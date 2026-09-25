@@ -178,24 +178,60 @@ async def test_short_foreground_command_finishes_inline(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["foreground", "background"])
-async def test_removed_handoff_parameter_is_rejected(
+async def test_handoff_delay_from_other_harnesses_keeps_the_requested_mode(
     manager: ProcessManager,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    mode: str,
+) -> None:
+    # OpenClaw yieldMs and the retired background_after_seconds only move the
+    # moment control returns; vBot hands off after its own delay instead.
+    monkeypatch.setattr(bash_module, "_shell_argv", python_command)
+
+    result = await _dispatch_bash(
+        manager,
+        make_context(tmp_path),
+        {"command": "print('ran inline')", "mode": "foreground", "yieldMs": 10000},
+    )
+
+    assert result["ok"] is True
+    assert result["data"]["status"] == "completed"
+    assert "ran inline" in result["data"]["output"]
+
+
+@pytest.mark.asyncio
+async def test_zero_handoff_delay_means_background_now(
+    manager: ProcessManager,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(bash_module, "_shell_argv", python_command)
 
-    with pytest.raises(ToolContractError, match='"background_after_seconds" is not a parameter'):
+    result = await _dispatch_bash(
+        manager,
+        make_context(tmp_path),
+        {"command": "import time; time.sleep(30)", "background_after_seconds": 0},
+    )
+
+    assert result["data"]["status"] == "running"
+    assert result["data"]["delivery"] == "automatic"
+    await kill_background(manager, result)
+
+
+@pytest.mark.asyncio
+async def test_zero_handoff_delay_conflicts_with_foreground_mode(
+    manager: ProcessManager,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(bash_module, "_shell_argv", python_command)
+
+    with pytest.raises(
+        ValueError, match='mode is "foreground" but yield_after asks for background'
+    ):
         await _dispatch_bash(
             manager,
             make_context(tmp_path),
-            {
-                "command": "print('never runs')",
-                "mode": mode,
-                "background_after_seconds": 1,
-            },
+            {"command": "print('never runs')", "mode": "foreground", "yield_after": 0},
         )
 
     assert manager.list_processes(AGENT_ID) == []
@@ -533,22 +569,18 @@ async def test_bash_runs_in_cwd_when_no_workdir_argument(
 
 
 @pytest.mark.asyncio
-async def test_env_argument_is_rejected(
+async def test_env_argument_must_be_an_object(
     manager: ProcessManager,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(bash_module, "_shell_argv", python_command)
 
-    with pytest.raises(ToolContractError, match='"env" is not a parameter'):
+    with pytest.raises(ToolContractError, match='"env" must be an object'):
         await _dispatch_bash(
             manager,
             make_context(tmp_path),
-            {
-                "command": "print('never runs')",
-                "mode": "foreground",
-                "env": {"SAFE_VALUE": "unsupported"},
-            },
+            {"command": "print('never runs')", "env": "SAFE_VALUE=1"},
         )
 
     assert manager.list_processes(AGENT_ID) == []

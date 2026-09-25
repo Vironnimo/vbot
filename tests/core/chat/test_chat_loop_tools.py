@@ -332,15 +332,19 @@ async def test_nested_run_receives_non_handoff_bash_definition(tmp_path: Path) -
 
     top_level_definition = adapter.requests[0]["kwargs"]["tools"][0]
     nested_definition = adapter.requests[1]["kwargs"]["tools"][0]
-    # The Provider request carries the name the Model knows on this host.
+    # The Provider request carries the name the Model knows on this host, and the
+    # description names no dedicated file Tool, since this Agent is offered none.
+    usual_pointer = (
+        "For reading, searching and editing files use read, search_files and apply_patch. "
+    )
     assert top_level_definition == {
         "name": model_tool_name(BASH_TOOL_NAME),
-        "description": BASH_TOOL_DESCRIPTION,
+        "description": BASH_TOOL_DESCRIPTION.replace(usual_pointer, ""),
         "parameters": BASH_TOOL_PARAMETERS,
     }
     assert nested_definition == {
         "name": model_tool_name(BASH_TOOL_NAME),
-        "description": BASH_SUBAGENT_TOOL_DESCRIPTION,
+        "description": BASH_SUBAGENT_TOOL_DESCRIPTION.replace(usual_pointer, ""),
         "parameters": BASH_SUBAGENT_TOOL_PARAMETERS,
     }
 

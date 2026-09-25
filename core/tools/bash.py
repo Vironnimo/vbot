@@ -44,7 +44,17 @@ from core.tools._bash_update_handoff import (
     UpdateHandoffGrant,
     UpdateHandoffs,
 )
+from core.tools._path_suggestions import similar_entries
 from core.tools._powershell import powershell_command
+from core.tools._shell_arguments import (
+    SHELL_UNADVERTISED_PARAMETERS,
+    inherited_env_keys_note,
+    normalize_shell_arguments,
+    resolve_timeout,
+    shell_display_parts,
+    split_env_object,
+    unknown_env_keys_message,
+)
 from core.tools.arguments import optional_number, optional_string
 from core.tools.availability import bash_allowed_env_keys, normalize_env_keys
 from core.tools.bash_hints import annotate_failure
@@ -59,12 +69,12 @@ from core.tools.tools import (
     JsonObject,
     ToolContext,
     ToolDisplay,
-    ToolDisplayField,
     ToolPromptBlockRegistry,
     ToolRegistry,
     tool_failure,
 )
 from core.utils.logging import get_logger
+from core.utils.paths import model_path
 
 CredentialResolver = Callable[[str], str]
 
@@ -82,26 +92,57 @@ def _shell_syntax_notes() -> str:
     """
     if sys.platform == "win32":
         return (
-            " Commands use PowerShell 7 (pwsh), not cmd or bash: use $env:VAR, redirect "
-            "stderr with 2>$null, and assign environment variables separately. PowerShell "
-            "runs non-interactively."
+            " Commands run in PowerShell 7 (pwsh), not bash or cmd: use $env:NAME for "
+            "variables, $null instead of /dev/null, Select-String instead of grep, and single "
+            "quotes or a here-string (@'...'@) instead of \\\" escapes and heredocs."
         )
     return " Commands run in bash on this host."
 
 
+# Dedicated Tools the description points to, by what they do better than a shell.
+# Registry names of the Files and Web families; literal to avoid importing them.
+_FILE_TOOL_USES = (("reading", "read"), ("searching", "search_files"), ("editing", "apply_patch"))
+_WEB_PAGE_TOOL = "web_fetch"
+# Offered with the shell in practice; the registered description names these,
+# and each request's projection names the ones that Agent is actually offered.
+_USUAL_DEDICATED_TOOLS = frozenset(name for _use, name in _FILE_TOOL_USES)
+
+
+def _joined(words: Sequence[str]) -> str:
+    return words[0] if len(words) == 1 else ", ".join(words[:-1]) + " and " + words[-1]
+
+
+def _dedicated_tools_sentence(offered: frozenset[str]) -> str:
+    """One sentence naming the offered Tools for file and web work, or nothing."""
+    uses = [(use, name) for use, name in _FILE_TOOL_USES if name in offered]
+    clauses = []
+    if uses:
+        clauses.append(
+            f"for {_joined([use for use, _ in uses])} files use "
+            f"{_joined([name for _, name in uses])}"
+        )
+    if _WEB_PAGE_TOOL in offered:
+        clauses.append(f"for web pages use {_WEB_PAGE_TOOL}")
+    if not clauses:
+        return ""
+    sentence = "; ".join(clauses)
+    return sentence[0].upper() + sentence[1:] + ". "
+
+
+_USUAL_DEDICATED_TOOLS_SENTENCE = _dedicated_tools_sentence(_USUAL_DEDICATED_TOOLS)
 BASH_TOOL_DESCRIPTION = (
     "Run an unattended shell command and capture its output, such as scripts, builds, "
     "non-interactive Git, file operations, and servers. "
-    "For file discovery and content search, use search_files when available. "
-    "No interactive input or live screen "
+    + _USUAL_DEDICATED_TOOLS_SENTENCE
+    + "No interactive input or live screen "
     "is available; provide input through files or pipelines. Never manually detach or "
     "daemonize commands." + _shell_syntax_notes()
 )
 BASH_SUBAGENT_TOOL_DESCRIPTION = (
     "Run an unattended shell command and wait for its output, such as scripts, builds, "
     "non-interactive Git, and file operations. "
-    "For file discovery and content search, use search_files when available. "
-    "Background execution is unavailable. "
+    + _USUAL_DEDICATED_TOOLS_SENTENCE
+    + "Background execution is unavailable. "
     "No interactive input or live screen is available; provide input through files or "
     "pipelines. Never manually detach or daemonize commands." + _shell_syntax_notes()
 )
@@ -131,9 +172,9 @@ _BASH_TIMEOUT_PARAMETER: JsonObject = {
     "type": "number",
     "minimum": 0,
     "description": (
-        "Total runtime limit in seconds, including time in background. Foreground default: "
-        "180 seconds; background mode has no default limit. Use a longer limit for slow "
-        "work or 0 for no limit."
+        "Total runtime limit in seconds (not milliseconds), including time in background. "
+        "Foreground default: 180 seconds; background mode has no default limit. Use a longer "
+        "limit for slow work or 0 for no limit."
     ),
 }
 _BASH_ENV_KEYS_PARAMETER: JsonObject = {
@@ -195,8 +236,15 @@ def project_bash_tool_definitions(
     *,
     nesting_depth: int,
 ) -> list[JsonObject]:
-    """Narrow Bash's Provider definition to the execution modes valid at this depth."""
-    if nesting_depth < 1:
+    """Fit the shell definition to this request.
+
+    It keeps only the execution modes valid at this depth, and its description
+    names the dedicated file and web Tools among ``definitions`` - the Tools
+    offered alongside it - instead of the usual set.
+    """
+    offered = frozenset(str(definition.get("name")) for definition in definitions)
+    sentence = _dedicated_tools_sentence(offered)
+    if nesting_depth < 1 and sentence == _USUAL_DEDICATED_TOOLS_SENTENCE:
         return definitions
 
     projected: list[JsonObject] = []
@@ -205,8 +253,14 @@ def project_bash_tool_definitions(
             projected.append(definition)
             continue
         narrowed = deepcopy(definition)
-        narrowed["description"] = BASH_SUBAGENT_TOOL_DESCRIPTION
-        narrowed["parameters"] = deepcopy(BASH_SUBAGENT_TOOL_PARAMETERS)
+        if nesting_depth >= 1:
+            narrowed["description"] = BASH_SUBAGENT_TOOL_DESCRIPTION
+            narrowed["parameters"] = deepcopy(BASH_SUBAGENT_TOOL_PARAMETERS)
+        description = narrowed.get("description")
+        if isinstance(description, str):
+            narrowed["description"] = description.replace(
+                _USUAL_DEDICATED_TOOLS_SENTENCE, sentence, 1
+            )
         projected.append(narrowed)
     return projected
 
@@ -239,24 +293,35 @@ async def bash_handler(
         )
 
     command = parsed["command"]
+    notes: list[str] = list(parsed["notes"])
     workdir = _resolve_workdir(context, parsed.get("workdir"))
-    requested_env_keys = parsed["env_keys"]
-    allowed_env_keys = set(bash_allowed_env_keys(context.tool_settings)) | set(
+    if not workdir.is_dir():
+        return tool_failure("invalid_arguments", _missing_workdir_message(workdir))
+    granted_env_keys = frozenset(bash_allowed_env_keys(context.tool_settings)) | frozenset(
         context.skill_env_keys
     )
-    unauthorized_env_keys = [key for key in requested_env_keys if key not in allowed_env_keys]
-    if unauthorized_env_keys:
-        names = ", ".join(unauthorized_env_keys)
-        return tool_failure(
-            "invalid_arguments",
-            f"env_keys contains key(s) not granted to this Agent: {names}",
-        )
+    try:
+        env_variables, env_credentials = split_env_object(parsed["env"], granted_env_keys)
+    except ValueError as error:
+        return tool_failure("invalid_arguments", str(error))
+    requested_env_keys = list(dict.fromkeys([*parsed["env_keys"], *env_credentials]))
+    ungranted_env_keys = [key for key in requested_env_keys if key not in granted_env_keys]
+    if ungranted_env_keys:
+        inherited = _inherited_names(ungranted_env_keys, await get_shell_env())
+        unknown = [key for key in ungranted_env_keys if key not in inherited]
+        if unknown:
+            return tool_failure(
+                "invalid_arguments", unknown_env_keys_message(unknown, granted_env_keys)
+            )
+        notes.append(inherited_env_keys_note(ungranted_env_keys))
+        requested_env_keys = [key for key in requested_env_keys if key in granted_env_keys]
     resolve_credential = credential_resolver or (lambda key: os.environ.get(key, ""))
     handoff = _issue_update_handoff(update_handoffs, context)
 
     async def command_environment() -> dict[str, str]:
         env = await get_shell_env()
         env.pop(HANDOFF_ENV, None)
+        env.update(env_variables)
         for key in requested_env_keys:
             env[key] = resolve_credential(key)
         env[VBOT_RUN_AGENT_ID_ENV] = context.agent_id
@@ -272,7 +337,12 @@ async def bash_handler(
     argv = _shell_argv(command)
     try:
         spawned = await _spawn_command(
-            process_manager, context, argv, workdir, environment=command_environment
+            process_manager,
+            context,
+            argv,
+            workdir,
+            environment=command_environment,
+            command=command,
         )
     except BaseException:
         if handoff is not None:
@@ -309,7 +379,7 @@ async def bash_handler(
             timeout_state=timeout_state,
             timeout_seconds=parsed["timeout"],
         )
-        return result
+        return _with_notes(result, notes)
 
     result = await _run_foreground_phase(
         process_manager,
@@ -340,7 +410,7 @@ async def bash_handler(
             timeout_state=timeout_state,
             timeout_seconds=parsed["timeout"],
         )
-        return result
+        return _with_notes(result, notes)
 
     if timeout_task is not None:
         timeout_task.cancel()
@@ -349,13 +419,56 @@ async def bash_handler(
         process_manager, context, process_id
     ):
         suffix = await _failure_output_suffix(process_manager, context, process_id)
+        background = not _background_blocked_at_depth(context)
         return tool_failure(
             "process_timeout",
-            f"process timed out after {parsed['timeout']} seconds. Inspect the output before "
-            "retrying; set a longer timeout if the command legitimately needs more time." + suffix,
+            _timeout_message(parsed["timeout"], notes, background=background) + suffix,
         )
 
+    return _with_notes(result, notes)
+
+
+def _with_notes(result: JsonObject, notes: Sequence[str]) -> JsonObject:
+    """Explain how the call was read, on a successful result only."""
+    data = result.get("data")
+    if notes and result.get("ok") is True and isinstance(data, dict):
+        data["note"] = " ".join(notes)
     return result
+
+
+def _timeout_message(timeout: float, notes: Sequence[str], *, background: bool) -> str:
+    message = (
+        f"The command was stopped when its {timeout:g} s timeout elapsed. Check the output "
+        "before retrying. If it needs more time, call again with a larger timeout (seconds) "
+        "or timeout: 0 for no limit"
+    )
+    if background:
+        message += '; start servers and other long-running commands with mode: "background"'
+    message += "."
+    if notes:
+        message += " Note: " + " ".join(notes)
+    return message
+
+
+def _missing_workdir_message(workdir: Path) -> str:
+    shown = model_path(workdir)
+    if workdir.exists():
+        return f"{SHELL_MODEL_NAME} was not run: workdir {shown} is a file, not a directory."
+    suggestions = [model_path(path) for path in similar_entries(workdir, kind="dirs")]
+    message = f"{SHELL_MODEL_NAME} was not run: workdir {shown} does not exist."
+    if suggestions:
+        message += " Similar directories: " + ", ".join(suggestions) + "."
+    elif not workdir.parent.is_dir():
+        message += f" Its parent {model_path(workdir.parent)} does not exist either."
+    return message
+
+
+def _inherited_names(names: Sequence[str], environment: dict[str, str]) -> set[str]:
+    """Names already set in the command environment (case-insensitive on Windows)."""
+    if sys.platform == "win32":
+        present = {key.casefold() for key in environment}
+        return {name for name in names if name.casefold() in present}
+    return {name for name in names if name in environment}
 
 
 def register_bash_tool(
@@ -386,13 +499,10 @@ def register_bash_tool(
         handler,
         family="execution",
         open_input_schema=True,
+        unadvertised_parameters=SHELL_UNADVERTISED_PARAMETERS,
+        argument_normalizer=normalize_shell_arguments,
         result_schema={"type": "object", "required": ["status"]},
-        display=ToolDisplay(
-            primary_candidates=(
-                ToolDisplayField("description", kind="description", quote=True),
-                ToolDisplayField("command", kind="command"),
-            )
-        ),
+        display=ToolDisplay(parts_builder=shell_display_parts),
     )
     if prompt_blocks is not None:
         prompt_blocks.register(
@@ -616,6 +726,7 @@ async def _spawn_command(
     workdir: Path,
     *,
     environment: Callable[[], Awaitable[dict[str, str]]],
+    command: str,
 ) -> str | JsonObject:
     """Spawn the shell and return its process id, or a spawn failure envelope."""
     env = await environment()
@@ -628,6 +739,7 @@ async def _spawn_command(
             env=env,
             cwd=workdir,
             execution_owner=context.execution_owner,
+            command=command,
         )
     except FileNotFoundError:
         # The shell binary itself (pwsh/bash) was not found. This is not a
@@ -649,6 +761,7 @@ async def _spawn_command(
                 env=env,
                 cwd=workdir,
                 execution_owner=context.execution_owner,
+                command=command,
             )
         except (OSError, ValueError) as error:
             return tool_failure("process_spawn_failed", _spawn_failure_message(argv, error))
@@ -722,13 +835,15 @@ def _parse_arguments(arguments: JsonObject) -> JsonObject | str:
     if not isinstance(mode, str) or mode not in BASH_EXECUTION_MODES:
         return "mode must be foreground or background"
 
+    env = arguments.get("env")
+    if env is not None and not isinstance(env, dict):
+        return "env must be an object of variable names and values"
     try:
         workdir = optional_string(arguments.get("workdir"), field_name="workdir")
         optional_string(arguments.get("description"), field_name="description")
-        timeout = optional_number(
-            arguments.get("timeout"),
-            field_name="timeout",
-            minimum=0,
+        timeout, timeout_note = resolve_timeout(
+            optional_number(arguments.get("timeout"), field_name="timeout", minimum=0),
+            optional_number(arguments.get("timeout_ms"), field_name="timeout_ms", minimum=0),
         )
         env_keys = normalize_env_keys(
             arguments.get("env_keys", []),
@@ -746,6 +861,8 @@ def _parse_arguments(arguments: JsonObject) -> JsonObject | str:
         "workdir": workdir,
         "timeout": None if timeout == 0 else timeout,
         "env_keys": env_keys,
+        "env": env,
+        "notes": [timeout_note] if timeout_note else [],
     }
 
 
