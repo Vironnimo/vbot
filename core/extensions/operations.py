@@ -38,6 +38,10 @@ class ExtensionHost:
     # ``release_owner``, which closes a retired registration's databases.
     open_database: Callable[..., Awaitable[Any]] | None = None
     release_owner: Callable[[Any], Awaitable[None]] | None = None
+    # Owner-bound hosts: load a payload this Extension attached with
+    # ``ToolContext.attach_result_payload``. Returns ``None`` unless the calling
+    # Tool call's Session currently shows the Tool Result that payload belongs to.
+    load_result_payload: Callable[[ToolContext, str], Awaitable[Any]] | None = None
 
 
 @dataclass(frozen=True)

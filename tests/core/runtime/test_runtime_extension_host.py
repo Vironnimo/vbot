@@ -542,3 +542,81 @@ def test_extension_group_usage_reads_the_runtime_statistics_index(tmp_path: Path
         runtime.stop()
 
     assert usage["participants"] == []
+
+
+@pytest.mark.asyncio
+async def test_result_payloads_load_for_their_owner_through_the_calling_session(tmp_path):
+    from core.chat import ChatMessage
+    from core.chat.messages import ToolCall
+    from core.sessions import ToolResultFacts, ToolResultPayload
+    from core.tools import ToolContext
+    from tests.core.sessions.history_fixtures import complete_run
+
+    runtime = Runtime(Config(data_dir=tmp_path / "data"))
+    runtime.start()
+    try:
+        session = runtime.chat_sessions.create("agent", session_id="source")
+        runtime.chat_sessions.create("agent", session_id="other")
+        run = session.start_run("run-one")
+        assistant = ChatMessage.assistant(
+            model="model",
+            content=None,
+            tool_calls=[ToolCall(id="call", name="mcp_x", arguments={})],
+        )
+        run.append_many([ChatMessage.user("question"), assistant])
+        run.assistant_message_id = assistant.id
+        run.append_many(
+            [ChatMessage.tool(tool_call_id="call", name="mcp_x", content="receipt")],
+            tool_results={
+                "call": ToolResultFacts(
+                    "completed", True, payloads=(ToolResultPayload("res_one", "mcp", "[1]"),)
+                )
+            },
+        )
+        complete_run(
+            run,
+            ChatMessage.run_summary(
+                run_id="run-one",
+                status="completed",
+                iteration_count=1,
+                timing={
+                    "started_at": "2026-09-19T10:00:00Z",
+                    "completed_at": "2026-09-19T10:00:01Z",
+                    "duration_ms": 1000,
+                },
+            ),
+        )
+        root = runtime._host_operations().make_host()
+        owners = {}
+        for name in ("mcp", "swarm"):
+            identity = runtime.extensions.registration_identity(name)
+            assert identity is not None
+            owners[name] = root.for_owner(identity)
+
+        def call(session_id: str, *, in_session: bool = True) -> ToolContext:
+            return ToolContext(
+                agent_id="agent",
+                session_id=session_id,
+                run_id="run",
+                tool_call_id="later-call",
+                tool_name="mcp_x",
+                tool_call_index=0,
+                workspace=tmp_path,
+                vbot_root=tmp_path,
+                data_root=tmp_path,
+                result_payload_hook=(lambda *_args: "unused") if in_session else None,
+            )
+
+        load = owners["mcp"].load_result_payload
+        assert root.load_result_payload is None
+        assert await load(call("source"), "res_one") == [1]
+        # Another Extension, another Session, a call outside any Session, an unsafe id.
+        assert await owners["swarm"].load_result_payload(call("source"), "res_one") is None
+        assert await load(call("other"), "res_one") is None
+        assert await load(call("source", in_session=False), "res_one") is None
+        assert await load(call("source"), "../res_one") is None
+        stale = root.for_owner(ExtensionRegistrationIdentity("mcp", "retired-epoch"))
+        with pytest.raises(ValueError, match="no longer current"):
+            await stale.load_result_payload(call("source"), "res_one")
+    finally:
+        await runtime.aclose()
