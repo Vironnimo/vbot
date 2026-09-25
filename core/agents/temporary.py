@@ -182,6 +182,12 @@ class TemporaryAgentRegistry:
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError("temporary Session binding configuration is invalid") from error
 
+    async def resolve_async(
+        self, address: SessionAddress, *, generation_id: str
+    ) -> TemporaryAgent | None:
+        """Event-Loop-safe :meth:`resolve`; the binding read runs on the Session pool."""
+        return await self._sessions.run_async(self.resolve, address, generation_id=generation_id)
+
 
 @dataclass(frozen=True)
 class TemporaryGroupHandle:

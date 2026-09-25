@@ -3,7 +3,11 @@
 import threading
 from typing import Any
 
+from core.database import DatabaseUnavailableError
+from core.sessions import ChatSessionManager
+
 from .resolver_test_support import (
+    AgentRunOverrides,
     AgentStore,
     ConfigAgent,
     FindingType,
@@ -177,30 +181,75 @@ def test_identity_resolution_unknown_agent_raises(
 
 
 @pytest.mark.asyncio
-async def test_async_resolution_reads_the_agent_store_off_the_event_loop(
+async def test_async_resolution_runs_each_agent_kind_on_its_pool(
     agents: AgentStore, projects: ProjectStore, repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # Arrange
     created = agents.create("orchestrator", "Orchestrator", model="openai/gpt-5.2")
+    _write_agent(repo, "builder.md", model="openai/gpt-5.2")
+    project = _project(projects, repo)
     resolver = _resolver(agents, projects, _openai_configured())
+    threads: dict[str, str] = {}
     store_get = agents.get
-    reading_threads: list[int] = []
+    read_fresh = resolver._read_agent_fresh
+    apply_overrides = resolver._apply_run_overrides
 
     def recording_get(agent_id: str) -> Any:
-        reading_threads.append(threading.get_ident())
+        threads["identity"] = threading.current_thread().name
         return store_get(agent_id)
 
+    def recording_read(*args: Any) -> Any:
+        threads["project"] = threading.current_thread().name
+        return read_fresh(*args)
+
+    def recording_overrides(*args: Any) -> Any:
+        threads["overrides"] = threading.current_thread().name
+        return apply_overrides(*args)
+
     monkeypatch.setattr(agents, "get", recording_get)
+    monkeypatch.setattr(resolver, "_read_agent_fresh", recording_read)
+    monkeypatch.setattr(resolver, "_apply_run_overrides", recording_overrides)
 
     # Act
     resolved = await resolver.resolve_agent_async(None, "orchestrator")
+    overridden = await resolver.resolve_agent_async(
+        None, "orchestrator", run_overrides=AgentRunOverrides(thinking_effort="high")
+    )
+    member = await resolver.resolve_agent_async(project.project_id, "builder")
 
-    # Assert: the ordinary resolution result, read by a worker thread.
+    # Assert: the ordinary results. The Identity read, which verifies the
+    # current-Session pointer, runs on the Session database's pool; the Model
+    # check of Run overrides and Project resolution on the resolution pool.
     assert resolved == created
-    assert reading_threads
-    assert threading.get_ident() not in reading_threads
+    assert overridden.thinking_effort == "high"
+    assert isinstance(member, ConfigAgent)
+    assert threads["identity"].startswith("vbot-db-sessions")
+    assert threads["overrides"].startswith("vbot-agent-resolution")
+    assert threads["project"].startswith("vbot-agent-resolution")
     with pytest.raises(ResolutionAgentNotFoundError):
         await resolver.resolve_agent_async(None, "missing-agent")
+
+
+@pytest.mark.asyncio
+async def test_async_resolution_on_a_closed_session_database_fails_cleanly(
+    data_dir: Path, template_dir: Path, projects: ProjectStore, repo: Path
+) -> None:
+    # Arrange: a Runtime-shaped store that uses the injected Session service.
+    sessions = ChatSessionManager(data_dir)
+    agents = AgentStore(data_dir, template_dir=template_dir, sessions=sessions)
+    agents.create("orchestrator", "Orchestrator", model="openai/gpt-5.2")
+    _write_agent(repo, "builder.md", model="openai/gpt-5.2")
+    project = _project(projects, repo)
+    resolver = _resolver(agents, projects, _openai_configured())
+    resolver.rescan_project(project)
+    sessions.close()
+
+    # Act / Assert: the Identity read fails as unavailable; a Project Agent whose
+    # Team is cached needs no Session database and still resolves.
+    with pytest.raises(DatabaseUnavailableError):
+        await resolver.resolve_agent_async(None, "orchestrator")
+    member = await resolver.resolve_agent_async(project.project_id, "builder")
+    assert isinstance(member, ConfigAgent)
 
 
 def test_identity_wildcard_keeps_global_and_cross_project_reach(
