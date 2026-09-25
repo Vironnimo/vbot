@@ -7,6 +7,7 @@ import contextlib
 import re
 import time
 from collections.abc import Awaitable, Callable
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 from core.attachments import AttachmentStore
@@ -712,10 +713,12 @@ class TelegramChannelAdapter(ChannelAdapter):
                 error,
             )
 
-    async def ensure_outbound_session(self, platform_target: str) -> RouteFacts:
+    async def ensure_outbound_session(
+        self, platform_target: str, *, thread_id: str | None = None
+    ) -> RouteFacts:
         """Ensure the Session mirroring an outbound Telegram chat exists with channel context."""
         return await self._engine.ensure_channel_session(
-            self._conversation_facts_for_target(platform_target)
+            replace(self._conversation_facts_for_target(platform_target), thread_id=thread_id)
         )
 
     def _conversation_facts_for_target(self, platform_target: str) -> ConversationFacts:

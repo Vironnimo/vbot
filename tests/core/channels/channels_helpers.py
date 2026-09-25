@@ -108,7 +108,9 @@ class BlockingAdapter(ChannelAdapter):
     async def relay_run(self, run: Run, reply_plan: ReplyPlanFacts) -> None:
         self.relayed_runs.append((run, reply_plan))
 
-    async def ensure_outbound_session(self, platform_target: str) -> RouteFacts:
+    async def ensure_outbound_session(
+        self, platform_target: str, *, thread_id: str | None = None
+    ) -> RouteFacts:
         return RouteFacts(agent_id="assistant", session_id=f"ch-blocking-{platform_target}")
 
 
@@ -150,7 +152,9 @@ class DelayedStopAdapter(ChannelAdapter):
     ) -> None:
         return
 
-    async def ensure_outbound_session(self, platform_target: str) -> RouteFacts:
+    async def ensure_outbound_session(
+        self, platform_target: str, *, thread_id: str | None = None
+    ) -> RouteFacts:
         raise NotImplementedError
 
 
