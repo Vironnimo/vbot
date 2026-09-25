@@ -37,7 +37,8 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   Two kinds of change in one call, a `path` that
   contradicts the patch's file, incomplete old/new pairs and Cursor `code_edit`
   (placeholder comments leave the change open) fail before any effect.
-  `old_string` replacements match precisely (no approximate strategies); an empty
+  `old_string` replacements match precisely, else as a copy with errors
+  (`copy_match`, below; never with `replace_all` or an expected count); an empty
   `old_string` creates a file or fills an empty one and fails with `file_exists`
   otherwise. `patch_targets(arguments)` lists every named path for callers that
   vet targets first (the provider probe).
@@ -150,26 +151,50 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   (including section offsets) under `Where it occurs:`, not guessed alternatives.
   An `expected_replacements` mismatch fails with `occurrence_mismatch`. These
   excerpts never authorize a write.
-- After any text-entry failure on a path, remaining hunks on that path allow
-  only unique precise/normalized matches, preventing approximate matching from
-  silently satisfying a failed earlier precondition. Other files retain normal
-  tolerance.
-- `fuzzy_match.replace_fuzzy` remains the matching owner. Patch-only options
-  require whole-line matches, permit precise-only retry checks, and constrain
-  EOF. The matcher retains its default substring mode for direct callers. Precise matches win;
+- After any text-entry failure on a path, remaining hunks and `old_string` edits
+  on that path allow only unique precise matches (no `copy_match`), preventing
+  tolerance from silently satisfying a failed earlier precondition. Other files
+  retain normal tolerance.
+- `fuzzy_match.replace_fuzzy` owns precise matching: exact, normalized (newline,
+  Unicode, typography), line-trimmed, and whitespace-normalized, in that order.
+  Patch-only options require whole-line matches and constrain EOF. The matcher
+  retains its default substring mode for direct callers. Precise matches win;
   ambiguity at a winning strategy never falls through to a looser strategy.
   Ambiguity counts every occurrence, including overlapping ones (repeated
   closing-brace lines) and ones following a filtered partial occurrence, for
   hunks and `@@` anchors alike; `replace_all` still replaces leftmost
   non-overlapping spans.
 - Newline/Unicode/typography/whitespace/indentation differences are supported
-  for every hunk line. The bounded block-anchor and context-similarity
-  strategies may absorb differences only in context lines: each removed (`-`)
-  line must still equal its actual line up to those normalizations (user
-  decision). Otherwise the hunk fails with `text_not_found` and candidate
-  excerpts; similar candidates failing this rule are discarded before the
-  ambiguity check (`replace_fuzzy(required_lines=...)`). Only changed lines are
-  emitted from the replacement; context lines keep their actual original bytes.
+  for every hunk line. Old text copied with other errors is applied whenever the
+  passage is clearly identified, with stricter evidence for shorter text (user
+  decision 2026-09-25). `core/tools/copy_match.py` owns this for `apply_patch`
+  hunks and `old_string` edits, `skill_manage` patches and Swarm Wiki edits; it
+  runs only after every precise attempt and the already-applied check missed, and
+  not when the new text is already present. Where (location), from the number W
+  of correctly copied words: below 3 the copy is exact up to spacing; from 3 it
+  may misspell one word per 3 correct words, and a kept (context) line may lack
+  or add words or signs, one per 2 correct words; from 12 it may also differ
+  otherwise, one difference per 4 correct words, but never where either side of
+  a difference is an identifier (underscore, digit, or inner capital: another
+  function or variable). Exactly copied first and last lines (3+ lines, 2+ words
+  each) also place a passage around similar lines (SequenceMatcher ratio >= 0.5,
+  or 0.7 when the anchor pair repeats). A misspelling is a word of 4+
+  characters within one edit (two from 8 characters, case-insensitive, adjacent
+  swaps count once) of the file's word, with the same digits, that occurs nowhere
+  in the file. Passages copied up to misspellings and kept-line gaps win over
+  looser ones; more than one passage at the winning level is `ambiguous_match`
+  (`ambiguous_copy` wording for `old_string`). What (merge): the change from old
+  to new text is applied to the file's text; kept text stays as the file has it,
+  the new text takes the file's spelling of misspelled words, the 3 words or
+  signs on each side of each change must match up to misspellings, and within a
+  change other differences need 4 correct words each (a rewrite may differ; `3`
+  to `4` where the file says `5` may not). When the winning passage cannot take
+  the change, nothing is applied elsewhere and the hunk fails `text_not_found`.
+  Warnings name each replaced line that differed with its old text and each
+  respelled word (`copy_warnings`). Tests: `test_copy_match.py`, plus the
+  patch, field, Skill and Wiki suites.
+- Only changed lines are emitted from the replacement; context lines keep their
+  actual original bytes.
 - Changed lines matched with different indentation are written in the file's
   indentation style: each indent the matched lines show maps to its file
   indent, and other indents (new deeper lines) convert level by level between

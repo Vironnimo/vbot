@@ -22,17 +22,11 @@ terminal — it does not fall through to a looser strategy):
    whitespace-only match never corrupts indentation.
 4. ``whitespace_normalized`` — collapse horizontal space/tab runs while preserving
    line boundaries. The replacement is re-indented like a line-trimmed match.
-5. ``block_anchor`` — require exact first/last lines around a sufficiently similar
-   multiline middle.
-6. ``context_aware`` — require every aligned non-blank line to be at least 80%
-   similar, including both boundary anchors.
 
 All non-exact strategies search a normalized copy of the content and map the
 match back to the original characters through a per-character span map, so CRLF line
-endings and the exact original characters are always preserved. Similarity strategies
-remain uniqueness-gated and are never used for ``replace_all``. A caller can name
-``required_lines`` that similarity strategies must still match up to the precise
-normalizations, so similarity only absorbs differences in the remaining lines.
+endings and the exact original characters are always preserved. Old text copied
+with other errors is ``copy_match``'s concern.
 """
 
 from __future__ import annotations
@@ -40,7 +34,7 @@ from __future__ import annotations
 import math
 import re
 from collections import Counter
-from collections.abc import Callable, Collection, Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from heapq import heappush, heapreplace
@@ -56,10 +50,6 @@ _CANDIDATE_MIN_SIMILARITY = 0.60
 _CANDIDATE_RESULT_LIMIT = 3
 _CANDIDATE_OUTPUT_MAX_LINES = 8
 _CANDIDATE_OUTPUT_MAX_CHARS = 1_200
-_BLOCK_ANCHOR_MIN_LINES = 3
-_BLOCK_ANCHOR_UNIQUE_THRESHOLD = 0.50
-_BLOCK_ANCHOR_MULTIPLE_THRESHOLD = 0.70
-_CONTEXT_AWARE_SIMILARITY_THRESHOLD = 0.80
 
 # Visually-equivalent characters models emit in place of their ASCII forms, keyed
 # by code point so the source stays pure ASCII and the entries are unambiguous.
@@ -106,6 +96,11 @@ class FuzzyReplacement:
     strategy: str
     before_spans: tuple[tuple[int, int], ...]
     after_spans: tuple[tuple[int, int], ...]
+    # Only ``copy_match`` sets these: replaced lines that differed from the caller's
+    # copy as (1-based line, original text), and the caller's misspelled words its
+    # new text took the file's spelling of, as (caller's word, file's word).
+    differed: tuple[tuple[int, str], ...] = ()
+    respelled: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -133,10 +128,8 @@ def replace_fuzzy(
     *,
     replace_all: bool,
     whole_lines: bool = False,
-    precise_only: bool = False,
     at_eof: bool = False,
     typographic: bool = False,
-    required_lines: Collection[int] = (),
 ) -> FuzzyReplacement | AmbiguousFuzzyMatch | None:
     """Find ``old_string`` in ``content`` via the strategy chain and replace it.
 
@@ -144,34 +137,18 @@ def replace_fuzzy(
     when the winning strategy matched more than once without ``replace_all``, or
     ``None`` when no strategy matched.
 
-    Patch callers can require whole-line spans, restrict matching to precise
-    strategies for retry evidence, or anchor a hunk at EOF. ``required_lines``
-    names 0-based ``old_string`` lines that similarity strategies must match up
-    to the newline, Unicode/typography, and whitespace normalizations of the
-    precise strategies; candidates failing that are discarded before the
-    ambiguity check. Defaults retain the default substring and fuzzy-matching
-    behavior.
+    Patch callers can require whole-line spans or anchor a hunk at EOF.
     """
     replacement_text = _normalize_replacement_newlines(new_string)
     old_lf = _normalize_newlines(old_string)
     file_ending = _detect_line_ending(content)
 
-    for name, matcher, reindent, approximate in _STRATEGIES:
-        if (replace_all or precise_only) and approximate:
-            continue
+    for name, matcher, reindent in _STRATEGIES:
         matches = (
             _match_normalized(content, old_string, typographic=True, whole_lines=whole_lines)
             if typographic and name == "normalized"
             else matcher(content, old_string)
         )
-        if approximate and required_lines:
-            matches = [
-                (start, end)
-                for start, end in matches
-                if _required_lines_match(
-                    content[start:end], old_string, required_lines, typographic=typographic
-                )
-            ]
         if whole_lines:
             matches = [
                 (start, end)
@@ -220,28 +197,6 @@ def replace_fuzzy(
         )
 
     return None
-
-
-def _required_lines_match(
-    region: str, pattern: str, required_lines: Collection[int], *, typographic: bool
-) -> bool:
-    """Return whether a similarity match keeps every required line precise."""
-    region_lines = _LINE_BREAK_RE.split(region)
-    pattern_lines = _LINE_BREAK_RE.split(pattern)
-    if len(region_lines) != len(pattern_lines):
-        return False
-    return all(
-        0 <= index < len(pattern_lines)
-        and _precise_line_key(region_lines[index], typographic=typographic)
-        == _precise_line_key(pattern_lines[index], typographic=typographic)
-        for index in required_lines
-    )
-
-
-def _precise_line_key(line: str, *, typographic: bool) -> str:
-    """Fold one line like the precise strategies: Unicode, typography, whitespace."""
-    folded = _normalize_with_spans(line, typographic=typographic)[0]
-    return _HORIZONTAL_WHITESPACE_RE.sub(" ", folded).strip()
 
 
 def _candidate_normalize_line(line: str) -> str:
@@ -580,106 +535,6 @@ def _match_whitespace_normalized(content: str, pattern: str) -> list[tuple[int, 
     return matches
 
 
-def _normalized_lines_with_offsets(text: str) -> tuple[list[str], list[tuple[int, int]], list[int]]:
-    normalized, spans = _normalize_with_spans(text)
-    lines = normalized.split("\n")
-    offsets: list[int] = []
-    cursor = 0
-    for line in lines:
-        offsets.append(cursor)
-        cursor += len(line) + 1
-    return lines, spans, offsets
-
-
-def _line_window_span(
-    lines: list[str],
-    offsets: list[int],
-    spans: list[tuple[int, int]],
-    start_line: int,
-    line_count: int,
-) -> tuple[int, int] | None:
-    normalized_start = offsets[start_line]
-    last_line = start_line + line_count - 1
-    normalized_end = offsets[last_line] + len(lines[last_line])
-    if normalized_start >= len(spans) or normalized_end <= normalized_start:
-        return None
-    return spans[normalized_start][0], spans[normalized_end - 1][1]
-
-
-def _match_block_anchor(content: str, pattern: str) -> list[tuple[int, int]]:
-    """Match exact multiline anchors around a sufficiently similar middle."""
-    content_lines, spans, offsets = _normalized_lines_with_offsets(content)
-    pattern_lines = _normalize_text(pattern).split("\n")
-    line_count = len(pattern_lines)
-    if line_count < _BLOCK_ANCHOR_MIN_LINES or line_count > len(content_lines):
-        return []
-
-    first = pattern_lines[0].strip()
-    last = pattern_lines[-1].strip()
-    if not first or not last:
-        return []
-
-    potential_starts = [
-        index
-        for index in range(len(content_lines) - line_count + 1)
-        if content_lines[index].strip() == first
-        and content_lines[index + line_count - 1].strip() == last
-    ]
-    threshold = (
-        _BLOCK_ANCHOR_UNIQUE_THRESHOLD
-        if len(potential_starts) == 1
-        else _BLOCK_ANCHOR_MULTIPLE_THRESHOLD
-    )
-    pattern_middle = "\n".join(pattern_lines[1:-1])
-    matches: list[tuple[int, int]] = []
-    for start_line in potential_starts:
-        content_middle = "\n".join(content_lines[start_line + 1 : start_line + line_count - 1])
-        if SequenceMatcher(None, pattern_middle, content_middle).ratio() < threshold:
-            continue
-        span = _line_window_span(content_lines, offsets, spans, start_line, line_count)
-        if span is not None:
-            matches.append(span)
-    return matches
-
-
-def _match_context_aware(content: str, pattern: str) -> list[tuple[int, int]]:
-    """Match only blocks whose aligned meaningful lines are strongly similar."""
-    content_lines, spans, offsets = _normalized_lines_with_offsets(content)
-    pattern_lines = _normalize_text(pattern).split("\n")
-    line_count = len(pattern_lines)
-    if not pattern_lines or line_count > len(content_lines):
-        return []
-
-    first = pattern_lines[0].strip()
-    last = pattern_lines[-1].strip()
-    if not first or not last:
-        return []
-
-    def similarity(left: str, right: str) -> float:
-        if left == right:
-            return 1.0
-        return SequenceMatcher(None, left, right).ratio()
-
-    matches: list[tuple[int, int]] = []
-    for start_line in range(len(content_lines) - line_count + 1):
-        block = content_lines[start_line : start_line + line_count]
-        if similarity(first, block[0].strip()) < _CONTEXT_AWARE_SIMILARITY_THRESHOLD:
-            continue
-        if similarity(last, block[-1].strip()) < _CONTEXT_AWARE_SIMILARITY_THRESHOLD:
-            continue
-        if any(
-            pattern_line.strip()
-            and similarity(pattern_line.strip(), content_line.strip())
-            < _CONTEXT_AWARE_SIMILARITY_THRESHOLD
-            for pattern_line, content_line in zip(pattern_lines, block, strict=True)
-        ):
-            continue
-        span = _line_window_span(content_lines, offsets, spans, start_line, line_count)
-        if span is not None:
-            matches.append(span)
-    return matches
-
-
 def _find_all(haystack: str, needle: str) -> list[tuple[int, int]]:
     """Return every occurrence of ``needle``, including overlapping ones."""
     if not needle:
@@ -942,17 +797,12 @@ def _only(indent: str, character: str) -> bool:
     return not indent.strip(character)
 
 
-# (name, matcher, reindent-replacement, approximate) in increasing tolerance.
-# Approximate strategies are intentionally unavailable to replace_all: one
-# unique fuzzy target is useful, while mass-replacing merely similar regions is
-# not a safe interpretation of the caller's intent.
+# (name, matcher, reindent-replacement) in increasing tolerance.
 _STRATEGIES = (
-    ("exact", _match_exact, False, False),
-    ("normalized", _match_normalized, False, False),
-    ("line_trimmed", _match_line_trimmed, True, False),
-    ("whitespace_normalized", _match_whitespace_normalized, True, False),
-    ("block_anchor", _match_block_anchor, True, True),
-    ("context_aware", _match_context_aware, True, True),
+    ("exact", _match_exact, False),
+    ("normalized", _match_normalized, False),
+    ("line_trimmed", _match_line_trimmed, True),
+    ("whitespace_normalized", _match_whitespace_normalized, True),
 )
 
 
