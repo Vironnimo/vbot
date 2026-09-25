@@ -181,6 +181,16 @@ def recall_matrix() -> list[dict[str, Any]]:
 def seed_sessions(root: Path) -> ChatSessionManager:
     initialize_data_directory(root)
     sessions = ChatSessionManager(root)
+    try:
+        _seed(sessions)
+    except BaseException:
+        # An open store would keep the fixture directory locked on Windows.
+        sessions.close()
+        raise
+    return sessions
+
+
+def _seed(sessions: ChatSessionManager) -> None:
     stamp = datetime(2026, 7, 12, 10, tzinfo=UTC)
     data = {
         "session-retention": [
@@ -287,7 +297,6 @@ def seed_sessions(root: Path) -> ChatSessionManager:
         )
     )
     sessions.record_run_kind(old.address, RunKind.SUBAGENT)
-    return sessions
 
 
 class FixtureEmbeddings:
