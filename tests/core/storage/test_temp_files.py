@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import threading
 import time
 from datetime import timedelta
 from pathlib import Path
@@ -138,6 +139,101 @@ async def test_periodic_sweep_and_async_close(tmp_path: Path) -> None:
 
     assert not lease.path.exists()
     assert manager._sweeper_task is None
+
+
+async def _wait_for(event: threading.Event) -> None:
+    for _ in range(500):
+        if event.is_set():
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError("worker never reached the blocking filesystem call")
+
+
+@pytest.mark.asyncio
+async def test_background_sweep_keeps_the_event_loop_responsive(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = TemporaryFileManager(
+        tmp_path,
+        retention={"subagents": timedelta(seconds=1)},
+    )
+    lease = manager.create("subagents", ".md")
+    lease.finish()
+    _age(lease.path, seconds=60)
+    category_dir = lease.path.parent
+    entered = threading.Event()
+    release = threading.Event()
+    original_iterdir = Path.iterdir
+
+    def slow_iterdir(path: Path):
+        if path == category_dir:
+            entered.set()
+            release.wait(timeout=5)
+        return original_iterdir(path)
+
+    monkeypatch.setattr(Path, "iterdir", slow_iterdir)
+
+    manager.start()
+    try:
+        await _wait_for(entered)
+        # The directory listing is still blocked, yet the loop keeps ticking.
+        loop = asyncio.get_running_loop()
+        ticked_at = loop.time()
+        for _ in range(5):
+            await asyncio.sleep(0.01)
+        assert loop.time() - ticked_at < 1
+        assert not release.is_set()
+        assert lease.path.exists()
+    finally:
+        release.set()
+    for _ in range(500):
+        if not lease.path.exists():
+            break
+        await asyncio.sleep(0.01)
+    await manager.aclose()
+
+    assert not lease.path.exists()
+
+
+@pytest.mark.asyncio
+async def test_aclose_awaits_an_in_flight_sweep_that_stops_between_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = TemporaryFileManager(
+        tmp_path,
+        retention={"subagents": timedelta(seconds=1)},
+    )
+    leases = [manager.create("subagents", ".md") for _ in range(3)]
+    for lease in leases:
+        lease.finish()
+        _age(lease.path, seconds=60)
+    entered = threading.Event()
+    release = threading.Event()
+    unlinked: list[Path] = []
+    original_unlink = Path.unlink
+
+    def slow_unlink(path: Path, missing_ok: bool = False) -> None:
+        if not unlinked:
+            entered.set()
+            release.wait(timeout=5)
+        unlinked.append(path)
+        original_unlink(path, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", slow_unlink)
+
+    manager.start()
+    await _wait_for(entered)
+    closing = asyncio.create_task(manager.aclose())
+    await asyncio.sleep(0.05)
+    assert not closing.done()
+
+    release.set()
+    await closing
+
+    assert len(unlinked) == 1
+    assert sum(lease.path.exists() for lease in leases) == 2
 
 
 def test_one_unlink_failure_does_not_block_other_cleanup(

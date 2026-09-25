@@ -10,11 +10,12 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import timedelta
 from pathlib import Path
-from threading import RLock
+from threading import Event, RLock
 
 from core.storage.layout import DataDirectoryLayout
 from core.utils.ids import write_id_file
 from core.utils.logging import get_logger
+from core.utils.workers import BoundedWorkerPool
 
 _LOGGER = get_logger("storage.temp_files")
 
@@ -27,6 +28,9 @@ TEMPORARY_FILE_RETENTION: Mapping[str, timedelta] = {
 TEMPORARY_FILE_SWEEP_INTERVAL_SECONDS = 60.0
 _SUFFIX_PATTERN = re.compile(r"^\.[A-Za-z0-9][A-Za-z0-9._-]*$")
 _CATEGORY_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+# A sweep lists and stats every retained file; on a busy disk that takes seconds,
+# so background sweeps never run on the Event Loop.
+_SWEEP_WORKERS = BoundedWorkerPool(name="temporary-files", max_workers=1)
 
 
 @dataclass(slots=True)
@@ -73,6 +77,8 @@ class TemporaryFileManager:
         self._active: set[Path] = set()
         self._lock = RLock()
         self._sweeper_task: asyncio.Task[None] | None = None
+        # Set by ``stop`` so an in-flight background sweep ends between files.
+        self._stopping = Event()
 
     def create(self, category: str, suffix: str) -> TemporaryFileLease:
         """Create and protect one uniquely named file in a fixed category."""
@@ -89,13 +95,19 @@ class TemporaryFileManager:
         return TemporaryFileLease(path=path, _manager=self)
 
     def start(self) -> None:
-        """Sweep crash leftovers now and start periodic cleanup when possible."""
-        self.sweep()
+        """Sweep crash leftovers and start periodic cleanup when possible.
+
+        With a running Event Loop the first and every later sweep run on the
+        ``temporary-files`` worker pool; without one the first sweep runs inline
+        and no periodic cleanup starts.
+        """
         if self._sweeper_task is not None and not self._sweeper_task.done():
             return
+        self._stopping.clear()
         try:
             asyncio.get_running_loop()
         except RuntimeError:
+            self.sweep()
             return
         self._sweeper_task = asyncio.create_task(
             self._sweep_loop(),
@@ -103,20 +115,30 @@ class TemporaryFileManager:
         )
 
     def stop(self) -> None:
-        """Stop periodic cleanup without finishing producer-owned leases."""
+        """Stop periodic cleanup without finishing producer-owned leases.
+
+        An in-flight background sweep ends after its current file.
+        """
+        self._stopping.set()
         if self._sweeper_task is not None:
             self._sweeper_task.cancel()
             self._sweeper_task = None
 
     async def aclose(self) -> None:
-        """Stop periodic cleanup and await its task."""
+        """Stop periodic cleanup and await its task, including an in-flight sweep."""
         sweeper_task = self._sweeper_task
         self.stop()
         if sweeper_task is not None and not sweeper_task.done():
             await asyncio.gather(sweeper_task, return_exceptions=True)
 
     def sweep(self) -> None:
-        """Remove expired inactive regular files, isolating filesystem errors."""
+        """Remove expired inactive regular files, isolating filesystem errors.
+
+        Blocking; async code relies on the periodic background sweep instead.
+        """
+        self._sweep(None)
+
+    def _sweep(self, stopping: Event | None) -> None:
         cutoff_epoch = time.time()
         with self._lock:
             active = set(self._active)
@@ -137,6 +159,8 @@ class TemporaryFileManager:
 
             expires_before = cutoff_epoch - retention.total_seconds()
             for candidate in candidates:
+                if stopping is not None and stopping.is_set():
+                    return
                 if candidate in active:
                     continue
                 try:
@@ -159,10 +183,12 @@ class TemporaryFileManager:
                 self._active.discard(path)
 
     async def _sweep_loop(self) -> None:
+        # A cancelled pool call returns only after the started sweep settles, so
+        # ``aclose`` never leaves a sweep deleting files behind it.
         try:
             while True:
+                await _SWEEP_WORKERS.run(self._sweep, self._stopping)
                 await asyncio.sleep(self._sweep_interval_seconds)
-                self.sweep()
         except asyncio.CancelledError:
             return
 
