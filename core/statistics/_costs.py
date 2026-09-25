@@ -108,6 +108,7 @@ class CallCost:
     estimated_tokens: bool
     cost: dict[str, Any]
     retrospective: bool
+    status: str | None = None
 
 
 @dataclass(frozen=True)
@@ -122,7 +123,10 @@ class CostsSection:
 
 
 def refresh_retrospective_costs(
-    connection: sqlite3.Connection, pricing_lookup: PricingLookup | None
+    connection: sqlite3.Connection,
+    pricing_lookup: PricingLookup | None,
+    *,
+    table: str = "stat_calls",
 ) -> None:
     """Price calls without a cost snapshot under the current catalog pricing.
 
@@ -133,7 +137,7 @@ def refresh_retrospective_costs(
     models = [
         str(row[0])
         for row in connection.execute(
-            "SELECT DISTINCT model_key FROM stat_calls WHERE retrospective = 1"
+            f"SELECT DISTINCT model_key FROM {table} WHERE retrospective = 1"
         )
     ]
     if not models:
@@ -147,20 +151,20 @@ def refresh_retrospective_costs(
     unpriced = {
         str(row[0])
         for row in connection.execute(
-            "SELECT DISTINCT model_key FROM stat_calls WHERE retrospective = 1 AND priced = 0"
+            f"SELECT DISTINCT model_key FROM {table} WHERE retrospective = 1 AND priced = 0"
         )
     }
     for model in models:
         pricing = pricing_lookup(model) if pricing_lookup is not None else None
         fingerprint = "null" if pricing is None else compact_json(pricing.to_dict())
         if fingerprints.get(model) != fingerprint:
-            _price_calls(connection, model, pricing, only_unpriced=False)
+            _price_calls(connection, model, pricing, only_unpriced=False, table=table)
             connection.execute(
                 "INSERT OR REPLACE INTO stat_pricing (model_key, fingerprint) VALUES (?, ?)",
                 (model, fingerprint),
             )
         elif model in unpriced:
-            _price_calls(connection, model, pricing, only_unpriced=True)
+            _price_calls(connection, model, pricing, only_unpriced=True, table=table)
 
 
 def _price_calls(
@@ -169,6 +173,7 @@ def _price_calls(
     pricing: TokenPricing | None,
     *,
     only_unpriced: bool,
+    table: str,
 ) -> None:
     condition = " AND priced = 0" if only_unpriced else ""
     cursor = connection.execute(
@@ -176,7 +181,7 @@ def _price_calls(
         SELECT session_key, seq, reported_cost_usd, input_tokens, output_tokens,
             cache_read_tokens, cache_read_present, cache_write_tokens, cache_write_present,
             reasoning_tokens, reasoning_present, price_estimated
-        FROM stat_calls
+        FROM {table}
         WHERE model_key = ? AND retrospective = 1{condition}
         """,
         (model,),
@@ -198,16 +203,18 @@ def _price_calls(
         source, amount = cost_source_class(cost)
         updates.append((amount, source, cost_json(cost), row[0], row[1]))
         if len(updates) >= _PRICING_BATCH:
-            _write_prices(connection, updates)
+            _write_prices(connection, updates, table=table)
             updates = []
-    _write_prices(connection, updates)
+    _write_prices(connection, updates, table=table)
 
 
-def _write_prices(connection: sqlite3.Connection, updates: Sequence[tuple[Any, ...]]) -> None:
+def _write_prices(
+    connection: sqlite3.Connection, updates: Sequence[tuple[Any, ...]], *, table: str
+) -> None:
     if updates:
         connection.executemany(
-            """
-            UPDATE stat_calls SET cost_usd = ?, cost_source = ?, cost_json = ?, priced = 1
+            f"""
+            UPDATE {table} SET cost_usd = ?, cost_source = ?, cost_json = ?, priced = 1
             WHERE session_key = ? AND seq = ?
             """,
             updates,
@@ -238,7 +245,7 @@ class CostAccumulator:
         """
         units = scan.units
         current_unit = -1
-        session: CostTotals = self.totals
+        session: CostTotals | None = None
         unit_slice: CostTotals | None = None
         models = self.models
         daily = self.daily
@@ -256,15 +263,19 @@ class CostAccumulator:
             if unit != current_unit:
                 current_unit = unit
                 report_unit = units[unit]
-                session = self.sessions.setdefault(
-                    (report_unit.display_key, report_unit.session_id),
-                    SessionCosts(
-                        report_unit.display_key,
-                        report_unit.session_id,
-                        titles[unit],
-                        CostTotals(),
-                    ),
-                ).totals
+                session = (
+                    self.sessions.setdefault(
+                        (report_unit.display_key, report_unit.session_id),
+                        SessionCosts(
+                            report_unit.display_key,
+                            report_unit.session_id,
+                            titles[unit],
+                            CostTotals(),
+                        ),
+                    ).totals
+                    if report_unit.session_id
+                    else None
+                )
                 unit_slice = slices[unit]
             retro = bool(retrospective)
             totals.add_classified(source, amount, retrospective=retro)
@@ -272,7 +283,8 @@ class CostAccumulator:
             if model_totals is None:
                 model_totals = models[model] = CostTotals()
             model_totals.add_classified(source, amount, retrospective=retro)
-            session.add_classified(source, amount, retrospective=retro)
+            if session is not None:
+                session.add_classified(source, amount, retrospective=retro)
             key = day_key(day)
             day_totals = daily.get(key)
             if day_totals is None:
@@ -290,33 +302,37 @@ class CostAccumulator:
                 titles[unit],
                 run_id,
                 model,
-                "compaction" if kind == CALL_KIND_COMPACTION else "chat",
+                purpose,
                 input_tokens,
                 output_tokens,
                 cache_read_tokens,
                 bool(estimated),
                 json.loads(cost),
                 bool(retrospective),
+                status,
             )
             for (
                 unit,
                 timestamp,
                 run_id,
                 model,
-                kind,
+                purpose,
                 input_tokens,
                 output_tokens,
                 cache_read_tokens,
                 estimated,
                 cost,
                 retrospective,
+                status,
             ) in scan.execute(
                 f"""
-                SELECT u.unit, r.timestamp, r.run_id, c.model_key, c.kind, c.input_tokens,
+                SELECT u.unit, r.timestamp, r.run_id, c.model_key, c.purpose, c.input_tokens,
                     c.output_tokens, c.cache_read_tokens,
-                    c.input_estimated OR c.output_estimated, c.cost_json, c.retrospective
+                    c.input_estimated OR c.output_estimated, c.cost_json, c.retrospective,
+                    {scan.call_status_sql}
                 FROM {scan.source("stat_calls", "c")}
-                JOIN stat_records r ON r.session_key = c.session_key AND r.seq = c.seq
+                JOIN {scan.table("stat_records")} r
+                    ON r.session_key = c.session_key AND r.seq = c.seq
                 WHERE {scan.where("c")}
                 ORDER BY c.instant DESC, u.unit, c.seq
                 LIMIT {RECENT_CALLS}

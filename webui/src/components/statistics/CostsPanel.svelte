@@ -7,6 +7,8 @@
     formatDateTime,
     formatInteger,
     formatOptionalTokens,
+    modelCallKindLabel,
+    modelCallStatusLabel,
   } from '$lib/statisticsView.js';
   import { statCard, agentName } from './ReportPrimitives.svelte';
   let { report } = $props();
@@ -111,7 +113,7 @@
   <p class="stats-note stats-spaced">
     {t(
       'statistics.cost.scope',
-      'Saved Chat responses and Compaction calls. Background tasks and attempts without a saved response are outside this report. Missing prices are never counted as free.',
+      'Includes Chat, Compaction, Task Models and background Model requests, including retries. Recorded usage remains after a Session is archived or deleted. Older requests count where usage was retained; missing tokens and prices stay unknown. Session diagnostics cover retained, unarchived Sessions.',
     )}
   </p>
 </div>
@@ -264,11 +266,16 @@
           >
           <div class="stats-call__body">
             <p class="stats-note">
-              {call.session_title || call.session_id} · {@render agentName(
-                call.agent_id,
-              )} · {call.kind === 'compaction'
-                ? t('statistics.subview.compactions', 'Compactions')
-                : 'Chat'}
+              {modelCallKindLabel(call.kind, t)}
+              {#if call.status}
+                · {modelCallStatusLabel(call.status, t)}{/if}
+              {#if call.session_id}
+                · {call.session_title || call.session_id}
+              {:else}
+                · {t('statistics.cost.withoutSession', 'Outside a Session')}
+              {/if}
+              {#if call.agent_id}
+                · {@render agentName(call.agent_id)}{/if}
             </p>
             <div class="stats-grid stats-spaced">
               {@render statCard(

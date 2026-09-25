@@ -10,6 +10,7 @@ from core.model_tasks import (
     MusicError,
     MusicExecutionError,
     MusicOutcomeUnknownError,
+    TaskUsageContext,
     VideoError,
     VideoExecutionError,
     VideoOutcomeUnknownError,
@@ -276,6 +277,16 @@ def make_generate_video_handler(video_service: Any):
                 output_dir=output_dir,
                 call_options=call_options,
                 frame_paths=frame_paths,
+                usage_context=TaskUsageContext(
+                    agent_id=context.agent_id,
+                    project_id=context.project_id,
+                    session_id=context.session_id,
+                    run_id=context.run_id,
+                    owner_name=context.execution_owner.extension
+                    if context.execution_owner
+                    else None,
+                    group_id=context.execution_owner.group_id if context.execution_owner else None,
+                ),
             )
         except VideoError as exc:
             return _media_failure(exc, "video-generation", "Video generation")
@@ -316,6 +327,16 @@ def make_generate_music_handler(music_service: Any):
                 prompt,
                 output_dir=output_dir,
                 source_paths=source_paths,
+                usage_context=TaskUsageContext(
+                    agent_id=context.agent_id,
+                    project_id=context.project_id,
+                    session_id=context.session_id,
+                    run_id=context.run_id,
+                    owner_name=context.execution_owner.extension
+                    if context.execution_owner
+                    else None,
+                    group_id=context.execution_owner.group_id if context.execution_owner else None,
+                ),
             )
         except MusicError as exc:
             return _media_failure(exc, "music-generation", "Music generation")

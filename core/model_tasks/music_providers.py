@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 
@@ -50,30 +51,37 @@ class ProviderMusicClient(ProviderTaskClient):
         audio_parts: list[str] = []
         transcript_parts: list[str] = []
         seen_done = False
-        async with self._stream_response(payload) as response:
+        usage: JsonObject = {}
+        async with self._stream_response(payload, usage=usage) as response:
             try:
                 async for data in iter_sse_data(response):
                     if data.strip() == SSE_DONE_MARKER:
                         seen_done = True
                         break
                     chunk = parse_sse_json_data(data, context="OpenRouter Music generation")
+                    if isinstance(chunk, Mapping) and isinstance(chunk.get("usage"), Mapping):
+                        usage.update(chunk["usage"])
                     _collect_music_delta(chunk, audio_parts, transcript_parts)
                 if not seen_done:
                     raise NetworkError("Stream ended without [DONE] marker")
             except httpx.TransportError as exc:
                 raise wrap_network_error(exc) from exc
 
-        if not audio_parts:
-            raise ProviderError("OpenRouter did not return generated music audio.", retryable=False)
-        try:
-            audio = base64.b64decode("".join(audio_parts), validate=True)
-        except (binascii.Error, ValueError) as exc:
-            raise ProviderError(
-                "OpenRouter did not return generated music audio.",
-                retryable=False,
-            ) from exc
-        if not audio:
-            raise ProviderError("OpenRouter did not return generated music audio.", retryable=False)
+            if not audio_parts:
+                raise ProviderError(
+                    "OpenRouter did not return generated music audio.", retryable=False
+                )
+            try:
+                audio = base64.b64decode("".join(audio_parts), validate=True)
+            except (binascii.Error, ValueError) as exc:
+                raise ProviderError(
+                    "OpenRouter did not return generated music audio.",
+                    retryable=False,
+                ) from exc
+            if not audio:
+                raise ProviderError(
+                    "OpenRouter did not return generated music audio.", retryable=False
+                )
         return MusicGenerationResult(
             data=audio,
             media_type="audio/mpeg",
@@ -82,7 +90,9 @@ class ProviderMusicClient(ProviderTaskClient):
         )
 
     @asynccontextmanager
-    async def _stream_response(self, payload: JsonObject) -> AsyncIterator[httpx.Response]:
+    async def _stream_response(
+        self, payload: JsonObject, *, usage: JsonObject
+    ) -> AsyncIterator[httpx.Response]:
         async with httpx.AsyncClient(
             base_url=self._base_url,
             timeout=MUSIC_REQUEST_TIMEOUT_SECONDS,
@@ -95,19 +105,32 @@ class ProviderMusicClient(ProviderTaskClient):
                 json=payload,
                 headers=await self._headers(),
             )
+            observer = self._usage_observer
+            call_id = await observer.start() if observer is not None else ""
+            response = None
+            status: Literal["completed", "failed", "cancelled"] = "completed"
             try:
                 response = await client.send(request, stream=True)
-            except httpx.TransportError as exc:
-                raise wrap_network_error(exc) from exc
-            try:
                 if response.status_code >= 400:
                     await response.aread()
                     classify_task_response(response)
                 yield response
             except httpx.TransportError as exc:
+                status = "failed"
                 raise wrap_network_error(exc) from exc
+            except asyncio.CancelledError:
+                status = "cancelled"
+                raise
+            except BaseException:
+                status = "failed"
+                raise
             finally:
-                await response.aclose()
+                try:
+                    if response is not None:
+                        await response.aclose()
+                finally:
+                    if observer is not None:
+                        await observer.finish(call_id, usage=usage, status=status)
 
 
 def _music_payload(

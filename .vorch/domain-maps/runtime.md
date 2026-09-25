@@ -8,6 +8,17 @@ Blocking in-process work crosses named `BoundedWorkerPool` boundaries from `core
 
 ## DI Contracts
 
+Runtime constructs the canonical `UsageRecorder` after the Model registry and
+before request producers. It injects `usage_recorder` into Task services, Chat
+dependencies, Compaction, titles and Statistics; Extension sampling records its
+own exposed Adapter request. Immediately after Sessions opens, the recorder
+imports retained historical Usage before Agent lifecycle operations can remove
+history. `canonical_databases()` and offline declarations include
+`model-usage.db`; async shutdown drains its producers and Statistics readers
+before closing it, and failed-startup cleanup also closes it. Extension sampling
+retains its injected recorder through readiness withdrawal during shutdown. See
+`usage.md` for the accounting lifetime and import contract.
+
 `core/runtime/interfaces.py` holds `typing.Protocol` contracts. Only `ConfigProtocol` is constructor-injected; the rest are structural typings. `RuntimeServices` is the read-only service surface of a *started* runtime for core modules coordinating across it - consumers access services directly (a missing attribute is a wiring bug, never a `getattr` probe), and Chat deliberately does not consume it: Runtime builds Chat-owned `ChatLoopDependencies`, and Chat projects those into Run-local context. Heavy service types import under `TYPE_CHECKING` only - a runtime import of `core.runtime` loads `Runtime` and everything behind it (import cycle). The central credential contract is `ProviderCredentialResolverProtocol` (`providers.md` -> Usable; details in `providers/connections.md`).
 
 ## Bootstrap

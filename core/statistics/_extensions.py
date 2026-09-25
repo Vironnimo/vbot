@@ -174,9 +174,9 @@ class ExtensionUsageAccumulator:
                             activity=_activity(participant, sessions=1),
                         )
                     )
-                # A window hides groups without in-window records; all-time
+                # A window hides groups without in-window activity; all-time
                 # reporting keeps every retained group, including idle ones.
-                if self._windowed and group_total.records == 0:
+                if self._windowed and group_total.records == 0 and group_total.model_calls == 0:
                     continue
                 owner_total.merge(group_total)
                 owner_sessions += len(participants)
