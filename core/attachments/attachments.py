@@ -38,8 +38,13 @@ from core.utils.atomic import atomic_write_bytes, atomic_write_text
 from core.utils.errors import VBotError
 from core.utils.ids import is_safe_id, new_id
 from core.utils.logging import get_logger
+from core.utils.workers import BoundedWorkerPool
 
 JsonObject = dict[str, Any]
+
+# Storing sniffs the content, scans the attachment directory for an id claim and
+# fsyncs a blob of up to the size limit: never on the Event Loop.
+_STORE_WORKERS = BoundedWorkerPool(name="attachments", max_workers=4)
 
 _OOXML_PREFIX = "application/vnd.openxmlformats-officedocument."
 _OOXML_WILDCARD = "application/vnd.openxmlformats-officedocument.*"
@@ -266,6 +271,11 @@ class AttachmentStore:
 
         _LOGGER.debug("Stored attachment %s (%s, %d bytes)", attachment_id, media_type, size_bytes)
         return record
+
+    async def store_async(self, filename: str, data: bytes) -> AttachmentRecord:
+        """Event-Loop-safe :meth:`store`, run on the ``attachments`` worker pool."""
+
+        return await _STORE_WORKERS.run(self.store, filename, data)
 
     def get(self, attachment_id: str) -> AttachmentRecord:
         """Load one attachment record by id from sidecar metadata."""

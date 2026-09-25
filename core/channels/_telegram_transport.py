@@ -465,7 +465,7 @@ class TelegramTransport:
             attachment_store,
             initial_delay=_INBOUND_MEDIA_RETRY_INITIAL_SECONDS,
         )
-        return attachment_store.store(filename, bytes(payload))
+        return await attachment_store.store_async(filename, bytes(payload))
 
     async def _download_inbound_attachment(
         self,

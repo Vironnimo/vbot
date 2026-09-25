@@ -714,7 +714,7 @@ class DiscordChannelAdapter(ChannelAdapter):
         )
 
         payload = await attachment.read()
-        return attachment_store.store(filename.strip(), payload)
+        return await attachment_store.store_async(filename.strip(), payload)
 
     # -- State helpers ----------------------------------------------------------------
 
