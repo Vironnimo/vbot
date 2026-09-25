@@ -424,9 +424,11 @@ def test_mcp_probe_uses_the_production_definition_for_every_case():
 
 
 def test_computer_probe_uses_production_definition_and_validates_matrix():
+    from core.tools.contracts import ToolContractError
     from resources.extensions.computer_use._arguments import (
         _validate_arguments,
     )
+    from resources.extensions.computer_use._dialects import normalize_computer_arguments
     from resources.extensions.computer_use.extension import (
         COMPUTER_PARAMETERS,
         InvalidComputerArgumentsError,
@@ -455,8 +457,8 @@ def test_computer_probe_uses_production_definition_and_validates_matrix():
                 }
                 else None
             )
-            _validate_arguments(expected, reference)
-        except InvalidComputerArgumentsError:
+            _validate_arguments(normalize_computer_arguments(dict(expected)), reference)
+        except (InvalidComputerArgumentsError, ToolContractError):
             assert case.startswith("invalid_")
         else:
             assert not case.startswith("invalid_")
@@ -524,22 +526,12 @@ def test_mcp_workflow_recovery_preserves_both_boolean_values():
                 arguments = {"action": "search", "query": "configure_render", "kind": "tool"}
             elif self.step == 1:
                 result = json.loads(messages[-1]["content"])
-
-                def target_in(value):
-                    if isinstance(value, dict):
-                        if value.get("name") == "configure_render" and "target" in value:
-                            return value["target"]
-                        for child in value.values():
-                            if found := target_in(child):
-                                return found
-                    elif isinstance(value, list):
-                        for child in value:
-                            if found := target_in(child):
-                                return found
-                    return None
-
-                target = target_in(result)
-                assert target, result
+                # Search lists one "target: description" line per match.
+                target = next(
+                    line.split(": ", 1)[0]
+                    for line in result["data"]["content"].splitlines()
+                    if line.startswith("tool:configure_render:")
+                )
                 arguments = {
                     "action": "call",
                     "target": target,

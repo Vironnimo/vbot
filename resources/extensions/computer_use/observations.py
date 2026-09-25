@@ -158,17 +158,10 @@ def _present(
         "view_id": observation.view_id,
         "image_width": image.width,
         "image_height": image.height,
-        "coordinate_space": "image_pixels",
-        "coordinate_note": (
-            "Coordinates use this image's top-left [0,0] and the reported "
-            "image_width/image_height. Windows display scaling is already handled; do not"
-            " apply a DPI multiplier."
-        ),
     }
     if factor < 1:
         result["image_note"] = (
-            "Reduced overview. For small targets, zoom the relevant rectangle and use"
-            " the returned crop's view_id and local coordinates."
+            f"Reduced from {source_width}x{source_height}; zoom in for small targets."
         )
     return result
 
@@ -309,8 +302,7 @@ def zoom(
     result = _present(context, zoomed, crop, "original")
     result["parent_view_id"] = view_id
     result["image_note"] = (
-        "This crop has its own view_id and top-left [0,0]. Measure coordinates in this "
-        "crop, not in the full window. The parent view remains usable until input or a "
-        "new capture."
+        f"Crop of view {view_id}. Coordinates measured in this image start at its top-left "
+        "[0,0] and need this view_id."
     )
     return zoomed, result
