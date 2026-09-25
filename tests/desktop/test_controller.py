@@ -849,6 +849,27 @@ def test_disabled_echo_cancellation_never_creates_the_stage(
     assert calls == [1]
 
 
+def test_a_slow_echo_stage_does_not_delay_listening(voice_rig: Callable[..., Rig]) -> None:
+    ready = threading.Event()
+
+    def factory() -> FakeEchoStage:
+        assert ready.wait(5)
+        return FakeEchoStage()
+
+    rig = voice_rig(settings={"echo_cancellation": True}, echo_factory=factory)
+    try:
+        listening = rig.wait_state("listening")
+    finally:
+        ready.set()
+    wait_until(lambda: rig.voice.status()["echo_cancellation"]["state"] == "active")
+    rig.wait_ready()
+    rig.say_command()
+    rig.sink.wait_for_event("sent")
+
+    assert listening["echo_cancellation"] == {"enabled": True, "state": "starting"}
+    assert uploaded_wav(rig.server.uploads[0])[0] == 48000
+
+
 # -- Status and events -------------------------------------------------------------------------
 
 

@@ -25,11 +25,15 @@ refreshed and retried once before it counts as disconnected.
 The echo stage (:class:`EchoStage`) comes from an :class:`EchoStagePool`
 when echo cancellation is enabled: the capture thread borrows it before it
 opens the microphone and returns it when it ends, so the slow creation of the
-echo canceller happens once per process. A disabled setting uses a
-pass-through stage in state ``off``; no pool, an unavailable library or a
-failing stage fall back to a pass-through stage in state ``unavailable`` for
-the rest of the capture. Only the capture thread calls the stage, except for
-reading ``state``.
+echo canceller happens once per process, in the background. A capture waits
+at most ``echo_stage_wait`` seconds for a stage still being created, then
+listens through a pass-through stage in state ``starting`` and attaches the
+stage at a block boundary once it is ready (with an ``echo_attached`` gap when
+that changes the recording rate). A disabled setting uses a pass-through
+stage in state ``off``; no pool, an unavailable library or a failing stage
+fall back to a pass-through stage in state ``unavailable`` for the rest of
+the capture, and a failed stage is never returned to the pool. Only the
+capture thread calls the stage, except for reading ``state``.
 """
 
 from __future__ import annotations
@@ -66,6 +70,9 @@ HISTORY_SECONDS = 3.0
 RECONNECT_INTERVAL_SECONDS = 30.0
 """Wait between attempts to reopen a disconnected microphone."""
 
+ECHO_STAGE_WAIT_SECONDS = 0.5
+"""How long a starting capture waits for an echo stage still being created."""
+
 _MAX_CONSECUTIVE_READ_FAILURES = 3
 
 CAPTURE_OPENING = "opening"
@@ -75,6 +82,7 @@ CAPTURE_STOPPED = "stopped"
 CAPTURE_FAILED = "failed"
 
 ECHO_OFF = "off"
+ECHO_STARTING = "starting"
 ECHO_ACTIVE = "active"
 ECHO_NO_REFERENCE = "no_reference"
 ECHO_UNAVAILABLE = "unavailable"
@@ -89,6 +97,8 @@ GAP_READ_FAILED = "read_failed"
 """A read failed; the stream was reopened or the microphone disconnected."""
 GAP_ECHO_FAILED = "echo_failed"
 """The echo stage failed and was replaced by a pass-through stage."""
+GAP_ECHO_ATTACHED = "echo_attached"
+"""The echo stage became ready mid-capture and changed the recording rate."""
 GAP_OVERRUN = "overrun"
 """This subscription fell behind; its oldest blocks were dropped."""
 GAP_HISTORY = "history"
@@ -112,7 +122,9 @@ class EchoStage(Protocol):
       and release it later (possibly as an empty array).
     - ``flush()``: release held-back audio (on a gap and on stop).
     - ``reset()``: forget held-back audio and timing after a capture gap.
-    - ``state``: ``off`` | ``active`` | ``no_reference`` | ``unavailable``.
+    - ``state``: ``off`` | ``starting`` | ``active`` | ``no_reference`` |
+      ``unavailable`` (``off``, ``starting`` and ``unavailable`` are
+      pass-through states of the capture).
     - ``close()``: close the reference; called before a PortAudio refresh and
       on stop. ``open`` follows when the microphone reopens.
     """
@@ -136,45 +148,74 @@ EchoStageFactory = Callable[[], EchoStage | None]
 
 
 class EchoStagePool:
-    """Creates echo stages on demand and keeps a returned one for the next capture.
+    """Creates echo stages in the background and keeps a returned one for the next capture.
 
-    Creating the real stage loads a native library (up to seconds), so every
-    capture after the first reuses the stage the previous one returned. A
-    stage is lent to one capture at a time: while an abandoned capture thread
-    still holds it, the next capture gets a new one. A factory that returns
-    ``None`` or raises is not asked again.
+    Creating the real stage loads a native library (up to seconds), so it runs
+    on a daemon thread (``vbot-voice-echo-init``) that :meth:`prepare` or
+    :meth:`acquire` starts, and every capture after the first reuses the stage
+    the previous one returned. A stage is lent to one capture at a time: while
+    an abandoned capture thread still holds it, the next capture gets a new
+    one. A factory that returns ``None`` or raises makes the pool
+    ``unavailable`` for the rest of the process; it is not asked again.
     """
 
     def __init__(self, factory: EchoStageFactory) -> None:
         self._factory = factory
-        self._create_lock = threading.Lock()
-        self._lock = threading.Lock()
+        self._condition = threading.Condition()
         self._idle: EchoStage | None = None
+        self._creating = False
         self._unavailable = False
 
-    def acquire(self) -> EchoStage | None:
-        """Lend a closed stage, creating one when none is idle; ``None`` when unavailable."""
-        with self._create_lock:
-            with self._lock:
-                idle, self._idle = self._idle, None
-                if idle is not None or self._unavailable:
-                    return idle
-            created: EchoStage | None
-            try:
-                created = self._factory()
-            except Exception:
-                logger.exception("Echo cancellation could not be created")
-                created = None
-            if created is None:
-                with self._lock:
-                    self._unavailable = True
-            return created
+    @property
+    def unavailable(self) -> bool:
+        """Whether the factory failed; no stage will ever be ready."""
+        with self._condition:
+            return self._unavailable
+
+    def prepare(self) -> None:
+        """Start creating a stage in the background unless one is idle or already coming."""
+        with self._condition:
+            if self._idle is not None or self._creating or self._unavailable:
+                return
+            self._creating = True
+        threading.Thread(target=self._create, name="vbot-voice-echo-init", daemon=True).start()
+
+    def acquire(self, timeout: float = 0.0) -> EchoStage | None:
+        """Lend a closed stage, waiting up to ``timeout`` seconds for one being created.
+
+        ``None`` when no stage is ready yet (its creation continues) or the pool
+        is unavailable.
+        """
+        self.prepare()
+        with self._condition:
+            self._condition.wait_for(lambda: self._idle is not None or not self._creating, timeout)
+            stage, self._idle = self._idle, None
+            return stage
 
     def release(self, stage: EchoStage) -> None:
-        """Take back a closed stage for the next capture."""
-        with self._lock:
+        """Take back a closed, working stage for the next capture."""
+        with self._condition:
             if self._idle is None:
                 self._idle = stage
+                self._condition.notify_all()
+
+    def _create(self) -> None:
+        stage: EchoStage | None
+        try:
+            stage = self._factory()
+        except Exception:
+            logger.exception("Echo cancellation could not be created")
+            stage = None
+        with self._condition:
+            self._creating = False
+            if stage is None:
+                self._unavailable = True
+            elif self._idle is None:
+                self._idle, stage = stage, None
+            self._condition.notify_all()
+        if stage is not None:
+            # A capture returned a stage while this one was created.
+            _close_stage_quietly(stage)
 
 
 class PassThroughEchoStage:
@@ -338,10 +379,12 @@ class AudioCapture:
         clock: Callable[[], float] = time.perf_counter,
         block_seconds: float = BLOCK_SECONDS,
         history_seconds: float = HISTORY_SECONDS,
+        echo_stage_wait: float = ECHO_STAGE_WAIT_SECONDS,
     ) -> None:
         self._requested = microphone.to_dict() if microphone is not None else None
         self._echo_cancellation = echo_cancellation
         self._echo_stages = echo_stages
+        self._echo_stage_wait = echo_stage_wait
         self._on_status = on_status
         self._stop = stop_event
         self._backend = backend
@@ -366,6 +409,7 @@ class AudioCapture:
         self._format: CaptureFormat | None = None
         self._stage: EchoStage = PassThroughEchoStage(ECHO_OFF)
         self._borrowed_stage: EchoStage | None = None  # returned to the pool at the end
+        self._awaiting_stage = False  # the pool is still creating this capture's stage
         self._stage_rate = 0  # output rate of the open stage; 0 while closed
         self._stage_open_rate = 0  # capture rate the stage was opened for
         self._resampler: Any = None
@@ -424,7 +468,7 @@ class AudioCapture:
         final = CaptureStatus(CAPTURE_STOPPED)
         try:
             self._sd = self._backend if self._backend is not None else _import_sounddevice()
-            self._stage = self._create_stage()
+            self._stage = self._initial_stage()
             opened = self._open_first() if not self._stop.is_set() else False
             while not self._stop.is_set():
                 opened = self._read_until_failure() if opened else self._wait_for_microphone()
@@ -471,6 +515,8 @@ class AudioCapture:
         """Read until stopped (``True``) or until the microphone disconnects (``False``)."""
         failures = 0
         while not self._stop.is_set():
+            if self._awaiting_stage:
+                self._attach_ready_stage()
             try:
                 samples, arrival = self._read_block()
             except _ReadError:
@@ -615,13 +661,14 @@ class AudioCapture:
         self._resampler = _create_resampler(rate)
 
     def _replace_failed_stage(self) -> None:
-        """Pass the microphone through (``unavailable``) for the rest of this capture."""
+        """Pass the microphone through (``unavailable``) for the rest of this capture.
+
+        The failed stage is closed and dropped: the pool never lends it again.
+        """
         failed = self._stage
         self._stage = PassThroughEchoStage(ECHO_UNAVAILABLE)
-        try:
-            failed.close()
-        except Exception:
-            logger.debug("Failed echo stage did not close cleanly", exc_info=True)
+        self._drop_borrowed_stage(failed)
+        _close_stage_quietly(failed)
         capture_rate = self._format.sample_rate if self._format is not None else 0
         previous_rate = self._stage_rate
         self._stage.open(capture_rate)
@@ -656,15 +703,52 @@ class AudioCapture:
             self._stage.close()
         except Exception:
             logger.warning("Echo stage did not close cleanly", exc_info=True)
+            self._drop_borrowed_stage(self._stage)
 
-    def _create_stage(self) -> EchoStage:
+    def _drop_borrowed_stage(self, stage: EchoStage) -> None:
+        if stage is self._borrowed_stage:
+            self._borrowed_stage = None
+
+    def _initial_stage(self) -> EchoStage:
+        """The pool's stage when ready in time, else a pass-through that awaits it."""
         if not self._echo_cancellation:
             return PassThroughEchoStage(ECHO_OFF)
-        stage = self._echo_stages.acquire() if self._echo_stages is not None else None
-        if stage is None:
+        pool = self._echo_stages
+        stage = pool.acquire(self._echo_stage_wait) if pool is not None else None
+        if stage is not None:
+            self._borrowed_stage = stage
+            return stage
+        if pool is None or pool.unavailable:
             return PassThroughEchoStage(ECHO_UNAVAILABLE)
+        logger.info("Echo cancellation is still starting; listening without it meanwhile")
+        self._awaiting_stage = True
+        return PassThroughEchoStage(ECHO_STARTING)
+
+    def _attach_ready_stage(self) -> None:
+        """Replace the ``starting`` pass-through once the pool has the stage (between blocks)."""
+        pool = self._echo_stages
+        capture_format = self._format
+        assert pool is not None and capture_format is not None
+        stage = pool.acquire()
+        if stage is None:
+            if pool.unavailable:
+                self._awaiting_stage = False
+                self._stage.state = ECHO_UNAVAILABLE  # still the pass-through
+                self._publish_echo_state()
+            return
+        self._awaiting_stage = False
         self._borrowed_stage = stage
-        return stage
+        pass_through_rate = self._stage_rate
+        resampler = self._resampler
+        self._stage = stage
+        self._stage_rate = 0  # the pass-through holds nothing to close
+        self._prepare_stage(capture_format.sample_rate)
+        if self._stage_rate == pass_through_rate:
+            self._resampler = resampler  # the 16 kHz projection continues seamlessly
+        else:
+            self._deliver_gap(GAP_ECHO_ATTACHED)
+        logger.info("Echo cancellation became ready mid-capture (state=%s)", self._stage.state)
+        self._publish_echo_state()
 
     def _publish_echo_state(self) -> None:
         state = self._stage.state
@@ -687,6 +771,13 @@ class AudioCapture:
         with self._lock:
             if subscription in self._subscriptions:
                 self._subscriptions.remove(subscription)
+
+
+def _close_stage_quietly(stage: EchoStage) -> None:
+    try:
+        stage.close()
+    except Exception:
+        logger.debug("Echo stage did not close cleanly", exc_info=True)
 
 
 def _import_sounddevice() -> Any:

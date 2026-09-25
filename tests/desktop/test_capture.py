@@ -119,6 +119,22 @@ def subscribe_to(target: list[CaptureSubscription], **kwargs: Any) -> Callable[.
     return subscribe
 
 
+def read_items_until(
+    subscription: CaptureSubscription,
+    done: Callable[[AudioBlock | CaptureGap], bool],
+    timeout: float = 5.0,
+) -> list[AudioBlock | CaptureGap]:
+    """Read items until ``done(item)`` holds for the last one read."""
+    items: list[AudioBlock | CaptureGap] = []
+    deadline = time.monotonic() + timeout
+    while not items or not done(items[-1]):
+        assert time.monotonic() < deadline, f"no matching item among {len(items)}"
+        item = subscription.read(0.1)
+        if item is not None:
+            items.append(item)
+    return items
+
+
 def pool_of(*stages: EchoStage | None) -> tuple[EchoStagePool, list[int]]:
     """A pool whose factory hands out ``stages`` in order and counts its calls."""
     calls: list[int] = []
@@ -127,6 +143,18 @@ def pool_of(*stages: EchoStage | None) -> tuple[EchoStagePool, list[int]]:
     def factory() -> EchoStage | None:
         calls.append(1)
         return queue.pop(0)
+
+    return EchoStagePool(factory), calls
+
+
+def slow_pool(stage: EchoStage | None, ready: threading.Event) -> tuple[EchoStagePool, list[int]]:
+    """A pool whose factory returns ``stage`` only once ``ready`` is set."""
+    calls: list[int] = []
+
+    def factory() -> EchoStage | None:
+        calls.append(1)
+        assert ready.wait(5)
+        return stage
 
     return EchoStagePool(factory), calls
 
@@ -567,7 +595,7 @@ def test_the_pool_reuses_the_stage_a_finished_capture_returned(
 def test_a_stage_still_lent_out_is_never_shared(start_capture: Callable[..., Running]) -> None:
     held, fresh = FakeEchoStage(), FakeEchoStage()
     pool, calls = pool_of(held, fresh)
-    assert pool.acquire() is held  # an abandoned capture still holds it
+    assert pool.acquire(5) is held  # an abandoned capture still holds it
 
     run = start_capture(FakeSoundDevice(), echo_cancellation=True, echo_stages=pool)
     wait_until(lambda: bool(run.statuses))
@@ -575,6 +603,110 @@ def test_a_stage_still_lent_out_is_never_shared(start_capture: Callable[..., Run
     assert calls == [1, 1]
     assert fresh.log[0] == "stage.open:16000"
     assert held.log == []
+
+
+def test_a_stage_that_failed_is_never_lent_again(start_capture: Callable[..., Running]) -> None:
+    failing, fresh = FakeEchoStage(), FakeEchoStage()
+    pool, calls = pool_of(failing, fresh)
+    subscriptions: list[CaptureSubscription] = []
+    run = start_capture(
+        FakeSoundDevice(),
+        echo_cancellation=True,
+        echo_stages=pool,
+        subscribe=subscribe_to(subscriptions),
+    )
+    read_items(subscriptions[0], 1)
+    failing.fail_process = True
+    wait_until(lambda: run.capture.status.echo_state == "unavailable")
+    run.stop.set()
+    assert run.capture.join(5)
+
+    again = start_capture(FakeSoundDevice(), echo_cancellation=True, echo_stages=pool)
+    wait_until(lambda: again.capture.status.echo_state == "active")
+
+    assert calls == [1, 1]
+    assert fresh.log[0] == "stage.open:16000"
+    assert failing.log.count("stage.open:16000") == 1
+    assert "stage.close" in failing.log
+
+
+def test_a_slow_echo_canceller_does_not_hold_back_listening(
+    start_capture: Callable[..., Running],
+) -> None:
+    ready = threading.Event()
+    stage = FakeEchoStage(rate=48000)
+    pool, _ = slow_pool(stage, ready)
+    subscriptions: list[CaptureSubscription] = []
+    run = start_capture(
+        FakeSoundDevice(),
+        echo_cancellation=True,
+        echo_stages=pool,
+        echo_stage_wait=0.05,
+        subscribe=subscribe_to(subscriptions),
+    )
+
+    before = read_items(subscriptions[0], 3)
+    assert all(isinstance(item, AudioBlock) and item.recording_rate == 16000 for item in before)
+    assert run.statuses[0].echo_state == "starting"
+
+    ready.set()
+    items = read_items_until(
+        subscriptions[0], lambda item: isinstance(item, AudioBlock) and item.recording_rate == 48000
+    )
+
+    # The stage changes the recording rate, so its first block follows a gap.
+    assert items[-2] == CaptureGap("echo_attached")
+    assert stage.log[0] == "stage.open:16000"
+    wait_until(lambda: run.capture.status.echo_state == "active")
+
+
+def test_an_echo_canceller_at_the_capture_rate_attaches_without_a_gap(
+    start_capture: Callable[..., Running],
+) -> None:
+    pytest.importorskip("soxr")
+    ready = threading.Event()
+    stage = FakeEchoStage(rate=48000)
+    pool, _ = slow_pool(stage, ready)
+    subscriptions: list[CaptureSubscription] = []
+    run = start_capture(
+        FakeSoundDevice(default_samplerate=48000),
+        echo_cancellation=True,
+        echo_stages=pool,
+        echo_stage_wait=0.05,
+        subscribe=subscribe_to(subscriptions),
+    )
+    before = read_items(subscriptions[0], 2)
+    assert run.statuses[0].echo_state == "starting"
+
+    ready.set()
+    items = before + read_items_until(subscriptions[0], lambda _item: len(stage.processed) >= 3)
+
+    assert [item.index for item in items] == list(range(len(items)))  # type: ignore[union-attr]
+    assert {item.recording_rate for item in items} == {48000}  # type: ignore[union-attr]
+    assert stage.log[0] == "stage.open:48000"
+    wait_until(lambda: run.capture.status.echo_state == "active")
+
+
+def test_an_echo_canceller_that_turns_out_unavailable_is_not_asked_again(
+    start_capture: Callable[..., Running],
+) -> None:
+    ready = threading.Event()
+    pool, calls = slow_pool(None, ready)
+    run = start_capture(
+        FakeSoundDevice(), echo_cancellation=True, echo_stages=pool, echo_stage_wait=0.05
+    )
+    wait_until(run.has_status)
+    assert run.statuses[0].echo_state == "starting"
+
+    ready.set()
+    wait_until(lambda: run.capture.status.echo_state == "unavailable")
+    run.stop.set()
+    assert run.capture.join(5)
+    again = start_capture(FakeSoundDevice(), echo_cancellation=True, echo_stages=pool)
+    wait_until(again.has_status)
+
+    assert again.statuses[0].echo_state == "unavailable"
+    assert calls == [1]
 
 
 def test_a_gap_releases_the_held_back_audio_before_the_discontinuity(
