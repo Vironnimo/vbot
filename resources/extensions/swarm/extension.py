@@ -911,6 +911,15 @@ class SwarmExtension:
         host = self.host
         if host is None or host.temporary_agents is None or host.catalog is None:
             raise SwarmStoreError("swarm_closed")
+        replay = await self._store().replay_start(
+            profile_id,
+            prompt,
+            request_id=request_id,
+            expected_profile_revision=expected_profile_revision,
+            working_directory=working_directory,
+        )
+        if replay is not None:
+            return replay
         profile = await self._store().get_profile(profile_id)
         if (
             expected_profile_revision is not None

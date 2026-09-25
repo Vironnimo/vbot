@@ -229,7 +229,11 @@ retain pending delivery and expose needs_attention with ids-only diagnostics.
 
 Start and Resume persist admitted Run results in their existing request receipt;
 replaying that request returns the saved outcome without preparing Sessions or
-admitting work again. A completed Stop returns its saved drain result, and an
+admitting work again. Start validates replay against the retained profile and
+effective configuration before consulting the current profile, directory or
+catalog, so later edits/removal cannot invalidate a matching receipt; changed
+goals, revision pins and effective directory/Project selections still conflict.
+A completed Stop returns its saved drain result, and an
 unfinished Stop can drain only its original lifecycle epoch. The receipts survive
 restart and later Resume attempts. An interrupted admission requires a new explicit
 Resume request, not replay of the old Start/Resume request. Evidence:
