@@ -968,6 +968,326 @@
      }
     ]
    }
+  },
+  {
+   "name": "calendar: timed create",
+   "tool": "calendar",
+   "arguments": {
+    "action": "create",
+    "title": "Dentist",
+    "start": "2030-01-10T15:00"
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "title: Dentist",
+     "start: 2030-01-10T15:00",
+     "end: 2030-01-10T16:00"
+    ]
+   }
+  },
+  {
+   "name": "calendar: all-day create",
+   "tool": "calendar",
+   "arguments": {
+    "action": "create",
+    "title": "Trip",
+    "start": "2030-01-10",
+    "duration": 3
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "start: 2030-01-10",
+     "days: 3"
+    ]
+   }
+  },
+  {
+   "name": "calendar: list a month",
+   "steps": [
+    {
+     "tool": "calendar",
+     "arguments": {
+      "action": "create",
+      "title": "Review",
+      "start": "2031-03-05T10:00"
+     }
+    },
+    {
+     "tool": "calendar",
+     "arguments": {
+      "action": "list",
+      "when": "2031-03"
+     }
+    }
+   ],
+   "expect": {
+    "ok": true,
+    "contains": [
+     "events: 1",
+     "window: 2031-03-01 to 2031-03-31",
+     "title: Review"
+    ]
+   }
+  },
+  {
+   "name": "calendar: find free time as whole spans",
+   "steps": [
+    {
+     "tool": "calendar",
+     "arguments": {
+      "action": "create",
+      "title": "Block",
+      "start": "2031-04-10T15:00"
+     }
+    },
+    {
+     "tool": "calendar",
+     "arguments": {
+      "action": "find_free",
+      "when": "2031-04-10",
+      "duration": 60
+     }
+    }
+   ],
+   "expect": {
+    "ok": true,
+    "contains": [
+     "free: 2",
+     "2031-04-10T00:00 to 2031-04-10T15:00 (15h)",
+     "2031-04-10T16:00 to 2031-04-11T00:00 (8h)"
+    ]
+   }
+  },
+  {
+   "name": "calendar: add an Agent action before an event",
+   "steps": [
+    {
+     "tool": "calendar",
+     "arguments": {
+      "action": "create",
+      "title": "Dentist",
+      "start": "2030-01-10T15:00"
+     }
+    },
+    {
+     "tool": "calendar",
+     "arguments": {
+      "action": "add_action",
+      "id": "$1.id",
+      "when": "start - 1h",
+      "prompt": "Remind the user to leave for the dentist."
+     }
+    }
+   ],
+   "expect": {
+    "ok": true,
+    "contains": [
+     "when: start - 1h",
+     "next_due: 2030-01-10T14:00"
+    ],
+    "absent": [
+     "Remind the user"
+    ]
+   }
+  },
+  {
+   "name": "calendar: reminder phrasing becomes a relative time",
+   "steps": [
+    {
+     "tool": "calendar",
+     "arguments": {
+      "action": "create",
+      "title": "Dentist",
+      "start": "2030-01-10T15:00"
+     }
+    },
+    {
+     "tool": "calendar",
+     "arguments": {
+      "action": "add_reminder",
+      "event_id": "$1.id",
+      "when": "30 minutes before",
+      "prompt": "Leave now."
+     }
+    }
+   ],
+   "expect": {
+    "ok": true,
+    "contains": [
+     "when: start - 30m"
+    ]
+   }
+  },
+  {
+   "name": "calendar: Google-style create with end and summary",
+   "tool": "calendar",
+   "arguments": {
+    "action": "create",
+    "summary": "Dentist",
+    "start": "2030-01-10T15:00",
+    "end": "2030-01-10T15:45",
+    "description": "Bring the insurance card."
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "title: Dentist",
+     "end: 2030-01-10T15:45",
+     "notes: Bring the insurance card."
+    ]
+   }
+  },
+  {
+   "name": "calendar: Google event object with dateTime and all-day end",
+   "tool": "calendar",
+   "arguments": {
+    "summary": "Trip",
+    "start": {
+     "date": "2030-01-10"
+    },
+    "end": {
+     "date": "2030-01-12"
+    }
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "start: 2030-01-10",
+     "days: 2"
+    ]
+   }
+  },
+  {
+   "name": "calendar: RRULE string",
+   "tool": "calendar",
+   "arguments": {
+    "action": "create",
+    "title": "Standup",
+    "start": "2030-01-07T09:00",
+    "duration": 15,
+    "rrule": "FREQ=WEEKLY;BYDAY=MO,WE"
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "repeats: {\"freq\":\"weekly\",\"by_weekday\":[\"mo\",\"we\"]}"
+    ]
+   }
+  },
+  {
+   "name": "calendar: event_id alias on delete",
+   "steps": [
+    {
+     "tool": "calendar",
+     "arguments": {
+      "action": "create",
+      "title": "Dentist",
+      "start": "2030-01-10T15:00"
+     }
+    },
+    {
+     "tool": "calendar",
+     "arguments": {
+      "action": "delete",
+      "event_id": "$1.id"
+     }
+    }
+   ],
+   "expect": {
+    "ok": true,
+    "contains": [
+     "status: deleted"
+    ]
+   }
+  },
+  {
+   "name": "calendar: start in another time zone is converted",
+   "tool": "calendar",
+   "arguments": {
+    "action": "create",
+    "title": "Call",
+    "start": "2030-01-12T10:00",
+    "timezone": "America/New_York"
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "as America/New_York time",
+     "in the server time zone"
+    ]
+   }
+  },
+  {
+   "name": "calendar: create without title names the corrected call",
+   "tool": "calendar",
+   "arguments": {
+    "action": "create",
+    "start": "2030-01-10T15:00"
+   },
+   "expect": {
+    "ok": false,
+    "error_code": "invalid_arguments",
+    "contains": [
+     "create needs \"title\"",
+     "\"start\":\"2030-01-10T15:00\""
+    ]
+   }
+  },
+  {
+   "name": "calendar: delete by title names the event id",
+   "steps": [
+    {
+     "tool": "calendar",
+     "arguments": {
+      "action": "create",
+      "title": "Orthodontist",
+      "start": "2031-05-02T09:30"
+     }
+    },
+    {
+     "tool": "calendar",
+     "arguments": {
+      "action": "delete",
+      "title": "orthodontist"
+     }
+    }
+   ],
+   "expect": {
+    "ok": false,
+    "error_code": "invalid_arguments",
+    "contains": [
+     "delete needs the event \"id\"; \"Orthodontist\" at 2031-05-02T09:30 has id evt_",
+     "Send: {\"action\":\"delete\",\"id\":\"evt_"
+    ]
+   }
+  },
+  {
+   "name": "calendar: requested reminders are refused with add_action guidance",
+   "tool": "calendar",
+   "arguments": {
+    "action": "create",
+    "title": "Dentist",
+    "start": "2030-01-10T15:00",
+    "reminders": {
+     "useDefault": false,
+     "overrides": [
+      {
+       "method": "popup",
+       "minutes": 10
+      }
+     ]
+    }
+   },
+   "expect": {
+    "ok": false,
+    "error_code": "invalid_arguments",
+    "contains": [
+     "the calendar has no reminders",
+     "add_action"
+    ]
+   }
   }
  ]
 }
