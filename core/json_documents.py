@@ -3,7 +3,8 @@
 Every in-scope document is a JSON object with a top-level ``format_version``. Its
 owner describes the object levels it models with a :class:`JsonShape` and keeps
 validating the content itself (see :mod:`core.config_validation`). This module
-owns only the contract mechanics every owner shares:
+owns the list of in-scope documents (:data:`DURABLE_DOCUMENTS`) and only the
+contract mechanics every owner shares:
 
 - :func:`validate_format_version` refuses a missing, malformed, older, or newer
   version. A newer version comes from a newer vBot and is never overwritten.
@@ -20,10 +21,14 @@ it needs a ``format_version`` bump and a converter.
 from __future__ import annotations
 
 import copy
+import fnmatch
 import json
-from collections.abc import Callable, Iterable, Mapping
+import os
+import stat
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Literal
 
 from core.config_validation import (
@@ -41,6 +46,31 @@ from core.utils.atomic import atomic_write_text
 
 FORMAT_VERSION_FIELD = "format_version"
 CONVERTER_HINT = "scripts/converters/persistence_generation_1"
+
+#: Every durable JSON document under this contract: a stable kind name and the
+#: document's data-dir relative location, where ``*`` matches within one path
+#: segment. ``vbot doctor config`` validates each kind through its owner and data
+#: snapshots capture every matching file as one set. A new document joins here.
+DURABLE_DOCUMENTS: Mapping[str, str] = MappingProxyType(
+    {
+        "settings": "settings.json",
+        "agent": "agents/*/agent.json",
+        "agent_order": "agents/order.json",
+        "agent_prompt_layout": "agents/*/prompts/layout.json",
+        "prompt_layout": "prompts/layout.json",
+        "channel": "channels/*/channel.json",
+        "project": "projects/*/project.json",
+        "cron_jobs": "cron/jobs.json",
+        "bootstrap_jobs": "bootstrap/jobs.json",
+        "calendar_events": "calendar/events.json",
+        "calendar_actions": "calendar/actions.json",
+        "skill_policy": "skills/policy.json",
+        "terminal_launch_history": "terminals/launch-history.json",
+        "terminal_groups": "terminals/groups.json",
+        "oauth_token": "oauth/*.json",
+        "mcp_connections": "mcp/connections.json",
+    }
+)
 
 ShapeKind = Literal["object", "map", "list", "opaque"]
 DocumentValidator = Callable[[Any], list[JsonDiagnostic]]
@@ -347,6 +377,75 @@ def render_json_document(
     body.pop(FORMAT_VERSION_FIELD, None)
     document = {FORMAT_VERSION_FIELD: version, **body}
     return json.dumps(document, ensure_ascii=False, indent=2) + "\n"
+
+
+def durable_document_paths(data_dir: Path) -> tuple[str, ...]:
+    """Every existing durable JSON document in ``data_dir`` as a relative POSIX path.
+
+    Only regular files reached through real directories count. Symbolic links,
+    Windows junctions and names starting with ``.`` (staging files) never match, so
+    a data snapshot neither copies nor replaces them. Operational listing failures raise
+    ``OSError``; a missing directory simply holds no documents.
+    """
+
+    root = Path(data_dir)
+    found: set[str] = set()
+    for pattern in DURABLE_DOCUMENTS.values():
+        found.update(_matching_documents(root, tuple(pattern.split("/")), ()))
+    return tuple(sorted(found))
+
+
+def is_durable_document_path(path: str) -> bool:
+    """Whether ``path`` is a relative POSIX path the document set may contain."""
+
+    if not isinstance(path, str) or not path or any(char in path for char in "\\:\0"):
+        return False
+    parts = path.split("/")
+    if any(part in {"", ".", ".."} for part in parts):
+        return False
+    return any(
+        len(parts) == len(pattern) and all(map(_segment_matches, parts, pattern))
+        for pattern in (tuple(value.split("/")) for value in DURABLE_DOCUMENTS.values())
+    )
+
+
+def _is_link(status: os.stat_result) -> bool:
+    """A symbolic link or a Windows junction; other reparse points are ordinary files."""
+    junction: int | None = getattr(stat, "IO_REPARSE_TAG_MOUNT_POINT", None)
+    tag: int | None = getattr(status, "st_reparse_tag", None)
+    return stat.S_ISLNK(status.st_mode) or (junction is not None and tag == junction)
+
+
+def _segment_matches(name: str, pattern: str) -> bool:
+    return not name.startswith(".") and fnmatch.fnmatchcase(name, pattern)
+
+
+def _matching_documents(
+    directory: Path, parts: tuple[str, ...], prefix: tuple[str, ...]
+) -> Iterator[str]:
+    segment, rest = parts[0], parts[1:]
+    if any(char in segment for char in "*?["):
+        try:
+            with os.scandir(directory) as entries:
+                names = sorted(
+                    entry.name for entry in entries if _segment_matches(entry.name, segment)
+                )
+        except (FileNotFoundError, NotADirectoryError):
+            return
+    else:
+        names = [segment]
+    for name in names:
+        try:
+            status = os.lstat(directory / name)
+        except (FileNotFoundError, NotADirectoryError):
+            continue
+        if _is_link(status):
+            continue
+        if rest:
+            if stat.S_ISDIR(status.st_mode):
+                yield from _matching_documents(directory / name, rest, (*prefix, name))
+        elif stat.S_ISREG(status.st_mode):
+            yield "/".join((*prefix, name))
 
 
 def _refusal_message(path: Path, fmt: JsonDocumentFormat, report: JsonValidationReport) -> str:

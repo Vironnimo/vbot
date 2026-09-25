@@ -32,6 +32,7 @@ from core.config_validation import (
 )
 from core.fetch_config import WEB_FETCH_FIELDS, parse_web_fetch_settings
 from core.json_documents import (
+    DURABLE_DOCUMENTS,
     FORMAT_VERSION_FIELD,
     OPAQUE,
     JsonDocumentFormat,
@@ -347,27 +348,34 @@ def validate_data_dir_config(data_dir: str | Path) -> tuple[JsonValidationReport
     # Extension hook for doctor checks yet, so this one import points outward.
     from resources.extensions.mcp.config import validate_connections_file
 
-    # Data-dir relative glob patterns; a literal pattern matches only an existing file.
-    documents: tuple[tuple[str, Callable[[Path], JsonValidationReport]], ...] = (
-        ("agents/*/agent.json", validate_agent_file),
-        ("agents/order.json", validate_agent_order_file),
-        ("agents/*/prompts/layout.json", validate_prompt_layout_file),
-        ("prompts/layout.json", validate_prompt_layout_file),
-        ("channels/*/channel.json", validate_channel_file),
-        ("projects/*/project.json", validate_project_file),
-        ("cron/jobs.json", validate_cron_jobs_file),
-        ("bootstrap/jobs.json", validate_bootstrap_jobs_file),
-        ("calendar/events.json", validate_calendar_events_file),
-        ("calendar/actions.json", validate_calendar_actions_file),
-        ("skills/policy.json", validate_skill_policy_file),
-        ("terminals/launch-history.json", validate_terminal_launch_history_file),
-        ("terminals/groups.json", validate_terminal_groups_file),
-        ("oauth/*.json", validate_oauth_token_file),
-        ("mcp/connections.json", validate_connections_file),
-    )
+    # One owner validator per kind of ``DURABLE_DOCUMENTS``, which owns the locations.
+    validators: dict[str, Callable[[Path], JsonValidationReport]] = {
+        "settings": validate_settings_file,
+        "agent": validate_agent_file,
+        "agent_order": validate_agent_order_file,
+        "agent_prompt_layout": validate_prompt_layout_file,
+        "prompt_layout": validate_prompt_layout_file,
+        "channel": validate_channel_file,
+        "project": validate_project_file,
+        "cron_jobs": validate_cron_jobs_file,
+        "bootstrap_jobs": validate_bootstrap_jobs_file,
+        "calendar_events": validate_calendar_events_file,
+        "calendar_actions": validate_calendar_actions_file,
+        "skill_policy": validate_skill_policy_file,
+        "terminal_launch_history": validate_terminal_launch_history_file,
+        "terminal_groups": validate_terminal_groups_file,
+        "oauth_token": validate_oauth_token_file,
+        "mcp_connections": validate_connections_file,
+    }
+    if set(validators) != set(DURABLE_DOCUMENTS):
+        raise RuntimeError("every durable JSON document kind needs exactly one validator")
     root = Path(data_dir).expanduser()
-    reports = [validate_settings_file(root / "settings.json")]
-    for pattern, validate in documents:
+    reports = [validate_settings_file(root / DURABLE_DOCUMENTS["settings"])]
+    for kind, pattern in DURABLE_DOCUMENTS.items():
+        if kind == "settings":
+            continue
+        validate = validators[kind]
+        # A literal pattern matches only an existing file.
         reports.extend(validate(path) for path in sorted(root.glob(pattern)) if path.is_file())
     return tuple(reports)
 

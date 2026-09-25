@@ -6,11 +6,12 @@ import importlib
 import json
 import math
 import os
+import re
 import secrets
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import IO, Any
 
 import psutil  # type: ignore[import-untyped]
 
@@ -24,6 +25,39 @@ CONTROL_RECORD_MAX_BYTES = 16_384
 CONTROL_TOKEN_BYTES = 32
 # The control record carries the shutdown authority token; only the owner reads it.
 CONTROL_RECORD_MODE = 0o600
+_CLAIM_FILE_PATTERN = re.compile(r"^server-(\d{1,5})\.lock$")
+
+
+def _lock_claim(handle: IO[bytes]) -> None:
+    """Take the non-blocking lifetime lock on byte 0; ``OSError`` while another holds it."""
+    if os.name == "nt":
+        msvcrt = importlib.import_module("msvcrt")
+
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+    else:
+        import fcntl
+
+        fcntl.flock(  # type: ignore[attr-defined]
+            handle.fileno(),
+            fcntl.LOCK_EX | fcntl.LOCK_NB,  # type: ignore[attr-defined]
+        )
+
+
+def _unlock_claim(handle: IO[bytes]) -> None:
+    with suppress(OSError):
+        handle.seek(0)
+        if os.name == "nt":
+            msvcrt = importlib.import_module("msvcrt")
+
+            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(  # type: ignore[attr-defined]
+                handle.fileno(),
+                fcntl.LOCK_UN,  # type: ignore[attr-defined]
+            )
 
 
 @contextmanager
@@ -36,21 +70,11 @@ def server_control_claim(data_dir: str | Path, port: int):
     locked = False
     try:
         if os.name == "nt":
-            msvcrt = importlib.import_module("msvcrt")
-
             handle.seek(0, os.SEEK_END)
             if handle.tell() == 0:
                 handle.write(b"\0")
                 handle.flush()
-            handle.seek(0)
-            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-        else:
-            import fcntl
-
-            fcntl.flock(  # type: ignore[attr-defined]
-                handle.fileno(),
-                fcntl.LOCK_EX | fcntl.LOCK_NB,  # type: ignore[attr-defined]
-            )
+        _lock_claim(handle)
         locked = True
         existing = read_server_control(data_dir, port)
         if existing is not None and existing.pid != os.getpid():
@@ -71,20 +95,47 @@ def server_control_claim(data_dir: str | Path, port: int):
         raise
     finally:
         if locked:
-            with suppress(OSError):
-                handle.seek(0)
-                if os.name == "nt":
-                    msvcrt = importlib.import_module("msvcrt")
-
-                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-                else:
-                    import fcntl
-
-                    fcntl.flock(  # type: ignore[attr-defined]
-                        handle.fileno(),
-                        fcntl.LOCK_UN,  # type: ignore[attr-defined]
-                    )
+            _unlock_claim(handle)
         handle.close()
+
+
+def live_server_ports(data_dir: str | Path) -> tuple[int, ...]:
+    """Ports whose lifetime claim a live server process holds in ``data_dir``.
+
+    The operating system releases a claim when its process exits, so this
+    sees every running vBot server on the data directory whatever its port,
+    version or startup mode. A claim that cannot be probed counts as held.
+    """
+
+    directory = Path(data_dir).expanduser().resolve() / CONTROL_DIRECTORY_NAME
+    try:
+        entries = sorted(directory.iterdir())
+    except FileNotFoundError:
+        return ()
+    ports: list[int] = []
+    for entry in entries:
+        match = _CLAIM_FILE_PATTERN.fullmatch(entry.name)
+        if match is None or not 1 <= int(match.group(1)) <= 65_535:
+            continue
+        if _claim_held(entry):
+            ports.append(int(match.group(1)))
+    return tuple(ports)
+
+
+def _claim_held(path: Path) -> bool:
+    try:
+        handle = path.open("r+b")
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+    with handle:
+        try:
+            _lock_claim(handle)
+        except OSError:
+            return True
+        _unlock_claim(handle)
+    return False
 
 
 @dataclass(frozen=True, slots=True)
@@ -221,6 +272,7 @@ __all__ = [
     "control_record_path",
     "create_server_control",
     "is_authorized_control_token",
+    "live_server_ports",
     "read_server_control",
     "remove_server_control",
     "server_control_claim",

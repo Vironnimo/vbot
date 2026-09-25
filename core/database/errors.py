@@ -42,3 +42,12 @@ class DatabaseFormatError(DatabaseError):
 
 class IncidentConflictError(DatabaseError):
     """An acknowledgement refers to a recovery incident superseded on disk."""
+
+
+class UpdateRollbackRefusedError(DatabaseError):
+    """An automatic update rollback cannot prove its data snapshot is safe to restore.
+
+    Nothing was changed. The snapshot is missing, belongs to another update, no
+    longer verifies, or the data directory may have been written by something
+    other than the failed candidate since the snapshot.
+    """

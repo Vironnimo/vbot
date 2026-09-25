@@ -45,7 +45,7 @@ Some directories are created only when their owning feature first writes data.
 | `agents/<agent-id>/skills/` | Skills private to one Identity Agent | `vbot skill read/create/update/delete --scope agent:<agent-id>` |
 | `agents/<agent-id>/prompts/` | Agent-scoped System Prompt layout and overrides when custom prompting is enabled | `vbot prompt ... --scope agent:<agent-id>` |
 | `projects/<project-id>/project.json` | Project record, including the external cwd and Project policy | `vbot project show/list/set` |
-| `snapshots/`, `incidents/` and `quarantine/` | Verified data snapshots of the canonical databases, recovery incidents, and damaged database files kept as evidence | `vbot data-store ...`; Project and Identity Session history both live in `sessions.db` |
+| `snapshots/`, `incidents/` and `quarantine/` | Verified data snapshots of the canonical databases and JSON documents, recovery incidents, and damaged database files or replaced JSON documents kept as evidence | `vbot data-store ...`; Project and Identity Session history both live in `sessions.db` |
 | `skills/` | User-global Skills shared across Identity Agents, subject to their policy | `vbot skill ... --scope global` |
 | `prompts/` | Default-scope System Prompt layout and overrides | `vbot prompt ... --scope default` |
 | `channels/<channel-id>/` | Channel configuration plus Channel-owned routing/idempotency state | `vbot channel list/status/update`; credentials remain outside Channel JSON |

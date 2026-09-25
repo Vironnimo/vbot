@@ -13,7 +13,7 @@ from cli.main import dispatch_data_store_command
 from cli.parser import parse_args
 from cli.server_management import CommandResult, HealthProbeResult, ServerInstance
 from core.chat import ChatMessage
-from core.database import create_data_snapshot, write_bootstrap_marker
+from core.database import SnapshotRestore, create_data_snapshot, write_bootstrap_marker
 from core.database.recovery import incident_path
 from core.sessions import ChatSessionManager, SessionAddress
 
@@ -97,9 +97,15 @@ def test_dispatch_routes_nested_data_store_commands(tmp_path: Path) -> None:
         return CommandResult(ok=True, message="create", instance=resolved)
 
     def restore(
-        resolved: ServerInstance, snapshot_id: str, confirm: bool, databases: list[str]
+        resolved: ServerInstance,
+        snapshot_id: str,
+        confirm: bool,
+        databases: list[str],
+        *,
+        documents: bool,
+        complete: bool,
     ) -> CommandResult:
-        calls.append(("restore", (snapshot_id, confirm, tuple(databases))))
+        calls.append(("restore", (snapshot_id, confirm, tuple(databases), documents, complete)))
         return CommandResult(ok=True, message="restore", instance=resolved)
 
     status_args = parse_args(["data-store", "status"])
@@ -107,14 +113,19 @@ def test_dispatch_routes_nested_data_store_commands(tmp_path: Path) -> None:
     restore_args = parse_args(
         ["data-store", "snapshot", "restore", "s-1", "--database", "sessions", "--yes"]
     )
+    documents_args = parse_args(["data-store", "snapshot", "restore", "s-1", "--documents"])
+    complete_args = parse_args(["data-store", "snapshot", "restore", "s-1", "--all", "--yes"])
 
     assert dispatch_data_store_command(status_args, instance, status_fn=status).ok
     assert dispatch_data_store_command(create_args, instance, snapshot_create_fn=create).ok
-    assert dispatch_data_store_command(restore_args, instance, snapshot_restore_fn=restore).ok
+    for args in (restore_args, documents_args, complete_args):
+        assert dispatch_data_store_command(args, instance, snapshot_restore_fn=restore).ok
     assert calls == [
         ("status", instance),
         ("create", "update"),
-        ("restore", ("s-1", True, ("sessions",))),
+        ("restore", ("s-1", True, ("sessions",), False, False)),
+        ("restore", ("s-1", False, (), True, False)),
+        ("restore", ("s-1", True, (), False, True)),
     ]
 
 
@@ -285,7 +296,7 @@ def test_restore_checks_process_shutdown_even_after_listener_closed(
 
     def restore(*_args, check_only: bool = False, **_kwargs):
         calls.append("check" if check_only else "restore")
-        return []
+        return SnapshotRestore("snapshot")
 
     monkeypatch.setattr(
         data_store_management,
