@@ -37,6 +37,19 @@ def _address(
     return SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
 
 
+async def wait_for_started(manager: Any, count: int = 1) -> list[dict[str, Any]]:
+    """Return the started child Runs once ``count`` exist.
+
+    A spawn opens its child Session on the Session database's pool before the
+    Run starts, so the child starts a few loop turns after the spawn begins.
+    """
+    for _ in range(500):
+        if len(manager.started) >= count:
+            return list(manager.started)
+        await asyncio.sleep(0.01)
+    raise AssertionError(f"expected {count} started child Run(s), got {len(manager.started)}")
+
+
 async def _handle_subagent(
     context: ToolContext,
     arguments: JsonObject,

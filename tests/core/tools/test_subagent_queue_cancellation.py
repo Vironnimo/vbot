@@ -19,6 +19,7 @@ from .subagent_test_support import (
     make_context,
     make_runtime,
     pytest,
+    wait_until,
 )
 
 pytestmark = pytest.mark.asyncio
@@ -186,7 +187,7 @@ async def test_subagent_tool_returns_queued_without_waiting_for_busy_session_sta
             batch_tracker=tracker,
         )
     )
-    await asyncio.sleep(0)
+    await wait_until(task.done)
 
     # Assert
     assert len(manager.enqueued) == 1
@@ -284,10 +285,9 @@ async def test_parent_cancellation_removes_foreground_queued_subagent(tmp_path: 
             batch_tracker=tracker,
         )
     )
-    await asyncio.sleep(0)
+    await wait_until(lambda: bool(manager.enqueued))
     manager.parent_run.request_cancel()
-    for _ in range(BACKGROUND_TASK_SETTLE_TICKS):
-        await asyncio.sleep(0)
+    await wait_until(task.done)
 
     # Assert
     assert task.done() is True
