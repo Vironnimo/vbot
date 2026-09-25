@@ -19,7 +19,7 @@ from functools import cache
 from typing import Any
 
 from core.tools._argument_repair import normalize_call_arguments
-from core.tools._field_aliases import SpellingAliases
+from core.tools._field_aliases import SpellingAliases, spelling
 from core.tools._patch_syntax import _Hunk, _Operation, _parse, _PatchError, _Replacement
 from core.tools.contracts import ToolContract, compile_tool_contract
 from core.tools.model_names import model_tool_name
@@ -102,8 +102,9 @@ _FIELD_ALIASES = SpellingAliases(
     }
 )
 
-# Remarks some harnesses attach to an edit; they request no effect.
-_REMARKS = frozenset({"explanation", "instructions", "instruction", "description"})
+# Remarks some harnesses attach to an edit; they request no effect. Roo's
+# write_to_file adds line_count, a count of the content's lines.
+_REMARKS = frozenset({"explanation", "instructions", "instruction", "description", "linecount"})
 
 _CHANGE_FIELDS = {
     "patch": "patch",
@@ -140,7 +141,7 @@ def normalize_patch_arguments(arguments: Any) -> Any:
     )
     if not isinstance(normalized, dict):
         return normalized
-    result = {key: value for key, value in normalized.items() if key not in _REMARKS}
+    result = {key: value for key, value in normalized.items() if spelling(key) not in _REMARKS}
     if "code_edit" in result:
         raise ValueError(
             "code_edit cannot be applied: it marks unchanged code with placeholder "

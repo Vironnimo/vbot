@@ -158,6 +158,9 @@ async def test_write_shapes_create_replace_and_empty_files(run):
     assert content_of(run, "new.txt") == b"one\r\ntwo\r\n"
     made = await run({"command": "create", "path": "made.txt", "file_text": "made\n"})
     assert made["ok"] and content_of(run, "made.txt") == b"made\n"
+    # Roo's write_to_file adds a line count, which requests no effect of its own.
+    roo = await run({"path": "roo.txt", "content": "a\nb\n", "line_count": 2})
+    assert roo["ok"] and content_of(run, "roo.txt") == b"a\nb\n"
     emptied = await run({"file_path": "made.txt", "content": ""})
     assert text(emptied) == "Replaced the content of made.txt (empty)."
     assert content_of(run, "made.txt") == b""
