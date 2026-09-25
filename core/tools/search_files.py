@@ -450,7 +450,7 @@ def _page_argument(
 
 
 def _missing_root_message(root: Path, cwd: Path) -> str:
-    message = f"Path not found: {root.as_posix()}"
+    message = f"Path not found: {path_label(root, cwd)}"
     suggestions = corrected_paths(root, cwd)
     if suggestions:
         message += f" (similar: {', '.join(path_label(path, cwd) for path in suggestions)})"
