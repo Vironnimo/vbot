@@ -576,7 +576,9 @@ async def _fork_session(state: Any, params: JsonObject) -> JsonObject:
         fork = await state.runtime.chat_sessions.fork(
             _session_address(source_agent_id, session_id, source_project_id),
             target_agent_id=target_agent_id if target_explicit else None,
-            target_project_id=target_project_id if target_explicit else None,
+            # Without a target the fork stays in the source's scope, which for a
+            # Project Session is its Project.
+            target_project_id=target_project_id,
         )
         fork_metadata = await _session_io(
             state.runtime.chat_sessions,
