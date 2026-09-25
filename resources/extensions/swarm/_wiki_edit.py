@@ -3,11 +3,11 @@
 The matching follows ``apply_patch``: precise matching first, up to newline,
 Unicode, typography and whitespace differences; then the same edit without blank
 boundary lines both texts share; then evidence that the page already holds the
-change. Only after those, similarity may absorb differences in the lines the edit
-keeps (its context), while every line it changes must still match precisely. The
-page's own context lines are kept, so a similar match never overwrites a peer's
-wording. Ambiguity is terminal at the step that finds it. A miss returns bounded
-line hints for the error, never a guess.
+change. Only after those, ``copy_match`` may apply an ``old_text`` copied with
+errors: text the edit keeps stays as the page has it, so a peer's wording is never
+overwritten, and the notes name each changed line that differed. Ambiguity is
+terminal at the step that finds it. A miss returns bounded line hints for the
+error, never a guess.
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 
+from core.tools.copy_match import copy_warnings, replace_copied
 from core.tools.fuzzy_match import (
     AmbiguousFuzzyMatch,
     FuzzyReplacement,
@@ -35,11 +36,15 @@ _HINT_LINE_CHARS = 4000
 
 @dataclass(frozen=True)
 class TextEdit:
-    """The page content after the edit; ``applied`` is False when it already held it."""
+    """The page content after the edit; ``applied`` is False when it already held it.
+
+    ``notes`` tell the caller where its ``old_text`` differed from the page.
+    """
 
     content: str
     line: int
     applied: bool
+    notes: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -55,11 +60,14 @@ class EditMiss:
 
     ``lines`` names every distinct line an ambiguous ``old_text`` starts on;
     ``passages`` shows a bounded few of them, or the closest text on a miss.
+    ``similar`` marks an ``old_text`` that matched nowhere exactly but resembles
+    several passages.
     """
 
     occurrences: int
     passages: tuple[Passage, ...]
     lines: tuple[int, ...] = ()
+    similar: bool = False
 
 
 def apply_text_edit(content: str, old: str, new: str) -> TextEdit | EditMiss:
@@ -70,7 +78,7 @@ def apply_text_edit(content: str, old: str, new: str) -> TextEdit | EditMiss:
     if trimmed != (old, new) and trimmed[0].strip():
         attempts.append(trimmed)
     for locator, replacement in attempts:
-        found = _replace(content, locator, replacement, precise=True)
+        found = _replace(content, locator, replacement)
         if isinstance(found, AmbiguousFuzzyMatch):
             return _ambiguous(content, found)
         if found is not None:
@@ -78,10 +86,13 @@ def apply_text_edit(content: str, old: str, new: str) -> TextEdit | EditMiss:
     held = _already_applied(content, old, new)
     if held is not None:
         return TextEdit(content, held, False)
-    if not new.strip() or _replace(content, new, new, precise=True) is None:
-        similar = _replace_similar(content, old, new)
-        if similar is not None:
-            return similar
+    if not new.strip() or _replace(content, new, new) is None:
+        copied = replace_copied(content, old, new)
+        if isinstance(copied, AmbiguousFuzzyMatch):
+            return _ambiguous(content, copied, similar=True)
+        if copied is not None:
+            notes = tuple(copy_warnings(copied))
+            return TextEdit(copied.new_content, copied.first_changed_line, True, notes)
     passages = tuple(
         Passage(candidate.line_number, candidate.text, candidate.truncated)
         for candidate in find_closest_candidates(content, old)
@@ -109,23 +120,8 @@ def _fragment_hint(content: str, old: str) -> tuple[Passage, ...]:
     return (Passage(number, line[:_SNIPPET_LINE_CHARS], len(line) > _SNIPPET_LINE_CHARS),)
 
 
-def _replace(
-    content: str,
-    old: str,
-    new: str,
-    *,
-    precise: bool,
-    required_lines: list[int] | None = None,
-) -> FuzzyReplacement | AmbiguousFuzzyMatch | None:
-    return replace_fuzzy(
-        content,
-        old,
-        new,
-        replace_all=False,
-        precise_only=precise,
-        typographic=True,
-        required_lines=required_lines or (),
-    )
+def _replace(content: str, old: str, new: str) -> FuzzyReplacement | AmbiguousFuzzyMatch | None:
+    return replace_fuzzy(content, old, new, replace_all=False, typographic=True)
 
 
 def _without_shared_blank_boundaries(old: str, new: str) -> tuple[str, str]:
@@ -155,7 +151,7 @@ def _already_applied(content: str, old: str, new: str) -> int | None:
 
     if not new.strip() or old == new:
         return None
-    found = _replace(content, new, new, precise=True)
+    found = _replace(content, new, new)
     if not isinstance(found, FuzzyReplacement):
         return None
     old_lines, new_lines = _LINE_BREAK.split(old), _LINE_BREAK.split(new)
@@ -189,41 +185,7 @@ def _inline_anchors_identify(content: str, old: str, new: str) -> bool:
     return lines == [new]
 
 
-def _replace_similar(content: str, old: str, new: str) -> TextEdit | EditMiss | None:
-    """Match with similar kept lines and exact changed lines, keeping the page's kept lines."""
-
-    old_lines, new_lines = _LINE_BREAK.split(old), _LINE_BREAK.split(new)
-    opcodes = _opcodes(old_lines, new_lines)
-    changed = [
-        index
-        for tag, i1, i2, _, _ in opcodes
-        if tag in {"replace", "delete"}
-        for index in range(i1, i2)
-    ]
-    if len(changed) == len(old_lines) or not any(tag == "equal" for tag, *_ in opcodes):
-        return None
-    found = _replace(content, old, new, precise=False, required_lines=changed)
-    if isinstance(found, AmbiguousFuzzyMatch):
-        return _ambiguous(content, found)
-    if found is None:
-        return None
-    start, end = found.before_spans[0]
-    after_start, after_end = found.after_spans[0]
-    actual = _LINE_BREAK.split(content[start:end])
-    prepared = _LINE_BREAK.split(found.new_content[after_start:after_end])
-    if len(actual) != len(old_lines):
-        return None
-    if len(prepared) != len(new_lines):
-        prepared = new_lines
-    output: list[str] = []
-    for tag, i1, i2, j1, j2 in opcodes:
-        output.extend(actual[i1:i2] if tag == "equal" else prepared[j1:j2])
-    ending = _line_ending(content)
-    edited = content[:start] + ending.join(output) + content[end:]
-    return TextEdit(edited, found.first_changed_line, True)
-
-
-def _ambiguous(content: str, match: AmbiguousFuzzyMatch) -> EditMiss:
+def _ambiguous(content: str, match: AmbiguousFuzzyMatch, *, similar: bool = False) -> EditMiss:
     lines = _LINE_BREAK.split(content)
     starts = tuple(dict.fromkeys(match.line_numbers))
     passages = []
@@ -236,7 +198,7 @@ def _ambiguous(content: str, match: AmbiguousFuzzyMatch) -> EditMiss:
                 any(len(line) > _SNIPPET_LINE_CHARS for line in window),
             )
         )
-    return EditMiss(match.occurrences, tuple(passages), starts)
+    return EditMiss(match.occurrences, tuple(passages), starts, similar)
 
 
 def _opcodes(
@@ -252,11 +214,6 @@ def _common_prefix(first: str, second: str) -> str:
             break
         size += 1
     return first[:size]
-
-
-def _line_ending(content: str) -> str:
-    match = _LINE_BREAK.search(content)
-    return match.group() if match else "\n"
 
 
 __all__ = ["EditMiss", "Passage", "TextEdit", "apply_text_edit"]

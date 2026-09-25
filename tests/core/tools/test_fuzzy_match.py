@@ -331,119 +331,19 @@ def test_exact_wins_over_looser_strategies() -> None:
     assert result.new_content == "  value = 2\n"
 
 
-def test_context_aware_matches_unique_single_line_word_drift() -> None:
-    content = (
-        '    "Continue work that does not depend on the result, or finish the current Run '
-        'now. Do not "\n'
-    )
-    old_string = (
-        '    "Continue work that does not depend on the result, or finish your current Run '
-        'now. Do not "'
-    )
-
-    result = replace_fuzzy(content, old_string, '    "Wait for the result."', replace_all=False)
-
-    assert isinstance(result, FuzzyReplacement)
-    assert result.strategy == "context_aware"
-    assert result.new_content == '    "Wait for the result."\n'
-
-
-def test_context_aware_preserves_crlf_while_tolerating_word_drift() -> None:
-    content = 'message = "finish the current Run now"\r\nnext = True\r\n'
-
-    result = replace_fuzzy(
-        content,
-        'message = "finish your current Run now"',
-        'message = "wait now"',
-        replace_all=False,
-    )
-
-    assert isinstance(result, FuzzyReplacement)
-    assert result.strategy == "context_aware"
-    assert result.new_content == 'message = "wait now"\r\nnext = True\r\n'
-
-
-def test_block_anchor_matches_unique_multiline_middle_drift() -> None:
-    content = "start\nalpha\nthe current Run\nomega\nend\n"
-    old_string = "start\nalpha\nyour current Run\nomega\nend"
-
-    result = replace_fuzzy(content, old_string, "start\nreplacement\nend", replace_all=False)
-
-    assert isinstance(result, FuzzyReplacement)
-    assert result.strategy == "block_anchor"
-    assert result.new_content == "start\nreplacement\nend\n"
-
-
-def test_context_aware_keeps_approximate_ambiguity() -> None:
-    content = (
-        "Continue work, or finish the current Run now. Do not poll.\n"
-        "Continue work, or finish a current Run now. Do not poll.\n"
-    )
-
-    result = replace_fuzzy(
-        content,
-        "Continue work, or finish your current Run now. Do not poll.",
-        "Wait for the result.",
-        replace_all=False,
-    )
-
-    assert isinstance(result, AmbiguousFuzzyMatch)
-    assert result.occurrences == 2
-    assert result.line_numbers == [1, 2]
-
-
 @pytest.mark.parametrize(
     ("content", "old_string"),
     [
-        # block_anchor: exact boundaries around a middle that names another call.
+        ('message = "finish the current Run now"\n', 'message = "finish your current Run now"'),
         (
-            "def process(data):\n    validate(data)\n    save_to_database(data)\n    return True\n",
-            "def process(data):\n    validate(data)\n    log(data)\n    return True",
-        ),
-        # context_aware: every line is similar, but the required value differs.
-        (
-            "TIMEOUT = 30\nRETRIES = 5\nMAX_SIZE = 1024\n",
-            "TIMEOUT = 30\nRETRIES = 3\nMAX_SIZE = 1024",
+            "start\nalpha\nthe current Run\nomega\nend\n",
+            "start\nalpha\nyour current Run\nomega\nend",
         ),
     ],
 )
-def test_similarity_strategies_cannot_absorb_required_line_differences(
-    content: str, old_string: str
-) -> None:
-    unconstrained = replace_fuzzy(content, old_string, "x", replace_all=False)
-    assert isinstance(unconstrained, FuzzyReplacement)
-    assert unconstrained.strategy in {"block_anchor", "context_aware"}
-
-    required = replace_fuzzy(
-        content, old_string, "x", replace_all=False, typographic=True, required_lines=[1, 2]
-    )
-
-    assert required is None
-
-
-def test_required_lines_allow_precise_normalizations_and_context_drift() -> None:
-    content = "    alpha_setting = 1\n    value = “x”\t\n    omega\n"
-    old_string = 'alpha_setting = 2\nvalue  =  "x"\nomega'
-
-    result = replace_fuzzy(
-        content, old_string, "replaced", replace_all=False, typographic=True, required_lines=[1]
-    )
-
-    assert isinstance(result, FuzzyReplacement)
-    assert result.strategy == "context_aware"
-
-
-def test_required_lines_select_the_block_with_the_precise_line_before_ambiguity() -> None:
-    content = "start\nalpha = 1\nvalue = 9\nend\nstart\nalpha = 2\nvalue = 8\nend\n"
-    old_string = "start\nalpha = 3\nvalue = 8\nend"
-
-    assert isinstance(
-        replace_fuzzy(content, old_string, "x", replace_all=False), AmbiguousFuzzyMatch
-    )
-    result = replace_fuzzy(content, old_string, "x", replace_all=False, required_lines=[2])
-
-    assert isinstance(result, FuzzyReplacement)
-    assert result.before_spans == ((content.index("start", 1), len(content) - 1),)
+def test_word_differences_are_left_to_copy_match(content: str, old_string: str) -> None:
+    # Every strategy here is precise; a copy with other words is copy_match's concern.
+    assert replace_fuzzy(content, old_string, "x", replace_all=False, typographic=True) is None
 
 
 @pytest.mark.parametrize(

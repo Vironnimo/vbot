@@ -452,6 +452,7 @@ class WikiCall:
             parts = []
             if "old_text" in arguments:
                 parts.append(status["passage"].format(line=data.get("line", 1)))
+                self.notes.extend(data.get("notes", ()))
             elif "content" in arguments:
                 parts.append(status["content"])
             if "title" in arguments:
@@ -489,7 +490,8 @@ def _miss_message(details: Json, page_id: str) -> str:
             if len(starts) == 1
             else text.WIKI_AT_LINES.format(lines=spoken_list(starts))
         )
-        parts = [text.WIKI_AMBIGUOUS.format(count=details["occurrences"], where=where)]
+        ambiguous = text.WIKI_AMBIGUOUS_SIMILAR if details.get("similar") else text.WIKI_AMBIGUOUS
+        parts = [ambiguous.format(count=details["occurrences"], where=where)]
         parts.extend(
             f"{text.WIKI_PASSAGE_LINE.format(line=passage['line'])}\n{_passage(passage)}"
             for passage in passages

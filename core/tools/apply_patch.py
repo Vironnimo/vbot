@@ -597,7 +597,6 @@ def _locate_context(context: ToolContext, batch: _Batch, name: str, lines: list[
         text,
         replace_all=True,
         whole_lines=True,
-        precise_only=True,
         typographic=True,
     )
     if not isinstance(found, FuzzyReplacement):

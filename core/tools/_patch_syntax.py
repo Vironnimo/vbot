@@ -106,6 +106,11 @@ _MESSAGES = {
         "surrounding text so it matches once, or set replace_all to true to change every "
         "occurrence."
     ),
+    "ambiguous_copy": (
+        "{where}: old_string does not match the file exactly and resembles {occurrences} "
+        "places ({lines}). Copy the current text of the one to change into old_string, with "
+        "enough surrounding text to tell it apart."
+    ),
     "replacement_count": (
         "{where}: old_string occurs {occurrences} times ({lines}), but expected_replacements "
         "is {expected}. Nothing was replaced."

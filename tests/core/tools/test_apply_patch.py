@@ -312,6 +312,30 @@ def test_similarity_never_replaces_a_different_removed_line(tmp_path, before, bo
     assert path.read_bytes() == before.encode()
 
 
+@pytest.mark.parametrize("hint", ["@@", "@@ import os"])
+def test_a_removed_line_copied_with_a_misspelling_is_applied_and_named(tmp_path, hint):
+    path = tmp_path / "file.py"
+    path.write_bytes(b"import os\n\ndef load(order):\n    return order.reciept_total\n")
+
+    result = apply(
+        tmp_path,
+        update(
+            f"{hint}\n def load(order):\n-    return order.receipt_total\n"
+            "+    return order.receipt_total + order.tax",
+            "file.py",
+        ),
+    )
+
+    assert result["ok"], result
+    assert path.read_bytes() == (
+        b"import os\n\ndef load(order):\n    return order.reciept_total + order.tax\n"
+    )
+    assert (
+        "Line 4 did not match your old text exactly and was edited anyway; it read:     "
+        "return order.reciept_total" in text(result)
+    )
+
+
 def test_similarity_absorbs_context_drift_around_precise_removed_lines(tmp_path):
     path = tmp_path / "file.py"
     path.write_bytes("def process(data):\n    value = “x”\n    return True\n".encode())
