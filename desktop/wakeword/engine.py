@@ -418,7 +418,7 @@ class MultiWakewordEngine:
     """Run several wakeword detectors over one shared feature stream.
 
     Each phrase confirms its own threshold crossings and keeps its own arm
-    state: a phrase that fired re-arms only once its score falls below its
+    state: a phrase that fired re-arms only once its raw score falls below its
     threshold, while the other phrases stay armed. Active phrases whose models
     ``overlap`` share one arm state instead, because one utterance drives both
     detectors in consecutive windows: after either fires, neither fires again
@@ -503,7 +503,9 @@ class MultiWakewordEngine:
         accumulate toward a detection and calibration sees the same gated scores.
         The caller decides it; the detection loop's speech gate asks whether the
         chunks 4 to 6 before this one carried speech, as upstream openWakeWord's
-        VAD threshold does.
+        VAD threshold does. Re-arming uses the raw scores: a gate that closes
+        during a short pause while the score is still high must not count as
+        the phrase having ended, or the same utterance fires twice.
         """
         if self._features is None or not self._models:
             return None
@@ -513,7 +515,7 @@ class MultiWakewordEngine:
         scores: dict[str, float] = {}
         groups_below_threshold = dict.fromkeys(self._armed, True)
         for descriptor, model in self._models:
-            score = max(
+            raw_score = max(
                 (
                     _clamp_score(score)
                     for features in feature_batches
@@ -521,15 +523,15 @@ class MultiWakewordEngine:
                 ),
                 default=0.0,
             )
-            if not speech_present:
-                score = 0.0
+            threshold = self._thresholds[descriptor.id]
+            group = self._arm_groups[descriptor.id]
+            if raw_score >= threshold:
+                groups_below_threshold[group] = False
+            score = raw_score if speech_present else 0.0
             scores[descriptor.id] = score
             self._recent_scores[descriptor.id].append(score)
-            threshold = self._thresholds[descriptor.id]
             if score < threshold:
                 continue
-            group = self._arm_groups[descriptor.id]
-            groups_below_threshold[group] = False
             if not self._armed[group]:
                 # Still above threshold since this phrase (or an overlapping one) fired.
                 continue
