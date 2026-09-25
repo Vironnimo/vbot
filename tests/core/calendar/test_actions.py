@@ -14,7 +14,11 @@ import pytest
 
 from core.calendar import CalendarService, CalendarStorageError, CalendarValidationError
 from core.calendar import actions as actions_module
-from core.calendar.actions import parse_action_when, validate_calendar_actions_file
+from core.calendar.actions import (
+    action_message,
+    parse_action_when,
+    validate_calendar_actions_file,
+)
 from core.runs import RunKind, RunStatus
 
 
@@ -317,7 +321,48 @@ async def test_selected_session_and_project_are_preserved(tmp_path):
     assert call.args[0] == "builder"
     assert call.args[2] == "chosen"
     assert call.kwargs["project_id"] == "project"
-    assert json.loads(call.args[1])["instruction"] == "prepare"
+    message = call.args[1]
+    action_id = service.actions.list_actions()[0]["id"]
+    assert message.startswith(
+        f'Calendar action {action_id} is due (start - 1h) for "Meeting" (event {event.id}).\n'
+        "Event time: "
+    )
+    assert message.endswith("(Europe/Berlin)\n\nInstruction:\nprepare")
+
+
+def test_action_message_names_all_day_span_and_notes(tmp_path):
+    service = CalendarService(tmp_path, tz="Europe/Berlin")
+    event = service.create_event(
+        title="Trip", start="2030-01-10", duration_days=3, notes="Pack the charger."
+    )
+    [occurrence] = service.event_occurrences(
+        event, datetime(2030, 1, 9, tzinfo=UTC), datetime(2030, 1, 14, tzinfo=UTC)
+    )
+    action = {"id": "act_1", "when": "start - 1d", "prompt": "Check the trains."}
+
+    assert action_message(action, event, occurrence, "Europe/Berlin") == (
+        f'Calendar action act_1 is due (start - 1d) for "Trip" (event {event.id}).\n'
+        "Event time: 2030-01-10 to 2030-01-12, all day (Europe/Berlin)\n"
+        "Event notes: Pack the charger.\n"
+        "\n"
+        "Instruction:\n"
+        "Check the trains."
+    )
+
+
+def test_action_message_shows_timed_span_in_minutes(tmp_path):
+    service = CalendarService(tmp_path, tz="Europe/Berlin")
+    event = service.create_event(title="Dentist", start="2030-01-10T15:00", duration_minutes=45)
+    [occurrence] = service.event_occurrences(
+        event, datetime(2030, 1, 10, tzinfo=UTC), datetime(2030, 1, 11, tzinfo=UTC)
+    )
+
+    message = action_message(
+        {"id": "act_2", "when": "start", "prompt": "Go."}, event, occurrence, "Europe/Berlin"
+    )
+
+    assert "Event time: 2030-01-10T15:00 to 2030-01-10T15:45 (Europe/Berlin)\n\n" in message
+    assert "Event notes" not in message
 
 
 @pytest.mark.asyncio
