@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from itertools import islice
 from typing import cast
 
 from core.tools.fuzzy_match import FuzzyReplacement, replace_fuzzy
@@ -194,23 +195,22 @@ def wiki(
                 (swarm_id, arguments["page_id"], high, limit + 1, offset),
             ).fetchall()
         else:
-            rows = connection.execute(
+            # Unicode case folding happens in Python: SQLite's lower() folds
+            # ASCII only, and the read connections carry no custom functions.
+            query = arguments.get("query", "").casefold()
+            latest = connection.execute(
                 f"SELECT {ALIASED_WIKI_REVISION_COLUMNS} FROM wiki_revisions r "
                 "JOIN (SELECT page_id,MAX(id) AS latest FROM wiki_revisions "
                 "WHERE swarm_id=? AND id<=? GROUP BY page_id) p ON r.id=p.latest "
-                "WHERE (? OR r.deleted=0) AND (instr(casefold(r.title),?)>0 OR "
-                "instr(casefold(r.content),?)>0) ORDER BY r.id DESC LIMIT ? "
-                "OFFSET ?",
-                (
-                    swarm_id,
-                    high,
-                    arguments.get("include_deleted", False),
-                    arguments.get("query", "").casefold(),
-                    arguments.get("query", "").casefold(),
-                    limit + 1,
-                    offset,
-                ),
-            ).fetchall()
+                "WHERE (? OR r.deleted=0) ORDER BY r.id DESC",
+                (swarm_id, high, arguments.get("include_deleted", False)),
+            )
+            matches = (
+                row
+                for row in latest
+                if query in row["title"].casefold() or query in row["content"].casefold()
+            )
+            rows = list(islice(matches, offset, offset + limit + 1))
         entries = []
         for row in rows[:limit]:
             value = _metadata(row)
@@ -230,7 +230,10 @@ def wiki(
             }
         return result
 
-    return db._write(operation) if action in MUTATIONS else operation(db._require_connection())
+    if action in MUTATIONS:
+        return cast(Json, db._write(operation))
+    with db._read() as connection:
+        return operation(connection)
 
 
 def _mutate(

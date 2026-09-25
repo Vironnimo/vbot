@@ -33,6 +33,11 @@ class ExtensionHost:
     catalog: Callable[[], Awaitable[dict[str, Any]]] | None = None
     publish_change: Callable[[str, Sequence[str], int], None] | None = None
     inspect_prompt: Callable[[Any, str | None], Awaitable[dict[str, Any]]] | None = None
+    # Owner-bound hosts: open one ``ext.<owner>.<name>`` kernel database
+    # (``core/extensions/databases.py``). The root host instead carries
+    # ``release_owner``, which closes a retired registration's databases.
+    open_database: Callable[..., Awaitable[Any]] | None = None
+    release_owner: Callable[[Any], Awaitable[None]] | None = None
 
 
 @dataclass(frozen=True)

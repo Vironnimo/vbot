@@ -22,14 +22,14 @@ Paths beginning with `core/`, `resources/` or `webui/` below are relative to the
 | Bash guard | Intercepting Tool calls with `Deny` and a System Reminder; illustrative, not a security boundary | [guard_bash.py](../assets/extensions/guard_bash.py) |
 | Workflow Command | Starting a Skill as a follow-up Run in the same Agent/Session/Project address | [workflow_command/](../assets/extensions/workflow_command/) |
 
-Read only the capability sections needed for the task: [entry point](#the-entry-point-registerapi), [hooks](#hooks), [Tools](#tools), [pages and owned Sessions](#pages-and-owned-sessions), [Commands](#slash-commands), [Recall](#recall-backends), [channel interactions](#channel-interaction-handlers), [settings](#settings-schema), [prompt blocks](#prompt-blocks), [lifecycle](#lifecycle-startup-and-shutdown), [managed operations](#managed-operations), and [explicit Tool permission](#explicit-tool-permission).
+Read only the capability sections needed for the task: [entry point](#the-entry-point-registerapi), [hooks](#hooks), [Tools](#tools), [pages and owned Sessions](#pages-and-owned-sessions), [Commands](#slash-commands), [Recall](#recall-backends), [channel interactions](#channel-interaction-handlers), [settings](#settings-schema), [prompt blocks](#prompt-blocks), [lifecycle](#lifecycle-startup-and-shutdown), [managed operations](#managed-operations), [Extension databases](#extension-databases), and [explicit Tool permission](#explicit-tool-permission).
 
 > **Trust boundary.** Extensions run in-process with the **same trust as the
 > kernel** — arbitrary Python, no sandbox, no permission system. Only install
 > extensions you would run by hand. This is intentional: vBot is a single-user,
 > technical-user tool.
 
-`API_VERSION` is currently **6**. The extension API is vBot's first public surface; it is designed conservatively and is not yet declared stable. Manifests requiring API v1 or v2 remain compatible; an Extension that declares Tool Families should require API v3 so older vBot versions reject it cleanly. Managed operations and live Tool catalogs require API v4. Tools declaring `requires_opt_in=True` require API v5. Page declarations and explicit Tool catalog visibility require API v6.
+`API_VERSION` is currently **7**. The extension API is vBot's first public surface; it is designed conservatively and is not yet declared stable. Manifests requiring API v1 or v2 remain compatible; an Extension that declares Tool Families should require API v3 so older vBot versions reject it cleanly. Managed operations and live Tool catalogs require API v4. Tools declaring `requires_opt_in=True` require API v5. Page declarations and explicit Tool catalog visibility require API v6. Extension databases (`host.open_database`) require API v7.
 
 ## Install and discovery
 
@@ -188,7 +188,7 @@ The page runs in an opaque-origin sandbox. Its parent bridge validates the sourc
 
 Bridge commands allow up to 64 KiB and host replies up to 8 MiB, including their envelopes. Oversized operation replies reject the request; requests without a reply time out after 30 seconds without replay. A timeout does not prove that a mutation failed: refresh its state before deciding whether to repeat it. Bundle fonts and other presentation assets with the page; external font stylesheets are blocked by its CSP.
 
-A callback appended to `api.operations.startup` receives an owner-bound `ExtensionHost`: `state_dir` is private persistent Extension data, `catalog()` provides safe configured choices, and `publish_change(resource, ids, revision)` invalidates its page. `temporary_agents` creates canonical bound Sessions without Identity workspaces, opens an admission group, starts initial or continuation inputs, closes/drains owned work, and exposes scoped history, Run, receipt and Statistics reads. Handles become invalid when the registration retires. The retained Sessions survive reload; reopening and admitting work is an explicit Extension decision.
+A callback appended to `api.operations.startup` receives an owner-bound `ExtensionHost`: `state_dir` is a private directory for persistent Extension files, `open_database(...)` opens the Extension's [databases](#extension-databases), `catalog()` provides safe configured choices, and `publish_change(resource, ids, revision)` invalidates its page. `temporary_agents` creates canonical bound Sessions without Identity workspaces, opens an admission group, starts initial or continuation inputs, closes/drains owned work, and exposes scoped history, Run, receipt and Statistics reads. Handles become invalid when the registration retires. The retained Sessions survive reload; reopening and admitting work is an explicit Extension decision.
 
 `catalog()` also returns public System Prompt block metadata. When available,
 `await host.inspect_prompt(config, project_id)` previews a `TemporaryAgentConfig`
@@ -540,6 +540,57 @@ handlers idempotent (see [Lifecycle](#lifecycle-startup-and-shutdown)). Edit a
 API v4 Extensions can register schema-described management operations with `api.operations.register`, publish complete live Tool catalogs with `api.operations.replace_tools`, and receive injected host capabilities through `api.operations.startup`. The host validates operation arguments, exposes them through RPC and `vbot extensions operations <name>`, and prevents a retired Extension from republishing Tools. Operations that accept credentials must declare `secret=True`; the CLI then requires JSON through `--stdin`.
 
 For the management declaration and host types, read `core/extensions/operations.py`. Register an async startup callback by appending it to `api.operations.startup`; its argument is the injected host. For MCP configuration and discovery, read [mcp.md](mcp.md).
+
+## Extension databases
+
+API v7 Extensions keep SQLite data in databases that vBot manages; do not open SQLite files yourself. In a callback appended to `api.operations.startup`, call `await host.open_database(name, schema_sql, migrations=(), retired_indexes=())`. It returns a `Database` stored at `<data_dir>/extension-data/<extension-id>/<name>.db`. `name` and the Extension id must be lowercase ids of letters, digits, `_` and `-` that start with a letter or digit, otherwise the call raises `ValueError`; each name can be open only once. vBot includes these databases in its data snapshots and restores them with the rest of its data. Declare `"api_version": 7` in `extension.json`.
+
+```python
+from core.extensions.databases import Database
+
+SCHEMA = """
+CREATE TABLE notes (
+  id INTEGER PRIMARY KEY,
+  body TEXT NOT NULL,
+  created_at TEXT NOT NULL
+) STRICT;
+"""
+
+
+class Notes:
+    def __init__(self) -> None:
+        self.database: Database | None = None
+
+    async def start(self, host) -> None:
+        self.database = await host.open_database("notes", SCHEMA)
+
+    async def add(self, body: str, created_at: str) -> None:
+        def insert(connection):
+            connection.execute(
+                "INSERT INTO notes (body, created_at) VALUES (?, ?)", (body, created_at)
+            )
+
+        await self.database.write_async(insert)
+
+    async def bodies(self) -> list[str]:
+        def select(connection):
+            rows = connection.execute("SELECT body FROM notes ORDER BY id")
+            return [row["body"] for row in rows]
+
+        return await self.database.read_async(select)
+
+
+notes = Notes()
+
+
+def register(api):
+    api.operations.startup.append(notes.start)
+```
+
+- From async code use `await database.write_async(fn)` and `await database.read_async(fn)`; `database.write(fn)` and `with database.read() as connection:` block the calling thread. `fn` receives a `sqlite3.Connection` whose rows support `row["column"]`. A write function runs in one transaction and is retried as a whole while the database is busy, so keep other side effects out of it. Read connections are read-only.
+- Change the schema only additively: add tables, indexes, or columns that are nullable or have a default to `schema_sql`, and vBot applies them on the next open. Never rename, retype, or drop columns or tables, and never change the constraints of an existing table; vBot refuses to open a database whose existing objects differ from their declaration. To remove an index, delete it from `schema_sql` and list its name in `retired_indexes`. Fill new structures with `Migration(name, apply=fn)` from `core.extensions.databases`: `apply(connection)` runs once per database and must be idempotent; a newly created database records it without running it.
+- Name the columns in every `SELECT` and `INSERT`, because a newer version of the Extension may add columns. Validate values that may grow, such as statuses, in code instead of with CHECK constraints.
+- A handle belongs to the current registration. Shutdown handlers can still use it; afterwards vBot closes it, including on reload and disable. Open it again in the next startup instead of keeping it across reloads, and do not close it yourself.
 
 ## Explicit Tool permission
 

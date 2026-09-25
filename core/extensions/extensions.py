@@ -588,7 +588,8 @@ class ExtensionRegistry:
            collision-skipped name owned by a built-in / another extension is left
            alone),
         3. unregisters its applied Commands from the canonical dispatcher,
-        4. fires its shutdown handlers (fail-open, resource cleanup), and
+        4. fires its shutdown handlers (fail-open, resource cleanup), then closes
+           the databases it opened through its owner host, and
         5. flips the record to ``disabled`` and clears its declarations, so every
            status surface reports it exactly like a boot-disabled extension (no
            schema, no capabilities, no pending restart) and the prompt/recall
@@ -618,6 +619,7 @@ class ExtensionRegistry:
             command_dispatcher.unregister_extension_commands(name)
         for handler in declarations.shutdown:
             await self._invoke_lifecycle("shutdown", name, handler)
+        await self._release_owner(name)
 
         record.status = "disabled"
         record.declarations = ExtensionDeclarations()
@@ -643,6 +645,25 @@ class ExtensionRegistry:
         for record in self._records:
             if record.status == "loaded":
                 await self.quiesce(record.name)
+
+    async def _release_owner(self, name: str) -> None:
+        """Close owner-bound host resources, such as databases, after shutdown handlers.
+
+        Shutdown handlers still use the Extension's databases; release follows
+        them, and the released registration can never open again.
+        """
+        host = self._host
+        if host is None or host.release_owner is None:
+            return
+        try:
+            await host.release_owner(ExtensionRegistrationIdentity(name, self._epoch))
+        except Exception as exc:
+            _LOGGER.error(
+                "Extension %r owner resources could not be released: %s",
+                name,
+                exc,
+                exc_info=True,
+            )
 
     def _retire_owner_host(self, name: str) -> None:
         """Forget cached owner hosts once their registration cannot be used."""
@@ -728,6 +749,7 @@ class ExtensionRegistry:
             self._retire_owner_host(record.name)
             for handler in record.declarations.shutdown:
                 await self._invoke_lifecycle("shutdown", record.name, handler)
+            await self._release_owner(record.name)
 
     def fire_shutdown_blocking(self) -> None:
         """Run :meth:`fire_shutdown` to completion from synchronous shutdown paths."""

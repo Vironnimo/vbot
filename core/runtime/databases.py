@@ -13,6 +13,8 @@ from pathlib import Path
 from core.channels import channel_database_spec
 from core.channels._state_schema import DATABASE_NAME as CHANNELS_DATABASE_NAME
 from core.database import DatabaseSpec, canonical_database_path
+from core.model_tasks.decision_store import DATABASE_NAME as DECISIONS_DATABASE_NAME
+from core.model_tasks.decision_store import decision_database_spec
 from core.providers.usage_history import DATABASE_NAME as PROVIDER_USAGE_DATABASE_NAME
 from core.providers.usage_history import provider_usage_database_spec
 from core.sessions._store_schema import session_database_spec
@@ -22,11 +24,15 @@ from core.sessions.schema import DATABASE_NAME as SESSIONS_DATABASE_NAME
 def canonical_database_specs(data_dir: Path) -> tuple[DatabaseSpec, ...]:
     """Declarations of every canonical database this vBot owns in ``data_dir``.
 
-    Extension databases are declared by their Extensions at load time and are
-    not listed here; offline tools verify them by kernel identity only.
+    Extension databases (``ext.<owner>.<name>``) are declared only when their
+    Extension opens them through ``host.open_database``: declaring them here
+    would mean running Extension code in an offline tool. Offline tools verify
+    them by kernel identity and integrity only, without owner facts or schema
+    compatibility checks.
     """
     return (
         session_database_spec(canonical_database_path(data_dir, SESSIONS_DATABASE_NAME)),
+        decision_database_spec(canonical_database_path(data_dir, DECISIONS_DATABASE_NAME)),
         provider_usage_database_spec(
             canonical_database_path(data_dir, PROVIDER_USAGE_DATABASE_NAME)
         ),

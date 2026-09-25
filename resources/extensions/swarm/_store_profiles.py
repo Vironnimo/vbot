@@ -88,11 +88,10 @@ def _save_profile(
 
 
 def _get_profile(db: SwarmDatabase, profile_id: str) -> Json:
-    row = (
-        db._require_connection()
-        .execute("SELECT payload FROM profiles WHERE id=?", (profile_id,))
-        .fetchone()
-    )
+    with db._read() as connection:
+        row = connection.execute(
+            "SELECT payload FROM profiles WHERE id=?", (profile_id,)
+        ).fetchone()
     if row is None:
         raise SwarmStoreError("profile_not_found")
     return _load(row["payload"])
@@ -100,11 +99,10 @@ def _get_profile(db: SwarmDatabase, profile_id: str) -> Json:
 
 def _list_profiles(db: SwarmDatabase, cursor: str | None, limit: int) -> Page:
     offset = db._cursor(cursor, "profiles", "all", None)[0] if cursor else 0
-    rows = (
-        db._require_connection()
-        .execute("SELECT payload FROM profiles ORDER BY slug LIMIT ? OFFSET ?", (limit + 1, offset))
-        .fetchall()
-    )
+    with db._read() as connection:
+        rows = connection.execute(
+            "SELECT payload FROM profiles ORDER BY slug LIMIT ? OFFSET ?", (limit + 1, offset)
+        ).fetchall()
     return _page(
         [_load(row["payload"]) for row in rows],
         limit,
@@ -264,13 +262,7 @@ def _delete_swarm(db: SwarmDatabase, swarm_id: str) -> None:
                 f"DELETE FROM {table} WHERE participant_id IN (SELECT id FROM participants WHERE swarm_id=?)",
                 (swarm_id,),
             )
-        connection.execute(
-            "DELETE FROM decision_positions WHERE question_id IN (SELECT id FROM decision_questions WHERE swarm_id=?)",
-            (swarm_id,),
-        )
         for table in (
-            "decision_events",
-            "decision_questions",
             "wiki_revisions",
             "wiki_pages",
             "swarm_goals",
@@ -303,153 +295,153 @@ def _delete_swarm(db: SwarmDatabase, swarm_id: str) -> None:
             "DELETE FROM requests WHERE substr(scope,1,?)=?",
             (len(f"wiki:{swarm_id}:"), f"wiki:{swarm_id}:"),
         )
-        connection.execute(
-            "DELETE FROM requests WHERE substr(scope,1,?)=?",
-            (len(f"decisions:{swarm_id}:"), f"decisions:{swarm_id}:"),
-        )
         connection.execute("DELETE FROM swarms WHERE id=?", (swarm_id,))
 
     db._write(operation)
 
 
 def _get_swarm(db: SwarmDatabase, swarm_id: str) -> Json:
-    connection = db._require_connection()
-    row = connection.execute(
-        f"SELECT {SWARM_COLUMNS} FROM swarms WHERE id=?", (swarm_id,)
-    ).fetchone()
-    if row is None:
-        raise SwarmStoreError("swarm_not_found")
-    participants = connection.execute(
-        "SELECT p.id,p.model,p.display_name,p.ordinal,p.state,p.lifecycle_run_id,"
-        "(SELECT COUNT(*) FROM recipients r JOIN posts ps ON ps.id=r.post_id "
-        "WHERE r.participant_id=p.id AND r.delivered_at IS NULL AND ps.swarm_id=p.swarm_id) "
-        "AS pending_count FROM participants p WHERE p.swarm_id=? ORDER BY p.ordinal",
-        (swarm_id,),
-    ).fetchall()
-    memberships: dict[str, list[str]] = {}
-    for membership in connection.execute(
-        "SELECT m.participant_id,m.discussion_id FROM memberships m "
-        "JOIN discussions d ON d.id=m.discussion_id WHERE d.swarm_id=? ORDER BY d.sequence",
-        (swarm_id,),
-    ):
-        memberships.setdefault(membership["participant_id"], []).append(membership["discussion_id"])
-    main = connection.execute(
-        "SELECT id FROM discussions WHERE swarm_id=? AND is_main=1", (swarm_id,)
-    ).fetchone()
-    return {
-        "id": swarm_id,
-        "prompt": row["prompt"],
-        "profile_snapshot": _load(row["profile_snapshot"]),
-        "effective_configuration": _load(row["effective_configuration"]),
-        "state": row["state"],
-        "delivery": _load(
-            connection.execute(
-                "SELECT delivery_json FROM swarm_settings WHERE swarm_id=?", (swarm_id,)
-            ).fetchone()[0]
-        ),
-        "settings_revision": int(
-            connection.execute(
-                "SELECT revision FROM swarm_settings WHERE swarm_id=?", (swarm_id,)
-            ).fetchone()[0]
-        ),
-        "main_discussion_id": main["id"],
-        "goal_post_id": (lambda goal: goal[0] if goal else None)(
-            connection.execute(
-                "SELECT post_id FROM swarm_goals WHERE swarm_id=?", (swarm_id,)
-            ).fetchone()
-        ),
-        "epoch": int(
-            connection.execute(
-                "SELECT epoch FROM swarm_epochs WHERE swarm_id=?", (swarm_id,)
-            ).fetchone()[0]
-        ),
-        "execution_epoch": (lambda value: value[0] if value else None)(
-            connection.execute(
-                "SELECT execution_epoch FROM swarm_execution_epochs WHERE swarm_id=? ORDER BY epoch DESC LIMIT 1",
-                (swarm_id,),
-            ).fetchone()
-        ),
-        "participants": [
-            {**dict(value), "discussion_ids": memberships.get(value["id"], [])}
-            for value in participants
-        ],
-    }
+    with db._read() as connection:
+        row = connection.execute(
+            f"SELECT {SWARM_COLUMNS} FROM swarms WHERE id=?", (swarm_id,)
+        ).fetchone()
+        if row is None:
+            raise SwarmStoreError("swarm_not_found")
+        participants = connection.execute(
+            "SELECT p.id,p.model,p.display_name,p.ordinal,p.state,p.lifecycle_run_id,"
+            "(SELECT COUNT(*) FROM recipients r JOIN posts ps ON ps.id=r.post_id "
+            "WHERE r.participant_id=p.id AND r.delivered_at IS NULL AND ps.swarm_id=p.swarm_id) "
+            "AS pending_count FROM participants p WHERE p.swarm_id=? ORDER BY p.ordinal",
+            (swarm_id,),
+        ).fetchall()
+        memberships: dict[str, list[str]] = {}
+        for membership in connection.execute(
+            "SELECT m.participant_id,m.discussion_id FROM memberships m "
+            "JOIN discussions d ON d.id=m.discussion_id WHERE d.swarm_id=? ORDER BY d.sequence",
+            (swarm_id,),
+        ):
+            memberships.setdefault(membership["participant_id"], []).append(
+                membership["discussion_id"]
+            )
+        main = connection.execute(
+            "SELECT id FROM discussions WHERE swarm_id=? AND is_main=1", (swarm_id,)
+        ).fetchone()
+        return {
+            "id": swarm_id,
+            "prompt": row["prompt"],
+            "profile_snapshot": _load(row["profile_snapshot"]),
+            "effective_configuration": _load(row["effective_configuration"]),
+            "state": row["state"],
+            "delivery": _load(
+                connection.execute(
+                    "SELECT delivery_json FROM swarm_settings WHERE swarm_id=?", (swarm_id,)
+                ).fetchone()[0]
+            ),
+            "settings_revision": int(
+                connection.execute(
+                    "SELECT revision FROM swarm_settings WHERE swarm_id=?", (swarm_id,)
+                ).fetchone()[0]
+            ),
+            "main_discussion_id": main["id"],
+            "goal_post_id": (lambda goal: goal[0] if goal else None)(
+                connection.execute(
+                    "SELECT post_id FROM swarm_goals WHERE swarm_id=?", (swarm_id,)
+                ).fetchone()
+            ),
+            "epoch": int(
+                connection.execute(
+                    "SELECT epoch FROM swarm_epochs WHERE swarm_id=?", (swarm_id,)
+                ).fetchone()[0]
+            ),
+            "execution_epoch": (lambda value: value[0] if value else None)(
+                connection.execute(
+                    "SELECT execution_epoch FROM swarm_execution_epochs WHERE swarm_id=? ORDER BY epoch DESC LIMIT 1",
+                    (swarm_id,),
+                ).fetchone()
+            ),
+            "participants": [
+                {**dict(value), "discussion_ids": memberships.get(value["id"], [])}
+                for value in participants
+            ],
+        }
 
 
 def _list_swarms(db: SwarmDatabase, cursor: str | None, limit: int) -> Page:
-    connection = db._require_connection()
-    high_water = int(connection.execute("SELECT COALESCE(MAX(rowid),0) FROM swarms").fetchone()[0])
-    if cursor:
-        offset, frozen_high_water = db._cursor(cursor, "swarms", "all", high_water)
-        if frozen_high_water is None:
-            raise SwarmStoreError("invalid_cursor")
-        high_water = frozen_high_water
-    else:
-        offset = 0
-    rows = connection.execute(
-        "SELECT s.id,s.state,s.created_at,substr(s.prompt,1,120) AS title,COUNT(p.id) AS participant_count,"
-        "ss.revision AS settings_revision "
-        "FROM swarms s JOIN swarm_settings ss ON ss.swarm_id=s.id "
-        "LEFT JOIN participants p ON p.swarm_id=s.id WHERE s.rowid<=? "
-        "GROUP BY s.id ORDER BY s.rowid DESC LIMIT ? OFFSET ?",
-        (high_water, limit + 1, offset),
-    ).fetchall()
-    entries = [
-        {
-            "id": str(row["id"]),
-            "title": str(row["title"]).split("\n", 1)[0],
-            "state": str(row["state"]),
-            "created_at": str(row["created_at"]),
-            "participant_count": int(row["participant_count"]),
-            "settings_revision": int(row["settings_revision"]),
-        }
-        for row in rows
-    ]
-    return _page(
-        entries,
-        limit,
-        db._make_cursor("swarms", "all", high_water, offset + limit),
-    )
+    with db._read() as connection:
+        high_water = int(
+            connection.execute("SELECT COALESCE(MAX(rowid),0) FROM swarms").fetchone()[0]
+        )
+        if cursor:
+            offset, frozen_high_water = db._cursor(cursor, "swarms", "all", high_water)
+            if frozen_high_water is None:
+                raise SwarmStoreError("invalid_cursor")
+            high_water = frozen_high_water
+        else:
+            offset = 0
+        rows = connection.execute(
+            "SELECT s.id,s.state,s.created_at,substr(s.prompt,1,120) AS title,COUNT(p.id) AS participant_count,"
+            "ss.revision AS settings_revision "
+            "FROM swarms s JOIN swarm_settings ss ON ss.swarm_id=s.id "
+            "LEFT JOIN participants p ON p.swarm_id=s.id WHERE s.rowid<=? "
+            "GROUP BY s.id ORDER BY s.rowid DESC LIMIT ? OFFSET ?",
+            (high_water, limit + 1, offset),
+        ).fetchall()
+        entries = [
+            {
+                "id": str(row["id"]),
+                "title": str(row["title"]).split("\n", 1)[0],
+                "state": str(row["state"]),
+                "created_at": str(row["created_at"]),
+                "participant_count": int(row["participant_count"]),
+                "settings_revision": int(row["settings_revision"]),
+            }
+            for row in rows
+        ]
+        return _page(
+            entries,
+            limit,
+            db._make_cursor("swarms", "all", high_water, offset + limit),
+        )
 
 
 def _list_events(db: SwarmDatabase, swarm_id: str, cursor: str | None, limit: int) -> Page:
-    connection = db._require_connection()
-    if connection.execute("SELECT 1 FROM swarms WHERE id=?", (swarm_id,)).fetchone() is None:
-        raise SwarmStoreError("swarm_not_found")
-    high_water = int(
-        connection.execute(
-            "SELECT COALESCE(MAX(id),0) FROM swarm_events WHERE swarm_id=?", (swarm_id,)
-        ).fetchone()[0]
-    )
-    if cursor:
-        offset, frozen_high_water = db._cursor(cursor, "events", swarm_id, high_water)
-        if frozen_high_water is None:
-            raise SwarmStoreError("invalid_cursor")
-        high_water = frozen_high_water
-    else:
-        offset = 0
-    rows = connection.execute(
-        "SELECT id,kind,actor,old_json,new_json,settings_revision,created_at FROM swarm_events "
-        "WHERE swarm_id=? AND id<=? ORDER BY id DESC LIMIT ? OFFSET ?",
-        (swarm_id, high_water, limit + 1, offset),
-    ).fetchall()
-    entries = [
-        {
-            "id": int(row["id"]),
-            "kind": str(row["kind"]),
-            "actor": str(row["actor"]),
-            "old": _load(row["old_json"]) if row["old_json"] is not None else None,
-            "new": _load(row["new_json"]) if row["new_json"] is not None else None,
-            "settings_revision": row["settings_revision"],
-            "created_at": str(row["created_at"]),
-        }
-        for row in rows
-    ]
-    return _page(
-        entries,
-        limit,
-        db._make_cursor("events", swarm_id, high_water, offset + limit),
-    )
+    with db._read() as connection:
+        if connection.execute("SELECT 1 FROM swarms WHERE id=?", (swarm_id,)).fetchone() is None:
+            raise SwarmStoreError("swarm_not_found")
+        high_water = int(
+            connection.execute(
+                "SELECT COALESCE(MAX(id),0) FROM swarm_events WHERE swarm_id=?", (swarm_id,)
+            ).fetchone()[0]
+        )
+        if cursor:
+            offset, frozen_high_water = db._cursor(cursor, "events", swarm_id, high_water)
+            if frozen_high_water is None:
+                raise SwarmStoreError("invalid_cursor")
+            high_water = frozen_high_water
+        else:
+            offset = 0
+        rows = connection.execute(
+            "SELECT id,kind,actor,old_json,new_json,settings_revision,created_at FROM swarm_events "
+            "WHERE swarm_id=? AND id<=? ORDER BY id DESC LIMIT ? OFFSET ?",
+            (swarm_id, high_water, limit + 1, offset),
+        ).fetchall()
+        entries = [
+            {
+                "id": int(row["id"]),
+                "kind": str(row["kind"]),
+                "actor": str(row["actor"]),
+                "old": _load(row["old_json"]) if row["old_json"] is not None else None,
+                "new": _load(row["new_json"]) if row["new_json"] is not None else None,
+                "settings_revision": row["settings_revision"],
+                "created_at": str(row["created_at"]),
+            }
+            for row in rows
+        ]
+        return _page(
+            entries,
+            limit,
+            db._make_cursor("events", swarm_id, high_water, offset + limit),
+        )
 
 
 def _apply_delivery_settings(
