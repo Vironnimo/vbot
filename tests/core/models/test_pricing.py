@@ -133,7 +133,7 @@ def test_zero_rate_is_free_but_absent_used_rate_is_unknown():
 
 def test_projection_keeps_only_accounting_fields():
     snapshot = price_usage(
-        {"input_tokens": 100, "output_tokens": 10, "input_tokens_estimated": True},
+        {"input_tokens": 100, "output_tokens": 10, "input_tokens_estimated": True, "estimated": True},
         pricing(input=1, output=2),
     )
     assert snapshot["estimated_tokens"] is True

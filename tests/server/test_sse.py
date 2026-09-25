@@ -313,10 +313,15 @@ async def test_sse_stream_emits_heartbeat_while_run_is_quiet() -> None:
 async def test_sse_projects_assistant_file_references_to_signed_urls(tmp_path: Path) -> None:
     image = tmp_path / "sse.png"
     image.write_bytes(b"\x89PNG\r\n\x1a\nimage")
+    marker = f"file:{image}"
     message = ChatMessage.assistant(
         model="provider/model",
-        content=str(image),
-        output_files=[AssistantFileReference(line_index=0, path=str(image.resolve()))],
+        content=marker,
+        output_files=[
+            AssistantFileReference(
+                line_index=0, path=str(image.resolve()), start_index=0, end_index=len(marker)
+            )
+        ],
     )
     run = Run(run_id="run-file", agent_id="coder", session_id="session-one")
     run.emit(ASSISTANT_OUTPUT_EVENT, {"message": message.to_dict()})

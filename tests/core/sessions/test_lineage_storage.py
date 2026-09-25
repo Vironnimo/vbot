@@ -57,8 +57,12 @@ def _tool_run(session: ChatSession, run_id: str, text: str) -> None:
     run.append(
         ChatMessage.assistant(
             model="model",
-            content=f"{text} answer\nnotes.md",
-            output_files=[AssistantFileReference(line_index=1, path="notes.md")],
+            content=f"{text} answer\nfile:notes.md",
+            output_files=[
+                AssistantFileReference(
+                    line_index=1, path="notes.md", start_index=0, end_index=len("file:notes.md")
+                )
+            ],
         )
     )
     complete_run(run, _summary(run_id))

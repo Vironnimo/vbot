@@ -99,7 +99,7 @@ def test_compaction_usage_and_context_are_counted_once(tmp_path: Path):
             _assistant(
                 model="test/m",
                 at=BASE + timedelta(seconds=3),
-                usage={"input_tokens": 460, "output_tokens": 10, "input_tokens_estimated": True},
+                usage={"input_tokens": 460, "output_tokens": 10, "input_tokens_estimated": True, "estimated": True},
             ),
         ],
     )

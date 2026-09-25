@@ -24,7 +24,6 @@ from typing import Any, Literal
 from core.chat._message_history import reply_surface_from_note
 from core.chat.errors import ChatMessageValidationError, ImageBudgetExceededError
 from core.chat.messages import (
-    _USAGE_ESTIMATION_FIELDS,
     COMPACTION_SKILL_NOTE_PREFIX,
     COMPACTION_SUMMARY_NOTE_PREFIX,
     USAGE_INPUT_TOKENS_ESTIMATED_FIELD,
@@ -816,12 +815,9 @@ def _complete_usage_with_estimates(
     *,
     estimated_input_tokens: int | None = None,
 ) -> ChatMessage:
-    """Fill only missing usage counters and preserve field-level provenance."""
+    """Fill only missing usage counters, mark each as estimated, and summarize in ``estimated``."""
 
     usage = dict(message.usage or {})
-    has_specific_provenance = any(field in usage for field in _USAGE_ESTIMATION_FIELDS.values())
-    legacy_estimated = usage.get("estimated") is True and not has_specific_provenance
-
     reported_input_tokens = _optional_usage_token_count(usage.get("input_tokens"))
     if reported_input_tokens is None or (reported_input_tokens == 0 and request_messages):
         estimated_input = estimated_input_tokens
@@ -829,14 +825,10 @@ def _complete_usage_with_estimates(
             estimated_input, _ = estimate_request_input_tokens(request_messages)
         usage["input_tokens"] = estimated_input
         usage[USAGE_INPUT_TOKENS_ESTIMATED_FIELD] = True
-    elif legacy_estimated:
-        usage[USAGE_INPUT_TOKENS_ESTIMATED_FIELD] = True
 
     if _optional_usage_token_count(usage.get("output_tokens")) is None:
         estimated_output, _ = estimate_message_tokens(message.to_dict())
         usage["output_tokens"] = estimated_output
-        usage[USAGE_OUTPUT_TOKENS_ESTIMATED_FIELD] = True
-    elif legacy_estimated:
         usage[USAGE_OUTPUT_TOKENS_ESTIMATED_FIELD] = True
 
     if usage_token_is_estimated(usage, "input_tokens") or usage_token_is_estimated(
