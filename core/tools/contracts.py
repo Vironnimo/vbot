@@ -760,7 +760,12 @@ def _similar_name(key: str, candidates: list[str]) -> str | None:
     containing = [name for name in candidates if name.casefold() in tokens]
     if len(containing) == 1:
         return containing[0]
-    close = difflib.get_close_matches(key, candidates, n=1, cutoff=0.75)
+    # A typo keeps the length; "country" is another word, not a misspelled "count".
+    close = [
+        name
+        for name in difflib.get_close_matches(key, candidates, n=3, cutoff=0.75)
+        if abs(len(name) - len(key)) <= max(1, len(name) // 4)
+    ]
     return close[0] if close else None
 
 
