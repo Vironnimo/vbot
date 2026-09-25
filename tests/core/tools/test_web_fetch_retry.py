@@ -6,11 +6,14 @@ import logging
 from pathlib import Path
 
 import pytest
+from curl_cffi.requests.exceptions import CertificateVerifyError, ReadTimeout
 from curl_cffi.requests.exceptions import ConnectionError as CurlConnectionError
 
 import core.tools.web_fetch as web_fetch_module
+from core.tools.tools import ToolRegistry
 from core.tools.web_fetch import (
     _FetchResult,
+    register_web_fetch_tool,
 )
 from core.utils.retry import MAX_RETRIES
 from tests.core.tools.web_fetch_helpers import (
@@ -44,8 +47,11 @@ async def test_web_fetch_handler_http_error(
 
     result = await web_fetch_handler(make_context(workspace), web_fetch_arguments(url))
 
-    error = assert_failure_envelope(result, "request_error")
-    assert "404" in error["message"]
+    error = assert_failure_envelope(result, "page_not_found")
+    assert error["message"] == (
+        "HTTP 404: there is no page at https://example.com/not-found. Check the address; "
+        "the page may have moved or been removed."
+    )
 
 
 @pytest.mark.asyncio
@@ -57,7 +63,11 @@ async def test_web_fetch_handler_network_error(
     url = "https://example.com/network-fail"
 
     def responder(_url: str) -> _FetchResult:
-        raise CurlConnectionError("connection refused")
+        raise CurlConnectionError(
+            "Failed to perform, curl: (7) Failed to connect to example.com port 443: "
+            "Connection refused. See https://curl.se/libcurl/c/libcurl-errors.html first "
+            "for more details."
+        )
 
     install_http_get(monkeypatch, responder)
 
@@ -69,8 +79,12 @@ async def test_web_fetch_handler_network_error(
     with caplog.at_level(logging.WARNING, logger="vbot.tools.web_fetch"):
         result = await web_fetch_handler(make_context(workspace), web_fetch_arguments(url))
 
-    error = assert_failure_envelope(result, "request_error")
-    assert "request failed" in error["message"].lower()
+    error = assert_failure_envelope(result, "connection_failed")
+    assert error["message"] == (
+        "The connection to example.com failed (Failed to connect to example.com port 443: "
+        "Connection refused). The site may be down or refusing connections; try again "
+        "later or use another source."
+    )
     assert any(
         record.levelno == logging.WARNING and "web_fetch request failed" in record.getMessage()
         for record in caplog.records
@@ -136,7 +150,7 @@ async def test_web_fetch_handler_exhausted_retryable_status_signals_retryable(
 
     result = await web_fetch_handler(make_context(workspace), web_fetch_arguments(url))
 
-    error = assert_failure_envelope(result, "request_error")
+    error = assert_failure_envelope(result, "server_error")
     assert error["retryable"] is True
     assert error["attempts_made"] == MAX_RETRIES + 1
     # All attempts were spent before the tool gave up.
@@ -197,7 +211,7 @@ async def test_web_fetch_handler_non_retryable_status_signals_not_retryable(
 
     result = await web_fetch_handler(make_context(workspace), web_fetch_arguments(url))
 
-    error = assert_failure_envelope(result, "request_error")
+    error = assert_failure_envelope(result, "page_not_found")
     assert error["retryable"] is False
     assert "attempts_made" not in error
 
@@ -226,10 +240,145 @@ async def test_web_fetch_handler_transport_error_retries_before_signalling_failu
 
     result = await web_fetch_handler(make_context(workspace), web_fetch_arguments(url))
 
-    error = assert_failure_envelope(result, "request_error")
+    error = assert_failure_envelope(result, "connection_failed")
     assert error["retryable"] is True
     assert error["attempts_made"] == MAX_RETRIES + 1
     assert calls == MAX_RETRIES + 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("error", "code", "attempts", "retryable", "message"),
+    [
+        (
+            ReadTimeout("Operation timed out after 30001 milliseconds"),
+            "timeout",
+            2,
+            True,
+            "example.com did not respond within 30 seconds. The site may be slow or down; "
+            "try again later or use another source.",
+        ),
+        (
+            CertificateVerifyError(
+                "Failed to perform, curl: (60) SSL certificate problem: certificate has "
+                "expired. See https://curl.se/libcurl/c/libcurl-errors.html first for more "
+                "details."
+            ),
+            "tls_error",
+            1,
+            False,
+            "The secure connection to example.com failed (SSL certificate problem: "
+            "certificate has expired). The site's certificate or TLS setup is broken, so "
+            "repeating the request will not help.",
+        ),
+    ],
+)
+async def test_web_fetch_limits_retries_of_timeouts_and_broken_tls(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    error: Exception,
+    code: str,
+    attempts: int,
+    retryable: bool,
+    message: str,
+) -> None:
+    calls = 0
+
+    def responder(_url: str) -> _FetchResult:
+        nonlocal calls
+        calls += 1
+        raise error
+
+    install_http_get(monkeypatch, responder)
+
+    async def no_retry_sleep(attempt: int, retry_after: float | None = None) -> None:
+        del attempt, retry_after
+
+    monkeypatch.setattr(web_fetch_module, "sleep_for_retry", no_retry_sleep)
+
+    result = await _registry().dispatch(make_context(tmp_path), {"url": "https://example.com/slow"})
+
+    failure = assert_failure_envelope(result, code)
+    assert failure["message"] == message
+    assert failure["retryable"] is retryable
+    assert calls == attempts
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "code", "retryable", "message"),
+    [
+        (
+            410,
+            "page_not_found",
+            False,
+            "HTTP 410: there is no page at https://example.com/page. Check the address; the "
+            "page may have moved or been removed.",
+        ),
+        (
+            403,
+            "access_denied",
+            False,
+            "HTTP 403: example.com refused access to https://example.com/page. The site "
+            "blocks automated requests or requires a login, so repeating the request will "
+            "not help. Try another source.",
+        ),
+        (
+            401,
+            "access_denied",
+            False,
+            "HTTP 401: example.com refused access to https://example.com/page.",
+        ),
+        (
+            429,
+            "rate_limited",
+            True,
+            "HTTP 429: example.com is limiting requests. Wait before fetching from this site "
+            "again, or try another source.",
+        ),
+        (
+            502,
+            "server_error",
+            True,
+            "HTTP 502: example.com failed to serve https://example.com/page. The site may be "
+            "down; try again later or use another source.",
+        ),
+        (
+            422,
+            "request_rejected",
+            False,
+            "HTTP 422: example.com rejected the request for https://example.com/page. "
+            "web_fetch sends a plain GET request without custom headers, cookies or a body.",
+        ),
+    ],
+)
+async def test_web_fetch_names_each_http_failure_and_its_next_step(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    status: int,
+    code: str,
+    retryable: bool,
+    message: str,
+) -> None:
+    install_http_get(monkeypatch, lambda _url: make_result(status_code=status, text="no"))
+
+    async def no_retry_sleep(attempt: int, retry_after: float | None = None) -> None:
+        del attempt, retry_after
+
+    monkeypatch.setattr(web_fetch_module, "sleep_for_retry", no_retry_sleep)
+
+    result = await _registry().dispatch(make_context(tmp_path), {"url": "https://example.com/page"})
+
+    error = assert_failure_envelope(result, code)
+    assert error["message"].startswith(message)
+    assert error["retryable"] is retryable
+    assert ("attempts_made" in error) is retryable
+
+
+def _registry() -> ToolRegistry:
+    registry = ToolRegistry()
+    register_web_fetch_tool(registry, attachment_store=None)
+    return registry
 
 
 @pytest.mark.asyncio
@@ -291,9 +440,12 @@ async def test_web_fetch_handler_redirect_limit_signals_not_retryable(
 
     result = await web_fetch_handler(make_context(workspace), web_fetch_arguments(url))
 
-    error = assert_failure_envelope(result, "request_error")
+    error = assert_failure_envelope(result, "redirect_loop")
     assert error["retryable"] is False
-    assert "too many redirects" in error["message"].lower()
+    assert error["message"] == (
+        "https://example.com/loop redirected more than 10 times without reaching a page. "
+        "Try another source or a more direct address."
+    )
 
 
 @pytest.mark.asyncio
@@ -319,9 +471,9 @@ async def test_web_fetch_handler_redirect_cycle_fails_fast(
 
     result = await web_fetch_handler(make_context(workspace), web_fetch_arguments(url))
 
-    error = assert_failure_envelope(result, "request_error")
+    error = assert_failure_envelope(result, "redirect_loop")
     assert error["retryable"] is False
-    assert "cycle" in error["message"].lower()
+    assert "redirects in a loop" in error["message"]
     assert calls == 1
 
 
@@ -349,7 +501,7 @@ async def test_web_fetch_handler_alternating_redirect_cycle_fails_fast(
 
     result = await web_fetch_handler(make_context(workspace), web_fetch_arguments(first))
 
-    error = assert_failure_envelope(result, "request_error")
+    error = assert_failure_envelope(result, "redirect_loop")
     assert error["retryable"] is False
-    assert "cycle" in error["message"].lower()
+    assert "redirects in a loop" in error["message"]
     assert calls == 2

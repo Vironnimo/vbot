@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import re
 from unittest.mock import AsyncMock
 
 import httpx
@@ -118,10 +119,31 @@ async def test_service_success_is_saved_and_followups_never_bill_again(tmp_path,
     )
     context = make_context(tmp_path)
     first = await tool(context, {"url": URL})
-    assert first["ok"]
-    second = await tool(context, first["data"]["next"])
-    assert second["ok"] and second["data"]["source"] == "tavily"
+    assert first["ok"] and first["data"]["content"].startswith("Service content")
+    follow_up = json.loads(re.search(r"Continue with (\{.*?\})", first["data"]["more"])[1])
+    second = await tool(context, follow_up)
+    assert second["ok"] and second["data"]["content"].startswith("Service content")
     service.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_failed_recovery_keeps_the_direct_failure_and_adds_the_service_reason(
+    tmp_path, monkeypatch
+):
+    install_http_get(monkeypatch, lambda url: make_result(status_code=403, url=url))
+    tool = make_web_fetch_handler(
+        None,
+        credential_resolver=lambda _: None,
+        settings_loader=lambda: {"provider": "firecrawl", "mode": "fallback"},
+    )
+    result = await tool(make_context(tmp_path), {"url": URL})
+    assert result["error"]["code"] == "access_denied"
+    assert result["error"]["message"].endswith(
+        "Try another source. The firecrawl fetch service also failed: The firecrawl fetch "
+        "service is selected in Settings, but FIRECRAWL_API_KEY is not set in the .env file "
+        "of the vBot data directory. Tell the user: they can add the key, or set Web Fetch "
+        "back to Direct in Settings."
+    )
 
 
 @pytest.mark.asyncio
@@ -181,8 +203,10 @@ async def test_preferred_failure_recovers_directly_with_source_and_warning(tmp_p
         settings_loader=lambda: {"provider": "exa", "mode": "prefer"},
     )
     result = await tool(make_context(tmp_path), {"url": URL})
-    assert result["ok"] and result["data"]["source"] == "direct"
-    assert any("Service unavailable" in item for item in result["data"]["warnings"])
+    assert result["ok"] and result["data"]["content"] == "Direct content"
+    assert result["data"]["note"] == (
+        "Service unavailable; used direct fetch. Service temporarily unavailable"
+    )
 
 
 @pytest.mark.asyncio
