@@ -24,7 +24,7 @@ FTS_TARGET_HIGH_WATER_KEY = "fts_rebuild_target_high_water"
 FTS_COMPLETED_HIGH_WATER_KEY = "fts_rebuild_completed_high_water"
 FTS_DEGRADED_REASON_KEY = "fts_degraded_reason"
 FTS_STORAGE_VERSION_KEY = "fts_storage_version"
-FTS_STORAGE_VERSION = 2
+FTS_STORAGE_VERSION = 1
 # Entry roles whose text the trigram index covers: conversation text only.
 FTS_TRIGRAM_ROLES = ("user", "assistant", "compaction_checkpoint")
 
