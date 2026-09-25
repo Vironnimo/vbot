@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from core.model_tasks.artifacts import TaskArtifactStore
+from core.model_tasks.artifacts import TaskArtifactStore, validate_task_artifact_metadata_file
 from core.utils.errors import TaskError
 
 
@@ -19,23 +19,40 @@ def _store(tmp_path: Path) -> TaskArtifactStore:
     return TaskArtifactStore(tmp_path / "speech", kind="speech", error=_StubConfigurationError)
 
 
-def test_write_persists_blob_and_sidecar_with_extra_metadata(tmp_path: Path) -> None:
+def test_write_persists_blob_and_versioned_sidecar(tmp_path: Path) -> None:
     store = _store(tmp_path)
 
-    stored = store.write(
-        b"audio", extension="mp3", media_type="audio/mpeg", extra_metadata={"index": 2}
-    )
+    stored = store.write(b"audio", extension="mp3", media_type="audio/mpeg")
 
     assert stored.file_path == tmp_path / "speech" / f"{stored.id}.mp3"
     assert stored.file_path.read_bytes() == b"audio"
-    sidecar = json.loads((tmp_path / "speech" / f"{stored.id}.json").read_text(encoding="utf-8"))
-    assert sidecar == {
+    sidecar_path = tmp_path / "speech" / f"{stored.id}.json"
+    assert json.loads(sidecar_path.read_text(encoding="utf-8")) == {
+        "format_version": 1,
         "id": stored.id,
         "filename": f"{stored.id}.mp3",
         "media_type": "audio/mpeg",
         "size_bytes": 5,
-        "index": 2,
     }
+    assert validate_task_artifact_metadata_file(sidecar_path).diagnostics == ()
+
+
+def test_read_ignores_unknown_fields_and_refuses_a_newer_version(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    written = store.write(b"audio", extension="mp3", media_type="audio/mpeg")
+    sidecar_path = tmp_path / "speech" / f"{written.id}.json"
+    metadata = json.loads(sidecar_path.read_text(encoding="utf-8"))
+    sidecar_path.write_text(json.dumps({**metadata, "voice": "alloy"}), encoding="utf-8")
+
+    assert store.read(written.id) == written
+    assert [
+        item.path for item in validate_task_artifact_metadata_file(sidecar_path).diagnostics
+    ] == ["$.voice"]
+
+    sidecar_path.write_text(json.dumps({**metadata, "format_version": 2}), encoding="utf-8")
+    with pytest.raises(_StubConfigurationError):
+        store.read(written.id)
+    assert not validate_task_artifact_metadata_file(sidecar_path).ok
 
 
 def test_read_round_trips_written_artifact(tmp_path: Path) -> None:
@@ -119,16 +136,19 @@ def test_read_rejects_unreadable_and_invalid_metadata(tmp_path: Path) -> None:
         store.read(invalid_id)
 
 
-def test_read_rejects_missing_blob_and_recovers_size_from_stat(tmp_path: Path) -> None:
+def test_read_rejects_invalid_size_and_missing_blob(tmp_path: Path) -> None:
     store = _store(tmp_path)
     written = store.write(b"abc", extension="mp3", media_type="audio/mpeg")
 
     sidecar_path = tmp_path / "speech" / f"{written.id}.json"
-    metadata = json.loads(sidecar_path.read_text(encoding="utf-8"))
+    original = sidecar_path.read_text(encoding="utf-8")
+    metadata = json.loads(original)
     metadata["size_bytes"] = "not-an-int"
     sidecar_path.write_text(json.dumps(metadata), encoding="utf-8")
-    assert store.read(written.id).size_bytes == 3
+    with pytest.raises(_StubConfigurationError):
+        store.read(written.id)
 
+    sidecar_path.write_text(original, encoding="utf-8")
     written.file_path.unlink()
     with pytest.raises(_StubConfigurationError):
         store.read(written.id)

@@ -332,9 +332,11 @@ def validate_data_dir_config(data_dir: str | Path) -> tuple[JsonValidationReport
     # by its domain. Imports stay local so those domains may reuse Settings-owned
     # scalar/Policy rules without creating package initialization cycles.
     from core.agents import validate_agent_file, validate_agent_order_file
+    from core.attachments import validate_attachment_metadata_file
     from core.automation import validate_bootstrap_jobs_file, validate_cron_jobs_file
     from core.calendar import validate_calendar_actions_file, validate_calendar_events_file
     from core.channels import validate_channel_file
+    from core.model_tasks.artifacts import validate_task_artifact_metadata_file
     from core.projects import validate_project_file
     from core.providers.token_store import validate_oauth_token_file
     from core.skills import validate_skill_policy_file
@@ -366,6 +368,8 @@ def validate_data_dir_config(data_dir: str | Path) -> tuple[JsonValidationReport
         "terminal_groups": validate_terminal_groups_file,
         "oauth_token": validate_oauth_token_file,
         "mcp_connections": validate_connections_file,
+        "attachment_metadata": validate_attachment_metadata_file,
+        "speech_artifact_metadata": validate_task_artifact_metadata_file,
     }
     if set(validators) != set(DURABLE_DOCUMENTS):
         raise RuntimeError("every durable JSON document kind needs exactly one validator")

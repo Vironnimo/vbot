@@ -67,7 +67,7 @@ from core.database.spec import (
     is_extension_database_name,
     validate_database_name,
 )
-from core.json_documents import durable_document_paths
+from core.json_documents import snapshot_document_paths
 from core.utils.atomic import atomic_write_text
 from core.utils.timestamps import parse_timestamp, utc_now_timestamp
 from core.utils.version import detect_vbot_version
@@ -778,7 +778,7 @@ def describe_missing_databases(data_dir: Path, marker: DataStoreMarker) -> str |
 def _document_bytes(data_dir: Path) -> int:
     """The current size of the JSON document set; a document removed meanwhile counts 0."""
     total = 0
-    for path in durable_document_paths(data_dir):
+    for path in snapshot_document_paths(data_dir):
         with suppress(FileNotFoundError):
             total += data_dir.joinpath(*path.split("/")).stat().st_size
     return total

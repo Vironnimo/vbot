@@ -1,7 +1,7 @@
 """The JSON document set of a data snapshot.
 
-Besides one member per canonical database, a data snapshot holds every durable
-JSON document of the data directory (``core.json_documents.DURABLE_DOCUMENTS``)
+Besides one member per canonical database, a data snapshot holds the durable
+JSON documents of the data directory (``core.json_documents.SNAPSHOT_DOCUMENTS``)
 as one set member: ``<snapshot>/documents/<relative path>``, recorded in the
 manifest by relative path, size and SHA-256.
 
@@ -31,7 +31,7 @@ from typing import Any
 
 from core.database._files import fsync_dir, fsync_file, sha256_file
 from core.database.errors import DatabaseCorruptError, DatabaseUnavailableError
-from core.json_documents import durable_document_paths, is_durable_document_path
+from core.json_documents import is_snapshot_document_path, snapshot_document_paths
 
 DOCUMENTS_DIRECTORY_NAME = "documents"
 #: The quarantine child of replaced documents; never a valid database name.
@@ -76,7 +76,7 @@ def _parts(path: str) -> list[str]:
 
 
 def _is_link(path: Path) -> bool:
-    """A symbolic link or a Windows junction, as ``durable_document_paths`` skips them."""
+    """A symbolic link or a Windows junction, as ``snapshot_document_paths`` skips them."""
     status = os.lstat(path)
     junction: int | None = getattr(stat, "IO_REPARSE_TAG_MOUNT_POINT", None)
     tag: int | None = getattr(status, "st_reparse_tag", None)
@@ -102,7 +102,7 @@ def _contained_file(root: Path, parts: list[str]) -> Path | None:
 
 def document_copy_path(snapshot_dir: Path, path: str) -> Path | None:
     """The snapshot copy of document ``path``, or ``None`` when it is absent or unsafe."""
-    if not is_durable_document_path(path):
+    if not is_snapshot_document_path(path):
         return None
     try:
         return _contained_file(Path(snapshot_dir) / DOCUMENTS_DIRECTORY_NAME, _parts(path))
@@ -160,7 +160,7 @@ def parse_documents(payload: object) -> dict[str, DocumentMember]:
             raise DatabaseCorruptError(f"snapshot document {path} has an invalid file_size")
         if not isinstance(digest, str) or _HEX64_PATTERN.fullmatch(digest) is None:
             raise DatabaseCorruptError(f"snapshot document {path} has an invalid sha256")
-        if is_durable_document_path(path):
+        if is_snapshot_document_path(path):
             members[path] = DocumentMember(path=path, file_size=size, sha256=digest)
     return members
 
@@ -193,7 +193,7 @@ def capture_documents(
     root = Path(snapshot_dir) / DOCUMENTS_DIRECTORY_NAME
     members: dict[str, DocumentMember] = {}
     directories: set[Path] = set()
-    for path in durable_document_paths(data_dir):
+    for path in snapshot_document_paths(data_dir):
         if cancelled is not None and cancelled():
             return None
         try:
@@ -254,7 +254,7 @@ def live_documents(data_dir: Path) -> dict[str, str]:
     """The SHA-256 of every current document in ``data_dir`` by relative path."""
     hashes: dict[str, str] = {}
     try:
-        for path in durable_document_paths(data_dir):
+        for path in snapshot_document_paths(data_dir):
             try:
                 hashes[path] = sha256_file(Path(data_dir).joinpath(*_parts(path)))
             except FileNotFoundError:

@@ -8,18 +8,21 @@ import pytest
 
 from core.config_validation import JsonDiagnostic, add_error
 from core.json_documents import (
+    DOCUMENTS_OUTSIDE_SNAPSHOTS,
+    DURABLE_DOCUMENTS,
     FORMAT_VERSION_FIELD,
     OPAQUE,
+    SNAPSHOT_DOCUMENTS,
     JsonDocumentFormat,
     JsonDocumentWriteError,
-    durable_document_paths,
-    is_durable_document_path,
+    is_snapshot_document_path,
     json_document,
     json_list,
     json_map,
     json_object,
     preserve_unknown_fields,
     render_json_document,
+    snapshot_document_paths,
     strip_unknown_fields,
     validate_collection_root,
     validate_format_version,
@@ -332,7 +335,16 @@ def test_render_json_document_sorts_nested_keys_after_the_version() -> None:
     assert text.index('"a": [') < text.index('"z"')
 
 
-def test_durable_document_paths_lists_exactly_the_documents_in_scope(tmp_path: Path) -> None:
+def test_snapshot_documents_are_the_durable_documents_without_blob_sidecars() -> None:
+    assert set(DURABLE_DOCUMENTS) >= DOCUMENTS_OUTSIDE_SNAPSHOTS
+    assert set(SNAPSHOT_DOCUMENTS) == set(DURABLE_DOCUMENTS) - DOCUMENTS_OUTSIDE_SNAPSHOTS
+    assert {DURABLE_DOCUMENTS[kind] for kind in DOCUMENTS_OUTSIDE_SNAPSHOTS} == {
+        "artifacts/attachments/*.json",
+        "artifacts/speech/*.json",
+    }
+
+
+def test_snapshot_document_paths_lists_exactly_the_documents_in_scope(tmp_path: Path) -> None:
     documents = [
         "settings.json",
         "agents/main/agent.json",
@@ -359,6 +371,9 @@ def test_durable_document_paths_lists_exactly_the_documents_in_scope(tmp_path: P
         "oauth/nested/token.json",
         "workspaces/main/settings.json",
         "channels/telegram/state.json",
+        # Blob sidecars are durable documents, but snapshots hold no blobs.
+        "artifacts/attachments/att_000000000001.json",
+        "artifacts/speech/aud_000000000001.json",
     ]
     for relative in documents + others:
         path = tmp_path.joinpath(*relative.split("/"))
@@ -366,10 +381,10 @@ def test_durable_document_paths_lists_exactly_the_documents_in_scope(tmp_path: P
         path.write_text("{}", encoding="utf-8")
     (tmp_path / "cron" / "jobs.json.d").mkdir()
 
-    assert durable_document_paths(tmp_path) == tuple(sorted(documents))
-    assert durable_document_paths(tmp_path / "missing") == ()
-    assert all(is_durable_document_path(relative) for relative in documents)
-    assert not any(is_durable_document_path(relative) for relative in others)
+    assert snapshot_document_paths(tmp_path) == tuple(sorted(documents))
+    assert snapshot_document_paths(tmp_path / "missing") == ()
+    assert all(is_snapshot_document_path(relative) for relative in documents)
+    assert not any(is_snapshot_document_path(relative) for relative in others)
 
 
 @pytest.mark.parametrize(
@@ -385,5 +400,5 @@ def test_durable_document_paths_lists_exactly_the_documents_in_scope(tmp_path: P
         "SETTINGS.JSON",
     ],
 )
-def test_is_durable_document_path_rejects_unsafe_or_foreign_paths(path: str) -> None:
-    assert not is_durable_document_path(path)
+def test_is_snapshot_document_path_rejects_unsafe_or_foreign_paths(path: str) -> None:
+    assert not is_snapshot_document_path(path)
