@@ -56,7 +56,7 @@ To re-run only the public-distribution smoke test without creating or changing a
 gh workflow run release-smoke.yml --ref main -f tag=vX.Y.Z
 ```
 
-The workflow validates that `X.Y.Z` is SemVer, equals `pyproject.toml` → `version`, and does not already exist as a tag. It creates auto-generated notes; never replace them with hand-written notes. The house style is the single auto-generated line GitHub produces:
+The workflow validates that `X.Y.Z` is SemVer, equals `pyproject.toml` → `version`, and does not already exist as a tag. It creates auto-generated notes; never replace them with hand-written notes. The one addition is the data-compatibility notice of step 7, only when that step requires it. The house style is the single auto-generated line GitHub produces:
 `**Full Changelog**: https://github.com/Vironnimo/vbot/compare/<prev>...vX.Y.Z` (the previous tag is selected automatically).
 
 The Release workflow also calls `windows-package.yml` in signed mode. It builds all three native shapes with locked CPython dependencies, exercises disposable payload installation/update/lifecycle, and compiles the per-user Inno installers. The minimal server package additionally provisions managed STT and both TTS recipes, including repeated Chatterbox setup, without model weights or inference. Before publication, `scripts/windows/smoke_installer.ps1` also runs each compiled installer and uninstaller in a disposable CI runner, checking its target, startup selection, server shutdown and preserved data. Configure `VBOT_RELEASE_SIGNING_KEY` as a release secret containing a base64 raw Ed25519 private key; the build emits only its public key into installers. A missing key or package failure blocks publication. The publish job attaches the existing WebUI and all native installers, update archives, signatures and inventories together. See `scripts/windows/README.md` for the native build contract. No local source installation is migrated by this release operation.
@@ -73,9 +73,27 @@ gh release view vX.Y.Z --json tagName,assets --jq '{tag: .tagName, assets: [.ass
 
 Expect: all Backend, Frontend, E2E, Candidate Build, Candidate Smoke, Windows Package, publish, and Public Distribution canary jobs succeed; `assets` includes the gated `webui-dist.tar.gz` and, for each `server`, `server-desktop`, and `desktop-client` shape, `vBot-X.Y.Z-windows-x86_64-<shape>.exe`, `vbot-windows-x86_64-<shape>.zip` and its `.zip.sig`; and `releases/latest` resolves to `vX.Y.Z`. The Windows public canary checks a native installation rather than a Git checkout, then verifies that uninstall preserves its data.
 
+### 7. Add the data-compatibility notice when a migration breaks older versions
+
+A data migration declared with `breaks_older=True` makes every older vBot refuse the database it ran on (`.vorch/domain-maps/database.md` -> Evolution contract, item 4). Users must be able to read this in the release notes before they update, because going back afterwards means restoring a data snapshot from before the update. Check whether the release adds such a migration to a core owner or a bundled Extension (declarations are `Migration(name, breaks_older, apply)`, keyword or positional), and review every match:
+
+```bash
+git diff v<prev>..vX.Y.Z -- core resources/extensions | grep -nE '^\+.*(Migration\(|breaks_older)'
+```
+
+When none is added, stop: the notes stay exactly as generated. When one is added, prepend one notice per affected database above the generated line, keeping that line unchanged:
+
+```bash
+notice='**Data compatibility**: this release migrates the `<database>` database in a way older vBot versions cannot read. After updating, an older version refuses to open it; going back requires restoring a data snapshot taken before the update, which loses everything written to that database since.'
+{ printf '%s\n\n' "$notice"; gh release view vX.Y.Z --json body --jq .body; } \
+  | gh release edit vX.Y.Z --notes-file -
+```
+
+`<database>` is the kernel database name (`sessions`, `ext.<extension>.<name>`, ...). This notice is the only prose a release body may carry.
+
 ## Fixing notes after the fact
 
-`gh release edit` has no `--generate-notes`. If a release ends up with the wrong body (e.g. hand-written notes), regenerate the house-style notes via the API and overwrite:
+`gh release edit` has no `--generate-notes`. If a release ends up with the wrong body (e.g. hand-written notes), regenerate the house-style notes via the API and overwrite, then add the step 7 notice again if the release requires one:
 
 ```bash
 gh api repos/Vironnimo/vbot/releases/generate-notes \
@@ -86,7 +104,7 @@ gh api repos/Vironnimo/vbot/releases/generate-notes \
 ## Gotchas
 
 - **Default version bump**: when the user does not name a version, bump only the patch component of the synchronized latest release by one. Change scope does not override this default.
-- **Notes**: only the auto-generated Full Changelog line — no custom prose. A custom `--notes` replaces it and breaks the convention every prior release follows.
+- **Notes**: only the auto-generated Full Changelog line — no custom prose. A custom `--notes` replaces it and breaks the convention every prior release follows. The single exception is the step 7 data-compatibility notice above that line, required when the release adds a `breaks_older=True` migration and forbidden otherwise.
 - **Assets are mandatory**: Linux/source requires `webui-dist.tar.gz`; native Windows requires the shape-specific installer and signed update archive. Never skip step 6.
 - **Candidate identity**: CI builds `webui-dist.tar.gz` once; Candidate Smokes test that exact artifact, and publish downloads and attaches it without rebuilding or repackaging.
 - **Post-publish scope**: the Public Distribution canary exists because the real public GitHub tag and asset cannot be acquired before publication. Candidate behavior belongs in the pre-publish gates; the canary only proves the final public acquisition path.
