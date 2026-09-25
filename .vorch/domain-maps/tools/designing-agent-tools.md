@@ -1,199 +1,189 @@
 # Designing Agent-Facing Tools
 
-This is the design map for the agent-facing part of every Tool: the model-facing definition the Model sees. Read it whenever work touches that surface - adding a Tool, changing its public contract, migrating an older shape, or editing a description, parameter, or model-facing schema. It owns the design rules; concrete per-Tool behavior contracts live in the sibling maps under `tools/`, routed from `tools.md`.
+Design rules for everything an Agent experiences when it uses a Tool: the definition (name, description, parameters), any System Prompt guidance block, the interpretation of its arguments, its results, and its errors. Applies to built-in and Extension Tools alike. Per-Tool behavior contracts live in the sibling maps under `tools/`; the review and redesign procedure lives in `.vorch/workflows/tool-review-workflow.md`.
 
-## Purpose and Priority
+## What Success Means
 
-A Tool definition helps a fresh Agent choose a capability, supply a complete request, and achieve the intended result. Optimize the whole task: correct effects and useful evidence first, clear first-use guidance next, then unnecessary context and call cost. A shorter definition that causes empty operations, misleading results, or extra discovery calls is an unsuccessful optimization. Provider portability must preserve these semantics.
+A Tool succeeds when a fresh Agent, on any supported Model, chooses it for the right task, obtains the intended effect on the first call (or the second, after one clear error), and knows what to do next, at low context cost.
 
-Start with the user task and the observable outcome the Tool should enable. Its current name, schema, parameters, description, results and division into Tools are revisable design choices, not constraints to preserve. Prefer the simplest complete workflow an Agent can use independently; recurring errors may call for redesign rather than another instruction sentence. Judge context footprint across definitions, arguments, results and repeated history together with unnecessary discovery, execution, verification, recovery and continuation calls. Preserve correctness and needed guidance while reducing that total cost.
+Evidence from real Runs: hard failures (`ok: false`) are rare and usually self-corrected. The expensive failures are elsewhere:
 
-Apply the same efficiency during redesign and testing: deterministic tests cover known argument/runtime variants; focused Model trials resolve actual uncertainty about Tool choice and use. Batch independent checks, reuse relevant evidence and expand trials for observed failures or uncertainty. Do not use exhaustive exact-JSON Model matrices as a usability gate or repeatedly rerun unchanged passing checks.
+- Agents bypass a Tool, for example searching and editing files through the shell because the dedicated Tool feels unfamiliar.
+- Agents loop on a strict validator that rejects an obviously meant call.
+- Agents accept an `ok` result whose effect is wrong (a lost exit code, broken indentation).
 
-## Model Contract and Runtime Contract
+A green run of prescribed calls proves none of this. Judge a Tool by what Agents actually do with it.
 
-- The model-facing Tool definition describes only what the Model needs to choose and call the Tool.
-- Runtime behavior follows `../tools.md` -> Contracts -> Agent error tolerance: when operation, target, values, scope, and explicit constraints remain reliably identifiable, process the intended request despite mistakes in its expression; a unique similar schema match alone does not establish that intent. The advertised schema teaches the preferred call shape; it is not a reason to reject an understandable request.
-- The handler owns actual defaults, normalization, conditional validation, authorization, security checks, side effects, and error handling.
-- A permissive model-facing schema is acceptable when its descriptions reliably guide the Model and the handler safely validates execution.
-- Do not expand the model-facing schema merely to encode every invalid runtime state.
+## Principles
 
-## Tool Names
+### 1. Meet trained habits
 
-- Use a short, stable, descriptive `snake_case` name.
-- Prefer an established domain noun or verb. Do not include implementation details, Provider names, transport names, or versions.
-- Keep one Tool responsible for one coherent capability. Separate genuinely different discovery and execution operations when combining them would make invocation ambiguous.
+Models arrive trained on a few widely used Tool dialects: Claude Code (`Read`/`Edit`/`Bash`/`Grep`/`Glob` with `file_path`, `old_string`, `command`, `pattern`), Codex (`apply_patch` V4A, `shell`), opencode, and Hermes (`terminal`/`process` with `poll`/`log`/`wait`).
 
-## Tool Descriptions
+- Choose names, parameter names and formats that match the dominant habit for the capability. Novel interfaces must earn their unfamiliarity with a clear gain.
+- Accept the other common dialects as aliases (principle 2); the schema advertises one canonical form.
+- Names must be honest about the platform. A Tool named `bash` primes bash syntax; if it runs PowerShell, Agents write `export`, `2>/dev/null` and heredocs that fail.
+- Formats handed between Tools must survive copying: text an Agent copies out of one result (read output, error candidates) must be accepted verbatim as input by the next Tool.
 
-- State when to use the Tool, what it does, and only the operational limitations that change how the Model should call it. Say what the Tool accomplishes and any decision the Agent must make; do not spend the description teaching the Model to construct an avoidably complex envelope.
-- Every Tool must have a clear description. Context efficiency comes from removing redundancy and irrelevant implementation detail, not from withholding guidance the Model needs.
-- Lead with the action and its observable result, such as editing file contents or finding matching lines. Explain targeting or context as part of that action, never as a substitute for the action itself. An editing Tool must teach how to supply the change as well as where it belongs.
-- Keep enough guidance for the first complete call. Remove words that add no decision value; brevity is not a separate acceptance criterion.
-- Schema types and names do not explain how arguments work together. Repeat a schema fact only when it resolves a likely misunderstanding about the requested effect.
-- Do not describe handler internals, libraries, storage layout, UI rendering, logging, telemetry, or validation machinery unless the Model must account for it when calling the Tool.
-- Mention result behavior only when it affects Tool choice, pagination, follow-up calls, or safe use.
-- Cross-Tool guidance must not direct an Agent to an unavailable Tool. Gate context-specific guidance by availability, or make a simple preference explicitly conditional on the other Tool being available, retaining a valid fallback.
+### 2. Execute clear intent
 
-## Choose the Public Shape
+The test: would a competent colleague who receives this request know exactly what is meant, without asking? Then execute it. A round trip spent correcting a call whose meaning was already clear is a defect.
+
+| Situation | Handling | Examples |
+|---|---|---|
+| Unambiguous representation or dialect difference | Execute silently | `file_path` for `path`, `cmd` for `command`, `"true"` for `true`, a JSON-encoded array, a known call wrapper, `example.com` for a URL, a shell-style argument string for an argument list, a unified diff for a patch, read-output line prefixes or typographic quotes copied into patch context |
+| Fields the selected action does not use | Ignore; name them in the result only when a meaningful value suggests the Agent expected an effect | `subagent(action="run", id="unused")`, `process(action="kill", filter="all")` |
+| Interpretation that involved judgment | Execute and state the interpretation in the result | `timeout: 120000` read as milliseconds; an invalid regex searched as literal text; model indentation mapped to the file's tabs; a unique near-miss name resolved for a read-only lookup |
+| Plausible readings with different effects, or a missing decision | Refuse before side effects, name the problem and give the corrected call | patch removes `"earth"` but the file says `"world"`; `memory(action="add")` without scope |
+
+Never write to a guessed target, silently drop a requested effect, or resolve contradictory instructions by picking one. Similarity alone (edit distance, a single close schema match) does not establish intent for a mutation or an explicit target; domain evidence does.
+
+Where it lives: shared representation repair (types, encodings, scalar-to-array) belongs to `contracts.py`; field aliases, wrappers, vocabulary formatting, inapplicable fields and empty-as-omitted belong to the owning Tool through `argument_normalizer` and `_argument_repair.normalize_call_arguments`. Repairs stay scoped to call syntax: they never rewrite payload values, quoted text, external identifiers or application data.
+
+### 3. `ok` means the intended effect happened
+
+- Tolerance must produce the correct result, not merely an accepted call: replacement text follows the file's indentation style, line endings and encoding.
+- Report facts truthfully: real exit codes, real counts, the actual target.
+- Partial success is unmistakable: which items were applied, which were not, and that applied items stay applied.
+- An effect that already holds (the edit is already present, the process already stopped) is success with a clear "nothing to repeat" signal, not an error that invites retries.
+- A non-zero exit of a command the Agent ran is data about the command, not a Tool failure; the Tool fails when it could not do its own job.
+
+### 4. Results drive the next step
+
+Every result answers: what happened, what is known now, and what the next useful call is.
+
+- Return identifiers and continuation values in the exact argument shape the next call needs (`offset=2001`, `process_id`, a page `ref`).
+- Name the observed state together with valid next actions. `status: "running"` alone invites polling; "the result arrives automatically; continue other work or end the Run" does not.
+- Distinguish an exhausted search from a partial page, and a truncated output from a complete one; give the path or call that retrieves the rest.
+- Content reaches the Model as readable text, not escaped inside a JSON string: escaping costs 9-27% extra tokens on file content and makes exact copying error-prone.
+- Include only fields that inform a decision. Repeated boilerplate (null fields, echoed arguments, unchanged warnings) costs context on every call.
+- Prefer returning what the next step needs over forcing a follow-up call, when it is cheap (a patch result shows the changed region; a failed patch shows the closest current lines).
+- Distinguish a successful invocation from a verified task outcome when the Agent could mistake one for the other.
+
+### 5. Errors are instructions
+
+An error states the lifecycle state (nothing applied, partially applied, already done), the concrete cause including the offending value, and the valid next call or the available choices.
+
+- No raw validator output. Bad: `arguments: 'path' is a required property [required]`. Good: `read needs "path", the file to read. Received: files.`
+- Show candidates as readable text with line numbers, exactly as the Agent would copy them, and make invisible differences visible (tab versus spaces, trailing whitespace).
+- Offer the nearest valid values (similar file names, valid actions, available Skill names).
+- Name the state, never a wrong cause: "already delivered" informs; "not owned" reads as a permission problem and invites retries.
+- When refusing an action, name the permitted alternative.
+- Escalate after repeated failures of the same kind: point out the loop and offer a different strategy.
+
+### 6. Design Tool families together
+
+Tools that hand data to each other form a family and are reviewed and changed together, including their System Prompt guidance blocks, notifications and consumers.
+
+- Files: `read` -> `apply_patch`; `search_files` -> `read`.
+- Shell: `bash` -> `process` and the automatic completion notification; `terminal` for interactive programs.
+- Delegation: `subagent` plus its System Prompt block and completion delivery; `status`.
+- Web: `web_search` -> `web_fetch`.
+- Knowledge: `memory`, `skill`/`skill_manage` plus the Skills prompt section, `session_search`, `history`.
+
+Cross-Tool guidance must never point to an unavailable Tool: gate it by availability, or phrase a preference conditionally with a valid fallback.
+
+### 7. One home per piece of guidance
+
+| Surface | Carries |
+|---|---|
+| Name and description | What the Tool does, when to use it instead of alternatives, and what a correct first call needs (prerequisites, consequential defaults, format) |
+| Parameters | What value to send, when to omit it, consequential omission behavior |
+| System Prompt guidance block | Only strategy spanning several Tools or turns (when to delegate, how to split work); rendered only while the Tool is available |
+| Result | The situational next step, truncation, continuation |
+| Error | Recovery for this failure |
+
+Do not repeat guidance across surfaces unless the repetition prevents a likely mistake. Keep in the definition what only it can teach: accepted formats, deviations from standard semantics, behavior invisible in results, and silent hazards (for example a foreground command being killed at its timeout). Also keep steering sentences deliberately placed to guide behavior. Write for a fresh Agent without project documentation: only concepts it can observe or act on, no hidden implementation categories, no glossary terms it has never seen (project documentation never reaches the Model). Prefer the shortest plain sentence that names the subject, the event and the recipient, and name concrete Agent actions rather than abstract concepts.
+
+### 8. Measure real behavior
+
+- Mine real Sessions: failure codes, what the Agent did next, fallbacks to the shell, identical retries, result sizes, per Model.
+- Probe through production dispatch and inspect the resulting state (file content, exit code), not just `ok`.
+- Run black-box tasks with several Models, including weaker ones; count first-attempt success, recovery and bypasses.
+- Mistake catalogs come from real Runs and known dialects, not from invented typos.
+
+The procedure and tooling: `.vorch/workflows/tool-review-workflow.md`.
+
+## Definition Rules
+
+### Names and descriptions
+
+- Short, stable `snake_case` names; established domain nouns or verbs; no implementation, Provider, transport or version names. One coherent capability per Tool; separate discovery from execution only when combining them would make invocation ambiguous.
+- The first sentence states the action and its observable result. An editing Tool teaches how to supply the change, not only how to locate it.
+- Say when to prefer this Tool over a plausible alternative (for example the shell) when Agents otherwise choose wrongly.
+- Mention result behavior only when it affects the call, pagination, follow-up or safe use. No handler internals, libraries, storage layout, UI, logging or telemetry.
+- Examples must perform the advertised operation (target plus the actual change or query) and match actual behavior, verified against independently specified results; omitted optional fields stay omitted rather than `null`.
+
+### Public shape
 
 Use this decision order:
 
-1. **One behavior:** expose its arguments directly in one open flat object. A Tool named `channel_send` that only sends should accept delivery fields directly; `action: "send"` would repeat the Tool name.
-2. **One repeatable independent behavior:** use one required plural array of compact operation objects when batching materially reduces Agent roundtrips. State ordering semantics in the array description, preserve input order, keep per-operation options on each item, and report indexed outcomes.
-3. **One behavior with optional targeting or selection:** keep direct optional target fields and validate their dependencies. `status()` checks the current Session, `status(session_id)` checks another Session for the same Agent, and `status(agent_id, session_id)` changes the owner and Session; these are target variants, not actions.
-4. **Several genuinely different behaviors:** use one top-level `action` enum and place every action argument beside it. Require an explicit choice when omission cannot identify the intended behavior. A common action may have a documented omission default when its validated inputs unambiguously express that task, as `subagent(content)` delegates. CRUD and read-versus-mutate behavior normally require explicit actions; `memory(action, scope, content?, entry_id?)` and `history(action, ...)` are reference shapes.
+1. **One behavior:** its arguments directly in one flat object. `channel_send` takes delivery fields; `action: "send"` would repeat the name.
+2. **One repeatable independent behavior:** one plural array of compact operation objects when batching saves round trips; preserve input order and report indexed outcomes.
+3. **One behavior with optional targeting:** direct optional target fields (`status()`, `status(session_id)`, `status(agent_id, session_id)`); these are targets, not actions.
+4. **Several genuinely different behaviors:** one top-level `action` enum with every action's arguments beside it in the same `properties`. Require `action` unless a common action has a documented unambiguous default (`subagent(content)` delegates); an explicit invalid value never counts as omission. CRUD and read-versus-mutate normally require explicit actions.
 
-Do not expose `request.operation`, an operation-key object such as `{"create": {...}}`, a stringified nested request, or several mutually exclusive booleans that encode actions. Do not infer a behavioral mode from an arbitrary combination of optional fields when a required `action` would state it directly.
+Never expose `request.operation`, operation-key objects (`{"create": {...}}`), stringified nested requests, mutually exclusive booleans that encode actions, or `oneOf`/`anyOf`/`allOf`/conditional schemas for action branches. Action-dependent arguments stay out of the root `required` list; their descriptions state the dependency briefly ("Required for write."). The handler validates the selected action's requirements and ignores fields that action does not use (principle 2).
 
-Action Tool mechanics:
+### Parameters
 
-- Represent an Action Tool as one flat object. Its `action` string enum names the actions in operational language; make it required unless the common-action default above applies. Explicit invalid values never become omission.
-- Put all arguments used by any action in the same `properties` object.
-- Leave action-dependent arguments out of the root `required` list and state their action dependency briefly in their descriptions.
-- Do not represent actions with `oneOf`, `anyOf`, `allOf`, conditional schemas, or duplicated per-action object branches.
-- The handler must validate the selected action's required arguments and return a concise actionable error for an invalid combination.
+- Minimal and Agent-relevant; one concept once. No implementation knobs (internal paths, executable flags, storage layout, cache controls) unless choosing them is part of the requested behavior. The schema lists one canonical name per field; aliases are accepted by the handler, not advertised.
+- A field is optional only when omission has a real default, an unambiguous derived fallback, or selects the current target.
+- Plain JSON Schema object with `type`, `properties`, `required`. Never emit `additionalProperties`.
+- `required` only for fields every valid call needs; use `required: []` when none are. No `null`, nullable unions or sentinels unless `null` carries a meaning such as clearing a value.
+- Narrowest simple type that preserves the interface; small fixed vocabularies as enums. Bounds, patterns and formats only when they help construct a valid call.
+- Use stable ids returned by earlier results for follow-up mutations; say when ids can shift.
+- One vocabulary: `action` for behavior, `mode` only for a genuine execution contract (foreground/background), domain names for arguments.
+- When discovery and exact retrieval share authority and lifecycle, keep one configurable capability and derive the reader as a companion; the search result returns the reader's callable argument shape.
+- `oneOf` only when a single parameter genuinely accepts several representations and removing one would lose capability (`read.offset` is the reference case); never for actions, targets, optionality or cursor continuation. Branches carry no duplicated descriptions or constraints.
+- No root parameter-object description unless it states conditional rules that cannot live on the affected properties.
 
-Example:
+### Parameter descriptions and defaults
 
-```json
-{
-  "type": "object",
-  "properties": {
-    "action": {
-      "type": "string",
-      "enum": ["list", "read", "write"]
-    },
-    "id": {
-      "type": "string",
-      "description": "Required for read and write."
-    },
-    "content": {
-      "type": "string",
-      "description": "Required for write."
-    }
-  },
-  "required": ["action"]
-}
-```
+- Role first, then accepted values, then the omit rule as its own short sentence ("Omit to use the working directory.").
+- State the omission result only when it affects the decision to omit.
+- Do not repeat `required`, enum values, bounds or defaults in prose unless it resolves a real ambiguity.
+- The handler is the sole authority for defaults and applies them explicitly; never rely on a Provider to inject one.
+- JSON Schema `default` only for numbers, and only when omission is common, the value is stable, matches the handler exactly and helps planning (page sizes, limits, timeouts).
 
-## Parameters
+### Schema and handler boundary
 
-- Keep the parameter set minimal and Agent-relevant. Do not expose implementation details such as internal source paths, executable flags, storage layout, working directories, or cache controls unless choosing them is part of the user's requested behavior.
-- Represent one concept once. Prefer one normalized field over several overlapping schedule, selector, or mode fields; do not preserve aliases in the canonical Tool contract.
-- When two Tool names separate discovery from exact retrieval but share the same authority and lifecycle, keep one configurable capability and derive the reader as a companion. A search result should return the reader's directly callable argument shape so the Agent does not translate identifiers or depend on both toggles being configured independently.
-- Use a plain JSON Schema object with `type`, `properties`, and `required`. Never emit `additionalProperties` in a model-facing Tool schema.
-- Put a field in `required` only when every valid call requires it. Make a field optional by leaving it out of `required`. Do not add `null`, nullable unions, sentinel values, or duplicate optionality metadata. Use `required: []` for a Tool with no required arguments.
-- Use the narrowest simple type that preserves the callable interface. Use an enum when the Model must choose from a small fixed vocabulary. Add bounds, patterns, length limits, or format hints only when they materially help the Model construct a valid argument; runtime-only constraints do not belong in the model-facing schema.
-- Do not add a root parameter-object description unless it conveys conditional argument rules that cannot be stated more compactly on the affected properties.
-- Make a field optional only when omission has a real default, an unambiguous derived fallback, or selects the current target.
-- Use stable IDs returned by prior Tool Results for follow-up mutations. If IDs can shift, say when the Agent must list or refresh first.
-- Use one vocabulary consistently: `action` for a domain-behavior discriminator, `mode` only for a genuine execution contract such as Bash foreground/background, domain names for arguments, and existing project terms for entities. Do not alternate between `action`, `operation`, `mode`, and `type` for the same role.
+- The schema owns field names, simple types, small enums and universal requirements. The handler owns defaults, conditional requirements, inapplicable fields, cross-field meaning, authorization, existence, state transitions and all argument interpretation.
+- A permissive schema is fine when descriptions guide the Model and the handler validates execution; do not expand the schema to encode every invalid state.
+- Authorization, path safety, sanitization, resource limits and destructive-action checks never depend on Model compliance.
 
-## Parameter Descriptions
+### Provider rendering
 
-- Describe the value the Model should provide, not the Python type or handler variable.
-- Every parameter must have a concise description that makes its purpose clear and, when optional, tells the Model when to omit it. A short self-evident description is preferable to no description.
-- State the omission condition from the Model's decision point, for example `Omit when no specific destination is given.` Add the resulting omission behavior or runtime default only when it materially affects that decision.
-- For a conditionally required parameter, state the relevant action or mode directly, for example `Required for write and submit.`
-- Do not repeat `required`, enum values, numeric bounds, or defaults in prose unless the repetition resolves a real ambiguity.
-- Use short canonical examples when syntax or the relationship between arguments needs explanation. Each example must perform the advertised operation: include the target and the actual change or query, not just a locator or context fragment. Show omitted optional fields as omitted, not as `null`, unless `null` is meaningful. Validate examples against independently specified results.
+- Canonical definitions are Provider-neutral. Adapters change only the transport wrapper (OpenAI Chat `function`, Responses `name` plus `parameters`, Anthropic `input_schema`).
+- Never enable strict Tool calling. This is a deliberate decision: strict mode repeatedly caused problems in practice. Do not reshape schemas for a strict subset, force optional fields to required-and-null, or add defaults, required fields, nullable types or closed-object keywords absent from the canonical definition.
 
-## Defaults
+### Results, errors and display
 
-- The handler is the sole authority for every actual default.
-- Do not emit the JSON Schema `default` keyword for strings, booleans, enums, arrays, objects, or null values.
-- A numeric `default` may be emitted only when omission is common, the number materially helps the Model plan the call, the value is stable, and the handler applies exactly the same value.
-- Do not add a numeric `default` merely because the handler has one. Pagination sizes, result limits, offsets, and timeouts are typical candidates; incidental implementation constants are not.
-- Explain a non-numeric omission result in the parameter description only when it materially affects whether the Model should omit the field.
-- Never rely on a Provider to apply a default or inject an omitted argument.
+- The stored result envelope `{ok, error, data, artifacts}` is the persistence and dispatch contract (`../tools.md` -> Contracts). What the Model reads should follow principles 3-5.
+- Batched independent operations keep input order with stable indices; mixed outcomes use a successful envelope with an explicit partial status; zero successes use a failure envelope.
+- Expected failures use precise codes and actionable messages; set retry metadata only when it changes what the Agent should do.
+- UI labels and hidden arguments come from `ToolDisplay` (`summary_builder`, `hidden_argument_keys`), never from extra public arguments.
+- Internal paths, provenance and implementation state stay out of results unless the Agent needs them for the next in-scope call.
 
-## Schema and Handler Boundary
+### Retired shapes
 
-- The canonical model-facing input has one open JSON-object root with `type`, `properties`, and `required`.
-- The schema owns field names, simple JSON types, small fixed enums, universal requirements, and only constraints that materially help the Model construct a valid call. The handler owns unknown fields, conditional requirements, inapplicable fields, actual defaults, cross-field meaning, authorization, existence, state transitions, and other semantic checks.
-- Interpret recognizable mistakes before rejecting unknown or inapplicable fields. A typo or stale field is not automatically a failed call: repair it when owner-specific evidence establishes the same intended effect. A unique close spelling or successful schema validation alone is insufficient. If meaning remains ambiguous or an instruction cannot be honored, return an actionable error; do not silently discard a meaningful part of the request.
-- Apply the Agent error tolerance contract through shared normalization for representation changes and the Tool's own boundary for known aliases, call syntax, and domain-specific repairs. Preserve valid payload keys and exact target ids; unknown fields may express unsupported effects. For example, a boolean field accepts both `true` and `"true"`. This example does not limit tolerance to type conversion. Keep the model-facing schema canonical and do not disable normalization merely to enforce exact JSON types.
-- Handlers must safely reject or normalize malformed arguments regardless of what the model-facing schema permits, and must apply defaults explicitly: an omitted argument must behave correctly even if the Provider ignores every schema annotation.
-- Authorization, path safety, input sanitization, resource limits, and destructive-action checks belong to runtime code and must never depend on Model compliance.
-- Runtime errors should identify the invalid argument and the valid correction without exposing implementation details.
+The helpers `operation_envelope_schema`, `extract_tool_operation`, `action_schema` and `discriminated_union_schema` were removed; do not reintroduce them. Recognizable older call shapes are still interpreted under principle 2. Keep any rendering of historical persisted calls the WebUI needs.
 
-## Multi-Type Parameters
+## Token Cost
 
-- Prefer one simple type.
-- Use `oneOf` only when one individual parameter genuinely accepts multiple representations and changing that public input would remove useful capability; `read.offset` is the reference case. A union never encodes actions, modes, targeting variants, optionality, or cursor continuation.
-- Never use a union to encode Action Tool branches or optionality.
-- Keep union branches free of duplicated descriptions and constraints.
-
-## Provider Rendering
-
-- Canonical Tool definitions remain Provider-neutral.
-- Provider adapters may change only the transport wrapper required by the Provider, such as OpenAI Chat `function`, OpenAI Responses `name` plus `parameters`, or Anthropic `input_schema`.
-- Provider rendering must never enable strict Tool calling. That is a deliberate decision - strict mode repeatedly caused problems in practice - so design the natural canonical contract instead: never force optional fields to be required-and-null, remove schema features, or otherwise reshape a Tool for a Provider's strict-schema subset.
-- Provider rendering must not add defaults, required fields, nullable types, closed-object keywords, or other semantics absent from the canonical Tool definition.
-
-## Results, Errors, and Display
-
-- Keep the stable vBot Tool Result envelope. Define a success-data schema and return stable target identifiers, state, or action outcome when they help the next call.
-- For batched independent operations, keep results in input order with stable indices. Mixed outcomes may use a successful envelope with an explicit `partial` data status when completed operations must remain applied; zero successful operations use a failure envelope.
-- Expected failures use precise codes and actionable messages. Set retry metadata only when it changes what the Agent should do.
-- Do not add public arguments solely to improve UI labels or conceal sensitive values. Use `ToolDisplay.summary_builder` and `hidden_argument_keys`.
-- A result should not expose internal filesystem paths, provenance, or implementation state unless the Agent needs that value for the next in-scope operation.
-
-## Writing the Texts
-
-The model-facing texts guide Tool choice and invocation; the handler and returned evidence establish whether the intended effect actually occurred. The description selects the Tool, parameter descriptions steer the call, and result/error texts guide continuation. Verify these surfaces together.
-
-- Write for a fresh Agent with no project context: self-contained, only concepts the Agent can observe or act on. Explain the available behavior and the next valid action, and never name a hidden implementation category merely to explain an exclusion.
-- All three surfaces are runtime Agent-facing text. Follow `AGENTS.md` -> Communication with the user -> Present Agent-facing text changes for review presentation.
-- Place guidance where it supports the decision: the definition must enable a correct first call, including prerequisites and defaults that affect its result. Errors explain the actual failure and recovery; they do not replace instructions needed to avoid predictable mistakes. Results explain observed truncation and supply usable continuation arguments.
-- Remove irrelevant detail and repetition that adds no understanding. Keep the connection between operation, target, and payload clear even when it requires a brief reminder across surfaces. A minimal parameter label is insufficient when it leaves that relationship unexplained.
-- Keep in the pre-call texts what only they can teach: capabilities the Agent needs before the first call (accepted file types, output row shape, sort order, omit-defaults), deviations from standard semantics (case-insensitivity, exclusion syntax), behavior invisible in results, silent-hang warnings where bad input blocks forever without an error, and deliberate steering sentences planted to guide Agent behavior.
-- Structure a parameter description role-first: lead with the parameter's role, then accepted values, then the omit-rule as its own short sentence.
-- The result steers the loop; the System Prompt only orients. Name the observed state and valid next actions together - a bare `status: "running"` invites polling. Explain alternatives to a prohibited action. Distinguish an exhausted search from a partial page, and a successful invocation from a verified task outcome.
-- Error wording names the lifecycle state, never a wrong cause: "already delivered" informs; "not owned" reads as a permission problem and invites retries.
-- Prefer the shortest plain sentence naming the subject, the event, and the recipient; name concrete Agent actions, not abstract concepts. The glossary does not reach the Model - project context loads only for Agents working in that project, so do not rely on glossary terms in model-facing texts.
-
-## Retired Shapes
-
-The shared `operation_envelope_schema`, `extract_tool_operation`, `action_schema`, and `discriminated_union_schema` compatibility helpers were removed after the final nested Tool migrated - the latter two built the forbidden oneOf closed-branch action shapes. Keep new definitions in the canonical flat form rather than reintroducing these helpers. Runtime handling of a recognizable older shape still follows the Agent error tolerance contract; its age alone is not a reason to reject it. Preserve any required rendering of historical persisted calls in the WebUI.
-
-## Change and Verification Discipline
-
-- Start an audit from actual delivered definitions, arguments, results, and the Agent's following decisions. Deduplicate persisted copies of calls. Investigate successful but empty, noisy, or truncated results as well as explicit errors; verify suspected false positives and false negatives against independent evidence. Separate proven defects from uncertain task outcomes or historical file state.
-- Keep changes independently reviewable around the intended workflow. A coordinated change to competing Tools, such as search and Bash selection guidance, should be verified together. Unrelated Tool behavior must remain intact.
-- Keep the repository releaseable after every Tool change.
-- Before changing a Tool's public contract, inventory every accepted shape, default, permission rule, and persisted or UI consumer.
-- After the change, recheck Provider rendering and the non-strict invariant, schema fingerprints, Tool descriptions, `ToolDisplay`, prompts, E2E fake-provider calls, and any generated Tool catalogs, and update the owning Tool map plus any documentation that teaches the call shape.
-- Before moving to the next Tool, run its focused dispatch tests and live black-box task evaluations with its production definitions and prompts. A live installation round-trip is not required. The three evidence layers below are separate; transport conformance never substitutes for usability.
-- For Luna probes, select `--provider openai --connection openai:subscription` explicitly. Do not run Luna through OpenCode Go or inherit the probe script's default Provider.
-- Deterministic production-dispatch tests cover every action/mode, consequential default, explicit value, recoverable representation, and ambiguous or unsupported request. Pair each repair with nearby different and conflicting inputs. Assert independently specified receiving targets, payloads, scope and effects. Do not ask a Model to reproduce malformed JSON as a substitute for these tests.
-- Provider conformance probes may prescribe arguments to isolate serialization, streaming, or schema transport. Label them as transport/conformance evidence. They cannot establish Tool choice, first-use understanding, or end-to-end task success.
-- Black-box Model evaluations supply only a natural user goal, production definitions/prompts, realistic state and the competing Tools normally available. Keep expected Tool names, actions, argument shapes, grading criteria and the suspected fix outside Model context. Never force a Tool, demand one call, teach the answer in a test-only reminder, or hide Bash to make search selection pass. Exercise common tasks, defaults, recovery, continuation and cases where another Tool is appropriate. Use genuine results through completion and judge the requested outcome, including final claims; equivalent valid call sequences are allowed.
-- Repeat fresh trials with fixed settings, compare unchanged cases before/after when possible, and keep task variants out of tuning. Preserve all attempts and diagnostic responses, including no-call replies, timeouts, wrong selections and retries. Report first-attempt success separately from recovery and final outcome, with denominators; reruns or changed thinking effort never erase failures. Fixture limitations and unresolved failures remain explicit. `--scenario tool_first_use` in `scripts/probe_provider_tool_call.py` owns search/delegation task evaluations; the older exact-call scenarios remain conformance probes.
-- Commit each verified Tool or coordinated workflow change as a cohesive releaseable unit before moving to unrelated Tool work.
-- Quality gates: a scoped non-mutating pass (`python scripts/quality.py --check <paths>`) while working and before any intermediate commit; the full gate (`python scripts/quality.py`) once, before the final commit that closes the task. Tool work adds no separate gate schedule.
-
-## Token Cost Comparisons
-
-Always include before/after token counts in Tool audits and changes, including replacements of older Tools. Measure the full model-facing definition (name, description, and parameters), using the same tokenizer and serialization on both sides. Use `core/utils/tokens.py` for local estimates; state the encoding, compared revisions, and whether wrappers are included. A definition cost applies to each Model request containing it, subject to Provider framing and caching; it is not a separately billed Tool execution.
-
-Where evidence exists, also measure argument and result tokens, call counts, pagination, and recovery calls for matched tasks. Count repeated history exposure separately from a payload counted once. Do not attribute whole-Run Provider usage to one Tool or compare unrelated live workloads as proof of savings. Report unavailable measurements explicitly. Present absolute counts and deltas alongside outcome quality; lower cost does not compensate for the wrong result.
+Report before/after token counts for every Tool audit or change, including replaced Tools: the full model-facing definition (name, description, parameters) with the same tokenizer and serialization on both sides (`core/utils/tokens.py`), stating encoding, revisions and whether wrappers are included. A definition recurs in every request that carries it (subject to caching); a result is paid once but stays in history. Where evidence exists, also compare result sizes, call counts and recovery calls for matched tasks. Lower cost never compensates for a wrong effect or missing guidance.
 
 ## Review Checklist
 
-Before accepting a Tool definition, verify all of the following:
-
-- The first sentence states the action and observable result; the complete definition teaches a request that actually accomplishes it.
-- Every required argument is in `required`, and every optional argument is absent from it.
-- Every optional parameter tells the Model when to omit it; omission results appear only when they affect that decision.
-- No `additionalProperties` keyword is present in the model-facing schema.
-- No non-numeric JSON Schema `default` is present.
-- Every Action Tool has one flat object. `action` is required unless it has a documented unambiguous default; other root-required fields must be required by every action.
-- Parameter descriptions contain no duplicated schema facts or runtime internals.
-- Every parameter still has enough description for the Model to use it correctly.
-- Cross-Tool guidance cannot point to an unavailable Tool.
-- The handler independently validates conditional requirements and applies all defaults.
-- The Provider wire explicitly remains non-strict where the Provider supports strict Tool calling.
-- Before/after definition tokens and the measurement basis are reported; any claimed workflow savings have matched-task evidence.
-- Focused dispatch tests and black-box task evaluations verify the intended outcome before another Tool is changed; conformance probes remain separate evidence.
+- The Tool name and parameter names match the dominant trained habit, or the difference earns its cost.
+- The first sentence states action and result; a fresh Agent can write a complete first call from the definition alone.
+- Common dialect variants, copy mistakes and placeholder fields execute with the intended effect; genuinely ambiguous calls are refused with the corrected call.
+- Tests assert the resulting state (file content, exit code, receiving call), not only `ok`.
+- Every result names the state and the next step; truncation and continuation are explicit and copyable.
+- Every error states what was and was not applied, the cause with the offending value, and the valid next call. No raw validator text.
+- Content reaches the Model as readable text; no field without decision value.
+- Family members, guidance blocks and notifications were reviewed together; no guidance points to an unavailable Tool.
+- Every optional parameter says when to omit it; every parameter keeps enough description to be used correctly, without duplicated schema facts or runtime internals.
+- Schema mechanics hold: flat object, no `additionalProperties`, correct `required`, numeric-only `default`, non-strict Provider rendering; the handler validates conditional requirements and applies every default.
+- Before/after definition tokens are reported; claimed workflow savings have matched-task evidence.
+- Focused dispatch tests and black-box task evaluations (`.vorch/workflows/tool-review-workflow.md`) verify the intended outcome before the next Tool is changed; conformance probes stay separate evidence.
