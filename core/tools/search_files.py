@@ -13,8 +13,8 @@ from pathlib import Path
 from typing import Any
 
 from core.tools._argument_repair import normalize_call_arguments
-from core.tools._field_aliases import SpellingAliases as _SpellingAliases
-from core.tools._field_aliases import spelling as _spelling
+from core.tools._call_vocabulary import SpellingAliases as _SpellingAliases
+from core.tools._call_vocabulary import spelling as _spelling
 from core.tools._path_suggestions import corrected_paths
 from core.tools._search_arguments import parse_search_args
 from core.tools._search_execution import (
