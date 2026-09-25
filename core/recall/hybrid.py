@@ -91,7 +91,7 @@ class HybridRecallBackend(CanonicalSessionRecallBackend):
         # once per search; adaptive depth growth reruns only the rankings.
         arm_request = dataclasses.replace(request, offset=0, limit=depth, snapshot_id=None)
         # Both arms search the same candidates, read once from the Session store.
-        scope = await asyncio.to_thread(self._read_scope, arm_request)
+        scope = await self.sessions.run_async(self._read_scope, arm_request)
         literal_prepared, semantic_prepared = await asyncio.gather(
             self._fts.prepare_passage_search(arm_request, scope),
             self._vector.prepare_search(arm_request, scope),

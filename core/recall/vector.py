@@ -225,7 +225,7 @@ class VectorRecallBackend(CanonicalSessionRecallBackend):
                 "Semantic search is unavailable because no embedding model is configured.",
             )
         if scope is None:
-            scope = await asyncio.to_thread(self._read_scope, request)
+            scope = await self.sessions.run_async(self._read_scope, request)
         stored = await self.store.read_header()
         pinned = (
             stored

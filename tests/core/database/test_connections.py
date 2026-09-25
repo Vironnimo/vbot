@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+import threading
 from contextlib import closing
 from pathlib import Path
 
@@ -372,6 +373,8 @@ async def test_async_work_runs_on_the_database_worker_pool(data_dir: Path) -> No
             lambda connection: [row[0] for row in connection.execute("SELECT body FROM notes")]
         )
         assert bodies == ["async"]
+        thread = await database.run_async(lambda: threading.current_thread().name)
+        assert thread.startswith(f"vbot-db-{database.name}")
     finally:
         database.close()
 

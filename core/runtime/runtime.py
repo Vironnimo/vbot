@@ -487,8 +487,8 @@ class Runtime:
         if self._recall is not None:
             await self._recall.aclose()
         if self._statistics_index is not None:
-            # A running Statistics read holds the index lock; wait off the loop.
-            await asyncio.to_thread(self._statistics_index.close)
+            # A running Statistics read holds the index lock; wait on its pool.
+            await self._statistics_index.aclose()
         if self._chat_sessions is not None:
             self._chat_sessions.close()
 

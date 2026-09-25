@@ -38,9 +38,6 @@ from core.statistics.skills import (
     SkillInventorySource,
     offered_skill_names,
 )
-from core.utils.workers import BoundedWorkerPool
-
-_GROUP_USAGE_WORKERS = BoundedWorkerPool(name="statistics-group-usage", max_workers=2)
 
 
 @dataclass(frozen=True)
@@ -96,6 +93,20 @@ class StatisticsService:
         """Reconcile the disposable index without building a report."""
         scopes = _index_scopes(self._statistics_scopes(), self._extension_sessions())
         self._index.read(self._sessions, scopes, lambda _view: None)
+
+    async def warm_index_async(self) -> None:
+        """``warm_index`` on the index database's worker pool."""
+        await self._index.run_async(self.warm_index)
+
+    async def report_async(
+        self, *, since: datetime | None = None, until: datetime | None = None
+    ) -> StatisticsReport:
+        """``report`` on the index database's worker pool."""
+        return await self._index.run_async(self.report, since=since, until=until)
+
+    async def run_activity_async(self, *, since: datetime, until: datetime) -> RunActivityReport:
+        """``run_activity`` on the index database's worker pool."""
+        return await self._index.run_async(self.run_activity, since=since, until=until)
 
     def report(
         self, *, since: datetime | None = None, until: datetime | None = None
@@ -173,7 +184,7 @@ class StatisticsService:
         query: JsonObject | None = None,
     ) -> JsonObject:
         """Return a bounded, owner-exact usage projection for an Extension group."""
-        return await _GROUP_USAGE_WORKERS.run(
+        return await self._index.run_async(
             self._group_usage, owner_name, group_id, dict(query or {})
         )
 

@@ -6,18 +6,22 @@ reaches the owner, which classifies the failure with
 :func:`projection_failure` and, for ``rebuild``, calls
 :meth:`DisposableDatabase.discard`: the handle closes, the files go, and the
 next :meth:`DisposableDatabase.get` creates the projection empty.
+
+A disposable database keeps one bounded worker pool for its whole life: its
+own asynchronous operations and every handle it opens run on it, so a rebuild
+never adds a pool and closing it ends all of them.
 """
 
 from __future__ import annotations
 
-import asyncio
 import sqlite3
 import threading
+from collections.abc import Callable
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal, TypeVar
 
 from core.database._connections import classify_write_error, is_busy_error
-from core.database.database import Database, _discard, open_database
+from core.database.database import Database, _discard, _open_disposable, database_worker_pool
 from core.database.errors import (
     DatabaseCorruptError,
     DatabaseFormatError,
@@ -26,6 +30,7 @@ from core.database.errors import (
 from core.database.spec import DISPOSABLE, DatabaseSpec
 
 ProjectionFailure = Literal["busy", "unavailable", "rebuild"]
+_Result = TypeVar("_Result")
 
 
 def projection_failure(error: BaseException) -> ProjectionFailure | None:
@@ -73,6 +78,10 @@ class DisposableDatabase:
     afterwards; ``discard`` closes it and deletes the files so the next ``get``
     rebuilds it; ``close`` releases it for good. Operations that already hold
     the old handle when ``discard`` runs fail as unavailable.
+
+    ``run_async``, ``get_async`` and ``discard_async`` run on the database's
+    bounded worker pool, which every handle ``get`` opens shares; after
+    ``close`` they raise :class:`DatabaseUnavailableError`.
     """
 
     def __init__(self, spec: DatabaseSpec) -> None:
@@ -82,10 +91,14 @@ class DisposableDatabase:
         self._lock = threading.Lock()
         self._database: Database | None = None
         self._closed = False
+        self._workers = database_worker_pool(spec)
 
     @property
     def path(self) -> Path:
         return self.spec.path
+
+    def is_closed(self) -> bool:
+        return self._closed
 
     def get(self) -> Database:
         """Return the open database, opening (and if needed rebuilding) it first."""
@@ -93,15 +106,32 @@ class DisposableDatabase:
             if self._closed:
                 raise DatabaseUnavailableError(f"{self.spec.name} is closed")
             if self._database is None or self._database.is_closed():
-                self._database = open_database(self.spec)
+                self._database = _open_disposable(self.spec, workers=self._workers)
             return self._database
 
+    async def run_async(
+        self, function: Callable[..., _Result], *arguments: Any, **keyword_arguments: Any
+    ) -> _Result:
+        """Run blocking work that uses this database on its bounded worker pool.
+
+        After ``close`` it raises :class:`DatabaseUnavailableError`, including
+        when ``close`` shut the pool down while this call waited for admission.
+        """
+        if self._closed:
+            raise DatabaseUnavailableError(f"{self.spec.name} is closed")
+        try:
+            return await self._workers.run(function, *arguments, **keyword_arguments)
+        except RuntimeError as exc:
+            if self._closed:
+                raise DatabaseUnavailableError(f"{self.spec.name} is closed") from exc
+            raise
+
     async def get_async(self) -> Database:
-        """``get`` for the Event Loop: the first open runs off the loop."""
+        """``get`` for the Event Loop: opening runs on the database's worker pool."""
         database = self._database
         if database is not None and not database.is_closed() and not self._closed:
             return database
-        return await asyncio.to_thread(self.get)
+        return await self.run_async(self.get)
 
     def discard(self) -> None:
         """Close the handle and delete the files; the next ``get`` rebuilds them.
@@ -114,14 +144,15 @@ class DisposableDatabase:
             _discard(self.spec)
 
     async def discard_async(self) -> None:
-        """``discard`` for the Event Loop: closing and deleting run off the loop."""
-        await asyncio.to_thread(self.discard)
+        """``discard`` for the Event Loop: closing and deleting run on the worker pool."""
+        await self.run_async(self.discard)
 
     def close(self) -> None:
-        """Close the handle; later ``get`` calls fail as unavailable."""
+        """Close the handle and the worker pool; later calls fail as unavailable."""
         with self._lock:
             self._closed = True
             self._release()
+        self._workers.shutdown(wait=False)
 
     def _release(self) -> None:
         database, self._database = self._database, None

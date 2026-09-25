@@ -3,8 +3,8 @@
 ``statistics.report`` returns a full :class:`StatisticsReport` from the
 incrementally reconciled Session read model. ``statistics.run_activity`` returns
 the bounded Run projection overlapping a required time window for Provider-limit
-correlation. Both offload filesystem/SQLite work and expose no raw Tool arguments
-or Reasoning.
+correlation. Both run on the Statistics index database's worker pool and expose
+no raw Tool arguments or Reasoning.
 """
 
 from __future__ import annotations
@@ -14,7 +14,6 @@ from typing import Any, cast
 
 from core.skills import project_skill_origin, scan_skill_names
 from core.statistics import StatisticsService
-from core.utils.workers import BoundedWorkerPool
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
 from server.rpc.validation import _reject_unsupported
@@ -23,7 +22,6 @@ JsonObject = dict[str, Any]
 
 _SUPPORTED_FIELDS = {"since", "until"}
 _RUN_ACTIVITY_SUPPORTED_FIELDS = {"since", "until"}
-_STATISTICS_WORKERS = BoundedWorkerPool(name="statistics", max_workers=2)
 
 
 async def _statistics_report(state: Any, params: JsonObject) -> JsonObject:
@@ -34,11 +32,7 @@ async def _statistics_report(state: Any, params: JsonObject) -> JsonObject:
     if since is not None and until is not None and since > until:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.since must not be after params.until")
 
-    report = await _STATISTICS_WORKERS.run(
-        statistics_service(state).report,
-        since=since,
-        until=until,
-    )
+    report = await statistics_service(state).report_async(since=since, until=until)
     return report.to_dict()
 
 
@@ -52,11 +46,7 @@ async def _statistics_run_activity(state: Any, params: JsonObject) -> JsonObject
     until = _required_utc_timestamp(params, "until")
     if since > until:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.since must not be after params.until")
-    report = await _STATISTICS_WORKERS.run(
-        statistics_service(state).run_activity,
-        since=since,
-        until=until,
-    )
+    report = await statistics_service(state).run_activity_async(since=since, until=until)
     return report.to_dict()
 
 

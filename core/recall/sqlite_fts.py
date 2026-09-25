@@ -12,7 +12,6 @@ the history they share.
 
 from __future__ import annotations
 
-import asyncio
 import sqlite3
 from contextlib import closing
 from dataclasses import dataclass
@@ -165,7 +164,7 @@ class SqliteFtsRecallBackend(CanonicalSessionRecallBackend):
         )
 
     async def search_page(self, request: RecallSearchRequest) -> RecallSearchPage:
-        return await asyncio.to_thread(self._search_page, request, use_fts=True)
+        return await self.sessions.run_async(self._search_page, request, use_fts=True)
 
     async def search_passages(self, request: RecallSearchRequest) -> RecallSearchPage:
         """Return Passage-level literal ranking for Hybrid fusion."""
@@ -185,7 +184,7 @@ class SqliteFtsRecallBackend(CanonicalSessionRecallBackend):
         """
 
         if scope is None:
-            scope = await asyncio.to_thread(self._read_scope, request)
+            scope = await self.sessions.run_async(self._read_scope, request)
         _check_snapshot(request, scope.snapshot_id)
         query = _passage_query(request)
         if query is not None and scope.candidates:

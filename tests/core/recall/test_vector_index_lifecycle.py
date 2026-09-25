@@ -343,7 +343,7 @@ async def test_vector_search_keeps_session_and_store_reads_off_the_event_loop(
     database_calls = forbid_database_calls_on_loop(monkeypatch)
 
     await recall.search_page(request(query="fruit"))
-    await asyncio.to_thread(session.append, ChatMessage.user("more fruit", timestamp=timestamp(2)))
+    await sessions.run_async(session.append, ChatMessage.user("more fruit", timestamp=timestamp(2)))
     page = await recall.search_page(request(query="fruit"))
 
     assert page.hits

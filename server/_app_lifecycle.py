@@ -141,7 +141,7 @@ def _start_statistics_warmup(state: Any) -> asyncio.Task[None] | None:
 
 async def _warm_statistics_index(service: Any) -> None:
     try:
-        await asyncio.to_thread(service.warm_index)
+        await service.warm_index_async()
     except Exception:
         logging.getLogger("vbot.server.app").warning(
             "Statistics index warmup failed",
