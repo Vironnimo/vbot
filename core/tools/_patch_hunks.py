@@ -1,12 +1,13 @@
 """Match one parsed hunk against current text and apply it.
 
 Line hunks (V4A, unified diffs, SEARCH/REPLACE blocks) delegate to
-``fuzzy_match.replace_fuzzy`` with patch-only options (whole lines, precise
-retries, EOF anchoring, precise removed lines) and add patch recoveries:
-read-output gutters, escaped text, surplus blank context, and already-applied
-post-states. Context lines keep their actual bytes; only changed lines come from
-the patch. Text replacements (``old_string``/``new_string``) match within lines
-with the precise strategies only, and line insertions go after a line number.
+``fuzzy_match.replace_fuzzy`` with patch-only options (whole lines, EOF
+anchoring) and add patch recoveries: read-output gutters, escaped text, surplus
+blank context, and already-applied post-states; old text copied with other
+errors goes to ``copy_match``. Context lines keep their actual bytes; only
+changed lines come from the patch. Text replacements (``old_string``/
+``new_string``) match within lines precisely, else through ``copy_match``, and
+line insertions go after a line number.
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ from core.tools.arguments import (
     split_text_lines,
     strip_line_number_gutters,
 )
+from core.tools.copy_match import copy_warnings, match_copied_edit, replace_copied
 from core.tools.fuzzy_match import (
     AmbiguousFuzzyMatch,
     FuzzyReplacement,
@@ -126,20 +128,12 @@ def _ambiguity(
     return details, {"occurrences": match.occurrences, "lines": _line_list(numbers)}
 
 
-def _removed_lines(hunk: _Hunk) -> list[int]:
-    """Return the 0-based positions of removed lines within the hunk's old text."""
-    old_prefixes = [prefix for prefix, _ in hunk.lines if prefix in " -"]
-    return [index for index, prefix in enumerate(old_prefixes) if prefix == "-"]
-
-
 def _match(
     content: str,
     old: str,
     new: str,
     *,
-    precise: bool = False,
     eof: bool = False,
-    required_lines: list[int] | None = None,
 ) -> FuzzyReplacement | AmbiguousFuzzyMatch | None:
     if old == "":
         positions = []
@@ -170,10 +164,8 @@ def _match(
         new,
         replace_all=False,
         whole_lines=True,
-        precise_only=precise,
         at_eof=eof,
         typographic=True,
-        required_lines=required_lines or (),
     )
 
 
@@ -261,7 +253,7 @@ def _inline_context_identifies(content: str, old: str, new: str) -> bool:
 
 
 def _apply_replacement(content: str, hunk: _Hunk, path: object) -> tuple[str, list[str]]:
-    """Replace ``old_string`` text within lines, located by precise matching only."""
+    """Replace ``old_string`` text, located precisely, else as a copy with errors."""
     replacement = hunk.replacement
     assert replacement is not None
     replace_all = replacement.replace_all or (replacement.expected or 1) > 1
@@ -288,7 +280,6 @@ def _apply_replacement(content: str, hunk: _Hunk, path: object) -> tuple[str, li
             new,
             replace_all=replace_all,
             whole_lines=whole_lines,
-            precise_only=True,
             typographic=True,
         )
         if found is None:
@@ -316,17 +307,31 @@ def _apply_replacement(content: str, hunk: _Hunk, path: object) -> tuple[str, li
             )
         return found.new_content, [note] if note else []
     details = _not_found(content, replacement.old)
+    present = None
     if replacement.new.strip() and replacement.new != replacement.old:
         present = replace_fuzzy(
             content,
             replacement.new,
             replacement.new,
             replace_all=True,
-            precise_only=True,
             typographic=True,
         )
         if isinstance(present, FuzzyReplacement):
             details["already_present"] = present.first_changed_line
+    if not replace_all and present is None and not hunk.precise_only:
+        copied = replace_copied(content, replacement.old, replacement.new)
+        if isinstance(copied, AmbiguousFuzzyMatch):
+            details, values = _ambiguity(content, copied)
+            raise _PatchError(
+                "ambiguous_match",
+                template="ambiguous_copy",
+                path=path,
+                label=hunk.label,
+                details=details,
+                **values,
+            )
+        if copied is not None:
+            return copied.new_content, copy_warnings(copied)
     raise _PatchError(
         "text_not_found",
         template="old_text_not_found",
@@ -369,7 +374,7 @@ def _apply_hunk(content: str, hunk: _Hunk, path: object) -> tuple[str, list[str]
     offset = 0
     hint_start = 0
     for hint in hunk.hints:
-        found = _match(content[offset:], hint, hint, precise=True)
+        found = _match(content[offset:], hint, hint)
         if isinstance(found, AmbiguousFuzzyMatch):
             details, values = _ambiguity(content, found, offset)
             raise _PatchError(
@@ -427,11 +432,11 @@ def _apply_hunk(content: str, hunk: _Hunk, path: object) -> tuple[str, list[str]
         # line. Include that line in the search without weakening earlier hints.
         offset = hint_start
         window = content[offset:]
-    found = _match(window, old, new, precise=True, eof=hunk.eof)
+    found = _match(window, old, new, eof=hunk.eof)
     normalized = _normalize_gutters(hunk)
     if found is None and normalized is not None:
         candidate_old, candidate_new = _hunk_text(normalized, " -"), _hunk_text(normalized, " +")
-        candidate_match = _match(window, candidate_old, candidate_new, precise=True, eof=hunk.eof)
+        candidate_match = _match(window, candidate_old, candidate_new, eof=hunk.eof)
         hunk, old, new, found = normalized, candidate_old, candidate_new, candidate_match
         warnings.append(_GUTTER_WARNING)
     if found is None and any(_GUTTER.match(t) for _, t in hunk.lines):
@@ -451,7 +456,7 @@ def _apply_hunk(content: str, hunk: _Hunk, path: object) -> tuple[str, list[str]
         # Unescaping line separators changes the hunk's physical line structure.
         escaped.lines = [(p, line) for p, text in escaped.lines for line in text.split("\n")]
         candidate_old, candidate_new = _hunk_text(escaped, " -"), _hunk_text(escaped, " +")
-        candidate_match = _match(window, candidate_old, candidate_new, precise=True, eof=hunk.eof)
+        candidate_match = _match(window, candidate_old, candidate_new, eof=hunk.eof)
         if candidate_match is not None:
             hunk, old, new, found = escaped, candidate_old, candidate_new, candidate_match
             warnings.append(_ESCAPE_WARNING)
@@ -466,16 +471,12 @@ def _apply_hunk(content: str, hunk: _Hunk, path: object) -> tuple[str, list[str]
         if lines != hunk.lines and any(p in " -" for p, _ in lines):
             trimmed = replace(hunk, lines=lines)
             candidate_old, candidate_new = _hunk_text(trimmed, " -"), _hunk_text(trimmed, " +")
-            candidate_match = _match(
-                window, candidate_old, candidate_new, precise=True, eof=hunk.eof
-            )
+            candidate_match = _match(window, candidate_old, candidate_new, eof=hunk.eof)
             if candidate_match is not None:
                 hunk, old, new, found = trimmed, candidate_old, candidate_new, candidate_match
     if found is None:
         context = "".join(text.strip() for prefix, text in hunk.lines if prefix == " ")
-        poststate = (
-            _match(window, new, new, precise=True, eof=hunk.eof or hunk.no_newline) if new else None
-        )
+        poststate = _match(window, new, new, eof=hunk.eof or hunk.no_newline) if new else None
         if (
             (len(context) >= 4 or _inline_context_identifies(window, old, new))
             and isinstance(poststate, FuzzyReplacement)
@@ -485,10 +486,9 @@ def _apply_hunk(content: str, hunk: _Hunk, path: object) -> tuple[str, list[str]
         # An exact post-state elsewhere does not prove this target is satisfied.
         # Do not let approximate matching choose it (or a similar other target)
         # after the independent locator above failed to establish that fact.
-        # Similarity may absorb context drift only: every removed line must
-        # still match its actual line up to the precise normalizations.
-        if not hunk.precise_only and (not new or _match(window, new, new, precise=True) is None):
-            found = _match(window, old, new, eof=hunk.eof, required_lines=_removed_lines(hunk))
+        # Old text copied with errors is placed and merged by ``copy_match``.
+        if not hunk.precise_only and (not new or _match(window, new, new) is None):
+            found = match_copied_edit(window, hunk.lines, at_eof=hunk.eof)
     if isinstance(found, AmbiguousFuzzyMatch):
         details, values = _ambiguity(content, found, offset)
         raise _PatchError("ambiguous_match", path=path, label=hunk.label, details=details, **values)
@@ -565,4 +565,5 @@ def _apply_hunk(content: str, hunk: _Hunk, path: object) -> tuple[str, list[str]
         if last_output_prefix == "+" or hunk.no_newline:
             output[-1] = (output[-1][0], "" if hunk.no_newline else final_ending)
     replacement_text = "".join(text + ending for text, ending in output)
+    warnings.extend(copy_warnings(found, line_shift=len(_BREAK.findall(content, 0, offset))))
     return content[: offset + start] + replacement_text + window[end:], warnings

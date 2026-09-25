@@ -191,6 +191,10 @@ WIKI_COPY_EXACTLY = "Copy old_text exactly from the page, or read it with {call}
 WIKI_AMBIGUOUS = (
     "old_text occurs {count} times, {where}. Include neighboring text so it occurs only once."
 )
+WIKI_AMBIGUOUS_SIMILAR = (
+    "old_text does not occur exactly and resembles {count} passages, {where}. Copy the one "
+    "to change from the page, with neighboring text so it matches only once."
+)
 WIKI_AT_LINES = "at lines {lines}"
 WIKI_IN_LINE = "all in line {line}"
 WIKI_MORE_LINES = "{count} more lines"

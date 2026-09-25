@@ -762,6 +762,51 @@ def test_patch_keeps_literal_escapes_that_match_the_file(tmp_path: Path) -> None
     assert _body(skill_file) == 'Run `printf "b\\n"` first.\n'
 
 
+def test_patch_applies_old_string_copied_with_a_misspelling_and_names_it(tmp_path: Path) -> None:
+    harness, skill_file = _patch_harness(
+        tmp_path, body="Always run the full test suite before merging.\n"
+    )
+
+    result = harness.run(
+        {
+            "action": "patch",
+            "name": "demo",
+            "old_string": "Always run the full test suite befor merging.",
+            "new_string": "Always run the full test suite and the linter before merging.",
+        }
+    )
+
+    assert result["ok"] is True
+    assert _body(skill_file) == "Always run the full test suite and the linter before merging.\n"
+    content = result["data"]["content"]
+    assert "\nNote: Line " in content
+    assert (
+        "did not match your old text exactly and was edited anyway; it read: Always run the "
+        "full test suite before merging." in content
+    )
+
+
+def test_patch_refuses_a_copy_resembling_several_places(tmp_path: Path) -> None:
+    line = "Tag the release with the version number and the changelog entry."
+    harness, skill_file = _patch_harness(tmp_path, body=f"{line}\n\n{line}\n")
+    before = skill_file.read_bytes()
+
+    result = harness.run(
+        {
+            "action": "patch",
+            "name": "demo",
+            "old_string": line.replace("version", "verison"),
+            "new_string": "Tag the release.",
+        }
+    )
+
+    assert result["error"]["code"] == "ambiguous_match"
+    assert result["error"]["message"].startswith(
+        "old_string does not match exactly and resembles 2 places in SKILL.md of Skill 'demo'"
+    )
+    assert skill_file.read_bytes() == before
+
+
 def test_patch_miss_names_the_closest_text_and_the_read_call(tmp_path: Path) -> None:
     harness, skill_file = _patch_harness(tmp_path)
     before = skill_file.read_bytes()

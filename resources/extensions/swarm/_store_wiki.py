@@ -292,6 +292,7 @@ def _mutate(
 
     now = utc_now_timestamp()
     line = None
+    notes: list[str] = []
     if action == "create":
         title, content, deleted = arguments["title"], arguments["content"], 0
         duplicate = connection.execute(
@@ -359,6 +360,7 @@ def _mutate(
                         **state,
                         "expected_revision": expected,
                         "occurrences": edit.occurrences,
+                        "similar": edit.similar,
                         "lines": list(edit.lines),
                         "passages": [
                             {"line": item.line, "text": item.text, "truncated": item.truncated}
@@ -366,7 +368,7 @@ def _mutate(
                         ],
                     },
                 )
-            content, line = edit.content, edit.line
+            content, line, notes = edit.content, edit.line, list(edit.notes)
             if content == current["content"] and title == current["title"]:
                 return finish({**_metadata(current), "unchanged": True, "line": line})
         if len(content) > 200000:
@@ -393,4 +395,6 @@ def _mutate(
     result = _metadata(_page(connection, swarm_id, page_id))
     if line is not None:
         result["line"] = line
+    if notes:
+        result["notes"] = notes
     return finish(result)

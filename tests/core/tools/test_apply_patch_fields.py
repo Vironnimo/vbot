@@ -126,6 +126,50 @@ async def test_replacement_counts_follow_the_call(run):
 
 
 @pytest.mark.asyncio
+async def test_old_string_copied_with_a_misspelling_is_applied_and_named(run):
+    result = await run(
+        {
+            "file_path": "a.py",
+            "old_string": "def load(order):\n    return order.receipt_total",
+            "new_string": "def load(order):\n    return order.receipt_total + order.tax",
+        },
+        **{"a.py": "def load(order):\n    return order.reciept_total\n"},
+    )
+
+    assert result["ok"], result
+    assert content_of(run, "a.py") == (
+        b"def load(order):\n    return order.reciept_total + order.tax\n"
+    )
+    assert (
+        "Line 2 did not match your old text exactly and was edited anyway; it read:     "
+        "return order.reciept_total" in text(result)
+    )
+    assert 'Your new text uses the file\'s spelling: "reciept_total" for "receipt_total".' in (
+        text(result)
+    )
+
+
+@pytest.mark.asyncio
+async def test_old_string_copied_with_errors_resembling_several_places_is_refused(run):
+    line = "total = reciept_total + shipping_cost + handling_fee"
+    result = await run(
+        {
+            "file_path": "a.py",
+            "old_string": line.replace("reciept", "receipt"),
+            "new_string": "total = 0",
+        },
+        **{"a.py": f"{line}\n{line}\n"},
+    )
+
+    assert result["error"]["message"].startswith(
+        "a.py: old_string does not match the file exactly and resembles 2 places (lines 1, 2). "
+        "Copy the current text of the one to change into old_string, with enough surrounding "
+        "text to tell it apart."
+    )
+    assert content_of(run, "a.py") == f"{line}\n{line}\n".encode()
+
+
+@pytest.mark.asyncio
 async def test_missing_old_string_shows_closest_text_and_existing_new_text(run):
     result = await run(
         {"file_path": "a.py", "old_string": "def f():\n    return 2", "new_string": "x"},
