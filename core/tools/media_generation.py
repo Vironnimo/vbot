@@ -25,20 +25,6 @@ GENERATE_VIDEO_TOOL_NAME = "generate_video"
 GENERATE_MUSIC_TOOL_NAME = "generate_music"
 _VIDEO_DIRECTORY_NAME = "video-gen"
 _MUSIC_DIRECTORY_NAME = "music-gen"
-_VIDEO_ARGUMENTS = frozenset(
-    {
-        "prompt",
-        "duration",
-        "resolution",
-        "aspect_ratio",
-        "size",
-        "generate_audio",
-        "first_frame",
-        "last_frame",
-        "output_dir",
-    }
-)
-_MUSIC_ARGUMENTS = frozenset({"prompt", "source_images", "output_dir"})
 
 GENERATE_VIDEO_TEXT_ONLY_DESCRIPTION = (
     "Generate a video from a text prompt using the configured model. Returns the "
@@ -214,12 +200,6 @@ def make_generate_video_handler(video_service: Any):
     """Create a Video generation handler bound to the runtime service."""
 
     async def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
-        unknown = set(arguments) - _VIDEO_ARGUMENTS
-        if unknown:
-            return tool_failure(
-                "invalid_arguments",
-                f"Unknown argument(s): {', '.join(sorted(unknown))}",
-            )
         prompt = arguments.get("prompt")
         if not isinstance(prompt, str) or not prompt.strip():
             return tool_failure("invalid_arguments", "prompt must be a non-empty string")
@@ -254,12 +234,6 @@ def make_generate_music_handler(music_service: Any):
     """Create a Music generation handler bound to the runtime service."""
 
     async def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
-        unknown = set(arguments) - _MUSIC_ARGUMENTS
-        if unknown:
-            return tool_failure(
-                "invalid_arguments",
-                f"Unknown argument(s): {', '.join(sorted(unknown))}",
-            )
         prompt = arguments.get("prompt")
         if not isinstance(prompt, str) or not prompt.strip():
             return tool_failure("invalid_arguments", "prompt must be a non-empty string")

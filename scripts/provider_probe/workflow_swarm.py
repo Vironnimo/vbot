@@ -12,6 +12,7 @@ from typing import Any, cast
 
 from core.chat.messages import ToolCall
 from core.providers.tool_schema import render_tool_definitions
+from core.tools import tool_failure
 from core.tools.contracts import ToolContractError
 from scripts.provider_probe.common import PROJECT_ROOT
 from scripts.provider_probe.transport import _expected_profile
@@ -402,6 +403,8 @@ async def _probe_swarm_tool(adapter: Any, args: argparse.Namespace) -> dict[str,
                     ),
                     ("name_rejected", {"action": "name", "name": "Analyst"}, False),
                     ("name_field_rejected", {"name": "Analyst"}, False),
+                    # An empty value under a retired name requests nothing.
+                    ("recovered_empty_unknown", {"include_summaries": None}, True),
                 ]
                 cases.extend(
                     (f"invalid_{index}", cast(dict[str, Any], value), False)
@@ -415,7 +418,6 @@ async def _probe_swarm_tool(adapter: Any, args: argparse.Namespace) -> dict[str,
                             {"limit": 101},
                             {"cursor": "foreign"},
                             {"include_summaries": "true"},
-                            {"include_summaries": None},
                             {"action": "wait", "include_summaries": True},
                             {"action": "name"},
                             {"action": "name", "name": "Another", "limit": 1},
@@ -696,7 +698,10 @@ async def _probe_swarm_workflow(
             call_context = replace(
                 context, tool_name=name, tool_call_id=call["id"], tool_call_index=index
             )
-            result = await registry.dispatch(call_context, arguments, allowed_tools=names)
+            try:
+                result = await registry.dispatch(call_context, arguments, allowed_tools=names)
+            except ToolContractError as error:
+                result = tool_failure("invalid_arguments", str(error))
             carriers.append(
                 ChatMessage.tool(tool_call_id=call["id"], name=name, content=json.dumps(result))
             )

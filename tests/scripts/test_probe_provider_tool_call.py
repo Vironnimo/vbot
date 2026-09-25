@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 from argparse import Namespace
-from typing import cast
+from typing import Any, cast
+
+import pytest
 
 import scripts.provider_probe.common as probe_common
 import scripts.provider_probe.measurements as probe_measurements
@@ -12,6 +14,7 @@ import scripts.provider_probe.scenarios as probe_scenarios
 import scripts.provider_probe.trace as probe_trace
 import scripts.provider_probe.transport as probe_transport
 from core.runtime import Runtime
+from core.tools import model_names
 
 
 def test_messages_from_wire_restores_internal_assistant_tool_call_shape() -> None:
@@ -260,3 +263,37 @@ def test_probe_runtime_suppresses_background_service_start_hooks() -> None:
 
     assert runtime.started is True
     assert runtime.background_starts == 0
+
+
+@pytest.mark.asyncio
+async def test_probe_adapter_view_uses_production_tool_names(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(model_names, "_MODEL_NAMES", {"probe": "host_probe"})
+    monkeypatch.setattr(model_names, "_REGISTRY_NAMES", {"host_probe": "probe"})
+    sent: list[dict[str, Any]] = []
+
+    class Adapter:
+        label = "stub"
+
+        async def send(self, messages: list[dict[str, Any]], **kwargs: Any) -> dict[str, Any]:
+            sent.append({"messages": messages, **kwargs})
+            return {"tool_calls": [{"id": "call", "name": "host_probe", "arguments": {}}]}
+
+        def normalize_response(self, response: dict[str, Any], **_: Any) -> dict[str, Any]:
+            return response
+
+    adapter = probe_common.ModelFacingAdapter(Adapter())
+    history: list[dict[str, Any]] = [
+        {"role": "assistant", "tool_calls": [{"id": "old", "name": "probe", "arguments": {}}]},
+        {"role": "tool", "tool_call_id": "old", "name": "probe", "content": "ok"},
+    ]
+
+    raw = await adapter.send(history, model_id="m", tools=[{"name": "probe"}])
+
+    assert [tool["name"] for tool in sent[0]["tools"]] == ["host_probe"]
+    assert sent[0]["messages"][0]["tool_calls"][0]["name"] == "host_probe"
+    assert sent[0]["messages"][1]["name"] == "host_probe"
+    assert history[0]["tool_calls"][0]["name"] == "probe"
+    assert adapter.normalize_response(raw)["tool_calls"][0]["name"] == "probe"
+    assert adapter.label == "stub"

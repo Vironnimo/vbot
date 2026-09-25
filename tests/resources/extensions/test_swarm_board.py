@@ -25,7 +25,7 @@ from core.extensions.extensions import ExtensionDeclarations
 from core.extensions.operations import ExtensionHost
 from core.runs import ChatRunManager, RunExecutionOwner
 from core.sessions import ChatSessionManager, SessionAddress
-from core.tools import ToolContext, ToolRegistry
+from core.tools import ToolContext, ToolContractError, ToolRegistry
 from core.tools.availability import ToolAccess
 from core.utils.ids import new_id
 from resources.extensions.swarm.extension import register
@@ -496,18 +496,24 @@ async def test_board_validation_identifies_the_field_before_any_effect(board):
     )
     from resources.extensions.swarm.store import SwarmStoreError
 
+    unknown = {"action": "list", "unavailable_feature": 1}
     for arguments, field in [
         ({"action": "post"}, "text"),
         ({"action": "list", "text": "inapplicable"}, "text"),
         ({"action": "join"}, "discussion_id"),
-        ({"action": "list", "unavailable_feature": 1}, "unavailable_feature"),
+        (unknown, "unavailable_feature"),
     ]:
         with pytest.raises(SwarmStoreError) as error:
             _validate_board(arguments)
         assert error.value.field == field
         context = replace(board.contexts[0], session_tool_grants=("swarm_board",))
-        result = await board.tools.dispatch(context, arguments, allowed_tools=["swarm_board"])
-        assert result["error"]["code"] == "invalid_arguments"
+        if arguments is unknown:
+            # Dispatch rejects a name that is not a parameter before the handler.
+            with pytest.raises(ToolContractError, match='"unavailable_feature" is not a parameter'):
+                await board.tools.dispatch(context, arguments, allowed_tools=["swarm_board"])
+        else:
+            result = await board.tools.dispatch(context, arguments, allowed_tools=["swarm_board"])
+            assert result["error"]["code"] == "invalid_arguments"
         assert context._delivery_receipts == []
     assert not (
         await board.store.read_posts(board.swarm["id"], board.bindings[0].participant_id)
@@ -602,8 +608,8 @@ async def test_state_tool_rejects_all_participant_status_mutations(board, argume
     before = await board.store.participant_status(
         board.swarm["id"], board.bindings[0].participant_id
     )
-    result = await board.tools.dispatch(context, arguments, allowed_tools=["swarm_state"])
-    assert not result["ok"] and result["error"]["code"] == "invalid_arguments"
+    with pytest.raises(ToolContractError):
+        await board.tools.dispatch(context, arguments, allowed_tools=["swarm_state"])
     assert not context._turn_end_requested
     assert (
         await board.store.participant_status(board.swarm["id"], board.bindings[0].participant_id)

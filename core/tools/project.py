@@ -16,6 +16,7 @@ from core.projects import (
 )
 from core.tools.arguments import required_string
 from core.tools.file_state import FileReadState
+from core.tools.model_names import SHELL_MODEL_NAME
 from core.tools.tools import (
     JsonObject,
     ToolContext,
@@ -57,7 +58,8 @@ PROJECT_PROMPT_BLOCK_HEADER = (
     "The `project` Tool loads the Project's current instructions, absolute Project path, and "
     "Project Skills. It does not change Rooting, Workspace, or permissions. After "
     "loading, use absolute paths for "
-    "file Tools. Set `workdir` to the returned `project_path` on every `bash` call; each call "
+    f"file Tools. Set `workdir` to the returned `project_path` on every `{SHELL_MODEL_NAME}` "
+    "call; each call "
     "starts a new shell and does not retain working-directory changes from earlier calls.\n\n"
     "Registered Projects:"
 )
@@ -93,10 +95,6 @@ def make_project_handler(
     """Create the explicit Project Context loader bound to runtime services."""
 
     def project_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
-        unknown_arguments = set(arguments) - {"project_id"}
-        if unknown_arguments:
-            names = ", ".join(sorted(unknown_arguments))
-            return tool_failure("invalid_arguments", f"Unknown argument(s): {names}")
 
         # The generic availability layer enforces this at prompt and dispatch time.
         # Keep the handler guard too: direct callers and a future wiring regression
@@ -263,7 +261,8 @@ def _render_project_context(
         "working directory, Rooting, Session ownership, or configured permissions. The Skills "
         "enabled by this Project are now available through the `skill` Tool in this Session "
         "while this Project Context is active. Use absolute paths for file Tools. "
-        f"Set `workdir` to '{project_path}' on every `bash` call; each call starts a new shell "
+        f"Set `workdir` to '{project_path}' on every `{SHELL_MODEL_NAME}` call; each call "
+        "starts a new shell "
         "and does not retain working-directory changes from an earlier call."
     )
     sections = [preamble]

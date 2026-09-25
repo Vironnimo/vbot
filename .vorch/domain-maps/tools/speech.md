@@ -6,7 +6,7 @@ Built-in `text_to_speech` tool for creating speech artifacts through the central
 
 - Tool name: `text_to_speech`
 - Registration: `register_text_to_speech_tool(registry, speech_service)`
-- Model-facing schema: required `text` (string, `minLength: 1`) with no `additionalProperties` keyword; the handler still rejects unknown or malformed arguments. The Tool intentionally exposes only `text` - model, provider, voice, format, speed, and instructions come from Settings `model_tasks.text_to_speech`.
+- Model-facing schema: required `text` (string, `minLength: 1`) with no `additionalProperties` keyword; dispatch rejects unknown or malformed arguments. The Tool intentionally exposes only `text` - model, provider, voice, format, speed, and instructions come from Settings `model_tasks.text_to_speech`.
 - Display: summary field `text`.
 - Success data: `{ artifact }`; the artifact dict is also returned in the top-level `artifacts` list.
 - Artifact shape: `{ id, kind: "speech", filename, media_type, size_bytes, url }`. `url` is a server-local speech artifact URL (`/api/speech/artifacts/<id>`), not an attachment URL.

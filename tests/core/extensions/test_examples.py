@@ -88,11 +88,15 @@ def test_example_word_count_tool_registers_and_runs(
 
 
 @pytest.mark.parametrize(
-    ("arguments", "contract_error"),
-    [({}, True), ({"text": None}, True), ({"text": "one", "extra": True}, False)],
+    ("arguments", "problem"),
+    [
+        ({}, '"text" is required'),
+        ({"text": None}, '"text" must be a string'),
+        ({"text": "one", "extra": True}, '"extra" is not a parameter'),
+    ],
 )
 def test_example_word_count_rejects_invalid_input(
-    examples_dir: Path, arguments: dict, contract_error: bool
+    examples_dir: Path, arguments: dict, problem: str
 ) -> None:
     registry = ExtensionRegistry.load(examples_dir)
     tools = ToolRegistry()
@@ -109,16 +113,10 @@ def test_example_word_count_rejects_invalid_input(
         data_root=examples_dir,
     )
 
-    if contract_error:
-        with pytest.raises(ToolContractError):
-            asyncio.run(tools.dispatch(context, arguments))
-        return
+    with pytest.raises(ToolContractError) as exc_info:
+        asyncio.run(tools.dispatch(context, arguments))
 
-    result = asyncio.run(tools.dispatch(context, arguments))
-
-    assert result["ok"] is False
-    assert result["error"]["code"] == "invalid_arguments"
-    assert result["data"] is None
+    assert problem in str(exc_info.value)
 
 
 def test_example_guard_bash_denies_dangerous_command(examples_dir: Path) -> None:

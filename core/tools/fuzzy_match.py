@@ -18,8 +18,8 @@ terminal — it does not fall through to a looser strategy):
    fragment within a line.
 3. ``line_trimmed`` — match whole lines after stripping each line's leading and
    trailing whitespace (plus the same Unicode mapping). The replacement is
-   re-indented to the file's actual indentation, so a whitespace-only match never
-   corrupts indentation.
+   re-indented in the file's own style (tabs or its level width), so a
+   whitespace-only match never corrupts indentation.
 4. ``whitespace_normalized`` — collapse horizontal space/tab runs while preserving
    line boundaries. The replacement is re-indented like a line-trimmed match.
 5. ``block_anchor`` — require exact first/last lines around a sufficiently similar
@@ -37,8 +37,10 @@ normalizations, so similarity only absorbs differences in the remaining lines.
 
 from __future__ import annotations
 
+import math
 import re
-from collections.abc import Collection
+from collections import Counter
+from collections.abc import Callable, Collection, Iterable
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from heapq import heappush, heapreplace
@@ -712,10 +714,11 @@ def _apply_replacements(
     before_spans: list[tuple[int, int]] = []
     after_spans: list[tuple[int, int]] = []
     offset_shift = 0
+    file_unit = _indent_unit([_meaningful_indents(content)]) if reindent else None
     for start, end in sorted(matches):
         if reindent:
             replacement_lf = _reindent_replacement(
-                content[start:end], old_string_lf, replacement_text
+                content[start:end], old_string_lf, replacement_text, file_unit
             )
         else:
             replacement_lf = replacement_text
@@ -741,13 +744,6 @@ def _leading_whitespace(line: str) -> str:
     return line[:index]
 
 
-def _first_meaningful_line(text: str) -> str | None:
-    for line in _LINE_BREAK_RE.split(text):
-        if line.strip():
-            return line
-    return None
-
-
 def _split_lines_preserving_endings(text: str) -> list[tuple[str, str]]:
     """Split read-visible lines without discarding their exact separators."""
     lines: list[tuple[str, str]] = []
@@ -759,37 +755,191 @@ def _split_lines_preserving_endings(text: str) -> list[tuple[str, str]]:
     return lines
 
 
-def _reindent_replacement(file_region: str, old_string_lf: str, replacement_text: str) -> str:
-    """Shift ``new_string`` so its base indent matches the file's actual indent.
+def _reindent_replacement(
+    file_region: str, old_string_lf: str, replacement_text: str, file_unit: str | None
+) -> str:
+    """Rewrite the replacement's indentation in the file's own indentation style.
 
-    A line-trimmed match can succeed when the model's indentation differs from the
-    file's (e.g. 2-space args vs a 4-space file). Writing the replacement verbatim
-    would then corrupt indentation, so anchor the model's base indent onto the
-    file's while preserving the relative nesting the model intended.
+    A whitespace-tolerant match succeeds when the model's indentation differs
+    from the file's: 2 spaces against 4, spaces against tabs, or a dropped outer
+    level. Writing the replacement verbatim would corrupt indentation, so each
+    replacement line gets the file indent that the matched lines show for the
+    same model indent. An indent the matched lines do not show, such as a new
+    deeper line, is converted level by level between the model's and the file's
+    indentation units; when no consistent conversion exists, the model's base
+    indent is anchored onto the file's, keeping the relative nesting the model
+    intended.
     """
     if not replacement_text:
         return replacement_text
 
-    old_first = _first_meaningful_line(old_string_lf)
-    file_first = _first_meaningful_line(file_region)
-    if old_first is None or file_first is None:
+    old_indents = _meaningful_indents(old_string_lf)
+    file_indents = _meaningful_indents(file_region)
+    if not old_indents or not file_indents:
+        return replacement_text
+    pairs = (
+        list(zip(old_indents, file_indents, strict=True))
+        if len(old_indents) == len(file_indents)
+        else [(old_indents[0], file_indents[0])]
+    )
+    seen: dict[str, str] = {}
+    for model_indent, file_indent in pairs:
+        seen.setdefault(model_indent, file_indent)
+    if all(model_indent == file_indent for model_indent, file_indent in seen.items()):
         return replacement_text
 
-    old_indent = _leading_whitespace(old_first)
-    file_indent = _leading_whitespace(file_first)
-    if old_indent == file_indent:
-        return replacement_text
+    replacement_lines = _split_lines_preserving_endings(replacement_text)
+    replacement_indents = [
+        _leading_whitespace(line) for line, _ending in replacement_lines if line.strip()
+    ]
+    convert = _level_converter(pairs, (old_indents, replacement_indents), file_unit)
+    base_model, base_file = pairs[0]
 
     out_parts: list[str] = []
-    for line, ending in _split_lines_preserving_endings(replacement_text):
+    for line, ending in replacement_lines:
         if not line.strip():
             out_parts.append(line + ending)
             continue
-        if _leading_whitespace(line).startswith(old_indent):
-            out_parts.append(file_indent + line[len(old_indent) :] + ending)
-        else:
-            out_parts.append(file_indent + line.lstrip(" \t") + ending)
+        indent = _leading_whitespace(line)
+        body = line[len(indent) :]
+        mapped = seen.get(indent)
+        if mapped is None and convert is not None:
+            mapped = convert(indent)
+        if mapped is None:
+            rest = indent[len(base_model) :] if indent.startswith(base_model) else ""
+            mapped = base_file + rest
+        out_parts.append(mapped + body + ending)
     return "".join(out_parts)
+
+
+def _meaningful_indents(text: str) -> list[str]:
+    return [_leading_whitespace(line) for line in _LINE_BREAK_RE.split(text) if line.strip()]
+
+
+def _indent_unit(sequences: Iterable[list[str]]) -> str | None:
+    """Return the indentation unit these indent sequences show: a tab or N spaces.
+
+    Tabs win when most indented lines start with one. Otherwise the unit is the
+    most common change between consecutive space indents, the smallest on ties.
+    ``None`` when the text shows no indentation step.
+    """
+    tab_lines = space_lines = 0
+    steps: Counter[int] = Counter()
+    for indents in sequences:
+        previous: int | None = None
+        for indent in indents:
+            if indent.startswith("\t"):
+                tab_lines += 1
+            elif indent:
+                space_lines += 1
+            if _only(indent, " "):
+                if previous is not None and len(indent) != previous:
+                    steps[abs(len(indent) - previous)] += 1
+                previous = len(indent)
+            else:
+                previous = None
+    if tab_lines > space_lines:
+        return "\t"
+    if not steps:
+        return None
+    return " " * max(sorted(steps), key=steps.__getitem__)
+
+
+# Spaces per indentation level to try, most common first.
+_LEVEL_WIDTHS = (4, 2, 8, 3)
+
+
+def _level_converter(
+    pairs: list[tuple[str, str]],
+    model_sequences: tuple[list[str], ...],
+    file_unit: str | None,
+) -> Callable[[str], str | None] | None:
+    """Convert model indents level by level into the file's indentation unit.
+
+    An indent is whole levels of its unit plus trailing alignment spaces. The
+    units are the ones each side shows; a side that shows no indentation step
+    gets the candidate unit that explains the matched pairs, preferring the
+    same level on both sides. The matched pairs that convert with unchanged
+    alignment must agree on one constant level offset (a dropped outer level);
+    pairs whose alignment cannot be told apart from levels are left out.
+    ``None`` when no pair of units explains the matched lines.
+    """
+    model_unit = _indent_unit(model_sequences)
+    model_units = _unit_candidates(model_unit, [model for model, _file in pairs])
+    file_units = _unit_candidates(file_unit, [file for _model, file in pairs])
+    best: tuple[tuple[int, bool, bool, int, int], str, str, int] | None = None
+    for model_rank, model in enumerate(model_units):
+        for file_rank, file in enumerate(file_units):
+            fit = _level_offset(pairs, model, file)
+            if fit is None:
+                continue
+            offset, explained = fit
+            score = (
+                -explained,
+                model != model_unit,
+                file != file_unit,
+                abs(offset),
+                model_rank + file_rank,
+            )
+            if best is None or score < best[0]:
+                best = (score, model, file, offset)
+    if best is None:
+        return None
+    _score, model, file, offset = best
+
+    def convert(indent: str) -> str | None:
+        split = _split_indent(indent, model)
+        if split is None or split[0] + offset < 0:
+            return None
+        levels, alignment = split
+        return file * (levels + offset) + " " * alignment
+
+    return convert
+
+
+def _unit_candidates(shown: str | None, indents: list[str]) -> list[str]:
+    candidates = [shown] if shown else []
+    if any("\t" in indent for indent in indents):
+        candidates.append("\t")
+    widths = [len(indent) for indent in indents if indent and _only(indent, " ")]
+    if widths:
+        candidates.append(" " * math.gcd(*widths))
+    candidates.extend(" " * width for width in _LEVEL_WIDTHS)
+    return list(dict.fromkeys(candidates))
+
+
+def _level_offset(
+    pairs: list[tuple[str, str]], model_unit: str, file_unit: str
+) -> tuple[int, int] | None:
+    """Return the level offset the pairs agree on and how many pairs it explains."""
+    offsets: set[int] = set()
+    explained = 0
+    for model_indent, file_indent in pairs:
+        model_split = _split_indent(model_indent, model_unit)
+        file_split = _split_indent(file_indent, file_unit)
+        if model_split is None or file_split is None:
+            return None
+        if model_split[1] != file_split[1]:
+            continue
+        offsets.add(file_split[0] - model_split[0])
+        explained += 1
+    return (offsets.pop(), explained) if len(offsets) == 1 else None
+
+
+def _split_indent(indent: str, unit: str) -> tuple[int, int] | None:
+    """Split ``indent`` into whole ``unit`` levels and trailing alignment spaces."""
+    if unit == "\t":
+        levels = len(indent) - len(indent.lstrip("\t"))
+        alignment = indent[levels:]
+        return (levels, len(alignment)) if _only(alignment, " ") else None
+    if not _only(indent, " "):
+        return None
+    return divmod(len(indent), len(unit))
+
+
+def _only(indent: str, character: str) -> bool:
+    """Whether ``indent`` is empty or consists of ``character`` alone."""
+    return not indent.strip(character)
 
 
 # (name, matcher, reindent-replacement, approximate) in increasing tolerance.

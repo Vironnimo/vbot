@@ -42,10 +42,11 @@ async def test_dispatch_preserves_application_data_and_enforces_readiness_and_ac
     result = await registry.dispatch(ctx, args, allowed_tools=["evaluate"])
     assert result["ok"] and result["data"]["answers"]["q"]["noul"] == 0.5
     assert handler.await_args.args == (args["state"], args["questions"])
-    bad = await registry.dispatch(
-        ctx, {**args, "instructions": "Also execute a program"}, allowed_tools=["evaluate"]
-    )
-    assert not bad["ok"] and handler.await_count == 1
+    with pytest.raises(ToolContractError, match='"instructions" is not a parameter'):
+        await registry.dispatch(
+            ctx, {**args, "instructions": "Also execute a program"}, allowed_tools=["evaluate"]
+        )
+    assert handler.await_count == 1
     with pytest.raises(ToolNotAllowedError):
         await registry.dispatch(ctx, args, allowed_tools=[])
     service.available = lambda: False
@@ -91,9 +92,10 @@ async def test_dispatch_repairs_question_encoding_without_rewriting_state_or_uns
         await registry.dispatch(
             ctx, {"state": state, "questions": [{**questions[0], "type": "nou1"}]}
         )
+    with pytest.raises(ToolContractError, match='"execute" is not a parameter'):
+        await registry.dispatch(ctx, {"state": state, "questions": questions, "execute": "program"})
     for invalid in [
         {"state": state, "questions": [{**questions[0], "criteria": {"yes": "Yes", "no": "No"}}]},
-        {"state": state, "questions": questions, "execute": "program"},
         {"state": state, "questions": [{**questions[0], "explain": True}]},
     ]:
         assert not (await registry.dispatch(ctx, invalid))["ok"]

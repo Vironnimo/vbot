@@ -21,6 +21,7 @@ from core.tools import (
     ToolRegistry,
     tool_success,
 )
+from core.tools.model_names import SHELL_MODEL_NAME
 from tests.core.chat.tool_dispatch_test_support import (
     _build_runtime_and_agent,
     _build_session,
@@ -70,7 +71,7 @@ def test_triggered_env_skill_carries_bash_usage_guidance(tmp_path: Path) -> None
     content = session.activated_skill_contents()["provider-probe"]
     assert content.index("<environment_access>") < content.index("Probe the provider.")
     assert "- `OPENAI_API_KEY`" in content
-    assert "`env_keys` array of every `bash` call" in content
+    assert f"`env_keys` array of every `{SHELL_MODEL_NAME}` call" in content
 
 
 @pytest.mark.asyncio

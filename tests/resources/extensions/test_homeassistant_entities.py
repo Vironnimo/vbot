@@ -216,17 +216,21 @@ async def test_handlers_reject_unknown_or_wrong_typed_arguments(
     assert_failure_envelope(result, "invalid_arguments")
 
 
+@respx.mock
 @pytest.mark.asyncio
-async def test_list_entities_handler_rejects_unknown_arguments_after_open_schema() -> None:
+async def test_list_entities_rejects_unknown_arguments_before_any_request() -> None:
     tools = _tools_with_token()
 
     result = await _dispatch(tools, HA_LIST_ENTITIES_NAME, {"unknown": True})
 
-    assert_failure_envelope(result, "validation_error")
+    error = assert_failure_envelope(result, "invalid_arguments")
+    assert '"unknown" is not a parameter' in error["message"]
+    assert not respx.calls
 
 
+@respx.mock
 @pytest.mark.asyncio
-async def test_get_state_handler_rejects_unknown_arguments_after_open_schema() -> None:
+async def test_get_state_rejects_unknown_arguments_before_any_request() -> None:
     tools = _tools_with_token()
 
     result = await _dispatch(
@@ -235,20 +239,26 @@ async def test_get_state_handler_rejects_unknown_arguments_after_open_schema() -
         {"entity_id": "light.living_room", "unknown": True},
     )
 
-    assert_failure_envelope(result, "validation_error")
+    error = assert_failure_envelope(result, "invalid_arguments")
+    assert '"unknown" is not a parameter' in error["message"]
+    assert not respx.calls
 
 
+@respx.mock
 @pytest.mark.asyncio
-async def test_list_services_handler_rejects_unknown_arguments_after_open_schema() -> None:
+async def test_list_services_rejects_unknown_arguments_before_any_request() -> None:
     tools = _tools_with_token()
 
     result = await _dispatch(tools, HA_LIST_SERVICES_NAME, {"unknown": True})
 
-    assert_failure_envelope(result, "validation_error")
+    error = assert_failure_envelope(result, "invalid_arguments")
+    assert '"unknown" is not a parameter' in error["message"]
+    assert not respx.calls
 
 
+@respx.mock
 @pytest.mark.asyncio
-async def test_call_service_handler_rejects_unknown_arguments_after_open_schema() -> None:
+async def test_call_service_rejects_unknown_arguments_before_any_request() -> None:
     tools = _tools_with_token()
 
     result = await _dispatch(
@@ -257,7 +267,9 @@ async def test_call_service_handler_rejects_unknown_arguments_after_open_schema(
         {"domain": "light", "service": "turn_on", "unknown": True},
     )
 
-    assert_failure_envelope(result, "validation_error")
+    error = assert_failure_envelope(result, "invalid_arguments")
+    assert '"unknown" is not a parameter' in error["message"]
+    assert not respx.calls
 
 
 @respx.mock

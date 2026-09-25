@@ -55,7 +55,7 @@ from core.sessions import (
     is_skill_context_note,
     skill_context_note_payload,
 )
-from core.tools import tool_failure
+from core.tools import model_tool_name, registry_tool_name, tool_failure
 from core.utils.tokens import estimate_message_tokens, estimate_request_input_tokens
 
 INTERRUPTED_TOOL_RESULT_CODE = "result_unavailable"
@@ -240,6 +240,36 @@ def _message_to_request_dict(
     if message.role == "user" and message.sender is not None:
         _apply_sender_attribution(data, message.sender)
     return data
+
+
+def model_facing_request(
+    messages: list[JsonObject], tools: list[JsonObject]
+) -> tuple[list[JsonObject], list[JsonObject]]:
+    """Name each Tool in one Provider request the way the Model knows it.
+
+    Session history, dispatch and Run events keep registry names; only the
+    request renames Tools that have a host-specific Model name, such as the
+    shell Tool on Windows (``core.tools.model_names``). Unchanged items are
+    returned as they are.
+    """
+
+    def renamed(item: JsonObject) -> JsonObject:
+        name = item.get("name")
+        if not isinstance(name, str) or model_tool_name(name) == name:
+            return item
+        return {**item, "name": model_tool_name(name)}
+
+    projected: list[JsonObject] = []
+    for message in messages:
+        calls = message.get("tool_calls")
+        if message.get("role") == "assistant" and isinstance(calls, list):
+            renamed_calls = [renamed(call) if isinstance(call, dict) else call for call in calls]
+            if any(new is not old for new, old in zip(renamed_calls, calls, strict=True)):
+                message = {**message, "tool_calls": renamed_calls}
+        elif message.get("role") == "tool":
+            message = renamed(message)
+        projected.append(message)
+    return projected, [renamed(tool) for tool in tools]
 
 
 def _replays_assistant_reasoning(
@@ -913,5 +943,10 @@ def _parse_response_tool_calls(value: Any) -> list[ToolCall] | None:
             argument_sequence_index=call.get(TOOL_CALL_ARGUMENT_SEQUENCE_INDEX_FIELD),
             argument_sequence_length=call.get(TOOL_CALL_ARGUMENT_SEQUENCE_LENGTH_FIELD),
         )
-        tool_calls.extend(ToolCall.from_dict(candidate) for candidate in candidates)
+        for candidate in candidates:
+            name = candidate.get("name")
+            if isinstance(name, str):
+                # The Model may know a Tool under its host-specific name.
+                candidate = {**candidate, "name": registry_tool_name(name)}
+            tool_calls.append(ToolCall.from_dict(candidate))
     return tool_calls or None

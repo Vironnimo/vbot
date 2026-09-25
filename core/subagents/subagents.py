@@ -158,6 +158,24 @@ class SubAgentCoordinator:
         )
 
 
+def _inapplicable_arguments(action: str, arguments: JsonObject) -> str | None:
+    """Explain arguments the selected action would otherwise silently ignore."""
+    if action in {"status", "cancel"}:
+        extra = sorted(set(arguments) - {"action", "id"})
+        if extra:
+            names = ", ".join(f'"{name}"' for name in extra)
+            return (
+                f'Action "{action}" takes only "id"; remove {names}. '
+                'To delegate new work, use action "run".'
+            )
+    elif action == "run" and "id" in arguments:
+        return (
+            'Action "run" does not take "id"; remove it. Use action "status" or "cancel" '
+            'with "id" for existing work, or "session_id" to continue a Sub-Agent Session.'
+        )
+    return None
+
+
 async def _handle_subagent(
     context: ToolContext,
     arguments: JsonObject,
@@ -173,6 +191,9 @@ async def _handle_subagent(
         action = required_string(arguments.get("action", "run"), field_name="action")
     except ToolArgumentError as error:
         return tool_failure("invalid_arguments", str(error))
+    inapplicable = _inapplicable_arguments(action, arguments)
+    if inapplicable is not None:
+        return tool_failure("invalid_arguments", inapplicable)
 
     if action == "cancel":
         return await _handle_subagent_cancel(
@@ -193,19 +214,6 @@ async def _handle_subagent(
             "invalid_arguments",
             "action must be one of: run, status, cancel",
         )
-
-    unknown_arguments = set(arguments) - {
-        "action",
-        "content",
-        "description",
-        "agent_id",
-        "session_id",
-        "model",
-        "thinking_effort",
-    }
-    if unknown_arguments:
-        names = ", ".join(sorted(unknown_arguments))
-        return tool_failure("invalid_arguments", f"Unknown argument(s): {names}")
 
     content = arguments.get("content")
     if not isinstance(content, str) or not content.strip():

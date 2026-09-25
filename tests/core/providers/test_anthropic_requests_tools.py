@@ -333,7 +333,7 @@ class TestSendRequestFormat:
 
     @respx.mock
     @pytest.mark.asyncio
-    async def test_send_marks_only_failed_canonical_tool_results_as_native_errors(
+    async def test_send_renders_tool_results_as_text_and_marks_failures_as_errors(
         self,
         anthropic_adapter,
     ):
@@ -374,12 +374,12 @@ class TestSendRequestFormat:
             {
                 "type": "tool_result",
                 "tool_use_id": "toolu_ok",
-                "content": success,
+                "content": "value: 1",
             },
             {
                 "type": "tool_result",
                 "tool_use_id": "toolu_failed",
-                "content": failure,
+                "content": "Error (lookup_failed): Lookup failed.",
                 "is_error": True,
             },
         ]

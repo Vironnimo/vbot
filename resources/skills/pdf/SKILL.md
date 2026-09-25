@@ -9,7 +9,7 @@ Produce a finished document, not merely a file that opens. The quality loop is m
 
 ## Tools and paths
 
-- Use vBot's available file Tools for source/spec files, `bash` for the bundled scripts, and `read` for every rendered PNG page.
+- Use vBot's available file Tools for source/spec files, the shell Tool for the bundled scripts, and `read` for every rendered PNG page.
 - Resolve `{baseDir}` to this Skill's absolute directory when invoking bundled scripts.
 - Keep intermediates under `tmp/pdfs/<task-name>/` in the effective cwd.
 - Keep final documents under `output/pdf/` in the effective cwd unless the user requested another location.

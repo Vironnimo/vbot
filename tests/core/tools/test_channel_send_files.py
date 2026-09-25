@@ -63,15 +63,15 @@ def test_channel_send_requires_message_or_file_paths(tmp_path: Path) -> None:
     (
         (
             {"channel_id": "tg-assistant", "message": "Hello", "file_paths": []},
-            "arguments/file_paths: [] should be non-empty [minItems]",
+            'channel_send was not run: "file_paths" must not be empty.',
         ),
         (
             {"channel_id": "tg-assistant", "message": "Hello", "buttons": []},
-            "arguments/buttons: [] should be non-empty [minItems]",
+            'channel_send was not run: "buttons" must not be empty.',
         ),
         (
             {"channel_id": "tg-assistant", "message": "Hello", "buttons": [[]]},
-            "arguments/buttons[0]: [] should be non-empty [minItems]",
+            'channel_send was not run: "buttons[0]" must not be empty.',
         ),
     ),
 )

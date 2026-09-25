@@ -84,7 +84,7 @@ def test_identity_agent_prompt_assembles_blocks_in_default_layout_order(
     assert "Europe/Berlin" in prompt
     # The opt-in Tool-description list ships disabled.
     assert "Read a workspace file" not in prompt
-    assert "shell" not in prompt
+    assert "- shell:" not in prompt
     # Only this Agent's enabled Channel fixture data is rendered.
     assert "tg-private" in prompt
     assert "tg-group" in prompt

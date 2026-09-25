@@ -42,7 +42,7 @@ async def test_missing_explicit_roots_preserve_results_and_report_incomplete_sco
 
 
 @pytest.mark.asyncio
-async def test_missing_path_is_not_reinterpreted_as_pattern_and_regex_is_not_made_literal(tmp_path):
+async def test_missing_path_is_not_reinterpreted_as_pattern(tmp_path):
     (tmp_path / "src").mkdir()
     (tmp_path / "src/code").write_text("Alpha\nBeta\ncall(\n")
     registry = ToolRegistry()
@@ -51,18 +51,64 @@ async def test_missing_path_is_not_reinterpreted_as_pattern_and_regex_is_not_mad
     partial = await registry.dispatch(ctx, {"args": ["Alpha", "Beta", "src"]})
     assert partial["data"]["content"] == "src/code:1:Alpha"
     assert partial["data"]["complete"] is False
-    assert any("-e" in warning for warning in partial["data"]["warnings"])
+    assert any('pattern "Alpha|Beta"' in warning for warning in partial["data"]["warnings"])
     missing = await registry.dispatch(ctx, {"args": ["Alpha", "Beta"]})
     assert missing["error"]["code"] == "path_not_found"
-    corrected = await registry.dispatch(ctx, {"args": ["-e", "Alpha", "-e", "Beta", "src"]})
-    assert corrected["data"]["content"] == "src/code:1:Alpha\nsrc/code:2:Beta"
-    assert corrected["data"]["complete"] is True
-    for options in ([], ["-P"]):
-        regex = await registry.dispatch(ctx, {"args": [*options, "call(", "src"]})
-        assert regex["error"]["code"] == "search_error"
-        assert "-F" in regex["error"]["message"]
+    literal_hint = await registry.dispatch(ctx, {"args": ["-F", "Alpha", "Beta"]})
+    assert '["-F", "-e", "Alpha", "-e", "Beta"]' in literal_hint["error"]["message"]
+    for corrected_call in (
+        {"args": ["-e", "Alpha", "-e", "Beta", "src"]},
+        {"pattern": "Alpha|Beta", "path": "src"},
+    ):
+        corrected = await registry.dispatch(ctx, corrected_call)
+        assert corrected["data"]["content"] == "src/code:1:Alpha\nsrc/code:2:Beta"
+        assert corrected["data"]["complete"] is True
     literal = await registry.dispatch(ctx, {"args": ["-F", "call(", "src"]})
     assert literal["data"]["content"] == "src/code:3:call("
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("options", "pattern", "searched", "content"),
+    [
+        *[
+            (options, pattern, searched, content)
+            for options in ([], ["-P"])
+            for pattern, searched, content in (
+                ("call(", r"call\(", "src/code:3:call("),
+                ("Beta|call(", r"Beta|call\(", "src/code:2:Beta\nsrc/code:3:call("),
+                ("x)|Alpha", r"x\)|Alpha", "src/code:1:Alpha"),
+            )
+        ],
+        # PCRE2 already reads a leading brace literally; the default engine rejects it.
+        ([], "{Alpha|Beta", r"\{Alpha|Beta", "src/code:2:Beta"),
+    ],
+)
+async def test_unbalanced_regex_characters_match_literally_with_a_note(
+    tmp_path, options, pattern, searched, content
+):
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src/code").write_text("Alpha\nBeta\ncall(\n")
+    registry = ToolRegistry()
+    register_search_files_tool(registry)
+
+    result = await registry.dispatch(context(tmp_path), {"args": [*options, pattern, "src"]})
+
+    assert result["data"]["content"] == content
+    assert f'searched "{pattern}" as "{searched}"' in result["data"]["note"]
+    assert "-F" in result["data"]["note"]
+
+
+@pytest.mark.asyncio
+async def test_look_around_runs_with_pcre2_and_says_so(tmp_path):
+    (tmp_path / "code.py").write_text("price = 1\nprice_total = 2\n")
+    registry = ToolRegistry()
+    register_search_files_tool(registry)
+
+    result = await registry.dispatch(context(tmp_path), {"args": ["price(?!_)"]})
+
+    assert result["data"]["content"] == "code.py:1:price = 1"
+    assert "PCRE2" in result["data"]["note"]
 
 
 @pytest.mark.parametrize(
@@ -152,7 +198,6 @@ async def test_literal_payloads_are_never_shell_or_repair_syntax(tmp_path, patte
 @pytest.mark.parametrize(
     "arguments",
     [
-        {"args": []},
         {"args": ["--files", "--dirs"]},
         {"args": ["--files", "-e", "needle"]},
         {"args": ["--files", "-c"]},

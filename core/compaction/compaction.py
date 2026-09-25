@@ -27,6 +27,7 @@ from core.chat.wire_shaping import (
     SYSTEM_REMINDER_CLOSE_TAG,
     SYSTEM_REMINDER_OPEN_TAG,
     _notes_to_request_messages,
+    model_facing_request,
 )
 from core.models.pricing import TokenPricing, price_usage
 from core.providers.adapter import TERMINAL_OUTCOME_STOP, estimate_wire_request_input_tokens
@@ -939,6 +940,10 @@ async def _send_streaming_model_request(
     never be passed back through a raw-wire response parser.
     """
     accumulator = StreamingAccumulator()
+    tools = request_options.get("tools")
+    messages, model_tools = model_facing_request(messages, list(tools or []))
+    if tools is not None:
+        request_options = {**request_options, "tools": model_tools}
     # Internal maintenance must remain bounded even when a local Model stalls;
     # no fallback result may replace an incomplete summary checkpoint.
     async for delta in iter_with_chunk_timeout(adapter.stream(messages, **request_options)):
