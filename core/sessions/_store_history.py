@@ -529,7 +529,11 @@ def run_result(
 
 
 def reflection_runs(connection: sqlite3.Connection, address: SessionAddress) -> list[JsonObject]:
-    """Read the first finished own Run of each reflection fork of this Session."""
+    """Read the first finished own Run of each reflection fork of this Session.
+
+    Only forks in the Session's own scope count: a reflection reviews its
+    source for the same Agent.
+    """
     source = _store_values._require_live(connection, address)
     rows = connection.execute(
         f"""
@@ -544,11 +548,12 @@ def reflection_runs(connection: sqlite3.Connection, address: SessionAddress) -> 
           ORDER BY start_seq, run_key LIMIT 1
         )
         WHERE s.fork_parent_key = ? AND s.state = 'live'
+          AND s.project_id = ? AND s.agent_id = ?
           AND EXISTS (SELECT 1 FROM session_run_kinds AS k
             WHERE k.session_key = s.session_key AND k.run_kind IN {_REFLECTION_KINDS})
         ORDER BY r.started_at, r.run_id
         """,
-        (source["session_key"],),
+        (source["session_key"], address.project_id or "", address.agent_id),
     ).fetchall()
     return [dict(row) for row in rows]
 
