@@ -64,7 +64,7 @@ All four tools share `ready=lambda: bool(api.resolve_credential("HASS_TOKEN").st
 
 - Home Assistant REST API at `{url}/api/` via `httpx.AsyncClient` with `Authorization: Bearer {token}`.
 - Home Assistant WebSocket API at `/api/websocket` via the bundled Skill's `websockets` script. The script accepts only allowlisted raw reads; dashboard mutation goes through purpose-built commands with local validation, expected-content hashing, backup-before-save, and post-save verification.
-- Credential key `HASS_TOKEN` (Long-Lived Access Token). `HASS_URL` is **retired** - no env fallback of any kind (project rule: no legacy compatibility). Existing `HASS_TOKEN` `.env` entries keep working.
+- Credential key `HASS_TOKEN` (Long-Lived Access Token). `HASS_URL` is **retired** - no env fallback of any kind (Generation 1: app code reads only the current format). Existing `HASS_TOKEN` `.env` entries keep working.
 - Timeout: 15s connect, 30s total. Retry: max 2 with exponential backoff + jitter via the shared policy in `core/utils/http_status.py` (`is_retryable_status`, idempotency-aware - `idempotent=method=="GET"`); a POST service call is not idempotent, so a 500 there is fatal. `_ha_request` takes the extension's logger (`api.logger`) as a parameter; it is the only helper that logs.
 
 ## Error Envelopes
