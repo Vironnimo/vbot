@@ -15,12 +15,13 @@ import json
 import re
 import shlex
 import sys
-from collections.abc import Iterator, Mapping
+from collections.abc import Mapping
 from functools import cache
 from pathlib import PurePath
 from typing import Any
 
 from core.tools._argument_repair import normalize_call_arguments
+from core.tools._call_vocabulary import SpellingAliases, spelling
 from core.tools.contracts import ToolContract, compile_tool_contract
 from core.tools.model_names import BASH_TOOL_NAME, SHELL_MODEL_NAME
 from core.tools.tools import JsonObject, ToolDisplayPart
@@ -34,28 +35,6 @@ SHELL_UNADVERTISED_PARAMETERS: JsonObject = {
 }
 # Values at or above this size that are whole thousands are milliseconds.
 MILLISECOND_TIMEOUT_THRESHOLD = 10_000
-
-
-def _spelling(value: str) -> str:
-    return re.sub(r"[\s_-]+", "", value.casefold())
-
-
-class SpellingAliases(Mapping[str, str]):
-    """Field aliases that match regardless of case, "_", "-", or spaces."""
-
-    def __init__(self, fields: dict[str, tuple[str, ...]]) -> None:
-        self._aliases = {
-            _spelling(alias): field for field, names in fields.items() for alias in names
-        }
-
-    def __getitem__(self, key: str) -> str:
-        return self._aliases[_spelling(key)]
-
-    def __iter__(self) -> Iterator[str]:
-        return iter(self._aliases)
-
-    def __len__(self) -> int:
-        return len(self._aliases)
 
 
 _FIELD_ALIASES = SpellingAliases(
@@ -138,7 +117,7 @@ def normalize_shell_arguments(arguments: Any) -> Any:
     wrapped = normalized.pop("action", None)
     if isinstance(wrapped, dict):
         # OpenAI local_shell: {"action": {"type": "exec", "command": [...], ...}}.
-        inner = {key: value for key, value in wrapped.items() if _spelling(key) != "type"}
+        inner = {key: value for key, value in wrapped.items() if spelling(key) != "type"}
         for key, value in normalize_shell_arguments(inner).items():
             if key in normalized and normalized[key] != value:
                 raise ValueError(_not_run(f"{key} is given twice with different values."))
@@ -157,7 +136,7 @@ def _lift_command_list(arguments: dict[str, Any]) -> dict[str, Any]:
     """A ``commands`` list is a sequence of shell commands, unlike an argv array."""
     lifted = dict(arguments)
     for key in list(lifted):
-        if _spelling(key) != "commands":
+        if spelling(key) != "commands":
             continue
         value = lifted.pop(key)
         if isinstance(value, list) and all(isinstance(item, str) for item in value):
@@ -217,7 +196,7 @@ def _powershell_command_line(argv: list[str]) -> str:
 
 def _mode_value(value: Any) -> Any:
     if isinstance(value, str):
-        return _MODE_VALUES.get(_spelling(value), value)
+        return _MODE_VALUES.get(spelling(value), value)
     return value
 
 
@@ -233,20 +212,20 @@ def _flag(key: str, value: Any) -> bool:
 
 def _translate_foreign_fields(arguments: dict[str, Any]) -> None:
     for key in list(arguments):
-        spelling = _spelling(key)
-        if spelling in _BACKGROUND_FLAGS:
+        word = spelling(key)
+        if word in _BACKGROUND_FLAGS:
             wanted = "background" if _flag(key, arguments.pop(key)) else "foreground"
             _set_mode(arguments, wanted, key)
-        elif spelling in _YIELD_FIELDS:
+        elif word in _YIELD_FIELDS:
             if arguments.pop(key) == 0:
                 _set_mode(arguments, "background", key)
-        elif spelling in _DESCRIPTION_FIELDS:
+        elif word in _DESCRIPTION_FIELDS:
             text = arguments.pop(key)
             if isinstance(text, str) and text.strip() and not arguments.get("description"):
                 arguments["description"] = text
-        elif spelling in _SATISFIED_FIELDS:
+        elif word in _SATISFIED_FIELDS:
             del arguments[key]
-        elif spelling in _PTY_FIELDS:
+        elif word in _PTY_FIELDS:
             if _flag(key, arguments.pop(key)):
                 raise ValueError(
                     _not_run(
@@ -255,9 +234,9 @@ def _translate_foreign_fields(arguments: dict[str, Any]) -> None:
                         f"otherwise call again without {key}."
                     )
                 )
-        elif spelling in _ELEVATION_FIELDS or spelling == "sandboxpermissions":
+        elif word in _ELEVATION_FIELDS or word == "sandboxpermissions":
             value = arguments.pop(key)
-            if spelling == "sandboxpermissions":
+            if word == "sandboxpermissions":
                 elevated = value not in (None, "", "use_default")
             else:
                 elevated = _flag(key, value)
@@ -268,7 +247,7 @@ def _translate_foreign_fields(arguments: dict[str, Any]) -> None:
                         f"{key}; if the command needs elevated rights, ask the user to run it."
                     )
                 )
-        elif spelling == "requireuserapproval":
+        elif word == "requireuserapproval":
             if _flag(key, arguments.pop(key)):
                 raise ValueError(
                     _not_run(
@@ -276,7 +255,7 @@ def _translate_foreign_fields(arguments: dict[str, Any]) -> None:
                         "first, then call again without require_user_approval."
                     )
                 )
-        elif spelling == "user":
+        elif word == "user":
             if arguments.pop(key) not in (None, ""):
                 raise ValueError(
                     _not_run(f"commands run as the vBot user; call again without {key}.")
