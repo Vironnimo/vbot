@@ -28,6 +28,7 @@ from cli._update_types import (
     Restart,
     Runner,
     UpdateResult,
+    _SnapshotStep,
     _Step,
 )
 from cli.install_state import (
@@ -128,7 +129,7 @@ def _ensure_update_data_snapshot(instance: ServerInstance) -> _Step:
         snapshot_id = snapshot.get("snapshot_id") if isinstance(snapshot, dict) else None
         if not isinstance(snapshot_id, str) or not snapshot_id:
             return _Step(False, "update: pre-update data snapshot response was incomplete")
-        return _Step(True, f"pre-update data snapshot: {snapshot_id}")
+        return _SnapshotStep(True, f"pre-update data snapshot: {snapshot_id}", snapshot_id)
 
     # The server is stopped: copy the files directly. No owner declarations are
     # passed, so a snapshot never depends on this checkout's schema shapes.
@@ -138,7 +139,7 @@ def _ensure_update_data_snapshot(instance: ServerInstance) -> _Step:
         return _Step(False, f"update: offline data snapshot failed: {exc}")
     if created is None:
         return _Step(False, "update: offline data snapshot was not verified")
-    return _Step(True, f"pre-update data snapshot: {created.name}")
+    return _SnapshotStep(True, f"pre-update data snapshot: {created.name}", created.name)
 
 
 @dataclass(frozen=True)
@@ -260,6 +261,7 @@ def run_update(
         return _fail(instance, data_snapshot.message)
 
     announce("success", "Data snapshot check completed")
+    snapshot_id = data_snapshot.snapshot_id if isinstance(data_snapshot, _SnapshotStep) else None
 
     if inferred_state:
         try:
@@ -444,6 +446,8 @@ def run_update(
         start=start,
         service_name=service_name,
         install_shape=state.install_shape,
+        snapshot_id=snapshot_id,
+        previous_revision=before,
     )
 
 
@@ -792,11 +796,18 @@ def _finish(
     start: Restart,
     service_name: str,
     install_shape: str,
+    snapshot_id: str | None = None,
+    previous_revision: str = "",
 ) -> CommandResult:
     """Restart the resolved server target (unless suppressed) and report.
 
     The restart is systemd-aware: on a unit-managed install it goes through the
     unit rather than fighting it with an out-of-band terminate/start.
+
+    A failed restart never restores the pre-update data snapshot: a source
+    checkout has no code rollback, and the snapshot may predate changes the
+    previous server made after it. The report names the snapshot and the
+    previous revision so the operator can go back deliberately.
     """
 
     if install_shape == DESKTOP_CLIENT_SHAPE:
@@ -817,6 +828,14 @@ def _finish(
     else:
         restarted = restart_server(instance, service_name=service_name, stop=stop, start=start)
     lines.append(f"server: {restarted.message}")
+    if not deferred and not restarted.ok and snapshot_id:
+        lines.append(
+            f"data: the pre-update data snapshot {snapshot_id} was not restored automatically; "
+            "a source checkout cannot roll its code back. To return to the previous state, "
+            f"check out {_short(previous_revision)} and reinstall its dependencies, then run "
+            f"`vbot data-store snapshot restore {snapshot_id} --all --yes`; everything written "
+            "after the snapshot is lost"
+        )
     return UpdateResult(
         ok=restarted.ok,
         message="\n".join(lines),

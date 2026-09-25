@@ -57,3 +57,10 @@ class _Step:
 
     ok: bool
     message: str
+
+
+@dataclass(frozen=True)
+class _SnapshotStep(_Step):
+    """The pre-update data snapshot step; ``snapshot_id`` names the snapshot it took."""
+
+    snapshot_id: str | None = None

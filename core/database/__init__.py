@@ -6,8 +6,9 @@ serialized writes, pooled reads, the per-database worker pool, schema
 evolution (additive reconcile, retired indexes, the migration ledger and
 format generations), the canonical and disposable profiles, the data-store
 marker and maintenance guard, data snapshots (every canonical database plus
-the JSON document set), quarantine, recovery incidents and automatic restore.
-See ``.vorch/domain-maps/database.md``.
+the JSON document set), quarantine, recovery incidents, automatic restore and
+the updater's guarded pre-update snapshot rollback. See
+``.vorch/domain-maps/database.md``.
 """
 
 from core.database._connections import (
@@ -24,6 +25,7 @@ from core.database.errors import (
     DatabaseFormatError,
     DatabaseUnavailableError,
     IncidentConflictError,
+    UpdateRollbackRefusedError,
 )
 from core.database.marker import (
     MAINTENANCE_GUARD_FILE_NAME,
@@ -67,6 +69,13 @@ from core.database.spec import (
     canonical_database_path,
 )
 from core.database.status import data_store_status
+from core.database.update_rollback import (
+    UpdateSnapshot,
+    create_update_snapshot,
+    data_changed_since,
+    find_update_snapshot,
+    restore_update_snapshot,
+)
 
 __all__ = [
     "APPLICATION_IDS",
@@ -91,12 +100,17 @@ __all__ = [
     "Migration",
     "SnapshotFacts",
     "SnapshotRestore",
+    "UpdateRollbackRefusedError",
+    "UpdateSnapshot",
     "acknowledge_incident",
     "active_incidents",
     "begin_maintenance",
     "canonical_database_path",
     "create_data_snapshot",
+    "create_update_snapshot",
+    "data_changed_since",
     "data_store_status",
+    "find_update_snapshot",
     "finish_maintenance",
     "has_live_connection",
     "is_wal_reset_vulnerable",
@@ -111,6 +125,7 @@ __all__ = [
     "read_verified_manifest",
     "required_journal_mode",
     "restore_data_snapshot",
+    "restore_update_snapshot",
     "snapshot_root",
     "snapshot_summaries",
     "snapshot_summary",
