@@ -107,12 +107,15 @@ class RecallScope:
 
     ``candidates`` maps each candidate Session id to its canonical
     ``(generation_id, history_revision)``; ``snapshot_id`` binds a continuation
-    to the request selection and those versions.
+    to the request selection and those versions. ``creation_orders`` gives each
+    candidate's creation order (larger is newer), which attributes history a
+    fork shares with its origin to one Session.
     """
 
     live_session_ids: frozenset[str]
     candidates: dict[str, tuple[str, int]]
     snapshot_id: str
+    creation_orders: dict[str, int]
 
 
 class CanonicalSessionRecallBackend:
@@ -206,6 +209,7 @@ class CanonicalSessionRecallBackend:
         excluded = set(request.excluded_session_ids)
         live: set[str] = set()
         candidates: dict[str, tuple[str, int]] = {}
+        creation_orders: dict[str, int] = {}
         for revision in self.sessions.list_history_revisions(request.agent_id, request.project_id):
             session_id = revision.address.session_id
             live.add(session_id)
@@ -215,10 +219,12 @@ class CanonicalSessionRecallBackend:
                 and (request.session_id is None or session_id == request.session_id)
             ):
                 candidates[session_id] = (revision.generation_id, revision.history_revision)
+                creation_orders[session_id] = revision.creation_order
         return RecallScope(
             live_session_ids=frozenset(live),
             candidates=candidates,
             snapshot_id=self._selection_snapshot(request, candidates),
+            creation_orders=creation_orders,
         )
 
     def _selection_snapshot(

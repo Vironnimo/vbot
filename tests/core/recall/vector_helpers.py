@@ -13,6 +13,7 @@ from typing import Any
 import pytest
 import sqlite_vec  # type: ignore[import-untyped]
 
+from core.database import Database
 from core.model_tasks import (
     EmbeddingResult,
     EmbeddingSpaceIdentity,
@@ -150,20 +151,35 @@ def _connect_store(store_path: Path) -> sqlite3.Connection:
 
 
 def _passage_rows(store_path: Path, agent_id: str, session_id: str) -> dict[int, str]:
-    """Return ``{rowid: text}`` for one Session's Passages that have a vector."""
+    """Return ``{passage_ref: text}`` for the Passages one Session shows that have a vector.
+
+    Covers every scope that holds a Session with this id.
+    """
 
     connection = _connect_store(store_path)
     try:
         rows = connection.execute(
             """
-            SELECT p.rowid, p.text FROM passages AS p
-            JOIN session_vectors AS v ON v.rowid = p.rowid
-            WHERE p.agent_id = ? AND p.session_id = ?
-            ORDER BY p.rowid
+            SELECT p.passage_ref, p.text FROM passages AS p
+            JOIN passage_views AS v ON v.passage_ref = p.passage_ref
+            JOIN indexed_sessions AS s ON s.session_ref = v.session_ref
+            JOIN passage_vectors AS vec ON vec.rowid = p.passage_ref
+            WHERE s.agent_id = ? AND s.session_id = ?
+            ORDER BY p.passage_ref
             """,
             (agent_id, session_id),
         ).fetchall()
         return {int(row[0]): str(row[1]) for row in rows}
+    finally:
+        connection.close()
+
+
+def _pending_count(store_path: Path) -> int:
+    """Count stored Passages still waiting for a vector."""
+
+    connection = _connect_store(store_path)
+    try:
+        return int(connection.execute("SELECT COUNT(*) FROM pending_vectors").fetchone()[0])
     finally:
         connection.close()
 
@@ -189,6 +205,30 @@ def forbid_event_loop_calls(monkeypatch: pytest.MonkeyPatch, *targets: object) -
             if not inspect.ismethod(method) or inspect.iscoroutinefunction(method):
                 continue
             monkeypatch.setattr(target, name, _off_loop(name, method, calls))
+    return calls
+
+
+def forbid_database_calls_on_loop(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Fail any blocking kernel database read or write made on the event loop.
+
+    Returns ``<database>.<read|write>`` for every call made off the loop, in order.
+    """
+
+    calls: list[str] = []
+    for name in ("read", "write"):
+        method = getattr(Database, name)
+
+        def guarded(
+            self: Database, *args: Any, _name: str = name, _method: Any = method, **kwargs: Any
+        ) -> Any:
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                calls.append(f"{self.name}.{_name}")
+                return _method(self, *args, **kwargs)
+            raise AssertionError(f"{self.name}.{_name} ran synchronously on the event loop")
+
+        monkeypatch.setattr(Database, name, guarded)
     return calls
 
 

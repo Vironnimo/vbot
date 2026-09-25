@@ -146,7 +146,7 @@ async def test_vector_backend_drops_chunks_when_session_no_longer_produces_any(
     # system-only messages). Append a real message so the session's
     # mtime/size change and the staleness path is exercised.
     session.append(ChatMessage.user("still here, but inert", timestamp=timestamp(2)))
-    monkeypatch.setattr("core.recall.vector.build_session_passages", lambda _messages: [])
+    monkeypatch.setattr("core.recall._passage_catalog.build_session_passages", lambda _messages: [])
 
     second = await recall.search_page(request(query="fruit", limit=2))
 
@@ -168,7 +168,7 @@ async def test_vector_backend_search_succeeds_when_first_indexed_session_yields_
     sessions.create("coder", session_id="empty-ish").append(
         ChatMessage.user("I bought some carrots", timestamp=timestamp(1))
     )
-    monkeypatch.setattr("core.recall.vector.build_session_passages", lambda _messages: [])
+    monkeypatch.setattr("core.recall._passage_catalog.build_session_passages", lambda _messages: [])
 
     # Must not raise. With nothing indexed the KNN has no candidates, so the
     # semantic search returns zero matches gracefully (an empty index is a
@@ -177,7 +177,7 @@ async def test_vector_backend_search_succeeds_when_first_indexed_session_yields_
     data = await recall.search_page(request(query="carrot"))
 
     assert data.hits == ()
-    assert set(recall.store.list_indexed_sessions("coder")) == {"empty-ish"}
+    assert set(await recall.store.list_indexed_sessions("coder")) == {"empty-ish"}
 
 
 async def test_vector_backend_never_surfaces_run_summary_as_a_match(tmp_path: Path) -> None:

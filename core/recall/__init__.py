@@ -22,6 +22,7 @@ from core.recall.recall import (
     RecallSearchHit,
     RecallSearchPage,
     RecallSearchRequest,
+    SupportsClose,
     SupportsSessionRemoval,
 )
 from core.recall.sqlite_fts import SqliteFtsRecallBackend
@@ -54,6 +55,7 @@ __all__ = [
     "RecallSearchHit",
     "RecallSearchPage",
     "RecallSearchRequest",
+    "SupportsClose",
     "SupportsSessionRemoval",
     "SqliteFtsRecallBackend",
     "VectorHeader",
