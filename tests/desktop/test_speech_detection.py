@@ -216,6 +216,10 @@ def test_speech_gate_uses_the_fallback_vad_without_a_neural_detector() -> None:
     assert admitted == [False] * 4 + [True] * 3 + [False] * 2
 
 
+def test_speech_gate_is_open_without_any_speech_detector() -> None:
+    assert _admitted(SpeechGate(None, None), 3) == [True] * 3
+
+
 # -- Neural endpointing detector ---------------------------------------------------
 
 
