@@ -336,6 +336,8 @@ Persistence Generation 1 is converted by
 `scripts/converters/persistence_generation_1/swarm.py` (every table with its keys
 and the cursor key, canonical timestamps; refused rows are dropped and reported;
 round trip through the current Store in `tests/scripts/converters/persistence_generation_1/test_swarm.py`).
+The converter also replaces retired Tool names in the `tool_access` of saved profiles
+and Swarm snapshots (`database/generation-1-conversion.md` -> Retired Tool names).
 The Store has no upgrade code. Saved profiles and Swarm snapshots are consumed as stored;
 input defaults are resolved when a profile is saved or previewed.
 
