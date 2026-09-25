@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import threading
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -239,7 +242,8 @@ def test_add_rejects_unknown_source_format(tmp_path: Path) -> None:
     assert "source_format" in exc_info.value.message
 
 
-def test_set_source_format_switches_team_without_restart(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_set_source_format_switches_team_without_restart(tmp_path: Path) -> None:
     # A format switch invalidates like a cwd change, so the returned scan (and any
     # later show) reflects the other format's team immediately.
     state = _make_state(tmp_path)
@@ -251,7 +255,7 @@ def test_set_source_format_switches_team_without_restart(tmp_path: Path) -> None
 
     assert switched["project"]["source_format"] == "claude"
     assert [member["agent_id"] for member in switched["scan"]["team"]] == ["reviewer"]
-    shown = _show_project(state, {"project_id": "mixed"})
+    shown = await _show_project(state, {"project_id": "mixed"})
     assert [member["agent_id"] for member in shown["scan"]["team"]] == ["reviewer"]
 
 
@@ -295,62 +299,104 @@ def test_detect_rejects_unknown_field(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 # show / list.
 # ---------------------------------------------------------------------------
-def test_show_returns_config_team_and_report(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_show_returns_config_team_and_report(tmp_path: Path) -> None:
     state = _make_state(tmp_path)
     repo = _make_repo(tmp_path, "vbot", "builder.md", "tester.md")
     _add_project(state, {"cwd": str(repo), "display_name": "vBot"})
 
-    result = _show_project(state, {"project_id": "vbot"})
+    result = await _show_project(state, {"project_id": "vbot"})
 
     assert result["project"]["project_id"] == "vbot"
     assert [member["agent_id"] for member in result["scan"]["team"]] == ["builder", "tester"]
 
 
-def test_show_rescans_repo_changes(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_show_rescans_repo_changes(tmp_path: Path) -> None:
     state = _make_state(tmp_path)
     repo = _make_repo(tmp_path, "vbot", "builder.md")
     _add_project(state, {"cwd": str(repo), "display_name": "vBot"})
     _write_agent(repo, "tester.md")
 
-    result = _show_project(state, {"project_id": "vbot"})
+    result = await _show_project(state, {"project_id": "vbot"})
 
     assert [member["agent_id"] for member in result["scan"]["team"]] == ["builder", "tester"]
 
 
-def test_show_reflects_a_newly_added_repo_skill(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_show_scans_the_repo_off_the_event_loop(tmp_path: Path) -> None:
+    state = _make_state(tmp_path)
+    repo = _make_repo(tmp_path, "vbot", "builder.md")
+    _add_project(state, {"cwd": str(repo), "display_name": "vBot"})
+    resolver = state.runtime.agent_resolver
+    scan_project_report = resolver.scan_project_report
+    entered = threading.Event()
+    release = threading.Event()
+    threads: list[int] = []
+
+    def blocked_scan(*args: Any, **kwargs: Any) -> Any:
+        threads.append(threading.get_ident())
+        entered.set()
+        release.wait(timeout=5)
+        return scan_project_report(*args, **kwargs)
+
+    resolver.scan_project_report = blocked_scan
+    showing = asyncio.create_task(_show_project(state, {"project_id": "vbot"}))
+    try:
+        assert await asyncio.to_thread(entered.wait, 5)
+        loop = asyncio.get_running_loop()
+        ticked_at = loop.time()
+        for _ in range(5):
+            await asyncio.sleep(0.01)
+        assert loop.time() - ticked_at < 1
+        assert not showing.done()
+    finally:
+        release.set()
+
+    result = await asyncio.wait_for(showing, timeout=5)
+    assert [member["agent_id"] for member in result["scan"]["team"]] == ["builder"]
+    assert threads and threading.get_ident() not in threads
+
+
+@pytest.mark.asyncio
+async def test_show_reflects_a_newly_added_repo_skill(tmp_path: Path) -> None:
     # Open re-scans the Team on every call; the skill pool must keep pace. A skill
     # newly added under <cwd>/.opencode/skills surfaces after project.show in both
     # the editor pool and the resolver's effective-skills input — not only after a
     # cwd change or a restart.
     runtime = _build_started_runtime(tmp_path)
-    state = SimpleNamespace(runtime=runtime)
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    _write_project_skill(repo, "alpha", "Alpha playbook.")
-    runtime.projects.create("p", "P", repo)
+    try:
+        state = SimpleNamespace(runtime=runtime)
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _write_project_skill(repo, "alpha", "Alpha playbook.")
+        runtime.projects.create("p", "P", repo)
 
-    # The first open primes the per-project skill cache against the current repo.
-    primed = _show_project(state, {"project_id": "p"})
-    assert primed["scan"]["skills"]["project"] == [
-        {"name": "alpha", "description": "Alpha playbook."},
-    ]
+        # The first open primes the per-project skill cache against the current repo.
+        primed = await _show_project(state, {"project_id": "p"})
+        assert primed["scan"]["skills"]["project"] == [
+            {"name": "alpha", "description": "Alpha playbook."},
+        ]
 
-    # A new project skill lands in the repo after that first open.
-    _write_project_skill(repo, "beta", "Beta playbook.")
+        # A new project skill lands in the repo after that first open.
+        _write_project_skill(repo, "beta", "Beta playbook.")
 
-    refreshed = _show_project(state, {"project_id": "p"})
+        refreshed = await _show_project(state, {"project_id": "p"})
 
-    # The editor pool reflects the new skill (name + description carried per entry)...
-    assert refreshed["scan"]["skills"]["project"] == [
-        {"name": "alpha", "description": "Alpha playbook."},
-        {"name": "beta", "description": "Beta playbook."},
-    ]
-    # ...and so does project_skill_names, which is exactly what the resolver feeds
-    # into a config agent's effective skills, so the next resolve sees it too.
-    assert runtime.project_skill_names("p") == frozenset({"alpha", "beta"})
+        # The editor pool reflects the new skill (name + description carried per entry)...
+        assert refreshed["scan"]["skills"]["project"] == [
+            {"name": "alpha", "description": "Alpha playbook."},
+            {"name": "beta", "description": "Beta playbook."},
+        ]
+        # ...and so does project_skill_names, which is exactly what the resolver feeds
+        # into a config agent's effective skills, so the next resolve sees it too.
+        assert runtime.project_skill_names("p") == frozenset({"alpha", "beta"})
+    finally:
+        await runtime.aclose()
 
 
-def test_show_drops_team_cache_so_a_new_repo_agent_resolves(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_show_drops_team_cache_so_a_new_repo_agent_resolves(tmp_path: Path) -> None:
     # Open drops the Team cache together with the skill cache, so an agent added to
     # the repo after an earlier run resolves on the next run instead of being
     # rejected by a stale Team cache.
@@ -363,38 +409,41 @@ def test_show_drops_team_cache_so_a_new_repo_agent_resolves(tmp_path: Path) -> N
     # A new agent is added to the repo afterwards.
     _write_agent(repo, "tester.md")
 
-    _show_project(state, {"project_id": "vbot"})
+    await _show_project(state, {"project_id": "vbot"})
 
     assert resolver.resolve_agent("vbot", "tester").id == "tester"
 
 
-def test_show_unknown_project_errors(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_show_unknown_project_errors(tmp_path: Path) -> None:
     state = _make_state(tmp_path)
 
     with pytest.raises(RpcError) as exc_info:
-        _show_project(state, {"project_id": "ghost"})
+        await _show_project(state, {"project_id": "ghost"})
 
     assert exc_info.value.code == "project_not_found"
 
 
-def test_show_case_variant_project_id_is_not_found(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_show_case_variant_project_id_is_not_found(tmp_path: Path) -> None:
     # Ids are exact even where the filesystem would open ``vbot`` for ``VBOT``.
     state = _make_state(tmp_path)
     repo = _make_repo(tmp_path, "vbot", "builder.md")
     _add_project(state, {"cwd": str(repo), "display_name": "vBot"})
 
     with pytest.raises(RpcError) as exc_info:
-        _show_project(state, {"project_id": "VBOT"})
+        await _show_project(state, {"project_id": "VBOT"})
 
     assert exc_info.value.code == "project_not_found"
 
 
-def test_list_returns_projects(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_list_returns_projects(tmp_path: Path) -> None:
     state = _make_state(tmp_path)
     _add_project(state, {"cwd": str(_make_repo(tmp_path, "alpha")), "display_name": "Alpha"})
     _add_project(state, {"cwd": str(_make_repo(tmp_path, "beta")), "display_name": "Beta"})
 
-    result = _list_projects(state, {})
+    result = await _list_projects(state, {})
 
     assert [project["project_id"] for project in result["projects"]] == ["alpha", "beta"]
 

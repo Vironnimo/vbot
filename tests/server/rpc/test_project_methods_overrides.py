@@ -24,12 +24,13 @@ from tests.server.rpc.project_methods_test_support import (
 # ---------------------------------------------------------------------------
 # Per-agent Overrides: team response fields (overrides + effective) + set/clear handlers.
 # ---------------------------------------------------------------------------
-def test_team_member_reports_null_overrides_by_default(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_team_member_reports_null_overrides_by_default(tmp_path: Path) -> None:
     state = _make_state(tmp_path)
     repo = _make_repo(tmp_path, "vbot", "builder.md")
     _add_project(state, {"cwd": str(repo), "display_name": "vBot"})
 
-    result = _show_project(state, {"project_id": "vbot"})
+    result = await _show_project(state, {"project_id": "vbot"})
 
     member = next(m for m in result["scan"]["team"] if m["agent_id"] == "builder")
     assert member["overrides"] is None
@@ -37,13 +38,14 @@ def test_team_member_reports_null_overrides_by_default(tmp_path: Path) -> None:
     assert member["effective"]["model"] == {"value": "openai/gpt-5.2", "source": "agent"}
 
 
-def test_team_member_reports_overrides_value_and_effective(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_team_member_reports_overrides_value_and_effective(tmp_path: Path) -> None:
     state = _make_state(tmp_path)
     repo = _make_repo(tmp_path, "vbot", "builder.md")
     _add_project(state, {"cwd": str(repo), "display_name": "vBot"})
     state.runtime.projects.set_override("vbot", "builder", "model", "openai/gpt-mini")
 
-    result = _show_project(state, {"project_id": "vbot"})
+    result = await _show_project(state, {"project_id": "vbot"})
 
     member = next(m for m in result["scan"]["team"] if m["agent_id"] == "builder")
     assert member["overrides"] == {"model": "openai/gpt-mini"}
@@ -404,7 +406,8 @@ def test_set_rejects_temperature_out_of_range(tmp_path: Path) -> None:
     assert exc_info.value.code == "invalid_request"
 
 
-def test_show_includes_default_temperature_and_thinking(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_show_includes_default_temperature_and_thinking(tmp_path: Path) -> None:
     state = _make_state(tmp_path)
     _add_project(
         state,
@@ -416,7 +419,7 @@ def test_show_includes_default_temperature_and_thinking(tmp_path: Path) -> None:
         },
     )
 
-    result = _show_project(state, {"project_id": "vbot"})
+    result = await _show_project(state, {"project_id": "vbot"})
 
     assert result["project"]["default_temperature"] == 0.7
     assert result["project"]["default_thinking_effort"] == "medium"
