@@ -108,6 +108,81 @@ def test_line_trimmed_matches_different_indent_and_reindents() -> None:
     assert result.first_changed_line == 2
 
 
+def test_reindent_converts_spaces_to_the_files_tabs() -> None:
+    content = 'func greet() string {\n\tif polite {\n\t\treturn "Hello"\n\t}\n\treturn "Hi"\n}\n'
+
+    result = replace_fuzzy(
+        content,
+        '    if polite {\n        return "Hello"\n    }',
+        '    if polite {\n        if loud {\n            return "HELLO"\n        }\n'
+        '        return "Hello"\n    }',
+        replace_all=False,
+    )
+
+    assert isinstance(result, FuzzyReplacement)
+    assert result.new_content == (
+        'func greet() string {\n\tif polite {\n\t\tif loud {\n\t\t\treturn "HELLO"\n'
+        '\t\t}\n\t\treturn "Hello"\n\t}\n\treturn "Hi"\n}\n'
+    )
+
+
+def test_reindent_converts_tabs_to_the_files_spaces() -> None:
+    content = "def f():\n    if ready:\n        go()\n"
+
+    result = replace_fuzzy(
+        content,
+        "\tif ready:\n\t\tgo()",
+        "\tif ready:\n\t\tif fast:\n\t\t\trun()",
+        replace_all=False,
+    )
+
+    assert isinstance(result, FuzzyReplacement)
+    assert result.new_content == "def f():\n    if ready:\n        if fast:\n            run()\n"
+
+
+def test_reindent_scales_a_new_deeper_line_to_the_files_level_width() -> None:
+    content = "def f():\n    a = 1\n    b = 2\n"
+
+    result = replace_fuzzy(
+        content, "  a = 1\n  b = 2", "  a = 1\n  if a:\n    b = 3", replace_all=False
+    )
+
+    assert isinstance(result, FuzzyReplacement)
+    assert result.new_content == "def f():\n    a = 1\n    if a:\n        b = 3\n"
+
+
+def test_reindent_restores_a_dropped_outer_level_in_tabs() -> None:
+    content = "class A:\n\tdef f(self):\n\t\treturn 1\n"
+
+    result = replace_fuzzy(
+        content,
+        "def f(self):\n    return 1",
+        "def f(self):\n    if self:\n        return 2\n    return 1",
+        replace_all=False,
+    )
+
+    assert isinstance(result, FuzzyReplacement)
+    assert result.new_content == (
+        "class A:\n\tdef f(self):\n\t\tif self:\n\t\t\treturn 2\n\t\treturn 1\n"
+    )
+
+
+def test_reindent_converts_levels_despite_an_aligned_line() -> None:
+    content = "func f() {\n\tcall(a,\n\t     b)\n}\n"
+
+    result = replace_fuzzy(
+        content,
+        "    call(a,\n         b)",
+        "    call(a,\n         b)\n    if ok {\n        done()\n    }",
+        replace_all=False,
+    )
+
+    assert isinstance(result, FuzzyReplacement)
+    assert result.new_content == (
+        "func f() {\n\tcall(a,\n\t     b)\n\tif ok {\n\t\tdone()\n\t}\n}\n"
+    )
+
+
 def test_line_trimmed_preserves_crlf_endings() -> None:
     # A whitespace-tolerant line match (2-space args vs a 4-space CRLF file) must
     # not mangle the file's CRLF endings.
