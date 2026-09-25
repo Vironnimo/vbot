@@ -11,33 +11,74 @@ import {
   addDesktopServer,
   removeDesktopServer,
   selectDesktopServer,
-  getWakewordStatus,
-  setWakewordEnabled,
-  setWakewordConfig,
+  disabledDesktopCapabilities,
+  supportsDesktopVoice,
+  normalizeVoiceStatus,
+  normalizeVoiceEvent,
+  getVoiceStatus,
+  setVoiceEnabled,
+  updateVoiceConfig,
   listMicrophones,
   listWakewordModels,
   importWakewordModel,
   deleteWakewordModel,
-  retryWakeword,
-  stopWakewordRecording,
-  startWakewordCalibration,
-  stopWakewordCalibration,
-  restartWakewordCalibration,
-  onWakewordStatusChange,
+  retryVoice,
+  stopVoiceRecording,
+  startVoiceCalibration,
+  restartVoiceCalibration,
+  stopVoiceCalibration,
+  onDesktopVoicePush,
+  desktopMicrophoneAccess,
+  playVoiceCue,
   waitForDesktopBridge,
-  setDesktopLiveVoiceActive,
-  syncDesktopLiveVoiceActive,
-  createDesktopLiveVoiceLease,
   onDesktopLiveRequest,
   getDesktopLiveHotkey,
   setDesktopLiveHotkey,
 } from '../desktopBridge.js';
 
-const NO_LIVE_CAPABILITIES = {
-  liveWakeword: false,
+const NO_VOICE_CAPABILITIES = {
+  voiceApi: 0,
   liveHotkey: false,
   secureOrigins: [],
 };
+
+function desktopWindow(
+  api,
+  { secure = true, origin = 'http://pi.lan:8420' } = {},
+) {
+  globalThis.window = {
+    location: { search: '?accessor=desktop', origin },
+    isSecureContext: secure,
+    pywebview: { api },
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+  };
+}
+
+function rawStatus(overrides = {}) {
+  return {
+    enabled: true,
+    mode: 'real',
+    state: 'listening',
+    error_code: null,
+    sequence: 4,
+    microphone: null,
+    active_microphone: null,
+    echo_cancellation: { enabled: true, state: 'active' },
+    default_agent_id: 'main',
+    default_session_behavior: 'active',
+    phrases: [],
+    recording: null,
+    commands: [],
+    calibration: null,
+    limits: {
+      max_active_phrases: 8,
+      min_sensitivity: 0.05,
+      max_sensitivity: 0.95,
+    },
+    ...overrides,
+  };
+}
 
 describe('desktop detection', () => {
   let originalLocation;
@@ -111,7 +152,7 @@ describe('getDesktopCapabilities', () => {
       wakeword: true,
       serverSelection: true,
       contextMenu: true,
-      ...NO_LIVE_CAPABILITIES,
+      ...NO_VOICE_CAPABILITIES,
     });
 
     // Second call should return cached result
@@ -119,14 +160,14 @@ describe('getDesktopCapabilities', () => {
     expect(caps2).toBe(caps1);
   });
 
-  it('normalizes the Live voice capabilities', async () => {
+  it('normalizes the Voice bridge version and the Live voice capabilities', async () => {
     globalThis.window = {
       location: { search: '?accessor=desktop' },
       pywebview: {
         api: {
           getDesktopCapabilities: () => ({
             wakeword: true,
-            liveWakeword: true,
+            voiceApi: 2,
             liveHotkey: 1,
             secureOrigins: ['http://pi.lan:8420', 42, null],
           }),
@@ -138,10 +179,22 @@ describe('getDesktopCapabilities', () => {
       wakeword: true,
       serverSelection: false,
       contextMenu: false,
-      liveWakeword: true,
+      voiceApi: 2,
       liveHotkey: true,
       secureOrigins: ['http://pi.lan:8420'],
     });
+  });
+
+  it('reads an invalid Voice bridge version as none', async () => {
+    for (const voiceApi of ['2', 1.5, -2, null]) {
+      globalThis.window = {
+        location: { search: '?accessor=desktop' },
+        pywebview: {
+          api: { getDesktopCapabilities: () => ({ wakeword: true, voiceApi }) },
+        },
+      };
+      expect((await getDesktopCapabilities()).voiceApi).toBe(0);
+    }
   });
 
   it('returns disabled when bridge absent', async () => {
@@ -152,8 +205,9 @@ describe('getDesktopCapabilities', () => {
       wakeword: false,
       serverSelection: false,
       contextMenu: false,
-      ...NO_LIVE_CAPABILITIES,
+      ...NO_VOICE_CAPABILITIES,
     });
+    expect(disabledDesktopCapabilities()).toEqual(caps);
   });
 
   it('does not reuse cached capabilities for a different bridge api object', async () => {
@@ -174,7 +228,7 @@ describe('getDesktopCapabilities', () => {
       wakeword: true,
       serverSelection: true,
       contextMenu: true,
-      ...NO_LIVE_CAPABILITIES,
+      ...NO_VOICE_CAPABILITIES,
     });
 
     globalThis.window.pywebview = {
@@ -187,7 +241,7 @@ describe('getDesktopCapabilities', () => {
       wakeword: false,
       serverSelection: false,
       contextMenu: false,
-      ...NO_LIVE_CAPABILITIES,
+      ...NO_VOICE_CAPABILITIES,
     });
   });
 
@@ -203,6 +257,14 @@ describe('getDesktopCapabilities', () => {
     };
 
     await expect(getDesktopCapabilities()).rejects.toThrow('bridge starting');
+  });
+
+  it('offers the Voice UI only for the Voice bridge version it speaks', () => {
+    expect(supportsDesktopVoice({ wakeword: true, voiceApi: 2 })).toBe(true);
+    expect(supportsDesktopVoice({ wakeword: true, voiceApi: 0 })).toBe(false);
+    expect(supportsDesktopVoice({ wakeword: true, voiceApi: 3 })).toBe(false);
+    expect(supportsDesktopVoice({ wakeword: false, voiceApi: 2 })).toBe(false);
+    expect(supportsDesktopVoice(null)).toBe(false);
   });
 });
 
@@ -355,178 +417,310 @@ describe('desktop server management', () => {
   });
 });
 
-describe('getWakewordStatus', () => {
-  it('returns status from bridge', async () => {
-    globalThis.window = {
-      location: { search: '?accessor=desktop' },
-      pywebview: {
-        api: {
-          getWakewordStatus: () => ({
-            enabled: true,
-            state: 'listening',
-            engine: 'pyopen_wakeword',
-          }),
-        },
+describe('Voice status validation', () => {
+  it('keeps a complete snapshot as reported', () => {
+    const raw = rawStatus({
+      microphone: { index: 2, name: 'Desk mic', host_api: 'WASAPI' },
+      active_microphone: {
+        index: 2,
+        name: 'Desk mic',
+        host_api: 'WASAPI',
+        sample_rate: 48000,
       },
-    };
+      default_session_behavior: 'new',
+      phrases: [
+        {
+          model_id: 'builtin/okay_nabu',
+          label: 'Okay Nabu',
+          sensitivity: 0.5,
+          action: {
+            type: 'command',
+            agent_id: 'writer',
+            session_behavior: 'new',
+          },
+          effective: {
+            type: 'command',
+            agent_id: 'writer',
+            session_behavior: 'new',
+          },
+          problem: null,
+        },
+        {
+          model_id: 'builtin/hey_jarvis',
+          label: 'Hey Jarvis',
+          sensitivity: 0.7,
+          action: { type: 'live_voice', mode: 'start' },
+          effective: { type: 'live_voice', mode: 'start' },
+          problem: 'live_voice_unavailable',
+        },
+      ],
+      recording: {
+        command_id: 'c-1',
+        model_id: 'builtin/okay_nabu',
+        agent_id: 'writer',
+      },
+      commands: [
+        { command_id: 'c-0', model_id: 'builtin/okay_nabu', stage: 'sending' },
+      ],
+      calibration: {
+        model_id: 'builtin/okay_nabu',
+        phase: 'phrases',
+        score: 0.4,
+        peak: 0.8,
+        noise_level: 0.1,
+        noise_high: true,
+        sample_count: 2,
+        required_samples: 3,
+        recommended_sensitivity: null,
+        noise_seconds_remaining: 0,
+      },
+    });
 
-    const status = await getWakewordStatus();
-    expect(status.enabled).toBe(true);
-    expect(status.state).toBe('listening');
+    expect(normalizeVoiceStatus(raw)).toEqual(raw);
+  });
+
+  it('rejects values that are not snapshots', () => {
+    expect(normalizeVoiceStatus(null)).toBeNull();
+    expect(normalizeVoiceStatus([])).toBeNull();
+    expect(normalizeVoiceStatus(rawStatus({ sequence: undefined }))).toBeNull();
+    expect(normalizeVoiceStatus(rawStatus({ sequence: -1 }))).toBeNull();
+    expect(normalizeVoiceStatus(rawStatus({ sequence: 1.5 }))).toBeNull();
+  });
+
+  it('falls back to safe defaults for unknown or missing fields', () => {
+    const status = normalizeVoiceStatus({
+      sequence: 0,
+      enabled: 'yes',
+      state: 'paused',
+      mode: 'turbo',
+      echo_cancellation: { state: 'loud' },
+      default_session_behavior: 'sometimes',
+      phrases: [
+        { model_id: 'a', action: { type: 'shout' }, effective: 7 },
+        { model_id: 'a', label: 'Duplicate' },
+        { label: 'No id' },
+        {
+          model_id: 'b',
+          action: { type: 'live_voice', mode: 'forever' },
+          sensitivity: 'high',
+        },
+      ],
+      recording: { model_id: 'a' },
+      commands: [{ stage: 'sending' }, { command_id: 'c-1' }],
+      calibration: { model_id: 'a', phase: 'dance', required_samples: 0 },
+      limits: {
+        max_active_phrases: 0,
+        min_sensitivity: 0.9,
+        max_sensitivity: 0.1,
+      },
+    });
+
+    expect(status).toMatchObject({
+      enabled: false,
+      state: 'off',
+      mode: 'real',
+      error_code: null,
+      echo_cancellation: { enabled: true, state: 'off' },
+      default_agent_id: null,
+      default_session_behavior: 'active',
+      recording: null,
+      commands: [{ command_id: 'c-1', model_id: null, stage: null }],
+      limits: {
+        max_active_phrases: null,
+        min_sensitivity: null,
+        max_sensitivity: null,
+      },
+    });
+    expect(status.phrases).toEqual([
+      {
+        model_id: 'a',
+        label: 'a',
+        sensitivity: null,
+        action: { type: 'command', agent_id: null, session_behavior: null },
+        effective: null,
+        problem: null,
+      },
+      {
+        model_id: 'b',
+        label: 'b',
+        sensitivity: null,
+        action: { type: 'live_voice', mode: 'toggle' },
+        effective: null,
+        problem: null,
+      },
+    ]);
+    expect(status.calibration).toMatchObject({
+      model_id: 'a',
+      phase: 'noise',
+      required_samples: null,
+      recommended_sensitivity: null,
+    });
+  });
+
+  it('accepts only events with a sequence and a well-formed kind', () => {
+    expect(
+      normalizeVoiceEvent({
+        sequence: 5,
+        kind: 'command_failed',
+        model_id: 'builtin/okay_nabu',
+        command_id: 'c-1',
+        error_code: 'target_unavailable',
+      }),
+    ).toEqual({
+      sequence: 5,
+      kind: 'command_failed',
+      model_id: 'builtin/okay_nabu',
+      command_id: 'c-1',
+      agent_id: null,
+      session_id: null,
+      error_code: 'target_unavailable',
+    });
+    // A kind a newer Desktop adds still passes.
+    expect(normalizeVoiceEvent({ sequence: 6, kind: 'future_kind' })).not.toBe(
+      null,
+    );
+    expect(normalizeVoiceEvent({ kind: 'sent' })).toBeNull();
+    expect(normalizeVoiceEvent({ sequence: 1, kind: 'Sent!' })).toBeNull();
+    expect(normalizeVoiceEvent({ sequence: 1, kind: '' })).toBeNull();
+    expect(normalizeVoiceEvent({ sequence: 1, kind: 4 })).toBeNull();
+    expect(normalizeVoiceEvent('sent')).toBeNull();
+  });
+});
+
+describe('Voice bridge calls', () => {
+  it('reads the status snapshot and rejects an invalid one', async () => {
+    desktopWindow({ getVoiceStatus: () => rawStatus() });
+    await expect(getVoiceStatus()).resolves.toEqual(rawStatus());
+
+    desktopWindow({ getVoiceStatus: () => ({ state: 'listening' }) });
+    await expect(getVoiceStatus()).rejects.toThrow(
+      'The Desktop returned an invalid Voice status',
+    );
   });
 
   it('propagates bridge absence instead of fabricating disabled state', async () => {
     globalThis.window = { location: { search: '' }, pywebview: undefined };
 
-    await expect(getWakewordStatus()).rejects.toThrow(
+    await expect(getVoiceStatus()).rejects.toThrow(
       'Desktop bridge not available',
     );
   });
-});
 
-describe('setWakewordEnabled', () => {
-  it('calls bridge method', async () => {
-    const enabledCalls = [];
-    globalThis.window = {
-      location: { search: '?accessor=desktop' },
-      pywebview: {
-        api: {
-          setWakewordEnabled: (val) => {
-            enabledCalls.push(val);
-            return { enabled: val, error_code: null };
-          },
-        },
-      },
-    };
+  it('enables Voice and reports the reason of a refusal', async () => {
+    const setEnabled = vi
+      .fn()
+      .mockResolvedValueOnce({ enabled: true, error_code: null })
+      .mockResolvedValueOnce({
+        enabled: false,
+        error_code: 'speech_to_text_unconfigured',
+      })
+      .mockResolvedValueOnce(null);
+    desktopWindow({ setVoiceEnabled: setEnabled });
 
-    await expect(setWakewordEnabled(true)).resolves.toEqual({
+    await expect(setVoiceEnabled(true)).resolves.toEqual({
       enabled: true,
       error_code: null,
     });
-    expect(enabledCalls).toEqual([true]);
-
-    await expect(setWakewordEnabled(false)).resolves.toEqual({
+    await expect(setVoiceEnabled(1)).resolves.toEqual({
+      enabled: false,
+      error_code: 'speech_to_text_unconfigured',
+    });
+    await expect(setVoiceEnabled(false)).resolves.toEqual({
       enabled: false,
       error_code: null,
     });
-    expect(enabledCalls).toEqual([true, false]);
+    expect(setEnabled.mock.calls).toEqual([[true], [true], [false]]);
   });
-});
 
-describe('setWakewordConfig', () => {
-  it('calls bridge with config object', async () => {
-    const calls = [];
-    globalThis.window = {
-      location: { search: '?accessor=desktop' },
-      pywebview: {
-        api: {
-          setWakewordConfig: (config) => {
-            calls.push(config);
-          },
-        },
-      },
-    };
-
-    await setWakewordConfig({
+  it('sends a configuration change and resolves the resulting snapshot', async () => {
+    const update = vi.fn(() => rawStatus({ sequence: 9 }));
+    desktopWindow({ updateVoiceConfig: update });
+    const changes = {
       model_sensitivities: { 'builtin/okay_nabu': 0.8 },
-    });
-    expect(calls).toEqual([
-      { model_sensitivities: { 'builtin/okay_nabu': 0.8 } },
-    ]);
-  });
-});
-
-describe('desktop Voice recovery and devices', () => {
-  it('returns microphone devices from the bridge', async () => {
-    const devices = [{ index: 3, name: 'Desk mic', supported: true }];
-    globalThis.window = {
-      location: { search: '?accessor=desktop' },
-      pywebview: { api: { listMicrophones: () => devices } },
+      phrase_actions: { 'builtin/hey_jarvis': null },
     };
 
-    await expect(listMicrophones()).resolves.toEqual(devices);
+    await expect(updateVoiceConfig(changes)).resolves.toMatchObject({
+      sequence: 9,
+    });
+    expect(update).toHaveBeenCalledWith(changes);
   });
 
-  it('asks the bridge to retry wakeword listening', async () => {
-    const retry = vi.fn();
-    globalThis.window = {
-      location: { search: '?accessor=desktop' },
-      pywebview: { api: { retryWakeword: retry } },
-    };
-
-    await retryWakeword();
-
-    expect(retry).toHaveBeenCalledOnce();
-  });
-
-  it('stops the active voice recording through the bridge', async () => {
-    const stop = vi.fn(() => ({ state: 'transcribing' }));
-    globalThis.window = {
-      location: { search: '?accessor=desktop' },
-      pywebview: { api: { stopWakewordRecording: stop } },
-    };
-
-    await expect(stopWakewordRecording()).resolves.toEqual({
-      state: 'transcribing',
+  it('controls the calibration of one phrase', async () => {
+    const start = vi.fn(() =>
+      rawStatus({
+        sequence: 5,
+        calibration: { model_id: 'builtin/okay_nabu', phase: 'noise' },
+      }),
+    );
+    const restart = vi.fn(() =>
+      rawStatus({
+        sequence: 6,
+        calibration: { model_id: 'builtin/okay_nabu', phase: 'noise' },
+      }),
+    );
+    const stop = vi.fn(() => rawStatus({ sequence: 7 }));
+    desktopWindow({
+      startVoiceCalibration: start,
+      restartVoiceCalibration: restart,
+      stopVoiceCalibration: stop,
     });
-    expect(stop).toHaveBeenCalledOnce();
-  });
 
-  it('controls transient wakeword calibration through the bridge', async () => {
-    const start = vi.fn(() => ({ calibration: { active: true } }));
-    const stop = vi.fn(() => ({ calibration: { active: false } }));
-    const restart = vi.fn(() => ({
-      calibration: { active: true, phase: 'noise' },
-    }));
-    globalThis.window = {
-      location: { search: '?accessor=desktop' },
-      pywebview: {
-        api: {
-          startWakewordCalibration: start,
-          stopWakewordCalibration: stop,
-          restartWakewordCalibration: restart,
-        },
-      },
-    };
-
-    await expect(startWakewordCalibration()).resolves.toEqual({
-      calibration: { active: true },
-    });
-    await expect(restartWakewordCalibration()).resolves.toEqual({
-      calibration: { active: true, phase: 'noise' },
-    });
-    await expect(stopWakewordCalibration()).resolves.toEqual({
-      calibration: { active: false },
-    });
-    expect(start).toHaveBeenCalledOnce();
+    expect(
+      (await startVoiceCalibration('builtin/okay_nabu')).calibration.model_id,
+    ).toBe('builtin/okay_nabu');
+    expect((await restartVoiceCalibration()).sequence).toBe(6);
+    expect((await stopVoiceCalibration()).calibration).toBeNull();
+    expect(start).toHaveBeenCalledWith('builtin/okay_nabu');
     expect(restart).toHaveBeenCalledOnce();
     expect(stop).toHaveBeenCalledOnce();
   });
-});
 
-describe('desktop wakeword models', () => {
-  it('lists, imports, and deletes models through the bridge', async () => {
-    const models = [{ id: 'builtin/okay_nabu', label: 'Okay Nabu' }];
-    const importModel = vi.fn(() => ({
-      id: 'custom/model',
-      label: 'Hey Computer',
-    }));
+  it('retries listening, stops a recording and lists microphones', async () => {
+    const devices = [{ index: 3, name: 'Desk mic', supported: true }];
+    const retry = vi.fn(() => ({ retried: true }));
+    const stop = vi.fn(() => ({ stopped: true }));
+    desktopWindow({
+      listMicrophones: () => devices,
+      retryVoice: retry,
+      stopVoiceRecording: stop,
+    });
+
+    await expect(listMicrophones()).resolves.toEqual(devices);
+    await expect(retryVoice()).resolves.toEqual({ retried: true });
+    await expect(stopVoiceRecording()).resolves.toEqual({ stopped: true });
+    expect(retry).toHaveBeenCalledOnce();
+    expect(stop).toHaveBeenCalledOnce();
+  });
+
+  it('lists models with their overlaps, imports and deletes them', async () => {
+    const importModel = vi.fn(() => ({ id: 'custom/model', activated: false }));
     const deleteModel = vi.fn(() => ({ deleted: true }));
-    globalThis.window = {
-      location: { search: '?accessor=desktop' },
-      pywebview: {
-        api: {
-          listWakewordModels: () => models,
-          importWakewordModel: importModel,
-          deleteWakewordModel: deleteModel,
+    desktopWindow({
+      listWakewordModels: () => [
+        {
+          id: 'builtin/okay_nabu',
+          label: 'Okay Nabu',
+          overlaps: ['custom/nabu', 3],
         },
-      },
-    };
+        { id: 'custom/nabu', label: '' },
+        { label: 'No id' },
+      ],
+      importWakewordModel: importModel,
+      deleteWakewordModel: deleteModel,
+    });
 
-    await expect(listWakewordModels()).resolves.toEqual(models);
+    await expect(listWakewordModels()).resolves.toEqual([
+      {
+        id: 'builtin/okay_nabu',
+        label: 'Okay Nabu',
+        overlaps: ['custom/nabu'],
+      },
+      { id: 'custom/nabu', label: 'custom/nabu', overlaps: [] },
+    ]);
     await expect(
       importWakewordModel('computer.tflite', 'b25ueA=='),
-    ).resolves.toEqual({ id: 'custom/model', label: 'Hey Computer' });
+    ).resolves.toEqual({ id: 'custom/model', activated: false });
     await expect(deleteWakewordModel('custom/model')).resolves.toEqual({
       deleted: true,
     });
@@ -543,140 +737,118 @@ describe('desktop wakeword models', () => {
   });
 });
 
-describe('onWakewordStatusChange', () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
+describe('pushed Voice status and events', () => {
+  function listen(handler) {
+    const target = new EventTarget();
+    globalThis.window = {
+      addEventListener: target.addEventListener.bind(target),
+      removeEventListener: target.removeEventListener.bind(target),
+    };
+    const cleanup = onDesktopVoicePush(handler);
+    const dispatch = (detail) =>
+      target.dispatchEvent(new CustomEvent('vbot-desktop-voice', { detail }));
+    return { cleanup, dispatch };
+  }
+
+  it('hands validated snapshots and events to the handler', () => {
+    const handler = vi.fn();
+    const { cleanup, dispatch } = listen(handler);
+
+    dispatch({ type: 'status', status: rawStatus({ sequence: 3 }) });
+    dispatch({
+      type: 'event',
+      event: { sequence: 4, kind: 'recording_started', command_id: 'c-1' },
+    });
+
+    expect(handler.mock.calls).toEqual([
+      [{ type: 'status', status: rawStatus({ sequence: 3 }) }],
+      [
+        {
+          type: 'event',
+          event: {
+            sequence: 4,
+            kind: 'recording_started',
+            model_id: null,
+            command_id: 'c-1',
+            agent_id: null,
+            session_id: null,
+            error_code: null,
+          },
+        },
+      ],
+    ]);
+
+    cleanup();
+    dispatch({ type: 'status', status: rawStatus({ sequence: 5 }) });
+    expect(handler).toHaveBeenCalledTimes(2);
   });
 
+  it('drops malformed pushes', () => {
+    const handler = vi.fn();
+    const { cleanup, dispatch } = listen(handler);
+
+    dispatch(null);
+    dispatch({ type: 'status', status: { state: 'listening' } });
+    dispatch({ type: 'event', event: { kind: 'sent' } });
+    dispatch({ type: 'event', event: { sequence: 2, kind: 'DROP TABLE' } });
+    dispatch({ type: 'snapshot', status: rawStatus() });
+
+    expect(handler).not.toHaveBeenCalled();
+    cleanup();
+  });
+
+  it('returns noop cleanup without a window', () => {
+    const savedWindow = globalThis.window;
+    globalThis.window = undefined;
+    try {
+      const cleanup = onDesktopVoicePush(() => {});
+      expect(cleanup()).toBeUndefined();
+    } finally {
+      globalThis.window = savedWindow;
+    }
+  });
+});
+
+describe('Voice cues', () => {
   afterEach(() => {
-    vi.useRealTimers();
+    vi.restoreAllMocks();
   });
 
-  it('polls and calls callback on state change', async () => {
-    const callbacks = [];
-    let pollCount = 0;
-    globalThis.window = {
-      location: { search: '?accessor=desktop' },
-      pywebview: {
-        api: {
-          getWakewordStatus: () => {
-            pollCount += 1;
-            if (pollCount === 1) return { state: 'off', enabled: true };
-            return { state: 'listening', enabled: true };
+  it('plays the tones of a cue kind and nothing for other kinds', async () => {
+    const oscillators = [];
+    class FakeAudioContext {
+      state = 'running';
+      currentTime = 0;
+      destination = {};
+      createOscillator() {
+        const oscillator = {
+          frequency: { value: 0 },
+          connect: vi.fn(),
+          start: vi.fn(),
+          stop: vi.fn(),
+        };
+        oscillators.push(oscillator);
+        return oscillator;
+      }
+      createGain() {
+        return {
+          gain: {
+            setValueAtTime: vi.fn(),
+            exponentialRampToValueAtTime: vi.fn(),
           },
-        },
-      },
-    };
+          connect: vi.fn(),
+        };
+      }
+    }
+    globalThis.window = { AudioContext: FakeAudioContext };
 
-    const cleanup = onWakewordStatusChange((status) => {
-      callbacks.push(status);
-    }, 100);
+    await playVoiceCue('sent');
+    expect(oscillators.map((oscillator) => oscillator.frequency.value)).toEqual(
+      [660, 880],
+    );
 
-    // First poll fires immediately (async)
-    await vi.advanceTimersByTimeAsync(0);
-    expect(callbacks).toHaveLength(1);
-    expect(callbacks[0].state).toBe('off');
-
-    // Second poll on interval
-    await vi.advanceTimersByTimeAsync(100);
-    expect(callbacks).toHaveLength(2);
-    expect(callbacks[1].state).toBe('listening');
-
-    cleanup();
-  });
-
-  it('does not call callback when state unchanged', async () => {
-    const callbacks = [];
-    globalThis.window = {
-      location: { search: '?accessor=desktop' },
-      pywebview: {
-        api: {
-          getWakewordStatus: () => ({ state: 'listening', enabled: true }),
-        },
-      },
-    };
-
-    const cleanup = onWakewordStatusChange((status) => {
-      callbacks.push(status);
-    }, 100);
-
-    await vi.advanceTimersByTimeAsync(0);
-    expect(callbacks).toHaveLength(1);
-
-    await vi.advanceTimersByTimeAsync(200);
-    expect(callbacks).toHaveLength(1); // Still only the initial poll
-
-    cleanup();
-  });
-
-  it('calls callback when config changes while state is unchanged', async () => {
-    const callbacks = [];
-    let pollCount = 0;
-    globalThis.window = {
-      location: { search: '?accessor=desktop' },
-      pywebview: {
-        api: {
-          getWakewordStatus: () => {
-            pollCount += 1;
-            return {
-              state: 'listening',
-              enabled: true,
-              target_agent_id: pollCount === 1 ? 'main' : 'writer',
-            };
-          },
-        },
-      },
-    };
-
-    const cleanup = onWakewordStatusChange((status) => {
-      callbacks.push(status);
-    }, 100);
-
-    await vi.advanceTimersByTimeAsync(0);
-    await vi.advanceTimersByTimeAsync(100);
-
-    expect(callbacks).toHaveLength(2);
-    expect(callbacks[1].target_agent_id).toBe('writer');
-
-    cleanup();
-  });
-
-  it('never overlaps slow status polls or publishes after cleanup', async () => {
-    const first = deferred();
-    const second = deferred();
-    const getStatus = vi
-      .fn()
-      .mockReturnValueOnce(first.promise)
-      .mockReturnValueOnce(second.promise);
-    const callback = vi.fn();
-    globalThis.window = {
-      location: { search: '?accessor=desktop' },
-      pywebview: { api: { getWakewordStatus: getStatus } },
-    };
-
-    const cleanup = onWakewordStatusChange(callback, 100);
-    await vi.advanceTimersByTimeAsync(500);
-    expect(getStatus).toHaveBeenCalledOnce();
-
-    first.resolve({ state: 'listening', enabled: true });
-    await vi.advanceTimersByTimeAsync(0);
-    expect(callback).toHaveBeenCalledOnce();
-    await vi.advanceTimersByTimeAsync(100);
-    expect(getStatus).toHaveBeenCalledTimes(2);
-
-    cleanup();
-    second.resolve({ state: 'off', enabled: false });
-    await vi.advanceTimersByTimeAsync(500);
-    expect(callback).toHaveBeenCalledOnce();
-    expect(getStatus).toHaveBeenCalledTimes(2);
-  });
-
-  it('returns noop cleanup when not on desktop', () => {
-    globalThis.window = { location: { search: '' }, pywebview: undefined };
-
-    const cleanup = onWakewordStatusChange(() => {});
-    expect(typeof cleanup).toBe('function');
-    expect(cleanup()).toBeUndefined();
+    await playVoiceCue('recording_started');
+    expect(oscillators).toHaveLength(2);
   });
 });
 
@@ -695,175 +867,38 @@ function createDesktopWindowWithoutBridge() {
   };
 }
 
-function deferred() {
-  let resolve;
-  const promise = new Promise((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
-}
-
 describe('desktop Live voice integration', () => {
   let savedWindow;
-
-  function deferred() {
-    let resolve;
-    let reject;
-    const promise = new Promise((res, rej) => {
-      resolve = res;
-      reject = rej;
-    });
-    return { promise, resolve, reject };
-  }
-
-  function desktopWindow(
-    api,
-    { secure = true, origin = 'http://pi.lan:8420' } = {},
-  ) {
-    globalThis.window = {
-      location: { search: '?accessor=desktop', origin },
-      isSecureContext: secure,
-      pywebview: { api },
-      addEventListener: vi.fn(),
-      removeEventListener: vi.fn(),
-    };
-  }
 
   beforeEach(() => {
     savedWindow = globalThis.window;
   });
 
-  afterEach(async () => {
-    // Leave the module with a settled, inactive Live voice state.
-    desktopWindow({ setLiveVoiceActive: () => ({ active: false }) });
-    await setDesktopLiveVoiceActive(false).catch(() => {});
+  afterEach(() => {
     globalThis.window = savedWindow;
     vi.restoreAllMocks();
   });
 
-  it('sends only the latest Live voice state, one call at a time', async () => {
-    const calls = [];
-    const pending = [];
-    desktopWindow({
-      setLiveVoiceActive: (active) => {
-        calls.push(active);
-        const call = deferred();
-        pending.push(call);
-        return call.promise;
-      },
-    });
+  describe('microphone access', () => {
+    it('lets a secure page open the microphone without asking the bridge', async () => {
+      const getDesktopCapabilities = vi.fn();
+      desktopWindow({ getDesktopCapabilities });
 
-    const first = setDesktopLiveVoiceActive(true);
-    setDesktopLiveVoiceActive(false);
-    const last = setDesktopLiveVoiceActive(true);
-    await vi.waitFor(() => expect(calls).toEqual([true]));
-    setDesktopLiveVoiceActive(false);
-    setDesktopLiveVoiceActive(true);
-
-    pending[0].resolve({ active: true });
-    await last;
-    await first;
-    // The Desktop already has `true`: the intermediate `false` is skipped.
-    expect(calls).toEqual([true]);
-
-    const stop = setDesktopLiveVoiceActive(false);
-    await vi.waitFor(() => expect(calls).toEqual([true, false]));
-    pending[1].resolve({ active: false });
-    await stop;
-  });
-
-  it('keeps delivering a newer state after a failed call', async () => {
-    const calls = [];
-    const first = deferred();
-    desktopWindow({
-      setLiveVoiceActive: (active) => {
-        calls.push(active);
-        return calls.length === 1 ? first.promise : Promise.resolve({ active });
-      },
-    });
-
-    const started = setDesktopLiveVoiceActive(true);
-    await vi.waitFor(() => expect(calls).toEqual([true]));
-    setDesktopLiveVoiceActive(false);
-    first.reject(new Error('bridge busy'));
-    await started;
-
-    expect(calls).toEqual([true, false]);
-  });
-
-  it('rejects when the latest state could not be delivered and retries on sync', async () => {
-    const calls = [];
-    let fail = true;
-    desktopWindow({
-      setLiveVoiceActive: async (active) => {
-        calls.push(active);
-        if (fail) throw new Error('bridge busy');
-        return { active };
-      },
-    });
-
-    await expect(setDesktopLiveVoiceActive(true)).rejects.toThrow(
-      'bridge busy',
-    );
-    fail = false;
-    await syncDesktopLiveVoiceActive();
-
-    expect(calls).toEqual([true, true]);
-  });
-
-  it('resends an unconfirmed state on sync but not a confirmed one', async () => {
-    const calls = [];
-    desktopWindow({
-      setLiveVoiceActive: async (active) => {
-        calls.push(active);
-        return { active };
-      },
-    });
-
-    await setDesktopLiveVoiceActive(true);
-    await syncDesktopLiveVoiceActive();
-
-    expect(calls).toEqual([true]);
-  });
-
-  describe('microphone lease', () => {
-    it('pauses wakeword listening before the call and resumes it afterwards', async () => {
-      const calls = [];
-      desktopWindow({
-        getDesktopCapabilities: () => ({ liveWakeword: true }),
-        setLiveVoiceActive: async (active) => {
-          calls.push(active);
-          return { active };
-        },
-      });
-      const lease = createDesktopLiveVoiceLease();
-
-      expect(await lease.acquire()).toBeNull();
-      expect(calls).toEqual([true]);
-      lease.release();
-      await vi.waitFor(() => expect(calls).toEqual([true, false]));
-      lease.release();
-      await Promise.resolve();
-      expect(calls).toEqual([true, false]);
+      expect(await desktopMicrophoneAccess()).toBeNull();
+      expect(getDesktopCapabilities).not.toHaveBeenCalled();
     });
 
     it('asks for a restart when this server was added after the Desktop started', async () => {
-      const setLiveVoiceActive = vi.fn();
       desktopWindow(
         {
           getDesktopCapabilities: () => ({
-            liveWakeword: true,
             secureOrigins: ['http://other.lan:8420'],
           }),
-          setLiveVoiceActive,
         },
         { secure: false },
       );
 
-      expect(await createDesktopLiveVoiceLease().acquire()).toBe(
-        'desktop_restart_required',
-      );
-      expect(setLiveVoiceActive).not.toHaveBeenCalled();
+      expect(await desktopMicrophoneAccess()).toBe('desktop_restart_required');
     });
 
     it('lets a server the Desktop trusted try the microphone', async () => {
@@ -871,48 +906,40 @@ describe('desktop Live voice integration', () => {
       desktopWindow(
         {
           getDesktopCapabilities: () => ({
-            liveWakeword: true,
             secureOrigins: ['http://pi.lan:8420'],
           }),
-          setLiveVoiceActive: async (active) => ({ active }),
         },
         { secure: false },
       );
 
-      expect(await createDesktopLiveVoiceLease().acquire()).toBeNull();
+      expect(await desktopMicrophoneAccess()).toBeNull();
     });
 
-    it('never blocks Live voice on a failing or slow bridge', async () => {
+    it('asks for a restart when the bridge fails or answers too late', async () => {
       vi.useFakeTimers();
       vi.spyOn(console, 'warn').mockImplementation(() => {});
       try {
-        desktopWindow({
-          getDesktopCapabilities: () => ({ liveWakeword: true }),
-          setLiveVoiceActive: () => new Promise(() => {}),
-        });
-        const acquired = createDesktopLiveVoiceLease({
-          timeoutMs: 100,
-        }).acquire();
+        desktopWindow(
+          { getDesktopCapabilities: () => new Promise(() => {}) },
+          { secure: false },
+        );
+        const access = desktopMicrophoneAccess({ timeoutMs: 100 });
         await vi.advanceTimersByTimeAsync(100);
-        expect(await acquired).toBeNull();
-        // The unanswered call times out, so later states are sent again.
-        await vi.advanceTimersByTimeAsync(10000);
+        expect(await access).toBe('desktop_restart_required');
+
+        desktopWindow(
+          {
+            getDesktopCapabilities: () =>
+              Promise.reject(new Error('bridge busy')),
+          },
+          { secure: false },
+        );
+        expect(await desktopMicrophoneAccess()).toBe(
+          'desktop_restart_required',
+        );
       } finally {
         vi.useRealTimers();
       }
-    });
-
-    it('skips the pause on a Desktop without Live voice support', async () => {
-      const setLiveVoiceActive = vi.fn();
-      desktopWindow({
-        getDesktopCapabilities: () => ({ wakeword: true }),
-        setLiveVoiceActive,
-      });
-      const lease = createDesktopLiveVoiceLease();
-
-      expect(await lease.acquire()).toBeNull();
-      lease.release();
-      expect(setLiveVoiceActive).not.toHaveBeenCalled();
     });
   });
 
@@ -936,14 +963,15 @@ describe('desktop Live voice integration', () => {
       const { cleanup, dispatch } = listen(handler);
 
       expect(dispatch({ action: 'toggle', source: 'hotkey' })).toBe(true);
-      expect(handler).toHaveBeenCalledWith({
-        action: 'toggle',
-        source: 'hotkey',
-      });
+      expect(dispatch({ action: 'start', source: 'wakeword' })).toBe(true);
+      expect(handler.mock.calls).toEqual([
+        [{ action: 'toggle', source: 'hotkey' }],
+        [{ action: 'start', source: 'wakeword' }],
+      ]);
 
       cleanup();
       expect(dispatch({ action: 'start', source: 'wakeword' })).toBe(false);
-      expect(handler).toHaveBeenCalledOnce();
+      expect(handler).toHaveBeenCalledTimes(2);
     });
 
     it('ignores malformed requests and reports declined ones as unhandled', () => {

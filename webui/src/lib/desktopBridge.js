@@ -4,34 +4,52 @@
  * loads inside pywebview with `?accessor=desktop` in the URL.
  */
 
-const POLL_INTERVAL_MS = 500;
+import { isPlainObject } from './values.js';
+
 const BRIDGE_READY_EVENT = 'pywebviewready';
 const BRIDGE_READY_TIMEOUT_MS = 5000;
 const LIVE_REQUEST_EVENT = 'vbot-desktop-live';
 const LIVE_REQUEST_ACTIONS = new Set(['start', 'toggle']);
 const LIVE_REQUEST_SOURCES = new Set(['wakeword', 'hotkey']);
-// A Live voice start never waits longer than this for the Desktop to pause
-// wakeword listening; the microphone is shared, so a slow bridge only delays.
-const LIVE_VOICE_LEASE_TIMEOUT_MS = 3000;
-// A bridge call that never answers must not stall later state changes.
-const LIVE_VOICE_SYNC_CALL_TIMEOUT_MS = 10000;
+const VOICE_PUSH_EVENT = 'vbot-desktop-voice';
+// The Voice UI works only against this Desktop Voice bridge version.
+export const DESKTOP_VOICE_API_VERSION = 2;
+// A Live voice start never waits longer than this for the Desktop capabilities
+// that decide whether the page may open the microphone.
+const MICROPHONE_ACCESS_TIMEOUT_MS = 3000;
 const DISABLED_DESKTOP_CAPABILITIES = Object.freeze({
   wakeword: false,
+  voiceApi: 0,
   serverSelection: false,
   contextMenu: false,
-  liveWakeword: false,
   liveHotkey: false,
   secureOrigins: Object.freeze([]),
 });
 
+const VOICE_STATES = new Set([
+  'off',
+  'starting',
+  'listening',
+  'microphone_disconnected',
+  'error',
+]);
+const VOICE_MODES = new Set(['real', 'mock', 'unavailable']);
+const ECHO_CANCELLATION_STATES = new Set([
+  'off',
+  'active',
+  'no_reference',
+  'unavailable',
+]);
+const SESSION_BEHAVIORS = new Set(['active', 'new']);
+const LIVE_VOICE_MODES = new Set(['start', 'toggle']);
+const CALIBRATION_PHASES = new Set(['noise', 'phrases', 'ready']);
+// Event kinds a newer Desktop adds still advance the sequence; consumers
+// ignore kinds they do not know.
+const VOICE_EVENT_KIND_PATTERN = /^[a-z][a-z0-9_]{0,63}$/;
+
 let cachedCapabilities = null;
 let cachedBridgeApi = null;
 let voiceAudioContext = null;
-// Whether this page holds the microphone for Live voice, and the value the
-// Desktop last confirmed (null: unknown, so the next sync sends it).
-let desiredLiveVoiceActive = false;
-let confirmedLiveVoiceActive = null;
-let liveVoiceActiveSync = null;
 
 /** True when the WebUI was loaded through the Desktop accessor URL. */
 export function isDesktopAccessor() {
@@ -101,6 +119,7 @@ function callBridge(method, ...args) {
  * Fetch desktop capabilities from the bridge.
  * Result is cached after the first successful call from a live bridge.
  * Returns disabled capability flags when the bridge is absent, without caching.
+ * `voiceApi` is the Desktop Voice bridge version (0 when none is offered).
  */
 export async function getDesktopCapabilities() {
   if (!bridgeAvailable()) {
@@ -112,9 +131,12 @@ export async function getDesktopCapabilities() {
   const caps = await callBridge('getDesktopCapabilities');
   cachedCapabilities = {
     wakeword: Boolean(caps?.wakeword),
+    voiceApi:
+      Number.isSafeInteger(caps?.voiceApi) && caps.voiceApi > 0
+        ? caps.voiceApi
+        : 0,
     serverSelection: Boolean(caps?.serverSelection),
     contextMenu: Boolean(caps?.contextMenu),
-    liveWakeword: Boolean(caps?.liveWakeword),
     liveHotkey: Boolean(caps?.liveHotkey),
     secureOrigins: Array.isArray(caps?.secureOrigins)
       ? caps.secureOrigins.filter((origin) => typeof origin === 'string')
@@ -122,6 +144,19 @@ export async function getDesktopCapabilities() {
   };
   cachedBridgeApi = window.pywebview.api;
   return cachedCapabilities;
+}
+
+/** Disabled capability flags for accessors without a Desktop bridge. */
+export function disabledDesktopCapabilities() {
+  return { ...DISABLED_DESKTOP_CAPABILITIES, secureOrigins: [] };
+}
+
+/** True when the capabilities offer the Voice bridge this WebUI speaks. */
+export function supportsDesktopVoice(capabilities) {
+  return (
+    capabilities?.wakeword === true &&
+    capabilities?.voiceApi === DESKTOP_VOICE_API_VERSION
+  );
 }
 
 /** Replace the Desktop host clipboard with plain text. */
@@ -169,19 +204,230 @@ export async function selectDesktopServer(host, port) {
   return result;
 }
 
-/** Fetch the current wakeword status from the bridge. */
-export async function getWakewordStatus() {
-  return callBridge('getWakewordStatus');
+// -- Voice (bridge API v2) ----------------------------------------------------
+
+const text = (value) =>
+  typeof value === 'string' && value.trim().length > 0 ? value : null;
+const finite = (value) =>
+  typeof value === 'number' && Number.isFinite(value) ? value : null;
+const sequenceNumber = (value) =>
+  Number.isSafeInteger(value) && value >= 0 ? value : null;
+
+function normalizeMicrophone(raw, { withSampleRate = false } = {}) {
+  if (!isPlainObject(raw) || !Number.isInteger(raw.index) || !text(raw.name))
+    return null;
+  const microphone = {
+    index: raw.index,
+    name: raw.name,
+    host_api: typeof raw.host_api === 'string' ? raw.host_api : '',
+  };
+  if (withSampleRate) microphone.sample_rate = finite(raw.sample_rate);
+  return microphone;
 }
 
-/** Enable or disable wakeword listening. */
-export async function setWakewordEnabled(enabled) {
-  return callBridge('setWakewordEnabled', Boolean(enabled));
+function normalizeAction(raw) {
+  if (!isPlainObject(raw)) return null;
+  if (raw.type === 'live_voice') {
+    return {
+      type: 'live_voice',
+      mode: LIVE_VOICE_MODES.has(raw.mode) ? raw.mode : 'toggle',
+    };
+  }
+  if (raw.type === 'command') {
+    return {
+      type: 'command',
+      agent_id: text(raw.agent_id),
+      session_behavior: SESSION_BEHAVIORS.has(raw.session_behavior)
+        ? raw.session_behavior
+        : null,
+    };
+  }
+  return null;
 }
 
-/** Apply a partial wakeword configuration update. */
-export async function setWakewordConfig(config) {
-  return callBridge('setWakewordConfig', config);
+function normalizePhrases(raw) {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set();
+  const phrases = [];
+  for (const entry of raw) {
+    const modelId = text(entry?.model_id);
+    if (!modelId || seen.has(modelId)) continue;
+    seen.add(modelId);
+    phrases.push({
+      model_id: modelId,
+      label: text(entry.label) ?? modelId,
+      sensitivity: finite(entry.sensitivity),
+      // A phrase without a stored action is a command with the defaults.
+      action: normalizeAction(entry.action) ?? {
+        type: 'command',
+        agent_id: null,
+        session_behavior: null,
+      },
+      effective: normalizeAction(entry.effective),
+      problem: text(entry.problem),
+    });
+  }
+  return phrases;
+}
+
+function normalizeRecording(raw) {
+  const commandId = text(raw?.command_id);
+  if (!commandId) return null;
+  return {
+    command_id: commandId,
+    model_id: text(raw.model_id),
+    agent_id: text(raw.agent_id),
+  };
+}
+
+function normalizeCommands(raw) {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((entry) => text(entry?.command_id))
+    .map((entry) => ({
+      command_id: entry.command_id,
+      model_id: text(entry.model_id),
+      stage: text(entry.stage),
+    }));
+}
+
+function normalizeCalibration(raw) {
+  const modelId = text(raw?.model_id);
+  if (!modelId) return null;
+  const count = (value) =>
+    Number.isInteger(value) && value >= 0 ? value : null;
+  return {
+    model_id: modelId,
+    phase: CALIBRATION_PHASES.has(raw.phase) ? raw.phase : 'noise',
+    score: finite(raw.score) ?? 0,
+    peak: finite(raw.peak) ?? 0,
+    noise_level: finite(raw.noise_level) ?? 0,
+    noise_high: raw.noise_high === true,
+    sample_count: count(raw.sample_count) ?? 0,
+    required_samples:
+      Number.isInteger(raw.required_samples) && raw.required_samples > 0
+        ? raw.required_samples
+        : null,
+    recommended_sensitivity: finite(raw.recommended_sensitivity),
+    noise_seconds_remaining: Math.max(
+      0,
+      finite(raw.noise_seconds_remaining) ?? 0,
+    ),
+  };
+}
+
+function normalizeLimits(raw) {
+  const maxActive = raw?.max_active_phrases;
+  let minSensitivity = finite(raw?.min_sensitivity);
+  let maxSensitivity = finite(raw?.max_sensitivity);
+  if (
+    minSensitivity === null ||
+    maxSensitivity === null ||
+    minSensitivity >= maxSensitivity
+  ) {
+    minSensitivity = null;
+    maxSensitivity = null;
+  }
+  return {
+    max_active_phrases:
+      Number.isSafeInteger(maxActive) && maxActive > 0 ? maxActive : null,
+    min_sensitivity: minSensitivity,
+    max_sensitivity: maxSensitivity,
+  };
+}
+
+/**
+ * Validate one Voice status snapshot from the Desktop.
+ *
+ * Returns a snapshot with every documented field present (unknown values fall
+ * back to safe defaults), or null when the value is not a snapshot at all.
+ * Limits the Desktop did not report stay null; the UI then offers no control
+ * that depends on them.
+ */
+export function normalizeVoiceStatus(raw) {
+  if (!isPlainObject(raw)) return null;
+  const sequence = sequenceNumber(raw.sequence);
+  if (sequence === null) return null;
+  const state = VOICE_STATES.has(raw.state) ? raw.state : 'off';
+  const echo = isPlainObject(raw.echo_cancellation)
+    ? raw.echo_cancellation
+    : {};
+  return {
+    enabled: raw.enabled === true,
+    mode: VOICE_MODES.has(raw.mode) ? raw.mode : 'real',
+    state,
+    error_code: text(raw.error_code),
+    sequence,
+    microphone: normalizeMicrophone(raw.microphone),
+    active_microphone: normalizeMicrophone(raw.active_microphone, {
+      withSampleRate: true,
+    }),
+    echo_cancellation: {
+      enabled: echo.enabled !== false,
+      state: ECHO_CANCELLATION_STATES.has(echo.state) ? echo.state : 'off',
+    },
+    default_agent_id: text(raw.default_agent_id),
+    default_session_behavior: SESSION_BEHAVIORS.has(
+      raw.default_session_behavior,
+    )
+      ? raw.default_session_behavior
+      : 'active',
+    phrases: normalizePhrases(raw.phrases),
+    recording: normalizeRecording(raw.recording),
+    commands: normalizeCommands(raw.commands),
+    calibration: normalizeCalibration(raw.calibration),
+    limits: normalizeLimits(raw.limits),
+  };
+}
+
+/** Validate one pushed Voice event; null when it is not an event. */
+export function normalizeVoiceEvent(raw) {
+  if (!isPlainObject(raw)) return null;
+  const sequence = sequenceNumber(raw.sequence);
+  if (sequence === null || typeof raw.kind !== 'string') return null;
+  if (!VOICE_EVENT_KIND_PATTERN.test(raw.kind)) return null;
+  return {
+    sequence,
+    kind: raw.kind,
+    model_id: text(raw.model_id),
+    command_id: text(raw.command_id),
+    agent_id: text(raw.agent_id),
+    session_id: text(raw.session_id),
+    error_code: text(raw.error_code),
+  };
+}
+
+function requireVoiceStatus(raw) {
+  const status = normalizeVoiceStatus(raw);
+  if (!status) throw new Error('The Desktop returned an invalid Voice status');
+  return status;
+}
+
+/** Read the current Voice status snapshot. */
+export async function getVoiceStatus() {
+  return requireVoiceStatus(await callBridge('getVoiceStatus'));
+}
+
+/**
+ * Enable or disable Voice listening. Resolves `{enabled, error_code}`: the
+ * setting the Desktop kept and, when it refused, the reason.
+ */
+export async function setVoiceEnabled(enabled) {
+  const result = await callBridge('setVoiceEnabled', Boolean(enabled));
+  return {
+    enabled:
+      typeof result?.enabled === 'boolean' ? result.enabled : Boolean(enabled),
+    error_code: text(result?.error_code),
+  };
+}
+
+/**
+ * Apply a partial Voice configuration change and resolve the resulting status
+ * snapshot. `model_sensitivities` and `phrase_actions` merge per phrase; a
+ * `null` phrase action restores the default command.
+ */
+export async function updateVoiceConfig(changes) {
+  return requireVoiceStatus(await callBridge('updateVoiceConfig', changes));
 }
 
 /** Enumerate Desktop-local microphone devices and compatibility. */
@@ -190,10 +436,22 @@ export async function listMicrophones() {
   return Array.isArray(devices) ? devices : [];
 }
 
-/** Enumerate curated and imported Desktop-local wakeword models. */
+/**
+ * Enumerate curated and imported Desktop-local wakeword models. Each
+ * descriptor carries `overlaps`: ids of models that can fire on the same words.
+ */
 export async function listWakewordModels() {
   const models = await callBridge('listWakewordModels');
-  return Array.isArray(models) ? models : [];
+  if (!Array.isArray(models)) return [];
+  return models
+    .filter((model) => text(model?.id))
+    .map((model) => ({
+      ...model,
+      label: text(model.label) ?? model.id,
+      overlaps: Array.isArray(model.overlaps)
+        ? model.overlaps.filter((id) => typeof id === 'string')
+        : [],
+    }));
 }
 
 /** Validate and install one user-selected TFLite wakeword model. */
@@ -206,81 +464,54 @@ export async function deleteWakewordModel(modelId) {
   return callBridge('deleteWakewordModel', modelId);
 }
 
-/** Retry the enabled worker after an actionable error. */
-export async function retryWakeword() {
-  return callBridge('retryWakeword');
+/** Restart Voice listening after an actionable error. */
+export async function retryVoice() {
+  return callBridge('retryVoice');
 }
 
-/** Stop the active voice recording and send what was captured so far. */
-export async function stopWakewordRecording() {
-  return callBridge('stopWakewordRecording');
-}
-
-/** Enter transient detector calibration without recording or sending commands. */
-export async function startWakewordCalibration() {
-  return callBridge('startWakewordCalibration');
-}
-
-/** Leave detector calibration and resume normal wakeword activation. */
-export async function stopWakewordCalibration() {
-  return callBridge('stopWakewordCalibration');
-}
-
-/** Restart guided calibration from ambient-noise measurement. */
-export async function restartWakewordCalibration() {
-  return callBridge('restartWakewordCalibration');
-}
-
-/** Retry calibration for one specific model, discarding only its samples. */
-export async function retryWakewordModelCalibration(modelId) {
-  return callBridge('retryWakewordModelCalibration', modelId);
+/** Stop the active command recording and send what was captured so far. */
+export async function stopVoiceRecording() {
+  return callBridge('stopVoiceRecording');
 }
 
 /**
- * Tell the Desktop whether a Live voice call holds the microphone, so it
- * pauses wakeword listening meanwhile.
+ * Calibrate one active phrase: commands pause while the Desktop measures room
+ * noise and repetitions. Resolves the resulting status snapshot.
+ */
+export async function startVoiceCalibration(modelId) {
+  return requireVoiceStatus(await callBridge('startVoiceCalibration', modelId));
+}
+
+/** Discard the measurements and restart calibration from room noise. */
+export async function restartVoiceCalibration() {
+  return requireVoiceStatus(await callBridge('restartVoiceCalibration'));
+}
+
+/** Leave calibration without changing any sensitivity. */
+export async function stopVoiceCalibration() {
+  return requireVoiceStatus(await callBridge('stopVoiceCalibration'));
+}
+
+/**
+ * Receive the Voice status snapshots and events the Desktop pushes.
  *
- * Calls are serialized and only the latest value is sent, so a quick
- * start/stop can never leave the Desktop with a stale state. Rejects with the
- * bridge failure when the latest value could not be delivered.
+ * `handler` gets `{type: 'status', status}` or `{type: 'event', event}` with
+ * validated values; anything else is dropped. Returns a cleanup function.
  */
-export function setDesktopLiveVoiceActive(active) {
-  desiredLiveVoiceActive = active === true;
-  return syncDesktopLiveVoiceActive();
-}
-
-/**
- * Send this page's Live voice state to the Desktop unless it already has it.
- * A new page calls this once the bridge is discovered, which also ends a pause
- * left behind by a previous page.
- */
-export function syncDesktopLiveVoiceActive() {
-  liveVoiceActiveSync ??= (async () => {
-    // Yield first: the promise must be stored before this body can finish.
-    await null;
-    let failure = null;
-    try {
-      while (confirmedLiveVoiceActive !== desiredLiveVoiceActive) {
-        const active = desiredLiveVoiceActive;
-        try {
-          await withTimeout(
-            callBridge('setLiveVoiceActive', active),
-            LIVE_VOICE_SYNC_CALL_TIMEOUT_MS,
-          );
-          confirmedLiveVoiceActive = active;
-          failure = null;
-        } catch (error) {
-          confirmedLiveVoiceActive = null;
-          failure = error;
-          if (active === desiredLiveVoiceActive) break;
-        }
-      }
-    } finally {
-      liveVoiceActiveSync = null;
+export function onDesktopVoicePush(handler) {
+  if (typeof window === 'undefined') return () => {};
+  const listener = (domEvent) => {
+    const detail = domEvent?.detail;
+    if (detail?.type === 'status') {
+      const status = normalizeVoiceStatus(detail.status);
+      if (status) handler({ type: 'status', status });
+    } else if (detail?.type === 'event') {
+      const event = normalizeVoiceEvent(detail.event);
+      if (event) handler({ type: 'event', event });
     }
-    if (failure) throw failure;
-  })();
-  return liveVoiceActiveSync;
+  };
+  window.addEventListener(VOICE_PUSH_EVENT, listener);
+  return () => window.removeEventListener(VOICE_PUSH_EVENT, listener);
 }
 
 function withTimeout(promise, timeoutMs) {
@@ -295,74 +526,36 @@ function withTimeout(promise, timeoutMs) {
 }
 
 /**
- * Create the Desktop microphone lease for Live voice.
+ * Check whether this Desktop page may open the microphone for Live voice.
  *
- * `acquire()` resolves `null` when the call may open the microphone, after
- * asking the Desktop to pause wakeword listening, or a Live voice notice code
- * when it cannot: `desktop_restart_required` when this server is not a secure
- * context because it was added after the Desktop app started. Bridge failures
- * are logged and never block Live voice. Pair every successful acquisition
- * with one `release()`; wakeword resumes after the last holder releases.
+ * Resolves null when it may, or `desktop_restart_required` when the server
+ * is not a secure context because it was added after the Desktop app started.
+ * Bridge failures are logged and never block Live voice.
  */
-export function createDesktopLiveVoiceLease({
-  timeoutMs = LIVE_VOICE_LEASE_TIMEOUT_MS,
+export async function desktopMicrophoneAccess({
+  timeoutMs = MICROPHONE_ACCESS_TIMEOUT_MS,
 } = {}) {
-  async function capabilities() {
-    try {
-      if (!(await waitForDesktopBridge(timeoutMs))) return null;
-      return await withTimeout(getDesktopCapabilities(), timeoutMs);
-    } catch (error) {
-      console.warn('Desktop capabilities unavailable for Live voice', error);
-      return null;
-    }
+  if (typeof window === 'undefined' || window.isSecureContext !== false)
+    return null;
+  let capabilities = null;
+  try {
+    if (await waitForDesktopBridge(timeoutMs))
+      capabilities = await withTimeout(getDesktopCapabilities(), timeoutMs);
+  } catch (error) {
+    console.warn('Desktop capabilities unavailable for Live voice', error);
   }
-
-  // Whether this lease asked the Desktop to pause, so release resumes it.
-  let paused = false;
-  let holders = 0;
-
-  return {
-    async acquire() {
-      const caps = await capabilities();
-      if (window.isSecureContext === false) {
-        // Desktop makes every server it knows at startup a secure context.
-        if (!caps?.secureOrigins.includes(window.location.origin))
-          return 'desktop_restart_required';
-        console.warn(
-          'Desktop marked this server secure, but the page is not a secure context',
-        );
-      }
-      // A cancelled start can finish acquiring after a newer call has started.
-      // Its release must not resume wakeword while that call holds the lease.
-      holders += 1;
-      if (!caps?.liveWakeword) return null;
-      paused = true;
-      try {
-        await withTimeout(setDesktopLiveVoiceActive(true), timeoutMs);
-      } catch (error) {
-        console.warn('Desktop could not pause wakeword for Live voice', error);
-      }
-      return null;
-    },
-    release() {
-      if (holders === 0) return;
-      holders -= 1;
-      if (holders > 0) return;
-      if (!paused) return;
-      paused = false;
-      setDesktopLiveVoiceActive(false).catch((error) => {
-        console.warn(
-          'Desktop could not resume wakeword after Live voice',
-          error,
-        );
-      });
-    },
-  };
+  // Desktop makes every server it knows at startup a secure context.
+  if (!capabilities?.secureOrigins.includes(window.location.origin))
+    return 'desktop_restart_required';
+  console.warn(
+    'Desktop marked this server secure, but the page is not a secure context',
+  );
+  return null;
 }
 
 /**
- * Handle Live voice requests the Desktop pushes to this page (a wakeword
- * model with the Live voice action or the global hotkey).
+ * Handle Live voice requests the Desktop pushes to this page (a wake phrase
+ * with the Live voice action or the global hotkey).
  *
  * `handler({action, source})` receives `start` or `toggle` from `wakeword` or
  * `hotkey`; returning `false` reports the request as not handled. Returns a
@@ -398,13 +591,26 @@ export async function setDesktopLiveHotkey(changes) {
   return callBridge('setLiveHotkey', changes);
 }
 
+const VOICE_CUES = Object.freeze({
+  detected: [760],
+  sent: [660, 880],
+  cancelled: [520, 360],
+  no_speech: [360],
+  transcription_failed: [320, 260],
+  command_failed: [320, 260],
+  error: [260, 220],
+});
+
 /**
- * Play a short non-verbal Voice cue inside the Desktop WebView.
+ * Play the short non-verbal cue of one Voice event kind inside the Desktop
+ * WebView; kinds without a cue play nothing.
  * Failures are deliberately silent: visual state remains authoritative when
  * the host has no output device or its autoplay policy suspends Web Audio.
  */
-export async function playWakewordCue(state) {
+export async function playVoiceCue(kind) {
   if (typeof window === 'undefined') return;
+  const frequencies = VOICE_CUES[kind];
+  if (!frequencies) return;
   const AudioContextClass = window.AudioContext || window.webkitAudioContext;
   if (!AudioContextClass) return;
 
@@ -413,16 +619,6 @@ export async function playWakewordCue(state) {
     if (voiceAudioContext.state === 'suspended') {
       await voiceAudioContext.resume();
     }
-    const patterns = {
-      wakeword_detected: [760],
-      sent: [660, 880],
-      cancelled: [520, 360],
-      no_speech: [360],
-      transcription_failed: [320, 260],
-      error: [260, 220],
-    };
-    const frequencies = patterns[state];
-    if (!frequencies) return;
     const start = voiceAudioContext.currentTime;
     frequencies.forEach((frequency, index) => {
       const oscillator = voiceAudioContext.createOscillator();
@@ -441,56 +637,4 @@ export async function playWakewordCue(state) {
   } catch {
     // Visual status remains available.
   }
-}
-
-/**
- * Start a polling subscription for wakeword status changes.
- *
- * Calls `callback(status)` on every poll with the full status object.
- * Returns a cleanup function that stops future polls.
- *
- * @param {Function} callback — receives the full wakeword status object.
- * @param {number} [intervalMs=500]
- * @returns {Function} cleanup — call to stop polling.
- */
-export function onWakewordStatusChange(
-  callback,
-  intervalMs = POLL_INTERVAL_MS,
-) {
-  if (!isDesktop()) {
-    return () => {};
-  }
-
-  let lastStatusKey = '';
-  let running = true;
-  let timeoutId = null;
-
-  const poll = async () => {
-    if (!running) return;
-    try {
-      const status = await getWakewordStatus();
-      const statusKey = JSON.stringify(status);
-      if (running && statusKey !== lastStatusKey) {
-        lastStatusKey = statusKey;
-        callback(status);
-      }
-    } catch {
-      // Bridge call failed, silently skip this poll cycle
-    } finally {
-      if (running) {
-        timeoutId = setTimeout(poll, intervalMs);
-      }
-    }
-  };
-
-  // Immediate first poll
-  void poll();
-
-  return () => {
-    running = false;
-    if (timeoutId !== null) {
-      clearTimeout(timeoutId);
-      timeoutId = null;
-    }
-  };
 }

@@ -2,33 +2,162 @@ import { createToastState, dismissToast, addToast } from '$lib/toastState.js';
 import { SvelteMap } from 'svelte/reactivity';
 import { CONNECTION_STATUS_DISCONNECTED } from '$lib/connectionState.js';
 import {
-  stopWakewordRecording,
-  playWakewordCue,
-  isDesktopAccessor,
+  disabledDesktopCapabilities,
   getDesktopCapabilities,
-  onWakewordStatusChange,
-  syncDesktopLiveVoiceActive,
+  getVoiceStatus,
+  isDesktopAccessor,
+  onDesktopVoicePush,
+  playVoiceCue,
+  stopVoiceRecording,
+  supportsDesktopVoice,
   waitForDesktopBridge,
 } from '$lib/desktopBridge.js';
 import { t } from '$lib/i18n.js';
 import { onMount } from 'svelte';
+import {
+  commandFailureMessage,
+  errorMessage,
+} from '../components/voice/voiceLabels.js';
+
+const TOAST_AUTO_DISMISS_MS = 3200;
+const DESKTOP_BRIDGE_PROBE_TIMEOUT_MS = 1000;
+const DESKTOP_CAPABILITY_RETRY_MS = 1000;
+const VOICE_STATUS_RETRY_MS = 1000;
+
+/**
+ * The page's copy of the Desktop Voice status, kept current from pushes.
+ *
+ * Status snapshots and events share one increasing sequence. A snapshot
+ * applies unless something newer was already seen; an event runs once, in
+ * order, and only when it happened after the first snapshot (older events
+ * belong to before this page). An event that skips a sequence number means
+ * pushes were missed: the snapshot is read again; missed events are not
+ * replayed. Recording events update `recording` at once, so the indicator and
+ * the Live voice hold do not wait for the next status push.
+ */
+function createDesktopVoiceSync({ onEvent, onFirstStatus }) {
+  let status = $state(null);
+  // Highest sequence of an applied snapshot or processed event; null before
+  // the first snapshot.
+  let sequence = null;
+  // Sequence of the last processed event.
+  let eventSequence = null;
+  let stopPushes = null;
+  let refreshing = null;
+  let refreshAgain = false;
+  let retryTimer = null;
+  let stopped = true;
+
+  function adopt(snapshot) {
+    if (stopped || !snapshot) return false;
+    if (sequence !== null && snapshot.sequence < sequence) return false;
+    const first = sequence === null;
+    sequence = snapshot.sequence;
+    if (first) eventSequence = snapshot.sequence;
+    status = snapshot;
+    if (first) onFirstStatus(snapshot);
+    return true;
+  }
+
+  function patchRecording(event) {
+    if (!status || event.sequence <= status.sequence) return;
+    if (event.kind === 'recording_started' && event.command_id) {
+      status = {
+        ...status,
+        recording: {
+          command_id: event.command_id,
+          model_id: event.model_id,
+          agent_id: event.agent_id,
+        },
+      };
+    } else if (
+      event.kind === 'recording_ended' &&
+      status.recording &&
+      (!event.command_id || event.command_id === status.recording.command_id)
+    ) {
+      status = { ...status, recording: null };
+    }
+  }
+
+  function handleEvent(event) {
+    if (sequence === null || event.sequence <= eventSequence) return;
+    const gap = event.sequence > sequence + 1;
+    eventSequence = event.sequence;
+    sequence = Math.max(sequence, event.sequence);
+    patchRecording(event);
+    onEvent(event);
+    if (gap) void refresh();
+  }
+
+  function scheduleRetry() {
+    if (stopped || retryTimer !== null) return;
+    retryTimer = setTimeout(() => {
+      retryTimer = null;
+      void refresh();
+    }, VOICE_STATUS_RETRY_MS);
+  }
+
+  /** Read the snapshot again; resolves the current status afterwards. */
+  function refresh() {
+    if (stopped) return Promise.resolve(status);
+    if (refreshing) {
+      refreshAgain = true;
+      return refreshing;
+    }
+    refreshing = (async () => {
+      try {
+        do {
+          refreshAgain = false;
+          try {
+            adopt(await getVoiceStatus());
+          } catch {
+            // Keep the last snapshot; the first one is retried until it loads.
+            if (sequence === null) scheduleRetry();
+          }
+        } while (refreshAgain && !stopped);
+      } finally {
+        refreshing = null;
+      }
+      return status;
+    })();
+    return refreshing;
+  }
+
+  function start() {
+    if (!stopped) return;
+    stopped = false;
+    stopPushes = onDesktopVoicePush((push) => {
+      if (push.type === 'status') adopt(push.status);
+      else handleEvent(push.event);
+    });
+    void refresh();
+  }
+
+  function stop() {
+    stopped = true;
+    stopPushes?.();
+    stopPushes = null;
+    if (retryTimer !== null) {
+      clearTimeout(retryTimer);
+      retryTimer = null;
+    }
+  }
+
+  return {
+    get status() {
+      return status;
+    },
+    adopt,
+    refresh,
+    start,
+    stop,
+  };
+}
 
 export function createAppDesktop(context) {
-  const TOAST_AUTO_DISMISS_MS = 3200;
-
-  const DESKTOP_BRIDGE_PROBE_TIMEOUT_MS = 1000;
-
-  const DESKTOP_CAPABILITY_RETRY_MS = 1000;
-
   let toastState = $state(createToastState());
 
   let desktopCapabilities = $state(null);
-
-  let wakewordStatus = $state({ enabled: false, state: 'off' });
-
-  let cleanupWakewordPoll = null;
-
-  let lastWakewordEventSequence = null;
 
   const toastDismissTimers = new SvelteMap();
 
@@ -87,130 +216,110 @@ export function createAppDesktop(context) {
     toastDismissTimers.set(id, timer);
   };
 
-  const handleStopWakewordRecording = () => {
-    // Fire-and-forget: the status poll reconciles the indicator, and a failed
+  const handleStopVoiceRecording = () => {
+    // Fire-and-forget: status pushes reconcile the indicator, and a failed
     // bridge call leaves the recording running rather than losing it.
-    void stopWakewordRecording().catch(() => {});
+    void stopVoiceRecording().catch(() => {});
   };
 
-  const wakewordFailureMessage = (errorCode) => {
-    if (errorCode === 'speech_to_text_unconfigured') {
-      return t(
-        'settings.voice.error.speechToTextUnconfigured',
-        'Configure a Speech-to-text Model under Settings → Models before enabling wakeword listening.',
-      );
-    }
-    if (errorCode === 'speech_to_text_unavailable') {
-      return t(
-        'settings.voice.error.speechToTextUnavailable',
-        'The configured Speech-to-text Model is not currently usable. Check its Provider connection or choose another Model under Settings → Models.',
-      );
-    }
-    if (errorCode === 'server_unreachable') {
-      return t(
-        'settings.voice.error.serverUnreachable',
-        'Voice could not reach the active server. Check the Desktop connection and try again.',
-      );
-    }
-    return t(
-      'voice.toast.errorMessage',
-      'Open Voice settings for details. The failure was written to the Desktop log.',
-    );
+  const showVoiceErrorToast = (errorCode) => {
+    showToast({
+      title: t('settings.voice.errorTitle', 'Voice needs attention'),
+      message: errorMessage(
+        errorCode,
+        t(
+          'voice.toast.errorMessage',
+          'Open Voice settings for details. The failure was written to the Desktop log.',
+        ),
+      ),
+      variant: 'error',
+    });
   };
 
-  const showWakewordEventToast = (event) => {
-    if (event?.state === 'sent') {
-      showToast({
-        title: t('voice.toast.sentTitle', 'Voice command sent'),
-        variant: 'success',
-      });
-      return;
-    }
-    if (event?.state === 'no_speech') {
-      showToast({
-        title: t('voice.toast.noSpeechTitle', 'No speech heard'),
-        message: t(
-          'voice.toast.noSpeechMessage',
-          'No command followed the wakeword. Try again and speak after the cue.',
-        ),
-        variant: 'warn',
-      });
-      return;
-    }
-    if (event?.state === 'transcription_failed') {
-      showToast({
-        title: t(
-          'voice.toast.transcriptionFailedTitle',
-          'Voice command could not be transcribed',
-        ),
-        message: t(
-          'voice.toast.transcriptionFailedMessage',
-          'Check the Speech-to-text Model and the Desktop log, then try again.',
-        ),
-        variant: 'error',
-      });
-      return;
-    }
-    if (event?.state === 'microphone_disconnected') {
-      showToast({
-        title: t(
-          'voice.toast.microphoneDisconnectedTitle',
-          'Microphone disconnected',
-        ),
-        message: t(
-          'voice.toast.microphoneDisconnectedMessage',
-          'Wakeword listening is paused. Reconnect the microphone and retry when you are ready.',
-        ),
-        variant: 'warn',
-      });
-      return;
-    }
-    if (event?.state === 'error') {
-      showToast({
-        title: t('settings.voice.errorTitle', 'Voice needs attention'),
-        message: wakewordFailureMessage(event.error_code),
-        variant: 'error',
-      });
-    }
-  };
-
-  const applyDesktopWakewordStatus = (status) => {
-    wakewordStatus = status;
-    const events = Array.isArray(status?.events) ? status.events : [];
-    const latestSequence = events.reduce(
-      (latest, event) =>
-        Number.isFinite(event?.sequence)
-          ? Math.max(latest, event.sequence)
-          : latest,
-      0,
-    );
-    if (lastWakewordEventSequence === null) {
-      // Do not replay sounds that happened before this WebUI mounted.
-      lastWakewordEventSequence = latestSequence;
-      // A fatal startup failure is still current, not historical feedback.
-      // Surface it even when the worker failed before the WebUI finished
-      // mounting (for example an enabled Desktop starting without STT).
-      if (status?.state === 'error') {
-        showWakewordEventToast({
-          state: 'error',
-          error_code: status.error_code,
+  // Feedback for one Voice event that happened while this page was open.
+  const handleVoiceEvent = (event) => {
+    void playVoiceCue(event.kind);
+    switch (event.kind) {
+      case 'sent':
+        showToast({
+          title: t('voice.toast.sentTitle', 'Voice command sent'),
+          variant: 'success',
         });
-      }
-      return;
+        break;
+      case 'no_speech':
+        showToast({
+          title: t('voice.toast.noSpeechTitle', 'No speech heard'),
+          message: t(
+            'voice.toast.noSpeechMessage',
+            'No command followed the wake phrase. Try again and speak after the cue.',
+          ),
+          variant: 'warn',
+        });
+        break;
+      case 'transcription_failed':
+        showToast({
+          title: t(
+            'voice.toast.transcriptionFailedTitle',
+            'Voice command could not be transcribed',
+          ),
+          message: t(
+            'voice.toast.transcriptionFailedMessage',
+            'Check the Speech-to-text Model and the Desktop log, then try again.',
+          ),
+          variant: 'error',
+        });
+        break;
+      case 'command_failed':
+        showToast({
+          title: t('voice.toast.commandFailedTitle', 'Voice command not sent'),
+          message: commandFailureMessage(event.error_code),
+          variant: 'error',
+        });
+        break;
+      case 'microphone_disconnected':
+        showToast({
+          title: t(
+            'voice.toast.microphoneDisconnectedTitle',
+            'Microphone disconnected',
+          ),
+          message: t(
+            'voice.toast.microphoneDisconnectedMessage',
+            'Wake phrases are not heard until the microphone is back. The Desktop keeps trying to reconnect it.',
+          ),
+          variant: 'warn',
+          autoDismiss: true,
+        });
+        break;
+      case 'error':
+        showVoiceErrorToast(event.error_code);
+        break;
+      default:
+        break;
     }
-    for (const event of events) {
-      if (
-        Number.isFinite(event?.sequence) &&
-        event.sequence > lastWakewordEventSequence
-      ) {
-        void playWakewordCue(event.state);
-        showWakewordEventToast(event);
-      }
-    }
-    lastWakewordEventSequence = Math.max(
-      lastWakewordEventSequence,
-      latestSequence,
-    );
+  };
+
+  const voice = createDesktopVoiceSync({
+    onEvent: handleVoiceEvent,
+    // A fatal startup failure is still current, not historical feedback:
+    // surface it even when Voice failed before this page finished mounting.
+    onFirstStatus: (status) => {
+      if (status.state === 'error') showVoiceErrorToast(status.error_code);
+    },
+  });
+
+  const voiceAvailable = $derived(supportsDesktopVoice(desktopCapabilities));
+
+  // The Voice owner the settings panel edits against: the current snapshot,
+  // `adopt(snapshot)` for snapshots a bridge call returned, and `refresh()`.
+  const desktopVoice = {
+    get available() {
+      return voiceAvailable;
+    },
+    get status() {
+      return voiceAvailable ? voice.status : null;
+    },
+    adopt: (snapshot) => voice.adopt(snapshot),
+    refresh: () => voice.refresh(),
   };
 
   onMount(() => {
@@ -237,16 +346,7 @@ export function createAppDesktop(context) {
         const caps = await getDesktopCapabilities();
         if (cancelled) return;
         desktopCapabilities = caps;
-        if (caps?.liveWakeword) {
-          // A new page holds no Live voice call yet: this ends a wakeword
-          // pause a replaced or crashed page may have left behind.
-          void syncDesktopLiveVoiceActive().catch(() => {});
-        }
-        if (caps?.wakeword && !cleanupWakewordPoll) {
-          cleanupWakewordPoll = onWakewordStatusChange((status) => {
-            applyDesktopWakewordStatus(status);
-          });
-        }
+        if (supportsDesktopVoice(caps)) voice.start();
       } catch {
         scheduleDesktopCapabilityRetry();
       }
@@ -257,14 +357,7 @@ export function createAppDesktop(context) {
     if (isDesktopAccessor()) {
       void initializeDesktopCapabilities();
     } else {
-      desktopCapabilities = {
-        wakeword: false,
-        serverSelection: false,
-        contextMenu: false,
-        liveWakeword: false,
-        liveHotkey: false,
-        secureOrigins: [],
-      };
+      desktopCapabilities = disabledDesktopCapabilities();
     }
 
     return () => {
@@ -274,10 +367,7 @@ export function createAppDesktop(context) {
         clearTimeout(desktopCapabilityRetryTimer);
         desktopCapabilityRetryTimer = null;
       }
-      if (cleanupWakewordPoll) {
-        cleanupWakewordPoll();
-        cleanupWakewordPoll = null;
-      }
+      voice.stop();
     };
   });
   return {
@@ -287,8 +377,14 @@ export function createAppDesktop(context) {
     get desktopCapabilities() {
       return desktopCapabilities;
     },
-    get wakewordStatus() {
-      return wakewordStatus;
+    get desktopVoice() {
+      return desktopVoice;
+    },
+    get voiceAvailable() {
+      return voiceAvailable;
+    },
+    get voiceStatus() {
+      return desktopVoice.status;
     },
     get dismissAppToast() {
       return dismissAppToast;
@@ -296,8 +392,8 @@ export function createAppDesktop(context) {
     get showToast() {
       return showToast;
     },
-    get handleStopWakewordRecording() {
-      return handleStopWakewordRecording;
+    get handleStopVoiceRecording() {
+      return handleStopVoiceRecording;
     },
   };
 }

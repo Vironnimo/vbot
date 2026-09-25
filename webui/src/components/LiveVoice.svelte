@@ -3,16 +3,22 @@
   import { tooltip } from '$lib/tooltip.js';
   import { t } from '$lib/i18n.js';
   import {
+    desktopMicrophoneAccess,
     isDesktopAccessor,
-    createDesktopLiveVoiceLease,
     onDesktopLiveRequest,
   } from '$lib/desktopBridge.js';
   import { createLiveVoice, createLiveVoiceState } from '$lib/liveVoice.js';
+  import { liveWakePhrases } from '$lib/wakewordSettings.js';
+
+  // The hold reason while Desktop Voice records a spoken command.
+  const VOICE_COMMAND_HOLD = 'wakeword';
 
   let {
     configured = false,
     uiActions = {},
     serverUnavailable = false,
+    // The Desktop Voice status snapshot, or null without Desktop Voice.
+    voiceStatus = null,
     onToast = () => {},
   } = $props();
 
@@ -141,15 +147,16 @@
   }
 
   onMount(() => {
-    // In the Desktop app, wakeword listening pauses while a call holds the
-    // microphone, and a wakeword model or the global shortcut can start Live.
+    // In the Desktop app, a wake phrase or the global shortcut can start Live,
+    // and the call learns which wake phrases address other Agents.
     const desktop = isDesktopAccessor();
     controller = createLiveVoice({
       state: voice,
       audio: audioElement,
       uiActions,
       onNotice: showNotice,
-      microphoneLease: desktop ? createDesktopLiveVoiceLease() : null,
+      checkMicrophoneAccess: desktop ? () => desktopMicrophoneAccess() : null,
+      wakePhrases: () => liveWakePhrases(voiceStatus),
     });
     const stopDesktopRequests = desktop
       ? onDesktopLiveRequest(handleDesktopRequest)
@@ -160,8 +167,8 @@
     };
   });
 
-  // `start` (wakeword) starts a call when none runs; `toggle` (shortcut) also
-  // stops a running one.
+  // `start` starts a call when none runs; `toggle` also stops a running one.
+  // Both come from a Live voice wake phrase or the global shortcut.
   function handleDesktopRequest({ action }) {
     if (serverUnavailable) return false;
     if (!configured) {
@@ -181,6 +188,21 @@
       });
   });
 
+  // While Desktop Voice records a spoken command, the running call is held:
+  // the command does not reach the Live voice Model and the assistant stays
+  // silent. A snapshot without a recording releases it, also after a missed
+  // event.
+  $effect(() => {
+    const recording = Boolean(voiceStatus?.recording);
+    const active = voice.phase !== 'off' && voice.phase !== 'closing';
+    untrack(() => {
+      if (!controller) return;
+      const holding = controller.held(VOICE_COMMAND_HOLD);
+      if (recording && active && !holding) controller.hold(VOICE_COMMAND_HOLD);
+      else if (!recording && holding) controller.release(VOICE_COMMAND_HOLD);
+    });
+  });
+
   async function startVoice() {
     if (!configured || serverUnavailable) return;
     await controller.start();
@@ -198,7 +220,9 @@
       ? t('live.state.connecting', 'Connecting…')
       : voice.phase === 'closing'
         ? t('live.state.closing', 'Stopping…')
-        : (caption?.text ?? t('live.state.listening', 'Listening…')),
+        : voice.held
+          ? t('live.state.held', 'Paused for a voice command')
+          : (caption?.text ?? t('live.state.listening', 'Listening…')),
   );
 </script>
 
@@ -250,7 +274,9 @@
     <div class="sidebar-footer__row live-voice__caption-row">
       <span
         class="live-voice__caption"
-        data-role={voice.phase === 'live' && caption ? caption.role : 'status'}
+        data-role={voice.phase === 'live' && caption && !voice.held
+          ? caption.role
+          : 'status'}
         use:tooltip={captionText}>{captionText}</span
       >
     </div>
