@@ -28,7 +28,8 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   patch body. A single edit travels as an `edits` item and empty `content` as an
   empty Add File patch, because shared contract normalization drops empty
   unadvertised root values (`_carry_empty_text`). Remark fields (`explanation`,
-  `instructions`, ...) are dropped. Two kinds of change in one call, a `path` that
+  `instructions`, `description`, Roo's `line_count`; any spelling) are dropped.
+  Two kinds of change in one call, a `path` that
   contradicts the patch's file, incomplete old/new pairs and Cursor `code_edit`
   (placeholder comments leave the change open) fail before any effect.
   `old_string` replacements match precisely (no approximate strategies); an empty
