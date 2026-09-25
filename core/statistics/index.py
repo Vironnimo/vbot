@@ -1,17 +1,21 @@
 """Disposable typed SQLite read model for Statistics-relevant Session facts.
 
-One :class:`StatisticsIndex` owns the index file of a data directory. Every
-read reconciles canonical Sessions into typed tables and then hands one SQL
-connection to a consumer that aggregates in SQL; no projection is hydrated or
-kept in memory between reads. Canonical history is only touched for Sessions
-whose generation or revision changed, and an unchanged index is read without
-any write. Each Session contributes its own audit only: a fork's inherited
-history belongs to the Session that wrote it.
+One :class:`StatisticsIndex` owns the index database of a data directory, a
+disposable projection opened through the shared kernel (``core/database``),
+which also owns its identity, projection version, journal policy and rebuild
+on open. Every read reconciles canonical Sessions into typed tables and then
+hands one SQL connection to a consumer that aggregates in SQL; no projection
+is hydrated or kept in memory between reads. Canonical history is only touched
+for Sessions whose generation or revision changed, and an unchanged index is
+read without any write. Each Session contributes its own audit only: a fork's
+inherited history belongs to the Session that wrote it, so shared history
+counts once however many forks show it.
 
 Failure policy: a busy or locked index raises :class:`StatisticsUnavailableError`
-so the caller can retry; a corrupt or inconsistent index is discarded and
-rebuilt once; any other index failure computes the read from a transient
-in-memory projection with the same code, so Statistics stay available.
+so the caller can retry; a damaged or inconsistent index is discarded and
+rebuilt once; an index that cannot be used otherwise (or fails again after the
+rebuild) computes the read from a transient in-memory projection with the same
+code, so Statistics stay available.
 """
 
 from __future__ import annotations
@@ -24,7 +28,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, TypeVar
 
-from core.database import required_journal_mode
+from core.database import (
+    APPLICATION_IDS,
+    DISPOSABLE,
+    DatabaseError,
+    DatabaseSpec,
+    DisposableDatabase,
+    projection_failure,
+)
 from core.sessions import (
     ChatSession,
     SessionAddress,
@@ -44,26 +55,11 @@ _LOGGER = get_logger("statistics")
 _INDEX_DIRECTORY = "statistics"
 _INDEX_FILENAME = "session-statistics.sqlite"
 _GLOBAL_SCOPE = ""
-# v6 replaced JSON message projections with typed, indexed fact tables; v7
-# indexes each Session's own audit, which never contains inherited fork history.
-# Older disposable projections are dropped and rebuilt from canonical Sessions.
-_SCHEMA_VERSION = 7
-_SQLITE_BUSY_TIMEOUT_MS = 1000
-_SQLITE_CACHE_KIB = 32 * 1024
-_SQLITE_PRIMARY_CODE_MASK = 0xFF
-_BUSY_CODES = frozenset({sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED})
-_REBUILD_CODES = frozenset(
-    {
-        sqlite3.SQLITE_CORRUPT,
-        sqlite3.SQLITE_FORMAT,
-        sqlite3.SQLITE_NOTADB,
-        # Missing tables or columns: the disposable schema is inconsistent.
-        sqlite3.SQLITE_ERROR,
-        sqlite3.SQLITE_CONSTRAINT,
-        sqlite3.SQLITE_SCHEMA,
-        sqlite3.SQLITE_MISMATCH,
-    }
-)
+# The kernel discards and rebuilds an index built for another projection
+# version. Bump it when the fact tables or the meaning of their rows change.
+_PROJECTION_VERSION = 1
+# A busy index fails the read quickly as retryable instead of queueing it.
+_WRITE_PATIENCE_S = 1.0
 
 SESSION_FACT_TABLES = (
     "stat_records",
@@ -194,22 +190,55 @@ CREATE TABLE stat_pricing (
 ) WITHOUT ROWID;
 """
 
-_INSERT_ROWS = {
-    "records": "INSERT INTO stat_records VALUES (?, ?, ?, ?, ?, ?)",
+_INSERT_COLUMNS = {
+    "records": ("stat_records", "session_key, seq, role, timestamp, instant, run_id"),
     "calls": (
-        "INSERT INTO stat_calls VALUES ("
-        "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        "stat_calls",
+        "session_key, seq, kind, instant, day, model_key, has_model, visible, has_usage, "
+        "input_tokens, output_tokens, reasoning_tokens, cache_read_tokens, cache_write_tokens, "
+        "input_estimated, output_estimated, has_cache, reasoning_present, cache_read_present, "
+        "cache_write_present, price_estimated, reported_cost_usd, retrospective, priced, "
+        "cost_usd, cost_source, cost_json",
     ),
-    "tools": "INSERT INTO stat_tools VALUES (?, ?, ?, ?, ?, ?, ?)",
-    "errors": "INSERT INTO stat_errors VALUES (?, ?, ?, ?, ?)",
-    "checkpoints": "INSERT INTO stat_checkpoints VALUES (?, ?, ?, ?, ?, ?, ?)",
-    "runs": "INSERT INTO stat_runs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-    "skills": "INSERT INTO stat_skills VALUES (?, ?, ?)",
+    "tools": ("stat_tools", "session_key, seq, instant, name, outcome, error_code, duration_ms"),
+    "errors": ("stat_errors", "session_key, seq, instant, day, kind"),
+    "checkpoints": (
+        "stat_checkpoints",
+        "session_key, seq, instant, strategy, context_before, context_after, duration_ms",
+    ),
+    "runs": (
+        "stat_runs",
+        "session_key, seq, instant, day, run_id, status, duration_ms, timing_started_at, "
+        "timing_completed_at, activity_start, activity_end",
+    ),
+    "skills": ("stat_skills", "session_key, seq, name"),
+}
+_INSERT_ROWS = {
+    name: (
+        f"INSERT INTO {table} ({columns}) "
+        f"VALUES ({', '.join('?' for _column in columns.split(','))})"
+    )
+    for name, (table, columns) in _INSERT_COLUMNS.items()
 }
 
 
-class StatisticsIndexError(RuntimeError):
-    """The disposable Statistics index is internally inconsistent."""
+def _prepare_connection(connection: sqlite3.Connection) -> None:
+    # Aggregation builds temporary tables; keep them off the disk.
+    connection.execute("PRAGMA temp_store = MEMORY")
+
+
+def statistics_database_spec(path: Path) -> DatabaseSpec:
+    """Declare the disposable Statistics index at ``path``."""
+    return DatabaseSpec(
+        name="statistics",
+        path=path,
+        profile=DISPOSABLE,
+        application_id=APPLICATION_IDS["statistics"],
+        format_generation=1,
+        schema_sql=_SCHEMA,
+        projection_version=_PROJECTION_VERSION,
+        connection_setup=_prepare_connection,
+    )
 
 
 class StatisticsUnavailableError(VBotError):
@@ -285,11 +314,12 @@ class _SourceFailureError(Exception):
 
 
 class StatisticsIndex:
-    """Own one disposable typed Statistics index file and its reconciliation."""
+    """Own one disposable typed Statistics index and its reconciliation."""
 
     def __init__(self, data_dir: Path) -> None:
         self.data_dir = Path(data_dir)
         self.index_path = self.data_dir / _INDEX_DIRECTORY / _INDEX_FILENAME
+        self._database = DisposableDatabase(statistics_database_spec(self.index_path))
         self._lock = threading.RLock()
 
     def read(
@@ -311,13 +341,15 @@ class StatisticsIndex:
                 for attempt in range(2):
                     try:
                         return self._read_file(sessions, scopes, consume, prune=prune)
-                    except (sqlite3.Error, StatisticsIndexError, OSError) as error:
-                        disposition = _failure_disposition(error)
-                        if disposition == "busy":
+                    except Exception as error:
+                        failure = projection_failure(error)
+                        if failure is None:
+                            raise
+                        if failure == "busy":
                             raise StatisticsUnavailableError(
                                 "Statistics are busy; retry shortly"
                             ) from error
-                        if disposition != "rebuild" or attempt:
+                        if failure == "unavailable" or attempt:
                             _LOGGER.warning(
                                 "Statistics index unavailable; using a transient projection: %s",
                                 error,
@@ -325,8 +357,8 @@ class StatisticsIndex:
                             break
                         _LOGGER.warning("Statistics index is inconsistent; rebuilding: %s", error)
                         try:
-                            self._discard_files()
-                        except OSError as discard_error:
+                            self._database.discard()
+                        except DatabaseError as discard_error:
                             _LOGGER.warning(
                                 "Could not discard the Statistics index: %s", discard_error
                             )
@@ -336,18 +368,14 @@ class StatisticsIndex:
                 raise failure.error from failure.error.__cause__
 
     def discard(self) -> None:
-        """Delete the disposable database and its SQLite sidecars."""
+        """Close and delete the disposable database with its SQLite sidecars."""
         with self._lock:
-            self._discard_files()
+            self._database.discard()
 
-    def _discard_files(self) -> None:
-        for path in (
-            self.index_path,
-            Path(f"{self.index_path}-wal"),
-            Path(f"{self.index_path}-shm"),
-            Path(f"{self.index_path}-journal"),
-        ):
-            path.unlink(missing_ok=True)
+    def close(self) -> None:
+        """Release the index database; later reads use a transient projection."""
+        with self._lock:
+            self._database.close()
 
     def _read_file(
         self,
@@ -357,9 +385,18 @@ class StatisticsIndex:
         *,
         prune: bool,
     ) -> _Result:
-        self.index_path.parent.mkdir(parents=True, exist_ok=True)
-        with closing(self._connect()) as connection:
-            return _read(connection, sessions, scopes, consume, prune=prune)
+        database = self._database.get()
+        indexed = database.write(
+            lambda connection: _reconcile(connection, sessions, scopes, prune=prune),
+            patience_s=_WRITE_PATIENCE_S,
+        )
+        # Aggregation builds temporary tables, which read-only pooled readers
+        # refuse, so the consumer runs on the writer too; its transaction
+        # changes no index row.
+        return database.write(
+            lambda connection: _consume(connection, indexed, consume),
+            patience_s=_WRITE_PATIENCE_S,
+        )
 
     def _read_memory(
         self,
@@ -370,73 +407,39 @@ class StatisticsIndex:
         prune: bool,
     ) -> _Result:
         with closing(sqlite3.connect(":memory:", isolation_level=None)) as connection:
-            connection.execute("PRAGMA temp_store = MEMORY")
-            return _read(connection, sessions, scopes, consume, prune=prune)
-
-    def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(
-            self.index_path,
-            timeout=_SQLITE_BUSY_TIMEOUT_MS / 1000,
-            isolation_level=None,
-        )
-        try:
-            connection.execute(f"PRAGMA busy_timeout = {_SQLITE_BUSY_TIMEOUT_MS}")
-            journal_mode = required_journal_mode(sqlite3.sqlite_version_info)
-            connection.execute(f"PRAGMA journal_mode = {journal_mode.upper()}")
-            connection.execute("PRAGMA synchronous = NORMAL")
-            connection.execute("PRAGMA temp_store = MEMORY")
-            connection.execute(f"PRAGMA cache_size = -{_SQLITE_CACHE_KIB}")
-            return connection
-        except Exception:
-            connection.close()
-            raise
+            connection.row_factory = sqlite3.Row
+            _prepare_connection(connection)
+            connection.executescript(_SCHEMA)
+            with _transaction(connection, immediate=True):
+                indexed = _reconcile(connection, sessions, scopes, prune=prune)
+            with _transaction(connection):
+                return _consume(connection, indexed, consume)
 
 
-def _failure_disposition(error: Exception) -> str:
-    if isinstance(error, StatisticsIndexError):
-        return "rebuild"
-    if isinstance(error, sqlite3.ProgrammingError | sqlite3.InterfaceError):
-        raise error
-    if isinstance(error, sqlite3.Error):
-        code = getattr(error, "sqlite_errorcode", None)
-        primary = None if code is None else code & _SQLITE_PRIMARY_CODE_MASK
-        if primary in _BUSY_CODES:
-            return "busy"
-        if primary in _REBUILD_CODES or isinstance(error, sqlite3.IntegrityError):
-            return "rebuild"
-    return "transient"
-
-
-def _read(
+def _consume(
     connection: sqlite3.Connection,
-    sessions: StatisticsSessionSource,
-    scopes: Sequence[StatisticsScope],
+    indexed: Mapping[tuple[str, str, str], IndexedSession],
     consume: Callable[[IndexView], _Result],
-    *,
-    prune: bool,
 ) -> _Result:
-    _ensure_schema(connection)
-    indexed = _reconcile(connection, sessions, scopes, prune=prune)
-    with _transaction(connection):
-        return consume(IndexView(connection, indexed))
+    """Run ``consume`` and drop its temporary tables before the transaction ends.
+
+    Temporary tables outlive a commit on the long-lived writer, and some shadow
+    the fact tables by name, so none may survive into the next read. A failed
+    consumer's rollback removes the ones it created.
+    """
+    _drop_temporary_tables(connection)
+    result = consume(IndexView(connection, indexed))
+    _drop_temporary_tables(connection)
+    return result
 
 
-def _ensure_schema(connection: sqlite3.Connection) -> None:
-    if int(connection.execute("PRAGMA user_version").fetchone()[0]) == _SCHEMA_VERSION:
-        return
-    with _transaction(connection, immediate=True):
-        tables = [
-            str(row[0])
-            for row in connection.execute(
-                "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
-            )
-        ]
-        for table in tables:
-            connection.execute(f'DROP TABLE IF EXISTS "{table}"')
-        for statement in _SCHEMA.split(";"):
-            if statement.strip():
-                connection.execute(statement)
-        connection.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
+def _drop_temporary_tables(connection: sqlite3.Connection) -> None:
+    names = [
+        str(row[0])
+        for row in connection.execute("SELECT name FROM temp.sqlite_master WHERE type = 'table'")
+    ]
+    for name in names:
+        connection.execute(f'DROP TABLE temp."{name}"')
 
 
 @contextmanager
@@ -458,7 +461,10 @@ def _reconcile(
     *,
     prune: bool,
 ) -> dict[tuple[str, str, str], IndexedSession]:
-    """Bring the index up to date, touching canonical history only for changes."""
+    """Bring the index up to date, touching canonical history only for changes.
+
+    Runs inside the caller's write transaction; an unchanged index writes nothing.
+    """
     # A Session listed by several scopes keeps its first position and its last
     # listed summary.
     listed: dict[tuple[str, str, str], tuple[SessionAddress, JsonObject]] = {}
@@ -499,38 +505,37 @@ def _reconcile(
     if not changed and not stale:
         return current
 
-    with _transaction(connection, immediate=True):
-        removed = False
-        for key, address, summary, version, row in changed:
-            try:
-                handle = _source(sessions.get, address)
-                indexed = _refresh(connection, handle, key, summary, version, row)
-            except SessionNotFoundError:
-                # The live generation vanished after the batched version read;
-                # a stale derived row is pruned below.
-                continue
-            # Replacing or extending an existing Session may retire priced Models.
-            removed = removed or row is not None
-            current[key] = indexed
-        if prune:
-            stale_keys = [row.session_key for key, row in stored.items() if key not in current]
-            if stale_keys:
-                _delete_facts(connection, stale_keys)
-                connection.executemany(
-                    "DELETE FROM stat_sessions WHERE session_key = ?",
-                    [(session_key,) for session_key in stale_keys],
-                )
-                removed = True
-        if removed:
-            connection.execute(
-                """
-                DELETE FROM stat_pricing
-                WHERE NOT EXISTS (
-                    SELECT 1 FROM stat_calls
-                    WHERE retrospective = 1 AND model_key = stat_pricing.model_key
-                )
-                """
+    removed = False
+    for key, address, summary, version, row in changed:
+        try:
+            handle = _source(sessions.get, address)
+            indexed = _refresh(connection, handle, key, summary, version, row)
+        except SessionNotFoundError:
+            # The live generation vanished after the batched version read;
+            # a stale derived row is pruned below.
+            continue
+        # Replacing or extending an existing Session may retire priced Models.
+        removed = removed or row is not None
+        current[key] = indexed
+    if prune:
+        stale_keys = [row.session_key for key, row in stored.items() if key not in current]
+        if stale_keys:
+            _delete_facts(connection, stale_keys)
+            connection.executemany(
+                "DELETE FROM stat_sessions WHERE session_key = ?",
+                [(session_key,) for session_key in stale_keys],
             )
+            removed = True
+    if removed:
+        connection.execute(
+            """
+            DELETE FROM stat_pricing
+            WHERE NOT EXISTS (
+                SELECT 1 FROM stat_calls
+                WHERE retrospective = 1 AND model_key = stat_pricing.model_key
+            )
+            """
+        )
     return current
 
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sqlite3
+from contextlib import closing
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -13,7 +14,7 @@ from typing import cast
 import pytest
 
 from core.chat.messages import ChatMessage, ToolCall
-from core.database import JOURNAL_MODE_DELETE
+from core.database import APPLICATION_IDS, DatabaseUnavailableError
 from core.models.pricing import TokenPricing
 from core.sessions import ChatSession, ChatSessionManager, SessionAddress
 from core.statistics import AgentDirectory, StatisticsService
@@ -29,24 +30,14 @@ from tests.core.sessions.history_fixtures import complete_run, seed_history
 BASE = datetime(2026, 8, 1, 12, 0, tzinfo=UTC)
 
 
-def test_index_uses_required_rollback_journal(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from core.statistics import index as statistics_index
+def test_index_is_a_kernel_disposable_projection(tmp_path: Path) -> None:
+    service, _manager, _session = _service(tmp_path)
+    service.report()
 
-    monkeypatch.setattr(
-        statistics_index, "required_journal_mode", lambda _version: JOURNAL_MODE_DELETE
-    )
-    index = StatisticsIndex(tmp_path)
-    index.index_path.parent.mkdir(parents=True)
-
-    connection = index._connect()
-    try:
-        mode = str(connection.execute("PRAGMA journal_mode").fetchone()[0]).lower()
-    finally:
-        connection.close()
-
-    assert mode == JOURNAL_MODE_DELETE
+    identity = _index_identity(tmp_path)
+    assert identity["application_id"] == APPLICATION_IDS["statistics"]
+    assert identity["database_name"] == "statistics"
+    assert identity["projection_version"] == "1"
 
 
 def test_discard_removes_rollback_journal(tmp_path: Path) -> None:
@@ -465,8 +456,77 @@ def test_corrupt_index_is_discarded_and_rebuilt_once(tmp_path: Path) -> None:
     report = service.report()
 
     assert report.overview.total_runs == 1
+    assert _index_identity(tmp_path)["database_name"] == "statistics"
     with sqlite3.connect(_index_path(tmp_path)) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 7
+        assert connection.execute("SELECT COUNT(*) FROM stat_sessions").fetchone()[0] == 1
+
+
+def test_projection_version_mismatch_discards_and_rebuilds_the_index(tmp_path: Path) -> None:
+    service, manager, _session = _service(tmp_path)
+    service.report()
+    service._index.close()
+    with closing(sqlite3.connect(_index_path(tmp_path))) as connection, connection:
+        connection.execute("UPDATE kernel_meta SET value = '0' WHERE key = 'projection_version'")
+        connection.execute("UPDATE stat_calls SET input_tokens = 42")
+
+    restarted = StatisticsService(manager, cast(AgentDirectory, _FakeAgents(["main"])))
+    report = restarted.report()
+
+    assert report.usage.totals.measured_input_tokens == 10
+    assert _index_identity(tmp_path)["projection_version"] == "1"
+
+
+def test_fork_history_counts_once_and_leaves_with_its_deleted_origin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, manager, source = _service(tmp_path)
+    source_address = SessionAddress(None, "main", source.id)
+    fork = asyncio.run(manager.fork(source_address))
+    seed_history(
+        fork,
+        [
+            ChatMessage.assistant(
+                model="openai/gpt-5",
+                content="fork work",
+                usage={"input_tokens": 7, "output_tokens": 1},
+                timestamp=BASE + timedelta(seconds=5),
+            )
+        ],
+    )
+    forked = service.report()
+    assert forked.overview.total_sessions == 2
+    assert forked.overview.total_runs == 1
+    assert forked.usage.totals.measured_input_tokens == 17
+
+    original = ChatSession.load_since
+    cursors = []
+
+    def track_load_since(self, cursor=None):
+        cursors.append(cursor)
+        return original(self, cursor)
+
+    monkeypatch.setattr(ChatSession, "load_since", track_load_since)
+    # Deleting the origin copies the history the fork shows into the fork and
+    # bumps its history revision, so the index reads the fork again; its own
+    # audit is unchanged, so the read continues from the stored cursor.
+    manager.delete(source_address)
+    after_delete = service.report()
+
+    fork_address = SessionAddress(None, "main", fork.id)
+    revision = manager.list_history_versions([fork_address])[fork_address][1]
+    assert len(cursors) == 1
+    assert cursors[0] is not None
+    assert cursors[0].history_revision < revision
+    with closing(sqlite3.connect(_index_path(tmp_path))) as connection:
+        stored = connection.execute(
+            "SELECT history_revision FROM stat_sessions WHERE session_id = ?", (fork.id,)
+        ).fetchone()
+    assert stored[0] == revision
+    assert after_delete.overview.total_sessions == 1
+    # The copied prefix is not the fork's own spend; the origin's usage left
+    # with the deleted origin.
+    assert after_delete.overview.total_runs == 0
+    assert after_delete.usage.totals.measured_input_tokens == 7
 
 
 @pytest.mark.parametrize("storage", ["file", "transient"])
@@ -546,7 +606,7 @@ def test_every_report_reads_the_index_instead_of_a_retained_projection(tmp_path:
         connection.execute("UPDATE stat_calls SET input_tokens = 42")
 
     assert service.report().usage.totals.measured_input_tokens == 42
-    assert set(vars(service._index)) == {"data_dir", "index_path", "_lock"}
+    assert set(vars(service._index)) == {"data_dir", "index_path", "_database", "_lock"}
 
 
 def test_unchanged_index_read_performs_no_write(tmp_path: Path) -> None:
@@ -682,8 +742,17 @@ def _index_dump(tmp_path: Path) -> str:
         )
 
 
+def _index_identity(tmp_path: Path) -> dict[str, object]:
+    with closing(sqlite3.connect(_index_path(tmp_path))) as connection:
+        identity: dict[str, object] = dict(
+            connection.execute("SELECT key, value FROM kernel_meta").fetchall()
+        )
+        identity["application_id"] = connection.execute("PRAGMA application_id").fetchone()[0]
+    return identity
+
+
 def _make_index_file_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
     def unavailable(self, *_args, **_kwargs):
-        raise OSError("index directory is not writable")
+        raise DatabaseUnavailableError("statistics: the index directory is not writable")
 
     monkeypatch.setattr(StatisticsIndex, "_read_file", unavailable)
