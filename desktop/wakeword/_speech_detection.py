@@ -161,12 +161,13 @@ def _frame_is_speech(
     detector: SpeechDetector | None,
     fallback_vad: Any | None,
 ) -> bool:
-    """Decide whether one 30 ms frame carries speech, with a fail-open bias.
+    """Decide whether one 32 ms (512-sample) frame carries speech, with a fail-open bias.
 
     The neural detector is authoritative when present. Without it (or on an
-    unexpected scoring error) the WebRTC fallback decides; a totally unavailable
-    stack counts frames as speech so a technical failure can never mute
-    recording — the worst case is today's noise-fragile behavior.
+    unexpected scoring error) the WebRTC fallback decides on the frame's 10 ms
+    slices (see :func:`_webrtc_contains_speech`); a totally unavailable stack
+    counts frames as speech so a technical failure can never mute recording —
+    the worst case is today's noise-fragile behavior.
     """
     if detector is not None:
         try:
@@ -175,11 +176,7 @@ def _frame_is_speech(
             logger.warning("Neural speech scoring failed; using WebRTC fallback", exc_info=True)
     if fallback_vad is None:
         return True
-    try:
-        verdict: bool = bool(fallback_vad.is_speech(frame.detection_pcm16, _SAMPLE_RATE))
-    except Exception:
-        return True
-    return verdict
+    return _webrtc_contains_speech(frame.detection_pcm16, fallback_vad)
 
 
 def _create_detection_vad() -> Any | None:
@@ -213,20 +210,31 @@ def _chunk_contains_speech(
             return speech_detector.speech_probability(detection_pcm16) >= _SPEECH_PROB_THRESHOLD
         except Exception:
             logger.warning("Neural speech scoring failed; using WebRTC fallback", exc_info=True)
-    if not fallback_vad or len(detection_pcm16) < _DETECTION_VAD_FRAME_BYTES:
+    if not fallback_vad:
         return True
-    speech_frames = 0
-    frame_count = len(detection_pcm16) // _DETECTION_VAD_FRAME_BYTES
-    for frame_index in range(frame_count):
-        offset = frame_index * _DETECTION_VAD_FRAME_BYTES
+    return _webrtc_contains_speech(detection_pcm16, fallback_vad)
+
+
+def _webrtc_contains_speech(pcm16: bytes, vad: Any) -> bool:
+    """Whether WebRTC VAD hears speech in at least two 10 ms slices of 16 kHz PCM16.
+
+    WebRTC VAD accepts only 10, 20 or 30 ms frames, so the audio is judged in
+    10 ms slices and a shorter trailing remainder is ignored; audio with a
+    single slice needs that one. Fails open: audio shorter than one slice or a
+    VAD error counts as speech.
+    """
+    slice_count = len(pcm16) // _DETECTION_VAD_FRAME_BYTES
+    if slice_count == 0:
+        return True
+    required_slices = min(_DETECTION_VAD_MIN_SPEECH_FRAMES, slice_count)
+    speech_slices = 0
+    for slice_index in range(slice_count):
+        offset = slice_index * _DETECTION_VAD_FRAME_BYTES
         try:
-            if fallback_vad.is_speech(
-                detection_pcm16[offset : offset + _DETECTION_VAD_FRAME_BYTES],
-                _SAMPLE_RATE,
-            ):
-                speech_frames += 1
+            if vad.is_speech(pcm16[offset : offset + _DETECTION_VAD_FRAME_BYTES], _SAMPLE_RATE):
+                speech_slices += 1
         except Exception:
             return True
-        if speech_frames >= _DETECTION_VAD_MIN_SPEECH_FRAMES:
+        if speech_slices >= required_slices:
             return True
     return False
