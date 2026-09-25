@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import replace
 from functools import partial
 from pathlib import Path
@@ -105,8 +106,9 @@ class ChannelService:
         self._adapter_restart_attempts: dict[str, int] = {}
         self._adapter_restart_tasks: dict[str, asyncio.Task[None]] = {}
         self._pending_start_requests: dict[str, tuple[bool, ChannelConfig | None]] = {}
-        # Channel ids whose create or delete persistence is in flight off the
-        # Event Loop; every other change of such a Channel is refused meanwhile.
+        # Channel ids whose config change (create, update, enable, disable,
+        # delete, or the config read of a restart) is in flight off the Event
+        # Loop; every other change of such a Channel is refused meanwhile.
         self._pending_config_changes: set[str] = set()
         self._failed_channels: set[str] = set()
         self._failure_reasons: dict[str, str] = {}
@@ -275,16 +277,19 @@ class ChannelService:
 
                 stop_task.add_done_callback(on_stop_done)
 
-    def restart_channel(self, channel_id: str) -> bool:
+    async def restart_channel(self, channel_id: str) -> bool:
         """Rebuild one enabled channel adapter from its current config and credentials.
 
         Returns whether the channel is enabled and therefore received a start
         request. Disabled channels keep the updated credential for their next
-        normal enable without creating an adapter.
+        normal enable without creating an adapter. ``channel.json`` is read on
+        the state database's worker pool; other changes of this Channel are
+        refused until that read settles.
         """
         normalized_id = _normalize_channel_id(channel_id)
-        config = self._storage.get(normalized_id)
         self._require_idle(normalized_id)
+        with self._config_change(normalized_id):
+            config = await self._load_config(normalized_id)
         self._validate_agent_exists(config.agent_id)
         self._preflight_adapter_start(config)
 
@@ -391,57 +396,44 @@ class ChannelService:
             self._persist_created_channel(config)
             persisted = True
 
-        self._pending_config_changes.add(config.id)
-        try:
-            await self._state.database.run_async(persist)
-            if config.enabled:
-                self.start_channel(config.id, config_override=config)
-        except BaseException:
-            if persisted:
-                await _settle(
-                    self._state.database.run_async(self._rollback_created_channel, config.id),
-                    f"Rollback failed while removing newly created channel (channel={config.id})",
-                )
-            raise
-        finally:
-            self._pending_config_changes.discard(config.id)
+        with self._config_change(config.id):
+            try:
+                await self._state.database.run_async(persist)
+                if config.enabled:
+                    self.start_channel(config.id, config_override=config)
+            except BaseException:
+                if persisted:
+                    await _settle(
+                        self._state.database.run_async(self._rollback_created_channel, config.id),
+                        "Rollback failed while removing newly created channel "
+                        f"(channel={config.id})",
+                    )
+                raise
         self._notify_tool_registration_if_changed(had_enabled_channels)
 
-    def update_channel(self, channel_id: str, **fields: Any) -> None:
-        """Update mutable fields, persist, and restart when currently running."""
+    async def update_channel(self, channel_id: str, **fields: Any) -> None:
+        """Update mutable fields, persist them, and rebuild the adapter to match.
+
+        ``channel.json`` is read and written on the state database's worker
+        pool, off the Event Loop; ordering and rollback follow
+        ``_change_config``. Other changes of this Channel are refused until the
+        update settles.
+        """
         normalized_id = _normalize_channel_id(channel_id)
-        config = self._storage.get(normalized_id)
-
-        unknown_fields = sorted(set(fields) - _MUTABLE_FIELDS)
-        if unknown_fields:
-            joined = ", ".join(unknown_fields)
-            raise ChannelConfigError(f"Unsupported channel fields: {joined}")
-        if not fields:
-            return
         self._require_idle(normalized_id)
-
-        had_enabled_channels = self.has_enabled_channels()
-        updated = replace(config, **fields)
-        updated.validate()
-        self._validate_agent_exists(updated.agent_id)
-        self._preflight_adapter_start(updated)
-
-        was_running = self._is_running(normalized_id) or self._is_stop_in_progress(normalized_id)
-
-        # Persist before disrupting a healthy adapter. A failed atomic save
-        # leaves both its configuration and its current connection untouched.
-        self._storage.save(updated)
-        try:
-            if was_running:
-                self.stop_channel(normalized_id)
-            if updated.enabled:
-                self.start_channel(normalized_id, config_override=updated)
-            else:
-                self._pending_start_requests.pop(normalized_id, None)
-        except Exception:
-            self._rollback_updated_channel(normalized_id, config, was_running)
-            raise
-        self._notify_tool_registration_if_changed(had_enabled_channels)
+        with self._config_change(normalized_id):
+            config = await self._load_config(normalized_id)
+            unknown_fields = sorted(set(fields) - _MUTABLE_FIELDS)
+            if unknown_fields:
+                joined = ", ".join(unknown_fields)
+                raise ChannelConfigError(f"Unsupported channel fields: {joined}")
+            if not fields:
+                return
+            updated = replace(config, **fields)
+            updated.validate()
+            self._validate_agent_exists(updated.agent_id)
+            self._preflight_adapter_start(updated)
+            await self._change_config(config, updated)
 
     async def delete_channel(self, channel_id: str) -> None:
         """Delete one channel config and state, and stop any active adapter task.
@@ -473,11 +465,10 @@ class ChannelService:
             self._state.unregister(normalized_id)
             removed = True
 
-        self._pending_config_changes.add(normalized_id)
         try:
-            await self._state.database.run_async(remove)
+            with self._config_change(normalized_id):
+                await self._state.database.run_async(remove)
         finally:
-            self._pending_config_changes.discard(normalized_id)
             # The worker settles before a cancellation arrives here, so a
             # completed removal is always followed through.
             if removed:
@@ -486,35 +477,33 @@ class ChannelService:
                 self._whatsapp_operations.pop(normalized_id, None)
                 self._notify_tool_registration_if_changed(had_enabled_channels)
 
-    def enable_channel(self, channel_id: str) -> None:
+    async def enable_channel(self, channel_id: str) -> None:
         """Enable one channel and start its adapter task."""
         normalized_id = _normalize_channel_id(channel_id)
-        config = self._storage.get(normalized_id)
         self._require_idle(normalized_id)
-        self._enable_channel(config)
+        await self._enable_channel(normalized_id)
 
-    def _enable_channel(self, config: ChannelConfig) -> None:
+    async def _enable_channel(self, channel_id: str) -> None:
         """Apply enable after public exclusion checks or inside the pairing owner."""
-        normalized_id = config.id
-        self._validate_agent_exists(config.agent_id)
-        had_enabled_channels = self.has_enabled_channels()
-        if not config.enabled:
-            self._storage.save(replace(config, enabled=True))
-        try:
-            self.start_channel(normalized_id)
-        finally:
-            self._notify_tool_registration_if_changed(had_enabled_channels)
+        with self._config_change(channel_id):
+            config = await self._load_config(channel_id)
+            self._validate_agent_exists(config.agent_id)
+            if config.enabled:
+                # Nothing to persist; (re)start a stopped or failed adapter.
+                self.start_channel(channel_id, config_override=config)
+                return
+            await self._change_config(config, replace(config, enabled=True))
 
-    def disable_channel(self, channel_id: str) -> None:
+    async def disable_channel(self, channel_id: str) -> None:
         """Disable one channel and stop its adapter task."""
         normalized_id = _normalize_channel_id(channel_id)
-        config = self._storage.get(normalized_id)
         self._require_idle(normalized_id)
-        had_enabled_channels = self.has_enabled_channels()
-        if config.enabled:
-            self._storage.save(replace(config, enabled=False))
-        self.stop_channel(normalized_id)
-        self._notify_tool_registration_if_changed(had_enabled_channels)
+        with self._config_change(normalized_id):
+            config = await self._load_config(normalized_id)
+            if not config.enabled:
+                self.stop_channel(normalized_id)
+                return
+            await self._change_config(config, replace(config, enabled=False))
 
     def record_chat_id_migration(self, channel_id: str, old_chat_id: str, new_chat_id: str) -> None:
         """Persist a platform-side chat-id migration into allowlist and group access.
@@ -753,12 +742,12 @@ class ChannelService:
                 if stopping is not None:
                     await asyncio.shield(stopping)
                 await channel_io(reset_pairing, self._channel_root / channel_id)
-            self._enable_channel(self._storage.get(channel_id))
+            await self._enable_channel(channel_id)
             _LOGGER.info("WhatsApp pairing requested (channel=%s reset=%s)", channel_id, reset)
             return await self.whatsapp_status(channel_id)
 
     def _require_idle(self, channel_id: str) -> None:
-        """Refuse a change while a create, delete or WhatsApp operation of it is in flight."""
+        """Refuse a change while a config change or WhatsApp operation of it is in flight."""
         self._require_no_config_change(channel_id)
         operation = self._whatsapp_operations.get(channel_id)
         if operation is not None and operation.locked():
@@ -769,7 +758,58 @@ class ChannelService:
 
     def _require_no_config_change(self, channel_id: str) -> None:
         if channel_id in self._pending_config_changes:
-            raise ChannelError("Wait for the Channel to finish being created or removed")
+            raise ChannelError("Wait for the current change of this Channel to finish")
+
+    @contextmanager
+    def _config_change(self, channel_id: str) -> Iterator[None]:
+        """Mark a config change of ``channel_id`` in flight; refuse overlapping ones."""
+        self._require_no_config_change(channel_id)
+        self._pending_config_changes.add(channel_id)
+        try:
+            yield
+        finally:
+            self._pending_config_changes.discard(channel_id)
+
+    async def _load_config(self, channel_id: str) -> ChannelConfig:
+        """Read one ``channel.json`` on the state database's worker pool."""
+        return await self._state.database.run_async(self._storage.get, channel_id)
+
+    async def _change_config(self, previous: ChannelConfig, updated: ChannelConfig) -> None:
+        """Persist ``updated``, then bring the adapter in line with it.
+
+        The caller holds this Channel's config-change mark. ``channel.json`` is
+        written on the state database's worker pool before a healthy adapter is
+        disturbed, so a failed write leaves config and connection untouched.
+        The adapter then stops and starts on the Event Loop. A failed adapter
+        start, or a cancellation once the write ran, restores ``previous`` and
+        the adapter it ran.
+        """
+        channel_id = updated.id
+        persisted = False
+        was_running = False
+
+        def persist() -> tuple[bool, bool]:
+            nonlocal persisted
+            had_enabled_channels = self.has_enabled_channels()
+            self._storage.save(updated)
+            persisted = True
+            return had_enabled_channels, self.has_enabled_channels()
+
+        try:
+            had_enabled_channels, has_enabled_channels = await self._state.database.run_async(
+                persist
+            )
+            was_running = self._is_running(channel_id) or self._is_stop_in_progress(channel_id)
+            if was_running or not updated.enabled:
+                self.stop_channel(channel_id)
+            if updated.enabled:
+                self.start_channel(channel_id, config_override=updated)
+        except BaseException:
+            if persisted:
+                await self._restore_config(previous, restart_adapter=was_running)
+            raise
+        if had_enabled_channels != has_enabled_channels:
+            self._notify_tool_registration_changed()
 
     def _preflight_adapter_start(self, config: ChannelConfig) -> None:
         if not config.enabled:
@@ -818,35 +858,29 @@ class ChannelService:
                 exc_info=(type(error), error, error.__traceback__),
             )
 
-    def _rollback_updated_channel(
-        self,
-        channel_id: str,
-        previous_config: ChannelConfig,
-        was_running: bool,
-    ) -> None:
+    async def _restore_config(self, previous: ChannelConfig, *, restart_adapter: bool) -> None:
+        """Undo a persisted config change; failures are logged, not raised.
+
+        The previous adapter restarts first, on the Event Loop. Restoring
+        ``channel.json`` on the worker pool then runs to its end even when
+        cancelled meanwhile.
+        """
+        channel_id = previous.id
         self._pending_start_requests.pop(channel_id, None)
-        try:
-            self._storage.save(previous_config)
-        except Exception as error:
-            _LOGGER.error(
-                "Rollback failed while restoring previous channel config (channel=%s): %s",
-                channel_id,
-                error,
-                exc_info=(type(error), error, error.__traceback__),
-            )
-
-        if not was_running or not previous_config.enabled:
-            return
-
-        try:
-            self.start_channel(channel_id, config_override=previous_config)
-        except Exception as error:
-            _LOGGER.error(
-                "Rollback failed while restarting previous channel adapter (channel=%s): %s",
-                channel_id,
-                error,
-                exc_info=(type(error), error, error.__traceback__),
-            )
+        if restart_adapter and previous.enabled:
+            try:
+                self.start_channel(channel_id, config_override=previous)
+            except Exception as error:
+                _LOGGER.error(
+                    "Rollback failed while restarting previous channel adapter (channel=%s): %s",
+                    channel_id,
+                    error,
+                    exc_info=(type(error), error, error.__traceback__),
+                )
+        await _settle(
+            self._state.database.run_async(self._storage.save, previous),
+            f"Rollback failed while restoring previous channel config (channel={channel_id})",
+        )
 
     def _schedule_pending_start(
         self,

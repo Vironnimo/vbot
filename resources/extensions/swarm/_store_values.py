@@ -11,7 +11,6 @@ import re
 import sqlite3
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from typing import Any
 
 from core.sessions import DeliveryReceipt, SessionAddress
@@ -272,11 +271,6 @@ def _limit(value: int) -> int:
     if type(value) is not int or not 1 <= value <= _MAX_LIMIT:
         raise SwarmStoreError("invalid_arguments", field="limit")
     return value
-
-
-def _now() -> str:
-    """Fixed-width UTC timestamp ``YYYY-MM-DDTHH:MM:SS.ffffffZ`` for stored values."""
-    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
 def _dump(value: Any) -> str:

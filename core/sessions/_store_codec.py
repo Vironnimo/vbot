@@ -125,8 +125,6 @@ def validate_appendable(message: ChatMessage) -> None:
     message.validate()
     if message.role not in APPENDABLE_ROLES:
         raise ChatSessionError(f"{message.role} entries are written by their Session operation")
-    if message.role == "compaction_checkpoint" and message.projection is None:
-        raise ChatSessionError("legacy compaction checkpoints without a projection are not stored")
 
 
 def validate_tool_results(

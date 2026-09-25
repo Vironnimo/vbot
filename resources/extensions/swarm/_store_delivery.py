@@ -9,6 +9,7 @@ import sqlite3
 
 from core.sessions import DeliveryReceipt, SessionAddress
 from core.utils.ids import new_id
+from core.utils.timestamps import utc_now_timestamp
 
 from ._store_database import (
     ALIASED_POST_COLUMNS,
@@ -31,7 +32,6 @@ from ._store_values import (
     SwarmStoreError,
     _hash,
     _load,
-    _now,
     _page,
     _post,
 )
@@ -81,7 +81,7 @@ def _prepare_delivery(
         content_hash = _hash({"effect_kind": effect_kind, "posts": entries})
         connection.execute(
             "INSERT INTO delivery_batches(receipt_id,participant_id,content_hash,effect_kind,created_at) VALUES(?,?,?,?,?)",
-            (receipt_id, participant_id, content_hash, effect_kind, _now()),
+            (receipt_id, participant_id, content_hash, effect_kind, utc_now_timestamp()),
         )
         for entry in entries:
             connection.execute(
@@ -246,7 +246,7 @@ def _prepare_automatic_delivery(
                 participant_id,
                 content_hash,
                 "swarm_automatic",
-                _now(),
+                utc_now_timestamp(),
                 int(settings_row["revision"]),
             ),
         )
@@ -424,7 +424,7 @@ def _acknowledge_delivery(
             "WHERE participant_id=? AND delivered_at IS NULL AND post_id IN "
             "(SELECT post_id FROM delivery_batch_entries WHERE receipt_id=? AND participant_id=?)",
             (
-                _now(),
+                utc_now_timestamp(),
                 location["kind"],
                 location["sequence"],
                 prepared["participant_id"],
@@ -434,7 +434,7 @@ def _acknowledge_delivery(
         )
         connection.execute(
             "UPDATE delivery_batches SET acknowledged_at=?,carrier_kind=?,carrier_sequence=? WHERE receipt_id=?",
-            (_now(), location["kind"], location["sequence"], receipt.receipt_id),
+            (utc_now_timestamp(), location["kind"], location["sequence"], receipt.receipt_id),
         )
         return True
 

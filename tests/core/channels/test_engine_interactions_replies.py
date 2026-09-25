@@ -7,8 +7,8 @@ import threading
 
 import core.channels._conversation_content as content_module
 from core.channels.adapter import RunButtonBinding, bound_run_callback_data
-from core.channels.state import state_timestamp
 from core.sessions import SessionAddress
+from core.utils.timestamps import utc_now_timestamp
 
 from .engine_test_support import (
     ASSISTANT_OUTPUT_EVENT,
@@ -55,7 +55,7 @@ async def test_aborted_bound_tap_restores_unadmitted_state(tmp_path, monkeypatch
         thread_id=None,
         origin_session_id="origin",
         original_button_data=("run:done",),
-        created_at=state_timestamp(),
+        created_at=utc_now_timestamp(),
     )
     storage.save_run_button_binding("tg-assistant", binding)
     data = bound_run_callback_data(binding.id, 0)
@@ -127,7 +127,7 @@ async def test_aborted_tap_cannot_undo_later_admission_to_same_origin(
             thread_id=None,
             origin_session_id="origin",
             original_button_data=("run:done",),
-            created_at=state_timestamp(),
+            created_at=utc_now_timestamp(),
         )
         storage.save_run_button_binding("tg-assistant", binding)
         data = bound_run_callback_data(name, 0)
@@ -214,7 +214,7 @@ async def test_waiting_bound_tap_keeps_origin_after_anchor_changes(tmp_path, del
         thread_id=None,
         origin_session_id="origin",
         original_button_data=("run:done",),
-        created_at=state_timestamp(),
+        created_at=utc_now_timestamp(),
     )
     storage.save_run_button_binding("tg-assistant", binding)
     data = bound_run_callback_data(binding.id, 0)
@@ -551,7 +551,7 @@ async def test_bound_tap_repoints_conversation_and_orders_followup_in_origin_ses
         thread_id=None,
         origin_session_id="origin-session",
         original_button_data=("run:done",),
-        created_at=state_timestamp(),
+        created_at=utc_now_timestamp(),
     )
     storage.save_run_button_binding("tg-assistant", binding)
     internal_data = bound_run_callback_data(binding.id, 0)
@@ -608,7 +608,7 @@ async def test_bound_tap_does_not_recreate_missing_origin_session(tmp_path: Path
         thread_id=None,
         origin_session_id="deleted-session",
         original_button_data=("run:done",),
-        created_at=state_timestamp(),
+        created_at=utc_now_timestamp(),
     )
     storage.save_run_button_binding("tg-assistant", binding)
     internal_data = bound_run_callback_data(binding.id, 0)
@@ -649,7 +649,7 @@ async def test_new_detaches_telegram_after_bound_tap(tmp_path: Path) -> None:
         thread_id=None,
         origin_session_id="origin-session",
         original_button_data=("run:done",),
-        created_at=state_timestamp(),
+        created_at=utc_now_timestamp(),
     )
     storage.save_run_button_binding("tg-assistant", binding)
     internal_data = bound_run_callback_data(binding.id, 0)
@@ -711,7 +711,7 @@ async def test_busy_bound_tap_restores_binding_and_previous_conversation_pointer
         thread_id=None,
         origin_session_id="origin-session",
         original_button_data=("run:done",),
-        created_at=state_timestamp(),
+        created_at=utc_now_timestamp(),
     )
     storage.save_run_button_binding("tg-assistant", binding)
     internal_data = bound_run_callback_data(binding.id, 0)

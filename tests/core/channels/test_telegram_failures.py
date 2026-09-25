@@ -12,9 +12,10 @@ from unittest.mock import AsyncMock
 import pytest
 
 from core.channels.adapter import ReplyPlanFacts
-from core.channels.state import ChannelStateStore, state_timestamp
+from core.channels.state import ChannelStateStore
 from core.channels.telegram import TELEGRAM_MESSAGE_LIMIT
 from core.chat.commands import CommandFeedback, CommandOutcome
+from core.utils.timestamps import format_canonical_timestamp
 from tests.core.channels.engine_test_support import channel_state
 from tests.core.channels.telegram_test_support import (
     drain_chat_queue,
@@ -129,7 +130,7 @@ async def test_stop_drains_slow_offset_save_before_restart(tmp_path, monkeypatch
 def test_polling_watermark_expires_before_telegram_randomizes_ids(tmp_path, age_hours):
     storage = channel_state(tmp_path)
     storage.save_update_offset("tg-assistant", 100)
-    previous_write = state_timestamp(datetime.now(UTC) - timedelta(hours=age_hours))
+    previous_write = format_canonical_timestamp(datetime.now(UTC) - timedelta(hours=age_hours))
     storage.database.write(
         lambda connection: connection.execute(
             "UPDATE channel_polling SET updated_at = ? WHERE channel_id = ?",

@@ -337,7 +337,6 @@ class ChatMessage:
     tool_call_id: str | None = None
     name: str | None = None
     error_kind: str | None = None
-    tail_boundary_id: str | None = None
     projection: list[JsonObject] | None = None
     compaction_policy: str | None = None
     compaction_strategy: str | None = None
@@ -669,7 +668,6 @@ class ChatMessage:
         _add_if_not_none(message, "tool_call_id", self.tool_call_id)
         _add_if_not_none(message, "name", self.name)
         _add_if_not_none(message, "error_kind", self.error_kind)
-        _add_if_not_none(message, "tail_boundary_id", self.tail_boundary_id)
         if self.projection is not None:
             message["projection"] = [dict(entry) for entry in self.projection]
         _add_if_not_none(message, "compaction_policy", self.compaction_policy)
@@ -762,7 +760,6 @@ class ChatMessage:
             tool_call_id=_message_validation._optional_string(data, "tool_call_id"),
             name=_message_validation._optional_string(data, "name"),
             error_kind=_message_validation._optional_string(data, "error_kind"),
-            tail_boundary_id=_message_validation._optional_string(data, "tail_boundary_id"),
             projection=(
                 [dict(entry) for entry in projection_data] if projection_data is not None else None
             ),

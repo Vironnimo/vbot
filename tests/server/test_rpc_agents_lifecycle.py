@@ -60,7 +60,10 @@ async def test_agent_rename_retargets_live_references_and_publishes_mapping(
         SimpleNamespace(id="boot-history", agent_id="coder", project_id=None, status="completed"),
     ]
 
-    def update_channel(channel_id: str, **fields: Any) -> None:
+    channel_update_loops: list[asyncio.AbstractEventLoop] = []
+
+    async def update_channel(channel_id: str, **fields: Any) -> None:
+        channel_update_loops.append(asyncio.get_running_loop())
         channel = next(item for item in channels if item.id == channel_id)
         channel.agent_id = fields["agent_id"]
 
@@ -104,6 +107,8 @@ async def test_agent_rename_retargets_live_references_and_publishes_mapping(
         "session_links_updated": 1,
     }
     assert channels[0].agent_id == "researcher"
+    # The rename worker hands Channel changes to the Event Loop owning the adapters.
+    assert channel_update_loops == [asyncio.get_running_loop()]
     assert jobs[0].agent_id == "researcher"
     assert jobs[1].agent_id == "coder"
     assert jobs[2].agent_id == "coder"
@@ -219,7 +224,10 @@ async def test_agent_rename_rolls_back_all_changes_when_reference_update_fails(
         SimpleNamespace(id="second", agent_id="coder"),
     ]
 
-    def update_channel(channel_id: str, **fields: Any) -> None:
+    channel_update_loops: list[asyncio.AbstractEventLoop] = []
+
+    async def update_channel(channel_id: str, **fields: Any) -> None:
+        channel_update_loops.append(asyncio.get_running_loop())
         if channel_id == "second" and fields["agent_id"] == "researcher":
             raise ChannelConfigError("adapter preflight failed")
         channel = next(item for item in channels if item.id == channel_id)
@@ -238,6 +246,8 @@ async def test_agent_rename_rolls_back_all_changes_when_reference_update_fails(
     assert response["ok"] is False
     assert state.runtime.agents.get("coder").id == "coder"
     assert all(channel.agent_id == "coder" for channel in channels)
+    # Forward changes and their rollback both ran on the Event Loop.
+    assert channel_update_loops == [asyncio.get_running_loop()] * 3
     assert state.runtime.agents.get("manager").tools["subagent"]["allowed_agents"] == ["coder"]
     assert state.runtime.chat_sessions.get_metadata(child) == original_metadata
     assert state.event_bus.events == []

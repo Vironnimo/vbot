@@ -225,12 +225,6 @@ class ChatSessionManager:
     def record_seen_skills(self, address: SessionAddress, update: SeenSkillsUpdate) -> None:
         self._store.record_seen_skills(address, update)
 
-    def record_run_kind(self, address: SessionAddress, run_kind: RunKind) -> None:
-        """Classify a Session before its first Run starts; ``start_run`` records it too."""
-        if not isinstance(run_kind, RunKind):
-            raise ChatSessionError("run kind must be a RunKind")
-        self._store.record_run_kind(address, run_kind.value)
-
     def recover_interrupted_runs(self) -> None:
         self._store.recover_interrupted_runs()
 
@@ -641,9 +635,6 @@ class ChatSessionManager:
         except SessionNotFoundError:
             return None
         return None if payload_json is None else json.loads(payload_json)
-
-    def history_revision(self, address: SessionAddress) -> int:
-        return self._store.history_revision(address)
 
     def retarget_identity_agent_references(
         self, old_agent_id: str, new_agent_id: str

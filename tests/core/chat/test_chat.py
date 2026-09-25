@@ -23,6 +23,7 @@ from core.tools import (
     tool_success,
 )
 from tests.core.chat.chat_loop_support import build_chat_loop, session_address
+from tests.core.sessions.history_fixtures import history_revision
 
 
 @pytest.mark.asyncio
@@ -50,7 +51,7 @@ async def test_edit_run_appends_lineage_marker_and_preserves_superseded_usage(
     )
     later = ChatMessage.user("later request")
     session.append_many([original, old_answer, later])
-    history_revision_before_edit = runtime.chat_sessions.history_revision(session.address)
+    history_revision_before_edit = history_revision(runtime.chat_sessions, session.address)
 
     run = await build_chat_loop(runtime).edit_run(
         "coder",
@@ -62,7 +63,7 @@ async def test_edit_run_appends_lineage_marker_and_preserves_superseded_usage(
 
     raw = session.load()
     active = active_session_messages(raw)
-    assert runtime.chat_sessions.history_revision(session.address) > history_revision_before_edit
+    assert history_revision(runtime.chat_sessions, session.address) > history_revision_before_edit
     assert [message.role for message in raw[:3]] == ["user", "assistant", "user"]
     assert raw[3].role == "history_edit"
     assert raw[3].target_message_id == original.id
@@ -102,7 +103,7 @@ async def test_edit_run_rejects_channel_target_without_appending(tmp_path: Path)
     )
     session.append(channel_message)
     before = session.load()
-    history_revision_before_edit = runtime.chat_sessions.history_revision(session.address)
+    history_revision_before_edit = history_revision(runtime.chat_sessions, session.address)
 
     with pytest.raises(ChatSessionError, match="plain-text"):
         await build_chat_loop(runtime).edit_run(
@@ -113,7 +114,7 @@ async def test_edit_run_rejects_channel_target_without_appending(tmp_path: Path)
         )
 
     assert session.load() == before
-    assert runtime.chat_sessions.history_revision(session.address) == history_revision_before_edit
+    assert history_revision(runtime.chat_sessions, session.address) == history_revision_before_edit
 
 
 def test_validate_assistant_message_allows_reasoning_only() -> None:

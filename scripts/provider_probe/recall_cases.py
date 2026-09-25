@@ -8,9 +8,10 @@ from typing import Any
 from core.chat import ChatMessage
 from core.chat.messages import ToolCall
 from core.model_tasks import EmbeddingResult, EmbeddingSpaceIdentity
-from core.runs import RunKind
-from core.sessions import ChatSessionManager
+from core.runs import Run, RunKind
+from core.sessions import ChatSessionManager, SessionAddress
 from core.storage.layout import initialize_data_directory
+from core.utils.ids import new_id
 
 
 def recall_cases() -> list[dict[str, Any]]:
@@ -178,11 +179,11 @@ def recall_matrix() -> list[dict[str, Any]]:
     ]
 
 
-def seed_sessions(root: Path) -> ChatSessionManager:
+async def seed_sessions(root: Path) -> ChatSessionManager:
     initialize_data_directory(root)
     sessions = ChatSessionManager(root)
     try:
-        _seed(sessions)
+        await _seed(sessions)
     except BaseException:
         # An open store would keep the fixture directory locked on Windows.
         sessions.close()
@@ -190,7 +191,22 @@ def seed_sessions(root: Path) -> ChatSessionManager:
     return sessions
 
 
-def _seed(sessions: ChatSessionManager) -> None:
+async def _admit_run(
+    sessions: ChatSessionManager, address: SessionAddress, run_kind: RunKind
+) -> None:
+    """Admit one Run of *run_kind*; admission records the Session's Run kind."""
+    await sessions.start_run(
+        Run(
+            run_id=new_id("run"),
+            agent_id=address.agent_id,
+            session_id=address.session_id,
+            project_id=address.project_id,
+            run_kind=run_kind,
+        )
+    )
+
+
+async def _seed(sessions: ChatSessionManager) -> None:
     stamp = datetime(2026, 7, 12, 10, tzinfo=UTC)
     data = {
         "session-retention": [
@@ -266,7 +282,7 @@ def _seed(sessions: ChatSessionManager) -> None:
         session = sessions.create("coder", session_id=name)
         session.append_many(messages)
         sessions.set_title(session.address, name.removeprefix("session-"))
-        sessions.record_run_kind(session.address, RunKind.USER)
+        await _admit_run(sessions, session.address, RunKind.USER)
     sessions.create("coder", session_id="session-retention", project_id="other-project").append(
         ChatMessage.user("Aurora: 999 Tage")
     )
@@ -289,14 +305,14 @@ def _seed(sessions: ChatSessionManager) -> None:
             timestamp=stamp,
         )
     )
-    sessions.record_run_kind(sub.address, RunKind.SUBAGENT)
+    await _admit_run(sessions, sub.address, RunKind.SUBAGENT)
     old = sessions.create("reviewer", session_id="session-old")
     old.append(
         ChatMessage.assistant(
             model="fixture", content="Aurora-Pruefung: Code 9999.", timestamp=stamp.replace(month=6)
         )
     )
-    sessions.record_run_kind(old.address, RunKind.SUBAGENT)
+    await _admit_run(sessions, old.address, RunKind.SUBAGENT)
 
 
 class FixtureEmbeddings:

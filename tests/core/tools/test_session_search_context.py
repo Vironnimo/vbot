@@ -19,7 +19,7 @@ from core.runs import RunKind
 from core.sessions import ChatSession, ChatSessionManager
 from core.tools.session_search import session_search_handler
 from scripts.provider_probe.recall_cases import FixtureEmbeddings
-from tests.core.sessions.history_fixtures import append_tool_fixture
+from tests.core.sessions.history_fixtures import admit_run, append_tool_fixture
 from tests.core.tools.session_search_helpers import make_context, success
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("current_format_data_directory")]
@@ -120,7 +120,7 @@ async def test_visibility_filters_still_apply_to_search_and_context(tmp_path: Pa
             ]
         )
         for kind in kinds:
-            sessions.record_run_kind(session.address, kind)
+            await admit_run(sessions, session.address, kind)
     backend = SqliteFtsRecallBackend(RecallBackendContext(tmp_path, sessions))
     normal = success(
         await session_search_handler(make_context(tmp_path), {"query": "needle"}, backend)

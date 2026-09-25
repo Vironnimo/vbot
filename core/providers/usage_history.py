@@ -16,7 +16,7 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime
 from math import isfinite
 from pathlib import Path
 from typing import Any
@@ -31,6 +31,7 @@ from core.database import (
     open_database,
 )
 from core.utils.logging import get_logger
+from core.utils.timestamps import canonical_timestamp, format_canonical_timestamp, parse_timestamp
 
 JsonObject = dict[str, Any]
 
@@ -240,7 +241,7 @@ class ProviderUsageHistoryStore:
         since: datetime | None = None,
         until: datetime | None = None,
     ) -> list[UsageHistorySample]:
-        """Every sample in the inclusive UTC window, oldest first."""
+        """Every sample in the inclusive window of aware bounds, oldest first."""
         return await self._database.run_async(self._read_samples, since, until)
 
     async def latest_sampled_at(self) -> datetime | None:
@@ -251,7 +252,7 @@ class ProviderUsageHistoryStore:
             return None if row is None or row[0] is None else str(row[0])
 
         value = await self._database.read_async(latest)
-        return None if value is None else _parse_iso_timestamp(value)
+        return None if value is None else parse_timestamp(value)
 
     async def clear(self) -> UsageHistoryClearResult:
         """Delete every sample in one transaction after an explicit caller confirmation."""
@@ -360,10 +361,10 @@ def _time_window(since: datetime | None, until: datetime | None) -> tuple[str, t
     parameters: list[str] = []
     if since is not None:
         clauses.append("s.sampled_at >= ?")
-        parameters.append(_format_canonical(since))
+        parameters.append(format_canonical_timestamp(since))
     if until is not None:
         clauses.append("s.sampled_at <= ?")
-        parameters.append(_format_canonical(until))
+        parameters.append(format_canonical_timestamp(until))
     if not clauses:
         return "", ()
     return " WHERE " + " AND ".join(clauses), tuple(parameters)
@@ -537,26 +538,8 @@ def _require_exact_keys(raw: JsonObject, expected: frozenset[str], context: str)
 # ---------------------------------------------------------------------------
 
 
-def _parse_iso_timestamp(value: str) -> datetime | None:
-    """Parse ISO 8601 with an explicit offset (``Z`` included) as aware UTC."""
-    try:
-        normalized = value.removesuffix("Z") + "+00:00" if value.endswith("Z") else value
-        parsed = datetime.fromisoformat(normalized)
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        return None
-    return parsed.astimezone(UTC)
-
-
 def _canonical_timestamp(value: str) -> str:
-    parsed = _parse_iso_timestamp(value)
-    if parsed is None:
-        raise UsageHistoryError("timestamp must be ISO 8601 with an explicit offset")
-    return _format_canonical(parsed)
-
-
-def _format_canonical(value: datetime) -> str:
-    """Fixed-width ``YYYY-MM-DDTHH:MM:SS.ffffffZ``; a naive value is taken as UTC."""
-    aware = value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
-    return aware.replace(tzinfo=None).isoformat(timespec="microseconds") + "Z"
+    try:
+        return canonical_timestamp(value)
+    except ValueError as exc:
+        raise UsageHistoryError("timestamp must be ISO 8601 with an explicit offset") from exc

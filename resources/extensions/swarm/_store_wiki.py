@@ -8,6 +8,7 @@ from typing import cast
 
 from core.tools.fuzzy_match import FuzzyReplacement, replace_fuzzy
 from core.utils.ids import new_id
+from core.utils.timestamps import utc_now_timestamp
 
 from ._store_database import (
     ALIASED_WIKI_REVISION_COLUMNS,
@@ -16,7 +17,7 @@ from ._store_database import (
     SwarmDatabase,
 )
 from ._store_records import _assert_epoch, _assert_mutable, _participant
-from ._store_values import Json, SwarmStoreError, _dump, _hash, _load, _now, _request_id
+from ._store_values import Json, SwarmStoreError, _dump, _hash, _load, _request_id
 
 MUTATIONS = {"create", "update", "delete", "restore"}
 _FIELDS = {
@@ -251,7 +252,7 @@ def _mutate(
         if replay["payload_hash"] != payload_hash:
             raise SwarmStoreError("request_conflict")
         return {**_load(replay["outcome"]), "replayed": True}
-    now = _now()
+    now = utc_now_timestamp()
     if action == "create":
         while True:
             page_id = new_id("wpg")

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 from contextlib import AsyncExitStack
 from typing import Any, cast
@@ -259,6 +260,7 @@ async def _rename_agent(state: Any, params: JsonObject) -> JsonObject:
                     state,
                     agent_id,
                     new_agent_id,
+                    asyncio.get_running_loop(),
                 )
                 state.runtime.invalidate_agent_skills(agent_id)
                 state.runtime.invalidate_agent_skills(new_agent_id)

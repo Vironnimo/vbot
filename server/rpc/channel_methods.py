@@ -172,7 +172,7 @@ async def _update_channel(state: Any, params: JsonObject) -> JsonObject:
         try:
             async with _agent_reference_lock(state):
                 _validate_channel_agent_exists(state, updates["agent_id"])
-                state.runtime.channel_service.update_channel(channel_id, **updates)
+                await state.runtime.channel_service.update_channel(channel_id, **updates)
                 state.runtime.reload_channel_tool()
         except Exception as exc:
             raise _map_expected_error(exc) from exc
@@ -182,7 +182,7 @@ async def _update_channel(state: Any, params: JsonObject) -> JsonObject:
         return saved_config.to_dict()
 
     try:
-        state.runtime.channel_service.update_channel(channel_id, **updates)
+        await state.runtime.channel_service.update_channel(channel_id, **updates)
         state.runtime.reload_channel_tool()
     except Exception as exc:
         raise _map_expected_error(exc) from exc
@@ -206,7 +206,7 @@ async def _delete_channel(state: Any, params: JsonObject) -> JsonObject:
     return {"ok": True}
 
 
-def _enable_channel(state: Any, params: JsonObject) -> JsonObject:
+async def _enable_channel(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, {"id"}, "channel.enable")
 
     channel_id = _required_string(params, "id")
@@ -214,7 +214,7 @@ def _enable_channel(state: Any, params: JsonObject) -> JsonObject:
         channel_service = state.runtime.channel_service
         previous_config = _channel_config_by_id(channel_service, channel_id)
         was_running = bool(channel_service.is_running(channel_id))
-        channel_service.enable_channel(channel_id)
+        await channel_service.enable_channel(channel_id)
         state.runtime.reload_channel_tool()
     except Exception as exc:
         raise _map_expected_error(exc) from exc
@@ -225,7 +225,7 @@ def _enable_channel(state: Any, params: JsonObject) -> JsonObject:
     return saved_config.to_dict()
 
 
-def _disable_channel(state: Any, params: JsonObject) -> JsonObject:
+async def _disable_channel(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, {"id"}, "channel.disable")
 
     channel_id = _required_string(params, "id")
@@ -233,7 +233,7 @@ def _disable_channel(state: Any, params: JsonObject) -> JsonObject:
         channel_service = state.runtime.channel_service
         previous_config = _channel_config_by_id(channel_service, channel_id)
         was_running = bool(channel_service.is_running(channel_id))
-        channel_service.disable_channel(channel_id)
+        await channel_service.disable_channel(channel_id)
         state.runtime.reload_channel_tool()
     except Exception as exc:
         raise _map_expected_error(exc) from exc
@@ -244,7 +244,7 @@ def _disable_channel(state: Any, params: JsonObject) -> JsonObject:
     return saved_config.to_dict()
 
 
-def _set_channel_token(state: Any, params: JsonObject) -> JsonObject:
+async def _set_channel_token(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, {"id", "token", "slot"}, "channel.set_token")
 
     channel_id = _required_string(params, "id")
@@ -273,13 +273,13 @@ def _set_channel_token(state: Any, params: JsonObject) -> JsonObject:
         effective_value = state.runtime.resolve_environment_credential(credential_key)
         if previous_effective_value != effective_value:
             adapter_restart_attempted = True
-            adapter_restart_requested = bool(channel_service.restart_channel(channel_id))
+            adapter_restart_requested = bool(await channel_service.restart_channel(channel_id))
         state.runtime.reload_channel_tool()
     except Exception as exc:
         _restore_channel_token(state.runtime, credential_key, previous_value)
         if adapter_restart_attempted:
             try:
-                channel_service.restart_channel(channel_id)
+                await channel_service.restart_channel(channel_id)
             except Exception as rollback_error:
                 _LOGGER.error(
                     "Channel token rollback could not restore the adapter "

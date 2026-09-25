@@ -307,6 +307,13 @@ def test_inactive_rows_no_edit_explains_are_hidden_and_reported(tmp_path: Path) 
     ]
 
 
+# Older Compactions placed this note between the summary and the retained tail.
+_TAIL_GUIDANCE = (
+    "The messages below are the most recent verbatim Session activity retained after this "
+    "Compaction checkpoint. They chronologically follow the summary above."
+)
+
+
 def test_checkpoints_get_a_projection_and_a_policy(tmp_path: Path) -> None:
     context = _context(tmp_path)
     with _legacy(context) as legacy:
@@ -321,7 +328,10 @@ def test_checkpoints_get_a_projection_and_a_policy(tmp_path: Path) -> None:
             key,
             "Later work",
             minute=7,
-            projection=[{"id": "p1", "role": "note", "timestamp": at(7), "content": "carried"}],
+            projection=[
+                {"id": "p1", "role": "note", "timestamp": at(7), "content": "carried"},
+                {"id": "p2", "role": "note", "timestamp": at(7), "content": _TAIL_GUIDANCE},
+            ],
             policy="auto",
         )
 
@@ -339,7 +349,6 @@ def test_checkpoints_get_a_projection_and_a_policy(tmp_path: Path) -> None:
         ("user", "recent question"),
         ("assistant", "recent answer"),
     ]
-    assert rebuilt.tail_boundary_id is None
     assert (rebuilt.compaction_policy, rebuilt.compaction_strategy) == (
         "summary_tail",
         "summary_tail",
@@ -352,6 +361,7 @@ def test_checkpoints_get_a_projection_and_a_policy(tmp_path: Path) -> None:
     assert (kept.compaction_policy, kept.compaction_strategy) == ("auto", "auto")
     counts = context.report.counts[AREA]
     assert (counts["checkpoints"], counts["checkpoints_materialized"]) == (2, 1)
+    assert counts["tail_guidance_notes_dropped"] == 1
     assert _skips(context) == [
         (
             "session -/main/s1 (gen_0001)",

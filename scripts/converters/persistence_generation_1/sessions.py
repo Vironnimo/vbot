@@ -22,7 +22,8 @@ gets exactly the side rows the current store writes for its role:
   has ended.
 - A boundary checkpoint without a projection gets the projection the old reader
   derived: the summary note, then the messages from its tail boundary up to
-  the checkpoint.
+  the checkpoint. A projected checkpoint drops the retired tail-guidance note
+  older Compactions placed between the summary and the tail.
 - A fork whose copied prefix still matches its source seq for seq (role,
   Message id and visibility), and whose copied Runs match the source's, shares
   that prefix through ``session_lineage``, exactly as a Generation 1 fork
@@ -68,7 +69,7 @@ from core.sessions._store_schema import session_database_spec
 from core.sessions._types import SESSION_TERMINAL_RUN_STATUSES
 from core.sessions.errors import SessionStoreCorruptError
 from core.sessions.schema import APPLICATION_ID, FTS_STALE_KEY
-from core.utils.timestamps import format_canonical_timestamp
+from core.utils.timestamps import format_canonical_timestamp, utc_now_timestamp
 from scripts.converters.persistence_generation_1._context import (
     ConversionContext,
     ConversionError,
@@ -97,6 +98,11 @@ _RUN_LATEST_RELEASE = (
 )
 # Boundary checkpoints were written by the summary-and-tail strategy.
 _LEGACY_CHECKPOINT_STRATEGY = "summary_tail"
+# Projected checkpoints once placed this note between the summary and the tail.
+_LEGACY_TAIL_GUIDANCE = (
+    "The messages below are the most recent verbatim Session activity retained after this "
+    "Compaction checkpoint. They chronologically follow the summary above."
+)
 # Channel routing moved out of Sessions; these metadata keys retired with it.
 _RETIRED_METADATA_KEYS = ("active_session_id", "conversation_kind", "participants")
 _RUNNING = "running"
@@ -375,10 +381,6 @@ def _group(rows: Sequence[sqlite3.Row], key: str) -> dict[int, list[sqlite3.Row]
     return grouped
 
 
-def _utc_now() -> str:
-    return format_canonical_timestamp(datetime.now(UTC))
-
-
 # -- Plan values -----------------------------------------------------------------------
 
 
@@ -555,7 +557,7 @@ class _Conversion:
             label = self.label(row)
             forked_at, problem = _normalize_timestamp(source.get("forked_at"))
             if forked_at is None:
-                forked_at = _normalize_timestamp(row["created_at"])[0] or _utc_now()
+                forked_at = _normalize_timestamp(row["created_at"])[0] or utc_now_timestamp()
                 self.issues.add(label, f"fork time {problem}; the Session creation time is used")
             elif problem is not None:
                 self.issues.add(label, f"fork time {problem}")
@@ -790,7 +792,7 @@ class _SessionConversion:
         self.generation_id = str(row["generation_id"])
         self.label = conversion.label(row)
         self.archived = row["status"] == "archived"
-        self.created_at = self._time(row["created_at"], "creation time", _utc_now())
+        self.created_at = self._time(row["created_at"], "creation time", utc_now_timestamp())
         self.last_activity = (
             self.created_at
             if row["last_message_at"] is None
@@ -946,18 +948,37 @@ class _SessionConversion:
         return timestamp
 
     def _prepare_checkpoint(self, record: _Record, data: dict[str, Any]) -> None:
-        """Give a checkpoint the policy and strategy every projected checkpoint has."""
+        """Give a checkpoint the projection, policy and strategy every checkpoint has."""
         policy = data.pop("compaction_policy", None)
         strategy = data.pop("compaction_strategy", None)
-        if data.get("projection") is None:
+        record.tail_boundary_id = data.pop("tail_boundary_id", None)
+        projection = data.get("projection")
+        if projection is None:
             # Materialized once every record is known; see _materialize_checkpoints.
             record.needs_projection = True
-            record.tail_boundary_id = data.pop("tail_boundary_id", None)
             data["projection"] = []
-        elif not policy or not strategy:
-            self.issue(f"compaction checkpoint {record.entry_id} policy or strategy filled in")
+        else:
+            if isinstance(projection, list):
+                data["projection"] = self._without_tail_guidance(projection)
+            if not policy or not strategy:
+                self.issue(f"compaction checkpoint {record.entry_id} policy or strategy filled in")
         data["compaction_policy"] = policy or strategy or _LEGACY_CHECKPOINT_STRATEGY
         data["compaction_strategy"] = strategy or policy or _LEGACY_CHECKPOINT_STRATEGY
+
+    def _without_tail_guidance(self, projection: list[Any]) -> list[Any]:
+        """Drop the retired tail-guidance note; the current reader knows no such note."""
+        kept = [
+            entry
+            for entry in projection
+            if not (
+                isinstance(entry, dict)
+                and entry.get("role") == "note"
+                and entry.get("content") == _LEGACY_TAIL_GUIDANCE
+            )
+        ]
+        if len(kept) != len(projection):
+            self.tally.count("tail_guidance_notes_dropped", len(projection) - len(kept))
+        return kept
 
     def _plan_run(self, row: sqlite3.Row, paths: list[sqlite3.Row]) -> _Run:
         run_id = str(row["run_id"])

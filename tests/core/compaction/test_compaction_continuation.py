@@ -6,9 +6,8 @@ import json
 
 import pytest
 
-from core.chat import ChatMessage
+from core.chat import ChatMessage, ChatMessageValidationError
 from core.chat._message_history import effective_compaction_messages
-from core.chat.messages import COMPACTION_SUMMARY_NOTE_PREFIX
 from core.compaction import (
     MIN_AUTO_COMPACTION_RECLAIM_TOKENS,
     CompactionError,
@@ -199,27 +198,17 @@ def test_checkpoint_round_trip_contains_projection_and_provenance() -> None:
     assert restored.compaction_strategy == "summary_tail"
 
 
-def test_legacy_checkpoint_is_read_only_input_to_the_new_projection_engine() -> None:
-    old = user("u1", "hidden")
-    tail = user("u2", "kept tail")
-    legacy = ChatMessage.from_dict(
-        {
-            "id": "c1",
-            "timestamp": TIMESTAMP,
-            "role": "compaction_checkpoint",
-            "content": "old checkpoint summary",
-            "tail_boundary_id": "u2",
-            "usage": {"compacted_token_count": 40},
-        }
-    )
-    newer = assistant("a2", "new response")
-
-    effective = effective_compaction_messages([old, tail, legacy, newer])
-
-    assert [message.role for message in effective] == ["note", "user", "assistant"]
-    assert effective[0].content == (f"{COMPACTION_SUMMARY_NOTE_PREFIX}old checkpoint summary")
-    assert effective[1:] == [tail, newer]
-    assert legacy.to_dict()["tail_boundary_id"] == "u2"
+def test_checkpoint_without_projection_is_rejected() -> None:
+    with pytest.raises(ChatMessageValidationError, match="require a projection"):
+        ChatMessage.from_dict(
+            {
+                "id": "c1",
+                "timestamp": TIMESTAMP,
+                "role": "compaction_checkpoint",
+                "content": "boundary checkpoint summary",
+                "usage": {"compacted_token_count": 40},
+            }
+        )
 
 
 @pytest.mark.asyncio

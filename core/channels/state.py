@@ -41,6 +41,7 @@ from core.channels.config import (
 from core.chat.messages import GroupRole
 from core.config_validation import JsonObject
 from core.database import Database, canonical_database_path, open_database
+from core.utils.timestamps import format_canonical_timestamp, utc_now_timestamp
 
 # Socket platforms may redeliver recent events after a reconnect; remembering the
 # newest receipts per Channel bounds both the dedupe window and the table.
@@ -154,7 +155,7 @@ class ChannelStateStore:
         normalized_display_name = (
             display_name.strip() if isinstance(display_name, str) else normalized_user_id
         ) or normalized_user_id
-        seen_at = state_timestamp()
+        seen_at = utc_now_timestamp()
 
         def snapshot(connection: sqlite3.Connection) -> GroupRole:
             self_user_id = _registered_self_user_id(connection, normalized_id)
@@ -340,7 +341,7 @@ class ChannelStateStore:
         normalized_id = _normalize_channel_id(channel_id)
         if conversation_kind not in _CONVERSATION_KINDS:
             raise ChannelError(f"Unknown Channel conversation kind: {conversation_kind}")
-        updated_at = state_timestamp()
+        updated_at = utc_now_timestamp()
 
         def point(connection: sqlite3.Connection) -> str | None:
             _registered_self_user_id(connection, normalized_id)
@@ -373,7 +374,7 @@ class ChannelStateStore:
     ) -> None:
         """Undo one pointer change unless later navigation replaced it."""
         normalized_id = _normalize_channel_id(channel_id)
-        updated_at = state_timestamp()
+        updated_at = utc_now_timestamp()
 
         def restore(connection: sqlite3.Connection) -> None:
             connection.execute(
@@ -410,7 +411,7 @@ class ChannelStateStore:
                     binding.origin_session_id,
                     json.dumps(list(binding.original_button_data), ensure_ascii=False),
                     binding.created_at,
-                    state_timestamp() if binding.consumed else None,
+                    utc_now_timestamp() if binding.consumed else None,
                 ),
             )
 
@@ -438,7 +439,7 @@ class ChannelStateStore:
     ) -> RunButtonClaim:
         """Consume a binding once, when its original target and thread tap a Run button."""
         normalized_id = _normalize_channel_id(channel_id)
-        consumed_at = state_timestamp()
+        consumed_at = utc_now_timestamp()
 
         def claim(connection: sqlite3.Connection) -> RunButtonClaim:
             binding = _run_button_binding(connection, normalized_id, binding_id)
@@ -499,7 +500,7 @@ class ChannelStateStore:
     async def record_received(self, channel_id: str, message_ref: str) -> None:
         """Remember one handled inbound message, keeping the newest receipts per Channel."""
         normalized_id = _normalize_channel_id(channel_id)
-        received_at = state_timestamp()
+        received_at = utc_now_timestamp()
 
         def record(connection: sqlite3.Connection) -> None:
             _registered_self_user_id(connection, normalized_id)
@@ -536,7 +537,7 @@ class ChannelStateStore:
         normalized_id = _normalize_channel_id(channel_id)
         if not isinstance(update_id, int) or isinstance(update_id, bool) or update_id < 0:
             raise ChannelError("Telegram update id must be a non-negative integer")
-        updated_at = state_timestamp()
+        updated_at = utc_now_timestamp()
         cutoff = _polling_expiry_cutoff()
 
         def save(connection: sqlite3.Connection) -> None:
@@ -554,14 +555,8 @@ class ChannelStateStore:
         self._database.write(save)
 
 
-def state_timestamp(moment: datetime | None = None) -> str:
-    """Canonical fixed-width UTC timestamp: ``YYYY-MM-DDTHH:MM:SS.ffffffZ``."""
-    value = datetime.now(UTC) if moment is None else moment.astimezone(UTC)
-    return value.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-
-
 def _polling_expiry_cutoff() -> str:
-    return state_timestamp(
+    return format_canonical_timestamp(
         datetime.now(UTC) - timedelta(seconds=TELEGRAM_UPDATE_OFFSET_TTL_SECONDS)
     )
 
@@ -697,4 +692,4 @@ def _normalize_platform_access_id(value: str, field_name: str) -> str:
     return value.strip()
 
 
-__all__ = ["RECEIVED_MESSAGE_WINDOW", "ChannelStateStore", "state_timestamp"]
+__all__ = ["RECEIVED_MESSAGE_WINDOW", "ChannelStateStore"]
