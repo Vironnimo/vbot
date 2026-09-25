@@ -352,6 +352,7 @@ async def _handle_channel_send_tool(
         chat_sessions,
         prepared.channel_id,
         platform_target,
+        thread_id=thread_id,
         sender_agent_id=context.agent_id,
         message=prepared.message,
         files=prepared.files,
@@ -424,12 +425,15 @@ async def _record_outbound_message_note(
     channel_id: str,
     platform_target: str,
     *,
+    thread_id: str | None,
     sender_agent_id: str,
     message: str | None,
     files: list[FileData],
 ) -> None:
     try:
-        route = await channel_service.ensure_outbound_session(channel_id, platform_target)
+        route = await channel_service.ensure_outbound_session(
+            channel_id, platform_target, thread_id=thread_id
+        )
         # Serialize the outbound-context note against an open tool cycle on the
         # target session. The lock is task-reentrant, so this is safe even when
         # the sending Run targets its own session.
