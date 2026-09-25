@@ -51,7 +51,9 @@ async def test_temporary_mcp_caller_uses_bound_policy_and_keeps_generation_scope
             data_root=tmp_path,
             execution_owner=owner,
         )
-        host = runtime._extension_host()
+        identity = runtime.extensions.registration_identity("mcp")
+        assert identity is not None
+        host = runtime._extension_host().for_owner(identity)
         agent = host.resolve_tool_agent(ctx)
         assert agent.tool_access.granted == ("mcp_example",)
         assert not runtime.agents.exists(ctx.agent_id)

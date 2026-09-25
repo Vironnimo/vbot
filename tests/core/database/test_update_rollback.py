@@ -72,7 +72,11 @@ def _candidate_writes(data_dir: Path) -> None:
     database.close()
     _write(data_dir, "settings.json", '{"format_version": 2}\n')
     (data_dir / "agents" / "main" / "agent.json").unlink()
-    _write(data_dir, "mcp/connections.json", '{"format_version": 1, "connections": []}\n')
+    _write(
+        data_dir,
+        "extension-data/mcp/connections.json",
+        '{"format_version": 1, "connections": []}\n',
+    )
     open_database(notes_spec(data_dir, name="journal")).close()
 
 
@@ -169,9 +173,9 @@ def test_the_rollback_restores_every_member_and_the_document_set(data_dir: Path)
     assert stored_bodies(notes_spec(data_dir, name="tasks")) == ["saved tasks"]
     assert (data_dir / "settings.json").read_text(encoding="utf-8") == _SETTINGS
     assert (data_dir / "agents" / "main" / "agent.json").read_text(encoding="utf-8") == _AGENT
-    assert not (data_dir / "mcp" / "connections.json").exists()
+    assert not (data_dir / "extension-data" / "mcp" / "connections.json").exists()
     assert result.documents is not None
-    assert result.documents.removed == ("mcp/connections.json",)
+    assert result.documents.removed == ("extension-data/mcp/connections.json",)
     # The database the candidate registered is retired, not deleted.
     assert result.retired == ("journal",)
     marker = read_marker(data_dir)

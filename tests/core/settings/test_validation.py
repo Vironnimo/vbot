@@ -87,7 +87,7 @@ _DATA_DIR_DOCUMENTS: dict[str, tuple[str, dict[str, object]]] = {
     "terminals/launch-history.json": ('{"version": 1, "entries": []}', {"entries": []}),
     "terminals/groups.json": ('{"version": 1, "groups": []}', {"groups": []}),
     "oauth/github-copilot-oauth.json": ('{"access_token": "token"}', {"access_token": "token"}),
-    "mcp/connections.json": ("[]", {"connections": []}),
+    "extension-data/mcp/connections.json": ("[]", {"connections": []}),
 }
 
 

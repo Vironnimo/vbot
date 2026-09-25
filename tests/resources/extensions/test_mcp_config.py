@@ -160,8 +160,9 @@ def test_validate_connections_file_reports_every_connection(tmp_path):
 async def test_start_publishes_healthy_tools_and_reports_individual_issues(
     host, monkeypatch, caplog
 ):
-    store = ConnectionStore(host.data_dir / "mcp")
-    store.directory.mkdir()
+    # MCP keeps its state in its Extension state directory.
+    store = ConnectionStore(host.data_dir / "extension-data" / "mcp")
+    assert store.directory == host.state_dir
     store.path.write_text(
         document(
             connection("godot", agents=[]),
@@ -189,5 +190,8 @@ async def test_start_publishes_healthy_tools_and_reports_individual_issues(
         }
         assert len(caplog.records) == 3
         assert "secret-sentinel" not in caplog.text
+        await service.manage("disable", {"id": "godot"})
+        assert ConnectionStore(host.state_dir).load()["godot"]["enabled"] is False
+        assert not (host.data_dir / "mcp").exists()
     finally:
         await service.close()

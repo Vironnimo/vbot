@@ -31,6 +31,8 @@ def host(tmp_path):
         memory_prompt_mode="off",
         workspace=str(tmp_path),
     )
+    state_dir = tmp_path / "extension-data" / "mcp"
+    state_dir.mkdir(parents=True)
     return ExtensionHost(
         data_dir=tmp_path,
         sample=sample,
@@ -41,6 +43,7 @@ def host(tmp_path):
         ),
         resolve_credential=lambda key: credentials.get(key, ""),
         set_credential=lambda key, value: credentials.__setitem__(key, value),
+        state_dir=state_dir,
     )
 
 

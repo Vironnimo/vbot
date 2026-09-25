@@ -103,7 +103,7 @@ def _candidate_writes(data_dir: Path) -> None:
     add_note(database, "written by the candidate")
     database.close()
     _write_document(data_dir, "settings.json", '{"format_version": 2}\n')
-    _write_document(data_dir, "mcp/connections.json", '{"format_version": 1}\n')
+    _write_document(data_dir, "extension-data/mcp/connections.json", '{"format_version": 1}\n')
 
 
 def _target_data(monkeypatch: pytest.MonkeyPatch, install: Installation) -> None:
@@ -345,7 +345,7 @@ def test_candidate_failure_restores_the_update_snapshot_before_the_previous_vers
     assert f"restored from snapshot {snapshot_id}" in operation.message
     assert starts == [("rel_new", True), ("rel_old", True), ("rel_old", False)]
     assert install.version().name == "rel_old"
-    assert not (data_dir / "mcp" / "connections.json").exists()
+    assert not (data_dir / "extension-data" / "mcp" / "connections.json").exists()
     incident = read_incident(data_dir, "notes")
     assert incident is not None
     assert incident["restored_snapshot_id"] == snapshot_id
