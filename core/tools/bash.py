@@ -82,9 +82,9 @@ def _shell_syntax_notes() -> str:
     """
     if sys.platform == "win32":
         return (
-            " Commands use PowerShell 7 (pwsh), not cmd or bash: use $env:VAR, redirect "
-            "stderr with 2>$null, and assign environment variables separately. PowerShell "
-            "runs non-interactively."
+            " Commands run in PowerShell 7 (pwsh), not bash or cmd: use $env:NAME for "
+            "variables, $null instead of /dev/null, Select-String instead of grep, and single "
+            "quotes or a here-string (@'...'@) instead of \\\" escapes and heredocs."
         )
     return " Commands run in bash on this host."
 

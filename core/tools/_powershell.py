@@ -6,14 +6,21 @@ every process pipe as UTF-8. Setting the console output encoding at the start of
 the command makes cmdlet output, captured native output, and native console
 programs started by the command (``cmd``, ``dir``, ...) use UTF-8 as well.
 
+Agents habitually pipe into ``head``, ``tail``, and ``wc -l``, which PowerShell
+lacks. When such a command is genuinely missing, a command-not-found hook runs
+an equivalent built from Select-Object and Get-Content for the line-count
+forms (``-n N``, ``-N``, ``tail -n +N``, ``wc -l``, pipeline or files); any
+other option stops the script with a message naming the PowerShell equivalent.
+An installed ``head`` (for example from Git for Windows) still runs itself.
+
 ``pwsh -Command`` exits with 1 whenever the last statement failed, so a native
 program's own exit code is lost. A closing statement exits with that code
 instead, as ``bash -c`` does, and otherwise with 0 or 1 by the last statement's
 success.
 
 ``using`` statements and a script ``param`` block must precede every other
-statement, and named script blocks must contain every statement, so the setup
-statement is inserted after those constructs, and a script of named blocks
+statement, and named script blocks must contain every statement, so the one-line
+setup statement is inserted after those constructs, and a script of named blocks
 keeps PowerShell's own exit status. The small scanner below only recognizes
 this leading script structure; everything after it stays verbatim.
 """
@@ -22,6 +29,52 @@ from __future__ import annotations
 
 UTF8_OUTPUT_STATEMENT = "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)"
 EXIT_STATUS_STATEMENT = "if ($?) { exit 0 }; if ($LASTEXITCODE) { exit $LASTEXITCODE }; exit 1"
+# One line, so PowerShell's error positions stay one line off the Agent's command.
+UNIX_LINE_FILTERS_STATEMENT = "".join(
+    (
+        "$ExecutionContext.InvokeCommand.CommandNotFoundAction = {param($Name, $EventArgs); ",
+        "if ($Name -notin 'head', 'tail', 'wc') { return }; $EventArgs.StopSearch = $true; ",
+        "$EventArgs.CommandScriptBlock = {begin {",
+        "$count = 10; $from = 0; $lines = $Name -ne 'wc'; $files = @(); $options = $true; ",
+        "$piped = $MyInvocation.ExpectingInput; $seen = 0; ",
+        "$last = [System.Collections.Generic.Queue[object]]::new(); ",
+        "$alternative = if ($Name -eq 'head') { 'Select-Object -First N' } ",
+        "else { 'Select-Object -Last N' }; ",
+        "for ($i = 0; $i -lt $args.Count; $i++) {$a = [string]$args[$i]; ",
+        "if ($a -eq '-') { continue }; ",
+        "if ($options -and $a -eq '--') { $options = $false; continue }; ",
+        "if (-not $options -or $a -notmatch '^-.') { $files += $a; continue }; ",
+        "if ($Name -eq 'wc') { if ($a -in '-l', '--lines') { $lines = $true; continue } } ",
+        "elseif ($a -match '^-(\\d+)$') { $count = [int]$Matches[1]; continue } ",
+        "elseif ($a -match '^(?:-n|--lines=?)(.*)$') {$value = $Matches[1]; ",
+        "if ($value -eq '') { $i++; $value = [string]$args[$i] }; ",
+        "if ($value -match '^(\\+?)(\\d+)$') {$count = [int]$Matches[2]; ",
+        "if ($Matches[1] -and $Name -eq 'tail') { $from = [math]::Max(1, $count) }; continue}}; ",
+        "if ($Name -eq 'wc') { throw \"wc: $a is not supported here; use wc -l, or ",
+        'Measure-Object -Word or -Character." }; ',
+        'throw "${Name}: $a is not supported here; use $Name -n N or $alternative."}; ',
+        "if (-not $lines) { throw 'wc: only wc -l is supported here; use Measure-Object ",
+        "-Word or -Character for other counts.' }} ",
+        "process {if ($files.Count -or -not $piped) { return }; $seen++; ",
+        "if ($Name -eq 'head') { if ($seen -le $count) { $_ } } ",
+        "elseif ($Name -eq 'tail') {if ($from) { if ($seen -ge $from) { $_ } } ",
+        "else { $last.Enqueue($_); if ($last.Count -gt $count) { [void]$last.Dequeue() } }}} ",
+        "end {if (-not $files.Count) { if ($Name -eq 'wc') { $seen } ",
+        "elseif (-not $from) { $last }; return }; ",
+        "$total = 0; foreach ($file in $files) {",
+        "if ($Name -eq 'wc') { $n = @(Get-Content -LiteralPath $file -ErrorAction Stop).Count; ",
+        '$total += $n; "$n $file"; continue }; ',
+        'if ($files.Count -gt 1) { "==> $file <==" }; ',
+        "if ($Name -eq 'head') { ",
+        "Get-Content -LiteralPath $file -TotalCount $count -ErrorAction Stop } ",
+        "elseif ($from) { Get-Content -LiteralPath $file -ErrorAction Stop | ",
+        "Select-Object -Skip ($from - 1) } ",
+        "else { Get-Content -LiteralPath $file -Tail $count -ErrorAction Stop }}; ",
+        "if ($Name -eq 'wc' -and $files.Count -gt 1) { \"$total total\" }}",
+        "}.GetNewClosure()}",
+    )
+)
+SETUP_STATEMENT = f"{UTF8_OUTPUT_STATEMENT}; {UNIX_LINE_FILTERS_STATEMENT}"
 
 _SINGLE_QUOTES = "'‘’‚‛"
 _DOUBLE_QUOTES = '"“”„'
@@ -30,7 +83,7 @@ _NAMED_BLOCKS = ("dynamicparam", "begin", "process", "end", "clean")
 
 
 def powershell_command(command: str) -> str:
-    """Return ``command`` with UTF-8 output and, where PowerShell allows it, its exit status."""
+    """Return ``command`` with the setup line and, where PowerShell allows it, its exit status."""
     position, named_blocks = _body_start(command)
     wrapped = _with_setup(command, position)
     if named_blocks:
@@ -38,8 +91,8 @@ def powershell_command(command: str) -> str:
     return f"{wrapped}\n{EXIT_STATUS_STATEMENT}"
 
 
-def with_utf8_output(command: str) -> str:
-    """Return ``command`` with the UTF-8 output statement where PowerShell allows it."""
+def with_setup(command: str) -> str:
+    """Return ``command`` with the setup line where PowerShell allows it."""
     return _with_setup(command, _body_start(command)[0])
 
 
@@ -47,7 +100,7 @@ def _with_setup(command: str, position: int) -> str:
     prefix = command[:position]
     if prefix and not prefix.endswith(("\n", "\r", "{")):
         prefix += "\n"
-    return f"{prefix}{UTF8_OUTPUT_STATEMENT}\n{command[position:]}"
+    return f"{prefix}{SETUP_STATEMENT}\n{command[position:]}"
 
 
 def _body_start(command: str) -> tuple[int, bool]:
@@ -188,7 +241,9 @@ def _line_end(command: str, position: int) -> int:
 
 __all__ = [
     "EXIT_STATUS_STATEMENT",
+    "SETUP_STATEMENT",
+    "UNIX_LINE_FILTERS_STATEMENT",
     "UTF8_OUTPUT_STATEMENT",
     "powershell_command",
-    "with_utf8_output",
+    "with_setup",
 ]
