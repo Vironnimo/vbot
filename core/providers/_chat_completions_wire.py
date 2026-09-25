@@ -23,6 +23,7 @@ from core.providers.adapter import (
     TERMINAL_OUTCOME_UNKNOWN,
     TerminalOutcome,
     normalize_tool_call_candidates,
+    tool_result_content_blocks,
     tool_result_text,
 )
 from core.providers.errors import (
@@ -109,7 +110,9 @@ def _to_openai_message(message: dict[str, Any]) -> dict[str, Any]:
         return {
             "role": "tool",
             "tool_call_id": message["tool_call_id"],
-            "content": tool_result_text(message["content"]),
+            "content": tool_result_text(
+                message["content"], content_blocks=tool_result_content_blocks(message)
+            ),
         }
     if role == "user":
         return {
