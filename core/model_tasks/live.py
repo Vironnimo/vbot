@@ -31,11 +31,33 @@ from typing import Any, Protocol
 from core.model_tasks._live_brain import BrainTarget, LiveBrain
 from core.model_tasks._live_call import LiveCallSession
 from core.model_tasks._live_openai import ControlJoinError, open_openai_live_wire
+from core.model_tasks._live_programs import (
+    CODING_PROGRAMS,
+    CliPrompt,
+    CodingProgram,
+    program_input_visible,
+    program_prompt,
+    program_ready,
+    shell_prompt_visible,
+)
 from core.model_tasks._live_tools import (
     DIRECT_VOICE_INSTRUCTIONS,
-    LIVE_TOOL_APP,
-    LIVE_TOOL_TERMINAL,
+    LIVE_KEYS,
+    LIVE_READ_ONLY_TOOLS,
+    LIVE_TOOL_NAMES,
+    MAX_LIVE_NAME_CHARS,
+    MAX_LIVE_TEXT_CHARS,
+    TOOL_OPEN,
+    TOOL_OVERVIEW,
+    TOOL_READ,
+    TOOL_SEND_MESSAGE,
+    TOOL_START_AGENT_SESSION,
+    TOOL_START_CODING_TERMINAL,
+    TOOL_STOP,
+    TOOL_TERMINAL,
     VOICE_INSTRUCTIONS,
+    live_failure,
+    live_success,
 )
 from core.model_tasks._live_wire import MEDIA_RELAY, MEDIA_WEBRTC, LiveWire
 from core.model_tasks._live_xai import open_xai_live_wire
@@ -63,10 +85,24 @@ from core.utils.logging import get_logger
 JsonObject = dict[str, Any]
 
 __all__ = [
+    "CODING_PROGRAMS",
+    "LIVE_KEYS",
     "LIVE_MEDIA_KINDS",
+    "LIVE_READ_ONLY_TOOLS",
     "LIVE_START_REJECTION_CODES",
-    "LIVE_TOOL_APP",
-    "LIVE_TOOL_TERMINAL",
+    "LIVE_TOOL_NAMES",
+    "MAX_LIVE_NAME_CHARS",
+    "MAX_LIVE_TEXT_CHARS",
+    "TOOL_OPEN",
+    "TOOL_OVERVIEW",
+    "TOOL_READ",
+    "TOOL_SEND_MESSAGE",
+    "TOOL_START_AGENT_SESSION",
+    "TOOL_START_CODING_TERMINAL",
+    "TOOL_STOP",
+    "TOOL_TERMINAL",
+    "CliPrompt",
+    "CodingProgram",
     "LiveCall",
     "LiveCallHost",
     "LiveRunNotice",
@@ -74,6 +110,12 @@ __all__ = [
     "LiveStartRejected",
     "LiveVoiceError",
     "LiveVoiceService",
+    "live_failure",
+    "live_success",
+    "program_input_visible",
+    "program_prompt",
+    "program_ready",
+    "shell_prompt_visible",
 ]
 
 _LOGGER = get_logger(__name__)
@@ -113,12 +155,12 @@ class LiveStartRejected(LiveVoiceError):  # noqa: N818 - names the outcome
 class LiveCallHost(Protocol):
     """Server-side attachment of one Live call to its owning accessor.
 
-    ``execute_tool`` runs one app operation (``vbot_app`` or ``vbot_terminal``)
-    and returns a JSON-serializable result, reporting operation failures inside
-    the result. Concurrent delegations may call it concurrently; the host
-    serializes executions. ``publish`` delivers an accessor update and
-    ``publish_audio`` relayed assistant audio (PCM16 mono 24 kHz), both
-    without blocking.
+    ``execute_tool`` runs one prepared Live Tool call (a canonical name from
+    ``LIVE_TOOL_NAMES`` with validated arguments) and returns a Tool result
+    envelope, reporting operation failures inside it. Concurrent delegations
+    may call it concurrently; the host serializes executions. ``publish``
+    delivers an accessor update and ``publish_audio`` relayed assistant audio
+    (PCM16 mono 24 kHz), both without blocking.
     """
 
     async def execute_tool(self, name: str, arguments: JsonObject) -> JsonObject: ...
@@ -134,7 +176,8 @@ class LiveRunNotice:
 
     ``kind`` names the outcome (for example ``completed``, ``failed``, or
     ``interrupted``). ``agent_id`` is the exact Agent address (``agent`` or
-    ``agent@project``).
+    ``agent@project``). ``session_ref`` is the call's short ref for the
+    Session (such as ``s3``), which the spoken notice names instead of the id.
     """
 
     kind: str
@@ -143,6 +186,7 @@ class LiveRunNotice:
     session_id: str
     excerpt: str
     truncated: bool
+    session_ref: str = ""
 
 
 class LiveCall(Protocol):

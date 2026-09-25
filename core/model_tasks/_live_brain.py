@@ -14,12 +14,13 @@ import json
 from collections import deque
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any
 
 from core.chat.model_resolution import resolve_request_temperature
+from core.model_tasks._live_arguments import PreparedLiveCall, prepare_live_call
 from core.model_tasks._live_tools import (
     DELEGATION_INSTRUCTIONS,
-    live_tool_rejection,
+    LIVE_READ_ONLY_TOOLS,
     live_tools,
 )
 from core.providers.accounts import ConnectionRef
@@ -35,8 +36,6 @@ _LOGGER = get_logger(__name__)
 MAX_MODEL_STEPS = 8
 HISTORY_PAIRS = 10
 _MODEL_RETRY_DELAYS_SECONDS = (0.5, 1.5)
-# Failure notes list only actions that may have changed something.
-_READ_ONLY_ACTIONS = frozenset({"context", "sessions", "read", "list"})
 
 
 @dataclass(frozen=True)
@@ -174,16 +173,16 @@ class LiveBrain:
                 await self._sleep(delay)
 
     async def _execute(self, tool_call: JsonObject, performed: list[str]) -> JsonObject:
-        name = tool_call.get("name")
-        arguments = tool_call.get("arguments")
-        rejection = live_tool_rejection(name, arguments)
-        if rejection is not None:
-            return rejection
-        checked = cast(JsonObject, arguments)
-        action = checked.get("action")
-        if action not in _READ_ONLY_ACTIONS:
-            performed.append(f"{name} {action}" if isinstance(action, str) else str(name))
-        return await self._execute_tool(str(name), dict(checked))
+        """Prepare one Tool call and run it once when it is valid.
+
+        Failure notes list only Tools that may have changed something.
+        """
+        prepared = prepare_live_call(tool_call.get("name"), tool_call.get("arguments"))
+        if not isinstance(prepared, PreparedLiveCall):
+            return prepared
+        if prepared.name not in LIVE_READ_ONLY_TOOLS:
+            performed.append(prepared.name)
+        return await self._execute_tool(prepared.name, dict(prepared.arguments))
 
 
 def _render_input(delegation: DelegationInput, request_label: str) -> str:

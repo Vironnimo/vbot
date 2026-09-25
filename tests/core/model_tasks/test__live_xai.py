@@ -16,6 +16,7 @@ from websockets.http11 import Response
 
 from core.model_tasks._live_tools import (
     DIRECT_VOICE_INSTRUCTIONS,
+    LIVE_TOOL_NAMES,
     VOICE_INSTRUCTIONS,
     live_tools,
     request_tool,
@@ -29,7 +30,6 @@ from core.model_tasks._live_wire import (
     WireProblem,
     WireSendError,
     WireStarted,
-    WireToolCall,
     WireUsage,
     relay_media,
 )
@@ -97,12 +97,20 @@ def _creates(commands: list[dict]) -> list[dict]:
 
 
 def _outputs(commands: list[dict]) -> dict[str, Any]:
+    """Function call outputs by call id: decoded JSON, or the plain text."""
     return {
-        command["item"]["call_id"]: json.loads(command["item"]["output"])
+        command["item"]["call_id"]: _decoded(command["item"]["output"])
         for command in commands
         if command["type"] == "conversation.item.create"
         and command["item"]["type"] == "function_call_output"
     }
+
+
+def _decoded(output: str) -> Any:
+    try:
+        return json.loads(output)
+    except ValueError:
+        return output
 
 
 # -- session setup -----------------------------------------------------------
@@ -335,7 +343,10 @@ def test_calls_of_an_interrupted_response_never_run_and_get_an_output():
     done = session.receive(_done("r1", status="cancelled"))
 
     assert done.events == []
-    assert _outputs(done.commands)["c1"]["error"]["code"] == "interrupted"
+    assert _outputs(done.commands)["c1"] == (
+        "Error (interrupted): The call was interrupted before it started; nothing was done. "
+        "Call it again if the user still wants it."
+    )
     assert _creates(done.commands) == []
     assert session.deliver("c1", "late") == []
 
@@ -356,28 +367,39 @@ def test_unknown_or_malformed_delegation_calls_are_answered_without_running(name
     done = session.receive(_done("r1"))
 
     assert done.events == []
-    assert _outputs(done.commands)["c1"]["error"]["code"] == code
+    assert _outputs(done.commands)["c1"].startswith(f"Error ({code}): ")
     assert _types(done.commands)[-1] == "response.create"
 
 
-def test_direct_tools_mode_emits_app_tool_calls_and_returns_raw_json_results():
-    session = _session(direct=True)
+def test_a_delegation_call_in_a_wrapper_spelling_is_accepted():
+    session = _session()
     session.receive(_created("r1"))
     session.receive(
-        _call("r1", "c1", name="vbot_app", arguments=json.dumps({"action": "sessions"}))
+        _call("r1", "c1", name="functions.vbot_request", arguments=json.dumps({"request": "Hi"}))
     )
-    session.receive(_call("r1", "c2", name="vbot_terminal", arguments="{broken"))
+    done = session.receive(_done("r1"))
+
+    assert done.events == [WireDelegation(delegation_id="c1", request="Hi")]
+
+
+def test_direct_tools_mode_hands_every_call_to_the_call_and_returns_its_text():
+    session = _session(direct=True)
+    session.receive(_created("r1"))
+    session.receive(_call("r1", "c1", name="overview", arguments=json.dumps({})))
+    session.receive(_call("r1", "c2", name="status", arguments="{broken"))
     session.receive(_call("r1", "c3", name="vbot_request"))
     done = session.receive(_done("r1"))
 
-    assert done.events == [
-        WireToolCall(call_id="c1", name="vbot_app", arguments={"action": "sessions"}),
-        WireToolCall(call_id="c2", name="vbot_terminal", arguments=None),
+    # The call prepares names and arguments; undecodable text stays as it came.
+    assert [(event.call_id, event.name, event.arguments) for event in done.events] == [
+        ("c1", "overview", {}),
+        ("c2", "status", "{broken"),
+        ("c3", "vbot_request", {"request": "Open the terminals"}),
     ]
-    assert _outputs(done.commands)["c3"]["error"]["code"] == "unknown_tool"
-    session.deliver("c2", json.dumps({"ok": False}))
-    commands = session.deliver("c1", json.dumps({"ok": True, "sessions": []}))
-    assert _outputs(commands) == {"c1": {"ok": True, "sessions": []}}
+    session.deliver("c2", "Error (invalid_arguments): The arguments are not one JSON object.")
+    session.deliver("c3", "Error (unknown_tool): There is no Tool called vbot_request.")
+    commands = session.deliver("c1", "Agents: Main, Coder.")
+    assert _outputs(commands) == {"c1": "Agents: Main, Coder."}
 
 
 # -- response gate -------------------------------------------------------------
@@ -787,10 +809,7 @@ async def test_open_joins_the_pinned_model_with_connection_auth_and_configures_t
     assert options["ssl"] is not None
     assert socket.sent[0]["type"] == "session.update"
     assert socket.sent[0]["session"]["instructions"] == DIRECT_VOICE_INSTRUCTIONS
-    assert [tool["name"] for tool in socket.sent[0]["session"]["tools"]] == [
-        "vbot_app",
-        "vbot_terminal",
-    ]
+    assert [tool["name"] for tool in socket.sent[0]["session"]["tools"]] == list(LIVE_TOOL_NAMES)
     assert re.fullmatch(r"live_[a-z0-9]{16}", wire.call_id)
     assert wire.media == relay_media()
     assert wire.announces_as_user_input is True
