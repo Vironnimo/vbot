@@ -11,10 +11,10 @@ from __future__ import annotations
 import contextlib
 import json
 import re
-from collections.abc import Iterator, Mapping
 from typing import Any
 
 from core.tools._argument_repair import normalize_call_arguments
+from core.tools._spelling_aliases import SpellingAliases, spelling
 from core.tools._web_fetch_pages import REF_IN_TEXT
 from core.tools.contracts import ToolContract, ToolContractError
 
@@ -39,30 +39,8 @@ _OUTPUT_VALUES = {
 _NEXT_KEYS = frozenset({"next", "nextpage", "nextcall", "more"})
 
 
-def _spelling(value: str) -> str:
-    return re.sub(r"[\s_-]+", "", value.casefold())
-
-
-class _SpellingAliases(Mapping[str, str]):
-    """Field aliases that match regardless of case, "_", "-", or spaces."""
-
-    def __init__(self, fields: dict[str, tuple[str, ...]]) -> None:
-        self._aliases = {
-            _spelling(alias): field for field, names in fields.items() for alias in names
-        }
-
-    def __getitem__(self, key: str) -> str:
-        return self._aliases[_spelling(key)]
-
-    def __iter__(self) -> Iterator[str]:
-        return iter(self._aliases)
-
-    def __len__(self) -> int:
-        return len(self._aliases)
-
-
 # Names other fetch Tools and Agents use for the same fields.
-FIELD_ALIASES = _SpellingAliases(
+FIELD_ALIASES = SpellingAliases(
     {
         "url": (
             "uri",
@@ -167,12 +145,12 @@ def _clean_ref(value: Any) -> Any:
 
 
 def _output_value(value: Any) -> Any:
-    return _OUTPUT_VALUES.get(_spelling(value), value) if isinstance(value, str) else value
+    return _OUTPUT_VALUES.get(spelling(value), value) if isinstance(value, str) else value
 
 
 def _lift_next(arguments: dict[str, Any]) -> dict[str, Any]:
     """Accept the continuation object of a result as the call's own fields."""
-    keys = [key for key in arguments if _spelling(key) in _NEXT_KEYS]
+    keys = [key for key in arguments if spelling(key) in _NEXT_KEYS]
     lifted = {key: value for key, value in arguments.items() if key not in keys}
     for key in keys:
         value = arguments[key]
