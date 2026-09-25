@@ -13,7 +13,6 @@ from core.chat._message_validation import (
 )
 from core.projects import AgentResolutionError, ProjectStore
 from core.runs import RunCancelledError
-from core.sessions import active_session_messages
 from core.tools import (
     FileReadState,
     ToolContext,
@@ -62,7 +61,7 @@ async def test_edit_run_appends_lineage_marker_and_preserves_superseded_usage(
     result = await run.wait()
 
     raw = session.load()
-    active = active_session_messages(raw)
+    active = session.load_active()
     assert history_revision(runtime.chat_sessions, session.address) > history_revision_before_edit
     assert [message.role for message in raw[:3]] == ["user", "assistant", "user"]
     assert raw[3].role == "history_edit"
