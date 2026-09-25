@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Mapping
 from datetime import datetime
 from typing import Any
@@ -31,8 +32,9 @@ from core.providers.providers import ProviderRegistry
 from core.runs import ChatRunManager
 from core.sessions import ChatSessionManager, SessionAddress
 from core.tools._argument_repair import normalize_call_arguments
+from core.tools._call_vocabulary import PLACEHOLDER_WORDS, SpellingAliases, is_placeholder, spelling
 from core.tools.arguments import optional_string
-from core.tools.contracts import compile_tool_contract
+from core.tools.contracts import ToolContractError, compile_tool_contract
 from core.tools.tools import (
     JsonObject,
     ToolContext,
@@ -48,20 +50,17 @@ _LOGGER = get_logger("tools.status")
 
 STATUS_TOOL_NAME = "status"
 STATUS_TOOL_DESCRIPTION = (
-    "Show status information for the current or a targeted chat Session, including model, "
-    "usage, runtime, and activity details."
+    "Report a chat Session's Agent, model, context and cache usage, runtime, and activity. "
+    "Omit both parameters for your current Session."
 )
 _STATUS_SESSION_ID_PARAMETER: JsonObject = {
     "type": "string",
-    "minLength": 1,
-    "description": "Session to inspect. Omit for the current Session.",
+    "description": "Session to inspect. Omit for your current Session.",
 }
 _STATUS_AGENT_ID_PARAMETER: JsonObject = {
     "type": "string",
-    "minLength": 1,
     "description": (
-        "Agent that owns the target Session. "
-        "Omit for this Agent; another Agent requires session_id."
+        "Agent that owns session_id. Omit for yourself; another Agent's Session needs both."
     ),
 }
 
@@ -84,6 +83,41 @@ _PROJECT_NOT_FOUND_MESSAGE_TEMPLATE = (
     "project does not exist: {project_id}. Status reports only on Sessions of the "
     "current Project, so tell the user that this Project is missing."
 )
+_AGENT_NOT_FOUND_MESSAGE_TEMPLATE = (
+    "Agent not found: {agent_id}. Omit agent_id and session_id to check your current Session."
+)
+_AGENT_WITHOUT_SESSION_MESSAGE_TEMPLATE = (
+    "status needs session_id to inspect a Session of Agent {agent_id}; nothing was checked. "
+    'Call {{"agent_id": "{agent_id}", "session_id": "<session id>"}}, for example with the '
+    "session_id from a subagent result, or omit agent_id to check your current Session."
+)
+_SESSION_NOT_FOUND_MESSAGE_TEMPLATE = "No Session {session_id} exists for Agent {agent_id}."
+_CURRENT_SESSION_HINT = " Omit session_id to check your current Session."
+_SESSION_OWNER_HINT = (
+    " If that Session belongs to another Agent, such as a Sub-Agent, also pass that "
+    "Agent's agent_id."
+)
+# Sub-Agent work ids come from ``subagent`` results; this Tool reports Sessions.
+_WORK_ID_MESSAGE_TEMPLATE = (
+    "status was not run: {work_id} is a Sub-Agent work id. For that work's progress, call "
+    'subagent with {{"action": "status", "id": "{work_id}"}}. status reports a chat Session '
+    "and takes session_id, with agent_id for another Agent's Session."
+)
+_ID_MESSAGE_TEMPLATE = (
+    'status was not run: it has no "id" parameter, so {value} is ambiguous. Pass a Session '
+    'as "session_id", with "agent_id" for another Agent\'s Session, or omit both to check '
+    "your current Session."
+)
+_ID_SESSION_CONFLICT_MESSAGE = "Conflicting values for session_id; provide one intended value."
+
+_FIELD_ALIASES = SpellingAliases(
+    {"session_id": ("session", "session_key"), "agent_id": ("agent", "agent_name")}
+)
+# Words that mean "my current Session"; generated Session ids never take these forms.
+_CURRENT_SESSION_WORDS = PLACEHOLDER_WORDS | {"current", "this", "active", "mine"}
+_ID_KEYS = frozenset({"id", "workid", "subagentid"})
+_WORK_ID_PREFIX = "sub_"
+_SESSION_ID_PREFIX = "ses_"
 
 
 _STATUS_RUNTIME_CONTRACT = compile_tool_contract(
@@ -98,11 +132,36 @@ _STATUS_RUNTIME_CONTRACT = compile_tool_contract(
 
 def _normalize_status_arguments(arguments: Any) -> Any:
     repaired = normalize_call_arguments(
-        _STATUS_RUNTIME_CONTRACT, arguments, enum_fields=("action",)
+        _STATUS_RUNTIME_CONTRACT, arguments, enum_fields=("action",), field_aliases=_FIELD_ALIASES
     )
-    if isinstance(repaired, dict) and repaired.pop("action", "current") != "current":
+    if not isinstance(repaired, dict):
+        return repaired
+    if repaired.pop("action", "current") != "current":
         raise ValueError("status reads Session status; action must be current or omitted.")
+    _read_id_field(repaired)
+    if is_placeholder(repaired.get("session_id"), _CURRENT_SESSION_WORDS):
+        repaired.pop("session_id", None)
+    if is_placeholder(repaired.get("agent_id")):
+        repaired.pop("agent_id", None)
     return repaired
+
+
+def _read_id_field(arguments: dict[str, Any]) -> None:
+    """Read an ``id`` field by what its value is: a Session, Sub-Agent work, or unknown."""
+    for key in [key for key in arguments if spelling(key) in _ID_KEYS]:
+        value = arguments.pop(key)
+        if is_placeholder(value):
+            continue
+        text = value.strip() if isinstance(value, str) else value
+        if isinstance(text, str) and text.startswith(_WORK_ID_PREFIX):
+            raise ToolContractError(_WORK_ID_MESSAGE_TEMPLATE.format(work_id=text))
+        if spelling(key) == "id" and isinstance(text, str) and text.startswith(_SESSION_ID_PREFIX):
+            session_id = arguments.get("session_id")
+            if not is_placeholder(session_id, _CURRENT_SESSION_WORDS) and session_id != text:
+                raise ToolContractError(_ID_SESSION_CONFLICT_MESSAGE)
+            arguments["session_id"] = text
+            continue
+        raise ToolContractError(_ID_MESSAGE_TEMPLATE.format(value=json.dumps(value)))
 
 
 def make_status_handler(
@@ -140,8 +199,7 @@ def make_status_handler(
         if requested_agent_id not in (None, context.agent_id) and requested_session_id is None:
             return tool_failure(
                 "invalid_arguments",
-                "agent_id requires session_id; provide no target, session_id, "
-                "or both agent_id and session_id",
+                _AGENT_WITHOUT_SESSION_MESSAGE_TEMPLATE.format(agent_id=requested_agent_id),
             )
 
         agent_id = requested_agent_id or context.agent_id
@@ -161,7 +219,9 @@ def make_status_handler(
                 retryable=False,
             )
         except ResolutionAgentNotFoundError:
-            return tool_failure("agent_not_found", f"agent does not exist: {agent_id}")
+            return tool_failure(
+                "agent_not_found", _AGENT_NOT_FOUND_MESSAGE_TEMPLATE.format(agent_id=agent_id)
+            )
         except AgentResolutionError as error:
             return tool_failure(
                 "agent_unavailable",
@@ -178,10 +238,14 @@ def make_status_handler(
                 )
             ).status_snapshot()
         except ChatSessionError:
-            return tool_failure(
-                "session_not_found",
-                f"session does not exist for agent {agent_id}: {session_id}",
+            message = _SESSION_NOT_FOUND_MESSAGE_TEMPLATE.format(
+                session_id=session_id, agent_id=agent_id
             )
+            if requested_session_id is not None:
+                message += _CURRENT_SESSION_HINT
+                if requested_agent_id is None:
+                    message += _SESSION_OWNER_HINT
+            return tool_failure("session_not_found", message)
 
         activity = resolve_status_activity(chat_runs, agent_id, session_id, context.project_id)
         model_details = resolve_status_model_details(
