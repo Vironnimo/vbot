@@ -4,14 +4,19 @@ from __future__ import annotations
 
 import logging
 import threading
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, cast
+from unittest.mock import Mock
 
 import pytest
 
+from desktop.wakeword import engine as engine_module
 from desktop.wakeword.capture import CaptureSubscription
+from desktop.wakeword.config import DEFAULT_MODEL_IDS, PhraseConfig
 from desktop.wakeword.detection import PRE_ROLL_SECONDS, Detection, DetectionLoop
+from desktop.wakeword.engine import MultiWakewordEngine, WakewordModelCatalog
 from tests.desktop.voice_fakes import (
     AmplitudeVad,
     FakeSubscription,
@@ -23,14 +28,37 @@ from tests.desktop.voice_fakes import (
 
 
 class ResettableDetector:
-    def __init__(self) -> None:
+    """Speech detector double: scripted per-chunk probabilities, then silence."""
+
+    def __init__(self, probabilities: Iterable[float] = ()) -> None:
         self.resets = 0
+        self._probabilities = iter(probabilities)
 
     def reset(self) -> None:
         self.resets += 1
 
     def speech_probability(self, _chunk: bytes) -> float:
-        return 0.0
+        return next(self._probabilities, 0.0)
+
+
+def _engine_with_scripted_head(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    head_scores: list[float],
+    score_listener: Callable[[dict[str, float]], None],
+) -> MultiWakewordEngine:
+    """A real engine whose feature extractor and detector head are scripted per chunk."""
+    features = Mock()
+    features.process_streaming.return_value = ["features"]
+    head = Mock()
+    head.process_streaming.side_effect = [[score] for score in head_scores]
+    monkeypatch.setattr(
+        engine_module, "_create_pyopenwakeword_features", Mock(return_value=features)
+    )
+    monkeypatch.setattr(engine_module, "_create_pyopenwakeword_model", Mock(return_value=head))
+    return WakewordModelCatalog(tmp_path / "settings.json").create_engine(
+        [PhraseConfig(DEFAULT_MODEL_IDS[0])], score_listener=score_listener
+    )
 
 
 @dataclass
@@ -87,17 +115,19 @@ def start_loop() -> Iterator[Callable[..., Loop]]:
         assert state.loop.join(5), "detection thread did not stop"
 
 
-def test_blocks_are_rechunked_into_engine_chunks_with_a_speech_gate(
+def test_blocks_are_rechunked_into_engine_chunks_with_a_delayed_speech_gate(
     start_loop: Callable[..., Loop],
 ) -> None:
     state = start_loop()
     assert state.started.wait(5)
 
-    state.subscription.push_audio(silence(0.16, 16000))  # 2 chunks of silence
-    state.subscription.push_audio(tone(0.2, 16000))  # 2.5 chunks of speech
-    state.wait_idle(4)
+    state.subscription.push_audio(silence(0.16, 16000))  # chunks 0-1
+    state.subscription.push_audio(tone(0.2, 16000))  # chunks 2-4 carry speech
+    state.subscription.push_audio(silence(0.48, 16000))  # up to chunk 9
+    state.wait_idle(10)
 
-    assert state.engine.chunks == [(2560, False), (2560, False), (2560, True), (2560, True)]
+    # A chunk's scores count 4 to 6 chunks after speech: chunks 6 to 10.
+    assert state.engine.chunks == [(2560, False)] * 6 + [(2560, True)] * 4
 
 
 def test_a_detection_carries_the_preceding_whole_blocks_as_pre_roll(
@@ -155,6 +185,43 @@ def test_a_gap_clears_the_pending_audio_and_the_pre_roll(start_loop: Callable[..
     assert len(state.engine.chunks) == 2  # the half chunk before the gap was dropped
     assert state.detections[0].pre_roll == tuple(after)
     assert detector.resets == 1
+
+
+def test_a_gap_forgets_the_speech_heard_before_it(start_loop: Callable[..., Loop]) -> None:
+    detector = ResettableDetector([0.9] * 3)
+    state = start_loop(detector=detector)
+    assert state.started.wait(5)
+
+    state.subscription.push_audio(silence(0.24, 16000))  # 3 chunks the detector hears as speech
+    state.subscription.push_gap()
+    state.subscription.push_audio(silence(0.56, 16000))  # 7 chunks
+    state.wait_idle(10)
+
+    # Without the reset, chunks 4 to 8 would count on the speech before the gap.
+    assert [speech for _size, speech in state.engine.chunks] == [False] * 10
+    assert detector.resets == 1
+
+
+def test_a_phrase_the_heads_score_after_the_speech_ended_is_detected(
+    start_loop: Callable[..., Loop], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The phrase fills chunks 0-9; the head peaks 4 chunks later and scores noise in the pause.
+    head_scores = [0.0] * 12 + [0.3, 0.9, 0.4] + [0.0] * 5 + [0.9] * 10
+    scores: list[float] = []
+    engine = _engine_with_scripted_head(
+        tmp_path, monkeypatch, head_scores, lambda frame: scores.append(frame[DEFAULT_MODEL_IDS[0]])
+    )
+    state = start_loop(engine=engine, detector=ResettableDetector([0.9] * 10))
+    assert state.started.wait(5)
+
+    state.subscription.push_audio(silence(2.4, 16000))  # 30 chunks
+    wait_until(lambda: len(scores) == 30)
+
+    assert [(detection.model_id, detection.score) for detection in state.detections] == [
+        (DEFAULT_MODEL_IDS[0], 0.9)
+    ]
+    # The score listener (calibration) sees the gated scores: the pause's noise is zeroed.
+    assert scores == [0.0] * 12 + [0.3, 0.9, 0.4] + [0.0] * 15
 
 
 def test_calibration_suppresses_matches(start_loop: Callable[..., Loop]) -> None:

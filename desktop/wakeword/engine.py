@@ -492,10 +492,12 @@ class MultiWakewordEngine:
     def detect(self, audio_chunk: bytes, *, speech_present: bool = True) -> WakewordMatch | None:
         """Return the strongest confirmed, armed phrase match for one chunk.
 
-        ``speech_present=False`` mirrors upstream openWakeWord's VAD threshold:
-        model scores for windows without speech are zeroed before they can enter
+        ``speech_present=False`` zeroes this chunk's scores before they can enter
         confirmation or reach the score listener, so idle room noise cannot
-        accumulate toward a detection.
+        accumulate toward a detection and calibration sees the same gated scores.
+        The caller decides it; the detection loop's speech gate asks whether the
+        chunks 4 to 6 before this one carried speech, as upstream openWakeWord's
+        VAD threshold does.
         """
         if self._features is None or not self._models:
             return None
