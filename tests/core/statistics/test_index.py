@@ -5,11 +5,12 @@ from __future__ import annotations
 import asyncio
 import json
 import sqlite3
+import threading
 from contextlib import closing
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
@@ -23,6 +24,7 @@ from core.statistics.index import (
     StatisticsIndex,
     StatisticsUnavailableError,
 )
+from core.statistics.report import RunActivityReport, StatisticsReport
 from core.statistics.statistics import MAX_RUN_ACTIVITY
 from core.tools import tool_success
 from tests.core.sessions.history_fixtures import complete_run, seed_history
@@ -762,3 +764,39 @@ def _make_index_file_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
         raise DatabaseUnavailableError("statistics: the index directory is not writable")
 
     monkeypatch.setattr(StatisticsIndex, "_read_file", unavailable)
+
+
+def test_async_reads_run_on_the_index_worker_pool_and_are_unavailable_after_close(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, _manager, _session = _service(tmp_path)
+    threads: list[str] = []
+    original = StatisticsIndex.read
+
+    def read(self: StatisticsIndex, *args: Any, **kwargs: Any) -> Any:
+        threads.append(threading.current_thread().name)
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(StatisticsIndex, "read", read)
+
+    async def scenario() -> tuple[StatisticsReport, RunActivityReport]:
+        report = await service.report_async()
+        activity = await service.run_activity_async(since=BASE, until=BASE + timedelta(minutes=1))
+        await service.warm_index_async()
+        await service._index.aclose()
+        await service._index.aclose()
+        with pytest.raises(DatabaseUnavailableError):
+            await service.report_async()
+        with pytest.raises(DatabaseUnavailableError):
+            await service.group_usage(owner_name="swarm", group_id="group")
+        return report, activity
+
+    report, activity = asyncio.run(scenario())
+
+    assert report.usage.totals.measured_input_tokens == 10
+    assert activity.total_runs == 1
+    assert len(threads) == 3
+    assert all(name.startswith("vbot-db-statistics_") for name in threads)
+    # A closed index never falls back to a transient projection.
+    with pytest.raises(DatabaseUnavailableError):
+        service.report()

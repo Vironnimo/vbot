@@ -260,7 +260,7 @@ async def _handle_subagent(
         and target_project_id == context.project_id
     ):
         owner = context.execution_owner
-        temporary_parent = await asyncio.to_thread(
+        temporary_parent = await runtime.chat_sessions.run_async(
             runtime.chat_sessions.temporary_binding_by_participant,
             owner_name=owner.extension,
             group_id=owner.group_id,

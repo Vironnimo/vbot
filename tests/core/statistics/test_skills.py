@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from core.statistics.skills import (
     SkillInventorySource,
     SkillsSection,
@@ -19,12 +21,13 @@ from core.statistics.skills import (
     offered_skill_names,
     resolve_inventory,
 )
+from core.utils.timestamps import format_canonical_timestamp
 
 BASE = datetime(2026, 6, 1, 12, 0, 0, tzinfo=UTC)
 
 
 def _iso(offset_seconds: int = 0) -> str:
-    return (BASE + timedelta(seconds=offset_seconds)).isoformat()
+    return format_canonical_timestamp(BASE + timedelta(seconds=offset_seconds))
 
 
 class _FakeInventory:
@@ -348,6 +351,19 @@ def test_activation_filtered_by_note_timestamp() -> None:
     assert row.activated_offered_sessions == 0
     assert row.usage_rate is None
     assert row.first_activated == _iso(200)
+
+
+def test_a_non_canonical_session_timestamp_is_bad_data() -> None:
+    accumulator = _accumulator(since=BASE + timedelta(seconds=100))
+
+    # Sessions store canonical timestamps only; an offset form is never guessed.
+    with pytest.raises(ValueError, match="canonical"):
+        accumulator.observe_session(
+            display_key="main",
+            created_at=BASE.isoformat(),
+            offered_names=["deploy"],
+            activations=[],
+        )
 
 
 def test_never_used_is_window_independent() -> None:

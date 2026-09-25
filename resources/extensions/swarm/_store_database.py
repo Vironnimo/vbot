@@ -38,8 +38,13 @@ class SwarmDatabase:
         self._database = database
         self._cursor_key: str | None = None
 
-    def call(self, function: Callable[..., Any], *arguments: Any) -> Any:
-        return function(self, *arguments)
+    async def run(self, function: Callable[..., Any], *arguments: Any) -> Any:
+        """Run ``function(self, *arguments)`` on the database's own worker pool.
+
+        After the host closes the database it raises the kernel's
+        ``DatabaseUnavailableError``.
+        """
+        return await self._database.run_async(function, self, *arguments)
 
     def _open(self) -> None:
         with self._database.read() as connection:
@@ -129,6 +134,22 @@ DATABASE_NAME = "swarm"
 # The Swarm database schema, opened through ``host.open_database``. Changes stay
 # additive (new tables, indexes, and nullable or defaulted columns); state and
 # kind values are validated in code, never by CHECK constraints.
+#
+# Every index names its reader:
+# - ``wiki_revision_page``: one page's revision history, the latest revision of
+#   each page for the page list, and the revision high-water mark
+#   (``_store_wiki.wiki``).
+# - ``recipients_pending_participant``: a participant's undelivered Posts
+#   (``_store_records._pending_rows`` and ``_pending_count``, and
+#   ``_store_delivery._prepare_automatic_delivery``, which names it with
+#   ``INDEXED BY``), so delivered history does not dominate the scan.
+# - ``posts_discussion_page``: the Post pages of one Discussion
+#   (``_store_reads._post_page`` and ``_human_post_page``, which name it with
+#   ``INDEXED BY`` so SQLite does not walk the whole Swarm's Posts by sequence)
+#   and its Post high-water mark (``_store_records._post_high_water``).
+# - ``discussions_one_main``: enforces one main Discussion per Swarm and serves
+#   the main-Discussion lookup (``_store_records._main``).
+# Discussion pages read through the ``UNIQUE(swarm_id,sequence)`` constraint.
 SCHEMA_SQL = """
 CREATE TABLE swarm_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL) STRICT;
 CREATE TABLE profiles(id TEXT PRIMARY KEY,slug TEXT NOT NULL UNIQUE,name TEXT NOT NULL,revision INTEGER NOT NULL,payload TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL) STRICT;
@@ -152,7 +173,6 @@ CREATE TABLE wiki_revisions(id INTEGER PRIMARY KEY,swarm_id TEXT NOT NULL REFERE
 CREATE INDEX wiki_revision_page ON wiki_revisions(swarm_id,page_id,id DESC);
 CREATE INDEX recipients_pending_participant ON recipients(participant_id,post_id) WHERE delivered_at IS NULL;
 CREATE INDEX posts_discussion_page ON posts(swarm_id,discussion_id,sequence DESC);
-CREATE INDEX discussions_page ON discussions(swarm_id,is_main DESC,sequence);
 CREATE UNIQUE INDEX discussions_one_main ON discussions(swarm_id) WHERE is_main=1;
 """
 

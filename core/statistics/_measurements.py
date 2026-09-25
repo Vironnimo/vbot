@@ -12,8 +12,8 @@ from core.statistics.report import (
     CountEntry,
     JsonObject,
 )
-from core.statistics.timestamps import parse_timestamp
 from core.tools import is_tool_result_envelope
+from core.utils.timestamps import parse_canonical_timestamp
 
 UNKNOWN_MODEL_KEY = "unknown"
 
@@ -64,15 +64,11 @@ def _timing_field(timing: JsonObject | None, key: str) -> str | None:
 
 
 def _max_timestamp(current: str | None, candidate: str) -> str:
+    """The later of two stored canonical timestamps; another form raises ``ValueError``."""
     if current is None:
         return candidate
-    current_parsed = parse_timestamp(current)
-    candidate_parsed = parse_timestamp(candidate)
-    if current_parsed is None:
-        return candidate
-    if candidate_parsed is None:
-        return current
-    return candidate if candidate_parsed > current_parsed else current
+    later = parse_canonical_timestamp(candidate) > parse_canonical_timestamp(current)
+    return candidate if later else current
 
 
 def _mean(values: list[int]) -> float | None:

@@ -15,11 +15,16 @@ Failure policy: a busy or locked index raises :class:`StatisticsUnavailableError
 so the caller can retry; a damaged or inconsistent index is discarded and
 rebuilt once; an index that cannot be used otherwise (or fails again after the
 rebuild) computes the read from a transient in-memory projection with the same
-code, so Statistics stay available.
+code, so Statistics stay available. After :meth:`StatisticsIndex.close` reads
+raise :class:`~core.database.DatabaseUnavailableError`.
+
+Asynchronous callers run a read, with everything it touches, on the index
+database's bounded worker pool through :meth:`StatisticsIndex.run_async`.
 """
 
 from __future__ import annotations
 
+import contextlib
 import sqlite3
 import threading
 from collections.abc import Callable, Iterator, Mapping, Sequence
@@ -33,6 +38,7 @@ from core.database import (
     DISPOSABLE,
     DatabaseError,
     DatabaseSpec,
+    DatabaseUnavailableError,
     DisposableDatabase,
     projection_failure,
 )
@@ -271,8 +277,9 @@ class StatisticsScope:
 class IndexedSession:
     """One reconciled Session: its index key, canonical generation and summary.
 
-    ``summary`` is the last listed summary of the Session across all scopes,
-    which also decides its fork boundary.
+    ``summary`` is the last listed summary of the Session across all scopes;
+    reports read its title, creation and last activity times, and offered
+    Skills from it.
     """
 
     session_key: int
@@ -334,9 +341,12 @@ class StatisticsIndex:
 
         ``prune`` removes indexed Sessions outside ``scopes``; partial readers
         such as one Extension group pass ``False`` so they never shrink the
-        shared index.
+        shared index. After :meth:`close` it raises
+        :class:`~core.database.DatabaseUnavailableError`.
         """
         with self._lock:
+            if self._database.is_closed():
+                raise DatabaseUnavailableError(f"{self._database.spec.name} is closed")
             try:
                 for attempt in range(2):
                     try:
@@ -372,10 +382,24 @@ class StatisticsIndex:
         with self._lock:
             self._database.discard()
 
+    async def run_async(
+        self, function: Callable[..., _Result], *arguments: Any, **keyword_arguments: Any
+    ) -> _Result:
+        """Run blocking Statistics work on the index database's bounded worker pool.
+
+        After :meth:`close` it raises :class:`~core.database.DatabaseUnavailableError`.
+        """
+        return await self._database.run_async(function, *arguments, **keyword_arguments)
+
     def close(self) -> None:
-        """Release the index database; later reads use a transient projection."""
+        """Release the index database and its worker pool; later work is unavailable."""
         with self._lock:
             self._database.close()
+
+    async def aclose(self) -> None:
+        """``close`` for the Event Loop: it waits on the worker pool for a running read."""
+        with contextlib.suppress(DatabaseUnavailableError):
+            await self._database.run_async(self.close)
 
     def _read_file(
         self,
