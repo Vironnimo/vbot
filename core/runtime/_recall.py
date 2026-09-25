@@ -7,6 +7,7 @@ import inspect
 import sqlite3
 from collections.abc import Callable
 
+from core.database import DatabaseError
 from core.extensions import ExtensionRegistry
 from core.model_tasks import EmbeddingService
 from core.models.models import ModelRegistry
@@ -15,6 +16,7 @@ from core.recall import (
     RecallBackend,
     RecallBackendContext,
     RecallBackendRegistry,
+    SupportsClose,
     SupportsSessionRemoval,
 )
 from core.runtime.interfaces import LoggerProtocol
@@ -49,6 +51,8 @@ class RecallIntegration:
         self.logger = logger
         self._recall_backend_registry = self._build_recall_backend_registry()
         self.backend = self._create_recall_backend(self._recall_backend_registry)
+        # Closing replaced backends, kept referenced until they finish.
+        self._retiring: set[asyncio.Task[None]] = set()
         register_session_search_tool(self._tools, self.backend, self._chat_sessions)
 
     def _build_recall_backend_registry(self) -> RecallBackendRegistry:
@@ -106,6 +110,7 @@ class RecallIntegration:
         """
         recall_registry = self._build_recall_backend_registry()
         self._recall_backend_registry = recall_registry
+        previous = self.backend
         self.backend = self._create_recall_backend(recall_registry)
         if self._tools is not None:
             self._tools.unregister("session_search")
@@ -114,6 +119,53 @@ class RecallIntegration:
                 self.backend,
                 self._chat_sessions,
             )
+        self._retire(previous)
+
+    def _retire(self, backend: RecallBackend) -> None:
+        """Close a replaced backend so its index files are released.
+
+        On the Event Loop the backend closes in a task that waits for its
+        background work; without a running loop it closes at once.
+        """
+        if not isinstance(backend, SupportsClose):
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self._close_quietly(backend)
+            return
+        task = loop.create_task(self._aclose_quietly(backend))
+        self._retiring.add(task)
+        task.add_done_callback(self._retiring.discard)
+
+    async def aclose(self) -> None:
+        """Close the active backend and wait for replaced ones to finish closing."""
+        retiring = set(self._retiring)
+        if isinstance(self.backend, SupportsClose):
+            await self._aclose_quietly(self.backend)
+        if retiring:
+            await asyncio.wait(retiring)
+
+    def close(self) -> None:
+        """Close the active backend without waiting for its background work."""
+        if isinstance(self.backend, SupportsClose):
+            self._close_quietly(self.backend)
+
+    async def _aclose_quietly(self, backend: SupportsClose) -> None:
+        try:
+            await backend.aclose()
+        except Exception as error:
+            self._warn_close_failure(error)
+
+    def _close_quietly(self, backend: SupportsClose) -> None:
+        try:
+            backend.close()
+        except Exception as error:
+            self._warn_close_failure(error)
+
+    def _warn_close_failure(self, error: Exception) -> None:
+        if self.logger is not None:
+            self.logger.warning("Recall backend could not close cleanly: %s", error)
 
     def _recover_recall_backend_if_deactivated(self, removed_backend_names: set[str]) -> None:
         """Fall the active recall backend back to the default if its provider left.
@@ -175,7 +227,7 @@ class RecallIntegration:
                 )
                 if inspect.isawaitable(result):
                     await result
-        except (OSError, sqlite3.Error) as error:
+        except (OSError, sqlite3.Error, DatabaseError) as error:
             if self.logger is not None:
                 self.logger.warning(
                     "Recall index cleanup failed for session %s/%s: %s",

@@ -40,6 +40,27 @@ _HYBRID_SEARCH_GUIDANCE = (
 _HYBRID_TOOL_SUMMARY = (
     "Find past conversations using both keywords and meaning, ranked by combined relevance."
 )
+# Agent-facing degradation reasons, by which arm failed or answered incompletely.
+_SEMANTIC_ONLY_REASON = (
+    "Only semantic search succeeded; keyword matches may be missing. "
+    "Use a topic description, and do not treat these results as an "
+    "exhaustive keyword search."
+)
+_SEMANTIC_ONLY_PARTIAL_REASON = (
+    "Only semantic search succeeded, and it has not finished indexing the eligible Sessions; "
+    "results are incomplete. Repeat the search later, and do not treat these results as an "
+    "exhaustive keyword search."
+)
+_LITERAL_ONLY_REASON = (
+    "Only keyword search succeeded; paraphrases may be missing. "
+    "Use words likely to appear in the conversation; rephrasing cannot "
+    "restore semantic search."
+)
+_SEMANTIC_PARTIAL_REASON = (
+    "Semantic search has not finished indexing the eligible Sessions and continues in the "
+    "background, so matches by meaning may be missing; keyword matches are complete. Repeat "
+    "the search later for complete results."
+)
 
 
 class HybridRecallBackend(CanonicalSessionRecallBackend):
@@ -118,19 +139,7 @@ class HybridRecallBackend(CanonicalSessionRecallBackend):
                 "stale_cursor", "Session search source changed; repeat the search."
             )
         selected = fused[request.offset : request.offset + request.limit]
-        degraded = literal_page is None or semantic_page is None
-        reason: str | None = None
-        if degraded:
-            failed_arm = "literal" if literal_page is None else "semantic"
-            reason = (
-                "Only semantic search succeeded; keyword matches may be missing. "
-                "Use a topic description, and do not treat these results as an "
-                "exhaustive keyword search."
-                if failed_arm == "literal"
-                else "Only keyword search succeeded; paraphrases may be missing. "
-                "Use words likely to appear in the conversation; rephrasing cannot "
-                "restore semantic search."
-            )
+        reason = _degradation_reason(literal_page, semantic_page)
         total_sessions = max(
             literal_page.total_candidate_sessions if literal_page is not None else 0,
             semantic_page.total_candidate_sessions if semantic_page is not None else 0,
@@ -146,7 +155,7 @@ class HybridRecallBackend(CanonicalSessionRecallBackend):
                 or (semantic_page is not None and semantic_page.has_more)
             ),
             total_candidate_sessions=total_sessions,
-            degraded=degraded,
+            degraded=reason is not None,
             degradation_reason=reason,
         )
 
@@ -159,6 +168,14 @@ class HybridRecallBackend(CanonicalSessionRecallBackend):
             self._vector.remove_session(agent_id, session_id, project_id),
         )
 
+    async def aclose(self) -> None:
+        """Stop background indexing and release both arms' index databases."""
+        await asyncio.gather(self._fts.aclose(), self._vector.aclose())
+
+    def close(self) -> None:
+        self._fts.close()
+        self._vector.close()
+
 
 class _PreparedArm(Protocol):
     """One retrieval arm whose freshness work is done; it only ranks."""
@@ -170,6 +187,18 @@ async def _arm_page(arm: _PreparedArm | None, depth: int) -> RecallSearchPage | 
     if arm is None:
         return None
     return await arm.page(0, depth)
+
+
+def _degradation_reason(
+    literal_page: RecallSearchPage | None, semantic_page: RecallSearchPage | None
+) -> str | None:
+    """Explain a failed arm, or a semantic arm that has not indexed everything yet."""
+    semantic_partial = semantic_page is not None and semantic_page.degraded
+    if literal_page is None:
+        return _SEMANTIC_ONLY_PARTIAL_REASON if semantic_partial else _SEMANTIC_ONLY_REASON
+    if semantic_page is None:
+        return _LITERAL_ONLY_REASON
+    return _SEMANTIC_PARTIAL_REASON if semantic_partial else None
 
 
 def _hybrid_unavailable() -> RecallSearchError:

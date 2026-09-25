@@ -452,6 +452,7 @@ def _open_existing(
         synchronous="FULL" if spec.profile == CANONICAL else "NORMAL",
         application_id=spec.application_id,
         format_generation=spec.format_generation,
+        connection_setup=spec.connection_setup,
     )
     identity: dict[str, str] = {}
 

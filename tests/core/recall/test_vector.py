@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -17,9 +18,10 @@ from core.recall import (
     RecallSearchError,
     RecallSearchRequest,
 )
-from core.recall.vector import _EMBED_BATCH_SIZE
+from core.recall.vector import _EMBED_BATCH_SIZE, SEMANTIC_PARTIAL_REASON
 from core.sessions import ChatSessionManager, SessionAddress
 from tests.core.recall.vector_helpers import (
+    _pending_count,
     _StubEmbeddings,
     backend,
     timestamp,
@@ -113,7 +115,7 @@ async def test_vector_search_skips_session_deleted_during_reconciliation(
     page = await recall.search_page(search_request("fruit"))
 
     assert page.hits == ()
-    assert recall.store.list_indexed_sessions("coder") == {}
+    assert await recall.store.list_indexed_sessions("coder") == {}
 
 
 async def test_typed_vector_search_has_no_literal_fallback_or_distance_cutoff(
@@ -169,12 +171,12 @@ async def test_typed_filtered_search_keeps_other_scope_sessions_indexed(tmp_path
     recall = backend(tmp_path, sessions, embeddings=_StubEmbeddings())
 
     await recall.search_page(search_request("fruit"))
-    assert set(recall.store.list_indexed_sessions("coder")) == {"one", "two"}
+    assert set(await recall.store.list_indexed_sessions("coder")) == {"one", "two"}
 
     page = await recall.search_page(search_request("fruit", session_id="one"))
 
     assert {hit.session_id for hit in page.hits} == {"one"}
-    assert set(recall.store.list_indexed_sessions("coder")) == {"one", "two"}
+    assert set(await recall.store.list_indexed_sessions("coder")) == {"one", "two"}
 
 
 async def test_typed_search_rebuilds_full_scope_on_native_dimension_change(
@@ -193,10 +195,10 @@ async def test_typed_search_rebuilds_full_scope_on_native_dimension_change(
     page = await recall.search_page(search_request("fruit"))
 
     assert {hit.session_id for hit in page.hits} == {"one", "two"}
-    header = recall.store.read_header()
+    header = await recall.store.read_header()
     assert header is not None
     assert header.dimension == 6
-    assert set(recall.store.list_indexed_sessions("coder")) == {"one", "two"}
+    assert set(await recall.store.list_indexed_sessions("coder")) == {"one", "two"}
 
 
 async def test_typed_search_rebuilds_when_execution_fingerprint_changes(tmp_path: Path) -> None:
@@ -214,7 +216,7 @@ async def test_typed_search_rebuilds_when_execution_fingerprint_changes(tmp_path
 
     assert [hit.session_id for hit in page.hits] == ["one"]
     assert len(embeddings.embed_calls) >= calls_before_switch + 2
-    header = recall.store.read_header()
+    header = await recall.store.read_header()
     assert header is not None
     assert header.space_fingerprint == "stub-space-b"
 
@@ -231,7 +233,7 @@ async def test_typed_search_discards_corrupt_index_once_and_rebuilds(tmp_path: P
     page = await recall.search_page(search_request("fruit"))
 
     assert [hit.session_id for hit in page.hits] == ["one"]
-    assert recall.store.read_header() is not None
+    assert await recall.store.read_header() is not None
 
 
 async def test_typed_search_embeds_documents_and_query_with_explicit_purposes(
@@ -285,7 +287,7 @@ async def test_typed_search_rebuilds_when_provider_response_model_changes(
     assert continuation.snapshot_id == first_page.snapshot_id
     assert error_info.value.code == "stale_cursor"
     assert [hit.session_id for hit in page.hits] == ["one"]
-    header = recall.store.read_header()
+    header = await recall.store.read_header()
     assert header is not None
     assert header.model_id == "stub-embed"
     assert header.response_model_id == "served/embed-b"
@@ -308,7 +310,7 @@ async def test_typed_search_rebuilds_when_response_model_drifts_during_backfill(
     page = await recall.search_page(search_request("fruit"))
 
     assert [hit.session_id for hit in page.hits] == ["one"]
-    header = recall.store.read_header()
+    header = await recall.store.read_header()
     assert header is not None
     assert header.response_model_id == "served/embed-b"
 
@@ -332,57 +334,185 @@ async def test_run_embed_rejects_actual_model_drift_between_batches(tmp_path: Pa
         await recall._run_embed(texts)
 
 
-async def test_typed_search_logs_usage_aggregated_across_rebuild_batches(
-    tmp_path: Path,
-) -> None:
-    class _UsageEmbeddings(_StubEmbeddings):
-        async def embed(
-            self,
-            texts: list[str],
-            *,
-            purpose: str | None = None,
-        ) -> EmbeddingResult:
-            result = await super().embed(texts, purpose=purpose)
-            return EmbeddingResult(
-                vectors=result.vectors,
-                model_id=result.model_id,
-                provider_id=result.provider_id,
-                dimension=result.dimension,
-                space_fingerprint=result.space_fingerprint,
-                response_model_id=result.response_model_id,
-                usage=EmbeddingUsage(
-                    requests=1,
-                    token_reports=1,
-                    cost_reports=1,
-                    input_tokens=len(texts),
-                    total_tokens=len(texts),
-                    cost=0.01,
-                ),
-            )
+class _UsageEmbeddings(_StubEmbeddings):
+    async def embed(
+        self,
+        texts: list[str],
+        *,
+        purpose: str | None = None,
+    ) -> EmbeddingResult:
+        result = await super().embed(texts, purpose=purpose)
+        return EmbeddingResult(
+            vectors=result.vectors,
+            model_id=result.model_id,
+            provider_id=result.provider_id,
+            dimension=result.dimension,
+            space_fingerprint=result.space_fingerprint,
+            response_model_id=result.response_model_id,
+            usage=EmbeddingUsage(
+                requests=1,
+                token_reports=1,
+                cost_reports=1,
+                input_tokens=len(texts),
+                total_tokens=len(texts),
+                cost=0.01,
+            ),
+        )
 
+
+def _sessions_with_distinct_passages(tmp_path: Path, count: int) -> ChatSessionManager:
     sessions = ChatSessionManager(tmp_path)
-    for index in range(_EMBED_BATCH_SIZE + 1):
+    for index in range(count):
         sessions.create("coder", session_id=f"session-{index}").append(
             ChatMessage.user(f"banana fruit {index}", timestamp=timestamp(1))
         )
+    return sessions
+
+
+async def test_search_embeds_one_bounded_batch_and_backfills_the_rest_in_background(
+    tmp_path: Path,
+) -> None:
+    sessions = _sessions_with_distinct_passages(tmp_path, _EMBED_BATCH_SIZE + 1)
+    embeddings = _StubEmbeddings()
+    recall = backend(tmp_path, sessions, embeddings=embeddings)
+    gate = asyncio.Event()
+    embed = embeddings.embed
+
+    async def held_backfill(texts: list[str], *, purpose: str | None = None) -> EmbeddingResult:
+        if purpose == "document" and len(embeddings.document_inputs) >= _EMBED_BATCH_SIZE:
+            await gate.wait()
+        return await embed(texts, purpose=purpose)
+
+    embeddings.embed = held_backfill  # type: ignore[method-assign]
+
+    partial = await recall.search_page(search_request("fruit", limit=100))
+
+    # The search embedded one batch and answered from it while the rest waits.
+    assert len(embeddings.document_inputs) == _EMBED_BATCH_SIZE
+    assert len(partial.hits) == _EMBED_BATCH_SIZE
+    assert partial.degraded is True
+    assert partial.degradation_reason == SEMANTIC_PARTIAL_REASON
+    assert _pending_count(recall.store.path) == 1
+    task = recall._backfill_task
+    assert task is not None and not task.done()
+
+    # A search while the background task embeds never embeds the same text again.
+    during = await recall.search_page(search_request("fruit", limit=100))
+    assert during.degraded is True
+    assert len(embeddings.document_inputs) == _EMBED_BATCH_SIZE
+
+    gate.set()
+    await asyncio.wait_for(task, timeout=10)
+    complete = await recall.search_page(search_request("fruit", limit=100))
+
+    assert _pending_count(recall.store.path) == 0
+    assert len(embeddings.document_inputs) == _EMBED_BATCH_SIZE + 1
+    assert len(complete.hits) == _EMBED_BATCH_SIZE + 1
+    assert complete.degraded is False
+    assert complete.degradation_reason is None
+
+
+async def test_embedding_space_change_requeues_every_passage_without_blocking(
+    tmp_path: Path,
+) -> None:
+    sessions = _sessions_with_distinct_passages(tmp_path, _EMBED_BATCH_SIZE + 1)
+    embeddings = _StubEmbeddings()
+    recall = backend(tmp_path, sessions, embeddings=embeddings)
+    await recall.search_page(search_request("fruit", limit=100))
+    assert recall._backfill_task is not None
+    await asyncio.wait_for(recall._backfill_task, timeout=10)
+    assert _pending_count(recall.store.path) == 0
+
+    embeddings.space_fingerprint = "stub-space-b"
+    calls_before = len(embeddings.embed_calls)
+    page = await recall.search_page(search_request("fruit", limit=100))
+
+    header = await recall.store.read_header()
+    assert header is not None and header.space_fingerprint == "stub-space-b"
+    assert page.degraded is True
+    assert recall._backfill_task is not None
+    await asyncio.wait_for(recall._backfill_task, timeout=10)
+    # The search embedded one bounded batch; the background task the remainder.
+    document_batches = [
+        len(texts)
+        for texts, purpose in zip(
+            embeddings.embed_calls[calls_before:],
+            embeddings.embed_purposes[calls_before:],
+            strict=True,
+        )
+        if purpose == "document"
+    ]
+    assert document_batches == [_EMBED_BATCH_SIZE, 1]
+    assert _pending_count(recall.store.path) == 0
+
+
+async def test_failed_batch_embedding_answers_from_indexed_passages(tmp_path: Path) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    session = sessions.create("coder", session_id="one")
+    session.append(ChatMessage.user("banana fruit", timestamp=timestamp(1)))
+    embeddings = _StubEmbeddings()
+    recall = backend(tmp_path, sessions, embeddings=embeddings)
+    await recall.search_page(search_request("fruit"))
+    await asyncio.to_thread(
+        sessions.create("coder", session_id="two").append,
+        ChatMessage.user("more fruit", timestamp=timestamp(2)),
+    )
+    embed = embeddings.embed
+
+    async def reject_documents(texts: list[str], *, purpose: str | None = None) -> EmbeddingResult:
+        if purpose == "document":
+            raise EmbeddingError("provider rejected the batch")
+        return await embed(texts, purpose=purpose)
+
+    embeddings.embed = reject_documents  # type: ignore[method-assign]
+
+    page = await recall.search_page(search_request("fruit"))
+
+    assert [hit.session_id for hit in page.hits] == ["one"]
+    assert page.degradation_reason == SEMANTIC_PARTIAL_REASON
+    assert recall._backfill_task is not None
+    await asyncio.wait_for(recall._backfill_task, timeout=10)
+    assert _pending_count(recall.store.path) == 1
+
+
+async def test_typed_search_and_backfill_log_their_own_usage(tmp_path: Path) -> None:
+    sessions = _sessions_with_distinct_passages(tmp_path, _EMBED_BATCH_SIZE + 1)
     logger = _CapturingLogger()
     recall = backend(tmp_path, sessions, embeddings=_UsageEmbeddings(), logger=logger)
 
     await recall.search_page(search_request("fruit"))
+    assert recall._backfill_task is not None
+    await asyncio.wait_for(recall._backfill_task, timeout=10)
 
-    assert len(logger.info_calls) == 1
-    message, args = logger.info_calls[0]
-    assert message.startswith("Embedding usage operation=")
-    assert args == (
+    assert [
+        message.startswith("Embedding usage operation=") for message, _ in logger.info_calls
+    ] == [
+        True,
+        True,
+    ]
+    assert logger.info_calls[0][1] == (
         "typed_search",
         "openrouter",
         "stub-embed",
-        3,
-        3,
-        _EMBED_BATCH_SIZE + 2,
-        _EMBED_BATCH_SIZE + 2,
-        3,
-        pytest.approx(0.03),
-        1,
+        2,
+        2,
         _EMBED_BATCH_SIZE + 1,
+        _EMBED_BATCH_SIZE + 1,
+        2,
+        pytest.approx(0.02),
+        1,
+        _EMBED_BATCH_SIZE,
+    )
+    assert logger.info_calls[1][1] == (
+        "recall_backfill",
+        "openrouter",
+        "stub-embed",
+        1,
+        1,
+        1,
+        1,
+        1,
+        pytest.approx(0.01),
+        0,
+        1,
     )

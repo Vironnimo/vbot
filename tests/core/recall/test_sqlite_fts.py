@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
+import dataclasses
 import sqlite3
+from contextlib import closing
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -12,13 +15,14 @@ import pytest
 
 from core.chat import ChatMessage, ToolCall
 from core.chat.content_blocks import FileBlock, TextBlock
-from core.database import JOURNAL_MODE_DELETE
+from core.database import APPLICATION_IDS, DatabaseUnavailableError
 from core.recall import (
     RecallBackendContext,
     RecallOrder,
     RecallSearchRequest,
     SqliteFtsRecallBackend,
 )
+from core.recall._passage_catalog import PassageCatalog
 from core.recall.canonical import CANONICAL_FALLBACK_PARTIAL_REASON
 from core.sessions import ChatSession, ChatSessionManager
 from tests.core.sessions.history_fixtures import append_tool_fixture
@@ -54,39 +58,6 @@ def request(
 
 def backend(tmp_path: Path, sessions: ChatSessionManager) -> SqliteFtsRecallBackend:
     return SqliteFtsRecallBackend(RecallBackendContext(data_dir=tmp_path, sessions=sessions))
-
-
-async def test_index_uses_required_rollback_journal(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from core.recall import sqlite_fts
-
-    monkeypatch.setattr(sqlite_fts, "required_journal_mode", lambda _version: JOURNAL_MODE_DELETE)
-
-    sessions = ChatSessionManager(tmp_path)
-    connection = backend(tmp_path, sessions)._connect()
-    try:
-        mode = str(connection.execute("PRAGMA journal_mode").fetchone()[0]).lower()
-    finally:
-        connection.close()
-        sessions.close()
-
-    assert mode == JOURNAL_MODE_DELETE
-
-
-async def test_index_cleanup_includes_rollback_journal(tmp_path: Path) -> None:
-    sessions = ChatSessionManager(tmp_path)
-    recall = backend(tmp_path, sessions)
-    try:
-        rollback_journal = Path(f"{recall.index_path}-journal")
-        rollback_journal.parent.mkdir(parents=True, exist_ok=True)
-        rollback_journal.write_bytes(b"stale")
-
-        recall._delete_index_file()
-
-        assert rollback_journal.exists() is False
-    finally:
-        sessions.close()
 
 
 def passage_request(
@@ -161,7 +132,7 @@ async def test_passage_time_filters_compare_equivalent_timestamp_encodings(
     )
     recall = backend(tmp_path, sessions)
     await recall.search_passages(passage_request("needle"))
-    with sqlite3.connect(recall.index_path) as connection:
+    with closing(sqlite3.connect(recall.index_path)) as connection, connection:
         connection.execute(
             "UPDATE passages SET start_timestamp = ?, end_timestamp = ?",
             ("2026-05-01T12:00:00Z", "2026-05-01T12:00:00Z"),
@@ -191,7 +162,7 @@ async def test_sqlite_fts_filtered_search_keeps_other_scope_sessions_indexed(
 
     await recall.search_passages(passage_request("fruit", session_id="one"))
 
-    with sqlite3.connect(recall.index_path) as connection:
+    with closing(sqlite3.connect(recall.index_path)) as connection:
         indexed = {
             str(row[0])
             for row in connection.execute(
@@ -227,7 +198,7 @@ async def test_passage_index_does_not_duplicate_canonical_message_storage(
 
     await recall.search_passages(passage_request("projection"))
 
-    with sqlite3.connect(recall.index_path) as connection:
+    with closing(sqlite3.connect(recall.index_path)) as connection:
         tables = {
             str(row[0])
             for row in connection.execute(
@@ -254,6 +225,30 @@ async def test_sqlite_fts_reindexes_stale_session_after_append(tmp_path: Path) -
     assert second_data.hits[0].text == "SQLite recall needle"
 
 
+def _index_identity(path: Path) -> dict[str, object]:
+    with closing(sqlite3.connect(path)) as connection:
+        identity: dict[str, object] = dict(
+            connection.execute("SELECT key, value FROM kernel_meta").fetchall()
+        )
+        identity["application_id"] = connection.execute("PRAGMA application_id").fetchone()[0]
+    return identity
+
+
+async def test_passage_index_is_a_kernel_disposable_projection(tmp_path: Path) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    sessions.create("coder", session_id="one").append(
+        ChatMessage.user("Disposable recall index", timestamp=timestamp(1))
+    )
+    recall = backend(tmp_path, sessions)
+    await recall.search_passages(passage_request("disposable"))
+
+    identity = _index_identity(recall.index_path)
+    assert recall.index_path == tmp_path / "recall" / "session_index.sqlite"
+    assert identity["application_id"] == APPLICATION_IDS["recall_index"]
+    assert identity["database_name"] == "recall_index"
+    assert identity["projection_version"] == "1"
+
+
 async def test_sqlite_fts_rebuilds_when_index_file_is_deleted(tmp_path: Path) -> None:
     sessions = ChatSessionManager(tmp_path)
     sessions.create("coder", session_id="rebuild-session").append(
@@ -262,12 +257,155 @@ async def test_sqlite_fts_rebuilds_when_index_file_is_deleted(tmp_path: Path) ->
     recall = backend(tmp_path, sessions)
     await recall.search_passages(passage_request("disposable"))
     assert recall.index_path.is_file()
+    await recall.aclose()
     recall.index_path.unlink()
 
-    page = await recall.search_passages(passage_request("disposable"))
+    restarted = backend(tmp_path, sessions)
+    page = await restarted.search_passages(passage_request("disposable"))
 
     assert page.hits[0].session_id == "rebuild-session"
-    assert recall.index_path.is_file()
+    assert restarted.index_path.is_file()
+
+
+async def test_projection_version_mismatch_discards_and_rebuilds_the_index(
+    tmp_path: Path,
+) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    sessions.create("coder", session_id="rebuild-session").append(
+        ChatMessage.user("Disposable recall index", timestamp=timestamp(1))
+    )
+    recall = backend(tmp_path, sessions)
+    await recall.search_passages(passage_request("disposable"))
+    old_identity = _index_identity(recall.index_path)
+    recall.close()
+    with closing(sqlite3.connect(recall.index_path)) as connection, connection:
+        connection.execute("UPDATE kernel_meta SET value = '0' WHERE key = 'projection_version'")
+        connection.execute("UPDATE passages SET text = 'stale text'")
+
+    restarted = backend(tmp_path, sessions)
+    page = await restarted.search_passages(passage_request("disposable"))
+
+    assert [hit.text for hit in page.hits] == ["Disposable recall index"]
+    identity = _index_identity(restarted.index_path)
+    assert identity["projection_version"] == "1"
+    assert identity["database_id"] != old_identity["database_id"]
+
+
+async def test_passage_index_damaged_during_a_search_is_rebuilt_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    sessions.create("coder", session_id="damaged").append(
+        ChatMessage.user("needle", timestamp=timestamp(1))
+    )
+    recall = backend(tmp_path, sessions)
+    await recall.search_passages(passage_request("needle"))
+    old_identity = _index_identity(recall.index_path)
+    refresh = PassageCatalog.refresh
+    failures = 0
+
+    async def damaged_once(self: PassageCatalog, *args: object) -> None:
+        nonlocal failures
+        if failures == 0:
+            failures += 1
+            raise sqlite3.DatabaseError("database disk image is malformed")
+        await refresh(self, *args)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(PassageCatalog, "refresh", damaged_once)
+
+    page = await recall.search_passages(passage_request("needle"))
+
+    assert [hit.session_id for hit in page.hits] == ["damaged"]
+    assert _index_identity(recall.index_path)["database_id"] != old_identity["database_id"]
+
+
+async def test_busy_passage_index_fails_the_search_without_discarding_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("core.recall._passage_catalog.WRITE_PATIENCE_S", 0.2)
+    sessions = ChatSessionManager(tmp_path)
+    session = sessions.create("coder", session_id="busy")
+    session.append(ChatMessage.user("needle one", timestamp=timestamp(1)))
+    recall = backend(tmp_path, sessions)
+    await recall.search_passages(passage_request("needle"))
+    identity = _index_identity(recall.index_path)
+    await asyncio.to_thread(session.append, ChatMessage.user("needle two", timestamp=timestamp(2)))
+
+    with closing(sqlite3.connect(recall.index_path, isolation_level=None)) as blocker:
+        blocker.execute("BEGIN IMMEDIATE")
+        with pytest.raises(DatabaseUnavailableError):
+            await recall.search_passages(passage_request("needle"))
+        blocker.execute("ROLLBACK")
+
+    assert _index_identity(recall.index_path)["database_id"] == identity["database_id"]
+    page = await recall.search_passages(passage_request("needle"))
+    assert len(page.hits) == 1 and "needle two" in page.hits[0].text
+
+
+async def test_passage_index_reports_shared_fork_history_once(tmp_path: Path) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    source = sessions.create("coder", session_id="source")
+    for day in range(1, 4):
+        source.append(ChatMessage.user(f"needle story {day} " * 120, timestamp=timestamp(day)))
+    older = await sessions.fork(source.address)
+    newer = await sessions.fork(source.address)
+    recall = backend(tmp_path, sessions)
+
+    complete = await recall.search_passages(passage_request("needle"))
+    without_origin = await recall.search_passages(
+        dataclasses.replace(passage_request("needle"), excluded_session_ids=("source",))
+    )
+
+    assert complete.hits
+    assert {hit.session_id for hit in complete.hits} == {"source"}
+    assert {hit.session_id for hit in without_origin.hits} == {newer.id}
+    assert [hit.passage_id for hit in without_origin.hits] == [
+        hit.passage_id for hit in complete.hits
+    ]
+
+    # Deleting the origin copies its history into both forks and bumps their
+    # history revision: the forks are reindexed and report it once.
+    await asyncio.to_thread(sessions.delete, source.address)
+    after_delete = await recall.search_passages(passage_request("needle"))
+
+    assert {hit.session_id for hit in after_delete.hits} == {newer.id}
+    assert sorted(str(hit.passage_id) for hit in after_delete.hits) == sorted(
+        str(hit.passage_id) for hit in complete.hits
+    )
+    with closing(sqlite3.connect(recall.index_path)) as connection:
+        stamps = {
+            str(row[0]): (str(row[1]), int(row[2]))
+            for row in connection.execute(
+                "SELECT session_id, generation_id, history_revision FROM indexed_sessions"
+            )
+        }
+    revisions = await asyncio.to_thread(sessions.list_history_revisions, "coder")
+    assert stamps == {
+        revision.address.session_id: (revision.generation_id, revision.history_revision)
+        for revision in revisions
+    }
+    assert set(stamps) == {older.id, newer.id}
+
+
+async def test_passage_index_attributes_own_fork_content_to_the_fork(tmp_path: Path) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    source = sessions.create("coder", session_id="source")
+    source.append(ChatMessage.user("shared needle " * 150, timestamp=timestamp(1)))
+    fork = await sessions.fork(source.address)
+    await asyncio.to_thread(
+        fork.append, ChatMessage.user("fork needle only " * 150, timestamp=timestamp(2))
+    )
+    recall = backend(tmp_path, sessions)
+
+    page = await recall.search_passages(passage_request("needle"))
+
+    by_session = {hit.session_id for hit in page.hits}
+    assert by_session == {"source", fork.id}
+    assert len({hit.passage_id for hit in page.hits}) == len(page.hits)
+    assert all("fork needle only" in hit.text for hit in page.hits if hit.session_id == fork.id)
+    assert all(
+        "fork needle only" not in hit.text for hit in page.hits if hit.session_id == "source"
+    )
 
 
 async def test_sqlite_fts_recovers_from_corrupt_index(tmp_path: Path) -> None:
@@ -625,13 +763,15 @@ async def test_time_ordered_pages_return_the_newest_or_oldest_matches(tmp_path: 
 
 
 def _stored_passages(recall: SqliteFtsRecallBackend) -> dict[str, int]:
-    with sqlite3.connect(recall.index_path) as connection:
+    with closing(sqlite3.connect(recall.index_path)) as connection:
         for table in ("passages_fts", "passages_fts_tokens"):
             # rank=1 compares every indexed row with its external content.
             connection.execute(f"INSERT INTO {table}({table}, rank) VALUES('integrity-check', 1)")
         return {
-            str(passage_id): int(row_id)
-            for row_id, passage_id in connection.execute("SELECT row_id, passage_id FROM passages")
+            str(passage_id): int(passage_ref)
+            for passage_ref, passage_id in connection.execute(
+                "SELECT passage_ref, passage_id FROM passages"
+            )
         }
 
 
@@ -657,7 +797,7 @@ async def test_passage_index_rewrites_only_changed_passages(tmp_path: Path) -> N
     assert all(before[passage_id] == after[passage_id] for passage_id in kept)
     assert after.keys() - before.keys()
     assert page.hits and {hit.session_id for hit in page.hits} == {"growing"}
-    with sqlite3.connect(recall.index_path) as connection:
+    with closing(sqlite3.connect(recall.index_path)) as connection:
         stamp = connection.execute(
             "SELECT generation_id, history_revision FROM indexed_sessions"
         ).fetchall()
@@ -706,11 +846,15 @@ async def test_passage_index_that_cannot_be_rebuilt_fails_the_search(
         ChatMessage.user("needle", timestamp=timestamp(1))
     )
     recall = backend(tmp_path, sessions)
+    attempts = 0
 
-    def broken(*_args: object) -> None:
+    async def broken(*_args: object) -> None:
+        nonlocal attempts
+        attempts += 1
         raise sqlite3.DatabaseError("database disk image is malformed")
 
-    monkeypatch.setattr(recall, "_sync_passage_index", broken)
+    monkeypatch.setattr(recall._catalog, "refresh", broken)
 
     with pytest.raises(sqlite3.DatabaseError):
         await recall.search_passages(passage_request("needle"))
+    assert attempts == 2
