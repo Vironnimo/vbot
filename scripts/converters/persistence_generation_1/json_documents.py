@@ -15,6 +15,15 @@ data Generation 1 no longer tolerates is normalized:
 - Retired Tool names are replaced by their successors, or dropped, in Agent
   Tool access, Project Tool whitelists and Project Agent overrides, without
   widening any policy (see ``_tool_access``).
+- The retired single ``fallback_model`` of an Agent and of the Settings
+  ``defaults.agent`` becomes the one-entry ``fallback_models`` chain; an empty
+  one is dropped.
+- Settings: the retired ``jsonl_scan``/``canonical_scan`` recall backend
+  becomes ``sqlite_fts``; the retired ``live_voice`` opt-in and
+  ``reflection.skill_tool_call_interval`` are dropped.
+- Prompt layouts: the retired ``core:project_files`` block becomes
+  ``core:working_project``, and ``core:identity_runtime``, split out of
+  ``core:runtime`` by the same change, joins the layout after it.
 - A Channel's retired ``owner_user_ids`` is dropped.
 - Attachment sidecars (``artifacts/attachments/<id>.json``) lose the stored
   ``file_path``, which vBot derives from the data directory, and the retired
@@ -76,6 +85,21 @@ _LEGACY_PROJECT_ALLOWED_TOOLS = (
     "skill",
 )
 _TERMINAL_LEGACY_VERSION = 1
+# The ordered fallback chain replaced the single fallback Model binding.
+_RETIRED_FALLBACK_MODEL = "fallback_model"
+_FALLBACK_MODELS = "fallback_models"
+# Recall backends that are no longer selectable (``jsonl_scan`` was renamed
+# ``canonical_scan``, which then became the internal degraded fallback only),
+# and the backend that replaced them as the default.
+_RETIRED_RECALL_BACKENDS = frozenset({"jsonl_scan", "canonical_scan"})
+_RECALL_BACKEND_SUCCESSOR = "sqlite_fts"
+# ``core:project_files`` was renamed ``core:working_project`` in the change that
+# also moved the host, version, Workspace and path lines of ``core:runtime`` into
+# the new ``core:identity_runtime``; a layout naming the retired id predates it.
+_RETIRED_PROJECT_FILES_BLOCK = "core:project_files"
+_WORKING_PROJECT_BLOCK = "core:working_project"
+_RUNTIME_BLOCK = "core:runtime"
+_IDENTITY_RUNTIME_BLOCK = "core:identity_runtime"
 
 
 class _UnconvertibleError(Exception):
@@ -212,7 +236,118 @@ def _agent(value: Any, notes: _Notes) -> dict[str, Any]:
     if "tool_access" in agent:
         agent["tool_access"], changes = convert_policy(agent["tool_access"])
         notes.retired_tools("tool_access", changes)
-    return agent
+    return _fallback_models(agent, _RETIRED_FALLBACK_MODEL, notes)
+
+
+def _fallback_models(document: dict[str, Any], label: str, notes: _Notes) -> dict[str, Any]:
+    """Replace the retired single ``fallback_model`` with the ``fallback_models`` chain.
+
+    Empty meant no fallback of its own, as an empty or absent chain does now, so
+    it is dropped. A binding becomes the chain's only entry, in the retired
+    field's place, unless a chain already exists. A value of the wrong type
+    stays invalid for the application to report, as the old one did.
+    """
+    if _RETIRED_FALLBACK_MODEL not in document:
+        return document
+    value = document[_RETIRED_FALLBACK_MODEL]
+    if value is None or (isinstance(value, str) and not value.strip()):
+        notes.count("fallback_model_dropped")
+        return _without(document, _RETIRED_FALLBACK_MODEL)
+    if _FALLBACK_MODELS in document:
+        notes.count("fallback_model_dropped")
+        notes.approximate(
+            f"retired {label} {value!r} dropped; the existing {_FALLBACK_MODELS} applies"
+        )
+        return _without(document, _RETIRED_FALLBACK_MODEL)
+    notes.count("fallback_model_converted")
+    if not isinstance(value, str):
+        notes.approximate(
+            f"invalid retired {label} {value!r} carried over into {_FALLBACK_MODELS} "
+            "for the application to report"
+        )
+    chain = [value.strip() if isinstance(value, str) else value]
+    converted: dict[str, Any] = {}
+    for key, item in document.items():
+        if key == _RETIRED_FALLBACK_MODEL:
+            converted[_FALLBACK_MODELS] = chain
+        else:
+            converted[key] = item
+    return converted
+
+
+def _without(document: dict[str, Any], field: str) -> dict[str, Any]:
+    return {key: item for key, item in document.items() if key != field}
+
+
+def _settings(value: Any, notes: _Notes) -> dict[str, Any]:
+    settings = _object(value)
+    defaults = settings.get("defaults")
+    if isinstance(defaults, dict) and isinstance(defaults.get("agent"), dict):
+        agent_defaults = _fallback_models(
+            defaults["agent"], f"defaults.agent.{_RETIRED_FALLBACK_MODEL}", notes
+        )
+        settings["defaults"] = {**defaults, "agent": agent_defaults}
+    recall = settings.get("recall")
+    backend = recall.get("backend") if isinstance(recall, dict) else None
+    retired_backend = backend.strip() if isinstance(backend, str) else None
+    if isinstance(recall, dict) and retired_backend in _RETIRED_RECALL_BACKENDS:
+        settings["recall"] = {**recall, "backend": _RECALL_BACKEND_SUCCESSOR}
+        notes.count("recall_backend_replaced")
+        notes.approximate(
+            f"recall.backend: retired {retired_backend} replaced by "
+            f"{_RECALL_BACKEND_SUCCESSOR}; a scan backend is no longer selectable"
+        )
+    if "live_voice" in settings:
+        del settings["live_voice"]
+        notes.count("live_voice_dropped")
+        notes.approximate(
+            "retired live_voice dropped; the Live voice control is available "
+            "whenever the model_tasks.live_voice binding is set"
+        )
+    reflection = settings.get("reflection")
+    if isinstance(reflection, dict) and "skill_tool_call_interval" in reflection:
+        settings["reflection"] = _without(reflection, "skill_tool_call_interval")
+        notes.count("reflection_skill_tool_call_interval_dropped")
+        successor = (
+            "the existing skill_model_step_interval applies"
+            if "skill_model_step_interval" in reflection
+            else "set reflection.skill_model_step_interval if its default does not fit"
+        )
+        notes.approximate(
+            "retired reflection.skill_tool_call_interval dropped: Skill reviews now count "
+            f"Model steps instead of Tool calls; {successor}"
+        )
+    return settings
+
+
+def _prompt_layout(value: Any, notes: _Notes) -> dict[str, Any]:
+    entries = _array(value)
+    laid_out = {entry.get("id") for entry in entries if isinstance(entry, dict)}
+    if _RETIRED_PROJECT_FILES_BLOCK not in laid_out:
+        return {"entries": entries}
+    converted: list[Any] = []
+    for entry in entries:
+        block_id = entry.get("id") if isinstance(entry, dict) else None
+        if block_id == _RETIRED_PROJECT_FILES_BLOCK:
+            if _WORKING_PROJECT_BLOCK in laid_out:
+                continue
+            laid_out.add(_WORKING_PROJECT_BLOCK)
+            entry = {**entry, "id": _WORKING_PROJECT_BLOCK}
+        converted.append(entry)
+        if block_id == _RUNTIME_BLOCK and _IDENTITY_RUNTIME_BLOCK not in laid_out:
+            # The split-off lines keep the place and state they had in core:runtime.
+            enabled = entry.get("enabled", True)
+            converted.append(
+                {
+                    "id": _IDENTITY_RUNTIME_BLOCK,
+                    "enabled": enabled if isinstance(enabled, bool) else True,
+                    "source": "core",
+                }
+            )
+            laid_out.add(_IDENTITY_RUNTIME_BLOCK)
+            notes.count("prompt_identity_runtime_added")
+    notes.count("prompt_project_files_converted")
+    return {"entries": converted}
 
 
 def _project(value: Any, notes: _Notes) -> dict[str, Any]:
@@ -306,11 +441,11 @@ def _mcp_connections(value: Any, notes: _Notes) -> dict[str, Any]:
 
 
 _DOCUMENTS: tuple[tuple[str, _Document], ...] = (
-    ("settings.json", _Document("settings", _plain)),
+    ("settings.json", _Document("settings", _settings)),
     ("agents/*/agent.json", _Document("agents", _agent)),
     ("agents/order.json", _Document("agent_order", _plain)),
-    ("agents/*/prompts/layout.json", _Document("prompt_layouts", _named_array("entries"))),
-    ("prompts/layout.json", _Document("prompt_layouts", _named_array("entries"))),
+    ("agents/*/prompts/layout.json", _Document("prompt_layouts", _prompt_layout)),
+    ("prompts/layout.json", _Document("prompt_layouts", _prompt_layout)),
     ("projects/*/project.json", _Document("projects", _project)),
     ("channels/*/channel.json", _Document("channels", _channel)),
     ("cron/jobs.json", _Document("cron_jobs", _cron_jobs)),
