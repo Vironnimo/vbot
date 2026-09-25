@@ -44,7 +44,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Protocol
 
-from core.statistics.timestamps import parse_timestamp
+from core.utils.timestamps import parse_canonical_timestamp
 
 # The session-metadata sidecar key holding the skills a session was offered
 # (its ``<available_skills>`` catalog names). Owned and written by the chat loop
@@ -283,11 +283,11 @@ class SkillUsageAccumulator:
     def _in_window(self, timestamp: str | None) -> bool:
         if self._since is None and self._until is None:
             return True
-        parsed = parse_timestamp(timestamp) if timestamp is not None else None
-        # An unparseable/absent timestamp cannot be excluded by a bound, matching
-        # the statistics scan's lenient in-window rule.
-        if parsed is None:
+        # An absent timestamp cannot be excluded by a bound; a present one is a
+        # stored canonical Session timestamp.
+        if timestamp is None:
             return True
+        parsed = parse_canonical_timestamp(timestamp)
         if self._since is not None and parsed < self._since:
             return False
         return not (self._until is not None and parsed > self._until)
@@ -385,13 +385,8 @@ def _min_timestamp(current: str | None, candidate: str | None) -> str | None:
         return current
     if current is None:
         return candidate
-    current_parsed = parse_timestamp(current)
-    candidate_parsed = parse_timestamp(candidate)
-    if current_parsed is None:
-        return candidate
-    if candidate_parsed is None:
-        return current
-    return candidate if candidate_parsed < current_parsed else current
+    earlier = parse_canonical_timestamp(candidate) < parse_canonical_timestamp(current)
+    return candidate if earlier else current
 
 
 def _max_timestamp(current: str | None, candidate: str | None) -> str | None:
@@ -399,10 +394,5 @@ def _max_timestamp(current: str | None, candidate: str | None) -> str | None:
         return current
     if current is None:
         return candidate
-    current_parsed = parse_timestamp(current)
-    candidate_parsed = parse_timestamp(candidate)
-    if current_parsed is None:
-        return candidate
-    if candidate_parsed is None:
-        return current
-    return candidate if candidate_parsed > current_parsed else current
+    later = parse_canonical_timestamp(candidate) > parse_canonical_timestamp(current)
+    return candidate if later else current

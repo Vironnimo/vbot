@@ -83,6 +83,11 @@ _Result = TypeVar("_Result")
 IO_WORKERS = 8
 
 
+def database_worker_pool(spec: DatabaseSpec) -> BoundedWorkerPool:
+    """The bounded worker pool of one database, named after it."""
+    return BoundedWorkerPool(name=f"db-{spec.name}", max_workers=IO_WORKERS)
+
+
 class _ProjectionMismatchError(Exception):
     """A disposable database was built for another projection; rebuild it."""
 
@@ -92,7 +97,10 @@ class Database:
 
     ``read()`` and ``write()`` block the calling thread; ``read_async``,
     ``write_async`` and ``run_async`` run blocking work on this database's
-    bounded worker pool instead of the Event Loop's shared executor.
+    bounded worker pool instead of the Event Loop's shared executor. A
+    disposable database's :class:`~core.database.disposable.DisposableDatabase`
+    lends its pool to every handle it opens, so the pool outlives rebuilds; a
+    handle shuts down only a pool it created.
     """
 
     def __init__(
@@ -102,12 +110,14 @@ class Database:
         *,
         database_id: str,
         data_dir: Path | None,
+        workers: BoundedWorkerPool | None = None,
     ) -> None:
         self.spec = spec
         self._runtime = runtime
         self._database_id = database_id
         self._data_dir = data_dir
-        self._workers = BoundedWorkerPool(name=f"db-{spec.name}", max_workers=IO_WORKERS)
+        self._owns_workers = workers is None
+        self._workers = database_worker_pool(spec) if workers is None else workers
 
     @property
     def name(self) -> str:
@@ -223,7 +233,8 @@ class Database:
     def close(self) -> None:
         """Close every connection; in-flight pool work fails as unavailable."""
         self._runtime.close()
-        self._workers.shutdown(wait=False)
+        if self._owns_workers:
+            self._workers.shutdown(wait=False)
 
 
 # ---------------------------------------------------------------------------
@@ -332,13 +343,13 @@ def _bootstrap_canonical(spec: DatabaseSpec, data_dir: Path) -> Database:
     return database
 
 
-def _open_disposable(spec: DatabaseSpec) -> Database:
+def _open_disposable(spec: DatabaseSpec, *, workers: BoundedWorkerPool | None = None) -> Database:
     for attempt in range(2):
         if not _has_content(spec.path):
             _discard(spec)
             _create_database_file(spec)
         try:
-            return _open_existing(spec, expected_database_id=None, data_dir=None)
+            return _open_existing(spec, expected_database_id=None, data_dir=None, workers=workers)
         except DatabaseUnavailableError:
             raise
         except (DatabaseError, _ProjectionMismatchError, sqlite3.DatabaseError, OSError) as exc:
@@ -449,7 +460,11 @@ def _fsync_directory(path: Path) -> None:
 
 
 def _open_existing(
-    spec: DatabaseSpec, *, expected_database_id: str | None, data_dir: Path | None
+    spec: DatabaseSpec,
+    *,
+    expected_database_id: str | None,
+    data_dir: Path | None,
+    workers: BoundedWorkerPool | None = None,
 ) -> Database:
     runtime = ConnectionRuntime(
         spec.path,
@@ -487,7 +502,9 @@ def _open_existing(
     except BaseException:
         runtime.close()
         raise
-    return Database(spec, runtime, database_id=identity["database_id"], data_dir=data_dir)
+    return Database(
+        spec, runtime, database_id=identity["database_id"], data_dir=data_dir, workers=workers
+    )
 
 
 def _verify_identity(

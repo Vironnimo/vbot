@@ -22,7 +22,6 @@ that still shows it.
 
 from __future__ import annotations
 
-import asyncio
 import contextlib
 import hashlib
 import json
@@ -47,6 +46,7 @@ from core.sessions import (
     SessionNotFoundError,
     SessionReadBatch,
 )
+from core.utils.timestamps import format_canonical_timestamp
 
 _T = TypeVar("_T")
 
@@ -532,12 +532,12 @@ def reported_sessions(
 
 
 def time_bounds(
-    alias: str, since: datetime | None, until: datetime | None, *, lenient: bool
+    alias: str, since: datetime | None, until: datetime | None
 ) -> tuple[list[str], list[str]]:
     """Conditions keeping Passages that overlap the requested period.
 
-    Stored timestamps compare as instants, so equivalent encodings agree. With
-    ``lenient`` a timestamp that is not a valid instant keeps the Passage.
+    Passage timestamps are the Session's canonical stored timestamps, whose text
+    order is time order, so the bounds compare as canonical text.
     """
     conditions: list[str] = []
     parameters: list[str] = []
@@ -547,11 +547,8 @@ def time_bounds(
     ):
         if bound is None:
             continue
-        condition = f"julianday({alias}.{column}) {operator} julianday(?)"
-        if lenient:
-            condition = f"(julianday({alias}.{column}) IS NULL OR {condition})"
-        conditions.append(condition)
-        parameters.append(bound.isoformat())
+        conditions.append(f"{alias}.{column} {operator} ?")
+        parameters.append(format_canonical_timestamp(bound))
     return conditions, parameters
 
 
@@ -609,7 +606,7 @@ class PassageCatalog:
             lambda connection: read_stamps(connection, agent_id=agent_id, project=project)
         )
         try:
-            plan = await asyncio.to_thread(
+            plan = await sessions.run_async(
                 plan_refresh, sessions, agent_id, project_id, scope, stamps
             )
         except Exception as error:

@@ -5,12 +5,14 @@ from __future__ import annotations
 # mypy: disable-error-code=arg-type
 import asyncio
 import sqlite3
+import threading
 
 import pytest
 
+from core.database import DatabaseUnavailableError
 from core.sessions import SessionAddress, TemporarySessionBinding
 from resources.extensions.swarm._participant_names import _PARTICIPANT_NAMES
-from resources.extensions.swarm.store import SwarmStore, SwarmStoreError
+from resources.extensions.swarm.store import SwarmDatabase, SwarmStore, SwarmStoreError
 from tests.resources.extensions.swarm_store_helpers import (
     _profile,
     _swarm,
@@ -319,3 +321,31 @@ async def test_names_are_unique_across_formations_and_persist(store, count, monk
     assert (await store.get_swarm(swarm_id))["participants"] == original
     await start("another-swarm")
     assert len(shuffles) == 2
+
+
+@pytest.mark.asyncio
+async def test_store_work_runs_on_the_host_database_pool_until_the_host_closes_it(
+    tmp_path, monkeypatch
+):
+    database = open_swarm_database(tmp_path)
+    store = SwarmStore(database)
+    await store.open()
+    threads: list[str] = []
+    original = SwarmDatabase._read
+
+    def read(self):
+        threads.append(threading.current_thread().name)
+        return original(self)
+
+    monkeypatch.setattr(SwarmDatabase, "_read", read)
+    saved = await store.save_profile(_profile(), expected_revision=None)
+    assert (await store.get_profile(saved["id"]))["id"] == saved["id"]
+    assert threads and all(name.startswith(f"vbot-db-{database.name}_") for name in threads)
+
+    database.close()
+
+    with pytest.raises(DatabaseUnavailableError):
+        await store.get_profile(saved["id"])
+    with pytest.raises(DatabaseUnavailableError):
+        await store.save_profile(_profile(slug="late"), expected_revision=None)
+    await store.close()

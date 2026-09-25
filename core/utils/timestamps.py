@@ -3,9 +3,11 @@
 Every stored timestamp uses the fixed-width form ``YYYY-MM-DDTHH:MM:SS.ffffffZ``:
 ISO 8601 with an explicit UTC designator, so plain text order equals time order.
 This module is the one owner of that form: formatting, parsing and
-normalization. Readers still accept other ISO 8601 forms with an explicit
-offset, such as ``+00:00`` or a missing fraction, and normalize them on write.
-A value without an offset is never guessed and raises ``ValueError``.
+normalization. Readers of incoming data still accept other ISO 8601 forms with
+an explicit offset, such as ``+00:00`` or a missing fraction, and normalize
+them on write. A value without an offset is never guessed and raises
+``ValueError``. Readers of stored values use :func:`parse_canonical_timestamp`,
+which accepts the canonical form only: anything else there is bad data.
 """
 
 from __future__ import annotations
@@ -37,6 +39,20 @@ def parse_timestamp(value: str) -> datetime:
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         raise ValueError(f"timestamp must include timezone information: {value!r}")
     return parsed.astimezone(UTC)
+
+
+def parse_canonical_timestamp(value: str) -> datetime:
+    """Parse a stored canonical timestamp as aware UTC.
+
+    Any other form raises ``ValueError``, including valid ISO 8601 text with
+    another offset spelling or fraction width: a stored value was written in
+    the canonical form, so a different one is bad data, and text comparisons
+    of stored values rely on the fixed width.
+    """
+    parsed = parse_timestamp(value)
+    if format_canonical_timestamp(parsed) != value:
+        raise ValueError(f"timestamp is not in the canonical stored form: {value!r}")
+    return parsed
 
 
 def canonical_timestamp(value: str | datetime) -> str:

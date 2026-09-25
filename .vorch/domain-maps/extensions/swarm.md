@@ -237,7 +237,7 @@ Resume request, not replay of the old Start/Resume request. Evidence:
 
 ## Verification routes
 
-Store source routing: `store.py` retains asynchronous validation/admission and the public `SwarmStore` API. `_store_database.py` wraps the host-opened kernel `Database`: each `_write` is one kernel write transaction (retried as a whole on a busy database), each `_read` one read transaction, and the signed cursor key is cached at open. `_store_profiles.py`, `_store_lifecycle.py`, `_store_delivery.py`, `_store_reads.py` and `_store_board.py` implement concrete operations against that database capability; they do not receive the Swarm service or public Store. Shared row checks/projections live in `_store_records.py`, pure input/value rules in `_store_values.py`, and the existing name pool in `_participant_names.py`. Worker dispatch runs each operation on the Store's worker pool without a Store lock; the kernel serializes writes, so a state-dependent decision belongs inside the write operation, not in a preceding read. Delivery receipt lookups run outside any database transaction. Store tests open the same kernel spec offline through `open_swarm_database` (`tests/resources/extensions/swarm_store_helpers.py`).
+Store source routing: `store.py` retains asynchronous validation/admission and the public `SwarmStore` API. `_store_database.py` wraps the host-opened kernel `Database`: each `_write` is one kernel write transaction (retried as a whole on a busy database), each `_read` one read transaction, and the signed cursor key is cached at open. `_store_profiles.py`, `_store_lifecycle.py`, `_store_delivery.py`, `_store_reads.py` and `_store_board.py` implement concrete operations against that database capability; they do not receive the Swarm service or public Store. Shared row checks/projections live in `_store_records.py`, pure input/value rules in `_store_values.py`, and the existing name pool in `_participant_names.py`. Worker dispatch (`SwarmDatabase.run`) runs each operation on the host database's own worker pool through `Database.run_async`, without a Store lock or a Swarm pool; once the host closes the database, Store operations raise the kernel's `DatabaseUnavailableError`; the kernel serializes writes, so a state-dependent decision belongs inside the write operation, not in a preceding read. Delivery receipt lookups run outside any database transaction. Store tests open the same kernel spec offline through `open_swarm_database` (`tests/resources/extensions/swarm_store_helpers.py`).
 
 Internal Extension source routing: `extension.py` owns the live Swarm service and participant callbacks; `_extension_values.py` holds pure argument/projection/configuration helpers, `_operation_schemas.py` the management schemas, and `_registration.py` binds the existing service to Extension capabilities. Registration constructs that service lazily to keep imports acyclic. Tool/schema/reminder wording is preserved.
 
@@ -398,6 +398,9 @@ Pending Board reads, automatic delivery, and participant counts use the partial
 Swarm's serialized database operations. The index is created with the current
 schema on open, without changing retained records. Ordered pending reads explicitly
 select this index so SQLite does not scan delivered posts to satisfy sequence order.
+Discussion Post pages likewise select `posts_discussion_page`, so a page of one
+Discussion does not walk the whole Swarm's Posts by sequence. Every index in
+`SCHEMA_SQL` names its reader in the comment above it.
 The regression fixture checks
 bounded SQLite work with 12 peers and 22,000 delivered recipient rows
 (`test_swarm_store_delivery.py`). A separate Wiki test verifies concurrent edits

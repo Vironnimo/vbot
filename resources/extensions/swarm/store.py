@@ -10,7 +10,6 @@ from typing import Any, Literal
 
 from core.extensions.databases import Database
 from core.sessions import TemporarySessionBinding
-from core.utils.workers import BoundedWorkerPool
 
 from ._store_board import (
     _create_discussion,
@@ -94,8 +93,6 @@ __all__ = [
     "SwarmStoreError",
 ]
 
-_WORKERS = BoundedWorkerPool(name="swarm-store", max_workers=2)
-
 
 class SwarmStore:
     """Public asynchronous persistence API for Swarm profiles and Board facts."""
@@ -105,18 +102,17 @@ class SwarmStore:
         database: Database,
         *,
         lookup_delivery_receipt: DeliveryReceiptLookup | None = None,
-        worker_pool: BoundedWorkerPool = _WORKERS,
     ) -> None:
         # The Extension host owns ``database``; closing the store never closes it.
+        # Store work runs on the database's own worker pool.
         self._database = SwarmDatabase(database)
-        self._workers = worker_pool
         self._lookup_delivery_receipt = lookup_delivery_receipt
 
     async def open(self) -> None:
         await self._run(SwarmDatabase._open)
 
     async def close(self) -> None:
-        await self._run(SwarmDatabase._close)
+        self._database._close()
 
     async def save_profile(
         self, profile: Mapping[str, Any], *, expected_revision: int | None
@@ -589,4 +585,4 @@ class SwarmStore:
         return await self._run(wiki, swarm_id, actor_id, arguments, expected_epoch)
 
     async def _run(self, function: Callable[..., Any], *arguments: Any) -> Any:
-        return await self._workers.run(self._database.call, function, *arguments)
+        return await self._database.run(function, *arguments)

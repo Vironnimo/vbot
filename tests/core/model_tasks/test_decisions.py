@@ -1,13 +1,14 @@
 import asyncio
 import json
 import sqlite3
+import threading
 from contextlib import closing
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 
-from core.database import write_bootstrap_marker
+from core.database import DatabaseUnavailableError, write_bootstrap_marker
 from core.model_tasks.decision_types import DecisionError
 from core.model_tasks.decisions import DecisionService
 
@@ -146,3 +147,25 @@ async def test_explicit_cancel_and_shutdown_retain_distinct_outcomes(tmp_path, m
             "SELECT status FROM evaluations WHERE id=?", (second["id"],)
         ).fetchone()
     assert status == "interrupted"
+
+
+@pytest.mark.asyncio
+async def test_store_work_runs_on_the_decisions_database_pool_until_close(tmp_path, monkeypatch):
+    owner = service(tmp_path)
+    threads = []
+    original = owner._store.list
+
+    def listing():
+        threads.append(threading.current_thread().name)
+        return original()
+
+    monkeypatch.setattr(owner._store, "list", listing)
+    assert (await owner.list_experiments())["experiments"] == []
+    assert threads[0].startswith(f"vbot-db-{owner.database.name}_")
+
+    await owner.aclose()
+
+    with pytest.raises(DatabaseUnavailableError):
+        await owner.list_experiments()
+    with pytest.raises(DatabaseUnavailableError):
+        await owner.save_experiment({"title": "Late", "state": "", "questions": []})
