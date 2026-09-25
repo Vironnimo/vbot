@@ -8,6 +8,7 @@ from __future__ import annotations
 import re
 import secrets
 import sqlite3
+from pathlib import Path
 
 from core.utils.ids import new_id
 from core.utils.timestamps import utc_now_timestamp
@@ -124,6 +125,63 @@ def _delete_profile(db: SwarmDatabase, profile_id: str, expected_revision: int) 
     db._write(operation)
 
 
+def _start_payload_hash(
+    profile_id: str, prompt: str, effective: Json, expected_profile_revision: int
+) -> str:
+    return _hash(
+        {
+            "profile_id": profile_id,
+            "prompt": prompt,
+            "effective": effective,
+            "expected_profile_revision": expected_profile_revision,
+        }
+    )
+
+
+def _replay_start(
+    db: SwarmDatabase,
+    profile_id: str,
+    prompt: str,
+    request_id: str,
+    expected_profile_revision: int | None,
+    working_directory: str | None,
+) -> Json | None:
+    with db._read() as connection:
+        row = connection.execute(
+            "SELECT r.payload_hash,r.outcome,s.profile_snapshot,s.effective_configuration "
+            "FROM requests r JOIN swarms s ON s.id=json_extract(r.outcome,'$.swarm_id') "
+            "WHERE r.scope='start' AND r.request_id=?",
+            (request_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        profile = _load(row["profile_snapshot"])
+        effective = _load(row["effective_configuration"])
+        working = profile["working_directory"]
+        # Resolve omitted values against the admitted snapshot, never today's
+        # profile, Project, directory or catalog. Explicitly changed inputs must
+        # still fail the original receipt's payload check.
+        if working_directory is not None:
+            cwd, project_id = working_directory, None
+        elif working["kind"] == "directory":
+            cwd, project_id = working["path"], None
+        else:
+            cwd, project_id = effective["cwd"], working["project_id"]
+        if Path(cwd) != Path(effective["cwd"]):
+            effective["cwd"] = str(Path(cwd))
+        if project_id is not None or "project_id" in effective:
+            effective["project_id"] = project_id
+        payload_hash = _start_payload_hash(
+            profile_id,
+            prompt,
+            effective,
+            profile["revision"] if expected_profile_revision is None else expected_profile_revision,
+        )
+        if row["payload_hash"] != payload_hash:
+            raise SwarmStoreError("request_conflict")
+        return {**_load(row["outcome"]), "replayed": True}
+
+
 def _create_swarm(
     db: SwarmDatabase,
     profile_id: str,
@@ -133,14 +191,7 @@ def _create_swarm(
     expected_profile_revision: int,
 ) -> Json:
     def operation(connection: sqlite3.Connection) -> Json:
-        payload_hash = _hash(
-            {
-                "profile_id": profile_id,
-                "prompt": prompt,
-                "effective": effective,
-                "expected_profile_revision": expected_profile_revision,
-            }
-        )
+        payload_hash = _start_payload_hash(profile_id, prompt, effective, expected_profile_revision)
         replay = connection.execute(
             "SELECT payload_hash, outcome FROM requests WHERE scope='start' AND request_id=?",
             (request_id,),
