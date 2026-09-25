@@ -98,7 +98,6 @@ def load_cache_facts(scan: UnitScan, *, top_incidents: int) -> CacheFacts:
                 AND previous_has_cache = 1
                 AND previous_model_key = model_key
                 AND previous_input_tokens >= {CACHE_BREAK_MIN_PREVIOUS_INPUT_TOKENS}
-                AND instant IS NOT NULL AND previous_instant IS NOT NULL
                 AND instant - previous_instant
                     BETWEEN 0 AND {CACHE_BREAK_MAX_GAP_SECONDS * _MICROSECONDS_PER_SECOND},
                 0

@@ -12,7 +12,7 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Hashable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from core.statistics._measurements import _nearest_rank_index
@@ -24,8 +24,6 @@ if TYPE_CHECKING:
 
 _MIN_INSTANT = -(2**63)
 _MAX_INSTANT = 2**63 - 1
-# The report's sort instant for an unparseable timestamp.
-UNPARSEABLE_SORT_INSTANT = datetime_instant(datetime.min.replace(tzinfo=UTC))
 
 
 @dataclass(frozen=True)
@@ -61,7 +59,6 @@ class UnitScan:
         self.params: dict[str, Any] = {
             "since": _MIN_INSTANT if since is None else datetime_instant(since),
             "until": _MAX_INSTANT if until is None else datetime_instant(until),
-            "unparseable": UNPARSEABLE_SORT_INSTANT,
         }
         scanned = self._scanned_sessions()
         connection.execute("DROP TABLE IF EXISTS temp.units")
@@ -100,10 +97,10 @@ class UnitScan:
         return f"u.scan = 1 AND {self.in_window(alias)}"
 
     def in_window(self, alias: str) -> str:
-        """Return the report window rule: unparseable timestamps are always in window."""
+        """Return the report window rule for ``alias`` rows."""
         if not self.windowed:
             return "1"
-        return f"({alias}.instant IS NULL OR {alias}.instant BETWEEN :since AND :until)"
+        return f"{alias}.instant BETWEEN :since AND :until"
 
     def execute(self, sql: str, params: Mapping[str, Any] | None = None) -> sqlite3.Cursor:
         return self.connection.execute(
@@ -142,20 +139,21 @@ class UnitScan:
         """Return Sessions that can contain in-window records.
 
         Without a window every unit is scanned; with one, a Session whose
-        recorded instants lie wholly outside it (and that has no unparseable
-        timestamp) contributes no windowed facts and is skipped.
+        recorded instants lie wholly outside it contributes no windowed facts
+        and is skipped.
         """
         keys = {unit.session_key for unit in self.units}
         if not self.windowed:
             return keys
         low, high = self.params["since"], self.params["until"]
         scanned: set[int] = set()
-        for session_key, min_instant, max_instant, untimed in self.connection.execute(
-            "SELECT session_key, min_instant, max_instant, untimed_records FROM stat_sessions"
+        for session_key, min_instant, max_instant in self.connection.execute(
+            "SELECT session_key, min_instant, max_instant FROM stat_sessions"
         ):
             if session_key not in keys:
                 continue
-            if untimed or (
+            # A Session without records has no instants and nothing to scan.
+            if (
                 min_instant is not None
                 and max_instant is not None
                 and max_instant >= low
@@ -169,12 +167,9 @@ def max_timestamp_sql(alias: str) -> str:
     """Order rows so the first is the report's latest-timestamp pick.
 
     Mirrors the sequential rule: the earliest record carrying the latest
-    parseable instant wins; without any parseable instant, the last record.
+    instant wins.
     """
-    return (
-        f"{alias}.instant IS NULL, {alias}.instant DESC, "
-        f"CASE WHEN {alias}.instant IS NULL THEN -{alias}.seq ELSE {alias}.seq END"
-    )
+    return f"{alias}.instant DESC, {alias}.seq"
 
 
 def materialize_run_slices(
