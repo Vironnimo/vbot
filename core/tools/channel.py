@@ -508,7 +508,7 @@ def _split_target(
         raise ChannelSendRefusedError(
             refusal(
                 f'"target" "{target}" is not "channel:chat" with one of your Channels ({ids}). '
-                "Name the Channel and the chat separately:",
+                "Name the Channel and the chat separately.",
                 _canonical(arguments),
                 channel_id=owned[0].id if len(owned) == 1 else "<channel id>",
                 platform_target="<chat id>",
