@@ -210,7 +210,8 @@ def test_a_session_keeps_its_history_side_rows_and_run(tmp_path: Path) -> None:
     assert _rows(
         context,
         "SELECT session_key, generation_id, state, created_at, next_seq, cursor_floor_seq, "
-        "last_activity_at, last_entry_id, latest_completion_run_id, latest_completion_status, "
+        "last_activity_at, last_entry_id, (SELECT run_id FROM runs "
+        "WHERE run_key = latest_completion_run_key), latest_completion_status, "
         "latest_completion_at, fork_parent_key, forked_at, fork_point_seq FROM sessions",
     ) == [
         (
@@ -665,6 +666,50 @@ def test_a_running_run_settles_like_after_a_crash(tmp_path: Path) -> None:
     assert _skips(context) == [
         (old_label, "Run run_old was still running in an archived Session; it ends interrupted"),
         (old_label, "1 Tool calls without a result end interrupted or cancelled"),
+    ]
+
+
+def test_the_latest_completion_and_its_read_mark_name_runs_of_their_session(
+    tmp_path: Path,
+) -> None:
+    context = _context(tmp_path)
+    with _legacy(context) as legacy:
+        read = legacy.session("s1")
+        legacy.start_run(read, "run_1", minute=1)
+        legacy.user(read, "go", minute=1, run_id="run_1")
+        legacy.finish_run(read, "run_1", minute=2)
+        legacy.execute(
+            "UPDATE sessions SET activity_json = json_set(activity_json, '$.read_run_id', "
+            "'run_1') WHERE session_key = ?",
+            (read,),
+        )
+        stray = legacy.session("s2", minute=0)
+        legacy.execute(
+            "UPDATE sessions SET activity_json = json_object('latest_completion', "
+            "json_object('run_id', 'run_gone', 'status', 'failed', 'timestamp', ?), "
+            "'read_run_id', 'run_other') WHERE session_key = ?",
+            (at(3), stray),
+        )
+        stray_label = f"session -/main/s2 ({legacy.generation(stray)})"
+
+    convert(context)
+
+    assert _rows(
+        context,
+        "SELECT s.session_id, r.run_id, s.latest_completion_status, s.latest_completion_at, "
+        "s.read_completion_run_key = s.latest_completion_run_key, s.read_completion_run_key "
+        "FROM sessions AS s LEFT JOIN runs AS r ON r.run_key = s.latest_completion_run_key "
+        "ORDER BY s.session_key",
+    ) == [("s1", "run_1", "completed", canonical(2), 1, 1), ("s2", None, None, None, None, None)]
+    with _opened(context) as manager:
+        activity = manager.list_completion_activity([(None, "main")])[(None, "main")]
+    assert [
+        (row["id"], row["latest_completion_run_id"], row["has_unread_completion"])
+        for row in activity
+    ] == [("s1", "run_1", False)]
+    assert _skips(context) == [
+        (stray_label, "latest completion dropped: Run run_gone is not in this Session"),
+        (stray_label, "read completion dropped: Run run_other is not in this Session"),
     ]
 
 

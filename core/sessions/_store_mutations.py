@@ -372,6 +372,53 @@ def restore(connection: sqlite3.Connection, address: SessionAddress) -> None:
     )
 
 
+def _detach_session(connection: sqlite3.Connection, session_key: int) -> None:
+    """Prepare deleting one Session: descendants stop depending on it.
+
+    Every descendant receives its own copy of what it inherits from the
+    Session, and the Session's search rows go before its entries do. Search
+    membership that only this Session's lineage kept alive is recomputed.
+    Deleting the ``sessions`` row afterwards cascades the rest.
+    """
+    # Search rows are forgotten while their membership is still readable.
+    _store_fts.fts_forget(
+        connection, "SELECT entry_key FROM entries WHERE session_key = ?", (session_key,)
+    )
+    inherited = tuple(
+        view_range
+        for view_range in _store_lineage.view_ranges(connection, session_key)
+        if view_range.source_key != session_key
+    )
+    candidates: list[int] = []
+    if inherited:
+        sql, params = _store_lineage.superseded_candidates(inherited)
+        candidates = [int(row[0]) for row in connection.execute(sql, params)]
+        _store_fts.fts_forget_keys(connection, candidates)
+    for segment in connection.execute(
+        "SELECT session_key, from_seq, upto_seq, as_of_seq FROM session_lineage "
+        "WHERE ancestor_key = ? ORDER BY session_key, from_seq",
+        (session_key,),
+    ).fetchall():
+        descendant_key, from_seq, upto_seq, as_of_seq = (int(value) for value in segment)
+        copies = _store_codec.copy_entries(
+            connection,
+            target_key=descendant_key,
+            view_range=_store_lineage.ViewRange(session_key, from_seq, upto_seq, as_of_seq),
+        )
+        connection.execute(
+            "DELETE FROM session_lineage WHERE session_key = ? AND from_seq = ?",
+            (descendant_key, from_seq),
+        )
+        _store_fts.fts_index_keys(connection, copies)
+        connection.execute(
+            "UPDATE sessions SET history_revision = history_revision + 1, "
+            "state_revision = state_revision + 1 WHERE session_key = ?",
+            (descendant_key,),
+        )
+    connection.execute("DELETE FROM session_lineage WHERE session_key = ?", (session_key,))
+    _store_fts.fts_index_keys(connection, candidates)
+
+
 def delete_session(connection: sqlite3.Connection, session_key: int) -> None:
     """Delete one Session generation with everything it owns.
 
@@ -379,7 +426,7 @@ def delete_session(connection: sqlite3.Connection, session_key: int) -> None:
     the row cascades, and prompt blobs no other Session pins go with it.
     """
     blob_keys = _store_prompts.session_blob_keys(connection, session_key)
-    _store_lineage.detach_session(connection, session_key)
+    _detach_session(connection, session_key)
     connection.execute("DELETE FROM sessions WHERE session_key = ?", (session_key,))
     _store_prompts.delete_unreferenced_blobs(connection, blob_keys)
 

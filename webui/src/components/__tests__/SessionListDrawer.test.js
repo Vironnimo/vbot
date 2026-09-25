@@ -604,7 +604,6 @@ describe('SessionListDrawer', () => {
           fork_source: {
             agent_id: 'alpha',
             session_id: 'plain-session',
-            message_count: 4,
           },
         },
       ],

@@ -19,7 +19,7 @@ from contextlib import closing
 from dataclasses import dataclass
 from typing import Any
 
-from core.sessions import _store_fts, _store_values
+from core.sessions import _store_fts, _store_lineage, _store_values
 from core.sessions._types import SessionSearchHit, SessionSearchOrder, SessionSearchResult
 from core.sessions.schema import FTS_TABLE, FTS_TRIGRAM_TABLE
 from core.utils.timestamps import canonical_timestamp
@@ -35,23 +35,21 @@ _Batch = builtins.list[tuple[int, float]]
 # entries, and the ancestor entries its lineage segments admit.
 _OWN_CURRENT = (
     "SELECT e.entry_key, e.created_at FROM entries AS e "
-    "WHERE e.session_key IN (SELECT session_key FROM eligible) AND e.superseded_at_seq IS NULL"
+    "WHERE e.session_key IN (SELECT session_key FROM eligible) "
+    f"AND {_store_lineage.own_current('e')}"
 )
 _INHERITED_CURRENT = (
     "SELECT e.entry_key, e.created_at FROM session_lineage AS l "
-    "JOIN entries AS e ON e.session_key = l.ancestor_key "
-    "AND e.seq >= l.from_seq AND e.seq < l.upto_seq "
-    "WHERE l.session_key IN (SELECT session_key FROM eligible) "
-    "AND (e.superseded_at_seq IS NULL OR e.superseded_at_seq >= l.as_of_seq)"
+    f"JOIN entries AS e ON {_store_lineage.segment_admits('e', 'l')} "
+    "WHERE l.session_key IN (SELECT session_key FROM eligible)"
 )
 # The Session a hit is reported for (see the module docstring).
 _REPORTED_SESSION = (
     "COALESCE("
-    "CASE WHEN e.superseded_at_seq IS NULL "
+    f"CASE WHEN {_store_lineage.own_current('e')} "
     "AND e.session_key IN (SELECT session_key FROM eligible) THEN e.session_key END, "
-    "(SELECT l.session_key FROM session_lineage AS l WHERE l.ancestor_key = e.session_key "
-    "AND e.seq >= l.from_seq AND e.seq < l.upto_seq "
-    "AND (e.superseded_at_seq IS NULL OR e.superseded_at_seq >= l.as_of_seq) "
+    "(SELECT l.session_key FROM session_lineage AS l "
+    f"WHERE {_store_lineage.segment_admits('e', 'l')} "
     "AND l.session_key IN (SELECT session_key FROM eligible) "
     "ORDER BY l.session_key DESC LIMIT 1))"
 )

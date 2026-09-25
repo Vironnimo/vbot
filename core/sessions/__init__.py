@@ -51,9 +51,7 @@ from core.sessions.errors import (
     SessionStoreCorruptError,
 )
 from core.sessions.history import (
-    active_session_messages,
     current_skill_activation_contents,
-    editable_session_message_ids,
     editable_session_message_index,
     is_channel_message_note,
     is_skill_available_note,
@@ -119,10 +117,8 @@ __all__ = [
     "TemporarySessionBinding",
     "ToolResultFacts",
     "ToolResultPayload",
-    "active_session_messages",
     "recall_visibilities",
     "is_channel_message_note",
-    "editable_session_message_ids",
     "editable_session_message_index",
     "is_skill_available_note",
     "is_skill_context_note",

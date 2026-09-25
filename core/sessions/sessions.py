@@ -273,11 +273,6 @@ class ChatSessionManager:
         )
         return await self._store.run_async(self._store.finish_run, address, completion)
 
-    def record_terminal_run(
-        self, address: SessionAddress, run_id: str, status: str, timestamp: str
-    ) -> None:
-        self._store.record_terminal_run(address, run_id=run_id, status=status, timestamp=timestamp)
-
     def mark_terminal_run_read(self, address: SessionAddress, run_id: str) -> JsonObject:
         activity, marked = self._store.mark_terminal_run_read(address, run_id)
         result = dict(activity)

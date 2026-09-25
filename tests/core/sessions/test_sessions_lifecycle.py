@@ -201,7 +201,12 @@ def test_fork_reads_and_transforms_metadata_inside_its_writer_transaction(
 
     metadata = manager.get_metadata(forked.address)
     assert metadata["title"] == "latest title"
-    assert metadata[FORK_SOURCE_META_KEY]["message_count"] == 1
+    assert metadata[FORK_SOURCE_META_KEY] == {
+        "agent_id": "coder",
+        "session_id": source.id,
+        "project_id": None,
+        "forked_at": metadata[FORK_SOURCE_META_KEY]["forked_at"],
+    }
     assert forked.load() == []
     assert forked.load_active() == source.load_active()
 

@@ -157,7 +157,6 @@ class _FakeSessions:
                 "session_id": session_id,
                 "project_id": source_project_id,
                 "forked_at": "2026-07-04T00:00:00.000000Z",
-                "message_count": 2,
             }
         }
         return SimpleNamespace(id="fork-1")

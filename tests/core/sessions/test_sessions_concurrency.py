@@ -14,9 +14,8 @@ from core.sessions import (
     SESSION_RUN_KINDS_META_KEY,
     ChatSessionManager,
     SessionAddress,
-    active_session_messages,
     current_skill_activation_contents,
-    editable_session_message_ids,
+    editable_session_message_index,
 )
 from tests.core.sessions.history_fixtures import admit_run
 from tests.core.sessions.sessions_test_support import (
@@ -133,9 +132,10 @@ def test_history_edits_and_skill_cache_preserve_chat_semantics(manager) -> None:
     session.apply_edit(user.id, [replacement])
 
     assert [message.role for message in session.load()] == ["user", "history_edit", "user"]
-    assert active_session_messages(session.load()) == [replacement]
     assert session.load_active() == [replacement]
-    assert editable_session_message_ids(session.load()) == frozenset({replacement.id})
+    assert editable_session_message_index(session.load_active(), replacement.id) == 0
+    with pytest.raises(ChatSessionError, match="not active"):
+        editable_session_message_index(session.load_active(), user.id)
     assert current_skill_activation_contents(session.load()) == {}
 
 

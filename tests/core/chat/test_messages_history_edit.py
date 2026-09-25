@@ -5,12 +5,7 @@ from datetime import UTC, datetime
 import pytest
 
 from core.chat import ChatMessage, ChatMessageValidationError
-from core.chat._message_history import effective_compaction_messages
-from core.sessions import (
-    ChatSessionError,
-    active_session_messages,
-    editable_session_message_ids,
-)
+from core.sessions import ChatSessionError, editable_session_message_index
 
 FIXED_TIMESTAMP = datetime(2026, 5, 3, 14, 30, tzinfo=UTC)
 
@@ -48,55 +43,17 @@ def test_history_edit_requires_only_a_target_message_id() -> None:
         )
 
 
-def test_active_lineage_preserves_raw_records_and_folds_multiple_edits() -> None:
+def test_edit_targets_only_an_own_plain_text_user_message_after_the_latest_takeover() -> None:
     first = ChatMessage.user("first", timestamp=FIXED_TIMESTAMP)
-    first_answer = ChatMessage.assistant(
-        model="openai/gpt-5.2",
-        content="old answer",
-        usage={"input_tokens": 10, "output_tokens": 2},
-        timestamp=FIXED_TIMESTAMP,
-    )
-    second = ChatMessage.user("second", timestamp=FIXED_TIMESTAMP)
-    first_edit = ChatMessage.history_edit(first.id, timestamp=FIXED_TIMESTAMP)
-    replacement = ChatMessage.user("replacement", timestamp=FIXED_TIMESTAMP)
-    replacement_answer = ChatMessage.assistant(
-        model="openai/gpt-5.2",
-        content="replacement answer",
-        usage={"input_tokens": 20, "output_tokens": 3},
-        timestamp=FIXED_TIMESTAMP,
-    )
-    second_edit = ChatMessage.history_edit(replacement.id, timestamp=FIXED_TIMESTAMP)
-    final = ChatMessage.user("final", timestamp=FIXED_TIMESTAMP)
-    raw = [
-        first,
-        first_answer,
-        second,
-        first_edit,
-        replacement,
-        replacement_answer,
-        second_edit,
-        final,
-    ]
-
-    active = active_session_messages(raw)
-
-    assert [message.content for message in active] == ["final"]
-    assert len(raw) == 8
-    assert first_answer.usage == {"input_tokens": 10, "output_tokens": 2}
-    assert replacement_answer.usage == {"input_tokens": 20, "output_tokens": 3}
-
-
-def test_active_lineage_rejects_inactive_structured_and_pre_takeover_targets() -> None:
-    first = ChatMessage.user("first", timestamp=FIXED_TIMESTAMP)
-    marker = ChatMessage.history_edit(first.id, timestamp=FIXED_TIMESTAMP)
     replacement = ChatMessage.user("replacement", timestamp=FIXED_TIMESTAMP)
 
+    assert editable_session_message_index([first, replacement], replacement.id) == 1
     with pytest.raises(ChatSessionError, match="not active"):
-        active_session_messages([first, marker, replacement, ChatMessage.history_edit(first.id)])
+        editable_session_message_index([replacement], first.id)
 
     structured = ChatMessage.user([], timestamp=FIXED_TIMESTAMP)
     with pytest.raises(ChatSessionError, match="plain-text"):
-        active_session_messages([structured, ChatMessage.history_edit(structured.id)])
+        editable_session_message_index([structured], structured.id)
 
     takeover = ChatMessage.agent_takeover(
         from_address="alpha",
@@ -104,22 +61,4 @@ def test_active_lineage_rejects_inactive_structured_and_pre_takeover_targets() -
         timestamp=FIXED_TIMESTAMP,
     )
     with pytest.raises(ChatSessionError, match="takeover"):
-        active_session_messages([first, takeover, ChatMessage.history_edit(first.id)])
-
-
-def test_editable_ids_and_compaction_projection_use_only_active_lineage() -> None:
-    first = ChatMessage.user("first", timestamp=FIXED_TIMESTAMP)
-    old_checkpoint = ChatMessage.compaction_checkpoint(
-        summary="old summary",
-        projection=[first],
-        compacted_token_count=100,
-        policy="context_ratio",
-        strategy="summary_tail",
-        timestamp=FIXED_TIMESTAMP,
-    )
-    marker = ChatMessage.history_edit(first.id, timestamp=FIXED_TIMESTAMP)
-    replacement = ChatMessage.user("replacement", timestamp=FIXED_TIMESTAMP)
-    raw = [first, old_checkpoint, marker, replacement]
-
-    assert editable_session_message_ids(raw) == frozenset({replacement.id})
-    assert effective_compaction_messages(raw) == [replacement]
+        editable_session_message_index([first, takeover], first.id)

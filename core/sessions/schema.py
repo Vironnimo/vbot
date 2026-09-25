@@ -7,6 +7,8 @@ snapshots it; this module only declares what it contains.
 
 from __future__ import annotations
 
+from core.sessions._store_lineage import own_current, segment_admits
+
 DATABASE_NAME = "sessions"
 APPLICATION_ID = 0x56425353  # "VBSS"
 # The physical format generation, not a counter for additive changes: those
@@ -40,6 +42,9 @@ CREATE TABLE store_meta (
   value TEXT NOT NULL
 ) STRICT;
 
+-- The latest completion and its read mark name runs of this Session by run_key.
+-- A Run is deleted only with its Session, so these keys never dangle; they
+-- carry no foreign key, which would scan sessions for every deleted Run.
 CREATE TABLE sessions (
   session_key INTEGER PRIMARY KEY,
   generation_id TEXT NOT NULL UNIQUE,
@@ -73,15 +78,15 @@ CREATE TABLE sessions (
   subagent_parent_tool_call_id TEXT,
   subagent_parent_tool_call_index INTEGER CHECK (subagent_parent_tool_call_index IS NULL OR subagent_parent_tool_call_index >= 0),
   list_visibility_mask INTEGER NOT NULL DEFAULT 0 CHECK (list_visibility_mask >= 0),
-  latest_completion_run_id TEXT,
+  latest_completion_run_key INTEGER,
   latest_completion_status TEXT,
   latest_completion_at TEXT,
-  read_completion_run_id TEXT,
+  read_completion_run_key INTEGER,
   prompt_cache_affinity_id TEXT,
   seen_skills_initialized INTEGER NOT NULL DEFAULT 0 CHECK (seen_skills_initialized IN (0, 1)),
   compaction_policy_json TEXT CHECK (compaction_policy_json IS NULL OR (json_valid(compaction_policy_json) AND json_type(compaction_policy_json) = 'object')),
   metadata_json TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(metadata_json) AND json_type(metadata_json) = 'object'),
-  CHECK ((latest_completion_run_id IS NULL) = (latest_completion_status IS NULL)),
+  CHECK ((latest_completion_run_key IS NULL) = (latest_completion_status IS NULL)),
   CHECK ((forked_at IS NULL) = (fork_point_seq IS NULL)),
   CHECK ((fork_parent_key IS NULL) OR (forked_at IS NOT NULL))
 ) STRICT;
@@ -470,12 +475,11 @@ CREATE INDEX run_execution_owners_group_run
 
 # An entry belongs to the search indexes while it is searchable and current in
 # some Session's view: its owner's, or a fork's that still inherits it after
-# the owner superseded it. Both indexes and their coverage checks share it.
+# the owner superseded it. Both indexes and their coverage checks share it; the
+# visibility itself is the lineage predicate.
 FTS_MEMBERSHIP_SQL = (
-    "e.searchable = 1 AND (e.superseded_at_seq IS NULL OR EXISTS ("
-    "SELECT 1 FROM session_lineage AS l WHERE l.ancestor_key = e.session_key "
-    "AND e.seq >= l.from_seq AND e.seq < l.upto_seq "
-    "AND e.superseded_at_seq >= l.as_of_seq))"
+    f"e.searchable = 1 AND ({own_current('e')} OR EXISTS ("
+    f"SELECT 1 FROM session_lineage AS l WHERE {segment_admits('e', 'l')}))"
 )
 FTS_TRIGRAM_MEMBERSHIP_SQL = (
     f"{FTS_MEMBERSHIP_SQL} AND e.role IN ({', '.join(repr(role) for role in FTS_TRIGRAM_ROLES)}) "

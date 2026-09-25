@@ -34,6 +34,7 @@ from server.app import (
 )
 from server.events import ServerEventBus
 from server.rpc.event_bridge import publish_bash_process_status_changed
+from tests.core.sessions.history_fixtures import settle_run
 
 
 @pytest.mark.asyncio
@@ -119,11 +120,11 @@ def test_session_completion_read_bridge_publishes_sessions_invalidation(tmp_path
     write_bootstrap_marker(tmp_path)
     sessions = ChatSessionManager(tmp_path)
     sessions.create("coder", session_id="session-one")
-    sessions.record_terminal_run(
+    settle_run(
+        sessions,
         SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
         "run-one",
-        "completed",
-        "2026-07-20T10:00:00+00:00",
+        completed_at="2026-07-20T10:00:00+00:00",
     )
     state = SimpleNamespace(
         runtime=SimpleNamespace(chat_sessions=sessions),

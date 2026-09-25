@@ -170,6 +170,47 @@ async def test_a_fork_shares_history_until_its_ancestor_is_deleted(tmp_path: Pat
         manager.close()
 
 
+def _unread_run_ids(manager: ChatSessionManager) -> dict[str, str | None]:
+    rows = manager.list_completion_activity([(None, "agent")])[(None, "agent")]
+    return {str(row["id"]): row["unread_run_id"] for row in rows}
+
+
+@pytest.mark.asyncio
+async def test_the_latest_completion_names_an_own_run_across_fork_and_delete(
+    tmp_path: Path,
+) -> None:
+    manager = ChatSessionManager(tmp_path)
+    try:
+        source = manager.create("agent", session_id="source")
+        _tool_run(source, "run-one", "needle")
+        fork = await manager.fork(source.address)
+        # A fork starts without a completion; an inherited Run's id marks nothing read.
+        assert _unread_run_ids(manager) == {"source": "run-one"}
+        assert manager.mark_terminal_run_read(fork.address, "run-one")["marked_read"] is False
+        _tool_run(fork, "fork-run", "fork")
+        assert _unread_run_ids(manager) == {"source": "run-one", fork.id: "fork-run"}
+
+        # Materializing the inherited Run gives it a new key in the fork; the
+        # fork's completion still names its own Run.
+        manager.delete(source.address)
+
+        assert _unread_run_ids(manager) == {fork.id: "fork-run"}
+        with sqlite3.connect(manager._store.path) as connection:
+            assert _rows(
+                connection,
+                "SELECT r.run_id, r.inherited FROM sessions AS s "
+                "JOIN runs AS r ON r.run_key = s.latest_completion_run_key "
+                "AND r.session_key = s.session_key WHERE s.session_id = ?",
+                fork.id,
+            ) == [("fork-run", 0)]
+            assert _rows(connection, "PRAGMA foreign_key_check") == []
+        assert manager.mark_terminal_run_read(fork.address, "run-one")["marked_read"] is False
+        assert manager.mark_terminal_run_read(fork.address, "fork-run")["marked_read"] is True
+        assert _unread_run_ids(manager) == {fork.id: None}
+    finally:
+        manager.close()
+
+
 def _populate(manager: ChatSessionManager, session_id: str) -> ChatSession:
     """Write one Session that owns a row in every Session-owned table."""
     session = manager.create("agent", session_id=session_id)
@@ -220,14 +261,14 @@ def _populate(manager: ChatSessionManager, session_id: str) -> ChatSession:
             },
             {
                 "version": 1,
-                "type": "tool_started",
+                "type": "assistant_boundary",
                 "run_id": run_id,
-                "tool_call_id": "operation",
-                "name": "read",
+                "step": 1,
+                "message_id": f"{session_id}-partial",
+                "tool_calls": [{"id": "operation", "name": "read"}],
             },
         ]
     )
-    manager.record_terminal_run(address, f"{session_id}-run", "completed", "2026-09-19T10:00:01Z")
     return session
 
 
