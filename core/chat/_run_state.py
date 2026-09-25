@@ -71,7 +71,7 @@ if TYPE_CHECKING:
     from core.chat._request_builder import RequestBuilder
     from core.extensions import ExtensionRegistry
     from core.models.models import ModelRegistry
-    from core.projects import AgentResolver, AgentRunOverrides, ProjectStore
+    from core.projects import AgentResolver, AgentRunOverrides, Project, ProjectStore
     from core.prompts import SystemPromptManager
     from core.providers.adapter import ProviderAdapter
     from core.providers.providers import ProviderRegistry
@@ -521,6 +521,17 @@ class SessionTitleNotifier(Protocol):
         ...
 
 
+def _resolve_working_project(
+    requests: RequestBuilder,
+    dependencies: ChatLoopDependencies,
+    working_project_id: str,
+    resolve_cwd: bool,
+) -> tuple[Path | None, Project | None]:
+    """Read the Working Project's cwd and prompt Project. Blocking."""
+    project_cwd = requests.resolve_project_cwd(working_project_id) if resolve_cwd else None
+    return project_cwd, resolve_prompt_project(dependencies.projects, working_project_id)
+
+
 async def create_run_execution_context(
     dependencies: ChatLoopDependencies,
     requests: RequestBuilder,
@@ -549,7 +560,7 @@ async def create_run_execution_context(
                 "This Session no longer matches this Run. "
                 "Ask the user to resume it through its Extension."
             )
-        agent = dependencies.agent_resolver.resolve_temporary_agent(
+        agent = await dependencies.agent_resolver.resolve_temporary_agent_async(
             temporary_binding.address, generation_id=temporary_binding.generation_id
         )
     elif request.temporary_parent_binding is not None:
@@ -598,6 +609,7 @@ async def create_run_execution_context(
             dependencies.process_manager.release_scope(run.id)
 
         run.add_completion_observer(release_process_scope)
+        temporary_cwd: Path | None = None
         if temporary_source is not None:
             temporary_cwd = getattr(agent, "cwd", None)
             if not isinstance(temporary_cwd, Path):
@@ -605,10 +617,19 @@ async def create_run_execution_context(
                     "This Session has an invalid configuration. "
                     "Ask the user to check it through its Extension."
                 )
-            project_cwd = temporary_cwd
+        if working_project_id is None:
+            project_cwd, prompt_project = None, None
         else:
-            project_cwd = requests.resolve_project_cwd(working_project_id)
-        prompt_project = resolve_prompt_project(dependencies.projects, working_project_id)
+            # The Working Project's anchor and repository are read off the Event Loop.
+            project_cwd, prompt_project = await _CHAT_TRANSFORM_WORKERS.run(
+                _resolve_working_project,
+                requests,
+                dependencies,
+                working_project_id,
+                temporary_source is None,
+            )
+        if temporary_cwd is not None:
+            project_cwd = temporary_cwd
         project_prompt_context = (
             ProjectPromptContext.from_project(
                 prompt_project.project_id,

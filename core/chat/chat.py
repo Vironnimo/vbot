@@ -512,7 +512,7 @@ class ChatLoop:
             raise ChatError(
                 "This Session is no longer available. Check its state through its Extension."
             )
-        agent = self._dependencies.agent_resolver.resolve_temporary_agent(
+        agent = await self._dependencies.agent_resolver.resolve_temporary_agent_async(
             binding.address, generation_id=binding.generation_id
         )
         provider_id, _connection_id = _resolve_agent_connection(self._dependencies, agent)
