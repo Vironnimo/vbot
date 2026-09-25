@@ -116,6 +116,20 @@ def test_a_failed_capture_raises_with_the_recorded_reason(data_dir: Path) -> Non
         create_update_snapshot(data_dir, operation_id="upd_1")
 
 
+def test_a_missing_extension_database_refuses_the_update_with_its_release_command(
+    data_dir: Path,
+) -> None:
+    _prepared(data_dir)
+    open_database(notes_spec(data_dir, name="ext.gone.state")).close()
+    notes_spec(data_dir, name="ext.gone.state").path.unlink()
+
+    with pytest.raises(
+        DatabaseUnavailableError, match="`vbot data-store unregister ext.gone.state --yes`"
+    ):
+        create_update_snapshot(data_dir, operation_id="upd_1")
+    assert find_update_snapshot(data_dir, "upd_1") is None
+
+
 @pytest.mark.parametrize("change", ["database", "document", "marker"])
 def test_every_write_after_the_snapshot_is_detected(data_dir: Path, change: str) -> None:
     snapshot = _snapshot(data_dir)

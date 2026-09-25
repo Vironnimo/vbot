@@ -82,7 +82,9 @@ def test_a_missing_or_foreign_registered_database_is_unavailable(data_dir: Path)
     foreign = data_store_status(data_dir)
 
     assert missing["state"] == "unavailable"
-    assert missing["databases"]["notes"]["reason"] == "the database file is missing"
+    assert missing["databases"]["notes"]["reason"].startswith(
+        "the registered database notes has no file; starting vBot restores it"
+    )
     assert foreign["state"] == "unavailable"
     assert foreign["databases"]["notes"]["reason"] == "the database file has another identity"
 

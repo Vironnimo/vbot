@@ -105,7 +105,9 @@ AREA_HELP = {
     "agent": "Inspect and manage agent configs",
     "project": "Inspect and manage projects and their scanned teams",
     "session": "Inspect and manage agent chat sessions",
-    "data-store": "Inspect, snapshot, verify, and recover the canonical SQLite databases",
+    "data-store": (
+        "Inspect, snapshot, verify, recover, and release the canonical SQLite databases"
+    ),
     "channel": "Inspect and manage channel configs",
     "tool": "Inspect public tool catalog",
     "prompt": "Inspect and manage System Prompt blocks",
@@ -172,6 +174,7 @@ DATA_STORE_HELP = {
     "status": "Show database health, data snapshots, and recovery incidents",
     "snapshot": "Manage verified data snapshots of every canonical database",
     "incident": "Manage durable database recovery incidents",
+    "unregister": "Release the database of a removed Extension (files move to quarantine)",
 }
 
 

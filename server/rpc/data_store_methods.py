@@ -1,4 +1,8 @@
-"""RPC projections for the data directory's canonical databases: health, snapshots, incidents."""
+"""RPC projections for the data directory's canonical databases.
+
+Health, snapshots, incidents, and the operator's release of a removed
+Extension's database.
+"""
 
 from __future__ import annotations
 
@@ -11,7 +15,7 @@ from core.database import (
     create_data_snapshot,
     data_store_status,
 )
-from core.database.snapshots import read_snapshot_summary
+from core.database.snapshots import read_snapshot_health, read_snapshot_summary
 from core.utils.workers import BoundedWorkerPool
 from server.events import RESOURCE_KIND_DATA_STORE
 from server.rpc.dispatcher import RpcMethodHandler
@@ -48,10 +52,14 @@ async def _data_store_status(state: Any, params: JsonObject) -> JsonObject:
 
 
 def _create_snapshot(runtime: Any, data_dir: Path, reason: str) -> JsonObject:
+    before = read_snapshot_health(data_dir)
     snapshot = create_data_snapshot(
         data_dir, reason=reason, databases=runtime.canonical_databases()
     )
     if snapshot is None:
+        after = read_snapshot_health(data_dir)
+        if after != before and after.get("state") == "degraded" and after.get("reason"):
+            raise DatabaseUnavailableError(f"the data snapshot was not created: {after['reason']}")
         raise DatabaseUnavailableError("the data snapshot was not created")
     summary = read_snapshot_summary(data_dir, snapshot)
     if summary is None:
@@ -98,10 +106,33 @@ async def _data_store_incident_acknowledge(state: Any, params: JsonObject) -> Js
     return status
 
 
+async def _data_store_unregister(state: Any, params: JsonObject) -> JsonObject:
+    _reject_unsupported(params, {"name"}, "data_store.unregister")
+    name = params.get("name")
+    if not isinstance(name, str) or not name:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.name must be a non-empty string")
+    try:
+        runtime, _data_dir = _runtime(state)
+        released = await runtime.unregister_extension_database(name)
+    except ValueError as exc:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    publish_resource_changed(state, RESOURCE_KIND_DATA_STORE)
+    return {
+        "unregistered": {
+            "name": released.name,
+            "database_id": released.database_id,
+            "quarantine": None if released.quarantine is None else str(released.quarantine),
+        }
+    }
+
+
 def method_handlers() -> dict[str, RpcMethodHandler]:
     """Return the public data-store handlers."""
     return {
         "data_store.status": _data_store_status,
         "data_store.snapshot_create": _data_store_snapshot_create,
         "data_store.incident_acknowledge": _data_store_incident_acknowledge,
+        "data_store.unregister": _data_store_unregister,
     }

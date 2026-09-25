@@ -144,6 +144,7 @@ def test_parse_args_supports_data_store_operations() -> None:
         ["data-store", "snapshot", "restore", "snapshot-1", "--database", "sessions", "--yes"]
     )
     incident = cli_main.parse_args(["data-store", "incident", "acknowledge", "incident-1"])
+    unregister = cli_main.parse_args(["data-store", "unregister", "ext.demo.notes"])
 
     assert (status.area, status.command, status.data_dir) == (
         "data-store",
@@ -162,6 +163,11 @@ def test_parse_args_supports_data_store_operations() -> None:
         "incident",
         "acknowledge",
         "incident-1",
+    )
+    assert (unregister.command, unregister.name, unregister.yes) == (
+        "unregister",
+        "ext.demo.notes",
+        False,
     )
 
 

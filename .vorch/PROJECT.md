@@ -119,7 +119,7 @@ python desktop/main.py                # Desktop shell
 ```
 A git-ignored checkout marker selects dev data `~/.vbot-dev`, port `8421`. Installed CLI outside the checkout uses product defaults `~/.vbot`, `8420`. Never target the installed instance with development commands, including its interpreter: running an installed `versions/<id>/runtime/python.exe` writes `__pycache__` into the verified version. Current versions remove such caches before verifying (`cli/windows-application.md` -> Update operation); older active versions fail the next update with "Release file inventory does not match its payload". Managed worktrees have separate data dirs and ports.
 
-**Data store:** Live operator-safe health of every canonical database: `python cli/main.py data-store status|snapshot|incident`; `snapshot restore` requires a proven-stopped target. Session Runs, Messages, Tool invocations/results and checkpoints are stored relationally in `sessions.db`.
+**Data store:** Live operator-safe health of every canonical database: `python cli/main.py data-store status|snapshot|incident|unregister`; `snapshot restore` requires a proven-stopped target, and `unregister` releases a removed Extension's database. Session Runs, Messages, Tool invocations/results and checkpoints are stored relationally in `sessions.db`.
 
 **Frontend build:** `cd webui && npm ci && npm run build`. Also compiles bundled Extension `ui/page.html` entries to relative `web/` assets via `webui/scripts/build-extension-pages.mjs`; installers ship assets and Extension sources. The frontend gate covers these external source/test paths with the shared dependency tree.
 

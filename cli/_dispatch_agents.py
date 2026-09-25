@@ -14,6 +14,7 @@ from cli.data_store_management import (
     data_store_snapshot_restore,
     data_store_snapshot_verify,
     data_store_status,
+    data_store_unregister,
 )
 from cli.project_management import (
     project_add,
@@ -305,6 +306,7 @@ def dispatch_data_store_command(
     incident_acknowledge_fn: Callable[
         [ServerInstance, str], CommandResult
     ] = data_store_incident_acknowledge,
+    unregister_fn: Callable[[ServerInstance, str, bool], CommandResult] = data_store_unregister,
 ) -> CommandResult:
     """Dispatch operator controls for the data directory's canonical databases."""
 
@@ -328,4 +330,6 @@ def dispatch_data_store_command(
             )
     if args.command == "incident" and args.incident_command == "acknowledge":
         return incident_acknowledge_fn(instance, args.incident_id)
+    if args.command == "unregister":
+        return unregister_fn(instance, args.name, args.yes)
     raise ValueError(f"Unsupported data-store command: {args.command}")

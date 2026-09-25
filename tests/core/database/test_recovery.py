@@ -21,13 +21,16 @@ from core.database import (
     MarkerEntry,
     acknowledge_incident,
     active_incidents,
+    create_data_snapshot,
     data_store_status,
     has_live_connection,
+    maintenance,
     open_database,
     read_incident,
     read_maintenance,
     read_marker,
     restore_data_snapshot,
+    unregister_database,
 )
 from core.database import marker as marker_module
 from core.database import recovery as recovery_module
@@ -736,3 +739,99 @@ def test_acknowledgement_never_acknowledges_a_newer_incident_written_meanwhile(
     assert newer is not None
     assert newer["cause"] == "a newer failure"
     assert newer["acknowledged"] is False
+
+
+_EXTENSION = "ext.demo.notes"
+
+
+def _registered(data_dir: Path) -> set[str]:
+    marker = read_marker(data_dir)
+    assert marker is not None
+    return set(marker.databases)
+
+
+def test_unregistering_an_extension_database_quarantines_it_and_drops_the_entry(
+    data_dir: Path,
+) -> None:
+    snapshot_with_notes(data_dir, "core")
+    snapshot = snapshot_with_notes(data_dir, "extension", name=_EXTENSION)
+    path = notes_spec(data_dir, name=_EXTENSION).path
+    original = path.read_bytes()
+    database_id = _database_id(data_dir, _EXTENSION)
+
+    released = unregister_database(data_dir, _EXTENSION)
+
+    assert released.name == _EXTENSION
+    assert released.database_id == database_id
+    assert released.quarantine is not None
+    assert (released.quarantine / path.name).read_bytes() == original
+    assert not path.exists()
+    assert _registered(data_dir) == {"notes"}
+    # The earlier snapshot keeps its copy; snapshots no longer wait for it.
+    assert snapshot.is_dir()
+    assert create_data_snapshot(data_dir, reason="test") is not None
+    # A database that is no longer registered is never restored automatically.
+    assert (
+        auto_restore_if_needed(data_dir, notes_spec(data_dir, name=_EXTENSION), database_id)
+        is False
+    )
+    assert not path.exists()
+
+
+def test_unregistering_releases_a_registration_whose_file_is_gone(data_dir: Path) -> None:
+    snapshot_with_notes(data_dir, "extension", name=_EXTENSION)
+    notes_spec(data_dir, name=_EXTENSION).path.unlink()
+
+    released = unregister_database(data_dir, _EXTENSION)
+
+    assert released.quarantine is None
+    assert _registered(data_dir) == set()
+
+
+def test_unregistering_is_refused_for_core_unknown_open_or_maintenance(
+    data_dir: Path,
+) -> None:
+    snapshot_with_notes(data_dir, "core")
+    snapshot_with_notes(data_dir, "extension", name=_EXTENSION)
+    path = notes_spec(data_dir, name=_EXTENSION).path
+    original = path.read_bytes()
+
+    with pytest.raises(ValueError, match="notes is a core vBot database"):
+        unregister_database(data_dir, "notes")
+    with pytest.raises(ValueError, match=f"registered Extension databases: {_EXTENSION}"):
+        unregister_database(data_dir, "ext.demo.other")
+    with pytest.raises(ValueError, match="invalid database name"):
+        unregister_database(data_dir, "../notes")
+    database = open_database(notes_spec(data_dir, name=_EXTENSION))
+    try:
+        with pytest.raises(DatabaseUnavailableError, match="disable its Extension"):
+            unregister_database(data_dir, _EXTENSION)
+    finally:
+        database.close()
+    with (
+        maintenance(data_dir, "restore"),
+        pytest.raises(DatabaseFormatError, match="maintenance is incomplete"),
+    ):
+        unregister_database(data_dir, _EXTENSION)
+
+    assert path.read_bytes() == original
+    assert _registered(data_dir) == {"notes", _EXTENSION}
+    assert not quarantine_root(data_dir).exists()
+
+
+def test_restoring_an_unregistered_member_registers_it_again(data_dir: Path) -> None:
+    snapshot = snapshot_with_notes(data_dir, "extension", name=_EXTENSION)
+    database_id = _database_id(data_dir, _EXTENSION)
+    unregister_database(data_dir, _EXTENSION)
+
+    planned = restore_data_snapshot(data_dir, snapshot, names=[_EXTENSION], check_only=True)
+    assert planned.registered == (_EXTENSION,)
+    assert _registered(data_dir) == set()
+
+    restored = restore_data_snapshot(data_dir, snapshot, names=[_EXTENSION])
+
+    assert restored.databases == (_EXTENSION,)
+    assert restored.registered == (_EXTENSION,)
+    assert _database_id(data_dir, _EXTENSION) == database_id
+    assert stored_bodies(notes_spec(data_dir, name=_EXTENSION)) == ["extension"]
+    assert read_maintenance(data_dir) is None

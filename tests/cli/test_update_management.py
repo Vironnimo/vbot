@@ -116,13 +116,19 @@ def test_update_snapshot_preflight_refuses_a_missing_registered_database(
 ) -> None:
     write_bootstrap_marker(tmp_path)
     register_database(tmp_path, "sessions", MarkerEntry(database_id="a" * 32, format_generation=1))
+    register_database(
+        tmp_path, "ext.gone.state", MarkerEntry(database_id="b" * 32, format_generation=1)
+    )
 
     result = update_management._ensure_update_data_snapshot(
         _stopped_instance(tmp_path, monkeypatch)
     )
 
     assert result.ok is False
-    assert "registers missing databases: sessions" in result.message
+    assert "the registered database sessions has no file; starting vBot restores it" in (
+        result.message
+    )
+    assert "`vbot data-store unregister ext.gone.state --yes` releases it" in result.message
 
 
 def test_update_refuses_dirty_without_flags(tmp_path: Path) -> None:

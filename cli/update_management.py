@@ -89,8 +89,8 @@ def _ensure_update_data_snapshot(instance: ServerInstance) -> _Step:
     from cli.rpc_client import rpc_call
     from core.database import (
         DatabaseError,
-        canonical_database_path,
         create_data_snapshot,
+        describe_missing_databases,
         read_marker,
     )
 
@@ -109,14 +109,9 @@ def _ensure_update_data_snapshot(instance: ServerInstance) -> _Step:
         return _Step(True, "")
     if not marker.databases:
         return _Step(True, "")
-    missing = sorted(
-        name for name in marker.databases if not canonical_database_path(data_dir, name).is_file()
-    )
-    if missing:
-        return _Step(
-            False,
-            "update: the data-store marker registers missing databases: " + ", ".join(missing),
-        )
+    missing = describe_missing_databases(data_dir, marker)
+    if missing is not None:
+        return _Step(False, f"update: {missing}")
 
     health = probe_health(instance)
     if health.reachable:
