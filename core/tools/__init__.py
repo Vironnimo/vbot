@@ -81,7 +81,7 @@ from core.tools.memory import (
     memory_handler,
     register_memory_tool,
 )
-from core.tools.model_names import model_tool_name, registry_tool_name
+from core.tools.model_names import called_tool_name, model_tool_name, registry_tool_name
 from core.tools.process import (
     PROCESS_TOOL_DESCRIPTION,
     PROCESS_TOOL_NAME,
@@ -376,6 +376,7 @@ __all__ = [
     "memory_tool_enabled",
     "normalize_tool_access",
     "resolve_tool_access",
+    "called_tool_name",
     "model_tool_name",
     "registry_tool_name",
 ]
