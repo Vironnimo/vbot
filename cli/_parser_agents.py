@@ -639,6 +639,22 @@ def _add_data_store_parsers(
         help="Restore only this database (repeatable); default: every database in the snapshot",
     )
     restore_parser.add_argument(
+        "--documents",
+        action="store_true",
+        help=(
+            "Restore the snapshot's JSON documents (settings, Agents, Channels, Projects, "
+            "jobs, tokens) as one set; without --database, only the documents are restored"
+        ),
+    )
+    restore_parser.add_argument(
+        "--all",
+        action="store_true",
+        help=(
+            "Restore the complete snapshot: every database, the JSON documents, and move "
+            "databases registered after the snapshot to quarantine"
+        ),
+    )
+    restore_parser.add_argument(
         "--yes",
         action="store_true",
         help="Confirm restore while the exact server target is stopped",

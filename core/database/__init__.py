@@ -5,8 +5,9 @@ An owner declares a :class:`DatabaseSpec` and opens it with
 serialized writes, pooled reads, the per-database worker pool, schema
 evolution (additive reconcile, retired indexes, the migration ledger and
 format generations), the canonical and disposable profiles, the data-store
-marker and maintenance guard, data snapshots, quarantine, recovery incidents
-and automatic restore. See ``.vorch/domain-maps/database.md``.
+marker and maintenance guard, data snapshots (every canonical database plus
+the JSON document set), quarantine, recovery incidents and automatic restore.
+See ``.vorch/domain-maps/database.md``.
 """
 
 from core.database._connections import (
@@ -39,6 +40,7 @@ from core.database.marker import (
     write_marker_for_databases,
 )
 from core.database.recovery import (
+    SnapshotRestore,
     acknowledge_incident,
     active_incidents,
     read_incident,
@@ -88,6 +90,7 @@ __all__ = [
     "MarkerEntry",
     "Migration",
     "SnapshotFacts",
+    "SnapshotRestore",
     "acknowledge_incident",
     "active_incidents",
     "begin_maintenance",

@@ -1,12 +1,15 @@
-"""Data snapshots: verified copies of every canonical database in a data directory.
+"""Data snapshots: verified copies of the durable data in a data directory.
 
 A data snapshot is ``<data-dir>/snapshots/<snapshot-id>/`` holding one
-``<name>.db`` copy per canonical database registered in the marker, plus a
-strict ``manifest.json``. Each member records its identity, format generation,
-applied migrations, size, hash, integrity checks and owner facts. Verification
-works per member: a restore candidate for one database needs only that member
-to verify. Snapshots are published atomically; retention prunes only after a
-verified snapshot was published.
+``<name>.db`` copy per canonical database registered in the marker, the JSON
+document set under ``documents/`` (see ``core.database._documents``), and a
+strict ``manifest.json``. Each database member records its identity, format
+generation, applied migrations, size, hash, integrity checks and owner facts;
+each document records its relative path, size and hash. Verification works per
+database member: a restore candidate for one database needs only that member to
+verify. A snapshot as a whole verifies only when every database member and
+every document does. Snapshots are published atomically; retention prunes only
+after a verified snapshot was published.
 """
 
 from __future__ import annotations
@@ -33,6 +36,15 @@ from core.database._connections import (
     readonly_sqlite_uri,
     sqlite_source_id,
 )
+from core.database._documents import (
+    DocumentMember,
+    capture_documents,
+    documents_payload,
+    documents_present,
+    parse_documents,
+    verify_documents,
+)
+from core.database._files import fsync_dir, fsync_file
 from core.database.errors import (
     DatabaseCorruptError,
     DatabaseUnavailableError,
@@ -45,6 +57,7 @@ from core.database.marker import (
     valid_database_id,
 )
 from core.database.spec import DatabaseSpec, canonical_database_path, validate_database_name
+from core.json_documents import durable_document_paths
 from core.utils.atomic import atomic_write_text
 from core.utils.version import detect_vbot_version
 
@@ -74,6 +87,8 @@ _MANIFEST_KEYS = frozenset(
         "complete",
     }
 )
+#: Absent in manifests written before the JSON document set was captured.
+_OPTIONAL_MANIFEST_KEYS = frozenset({"documents"})
 _MEMBER_KEYS = frozenset(
     {
         "file",
@@ -116,10 +131,15 @@ class SnapshotManifest:
     sqlite_version: str
     sqlite_source_id: str
     members: Mapping[str, SnapshotMember]
+    #: The JSON document set by relative path; ``None`` when not captured.
+    documents: Mapping[str, DocumentMember] | None = None
 
     @property
     def total_size(self) -> int:
-        return sum(member.file_size for member in self.members.values())
+        documents = self.documents or {}
+        return sum(member.file_size for member in self.members.values()) + sum(
+            document.file_size for document in documents.values()
+        )
 
     def created_instant(self) -> datetime:
         return _parse_instant(self.created_at)
@@ -171,22 +191,6 @@ def _sha256(path: Path, *, cancelled: Callable[[], bool] | None = None) -> str:
                 raise _SnapshotCancelledError
             digest.update(chunk)
     return digest.hexdigest()
-
-
-def fsync_file(path: Path) -> None:
-    # Binary mode: a Windows text-mode open can strip a trailing CTRL-Z.
-    with path.open("r+b") as handle:
-        os.fsync(handle.fileno())
-
-
-def fsync_dir(path: Path) -> None:
-    if os.name == "nt":
-        return
-    descriptor = os.open(path, os.O_RDONLY)
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
 
 
 # ---------------------------------------------------------------------------
@@ -281,7 +285,9 @@ def _parse_member(name: str, payload: object) -> SnapshotMember:
 
 
 def _parse_manifest(payload: object, *, child_name: str) -> SnapshotManifest:
-    if not isinstance(payload, dict) or set(payload) != _MANIFEST_KEYS:
+    if not isinstance(payload, dict) or not (
+        _MANIFEST_KEYS <= set(payload) <= _MANIFEST_KEYS | _OPTIONAL_MANIFEST_KEYS
+    ):
         raise DatabaseCorruptError("snapshot manifest has an unexpected shape")
     if payload["manifest_version"] != MANIFEST_VERSION or isinstance(
         payload["manifest_version"], bool
@@ -318,6 +324,7 @@ def _parse_manifest(payload: object, *, child_name: str) -> SnapshotManifest:
         sqlite_version=str(payload["sqlite_version"]),
         sqlite_source_id=str(payload["sqlite_source_id"]),
         members={name: _parse_member(name, member) for name, member in members.items()},
+        documents=parse_documents(payload["documents"]) if "documents" in payload else None,
     )
 
 
@@ -346,6 +353,11 @@ def _manifest_payload(manifest: SnapshotManifest) -> dict[str, Any]:
             }
             for name, member in sorted(manifest.members.items())
         },
+        **(
+            {"documents": documents_payload(manifest.documents)}
+            if manifest.documents is not None
+            else {}
+        ),
     }
 
 
@@ -570,13 +582,15 @@ def read_verified_manifest(
     specs: Mapping[str, DatabaseSpec] | None = None,
     expected: Mapping[str, str] | None = None,
 ) -> SnapshotManifest | None:
-    """Verify every member of one snapshot; operational failures still raise."""
+    """Verify every member and document of one snapshot; operational failures still raise."""
     manifest = read_manifest(data_dir, snapshot_dir)
     if manifest is None or _foreign(manifest, expected):
         return None
     try:
         for name, member in manifest.members.items():
             verify_member(snapshot_dir, member, spec=(specs or {}).get(name))
+        if manifest.documents is not None:
+            verify_documents(snapshot_dir, manifest.documents)
     except DatabaseCorruptError:
         return None
     return manifest
@@ -623,6 +637,12 @@ def snapshot_summary(manifest: SnapshotManifest) -> dict[str, Any]:
                 "facts": dict(sorted(member.facts.items())),
             }
             for name, member in sorted(manifest.members.items())
+        },
+        "documents": None
+        if manifest.documents is None
+        else {
+            "count": len(manifest.documents),
+            "file_size": sum(document.file_size for document in manifest.documents.values()),
         },
     }
 
@@ -688,6 +708,10 @@ def _shallow_manifest(data_dir: Path, snapshot_dir: Path) -> SnapshotManifest | 
             path = member_path(snapshot_dir, member)
             if path is None or path.stat().st_size != member.file_size:
                 return None
+        if manifest.documents is not None and not documents_present(
+            snapshot_dir, manifest.documents
+        ):
+            return None
     except (OSError, DatabaseUnavailableError):
         return None
     return manifest
@@ -698,6 +722,15 @@ def _shallow_manifest(data_dir: Path, snapshot_dir: Path) -> SnapshotManifest | 
 # ---------------------------------------------------------------------------
 
 
+def _document_bytes(data_dir: Path) -> int:
+    """The current size of the JSON document set; a document removed meanwhile counts 0."""
+    total = 0
+    for path in durable_document_paths(data_dir):
+        with suppress(FileNotFoundError):
+            total += data_dir.joinpath(*path.split("/")).stat().st_size
+    return total
+
+
 def create_data_snapshot(
     data_dir: Path,
     *,
@@ -706,12 +739,14 @@ def create_data_snapshot(
     specs: Iterable[DatabaseSpec] = (),
     cancelled: Callable[[], bool] | None = None,
 ) -> Path | None:
-    """Capture, verify and atomically publish one snapshot of every registered database.
+    """Capture, verify and atomically publish one snapshot of the durable data.
 
+    Every registered database and the JSON document set are captured.
     ``databases`` are the open handles of this process: their members are copied
     online through the handle, so live writers keep committing. Every other
     registered database is copied from its file, which must not be written by
-    another process meanwhile. ``specs`` add owner facts for members not open
+    another process meanwhile. Documents are copied after the databases, each
+    read whole at one instant. ``specs`` add owner facts for members not open
     here. Returns ``None`` when there is nothing to capture, the attempt was
     cancelled, or it failed; failures are recorded in the snapshot health.
     Refuses with ``DatabaseFormatError`` while data maintenance is incomplete.
@@ -740,7 +775,7 @@ def create_data_snapshot(
                 canonical_database_path(data_dir, name).stat().st_size
                 for name in marker.databases
                 if canonical_database_path(data_dir, name).exists()
-            )
+            ) + _document_bytes(data_dir)
             if shutil.disk_usage(root).free < needed + SNAPSHOT_RESERVE_BYTES:
                 _record_snapshot_health(
                     data_dir, "degraded", reason="insufficient snapshot reserve"
@@ -788,6 +823,9 @@ def create_data_snapshot(
                 migrations=verification.migrations,
                 facts=verification.facts,
             )
+        documents = capture_documents(data_dir, partial, cancelled=cancelled)
+        if documents is None:
+            raise _SnapshotCancelledError
         manifest = SnapshotManifest(
             snapshot_id=snapshot_id,
             reason=reason,
@@ -796,6 +834,7 @@ def create_data_snapshot(
             sqlite_version=sqlite3.sqlite_version,
             sqlite_source_id=sqlite_source_id() or "unknown",
             members=members,
+            documents=documents,
         )
         _write_manifest(partial / SNAPSHOT_MANIFEST_NAME, manifest)
         fsync_dir(partial)

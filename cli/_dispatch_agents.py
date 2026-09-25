@@ -301,9 +301,7 @@ def dispatch_data_store_command(
     snapshot_list_fn: Callable[[ServerInstance], CommandResult] = data_store_snapshot_list,
     snapshot_create_fn: Callable[[ServerInstance, str], CommandResult] = data_store_snapshot_create,
     snapshot_verify_fn: Callable[[ServerInstance, str], CommandResult] = data_store_snapshot_verify,
-    snapshot_restore_fn: Callable[
-        [ServerInstance, str, bool, list[str]], CommandResult
-    ] = data_store_snapshot_restore,
+    snapshot_restore_fn: Callable[..., CommandResult] = data_store_snapshot_restore,
     incident_acknowledge_fn: Callable[
         [ServerInstance, str], CommandResult
     ] = data_store_incident_acknowledge,
@@ -320,7 +318,14 @@ def dispatch_data_store_command(
         if args.snapshot_command == "verify":
             return snapshot_verify_fn(instance, args.snapshot_id)
         if args.snapshot_command == "restore":
-            return snapshot_restore_fn(instance, args.snapshot_id, args.yes, args.database)
+            return snapshot_restore_fn(
+                instance,
+                args.snapshot_id,
+                args.yes,
+                args.database,
+                documents=args.documents,
+                complete=args.all,
+            )
     if args.command == "incident" and args.incident_command == "acknowledge":
         return incident_acknowledge_fn(instance, args.incident_id)
     raise ValueError(f"Unsupported data-store command: {args.command}")
