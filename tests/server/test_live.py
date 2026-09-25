@@ -104,12 +104,17 @@ class FakeService:
 
     def __init__(self) -> None:
         self.calls: list[FakeCall] = []
-        self.starts: list[tuple[str, str | None]] = []
+        self.starts: list[tuple[str, str | None, tuple[str, ...]]] = []
         self.rejection: str | None = None
         self.gate: asyncio.Event | None = None
 
     async def start_call(
-        self, *, media: str, offer_sdp: str | None, host: LiveCallHost
+        self,
+        *,
+        media: str,
+        offer_sdp: str | None,
+        wake_phrases: tuple[str, ...],
+        host: LiveCallHost,
     ) -> FakeCall:
         if self.rejection is not None:
             raise LiveStartRejected(self.rejection)
@@ -117,7 +122,7 @@ class FakeService:
             await self.gate.wait()
         call = FakeCall(f"call-{len(self.calls) + 1}", host, media)
         self.calls.append(call)
-        self.starts.append((media, offer_sdp))
+        self.starts.append((media, offer_sdp, wake_phrases))
         return call
 
 
@@ -179,8 +184,8 @@ class Harness:
         await self.registry.start(self.service, media="webrtc", offer_sdp=sdp)
         return self.service.calls[-1]
 
-    async def start_relay(self) -> FakeCall:
-        await self.registry.start(self.service, media="relay")
+    async def start_relay(self, wake_phrases: tuple[str, ...] = ()) -> FakeCall:
+        await self.registry.start(self.service, media="relay", wake_phrases=wake_phrases)
         return self.service.calls[-1]
 
     def attach(self, call: FakeCall) -> OwnerReader:
@@ -211,7 +216,7 @@ async def live() -> AsyncIterator[Harness]:
 @pytest.mark.asyncio
 async def test_start_buffers_updates_until_the_owner_attaches(live: Harness) -> None:
     call = await live.start()
-    assert live.service.starts == [("webrtc", "v=0 offer")]
+    assert live.service.starts == [("webrtc", "v=0 offer", ())]
     assert live.registry.active_call_id == call.id
     call.host.publish({"type": "state", "phase": "connecting"})
     call.host.publish({"type": "state", "phase": "live"})
@@ -267,6 +272,12 @@ async def test_a_rejected_start_propagates_after_ending_the_previous_call(live: 
 def test_limits_must_let_an_owner_receive_the_whole_buffer() -> None:
     with pytest.raises(ValueError, match="owner_queue_limit"):
         LiveCallLimits(update_buffer_limit=10, owner_queue_limit=5)
+
+
+@pytest.mark.asyncio
+async def test_start_passes_wake_phrases_to_the_service(live: Harness) -> None:
+    await live.start_relay(wake_phrases=("Hey Nabu", "Hey Jarvis"))
+    assert live.service.starts == [("relay", None, ("Hey Nabu", "Hey Jarvis"))]
 
 
 # -- owner socket ownership ---------------------------------------------------
@@ -358,7 +369,7 @@ async def test_unknown_calls_cannot_be_attached_stopped_or_answered(live: Harnes
 @pytest.mark.asyncio
 async def test_relay_audio_reaches_only_an_attached_owner(live: Harness) -> None:
     call = await live.start_relay()
-    assert live.service.starts == [("relay", None)]
+    assert live.service.starts == [("relay", None, ())]
     call.host.publish_audio(b"\x01\x00")
     call.host.publish({"type": "state", "phase": "live"})
     reader = live.attach(call)

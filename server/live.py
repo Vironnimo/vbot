@@ -90,7 +90,12 @@ class LiveVoiceStarter(Protocol):
     """The Live voice service surface the registry uses."""
 
     async def start_call(
-        self, *, media: str, offer_sdp: str | None, host: LiveCallHost
+        self,
+        *,
+        media: str,
+        offer_sdp: str | None,
+        wake_phrases: tuple[str, ...],
+        host: LiveCallHost,
     ) -> LiveCall: ...
 
 
@@ -486,10 +491,16 @@ class LiveCallRegistry:
         return self._active.call_id if self._active is not None else None
 
     async def start(
-        self, service: LiveVoiceStarter, *, media: str, offer_sdp: str | None = None
+        self,
+        service: LiveVoiceStarter,
+        *,
+        media: str,
+        offer_sdp: str | None = None,
+        wake_phrases: tuple[str, ...] = (),
     ) -> LiveCall:
         """Start a call with *media* (WebRTC needs *offer_sdp*), ending the active call first.
 
+        *wake_phrases* (validated) address other vBot Agents during the call.
         :class:`core.model_tasks.live.LiveStartRejected` propagates unchanged.
         """
         async with self._start_lock:
@@ -506,7 +517,9 @@ class LiveCallRegistry:
                 started_at=self._clock(),
                 after_sequence=self._events.last_sequence,
             )
-            call = await service.start_call(media=media, offer_sdp=offer_sdp, host=entry)
+            call = await service.start_call(
+                media=media, offer_sdp=offer_sdp, wake_phrases=wake_phrases, host=entry
+            )
             if self._closed:
                 # Shutdown began while the provider created the call.
                 entry.call = call

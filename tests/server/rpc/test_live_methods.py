@@ -18,13 +18,20 @@ JsonObject = dict[str, Any]
 
 class FakeRegistry:
     def __init__(self) -> None:
-        self.starts: list[tuple[Any, str, str | None]] = []
+        self.starts: list[tuple[Any, str, str | None, tuple[str, ...]]] = []
         self.stops: list[str] = []
         self.answers: list[tuple[str, str, JsonObject | None, str | None]] = []
         self.start_error: Exception | None = None
 
-    async def start(self, service: Any, *, media: str, offer_sdp: str | None = None) -> Any:
-        self.starts.append((service, media, offer_sdp))
+    async def start(
+        self,
+        service: Any,
+        *,
+        media: str,
+        offer_sdp: str | None = None,
+        wake_phrases: tuple[str, ...] = (),
+    ) -> Any:
+        self.starts.append((service, media, offer_sdp, wake_phrases))
         if self.start_error is not None:
             raise self.start_error
         if media == "relay":
@@ -71,7 +78,7 @@ async def test_start_passes_the_offer_to_the_registry_with_the_live_voice_servic
         "call_id": "call-1",
         "media": {"type": "webrtc", "sdp": "answer"},
     }
-    assert current.live_calls.starts == [(current.runtime.live_voice, "webrtc", "v=0 offer")]
+    assert current.live_calls.starts == [(current.runtime.live_voice, "webrtc", "v=0 offer", ())]
 
 
 @pytest.mark.asyncio
@@ -81,7 +88,7 @@ async def test_start_a_relay_call_without_an_offer() -> None:
         "call_id": "call-1",
         "media": {"type": "relay", "audio": {}},
     }
-    assert current.live_calls.starts == [(current.runtime.live_voice, "relay", None)]
+    assert current.live_calls.starts == [(current.runtime.live_voice, "relay", None, ())]
 
 
 @pytest.mark.asyncio
@@ -119,6 +126,76 @@ async def test_start_rejects_invalid_params(params: JsonObject) -> None:
     current = state()
     with pytest.raises(RpcError):
         await _start(current, params)
+    assert current.live_calls.starts == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("wake_phrases", "passed"),
+    [
+        ([], ()),
+        (["  Hey Nabu ", "Hey Jarvis"], ("Hey Nabu", "Hey Jarvis")),
+        (["Hey Nabu", "hey nabu", "Hey Jarvis", " HEY NABU"], ("Hey Nabu", "Hey Jarvis")),
+        ([f"Phrase {index}" for index in range(8)], tuple(f"Phrase {index}" for index in range(8))),
+        (["x" * 60], ("x" * 60,)),
+        (["Hallo, Jürgen!", 'Say "go"'], ("Hallo, Jürgen!", 'Say "go"')),
+    ],
+    ids=["empty", "trimmed", "duplicates-keep-first", "eight", "sixty-chars", "printable"],
+)
+async def test_start_passes_normalized_wake_phrases(
+    wake_phrases: list[str], passed: tuple[str, ...]
+) -> None:
+    current = state()
+    await _start(current, {"media": "relay", "wake_phrases": wake_phrases})
+    assert current.live_calls.starts == [(current.runtime.live_voice, "relay", None, passed)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "wake_phrases",
+    [
+        "Hey Nabu",
+        None,
+        {"phrase": "Hey Nabu"},
+        [1],
+        [None],
+        [["Hey Nabu"]],
+        [f"Phrase {index}" for index in range(9)],
+        ["x" * 61],
+        [""],
+        ["   "],
+        ["Hey\nNabu"],
+        ["Hey\tNabu"],
+        ["Hey\x00Nabu"],
+        ["Hey\u200bNabu"],
+        ["Hey\u2028Nabu"],
+        ["Hey" + chr(0xD800) + "Nabu"],
+    ],
+    ids=[
+        "string",
+        "null",
+        "object",
+        "number-item",
+        "null-item",
+        "nested-array",
+        "too-many",
+        "too-long",
+        "empty",
+        "blank",
+        "newline",
+        "tab",
+        "nul",
+        "format-character",
+        "line-separator",
+        "lone-surrogate",
+    ],
+)
+async def test_start_rejects_invalid_wake_phrases(wake_phrases: Any) -> None:
+    current = state()
+    with pytest.raises(RpcError) as exc_info:
+        await _start(current, {"media": "relay", "wake_phrases": wake_phrases})
+    assert exc_info.value.code == "invalid_request"
+    assert "params.wake_phrases" in exc_info.value.message
     assert current.live_calls.starts == []
 
 
