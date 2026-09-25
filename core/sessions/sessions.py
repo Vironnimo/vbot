@@ -189,7 +189,7 @@ class ChatSessionManager:
         return self._store.mutate_metadata(address, mutation)
 
     def metadata_value(self, address: SessionAddress, key: str) -> Any:
-        """Read one metadata value (``None`` when absent) without decoding the rest."""
+        """Read one metadata value (``None`` when absent) from the Session row alone."""
         return self._store.metadata_value(address, key)
 
     async def metadata_value_async(self, address: SessionAddress, key: str) -> Any:
