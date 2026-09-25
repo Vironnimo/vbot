@@ -10,13 +10,10 @@ server zone and the corrected call.
 
 from __future__ import annotations
 
-import re
-from datetime import UTC, datetime, timedelta, timezone, tzinfo
-from functools import cache
+from datetime import datetime, timedelta, tzinfo
 from typing import Any
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
+from zoneinfo import ZoneInfo
 
-from core.tools._call_vocabulary import spelling
 from core.tools._cron_arguments import (
     OMIT,
     TIMEZONE_FIELD,
@@ -25,11 +22,14 @@ from core.tools._cron_arguments import (
     render_call,
     schedule_kind,
 )
+from core.tools._named_zones import (
+    named_zone,
+    offset,
+    same_zone,
+    server_shifts,
+    server_text,
+)
 
-_UTC_NAMES = frozenset({"utc", "z", "gmt", "zulu", "etcutc", "etcgmt", "universal", "utc0", "gmt0"})
-_OFFSET = re.compile(r"^(?:utc|gmt)?\s*([+-])(\d{1,2})(?::?(\d{2}))?$", re.IGNORECASE)
-_SAMPLE_STEP = timedelta(days=7)
-_SAMPLE_COUNT = 53
 _CRON_STAND_IN = "<five cron fields in server time>"
 
 
@@ -41,14 +41,14 @@ def zoned_schedule(
     name = result.pop(TIMEZONE_FIELD, None)
     if not isinstance(name, str):
         return result, None
-    zone = _zone(name)
+    zone = named_zone(name)
     schedule = result.get("schedule")
     if not isinstance(schedule, str) or schedule.startswith(("in ", "every ")):
         if (
             not isinstance(schedule, str)
             and result.get("action") == "update"
             and zone is not None
-            and not _same_zone(zone, server, now)
+            and not same_zone(zone, server, now)
         ):
             raise CronCallRefusedError(
                 refusal(
@@ -67,7 +67,7 @@ def zoned_schedule(
                 result,
             )
         )
-    if _same_zone(zone, server, now):
+    if same_zone(zone, server, now):
         return result, None
     if schedule_kind(schedule) == "cron":
         return _cron_in_zone(result, schedule, name, zone, server, now)
@@ -84,7 +84,7 @@ def _moment_in_zone(
         # The schedule parser explains the form; a time zone cannot fix it.
         return arguments, None
     if parsed.tzinfo is None:
-        converted = _server_text(parsed.replace(tzinfo=zone), server)
+        converted = server_text(parsed.replace(tzinfo=zone), server)
         arguments["schedule"] = converted
         return (
             arguments,
@@ -95,7 +95,7 @@ def _moment_in_zone(
         return arguments, None
     wall = parsed.replace(tzinfo=None).isoformat()
     as_written = render_call(arguments, schedule=text)
-    zone_reading = render_call(arguments, schedule=_server_text(as_zone, server))
+    zone_reading = render_call(arguments, schedule=server_text(as_zone, server))
     raise CronCallRefusedError(
         f'cron was not run: "{text}" carries an offset that is not {name} time. Send the one '
         f"that is meant: {as_written} (the time as written) or {zone_reading} ({wall} in {name})."
@@ -110,9 +110,8 @@ def _cron_in_zone(
     server: ZoneInfo,
     now: datetime,
 ) -> tuple[dict[str, Any], str | None]:
-    samples = [now + _SAMPLE_STEP * index for index in range(_SAMPLE_COUNT)]
-    shifts = {_offset(server, moment) - _offset(zone, moment) for moment in samples}
-    current = _offset(server, now) - _offset(zone, now)
+    shifts = server_shifts(zone, server, now)
+    current = offset(server, now) - offset(zone, now)
     converted = _shift_cron(schedule.split(), _minutes(current))
     # Exact when every offset the year brings yields the same fields, e.g. "*/15 * * * *".
     conversions = {_shift_cron(schedule.split(), _minutes(shift)) for shift in shifts}
@@ -180,44 +179,6 @@ def _shift_cron(fields: list[str], shift: int) -> str | None:
 
 def _minutes(shift: timedelta) -> int:
     return int(shift.total_seconds() // 60)
-
-
-def _server_text(moment: datetime, server: ZoneInfo) -> str:
-    return moment.astimezone(server).replace(microsecond=0).isoformat()
-
-
-def _offset(zone: tzinfo, moment: datetime) -> timedelta:
-    return moment.astimezone(zone).utcoffset() or timedelta(0)
-
-
-def _same_zone(zone: tzinfo, server: ZoneInfo, now: datetime) -> bool:
-    if isinstance(zone, ZoneInfo) and zone.key == server.key:
-        return True
-    moments = [now + _SAMPLE_STEP * index for index in range(_SAMPLE_COUNT)]
-    return all(_offset(zone, moment) == _offset(server, moment) for moment in moments)
-
-
-def _zone(name: str) -> tzinfo | None:
-    text = name.strip()
-    if spelling(text) in _UTC_NAMES:
-        return UTC
-    match = _OFFSET.match(text)
-    if match is not None:
-        sign, hours, minutes = match.groups()
-        size = timedelta(hours=int(hours), minutes=int(minutes or 0))
-        if size > timedelta(hours=14):
-            return None
-        return timezone(size if sign == "+" else -size)
-    key = _zone_keys().get(text.casefold(), text)
-    try:
-        return ZoneInfo(key)
-    except (ZoneInfoNotFoundError, ValueError):
-        return None
-
-
-@cache
-def _zone_keys() -> dict[str, str]:
-    return {key.casefold(): key for key in available_timezones()}
 
 
 __all__ = ["zoned_schedule"]
