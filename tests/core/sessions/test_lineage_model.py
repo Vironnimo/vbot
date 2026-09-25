@@ -8,6 +8,11 @@ and the search indexes must cover exactly the entries some view shows.
 The model also tracks which stored entry each view shows: a fork shares its
 origin's entries, and deleting a Session gives every Session that still shows
 its entries a copy of its own. Search reports each stored entry once.
+
+The narrow reads must agree with the model too: the status facts, the User
+count and the newest prefixed Note read the current view, while the Session's
+spend counts only the Assistant usage it wrote itself, superseded turns
+included and a fork's inherited prefix excluded.
 """
 
 from __future__ import annotations
@@ -20,10 +25,11 @@ from pathlib import Path
 import pytest
 
 from core.chat import ChatMessage
-from core.sessions import ChatSessionManager, SessionAddress, _store_fts
+from core.sessions import ChatSession, ChatSessionManager, SessionAddress, _store_fts
 
 _STEPS = 45
 _MAX_SESSIONS = 7
+_NOTE_PREFIX = "[mark] "
 
 
 @dataclass
@@ -40,6 +46,8 @@ class _Model:
 
     current: list[_Shown] = field(default_factory=list)
     audit: list[tuple[str, str | None]] = field(default_factory=list)
+    # The Assistant usage this Session wrote: (turns, input tokens, output tokens).
+    spend: tuple[int, int, int] = (0, 0, 0)
 
 
 class _Scenario:
@@ -70,13 +78,25 @@ class _Scenario:
     def append(self) -> str:
         address = self.pick()
         text = f"{self.token()} words"
-        message = (
-            ChatMessage.user(text)
-            if self.rng.random() < 0.6
-            else ChatMessage.assistant(model="model", content=text)
-        )
-        self.manager.get(address).append(message)
+        roll = self.rng.random()
         model = self.models[address]
+        if roll < 0.5:
+            message = ChatMessage.user(text)
+        elif roll < 0.85:
+            usage = {
+                "input_tokens": self.rng.randint(1, 99),
+                "output_tokens": self.rng.randint(1, 9),
+            }
+            message = ChatMessage.assistant(model="model", content=text, usage=usage)
+            turns, input_tokens, output_tokens = model.spend
+            model.spend = (
+                turns + 1,
+                input_tokens + usage["input_tokens"],
+                output_tokens + usage["output_tokens"],
+            )
+        else:
+            message = ChatMessage.note(_NOTE_PREFIX + text)
+        self.manager.get(address).append(message)
         model.current.append(self.store(address, message))
         model.audit.append((message.role, message.id))
         return f"append {message.role} to {address.session_id}"
@@ -142,9 +162,31 @@ class _Scenario:
                 for message in session.load()
             ]
             assert audit == model.audit, trail
+            self.verify_reads(session, model, trail)
         coverage = self.manager._store._execute_write(_store_fts._fts_coverage_ok)
         assert coverage == (True, None), trail
         assert self.manager.fts_health().state == "healthy", trail
+
+    def verify_reads(self, session: ChatSession, model: _Model, trail: list[str]) -> None:
+        """The narrow reads agree with the current view and the own spend."""
+        current = [shown.message for shown in model.current]
+        users = [message for message in current if message.role == "user"]
+        usages = [message.usage for message in current if message.role == "assistant"]
+        notes = [message for message in current if message.role == "note"]
+        status = session.status_snapshot()
+        assert status.first_message_at == (current[0].timestamp if current else None), trail
+        assert status.user_message_count == len(users), trail
+        assert status.latest_assistant_usage == (usages[-1] if usages else None), trail
+        turns, input_tokens, output_tokens = model.spend
+        assert (
+            status.session_usage["measured_turns"],
+            status.session_usage["input_tokens"],
+            status.session_usage["output_tokens"],
+        ) == (turns, input_tokens, output_tokens), trail
+        for limit in (1, 2, _STEPS):
+            assert session.active_user_message_count(limit=limit) == min(len(users), limit), trail
+        latest = session.latest_note(_NOTE_PREFIX)
+        assert (latest.id if latest else None) == (notes[-1].id if notes else None), trail
 
     def verify_search(self, trail: list[str]) -> None:
         """Each shown entry is found once, for a Session that shows it."""
@@ -152,6 +194,8 @@ class _Scenario:
         messages: dict[str, ChatMessage] = {}
         for address, model in self.models.items():
             for shown in model.current:
+                if shown.message.role == "note":
+                    continue
                 messages[shown.message.id] = shown.message
                 shown_by.setdefault(shown.message.id, {}).setdefault(shown.entry, set()).add(
                     address
