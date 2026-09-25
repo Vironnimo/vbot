@@ -23,6 +23,7 @@ from scripts.perf_bench_suite.fixtures import (
     HISTORY_SHAPES,
     HistoryShape,
     TextFactory,
+    history_shapes,
     history_store,
     loaded_history,
     session_store,
@@ -133,10 +134,12 @@ def _history_older_page_setup(shape: HistoryShape) -> Callable[[BenchContext], P
 
 
 def _search_setup(*, use_fts: bool) -> Callable[[BenchContext], Prepared]:
-    """Search every synthetic history of the shared store the way Recall reads a page."""
+    """Search the synthetic histories of the shared store the way Recall reads a page."""
 
     def setup(context: BenchContext) -> Prepared:
-        messages = sum(len(loaded_history(context, shape).messages) for shape in HISTORY_SHAPES)
+        messages = sum(
+            len(loaded_history(context, shape).messages) for shape in history_shapes(context)
+        )
         manager = history_store(context)
 
         def search() -> None:

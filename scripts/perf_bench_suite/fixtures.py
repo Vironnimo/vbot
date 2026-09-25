@@ -91,6 +91,15 @@ HISTORY_SHAPES = (
 )
 
 
+def history_shapes(context: BenchContext) -> tuple[HistoryShape, ...]:
+    """The shapes a benchmark over every synthetic history covers in this suite run.
+
+    A smoke context covers only the smallest: persisting the ~1000-message
+    history alone commits several hundred fsynced transactions.
+    """
+    return HISTORY_SHAPES[:1] if context.smoke else HISTORY_SHAPES
+
+
 class TextFactory:
     """Deterministic filler text, Markdown and code of a requested length."""
 

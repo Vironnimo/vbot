@@ -1,8 +1,11 @@
 """Smoke test: every Python benchmark still sets up and runs against current vBot code.
 
-The ~1000-message variants share their code path with the ~100-message ones and
-are skipped to keep this fast. One suite context per test worker shares the
-persisted history and Adapter fixtures, as a real suite run does.
+The suite context is a smoke context: the ~1000-message variants share their
+code path with the ~100-message ones and are skipped, and benchmarks over every
+synthetic history use only the ~100-message one, because persisting the larger
+history costs several hundred fsynced commits. One suite context per test
+worker shares the persisted history and Adapter fixtures, as a real suite run
+does.
 """
 
 from __future__ import annotations
@@ -13,6 +16,7 @@ from collections.abc import Iterator
 import pytest
 
 from scripts.perf_bench_suite.catalog import BENCHMARKS
+from scripts.perf_bench_suite.fixtures import HISTORY_SHAPES
 from scripts.perf_bench_suite.runner import BenchContext, Benchmark, iteration_timer
 
 _SMOKE_BENCHMARKS = [benchmark for benchmark in BENCHMARKS if "1000msg" not in benchmark.name]
@@ -21,7 +25,7 @@ _SMOKE_BENCHMARKS = [benchmark for benchmark in BENCHMARKS if "1000msg" not in b
 @pytest.fixture(scope="module")
 def bench_context(tmp_path_factory: pytest.TempPathFactory) -> Iterator[BenchContext]:
     loop = asyncio.new_event_loop()
-    context = BenchContext(tmp_path_factory.mktemp("perf-bench"), loop)
+    context = BenchContext(tmp_path_factory.mktemp("perf-bench"), loop, smoke=True)
     try:
         yield context
     finally:
@@ -51,3 +55,5 @@ def test_benchmark_sets_up_and_runs_one_operation(
 
     assert elapsed > 0
     assert prepared.items >= 1
+    # The smoke run never persists a history larger than the smallest shape.
+    assert prepared.params.get("messages", 0) <= HISTORY_SHAPES[0].messages
