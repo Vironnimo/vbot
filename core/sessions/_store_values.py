@@ -37,8 +37,8 @@ _SESSION_STATE_COLUMNS = """
     s.subagent_parent_id, s.subagent_parent_project_id, s.subagent_parent_agent_id,
     s.subagent_parent_session_id, s.subagent_parent_run_id,
     s.subagent_parent_tool_call_id, s.subagent_parent_tool_call_index,
-    s.list_visibility_mask, s.latest_completion_run_id, s.latest_completion_status,
-    s.latest_completion_at, s.read_completion_run_id, s.prompt_cache_affinity_id,
+    s.list_visibility_mask, s.latest_completion_run_key, s.latest_completion_status,
+    s.latest_completion_at, s.read_completion_run_key, s.prompt_cache_affinity_id,
     s.seen_skills_initialized, s.compaction_policy_json, s.metadata_json
 """
 # Derived facade values: the direct fork source's address and the Run kinds.
@@ -48,6 +48,15 @@ _DERIVED_METADATA_COLUMNS = """
     fork_parent.session_id AS fork_parent_session_id,
     (SELECT json_group_array(k.run_kind) FROM session_run_kinds AS k
      WHERE k.session_key = s.session_key) AS run_kinds_json
+"""
+# Completion activity as ``_completion_activity_from_state`` reads it: the
+# latest completion's public Run id and whether its read mark names it.
+_COMPLETION_ACTIVITY_COLUMNS = """
+    (SELECT r.run_id FROM runs AS r WHERE r.run_key = s.latest_completion_run_key)
+      AS latest_completion_run_id,
+    s.latest_completion_status,
+    s.latest_completion_at,
+    s.read_completion_run_key = s.latest_completion_run_key AS latest_completion_read
 """
 _DERIVED_METADATA_JOIN = (
     "LEFT JOIN sessions AS fork_parent ON fork_parent.session_key = s.fork_parent_key"
@@ -74,10 +83,7 @@ _SESSION_LIST_COLUMNS = f"""
     s.forked_at,
     s.fork_point_seq,
     s.compaction_policy_json,
-    s.latest_completion_run_id,
-    s.latest_completion_status,
-    s.latest_completion_at,
-    s.read_completion_run_id,
+    {_COMPLETION_ACTIVITY_COLUMNS},
     {_DERIVED_METADATA_COLUMNS}
 """
 _SESSION_LIST_BACKGROUND_KINDS = (

@@ -23,7 +23,12 @@ from core.sessions import (
     SessionListFilters,
 )
 from core.utils.timestamps import canonical_timestamp
-from tests.core.sessions.history_fixtures import admit_run, complete_run, history_revision
+from tests.core.sessions.history_fixtures import (
+    admit_run,
+    complete_run,
+    history_revision,
+    settle_run,
+)
 from tests.core.sessions.sessions_test_support import (
     _address,
     _continuation_start,
@@ -264,11 +269,11 @@ def test_metadata_activity_and_continuation_change_state_not_history(manager) ->
     address = _address("coder", "session-one")
     session = manager.create("coder", session_id=address.session_id)
     session.append(ChatMessage.user("hello"))
+    settle_run(manager, address, "run-1")
     session.start_run("run-one")
     revision = history_revision(manager, address)
 
     manager.set_metadata(address, {"project": "vbot"})
-    manager.record_terminal_run(address, "run-1", "completed", "2026-08-29T12:00:00Z")
     session.append_continuation_records([_continuation_start()])
 
     assert history_revision(manager, address) == revision
@@ -279,6 +284,7 @@ def test_metadata_activity_and_continuation_change_state_not_history(manager) ->
     assert continuation.checkpoint_id == "checkpoint-one"
     assert manager.mark_terminal_run_read(address, "wrong")["marked_read"] is False
     assert manager.mark_terminal_run_read(address, "run-1")["marked_read"] is True
+    assert history_revision(manager, address) == revision
 
 
 def test_unchanged_metadata_and_activity_mutations_write_nothing(manager) -> None:
@@ -286,8 +292,7 @@ def test_unchanged_metadata_and_activity_mutations_write_nothing(manager) -> Non
     manager.create(address.agent_id, session_id=address.session_id)
     manager.set_metadata(address, {"title": "Kept"})
     manager.record_seen_skills(address, SeenSkillsUpdate(baseline=("alpha",)))
-    asyncio.run(admit_run(manager, address))
-    manager.record_terminal_run(address, "run-1", "completed", "2026-08-29T12:00:00Z")
+    settle_run(manager, address, "run-1")
     assert manager.mark_terminal_run_read(address, "run-1")["marked_read"] is True
     writer = manager._store._writer
     revision = _state_revision(manager, address)
@@ -443,10 +448,10 @@ def test_completion_activity_reads_completed_sessions_for_many_scopes(manager) -
     manager.ensure_prompt_pin(
         unread, PINNED_MEMORY_FILES_SLOT, {"files": "large" * 10_000}, lambda _pin: True
     )
-    manager.record_terminal_run(unread, "run-1", "failed", "2026-08-29T12:00:00Z")
-    manager.record_terminal_run(read, "run-2", "completed", "2026-08-29T12:01:00Z")
+    settle_run(manager, unread, "run-1", "failed", "2026-08-29T12:00:00Z")
+    settle_run(manager, read, "run-2", "completed", "2026-08-29T12:01:00Z")
     manager.mark_terminal_run_read(read, "run-2")
-    manager.record_terminal_run(project, "run-3", "completed", "2026-08-29T12:02:00Z")
+    settle_run(manager, project, "run-3", "completed", "2026-08-29T12:02:00Z")
 
     activity = manager.list_completion_activity(
         [(None, "coder"), ("vbot", "coder"), (None, "unknown"), (None, "coder")]
@@ -493,7 +498,7 @@ def test_completion_activity_reads_all_scopes_in_one_snapshot(manager, monkeypat
     for _project_id, agent_id in scopes:
         address = _address(agent_id, "done")
         manager.create(agent_id, session_id="done")
-        manager.record_terminal_run(address, f"run-{agent_id}", "completed", "2026-08-29T12:00:00Z")
+        settle_run(manager, address, f"run-{agent_id}")
     snapshots = 0
     read = manager._store.database.read
 

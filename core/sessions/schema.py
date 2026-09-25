@@ -42,6 +42,9 @@ CREATE TABLE store_meta (
   value TEXT NOT NULL
 ) STRICT;
 
+-- The latest completion and its read mark name runs of this Session by run_key.
+-- A Run is deleted only with its Session, so these keys never dangle; they
+-- carry no foreign key, which would scan sessions for every deleted Run.
 CREATE TABLE sessions (
   session_key INTEGER PRIMARY KEY,
   generation_id TEXT NOT NULL UNIQUE,
@@ -75,15 +78,15 @@ CREATE TABLE sessions (
   subagent_parent_tool_call_id TEXT,
   subagent_parent_tool_call_index INTEGER CHECK (subagent_parent_tool_call_index IS NULL OR subagent_parent_tool_call_index >= 0),
   list_visibility_mask INTEGER NOT NULL DEFAULT 0 CHECK (list_visibility_mask >= 0),
-  latest_completion_run_id TEXT,
+  latest_completion_run_key INTEGER,
   latest_completion_status TEXT,
   latest_completion_at TEXT,
-  read_completion_run_id TEXT,
+  read_completion_run_key INTEGER,
   prompt_cache_affinity_id TEXT,
   seen_skills_initialized INTEGER NOT NULL DEFAULT 0 CHECK (seen_skills_initialized IN (0, 1)),
   compaction_policy_json TEXT CHECK (compaction_policy_json IS NULL OR (json_valid(compaction_policy_json) AND json_type(compaction_policy_json) = 'object')),
   metadata_json TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(metadata_json) AND json_type(metadata_json) = 'object'),
-  CHECK ((latest_completion_run_id IS NULL) = (latest_completion_status IS NULL)),
+  CHECK ((latest_completion_run_key IS NULL) = (latest_completion_status IS NULL)),
   CHECK ((forked_at IS NULL) = (fork_point_seq IS NULL)),
   CHECK ((fork_parent_key IS NULL) OR (forked_at IS NOT NULL))
 ) STRICT;

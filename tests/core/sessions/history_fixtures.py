@@ -14,7 +14,7 @@ from core.chat._step_outcomes import tool_result_facts
 from core.chat.messages import ChatMessage, ToolCall
 from core.runs import Run, RunKind
 from core.sessions import ChatSession, ChatSessionManager, SessionAddress
-from core.sessions._types import SessionRunCompletion
+from core.sessions._types import SessionRunAdmission, SessionRunCompletion
 from core.utils.ids import new_id
 
 
@@ -65,6 +65,32 @@ def complete_run(session: ChatSession, summary: ChatMessage) -> ChatMessage:
         ),
     )
     return session.load()[-1]
+
+
+def settle_run(
+    manager: ChatSessionManager,
+    address: SessionAddress,
+    run_id: str,
+    status: str = "completed",
+    completed_at: str = "2026-08-29T12:00:00Z",
+) -> None:
+    """Admit and finish one plain User Run; it becomes the latest completion.
+
+    Admission creates a missing Session, and the Run's summary entry is
+    appended to its history, as the Run manager's lifecycle does.
+    """
+    manager._store.admit_run(
+        address, SessionRunAdmission(run_id=run_id, run_kind="user", started_at=completed_at)
+    )
+    manager._store.finish_run(
+        address,
+        SessionRunCompletion(
+            run_id=run_id,
+            status=status,
+            timing={"started_at": completed_at, "completed_at": completed_at, "duration_ms": 0},
+            iteration_count=0,
+        ),
+    )
 
 
 def seed_history(session: ChatSession, messages: list[ChatMessage]) -> None:

@@ -34,6 +34,7 @@ from core.database._connections import readonly_sqlite_uri
 from core.database.snapshots import SNAPSHOT_MANIFEST_NAME
 from core.sessions import ChatSessionManager, SessionAddress, _store_schema
 from core.sessions._store_schema import session_database_spec
+from core.sessions._types import SessionRunAdmission, SessionRunCompletion
 from core.sessions.errors import SessionStoreCorruptError
 from core.sessions.schema import (
     APPLICATION_ID,
@@ -166,11 +167,24 @@ def test_a_populated_database_keeps_every_row_when_tables_are_added(tmp_path: Pa
         store.replace_metadata(
             address, {"title": "Retained title", "custom": {"unicode": "Gruesse"}}
         )
-        store.record_terminal_run(
+        store.admit_run(
             address,
-            run_id="retained-run",
-            status="interrupted",
-            timestamp="2026-05-01T12:00:00.000000Z",
+            SessionRunAdmission(
+                run_id="retained-run", run_kind="user", started_at="2026-05-01T11:59:00Z"
+            ),
+        )
+        store.finish_run(
+            address,
+            SessionRunCompletion(
+                run_id="retained-run",
+                status="interrupted",
+                timing={
+                    "started_at": "2026-05-01T11:59:00Z",
+                    "completed_at": "2026-05-01T12:00:00Z",
+                    "duration_ms": 60_000,
+                },
+                iteration_count=1,
+            ),
         )
         store.append_messages(
             address,
@@ -349,10 +363,8 @@ def test_online_snapshot_completes_while_runs_keep_committing(
             index += 1
             try:
                 manager.get(address).append(ChatMessage.user(f"message {index}"))
-                # Completion activity has the shortest busy budget (0.5 s).
-                manager.record_terminal_run(
-                    address, f"run-{index}", "completed", "2026-01-01T00:00:00+00:00"
-                )
+                # Marking a completion read has the shortest busy budget (0.5 s).
+                manager.mark_terminal_run_read(address, f"run-{index}")
             except BaseException as exc:
                 with progressed:
                     failures.append(exc)

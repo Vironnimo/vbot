@@ -14,6 +14,7 @@ from core.subagents.tracker import (
     _entry_status,
     _SubAgentEntry,
 )
+from tests.core.sessions.history_fixtures import settle_run
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("current_format_data_directory")]
 
@@ -257,11 +258,11 @@ async def test_background_result_is_read_only_after_parent_note_persists(tmp_pat
     trigger_service.defer_input_persisted = True
     sessions = ChatSessionManager(tmp_path)
     sessions.create("worker", session_id="session-one")
-    sessions.record_terminal_run(
+    settle_run(
+        sessions,
         SessionAddress(project_id=None, agent_id="worker", session_id="session-one"),
         "run-one",
-        "completed",
-        "2026-07-22T10:00:00+00:00",
+        completed_at="2026-07-22T10:00:00+00:00",
     )
     tracker = SubAgentBatchTracker(trigger_service, sessions=sessions)
     parent_key = ("parent", "parent-session", "parent-run")
@@ -285,11 +286,11 @@ async def test_background_delivery_failure_leaves_child_unread(tmp_path) -> None
     trigger_service.error = RuntimeError("parent unavailable")
     sessions = ChatSessionManager(tmp_path)
     sessions.create("worker", session_id="session-one")
-    sessions.record_terminal_run(
+    settle_run(
+        sessions,
         SessionAddress(project_id=None, agent_id="worker", session_id="session-one"),
         "run-one",
-        "completed",
-        "2026-07-22T10:00:00+00:00",
+        completed_at="2026-07-22T10:00:00+00:00",
     )
     tracker = SubAgentBatchTracker(trigger_service, sessions=sessions)
     parent_key = ("parent", "parent-session", "parent-run")

@@ -23,7 +23,7 @@ from core.sessions import (
 from core.sessions import _store_values as store_values
 from core.sessions.errors import SessionNotFoundError
 from core.sessions.history import skill_tool_activation
-from tests.core.sessions.history_fixtures import complete_run
+from tests.core.sessions.history_fixtures import complete_run, settle_run
 from tests.core.sessions.sessions_test_support import (
     _address,
     _continuation_start,
@@ -181,10 +181,10 @@ def test_fork_inherits_history_but_not_activity_or_continuation(manager) -> None
     source.append_many(
         [ChatMessage.user("hello"), ChatMessage.assistant(model="test", content="hi")]
     )
+    source_address = _address("coder", "source")
+    settle_run(manager, source_address, "run-1")
     source.start_run("run-one")
     source.append_continuation_record(_continuation_start())
-    source_address = _address("coder", "source")
-    manager.record_terminal_run(source_address, "run-1", "completed", "2026-08-29T12:00:00Z")
 
     forked = asyncio.run(manager.fork(source_address, target_agent_id="reviewer"))
 
@@ -192,7 +192,12 @@ def test_fork_inherits_history_but_not_activity_or_continuation(manager) -> None
     assert forked.load_active() == source.load_active()
     assert forked.load() == []
     assert forked.load_continuation() is None
+    # The latest completion is the source's own; the fork completed no Run, and
+    # an inherited Run's id marks nothing read there.
     assert manager.list_completion_activity([(None, "reviewer")]) == {(None, "reviewer"): []}
+    assert manager.mark_terminal_run_read(forked.address, "run-1")["marked_read"] is False
+    source_activity = manager.list_completion_activity([(None, "coder")])[(None, "coder")]
+    assert [row["unread_run_id"] for row in source_activity] == ["run-1"]
     metadata = manager.get_metadata(forked.address)
     assert metadata[FORK_SOURCE_META_KEY]["session_id"] == "source"
     # A fork into another Agent's scope starts its own prompt-cache lineage.
