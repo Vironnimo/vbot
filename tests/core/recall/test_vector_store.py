@@ -1,28 +1,27 @@
-"""Tests for the sqlite-vec vector store."""
+"""Tests for the sqlite-vec Passage vector store and its shared Passage catalog."""
 
 from __future__ import annotations
 
 import sqlite3
 from collections.abc import Mapping, Sequence
-from dataclasses import replace
+from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-import sqlite_vec  # type: ignore[import-untyped]
 
-from core.database import JOURNAL_MODE_DELETE
-from core.recall.passages import Passage
-from core.recall.vector_store import (
-    RefreshPlan,
+from core.database import APPLICATION_IDS, DatabaseUnavailableError, projection_failure
+from core.recall._passage_catalog import (
+    Candidates,
+    CatalogPlan,
     SessionPassages,
-    StoredPassage,
-    VectorHeader,
-    VectorStore,
-    VectorStoreError,
+    text_hash,
 )
+from core.recall.passages import Passage
+from core.recall.vector_store import VectorHeader, VectorStore, VectorStoreError
+from tests.core.recall.vector_helpers import _connect_store
 
-pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
+pytestmark = [pytest.mark.asyncio, pytest.mark.filterwarnings("ignore::DeprecationWarning")]
 
 HEADER = VectorHeader(provider_id="p", model_id="m", dimension=3)
 VECTORS: dict[str, list[float]] = {
@@ -56,534 +55,485 @@ def _passage(
     )
 
 
-def _plan(
-    store: VectorStore,
-    sessions: Mapping[str, Sequence[Passage]],
+def _change(
+    session_id: str,
+    passages: Sequence[Passage],
     *,
-    header: VectorHeader = HEADER,
-    agent_id: str = "coder",
-    project_id: str = "",
     revision: int = 1,
-    pruned: Sequence[str] = (),
-) -> RefreshPlan:
-    indexed = store.list_indexed_sessions(agent_id, project_id)
-    return store.plan_refresh(
-        agent_id,
-        project_id,
-        header=header,
-        sessions=[
-            SessionPassages(
-                session_id=session_id,
-                version=("generation", revision),
-                previous_version=indexed.get(session_id),
-                passages=tuple(passages),
-            )
-            for session_id, passages in sessions.items()
-        ],
-        pruned_session_ids=pruned,
+    previous: tuple[str, int] | None = None,
+    owned: Sequence[bool] | None = None,
+) -> SessionPassages:
+    return SessionPassages(
+        session_id=session_id,
+        previous=previous,
+        version=("generation", revision),
+        passages=tuple(passages),
+        owned=tuple(owned if owned is not None else [True] * len(passages)),
     )
 
 
-def _refresh(
+async def _apply(
+    store: VectorStore,
+    *changes: SessionPassages,
+    project: str = "",
+    pruned: Sequence[str] = (),
+) -> None:
+    await store.apply(CatalogPlan("coder", project, tuple(pruned), tuple(changes)))
+
+
+async def _index(
     store: VectorStore,
     sessions: Mapping[str, Sequence[Passage]],
     *,
+    project: str = "",
     header: VectorHeader = HEADER,
-    agent_id: str = "coder",
-    project_id: str = "",
-    revision: int = 1,
-    pruned: Sequence[str] = (),
-    vectors: Mapping[str, list[float]] = VECTORS,
-) -> RefreshPlan:
-    """Plan and apply one refresh, embedding each requested text from *vectors*."""
-
-    plan = _plan(
+) -> None:
+    """Pin *header*, add new Sessions and embed every waiting Passage."""
+    await store.use_space(header)
+    await _apply(
         store,
-        sessions,
-        header=header,
-        agent_id=agent_id,
-        project_id=project_id,
-        revision=revision,
-        pruned=pruned,
+        *(_change(session_id, passages) for session_id, passages in sessions.items()),
+        project=project,
     )
-    store.apply_refresh(plan, [vectors[text] for text in plan.texts_to_embed])
-    return plan
+    await _embed_waiting(store, header)
 
 
-def _rows(store: VectorStore, session_id: str, *, project_id: str = "") -> list[tuple[int, str]]:
-    """Return ``(rowid, text)`` for one Session's rows that have a vector."""
-
-    connection = sqlite3.connect(store.path)
-    try:
-        connection.enable_load_extension(True)
-        sqlite_vec.load(connection)
-        rows = connection.execute(
-            """
-            SELECT p.rowid, p.text FROM passages AS p
-            JOIN session_vectors AS v ON v.rowid = p.rowid
-            WHERE p.project_id = ? AND p.agent_id = 'coder' AND p.session_id = ?
-            ORDER BY p.rowid
-            """,
-            (project_id, session_id),
-        ).fetchall()
-    finally:
-        connection.close()
-    return [(int(rowid), str(text)) for rowid, text in rows]
+async def _embed_waiting(store: VectorStore, header: VectorHeader = HEADER) -> list[str]:
+    batch = await store.pending_texts(None, limit=1000)
+    assert await store.store_vectors(header, {key: VECTORS[text] for key, text in batch})
+    return sorted(text for _key, text in batch)
 
 
-def _vec0_row_count(path: Path) -> int:
-    connection = sqlite3.connect(path)
-    try:
-        connection.enable_load_extension(True)
-        sqlite_vec.load(connection)
-        row = connection.execute("SELECT COUNT(*) FROM session_vectors").fetchone()
-    finally:
-        connection.close()
-    return int(row[0])
+def _candidates(*session_ids: str, project: str = "") -> Candidates:
+    return Candidates(
+        "coder", project, {session_id: order for order, session_id in enumerate(session_ids)}
+    )
 
 
-def _nearest(
+async def _nearest(
     store: VectorStore,
-    query: list[float],
+    vector: Sequence[float],
+    candidates: Candidates,
     *,
-    header: VectorHeader = HEADER,
     limit: int = 10,
-    **filters: object,
-) -> list[tuple[StoredPassage, float]]:
-    return store.knn_search(
-        header=header,
-        query_vector=query,
+    since: datetime | None = None,
+    until: datetime | None = None,
+) -> list[tuple[str, str]]:
+    matches = await store.knn_search(
+        header=HEADER,
+        query_vector=vector,
         limit=limit,
-        **filters,  # type: ignore[arg-type]
+        candidates=candidates,
+        since=since,
+        until=until,
     )
+    return [(session_id, passage.text) for passage, session_id, _distance in matches]
+
+
+def _identity(path: Path) -> dict[str, object]:
+    with closing(sqlite3.connect(path)) as connection:
+        identity: dict[str, object] = dict(
+            connection.execute("SELECT key, value FROM kernel_meta").fetchall()
+        )
+        identity["application_id"] = connection.execute("PRAGMA application_id").fetchone()[0]
+    return identity
+
+
+def _refs(path: Path) -> dict[str, int]:
+    with closing(_connect_store(path)) as connection:
+        return {
+            str(text): int(ref)
+            for ref, text in connection.execute("SELECT passage_ref, text FROM passages")
+        }
 
 
 # ---------------------------------------------------------------------------
-# File, journal, header and schema lifecycle
+# The kernel disposable projection
 # ---------------------------------------------------------------------------
 
 
-def test_vector_store_uses_required_rollback_journal(
+async def test_vector_store_is_a_kernel_disposable_projection(tmp_path: Path) -> None:
+    store = VectorStore(tmp_path)
+    await _index(store, {"one": [_passage("alpha")]})
+
+    identity = _identity(store.path)
+    assert store.path == tmp_path / "recall" / "session_passage_vectors.sqlite"
+    assert identity["application_id"] == APPLICATION_IDS["recall_vectors"]
+    assert identity["database_name"] == "recall_vectors"
+    assert identity["projection_version"] == "1"
+    store.close()
+
+
+async def test_projection_version_mismatch_discards_and_rebuilds_the_store(
+    tmp_path: Path,
+) -> None:
+    store = VectorStore(tmp_path)
+    await _index(store, {"one": [_passage("alpha")]})
+    old_identity = _identity(store.path)
+    store.close()
+    with closing(sqlite3.connect(store.path)) as connection, connection:
+        connection.execute("UPDATE kernel_meta SET value = '0' WHERE key = 'projection_version'")
+
+    reopened = VectorStore(tmp_path)
+
+    assert await reopened.read_header() is None
+    assert await reopened.list_indexed_sessions("coder") == {}
+    identity = _identity(reopened.path)
+    assert identity["projection_version"] == "1"
+    assert identity["database_id"] != old_identity["database_id"]
+    reopened.close()
+
+
+async def test_unreadable_store_file_is_rebuilt_on_open(tmp_path: Path) -> None:
+    path = tmp_path / "recall" / "session_passage_vectors.sqlite"
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"not a sqlite database")
+    store = VectorStore(tmp_path)
+
+    await _index(store, {"one": [_passage("alpha")]})
+
+    assert await _nearest(store, [1.0, 0.0, 0.0], _candidates("one")) == [("one", "alpha")]
+    store.close()
+
+
+async def test_pinned_space_without_its_vector_table_is_damage(tmp_path: Path) -> None:
+    store = VectorStore(tmp_path)
+    await _index(store, {"one": [_passage("alpha")]})
+    with closing(_connect_store(store.path)) as connection, connection:
+        connection.execute("DROP TABLE passage_vectors")
+
+    with pytest.raises(Exception) as failure:
+        await store.read_header()
+
+    assert projection_failure(failure.value) == "rebuild"
+    store.close()
+
+
+async def test_busy_store_fails_as_busy_and_keeps_its_rows(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from core.recall import vector_store
-
-    monkeypatch.setattr(vector_store, "required_journal_mode", lambda _version: JOURNAL_MODE_DELETE)
+    monkeypatch.setattr("core.recall._passage_catalog.WRITE_PATIENCE_S", 0.2)
     store = VectorStore(tmp_path)
+    await _index(store, {"one": [_passage("alpha")]})
+    identity = _identity(store.path)
 
-    connection = store._connect()
-    try:
-        mode = str(connection.execute("PRAGMA journal_mode").fetchone()[0]).lower()
-    finally:
-        connection.close()
+    with closing(sqlite3.connect(store.path, isolation_level=None)) as blocker:
+        blocker.execute("BEGIN IMMEDIATE")
+        with pytest.raises(DatabaseUnavailableError) as failure:
+            await _apply(store, _change("two", [_passage("beta")]))
+        blocker.execute("ROLLBACK")
 
-    assert mode == JOURNAL_MODE_DELETE
-
-
-def test_vector_store_reset_removes_rollback_journal(tmp_path: Path) -> None:
-    store = VectorStore(tmp_path)
-    rollback_journal = Path(f"{store.path}-journal")
-    rollback_journal.parent.mkdir(parents=True, exist_ok=True)
-    rollback_journal.write_bytes(b"stale")
-
-    store.reset_index()
-
-    assert rollback_journal.exists() is False
-
-
-def test_vector_store_fresh_file_is_empty(tmp_path: Path) -> None:
-    store = VectorStore(tmp_path)
-
-    assert store.read_header() is None
-    assert store.list_indexed_sessions("coder") == {}
-    store.delete_session("coder", "", "never-indexed")  # must not raise
-
-
-def test_vector_store_first_refresh_creates_file_header_and_vec0_table(tmp_path: Path) -> None:
-    store = VectorStore(tmp_path)
-    header = VectorHeader(
-        provider_id="openrouter",
-        model_id="model-a",
-        dimension=3,
-        space_fingerprint="space-a",
-        index_policy="passage-v2",
-        response_model_id="served/model-a-202607",
-    )
-
-    _refresh(store, {"s1": [_passage("alpha")]}, header=header)
-
-    assert store.path == tmp_path / "recall" / "session_passage_vectors.sqlite"
-    assert store.path.is_file()
-    assert store.read_header() == header
-    assert _vec0_row_count(store.path) == 1
-
-
-def test_vector_store_refresh_requires_resolved_dimension(tmp_path: Path) -> None:
-    store = VectorStore(tmp_path)
-
-    with pytest.raises(VectorStoreError):
-        _plan(store, {"s1": [_passage("alpha")]}, header=replace(HEADER, dimension=0))
-
-
-@pytest.mark.parametrize(
-    "changed",
-    [
-        replace(HEADER, provider_id="other"),
-        replace(HEADER, model_id="other"),
-        replace(HEADER, response_model_id="served/other"),
-        replace(HEADER, space_fingerprint="other-space"),
-        replace(HEADER, index_policy="other-policy"),
-        replace(HEADER, dimension=4),
-    ],
-)
-def test_vector_store_refuses_refresh_in_another_embedding_space(
-    tmp_path: Path, changed: VectorHeader
-) -> None:
-    """Vectors of one embedding space never mix with another; the caller resets first."""
-
-    store = VectorStore(tmp_path)
-    _refresh(store, {"s1": [_passage("alpha")]})
-
-    with pytest.raises(VectorStoreError):
-        _plan(store, {"s2": [_passage("beta")]}, header=changed)
-
-    assert store.read_header() == HEADER
-    assert set(store.list_indexed_sessions("coder")) == {"s1"}
-
-
-def test_vector_store_apply_rejects_plan_whose_store_changed_space(tmp_path: Path) -> None:
-    store = VectorStore(tmp_path)
-    stale = _plan(store, {"s1": [_passage("alpha")]})
-    other = replace(HEADER, model_id="other")
-    _refresh(store, {"s2": [_passage("beta")]}, header=other)
-
-    with pytest.raises(VectorStoreError, match="header changed"):
-        store.apply_refresh(stale, [VECTORS["alpha"]])
-
-    assert store.read_header() == other
-
-
-def test_vector_store_apply_rejects_plan_whose_store_was_discarded(tmp_path: Path) -> None:
-    store = VectorStore(tmp_path)
-    _refresh(store, {"s1": [_passage("alpha")]})
-    stale = _plan(store, {"s2": [_passage("beta")]})
-    store.reset_index()
-
-    with pytest.raises(VectorStoreError, match="discarded"):
-        store.apply_refresh(stale, [VECTORS["beta"]])
-
-
-def test_vector_store_rejects_populated_file_of_another_schema_version(tmp_path: Path) -> None:
-    store = VectorStore(tmp_path)
-    _refresh(store, {"s1": [_passage("alpha")]})
-    connection = sqlite3.connect(store.path)
-    try:
-        connection.execute("PRAGMA user_version = 999")
-    finally:
-        connection.close()
-
-    with pytest.raises(VectorStoreError):
-        store.read_header()
-    with pytest.raises(VectorStoreError):
-        store.list_indexed_sessions("coder")
-    store.delete_session("coder", "", "s1")  # tolerated; the next search rebuilds
-
-    store.reset_index()
-    _refresh(store, {"s2": [_passage("beta")]})
-    assert set(store.list_indexed_sessions("coder")) == {"s2"}
-
-
-def test_vector_store_rejects_vectors_that_do_not_fit_the_plan(tmp_path: Path) -> None:
-    store = VectorStore(tmp_path)
-    _refresh(store, {"s1": [_passage("alpha")]})
-    plan = _plan(store, {"s2": [_passage("beta")]})
-
-    with pytest.raises(VectorStoreError):
-        store.apply_refresh(plan, [[0.1, 0.2, 0.3, 0.4]])
-    with pytest.raises(VectorStoreError):
-        store.apply_refresh(plan, [])
-
-    assert set(store.list_indexed_sessions("coder")) == {"s1"}
+    assert projection_failure(failure.value) == "busy"
+    await store.discard_if_damaged(failure.value)
+    assert _identity(store.path)["database_id"] == identity["database_id"]
+    assert await store.list_indexed_sessions("coder") == {"one": ("generation", 1)}
+    store.close()
 
 
 # ---------------------------------------------------------------------------
-# Incremental refresh
+# Embedding space and the pending queue
 # ---------------------------------------------------------------------------
 
 
-def test_vector_store_refresh_keeps_unchanged_rows_and_embeds_only_new_texts(
+async def test_vector_store_first_space_pins_header_and_queues_new_passages(
     tmp_path: Path,
 ) -> None:
     store = VectorStore(tmp_path)
-    alpha = _passage("alpha")
-    first = _refresh(store, {"s1": [alpha, _passage("beta", passage_id="tail")]})
-    assert first.texts_to_embed == ("alpha", "beta")
-    [(alpha_rowid, _alpha), _beta] = _rows(store, "s1")
+    assert await store.read_header() is None
 
-    # The tail Passage keeps its id but grows; a new Passage follows it.
-    second = _refresh(
-        store,
-        {"s1": [alpha, _passage("beta grown", passage_id="tail"), _passage("gamma")]},
-        revision=2,
+    assert await store.use_space(HEADER) is True
+    assert await store.use_space(HEADER) is False
+    await _apply(store, _change("one", [_passage("alpha"), _passage("beta")]))
+
+    assert await store.read_header() == HEADER
+    assert await store.count_pending(_candidates("one")) == 2
+    assert await _embed_waiting(store) == ["alpha", "beta"]
+    assert await store.count_pending(_candidates("one")) == 0
+    store.close()
+
+
+async def test_vector_store_refuses_non_positive_dimension(tmp_path: Path) -> None:
+    store = VectorStore(tmp_path)
+
+    with pytest.raises(VectorStoreError):
+        await store.use_space(VectorHeader(provider_id="p", model_id="m", dimension=0))
+    store.close()
+
+
+async def test_vector_store_new_passage_reuses_a_stored_vector_for_its_text(
+    tmp_path: Path,
+) -> None:
+    store = VectorStore(tmp_path)
+    await _index(store, {"one": [_passage("alpha")]})
+
+    await _apply(
+        store, _change("two", [_passage("alpha", passage_id="other", end_message_id="m2")])
     )
+    await _apply(store, _change("one", [_passage("alpha")]), project="proj")
 
-    assert second.texts_to_embed == ("beta grown", "gamma")
-    rows = _rows(store, "s1")
-    assert (alpha_rowid, "alpha") in rows
-    assert sorted(text for _rowid, text in rows) == ["alpha", "beta grown", "gamma"]
-    assert store.list_indexed_sessions("coder") == {"s1": ("generation", 2)}
-
-
-def test_vector_store_refresh_replaces_rows_whose_boundaries_moved(tmp_path: Path) -> None:
-    """Same id and text with other boundary metadata is a different row."""
-
-    store = VectorStore(tmp_path)
-    _refresh(store, {"s1": [_passage("alpha", end_message_id="m1")]})
-
-    plan = _refresh(store, {"s1": [_passage("alpha", end_message_id="m2")]}, revision=2)
-
-    # The row is rewritten, but its text keeps the stored vector.
-    assert plan.texts_to_embed == ()
-    [(_rowid, text)] = _rows(store, "s1")
-    assert text == "alpha"
-    [(passage, _distance)] = _nearest(store, VECTORS["alpha"])
-    assert passage.end_message_id == "m2"
-
-
-def test_vector_store_refresh_removes_vanished_passages(tmp_path: Path) -> None:
-    store = VectorStore(tmp_path)
-    _refresh(store, {"s1": [_passage("alpha"), _passage("beta"), _passage("gamma")]})
-
-    plan = _refresh(store, {"s1": [_passage("alpha")]}, revision=2)
-
-    assert plan.texts_to_embed == ()
-    assert [text for _rowid, text in _rows(store, "s1")] == ["alpha"]
-    assert _vec0_row_count(store.path) == 1
-
-
-def test_vector_store_refresh_reuses_vectors_across_sessions(tmp_path: Path) -> None:
-    store = VectorStore(tmp_path)
-    _refresh(store, {"s1": [_passage("alpha"), _passage("beta")]})
-
-    plan = _refresh(store, {"s2": [_passage("alpha", passage_id="fork-id")]})
-
-    assert plan.texts_to_embed == ()
-    nearest = _nearest(store, VECTORS["alpha"], limit=2)
-    assert [(passage.session_id, passage.text) for passage, _ in nearest] == [
-        ("s1", "alpha"),
-        ("s2", "alpha"),
+    assert await store.pending_texts(None, limit=10) == []
+    assert await _nearest(store, [1.0, 0.0, 0.0], _candidates("two")) == [("two", "alpha")]
+    assert await _nearest(store, [1.0, 0.0, 0.0], _candidates("one", project="proj")) == [
+        ("one", "alpha")
     ]
-    assert nearest[1][1] == pytest.approx(0.0, abs=1e-5)
+    store.close()
 
 
-def test_vector_store_refresh_embeds_each_distinct_text_once(tmp_path: Path) -> None:
-    store = VectorStore(tmp_path)
-
-    plan = _refresh(
-        store,
-        {
-            "s1": [_passage("alpha", passage_id="a1"), _passage("alpha", passage_id="a2")],
-            "s2": [_passage("alpha", passage_id="a3")],
-        },
-    )
-
-    assert plan.texts_to_embed == ("alpha",)
-    assert len(_rows(store, "s1")) == 2
-    assert len(_rows(store, "s2")) == 1
-
-
-def test_vector_store_refresh_matches_duplicate_rows_as_a_multiset(tmp_path: Path) -> None:
-    store = VectorStore(tmp_path)
-    duplicate = _passage("alpha")
-    _refresh(store, {"s1": [duplicate, duplicate]})
-    [first, second] = _rows(store, "s1")
-
-    _refresh(store, {"s1": [duplicate]}, revision=2)
-
-    remaining = _rows(store, "s1")
-    assert len(remaining) == 1
-    assert remaining[0] in (first, second)
-
-
-def test_vector_store_stamps_session_without_passages(tmp_path: Path) -> None:
-    store = VectorStore(tmp_path)
-    _refresh(store, {"s1": [_passage("alpha")], "empty": []})
-
-    assert store.list_indexed_sessions("coder") == {
-        "s1": ("generation", 1),
-        "empty": ("generation", 1),
-    }
-
-    _refresh(store, {"s1": []}, revision=2)
-
-    assert _rows(store, "s1") == []
-    assert store.list_indexed_sessions("coder")["s1"] == ("generation", 2)
-
-
-def test_vector_store_skips_session_refreshed_by_another_writer(tmp_path: Path) -> None:
-    """A plan applies only on top of the stamp it was planned against."""
-
-    store = VectorStore(tmp_path)
-    _refresh(store, {"s1": [_passage("alpha")]})
-    stale = _plan(store, {"s1": [_passage("beta")]}, revision=2)
-    _refresh(store, {"s1": [_passage("gamma")]}, revision=3)
-
-    store.apply_refresh(stale, [VECTORS["beta"]])
-
-    assert [text for _rowid, text in _rows(store, "s1")] == ["gamma"]
-    assert store.list_indexed_sessions("coder") == {"s1": ("generation", 3)}
-
-
-def test_vector_store_empty_plan_writes_nothing(tmp_path: Path) -> None:
-    store = VectorStore(tmp_path)
-    _refresh(store, {"s1": [_passage("alpha")]})
-    modified = store.path.stat().st_mtime_ns
-
-    plan = _plan(store, {})
-    assert plan.is_empty
-    store.apply_refresh(plan)
-
-    assert store.path.stat().st_mtime_ns == modified
-
-
-def test_vector_store_prunes_named_sessions(tmp_path: Path) -> None:
-    store = VectorStore(tmp_path)
-    _refresh(store, {"keep": [_passage("alpha")], "drop": [_passage("beta")]})
-
-    _refresh(store, {}, pruned=["drop"])
-
-    assert set(store.list_indexed_sessions("coder")) == {"keep"}
-    assert _rows(store, "drop") == []
-    assert _vec0_row_count(store.path) == 1
-
-
-def test_vector_store_delete_session_removes_rows_and_stamp(tmp_path: Path) -> None:
-    store = VectorStore(tmp_path)
-    _refresh(store, {"s1": [_passage("alpha")], "s2": [_passage("beta")]})
-
-    store.delete_session("coder", "", "s1")
-
-    assert set(store.list_indexed_sessions("coder")) == {"s2"}
-    assert _rows(store, "s1") == []
-
-
-# ---------------------------------------------------------------------------
-# KNN
-# ---------------------------------------------------------------------------
-
-
-def test_vector_store_knn_search_returns_nearest_passages_by_cosine(tmp_path: Path) -> None:
-    store = VectorStore(tmp_path)
-    _refresh(
-        store,
-        {
-            "near": [_passage("alpha", start_message_id="n1", end_message_id="n2")],
-            "mid": [_passage("delta")],
-            "far": [_passage("gamma")],
-        },
-    )
-
-    results = _nearest(store, [1.0, 0.0, 0.0], limit=3)
-
-    assert [passage.session_id for passage, _ in results] == ["near", "mid", "far"]
-    assert results[0][0] == StoredPassage(
-        session_id="near",
-        passage_id="id-alpha",
-        text="alpha",
-        start_message_id="n1",
-        end_message_id="n2",
-        start_timestamp="2026-05-01T12:00:00+00:00",
-        end_timestamp="2026-05-01T12:00:00+00:00",
-        start_role="user",
-        end_role="user",
-    )
-    assert results[0][1] == pytest.approx(0.0, abs=1e-5)
-    assert results[-1][1] > results[0][1]
-
-
-def test_vector_store_knn_header_mismatch_is_read_only(tmp_path: Path) -> None:
-    store = VectorStore(tmp_path)
-    _refresh(store, {"s1": [_passage("alpha")]})
-
-    with pytest.raises(VectorStoreError):
-        _nearest(store, [1.0, 0.0, 0.0, 0.0], header=replace(HEADER, dimension=4))
-    with pytest.raises(VectorStoreError):
-        _nearest(store, [1.0, 0.0, 0.0], header=replace(HEADER, model_id="other"))
-
-    assert store.read_header() == HEADER
-    assert _nearest(store, [1.0, 0.0, 0.0])
-
-
-def test_vector_store_knn_search_applies_session_filters_before_ranking(tmp_path: Path) -> None:
-    store = VectorStore(tmp_path)
-    _refresh(
-        store,
-        {"excluded": [_passage("alpha")], "included": [_passage("delta")], "other": []},
-    )
-
-    excluded = _nearest(store, [1.0, 0.0, 0.0], limit=1, session_ids={"included", "other"})
-    selected = _nearest(store, [1.0, 0.0, 0.0], limit=1, session_ids={"included"})
-
-    assert [passage.session_id for passage, _ in excluded] == ["included"]
-    assert [passage.session_id for passage, _ in selected] == ["included"]
-    assert _nearest(store, [1.0, 0.0, 0.0], session_ids=set()) == []
-    assert _nearest(store, [1.0, 0.0, 0.0], session_ids={"never-indexed"}) == []
-
-
-@pytest.mark.parametrize("excluded_count", [8, 40])
-def test_vector_store_knn_search_excludes_many_sessions_without_starving(
-    tmp_path: Path, excluded_count: int
-) -> None:
-    """Session filters run inside KNN, even beyond the constraints one vec0 query accepts."""
-
-    store = VectorStore(tmp_path)
-    excluded_ids = [f"hidden-{index}" for index in range(excluded_count)]
-    _refresh(
-        store,
-        {
-            **{
-                session_id: [_passage("alpha", passage_id=session_id)]
-                for session_id in excluded_ids
-            },
-            "visible": [_passage("delta")],
-            "far": [_passage("gamma")],
-        },
-    )
-
-    results = _nearest(
-        store,
-        [1.0, 0.0, 0.0],
-        limit=2,
-        agent_id="coder",
-        session_ids={"visible", "far", "not-indexed-yet"},
-        since=datetime(2026, 1, 1, tzinfo=UTC),
-        until=datetime(2026, 12, 31, tzinfo=UTC),
-    )
-
-    assert [passage.session_id for passage, _ in results] == ["visible", "far"]
-
-
-def test_vector_store_time_filters_keep_passages_with_invalid_timestamps(
+async def test_vector_store_one_vector_serves_every_waiting_passage_with_its_text(
     tmp_path: Path,
 ) -> None:
     store = VectorStore(tmp_path)
-    _refresh(store, {"malformed-time": [_passage("alpha", timestamp="not-a-timestamp")]})
+    await store.use_space(HEADER)
+    await _apply(store, _change("one", [_passage("alpha")]))
+    await _apply(store, _change("one", [_passage("alpha")]), project="proj")
 
-    results = _nearest(
+    batch = await store.pending_texts(None, limit=10)
+    assert batch == [(text_hash("alpha"), "alpha")]
+    assert await store.store_vectors(HEADER, {text_hash("alpha"): VECTORS["alpha"]})
+
+    assert await store.count_pending(_candidates("one")) == 0
+    assert await store.count_pending(_candidates("one", project="proj")) == 0
+    store.close()
+
+
+async def test_vector_store_pending_texts_are_newest_first_bounded_and_filtered(
+    tmp_path: Path,
+) -> None:
+    store = VectorStore(tmp_path)
+    await store.use_space(HEADER)
+    await _apply(
+        store,
+        _change("old", [_passage("alpha", timestamp="2026-01-01T00:00:00+00:00")]),
+        _change("new", [_passage("beta", timestamp="2026-06-01T00:00:00+00:00")]),
+        _change("newest", [_passage("gamma", timestamp="2026-07-01T00:00:00+00:00")]),
+    )
+
+    assert [text for _key, text in await store.pending_texts(None, limit=2)] == ["gamma", "beta"]
+    assert [
+        text
+        for _key, text in await store.pending_texts(None, limit=10, exclude={text_hash("gamma")})
+    ] == ["beta", "alpha"]
+    candidates = _candidates("old", "new")
+    assert [text for _key, text in await store.pending_texts(candidates, limit=10)] == [
+        "beta",
+        "alpha",
+    ]
+    since = datetime(2026, 3, 1, tzinfo=UTC)
+    assert [
+        text for _key, text in await store.pending_texts(candidates, limit=10, since=since)
+    ] == ["beta"]
+    assert await store.count_pending(candidates, since=since) == 1
+    store.close()
+
+
+async def test_vector_store_refuses_vectors_of_a_space_it_left(tmp_path: Path) -> None:
+    store = VectorStore(tmp_path)
+    await store.use_space(HEADER)
+    await _apply(store, _change("one", [_passage("alpha")]))
+    other = VectorHeader(provider_id="p", model_id="m2", dimension=3)
+
+    assert await store.store_vectors(other, {text_hash("alpha"): VECTORS["alpha"]}) is False
+    assert await store.count_pending(_candidates("one")) == 1
+    with pytest.raises(VectorStoreError):
+        await store.store_vectors(HEADER, {text_hash("alpha"): [1.0, 0.0]})
+    store.close()
+
+
+async def test_vector_store_space_change_queues_every_passage_again(tmp_path: Path) -> None:
+    store = VectorStore(tmp_path)
+    await _index(store, {"one": [_passage("alpha")], "two": [_passage("beta")]})
+    wider = VectorHeader(provider_id="p", model_id="m", dimension=4)
+
+    assert await store.use_space(wider) is True
+
+    assert await store.read_header() == wider
+    assert await store.count_pending(_candidates("one", "two")) == 2
+    matches = await store.knn_search(
+        header=wider, query_vector=[1.0, 0.0, 0.0, 0.0], limit=5, candidates=_candidates("one")
+    )
+    assert matches == []
+    with pytest.raises(VectorStoreError):
+        await _nearest(store, [1.0, 0.0, 0.0], _candidates("one"))
+    store.close()
+
+
+# ---------------------------------------------------------------------------
+# Catalog refresh
+# ---------------------------------------------------------------------------
+
+
+async def test_vector_store_refresh_keeps_unchanged_passages_and_drops_vanished_ones(
+    tmp_path: Path,
+) -> None:
+    store = VectorStore(tmp_path)
+    await _index(store, {"one": [_passage("alpha"), _passage("beta")]})
+    before = _refs(store.path)
+
+    await _apply(
+        store,
+        _change(
+            "one",
+            [_passage("alpha"), _passage("beta grown", passage_id="id-beta")],
+            revision=2,
+            previous=("generation", 1),
+        ),
+    )
+
+    after = _refs(store.path)
+    assert after["alpha"] == before["alpha"]
+    assert set(after) == {"alpha", "beta grown"}
+    assert await _embed_waiting(store) == ["beta grown"]
+    assert await store.list_indexed_sessions("coder") == {"one": ("generation", 2)}
+    with closing(_connect_store(store.path)) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM passage_vectors").fetchone()[0] == 2
+    store.close()
+
+
+async def test_vector_store_skips_a_session_refreshed_by_another_writer(tmp_path: Path) -> None:
+    store = VectorStore(tmp_path)
+    await _index(store, {"one": [_passage("alpha")]})
+
+    await _apply(store, _change("one", [_passage("beta")], revision=3, previous=None))
+
+    assert await store.list_indexed_sessions("coder") == {"one": ("generation", 1)}
+    assert set(_refs(store.path)) == {"alpha"}
+    store.close()
+
+
+async def test_vector_store_stamps_a_session_without_passages(tmp_path: Path) -> None:
+    store = VectorStore(tmp_path)
+    await store.use_space(HEADER)
+
+    await _apply(store, _change("inert", []))
+
+    assert await store.list_indexed_sessions("coder") == {"inert": ("generation", 1)}
+    store.close()
+
+
+async def test_vector_store_prune_keeps_passages_another_session_shows(tmp_path: Path) -> None:
+    store = VectorStore(tmp_path)
+    shared = _passage("alpha")
+    await _index(store, {"origin": [shared, _passage("beta")], "fork": [shared]})
+
+    await _apply(store, pruned=["origin"])
+
+    assert await store.list_indexed_sessions("coder") == {"fork": ("generation", 1)}
+    assert set(_refs(store.path)) == {"alpha"}
+    assert await _nearest(store, [1.0, 0.0, 0.0], _candidates("fork")) == [("fork", "alpha")]
+
+    await store.remove_session("coder", None, "fork")
+
+    assert _refs(store.path) == {}
+    with closing(_connect_store(store.path)) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM passage_vectors").fetchone()[0] == 0
+    store.close()
+
+
+# ---------------------------------------------------------------------------
+# KNN and attribution
+# ---------------------------------------------------------------------------
+
+
+async def test_vector_store_knn_returns_nearest_passages_by_cosine(tmp_path: Path) -> None:
+    store = VectorStore(tmp_path)
+    await _index(
+        store,
+        {"a": [_passage("alpha")], "b": [_passage("beta")], "d": [_passage("delta")]},
+    )
+
+    assert await _nearest(store, [1.0, 0.1, 0.0], _candidates("a", "b", "d"), limit=2) == [
+        ("a", "alpha"),
+        ("d", "delta"),
+    ]
+    with pytest.raises(VectorStoreError):
+        await store.knn_search(
+            header=VectorHeader(provider_id="p", model_id="other", dimension=3),
+            query_vector=[1.0, 0.0, 0.0],
+            limit=1,
+            candidates=_candidates("a"),
+        )
+    store.close()
+
+
+async def test_vector_store_shared_passage_is_reported_once_by_owner_then_newest(
+    tmp_path: Path,
+) -> None:
+    store = VectorStore(tmp_path)
+    shared = _passage("alpha")
+    await store.use_space(HEADER)
+    await _apply(
+        store,
+        _change("origin", [shared]),
+        _change("older", [shared, _passage("beta", end_message_id="o1")], owned=[False, True]),
+        _change("newer", [shared], owned=[False]),
+    )
+    await _embed_waiting(store)
+    everyone = Candidates("coder", "", {"origin": 1, "older": 2, "newer": 3})
+
+    assert await _nearest(store, [1.0, 0.0, 0.0], everyone) == [
+        ("origin", "alpha"),
+        ("older", "beta"),
+    ]
+    without_origin = Candidates("coder", "", {"older": 2, "newer": 3})
+    assert await _nearest(store, [1.0, 0.0, 0.0], without_origin) == [
+        ("newer", "alpha"),
+        ("older", "beta"),
+    ]
+    only_older = Candidates("coder", "", {"older": 2})
+    assert await _nearest(store, [1.0, 0.0, 0.0], only_older) == [
+        ("older", "alpha"),
+        ("older", "beta"),
+    ]
+    store.close()
+
+
+@pytest.mark.parametrize("hidden_count", [3, 40])
+async def test_vector_store_candidate_filter_runs_inside_knn_without_starving(
+    tmp_path: Path, hidden_count: int
+) -> None:
+    store = VectorStore(tmp_path)
+    hidden = {
+        f"hidden-{index}": [_passage("alpha", passage_id=f"h{index}", end_message_id=f"h{index}")]
+        for index in range(hidden_count)
+    }
+    await _index(store, {**hidden, "visible": [_passage("delta")], "far": [_passage("gamma")]})
+
+    matches = await _nearest(
         store,
         [1.0, 0.0, 0.0],
-        limit=1,
-        agent_id="coder",
+        _candidates("visible", "far", "not-indexed-yet"),
+        limit=2,
         since=datetime(2026, 1, 1, tzinfo=UTC),
         until=datetime(2026, 12, 31, tzinfo=UTC),
     )
 
-    assert len(results) == 1
+    assert matches == [("visible", "delta"), ("far", "gamma")]
+    store.close()
 
 
-def test_vector_store_time_filters_exclude_passages_outside_the_period(tmp_path: Path) -> None:
+async def test_vector_store_time_filters_keep_passages_with_invalid_timestamps(
+    tmp_path: Path,
+) -> None:
     store = VectorStore(tmp_path)
-    _refresh(
+    await _index(store, {"malformed": [_passage("alpha", timestamp="not-a-timestamp")]})
+
+    matches = await _nearest(
+        store,
+        [1.0, 0.0, 0.0],
+        _candidates("malformed"),
+        since=datetime(2026, 1, 1, tzinfo=UTC),
+        until=datetime(2026, 12, 31, tzinfo=UTC),
+    )
+
+    assert matches == [("malformed", "alpha")]
+    store.close()
+
+
+async def test_vector_store_time_filters_exclude_passages_outside_the_period(
+    tmp_path: Path,
+) -> None:
+    store = VectorStore(tmp_path)
+    await _index(
         store,
         {
             "old": [_passage("alpha", timestamp="2026-01-01T00:00:00+00:00")],
@@ -591,52 +541,42 @@ def test_vector_store_time_filters_exclude_passages_outside_the_period(tmp_path:
         },
     )
 
-    results = _nearest(
-        store, [1.0, 0.0, 0.0], agent_id="coder", since=datetime(2026, 3, 1, tzinfo=UTC)
+    matches = await _nearest(
+        store, [1.0, 0.0, 0.0], _candidates("old", "new"), since=datetime(2026, 3, 1, tzinfo=UTC)
     )
 
-    assert [passage.session_id for passage, _ in results] == ["new"]
+    assert matches == [("new", "delta")]
+    store.close()
 
 
 # ---------------------------------------------------------------------------
-# Scope isolation — the same Session UUID in two scopes never collides
+# Scope isolation: the same Session UUID in two scopes never collides
 # ---------------------------------------------------------------------------
 
 
-def test_vector_store_same_uuid_in_two_scopes_are_distinct(tmp_path: Path) -> None:
+async def test_vector_store_same_uuid_in_two_scopes_are_distinct(tmp_path: Path) -> None:
     store = VectorStore(tmp_path)
-    _refresh(store, {"shared": [_passage("alpha")]}, project_id="")
-    _refresh(store, {"shared": [_passage("beta")]}, project_id="proj")
+    await _index(store, {"shared": [_passage("alpha")]})
+    await _index(store, {"shared": [_passage("beta")]}, project="proj")
 
-    assert set(store.list_indexed_sessions("coder", "")) == {"shared"}
-    assert set(store.list_indexed_sessions("coder", "proj")) == {"shared"}
-    assert _vec0_row_count(store.path) == 2
-    global_hits = _nearest(store, [1.0, 0.0, 0.0], agent_id="coder", project_id="")
-    project_hits = _nearest(store, [1.0, 0.0, 0.0], agent_id="coder", project_id="proj")
-    assert [passage.text for passage, _ in global_hits] == ["alpha"]
-    assert [passage.text for passage, _ in project_hits] == ["beta"]
+    assert set(await store.list_indexed_sessions("coder")) == {"shared"}
+    assert set(await store.list_indexed_sessions("coder", "proj")) == {"shared"}
+    assert await _nearest(store, [1.0, 0.0, 0.0], _candidates("shared")) == [("shared", "alpha")]
+    assert await _nearest(store, [1.0, 0.0, 0.0], _candidates("shared", project="proj")) == [
+        ("shared", "beta")
+    ]
+    store.close()
 
 
-def test_vector_store_refresh_of_one_scope_leaves_other_scope_intact(tmp_path: Path) -> None:
+async def test_vector_store_prune_and_remove_affect_only_the_named_scope(tmp_path: Path) -> None:
     store = VectorStore(tmp_path)
-    _refresh(store, {"shared": [_passage("alpha")]}, project_id="")
-    _refresh(store, {"shared": [_passage("beta")]}, project_id="proj")
+    await _index(store, {"shared": [_passage("alpha")]})
+    await _index(store, {"shared": [_passage("beta")], "other": []}, project="proj")
 
-    _refresh(store, {"shared": [_passage("gamma")]}, project_id="proj", revision=2)
-    _refresh(store, {}, project_id="proj", pruned=["other"])
+    await _apply(store, pruned=["shared"], project="proj")
+    await store.remove_session("coder", "proj", "other")
 
-    assert [text for _rowid, text in _rows(store, "shared", project_id="")] == ["alpha"]
-    assert [text for _rowid, text in _rows(store, "shared", project_id="proj")] == ["gamma"]
-
-
-def test_vector_store_prune_and_delete_affect_only_the_named_scope(tmp_path: Path) -> None:
-    store = VectorStore(tmp_path)
-    _refresh(store, {"shared": [_passage("alpha")]}, project_id="")
-    _refresh(store, {"shared": [_passage("beta")], "other": []}, project_id="proj")
-
-    _refresh(store, {}, project_id="proj", pruned=["shared"])
-    store.delete_session("coder", "proj", "other")
-
-    assert set(store.list_indexed_sessions("coder", "")) == {"shared"}
-    assert store.list_indexed_sessions("coder", "proj") == {}
-    assert [text for _rowid, text in _rows(store, "shared", project_id="")] == ["alpha"]
+    assert set(await store.list_indexed_sessions("coder")) == {"shared"}
+    assert await store.list_indexed_sessions("coder", "proj") == {}
+    assert set(_refs(store.path)) == {"alpha"}
+    store.close()
