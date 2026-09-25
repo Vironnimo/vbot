@@ -268,8 +268,9 @@ def initialize_data_directory(
     data_dir: str | Path,
     *,
     resources_dir: str | Path | None = None,
+    require_new: bool = False,
 ) -> DataDirectoryInitializationResult:
-    """Create the canonical layout without replacing existing files."""
+    """Create the canonical layout, optionally requiring exclusive root creation."""
 
     layout = DataDirectoryLayout(data_dir)
     resources_root = (
@@ -300,6 +301,8 @@ def initialize_data_directory(
         else:
             write_bootstrap_marker(layout.root)
         created_files.append(layout.data_store_marker_path)
+    elif require_new:
+        raise FileExistsError(f"Data-directory path already exists: {layout.root}")
     elif not layout.root.is_dir():
         raise NotADirectoryError(f"Data-directory path is not a directory: {layout.root}")
 

@@ -80,6 +80,9 @@ python scripts/worktree.py create my-task
 
 Worktree names must be a single safe path segment. They may contain letters,
 numbers, dots, underscores, and hyphens, and must start with a letter or number.
+They must not end with a dot. `dev` is reserved, case-insensitively, for the
+primary checkout. Creation refuses an existing `~/.vbot-<name>` (including a
+link) before changing it; choose another name or inspect the old directory.
 
 This creates:
 
@@ -90,7 +93,8 @@ This creates:
 It also prints the assigned port, data dir, path, and local URL.
 
 If creation fails after Git has created the worktree, the script attempts to
-clean up the partial worktree, the dedicated data dir, and the managed branch.
+clean up the partial worktree, its proven-owned data dir, and the managed branch.
+A failure before ownership is recorded leaves the data directory for inspection.
 
 ### 3. Enter the worktree
 
@@ -156,10 +160,12 @@ python scripts/worktree.py delete my-task
 This deletes:
 
 - the Git worktree at `.worktrees/my-task`
-- the dedicated data dir `~/.vbot-my-task`
+- the dedicated data dir `~/.vbot-my-task` when its ownership records match
 - the managed branch `my-task` if the script created that branch itself
 
 On success, the command prints `status: deleted`.
+Unverified data is kept and reported as `data-status: preserved (ownership
+unverified)`, including for older worktrees without ownership records.
 
 If the worktree was created from an existing branch with `--from`, the existing
 branch is not deleted.
@@ -243,9 +249,16 @@ It stores at least the worktree data dir:
 ```json
 {
   "data_dir": "~/.vbot-my-task",
-  "managed_branch": true
+  "managed_branch": true,
+  "data_owner": "unique-token-generated-during-creation"
 }
 ```
+
+The matching `~/.vbot-my-task/.vbot-worktree-owner.json` binds that token to the
+canonical repository and worktree paths. Cleanup requires both records and
+refuses redirected data roots. Copying a checkout marker alone does not transfer
+data ownership. Older worktrees keep their existing config behavior, but cleanup
+preserves their data and does not stop services using it.
 
 The primary checkout's local marker additionally sets `"cwd_only": true`. That scope makes the marker apply when a command is launched from the checkout itself, but not merely because an editable installation imports code from that checkout. Script-generated task-worktree markers omit the field so their module-root fallback continues to work from the installed `vbot` entrypoint.
 
@@ -375,11 +388,11 @@ This is the machine-readable marker used by config and cleanup logic.
 
 ### `~/.vbot-<name>/settings.json`
 
-This contains the dedicated `server_port`, the keyless `providers.custom.fake` endpoint, manual fake Models for chat/fallback/image/speech, and the corresponding default/task-model bindings. Existing user values in a reused data directory are preserved; missing fixture values are filled. The fixture is `tests/e2e/fake-provider-settings.json` from the checkout that runs `worktree.py` (like the data-directory layout and seed resources), not from the main repository, so a branch that changes it seeds its own version. Its task-model options must be valid for the option schemas vBot builds for those fake Models (for these Custom Provider Models, TTS offers only the `mp3`/`pcm` formats and image generation only `extra_options`), otherwise saving Specialized Models fails on an untouched option; `tests/scripts/test_worktree.py` validates the seeded bindings through the same Task Model check Settings runs.
+This contains the dedicated `server_port`, the keyless `providers.custom.fake` endpoint, manual fake Models for chat/fallback/image/speech, and the corresponding default/task-model bindings. Creation seeds only its newly created data directory. The fixture is `tests/e2e/fake-provider-settings.json` from the checkout that runs `worktree.py` (like the data-directory layout and seed resources), not from the main repository, so a branch that changes it seeds its own version. Its task-model options must be valid for the option schemas vBot builds for those fake Models (for these Custom Provider Models, TTS offers only the `mp3`/`pcm` formats and image generation only `extra_options`), otherwise saving Specialized Models fails on an untouched option; `tests/scripts/test_worktree.py` validates the seeded bindings through the same Task Model check Settings runs.
 
 ### `~/.vbot-<name>/.env` and canonical directories
 
-Worktree creation uses the same canonical initializer as Setup and Runtime. It seeds `.env` from `resources/data-dir/.env.example` only when absent, preserves pre-existing configuration, creates every canonical directory, and leaves `agents/` empty until Runtime's first start.
+Worktree creation uses the same canonical initializer as Setup and Runtime, with exclusive root creation required. It seeds `.env` from `resources/data-dir/.env.example`, creates every canonical directory, and leaves `agents/` empty until Runtime's first start. A concurrent creator winning the root creation race causes refusal before any seeding.
 
 ## Delete rules and safety
 
@@ -387,14 +400,15 @@ Worktree creation uses the same canonical initializer as Setup and Runtime. It s
 
 Important behavior:
 
-- it resolves the data dir from the marker only when the marker matches the
-  expected managed path
-- it does not blindly trust arbitrary marker paths for deletion
+- it stops services and deletes data only when the expected data path and both
+  ownership records match; it checks ownership again after Git removes the checkout
+- missing, malformed or mismatched records and redirected roots preserve data;
+  `--force` does not override this protection
 - it deletes the branch only when the marker says the branch was script-managed
 - if the worktree is dirty, delete fails unless you explicitly use `--force`;
   the error output lists each blocking file as an `uncommitted:` line so you
   can decide whether to commit the work or discard it with `--force`
-- before removing anything it stops the worktree's managed server and fake
+- for proven-owned data, before removing anything it stops the worktree's managed server and fake
   Provider with `scripts/test-env.py stop` for the recorded data dir and port;
   when the worktree no longer has that script, the copy in the checkout running
   `worktree.py` is used, which still refuses to kill a fake Provider it cannot
@@ -473,7 +487,7 @@ this automatically:
    The worktree still counts as deleted; trash directories are swept
    automatically on later create/delete runs once the locks are gone.
 
-In both cases the delete finishes: data dir and managed branch are cleaned up
+In both cases the delete finishes: owned data dir and managed branch are cleaned up
 and the worktree name is immediately reusable.
 
 ### The worktree build step failed during creation
