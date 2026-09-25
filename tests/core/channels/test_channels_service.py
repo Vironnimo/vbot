@@ -203,19 +203,19 @@ async def test_channel_state_follows_channel_create_and_delete(tmp_path: Path) -
     try:
         await service.create_channel(make_config(enabled=False))
         await service._state.snapshot_participant_role("tg-assistant", "-100", "50", "Alice")
-        service._state.save_update_offset("tg-assistant", 42)
+        service._state.save_update_offset("tg-assistant", 7001, 42)
 
         await service.delete_channel("tg-assistant")
 
         # A late write of a stopping adapter cannot resurrect deleted state.
         with pytest.raises(ChannelNotFoundError):
-            service._state.save_update_offset("tg-assistant", 43)
+            service._state.save_update_offset("tg-assistant", 7001, 43)
         with service.database.read() as connection:
             for table in ("channel_participants", "channel_polling"):
                 assert connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
 
         await service.create_channel(make_config(enabled=False))
-        assert service._state.load_update_offset("tg-assistant") == 0
+        assert service._state.load_update_offset("tg-assistant", 7001) == 0
         assert (await service.channel_access("tg-assistant"))["groups"] == []
     finally:
         service.close()
@@ -239,10 +239,10 @@ async def test_channel_create_and_delete_write_channels_db_off_the_event_loop(
     real_unregister = service._state.unregister
 
     def held(name: str, write: Any) -> Any:
-        def call(channel_id: str) -> None:
+        def call(channel_id: str, *args: Any) -> None:
             calls.append((name, threading.get_ident() != loop_thread))
             assert release.wait(timeout=5)
-            write(channel_id)
+            write(channel_id, *args)
 
         return call
 
@@ -286,7 +286,7 @@ async def test_a_failed_registration_removes_the_created_config(
     service = make_service(tmp_path)
     storage = ChannelStorage(tmp_path)
 
-    def fail(_channel_id: str) -> None:
+    def fail(_channel_id: str, _platform: str) -> None:
         raise DatabaseUnavailableError("channels is busy")
 
     try:
@@ -314,10 +314,10 @@ async def test_a_create_cancelled_during_registration_removes_config_and_registr
     release = threading.Event()
     real_reset = service._state.reset
 
-    def reset(channel_id: str) -> None:
+    def reset(channel_id: str, platform: str) -> None:
         entered.set()
         assert release.wait(timeout=5)
-        real_reset(channel_id)
+        real_reset(channel_id, platform)
 
     monkeypatch.setattr(service._state, "reset", reset)
     try:

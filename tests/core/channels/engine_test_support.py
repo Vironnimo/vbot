@@ -89,7 +89,7 @@ def channel_state(data_dir: Path, *channel_ids: str) -> ChannelStateStore:
             write_bootstrap_marker(data_dir)
         state = ChannelStateStore.open(data_dir)
         _CHANNEL_STATES[key] = state
-    state.adopt(channel_ids or ("tg-assistant",))
+    state.adopt(dict.fromkeys(channel_ids or ("tg-assistant",)))
     return state
 
 
