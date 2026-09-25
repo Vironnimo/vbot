@@ -463,22 +463,22 @@ def _skill_manage_scenario(case_name: str) -> ProbeScenario:
         "patch_default": {
             "action": "patch",
             "name": "provider-probe",
-            "match": "Follow the probe instructions.",
-            "content": "Follow the revised probe instructions.",
+            "old_string": "Follow the probe instructions.",
+            "new_string": "Follow the revised probe instructions.",
         },
         "patch_support": {
             "action": "patch",
             "name": "provider-probe",
             "file_path": "scripts/check.py",
-            "match": "value = 1",
-            "content": "value = 2",
+            "old_string": "value = 1",
+            "new_string": "value = 2",
         },
         "patch_delete": {
             "action": "patch",
             "name": "provider-probe",
             "file_path": "references/notes.md",
-            "match": "obsolete line\n",
-            "content": "",
+            "old_string": "obsolete line\n",
+            "new_string": "",
         },
         "write_script": {
             "action": "write_file",

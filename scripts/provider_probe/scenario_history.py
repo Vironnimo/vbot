@@ -173,17 +173,17 @@ def _memory_scenario(case_name: str) -> ProbeScenario:
         "replace_user": {
             "action": "replace",
             "scope": "user",
-            "entry_id": 2,
+            "old_text": "concise answers",
             "content": "Prefers direct, concise answers.",
         },
         "replace_agent": {
             "action": "replace",
             "scope": "agent",
-            "entry_id": 2,
+            "old_text": "PowerShell",
             "content": "Workspace uses PowerShell 7.",
         },
-        "remove_user": {"action": "remove", "scope": "user", "entry_id": 2},
-        "remove_agent": {"action": "remove", "scope": "agent", "entry_id": 2},
+        "remove_user": {"action": "remove", "scope": "user", "old_text": "concise answers"},
+        "remove_agent": {"action": "remove", "scope": "agent", "old_text": "PowerShell"},
     }
     expected_arguments = memory_arguments[case_name]
     rendered_arguments = json.dumps(expected_arguments, separators=(",", ":"))

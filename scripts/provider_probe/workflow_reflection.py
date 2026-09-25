@@ -176,7 +176,10 @@ async def _probe_reflection_case(
                 if not result["ok"]:
                     violations.append("tool_call_rejected")
                 elif name == "memory" and action == "list":
-                    reads.add(("memory", target))
+                    # A list without scope shows both scopes.
+                    reads.update(
+                        ("memory", item) for item in ((target,) if target else ("user", "agent"))
+                    )
                 elif name == "skill" and not arguments:
                     reads.add(("skill", "catalog"))
                 elif name == "skill" and arguments.get("file_path"):

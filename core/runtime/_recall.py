@@ -21,6 +21,7 @@ from core.recall import (
 )
 from core.runtime.interfaces import LoggerProtocol
 from core.sessions import ChatSessionManager
+from core.settings.settings import effective_timezone_name
 from core.storage.storage import StorageManager
 from core.tools import (
     register_session_search_tool,
@@ -53,7 +54,19 @@ class RecallIntegration:
         self.backend = self._create_recall_backend(self._recall_backend_registry)
         # Closing replaced backends, kept referenced until they finish.
         self._retiring: set[asyncio.Task[None]] = set()
-        register_session_search_tool(self._tools, self.backend, self._chat_sessions)
+        self._register_session_search()
+
+    def _register_session_search(self) -> None:
+        register_session_search_tool(
+            self._tools,
+            self.backend,
+            self._chat_sessions,
+            timezone_name_loader=self._timezone_name,
+        )
+
+    def _timezone_name(self) -> str:
+        """The Settings timezone that reads search periods given without an offset."""
+        return effective_timezone_name(self._storage.load_settings())
 
     def _build_recall_backend_registry(self) -> RecallBackendRegistry:
         """Build a builtins registry with extension recall backends applied.
@@ -114,11 +127,7 @@ class RecallIntegration:
         self.backend = self._create_recall_backend(recall_registry)
         if self._tools is not None:
             self._tools.unregister("session_search")
-            register_session_search_tool(
-                self._tools,
-                self.backend,
-                self._chat_sessions,
-            )
+            self._register_session_search()
         self._retire(previous)
 
     def _retire(self, backend: RecallBackend) -> None:

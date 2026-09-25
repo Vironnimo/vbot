@@ -91,8 +91,7 @@ def test_identity_agent_prompt_assembles_blocks_in_default_layout_order(
     assert "telegram" in prompt
     assert "other-agent-channel" not in prompt
     # Skills block.
-    assert "<name>agent-cli</name>" in prompt
-    assert "<description>Delegate coding tasks</description>" in prompt
+    assert "- agent-cli: Delegate coding tasks" in prompt
     assert "news" not in prompt
     # Data blocks: SOUL + memory entries.
     assert "Soul text" in prompt

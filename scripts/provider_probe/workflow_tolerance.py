@@ -189,9 +189,9 @@ async def _skill_case(
             elif action == "write_file":
                 checks["file_effect"] = files.get(target) == expected["content"]
             elif action == "patch":
-                checks["file_effect"] = expected["match"] not in files.get(target, "") and expected[
-                    "content"
-                ] in files.get(target, "")
+                checks["file_effect"] = expected["old_string"] not in files.get(
+                    target, ""
+                ) and expected["new_string"] in files.get(target, "")
             elif action == "remove_file":
                 checks["file_effect"] = target not in files
             else:
