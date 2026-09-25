@@ -40,7 +40,7 @@ def _spelling(value: str) -> str:
     return re.sub(r"[\s_-]+", "", value.casefold())
 
 
-class _SpellingAliases(Mapping[str, str]):
+class SpellingAliases(Mapping[str, str]):
     """Field aliases that match regardless of case, "_", "-", or spaces."""
 
     def __init__(self, fields: dict[str, tuple[str, ...]]) -> None:
@@ -58,7 +58,7 @@ class _SpellingAliases(Mapping[str, str]):
         return len(self._aliases)
 
 
-_FIELD_ALIASES = _SpellingAliases(
+_FIELD_ALIASES = SpellingAliases(
     {
         "command": ("cmd", "cmdline", "command_line", "script", "shell_command", "argv"),
         "workdir": ("cwd", "dir", "directory", "working_directory", "working_dir"),
@@ -293,17 +293,15 @@ def _set_mode(arguments: dict[str, Any], wanted: str, source: str) -> None:
 
 
 def resolve_timeout(
-    timeout: float | None, timeout_ms: float | None
+    timeout: float | None, timeout_ms: float | None, *, tool_name: str = SHELL_MODEL_NAME
 ) -> tuple[float | None, str | None]:
     """Return the timeout in seconds and a note when a value was read as milliseconds."""
     if timeout_ms is not None:
         seconds = timeout_ms / 1000
         if timeout is not None and timeout not in (seconds, timeout_ms):
             raise ValueError(
-                _not_run(
-                    f"timeout ({timeout:g} s) and timeout_ms ({timeout_ms:g} ms) disagree; "
-                    "send one of them."
-                )
+                f"{tool_name} was not run: timeout ({timeout:g} s) and timeout_ms "
+                f"({timeout_ms:g} ms) disagree; send one of them."
             )
         return seconds, None
     if timeout is not None and timeout >= MILLISECOND_TIMEOUT_THRESHOLD and timeout % 1000 == 0:

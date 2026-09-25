@@ -293,7 +293,12 @@ async def bash_handler(
     argv = _shell_argv(command)
     try:
         spawned = await _spawn_command(
-            process_manager, context, argv, workdir, environment=command_environment
+            process_manager,
+            context,
+            argv,
+            workdir,
+            environment=command_environment,
+            command=command,
         )
     except BaseException:
         if handoff is not None:
@@ -677,6 +682,7 @@ async def _spawn_command(
     workdir: Path,
     *,
     environment: Callable[[], Awaitable[dict[str, str]]],
+    command: str,
 ) -> str | JsonObject:
     """Spawn the shell and return its process id, or a spawn failure envelope."""
     env = await environment()
@@ -689,6 +695,7 @@ async def _spawn_command(
             env=env,
             cwd=workdir,
             execution_owner=context.execution_owner,
+            command=command,
         )
     except FileNotFoundError:
         # The shell binary itself (pwsh/bash) was not found. This is not a
@@ -710,6 +717,7 @@ async def _spawn_command(
                 env=env,
                 cwd=workdir,
                 execution_owner=context.execution_owner,
+                command=command,
             )
         except (OSError, ValueError) as error:
             return tool_failure("process_spawn_failed", _spawn_failure_message(argv, error))
