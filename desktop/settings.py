@@ -32,7 +32,7 @@ import os
 import tempfile
 import threading
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from contextlib import suppress
 from pathlib import Path, PurePath, PurePosixPath, PureWindowsPath
 from typing import Any, TypeGuard
@@ -367,6 +367,47 @@ def write_live_hotkey_settings(hotkey: dict[str, Any], path: Path | None = None)
         section["hotkey"] = dict(hotkey)
         full[LIVE_VOICE_KEY] = section
         _write_settings_unlocked(full, resolved_path)
+
+
+def read_section(key: str, path: Path | None = None) -> dict[str, Any]:
+    """Return an isolated copy of one raw top-level settings object.
+
+    A missing, non-object, or unreadable section yields an empty dict; the
+    section's owner interprets and validates its fields.
+    """
+
+    section = read_settings(path).get(key)
+    if not isinstance(section, dict):
+        return {}
+    return copy.deepcopy(section)
+
+
+def update_section(
+    key: str,
+    mutate: Callable[[dict[str, Any]], dict[str, Any]],
+    path: Path | None = None,
+) -> dict[str, Any]:
+    """Apply ``mutate`` to one top-level section as a serialized transaction.
+
+    ``mutate`` receives an isolated copy of the stored section (``{}`` when it
+    is missing or not an object) and returns the complete new section. Other
+    settings keys are preserved, an unchanged section is not rewritten, and an
+    exception from ``mutate`` or an unreadable settings file leaves the file
+    untouched. Returns an isolated copy of the stored section.
+    """
+
+    resolved_path = _resolve_settings_path(path)
+    with _settings_lock(resolved_path):
+        full = _read_settings_unlocked(resolved_path)
+        stored = full.get(key)
+        current = copy.deepcopy(stored) if isinstance(stored, dict) else {}
+        updated = mutate(copy.deepcopy(current))
+        if not isinstance(updated, dict):
+            raise TypeError(f"Settings section {key!r} must be an object")
+        if updated != current:
+            full[key] = copy.deepcopy(updated)
+            _write_settings_unlocked(full, resolved_path)
+        return copy.deepcopy(updated)
 
 
 def _write_section(key: str, value: Any, path: Path | None) -> None:
