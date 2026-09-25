@@ -10,7 +10,6 @@ from core.sessions import _store_codec, _store_fts, _store_mutations, _store_val
 from core.sessions._io import _encode_chat_history_cursor
 from core.sessions._metadata import _RUN_KIND_VALUES, _completion_activity_from_state
 from core.sessions._types import (
-    SESSION_TERMINAL_RUN_STATUSES,
     JsonObject,
     SessionAddress,
     SessionRunAdmission,
@@ -224,17 +223,17 @@ def finish_run(
             (session_key, run_key),
         )
     latest = (
-        (completion.run_id, completion.status, completed_at)
+        (run_key, completion.status, completed_at)
         if completion.contributes_to_activity
         else (
-            state["latest_completion_run_id"],
+            state["latest_completion_run_key"],
             state["latest_completion_status"],
             state["latest_completion_at"],
         )
     )
     connection.execute(
         "UPDATE sessions SET next_seq = ?, last_activity_at = ?, "
-        "last_entry_id = ?, latest_completion_run_id = ?, latest_completion_status = ?, "
+        "last_entry_id = ?, latest_completion_run_key = ?, latest_completion_status = ?, "
         "latest_completion_at = ?, history_revision = history_revision + 1, "
         "state_revision = state_revision + 1 WHERE session_key = ?",
         (seq + 1, completed_at, summary.id, *latest, session_key),
@@ -280,45 +279,29 @@ def recover_interrupted_runs(connection: sqlite3.Connection) -> None:
         )
 
 
-def record_terminal_run(
-    connection: sqlite3.Connection,
-    address: SessionAddress,
-    *,
-    run_id: str,
-    status: str,
-    timestamp: str,
-) -> None:
-    """Make one terminal Run the Session's latest completion."""
-    if not run_id or status not in SESSION_TERMINAL_RUN_STATUSES or not timestamp:
-        raise ChatSessionError("invalid terminal Run completion")
-    completed_at = _store_values._timestamp(timestamp, "Run completion")
-    state = _store_values._require_live(connection, address)
-    if (
-        state["latest_completion_run_id"],
-        state["latest_completion_status"],
-        state["latest_completion_at"],
-    ) == (run_id, status, completed_at):
-        return
-    connection.execute(
-        "UPDATE sessions SET latest_completion_run_id = ?, latest_completion_status = ?, "
-        "latest_completion_at = ?, state_revision = state_revision + 1 WHERE session_key = ?",
-        (run_id, status, completed_at, state["session_key"]),
-    )
+def _completion_activity(connection: sqlite3.Connection, session_key: int) -> sqlite3.Row:
+    row: sqlite3.Row = connection.execute(
+        f"SELECT {_store_values._COMPLETION_ACTIVITY_COLUMNS} FROM sessions AS s "
+        "WHERE s.session_key = ?",
+        (session_key,),
+    ).fetchone()
+    return row
 
 
 def mark_terminal_run_read(
     connection: sqlite3.Connection, address: SessionAddress, run_id: str
 ) -> tuple[JsonObject, bool]:
     """Mark the latest completion read when it is *run_id*; return the activity."""
-    state = _store_values._require_live(connection, address)
+    session_key = int(_store_values._require_live(connection, address)["session_key"])
+    activity = _completion_activity(connection, session_key)
     marked = (
-        state["latest_completion_run_id"] == run_id and state["read_completion_run_id"] != run_id
+        activity["latest_completion_run_id"] == run_id and not activity["latest_completion_read"]
     )
     if marked:
         connection.execute(
-            "UPDATE sessions SET read_completion_run_id = ?, state_revision = state_revision + 1 "
-            "WHERE session_key = ?",
-            (run_id, state["session_key"]),
+            "UPDATE sessions SET read_completion_run_key = latest_completion_run_key, "
+            "state_revision = state_revision + 1 WHERE session_key = ?",
+            (session_key,),
         )
-        state = _store_values._state_by_key(connection, int(state["session_key"]))
-    return _completion_activity_from_state(state), marked
+        activity = _completion_activity(connection, session_key)
+    return _completion_activity_from_state(activity), marked

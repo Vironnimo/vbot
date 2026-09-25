@@ -188,7 +188,8 @@ class FileSelection:
                     )
                 try:
                     self.db.execute(
-                        "INSERT OR IGNORE INTO entries VALUES (?, ?, ?, ?, ?, ?)",
+                        "INSERT OR IGNORE INTO entries (identity, path, directory, modified, "
+                        "accessed, created) VALUES (?, ?, ?, ?, ?, ?)",
                         (
                             os.path.normcase(raw),
                             raw,

@@ -895,6 +895,7 @@ class _SessionConversion:
         self._materialize_checkpoints(own)
         self._write_session(fork)
         run_keys = self._write_runs(runs)
+        self._write_completion(run_keys)
         written = self._write_records(own, run_keys)
         self._settle_calls()
         current = list(segments or ())
@@ -1338,7 +1339,6 @@ class _SessionConversion:
         if records_end > next_seq:
             self.issue(f"next seq {next_seq} raised to {records_end} past its last record")
             next_seq = records_end
-        latest, read_run_id = self._activity()
         columns = {
             "session_key": self.key,
             "generation_id": self.generation_id,
@@ -1361,10 +1361,6 @@ class _SessionConversion:
             **dict(
                 zip(_store_values._METADATA_WRITE_COLUMNS, metadata.storage.columns, strict=True)
             ),
-            "latest_completion_run_id": None if latest is None else latest[0],
-            "latest_completion_status": None if latest is None else latest[1],
-            "latest_completion_at": None if latest is None else latest[2],
-            "read_completion_run_id": read_run_id,
             "prompt_cache_affinity_id": metadata.affinity,
             "seen_skills_initialized": int(metadata.seen_skills is not None),
         }
@@ -1389,6 +1385,33 @@ class _SessionConversion:
         self.tally.count("prompt_pins", len(metadata.pins))
         if metadata.affinity is not None:
             self.tally.count("prompt_cache_affinities")
+
+    def _write_completion(self, run_keys: Mapping[str, int]) -> None:
+        """Point the latest completion and its read mark at Runs stored in this Session."""
+        latest, read_run_id = self._activity()
+        latest_key = read_key = None
+        if latest is not None:
+            latest_key = run_keys.get(latest[0])
+            if latest_key is None:
+                self.issue(f"latest completion dropped: Run {latest[0]} is not in this Session")
+                latest = None
+        if read_run_id is not None:
+            read_key = run_keys.get(read_run_id)
+            if read_key is None:
+                self.issue(f"read completion dropped: Run {read_run_id} is not in this Session")
+        if latest is None and read_key is None:
+            return
+        self.target.execute(
+            "UPDATE sessions SET latest_completion_run_key = ?, latest_completion_status = ?, "
+            "latest_completion_at = ?, read_completion_run_key = ? WHERE session_key = ?",
+            (
+                latest_key,
+                None if latest is None else latest[1],
+                None if latest is None else latest[2],
+                read_key,
+                self.key,
+            ),
+        )
 
     def _activity(self) -> tuple[tuple[str, str, str] | None, str | None]:
         activity = _json_value(self.row["activity_json"])

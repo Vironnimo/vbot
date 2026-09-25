@@ -23,7 +23,7 @@ from core.subagents.subagents import SubAgentCoordinator
 from core.subagents.subagents import _handle_subagent as _handle_subagent_impl
 from core.subagents.tracker import SubAgentBatchTracker
 from core.tools.tools import ToolContext
-from tests.core.sessions.history_fixtures import complete_run
+from tests.core.sessions.history_fixtures import complete_run, settle_run
 from tests.core.subagents.subagents_test_support import (
     FakeRunManager,
     JsonObject,
@@ -88,11 +88,11 @@ async def test_foreground_result_keeps_handle_and_child_unread_until_parent_pers
     child_session_id = result["data"]["session_id"]
     child_run_id = manager.started[0]["run"].id
     work_id = result["data"]["id"]
-    runtime.chat_sessions.record_terminal_run(
+    settle_run(
+        runtime.chat_sessions,
         _address("worker", child_session_id),
         child_run_id,
-        "completed",
-        "2026-07-22T10:00:00+00:00",
+        completed_at="2026-07-22T10:00:00+00:00",
     )
     manager.parent_run.request_cancel(reason="user")
     await asyncio.sleep(0)
@@ -321,12 +321,6 @@ async def test_status_result_keeps_handle_and_child_unread_until_parent_persiste
                 "duration_ms": 1000,
             },
         ),
-    )
-    runtime.chat_sessions.record_terminal_run(
-        _address("worker", "child-session"),
-        "child-run",
-        "completed",
-        "2026-07-22T10:00:00+00:00",
     )
     persisted_callbacks: list[Any] = []
     context = make_context(result_persisted_hook=persisted_callbacks.append)

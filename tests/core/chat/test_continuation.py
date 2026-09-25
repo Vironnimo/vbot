@@ -38,6 +38,16 @@ def _record(record_type: str, run_id: str = "run-one", **fields: Any) -> dict[st
     }
 
 
+def _calls(step: int, *calls: tuple[str, str]) -> dict[str, Any]:
+    """An Assistant boundary that starts the Tool *calls*, each an (id, name) pair."""
+    return _record(
+        "assistant_boundary",
+        step=step,
+        message_id=f"assistant-{step}",
+        tool_calls=[{"id": call_id, "name": name} for call_id, name in calls],
+    )
+
+
 class _ManualClock:
     def __init__(self) -> None:
         self.now = 0.0
@@ -378,8 +388,7 @@ def test_prompt_warns_before_repeating_unknown_write_edit_or_bash(tmp_path: Path
             origin_run_id="run-one",
             request="change the repository",
         ),
-        _record("tool_started", tool_call_id="write-1", name="write"),
-        _record("tool_started", tool_call_id="read-1", name="read"),
+        _calls(1, ("write-1", "write"), ("read-1", "read")),
         _record("run_interrupted", cause="process_restart"),
     ]
     state = _stored_state(tmp_path, records)
@@ -420,8 +429,8 @@ def test_external_text_cannot_close_the_checkpoint_or_reminder_frame(
                 reasoning=reasoning,
                 content=f"Partial {injection}",
                 interrupted=True,
+                tool_calls=[{"id": f"call {injection}", "name": "write"}],
             ),
-            _record("tool_started", tool_call_id=f"call {injection}", name="write"),
             _record("run_interrupted", cause="network"),
         ],
     )
@@ -462,11 +471,7 @@ def test_fold_references_ten_completed_tools_and_keeps_one_dangling_unknown(
     for index in range(10):
         records.extend(
             [
-                _record(
-                    "tool_started",
-                    tool_call_id=f"read-{index}",
-                    name="read",
-                ),
+                _calls(index + 1, (f"read-{index}", "read")),
                 _record(
                     "tool_result",
                     tool_call_id=f"read-{index}",
@@ -477,7 +482,7 @@ def test_fold_references_ten_completed_tools_and_keeps_one_dangling_unknown(
         )
     records.extend(
         [
-            _record("tool_started", tool_call_id="mutation-dangling", name=tool_name),
+            _calls(11, ("mutation-dangling", tool_name)),
             _record("run_interrupted", cause="process_restart"),
         ]
     )
@@ -515,7 +520,7 @@ def test_prompt_truncation_keeps_original_request_operations_warning_and_marker(
             reasoning_delta="old plan " * 2_000,
             content_delta="partial",
         ),
-        _record("tool_started", tool_call_id="bash-1", name="bash"),
+        _calls(1, ("bash-1", "bash")),
         _record("run_interrupted", cause="internal"),
     ]
     state = _stored_state(tmp_path, records)

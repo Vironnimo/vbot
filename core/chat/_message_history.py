@@ -11,7 +11,6 @@ from core.chat import messages as _records
 from core.chat.errors import ChatError, ChatMessageValidationError
 from core.sessions import (
     ChatSession,
-    active_session_messages,
     is_skill_context_note,
     skill_tool_activation,
 )
@@ -233,16 +232,14 @@ def latest_compaction_checkpoint(
 
 
 def history_available(messages: Sequence[_records.ChatMessage]) -> bool:
-    """Return whether persisted Session history grants the History tool."""
-    return any(
-        message.role == "compaction_checkpoint" for message in active_session_messages(messages)
-    )
+    """Return whether the current view grants the History tool."""
+    return any(message.role == "compaction_checkpoint" for message in messages)
 
 
 def checkpoint_ordinal(messages: Sequence[_records.ChatMessage], checkpoint_id: str) -> int | None:
     """Return a checkpoint's one-based chronological ordinal."""
     ordinal = 0
-    for message in active_session_messages(messages):
+    for message in messages:
         if message.role != "compaction_checkpoint":
             continue
         ordinal += 1
@@ -280,7 +277,6 @@ def effective_compaction_messages(
     messages: list[_records.ChatMessage],
 ) -> list[_records.ChatMessage]:
     """Return the latest checkpoint projection plus messages appended after it."""
-    messages = active_session_messages(messages)
     checkpoint = latest_compaction_checkpoint(messages)
     if checkpoint is None:
         return list(messages)
