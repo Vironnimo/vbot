@@ -506,7 +506,10 @@ class ToolRegistry:
         allowed_tools: Sequence[str] | None = None,
     ) -> JsonObject:
         """Execute a registered allowed tool through an async interface."""
-        tool = self.get(context.tool_name)
+        try:
+            tool = self.get(context.tool_name)
+        except ToolNotFoundError:
+            raise ToolNotFoundError(self._unknown_tool_message(context, allowed_tools)) from None
         if tool.session_scoped and context.tool_name not in context.session_tool_grants:
             raise SessionToolUnavailableError(f"Session tool unavailable: {context.tool_name}")
         if (
@@ -553,6 +556,24 @@ class ToolRegistry:
         if inspect.isawaitable(result):
             result = await result
         return self.validate_result(context.tool_name, result)
+
+    def _unknown_tool_message(
+        self, context: ToolContext, allowed_tools: Sequence[str] | None
+    ) -> str:
+        """Name the Tools this caller can use instead of an unknown one."""
+        available = [
+            model_tool_name(tool.name)
+            for tool in self.list_tools(allowed_tools, ready_only=True)
+            if not tool.deferred
+            and (not tool.session_scoped or tool.name in context.session_tool_grants)
+            and (not tool.requires_opt_in or tool.name in (allowed_tools or ()))
+        ]
+        if not available:
+            return f"Unknown Tool: {context.tool_name}. No Tools are available in this Run."
+        return (
+            f"Unknown Tool: {context.tool_name}. Call one of the available Tools instead: "
+            f"{', '.join(available)}."
+        )
 
     def _model_facing_tools(
         self,

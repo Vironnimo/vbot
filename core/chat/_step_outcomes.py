@@ -24,7 +24,7 @@ from core.providers.adapter import (
     TerminalOutcome,
 )
 from core.sessions import ToolResultFacts
-from core.tools import ToolNotFoundError
+from core.tools import ToolNotFoundError, called_tool_name
 from core.utils.errors import ProviderError
 
 MAX_TOOL_ITERATIONS = 1000
@@ -75,6 +75,43 @@ def _prepare_completed_assistant(
         completed, usage={**(completed.usage or {}), "cost": price_usage(completed.usage, pricing)}
     )
     return _with_assistant_output_files(completed, cwd=output_cwd)
+
+
+def _with_offered_tool_names(
+    assistant_message: ChatMessage, offered: Sequence[str], registry: Any
+) -> ChatMessage:
+    """Store each Tool Call under the offered Tool its called name clearly means.
+
+    Models call Tools by names from other harnesses or with a namespace prefix
+    (``Read``, ``functions.bash``, ``Grep``). Resolving before persistence makes
+    history, dispatch and Run events agree, and the next request replays the
+    call under the name the Model should use.
+    """
+    tool_calls = assistant_message.tool_calls
+    if not tool_calls or not offered:
+        return assistant_message
+    registered = _RegisteredNames(registry)
+    resolved = [
+        replace(call, name=called_tool_name(call.name, offered, registered=registered))
+        for call in tool_calls
+    ]
+    if all(new.name == old.name for new, old in zip(resolved, tool_calls, strict=True)):
+        return assistant_message
+    return replace(assistant_message, tool_calls=resolved)
+
+
+@dataclass(frozen=True)
+class _RegisteredNames:
+    """Membership view of the Tool registry for name resolution."""
+
+    registry: Any
+
+    def __contains__(self, name: object) -> bool:
+        try:
+            self.registry.get(name)
+        except (KeyError, ToolNotFoundError):
+            return False
+        return True
 
 
 @dataclass
