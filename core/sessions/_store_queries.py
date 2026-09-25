@@ -391,7 +391,8 @@ def list_history_revisions(
     """Return every live Session version of one scope with its Recall visibility."""
     rows = connection.execute(
         "SELECT s.project_id, s.agent_id, s.session_id, s.generation_id, s.history_revision, "
-        f"{_store_values._RECALL_VISIBILITY_SQL} AS recall_visibility FROM sessions AS s "
+        f"s.session_key, {_store_values._RECALL_VISIBILITY_SQL} AS recall_visibility "
+        "FROM sessions AS s "
         "WHERE s.state = 'live' AND s.project_id = ? AND s.agent_id = ? ORDER BY s.session_id",
         (project_id or "", agent_id),
     ).fetchall()
@@ -401,6 +402,7 @@ def list_history_revisions(
             str(row["generation_id"]),
             int(row["history_revision"]),
             cast("SessionRecallVisibility", str(row["recall_visibility"])),
+            int(row["session_key"]),
         )
         for row in rows
     ]

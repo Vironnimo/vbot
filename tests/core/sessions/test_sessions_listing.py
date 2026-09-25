@@ -662,6 +662,16 @@ def test_recall_visibility_is_classified_in_sql(manager) -> None:
     } == expected
 
 
+def test_history_revisions_order_sessions_by_creation(manager) -> None:
+    for session_id in ("b-first", "a-second", "c-third"):
+        manager.create("coder", session_id=session_id)
+
+    revisions = manager.list_history_revisions("coder")
+    order = {revision.address.session_id: revision.creation_order for revision in revisions}
+
+    assert order["b-first"] < order["a-second"] < order["c-third"]
+
+
 @pytest.mark.parametrize("include_channels", [False, True])
 def test_channel_filter_counts_pages_and_preserves_required_session(manager, include_channels):
     for index, session_id in enumerate(["old", "telegram", "new", "discord"]):
