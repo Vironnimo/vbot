@@ -79,6 +79,9 @@ remain in force (`statistics.py`, `index.py`; `test_statistics_groups.py`,
 
 ## Constraints & Gotchas
 
+- Every report retry creates a fresh accumulator; totals from an incomplete
+  aggregation are discarded before rebuilding or using a transient index
+  (`tests/core/statistics/test_index.py`).
 - **The SQLite index is not a second source of truth:** replace-not-migrate projection version, deletable on failure, must stay fully rebuildable - no user-owned or non-derivable data in it. Source cursors validate the processed prefix; mismatches rebuild rather than repair.
 - **Temp tables shadow fact tables:** group usage creates temp tables with the fact tables' names, and unqualified names resolve to `temp` first. Section SQL must keep fact-table names unqualified; only `materialize_run_slices` reads `main.` explicitly.
 - Derived fallback detection (>=2 distinct models per run group) is best-effort and labelled derived - the authoritative event is in-memory only.
