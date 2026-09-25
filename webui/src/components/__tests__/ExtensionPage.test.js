@@ -662,6 +662,95 @@ it('keeps file links from every loaded history page and rejects stale participan
   ]);
 });
 
+it.each([
+  ['group-a', 'participant-b'],
+  ['group-b', 'participant-a'],
+])(
+  'opens streamed file links only for the selected history scope (switch to %s/%s)',
+  async (groupId, participantId) => {
+    const api = await import('$lib/api.js');
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null);
+    let transport;
+    api.openExtensionPageRun.mockResolvedValue({
+      stream: { url: '/api/extension-runs/current' },
+      participant_id: 'participant-a',
+      replay_through_sequence: 0,
+    });
+    api.subscribeRunEvents.mockImplementation((_url, handlers) => {
+      transport = handlers;
+      return { close: vi.fn() };
+    });
+    history.mockResolvedValue({ messages: [], file_urls: [] });
+    component = mount(ExtensionPageHost, {
+      target: document.body,
+      props: { initialDescriptor: descriptor },
+    });
+    flushSync();
+    const { child, sent, init } = loadFrame();
+    message(child, { ...init, type: 'vbot.extension.ready' });
+    const call = async (id, method, params) => {
+      message(child, {
+        ...init,
+        type: 'vbot.extension.call',
+        id,
+        method,
+        params,
+      });
+      await vi.waitFor(() =>
+        expect(sent.mock.calls.some(([data]) => data.id === id)).toBe(true),
+      );
+    };
+    await call('history-a', 'history.read', {
+      group_id: 'group-a',
+      participant_id: 'participant-a',
+    });
+    await call('stream-a', 'run.subscribe', {
+      group_id: 'group-a',
+      run_id: 'run-a',
+    });
+    const stream = (sequence, token) =>
+      transport.onEvent({
+        type: 'assistant_output',
+        data: {
+          run_id: 'run-a',
+          sequence,
+          payload: {
+            message: {
+              content: `[result](/api/files/${token}.signature) [unverified](/api/files/forged.signature)`,
+            },
+          },
+          file_urls: [`/api/files/${token}.signature`],
+        },
+      });
+    stream(1, 'fresh');
+    await call('open-fresh', 'link.open', {
+      url: '/api/files/fresh.signature',
+    });
+    expect(open).toHaveBeenCalledExactlyOnceWith(
+      `${window.location.origin}/api/files/fresh.signature`,
+      '_blank',
+      'noopener,noreferrer',
+    );
+    expect(history).toHaveBeenCalledOnce();
+    await call('open-forged', 'link.open', {
+      url: '/api/files/forged.signature',
+    });
+    await call('history-next', 'history.read', {
+      group_id: groupId,
+      participant_id: participantId,
+    });
+    stream(2, 'late');
+    await call('open-late', 'media.open', { url: '/api/files/late.signature' });
+    await call('open-old', 'link.open', { url: '/api/files/fresh.signature' });
+    expect(open).toHaveBeenCalledOnce();
+    expect(
+      sent.mock.calls
+        .filter(([data]) => data.type === 'vbot.extension.error')
+        .map(([data]) => data.id),
+    ).toEqual(['open-forged', 'open-late', 'open-old']);
+  },
+);
+
 it('forwards Tool cancellation only from the current page frame', async () => {
   const api = await import('$lib/api.js');
   component = mount(ExtensionPageHost, {

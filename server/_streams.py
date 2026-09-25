@@ -18,7 +18,8 @@ from server.events import (
 )
 from server.file_delivery import FileDelivery
 from server.rpc.event_bridge import publish_resource_changed
-from server.rpc.payloads import remove_opaque_provider_metadata
+from server.rpc.operations_methods import FILE_PREVIEW_WORKERS
+from server.rpc.payloads import projected_file_urls, remove_opaque_provider_metadata
 
 JsonObject = dict[str, Any]
 
@@ -274,6 +275,7 @@ async def _sse_run_events(
     after_sequence: int = 0,
     heartbeat_interval_seconds: float = SSE_HEARTBEAT_INTERVAL_SECONDS,
     file_delivery: FileDelivery | None = None,
+    include_file_urls: bool = False,
 ) -> AsyncGenerator[str, None]:
     async with aclosing(run.subscribe(after_sequence=after_sequence)) as events:
         event_iterator = events.__aiter__()
@@ -302,6 +304,10 @@ async def _sse_run_events(
                     event.to_dict(),
                     file_delivery=file_delivery,
                 )
+                if include_file_urls:
+                    data["file_urls"] = await FILE_PREVIEW_WORKERS.run(
+                        projected_file_urls, data, file_delivery
+                    )
                 yield (
                     f"id: {event.sequence}\n"
                     f"event: {event.type}\n"

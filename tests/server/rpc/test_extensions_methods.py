@@ -1008,7 +1008,10 @@ async def test_extension_page_run_reports_verified_replay_watermark(scenario: st
             self.reads += 1
             if scenario == "retired":
                 registry.current = False
-            return SimpleNamespace(run=run)
+            return SimpleNamespace(
+                run=run,
+                record=SimpleNamespace(owner=SimpleNamespace(participant_id="participant-a")),
+            )
 
     class Registry(_PageRegistry):
         def page_declarations(self) -> list[tuple[Any, Any, Path]]:
@@ -1047,5 +1050,9 @@ async def test_extension_page_run_reports_verified_replay_watermark(scenario: st
         return
     assert result == {
         "ok": True,
-        "result": {"stream": {"url": "/api/extension-runs/test"}, "replay_through_sequence": 14},
+        "result": {
+            "stream": {"url": "/api/extension-runs/test"},
+            "replay_through_sequence": 14,
+            "participant_id": "participant-a",
+        },
     }
