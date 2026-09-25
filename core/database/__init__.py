@@ -8,7 +8,8 @@ format generations), the canonical and disposable profiles, the data-store
 marker and maintenance guard, data snapshots (every canonical database plus
 the JSON document set), quarantine, recovery incidents, automatic restore and
 the updater's guarded pre-update snapshot rollback. See
-``.vorch/domain-maps/database.md``.
+``.vorch/domain-maps/database.md``. :class:`DisposableDatabase` and
+:func:`projection_failure` serve owners of disposable projections at runtime.
 """
 
 from core.database._connections import (
@@ -19,6 +20,7 @@ from core.database._connections import (
     required_journal_mode,
 )
 from core.database.database import Database, open_database, open_offline_database
+from core.database.disposable import DisposableDatabase, ProjectionFailure, projection_failure
 from core.database.errors import (
     DatabaseCorruptError,
     DatabaseError,
@@ -100,10 +102,12 @@ __all__ = [
     "DatabaseSchemaMismatchError",
     "DatabaseSpec",
     "DatabaseUnavailableError",
+    "DisposableDatabase",
     "IncidentConflictError",
     "MaintenanceOperation",
     "MarkerEntry",
     "Migration",
+    "ProjectionFailure",
     "SnapshotFacts",
     "SnapshotRestore",
     "UnregisteredDatabase",
@@ -127,6 +131,7 @@ __all__ = [
     "maintenance",
     "open_database",
     "open_offline_database",
+    "projection_failure",
     "read_incident",
     "read_maintenance",
     "read_marker",

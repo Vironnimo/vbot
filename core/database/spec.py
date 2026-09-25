@@ -83,7 +83,10 @@ class DatabaseSpec:
     declares; the kernel drops them on open. ``after_open`` runs after the
     reconcile and migrations and manages its own transactions (for example FTS
     readiness). ``health`` reports owner state for data-store status from a
-    read transaction.
+    read transaction. ``connection_setup`` runs on every connection the kernel
+    opens for the database, the writer and each pooled reader, before any other
+    statement, for example to load a SQLite extension its tables or queries need;
+    it must not write.
 
     Canonical databases live at :func:`canonical_database_path` for their name
     and are registered in the data directory's marker. Disposable databases
@@ -102,6 +105,7 @@ class DatabaseSpec:
     snapshot_facts: SnapshotFacts | None = None
     health: Callable[[sqlite3.Connection], DatabaseHealth] | None = None
     projection_version: int | None = None
+    connection_setup: Callable[[sqlite3.Connection], None] | None = None
 
     def __post_init__(self) -> None:
         validate_database_name(self.name)

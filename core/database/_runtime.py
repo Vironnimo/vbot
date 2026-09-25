@@ -76,10 +76,12 @@ class ConnectionRuntime:
         synchronous: Synchronous,
         application_id: int,
         format_generation: int,
+        connection_setup: Callable[[sqlite3.Connection], None] | None = None,
     ) -> None:
         self.path = Path(path)
         self.name = name
         self._synchronous = synchronous
+        self._connection_setup = connection_setup
         self._application_id = application_id
         self._format_generation = format_generation
         self._write_metric = f"sqlite.{name}.write"
@@ -127,6 +129,8 @@ class ConnectionRuntime:
                     timeout=BUSY_TIMEOUT_MS / 1000,
                 )
                 connection.row_factory = sqlite3.Row
+                if self._connection_setup is not None:
+                    self._connection_setup(connection)
                 connection.execute("PRAGMA foreign_keys=ON")
                 connection.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
                 connection.execute(f"PRAGMA cache_size=-{WRITER_CACHE_KIB}")
@@ -300,6 +304,8 @@ class ConnectionRuntime:
                 timeout=5.0,
             )
             connection.row_factory = sqlite3.Row
+            if self._connection_setup is not None:
+                self._connection_setup(connection)
             connection.execute("PRAGMA query_only=ON")
             connection.execute("PRAGMA foreign_keys=ON")
             connection.execute(f"PRAGMA cache_size=-{READER_CACHE_KIB}")

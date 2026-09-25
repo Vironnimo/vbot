@@ -69,6 +69,7 @@ def projection_spec(
     projection_version: int = 1,
     schema_sql: str = NOTES_SCHEMA_SQL,
     format_generation: int = 1,
+    connection_setup: Callable[[sqlite3.Connection], None] | None = None,
 ) -> DatabaseSpec:
     """A disposable database that may live anywhere."""
     return DatabaseSpec(
@@ -79,6 +80,7 @@ def projection_spec(
         format_generation=format_generation,
         schema_sql=schema_sql,
         projection_version=projection_version,
+        connection_setup=connection_setup,
     )
 
 

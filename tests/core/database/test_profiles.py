@@ -13,9 +13,13 @@ from core.database import (
     APPLICATION_IDS,
     CANONICAL,
     DISPOSABLE,
+    DatabaseCorruptError,
+    DatabaseSchemaMismatchError,
     DatabaseSpec,
     DatabaseUnavailableError,
+    DisposableDatabase,
     open_database,
+    projection_failure,
     read_marker,
 )
 from core.database.spec import canonical_relative_path
@@ -139,6 +143,108 @@ def test_a_projection_open_in_this_process_is_never_deleted(tmp_path: Path) -> N
         assert note_bodies(database) == ["in use"]
     finally:
         database.close()
+
+
+def test_connection_setup_prepares_the_writer_and_every_pooled_reader(tmp_path: Path) -> None:
+    path = tmp_path / "index.db"
+    prepared: list[sqlite3.Connection] = []
+
+    def setup(connection: sqlite3.Connection) -> None:
+        connection.create_function("projection_marker", 0, lambda: "ready")
+        prepared.append(connection)
+
+    open_database(projection_spec(path, connection_setup=setup)).close()
+    # Pooled readers exist only in WAL mode, which the kernel keeps on a file
+    # that already uses it.
+    raw_execute(path, "PRAGMA journal_mode = WAL")
+    prepared.clear()
+    database = open_database(projection_spec(path, connection_setup=setup))
+    try:
+        assert database.writer.execute("SELECT projection_marker()").fetchone()[0] == "ready"
+        assert database.wal_active()
+        with database.read() as connection:
+            assert connection is not database.writer
+            assert connection.execute("SELECT projection_marker()").fetchone()[0] == "ready"
+        assert len(prepared) == 2
+    finally:
+        database.close()
+
+
+def test_a_disposable_database_is_discarded_at_runtime_and_rebuilt_empty(
+    tmp_path: Path,
+) -> None:
+    projection = DisposableDatabase(projection_spec(tmp_path / "index.db"))
+    first = projection.get()
+    add_note(first, "derived")
+    assert projection.get() is first
+
+    projection.discard()
+
+    assert first.is_closed()
+    rebuilt = projection.get()
+    try:
+        assert rebuilt is not first
+        assert note_bodies(rebuilt) == []
+        assert rebuilt.database_id != first.database_id
+    finally:
+        projection.close()
+    with pytest.raises(DatabaseUnavailableError, match="closed"):
+        projection.get()
+
+
+def test_a_disposable_database_open_in_another_handle_is_never_discarded(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "index.db"
+    projection = DisposableDatabase(projection_spec(path))
+    other = open_database(projection_spec(path))
+    try:
+        add_note(other, "in use")
+        with pytest.raises(DatabaseUnavailableError, match="still open"):
+            projection.discard()
+        assert note_bodies(other) == ["in use"]
+    finally:
+        other.close()
+        projection.close()
+
+
+def test_projection_failures_separate_contention_unavailability_and_damage(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "index.db"
+    database = open_database(projection_spec(path))
+    try:
+        with closing(sqlite3.connect(path, isolation_level=None, timeout=0)) as holder:
+            holder.execute("BEGIN EXCLUSIVE")
+            with pytest.raises(DatabaseUnavailableError) as busy:
+                add_note_with_patience(database, patience_s=0.1)
+            holder.execute("ROLLBACK")
+        with pytest.raises(sqlite3.OperationalError) as missing:
+            database.write(lambda connection: connection.execute("SELECT * FROM missing"))
+    finally:
+        database.close()
+
+    assert projection_failure(busy.value) == "busy"
+    assert projection_failure(sqlite3.OperationalError("database is locked")) == "busy"
+    assert projection_failure(DatabaseUnavailableError("index is closed")) == "unavailable"
+    assert projection_failure(sqlite3.OperationalError("database or disk is full")) == (
+        "unavailable"
+    )
+    assert projection_failure(missing.value) == "rebuild"
+    assert projection_failure(DatabaseCorruptError("damaged")) == "rebuild"
+    assert projection_failure(DatabaseSchemaMismatchError("index", "table notes", "differs")) == (
+        "rebuild"
+    )
+    assert projection_failure(sqlite3.IntegrityError("UNIQUE constraint failed")) == "rebuild"
+    assert projection_failure(sqlite3.ProgrammingError("closed database")) is None
+    assert projection_failure(ValueError("owner bug")) is None
+
+
+def add_note_with_patience(database, *, patience_s: float) -> None:
+    database.write(
+        lambda connection: connection.execute("INSERT INTO notes (body) VALUES ('late')"),
+        patience_s=patience_s,
+    )
 
 
 def test_spec_validation_rejects_inconsistent_declarations(tmp_path: Path) -> None:
