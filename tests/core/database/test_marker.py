@@ -25,6 +25,7 @@ from core.database import (
     open_offline_database,
     read_maintenance,
     read_marker,
+    unregister_database,
     write_bootstrap_marker,
 )
 from core.database import marker as marker_module
@@ -42,7 +43,7 @@ def _marker_payload(data_dir: Path) -> dict[str, Any]:
     return payload
 
 
-def test_bootstrap_marker_has_the_closed_shape(data_dir: Path) -> None:
+def test_bootstrap_marker_lists_no_database(data_dir: Path) -> None:
     assert _marker_payload(data_dir) == {"databases": {}, "format_version": 1}
     marker = read_marker(data_dir)
     assert marker is not None
@@ -63,7 +64,8 @@ def test_first_open_creates_and_registers_the_database(data_dir: Path) -> None:
 @pytest.mark.parametrize(
     "payload",
     [
-        {"format_version": 1, "databases": {}, "state": "ready"},
+        {"databases": {}},
+        {"format_version": 1},
         {"format_version": 2, "databases": {}},
         {"format_version": True, "databases": {}},
         {"format_version": 1, "databases": []},
@@ -79,25 +81,23 @@ def test_first_open_creates_and_registers_the_database(data_dir: Path) -> None:
             "format_version": 1,
             "databases": {"notes": {"database_id": "a" * 32, "format_generation": 0}},
         },
-        {
-            "format_version": 1,
-            "databases": {
-                "notes": {"database_id": "a" * 32, "format_generation": 1, "state": "ready"}
-            },
-        },
+        {"format_version": 1, "databases": {"notes": {"database_id": "a" * 32}}},
     ],
     ids=[
-        "extra-key",
+        "missing-format",
+        "missing-databases",
         "newer-format",
         "boolean-format",
         "database-list",
         "invalid-name",
         "invalid-id",
         "invalid-generation",
-        "extra-entry-key",
+        "missing-entry-generation",
     ],
 )
-def test_marker_schema_is_closed(data_dir: Path, payload: dict) -> None:
+def test_a_marker_with_a_missing_invalid_or_newer_known_field_is_refused(
+    data_dir: Path, payload: dict
+) -> None:
     (data_dir / MARKER_FILE_NAME).write_text(json.dumps(payload), encoding="utf-8")
 
     with pytest.raises(DatabaseFormatError):
@@ -105,6 +105,32 @@ def test_marker_schema_is_closed(data_dir: Path, payload: dict) -> None:
     with pytest.raises(DatabaseFormatError):
         open_database(notes_spec(data_dir))
     assert not notes_spec(data_dir).path.exists()
+
+
+def test_an_older_vbot_keeps_the_fields_a_newer_one_added_to_the_marker(
+    data_dir: Path,
+) -> None:
+    open_database(notes_spec(data_dir)).close()
+    open_database(notes_spec(data_dir, name="ext.demo.state")).close()
+    payload = _marker_payload(data_dir)
+    payload["retention"] = {"policy": "keep", "limits": [1, 2]}
+    payload["databases"]["notes"]["owner"] = {"kind": "core", "since": "2.0"}
+    payload["databases"]["ext.demo.state"]["owner"] = "demo"
+    (data_dir / MARKER_FILE_NAME).write_text(json.dumps(payload), encoding="utf-8")
+
+    marker = read_marker(data_dir)
+    assert marker is not None
+    assert marker.databases["notes"] == MarkerEntry(payload["databases"]["notes"]["database_id"], 1)
+    open_database(notes_spec(data_dir)).close()
+    # Registering and releasing a database rewrite the marker.
+    open_database(notes_spec(data_dir, name="tasks")).close()
+    unregister_database(data_dir, "ext.demo.state")
+
+    rewritten = _marker_payload(data_dir)
+    assert rewritten["retention"] == {"policy": "keep", "limits": [1, 2]}
+    assert rewritten["databases"]["notes"] == payload["databases"]["notes"]
+    assert set(rewritten["databases"]) == {"notes", "tasks"}
+    assert set(rewritten["databases"]["tasks"]) == {"database_id", "format_generation"}
 
 
 def test_existing_root_without_marker_never_authorizes_a_database(tmp_path: Path) -> None:

@@ -109,6 +109,7 @@ _INCIDENT_KEYS = frozenset(
         "acknowledged",
     }
 )
+_INTERVAL_KEYS = frozenset({"start", "end"})
 
 
 @dataclass(frozen=True)
@@ -268,10 +269,17 @@ def write_incident(
     verification: Literal["pending", "ok"] = "ok",
     incident_id: str | None = None,
     recovered_at: str | None = None,
+    previous: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Publish the durable recovery incident of one database, or raise."""
+    """Publish the durable recovery incident of one database, or raise.
+
+    ``previous`` is the incident this one continues (a pending restore that is
+    resumed or confirmed); fields a newer vBot added to it are kept.
+    """
     detected_at = failure_detected_at or utc_now_timestamp()
+    previous_interval = (previous or {}).get("possible_loss_interval")
     payload: dict[str, Any] = {
+        **_unknown_fields(previous, _INCIDENT_KEYS),
         "incident_id": incident_id or uuid.uuid4().hex,
         "database": name,
         "cause": cause,
@@ -282,11 +290,21 @@ def write_incident(
         if verification == "pending"
         else (recovered_at or utc_now_timestamp()),
         "verification": verification,
-        "possible_loss_interval": {"start": restored_snapshot_time, "end": detected_at},
+        "possible_loss_interval": {
+            **_unknown_fields(previous_interval, _INTERVAL_KEYS),
+            "start": restored_snapshot_time,
+            "end": detected_at,
+        },
         "acknowledged": False,
     }
     _write_json_durably(incident_path(data_dir, name), payload, what="recovery incident")
     return payload
+
+
+def _unknown_fields(payload: object, known: frozenset[str]) -> dict[str, Any]:
+    if not isinstance(payload, Mapping):
+        return {}
+    return {key: value for key, value in payload.items() if key not in known}
 
 
 def _valid_instant(value: object) -> bool:
@@ -300,7 +318,8 @@ def _valid_instant(value: object) -> bool:
 
 
 def _parse_incident(payload: object, name: str) -> dict[str, Any]:
-    if not isinstance(payload, dict) or set(payload) != _INCIDENT_KEYS:
+    """Validate every known field; fields a newer vBot added are kept."""
+    if not isinstance(payload, dict) or not set(payload) >= _INCIDENT_KEYS:
         raise DatabaseCorruptError(f"the {name} recovery incident has an invalid shape")
     interval = payload["possible_loss_interval"]
     verification = payload["verification"]
@@ -313,7 +332,7 @@ def _parse_incident(payload: object, name: str) -> dict[str, Any]:
         or not isinstance(payload["acknowledged"], bool)
         or verification not in ("pending", "ok")
         or not isinstance(interval, dict)
-        or set(interval) != {"start", "end"}
+        or not set(interval) >= _INTERVAL_KEYS
         or (payload["quarantine"] is not None and not isinstance(payload["quarantine"], str))
         or (verification == "pending" and payload["recovered_at"] is not None)
     ):
@@ -620,6 +639,7 @@ def _restore_member_locked(
             failure_detected_at=failure_detected_at,
             verification="pending",
             incident_id=incident_id,
+            previous=pending,
         )
 
     quarantine_path = _install_member(
@@ -638,6 +658,7 @@ def _restore_member_locked(
         failure_detected_at=failure_detected_at,
         verification="ok",
         incident_id=incident_id,
+        previous=pending,
     )
     return True
 
@@ -668,6 +689,7 @@ def _confirm_pending(data_dir: Path, spec: DatabaseSpec) -> None:
         failure_detected_at=pending["possible_loss_interval"]["end"],
         verification="ok",
         incident_id=pending["incident_id"],
+        previous=pending,
     )
 
 
@@ -777,9 +799,7 @@ def restore_data_snapshot(
             raise DatabaseFormatError(f"snapshot member {name} cannot be opened by this vBot")
     document_members = manifest.documents if documents else None
     document_plan: DocumentRestore | None = None
-    if documents:
-        if document_members is None:
-            raise DatabaseFormatError(f"snapshot {manifest.snapshot_id} holds no JSON document set")
+    if document_members is not None:
         verify_documents(snapshot_dir, document_members)
         document_plan = plan_document_restore(data_dir, document_members)
     retired = (

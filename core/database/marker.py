@@ -7,6 +7,12 @@ has been verified; a listed database that is missing or corrupt is restored from
 a data snapshot, or startup fails. A data directory without a marker is not a
 current-format store, and Runtime refuses it without inspecting anything else.
 
+The marker is open for additive evolution: a reader tolerates fields it does
+not know at every object level and refuses only a ``format_version`` other than
+this one (a newer marker names the newer vBot), and a rewrite keeps every
+unknown field unchanged. A newer vBot that adds a field
+therefore never makes an older one refuse the data directory.
+
 ``data-maintenance.json`` exists while an offline operation (a converter, a
 generation conversion, a restore) is incomplete. Runtime refuses to open any
 canonical database while it exists.
@@ -23,7 +29,7 @@ import sqlite3
 import time
 import uuid
 from collections.abc import Callable, Iterable, Iterator, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -52,17 +58,28 @@ _MAINTENANCE_KEYS = frozenset({"operation_id", "operation", "started_at", "pid"}
 
 @dataclass(frozen=True)
 class MarkerEntry:
-    """One registered canonical database."""
+    """One registered canonical database.
+
+    ``unknown_fields`` holds entry fields a newer vBot added. They never take
+    part in comparisons and are written back unchanged while the entry stays
+    registered.
+    """
 
     database_id: str
     format_generation: int
+    unknown_fields: Mapping[str, Any] = field(default_factory=dict, compare=False, repr=False)
 
 
 @dataclass(frozen=True)
 class DataStoreMarker:
-    """The strictly validated ``data-store.json`` content."""
+    """The validated ``data-store.json`` content.
+
+    ``unknown_fields`` holds top-level fields a newer vBot added; every rewrite
+    keeps them.
+    """
 
     databases: Mapping[str, MarkerEntry]
+    unknown_fields: Mapping[str, Any] = field(default_factory=dict, compare=False, repr=False)
 
 
 @dataclass(frozen=True)
@@ -98,7 +115,10 @@ def valid_database_id(value: object) -> bool:
 
 
 def read_marker(data_dir: Path) -> DataStoreMarker | None:
-    """Load and strictly validate the marker; ``None`` when it does not exist."""
+    """Load and validate the marker; ``None`` when it does not exist.
+
+    Every known field must be present and valid; unknown fields are kept.
+    """
     path = marker_path(data_dir)
     try:
         raw = path.read_text(encoding="utf-8")
@@ -116,7 +136,7 @@ def _parse_marker(raw: str, path: Path) -> DataStoreMarker:
         payload = json.loads(raw)
     except json.JSONDecodeError as exc:
         raise DatabaseFormatError(f"data-store marker is malformed: {path}") from exc
-    if not isinstance(payload, dict) or set(payload) != _MARKER_KEYS:
+    if not isinstance(payload, dict) or not set(payload) >= _MARKER_KEYS:
         raise DatabaseFormatError(f"data-store marker has an unexpected shape: {path}")
     format_version = payload["format_version"]
     if not isinstance(format_version, int) or isinstance(format_version, bool):
@@ -141,7 +161,7 @@ def _parse_marker(raw: str, path: Path) -> DataStoreMarker:
             raise DatabaseFormatError(
                 f"data-store marker lists an invalid database name {name!r}: {path}"
             ) from exc
-        if not isinstance(entry, dict) or set(entry) != _ENTRY_KEYS:
+        if not isinstance(entry, dict) or not set(entry) >= _ENTRY_KEYS:
             raise DatabaseFormatError(f"data-store marker entry {name} has an invalid shape")
         generation = entry["format_generation"]
         if (
@@ -151,16 +171,31 @@ def _parse_marker(raw: str, path: Path) -> DataStoreMarker:
             or generation < 1
         ):
             raise DatabaseFormatError(f"data-store marker entry {name} is invalid: {path}")
-        entries[name] = MarkerEntry(str(entry["database_id"]), generation)
-    return DataStoreMarker(entries)
+        entries[name] = MarkerEntry(
+            str(entry["database_id"]), generation, _unknown_fields(entry, _ENTRY_KEYS)
+        )
+    return DataStoreMarker(entries, _unknown_fields(payload, _MARKER_KEYS))
 
 
-def _write_marker(data_dir: Path, databases: Mapping[str, MarkerEntry]) -> DataStoreMarker:
+def _unknown_fields(payload: Mapping[str, Any], known: frozenset[str]) -> dict[str, Any]:
+    return {key: value for key, value in payload.items() if key not in known}
+
+
+def _write_marker(
+    data_dir: Path,
+    databases: Mapping[str, MarkerEntry],
+    *,
+    unknown_fields: Mapping[str, Any] | None = None,
+) -> DataStoreMarker:
+    """Write the marker, keeping the unknown fields of the marker and of each entry."""
     path = marker_path(data_dir)
+    kept = dict(unknown_fields or {})
     payload = {
+        **kept,
         "format_version": MARKER_FORMAT_VERSION,
         "databases": {
             name: {
+                **entry.unknown_fields,
                 "database_id": entry.database_id,
                 "format_generation": entry.format_generation,
             }
@@ -171,7 +206,7 @@ def _write_marker(data_dir: Path, databases: Mapping[str, MarkerEntry]) -> DataS
         atomic_write_text(path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
     except OSError as exc:
         raise DatabaseUnavailableError(f"data-store marker cannot be written: {path}") from exc
-    return DataStoreMarker(dict(databases))
+    return DataStoreMarker(dict(databases), kept)
 
 
 def write_bootstrap_marker(data_dir: Path) -> DataStoreMarker:
@@ -203,7 +238,9 @@ def register_database_locked(data_dir: Path, name: str, entry: MarkerEntry) -> D
         raise DatabaseFormatError(
             f"{name} is already registered with a different identity in {data_dir}"
         )
-    return _write_marker(data_dir, {**marker.databases, name: entry})
+    return _write_marker(
+        data_dir, {**marker.databases, name: entry}, unknown_fields=marker.unknown_fields
+    )
 
 
 def unregister_databases_locked(data_dir: Path, names: Iterable[str]) -> DataStoreMarker:
@@ -223,6 +260,7 @@ def unregister_databases_locked(data_dir: Path, names: Iterable[str]) -> DataSto
     return _write_marker(
         data_dir,
         {name: entry for name, entry in marker.databases.items() if name not in retired},
+        unknown_fields=marker.unknown_fields,
     )
 
 

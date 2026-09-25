@@ -322,6 +322,43 @@ def test_final_incident_failure_leaves_pending_evidence_and_completes_on_next_op
     assert completed["possible_loss_interval"] == pending["possible_loss_interval"]
 
 
+def test_an_older_vbot_completes_and_acknowledges_an_incident_with_newer_fields(
+    data_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    snapshot_with_notes(data_dir, "saved")
+    notes_spec(data_dir).path.write_bytes(b"damaged")
+    real_replace = recovery_module.os.replace
+    incident_replaces = 0
+
+    def fail_final_incident(source: str | Path, destination: str | Path) -> None:
+        nonlocal incident_replaces
+        if Path(destination) == incident_path(data_dir, "notes"):
+            incident_replaces += 1
+            if incident_replaces == 2:
+                raise OSError("injected final incident publication failure")
+        real_replace(source, destination)
+
+    monkeypatch.setattr(recovery_module.os, "replace", fail_final_incident)
+    with pytest.raises(DatabaseCorruptError):
+        open_database(notes_spec(data_dir))
+    monkeypatch.setattr(recovery_module.os, "replace", real_replace)
+    evidence = incident_path(data_dir, "notes")
+    pending = json.loads(evidence.read_text(encoding="utf-8"))
+    pending["operator_note"] = {"source": "newer vBot"}
+    pending["possible_loss_interval"]["confidence"] = "exact"
+    evidence.write_text(json.dumps(pending), encoding="utf-8")
+
+    # Every open reads the incident; a newer vBot's fields never block it.
+    assert stored_bodies(notes_spec(data_dir)) == ["saved"]
+    completed = read_incident(data_dir, "notes")
+    assert completed is not None
+    assert completed["verification"] == "ok"
+    assert completed["operator_note"] == {"source": "newer vBot"}
+    assert completed["possible_loss_interval"]["confidence"] == "exact"
+    assert acknowledge_incident(data_dir, completed["incident_id"]) is True
+    assert read_incident(data_dir, "notes") == {**completed, "acknowledged": True}
+
+
 def test_final_incident_failure_never_restores_an_older_snapshot(
     data_dir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
