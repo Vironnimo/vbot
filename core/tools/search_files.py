@@ -8,12 +8,13 @@ import os
 import re
 import shlex
 import tempfile
-from collections.abc import Iterator, Mapping
 from functools import cache
 from pathlib import Path
 from typing import Any
 
 from core.tools._argument_repair import normalize_call_arguments
+from core.tools._field_aliases import SpellingAliases as _SpellingAliases
+from core.tools._field_aliases import spelling as _spelling
 from core.tools._path_suggestions import corrected_paths
 from core.tools._search_arguments import parse_search_args
 from core.tools._search_execution import (
@@ -89,28 +90,6 @@ def _repair_argument_array(value: Any) -> Any:
         "args contains a malformed encoded list. Send each rg argument as a string, "
         'for example ["-F", "TODO"].'
     )
-
-
-def _spelling(value: str) -> str:
-    return re.sub(r"[\s_-]+", "", value.casefold())
-
-
-class _SpellingAliases(Mapping[str, str]):
-    """Field aliases that match regardless of case, "_", "-", or spaces."""
-
-    def __init__(self, fields: dict[str, tuple[str, ...]]) -> None:
-        self._aliases = {
-            _spelling(alias): field for field, names in fields.items() for alias in names
-        }
-
-    def __getitem__(self, key: str) -> str:
-        return self._aliases[_spelling(key)]
-
-    def __iter__(self) -> Iterator[str]:
-        return iter(self._aliases)
-
-    def __len__(self) -> int:
-        return len(self._aliases)
 
 
 # Names other search Tools and command-line habits use for the same fields.
@@ -471,7 +450,7 @@ def _page_argument(
 
 
 def _missing_root_message(root: Path, cwd: Path) -> str:
-    message = f"Path not found: {root.as_posix()}"
+    message = f"Path not found: {path_label(root, cwd)}"
     suggestions = corrected_paths(root, cwd)
     if suggestions:
         message += f" (similar: {', '.join(path_label(path, cwd) for path in suggestions)})"

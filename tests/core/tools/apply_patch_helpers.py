@@ -35,3 +35,10 @@ def apply(root: Path, patch: str, *, state=None, ctx=None):
 
 def update(body: str, path: str = "file.txt") -> str:
     return f"*** Begin Patch\n*** Update File: {path}\n{body}\n*** End Patch"
+
+
+def text(result: dict) -> str:
+    """Return the Model-facing text of an apply_patch result: content or error message."""
+    if result["ok"]:
+        return str(result["data"]["content"])
+    return str(result["error"]["message"])

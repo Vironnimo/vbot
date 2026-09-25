@@ -3,7 +3,8 @@
 The built-in `write` Tool is retired. Use `apply_patch` with `*** Add File: path`
 and `+` content lines to create or fully replace a file. An existing file must
 have been read in the current Session and remain unchanged since that read;
-identical content is a verified no-op. See `apply_patch.md` and `file_state.md`.
+identical content is a verified no-op. Write-shaped calls (`file_path` plus
+`content`) run as the same full replacement. See `apply_patch.md` and `file_state.md`.
 
 `archive/write.zip` preserves the implementation, focused tests, prior domain map,
 and original shared integration/probe files at their repository paths. Its

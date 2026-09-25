@@ -7,6 +7,8 @@ from itertools import islice
 from pathlib import Path
 from typing import Literal
 
+from core.tools.search import display_search_path
+
 _SCAN_LIMIT = 200
 _RESULT_LIMIT = 5
 _MIN_RATIO = 0.55
@@ -105,3 +107,17 @@ def _repair_components(missing: Path) -> Path | None:
             return None
         current = matches[0]
     return current
+
+
+def missing_file_message(missing: Path, cwd: Path) -> str:
+    """Build a not-found error that names paths the next call can use."""
+    label = display_search_path(missing, cwd=cwd)
+    suggestions = corrected_paths(missing, cwd)
+    if suggestions:
+        similar = ", ".join(display_search_path(candidate, cwd=cwd) for candidate in suggestions)
+        return f"File not found: {label} (similar: {similar})."
+    parent = missing.parent
+    shown = display_search_path(parent, cwd=cwd)
+    if parent.is_dir():
+        return f"File not found: {label}. Read {shown} to list that directory."
+    return f"File not found: {label}. Its directory {shown} does not exist."
