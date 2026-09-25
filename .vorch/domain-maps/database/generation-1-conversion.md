@@ -21,6 +21,16 @@ Run once per data directory, from a vBot checkout that includes Generation 1:
 
 Going back (loses everything written since the install): stop vBot, delete the paths the report lists under `install.installed` and `data-store.json`, then move the content of `pre-generation-1/` (except `conversion-report.json`) back to the same relative paths.
 
+### Packaged Windows installations
+
+The update transaction always runs the active version's worker, and the 0.4.x worker cannot reach Generation 1 in either order: a Generation 1 version activated on an unconverted data directory fails its verification start (`DatabaseConversionRequiredError`) and the worker rolls back to 0.4.x; after a conversion the 0.4.x worker refuses to update because `sessions.db` has no `session-store.json` marker. Until a bridge exists, a main-tracking installation moves by hand (first done on 2026-09-25):
+
+1. `vbot update --no-restart` prepares the Generation 1 version without touching the server or the data. A 0.4.x worker refuses to prepare while an installed version holds `__pycache__` files that running its `python.exe` directly wrote ("Release file inventory does not match its payload"); `validate_release(<version dir>, shape=..., remove_bytecode_caches=True)` from the current code removes exactly those.
+2. `vbot server stop`, `vbot application exit`; back up the data directory.
+3. Convert with a checkout at the prepared version's revision.
+4. Immediately point `active-version` at the prepared version: `load_installation(<install root>)`, `validate_release(installation.version(<id>), shape=installation.install_shape, remove_bytecode_caches=True)`, `installation.activate(<id>)` (`cli/application/state.py`, `packages.py`). Nothing may start the old version between steps 3 and 4 (tray, logon task, `vbot server start`): 0.4.x refuses the Session store but first creates its tables in `decisions.db`.
+5. `vbot server start`, start the tray, then take the first data snapshot. Later updates run through the Generation 1 worker with data snapshots and rollback.
+
 ## Phases
 
 `conversion.convert_data_directory(data_dir, *, dry_run)` returns the JSON report; `__main__` prints the summary and exits 1 on a refusal, a failed conversion or an interrupted install (130 on Ctrl+C).
