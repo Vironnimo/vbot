@@ -1,0 +1,845 @@
+{
+ "files": {
+  "sub/marker.txt": "marker\n",
+  "tools/fake_error.py": "import sys\n\nMESSAGES = {\n    \"grep\": \"grep: The term 'grep' is not recognized as a name of a cmdlet, function, script file, or executable program.\",\n    \"devnull\": \"Out-File: Could not find a part of the path 'C:\\\\dev\\\\null'.\",\n    \"parser\": \"ParserError:\\nLine |\\n   1 |  cat <<EOF\\n     |       ~\\n     | Missing file specification after redirection operator.\",\n}\nprint(MESSAGES[sys.argv[1]])\nsys.exit(1)\n"
+ },
+ "cases": [
+  {
+   "name": "shell: canonical",
+   "tool": "bash",
+   "arguments": {
+    "command": "python -c \"print('hello there')\""
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "hello there"
+    ]
+   }
+  },
+  {
+   "name": "shell: cmd alias",
+   "tool": "bash",
+   "arguments": {
+    "cmd": "python -c \"print('hello there')\""
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "hello there"
+    ]
+   }
+  },
+  {
+   "name": "shell: script alias",
+   "tool": "bash",
+   "arguments": {
+    "script": "python -c \"print('hello there')\""
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "hello there"
+    ]
+   }
+  },
+  {
+   "name": "shell: argv array (Codex)",
+   "tool": "bash",
+   "arguments": {
+    "command": [
+     "python",
+     "-c",
+     "print('argv ok')"
+    ]
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "argv ok"
+    ]
+   }
+  },
+  {
+   "name": "shell: commands list runs in order",
+   "tool": "bash",
+   "arguments": {
+    "commands": [
+     "python -c \"print('first step')\"",
+     "python -c \"print('second step')\""
+    ]
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "first step",
+     "second step"
+    ]
+   }
+  },
+  {
+   "name": "shell: cwd alias",
+   "tool": "bash",
+   "arguments": {
+    "command": "python -c \"import os; print(os.listdir('.'))\"",
+    "cwd": "sub"
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "marker.txt"
+    ]
+   }
+  },
+  {
+   "name": "shell: directory alias (Gemini)",
+   "tool": "bash",
+   "arguments": {
+    "command": "python -c \"import os; print(os.listdir('.'))\"",
+    "directory": "sub",
+    "description": "list sub"
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "marker.txt"
+    ]
+   }
+  },
+  {
+   "name": "shell: working_directory alias",
+   "tool": "bash",
+   "arguments": {
+    "command": "python -c \"import os; print(os.listdir('.'))\"",
+    "working_directory": "sub"
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "marker.txt"
+    ]
+   }
+  },
+  {
+   "name": "shell: timeout_ms",
+   "tool": "bash",
+   "arguments": {
+    "command": "python -c \"print('hello there')\"",
+    "timeout_ms": 60000
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "hello there"
+    ],
+    "absent": [
+     "milliseconds"
+    ]
+   }
+  },
+  {
+   "name": "shell: timeout given in ms is read as ms with a note",
+   "tool": "bash",
+   "arguments": {
+    "command": "python -c \"print('hello there')\"",
+    "timeout": 120000
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "hello there",
+     "milliseconds"
+    ]
+   }
+  },
+  {
+   "name": "shell: background true",
+   "tool": "bash",
+   "arguments": {
+    "command": "python -c \"import time; time.sleep(1)\"",
+    "background": true
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "process_id",
+     "running"
+    ]
+   }
+  },
+  {
+   "name": "shell: run_in_background (Claude Code)",
+   "tool": "bash",
+   "arguments": {
+    "command": "python -c \"import time; time.sleep(1)\"",
+    "run_in_background": true,
+    "description": "short sleep"
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "process_id",
+     "running"
+    ]
+   }
+  },
+  {
+   "name": "shell: is_background with explanation (Cursor)",
+   "tool": "bash",
+   "arguments": {
+    "command": "python -c \"print('hello there')\"",
+    "is_background": false,
+    "explanation": "print a greeting"
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "hello there"
+    ]
+   }
+  },
+  {
+   "name": "shell: mode auto means foreground",
+   "tool": "bash",
+   "arguments": {
+    "command": "python -c \"print('hello there')\"",
+    "mode": "auto"
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "hello there"
+    ]
+   }
+  },
+  {
+   "name": "shell: background conflicts with mode",
+   "tool": "bash",
+   "arguments": {
+    "command": "python -c \"print('hello there')\"",
+    "mode": "foreground",
+    "background": true
+   },
+   "expect": {
+    "ok": false,
+    "contains": [
+     "mode"
+    ]
+   }
+  },
+  {
+   "name": "shell: empty env_keys",
+   "tool": "bash",
+   "arguments": {
+    "command": "python -c \"print('hello there')\"",
+    "env_keys": []
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "hello there"
+    ]
+   }
+  },
+  {
+   "name": "shell: env_keys naming an inherited variable",
+   "tool": "bash",
+   "arguments": {
+    "command": "python -c \"print('hello there')\"",
+    "env_keys": [
+     "PATH"
+    ]
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "hello there",
+     "inherit"
+    ]
+   }
+  },
+  {
+   "name": "shell: env_keys naming an unknown credential",
+   "tool": "bash",
+   "arguments": {
+    "command": "python -c \"print('hello there')\"",
+    "env_keys": [
+     "VBOT_PROBE_MISSING_KEY"
+    ]
+   },
+   "expect": {
+    "ok": false,
+    "contains": [
+     "VBOT_PROBE_MISSING_KEY",
+     "not granted to this Agent"
+    ],
+    "absent": [
+     "hello there"
+    ]
+   }
+  },
+  {
+   "name": "shell: env object sets a plain variable",
+   "tool": "bash",
+   "arguments": {
+    "command": "python -c \"import os; print(os.environ['PROBE_GREETING'])\"",
+    "env": {
+     "PROBE_GREETING": "hi from env"
+    }
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "hi from env"
+    ]
+   }
+  },
+  {
+   "name": "shell: env object refuses a literal secret",
+   "tool": "bash",
+   "arguments": {
+    "command": "python -c \"print('hello there')\"",
+    "env": {
+     "PROBE_API_TOKEN": "abc123secret"
+    }
+   },
+   "expect": {
+    "ok": false,
+    "contains": [
+     "credential values written in Tool calls"
+    ],
+    "absent": [
+     "abc123secret",
+     "hello there"
+    ]
+   }
+  },
+  {
+   "name": "shell: local_shell action wrapper (OpenAI)",
+   "tool": "bash",
+   "arguments": {
+    "action": {
+     "type": "exec",
+     "command": [
+      "python",
+      "-c",
+      "import os; print(os.listdir('.'))"
+     ],
+     "working_directory": "sub",
+     "timeout_ms": 30000,
+     "env": {}
+    }
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "marker.txt"
+    ]
+   }
+  },
+  {
+   "name": "shell: pty request names the terminal Tool",
+   "tool": "bash",
+   "arguments": {
+    "command": "python -c \"print('hello there')\"",
+    "pty": true
+   },
+   "expect": {
+    "ok": false,
+    "contains": [
+     "terminal"
+    ],
+    "absent": [
+     "hello there"
+    ]
+   }
+  },
+  {
+   "name": "shell: timeout failure names the next call",
+   "tool": "bash",
+   "arguments": {
+    "command": "python -c \"import time; time.sleep(5)\"",
+    "timeout": 1
+   },
+   "expect": {
+    "ok": false,
+    "error_code": "process_timeout",
+    "contains": [
+     "1 s",
+     "background"
+    ]
+   }
+  },
+  {
+   "name": "shell: head in a pipeline",
+   "tool": "bash",
+   "arguments": {
+    "command": "python -c \"print('alpha'); print('beta'); print('gamma')\" | head -n 2"
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "beta"
+    ],
+    "absent": [
+     "gamma"
+    ]
+   }
+  },
+  {
+   "name": "shell: tail in a pipeline",
+   "tool": "bash",
+   "arguments": {
+    "command": "python -c \"print('alpha'); print('beta'); print('gamma')\" | tail -n 1"
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "gamma"
+    ],
+    "absent": [
+     "alpha"
+    ]
+   }
+  },
+  {
+   "name": "shell hint: grep is not PowerShell",
+   "tool": "bash",
+   "arguments": {
+    "command": "python tools/fake_error.py grep"
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "Select-String"
+    ]
+   }
+  },
+  {
+   "name": "shell hint: /dev/null",
+   "tool": "bash",
+   "arguments": {
+    "command": "python tools/fake_error.py devnull"
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "$null"
+    ]
+   }
+  },
+  {
+   "name": "shell hint: ls -la",
+   "tool": "bash",
+   "arguments": {
+    "command": "ls -la"
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "Get-ChildItem -Force"
+    ]
+   }
+  },
+  {
+   "name": "shell hint: heredoc",
+   "tool": "bash",
+   "arguments": {
+    "command": "python tools/fake_error.py parser \"cat <<EOF\""
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "here-string"
+    ]
+   }
+  },
+  {
+   "name": "process: wait for a background command",
+   "steps": [
+    {
+     "tool": "bash",
+     "arguments": {
+      "command": "python -c \"import time; time.sleep(1); print('work done')\"",
+      "mode": "background"
+     }
+    },
+    {
+     "tool": "process",
+     "arguments": {
+      "action": "wait",
+      "process_id": "$1.process_id"
+     }
+    }
+   ],
+   "expect": {
+    "ok": true,
+    "contains": [
+     "work done",
+     "exit_code: 0"
+    ]
+   }
+  },
+  {
+   "name": "process: wait for an output pattern",
+   "steps": [
+    {
+     "tool": "bash",
+     "arguments": {
+      "command": "python -u -c \"import time; print('server ready'); time.sleep(20)\"",
+      "mode": "background"
+     }
+    },
+    {
+     "tool": "process",
+     "arguments": {
+      "action": "wait",
+      "process_id": "$1.process_id",
+      "pattern": "ready"
+     }
+    }
+   ],
+   "expect": {
+    "ok": true,
+    "contains": [
+     "server ready",
+     "running"
+    ]
+   }
+  },
+  {
+   "name": "process: status ignores list placeholders",
+   "steps": [
+    {
+     "tool": "bash",
+     "arguments": {
+      "command": "python -c \"print('work done')\"",
+      "mode": "background"
+     }
+    },
+    {
+     "tool": "process",
+     "arguments": {
+      "action": "status",
+      "process_id": "$1.process_id",
+      "filter": "all",
+      "limit": 20,
+      "before": " "
+     }
+    }
+   ],
+   "expect": {
+    "ok": true,
+    "contains": [
+     "process_id"
+    ]
+   }
+  },
+  {
+   "name": "process: session_id alias (Hermes)",
+   "steps": [
+    {
+     "tool": "bash",
+     "arguments": {
+      "command": "python -c \"print('work done')\"",
+      "mode": "background"
+     }
+    },
+    {
+     "tool": "process",
+     "arguments": {
+      "action": "status",
+      "session_id": "$1.process_id"
+     }
+    }
+   ],
+   "expect": {
+    "ok": true,
+    "contains": [
+     "process_id"
+    ]
+   }
+  },
+  {
+   "name": "process: poll alias",
+   "steps": [
+    {
+     "tool": "bash",
+     "arguments": {
+      "command": "python -c \"print('work done')\"",
+      "mode": "background"
+     }
+    },
+    {
+     "tool": "process",
+     "arguments": {
+      "action": "poll",
+      "process_id": "$1.process_id"
+     }
+    }
+   ],
+   "expect": {
+    "ok": true,
+    "contains": [
+     "process_id"
+    ]
+   }
+  },
+  {
+   "name": "process: Hermes wait with timeout seconds",
+   "steps": [
+    {
+     "tool": "bash",
+     "arguments": {
+      "command": "python -c \"import time; time.sleep(1); print('work done')\"",
+      "mode": "background"
+     }
+    },
+    {
+     "tool": "process",
+     "arguments": {
+      "action": "wait",
+      "session_id": "$1.process_id",
+      "timeout": 30
+     }
+    }
+   ],
+   "expect": {
+    "ok": true,
+    "contains": [
+     "work done"
+    ]
+   }
+  },
+  {
+   "name": "process: OpenClaw poll with timeout ms",
+   "steps": [
+    {
+     "tool": "bash",
+     "arguments": {
+      "command": "python -c \"import time; time.sleep(1); print('work done')\"",
+      "mode": "background"
+     }
+    },
+    {
+     "tool": "process",
+     "arguments": {
+      "action": "poll",
+      "sessionId": "$1.process_id",
+      "timeout": 30000
+     }
+    }
+   ],
+   "expect": {
+    "ok": true,
+    "contains": [
+     "work done"
+    ]
+   }
+  },
+  {
+   "name": "process: unknown id names the listing call",
+   "tool": "process",
+   "arguments": {
+    "action": "status",
+    "process_id": "proc_does_not_exist"
+   },
+   "expect": {
+    "ok": false,
+    "error_code": "process_not_found",
+    "contains": [
+     "\"status\""
+    ]
+   }
+  },
+  {
+   "name": "process: kill ignores list placeholders",
+   "steps": [
+    {
+     "tool": "bash",
+     "arguments": {
+      "command": "python -c \"import time; time.sleep(30)\"",
+      "mode": "background"
+     }
+    },
+    {
+     "tool": "process",
+     "arguments": {
+      "action": "kill",
+      "process_id": "$1.process_id",
+      "filter": "running",
+      "limit": 20
+     }
+    }
+   ],
+   "expect": {
+    "ok": true,
+    "contains": [
+     "killed"
+    ]
+   }
+  },
+  {
+   "name": "process: stop alias",
+   "steps": [
+    {
+     "tool": "bash",
+     "arguments": {
+      "command": "python -c \"import time; time.sleep(30)\"",
+      "mode": "background"
+     }
+    },
+    {
+     "tool": "process",
+     "arguments": {
+      "action": "stop",
+      "process_id": "$1.process_id"
+     }
+    }
+   ],
+   "expect": {
+    "ok": true,
+    "contains": [
+     "killed"
+    ]
+   }
+  },
+  {
+   "name": "process: list alias",
+   "tool": "process",
+   "arguments": {
+    "action": "list"
+   },
+   "expect": {
+    "ok": true
+   }
+  },
+  {
+   "name": "terminal: start ignores placeholder fields",
+   "tool": "terminal",
+   "arguments": {
+    "action": "start",
+    "command": "python",
+    "terminal_id": "",
+    "after_revision": 0,
+    "expected_screen_revision": 0,
+    "start_line": 0,
+    "data": "",
+    "key": "enter",
+    "lines": 30
+   },
+   "expect": {
+    "ok": true
+   }
+  },
+  {
+   "name": "terminal: command string with arguments",
+   "tool": "terminal",
+   "arguments": {
+    "action": "start",
+    "command": "python -q"
+   },
+   "expect": {
+    "ok": true
+   }
+  },
+  {
+   "name": "terminal: enter true submits",
+   "steps": [
+    {
+     "tool": "terminal",
+     "arguments": {
+      "action": "start",
+      "command": "python"
+     }
+    },
+    {
+     "tool": "terminal",
+     "arguments": {
+      "action": "input",
+      "terminal_id": "$1.terminal_id",
+      "text": "print(6*7)",
+      "enter": true
+     }
+    }
+   ],
+   "expect": {
+    "ok": true,
+    "contains": [
+     "enter"
+    ]
+   }
+  },
+  {
+   "name": "terminal: key spelling Ctrl+C",
+   "steps": [
+    {
+     "tool": "terminal",
+     "arguments": {
+      "action": "start",
+      "command": "python"
+     }
+    },
+    {
+     "tool": "terminal",
+     "arguments": {
+      "action": "input",
+      "terminal_id": "$1.terminal_id",
+      "key": "Ctrl+C"
+     }
+    }
+   ],
+   "expect": {
+    "ok": true,
+    "contains": [
+     "ctrl_c"
+    ]
+   }
+  },
+  {
+   "name": "terminal: wait timeout above the maximum",
+   "steps": [
+    {
+     "tool": "terminal",
+     "arguments": {
+      "action": "start",
+      "command": "python"
+     }
+    },
+    {
+     "tool": "terminal",
+     "arguments": {
+      "action": "wait",
+      "terminal_id": "$1.terminal_id",
+      "timeout_ms": 30000
+     }
+    }
+   ],
+   "expect": {
+    "ok": true
+   }
+  },
+  {
+   "name": "terminal: close alias",
+   "steps": [
+    {
+     "tool": "terminal",
+     "arguments": {
+      "action": "start",
+      "command": "python"
+     }
+    },
+    {
+     "tool": "terminal",
+     "arguments": {
+      "action": "close",
+      "terminal_id": "$1.terminal_id"
+     }
+    }
+   ],
+   "expect": {
+    "ok": true
+   }
+  }
+ ]
+}
