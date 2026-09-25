@@ -244,7 +244,7 @@ def test_a_fork_made_while_a_run_was_running_keeps_its_copies(tmp_path: Path) ->
         context,
         "SELECT run_id, status, completion_reason, completed_at, inherited, "
         f"contributes_to_activity FROM runs WHERE session_key = {branch}",
-    ) == [("run_1", "interrupted", "fork_snapshot", canonical(5), 1, 0)]
+    ) == [("run_1", "interrupted", None, canonical(5), 1, 0)]
     assert _rows(
         context,
         "SELECT c.status, c.completed_at FROM tool_calls AS c JOIN entries AS e "
@@ -259,16 +259,23 @@ def test_a_fork_made_while_a_run_was_running_keeps_its_copies(tmp_path: Path) ->
         f"SELECT fork_parent_key, fork_point_seq FROM sessions WHERE session_key = {branch}",
     ) == [(None, 2)]
     counts = context.report.counts[AREA]
-    assert (counts["forks_shared"], counts["forks_self_contained"], counts["runs_inherited"]) == (
-        1,
-        1,
-        1,
-    )
+    assert (
+        counts["forks_shared"],
+        counts["forks_self_contained"],
+        counts["runs_inherited"],
+        # Only the branch writes its copy; the twig shares the branch's.
+        counts["fork_snapshot_reasons_dropped"],
+    ) == (1, 1, 1, 1)
     assert _skips(context) == [
         (
             branch_label,
             "fork keeps its copied history: Run run_1 was running when the Session was forked",
-        )
+        ),
+        (
+            branch_label,
+            "Run run_1 retired completion reason fork_snapshot dropped: the copy of a Run "
+            "that was running when the Session was forked stays interrupted",
+        ),
     ]
 
 

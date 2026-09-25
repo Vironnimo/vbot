@@ -19,7 +19,9 @@ gets exactly the side rows the current store writes for its role:
   live Session stays running, so the next start settles it as it settles a Run
   after a crash; one in an archived Session ends interrupted. Tool calls without
   a result end interrupted, or cancelled for a cancelled Run, once their Run
-  has ended.
+  has ended. The retired completion reason ``fork_snapshot``, which marked a
+  fork's copy of a Run that was running at the fork, is dropped; the copy stays
+  interrupted.
 - A boundary checkpoint without a projection gets the projection the old reader
   derived: the summary note, then the messages from its tail boundary up to
   the checkpoint. A projected checkpoint drops the retired tail-guidance note
@@ -34,12 +36,16 @@ gets exactly the side rows the current store writes for its role:
   Skills and the prompt-cache affinity move to their own storage, and the Run
   kinds move to ``session_run_kinds``. The derived ``fork_source`` and
   ``run_kinds`` keys are not stored, and the retired Channel routing keys are
+  dropped. So is the retired ``visited_projects`` record of automatic Project
+  visits. In the Reflection cadence counters, ``model_steps_since_skill_review``
+  is renamed ``iterations_since_skill_review`` (dropped next to an existing
+  one), and ``tool_calls_since_skill_review``, which counted Tool calls, is
   dropped. A value the store would refuse is dropped and reported.
 - Continuations are dropped. Owner-managed bindings, group titles, delivery
   receipts and Run execution owners are kept; retired Tool names in a binding's
   ``tool_access`` are replaced as in every other Tool access policy
   (``_tool_access``).
-- Three old Assistant Message shapes get their current form, in history and in
+- Four old Assistant Message shapes get their current form, in history and in
   stored checkpoint projections. A line-only output-file reference named a
   line that held just the path, and the server replaced that whole line with
   the file link; it gets the span of the whole line. One whose line is missing
@@ -50,7 +56,10 @@ gets exactly the side rows the current store writes for its role:
   ``context_usage`` snapshot every current Assistant step stores gets the
   Context the old reader derived from it: input plus output, each measured
   unless estimated. One without an input count to derive it from, where the
-  old reader showed no Context, keeps no snapshot and is reported.
+  old reader showed no Context, keeps no snapshot and is reported. A
+  ``reasoning_meta`` loses the retired ``_reasoning_key`` marker, and is
+  dropped when nothing else remains: the Provider adapter decides whether
+  readable reasoning is sent back as ``reasoning_content``.
 
 The source is opened read-only. Timestamps become canonical UTC, and every drop
 or approximation is reported. The staged database is reopened once, so its
@@ -127,6 +136,21 @@ _LEGACY_TAIL_GUIDANCE = (
 )
 # Channel routing moved out of Sessions; these metadata keys retired with it.
 _RETIRED_METADATA_KEYS = ("active_session_id", "conversation_kind", "participants")
+# The Projects a Session had visited; automatic Project visits were retired for
+# the explicit ``project`` Tool, and nothing replaced the record.
+_RETIRED_VISITED_PROJECTS = "visited_projects"
+# The Reflection cadence counters (``core/automation/reflection.py``). The
+# Skill review counter first counted Tool calls, then Model steps under a name
+# later renamed, unit unchanged, to the current one.
+_REFLECTION_COUNTERS = "reflection_counters"
+_SKILL_REVIEW_COUNTER = "iterations_since_skill_review"
+_RENAMED_SKILL_REVIEW_COUNTER = "model_steps_since_skill_review"
+_RETIRED_SKILL_REVIEW_COUNTER = "tool_calls_since_skill_review"
+# Marked an old Assistant Message whose Reasoning the Provider sent as
+# ``reasoning_content``; the Provider adapter now decides how Reasoning replays.
+_RETIRED_REASONING_META_KEY = "_reasoning_key"
+# The completion reason an old fork gave its copy of a Run that was running.
+_RETIRED_FORK_SNAPSHOT_REASON = "fork_snapshot"
 _RUNNING = "running"
 _INTERRUPTED = "interrupted"
 _CANCELLED = "cancelled"
@@ -1460,6 +1484,15 @@ class _SessionConversion:
     def _write_runs(self, runs: Sequence[_Run]) -> dict[str, int]:
         run_keys: dict[str, int] = {}
         for run in runs:
+            if run.completion_reason == _RETIRED_FORK_SNAPSHOT_REASON:
+                # Counted where the copy is written: a fork sharing it drops it.
+                run.completion_reason = None
+                self.tally.count("fork_snapshot_reasons_dropped")
+                self.issue(
+                    f"Run {run.run_id} retired completion reason {_RETIRED_FORK_SNAPSHOT_REASON} "
+                    "dropped: the copy of a Run that was running when the Session was forked "
+                    "stays interrupted"
+                )
             cursor = self.target.execute(
                 "INSERT INTO runs (session_key, run_id, work_id, run_kind, "
                 "contributes_to_activity, inherited, status, started_at, start_seq, "
@@ -1711,6 +1744,15 @@ class _SessionMetadata:
             del metadata[key]
         if retired:
             self.session.tally.count("retired_metadata_keys", len(retired))
+        if _RETIRED_VISITED_PROJECTS in metadata:
+            del metadata[_RETIRED_VISITED_PROJECTS]
+            self.session.tally.count("visited_projects_dropped")
+            self.drop(
+                _RETIRED_VISITED_PROJECTS,
+                "automatic Project visits were retired; an Agent loads another Project's "
+                "context with the project Tool",
+            )
+        self._reflection_counters(metadata)
         seen_skills = self._seen_skills(metadata.pop("seen_skills", None))
         affinity = metadata.pop("prompt_cache_affinity_id", None)
         if affinity is not None and not _is_prompt_cache_affinity_id(affinity):
@@ -1744,6 +1786,47 @@ class _SessionMetadata:
             self.drop("object", str(error))
             storage = _store_values._session_metadata_storage({}, derived)
         return _Metadata(storage, run_kinds, seen_skills, pins, affinity)
+
+    def _reflection_counters(self, metadata: dict[str, Any]) -> None:
+        """Give the Reflection cadence counters their current Skill review counter.
+
+        The Model-step counter is renamed in place. The Tool-call counter is
+        dropped, not mapped: its successor counts Model steps, and the absent
+        counter reads as zero. Other keys, and a value of another shape, stay for
+        the application, which reads an invalid counter as zero.
+        """
+        counters = metadata.get(_REFLECTION_COUNTERS)
+        if not isinstance(counters, dict) or not (
+            _RENAMED_SKILL_REVIEW_COUNTER in counters or _RETIRED_SKILL_REVIEW_COUNTER in counters
+        ):
+            return
+        converted: dict[str, Any] = {}
+        for key, value in counters.items():
+            if key == _RENAMED_SKILL_REVIEW_COUNTER and _SKILL_REVIEW_COUNTER not in counters:
+                converted[_SKILL_REVIEW_COUNTER] = value
+                self.session.tally.count("reflection_counter_renamed")
+            elif key == _RENAMED_SKILL_REVIEW_COUNTER:
+                self.session.tally.count("reflection_counter_dropped")
+                self.drop(
+                    f"{_REFLECTION_COUNTERS}.{key}",
+                    f"retired name of {_SKILL_REVIEW_COUNTER}; the existing "
+                    f"{_SKILL_REVIEW_COUNTER} applies",
+                )
+            elif key != _RETIRED_SKILL_REVIEW_COUNTER:
+                converted[key] = value
+        if _RETIRED_SKILL_REVIEW_COUNTER in counters:
+            self.session.tally.count("reflection_counter_dropped")
+            successor = (
+                f"the existing {_SKILL_REVIEW_COUNTER} applies"
+                if _SKILL_REVIEW_COUNTER in converted
+                else "the count toward the next Skill review starts at zero"
+            )
+            self.drop(
+                f"{_REFLECTION_COUNTERS}.{_RETIRED_SKILL_REVIEW_COUNTER}",
+                f"it counted Tool calls, and its successor {_SKILL_REVIEW_COUNTER} counts "
+                f"Model steps; {successor}",
+            )
+        metadata[_REFLECTION_COUNTERS] = converted
 
     def _run_kinds(self, value: Any) -> list[str]:
         if value is None:
@@ -1816,9 +1899,19 @@ def _build_search_index(path: Path, tally: Tally) -> None:
 
 
 def _current_assistant_shape(record: _Record, what: str, data: dict[str, Any]) -> None:
-    """Give old Assistant Message data the Usage and file spans it meant."""
+    """Give old Assistant Message data the Usage, file spans and Reasoning state it meant."""
     if data.get("role") != "assistant":
         return
+    meta = data.get("reasoning_meta")
+    if isinstance(meta, dict) and _RETIRED_REASONING_META_KEY in meta:
+        del meta[_RETIRED_REASONING_META_KEY]
+        if not meta:
+            del data["reasoning_meta"]
+        record.reshaped["reasoning_keys_dropped"] += 1
+        record.reshape_drops.append(
+            f"retired reasoning_meta.{_RETIRED_REASONING_META_KEY} dropped: the Provider "
+            "adapter decides whether readable reasoning is sent back as reasoning_content"
+        )
     usage = data.get("usage")
     if isinstance(usage, dict):
         if _with_field_provenance(usage):

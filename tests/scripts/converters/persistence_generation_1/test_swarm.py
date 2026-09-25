@@ -281,6 +281,61 @@ async def test_retired_tool_names_in_profiles_and_snapshots_are_replaced(tmp_pat
     ]
 
 
+def test_board_request_outcomes_lose_the_retired_recipient_list(tmp_path: Path) -> None:
+    context = _context(tmp_path)
+    routes = {"discussion": 0, "main": 1, "ping": 0}
+    post = {"discussion_id": "dsc_1", "post_id": "pst_1", "routes": routes, "sequence": 1}
+    created = {
+        "discussion_id": "dsc_2",
+        "joined": True,
+        "main_announcement_id": "pst_3",
+        "opening_post_id": "pst_2",
+    }
+    current = json.dumps({**post, "post_id": "pst_4", "sequence": 2})
+    # Only Board outcomes carried the retired list; another scope keeps a field it names.
+    foreign = json.dumps({"inactive_recipients": ["kept"], "page_id": "wpg_1"})
+    retired = [
+        ("post:swr_1:prt_1", "p-1", {**post, "inactive_recipients": ["prt_2"]}),
+        ("create:swr_1:prt_1", "c-1", {**created, "inactive_recipients": []}),
+    ]
+    _legacy_source(
+        context,
+        _SWARM_ROW,
+        *(
+            f"INSERT INTO requests VALUES('{scope}','{request_id}','hash','{json.dumps(value)}')"
+            for scope, request_id, value in retired
+        ),
+        f"INSERT INTO requests VALUES('post:swr_1:prt_1','p-2','hash','{current}')",
+        f"INSERT INTO requests VALUES('wiki:swr_1:prt_1','w-1','hash','{foreign}')",
+    )
+
+    convert(context)
+
+    staged = _staged(context)
+    try:
+        with staged.read() as connection:
+            outcomes = dict(
+                connection.execute("SELECT request_id, outcome FROM requests").fetchall()
+            )
+    finally:
+        staged.close()
+    assert outcomes == {
+        "p-1": json.dumps(post, sort_keys=True, separators=(",", ":")),
+        "c-1": json.dumps(created, sort_keys=True, separators=(",", ":")),
+        "p-2": current,
+        "w-1": foreign,
+    }
+    assert context.report.counts[AREA]["request_inactive_recipients_dropped"] == 2
+    reason = (
+        "retired outcome.inactive_recipients dropped: Swarm activity is derived now, "
+        "and a replay of the request returns only the current outcome fields"
+    )
+    assert [(item.item, item.reason) for item in context.report.skipped] == [
+        ("requests create:swr_1:prt_1 c-1", reason),
+        ("requests post:swr_1:prt_1 p-1", reason),
+    ]
+
+
 def test_missing_and_unknown_tables_and_columns_are_reported(tmp_path: Path) -> None:
     context = _context(tmp_path)
     _legacy_source(
