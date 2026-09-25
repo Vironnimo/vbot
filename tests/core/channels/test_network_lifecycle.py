@@ -16,6 +16,7 @@ import pytest
 
 from core.channels.config import ChannelConfig, ChannelError
 from tests.core.channels.channels_helpers import make_service
+from tests.core.channels.engine_test_support import channel_state
 from tests.core.channels.test_network_channels import event, make_adapter
 
 pytestmark = pytest.mark.usefixtures("current_format_data_directory")
@@ -219,21 +220,20 @@ async def test_pairing_preparation_prevents_deletion_until_cancelled(
 async def test_cancelled_ingress_drains_receipt_write_before_restart(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from core.channels import _network_adapter
-
     adapter = make_adapter(tmp_path, "slack")
     adapter._engine.handle_inbound_text = AsyncMock()
+    database = channel_state(tmp_path, "test-slack").database
     entered = asyncio.Event()
     release = threading.Event()
     loop = asyncio.get_running_loop()
-    original_write = _network_adapter.atomic_write_text
+    original_write = database.write
 
-    def blocked_write(*args: Any) -> None:
+    def blocked_write(*args: Any, **kwargs: Any) -> Any:
         loop.call_soon_threadsafe(entered.set)
         assert release.wait(5)
-        original_write(*args)
+        return original_write(*args, **kwargs)
 
-    monkeypatch.setattr(_network_adapter, "atomic_write_text", blocked_write)
+    monkeypatch.setattr(database, "write", blocked_write)
     receiving = asyncio.create_task(adapter.handle_event(event("slack")))
     try:
         await asyncio.wait_for(entered.wait(), timeout=2)
@@ -251,7 +251,6 @@ async def test_cancelled_ingress_drains_receipt_write_before_restart(
     restarted = make_adapter(tmp_path, "slack")
     restarted._engine.handle_inbound_text = AsyncMock()
     try:
-        await restarted.load_seen()
         await restarted.handle_event(event("slack"))
         restarted._engine.handle_inbound_text.assert_not_awaited()
     finally:

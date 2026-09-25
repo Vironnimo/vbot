@@ -15,6 +15,7 @@ from core.channels.adapter import (
     ChannelAccessRegistry,
     ChannelAdapter,
     ConversationFacts,
+    ConversationPointerStore,
     DeniedChatFacts,
     DeniedChatLog,
     FileData,
@@ -62,7 +63,8 @@ if TYPE_CHECKING:
     from core.sessions import ChatSessionManager
 
 _LOGGER = get_logger("channels.telegram")
-_POLLING_IO_POOL = BoundedWorkerPool(name="telegram-polling-io", max_workers=2)
+# Durable polling watermark and chat-migration writes; never on the Event Loop.
+_STATE_IO_POOL = BoundedWorkerPool(name="telegram-state-io", max_workers=2)
 
 _UNSUPPORTED_MESSAGE_TYPE_REPLY = "Sorry, this message type isn't supported yet."
 # Telegram's first-contact ritual: every user's first DM to a bot is the /start command.
@@ -98,6 +100,7 @@ class TelegramChannelAdapter(ChannelAdapter):
         attachment_store: AttachmentStore | None = None,
         *,
         command_dispatcher: CommandDispatcher,
+        conversation_pointers: ConversationPointerStore,
         chat_migration_persister: Callable[[str, str], None] | None = None,
         interaction_dispatcher: (
             Callable[[InteractionEvent, InteractionResponder], Awaitable[bool]] | None
@@ -108,8 +111,9 @@ class TelegramChannelAdapter(ChannelAdapter):
     ) -> None:
         self._config = config
         self._transport = TelegramTransport(config.id, self._require_bot, attachment_store)
-        # Persists a group→supergroup chat-id swap into the channel config
-        # (ChannelService wires its storage update); None keeps the swap runtime-only.
+        # Persists a group→supergroup chat-id swap into the channel config and
+        # group access state (ChannelService wires it). It blocks, so the adapter
+        # runs it on its state I/O pool; None keeps the swap runtime-only.
         self._chat_migration_persister = chat_migration_persister
         # Routes a button tap to the extension registered for its callback prefix.
         # Reads the live extension registry (bound method), so an extension
@@ -129,6 +133,7 @@ class TelegramChannelAdapter(ChannelAdapter):
             chat_sessions,
             self._transport,
             command_dispatcher=command_dispatcher,
+            conversation_pointers=conversation_pointers,
             run_button_binding_registry=run_button_binding_registry,
             access_registry=access_registry,
         )
@@ -169,7 +174,7 @@ class TelegramChannelAdapter(ChannelAdapter):
         # detection, reply-to-bot checks, /cmd@botname suffix parsing) for group gating.
         bot_user = await application.bot.get_me()
         self._set_bot_identity(bot_user)
-        self._last_update_id = self._load_update_offset()
+        self._last_update_id = await _STATE_IO_POOL.run(self._load_update_offset)
         self._last_update_claimed_at = time.monotonic()
         await application.bot.delete_webhook(drop_pending_updates=False)
         await application.start()
@@ -335,7 +340,7 @@ class TelegramChannelAdapter(ChannelAdapter):
         if store is None:
             return
         task = asyncio.create_task(
-            _POLLING_IO_POOL.run(store.save_update_offset, self._config.id, update_id)
+            _STATE_IO_POOL.run(store.save_update_offset, self._config.id, update_id)
         )
         self._offset_save_tasks.add(task)
         task.add_done_callback(self._on_offset_saved)
@@ -535,7 +540,7 @@ class TelegramChannelAdapter(ChannelAdapter):
         persister = self._chat_migration_persister
         if persister is not None:
             try:
-                persister(old_chat_id, new_chat_id)
+                await _STATE_IO_POOL.run(persister, old_chat_id, new_chat_id)
             except Exception as error:
                 _LOGGER.error(
                     "Cannot persist migrated chat id (channel=%s): %s",

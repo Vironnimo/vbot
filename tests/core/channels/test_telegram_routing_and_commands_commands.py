@@ -7,7 +7,6 @@ from types import SimpleNamespace
 
 import pytest
 
-import core.channels._conversation_routing as routing_module
 import core.channels.engine as engine_module
 from core.chat.commands import (
     CommandFeedback,
@@ -16,6 +15,7 @@ from core.chat.commands import (
 )
 from core.sessions import SessionAddress
 from tests.core.channels.engine_test_support import (
+    channel_state,
     make_new_only_dispatcher,
 )
 from tests.core.channels.telegram_test_support import (
@@ -112,10 +112,10 @@ async def test_new_command_starts_fresh_session(
     )
     await drain_chat_queue(adapter, 12345)
 
-    anchor_metadata = chat_sessions.get_metadata(
-        SessionAddress(project_id=None, agent_id="assistant", session_id="ch-tg-assistant-12345")
+    new_session_id = channel_state(tmp_path).active_session_id(
+        "tg-assistant", "ch-tg-assistant-12345"
     )
-    new_session_id = anchor_metadata[routing_module.ACTIVE_SESSION_METADATA_KEY]
+    assert new_session_id is not None
     assert new_session_id.startswith("ses_")
     assert chat_sessions.exists(
         SessionAddress(project_id=None, agent_id="assistant", session_id=new_session_id)

@@ -21,6 +21,7 @@ from weakref import WeakValueDictionary
 from core.channels.adapter import (
     ChannelAccessRegistry,
     ConversationFacts,
+    ConversationPointerStore,
     MessageFacts,
     QuotedMessageFacts,
     ReplyPlanFacts,
@@ -119,6 +120,7 @@ class ChannelConversationEngine:
         transport: ConversationTransport,
         *,
         command_dispatcher: CommandDispatcher,
+        conversation_pointers: ConversationPointerStore,
         run_button_binding_registry: RunButtonBindingRegistry | None = None,
         access_registry: ChannelAccessRegistry | None = None,
     ) -> None:
@@ -129,7 +131,7 @@ class ChannelConversationEngine:
         self._command_dispatcher = command_dispatcher
         self._run_button_binding_registry = run_button_binding_registry
         self._access = ChannelAccessPolicy(config, access_registry)
-        self._routing = ChannelSessionRouting(config, chat_sessions)
+        self._routing = ChannelSessionRouting(config, chat_sessions, conversation_pointers)
         self._chat_queues: dict[str, asyncio.Queue[_QueuedWork]] = {}
         self._chat_workers: dict[str, asyncio.Task[None]] = {}
         self._busy_reply_times: OrderedDict[str, float] = OrderedDict()
@@ -170,7 +172,7 @@ class ChannelConversationEngine:
         observed_context: Sequence[tuple[ConversationFacts, str]] = (),
     ) -> bool:
         """Gate and admit text with optional bounded context; report admission."""
-        conversation = self._access._snapshot_group_sender(conversation)
+        conversation = await self._access._snapshot_group_sender(conversation)
         prepared_command = self._command_dispatcher.prepare(message_text)
         if prepared_command is not None:
             # Commands are inherently addressed; group commands are gated by sender
@@ -226,7 +228,7 @@ class ChannelConversationEngine:
                 conversation=conversation,
                 message=MessageFacts(content=message_text),
                 raw_message=raw_message,
-                observed_context=self._snapshot_observed_context(observed_context),
+                observed_context=await self._snapshot_observed_context(observed_context),
             ),
         ):
             await self._reject_overflow(conversation)
@@ -242,7 +244,7 @@ class ChannelConversationEngine:
         observed_context: Sequence[tuple[ConversationFacts, str]] = (),
     ) -> bool:
         """Gate and admit media with optional bounded context; report admission."""
-        conversation = self._access._snapshot_group_sender(conversation)
+        conversation = await self._access._snapshot_group_sender(conversation)
         normalized_companion = companion_text.strip() if companion_text is not None else None
         if normalized_companion == "":
             normalized_companion = None
@@ -271,19 +273,19 @@ class ChannelConversationEngine:
                 conversation=conversation,
                 messages=tuple(raw_messages),
                 companion_text=normalized_companion,
-                observed_context=self._snapshot_observed_context(observed_context),
+                observed_context=await self._snapshot_observed_context(observed_context),
             ),
         ):
             await self._reject_overflow(conversation)
             return False
         return True
 
-    def _snapshot_observed_context(
+    async def _snapshot_observed_context(
         self, context: Sequence[tuple[ConversationFacts, str]]
     ) -> tuple[_QueuedObservedMessage, ...]:
         observed = []
         for conversation, text in context:
-            conversation = self._access._snapshot_group_sender(conversation)
+            conversation = await self._access._snapshot_group_sender(conversation)
             observed.append(
                 _QueuedObservedMessage(
                     conversation=conversation,
@@ -299,7 +301,7 @@ class ChannelConversationEngine:
         persisted as a kernel-internal note (never a visible user message), the model
         acts on it, and its reply is relayed like any other channel answer.
         """
-        conversation = self._access._snapshot_group_sender(conversation)
+        conversation = await self._access._snapshot_group_sender(conversation)
         if self._enqueue_chat_work(
             conversation.chat_id,
             _QueuedInternalPrompt(conversation=conversation, prompt=prompt),
@@ -320,7 +322,7 @@ class ChannelConversationEngine:
         FIFO as following messages. Legacy unbound ``run:<payload>`` buttons keep
         routing to the Channel's current active Session.
         """
-        conversation = self._access._snapshot_group_sender(conversation)
+        conversation = await self._access._snapshot_group_sender(conversation)
         if not self._access._command_sender_authorized(conversation):
             _LOGGER.info(
                 "Run-triggering tap denied for member (channel=%s)",
@@ -350,13 +352,14 @@ class ChannelConversationEngine:
         async with lock:
             binding_id, button_index = parsed_binding
             claim: RunButtonClaim | None = None
-            previous_anchor_metadata: dict[str, Any] | None = None
+            pointed = False
+            previous_session_id: str | None = None
             restored_event: InteractionEvent | None = None
             terminal = False
             admitted = False
 
             def prepare() -> InteractionTriggerStatus | None:
-                nonlocal claim, previous_anchor_metadata, restored_event, terminal
+                nonlocal claim, pointed, previous_session_id, restored_event, terminal
                 claim = registry.claim_run_button_binding(
                     self._config.id,
                     binding_id,
@@ -374,18 +377,19 @@ class ChannelConversationEngine:
                 ):
                     terminal = True
                     return "unavailable"
-                previous_anchor_metadata = self._routing._point_conversation_at_session(
+                previous_session_id = self._routing._point_conversation_at_session(
                     conversation, binding.origin_session_id
                 )
+                pointed = True
                 return None
 
             def rollback() -> None:
                 assert claim is not None and claim.binding is not None
                 try:
-                    if previous_anchor_metadata is not None:
+                    if pointed:
                         self._routing._restore_conversation_pointer(
                             conversation,
-                            previous_anchor_metadata,
+                            previous_session_id,
                             expected_session_id=claim.binding.origin_session_id,
                         )
                 finally:
@@ -600,7 +604,7 @@ class ChannelConversationEngine:
                     content=None,
                 )
             if quoted is not None:
-                content = self._content_with_quoted_message(queued, quoted)
+                content = await self._content_with_quoted_message(queued, quoted)
 
         await self._trigger_and_relay(
             route,
@@ -611,7 +615,7 @@ class ChannelConversationEngine:
             waiting_work_admission=queued.admission,
         )
 
-    def _content_with_quoted_message(
+    async def _content_with_quoted_message(
         self,
         queued: _QueuedInboundMessage,
         quoted: QuotedMessageFacts,
@@ -623,7 +627,7 @@ class ChannelConversationEngine:
             blocks.append(TextBlock(type="text", text=_QUOTED_MESSAGE_UNAVAILABLE))
             return blocks
 
-        quoted_conversation = self._access._snapshot_group_sender(
+        quoted_conversation = await self._access._snapshot_group_sender(
             replace(
                 queued.conversation,
                 user_id=quoted.user_id,

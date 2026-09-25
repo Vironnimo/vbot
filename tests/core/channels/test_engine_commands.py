@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import core.channels._conversation_routing as routing_module
 from core.chat import (
     CommandDispatcher,
     CommandFeedback,
@@ -27,6 +26,7 @@ from .engine_test_support import (
     RouteFacts,
     Run,
     asyncio,
+    channel_state,
     command_outcome,
     drain,
     engine_module,
@@ -397,12 +397,7 @@ async def test_handoff_follow_up_is_one_shot_and_keeps_channel_anchor(tmp_path: 
 
     assert transport.sent_texts == ["review reply", "source reply"]
     assert engine._config.agent_id == "assistant"
-    assert (
-        chat_sessions.get_metadata(
-            SessionAddress(project_id=None, agent_id="assistant", session_id=SESSION_ID)
-        ).get(routing_module.ACTIVE_SESSION_METADATA_KEY)
-        is None
-    )
+    assert channel_state(tmp_path).active_session_id("tg-assistant", SESSION_ID) is None
     assert trigger_mock.await_args is not None
     assert trigger_mock.await_args.args[:3] == ("assistant", "later message", SESSION_ID)
     await engine.stop()
@@ -420,9 +415,8 @@ async def test_new_session_command_starts_fresh_session_and_redirects_followups(
     await engine.handle_inbound_text(make_conversation(), "/new")
     await drain(engine, 12345)
 
-    new_session_id = chat_sessions.get_metadata(
-        SessionAddress(project_id=None, agent_id="assistant", session_id=SESSION_ID)
-    )[routing_module.ACTIVE_SESSION_METADATA_KEY]
+    new_session_id = channel_state(tmp_path).active_session_id("tg-assistant", SESSION_ID)
+    assert new_session_id is not None
     # A distinct Session was created; Channel grouping comes from its metadata.
     assert new_session_id != SESSION_ID
     assert new_session_id.startswith("ses_")
@@ -468,9 +462,8 @@ async def test_message_enqueued_behind_pending_new_routes_to_new_session(tmp_pat
     await engine.handle_inbound_text(make_conversation(), "right after new")
     await drain(engine, 12345)
 
-    new_session_id = chat_sessions.get_metadata(
-        SessionAddress(project_id=None, agent_id="assistant", session_id=SESSION_ID)
-    )[routing_module.ACTIVE_SESSION_METADATA_KEY]
+    new_session_id = channel_state(tmp_path).active_session_id("tg-assistant", SESSION_ID)
+    assert new_session_id is not None
     trigger_mock.assert_awaited_once()
     assert trigger_mock.await_args is not None
     assert trigger_mock.await_args.args[2] == new_session_id
@@ -487,9 +480,8 @@ async def test_new_session_tags_fresh_session_with_metadata_but_no_reminder(tmp_
     await engine.handle_inbound_text(make_conversation(), "/new")
     await drain(engine, 12345)
 
-    new_session_id = chat_sessions.get_metadata(
-        SessionAddress(project_id=None, agent_id="assistant", session_id=SESSION_ID)
-    )[routing_module.ACTIVE_SESSION_METADATA_KEY]
+    new_session_id = channel_state(tmp_path).active_session_id("tg-assistant", SESSION_ID)
+    assert new_session_id is not None
     notes = [
         message
         for message in chat_sessions.get(
@@ -508,9 +500,9 @@ async def test_new_session_tags_fresh_session_with_metadata_but_no_reminder(tmp_
         "channel_id": "tg-assistant",
         "platform_target": "12345",
     }
-    # The fresh session is not itself a pointer anchor, and tracks no participant.
-    assert routing_module.ACTIVE_SESSION_METADATA_KEY not in metadata
-    assert "participants" not in metadata
+    # Routing state lives in the Channel state database, not in Session metadata.
+    assert not {"active_session_id", "conversation_kind", "participants"} & metadata.keys()
+    assert channel_state(tmp_path).active_session_id("tg-assistant", new_session_id) is None
     await engine.stop()
 
 
@@ -532,10 +524,7 @@ async def test_new_session_command_refused_while_run_active(tmp_path: Path) -> N
     assert transport.sent_texts == ["A new session can be started after the current run finishes."]
     trigger_mock.assert_not_awaited()
     # No new session and no pointer: the anchor is unchanged.
-    metadata = chat_sessions.get_metadata(
-        SessionAddress(project_id=None, agent_id="assistant", session_id=SESSION_ID)
-    )
-    assert routing_module.ACTIVE_SESSION_METADATA_KEY not in metadata
+    assert channel_state(tmp_path).active_session_id("tg-assistant", SESSION_ID) is None
     await engine.stop()
 
 
@@ -561,10 +550,9 @@ async def test_new_session_in_one_chat_leaves_other_chat_untouched(tmp_path: Pat
         reply_surface=CHANNEL_REPLY_SURFACE,
         run_kind=RunKind.CHANNEL,
     )
-    metadata_b = chat_sessions.get_metadata(
-        SessionAddress(project_id=None, agent_id="assistant", session_id="ch-tg-assistant-67890")
+    assert (
+        channel_state(tmp_path).active_session_id("tg-assistant", "ch-tg-assistant-67890") is None
     )
-    assert routing_module.ACTIVE_SESSION_METADATA_KEY not in metadata_b
     await engine.stop()
 
 

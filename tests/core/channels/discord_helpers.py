@@ -15,7 +15,7 @@ from core.channels.discord import (
 from core.runs import WaitingWorkAdmission
 from core.sessions import ChatSessionManager
 
-from .engine_test_support import MemoryChannelAccessRegistry
+from .engine_test_support import MemoryChannelAccessRegistry, channel_state
 
 
 class FakePartialMessage:
@@ -212,6 +212,7 @@ def make_adapter(
         lambda _key: "test-token",
         attachment_store=attachment_store,
         command_dispatcher=cast(Any, command_dispatcher or make_command_dispatcher()),
+        conversation_pointers=channel_state(tmp_path, "dc-assistant"),
         access_registry=MemoryChannelAccessRegistry(
             [str(user_id) for user_id in admin_user_ids or []]
         ),

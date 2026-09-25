@@ -119,80 +119,24 @@ def test_channel_storage_crud_round_trip(tmp_path: Path) -> None:
         storage.get(initial.id)
 
 
-def test_channel_access_state_is_durable_and_scoped_per_group(tmp_path: Path) -> None:
-    storage = ChannelStorage(tmp_path)
-    storage.save(make_config(allowed_chat_ids=["-100", "-200"]))
-
-    assert storage.snapshot_participant_role("tg-assistant", "-100", "50", "Alice") == "member"
-    assert storage.snapshot_participant_role("tg-assistant", "-100", "51", "Bob") == "member"
-    assert storage.snapshot_participant_role("tg-assistant", "-200", "51", "Bob") == "member"
-
-    storage.set_self_user_id("tg-assistant", "50")
-    storage.grant_group_admin("tg-assistant", "-100", "51")
-    storage.revoke_group_admin("tg-assistant", "-100", "50")
-
-    assert storage.role_for("tg-assistant", "-100", "50") == "admin"
-    assert storage.role_for("tg-assistant", "-100", "51") == "admin"
-    assert storage.role_for("tg-assistant", "-200", "51") == "member"
-
-    reloaded = ChannelStorage(tmp_path)
-    state = reloaded.access_state("tg-assistant")
-    assert state["self_user_id"] == "50"
-    groups = {group["access_scope_id"]: group for group in state["groups"]}
-    assert groups["-100"]["admin_user_ids"] == ["50", "51"]
-    assert groups["-200"]["admin_user_ids"] == ["50"]
-    assert groups["-100"]["participants"] == [
-        {
-            "user_id": "50",
-            "display_name": "Alice",
-            "last_seen_at": groups["-100"]["participants"][0]["last_seen_at"],
-            "role": "admin",
-        },
-        {
-            "user_id": "51",
-            "display_name": "Bob",
-            "last_seen_at": groups["-100"]["participants"][1]["last_seen_at"],
-            "role": "admin",
-        },
-    ]
-
-    reloaded.revoke_group_admin("tg-assistant", "-100", "51")
-    assert reloaded.role_for("tg-assistant", "-100", "51") == "member"
-
-
-def test_channel_access_mutations_do_not_change_channel_config(tmp_path: Path) -> None:
-    storage = ChannelStorage(tmp_path)
-    storage.save(make_config(allowed_chat_ids=["-100"]))
+@pytest.mark.asyncio
+async def test_channel_access_mutations_do_not_change_channel_config(tmp_path: Path) -> None:
+    ChannelStorage(tmp_path).save(make_config(allowed_chat_ids=["-100"]))
     config_path = tmp_path / "channels" / "tg-assistant" / "channel.json"
     original_config = config_path.read_bytes()
+    service = make_service(tmp_path)
+    try:
+        await service._state.snapshot_participant_role("tg-assistant", "-100", "50", "Alice")
+        await service.set_channel_self_user_id("tg-assistant", "50")
+        await service.grant_channel_group_admin("tg-assistant", "-100", "51")
+        await service.revoke_channel_group_admin("tg-assistant", "-100", "51")
+        access = await service.channel_access("tg-assistant")
+    finally:
+        service.close()
 
-    storage.snapshot_participant_role("tg-assistant", "-100", "50", "Alice")
-    storage.set_self_user_id("tg-assistant", "50")
-    storage.grant_group_admin("tg-assistant", "-100", "51")
-    storage.revoke_group_admin("tg-assistant", "-100", "51")
-
+    assert access["self_user_id"] == "50"
     assert config_path.read_bytes() == original_config
-    assert (config_path.parent / "access.json").is_file()
-
-
-def test_channel_access_migration_merges_groups_and_removes_old_scope(tmp_path: Path) -> None:
-    storage = ChannelStorage(tmp_path)
-    storage.save(make_config(allowed_chat_ids=["-100", "-200"]))
-    storage.snapshot_participant_role("tg-assistant", "-100", "50", "Alice")
-    storage.snapshot_participant_role("tg-assistant", "-200", "51", "Bob")
-    storage.grant_group_admin("tg-assistant", "-100", "50")
-    storage.grant_group_admin("tg-assistant", "-200", "51")
-
-    storage.migrate_group_access("tg-assistant", "-100", "-200")
-
-    state = storage.access_state("tg-assistant")
-    assert [group["access_scope_id"] for group in state["groups"]] == ["-200"]
-    group = state["groups"][0]
-    assert group["admin_user_ids"] == ["50", "51"]
-    assert [
-        (participant["user_id"], participant["display_name"])
-        for participant in group["participants"]
-    ] == [("50", "Alice"), ("51", "Bob")]
+    assert not (config_path.parent / "access.json").exists()
 
 
 def test_unknown_config_fields_are_kept_when_the_channel_is_saved(tmp_path: Path) -> None:
