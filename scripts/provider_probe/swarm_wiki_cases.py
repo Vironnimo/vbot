@@ -93,7 +93,7 @@ async def wiki_cases(store: Any, sid: str, pid: str) -> list[tuple[str, dict[str
         ("recovered_identity", {**read, "swarm_id": sid, "participant_id": pid}, True),
         ("invalid_identity", {**read, "swarm_id": "foreign"}, False),
         ("invalid_fraction", {**read, "limit": 1.5}, False),
-        ("invalid_null", {**read, "revision": None}, False),
+        ("recovered_null", {**read, "revision": None}, True),
         ("invalid_field", {**read, "publish": True}, False),
         ("create", create_args, True),
         ("create_replay", create_args, True),

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from argparse import Namespace
 
 import pytest
@@ -60,10 +61,13 @@ def test_swarm_workflow_persists_failed_calls_and_resumes_from_feedback():
             )
             topic = next(
                 (
-                    row["id"]
+                    match.group(1)
                     for item in results
-                    for row in (item.get("data") or {}).get("entries", [])
-                    if row.get("title") == "Topic"
+                    if (
+                        match := re.search(
+                            r'- (\S+) "Topic"', (item.get("data") or {}).get("content") or ""
+                        )
+                    )
                 ),
                 "",
             )

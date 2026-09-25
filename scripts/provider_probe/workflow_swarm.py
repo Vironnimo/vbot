@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import re
 from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -16,6 +17,24 @@ from core.tools import tool_failure
 from core.tools.contracts import ToolContractError
 from scripts.provider_probe.common import PROJECT_ROOT
 from scripts.provider_probe.transport import _expected_profile
+
+_POST_HEADER = re.compile(r"^\[(pst_[A-Za-z0-9]+)\]", re.MULTILINE)
+
+
+def _continuation(line: str) -> dict[str, Any]:
+    """Return the copyable argument object that ends a Swarm result line."""
+
+    return cast(dict[str, Any], json.loads(line[line.index("{") :]))
+
+
+def _received_post_ids(data: dict[str, Any]) -> set[str]:
+    """Return the post IDs a successful Swarm result showed the Agent."""
+
+    received = {entry["id"] for entry in data.get("entries", []) if "id" in entry}
+    content = data.get("content")
+    if isinstance(content, str):
+        received.update(_POST_HEADER.findall(content))
+    return received
 
 
 async def _probe_swarm_tool(adapter: Any, args: argparse.Namespace) -> dict[str, Any]:
@@ -164,6 +183,11 @@ async def _probe_swarm_tool(adapter: Any, args: argparse.Namespace) -> dict[str,
             listed = await service.board(context, {"action": "list", "limit": 1})
             read = await service.board(context, {"action": "read", "limit": 1})
             main = swarm["main_discussion_id"]
+            list_more = _continuation(listed["data"]["more"])
+            read_older = _continuation(read["data"]["older"])
+            peer_name = next(
+                row["display_name"] for row in swarm["participants"] if row["id"] == peer
+            )
             post = {"action": "post", "text": "probe contribution"}
             create = {
                 "action": "create",
@@ -174,12 +198,12 @@ async def _probe_swarm_tool(adapter: Any, args: argparse.Namespace) -> dict[str,
                 ("list_default", {"action": "list"}, True),
                 ("list_one", {"action": "list", "limit": 1}, True),
                 ("list_max", {"action": "list", "limit": 100}, True),
-                ("list_cursor", listed["data"]["next_call"]["arguments"], True),
+                ("list_cursor", list_more, True),
                 ("read_default", {"action": "read"}, True),
                 ("read_discussion", {"action": "read", "discussion_id": disc}, True),
                 ("read_one", {"action": "read", "limit": 1}, True),
                 ("read_max", {"action": "read", "limit": 100}, True),
-                ("read_cursor", read["data"]["next_call"]["arguments"], True),
+                ("read_before", read_older, True),
                 ("read_message", {"action": "read", "message_id": topic["opening_post_id"]}, True),
                 ("post_default", post, True),
                 ("post_repeat", post, True),
@@ -264,7 +288,7 @@ async def _probe_swarm_tool(adapter: Any, args: argparse.Namespace) -> dict[str,
                     "foreign_cursor",
                     {
                         "action": "read",
-                        "cursor": listed["data"]["next_call"]["arguments"]["cursor"],
+                        "cursor": list_more["cursor"],
                     },
                     False,
                 ),
@@ -287,8 +311,6 @@ async def _probe_swarm_tool(adapter: Any, args: argparse.Namespace) -> dict[str,
                 {"action": "read", "text": "wrong"},
                 {"action": "list", "limit": True},
                 {"action": "list", "limit": 0},
-                {"action": "list", "limit": 101},
-                {"action": "read", "message_id": topic["opening_post_id"], "limit": 20},
                 {"action": "post"},
                 {**post, "text": ""},
                 {"action": "create", "text": "missing title"},
@@ -299,8 +321,21 @@ async def _probe_swarm_tool(adapter: Any, args: argparse.Namespace) -> dict[str,
                 [
                     ("recovered_count", {"action": "list", "limit": "1"}, True),
                     ("recovered_scope", {"action": "list", "swarm_id": sid, "sender": pid}, True),
-                    ("invalid_null_cursor", {"action": "read", "cursor": None}, False),
+                    ("recovered_null_cursor", {"action": "read", "cursor": None}, True),
                     ("recovered_wrapper", {"request": {"operation": "LIST", "limti": "1.0"}}, True),
+                    ("recovered_limit_clamp", {"action": "list", "limit": 101}, True),
+                    (
+                        "recovered_message_limit",
+                        {"action": "read", "message_id": topic["opening_post_id"], "limit": 20},
+                        True,
+                    ),
+                    ("recovered_inferred_post", {"text": "inferred contribution"}, True),
+                    ("recovered_action_synonym", {"action": "send", "message": "hello"}, True),
+                    ("recovered_name_ping", {**post, "recipients": [peer_name]}, True),
+                    ("recovered_all_ping", {**post, "recipients": ["all"]}, True),
+                    ("recovered_post_number", {"action": "read", "message_id": "pst_1"}, True),
+                    ("reply_post_number", {**post, "reply_to": "pst_1"}, False),
+                    ("foreign_action", {"action": "status"}, False),
                 ]
             )
             cases.extend(
@@ -348,7 +383,7 @@ async def _probe_swarm_tool(adapter: Any, args: argparse.Namespace) -> dict[str,
                     ("receive_max", {"limit": 100}, True),
                     ("receive_empty", {}, True),
                     ("recovered_count", {"limit": "1"}, True),
-                    ("invalid_null_limit", {"limit": None}, False),
+                    ("recovered_null_limit", {"limit": None}, True),
                     ("recovered_action", {"action": "receive"}, True),
                     ("recovered_wrapper", {"receive": {"limti": "1"}}, True),
                     ("recovered_scope", {"swarm_id": sid, "participant_id": pid}, True),
@@ -373,7 +408,7 @@ async def _probe_swarm_tool(adapter: Any, args: argparse.Namespace) -> dict[str,
                 cases = [
                     ("status_default", {}, True),
                     ("recovered_count", {"limit": "1"}, True),
-                    ("invalid_null_cursor", {"cursor": None}, False),
+                    ("recovered_null_cursor", {"cursor": None}, True),
                     ("recovered_action", {"action": "status"}, True),
                     ("recovered_wrapper", {"request": {"operation": "STATUS", "limit": "1"}}, True),
                     ("recovered_scope", {"swarm_id": sid, "participant_id": pid}, True),
@@ -707,9 +742,7 @@ async def _probe_swarm_workflow(
             )
             if result["ok"]:
                 data = result["data"]
-                received = {entry["id"] for entry in data.get("entries", []) if "id" in entry}
-                received.update(entry["id"] for entry in data.get("recent", {}).get("entries", []))
-                received_ids.update(received)
+                received_ids.update(_received_post_ids(data))
                 if feedback_ids and feedback_ids.issubset(received_ids):
                     feedback_received = True
                 if name == "swarm_board" and arguments.get("action") in {"post", "create"}:

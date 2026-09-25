@@ -3,14 +3,17 @@
 Read for changes to the bundled Swarm Extension. The generic Extension contracts
 remain in `extensions.md`; Swarm policy belongs under `resources/extensions/swarm/`.
 
-Private Session Tools use owner-selected call repair before scoped execution, including encoded counts and known wrappers. Bound identities remain exact; optional values are not erased merely because their schema rejects them. The known `limti` field typo names `limit` without enabling general nearest-name matching. Inbox `action: receive` and State `action: status` are accepted redundant labels. Recognizable wrappers and explicit identities matching the bound Session are accepted (the identity fields and redundant action labels are declared `unadvertised_parameters`, so dispatch validates them without offering them); unsupported operations and scope mismatches remain failures. The probe executes the Model's emitted arguments, compares them with independently prescribed conformance inputs, and verifies canonical receipts.
+Private Session Tools use owner-selected call repair before scoped execution (`_tool_calls.py`; details under the Board section), including encoded counts and known wrappers. Bound identities remain exact; optional values are not erased merely because their schema rejects them. Field aliases are explicit lists (the `limti` typo among them); there is no general nearest-name matching of field names. Inbox and State accept their single action under common synonyms (`receive`, `status`) and reject other actions with a message naming the Swarm Tool that has them. Recognizable wrappers and explicit identities matching the bound Session are accepted (the identity fields and redundant action labels are declared `unadvertised_parameters`, so dispatch validates them without offering them); unsupported operations and scope mismatches remain failures. The probe executes the Model's emitted arguments, compares them with independently prescribed conformance inputs, and verifies canonical receipts.
 
 Swarm Activity uses live `run_active` as authoritative over an older persisted Session status. Failed/interrupted participants remain visible in an overview warning, and partial Resume failures name the affected participants after refresh. `swarms.get` inspects every participant's lifecycle Run with one batched `temporary_agents.owned_runs` read; only a Run id without an owned record counts as inactive, and unexpected host failures propagate instead of looking idle. Completion callbacks arriving after Stop or a newer lifecycle epoch quietly defer to that lifecycle outcome (`test_swarm_lifecycle.py`, `SwarmPage.test.activity-and-usage.test.js`). Temporary participants inherit the Runtime streaming loop; request diagnostics use the shared Chat timeline.
 
 ## Owners
 
 - `extension.py` owns registration, management operations, the four Tool handlers,
-  and coordination with owner-bound temporary execution groups.
+  and coordination with owner-bound temporary execution groups. The Board handler
+  delegates to `_board_tool.py` (call checks, actions, corrections) and
+  `_board_view.py` (pure recipient resolution and result text); `_tool_calls.py`
+  holds the per-Tool call-syntax normalizers.
 - `store.py` owns the SQLite profile, Board, Wiki, audience, delivery, lifecycle and audit
   transactions. It receives canonical receipt lookups; it must
   not open the Session database directly. Its database handle comes from
@@ -75,9 +78,10 @@ the profile transaction; omission on an update retains the existing shortcut.
 Explicit shortcuts remain validated and collision-checked (`store.py`).
 
 New Swarms atomically retain the original user request as an immutable user-authored
-Board post at sequence zero. `goal_post_id` identifies it in the Swarm snapshot and
-Board results. The page pins it separately; chronological discussion pages exclude
-it, while exact-message reads return it. It creates no delivery audience: the initial
+Board post at sequence zero. `goal_post_id` identifies it in the Swarm snapshot. The
+page pins it separately; chronological discussion pages exclude it, while
+exact-message reads return it. The Board Tool's list result, and main-discussion
+reads that reach the start, carry a `user_request` line with the copyable read call. It creates no delivery audience: the initial
 participant message points to this post and asks Agents to read and discuss the
 request together before implementation. The Agents decide when they are ready to
 act; no fixed roles, discussion rounds, plan template or approval phase are imposed.
@@ -118,7 +122,8 @@ participants on a discussion's opening message without joining those recipients;
 creation, opening-message audience and the main-discussion announcement commit
 atomically. Replies derive their discussion from the exact same-Swarm message
 unless an explicit, matching discussion is supplied. Reads start with newest
-posts, chronological within each page, and continuation moves to older posts.
+posts, chronological within each page. The Tool continues to older posts with
+`before` (the oldest shown post id); Store read cursors remain accepted.
 The Board UI reverses each page for newest-first display and appends older pages
 below it; this presentation does not change the Store or Tool read order.
 Ordinary post bodies use the shared `MarkdownContent.svelte` renderer and Chat
@@ -126,6 +131,27 @@ typography, including fenced-code Copy actions. Raw HTML stays escaped and links
 open through the same host bridge handler as Activity. Discussion announcements
 retain their dedicated navigation action (`SwarmPage.test.js`).
 Coverage: `test_swarm_board.py` and the production `swarm_tool` probe.
+
+Swarm Tool calls follow the Tool error-tolerance rules (`../tools.md`). Owners:
+- `_tool_calls.py` repairs call syntax for all four Tools before validation:
+  wrapper objects, other harnesses' field and action names, an action implied by
+  the supplied fields, placeholder values in optional fields, and echoed
+  idempotency keys the handler derives. An action that belongs to another Swarm
+  Tool fails with a message naming that Tool.
+- `_board_tool.py` checks Board calls. It drops fields that request nothing, such
+  as paging fields on post, with a `note`. It clamps `limit` above 100 with a note.
+  It rejects a field that another action would use, naming those actions. It
+  corrects a read-only reference with a note when exactly one candidate exists:
+  a post number (`pst_N`), a close post id, a close discussion id, or a post id
+  passed as `cursor`. It never corrects a write target (`reply_to`, a post's
+  `discussion_id`, recipients); those fail before any effect with the exact
+  corrected call.
+- `_board_view.py` renders results as plain text: one header line per post
+  (`[post_id] Author (in ...; reply to ...; pinged ...)`), then its verbatim
+  text. Copyable continuation calls follow as JSON.
+
+The Store keeps its exact-id contracts; `post_suggestions` only feeds these
+corrections and errors.
 
 The Board Tool description guides participants toward
 the main discussion for shared conversation and coordination; additional discussions
@@ -186,8 +212,12 @@ roster, pending count and delivery/wake policy; cursors bind page size. Particip
 cannot rename themselves. The Store shuffles a curated pool of 300 short given
 names and callsigns once per new Swarm, assigning without replacement across
 formation rows. Larger Swarms use numbered suffixes after the pool is exhausted.
-Saved names survive request replay, restart and Resume; participant ids remain
-the addressing contract (`test_swarm_store.py`). Progress, results and requests for help belong on the
+Saved names survive request replay, restart and Resume; stored recipients remain
+participant ids (`test_swarm_store.py`). At its boundary the Board Tool also resolves
+exact display names, `all`/`*` (every other participant), and words meaning the
+user. The user is not a participant, so that ping is dropped with a note. Values
+matching no participant fail with the roster and any unique close id; the Tool
+never guesses between participants (`test_swarm_board.py`). Progress, results and requests for help belong on the
 Board, not in participant lifecycle fields. There is no participant-owned wait, blocked, finishing or done state,
 completion reservation, structured participant summary field or automatic group completion.
 
