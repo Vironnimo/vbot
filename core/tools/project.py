@@ -14,7 +14,11 @@ from core.projects import (
     ProjectStore,
     cwd_exists,
 )
+from core.settings import PROJECT_ID_PATTERN
+from core.tools._argument_repair import normalize_call_arguments
+from core.tools._call_vocabulary import SpellingAliases
 from core.tools.arguments import required_string
+from core.tools.contracts import compile_tool_contract
 from core.tools.file_state import FileReadState
 from core.tools.model_names import SHELL_MODEL_NAME
 from core.tools.tools import (
@@ -28,22 +32,22 @@ from core.tools.tools import (
     tool_failure,
     tool_success,
 )
+from core.utils.logging import get_logger
 from core.utils.paths import model_path
+
+_LOGGER = get_logger("tools.project")
 
 PROJECT_TOOL_NAME = "project"
 PROJECT_TOOL_DESCRIPTION = (
-    "Load a registered Project's current instructions, absolute Project path, and Project "
-    "Skills. "
-    "Call it alone and wait for the result before taking dependent actions in that Project. "
-    "Loading Project Context does not change the current working directory."
+    "Load a registered Project's instructions, absolute Project path, and Project Skills into "
+    "this Session. It does not change your working directory, Workspace, or permissions."
 )
 PROJECT_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
     "properties": {
         "project_id": {
             "type": "string",
-            "minLength": 1,
-            "description": "Registered Project id from the Projects list in the System Prompt.",
+            "description": "Exact id of a Project listed under Registered Projects.",
         }
     },
     "required": ["project_id"],
@@ -51,17 +55,27 @@ PROJECT_TOOL_PARAMETERS: JsonObject = {
 
 PROJECT_PROMPT_BLOCK_HEADER = (
     "## Projects\n\n"
-    "Projects are registered execution contexts. Before working on a registered Project "
-    "that is not already your current working Project, call `project` with its exact id. "
-    "Call it alone and wait for the result before any dependent file, search, edit, or shell "
-    "Tool call; sibling Tool calls may run concurrently.\n\n"
-    "The `project` Tool loads the Project's current instructions, absolute Project path, and "
-    "Project Skills. It does not change Rooting, Workspace, or permissions. After "
-    "loading, use absolute paths for "
-    f"file Tools. Set `workdir` to the returned `project_path` on every `{SHELL_MODEL_NAME}` "
-    "call; each call "
-    "starts a new shell and does not retain working-directory changes from earlier calls.\n\n"
+    "Before working on a registered Project other than your current working Project (marked "
+    '`active="true"`), call `project` with its exact id. Call it alone and wait for its '
+    "result before any dependent Tool call, because sibling calls run concurrently. Loading "
+    "does not change your working directory: use absolute paths for file Tools, and set "
+    f"`workdir` to the returned `project_path` on every `{SHELL_MODEL_NAME}` call.\n\n"
     "Registered Projects:"
+)
+# ``choices`` lists registered ids with their display names.
+_PROJECT_NOT_FOUND_MESSAGE_TEMPLATE = (
+    "Project not found: {project_id}. Use one of these registered Project ids exactly: {choices}."
+)
+_NO_PROJECTS_MESSAGE_TEMPLATE = (
+    "Project not found: {project_id}. No Projects are registered, so there is no Project "
+    "Context to load."
+)
+_PROJECT_CHOICE_LIMIT = 30
+# A display name sent under one of these keys fails with the exact ids; it never
+# selects a Project.
+_FIELD_ALIASES = SpellingAliases({"project_id": ("project", "id", "name", "project_name")})
+_PROJECT_CONTRACT = compile_tool_contract(
+    name=PROJECT_TOOL_NAME, input_schema=PROJECT_TOOL_PARAMETERS, require_closed_input=False
 )
 
 
@@ -113,13 +127,14 @@ def make_project_handler(
             return tool_failure("invalid_arguments", str(error), retryable=False)
 
         try:
+            # An id that cannot exist is as missing as one that does not.
+            if PROJECT_ID_PATTERN.fullmatch(project_id) is None:
+                raise ProjectNotFoundError(project_id)
             project = projects.get(project_id)
-        except InvalidProjectIdError as error:
-            return tool_failure("invalid_arguments", str(error), retryable=False)
-        except ProjectNotFoundError:
+        except (InvalidProjectIdError, ProjectNotFoundError):
             return tool_failure(
                 "project_not_found",
-                f"Project not found: {project_id}",
+                _project_not_found_message(projects, project_id),
                 retryable=False,
             )
         except (ProjectError, OSError) as error:
@@ -165,21 +180,16 @@ def make_project_handler(
 
         project_path = model_path(project.cwd)
         content = _render_project_context(
-            project.project_id,
-            project.display_name,
-            project_path,
-            rendered_files,
-            rendered_skills,
+            project.display_name, project_path, rendered_files, rendered_skills
         )
+        # ``status`` and ``project_id`` are what Chat recovers the loaded Project from;
+        # the files and Skills are listed once, in ``content``.
         return tool_success(
             {
                 "status": "loaded",
                 "project_id": project.project_id,
-                "display_name": project.display_name,
                 "project_path": project_path,
                 "content": content,
-                "loaded_files": [model_path(path) for path in read_paths],
-                "skills": [_skill_payload(skill) for skill in skills],
             }
         )
 
@@ -204,9 +214,10 @@ def register_project_tool(
         ),
         constraints=("identity_agent",),
         open_input_schema=True,
+        argument_normalizer=_normalize_project_arguments,
         result_schema={
             "type": "object",
-            "required": ["status", "project_id", "display_name", "project_path", "content"],
+            "required": ["status", "project_id", "project_path", "content"],
         },
         display=ToolDisplay(
             primary_candidates=(
@@ -246,35 +257,50 @@ def _project_prompt_line(project: Any, *, active_project_id: str | None) -> str:
 
 
 def _render_project_context(
-    project_id: str,
     display_name: str,
     project_path: str,
     rendered_files: str,
     rendered_skills: str,
 ) -> str:
+    instructions = (
+        " The files below are this Project's instructions: follow them for all work in this "
+        "Project."
+        if rendered_files.strip()
+        else ""
+    )
     preamble = (
-        f"Project Context loaded for '{display_name}' (id: '{project_id}') at Project path "
-        f"'{project_path}'. "
-        "The auto-loaded files below are this Project's instructions. Follow them for every "
-        "action that affects this Project while this context is relevant in the Session. "
-        "They apply only to this Project. This call did not change your home Workspace, current "
-        "working directory, Rooting, Session ownership, or configured permissions. The Skills "
-        "enabled by this Project are now available through the `skill` Tool in this Session "
-        "while this Project Context is active. Use absolute paths for file Tools. "
-        f"Set `workdir` to '{project_path}' on every `{SHELL_MODEL_NAME}` call; each call "
-        "starts a new shell "
-        "and does not retain working-directory changes from an earlier call."
+        f"Project Context loaded for '{display_name}'.{instructions} Your working directory, "
+        "Workspace, and permissions are unchanged, so use absolute paths for file Tools and set "
+        f"`workdir` to '{project_path}' on every `{SHELL_MODEL_NAME}` call."
     )
     sections = [preamble]
     sections.extend(section for section in (rendered_files, rendered_skills) if section.strip())
     return "\n\n".join(sections)
 
 
-def _skill_payload(skill: Any) -> JsonObject:
-    return {
-        "name": str(skill.name),
-        "description": str(skill.description),
-    }
+def _normalize_project_arguments(arguments: Any) -> Any:
+    return normalize_call_arguments(_PROJECT_CONTRACT, arguments, field_aliases=_FIELD_ALIASES)
+
+
+def _project_not_found_message(projects: ProjectStore, project_id: str) -> str:
+    try:
+        registered = sorted(projects.list(), key=lambda project: project.project_id)
+    except (ProjectError, OSError):
+        _LOGGER.warning("Failed to list Projects for a project_not_found message", exc_info=True)
+        registered = []
+    if not registered:
+        return _NO_PROJECTS_MESSAGE_TEMPLATE.format(project_id=project_id)
+    choices = [
+        f"{project.project_id} ({_single_line(project.display_name)})"
+        for project in registered[:_PROJECT_CHOICE_LIMIT]
+    ]
+    if len(registered) > _PROJECT_CHOICE_LIMIT:
+        choices.append(
+            f"and {len(registered) - _PROJECT_CHOICE_LIMIT} more under Registered Projects"
+        )
+    return _PROJECT_NOT_FOUND_MESSAGE_TEMPLATE.format(
+        project_id=project_id, choices=", ".join(choices)
+    )
 
 
 def _single_line(value: str) -> str:
