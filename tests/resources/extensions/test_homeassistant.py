@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Awaitable
 from typing import Any, cast
 
@@ -169,11 +170,13 @@ def test_provider_schemas_follow_each_tools_current_migration_state() -> None:
 
     entity_id = tools.get(HA_GET_STATE_NAME).parameters["properties"]["entity_id"]
     assert entity_id["minLength"] == 1
-    assert entity_id["pattern"]
-    call_properties = tools.get(HA_CALL_SERVICE_NAME).parameters["properties"]
-    assert call_properties["domain"]["pattern"]
-    assert call_properties["service"]["pattern"]
-    assert call_properties["data"]["type"] == "object"
+    call_parameters = tools.get(HA_CALL_SERVICE_NAME).parameters
+    assert call_parameters["required"] == ["domain", "service"]
+    assert call_parameters["properties"]["data"]["type"] == "object"
+    # Identifier grammar is checked after spelling repair, with messages naming the
+    # next call, so the definitions carry no patterns for Providers to enforce first.
+    for name in _HA_TOOL_NAMES:
+        assert "pattern" not in json.dumps(tools.get(name).parameters)
 
 
 # Handler guard: token removed between prompt build and call
@@ -197,7 +200,11 @@ async def test_handler_guard_when_token_removed_mid_flight() -> None:
         tool.handler(make_context(HA_LIST_ENTITIES_NAME), {}),
     )
 
-    assert_failure_envelope(result, "home_assistant_error")
+    error = assert_failure_envelope(result, "home_assistant_error")
+    assert error["message"] == (
+        "Home Assistant is not connected: no access token is set. Tell the user to set it in "
+        "Settings -> Extensions."
+    )
     assert route.called is False
 
 

@@ -13,6 +13,7 @@ The HTTP mocking approach mirrors the retired ``tests/core/tools/`` suite
 
 from __future__ import annotations
 
+import json
 import sys
 from collections.abc import Iterator
 from pathlib import Path
@@ -136,6 +137,18 @@ def assert_failure_envelope(result: dict[str, object], code: str) -> dict[str, s
     assert isinstance(error["message"], str)
     assert error["message"]
     return error  # type: ignore[return-value]
+
+
+def model_text(result: dict[str, Any]) -> str:
+    """Return the plain text the Model reads for a Tool Result."""
+    from core.providers.adapter import tool_result_text
+
+    return str(tool_result_text(json.dumps(result)))
+
+
+def request_body(route: Any, index: int = 0) -> Any:
+    """Return the JSON body of one request a respx route received."""
+    return json.loads(route.calls[index].request.content)
 
 
 async def _dispatch(
