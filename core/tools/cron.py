@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from contextlib import suppress
+from datetime import UTC, datetime
+from functools import cache
+from typing import TYPE_CHECKING, Any
+from zoneinfo import ZoneInfo
 
 from core.automation.cron import (
     CronJobInPastError,
@@ -15,9 +19,15 @@ from core.automation.cron import (
     CronTargetUnavailableError,
 )
 from core.projects import InvalidAgentAddressError, format_agent_address, parse_agent_address
-from core.tools._argument_repair import normalize_call_arguments
-from core.tools.arguments import optional_string, required_string
-from core.tools.contracts import ToolContractError, compile_tool_contract
+from core.tools._cron_arguments import (
+    ENABLED_FIELD,
+    UNADVERTISED_PARAMETERS,
+    CronCallRefusedError,
+    normalize_cron_arguments,
+    refusal,
+)
+from core.tools._cron_timezone import zoned_schedule
+from core.tools.contracts import ToolContract, compile_tool_contract
 from core.tools.tools import (
     JsonObject,
     ToolContext,
@@ -35,110 +45,26 @@ if TYPE_CHECKING:
 
 CRON_TOOL_NAME = "cron"
 CRON_TOOL_DESCRIPTION = (
-    "Create and manage persisted schedules that start Runs in fresh Sessions. New jobs are "
-    "enabled immediately and use the server timezone; disable pauses without deleting."
+    "Schedule jobs that run an instruction later, once or repeatedly. Each fire starts a new "
+    "Run of the target Agent in a fresh Session with prompt as its only message: that Run sees "
+    "nothing of this conversation, and its reply stays in that Session without notifying "
+    "anyone. Times are in the Time zone shown in Runtime Environment."
 )
 
 CRON_ACTIONS = frozenset(("create", "list", "update", "delete", "enable", "disable"))
 
-_CREATE_ARGUMENTS = frozenset({"target", "name", "prompt", "schedule", "repeat"})
-_LIST_ARGUMENTS: frozenset[str] = frozenset()
-_UPDATE_ARGUMENTS = frozenset({"id", "target", "name", "prompt", "schedule", "repeat"})
-_ID_ONLY_ARGUMENTS = frozenset({"id"})
-_ACTION_ARGUMENTS: dict[str, frozenset[str]] = {
-    "create": _CREATE_ARGUMENTS,
-    "list": _LIST_ARGUMENTS,
-    "update": _UPDATE_ARGUMENTS,
-    "delete": _ID_ONLY_ARGUMENTS,
-    "enable": _ID_ONLY_ARGUMENTS,
-    "disable": _ID_ONLY_ARGUMENTS,
-}
-_ACTION_RECOMMENDATIONS = {
-    "create": (
-        'Use {"action":"create","prompt":"<instruction>","schedule":"every 2h"} for an '
-        'interval, {"action":"create","prompt":"<instruction>","schedule":"0 9 * * *"} '
-        'for cron, or an ISO timestamp / "in 30m" for one fire'
-    ),
-    "list": 'Use {"action":"list"}',
-    "update": (
-        'Use {"action":"update","id":"<job-id>","schedule":"every 4h"}; include only fields '
-        "that should change"
-    ),
-    "delete": 'Use {"action":"delete","id":"<job-id>"}',
-    "enable": 'Use {"action":"enable","id":"<job-id>"}',
-    "disable": 'Use {"action":"disable","id":"<job-id>"}',
-}
-# Target failures get target guidance; the call-shape examples above are about the
-# schedule and the other fields and would not fix a target.
+_ID_ACTIONS = frozenset({"update", "delete", "enable", "disable"})
+_UPDATE_FIELDS = ("target", "name", "prompt", "schedule", "repeat", ENABLED_FIELD)
+_SCHEDULE_FORMS = (
+    'Use five cron fields in server time such as "0 9 * * 1-5" (weekdays at 09:00), '
+    '"every 2h", "in 30m", or a local time such as "2030-01-01T09:00".'
+)
 _TARGET_ADDRESS_RECOMMENDATION = (
     'Set "target" to an existing Agent id, or to agent@project for a member of a Project Team'
 )
 _TARGET_UNAVAILABLE_RECOMMENDATION = (
     'Choose another "target", or tell the user that the target Agent cannot run and why'
 )
-_PAST_ONCE_RECOMMENDATIONS = {
-    "create": 'For example use "schedule":"in 30m" or a later ISO timestamp',
-    "update": (
-        'For example use {"action":"update","id":"<job-id>","schedule":"in 30m"} or a later '
-        "ISO timestamp"
-    ),
-    "enable": (
-        'Set one with {"action":"update","id":"<job-id>","schedule":"in 30m"}, then enable the job'
-    ),
-}
-
-_CRON_ID_PARAMETER: JsonObject = {
-    "type": "string",
-    "minLength": 1,
-    "description": (
-        "Existing job id returned by list. Required for update, delete, enable, and disable."
-    ),
-}
-_CRON_TARGET_PARAMETER: JsonObject = {
-    "type": "string",
-    "minLength": 1,
-    "description": (
-        "Target Agent address for create or update: agent or agent@project. Omit on create "
-        "to use the current Agent and Project; omit on update to keep the existing target."
-    ),
-}
-_CRON_NAME_PARAMETER: JsonObject = {
-    "type": "string",
-    "minLength": 1,
-    "description": (
-        "Human-readable name for create or update. Omit on create to derive one from prompt; "
-        "omit on update to keep the existing name."
-    ),
-}
-_CRON_PROMPT_PARAMETER: JsonObject = {
-    "type": "string",
-    "minLength": 1,
-    "description": (
-        "Self-contained instruction for each fresh Session. Required on create; omit on update "
-        "to keep the existing prompt."
-    ),
-}
-_CRON_SCHEDULE_PARAMETER: JsonObject = {
-    "type": "string",
-    "minLength": 1,
-    "description": (
-        "Schedule for create or update: ISO 8601 timestamp, 'in <duration>', "
-        "'every <duration>', or exactly five cron fields. Durations use a positive whole "
-        "number plus m, h, or d. Bare durations, fuzzy dates, and six-field cron are invalid. "
-        "An ISO 8601 timestamp must lie in the future. Examples: 'every 2h', 'in 30m', "
-        "'0 9 * * *', '2030-08-07T09:00:00+02:00'. Omit on update to keep the existing "
-        "schedule."
-    ),
-}
-_CRON_REPEAT_PARAMETER: JsonObject = {
-    "type": ["integer", "null"],
-    "minimum": 1,
-    "description": (
-        "Number of future fires, including the next one. Use a positive integer; use null on "
-        "update to make a recurring job unlimited. Omit on create for unlimited recurrence or "
-        "on update to keep the current count. One-time schedules accept only 1, never null."
-    ),
-}
 
 CRON_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
@@ -146,46 +72,78 @@ CRON_TOOL_PARAMETERS: JsonObject = {
         "action": {
             "type": "string",
             "enum": ["create", "list", "update", "delete", "enable", "disable"],
-            "description": "Schedule action to perform.",
+            "description": (
+                "list shows jobs and their ids. update changes only the fields you send. "
+                "disable pauses a job, enable resumes it, delete removes it."
+            ),
         },
-        "id": _CRON_ID_PARAMETER,
-        "target": _CRON_TARGET_PARAMETER,
-        "name": _CRON_NAME_PARAMETER,
-        "prompt": _CRON_PROMPT_PARAMETER,
-        "schedule": _CRON_SCHEDULE_PARAMETER,
-        "repeat": _CRON_REPEAT_PARAMETER,
+        "id": {
+            "type": "string",
+            "minLength": 1,
+            "description": (
+                "Job id from list or an earlier result. Required for update, delete, enable, "
+                "and disable."
+            ),
+        },
+        "target": {
+            "type": "string",
+            "minLength": 1,
+            "description": (
+                "Agent that runs the job: agent or agent@project. Defaults to the current Agent."
+            ),
+        },
+        "name": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Short label. Derived from prompt when omitted on create.",
+        },
+        "prompt": {
+            "type": "string",
+            "minLength": 1,
+            "description": (
+                "Complete instruction for every fire. If the user should see the result, say "
+                "how to deliver it. Required on create."
+            ),
+        },
+        "schedule": {
+            "type": "string",
+            "minLength": 1,
+            "description": (
+                "When to fire: five cron fields (minute hour day month weekday), e.g. "
+                "'0 9 * * 1-5' for weekdays at 09:00; 'every 30m', 'every 2h' or 'every 1d'; "
+                "or one fire with 'in 45m' or a local time such as '2030-08-07T09:00'. "
+                "Required on create."
+            ),
+        },
+        "repeat": {
+            "type": ["integer", "null"],
+            "minimum": 1,
+            "description": (
+                "Remaining fires before the job completes. Omit for no limit; null on update "
+                "removes a limit. One-time schedules fire once."
+            ),
+        },
     },
     "required": ["action"],
 }
 
-_CRON_RUNTIME_CONTRACT = compile_tool_contract(
-    name="cron",
-    input_schema={
-        **CRON_TOOL_PARAMETERS,
-        "properties": {
-            **CRON_TOOL_PARAMETERS["properties"],
-            "agent_id": _CRON_TARGET_PARAMETER,
-        },
-    },
-    require_closed_input=False,
-)
-
-
-def _normalize_cron_arguments(arguments: JsonObject) -> JsonObject:
-    arguments = normalize_call_arguments(_CRON_RUNTIME_CONTRACT, arguments, enum_fields=("action",))
-    if "agent_id" in arguments:
-        target = arguments.pop("agent_id")
-        if "target" in arguments and parse_agent_address(
-            arguments["target"]
-        ) != parse_agent_address(target):
-            raise ToolContractError(
-                "target and agent_id identify different Agents; provide one intended target."
-            )
-        arguments["target"] = target
-    return arguments
-
-
 _LOGGER = get_logger("tools.cron")
+
+
+@cache
+def _repair_contract() -> ToolContract:
+    return compile_tool_contract(
+        name=CRON_TOOL_NAME,
+        input_schema={
+            **CRON_TOOL_PARAMETERS,
+            "properties": {**CRON_TOOL_PARAMETERS["properties"], **UNADVERTISED_PARAMETERS},
+        },
+        require_closed_input=False,
+    )
+
+
+def _normalize_cron_arguments(arguments: Any) -> Any:
+    return normalize_cron_arguments(_repair_contract(), arguments)
 
 
 def register_cron_tool(registry: ToolRegistry, cron_service: CronService) -> None:
@@ -201,10 +159,11 @@ def register_cron_tool(registry: ToolRegistry, cron_service: CronService) -> Non
         handler,
         open_input_schema=True,
         argument_normalizer=_normalize_cron_arguments,
+        unadvertised_parameters=UNADVERTISED_PARAMETERS,
         result_schema={"type": "object"},
         display=ToolDisplay(
             parts_builder=_cron_display_parts,
-            fact_builder=result_count_fact_builder("jobs", when_arguments={"action": "list"}),
+            fact_builder=result_count_fact_builder("jobs"),
         ),
     )
 
@@ -214,82 +173,50 @@ def _handle_cron_tool(
     context: ToolContext,
     arguments: JsonObject,
 ) -> JsonObject:
-    try:
-        arguments = _normalize_cron_arguments(arguments)
-    except ValueError as error:
-        return tool_failure("invalid_arguments", str(error))
-    raw_action = arguments.get("action")
-    if not isinstance(raw_action, str) or raw_action not in CRON_ACTIONS:
+    action = arguments.get("action")
+    if action not in CRON_ACTIONS:
         options = ", ".join(sorted(CRON_ACTIONS))
-        return tool_failure(
-            "invalid_arguments",
-            f"action must be one of: {options}. {_ACTION_RECOMMENDATIONS['list']}",
-            retryable=False,
-        )
-    action = raw_action
-    operation_arguments = dict(arguments)
-    operation_arguments.pop("action", None)
-
-    unknown_arguments = sorted(set(operation_arguments) - _ACTION_ARGUMENTS[action])
-    if unknown_arguments:
-        names = ", ".join(unknown_arguments)
-        allowed = ", ".join(sorted(_ACTION_ARGUMENTS[action])) or "no additional fields"
-        return tool_failure(
-            "invalid_arguments",
-            _with_action_recommendation(
-                action,
-                f"Action '{action}' does not accept: {names}. Allowed: {allowed}",
-            ),
-            retryable=False,
-        )
-
+        return tool_failure("invalid_arguments", f"action must be one of: {options}.")
     try:
+        if action in _ID_ACTIONS and "id" not in arguments:
+            raise CronCallRefusedError(
+                refusal(
+                    f'{action} needs the job "id"; {{"action":"list"}} shows the ids.',
+                    arguments,
+                    id="<job id from list>",
+                )
+            )
         if action == "create":
-            return _handle_create(cron_service, context, operation_arguments)
+            return _handle_create(cron_service, context, arguments)
         if action == "list":
-            return _handle_list(cron_service)
+            return _handle_list(cron_service, arguments)
         if action == "update":
-            return _handle_update(cron_service, operation_arguments)
+            return _handle_update(cron_service, arguments)
         if action == "delete":
-            return _handle_delete(cron_service, operation_arguments)
+            return _handle_delete(cron_service, arguments)
         if action == "enable":
-            return _handle_enable(cron_service, operation_arguments)
-        return _handle_disable(cron_service, operation_arguments)
+            return _job_success(cron_service, cron_service.enable_job(arguments["id"]))
+        return _job_success(cron_service, cron_service.disable_job(arguments["id"]))
+    except CronCallRefusedError as error:
+        return tool_failure("invalid_arguments", str(error))
     except (CronTargetError, InvalidAgentAddressError) as error:
         # Checked before ValueError: missing-target errors are also resolver
         # ValueErrors, and a malformed target address is one too.
         return _target_failure(error)
-    except ValueError as error:
-        return tool_failure(
-            "invalid_arguments",
-            _with_action_recommendation(action, str(error)),
-            retryable=False,
-        )
-    except CronJobNotFoundError as error:
+    except CronJobNotFoundError:
         return tool_failure(
             "job_not_found",
-            f'{error}. Use {{"action":"list"}} to get current job ids',
-            retryable=False,
+            f'No job has id "{arguments.get("id")}". {{"action":"list"}} shows the current jobs '
+            "and their ids.",
         )
     except CronJobInPastError as error:
-        recommendation = _PAST_ONCE_RECOMMENDATIONS.get(action, _ACTION_RECOMMENDATIONS[action])
-        return tool_failure(
-            "invalid_arguments",
-            f"{str(error).rstrip('. ')}. {recommendation}",
-            retryable=False,
-        )
+        return tool_failure("invalid_arguments", _past_message(action, arguments, error))
     except CronJobValidationError as error:
-        return tool_failure(
-            "invalid_arguments",
-            _with_action_recommendation(action, str(error)),
-            retryable=False,
-        )
+        return tool_failure("invalid_arguments", _validation_message(action, arguments, error))
     except CronServiceError as error:
         _LOGGER.warning("Cron service error for action=%s: %s", action, error)
         return tool_failure(
-            "cron_service_error",
-            f"{error}. Do not repeat the same call unchanged",
-            retryable=False,
+            "cron_service_error", f"{error}. Do not repeat the same call unchanged."
         )
 
 
@@ -306,130 +233,248 @@ def _target_failure(error: CronTargetError | InvalidAgentAddressError) -> JsonOb
     else:
         # A malformed address names no target that could be looked up.
         code = "invalid_arguments"
-    return tool_failure(code, f"{str(error).rstrip('. ')}. {recommendation}", retryable=False)
+    return tool_failure(code, f"{str(error).rstrip('. ')}. {recommendation}.")
 
 
 def _handle_create(
     cron_service: CronService, context: ToolContext, arguments: JsonObject
 ) -> JsonObject:
-    target = optional_string(arguments.get("target"), field_name="target")
-    if target is None:
-        agent_id, project_id = context.agent_id, context.project_id
+    missing = [name for name in ("prompt", "schedule") if name not in arguments]
+    if missing:
+        if "schedule" not in missing:
+            # Show the schedule the job would get: a server time zone drops out.
+            with suppress(CronCallRefusedError):
+                arguments, _note = _server_time(cron_service, arguments)
+        raise CronCallRefusedError(_missing_create_fields(missing, arguments))
+    arguments, note = _server_time(cron_service, arguments)
+    if "target" in arguments:
+        agent_id, project_id = parse_agent_address(arguments["target"])
     else:
-        agent_id, project_id = parse_agent_address(target)
-    name = optional_string(arguments.get("name"), field_name="name")
-    prompt = required_string(arguments.get("prompt"), field_name="prompt")
-    schedule = required_string(arguments.get("schedule"), field_name="schedule")
-    parsed_schedule = cron_service.parse_schedule(schedule)
-    repeat = _optional_positive_integer(arguments.get("repeat"), field_name="repeat")
-    if parsed_schedule.schedule_type == "once":
-        if "repeat" in arguments and repeat is None:
-            raise ValueError("repeat cannot be null for a one-time schedule; omit it or use 1")
-        if repeat not in {None, 1}:
-            raise ValueError("repeat must be 1 for a one-time schedule")
-
+        agent_id, project_id = context.agent_id, context.project_id
+    parsed = _parse_schedule(cron_service, arguments)
+    repeat = arguments.get("repeat")
+    if parsed.schedule_type == "once" and "repeat" in arguments and repeat != 1:
+        raise CronCallRefusedError(
+            refusal(
+                f'"{arguments["schedule"]}" fires once, so repeat cannot be {_json(repeat)}. For '
+                'several fires use "every <duration>" or five cron fields.',
+                arguments,
+                repeat=1,
+            )
+        )
+    paused = arguments.get(ENABLED_FIELD) is False
     job = cron_service.create_job(
         agent_id=agent_id,
-        name=name,
-        prompt=prompt,
-        schedule_type=parsed_schedule.schedule_type,
-        cron_expression=parsed_schedule.cron_expression,
-        interval_seconds=parsed_schedule.interval_seconds,
-        interval_anchor_at=parsed_schedule.interval_anchor_at,
-        run_at=parsed_schedule.run_at,
+        name=arguments.get("name"),
+        prompt=arguments["prompt"],
+        schedule_type=parsed.schedule_type,
+        cron_expression=parsed.cron_expression,
+        interval_seconds=parsed.interval_seconds,
+        interval_anchor_at=parsed.interval_anchor_at,
+        run_at=parsed.run_at,
         remaining_runs=repeat,
         session_id=None,
+        status="paused" if paused else "active",
         project_id=project_id,
     )
-    return tool_success({"job": _job_payload(cron_service, job)})
+    notes = [note] if note else []
+    if paused:
+        notes.append(f'The job is paused; {{"action":"enable","id":"{job.id}"}} starts it.')
+    return _job_success(cron_service, job, notes)
 
 
-def _handle_list(cron_service: CronService) -> JsonObject:
-    jobs = [_job_payload(cron_service, job) for job in cron_service.list_jobs()]
-    return tool_success({"jobs": jobs, "system_timezone": cron_service.system_timezone_name()})
+def _handle_list(cron_service: CronService, arguments: JsonObject) -> JsonObject:
+    jobs = (
+        [cron_service.get_job(arguments["id"])] if "id" in arguments else cron_service.list_jobs()
+    )
+    zone = ZoneInfo(cron_service.system_timezone_name())
+    data: JsonObject = {"jobs": len(jobs), "timezone": cron_service.system_timezone_name()}
+    if jobs:
+        data["content"] = "\n\n".join(_job_block(cron_service, job, zone) for job in jobs)
+    return tool_success(data)
 
 
 def _handle_update(cron_service: CronService, arguments: JsonObject) -> JsonObject:
-    job_id = required_string(arguments.get("id"), field_name="id")
-    updates: dict[str, str | int | None] = {}
-
-    if "target" in arguments:
-        target = required_string(
-            arguments.get("target"),
-            field_name="target",
+    job_id = arguments["id"]
+    # A time zone alone cannot change a job: another zone is refused here, the server's drops.
+    arguments, note = _server_time(cron_service, arguments)
+    if not any(name in arguments for name in _UPDATE_FIELDS):
+        raise CronCallRefusedError(
+            refusal(
+                "update needs a field to change: name, prompt, schedule, repeat, or target. To "
+                "pause or resume the job, use disable or enable.",
+                arguments,
+                schedule="every 4h",
+            )
         )
-        agent_id, project_id = parse_agent_address(target)
-        updates["agent_id"] = agent_id
-        updates["project_id"] = project_id
-    if "name" in arguments:
-        updates["name"] = required_string(arguments.get("name"), field_name="name")
-    if "prompt" in arguments:
-        updates["prompt"] = required_string(arguments.get("prompt"), field_name="prompt")
-    parsed_schedule = None
+    updates: dict[str, Any] = {}
+    if "target" in arguments:
+        updates["agent_id"], updates["project_id"] = parse_agent_address(arguments["target"])
+    for name in ("name", "prompt"):
+        if name in arguments:
+            updates[name] = arguments[name]
     if "schedule" in arguments:
-        schedule = required_string(arguments.get("schedule"), field_name="schedule")
-        parsed_schedule = cron_service.parse_schedule(schedule)
-        updates.update(parsed_schedule.as_job_fields())
-    if "repeat" in arguments:
-        repeat = _optional_positive_integer(arguments.get("repeat"), field_name="repeat")
-        if parsed_schedule is not None and parsed_schedule.schedule_type == "once":
-            if repeat is None:
-                raise ValueError("repeat cannot be null for a one-time schedule; use 1")
+        parsed = _parse_schedule(cron_service, arguments)
+        updates.update(parsed.as_job_fields())
+        if parsed.schedule_type == "once":
+            # A one-time schedule fires once; an old repeat count does not carry over.
+            repeat = arguments.get("repeat", 1)
             if repeat != 1:
-                raise ValueError("repeat must be 1 for a one-time schedule")
-        updates["remaining_runs"] = repeat
-    if not updates:
-        raise ValueError("update requires at least one field to change")
-
+                raise CronCallRefusedError(
+                    refusal(
+                        f'"{arguments["schedule"]}" fires once, so repeat cannot be '
+                        f"{_json(repeat)}.",
+                        arguments,
+                        repeat=1,
+                    )
+                )
+            updates["remaining_runs"] = 1
+    if "repeat" in arguments:
+        updates["remaining_runs"] = arguments["repeat"]
+    if ENABLED_FIELD in arguments:
+        updates["status"] = "active" if arguments[ENABLED_FIELD] else "paused"
     job = cron_service.update_job(job_id, **updates)
-    return tool_success({"job": _job_payload(cron_service, job)})
+    return _job_success(cron_service, job, [note] if note else [])
 
 
 def _handle_delete(cron_service: CronService, arguments: JsonObject) -> JsonObject:
-    job_id = required_string(arguments.get("id"), field_name="id")
-    cron_service.delete_job(job_id)
-    return tool_success({"id": job_id, "deleted": True})
+    job = cron_service.get_job(arguments["id"])
+    cron_service.delete_job(job.id)
+    return tool_success({"id": job.id, "name": job.name, "status": "deleted"})
 
 
-def _handle_enable(cron_service: CronService, arguments: JsonObject) -> JsonObject:
-    job_id = required_string(arguments.get("id"), field_name="id")
-    job = cron_service.enable_job(job_id)
-    return tool_success({"job": _job_payload(cron_service, job)})
+def _server_time(cron_service: CronService, arguments: JsonObject) -> tuple[JsonObject, str | None]:
+    server = ZoneInfo(cron_service.system_timezone_name())
+    return zoned_schedule(dict(arguments), server, datetime.now(UTC))
 
 
-def _handle_disable(cron_service: CronService, arguments: JsonObject) -> JsonObject:
-    job_id = required_string(arguments.get("id"), field_name="id")
-    job = cron_service.disable_job(job_id)
-    return tool_success({"job": _job_payload(cron_service, job)})
+def _parse_schedule(cron_service: CronService, arguments: JsonObject) -> Any:
+    schedule = arguments["schedule"]
+    try:
+        return cron_service.parse_schedule(schedule)
+    except CronJobInPastError:
+        raise
+    except CronJobValidationError as error:
+        detail = str(error).rstrip(". ")
+        raise CronCallRefusedError(
+            f'cron was not run: schedule "{schedule}" is not valid ({detail}). {_SCHEDULE_FORMS}'
+        ) from error
 
 
-def _job_payload(cron_service: CronService, job: CronJob) -> JsonObject:
-    payload: JsonObject = {
+def _missing_create_fields(missing: list[str], arguments: JsonObject) -> str:
+    stand_ins = {"prompt": "<instruction>", "schedule": "<when>"}
+    texts = []
+    if "prompt" in missing:
+        texts.append('"prompt", the complete instruction the Agent runs at each fire')
+    if "schedule" in missing:
+        texts.append(f'"schedule". {_SCHEDULE_FORMS}')
+    return refusal(
+        "create needs " + " and ".join(texts).rstrip(".") + ".",
+        arguments,
+        **{name: stand_ins[name] for name in missing},
+    )
+
+
+def _past_message(action: str, arguments: JsonObject, error: CronJobInPastError) -> str:
+    detail = str(error).rstrip(". ")
+    if action == "enable":
+        return refusal(
+            f"{detail}. Give the job a future time first, then enable it.",
+            {"action": "update", "id": arguments.get("id")},
+            schedule="in 30m",
+        )
+    return refusal(f"{detail}.", arguments, schedule="in 30m")
+
+
+def _validation_message(action: str, arguments: JsonObject, error: CronJobValidationError) -> str:
+    detail = str(error).rstrip(". ")
+    if "Completed or missed jobs" in detail:
+        return (
+            f"cron was not run: {detail}. The job has finished; create a new job instead, or "
+            f'delete this one with {{"action":"delete","id":"{arguments.get("id")}"}}.'
+        )
+    return f"cron was not run: {detail}."
+
+
+def _job_success(
+    cron_service: CronService, job: CronJob, notes: list[str] | None = None
+) -> JsonObject:
+    data = _job_fields(cron_service, job, ZoneInfo(cron_service.system_timezone_name()))
+    if notes:
+        data["note"] = " ".join(notes)
+    return tool_success(data)
+
+
+def _job_fields(cron_service: CronService, job: CronJob, zone: ZoneInfo) -> JsonObject:
+    data: JsonObject = {
         "id": job.id,
         "name": job.name,
-        "prompt": job.prompt,
         "status": job.status,
-        "remaining_runs": job.remaining_runs,
-        "created_at": job.created_at,
-        "last_fired_at": job.last_fired_at,
-        "last_attempt_at": job.last_attempt_at,
-        "last_completed_at": job.last_completed_at,
-        "last_outcome": job.last_outcome,
-        "last_error": job.last_error,
-        "consecutive_failures": job.consecutive_failures,
+        "schedule": _schedule_text(cron_service, job, zone),
+        # A one-time schedule is its own next run.
+        "next_run": (
+            None
+            if job.schedule_type == "once"
+            else _local_time(cron_service.next_fire_at(job), zone)
+        ),
+        "target": format_agent_address(job.agent_id, job.project_id),
     }
-    payload["target"] = format_agent_address(job.agent_id, job.project_id)
-    payload["schedule"] = cron_service.format_schedule(job)
-    payload["next_fire_at"] = cron_service.next_fire_at(job)
-    return payload
+    if job.schedule_type != "once" and job.remaining_runs is not None:
+        data["repeat"] = job.remaining_runs
+    last_run = job.last_fired_at or job.last_attempt_at
+    if last_run:
+        data["last_run"] = _local_time(last_run, zone)
+    if job.last_outcome:
+        data["last_outcome"] = job.last_outcome
+    if job.last_error:
+        data["last_error"] = job.last_error
+    if job.consecutive_failures:
+        data["failures_in_a_row"] = job.consecutive_failures
+    return data
 
 
-def _with_action_recommendation(action: str, message: str) -> str:
-    recommendation = _ACTION_RECOMMENDATIONS[action]
-    return f"{message.rstrip('. ')}. {recommendation}"
+def _job_block(cron_service: CronService, job: CronJob, zone: ZoneInfo) -> str:
+    fields = {key: value for key, value in _job_fields(cron_service, job, zone).items() if value}
+    lines = [f"{key}: {value}" for key, value in fields.items()]
+    prompt_lines = job.prompt.splitlines() or [""]
+    lines.append("prompt: " + "\n  ".join(prompt_lines))
+    if job.status == "failed":
+        lines.append(
+            f'note: stopped after failed runs; {{"action":"enable","id":"{job.id}"}} restarts it.'
+        )
+    return "\n".join(lines)
 
 
-def _cron_display_parts(arguments: JsonObject) -> tuple[ToolDisplayPart, ...]:
+def _schedule_text(cron_service: CronService, job: CronJob, zone: ZoneInfo) -> str:
+    if job.schedule_type == "once":
+        return _local_time(job.run_at, zone) or ""
+    return cron_service.format_schedule(job)
+
+
+def _local_time(value: str | None, zone: ZoneInfo) -> str | None:
+    if not value:
+        return None
+    try:
+        moment = datetime.fromisoformat(value[:-1] + "+00:00" if value.endswith("Z") else value)
+    except ValueError:
+        return value
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=zone)
+    return moment.astimezone(zone).replace(microsecond=0).isoformat()
+
+
+def _json(value: object) -> str:
+    return "null" if value is None else str(value)
+
+
+def _cron_display_parts(raw_arguments: JsonObject) -> tuple[ToolDisplayPart, ...]:
+    # Persisted calls keep the Model's own spelling; label what the call meant.
+    try:
+        arguments = _normalize_cron_arguments(raw_arguments)
+    except ValueError:
+        arguments = raw_arguments
+    if not isinstance(arguments, dict):
+        return ()
     action = arguments.get("action")
     if not isinstance(action, str) or action not in CRON_ACTIONS:
         return ()
@@ -442,14 +487,6 @@ def _cron_display_parts(arguments: JsonObject) -> tuple[ToolDisplayPart, ...]:
             parts.append(ToolDisplayPart(value.strip(), kind=kind, truncate=truncate))
             break
     return tuple(parts)
-
-
-def _optional_positive_integer(value: object, *, field_name: str) -> int | None:
-    if value is None:
-        return None
-    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-        raise ValueError(f"{field_name} must be a positive integer")
-    return value
 
 
 __all__ = [
