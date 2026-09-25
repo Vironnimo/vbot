@@ -570,9 +570,10 @@ async def test_goal_is_pinned_user_post_without_automatic_delivery(board):
 @pytest.mark.asyncio
 async def test_twelve_peers_can_edit_independent_passages_from_the_same_revision(tmp_path):
     from resources.extensions.swarm.store import SwarmStore
-    from tests.resources.extensions.swarm_store_helpers import _swarm
+    from tests.resources.extensions.swarm_store_helpers import _swarm, open_swarm_database
 
-    store = SwarmStore(tmp_path / "swarm.db")
+    database = open_swarm_database(tmp_path)
+    store = SwarmStore(database)
     await store.open()
     try:
         started = await _swarm(store, count=12)
@@ -611,3 +612,4 @@ async def test_twelve_peers_can_edit_independent_passages_from_the_same_revision
         assert current["revision"] == 13
     finally:
         await store.close()
+        database.close()

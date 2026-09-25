@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 # mypy: disable-error-code=arg-type
+from contextlib import contextmanager
+
 import pytest
 
 from core.sessions import DeliveryReceipt, SessionAddress, TemporarySessionBinding
 from resources.extensions.swarm.store import SwarmStore, SwarmStoreError
 from tests.resources.extensions.swarm_store_helpers import (
     _swarm,
+    open_swarm_database,
 )
 from tests.resources.extensions.swarm_store_helpers import (
     store as store,
@@ -24,7 +27,8 @@ async def test_prepared_delivery_reconciles_only_matching_canonical_receipts(tmp
     ) -> DeliveryReceipt | None:
         return receipts.get(receipt_id)
 
-    value = SwarmStore(tmp_path / "delivery.db", lookup_delivery_receipt=lookup)
+    database = open_swarm_database(tmp_path, "delivery")
+    value = SwarmStore(database, lookup_delivery_receipt=lookup)
     await value.open()
     try:
         started = await _swarm(value)
@@ -62,6 +66,7 @@ async def test_prepared_delivery_reconciles_only_matching_canonical_receipts(tmp
             await value.reconcile_delivery(prepared["receipt_id"])
     finally:
         await value.close()
+        database.close()
 
 
 @pytest.mark.asyncio
@@ -69,7 +74,8 @@ async def test_inbox_batches_complete_posts_without_exceeding_character_budget(t
     async def lookup(*_arguments: object) -> DeliveryReceipt | None:
         return None
 
-    value = SwarmStore(tmp_path / "batch.db", lookup_delivery_receipt=lookup)
+    database = open_swarm_database(tmp_path, "batch")
+    value = SwarmStore(database, lookup_delivery_receipt=lookup)
     await value.open()
     try:
         started = await _swarm(value)
@@ -107,6 +113,7 @@ async def test_inbox_batches_complete_posts_without_exceeding_character_budget(t
         assert prepared["entries"][1]["text"] == "x" * 8_000
     finally:
         await value.close()
+        database.close()
 
 
 @pytest.mark.asyncio
@@ -158,7 +165,8 @@ async def test_overlapping_prepared_batches_acknowledge_each_recipient_once(tmp_
     ) -> DeliveryReceipt | None:
         return receipts.get(receipt_id)
 
-    value = SwarmStore(tmp_path / "overlap.db", lookup_delivery_receipt=lookup)
+    database = open_swarm_database(tmp_path, "overlap")
+    value = SwarmStore(database, lookup_delivery_receipt=lookup)
     await value.open()
     try:
         started = await _swarm(value)
@@ -192,10 +200,11 @@ async def test_overlapping_prepared_batches_acknowledge_each_recipient_once(tmp_
         assert (await value.prepare_inbox_delivery(started["swarm_id"], recipient))["entries"] == []
     finally:
         await value.close()
+        database.close()
 
 
 @pytest.mark.asyncio
-async def test_pending_reads_do_not_scan_delivered_board_history(store):
+async def test_pending_reads_do_not_scan_delivered_board_history(store, monkeypatch):
     """A busy Board must not delay all Store work behind historical delivery scans."""
     from resources.extensions.swarm._store_delivery import _prepare_automatic_delivery
     from resources.extensions.swarm._store_profiles import _get_swarm
@@ -243,27 +252,52 @@ async def test_pending_reads_do_not_scan_delivered_board_history(store):
     await store._run(seed)
     await store.post(sid, peers[0], text="Pending now", request_id="pending-now")
 
-    def inspect(db):
-        steps = 0
+    steps = 0
 
-        def progress():
-            nonlocal steps
-            steps += 100
-            return 0
+    def progress():
+        nonlocal steps
+        steps += 100
+        return 0
 
-        connection = db._require_connection()
+    @contextmanager
+    def counted(connection):
         connection.set_progress_handler(progress, 100)
         try:
-            snapshot = _get_swarm(db, sid)
-            count = _pending_count(connection, sid, peers[1])
-            rows = _pending_rows(connection, sid, peers[1], 20, 24000)
-            prepared = _prepare_automatic_delivery(db, sid, peers[1], swarm["epoch"], 0, False)
-            replayed = _prepare_automatic_delivery(db, sid, peers[1], swarm["epoch"], 0, False)
+            yield connection
         finally:
             connection.set_progress_handler(None, 0)
-        return snapshot, count, [row["text"] for row in rows], prepared, replayed, steps
 
-    snapshot, count, texts, prepared, replayed, steps = await store._run(inspect)
+    # Count SQLite VM steps on whichever database connection each read or write uses.
+    database = store._database
+    plain_read, plain_write = database._read, database._write
+
+    @contextmanager
+    def counted_read():
+        with plain_read() as connection, counted(connection):
+            yield connection
+
+    def counted_write(operation):
+        def run(connection):
+            with counted(connection):
+                return operation(connection)
+
+        return plain_write(run)
+
+    monkeypatch.setattr(database, "_read", counted_read)
+    monkeypatch.setattr(database, "_write", counted_write)
+
+    def inspect(db):
+        snapshot = _get_swarm(db, sid)
+        with db._read() as connection:
+            count = _pending_count(connection, sid, peers[1])
+            rows = _pending_rows(connection, sid, peers[1], 20, 24000)
+            texts = [row["text"] for row in rows]
+        prepared = _prepare_automatic_delivery(db, sid, peers[1], swarm["epoch"], 0, False)
+        replayed = _prepare_automatic_delivery(db, sid, peers[1], swarm["epoch"], 0, False)
+        return snapshot, count, texts, prepared, replayed
+
+    snapshot, count, texts, prepared, replayed = await store._run(inspect)
+    monkeypatch.undo()
     assert [item["pending_count"] for item in snapshot["participants"]] == [0] + [1] * 11
     assert count == 1
     assert texts == ["Pending now"]

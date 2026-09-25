@@ -14,6 +14,7 @@ from resources.extensions.swarm.store import SwarmStore, SwarmStoreError
 from tests.resources.extensions.swarm_store_helpers import (
     _profile,
     _swarm,
+    open_swarm_database,
 )
 from tests.resources.extensions.swarm_store_helpers import (
     store as store,
@@ -69,8 +70,8 @@ async def test_prompt_controls_reject_invalid_values(store, fields):
 
 @pytest.mark.asyncio
 async def test_current_store_reopens_with_profile_board_and_execution_state(tmp_path):
-    path = tmp_path / "swarm.db"
-    original = SwarmStore(path)
+    database = open_swarm_database(tmp_path)
+    original = SwarmStore(database)
     await original.open()
     try:
         profile = await original.save_profile(_profile(), expected_revision=None)
@@ -96,12 +97,15 @@ async def test_current_store_reopens_with_profile_board_and_execution_state(tmp_
         await original.set_participant_state(sid, pid, "failed")
         post = await original.post_human(sid, text="Still pending", request_id="post")
         snapshot = await original.get_swarm(sid)
-        schema = original._database._connection.execute(
-            "SELECT name,sql FROM sqlite_master ORDER BY name"
-        ).fetchall()
+        with database.read() as connection:
+            schema = connection.execute(
+                "SELECT name,sql FROM sqlite_master ORDER BY name"
+            ).fetchall()
     finally:
         await original.close()
-    reopened = SwarmStore(path)
+        database.close()
+    database = open_swarm_database(tmp_path)
+    reopened = SwarmStore(database)
     await reopened.open()
     try:
         assert await reopened.get_profile(profile["id"]) == profile
@@ -110,14 +114,14 @@ async def test_current_store_reopens_with_profile_board_and_execution_state(tmp_
         assert (await reopened.prepare_inbox_delivery(sid, pid))["entries"][0]["id"] == post[
             "post_id"
         ]
-        assert (
-            reopened._database._connection.execute(
-                "SELECT name,sql FROM sqlite_master ORDER BY name"
-            ).fetchall()
-            == schema
-        )
+        with database.read() as connection:
+            assert (
+                connection.execute("SELECT name,sql FROM sqlite_master ORDER BY name").fetchall()
+                == schema
+            )
     finally:
         await reopened.close()
+        database.close()
 
 
 @pytest.mark.asyncio
@@ -245,7 +249,7 @@ def test_named_read_columns_match_the_schema():
 
     connection = sqlite3.connect(":memory:")
     try:
-        connection.executescript(database._SCHEMA)
+        connection.executescript(database.SCHEMA_SQL)
         for table, columns in {
             "swarms": database.SWARM_COLUMNS,
             "participants": database.PARTICIPANT_COLUMNS,

@@ -6,9 +6,9 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from pathlib import Path
 from typing import Any, Literal
 
+from core.extensions.databases import Database
 from core.sessions import TemporarySessionBinding
 from core.utils.workers import BoundedWorkerPool
 
@@ -18,6 +18,8 @@ from ._store_board import (
     _post_message,
 )
 from ._store_database import (
+    DATABASE_NAME,
+    SCHEMA_SQL,
     SwarmDatabase,
 )
 from ._store_delivery import (
@@ -82,6 +84,8 @@ from ._store_values import (
 )
 
 __all__ = [
+    "DATABASE_NAME",
+    "SCHEMA_SQL",
     "DeliveryReceiptLookup",
     "Json",
     "Page",
@@ -98,12 +102,13 @@ class SwarmStore:
 
     def __init__(
         self,
-        path: Path,
+        database: Database,
         *,
         lookup_delivery_receipt: DeliveryReceiptLookup | None = None,
         worker_pool: BoundedWorkerPool = _WORKERS,
     ) -> None:
-        self._database = SwarmDatabase(path)
+        # The Extension host owns ``database``; closing the store never closes it.
+        self._database = SwarmDatabase(database)
         self._workers = worker_pool
         self._lookup_delivery_receipt = lookup_delivery_receipt
 

@@ -16,6 +16,7 @@ from core.agents.temporary import (
 )
 from core.chat import ChatLoop
 from core.extensions import ExtensionRegistry
+from core.extensions.databases import ExtensionDatabases
 from core.extensions.operations import ExtensionHost
 from core.models.models import ModelRegistry
 from core.models.query import ModelQuery
@@ -157,6 +158,7 @@ class ExtensionHostFactory:
         self.logger = logger
         self._temporary_groups: list[TemporaryExecutionGroups] = []
         self._statistics_service: StatisticsService | None = None
+        self.databases = ExtensionDatabases(host.data_dir)
 
     @property
     def _extensions(self) -> ExtensionRegistry | None:
@@ -164,7 +166,11 @@ class ExtensionHostFactory:
 
     def make_host(self) -> ExtensionHost:
         self._ensure_started()
-        return replace(self._host, for_owner=self._extension_owner_host)
+        return replace(
+            self._host,
+            for_owner=self._extension_owner_host,
+            release_owner=self.databases.release,
+        )
 
     def _extension_owner_host(self, identity: Any) -> ExtensionHost:
         if self._extensions is None:
@@ -195,6 +201,7 @@ class ExtensionHostFactory:
             for_owner=lambda _identity: self._extension_owner_host(identity),
             temporary_agents=groups,
             state_dir=state_dir,
+            open_database=self.databases.opener(identity),
             catalog=lambda: self._extension_catalog(identity),
             inspect_prompt=lambda config, project_id: self._inspect_extension_prompt(
                 identity, config, project_id
