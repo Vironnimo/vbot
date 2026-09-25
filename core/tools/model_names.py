@@ -109,11 +109,21 @@ _HARNESS_NAMES = {
             "browseurl",
             "fetchwebpage",
             "webextract",
+            "tavilyextract",
         ),
         "web_fetch",
     ),
     **dict.fromkeys(
-        ("searchweb", "googlesearch", "internetsearch", "bingsearch", "bravesearch"),
+        (
+            "searchweb",
+            "googlesearch",
+            "googlewebsearch",
+            "internetsearch",
+            "bingsearch",
+            "bravesearch",
+            "tavilysearch",
+            "websearchexa",
+        ),
         "web_search",
     ),
     **dict.fromkeys(
@@ -121,7 +131,19 @@ _HARNESS_NAMES = {
         "subagent",
     ),
     **dict.fromkeys(("loadskill", "useskill", "skillview", "readskill"), "skill"),
-    **dict.fromkeys(("viewimage", "describeimage", "imageanalysis", "vision"), "analyze_image"),
+    **dict.fromkeys(
+        (
+            "viewimage",
+            "readimage",
+            "describeimage",
+            "imageanalysis",
+            "vision",
+            "visionanalyze",
+        ),
+        "analyze_image",
+    ),
+    **dict.fromkeys(("generateimage", "createimage", "imagegen"), "image_generation"),
+    **dict.fromkeys(("tts", "speak"), "text_to_speech"),
 }
 
 
