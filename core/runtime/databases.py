@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from core.channels import channel_database_spec
+from core.channels._state_schema import DATABASE_NAME as CHANNELS_DATABASE_NAME
 from core.database import DatabaseSpec, canonical_database_path
 from core.providers.usage_history import DATABASE_NAME as PROVIDER_USAGE_DATABASE_NAME
 from core.providers.usage_history import provider_usage_database_spec
@@ -28,4 +30,5 @@ def canonical_database_specs(data_dir: Path) -> tuple[DatabaseSpec, ...]:
         provider_usage_database_spec(
             canonical_database_path(data_dir, PROVIDER_USAGE_DATABASE_NAME)
         ),
+        channel_database_spec(canonical_database_path(data_dir, CHANNELS_DATABASE_NAME)),
     )

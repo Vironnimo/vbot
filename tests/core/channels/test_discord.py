@@ -31,7 +31,11 @@ from tests.core.channels.discord_helpers import (
     make_message,
 )
 
-from .engine_test_support import QUEUE_DRAIN_TIMEOUT_SECONDS, assert_member_trigger
+from .engine_test_support import (
+    QUEUE_DRAIN_TIMEOUT_SECONDS,
+    assert_member_trigger,
+    channel_state,
+)
 
 pytestmark = pytest.mark.usefixtures("current_format_data_directory")
 
@@ -145,6 +149,7 @@ def test_constructor_requires_token(tmp_path: Path) -> None:
             cast(Any, ChatSessionManager(tmp_path)),
             lambda _key: "",
             command_dispatcher=cast(Any, make_command_dispatcher()),
+            conversation_pointers=channel_state(tmp_path, "dc-assistant"),
         )
 
 
@@ -194,6 +199,7 @@ async def test_start_enables_message_content_intent(
         cast(Any, ChatSessionManager(tmp_path)),
         lambda _key: "test-token",
         command_dispatcher=cast(Any, make_command_dispatcher()),
+        conversation_pointers=channel_state(tmp_path, "dc-assistant"),
     )
 
     await adapter.start()
@@ -532,6 +538,7 @@ async def test_mention_backfills_history_since_last_bot_reply_in_order(
         cast(Any, chat_sessions),
         lambda _key: "test-token",
         command_dispatcher=cast(Any, make_command_dispatcher()),
+        conversation_pointers=channel_state(tmp_path, "dc-assistant"),
     )
     adapter._client = FakeClient([channel])
     adapter._bot_id = "999"

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
@@ -15,6 +14,7 @@ from core.channels.adapter import (
     RunButtonBinding,
     bound_run_callback_data,
 )
+from core.channels.state import state_timestamp
 from core.chat.messages import ReplySurface
 from core.extensions import InteractionButton
 from core.sessions import SessionAddress
@@ -112,7 +112,7 @@ def _bind_outbound_run_buttons(
         thread_id=thread_id,
         origin_session_id=origin_session_id,
         original_button_data=tuple(original_data),
-        created_at=datetime.now(UTC).isoformat(),
+        created_at=state_timestamp(),
     )
 
 
@@ -194,7 +194,7 @@ async def send(
         if binding is not None:
             cleanup = asyncio.create_task(
                 _CHANNEL_IO_WORKERS.run(
-                    service._storage.discard_run_button_binding, normalized_id, binding.id
+                    service._state.discard_run_button_binding, normalized_id, binding.id
                 )
             )
             cancelled = False
@@ -298,5 +298,5 @@ def _prepare_outbound_dispatch(
             origin_session_id=run_origin.session_id,
         )
         if binding is not None:
-            service._storage.save_run_button_binding(channel_id, binding)
+            service._state.save_run_button_binding(channel_id, binding)
     return adapter, outbound_buttons, binding

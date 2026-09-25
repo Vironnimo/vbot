@@ -11,6 +11,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock, Mock
+from weakref import WeakValueDictionary
 
 import pytest
 
@@ -27,6 +28,7 @@ from core.channels.adapter import (
     RunButtonBindingRegistry,
 )
 from core.channels.engine import ChannelConversationEngine
+from core.channels.state import ChannelStateStore
 from core.chat import MessageSender, ReplySurface
 from core.chat.commands import (
     CommandFeedback,
@@ -70,6 +72,27 @@ CHANNEL_GROUP_REPLY_SURFACE = ReplySurface.channel(
 )
 
 
+_CHANNEL_STATES: WeakValueDictionary[Path, ChannelStateStore] = WeakValueDictionary()
+
+
+def channel_state(data_dir: Path, *channel_ids: str) -> ChannelStateStore:
+    """Return the one Channel state store of a test data directory.
+
+    Opens ``channels.db`` on first use (writing the data-store marker when the
+    directory has none) and registers the named Channels, by default the
+    ``tg-assistant`` Channel the engine tests configure.
+    """
+    key = data_dir.resolve()
+    state = _CHANNEL_STATES.get(key)
+    if state is None:
+        if not (data_dir / "data-store.json").exists():
+            write_bootstrap_marker(data_dir)
+        state = ChannelStateStore.open(data_dir)
+        _CHANNEL_STATES[key] = state
+    state.adopt(channel_ids or ("tg-assistant",))
+    return state
+
+
 class MemoryChannelAccessRegistry(ChannelAccessRegistry):
     """Small live access registry for adapter/engine unit tests."""
 
@@ -77,7 +100,7 @@ class MemoryChannelAccessRegistry(ChannelAccessRegistry):
         self.admin_user_ids = set(admin_user_ids or [])
         self.participants: dict[str, dict[str, str]] = {}
 
-    def snapshot_participant_role(
+    async def snapshot_participant_role(
         self,
         channel_id: str,
         access_scope_id: str,
@@ -328,6 +351,11 @@ def make_engine(
     run_button_binding_registry: RunButtonBindingRegistry | None = None,
     access_registry: ChannelAccessRegistry | None = None,
 ) -> tuple[ChannelConversationEngine, ChatSessionManager, AsyncMock, FakeTransport]:
+    """Build an engine on real Sessions and the data directory's Channel state.
+
+    ``channel_state(tmp_path)`` returns the same store, for reading and
+    arranging conversation pointers or Run-button bindings.
+    """
     if not (tmp_path / "data-store.json").exists():
         write_bootstrap_marker(tmp_path)
     chat_sessions = ChatSessionManager(tmp_path)
@@ -379,6 +407,7 @@ def make_engine(
         cast(Any, chat_sessions),
         cast(Any, resolved_transport),
         command_dispatcher=cast(Any, resolved_dispatcher),
+        conversation_pointers=channel_state(tmp_path),
         run_button_binding_registry=run_button_binding_registry,
         access_registry=access_registry
         or cast(

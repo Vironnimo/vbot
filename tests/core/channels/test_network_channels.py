@@ -22,7 +22,7 @@ from core.channels.whatsapp import WhatsAppChannelAdapter
 from core.runs import ASSISTANT_OUTPUT_EVENT, Run, WaitingWorkAdmission
 from core.sessions import ChatSessionManager
 from tests.core.channels.discord_helpers import make_command_dispatcher
-from tests.core.channels.engine_test_support import MemoryChannelAccessRegistry
+from tests.core.channels.engine_test_support import MemoryChannelAccessRegistry, channel_state
 
 pytestmark = pytest.mark.usefixtures("current_format_data_directory")
 
@@ -68,6 +68,8 @@ def make_adapter(tmp_path: Path, platform: str, *, allow: list[str] | None = Non
         lambda key: f"secret-{key}",
         AttachmentStore(tmp_path),
         command_dispatcher=make_command_dispatcher(),
+        conversation_pointers=channel_state(tmp_path, config.id),
+        received_messages=channel_state(tmp_path, config.id),
         access_registry=MemoryChannelAccessRegistry([]),
         state_dir=tmp_path / "channels" / config.id,
     )
@@ -109,11 +111,15 @@ async def test_inbound_uses_real_engine_and_persists_dedup(tmp_path: Path, platf
         adapter.send_text.assert_awaited_once()
         await adapter.handle_event(incoming)
         adapter.trigger.assert_awaited_once()
-        await adapter.load_seen()
-        await adapter.handle_event(incoming)
-        adapter.trigger.assert_awaited_once()
     finally:
         await adapter.stop()
+    # A restarted adapter still recognizes the redelivered event.
+    restarted = make_adapter(tmp_path, platform)
+    try:
+        await restarted.handle_event(incoming)
+        restarted.trigger.assert_not_awaited()
+    finally:
+        await restarted.stop()
 
 
 @pytest.mark.asyncio

@@ -1,5 +1,6 @@
 """Channel domain public API."""
 
+from core.channels._state_schema import channel_database_spec
 from core.channels.adapter import (
     ChannelAdapter,
     ConversationFacts,
@@ -47,6 +48,7 @@ __all__ = [
     "QuotedMessageFacts",
     "ReplyPlanFacts",
     "RouteFacts",
+    "channel_database_spec",
     "load_validated_channel_json",
     "managed_channel_token_env_var",
     "validate_channel_data",

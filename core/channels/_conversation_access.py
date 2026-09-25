@@ -83,14 +83,14 @@ class ChannelAccessPolicy:
             role=conversation.sender_role or "member",
         )
 
-    def _snapshot_group_sender(self, conversation: ConversationFacts) -> ConversationFacts:
+    async def _snapshot_group_sender(self, conversation: ConversationFacts) -> ConversationFacts:
         """Persist and freeze one group sender's role at Channel ingress."""
         if conversation.kind != "group" or conversation.sender_role is not None:
             return conversation
         access_scope_id = conversation.access_scope_id or conversation.chat_id
         registry = self._access_registry
         role: GroupRole = (
-            registry.snapshot_participant_role(
+            await registry.snapshot_participant_role(
                 self._config.id,
                 access_scope_id,
                 conversation.user_id,

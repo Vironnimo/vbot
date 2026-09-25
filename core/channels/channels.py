@@ -1,4 +1,4 @@
-"""Channel configuration, storage, and lifecycle management."""
+"""Channel configuration, state, and lifecycle management."""
 
 from __future__ import annotations
 
@@ -26,6 +26,7 @@ from core.channels.config import (
     ChannelNotFoundError,
     _normalize_channel_id,
 )
+from core.channels.state import ChannelStateStore
 from core.channels.storage import ChannelStorage
 from core.chat.messages import ReplySurface
 from core.config_validation import (
@@ -38,6 +39,7 @@ if TYPE_CHECKING:
     from core.agents.agents import AgentStore
     from core.automation.automation import TriggerService
     from core.chat.commands import CommandDispatcher
+    from core.database import Database
     from core.runs import Run
     from core.sessions import ChatSessionManager
 
@@ -84,6 +86,15 @@ class ChannelService:
         self._interaction_dispatcher = interaction_dispatcher
         self._storage = ChannelStorage(Path(data_root))
         self._channel_root = Path(data_root) / "channels"
+        # channels.db holds the durable state of every configured Channel. A
+        # Channel whose config exists is registered, including after its state
+        # database came back from an older data snapshot.
+        self._state = ChannelStateStore.open(Path(data_root))
+        try:
+            self._state.adopt(self._storage.channel_ids())
+        except BaseException:
+            self._state.close()
+            raise
         self._whatsapp_setup_tasks: dict[str, asyncio.Task[None]] = {}
         self._whatsapp_setup_states: dict[str, dict[str, Any]] = {}
         self._whatsapp_operations: dict[str, asyncio.Lock] = {}
@@ -142,6 +153,15 @@ class ChannelService:
         self._failed_channels.clear()
         self._failure_reasons.clear()
         self._started = False
+
+    @property
+    def database(self) -> Database:
+        """The canonical Channel state database, for data snapshots and status."""
+        return self._state.database
+
+    def close(self) -> None:
+        """Close the Channel state database after the adapters stopped. Idempotent."""
+        self._state.close()
 
     async def aclose(self) -> None:
         """Stop all channel tasks and await their cancellation/shutdown paths."""
@@ -311,31 +331,31 @@ class ChannelService:
         """Return all persisted channels, enabled and disabled."""
         return self._storage.load_all()
 
-    def channel_access(self, channel_id: str) -> JsonObject:
+    async def channel_access(self, channel_id: str) -> JsonObject:
         """Return one Channel's durable identity and per-group access state."""
-        return self._storage.access_state(channel_id)
+        return await self._state.access_state(channel_id)
 
-    def set_channel_self_user_id(self, channel_id: str, user_id: str) -> JsonObject:
+    async def set_channel_self_user_id(self, channel_id: str, user_id: str) -> JsonObject:
         """Set and return one Channel account's own platform identity."""
-        return self._storage.set_self_user_id(channel_id, user_id)
+        return await self._state.set_self_user_id(channel_id, user_id)
 
-    def grant_channel_group_admin(
+    async def grant_channel_group_admin(
         self,
         channel_id: str,
         access_scope_id: str,
         user_id: str,
     ) -> JsonObject:
         """Grant one user admin access in one group and return saved state."""
-        return self._storage.grant_group_admin(channel_id, access_scope_id, user_id)
+        return await self._state.grant_group_admin(channel_id, access_scope_id, user_id)
 
-    def revoke_channel_group_admin(
+    async def revoke_channel_group_admin(
         self,
         channel_id: str,
         access_scope_id: str,
         user_id: str,
     ) -> JsonObject:
         """Revoke one additional group admin and return saved state."""
-        return self._storage.revoke_group_admin(channel_id, access_scope_id, user_id)
+        return await self._state.revoke_group_admin(channel_id, access_scope_id, user_id)
 
     def create_channel(self, config: ChannelConfig) -> None:
         """Validate and persist one channel config, then start it when enabled."""
@@ -354,12 +374,14 @@ class ChannelService:
 
         self._preflight_adapter_start(config)
         self._storage.save(config)
-        if config.enabled:
-            try:
+        try:
+            # A new Channel never inherits state rows left behind under its id.
+            self._state.reset(config.id)
+            if config.enabled:
                 self.start_channel(config.id, config_override=config)
-            except Exception:
-                self._rollback_created_channel(config.id)
-                raise
+        except Exception:
+            self._rollback_created_channel(config.id)
+            raise
         self._notify_tool_registration_if_changed(had_enabled_channels)
 
     def update_channel(self, channel_id: str, **fields: Any) -> None:
@@ -399,7 +421,7 @@ class ChannelService:
         self._notify_tool_registration_if_changed(had_enabled_channels)
 
     def delete_channel(self, channel_id: str) -> None:
-        """Delete one channel config and stop any active adapter task."""
+        """Delete one channel config and state, and stop any active adapter task."""
         normalized_id = _normalize_channel_id(channel_id)
         config = self._storage.get(normalized_id)
         self._require_whatsapp_idle(normalized_id)
@@ -413,6 +435,8 @@ class ChannelService:
         self.stop_channel(normalized_id)
         self._pending_start_requests.pop(normalized_id, None)
         self._storage.delete(normalized_id)
+        # Late saves of the stopping adapter are refused once unregistered.
+        self._state.unregister(normalized_id)
         self._whatsapp_setup_states.pop(normalized_id, None)
         self._whatsapp_setup_tasks.pop(normalized_id, None)
         self._whatsapp_operations.pop(normalized_id, None)
@@ -449,16 +473,18 @@ class ChannelService:
         self._notify_tool_registration_if_changed(had_enabled_channels)
 
     def record_chat_id_migration(self, channel_id: str, old_chat_id: str, new_chat_id: str) -> None:
-        """Persist a platform-side chat-id migration into the channel's allowlist.
+        """Persist a platform-side chat-id migration into allowlist and group access.
 
-        Swaps the old chat id for the new one in ``allowed_chat_ids`` and saves the
-        config without restarting the adapter — the running adapter already swapped
-        its in-memory allowlist and a restart would drop queued conversation work.
-        Idempotent: a config that no longer lists the old id is left untouched.
+        Moves the group's admins and participants to the new chat id, swaps the old
+        chat id for the new one in ``allowed_chat_ids`` and saves the config without
+        restarting the adapter — the running adapter already swapped its in-memory
+        allowlist and a restart would drop queued conversation work. Idempotent: a
+        config that no longer lists the old id is left untouched. Blocking; the
+        adapter calls it from a worker thread.
         """
         normalized_id = _normalize_channel_id(channel_id)
         config = self._storage.get(normalized_id)
-        self._storage.migrate_group_access(normalized_id, old_chat_id, new_chat_id)
+        self._state.migrate_group_access(normalized_id, old_chat_id, new_chat_id)
         if old_chat_id not in config.allowed_chat_ids:
             return
 
@@ -559,7 +585,9 @@ class ChannelService:
                 self._credential_resolver,
                 attachment_store=self._attachment_store,
                 command_dispatcher=self._command_dispatcher,
-                access_registry=self._storage,
+                conversation_pointers=self._state,
+                received_messages=self._state,
+                access_registry=self._state,
                 state_dir=self._channel_root / config.id,
             )
             return adapter
@@ -573,7 +601,8 @@ class ChannelService:
                 self._credential_resolver,
                 attachment_store=self._attachment_store,
                 command_dispatcher=self._command_dispatcher,
-                access_registry=self._storage,
+                conversation_pointers=self._state,
+                access_registry=self._state,
             )
 
         if config.platform == "telegram":
@@ -586,11 +615,12 @@ class ChannelService:
                 self._credential_resolver,
                 attachment_store=self._attachment_store,
                 command_dispatcher=self._command_dispatcher,
+                conversation_pointers=self._state,
                 chat_migration_persister=partial(self.record_chat_id_migration, config.id),
                 interaction_dispatcher=self._interaction_dispatcher,
-                run_button_binding_registry=self._storage,
-                access_registry=self._storage,
-                update_offset_store=self._storage,
+                run_button_binding_registry=self._state,
+                access_registry=self._state,
+                update_offset_store=self._state,
             )
 
         raise ChannelConfigError(f"Unsupported channel platform: {config.platform}")
@@ -708,6 +738,15 @@ class ChannelService:
         except Exception as error:
             _LOGGER.error(
                 "Rollback failed while deleting newly created channel config (channel=%s): %s",
+                channel_id,
+                error,
+                exc_info=(type(error), error, error.__traceback__),
+            )
+        try:
+            self._state.unregister(channel_id)
+        except Exception as error:
+            _LOGGER.error(
+                "Rollback failed while removing newly created channel state (channel=%s): %s",
                 channel_id,
                 error,
                 exc_info=(type(error), error, error.__traceback__),

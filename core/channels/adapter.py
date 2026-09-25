@@ -83,9 +83,13 @@ class UpdateOffsetStore(Protocol):
 
 
 class ChannelAccessRegistry(Protocol):
-    """Live, platform-neutral group access seam used by the Channel engine."""
+    """Live, platform-neutral group access seam used by the Channel engine.
 
-    def snapshot_participant_role(
+    ``snapshot_participant_role`` records a sender at ingress and runs off the
+    Event Loop; ``role_for`` answers per Tool dispatch without storage I/O.
+    """
+
+    async def snapshot_participant_role(
         self,
         channel_id: str,
         access_scope_id: str,
@@ -99,6 +103,42 @@ class ChannelAccessRegistry(Protocol):
         access_scope_id: str,
         user_id: str,
     ) -> GroupRole: ...
+
+
+class ConversationPointerStore(Protocol):
+    """Durable routing pointers from a conversation anchor to its active Session.
+
+    A conversation is identified by its derived anchor Session id. Without a
+    pointer the anchor itself is the active Session. The methods block and are
+    called from worker threads.
+    """
+
+    def active_session_id(self, channel_id: str, conversation_id: str) -> str | None: ...
+
+    def point_conversation(
+        self,
+        channel_id: str,
+        conversation_id: str,
+        conversation_kind: str,
+        session_id: str,
+    ) -> str | None: ...
+
+    def restore_conversation_pointer(
+        self,
+        channel_id: str,
+        conversation_id: str,
+        previous_session_id: str | None,
+        *,
+        expected_session_id: str,
+    ) -> None: ...
+
+
+class ReceivedMessageStore(Protocol):
+    """Durable inbound receipt window for platforms that redeliver after reconnects."""
+
+    async def has_received(self, channel_id: str, message_ref: str) -> bool: ...
+
+    async def record_received(self, channel_id: str, message_ref: str) -> None: ...
 
 
 def bound_run_callback_data(binding_id: str, button_index: int) -> str:

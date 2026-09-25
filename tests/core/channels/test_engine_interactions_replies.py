@@ -4,12 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import threading
-from datetime import UTC, datetime
 
 import core.channels._conversation_content as content_module
-import core.channels._conversation_routing as routing_module
-from core.channels import ChannelStorage
 from core.channels.adapter import RunButtonBinding, bound_run_callback_data
+from core.channels.state import state_timestamp
 from core.sessions import SessionAddress
 
 from .engine_test_support import (
@@ -22,6 +20,7 @@ from .engine_test_support import (
     InteractionEvent,
     Path,
     Run,
+    channel_state,
     drain,
     engine_module,
     logging,
@@ -40,22 +39,23 @@ from .engine_test_support import (
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stage", ["claim", "pointer", "lookup_failure"])
 async def test_aborted_bound_tap_restores_unadmitted_state(tmp_path, monkeypatch, stage):
-    storage = ChannelStorage(tmp_path)
+    storage = channel_state(tmp_path)
     engine, sessions, trigger, _transport = make_engine(
         tmp_path, run_button_binding_registry=storage
     )
     sessions.create("assistant", session_id=SESSION_ID)
     sessions.create("assistant", session_id="origin")
     address = SessionAddress(project_id=None, agent_id="assistant", session_id=SESSION_ID)
-    previous = {"active_session_id": "prior", "other": "keep"}
+    previous = {"other": "keep"}
     sessions.set_metadata(address, previous)
+    storage.point_conversation("tg-assistant", SESSION_ID, "direct", "prior")
     binding = RunButtonBinding(
         id="cancelled-binding",
         platform_target="12345",
         thread_id=None,
         origin_session_id="origin",
         original_button_data=("run:done",),
-        created_at=datetime.now(UTC).isoformat(),
+        created_at=state_timestamp(),
     )
     storage.save_run_button_binding("tg-assistant", binding)
     data = bound_run_callback_data(binding.id, 0)
@@ -94,6 +94,7 @@ async def test_aborted_bound_tap_restores_unadmitted_state(tmp_path, monkeypatch
         with pytest.raises(OSError if stage == "lookup_failure" else asyncio.CancelledError):
             await pending
         assert sessions.get_metadata(address) == previous
+        assert storage.active_session_id("tg-assistant", SESSION_ID) == "prior"
         monkeypatch.setattr(owner, name, original)
         claim = storage.claim_run_button_binding(
             "tg-assistant", binding.id, platform_target="12345", thread_id=None
@@ -110,15 +111,14 @@ async def test_aborted_bound_tap_restores_unadmitted_state(tmp_path, monkeypatch
 async def test_aborted_tap_cannot_undo_later_admission_to_same_origin(
     tmp_path, monkeypatch, cancel_waiter
 ):
-    storage = ChannelStorage(tmp_path)
+    storage = channel_state(tmp_path)
     trigger = AsyncMock(return_value=make_completed_run(output_text="done", session_id="origin"))
     engine, sessions, _, _ = make_engine(
         tmp_path, run_button_binding_registry=storage, trigger_run=trigger
     )
     sessions.create("assistant", session_id=SESSION_ID)
     sessions.create("assistant", session_id="origin")
-    address = SessionAddress(project_id=None, agent_id="assistant", session_id=SESSION_ID)
-    sessions.set_metadata(address, {"active_session_id": "prior"})
+    storage.point_conversation("tg-assistant", SESSION_ID, "direct", "prior")
     events = []
     for name in ("first", "second"):
         binding = RunButtonBinding(
@@ -127,7 +127,7 @@ async def test_aborted_tap_cannot_undo_later_admission_to_same_origin(
             thread_id=None,
             origin_session_id="origin",
             original_button_data=("run:done",),
-            created_at=datetime.now(UTC).isoformat(),
+            created_at=state_timestamp(),
         )
         storage.save_run_button_binding("tg-assistant", binding)
         data = bound_run_callback_data(name, 0)
@@ -181,7 +181,7 @@ async def test_aborted_tap_cannot_undo_later_admission_to_same_origin(
         with pytest.raises(asyncio.CancelledError):
             await first
         assert await second == "enqueued"
-        assert sessions.get_metadata(address)["active_session_id"] == "origin"
+        assert storage.active_session_id("tg-assistant", SESSION_ID) == "origin"
         await drain(engine, "12345")
         assert trigger.await_count == 1
     finally:
@@ -193,7 +193,7 @@ async def test_aborted_tap_cannot_undo_later_admission_to_same_origin(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("delete_origin", [False, True])
 async def test_waiting_bound_tap_keeps_origin_after_anchor_changes(tmp_path, delete_origin):
-    storage = ChannelStorage(tmp_path)
+    storage = channel_state(tmp_path)
     started, release = asyncio.Event(), asyncio.Event()
 
     async def trigger(agent_id, content, session_id, **kwargs):
@@ -214,7 +214,7 @@ async def test_waiting_bound_tap_keeps_origin_after_anchor_changes(tmp_path, del
         thread_id=None,
         origin_session_id="origin",
         original_button_data=("run:done",),
-        created_at=datetime.now(UTC).isoformat(),
+        created_at=state_timestamp(),
     )
     storage.save_run_button_binding("tg-assistant", binding)
     data = bound_run_callback_data(binding.id, 0)
@@ -232,10 +232,7 @@ async def test_waiting_bound_tap_keeps_origin_after_anchor_changes(tmp_path, del
         await engine.handle_inbound_text(conversation, "hold")
         await asyncio.wait_for(started.wait(), 10)
         assert await engine.trigger_interaction_reply(conversation, event) == "enqueued"
-        sessions.mutate_metadata(
-            SessionAddress(project_id=None, agent_id="assistant", session_id=SESSION_ID),
-            lambda metadata: metadata.update(active_session_id="other"),
-        )
+        storage.point_conversation("tg-assistant", SESSION_ID, "direct", "other")
         if delete_origin:
             await sessions.archive(
                 SessionAddress(project_id=None, agent_id="assistant", session_id="origin")
@@ -246,12 +243,7 @@ async def test_waiting_bound_tap_keeps_origin_after_anchor_changes(tmp_path, del
         assert [call.args[2] for call in calls] == (
             [SESSION_ID] if delete_origin else [SESSION_ID, "origin"]
         )
-        assert (
-            sessions.get_metadata(
-                SessionAddress(project_id=None, agent_id="assistant", session_id=SESSION_ID)
-            )[routing_module.ACTIVE_SESSION_METADATA_KEY]
-            == "other"
-        )
+        assert storage.active_session_id("tg-assistant", SESSION_ID) == "other"
         if delete_origin:
             assert not sessions.exists(
                 SessionAddress(project_id=None, agent_id="assistant", session_id="origin")
@@ -540,7 +532,7 @@ async def test_group_member_interaction_tap_is_dropped(
 async def test_bound_tap_repoints_conversation_and_orders_followup_in_origin_session(
     tmp_path: Path,
 ) -> None:
-    storage = ChannelStorage(tmp_path)
+    storage = channel_state(tmp_path)
     trigger_mock = AsyncMock(
         side_effect=[
             make_completed_run(output_text="synced", session_id="origin-session"),
@@ -559,7 +551,7 @@ async def test_bound_tap_repoints_conversation_and_orders_followup_in_origin_ses
         thread_id=None,
         origin_session_id="origin-session",
         original_button_data=("run:done",),
-        created_at=datetime.now(UTC).isoformat(),
+        created_at=state_timestamp(),
     )
     storage.save_run_button_binding("tg-assistant", binding)
     internal_data = bound_run_callback_data(binding.id, 0)
@@ -592,10 +584,7 @@ async def test_bound_tap_repoints_conversation_and_orders_followup_in_origin_ses
         "den rest kannst du löschen",
         "origin-session",
     )
-    anchor_metadata = sessions.get_metadata(
-        SessionAddress(project_id=None, agent_id="assistant", session_id=SESSION_ID)
-    )
-    assert anchor_metadata[routing_module.ACTIVE_SESSION_METADATA_KEY] == "origin-session"
+    assert storage.active_session_id("tg-assistant", SESSION_ID) == "origin-session"
     assert transport.sent_texts == ["synced", "deleted"]
 
     duplicate = await engine.trigger_interaction_reply(conversation, event)
@@ -606,7 +595,7 @@ async def test_bound_tap_repoints_conversation_and_orders_followup_in_origin_ses
 
 @pytest.mark.asyncio
 async def test_bound_tap_does_not_recreate_missing_origin_session(tmp_path: Path) -> None:
-    storage = ChannelStorage(tmp_path)
+    storage = channel_state(tmp_path)
     trigger_mock = AsyncMock(return_value=make_completed_run(output_text="unexpected"))
     engine, sessions, _trigger, _transport = make_engine(
         tmp_path,
@@ -619,7 +608,7 @@ async def test_bound_tap_does_not_recreate_missing_origin_session(tmp_path: Path
         thread_id=None,
         origin_session_id="deleted-session",
         original_button_data=("run:done",),
-        created_at=datetime.now(UTC).isoformat(),
+        created_at=state_timestamp(),
     )
     storage.save_run_button_binding("tg-assistant", binding)
     internal_data = bound_run_callback_data(binding.id, 0)
@@ -645,7 +634,7 @@ async def test_bound_tap_does_not_recreate_missing_origin_session(tmp_path: Path
 
 @pytest.mark.asyncio
 async def test_new_detaches_telegram_after_bound_tap(tmp_path: Path) -> None:
-    storage = ChannelStorage(tmp_path)
+    storage = channel_state(tmp_path)
     trigger_mock = AsyncMock(return_value=make_completed_run(output_text="synced"))
     engine, sessions, _trigger, _transport = make_engine(
         tmp_path,
@@ -660,7 +649,7 @@ async def test_new_detaches_telegram_after_bound_tap(tmp_path: Path) -> None:
         thread_id=None,
         origin_session_id="origin-session",
         original_button_data=("run:done",),
-        created_at=datetime.now(UTC).isoformat(),
+        created_at=state_timestamp(),
     )
     storage.save_run_button_binding("tg-assistant", binding)
     internal_data = bound_run_callback_data(binding.id, 0)
@@ -680,9 +669,8 @@ async def test_new_detaches_telegram_after_bound_tap(tmp_path: Path) -> None:
     await engine.handle_inbound_text(conversation, "/new")
     await drain(engine, 12345)
 
-    detached_session_id = sessions.get_metadata(
-        SessionAddress(project_id=None, agent_id="assistant", session_id=SESSION_ID)
-    )[routing_module.ACTIVE_SESSION_METADATA_KEY]
+    detached_session_id = storage.active_session_id("tg-assistant", SESSION_ID)
+    assert detached_session_id is not None
     assert detached_session_id not in {SESSION_ID, "origin-session"}
     assert sessions.exists(
         SessionAddress(project_id=None, agent_id="assistant", session_id=detached_session_id)
@@ -699,7 +687,7 @@ async def test_busy_bound_tap_restores_binding_and_previous_conversation_pointer
     prior_pointer: str | None,
     concurrent,
 ) -> None:
-    storage = ChannelStorage(tmp_path)
+    storage = channel_state(tmp_path)
     waiting_work = ChatRunManager(waiting_work_limit=1)
     held_admission = waiting_work.reserve_waiting_work(scope="already-busy", scope_limit=1)
     engine, sessions, trigger_mock, transport = make_engine(
@@ -711,19 +699,19 @@ async def test_busy_bound_tap_restores_binding_and_previous_conversation_pointer
     sessions.create("assistant", session_id="prior-session")
     sessions.create("assistant", session_id="origin-session")
     previous_metadata = {"existing": "preserved"}
-    if prior_pointer is not None:
-        previous_metadata[routing_module.ACTIVE_SESSION_METADATA_KEY] = prior_pointer
     sessions.set_metadata(
         SessionAddress(project_id=None, agent_id="assistant", session_id=SESSION_ID),
         previous_metadata,
     )
+    if prior_pointer is not None:
+        storage.point_conversation("tg-assistant", SESSION_ID, "direct", prior_pointer)
     binding = RunButtonBinding(
         id="binding-busy",
         platform_target="12345",
         thread_id=None,
         origin_session_id="origin-session",
         original_button_data=("run:done",),
-        created_at=datetime.now(UTC).isoformat(),
+        created_at=state_timestamp(),
     )
     storage.save_run_button_binding("tg-assistant", binding)
     internal_data = bound_run_callback_data(binding.id, 0)
@@ -738,20 +726,22 @@ async def test_busy_bound_tap_restores_binding_and_previous_conversation_pointer
     )
 
     expected_metadata = dict(previous_metadata)
+    expected_pointer = prior_pointer
     if concurrent is not None:
         original_enqueue = engine._enqueue_chat_work
-        changes = (
-            {"new_metadata": "preserved"}
-            if concurrent == "metadata"
-            else {routing_module.ACTIVE_SESSION_METADATA_KEY: "newer-session"}
-        )
-        expected_metadata.update(changes)
+        if concurrent == "metadata":
+            expected_metadata["new_metadata"] = "preserved"
+        else:
+            expected_pointer = "newer-session"
 
         def enqueue(*args):
-            sessions.mutate_metadata(
-                SessionAddress(project_id=None, agent_id="assistant", session_id=SESSION_ID),
-                lambda metadata: metadata.update(changes),
-            )
+            if concurrent == "metadata":
+                sessions.mutate_metadata(
+                    SessionAddress(project_id=None, agent_id="assistant", session_id=SESSION_ID),
+                    lambda metadata: metadata.update(new_metadata="preserved"),
+                )
+            else:
+                storage.point_conversation("tg-assistant", SESSION_ID, "direct", "newer-session")
             return original_enqueue(*args)
 
         monkeypatch.setattr(engine, "_enqueue_chat_work", enqueue)
@@ -765,6 +755,7 @@ async def test_busy_bound_tap_restores_binding_and_previous_conversation_pointer
         )
         == expected_metadata
     )
+    assert storage.active_session_id("tg-assistant", SESSION_ID) == expected_pointer
     retry_claim = storage.claim_run_button_binding(
         "tg-assistant",
         binding.id,
