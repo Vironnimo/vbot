@@ -121,10 +121,13 @@ SESSION_FORK_ALWAYS_STRIP_META_KEYS = frozenset(
         SESSION_RUN_KINDS_META_KEY,
     }
 )
-# Prompt pin slots bound to the Session's Agent. A fork or move into another
-# scope drops them, together with the seen Skills, and starts a new prompt-cache
-# affinity, so the destination pins its own Skill catalog.
-AGENT_BOUND_PROMPT_PIN_SLOTS = frozenset({"pinned_skill_catalog"})
+# Prompt pin slots rendered from the Session's Agent: its Skill catalog, SOUL
+# block and pinned-memory text. A fork or move into another scope drops them,
+# together with the seen Skills, and starts a new prompt-cache affinity, so the
+# destination renders its own Agent's snapshots instead of the source's.
+AGENT_BOUND_PROMPT_PIN_SLOTS = frozenset(
+    {"pinned_skill_catalog", "pinned_soul_context", "pinned_memory_files"}
+)
 SKILL_CONTEXT_NOTE_PREFIX = "[skill-context] "
 SKILL_TOOL_MESSAGE_NAME = "skill"
 SKILL_TOOL_LOADED_STATUS = "loaded"
