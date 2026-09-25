@@ -762,7 +762,9 @@ class AgenticProgression:
                         if context.continuation_tracker is None
                         else context.continuation_tracker.tool_results_boundary(tool_messages)
                     )
-                    result_facts = tool_result_facts(tool_messages)
+                    result_facts = tool_dispatch_context.with_result_payloads(
+                        tool_result_facts(tool_messages)
+                    )
                     if binding is not None and tool_dispatch_context.delivery_receipts:
                         # The binding addresses this Run's own Session.
                         owned_receipts = [

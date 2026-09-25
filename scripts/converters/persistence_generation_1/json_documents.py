@@ -13,10 +13,15 @@ data Generation 1 no longer tolerates is normalized:
   dropped when ``tool_access`` already exists.
 - A Channel's retired ``owner_user_ids`` is dropped.
 
+The MCP ``connections.json`` moves from ``mcp/`` into the MCP Extension's state
+directory ``extension-data/mcp/``; the old file retires.
+
 Unknown fields and invalid collection entries are carried over unchanged; the
 application reports them. A document that already has ``format_version`` 1 is
 not rewritten. A document that cannot be converted without guessing is left
-unconverted and reported, so the application refuses it until it is repaired.
+unconverted and reported, so the application refuses it until it is repaired;
+a moved document moves either way, since the application reads only its new
+location.
 """
 
 from __future__ import annotations
@@ -55,6 +60,8 @@ class _UnconvertibleError(Exception):
 class _Document:
     kind: str
     convert: Callable[[Any, _Notes], dict[str, Any]]
+    # The Generation 1 location of a document that moved; its old file retires.
+    target: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,11 +88,33 @@ def convert(context: ConversionContext) -> None:
 
 def _convert_file(context: ConversionContext, document: _Document, path: Path) -> None:
     relative = path.relative_to(context.source).as_posix()
+    target = document.target or relative
+    moved = target != relative
+    if moved and context.source_path(target).exists():
+        context.report.skip(AREA, relative, f"left in place: {target} already exists")
+        return
+    body = _converted(context, document, path, relative)
+    if body is not None:
+        context.staged(target).write_text(
+            render_json_document(body, version=FORMAT_VERSION), encoding="utf-8"
+        )
+        context.report.count(AREA, document.kind)
+    elif moved:
+        context.staged(target).write_bytes(path.read_bytes())
+    if moved:
+        context.retire(relative)
+        context.report.count(AREA, "relocated")
+
+
+def _converted(
+    context: ConversionContext, document: _Document, path: Path, relative: str
+) -> dict[str, Any] | None:
+    """Return the converted body, or ``None`` for a document that stays as it is."""
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, ValueError) as error:
         context.report.skip(AREA, relative, f"left unconverted: unreadable JSON ({error})")
-        return
+        return None
     if isinstance(value, dict) and FORMAT_VERSION_FIELD in value:
         if value[FORMAT_VERSION_FIELD] == FORMAT_VERSION:
             context.report.count(AREA, "already_current")
@@ -95,16 +124,12 @@ def _convert_file(context: ConversionContext, document: _Document, path: Path) -
                 relative,
                 f"left unconverted: unexpected format_version {value[FORMAT_VERSION_FIELD]!r}",
             )
-        return
+        return None
     try:
-        body = document.convert(value, _Notes(context, relative))
+        return document.convert(value, _Notes(context, relative))
     except _UnconvertibleError as error:
         context.report.skip(AREA, relative, f"left unconverted: {error}")
-        return
-    context.staged(relative).write_text(
-        render_json_document(body, version=FORMAT_VERSION), encoding="utf-8"
-    )
-    context.report.count(AREA, document.kind)
+        return None
 
 
 def _object(value: Any) -> dict[str, Any]:
@@ -236,5 +261,10 @@ _DOCUMENTS: tuple[tuple[str, _Document], ...] = (
     ("terminals/launch-history.json", _Document("terminal_documents", _terminal_document)),
     ("terminals/groups.json", _Document("terminal_documents", _terminal_document)),
     ("oauth/*.json", _Document("oauth_tokens", _plain)),
-    ("mcp/connections.json", _Document("mcp_connections", _mcp_connections)),
+    (
+        "mcp/connections.json",
+        _Document(
+            "mcp_connections", _mcp_connections, target="extension-data/mcp/connections.json"
+        ),
+    ),
 )

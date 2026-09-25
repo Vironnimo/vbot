@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import builtins
+import json
 import logging
 import threading
 from collections.abc import Callable, Mapping, Sequence
@@ -42,7 +43,7 @@ from core.sessions._types import (
     TemporarySessionBinding,
     ToolResultFacts,
 )
-from core.sessions.errors import FtsHealth
+from core.sessions.errors import FtsHealth, SessionNotFoundError
 from core.sessions.session import ChatSession
 from core.sessions.store import SessionStore
 from core.settings import is_valid_project_id
@@ -624,6 +625,22 @@ class ChatSessionManager:
     async def tool_result_persisted_async(self, address: SessionAddress, tool_call_id: str) -> bool:
         """Report in one indexed probe whether a live Session holds a Tool call's result."""
         return await self._store.run_async(self._store.tool_result_persisted, address, tool_call_id)
+
+    async def tool_result_payload_async(
+        self, address: SessionAddress, payload_id: str, *, owner_name: str
+    ) -> Any | None:
+        """Load one payload *owner_name* attached to a Tool Result the Session's view shows.
+
+        Returns ``None`` when the Session does not exist, the payload belongs to
+        another owner, or its Tool Result is not in the current view.
+        """
+        try:
+            payload_json = await self._store.run_async(
+                lambda: self._store.tool_result_payload(address, payload_id, owner_name=owner_name)
+            )
+        except SessionNotFoundError:
+            return None
+        return None if payload_json is None else json.loads(payload_json)
 
     def history_revision(self, address: SessionAddress) -> int:
         return self._store.history_revision(address)

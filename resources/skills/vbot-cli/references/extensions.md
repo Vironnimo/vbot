@@ -29,7 +29,7 @@ Read only the capability sections needed for the task: [entry point](#the-entry-
 > extensions you would run by hand. This is intentional: vBot is a single-user,
 > technical-user tool.
 
-`API_VERSION` is currently **7**. The extension API is vBot's first public surface; it is designed conservatively and is not yet declared stable. Manifests requiring API v1 or v2 remain compatible; an Extension that declares Tool Families should require API v3 so older vBot versions reject it cleanly. Managed operations and live Tool catalogs require API v4. Tools declaring `requires_opt_in=True` require API v5. Page declarations and explicit Tool catalog visibility require API v6. Extension databases (`host.open_database`) require API v7.
+`API_VERSION` is currently **8**. The extension API is vBot's first public surface; it is designed conservatively and is not yet declared stable. Manifests requiring API v1 or v2 remain compatible; an Extension that declares Tool Families should require API v3 so older vBot versions reject it cleanly. Managed operations and live Tool catalogs require API v4. Tools declaring `requires_opt_in=True` require API v5. Page declarations and explicit Tool catalog visibility require API v6. Extension databases (`host.open_database`) require API v7. Tool result payloads (`context.attach_result_payload`, `host.load_result_payload`) require API v8.
 
 ## Install and discovery
 
@@ -188,7 +188,7 @@ The page runs in an opaque-origin sandbox. Its parent bridge validates the sourc
 
 Bridge commands allow up to 64 KiB and host replies up to 8 MiB, including their envelopes. Oversized operation replies reject the request; requests without a reply time out after 30 seconds without replay. A timeout does not prove that a mutation failed: refresh its state before deciding whether to repeat it. Bundle fonts and other presentation assets with the page; external font stylesheets are blocked by its CSP.
 
-A callback appended to `api.operations.startup` receives an owner-bound `ExtensionHost`: `state_dir` is a private directory for persistent Extension files, `open_database(...)` opens the Extension's [databases](#extension-databases), `catalog()` provides safe configured choices, and `publish_change(resource, ids, revision)` invalidates its page. `temporary_agents` creates canonical bound Sessions without Identity workspaces, opens an admission group, starts initial or continuation inputs, closes/drains owned work, and exposes scoped history, Run, receipt and Statistics reads. Handles become invalid when the registration retires. The retained Sessions survive reload; reopening and admitting work is an explicit Extension decision.
+A callback appended to `api.operations.startup` receives an owner-bound `ExtensionHost`: `state_dir` is a private directory for persistent Extension files, `open_database(...)` opens the Extension's [databases](#extension-databases), `load_result_payload(context, payload_id)` reads its [Tool result payloads](#tool-result-payloads), `catalog()` provides safe configured choices, and `publish_change(resource, ids, revision)` invalidates its page. `temporary_agents` creates canonical bound Sessions without Identity workspaces, opens an admission group, starts initial or continuation inputs, closes/drains owned work, and exposes scoped history, Run, receipt and Statistics reads. Handles become invalid when the registration retires. The retained Sessions survive reload; reopening and admitting work is an explicit Extension decision.
 
 `catalog()` also returns public System Prompt block metadata. When available,
 `await host.inspect_prompt(config, project_id)` previews a `TemporaryAgentConfig`
@@ -592,6 +592,12 @@ def register(api):
 - Name the columns in every `SELECT` and `INSERT`, because a newer version of the Extension may add columns. Validate values that may grow, such as statuses, in code instead of with CHECK constraints.
 - A handle belongs to the current registration. Shutdown handlers can still use it; afterwards vBot closes it, including on reload and disable. Open it again in the next startup instead of keeping it across reloads, and do not close it yourself.
 - Deleting an Extension keeps its databases registered and in data snapshots. When the user no longer needs that data, release each one with `vbot data-store unregister ext.<extension-id>.<name> --yes` (see `data-store.md`).
+
+## Tool result payloads
+
+API v8 Extension Tools can keep a large result with its Tool Result in Session history instead of in files. In a Tool handler, check `context.result_payloads_available`. When it is true, `payload_id = context.attach_result_payload(value)` stores the JSON-serializable `value` with this call's Tool Result and returns an opaque id; put that id in the result you return. It is false for calls outside a Session, such as management operations and the CLI; `attach_result_payload` then raises `RuntimeError`, so return the value inline instead. Attach only while the call runs. vBot stores the payload only if the handler returns a result: if the handler raises, returns an invalid result, or its Run is cancelled, nothing is stored.
+
+To read a payload later, a Tool call in the same Session passes its own `ToolContext` to `await host.load_result_payload(context, payload_id)`. It returns the value, or `None` when the id is unknown, belongs to another Extension, or its Tool Result is not in that Session's current history. Forks of the Session can read the payloads they inherited. Apply your own access checks after loading. Declare `"api_version": 8` in `extension.json`.
 
 ## Explicit Tool permission
 
