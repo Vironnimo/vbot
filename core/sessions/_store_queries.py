@@ -371,11 +371,11 @@ def list_completion_activity(
         values = ", ".join("(?, ?)" for _scope in chunk)
         for state in connection.execute(
             f"WITH scopes(project_id, agent_id) AS (VALUES {values}) "
-            "SELECT s.project_id, s.agent_id, s.session_id, s.latest_completion_run_id, "
-            "s.latest_completion_status, s.latest_completion_at, s.read_completion_run_id "
+            "SELECT s.project_id, s.agent_id, s.session_id, "
+            f"{_store_values._COMPLETION_ACTIVITY_COLUMNS} "
             "FROM scopes JOIN sessions AS s "
             "ON s.project_id = scopes.project_id AND s.agent_id = scopes.agent_id "
-            "WHERE s.state = 'live' AND s.latest_completion_run_id IS NOT NULL "
+            "WHERE s.state = 'live' AND s.latest_completion_run_key IS NOT NULL "
             "ORDER BY s.project_id, s.agent_id, s.session_id",
             [value for scope in chunk for value in scope],
         ).fetchall():

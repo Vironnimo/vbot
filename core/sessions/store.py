@@ -63,8 +63,8 @@ if TYPE_CHECKING:
 WRITE_PATIENCE_S = 20.0
 # Transcript appends are the user's conversation: wait longer before failing.
 TRANSCRIPT_WRITE_PATIENCE_S = 60.0
-# Completion activity (the latest completion and its read mark) is advisory:
-# give up quickly under contention.
+# Marking the latest completion read is advisory: give up quickly under
+# contention.
 ACTIVITY_WRITE_PATIENCE_S = 0.5
 
 _WriteResult = TypeVar("_WriteResult")
@@ -364,16 +364,6 @@ class SessionStore:
 
     def recover_interrupted_runs(self) -> None:
         self._execute_write(_store_runs.recover_interrupted_runs)
-
-    def record_terminal_run(
-        self, address: SessionAddress, *, run_id: str, status: str, timestamp: str
-    ) -> None:
-        self._execute_write(
-            lambda connection: _store_runs.record_terminal_run(
-                connection, address, run_id=run_id, status=status, timestamp=timestamp
-            ),
-            patience_s=ACTIVITY_WRITE_PATIENCE_S,
-        )
 
     def mark_terminal_run_read(
         self, address: SessionAddress, run_id: str

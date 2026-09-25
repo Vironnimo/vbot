@@ -79,8 +79,9 @@ def _decode_state_object(payload: str, name: str) -> JsonObject:
 
 
 def _completion_activity_from_state(state: Any) -> JsonObject:
+    """Decode one row of ``_store_values._COMPLETION_ACTIVITY_COLUMNS``."""
     latest_id = state["latest_completion_run_id"]
-    if latest_id is None or state["read_completion_run_id"] == latest_id:
+    if latest_id is None or state["latest_completion_read"]:
         return {
             "latest_completion_run_id": latest_id,
             "has_unread_completion": False,

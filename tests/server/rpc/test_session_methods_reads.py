@@ -11,6 +11,7 @@ from core.chat import ChatMessage
 from core.sessions import FORK_SOURCE_META_KEY, SessionAddress
 from core.utils.timestamps import canonical_timestamp
 from server.rpc.methods import dispatch_rpc
+from tests.core.sessions.history_fixtures import settle_run
 from tests.server.rpc_test_support import StubAdapter, make_state
 
 
@@ -29,7 +30,7 @@ async def test_session_get_reads_one_summary_by_exact_address(tmp_path: Path) ->
     source.append(ChatMessage.user("hello"))
     sessions.set_title(source.address, "Release planning")
     fork = await sessions.fork(source.address)
-    sessions.record_terminal_run(fork.address, "run-one", "completed", "2026-09-20T10:00:00Z")
+    settle_run(sessions, fork.address, "run-one", completed_at="2026-09-20T10:00:00Z")
 
     parent = await _rpc(state, "session.get", {"agent_id": "coder", "session_id": "source"})
     child = await _rpc(state, "session.get", {"agent_id": "coder", "session_id": fork.id})
@@ -89,10 +90,10 @@ async def test_activity_list_returns_only_completed_sessions_per_address(tmp_pat
     unread = SessionAddress(project_id=None, agent_id="coder", session_id="unread")
     read = SessionAddress(project_id=None, agent_id="coder", session_id="read")
     team = SessionAddress(project_id="vbot", agent_id="builder", session_id="team")
-    sessions.record_terminal_run(unread, "run-unread", "failed", "2026-09-20T10:00:00Z")
-    sessions.record_terminal_run(read, "run-read", "completed", "2026-09-20T10:01:00Z")
+    settle_run(sessions, unread, "run-unread", "failed", "2026-09-20T10:00:00Z")
+    settle_run(sessions, read, "run-read", "completed", "2026-09-20T10:01:00Z")
     sessions.mark_terminal_run_read(read, "run-read")
-    sessions.record_terminal_run(team, "run-team", "completed", "2026-09-20T10:02:00Z")
+    settle_run(sessions, team, "run-team", "completed", "2026-09-20T10:02:00Z")
 
     result = await _rpc(
         state,
