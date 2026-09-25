@@ -262,6 +262,7 @@ def shape_process_output(
     max_chars: int = PROCESS_OUTPUT_CAP_CHARS,
 ) -> JsonObject:
     """Bound Model-facing Bash/Process output, retaining the newest text and log pointer."""
+    output = _final_line_text(output)
     lines = output.splitlines(keepends=True)
     truncated = truncated or len(lines) > max_lines or len(output) > max_chars
     output = "".join(lines[-max_lines:])
@@ -276,6 +277,25 @@ def shape_process_output(
     if truncated and log_file is not None:
         fields["log_file"] = log_file
     return fields
+
+
+def _final_line_text(output: str) -> str:
+    """Show output as a terminal leaves it: plain line ends, redrawn lines in final form.
+
+    Windows programs end lines with CRLF, and progress bars redraw one line after
+    a bare carriage return; the log file keeps the raw text.
+    """
+    if "\r" not in output:
+        return output
+    output = output.replace("\r\n", "\n")
+    if "\r" not in output:
+        return output
+    return "\n".join(_last_segment(line) for line in output.split("\n"))
+
+
+def _last_segment(line: str) -> str:
+    segments = [segment for segment in line.split("\r") if segment]
+    return segments[-1] if segments else ""
 
 
 def _truncation_marker(log_file: str | None) -> str:

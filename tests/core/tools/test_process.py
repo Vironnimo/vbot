@@ -310,12 +310,12 @@ async def test_status_caps_output_tail(
     assert data["output_truncated"] is True
 
 
-@pytest.mark.parametrize("newline", ["\n", "\r\n", "\r"])
+@pytest.mark.parametrize("newline", ["\n", "\r\n"])
 @pytest.mark.parametrize("line_count", [0, 1, 100, 101, 200])
 @pytest.mark.parametrize("has_log", [False, True])
 def test_output_line_budget_preserves_text_and_log_reference(newline, line_count, has_log):
-    lines = [f"line-{index}{newline}" for index in range(line_count)]
-    output = "".join(lines)
+    lines = [f"line-{index}\n" for index in range(line_count)]
+    output = "".join(line.replace("\n", newline) for line in lines)
     log_file = "C:/logs/command.log" if has_log else None
     fields = process_module.shape_process_output(output, log_file=log_file)
     assert fields["truncated"] is (line_count > 100)
@@ -327,7 +327,24 @@ def test_output_line_budget_preserves_text_and_log_reference(newline, line_count
             assert fields["log_file"] == log_file
             assert log_file in marker
     else:
-        assert fields["output"] == output
+        assert fields["output"] == "".join(lines)
+
+
+@pytest.mark.parametrize(
+    ("output", "shown"),
+    [
+        ("done\r\nnext\r\n", "done\nnext\n"),
+        (
+            "Downloading 10%\rDownloading 55%\rDownloading 100%\nsaved\n",
+            "Downloading 100%\nsaved\n",
+        ),
+        ("progress 1/3\rprogress 3/3\r\n", "progress 3/3\n"),
+        ("tail without newline\r", "tail without newline"),
+        ("plain\n", "plain\n"),
+    ],
+)
+def test_output_shows_carriage_returns_as_a_terminal_leaves_them(output, shown):
+    assert process_module.shape_process_output(output)["output"] == shown
 
 
 @pytest.mark.parametrize("size", [0, 7999, 8000, 8001, 20000])
