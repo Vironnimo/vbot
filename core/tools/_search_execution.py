@@ -188,6 +188,84 @@ def _explained_pattern_errors() -> Iterator[None]:
         raise
 
 
+def pattern_retry(
+    error: str, patterns: list[str], options: SearchOptions
+) -> tuple[list[str], bool, str] | None:
+    """Return the evident reading of patterns the regex engine rejected, if any.
+
+    Returns the patterns to search, whether PCRE2 is needed, and a note for the
+    Agent. A pattern that uses look-around or backreferences needs PCRE2. An
+    unmatched parenthesis or a repetition operator with nothing to repeat cannot
+    be regex syntax, so those characters match literally; everything else in the
+    pattern keeps its regex meaning. Literal (-F) searches never reach here.
+    """
+    if "regex parse error" not in error and "PCRE2: error compiling pattern" not in error:
+        return None
+    if "--pcre2" in error and options.get("engine") != "pcre2":
+        return (
+            patterns,
+            True,
+            "The pattern needs PCRE2 (look-around or backreferences), so it ran with -P.",
+        )
+    repaired = [_escape_unbalanced(pattern) for pattern in patterns]
+    changed = [(old, new) for old, new in zip(patterns, repaired, strict=True) if old != new]
+    if not changed:
+        return None
+    described = "; ".join(f'"{old}" as "{new}"' for old, new in changed)
+    return (
+        repaired,
+        False,
+        f"Unbalanced regex characters were matched literally: searched {described}. "
+        "Add -F to args to search plain text.",
+    )
+
+
+def _escape_unbalanced(pattern: str) -> str:
+    out: list[str] = []
+    open_groups: list[int] = []
+    previous = ""  # "", "(", "|" or "atom": what a repetition operator would apply to
+    class_depth = 0
+    index = 0
+    while index < len(pattern):
+        char = pattern[index]
+        index += 1
+        if char == "\\":
+            out.append(char + pattern[index : index + 1])
+            index += 1
+            previous = "atom"
+        elif class_depth:
+            class_depth += {"[": 1, "]": -1}.get(char, 0)
+            out.append(char)
+        elif char == "[":
+            class_depth = 1
+            out.append(char)
+            for literal in ("^", "]"):
+                if pattern.startswith(literal, index):
+                    out.append(literal)
+                    index += 1
+            previous = "atom"
+        elif char == "(":
+            open_groups.append(len(out))
+            out.append(char)
+            previous = "("
+        elif char == ")":
+            out.append(char if open_groups else "\\)")
+            if open_groups:
+                open_groups.pop()
+            previous = "atom"
+        elif (
+            char in "*+?{" and previous in {"", "(", "|"} and not (char == "?" and previous == "(")
+        ):
+            out.append("\\" + char)
+            previous = "atom"
+        else:
+            out.append(char)
+            previous = "|" if char == "|" else "atom"
+    for position in open_groups:
+        out[position] = "\\("
+    return "".join(out)
+
+
 def content_events(
     binary: Path,
     paths: Iterator[tuple[Path, bool]],
