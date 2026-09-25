@@ -19,6 +19,7 @@ from core.providers.adapter import (
     TERMINAL_OUTCOME_UNKNOWN,
     TerminalOutcome,
     normalize_tool_call_candidates,
+    tool_result_function_response,
 )
 from core.providers.errors import (
     ProviderError,
@@ -53,16 +54,7 @@ def _to_gemini_content(message: Mapping[str, Any]) -> tuple[dict[str, Any] | Non
             )
         return ({"role": "model", "parts": parts} if parts else None), 0
     if role == "tool":
-        raw_content = message.get("content", "")
-        try:
-            parsed_content = (
-                json.loads(raw_content) if isinstance(raw_content, str) else raw_content
-            )
-        except json.JSONDecodeError:
-            parsed_content = raw_content
-        response = (
-            parsed_content if isinstance(parsed_content, Mapping) else {"result": parsed_content}
-        )
+        response = tool_result_function_response(message.get("content", ""))
         return (
             {
                 "role": "user",

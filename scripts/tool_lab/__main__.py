@@ -43,7 +43,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     probed.add_argument("--max", type=int, default=3000, help="clip printed texts (0 = no limit)")
     probed.add_argument(
-        "--visible", action="store_true", help="show tabs and carriage returns as \\t and \\r"
+        "--visible",
+        action="store_true",
+        help="show tabs as \\t (carriage returns always show as \\r)",
     )
 
     mined = commands.add_parser(
