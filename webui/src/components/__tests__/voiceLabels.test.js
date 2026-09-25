@@ -10,6 +10,7 @@ const BRIDGE_ERROR_CODES = [
   'wakeword_model_invalid',
   'wakeword_model_unavailable',
   'wakeword_model_active',
+  'wakeword_model_delete_failed',
   'calibration_unavailable',
   'calibration_inactive',
 ];

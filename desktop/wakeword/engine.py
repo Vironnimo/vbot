@@ -285,7 +285,10 @@ class WakewordModelCatalog:
         """Permanently remove one imported model and its metadata."""
         descriptor = self.resolve(model_id)
         if not descriptor.removable:
-            raise WakewordModelError("Built-in wakeword models cannot be removed")
+            raise WakewordModelError(
+                "Built-in wakeword models cannot be removed",
+                error_code="wakeword_model_delete_failed",
+            )
         model_token = model_id.removeprefix(_CUSTOM_MODEL_PREFIX)
         model_path = self._model_directory / f"{model_token}{_CUSTOM_MODEL_FILE_SUFFIX}"
         metadata_path = self._metadata_path(model_token)
@@ -293,7 +296,10 @@ class WakewordModelCatalog:
             model_path.unlink()
             metadata_path.unlink(missing_ok=True)
         except OSError as exc:
-            raise WakewordModelError("Wakeword model could not be removed") from exc
+            raise WakewordModelError(
+                "Wakeword model could not be removed",
+                error_code="wakeword_model_delete_failed",
+            ) from exc
 
     def _custom_models(self) -> list[WakewordModelDescriptor]:
         if not self._model_directory.is_dir():

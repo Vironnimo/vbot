@@ -145,6 +145,10 @@ function knownErrorMessage(code) {
       'settings.voice.error.modelActive',
       'This wake phrase is active. Deactivate it before removing its model.',
     ),
+    wakeword_model_delete_failed: t(
+      'settings.voice.error.modelDeleteFailed',
+      'The Desktop could not remove this wakeword model. Check the Desktop log and try again.',
+    ),
     calibration_unavailable: t(
       'settings.voice.error.calibrationUnavailable',
       'Calibration needs Voice listening with this wake phrase active. Wait until Voice is listening, then try again.',
