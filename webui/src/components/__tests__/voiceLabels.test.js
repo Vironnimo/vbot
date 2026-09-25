@@ -1,7 +1,11 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { init } from '../../lib/i18n.js';
-import { bridgeErrorMessage, errorMessage } from '../voice/voiceLabels.js';
+import {
+  bridgeErrorMessage,
+  commandFailureMessage,
+  errorMessage,
+} from '../voice/voiceLabels.js';
 
 // Every code a Desktop bridge call can reject with.
 const BRIDGE_ERROR_CODES = [
@@ -38,5 +42,26 @@ describe('bridgeErrorMessage', () => {
       'Desktop bridge timed out',
     );
     expect(bridgeErrorMessage(null)).toBe('');
+  });
+});
+
+describe('commandFailureMessage', () => {
+  beforeEach(() => {
+    init('en');
+  });
+
+  it('tells an interrupted recording apart from a failing microphone', () => {
+    expect(commandFailureMessage('recording_interrupted')).toBe(
+      'The recording was interrupted. Say the wake phrase again.',
+    );
+    expect(commandFailureMessage('microphone_read_failed')).toBe(
+      'The microphone stopped responding. Check the device connection and retry.',
+    );
+  });
+
+  it('falls back to the generic command failure for an unknown code', () => {
+    expect(commandFailureMessage('future_code')).toBe(
+      'The voice command could not be sent. The failure was written to the Desktop log.',
+    );
   });
 });

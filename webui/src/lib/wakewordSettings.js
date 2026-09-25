@@ -299,11 +299,13 @@ function cleanWakePhrase(label) {
 
 /**
  * The wake phrases a Live voice call should know about: the labels of the
- * active phrases that send a command to an Agent, while Desktop Voice listens.
- * Empty when Voice is off or not listening.
+ * active phrases that send a command to an Agent, whenever Desktop Voice is
+ * enabled. The listener state and phrase problems do not matter: a phrase
+ * that is not heard right now can be heard again later in the same call.
+ * Empty when Voice is off.
  */
 export function liveWakePhrases(status) {
-  if (status?.enabled !== true || status.state !== 'listening') return [];
+  if (status?.enabled !== true) return [];
   const phrases = [];
   const seen = new Set();
   for (const phrase of status.phrases ?? []) {

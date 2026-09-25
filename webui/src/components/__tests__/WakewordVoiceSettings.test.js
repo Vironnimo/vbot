@@ -468,6 +468,51 @@ describe('WakewordVoiceSettings', () => {
       });
     });
 
+    it('lets an active phrase whose model is gone be deactivated', async () => {
+      const GONE = 'custom/gone';
+      await mountPanel({
+        status: voiceStatus({
+          phrases: [
+            phrase(GONE, {
+              sensitivity: 0.7,
+              action: { type: 'live_voice', mode: 'start' },
+            }),
+            phrase(NABU),
+          ],
+        }),
+      });
+
+      const card = phraseCard(GONE);
+      expect(card.querySelector('.voice-model-card__name').textContent).toBe(
+        GONE,
+      );
+      expect(card.querySelector('.badge--warn').textContent).toContain(
+        'Not installed',
+      );
+      expect(card.textContent).toContain(
+        'The selected wakeword model is no longer available.',
+      );
+      expect(document.querySelectorAll('.voice-model-card')).toHaveLength(4);
+
+      buttonByLabel(`Stop listening for ${GONE}`).click();
+      await settle();
+
+      expect(desktopBridge.updateVoiceConfig).toHaveBeenCalledExactlyOnceWith({
+        active_model_ids: [NABU],
+      });
+      expect(phraseCard(GONE)).toBeNull();
+    });
+
+    it('keeps the only active phrase even when its model is gone', async () => {
+      await mountPanel({
+        status: voiceStatus({ phrases: [phrase('custom/gone')] }),
+      });
+
+      expect(buttonByLabel('Stop listening for custom/gone').disabled).toBe(
+        true,
+      );
+    });
+
     it('marks a phrase Agent that is not on this server', async () => {
       await mountPanel({
         status: voiceStatus({

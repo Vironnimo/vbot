@@ -387,7 +387,7 @@ describe('liveWakePhrases', () => {
     session_behavior: 'active',
   };
 
-  it('lists the command phrases while Voice listens', () => {
+  it('lists the command phrases, including those with a problem', () => {
     expect(
       liveWakePhrases(
         status({
@@ -408,12 +408,16 @@ describe('liveWakePhrases', () => {
     ).toEqual(['Okay Nabu', 'Hey Nabu']);
   });
 
-  it('sends nothing unless Voice is enabled and listening', () => {
+  it('lists the phrases whenever Voice is enabled, whatever its state', () => {
     const phrases = [phrase(NABU, { label: 'Okay Nabu', effective: command })];
     expect(liveWakePhrases(null)).toEqual([]);
     expect(liveWakePhrases(status({ enabled: false, phrases }))).toEqual([]);
     for (const state of ['off', 'starting', 'microphone_disconnected', 'error'])
-      expect(liveWakePhrases(status({ state, phrases }))).toEqual([]);
+      expect(
+        liveWakePhrases(
+          status({ state, error_code: 'engine_start_failed', phrases }),
+        ),
+      ).toEqual(['Okay Nabu']);
   });
 
   it('cleans, shortens, deduplicates and bounds the labels', () => {

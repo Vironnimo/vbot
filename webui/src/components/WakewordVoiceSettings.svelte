@@ -38,6 +38,7 @@
   } from '$lib/wakewordSettings.js';
   import TranscriptionAudioSettings from './voice/TranscriptionAudioSettings.svelte';
   import VoicePhraseCard from './voice/VoicePhraseCard.svelte';
+  import VoiceUnavailablePhraseCard from './voice/VoiceUnavailablePhraseCard.svelte';
   import WakewordCalibration from './voice/WakewordCalibration.svelte';
 
   const MAX_CUSTOM_WAKEWORD_MODEL_BYTES = 20 * 1024 * 1024;
@@ -119,6 +120,17 @@
   let modelLabels = $derived(
     new Map(wakewordModels.map((model) => [model.id, model.label])),
   );
+  // Active phrases whose model is not in the catalog (its file was removed
+  // or no longer loads): they cannot be tuned, only deactivated.
+  let unavailablePhrases = $derived.by(() => {
+    if (!listsLoaded || !draft) return [];
+    const statusLabels = new Map(
+      (status?.phrases ?? []).map((phrase) => [phrase.model_id, phrase.label]),
+    );
+    return draft.active_model_ids
+      .filter((modelId) => !modelLabels.has(modelId))
+      .map((modelId) => ({ modelId, label: statusLabels.get(modelId) ?? '' }));
+  });
   let conflicts = $derived(
     draft ? overlappingPhraseConflicts(draft, wakewordModels) : new Map(),
   );
@@ -430,9 +442,9 @@
     void saveConfig();
   }
 
-  function handlePhraseToggle(model, checked) {
+  function handlePhraseToggle(modelId, checked) {
     const ids = draft.active_model_ids;
-    const isActive = ids.includes(model.id);
+    const isActive = ids.includes(modelId);
     if (checked === isActive) return;
     if (
       checked &&
@@ -442,8 +454,8 @@
     if (!checked && ids.length <= 1) return;
     editDraft({
       active_model_ids: checked
-        ? [...ids, model.id]
-        : ids.filter((modelId) => modelId !== model.id),
+        ? [...ids, modelId]
+        : ids.filter((activeId) => activeId !== modelId),
     });
   }
 
@@ -786,6 +798,15 @@
         </div>
         <div class="s-row-control voice-model-control">
           <div class="voice-model-list">
+            {#each unavailablePhrases as phrase (phrase.modelId)}
+              <VoiceUnavailablePhraseCard
+                modelId={phrase.modelId}
+                label={phrase.label}
+                deactivateDisabled={captureLocked ||
+                  draft.active_model_ids.length <= 1}
+                onDeactivate={() => handlePhraseToggle(phrase.modelId, false)}
+              />
+            {/each}
             {#each wakewordModels as model (model.id)}
               {@const active =
                 draft?.active_model_ids.includes(model.id) ?? false}
@@ -813,7 +834,7 @@
                 routingDisabled={routingLocked}
                 calibrateDisabled={calibrateDisabled(model.id)}
                 removeDisabled={captureLocked}
-                onToggle={(checked) => handlePhraseToggle(model, checked)}
+                onToggle={(checked) => handlePhraseToggle(model.id, checked)}
                 onSensitivityInput={(value) =>
                   handleSensitivityInput(model.id, value)}
                 onSensitivityCommit={() => void saveConfig()}

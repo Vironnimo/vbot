@@ -404,7 +404,12 @@ class VoiceController:
         return self.status()
 
     def retry(self) -> dict[str, Any]:
-        """Rebuild the listener from the stored config; returns the status."""
+        """Rebuild the listener from the stored config; returns the status.
+
+        The PortAudio device list is refreshed between the old listener's
+        shutdown and the new one's start, so a device connected or a default
+        input changed since then is used.
+        """
         with self._mutation_lock:
             config = parse_voice_config(
                 desktop_settings.read_section(desktop_settings.WAKEWORD_KEY, self._settings_path)
@@ -415,7 +420,7 @@ class VoiceController:
                     self._mode = MODE_REAL
                     self._stack_checked = False
                 self._config = config
-                self._transition_locked()
+                self._transition_locked(refresh_devices=True)
                 self._commit_locked()
         return self.status()
 
@@ -433,9 +438,15 @@ class VoiceController:
     # -- Models and devices --------------------------------------------------
 
     def list_microphones(self) -> list[dict[str, Any]]:
-        """Return the shared-mode input devices and whether Voice can use them."""
-        from desktop.wakeword._microphones import list_microphones
+        """Return the shared-mode input devices and whether Voice can use them.
 
+        PortAudio keeps the device list of its last initialization, so the list
+        is refreshed first; the refresh is skipped while a Voice stream is open
+        (it would invalidate the stream), and Retry refreshes it then.
+        """
+        from desktop.wakeword._microphones import list_microphones, refresh_microphone_devices
+
+        refresh_microphone_devices(self._runtime.audio_backend)
         return list_microphones(self._runtime.audio_backend)
 
     def list_models(self) -> list[dict[str, Any]]:
@@ -565,8 +576,12 @@ class VoiceController:
                     self._request_readiness_locked(self._session)
             self._commit_locked()
 
-    def _transition_locked(self) -> None:
-        """Stop the running session and start the next one on a background thread."""
+    def _transition_locked(self, *, refresh_devices: bool = False) -> None:
+        """Stop the running session and start the next one on a background thread.
+
+        ``refresh_devices`` refreshes the PortAudio device list once the old
+        session released its microphone, before the next one opens it.
+        """
         self._generation += 1
         generation = self._generation
         session, self._session = self._session, None
@@ -579,7 +594,7 @@ class VoiceController:
         previous = self._transition_thread
         thread = threading.Thread(
             target=self._run_transition,
-            args=(generation, previous, session, should_run),
+            args=(generation, previous, session, should_run, refresh_devices),
             name="vbot-voice-start" if should_run else "vbot-voice-stop",
             daemon=True,
         )
@@ -608,6 +623,7 @@ class VoiceController:
         previous: threading.Thread | None,
         session: _Session | None,
         should_run: bool,
+        refresh_devices: bool,
     ) -> None:
         timeout = self._runtime.join_timeout
         try:
@@ -616,12 +632,12 @@ class VoiceController:
             if session is not None:
                 session.shutdown(timeout)
             if should_run:
-                self._build_session(generation)
+                self._build_session(generation, refresh_devices=refresh_devices)
         except Exception:
             logger.exception("Voice listener could not start")
             self._fail_start(generation, ERROR_PIPELINE_FAILED)
 
-    def _build_session(self, generation: int) -> None:
+    def _build_session(self, generation: int, *, refresh_devices: bool = False) -> None:
         with self._lock:
             if generation != self._generation:
                 return
@@ -638,6 +654,11 @@ class VoiceController:
         if not server_url:
             self._fail_start(generation, ERROR_NO_SERVER)
             return
+        if refresh_devices:
+            from desktop.wakeword._microphones import refresh_microphone_devices
+
+            # Skipped by itself while a stream of an abandoned listener is still open.
+            refresh_microphone_devices(self._runtime.audio_backend)
         echo_stages = self._echo_stage_pool()
         if config.echo_cancellation:
             echo_stages.prepare()  # the canceller loads while the listener is built
