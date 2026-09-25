@@ -64,11 +64,18 @@ class Benchmark:
 
 
 class BenchContext:
-    """Resources shared by one suite run: work directory, Event Loop, fixtures."""
+    """Resources shared by one suite run: work directory, Event Loop, fixtures.
 
-    def __init__(self, work_dir: Path, loop: asyncio.AbstractEventLoop) -> None:
+    A ``smoke`` context only checks that benchmarks still set up and run:
+    fixtures that span every size build only the smallest one.
+    """
+
+    def __init__(
+        self, work_dir: Path, loop: asyncio.AbstractEventLoop, *, smoke: bool = False
+    ) -> None:
         self.work_dir = work_dir
         self.loop = loop
+        self.smoke = smoke
         self._fixtures: dict[str, object] = {}
         self._cleanups: list[Callable[[], object]] = []
 
