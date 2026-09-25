@@ -898,6 +898,8 @@ export default Object.freeze({
     'The Desktop rejected this Voice setting. Reload Voice settings and try again.',
   'settings.voice.error.modelActive':
     'This wake phrase is active. Deactivate it before removing its model.',
+  'settings.voice.error.modelDeleteFailed':
+    'The Desktop could not remove this wakeword model. Check the Desktop log and try again.',
   'settings.voice.error.calibrationUnavailable':
     'Calibration needs Voice listening with this wake phrase active. Wait until Voice is listening, then try again.',
   'settings.voice.error.calibrationInactive':

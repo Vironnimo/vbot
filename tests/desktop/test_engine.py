@@ -147,8 +147,9 @@ def test_catalog_deletes_only_imported_models(
         "builtin/alexa",
     ]
     assert not Path(imported.target).exists()
-    with pytest.raises(WakewordModelError):
+    with pytest.raises(WakewordModelError) as rejected:
         catalog.delete_model(DEFAULT_MODEL_IDS[0])
+    assert rejected.value.error_code == "wakeword_model_delete_failed"
 
 
 def test_catalog_creates_two_model_engine_with_independent_thresholds(tmp_path: Path) -> None:
