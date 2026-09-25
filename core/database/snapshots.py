@@ -65,7 +65,7 @@ from core.database.spec import (
 )
 from core.json_documents import durable_document_paths
 from core.utils.atomic import atomic_write_text
-from core.utils.timestamps import utc_now_timestamp
+from core.utils.timestamps import parse_timestamp, utc_now_timestamp
 from core.utils.version import detect_vbot_version
 
 if TYPE_CHECKING:
@@ -149,7 +149,7 @@ class SnapshotManifest:
         )
 
     def created_instant(self) -> datetime:
-        return _parse_instant(self.created_at)
+        return parse_timestamp(self.created_at)
 
 
 @dataclass(frozen=True)
@@ -182,13 +182,6 @@ def member_file_name(name: str) -> str:
 
 def _new_snapshot_id() -> str:
     return f"{datetime.now(UTC).strftime('%Y%m%dT%H%M%S')}Z-{uuid.uuid4().hex[:8]}"
-
-
-def _parse_instant(value: str) -> datetime:
-    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    if parsed.tzinfo is None:
-        raise ValueError("timestamp is not timezone-aware")
-    return parsed
 
 
 # ---------------------------------------------------------------------------
@@ -321,7 +314,7 @@ def _parse_manifest(payload: object, *, child_name: str) -> SnapshotManifest:
     try:
         if not isinstance(created_at, str):
             raise ValueError("created_at is not text")
-        _parse_instant(created_at)
+        parse_timestamp(created_at)
     except ValueError as exc:
         raise DatabaseCorruptError("snapshot manifest has an invalid created_at") from exc
     if payload["complete"] is not True:
