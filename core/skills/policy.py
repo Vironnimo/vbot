@@ -7,6 +7,10 @@ file means an empty policy. A malformed file yields diagnostics plus an empty
 effective policy instead of breaking startup; the manager surfaces the
 diagnostics, and mutations refuse to overwrite it. Another ``format_version`` is
 invalid; data from before persistence Generation 1 is converted, not migrated.
+
+Entries this vBot cannot use (a Skill name that is not trigger-safe, a receiver
+that is not an Identity Agent id) are warnings: the effective policy leaves them
+out, and mutations write every stored entry back except the one they change.
 """
 
 from __future__ import annotations
@@ -70,6 +74,64 @@ class SkillPolicy:
     shared: Mapping[str, Mapping[str, frozenset[str]]] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class _StoredPolicy:
+    """The modeled fields of the policy document exactly as stored.
+
+    Mutations change one entry here and write the rest back unchanged, including
+    entries the effective :class:`SkillPolicy` leaves out.
+    """
+
+    disabled: tuple[str, ...] = ()
+    shared: Mapping[str, Mapping[str, tuple[str, ...]]] = field(default_factory=dict)
+
+    @classmethod
+    def from_document(cls, data: Mapping[str, Any]) -> _StoredPolicy:
+        """Read the stored lists of a document that passed validation."""
+        return cls(
+            disabled=tuple(data.get("disabled") or ()),
+            shared={
+                str(owner_id): {
+                    str(skill_name): tuple(receivers or ())
+                    for skill_name, receivers in (skills or {}).items()
+                }
+                for owner_id, skills in (data.get("shared") or {}).items()
+            },
+        )
+
+    def effective(self) -> SkillPolicy:
+        """Return the policy this vBot applies: usable names and receivers only."""
+        from core.settings import is_valid_agent_id
+
+        shared: dict[str, dict[str, frozenset[str]]] = {}
+        for owner_id, stored_skills in sorted(self.shared.items()):
+            skills: dict[str, frozenset[str]] = {}
+            for skill_name, stored_receivers in sorted(stored_skills.items()):
+                receivers = frozenset(
+                    receiver for receiver in stored_receivers if is_valid_agent_id(receiver)
+                )
+                if _is_usable_skill_name(skill_name) and receivers:
+                    skills[skill_name] = receivers
+            if skills:
+                shared[owner_id] = skills
+        return SkillPolicy(
+            disabled=frozenset(name for name in self.disabled if _is_usable_skill_name(name)),
+            shared=shared,
+        )
+
+    def to_document(self) -> dict[str, Any]:
+        """Return the stored lists in the document's canonical (sorted) order."""
+        return {
+            "disabled": sorted(self.disabled),
+            "shared": {
+                owner_id: {
+                    skill_name: sorted(receivers) for skill_name, receivers in skills.items()
+                }
+                for owner_id, skills in self.shared.items()
+            },
+        }
+
+
 def validate_skill_policy_file(policy_path: str | Path) -> JsonValidationReport:
     """Validate the optional persisted ``skills/policy.json`` without consuming it."""
     return validate_json_file(policy_path, _validate_policy_document, missing_ok=True)
@@ -83,9 +145,14 @@ def _validate_policy_document(data: Any) -> list[JsonDiagnostic]:
         return diagnostics
     if not validate_format_version(diagnostics, data, POLICY_FORMAT_VERSION):
         return diagnostics
+    from core.settings import is_valid_agent_id
+
     disabled = data.get("disabled", [])
     if disabled is not None:
         validate_string_list(diagnostics, "$.disabled", disabled)
+        if isinstance(disabled, list):
+            for index, name in enumerate(disabled):
+                _warn_unusable_skill_name(diagnostics, f"$.disabled[{index}]", name)
     shared = data.get("shared", {})
     if shared is not None and not isinstance(shared, dict):
         add_error(diagnostics, "$.shared", "must be an object keyed by owner agent id")
@@ -96,13 +163,37 @@ def _validate_policy_document(data: Any) -> list[JsonDiagnostic]:
                 add_error(diagnostics, owner_path, "must be an object keyed by skill name")
                 continue
             for skill_name, receivers in sorted(skills.items()):
-                validate_string_list(
-                    diagnostics,
-                    child_path(owner_path, str(skill_name)),
-                    receivers,
-                )
+                skill_path = child_path(owner_path, str(skill_name))
+                _warn_unusable_skill_name(diagnostics, skill_path, skill_name)
+                validate_string_list(diagnostics, skill_path, receivers)
+                if not isinstance(receivers, list):
+                    continue
+                for index, receiver in enumerate(receivers):
+                    if isinstance(receiver, str) and not is_valid_agent_id(receiver):
+                        diagnostics.append(
+                            JsonDiagnostic(
+                                severity="warning",
+                                path=f"{skill_path}[{index}]",
+                                message=f"ignoring invalid receiver agent id: {receiver!r}",
+                            )
+                        )
     warn_unknown_keys(diagnostics, "$", data, POLICY_SHAPE.fields, "key")
     return diagnostics
+
+
+def _warn_unusable_skill_name(diagnostics: list[JsonDiagnostic], path: str, name: Any) -> None:
+    if isinstance(name, str) and not _is_usable_skill_name(name):
+        diagnostics.append(
+            JsonDiagnostic(
+                severity="warning",
+                path=path,
+                message=f"ignoring unusable skill name: {name!r}",
+            )
+        )
+
+
+def _is_usable_skill_name(name: Any) -> bool:
+    return isinstance(name, str) and SKILL_NAME_TRIGGER_PATTERN.fullmatch(name) is not None
 
 
 POLICY_FORMAT = JsonDocumentFormat(
@@ -146,14 +237,12 @@ class SkillPolicyService:
         """Add or remove one Skill name from the global disable switch."""
         self._validate_skill_name(name)
         with self._lock:
-            policy, _ = self._read_policy(strict=True)
-            names = set(policy.disabled)
+            stored = self._read_stored()
+            names = tuple(entry for entry in stored.disabled if entry != name)
             if disabled:
-                names.add(name)
-            else:
-                names.discard(name)
+                names = (*names, name)
             return self._write_policy(
-                SkillPolicy(disabled=frozenset(names), shared=policy.shared),
+                _StoredPolicy(disabled=names, shared=stored.shared),
                 operation="disable" if disabled else "enable",
                 target=name,
             )
@@ -185,25 +274,20 @@ class SkillPolicyService:
         ):
             raise SkillPolicyError("Sharing requires valid receiver Agent ids other than the owner")
         with self._lock:
-            policy, _ = self._read_policy(strict=True)
-            per_owner: dict[str, dict[str, frozenset[str]]] = {
-                owner: dict(skills) for owner, skills in policy.shared.items()
+            stored = self._read_stored()
+            per_owner: dict[str, dict[str, tuple[str, ...]]] = {
+                owner: dict(skills) for owner, skills in stored.shared.items()
             }
             owner_skills = per_owner.get(owner_id, {})
             if shared:
-                owner_skills[name] = frozenset(receivers or [])
+                owner_skills[name] = tuple(sorted(set(receivers or [])))
                 per_owner[owner_id] = owner_skills
-            else:
-                owner_skills.pop(name, None)
-                if owner_skills:
-                    per_owner[owner_id] = owner_skills
-                else:
-                    per_owner.pop(owner_id, None)
+            elif name in owner_skills:
+                del owner_skills[name]
+                if not owner_skills:
+                    del per_owner[owner_id]
             return self._write_policy(
-                SkillPolicy(
-                    disabled=policy.disabled,
-                    shared={owner: dict(skills) for owner, skills in sorted(per_owner.items())},
-                ),
+                _StoredPolicy(disabled=stored.disabled, shared=per_owner),
                 operation="share" if shared else "unshare",
                 target=f"{owner_id}/{name}",
             )
@@ -213,7 +297,8 @@ class SkillPolicyService:
         if not isinstance(name, str) or not SKILL_NAME_TRIGGER_PATTERN.fullmatch(name):
             raise SkillPolicyError("Skill policy requires a trigger-safe Skill name")
 
-    def _read_policy(self, *, strict: bool = False) -> tuple[SkillPolicy, list[str]]:
+    def _read_policy(self) -> tuple[SkillPolicy, list[str]]:
+        """Return the effective policy and the diagnostics of the file."""
         path = self.policy_path
         if not path.is_file():
             return SkillPolicy(), []
@@ -221,88 +306,51 @@ class SkillPolicyService:
             data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError) as error:
             message = f"Cannot read skill policy {path}: {error}"
-            if strict:
-                raise SkillPolicyError(message) from error
             _LOGGER.warning(message)
             return SkillPolicy(), [message]
         diagnostics = _validate_policy_document(data)
-        if any(diagnostic.severity == "error" for diagnostic in diagnostics):
-            messages = [
-                f"{diagnostic.severity} {diagnostic.path}: {diagnostic.message}"
-                for diagnostic in diagnostics
-            ]
-            if strict:
-                raise SkillPolicyError(
-                    f"Cannot update invalid skill policy {path}: {'; '.join(messages)}"
-                )
-            _LOGGER.warning("Ignoring invalid skill policy %s: %s", path, "; ".join(messages))
-            return SkillPolicy(), messages
-        policy = self._build_effective_policy(data, diagnostics)
-        return policy, [
+        messages = [
             f"{diagnostic.severity} {diagnostic.path}: {diagnostic.message}"
             for diagnostic in diagnostics
         ]
+        if any(diagnostic.severity == "error" for diagnostic in diagnostics):
+            _LOGGER.warning("Ignoring invalid skill policy %s: %s", path, "; ".join(messages))
+            return SkillPolicy(), messages
+        return _StoredPolicy.from_document(data).effective(), messages
 
-    @staticmethod
-    def _build_effective_policy(
-        data: Mapping[str, Any], diagnostics: list[JsonDiagnostic]
-    ) -> SkillPolicy:
-        """Project a valid document into its effective policy, dropping bad names."""
-        from core.settings import is_valid_agent_id
-
-        def usable_name(name: Any, path: str) -> bool:
-            if isinstance(name, str) and SKILL_NAME_TRIGGER_PATTERN.fullmatch(name):
-                return True
-            diagnostics.append(
-                JsonDiagnostic(
-                    severity="warning",
-                    path=path,
-                    message=f"ignoring unusable skill name: {name!r}",
-                )
+    def _read_stored(self) -> _StoredPolicy:
+        """Return the stored policy for a mutation; refuse a file that fails to load."""
+        path = self.policy_path
+        if not path.is_file():
+            return _StoredPolicy()
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as error:
+            raise SkillPolicyError(f"Cannot read skill policy {path}: {error}") from error
+        errors = [
+            f"{diagnostic.severity} {diagnostic.path}: {diagnostic.message}"
+            for diagnostic in _validate_policy_document(data)
+            if diagnostic.severity == "error"
+        ]
+        if errors:
+            raise SkillPolicyError(
+                f"Cannot update invalid skill policy {path}: {'; '.join(errors)}"
             )
-            return False
+        return _StoredPolicy.from_document(data)
 
-        disabled = frozenset(
-            name
-            for index, name in enumerate(data.get("disabled") or [])
-            if usable_name(name, f"$.disabled[{index}]")
-        )
-        shared: dict[str, dict[str, frozenset[str]]] = {}
-        raw_shared = data.get("shared") or {}
-        for owner_id, raw_skills in sorted(raw_shared.items()):
-            path = child_path("$.shared", str(owner_id))
-            skills: dict[str, frozenset[str]] = {}
-            for index, (skill_name, raw_receivers) in enumerate(sorted((raw_skills or {}).items())):
-                if not usable_name(skill_name, f"{path}[{index}]"):
-                    continue
-                receivers = frozenset(
-                    receiver for receiver in raw_receivers or [] if is_valid_agent_id(receiver)
-                )
-                if receivers:
-                    skills[str(skill_name)] = receivers
-            if skills:
-                shared[str(owner_id)] = skills
-        return SkillPolicy(disabled=disabled, shared=shared)
-
-    def _write_policy(self, policy: SkillPolicy, *, operation: str, target: str) -> SkillPolicy:
-        document = {
-            "disabled": sorted(policy.disabled),
-            "shared": {
-                owner_id: {
-                    skill_name: sorted(receivers)
-                    for skill_name, receivers in sorted(skills.items())
-                }
-                for owner_id, skills in sorted(policy.shared.items())
-            },
-        }
+    def _write_policy(self, stored: _StoredPolicy, *, operation: str, target: str) -> SkillPolicy:
         try:
             write_json_document(
-                self.policy_path, document, POLICY_FORMAT, data_dir=self._storage.data_dir
+                self.policy_path,
+                stored.to_document(),
+                POLICY_FORMAT,
+                data_dir=self._storage.data_dir,
             )
         except JsonDocumentWriteError as error:
             raise SkillPolicyError(str(error)) from error
         except OSError as error:
             raise SkillPolicyError(f"Cannot write skill policy: {error}") from error
+        policy = stored.effective()
         _LOGGER.info(
             "Skill policy %s applied for %s (%d disabled, %d shared owners)",
             operation,

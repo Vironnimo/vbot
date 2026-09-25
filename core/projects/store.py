@@ -5,13 +5,10 @@ repo (see add-projects.md → Speicherort & Datenmodell). Layout::
 
     <data_dir>/projects/<project-id>/
         project.json                 ← cwd, default agent/model, auto_load
-        agents/<agent-id>/
-            workspace/               ← reserved legacy layout helper; not Rooting state
 
-The anchor holds **no run config** — only Project configuration and an optional
-legacy Workspace layout; config comes live from the scan/repo. This module owns
-creation, read, list, cwd-mutation, and removal. Removal **archives** the
-project subtree using the same mechanic as agent deletion
+The anchor holds **no run config** — only Project configuration; config comes live
+from the scan/repo. This module owns creation, read, list, cwd-mutation, and
+removal. Removal **archives** the project subtree using the same mechanic as agent deletion
 (``shutil.move`` into ``<data_dir>/archive/...`` replacing an existing archive),
 so nothing is hard-deleted and the repo is never touched.
 
@@ -47,7 +44,6 @@ from core.projects.projects import (
 from core.settings import (
     DEFAULT_PROJECT_SOURCE_FORMAT,
     PROJECT_ID_PATTERN,
-    is_valid_agent_id,
 )
 from core.utils.ids import has_id_entry
 from core.utils.logging import get_logger
@@ -59,8 +55,6 @@ _LOGGER = get_logger("projects")
 
 _PROJECT_CONFIG_FILENAME = "project.json"
 _PROJECTS_DIRNAME = "projects"
-_AGENTS_DIRNAME = "agents"
-_WORKSPACE_DIRNAME = "workspace"
 
 
 def _validate_project_id(project_id: str) -> str:
@@ -77,19 +71,6 @@ def _validate_project_id(project_id: str) -> str:
     if not isinstance(project_id, str) or PROJECT_ID_PATTERN.fullmatch(project_id) is None:
         raise ProjectError(f"Invalid project id: {project_id!r}")
     return project_id
-
-
-def _validate_agent_id(agent_id: str) -> str:
-    """Reject any agent id that is not a bare slug before it becomes a path segment.
-
-    Mirrors :func:`_validate_project_id`: the agent id is a path segment under a
-    project anchor's ``agents/`` directory (legacy workspace), so a separator
-    or ``..`` component must never reach the filesystem. Defense-in-depth — RPC entry
-    already validates agent addresses — applied at the same path-building choke point.
-    """
-    if not is_valid_agent_id(agent_id):
-        raise ProjectError(f"Invalid agent id: {agent_id!r}")
-    return agent_id
 
 
 # Project archives live under their own subtree so a project id can never
@@ -134,7 +115,7 @@ class ProjectStore:
         source_format: str = DEFAULT_PROJECT_SOURCE_FORMAT,
         auto_load: list[str] | None = None,
     ) -> Project:
-        """Create and persist a project anchor and its ``agents/`` subtree.
+        """Create and persist a project anchor.
 
         Rejects a duplicate id and a cwd already claimed by another project
         (same folder twice is not a valid case). The cwd folder itself does not
@@ -165,7 +146,6 @@ class ProjectStore:
 
             project_dir.mkdir(parents=True)
             try:
-                (project_dir / _AGENTS_DIRNAME).mkdir()
                 self._write_project(project)
             except Exception:
                 shutil.rmtree(project_dir)
@@ -326,9 +306,10 @@ class ProjectStore:
 
         The config agent's matching chain then falls back to its repo-declared value
         (or the project/global default). Clearing the agent's **last** overridden field
-        removes the agent's entry entirely. When the agent has no such overridden field,
-        the project is returned unchanged without a write; otherwise exactly that one
-        field is dropped and every other override and field is preserved.
+        removes the agent's entry from ``project.json`` unless it still holds fields this
+        vBot does not model, which stay on disk. When the agent has no such overridden
+        field, the project is returned unchanged without a write; otherwise exactly that
+        one field is dropped and every other override and field is preserved.
         """
         with self._write_lock:
             project = self.get(project_id)
@@ -338,10 +319,8 @@ class ProjectStore:
             overrides = _copy_overrides(project.overrides)
             updated_override = dict(overrides[agent_id])
             del updated_override[field]
-            if updated_override:
-                overrides[agent_id] = updated_override
-            else:
-                del overrides[agent_id]
+            # An empty entry keeps its unknown fields on write, or is left out.
+            overrides[agent_id] = updated_override
             return self._rewrite_with_overrides(project, overrides)
 
     def _rewrite_with_overrides(
@@ -352,7 +331,8 @@ class ProjectStore:
         Carries every other field unchanged through ``build_project`` (the single
         validation path), refreshes ``updated_at``, and writes via the atomic
         replace. The cwd re-normalization is idempotent on an already-stored project,
-        exactly as in :meth:`update`.
+        exactly as in :meth:`update`. Returns the project as persisted: an emptied
+        override entry remains only while it holds fields this vBot does not model.
         """
         rebuilt = build_project(
             project.project_id,
@@ -373,7 +353,7 @@ class ProjectStore:
         )
         updated = replace(rebuilt, updated_at=_utc_now())
         self._write_project(updated)
-        return updated
+        return self._read_project(self._config_path(project.project_id))
 
     def delete(self, project_id: str) -> Path:
         """Archive the Project Anchor and its live Sessions, preserving the repo.
@@ -457,17 +437,6 @@ class ProjectStore:
                 self._sessions = ChatSessionManager(self._data_dir)
                 self._owns_sessions = True
             return self._sessions
-
-    def workspace_dir(self, project_id: str, agent_id: str) -> Path:
-        """Return the rooted-identity-agent workspace dir under the anchor.
-
-        ``projects/<project-id>/agents/<agent-id>/workspace/``. Explicit Rooted
-        Identity Agents do not use this path; their Workspace remains Agent-owned.
-        """
-        return self._agent_anchor_dir(project_id, agent_id) / _WORKSPACE_DIRNAME
-
-    def _agent_anchor_dir(self, project_id: str, agent_id: str) -> Path:
-        return self._project_dir(project_id) / _AGENTS_DIRNAME / _validate_agent_id(agent_id)
 
     def _project_dir(self, project_id: str) -> Path:
         return self._data_dir / _PROJECTS_DIRNAME / _validate_project_id(project_id)

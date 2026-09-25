@@ -15,6 +15,9 @@ data Generation 1 no longer tolerates is normalized:
   access, Project Tool whitelists and Project Agent overrides, without widening
   any policy (see ``_tool_access``).
 - A Channel's retired ``owner_user_ids`` is dropped.
+- Attachment sidecars (``artifacts/attachments/<id>.json``) lose the stored
+  ``file_path``, which vBot derives from the data directory, and the retired
+  ``text_content`` cache; speech artifact sidecars only get ``format_version``.
 
 The MCP ``connections.json`` moves from ``mcp/`` into the MCP Extension's state
 directory ``extension-data/mcp/``; the old file retires.
@@ -276,6 +279,15 @@ def _terminal_document(value: Any, notes: _Notes) -> dict[str, Any]:
     return _versioned(value, _TERMINAL_LEGACY_VERSION)
 
 
+def _attachment_metadata(value: Any, notes: _Notes) -> dict[str, Any]:
+    metadata = _object(value)
+    for retired in ("file_path", "text_content"):
+        if retired in metadata:
+            del metadata[retired]
+            notes.count(f"attachment_{retired}_dropped")
+    return metadata
+
+
 def _mcp_connections(value: Any, notes: _Notes) -> dict[str, Any]:
     connections = _array(value)
     for connection in connections:
@@ -303,6 +315,8 @@ _DOCUMENTS: tuple[tuple[str, _Document], ...] = (
     ("terminals/launch-history.json", _Document("terminal_documents", _terminal_document)),
     ("terminals/groups.json", _Document("terminal_documents", _terminal_document)),
     ("oauth/*.json", _Document("oauth_tokens", _plain)),
+    ("artifacts/attachments/*.json", _Document("attachment_metadata", _attachment_metadata)),
+    ("artifacts/speech/*.json", _Document("speech_artifact_metadata", _plain)),
     (
         "mcp/connections.json",
         _Document(

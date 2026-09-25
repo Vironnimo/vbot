@@ -18,6 +18,7 @@ from core.attachments.attachments import (
     AttachmentTooLargeError,
     AttachmentTypeNotAllowedError,
     sniff_media_type,
+    validate_attachment_metadata_file,
 )
 from core.storage.layout import DataDirectoryLayout
 
@@ -147,7 +148,11 @@ def test_store_happy_path_persists_blob_and_sidecar(
     assert sidecar_payload["filename"] == filename
     assert sidecar_payload["media_type"] == expected_media_type
     assert sidecar_payload["size_bytes"] == len(data)
+    assert sidecar_payload["format_version"] == 1
+    # The blob path follows from the data directory and is never stored.
+    assert "file_path" not in sidecar_payload
     assert "text_content" not in sidecar_payload
+    assert validate_attachment_metadata_file(sidecar_path).diagnostics == ()
 
     loaded = store.get(record.id)
     assert loaded == record
@@ -233,6 +238,54 @@ def test_set_transcription_persists_to_sidecar(tmp_path: Path) -> None:
     sidecar_path = DataDirectoryLayout(tmp_path).attachments / f"{record.id}.json"
     sidecar_payload = json.loads(sidecar_path.read_text(encoding="utf-8"))
     assert sidecar_payload["transcription"] == "hello world"
+
+
+def test_set_transcription_keeps_the_unknown_fields_of_the_sidecar(tmp_path: Path) -> None:
+    store = AttachmentStore(tmp_path)
+    record = store.store("voice.ogg", b"OggS\x00\x02opus-data")
+    sidecar_path = DataDirectoryLayout(tmp_path).attachments / f"{record.id}.json"
+    payload = json.loads(sidecar_path.read_text(encoding="utf-8"))
+    payload["duration_ms"] = 1200
+    sidecar_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    store.set_transcription(record.id, "hello world")
+
+    stored = json.loads(sidecar_path.read_text(encoding="utf-8"))
+    assert stored == {**payload, "transcription": "hello world"}
+    report = validate_attachment_metadata_file(sidecar_path)
+    assert [(item.severity, item.path) for item in report.diagnostics] == [
+        ("warning", "$.duration_ms")
+    ]
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"format_version": 2},
+        {"format_version": None},
+        {"size_bytes": -1},
+        {"media_type": "application/x-unknown"},
+    ],
+    ids=["newer-version", "no-version", "negative-size", "unstored-type"],
+)
+def test_sidecar_that_fails_to_load_is_unavailable_and_never_rewritten(
+    tmp_path: Path, change: dict[str, object]
+) -> None:
+    store = AttachmentStore(tmp_path)
+    record = store.store("voice.ogg", b"OggS\x00\x02opus-data")
+    sidecar_path = DataDirectoryLayout(tmp_path).attachments / f"{record.id}.json"
+    payload = {**json.loads(sidecar_path.read_text(encoding="utf-8")), **change}
+    payload = {key: value for key, value in payload.items() if value is not None}
+    original = json.dumps(payload)
+    sidecar_path.write_text(original, encoding="utf-8")
+
+    with pytest.raises(AttachmentError):
+        store.get(record.id)
+    with pytest.raises(AttachmentError):
+        store.set_transcription(record.id, "hello world")
+
+    assert sidecar_path.read_text(encoding="utf-8") == original
+    assert not validate_attachment_metadata_file(sidecar_path).ok
 
 
 def test_set_transcription_rejects_empty_text(tmp_path: Path) -> None:

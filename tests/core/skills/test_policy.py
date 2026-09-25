@@ -10,6 +10,7 @@ from core.skills.policy import (
     SkillPolicy,
     SkillPolicyError,
     SkillPolicyService,
+    validate_skill_policy_file,
 )
 from core.storage.storage import StorageManager
 
@@ -126,6 +127,31 @@ class TestLoad:
         messages = service.validation_diagnostics()
         assert sum("ignoring unusable skill name" in message for message in messages) == 2
 
+    def test_doctor_reports_entries_the_effective_policy_ignores(
+        self, storage: StorageManager
+    ) -> None:
+        path = policy_path(storage)
+        path.parent.mkdir(parents=True)
+        path.write_text(
+            json.dumps(
+                {
+                    "format_version": POLICY_FORMAT_VERSION,
+                    "disabled": ["bad name!"],
+                    "shared": {"owner": {"deploy": ["Not An Id"]}},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        report = validate_skill_policy_file(path)
+
+        assert report.ok
+        assert [diagnostic.path for diagnostic in report.diagnostics] == [
+            "$.disabled[0]",
+            "$.shared.owner.deploy[0]",
+        ]
+        assert SkillPolicyService(storage).load() == SkillPolicy()
+
     def test_non_string_receivers_are_shape_errors(self, storage: StorageManager) -> None:
         path = policy_path(storage)
         path.parent.mkdir(parents=True)
@@ -222,6 +248,46 @@ class TestMutations:
         document = json.loads(path.read_text(encoding="utf-8"))
         assert document["future"] == {"kept": True}
         assert document["disabled"] == ["deploy"]
+
+    def test_mutations_write_unusable_stored_entries_back_unchanged(
+        self, storage: StorageManager
+    ) -> None:
+        path = policy_path(storage)
+        path.parent.mkdir(parents=True)
+        path.write_text(
+            json.dumps(
+                {
+                    "format_version": POLICY_FORMAT_VERSION,
+                    "disabled": ["bad name!", "old"],
+                    "shared": {
+                        "main": {"also bad!": ["two"], "notes": ["Not An Id", "two"]},
+                        "other": {"deploy": []},
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        service = SkillPolicyService(storage)
+
+        service.set_disabled("deploy", disabled=True)
+        service.set_disabled("old", disabled=False)
+        service.set_shared("main", "review", shared=True, receivers=["two"])
+
+        document = json.loads(path.read_text(encoding="utf-8"))
+        assert document["disabled"] == ["bad name!", "deploy"]
+        assert document["shared"] == {
+            "main": {
+                "also bad!": ["two"],
+                "notes": ["Not An Id", "two"],
+                "review": ["two"],
+            },
+            "other": {"deploy": []},
+        }
+        # The effective policy still leaves the unusable entries out.
+        assert service.load() == SkillPolicy(
+            disabled=frozenset({"deploy"}),
+            shared={"main": {"notes": frozenset({"two"}), "review": frozenset({"two"})}},
+        )
 
     def test_set_disabled_preserves_shared_state(self, storage: StorageManager) -> None:
         service = SkillPolicyService(storage)

@@ -179,10 +179,6 @@ def resolve_tool_access(
 
     _add_followed_tools(active, catalog, workspace=workspace)
     active.difference_update(tool_access.denied)
-    # A retired search denial must never turn into a broader grant merely
-    # because the two capabilities now share one configurable Tool.
-    if {"grep", "glob"}.intersection(tool_access.denied):
-        active.discard("search_files")
     _remove_orphaned_followers(active, catalog)
 
     ordered_active = tuple(tool.name for tool in tools if tool.name in active)
