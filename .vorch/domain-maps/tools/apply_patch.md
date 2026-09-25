@@ -28,7 +28,12 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   patch body. A single edit travels as an `edits` item and empty `content` as an
   empty Add File patch, because shared contract normalization drops empty
   unadvertised root values (`_carry_empty_text`). Remark fields (`explanation`,
-  `instructions`, `description`, Roo's `line_count`; any spelling) are dropped.
+  `instructions`, `description`, Roo's `line_count`; any spelling) are dropped, and
+  so are switches while `false` (Windsurf `EmptyFile`, Roo `use_regex`/`ignore_case`,
+  MCP filesystem `dryRun`). Turned on, each stays an unknown parameter, except
+  `EmptyFile: true` without content, which creates an empty file. Windsurf
+  `replace_file_content` chunks (`ReplacementChunks` of `TargetContent`/
+  `ReplacementContent`/`AllowMultiple`) run as `edits`.
   Two kinds of change in one call, a `path` that
   contradicts the patch's file, incomplete old/new pairs and Cursor `code_edit`
   (placeholder comments leave the change open) fail before any effect.
