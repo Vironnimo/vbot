@@ -46,6 +46,7 @@ from scripts.converters.persistence_generation_1 import (
     channels,
     decisions,
     json_documents,
+    mcp,
     provider_usage,
     sessions,
     swarm,
@@ -104,6 +105,8 @@ AREAS: tuple[Area, ...] = (
     Area(provider_usage.AREA, provider_usage.convert),
     Area(channels.AREA, channels.convert),
     Area(sessions.AREA, sessions.convert, sessions.check_source),
+    # Attaches saved MCP results to Tool calls in the staged sessions.db.
+    Area(mcp.AREA, mcp.convert),
 )
 
 
