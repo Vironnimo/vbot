@@ -4,18 +4,20 @@ from __future__ import annotations
 
 import base64
 import inspect
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
 
 import pytest
 
-from desktop.bridge import DesktopBridge
+from desktop.bridge import BridgeError, DesktopBridge
 from desktop.connection import PreparedConnection, ServerEntry
 from desktop.main import DesktopProbeResult, DesktopTarget
 from desktop.page_events import PageEventDispatcher
 from desktop.system_actions import DesktopSystemActions
-from desktop.wakeword.controller import VoiceController
+from desktop.wakeword.config import VoiceConfigError
+from desktop.wakeword.controller import VoiceControlError, VoiceController
 from desktop.wakeword.engine import MAX_CUSTOM_WAKEWORD_MODEL_BYTES, WakewordModelError
 
 VOICE_METHODS = {
@@ -35,14 +37,17 @@ VOICE_METHODS = {
 
 
 class FakeVoice:
-    """Records the Voice controller calls and returns a marker per method."""
+    """Records the Voice controller calls and returns a marker per method (or raises ``error``)."""
 
-    def __init__(self) -> None:
+    def __init__(self, error: Exception | None = None) -> None:
         self.calls: list[tuple[str, tuple[Any, ...]]] = []
+        self.error = error
 
     def __getattr__(self, name: str) -> Any:
         def call(*args: Any) -> Any:
             self.calls.append((name, args))
+            if self.error is not None:
+                raise self.error
             return {"from": name}
 
         return call
@@ -100,8 +105,8 @@ class FakeHotkey:
         return {**self.status(), "enabled": True}
 
 
-def _bridge(**kwargs: Any) -> tuple[DesktopBridge, FakeVoice]:
-    voice = FakeVoice()
+def _bridge(*, error: Exception | None = None, **kwargs: Any) -> tuple[DesktopBridge, FakeVoice]:
+    voice = FakeVoice(error)
     return DesktopBridge(voice=cast(VoiceController, voice), **kwargs), voice
 
 
@@ -130,6 +135,80 @@ def test_pywebview_sees_only_the_bridge_methods() -> None:
         "removeServer",
         "selectServer",
     }
+
+
+def test_pywebview_reads_the_real_parameter_names() -> None:
+    bridge, _ = _bridge()
+
+    # pywebview generates the JavaScript stubs from ``getfullargspec(...).args[1:]``.
+    assert inspect.getfullargspec(bridge.importWakewordModel).args[1:] == [
+        "filename",
+        "content_base64",
+    ]
+    assert inspect.getfullargspec(bridge.addServer).args[1:] == ["host", "port", "label"]
+
+
+# -- Error contract --------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("error", "code", "logged"),
+    [
+        (
+            VoiceConfigError("Sensitivity must be a number", field="model_sensitivities"),
+            "voice_config_invalid",
+            "field=model_sensitivities): Sensitivity must be a number",
+        ),
+        (
+            WakewordModelError("Deactivate it first.", error_code="wakeword_model_active"),
+            "wakeword_model_active",
+            "Deactivate it first.",
+        ),
+        (
+            VoiceControlError("No calibration is running.", error_code="calibration_inactive"),
+            "calibration_inactive",
+            "No calibration is running.",
+        ),
+    ],
+)
+def test_a_known_failure_rejects_with_exactly_its_error_code(
+    error: Exception, code: str, logged: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    bridge, _ = _bridge(error=error)
+
+    with (
+        caplog.at_level(logging.WARNING, logger="vbot.desktop.bridge"),
+        pytest.raises(BridgeError) as rejected,
+    ):
+        bridge.updateVoiceConfig({"echo_cancellation": True})
+
+    assert str(rejected.value) == code
+    assert rejected.value.__cause__ is error
+    assert f"Desktop bridge updateVoiceConfig failed (error_code={code}" in caplog.text
+    assert logged in caplog.text
+
+
+def test_an_unexpected_failure_keeps_its_message_and_logs_the_traceback(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    bridge, _ = _bridge(error=OSError("disk full"))
+
+    with (
+        caplog.at_level(logging.ERROR, logger="vbot.desktop.bridge"),
+        pytest.raises(OSError, match="^disk full$"),
+    ):
+        bridge.retryVoice()
+
+    assert caplog.records[-1].exc_info is not None
+
+
+def test_an_unexpected_failure_never_looks_like_an_error_code() -> None:
+    bridge, _ = _bridge(error=RuntimeError("timeout"))
+
+    with pytest.raises(RuntimeError) as rejected:
+        bridge.retryVoice()
+
+    assert str(rejected.value) == "The Desktop could not complete retryVoice"
 
 
 def test_capabilities_announce_the_voice_bridge_version() -> None:
@@ -233,8 +312,9 @@ def test_model_import_rejects_invalid_content_before_the_controller(
 ) -> None:
     bridge, voice = _bridge()
 
-    with pytest.raises(WakewordModelError):
+    with pytest.raises(BridgeError, match="^wakeword_model_invalid$") as rejected:
         bridge.importWakewordModel(filename, content)
+    assert isinstance(rejected.value.__cause__, WakewordModelError)
     assert voice.calls == []
 
 

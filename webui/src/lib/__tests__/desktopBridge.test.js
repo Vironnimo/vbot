@@ -3,6 +3,7 @@ import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import {
   isDesktop,
   isDesktopAccessor,
+  desktopErrorCode,
   getDesktopCapabilities,
   getDesktopClipboardText,
   openDesktopExternalUrl,
@@ -557,6 +558,19 @@ describe('Voice status validation', () => {
     });
   });
 
+  it('keeps every echo cancellation state the Desktop reports', () => {
+    for (const state of [
+      'off',
+      'starting',
+      'active',
+      'no_reference',
+      'unavailable',
+    ]) {
+      const raw = rawStatus({ echo_cancellation: { enabled: true, state } });
+      expect(normalizeVoiceStatus(raw).echo_cancellation.state).toBe(state);
+    }
+  });
+
   it('accepts only events with a sequence and a well-formed kind', () => {
     expect(
       normalizeVoiceEvent({
@@ -726,6 +740,34 @@ describe('Voice bridge calls', () => {
     });
     expect(importModel).toHaveBeenCalledWith('computer.tflite', 'b25ueA==');
     expect(deleteModel).toHaveBeenCalledWith('custom/model');
+  });
+
+  it('reads the stable error code of a rejected call', async () => {
+    desktopWindow({
+      updateVoiceConfig: () =>
+        Promise.reject(new Error('voice_config_invalid')),
+    });
+
+    const rejected = await updateVoiceConfig({ echo_cancellation: 1 }).catch(
+      (error) => error,
+    );
+
+    expect(desktopErrorCode(rejected)).toBe('voice_config_invalid');
+    expect(desktopErrorCode(new Error('wakeword_model_active'))).toBe(
+      'wakeword_model_active',
+    );
+  });
+
+  it('finds no error code in other failures', () => {
+    expect(desktopErrorCode(new Error('Desktop bridge not available'))).toBe(
+      null,
+    );
+    expect(desktopErrorCode(new Error('Voice_config_invalid'))).toBeNull();
+    expect(desktopErrorCode(new Error('2fast'))).toBeNull();
+    expect(desktopErrorCode(new Error(''))).toBeNull();
+    expect(desktopErrorCode({ message: 7 })).toBeNull();
+    expect(desktopErrorCode('voice_config_invalid')).toBeNull();
+    expect(desktopErrorCode(null)).toBeNull();
   });
 
   it('propagates model-list bridge failure so callers retain known state', async () => {

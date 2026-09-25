@@ -11,6 +11,7 @@
     restartVoiceCalibration,
     stopVoiceCalibration,
   } from '$lib/desktopBridge.js';
+  import { bridgeErrorMessage } from './voiceLabels.js';
 
   let {
     // `status.calibration` of this phrase.
@@ -90,7 +91,7 @@
     } catch (error) {
       onToast({
         title: failureTitle,
-        message: error?.message || '',
+        message: bridgeErrorMessage(error),
         variant: 'error',
       });
     } finally {

@@ -875,6 +875,9 @@ export default Object.freeze({
   'settings.voice.echoOff': 'Off',
   'settings.voice.echoOffDetail':
     'Speaker output can trigger wake phrases and end up in command recordings.',
+  'settings.voice.echoStarting': 'Starting',
+  'settings.voice.echoStartingDetail':
+    'Echo cancellation is still loading. Until it is ready, the microphone signal is used unprocessed.',
   'settings.voice.echoActive': 'Active',
   'settings.voice.echoActiveDetail':
     'Speaker output is removed from the microphone signal before phrases are detected and commands are recorded.',
@@ -893,6 +896,12 @@ export default Object.freeze({
     'vBot could not open the target Agent Session. Check the server connection and retry.',
   'settings.voice.error.configInvalid':
     'The Desktop rejected this Voice setting. Reload Voice settings and try again.',
+  'settings.voice.error.modelActive':
+    'This wake phrase is active. Deactivate it before removing its model.',
+  'settings.voice.error.calibrationUnavailable':
+    'Calibration needs Voice listening with this wake phrase active. Wait until Voice is listening, then try again.',
+  'settings.voice.error.calibrationInactive':
+    'No calibration is running anymore. Start the calibration again.',
   'settings.voice.models': 'Wake phrases',
   'settings.voice.modelDescription':
     'Choose the phrases to listen for. Each active phrase has its own sensitivity and action; Calibrate measures the room and your voice to set its sensitivity while listening is on.',

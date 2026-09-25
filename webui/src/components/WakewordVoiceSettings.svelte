@@ -1,5 +1,9 @@
 <script>
-  import { errorMessage, voiceIndicator } from './voice/voiceLabels.js';
+  import {
+    bridgeErrorMessage,
+    errorMessage,
+    voiceIndicator,
+  } from './voice/voiceLabels.js';
   import './voice/voice.css';
   import { t } from '$lib/i18n.js';
   import Toggle from './ui/Toggle.svelte';
@@ -216,6 +220,15 @@
     // The saved setting is on; the state describes the running capture.
     if (!status.echo_cancellation.enabled) return null;
     switch (status.echo_cancellation.state) {
+      case 'starting':
+        return {
+          variant: 'neutral',
+          label: t('settings.voice.echoStarting', 'Starting'),
+          detail: t(
+            'settings.voice.echoStartingDetail',
+            'Echo cancellation is still loading. Until it is ready, the microphone signal is used unprocessed.',
+          ),
+        };
       case 'active':
         return {
           variant: 'success',
@@ -357,7 +370,7 @@
   function errorToast(error, title = null) {
     onToast({
       title: title ?? t('errors.generic', 'Something went wrong. Try again.'),
-      message: error?.message || '',
+      message: bridgeErrorMessage(error),
       variant: 'error',
     });
   }

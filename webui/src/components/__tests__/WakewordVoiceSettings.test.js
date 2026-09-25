@@ -10,7 +10,8 @@ vi.mock('svelte', async () => {
   return import('../../../node_modules/svelte/src/index-client.js');
 });
 
-vi.mock('$lib/desktopBridge.js', () => ({
+vi.mock('$lib/desktopBridge.js', async (importOriginal) => ({
+  desktopErrorCode: (await importOriginal()).desktopErrorCode,
   isDesktopAccessor: vi.fn(() => true),
   setVoiceEnabled: vi.fn(),
   updateVoiceConfig: vi.fn(),
@@ -587,6 +588,7 @@ describe('WakewordVoiceSettings', () => {
     });
 
     it.each([
+      ['starting', 'Starting', 'Echo cancellation is still loading'],
       [
         'active',
         'Active',
@@ -652,15 +654,33 @@ describe('WakewordVoiceSettings', () => {
       switchByLabel('Listen for Hey Nabu').click();
       await settle();
 
-      expect(onToast).toHaveBeenCalledWith(
-        expect.objectContaining({ variant: 'error' }),
-      );
+      expect(onToast).toHaveBeenCalledWith({
+        title: 'Something went wrong. Try again.',
+        message:
+          'The Desktop rejected this Voice setting. Reload Voice settings and try again.',
+        variant: 'error',
+      });
       expect(document.querySelector('.voice-save-state').textContent).toContain(
         'Not saved',
       );
       expect(
         switchByLabel('Listen for Hey Nabu').getAttribute('aria-checked'),
       ).toBe('false');
+    });
+
+    it('reports a failure without an error code by its own message', async () => {
+      const onToast = vi.fn();
+      desktopBridge.updateVoiceConfig.mockRejectedValue(
+        new Error('Desktop bridge not available'),
+      );
+      await mountPanel({ onToast });
+
+      switchByLabel('Listen for Hey Nabu').click();
+      await settle();
+
+      expect(onToast).toHaveBeenCalledWith(
+        expect.objectContaining({ message: 'Desktop bridge not available' }),
+      );
     });
   });
 
