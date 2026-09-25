@@ -361,12 +361,11 @@ def resolve_inventory(
 
 
 def offered_skill_names(metadata: dict[str, object]) -> list[str]:
-    """Return a session's offered skill names from its ``seen_skills`` metadata.
+    """Return a session's offered skill names from its ``seen_skills`` summary value.
 
-    The chat loop persists ``seen_skills`` as a sorted list of skill names.
-    A session predating that metadata (or a malformed value) yields an empty
-    list — such a session simply contributes no offered counts, with no legacy
-    handling, matching the no-legacy-compat rule.
+    Sessions report ``seen_skills`` as a sorted list of skill names. A session
+    without a recorded set (or a malformed value) yields an empty list, so it
+    contributes no offered counts.
     """
     seen = metadata.get(SEEN_SKILLS_META_KEY)
     if not isinstance(seen, list):

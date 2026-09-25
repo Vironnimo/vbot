@@ -19,7 +19,7 @@ from core.compaction import (
     CompactionService,
 )
 from core.prompts.pinned_context import (
-    PINNED_SKILL_CATALOG_META_KEY,
+    PINNED_SKILL_CATALOG_SLOT,
     pinned_skill_catalog,
 )
 from core.runs import (
@@ -267,12 +267,15 @@ async def test_real_auto_compaction_truncation_preserves_history_skills_and_prom
     request_after = await loop._requests.build_request_state(
         agent, session, inputs=RequestBuildInputs()
     )
-    metadata = runtime.chat_sessions.get_metadata(session_address("coder", session.id))
+    catalog_pin = runtime.chat_sessions.prompt_pin(
+        session_address("coder", session.id), PINNED_SKILL_CATALOG_SLOT
+    )
     assert result == messages
     assert session.load() == original_history
     assert HISTORY_TOOL_NAME not in request_after.session_tool_grants
     assert session.activated_skill_contents() == original_skills
-    assert metadata[PINNED_SKILL_CATALOG_META_KEY]["catalog_text"] == "catalog:1"
+    assert catalog_pin is not None
+    assert catalog_pin["catalog_text"] == "catalog:1"
     assert runtime.refresh_skills_for_calls == []
     assert len(adapter.stream_requests) == 1
     assert [event.type for event in run.events] == [

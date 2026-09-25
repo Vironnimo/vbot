@@ -57,9 +57,6 @@ class _FakeSessions:
         self.activity_error: Exception | None = None
         self.activity_reads: list[list[tuple[str | None, str]]] = []
         self.list_page_calls: list[dict[str, Any]] = []
-        # Sidecar the source carries; ``fork`` strips the requested keys off it so
-        # fork tests can assert what the fork retains. Fork tests override it.
-        self.source_metadata: dict[str, Any] = {}
         # Session ids that ``get``/``fork`` should treat as nonexistent.
         self.missing: set[str] = set()
         # Fork metadata keyed by (agent_id, session_id, project_id) for get_metadata.
@@ -132,7 +129,8 @@ class _FakeSessions:
         *,
         target_agent_id: str | None = None,
         target_project_id: str | None = None,
-        strip_meta_keys: Any = frozenset(),
+        title: str | None = None,
+        run_kind: Any = None,
     ) -> Any:
         source_agent_id = source.agent_id
         session_id = source.session_id
@@ -144,25 +142,24 @@ class _FakeSessions:
                 "target_agent_id": target_agent_id,
                 "source_project_id": source_project_id,
                 "target_project_id": target_project_id,
-                "strip_meta_keys": frozenset(strip_meta_keys),
+                "title": title,
+                "run_kind": run_kind,
             }
         )
         if session_id in self.missing:
             raise ChatSessionError(f"session does not exist: {session_id}")
         if self.fork_error is not None:
             raise self.fork_error
-        retained = {
-            key: value for key, value in self.source_metadata.items() if key not in strip_meta_keys
-        }
-        retained[FORK_SOURCE_META_KEY] = {
-            "agent_id": source_agent_id,
-            "session_id": session_id,
-            "project_id": source_project_id,
-            "forked_at": "2026-07-04T00:00:00+00:00",
-            "message_count": 2,
-        }
         destination_agent_id = target_agent_id or source_agent_id
-        self._fork_metadata[(destination_agent_id, "fork-1", target_project_id)] = retained
+        self._fork_metadata[(destination_agent_id, "fork-1", target_project_id)] = {
+            FORK_SOURCE_META_KEY: {
+                "agent_id": source_agent_id,
+                "session_id": session_id,
+                "project_id": source_project_id,
+                "forked_at": "2026-07-04T00:00:00.000000Z",
+                "message_count": 2,
+            }
+        }
         return SimpleNamespace(id="fork-1")
 
     def get_metadata(self, address: Any) -> dict[str, Any]:

@@ -23,6 +23,7 @@ from core.providers.adapter import (
     TERMINAL_OUTCOME_UNKNOWN,
     TerminalOutcome,
 )
+from core.sessions import ToolResultFacts
 from core.tools import ToolNotFoundError
 from core.utils.errors import ProviderError
 
@@ -163,6 +164,52 @@ def _tool_message_failure_code(message: ChatMessage) -> str | None:
         return "unknown_failure"
     code = error.get("code")
     return code if isinstance(code, str) and code else "unknown_failure"
+
+
+# Failure codes that mean the Tool call was cancelled rather than failed.
+_CANCELLED_TOOL_CODES = frozenset({"cancelled", "tool_cancelled", "user_cancelled"})
+
+
+def tool_result_facts(tool_messages: Sequence[ChatMessage]) -> dict[str, ToolResultFacts]:
+    """Report how each Tool call ended, read from its Tool Result envelope.
+
+    Sessions stores these facts with the Tool Result, so history readers never
+    parse Tool output. A result that is not a failure envelope completed.
+    """
+    facts: dict[str, ToolResultFacts] = {}
+    for message in tool_messages:
+        if message.role != "tool" or message.tool_call_id is None:
+            continue
+        result: Any = None
+        if isinstance(message.content, str):
+            try:
+                result = json.loads(message.content)
+            except (TypeError, ValueError):
+                result = None
+        if not isinstance(result, dict) or not isinstance(result.get("ok"), bool):
+            facts[message.tool_call_id] = ToolResultFacts(status="completed")
+            continue
+        if result["ok"]:
+            facts[message.tool_call_id] = ToolResultFacts(status="completed", ok=True)
+            continue
+        error = result.get("error")
+        error = error if isinstance(error, dict) else {}
+        code = error.get("code")
+        code = code if isinstance(code, str) and code else None
+        retryable = error.get("retryable")
+        attempts = error.get("attempts_made")
+        facts[message.tool_call_id] = ToolResultFacts(
+            status="cancelled" if code in _CANCELLED_TOOL_CODES else "failed",
+            ok=False,
+            error_code=code,
+            error_retryable=retryable if isinstance(retryable, bool) else None,
+            error_attempts=(
+                attempts
+                if isinstance(attempts, int) and not isinstance(attempts, bool) and attempts >= 0
+                else None
+            ),
+        )
+    return facts
 
 
 def _terminal_outcome_error(

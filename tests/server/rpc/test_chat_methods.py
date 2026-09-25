@@ -20,6 +20,7 @@ from server.rpc.chat_methods import (
     _stream_chat,
 )
 from server.rpc.errors import RpcError
+from tests.core.sessions.history_fixtures import complete_run
 from tests.server.rpc.chat_methods_test_support import (
     _NoCommandDispatcher,
     _RecordingLoop,
@@ -43,17 +44,19 @@ async def test_run_result_keeps_exact_scope_when_session_has_continued(tmp_path)
         session = manager.create("joel", project_id="project")
         session = session.start_run("first")
         session.append(ChatMessage.assistant(model="test/model", content="Which option?"))
-        session.append(
+        complete_run(
+            session,
             ChatMessage.run_summary(
                 run_id="first", status="completed", timing=timing, iteration_count=1
-            )
+            ),
         )
         session = session.start_run("second")
         session.append(ChatMessage.assistant(model="test/model", content="Already continued"))
-        session.append(
+        complete_run(
+            session,
             ChatMessage.run_summary(
                 run_id="second", status="completed", timing=timing, iteration_count=1
-            )
+            ),
         )
         state = SimpleNamespace(runtime=SimpleNamespace(chat_sessions=manager))
         target = {

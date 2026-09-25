@@ -66,6 +66,7 @@ from core.runs.run import (
     WaitingWorkLimitError,
 )
 from core.utils.ids import new_id
+from core.utils.timestamps import format_canonical_timestamp
 
 if TYPE_CHECKING:
     from core.sessions import SessionAddress
@@ -863,8 +864,8 @@ class ChatRunManager:
             completed_at = datetime.now(UTC)
             duration_ms = max(0, round((time.perf_counter() - timing_started_perf) * 1000))
             return {
-                "started_at": timing_started_at.isoformat(),
-                "completed_at": completed_at.isoformat(),
+                "started_at": format_canonical_timestamp(timing_started_at),
+                "completed_at": format_canonical_timestamp(completed_at),
                 "duration_ms": duration_ms,
             }
 
@@ -889,8 +890,10 @@ class ChatRunManager:
                     # Observe its outcome before attempting terminal persistence.
                     await admission
                     admitted = True
+                    run._mark_admitted()  # noqa: SLF001 - manager owns run lifecycle internals.
                     raise
                 admitted = True
+            run._mark_admitted()  # noqa: SLF001 - manager owns run lifecycle internals.
             run.raise_if_cancelled()
             started_payload: JsonObject = {"status": RunStatus.RUNNING.value}
             if run._started_from_queue_item_id is not None:  # noqa: SLF001

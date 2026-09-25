@@ -5,38 +5,27 @@ from __future__ import annotations
 import builtins
 import logging
 import threading
-from collections.abc import Callable, Sequence
-from datetime import UTC, datetime
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 from core.chat.errors import ChatSessionError
-from core.runs import RunExecutionOwner, RunKind
+from core.runs import RunKind
 from core.sessions._io import _SessionWriteLock
 from core.sessions._metadata import (
-    _append_run_kind,
-    _completion_activity_payload,
-    _default_prompt_cache_affinity_id,
-    _format_timestamp,
-    _is_prompt_cache_affinity_id,
-    _new_prompt_cache_affinity_id,
     _normalize_session_title,
-    _valid_latest_completion,
     _validate_agent_id,
     _validate_session_id,
 )
 from core.sessions._types import (
-    FORK_SOURCE_META_KEY,
-    PROMPT_CACHE_AFFINITY_META_KEY,
     SESSION_AUTO_TITLE_INITIALIZED_KEY,
     SESSION_AUTO_TITLE_KEY,
-    SESSION_TERMINAL_RUN_STATUSES,
     SESSION_TITLE_KEY,
     DeliveryReceipt,
     JsonObject,
     OwnedRunRecord,
     OwnedSessionSummary,
-    RunStartBoundary,
+    SeenSkillsUpdate,
     SessionAddress,
     SessionDescriptorSource,
     SessionHistoryRevision,
@@ -46,10 +35,12 @@ from core.sessions._types import (
     SessionListPage,
     SessionReadBatch,
     SessionReadCursor,
+    SessionRunAdmission,
     SessionRunCompletion,
     SessionSearchOrder,
     SessionSearchResult,
     TemporarySessionBinding,
+    ToolResultFacts,
 )
 from core.sessions.errors import FtsHealth
 from core.sessions.session import ChatSession
@@ -142,7 +133,7 @@ class ChatSessionManager:
 
     def get(self, address: SessionAddress) -> ChatSession:
         _validate_session_id(address.session_id)
-        self._store.state(address)
+        self._store.require_live(address)
         return ChatSession(self._store, address)
 
     async def get_async(self, address: SessionAddress) -> ChatSession:
@@ -179,10 +170,7 @@ class ChatSessionManager:
         self, addresses: Sequence[SessionAddress]
     ) -> dict[SessionAddress, SessionDescriptorSource]:
         """Load descriptor inputs, including Recall visibility, for many Sessions at once."""
-        return {
-            address: SessionDescriptorSource(*source)
-            for address, source in self._store.descriptor_sources(addresses).items()
-        }
+        return self._store.descriptor_sources(addresses)
 
     def set_metadata(self, address: SessionAddress, data: JsonObject) -> None:
         self._store.replace_metadata(address, data)
@@ -201,28 +189,40 @@ class ChatSessionManager:
         return self._store.mutate_metadata(address, mutation)
 
     def metadata_value(self, address: SessionAddress, key: str) -> Any:
-        """Read one metadata value (``None`` when absent) without decoding the rest."""
+        """Read one metadata value (``None`` when absent) from the Session row alone."""
         return self._store.metadata_value(address, key)
 
     async def metadata_value_async(self, address: SessionAddress, key: str) -> Any:
         return await self._store.run_async(self.metadata_value, address, key)
 
     def prompt_cache_affinity_id(self, address: SessionAddress) -> str:
-        value = self._store.metadata_value(address, PROMPT_CACHE_AFFINITY_META_KEY)
-        if value is None:
-            return _default_prompt_cache_affinity_id(address)
-        if not _is_prompt_cache_affinity_id(value):
-            raise ChatSessionError(
-                f"invalid prompt cache affinity id for session: {address.session_id}"
-            )
-        return cast(str, value)
+        """Return the Session's prompt-cache affinity id (forks in one scope share it)."""
+        return self._store.prompt_cache_affinity_id(address)
 
-    def rotate_prompt_cache_affinity_id(self, address: SessionAddress) -> str:
-        value = _new_prompt_cache_affinity_id()
-        self._store.mutate_metadata(
-            address, lambda metadata: metadata.__setitem__(PROMPT_CACHE_AFFINITY_META_KEY, value)
-        )
-        return value
+    def prompt_pin(self, address: SessionAddress, slot: str) -> JsonObject | None:
+        """Return the value pinned in one prompt pin *slot*, or ``None``.
+
+        A pin keeps one prompt input fixed for the current prompt epoch; a
+        Compaction commit starts the next epoch with fresh pins.
+        """
+        return self._store.prompt_pin(address, slot)
+
+    def ensure_prompt_pin(
+        self,
+        address: SessionAddress,
+        slot: str,
+        value: JsonObject,
+        accept: Callable[[JsonObject], bool],
+    ) -> JsonObject:
+        """Keep an acceptable pin in *slot*, else pin *value*; return the pin in effect."""
+        return self._store.ensure_prompt_pin(address, slot, value, accept)
+
+    def seen_skills(self, address: SessionAddress) -> frozenset[str] | None:
+        """Return the Skills announced to this Session, or ``None`` before the first record."""
+        return self._store.seen_skills(address)
+
+    def record_seen_skills(self, address: SessionAddress, update: SeenSkillsUpdate) -> None:
+        self._store.record_seen_skills(address, update)
 
     def record_run_kind(self, address: SessionAddress, run_kind: RunKind) -> None:
         """Classify a Session before its first Run starts; ``start_run`` records it too."""
@@ -234,19 +234,20 @@ class ChatSessionManager:
         self._store.recover_interrupted_runs()
 
     async def start_run(self, run: Run) -> None:
+        """Admit *run* with its Run kind and execution owner in one transaction."""
         address = SessionAddress(
             project_id=run.project_id, agent_id=run.agent_id, session_id=run.session_id
         )
-        await self._store.run_async(
-            lambda: self._store.start_run(
-                address,
-                run_id=run.id,
-                work_id=run.work_id,
-                run_kind=run.run_kind.value,
-                contributes_to_activity=run.contributes_to_agent_activity,
-                started_at=run.created_at,
-            )
+        admission = SessionRunAdmission(
+            run_id=run.id,
+            run_kind=run.run_kind.value,
+            started_at=run.created_at,
+            work_id=run.work_id,
+            contributes_to_activity=run.contributes_to_agent_activity,
+            owner=run.execution_owner,
+            input_id=run.execution_input_id,
         )
+        await self._store.run_async(self._store.admit_run, address, admission)
 
     async def finish_run(self, run: Run, status: str, payload: JsonObject) -> JsonObject:
         address = SessionAddress(
@@ -267,32 +268,11 @@ class ChatSessionManager:
     def record_terminal_run(
         self, address: SessionAddress, run_id: str, status: str, timestamp: str
     ) -> None:
-        if not run_id or status not in SESSION_TERMINAL_RUN_STATUSES or not timestamp:
-            raise ChatSessionError("invalid terminal Run completion")
-
-        def update(activity: JsonObject) -> None:
-            activity["latest_completion"] = {
-                "run_id": run_id,
-                "status": status,
-                "timestamp": timestamp,
-            }
-
-        self._store.mutate_activity(address, update)
+        self._store.record_terminal_run(address, run_id=run_id, status=status, timestamp=timestamp)
 
     def mark_terminal_run_read(self, address: SessionAddress, run_id: str) -> JsonObject:
-        marked = False
-
-        def update(activity: JsonObject) -> None:
-            nonlocal marked
-            latest = _valid_latest_completion(activity)
-            marked = bool(
-                latest and latest["run_id"] == run_id and activity.get("read_run_id") != run_id
-            )
-            if marked:
-                activity["read_run_id"] = run_id
-
-        _previous, activity = self._store.mutate_activity(address, update)
-        result = _completion_activity_payload(activity)
+        activity, marked = self._store.mark_terminal_run_read(address, run_id)
+        result = dict(activity)
         result["marked_read"] = marked
         if marked:
             self._notify_callbacks(self._completion_read_callbacks, address, run_id)
@@ -334,13 +314,6 @@ class ChatSessionManager:
         if previous != normalized:
             self._notify_callbacks(self._title_changed_callbacks, address)
         return normalized
-
-    def reset_auto_title(self, address: SessionAddress) -> None:
-        def update(metadata: JsonObject) -> None:
-            metadata.pop(SESSION_AUTO_TITLE_KEY, None)
-            metadata.pop(SESSION_AUTO_TITLE_INITIALIZED_KEY, None)
-
-        self._store.mutate_metadata(address, update)
 
     def mark_auto_title_initialized(self, address: SessionAddress) -> None:
         self._store.mutate_metadata(
@@ -414,22 +387,6 @@ class ChatSessionManager:
     def summary(self, address: SessionAddress) -> JsonObject | None:
         """Read one live Session's list row by exact address; ``None`` if absent."""
         return self._store.summary(address)
-
-    def session_ids_with_messages(
-        self,
-        agent_id: str,
-        project_id: str | None,
-        roles: Sequence[str],
-        since: datetime | None,
-        until: datetime | None,
-    ) -> set[str]:
-        return self._store.session_ids_with_messages(
-            project_id,
-            agent_id,
-            roles,
-            since,
-            until,
-        )
 
     def list_completion_activity(
         self, scopes: Sequence[tuple[str | None, str]]
@@ -565,6 +522,7 @@ class ChatSessionManager:
         deduplicate_carrier: bool = False,
         run_id: str | None = None,
         assistant_message_id: str | None = None,
+        tool_results: Mapping[str, ToolResultFacts] | None = None,
         continuation_records: Sequence[JsonObject] = (),
         since: SessionReadCursor | None = None,
     ) -> SessionReadBatch | None:
@@ -578,6 +536,7 @@ class ChatSessionManager:
                 deduplicate_carrier=deduplicate_carrier,
                 run_id=run_id,
                 assistant_message_id=assistant_message_id,
+                tool_results=tool_results,
                 continuation_records=continuation_records,
                 since=since,
             )
@@ -594,6 +553,7 @@ class ChatSessionManager:
         deduplicate_carrier: bool = False,
         run_id: str | None = None,
         assistant_message_id: str | None = None,
+        tool_results: Mapping[str, ToolResultFacts] | None = None,
         continuation_records: Sequence[JsonObject] = (),
         since: SessionReadCursor | None = None,
     ) -> SessionReadBatch | None:
@@ -607,6 +567,7 @@ class ChatSessionManager:
             deduplicate_carrier=deduplicate_carrier,
             run_id=run_id,
             assistant_message_id=assistant_message_id,
+            tool_results=tool_results,
             continuation_records=continuation_records,
             since=since,
         )
@@ -626,24 +587,6 @@ class ChatSessionManager:
                 receipt_id=receipt_id,
             )
         )
-
-    async def record_run_owner_async(
-        self,
-        address: SessionAddress,
-        *,
-        run_id: str,
-        owner: RunExecutionOwner,
-        input_id: str | None = None,
-    ) -> None:
-        await self._store.run_async(
-            lambda: self._store.record_run_owner(
-                address, run_id=run_id, owner=owner, input_id=input_id
-            )
-        )
-
-    async def record_run_start_async(self, address: SessionAddress, *, run_id: str) -> None:
-        """Persist one normal Run admission boundary before it appends output."""
-        await self._store.run_async(lambda: self._store.record_run_start(address, run_id=run_id))
 
     def owned_runs(
         self,
@@ -682,13 +625,8 @@ class ChatSessionManager:
         """Report in one indexed probe whether a live Session holds a Tool call's result."""
         return await self._store.run_async(self._store.tool_result_persisted, address, tool_call_id)
 
-    def run_start_boundaries(
-        self, addresses: Sequence[SessionAddress]
-    ) -> builtins.list[RunStartBoundary]:
-        return self._store.run_start_boundaries(addresses)
-
     def history_revision(self, address: SessionAddress) -> int:
-        return int(self._store.state(address)["history_revision"])
+        return self._store.history_revision(address)
 
     def retarget_identity_agent_references(
         self, old_agent_id: str, new_agent_id: str
@@ -700,26 +638,16 @@ class ChatSessionManager:
     ) -> None:
         self._store.restore_identity_agent_references(updates)
 
-    async def move(
-        self,
-        source: SessionAddress,
-        target: SessionAddress,
-        *,
-        strip_meta_keys: frozenset[str] = frozenset(),
-    ) -> ChatSession:
+    async def move(self, source: SessionAddress, target: SessionAddress) -> ChatSession:
+        """Give a Session a new address; history, forks and relations stay attached.
+
+        A move into another scope leaves the Agent-bound prompt state behind and
+        starts a new prompt-cache affinity.
+        """
         _validate_session_id(source.session_id)
-        _validate_session_id(target.session_id)
+        _validate_creatable_address(target)
         async with self.write_lock(source):
-            return await self._store.run_async(self._move, source, target, strip_meta_keys)
-
-    def _move(
-        self, source: SessionAddress, target: SessionAddress, strip_meta_keys: frozenset[str]
-    ) -> ChatSession:
-        def prepare_metadata(metadata: JsonObject, _message_count: int) -> None:
-            for key in strip_meta_keys:
-                metadata.pop(key, None)
-
-        self._store.move(source, target, prepare_metadata)
+            await self._store.run_async(self._store.move, source, target)
         return ChatSession(self._store, target)
 
     async def fork(
@@ -728,79 +656,38 @@ class ChatSessionManager:
         *,
         target_agent_id: str | None = None,
         target_project_id: str | None = None,
-        strip_meta_keys: frozenset[str] = frozenset(),
         title: str | None = None,
         run_kind: RunKind | None = None,
     ) -> ChatSession:
-        """Copy a Session in one write; ``title``/``run_kind`` label the copy in it."""
-        _validate_session_id(source.session_id)
-        async with self.write_lock(source):
-            fork = await self._store.run_async(
-                self._fork,
-                source,
-                target_agent_id or source.agent_id,
-                target_project_id,
-                strip_meta_keys,
-                target_agent_id is not None,
-                title,
-                run_kind,
-            )
-        if title is not None:
-            self._notify_callbacks(self._title_changed_callbacks, fork.address)
-        return fork
+        """Fork a Session under a fresh id in one write.
 
-    def _fork(
-        self,
-        source: SessionAddress,
-        target_agent_id: str,
-        target_project_id: str | None,
-        strip_meta_keys: frozenset[str],
-        target_explicit: bool,
-        title: str | None = None,
-        run_kind: RunKind | None = None,
-    ) -> ChatSession:
-        _validate_agent_id(target_agent_id)
-        normalized_title = None if title is None else _normalize_session_title(title)
+        The fork shares the source's current history up to its settled end
+        without copying it. It belongs to ``target_agent_id`` (default: the
+        source's Agent) in ``target_project_id`` (``None``: outside any
+        Project). Channel, Sub-Agent and reflection bindings stay behind;
+        ``title`` and ``run_kind`` label the fork instead.
+        """
+        _validate_session_id(source.session_id)
+        agent_id = target_agent_id or source.agent_id
+        _validate_agent_id(agent_id)
+        if target_project_id is not None and not is_valid_project_id(target_project_id):
+            raise ChatSessionError("invalid project id")
         if run_kind is not None and not isinstance(run_kind, RunKind):
             raise ChatSessionError("run kind must be a RunKind")
-        same_scope = target_agent_id == source.agent_id and target_project_id == source.project_id
-        target = SessionAddress(target_project_id, target_agent_id, "")
-        cross_scope_affinity_id = None if same_scope else _new_prompt_cache_affinity_id()
-        forked_at = _format_timestamp(datetime.now(UTC))
-
-        def prepare_metadata(metadata: JsonObject, message_count: int) -> None:
-            affinity_id = metadata.get(PROMPT_CACHE_AFFINITY_META_KEY)
-            for key in strip_meta_keys:
-                metadata.pop(key, None)
-            if same_scope:
-                if affinity_id is None:
-                    affinity_id = _default_prompt_cache_affinity_id(source)
-                elif not _is_prompt_cache_affinity_id(affinity_id):
-                    raise ChatSessionError(
-                        f"invalid prompt cache affinity id for session: {source.session_id}"
-                    )
-            else:
-                affinity_id = cross_scope_affinity_id
-            metadata[PROMPT_CACHE_AFFINITY_META_KEY] = affinity_id
-            metadata[FORK_SOURCE_META_KEY] = {
-                "agent_id": source.agent_id,
-                "session_id": source.session_id,
-                "project_id": source.project_id,
-                "forked_at": forked_at,
-                "message_count": message_count,
-            }
-            if title is not None:
-                _set_title(metadata, normalized_title)
-            if run_kind is not None:
-                _append_run_kind(metadata, run_kind.value)
-
-        target = self._store.fork(
-            source,
-            target,
-            prepare_metadata,
-            generate_id=True,
-            allow_owner_managed_source=target_explicit and not same_scope,
-        )
+        normalized_title = None if title is None else _normalize_session_title(title) or ""
+        same_scope = agent_id == source.agent_id and target_project_id == source.project_id
+        async with self.write_lock(source):
+            target = await self._store.run_async(
+                lambda: self._store.fork(
+                    source,
+                    SessionAddress(target_project_id, agent_id, ""),
+                    title=normalized_title,
+                    run_kind=None if run_kind is None else run_kind.value,
+                    allow_owner_managed_source=target_agent_id is not None and not same_scope,
+                )
+            )
+        if title is not None:
+            self._notify_callbacks(self._title_changed_callbacks, target)
         return ChatSession(self._store, target)
 
     def delete(self, address: SessionAddress) -> None:

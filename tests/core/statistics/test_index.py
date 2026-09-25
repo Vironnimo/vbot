@@ -24,7 +24,7 @@ from core.statistics.index import (
 )
 from core.statistics.statistics import MAX_RUN_ACTIVITY
 from core.tools import tool_success
-from tests.core.sessions.history_fixtures import seed_history
+from tests.core.sessions.history_fixtures import complete_run, seed_history
 
 BASE = datetime(2026, 8, 1, 12, 0, tzinfo=UTC)
 
@@ -92,14 +92,15 @@ def _service(tmp_path: Path) -> tuple[StatisticsService, ChatSessionManager, Cha
             timestamp=BASE,
         )
     )
-    session.append(
+    complete_run(
+        session,
         ChatMessage.run_summary(
             run_id="run-one",
             status="completed",
             iteration_count=1,
             timing=_timing(BASE, 1000),
             timestamp=BASE + timedelta(seconds=1),
-        )
+        ),
     )
     service = StatisticsService(
         manager,
@@ -168,14 +169,15 @@ def test_index_shared_by_two_services_serves_the_other_services_updates(
             timestamp=BASE + timedelta(minutes=1),
         )
     )
-    session.append(
+    complete_run(
+        session,
         ChatMessage.run_summary(
             run_id="run-two",
             status="completed",
             iteration_count=1,
             timing=_timing(BASE + timedelta(minutes=1), 500),
             timestamp=BASE + timedelta(minutes=1, seconds=1),
-        )
+        ),
     )
     second_service.report()
 
@@ -213,14 +215,15 @@ def test_appended_messages_incrementally_extend_the_affected_projection(
             timestamp=BASE + timedelta(minutes=1),
         )
     )
-    session.append(
+    complete_run(
+        session,
         ChatMessage.run_summary(
             run_id="run-two",
             status="completed",
             iteration_count=1,
             timing=_timing(BASE + timedelta(minutes=1), 500),
             timestamp=BASE + timedelta(minutes=1, seconds=1),
-        )
+        ),
     )
 
     report = service.report()
@@ -254,8 +257,29 @@ def test_metadata_change_updates_index_without_loading_transcript(
     assert activity.runs[0].session_title == "Renamed"
 
 
-def test_replaced_canonical_session_rebuilds_only_that_projection(tmp_path: Path) -> None:
-    service, _manager, session = _service(tmp_path)
+def test_replaced_canonical_session_rebuilds_only_that_projection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, manager, session = _service(tmp_path)
+    untouched = manager.create("main", session_id="session-two")
+    seed_history(
+        untouched,
+        [
+            ChatMessage.assistant(
+                model="openai/gpt-5",
+                content="unchanged",
+                usage={"input_tokens": 7, "output_tokens": 1},
+                timestamp=BASE + timedelta(minutes=5),
+            ),
+            ChatMessage.run_summary(
+                run_id="untouched-run",
+                status="completed",
+                iteration_count=1,
+                timing=_timing(BASE + timedelta(minutes=5), 300),
+                timestamp=BASE + timedelta(minutes=5, seconds=1),
+            ),
+        ],
+    )
     service.report()
     replacement_messages = [
         ChatMessage.assistant(
@@ -273,15 +297,95 @@ def test_replaced_canonical_session_rebuilds_only_that_projection(tmp_path: Path
         ),
     ]
     address = SessionAddress(project_id=None, agent_id="main", session_id=session.id)
-    _manager.delete(address)
-    replacement = _manager.create("main", session_id=session.id)
+    manager.delete(address)
+    replacement = manager.create("main", session_id=session.id)
     seed_history(replacement, replacement_messages)
+    original = ChatSession.load_since
+    loads = []
+
+    def track_load_since(self, cursor=None):
+        loads.append((self.id, cursor))
+        return original(self, cursor)
+
+    monkeypatch.setattr(ChatSession, "load_since", track_load_since)
 
     report = service.report()
 
-    assert report.overview.total_runs == 1
+    # The replaced Session is rebuilt from its start; the other one is not read.
+    assert loads == [(session.id, None)]
+    assert report.overview.total_runs == 2
     assert report.overview.run_status.failed == 1
-    assert report.usage.totals.measured_input_tokens == 99
+    assert report.overview.run_status.completed == 1
+    assert report.usage.totals.measured_input_tokens == 99 + 7
+
+
+def test_history_edit_rebuilds_the_projection_and_keeps_superseded_spend(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manager = ChatSessionManager(tmp_path)
+    session = manager.create("main", session_id="session-one")
+    question = ChatMessage.user("first question", timestamp=BASE)
+    session = session.start_run("run-one")
+    session.append(question)
+    session.append(
+        ChatMessage.assistant(
+            model="openai/gpt-5",
+            content="first answer",
+            usage={"input_tokens": 10, "output_tokens": 2},
+            timestamp=BASE + timedelta(seconds=1),
+        )
+    )
+    complete_run(
+        session,
+        ChatMessage.run_summary(
+            run_id="run-one",
+            status="completed",
+            iteration_count=1,
+            timing=_timing(BASE, 2000),
+            timestamp=BASE + timedelta(seconds=2),
+        ),
+    )
+    service = StatisticsService(manager, cast(AgentDirectory, _FakeAgents(["main"])))
+    service.report()
+
+    manager.get(session.address).apply_edit(
+        question.id, [ChatMessage.user("edited question", timestamp=BASE + timedelta(minutes=1))]
+    )
+    session = manager.get(session.address).start_run("run-two")
+    session.append(
+        ChatMessage.assistant(
+            model="openai/gpt-5",
+            content="second answer",
+            usage={"input_tokens": 7, "output_tokens": 1},
+            timestamp=BASE + timedelta(minutes=1, seconds=1),
+        )
+    )
+    complete_run(
+        session,
+        ChatMessage.run_summary(
+            run_id="run-two",
+            status="completed",
+            iteration_count=1,
+            timing=_timing(BASE + timedelta(minutes=1), 1000),
+            timestamp=BASE + timedelta(minutes=1, seconds=2),
+        ),
+    )
+    original = ChatSession.load_since
+    cursors = []
+
+    def track_load_since(self, cursor=None):
+        cursors.append(cursor)
+        return original(self, cursor)
+
+    monkeypatch.setattr(ChatSession, "load_since", track_load_since)
+
+    report = service.report()
+
+    # The edit ends the stored cursor, so the Session is rebuilt from its start.
+    assert cursors[-1] is None
+    # The edited-away Run and its Usage were really spent and stay counted.
+    assert report.overview.total_runs == 2
+    assert report.usage.totals.measured_input_tokens == 17
 
 
 def test_deleted_session_is_pruned_from_index(tmp_path: Path) -> None:
@@ -362,7 +466,7 @@ def test_corrupt_index_is_discarded_and_rebuilt_once(tmp_path: Path) -> None:
 
     assert report.overview.total_runs == 1
     with sqlite3.connect(_index_path(tmp_path)) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 6
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 7
 
 
 @pytest.mark.parametrize("storage", ["file", "transient"])
@@ -397,6 +501,12 @@ def test_index_file_and_transient_projection_agree_on_forks_windows_and_run_acti
 ) -> None:
     service, manager, source = _service(tmp_path)
     fork = asyncio.run(manager.fork(SessionAddress(None, "main", source.id)))
+    # Index the fork before it writes anything: it inherits the source's Run
+    # without contributing it, and its own later work extends that projection.
+    just_forked = service.report()
+    assert just_forked.overview.total_sessions == 2
+    assert just_forked.overview.total_runs == 1
+    assert just_forked.usage.totals.measured_input_tokens == 10
     seed_history(
         fork,
         [

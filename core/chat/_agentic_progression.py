@@ -26,6 +26,7 @@ from core.chat._step_outcomes import (
     _terminal_outcome_error,
     _terminal_tool_failure,
     _usage_token_count,
+    tool_result_facts,
 )
 from core.chat._workers import _CHAT_TRANSFORM_WORKERS
 from core.chat.errors import ChatError
@@ -761,6 +762,7 @@ class AgenticProgression:
                         if context.continuation_tracker is None
                         else context.continuation_tracker.tool_results_boundary(tool_messages)
                     )
+                    result_facts = tool_result_facts(tool_messages)
                     if binding is not None and tool_dispatch_context.delivery_receipts:
                         # The binding addresses this Run's own Session.
                         owned_receipts = [
@@ -793,13 +795,17 @@ class AgenticProgression:
                                 messages=batch_messages,
                                 run_id=run.id,
                                 assistant_message_id=assistant_message.id,
+                                tool_results=result_facts,
                                 receipts=owned_receipts,
                             ),
                             journal=results_journal,
                         )
                     else:
                         await context.session_snapshot.append(
-                            session, batch_messages, journal=results_journal
+                            session,
+                            batch_messages,
+                            journal=results_journal,
+                            tool_results=result_facts,
                         )
                     record_span(
                         "chat.persist",

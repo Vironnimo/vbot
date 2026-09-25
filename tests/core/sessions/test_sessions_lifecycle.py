@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import sqlite3
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -13,10 +12,7 @@ import pytest
 from core.chat import ChatMessage, ChatSessionError
 from core.chat.usage import aggregate_session_usage
 from core.runs import RunKind
-from core.sessions import (
-    FORK_SOURCE_META_KEY,
-    SESSION_FORK_ALWAYS_STRIP_META_KEYS,
-)
+from core.sessions import FORK_SOURCE_META_KEY
 from tests.core.sessions.sessions_test_support import (
     _address,
 )
@@ -51,17 +47,17 @@ def test_identity_reference_changes_roll_back_together(manager, monkeypatch, res
         )
     updates = manager.retarget_identity_agent_references("old", "new") if restoring else ()
     before = [manager.get_metadata(child.address) for child in children]
-    original = _store_values._session_metadata_storage
+    original = _store_values._subagent_parent_columns
     calls = 0
 
-    def fail_second_write(metadata):
+    def fail_second_write(parent):
         nonlocal calls
         calls += 1
         if calls == 2:
             raise OSError("injected metadata write failure")
-        return original(metadata)
+        return original(parent)
 
-    monkeypatch.setattr(_store_values, "_session_metadata_storage", fail_second_write)
+    monkeypatch.setattr(_store_values, "_subagent_parent_columns", fail_second_write)
     with pytest.raises(OSError):
         if restoring:
             manager.restore_identity_agent_references(updates)
@@ -79,13 +75,25 @@ def test_identity_reference_retarget_skips_unrelated_sessions(manager) -> None:
     manager.set_metadata(
         qualified.address, {"subagent_parent": {"agent_id": "old", "project_id": "project"}}
     )
-    before = [manager._store.state(session.address) for session in (unrelated, qualified)]
+
+    def state(session):
+        return manager._store._read(
+            lambda connection: tuple(
+                connection.execute(
+                    "SELECT state_revision, subagent_parent_agent_id, subagent_parent_project_id "
+                    "FROM sessions WHERE session_id = ? AND state = 'live'",
+                    (session.id,),
+                ).fetchone()
+            )
+        )
+
+    before = [state(session) for session in (unrelated, qualified)]
 
     updates = manager.retarget_identity_agent_references("old", "new")
 
     assert [update.address for update in updates] == [changed.address]
     assert manager.get_metadata(changed.address)["subagent_parent"]["agent_id"] == "new"
-    assert [manager._store.state(session.address) for session in (unrelated, qualified)] == before
+    assert [state(session) for session in (unrelated, qualified)] == before
 
 
 def test_move_reads_and_transforms_metadata_inside_its_writer_transaction(
@@ -105,9 +113,9 @@ def test_move_reads_and_transforms_metadata_inside_its_writer_transaction(
     try:
         writer.execute("BEGIN IMMEDIATE")
         writer.execute(
-            "UPDATE sessions SET metadata_json = ?, state_revision = state_revision + 1 "
-            "WHERE agent_id = ? AND session_id = ? AND status = 'live'",
-            (json.dumps({"title": "latest title"}), source.address.agent_id, source.id),
+            "UPDATE sessions SET title = ?, state_revision = state_revision + 1 "
+            "WHERE agent_id = ? AND session_id = ? AND state = 'live'",
+            ("latest title", source.address.agent_id, source.id),
         )
         with ThreadPoolExecutor(max_workers=1) as pool:
             future = pool.submit(lambda: asyncio.run(manager.move(source.address, target)))
@@ -137,9 +145,9 @@ def test_fork_reads_and_transforms_metadata_inside_its_writer_transaction(
     try:
         writer.execute("BEGIN IMMEDIATE")
         writer.execute(
-            "UPDATE sessions SET metadata_json = ?, state_revision = state_revision + 1 "
-            "WHERE agent_id = ? AND session_id = ? AND status = 'live'",
-            (json.dumps({"title": "latest title"}), source.address.agent_id, source.id),
+            "UPDATE sessions SET title = ?, state_revision = state_revision + 1 "
+            "WHERE agent_id = ? AND session_id = ? AND state = 'live'",
+            ("latest title", source.address.agent_id, source.id),
         )
         with ThreadPoolExecutor(max_workers=1) as pool:
             future = pool.submit(lambda: asyncio.run(manager.fork(source.address)))
@@ -152,7 +160,8 @@ def test_fork_reads_and_transforms_metadata_inside_its_writer_transaction(
     metadata = manager.get_metadata(forked.address)
     assert metadata["title"] == "latest title"
     assert metadata[FORK_SOURCE_META_KEY]["message_count"] == 1
-    assert forked.load() == source.load()
+    assert forked.load() == []
+    assert forked.load_active() == source.load_active()
 
 
 def test_fork_titles_and_classifies_the_copy_in_its_one_write(manager, monkeypatch) -> None:
@@ -174,7 +183,6 @@ def test_fork_titles_and_classifies_the_copy_in_its_one_write(manager, monkeypat
     forked = asyncio.run(
         manager.fork(
             source.address,
-            strip_meta_keys=SESSION_FORK_ALWAYS_STRIP_META_KEYS,
             title="  Reviewer:   Source title ",
             run_kind=RunKind.MEMORY_REFLECTION,
         )

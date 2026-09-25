@@ -10,11 +10,11 @@ from core.sessions import _store_fts
 from core.sessions.schema import APPLICATION_ID, DATABASE_NAME, FORMAT_GENERATION, SCHEMA_SQL
 
 # Owner facts every data snapshot records for the Session member and
-# re-verifies on its copy: entry counts and revision watermarks.
+# re-verifies on its copy: row counts and revision watermarks.
 _SNAPSHOT_FACTS = SnapshotFacts(
     {
         "session_count": "SELECT COUNT(*) FROM sessions",
-        "message_count": "SELECT COUNT(*) FROM messages",
+        "entry_count": "SELECT COUNT(*) FROM entries",
         "latest_history_revision": "SELECT COALESCE(MAX(history_revision), 0) FROM sessions",
         "latest_state_revision": "SELECT COALESCE(MAX(state_revision), 0) FROM sessions",
     }

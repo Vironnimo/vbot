@@ -20,7 +20,7 @@ import pytest
 from core.chat.messages import ChatMessage
 from core.database import write_bootstrap_marker
 from core.projects import ProjectStore
-from core.sessions import ChatSessionManager, SessionAddress
+from core.sessions import ChatSessionManager, SeenSkillsUpdate, SessionAddress
 from core.sessions._types import SKILL_CONTEXT_NOTE_PREFIX
 from core.statistics import StatisticsIndex, StatisticsUnavailableError
 from server.rpc.error_mapping import _map_expected_error
@@ -31,6 +31,7 @@ from server.rpc.statistics_methods import (
     _statistics_report,
     _statistics_run_activity,
 )
+from tests.core.sessions.history_fixtures import complete_run
 
 BASE = datetime(2026, 6, 1, 12, 0, 0, tzinfo=UTC)
 
@@ -118,14 +119,15 @@ def _seed_session(manager: ChatSessionManager, agent_id: str) -> None:
             timestamp=BASE,
         )
     )
-    session.append(
+    complete_run(
+        session,
         ChatMessage.run_summary(
             run_id="r1",
             status="completed",
             iteration_count=1,
             timing=_timing(BASE + timedelta(seconds=1), 1200),
             timestamp=BASE + timedelta(seconds=2),
-        )
+        ),
     )
 
 
@@ -278,14 +280,15 @@ def test_report_includes_project_sessions_under_address_form(tmp_path: Path) -> 
     project_session.append(
         ChatMessage.assistant(model="openai/gpt-5", content="hi", timestamp=BASE)
     )
-    project_session.append(
+    complete_run(
+        project_session,
         ChatMessage.run_summary(
             run_id="p1",
             status="completed",
             iteration_count=1,
             timing=_timing(BASE + timedelta(seconds=1), 800),
             timestamp=BASE + timedelta(seconds=2),
-        )
+        ),
     )
 
     result = asyncio.run(_statistics_report(state, {}))
@@ -338,9 +341,9 @@ def test_report_skills_section_joins_usage_against_inventory(tmp_path: Path) -> 
             timestamp=BASE + timedelta(seconds=1),
         )
     )
-    manager.set_metadata(
+    manager.record_seen_skills(
         SessionAddress(project_id=None, agent_id="main", session_id=session.id),
-        {"seen_skills": ["deploy", "teach"]},
+        SeenSkillsUpdate(baseline=("deploy", "teach")),
     )
 
     result = asyncio.run(_statistics_report(state, {}))

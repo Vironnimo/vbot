@@ -4,8 +4,9 @@ One :class:`StatisticsIndex` owns the index file of a data directory. Every
 read reconciles canonical Sessions into typed tables and then hands one SQL
 connection to a consumer that aggregates in SQL; no projection is hydrated or
 kept in memory between reads. Canonical history is only touched for Sessions
-whose generation, revision or fork boundary changed, and an unchanged index is
-read without any write.
+whose generation or revision changed, and an unchanged index is read without
+any write. Each Session contributes its own audit only: a fork's inherited
+history belongs to the Session that wrote it.
 
 Failure policy: a busy or locked index raises :class:`StatisticsUnavailableError`
 so the caller can retry; a corrupt or inconsistent index is discarded and
@@ -25,7 +26,6 @@ from typing import Any, Protocol, TypeVar
 
 from core.database import required_journal_mode
 from core.sessions import (
-    FORK_SOURCE_META_KEY,
     ChatSession,
     SessionAddress,
     SessionNotFoundError,
@@ -44,9 +44,10 @@ _LOGGER = get_logger("statistics")
 _INDEX_DIRECTORY = "statistics"
 _INDEX_FILENAME = "session-statistics.sqlite"
 _GLOBAL_SCOPE = ""
-# v6 replaces JSON message projections with typed, indexed fact tables.
+# v6 replaced JSON message projections with typed, indexed fact tables; v7
+# indexes each Session's own audit, which never contains inherited fork history.
 # Older disposable projections are dropped and rebuilt from canonical Sessions.
-_SCHEMA_VERSION = 6
+_SCHEMA_VERSION = 7
 _SQLITE_BUSY_TIMEOUT_MS = 1000
 _SQLITE_CACHE_KIB = 32 * 1024
 _SQLITE_PRIMARY_CODE_MASK = 0xFF
@@ -83,9 +84,7 @@ CREATE TABLE stat_sessions (
     generation_id TEXT NOT NULL,
     history_revision INTEGER NOT NULL,
     next_seq INTEGER NOT NULL,
-    message_count INTEGER NOT NULL,
     last_message_id TEXT,
-    fork_message_count INTEGER NOT NULL,
     min_instant INTEGER,
     max_instant INTEGER,
     untimed_records INTEGER NOT NULL,
@@ -271,9 +270,7 @@ class _StoredSession:
     generation_id: str
     history_revision: int
     next_seq: int
-    message_count: int
     last_message_id: str | None
-    fork_message_count: int
     min_instant: int | None
     max_instant: int | None
     untimed_records: int
@@ -494,7 +491,6 @@ def _reconcile(
             row is not None
             and row.generation_id == version[0]
             and row.history_revision == version[1]
-            and _effective_fork_message_count(summary, row.message_count) == row.fork_message_count
         ):
             current[key] = IndexedSession(row.session_key, row.generation_id, summary)
         else:
@@ -545,18 +541,16 @@ def _stored_sessions(connection: sqlite3.Connection) -> dict[tuple[str, str, str
             generation_id=str(row[4]),
             history_revision=int(row[5]),
             next_seq=int(row[6]),
-            message_count=int(row[7]),
-            last_message_id=row[8],
-            fork_message_count=int(row[9]),
-            min_instant=row[10],
-            max_instant=row[11],
-            untimed_records=int(row[12]),
+            last_message_id=row[7],
+            min_instant=row[8],
+            max_instant=row[9],
+            untimed_records=int(row[10]),
         )
         for row in connection.execute(
             """
             SELECT project_id, agent_id, session_id, session_key, generation_id,
-                history_revision, next_seq, message_count, last_message_id,
-                fork_message_count, min_instant, max_instant, untimed_records
+                history_revision, next_seq, last_message_id, min_instant, max_instant,
+                untimed_records
             FROM stat_sessions
             """
         )
@@ -571,18 +565,13 @@ def _refresh(
     version: tuple[str, int],
     row: _StoredSession | None,
 ) -> IndexedSession:
-    if (
-        row is not None
-        and row.generation_id == version[0]
-        and _effective_fork_message_count(summary, row.message_count) == row.fork_message_count
-    ):
+    if row is not None and row.generation_id == version[0]:
         batch = _source(
             session.load_since,
             SessionReadCursor(
                 generation_id=row.generation_id,
                 history_revision=row.history_revision,
                 next_seq=row.next_seq,
-                message_count=row.message_count,
                 last_message_id=row.last_message_id,
             ),
         )
@@ -602,15 +591,13 @@ def _replace(
     batch: SessionReadBatch,
     row: _StoredSession | None,
 ) -> IndexedSession:
-    fork_message_count = _effective_fork_message_count(summary, batch.cursor.message_count)
     if row is None:
         cursor = connection.execute(
             """
             INSERT INTO stat_sessions (
                 project_id, agent_id, session_id, generation_id, history_revision,
-                next_seq, message_count, last_message_id, fork_message_count,
-                min_instant, max_instant, untimed_records
-            ) VALUES (?, ?, ?, '', 0, 0, 0, NULL, 0, NULL, NULL, 0)
+                next_seq, last_message_id, min_instant, max_instant, untimed_records
+            ) VALUES (?, ?, ?, '', 0, 0, NULL, NULL, NULL, 0)
             """,
             key,
         )
@@ -618,13 +605,12 @@ def _replace(
     else:
         session_key = row.session_key
         _delete_facts(connection, [session_key])
-    rows = _project_batch(session_key, batch, first_seq=0, fork_message_count=fork_message_count)
+    rows = _project_batch(session_key, batch)
     _insert_rows(connection, rows)
     _write_session_state(
         connection,
         session_key,
         batch.cursor,
-        fork_message_count=fork_message_count,
         min_instant=rows.min_instant,
         max_instant=rows.max_instant,
         untimed_records=rows.untimed_records,
@@ -633,18 +619,12 @@ def _replace(
 
 
 def _append(connection: sqlite3.Connection, row: _StoredSession, batch: SessionReadBatch) -> None:
-    rows = _project_batch(
-        row.session_key,
-        batch,
-        first_seq=row.next_seq,
-        fork_message_count=row.fork_message_count,
-    )
+    rows = _project_batch(row.session_key, batch)
     _insert_rows(connection, rows)
     _write_session_state(
         connection,
         row.session_key,
         batch.cursor,
-        fork_message_count=row.fork_message_count,
         min_instant=_bound(min, row.min_instant, rows.min_instant),
         max_instant=_bound(max, row.max_instant, rows.max_instant),
         untimed_records=row.untimed_records + rows.untimed_records,
@@ -659,16 +639,16 @@ def _bound(pick: Callable[[int, int], int], stored: int | None, added: int | Non
     return pick(stored, added)
 
 
-def _project_batch(
-    session_key: int, batch: SessionReadBatch, *, first_seq: int, fork_message_count: int
-) -> ProjectedRows:
+def _project_batch(session_key: int, batch: SessionReadBatch) -> ProjectedRows:
+    """Project a batch of the Session's own audit.
+
+    Own audit entries occupy consecutive sequence numbers up to the batch's
+    cursor, so the first entry's sequence follows from the batch length.
+    """
     rows = ProjectedRows(session_key)
+    first_seq = batch.cursor.next_seq - len(batch.messages)
     for offset, message in enumerate(batch.messages):
-        seq = first_seq + offset
-        # A fork's copied prefix belongs to its source Session's activity.
-        if seq < fork_message_count:
-            continue
-        rows.add(seq, message)
+        rows.add(first_seq + offset, message)
     return rows
 
 
@@ -684,7 +664,6 @@ def _write_session_state(
     session_key: int,
     cursor: SessionReadCursor,
     *,
-    fork_message_count: int,
     min_instant: int | None,
     max_instant: int | None,
     untimed_records: int,
@@ -695,9 +674,7 @@ def _write_session_state(
             generation_id = ?,
             history_revision = ?,
             next_seq = ?,
-            message_count = ?,
             last_message_id = ?,
-            fork_message_count = ?,
             min_instant = ?,
             max_instant = ?,
             untimed_records = ?
@@ -707,9 +684,7 @@ def _write_session_state(
             cursor.generation_id,
             cursor.history_revision,
             cursor.next_seq,
-            cursor.message_count,
             cursor.last_message_id,
-            fork_message_count,
             min_instant,
             max_instant,
             untimed_records,
@@ -745,13 +720,3 @@ def statistics_session_key(
 ) -> tuple[str, str, str]:
     """Return the persisted composite key for one scoped Session."""
     return (_scope_key(project_id), agent_id, session_id)
-
-
-def _effective_fork_message_count(summary: JsonObject, total_messages: int) -> int:
-    fork_source = summary.get(FORK_SOURCE_META_KEY)
-    if not isinstance(fork_source, dict):
-        return 0
-    value = fork_source.get("message_count")
-    if isinstance(value, bool) or not isinstance(value, int) or value < 0 or value > total_messages:
-        return 0
-    return value

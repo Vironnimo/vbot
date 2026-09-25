@@ -5,9 +5,8 @@ from __future__ import annotations
 
 import builtins
 import sqlite3
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
-from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeVar
 
@@ -17,9 +16,13 @@ from core.sessions import (
     _store_fts,
     _store_history,
     _store_mutations,
+    _store_operations,
     _store_owned,
+    _store_prompts,
     _store_queries,
+    _store_runs,
     _store_search,
+    _store_timeline,
     _store_values,
 )
 from core.sessions._store_schema import session_database_spec
@@ -27,23 +30,21 @@ from core.sessions._types import (
     JsonObject,
     OwnedRunRecord,
     SessionChatHistorySnapshot,
+    SessionDescriptorSource,
+    SessionEditResult,
     SessionHistoryRevision,
-    SessionRecallVisibility,
     SessionSearchOrder,
     SessionSearchResult,
 )
-from core.sessions.errors import (
-    FtsHealth,
-    SessionNotFoundError,
-)
+from core.sessions.errors import FtsHealth, SessionNotFoundError
 
 if TYPE_CHECKING:
     from core.chat.messages import ChatMessage
-    from core.runs import RunExecutionOwner
     from core.sessions._types import (
         DeliveryReceipt,
         OwnedSessionSummary,
-        RunStartBoundary,
+        PromptEpoch,
+        SeenSkillsUpdate,
         SessionAddress,
         SessionContinuationState,
         SessionIdentityReferenceUpdate,
@@ -52,21 +53,23 @@ if TYPE_CHECKING:
         SessionListPage,
         SessionReadBatch,
         SessionReadCursor,
+        SessionRunAdmission,
         SessionRunCompletion,
         TemporarySessionBinding,
+        ToolResultFacts,
     )
 
 
 WRITE_PATIENCE_S = 20.0
 # Transcript appends are the user's conversation: wait longer before failing.
 TRANSCRIPT_WRITE_PATIENCE_S = 60.0
-# Activity updates are advisory and frequent: give up quickly under contention.
+# Completion activity (the latest completion and its read mark) is advisory:
+# give up quickly under contention.
 ACTIVITY_WRITE_PATIENCE_S = 0.5
 
 _WriteResult = TypeVar("_WriteResult")
 _Decoded = TypeVar("_Decoded")
-# Records selected inside a write transaction and decoded after commit.
-_HistoryDelta = tuple[list[sqlite3.Row], "SessionReadCursor"] | None
+_FTS_ERROR_MARKERS = ("fts",)
 
 
 class SessionStore:
@@ -75,7 +78,8 @@ class SessionStore:
     Opening goes through the kernel's canonical profile: marker authorization,
     identity and format checks, additive reconcile, automatic restore from a
     data snapshot, then the search index readiness hook. Reads use pooled read
-    transactions; writes run as whole ``BEGIN IMMEDIATE`` transactions.
+    transactions; writes run as whole ``BEGIN IMMEDIATE`` transactions, each
+    one complete domain step.
     """
 
     def __init__(self, path: Path, *, _offline: bool = False) -> None:
@@ -97,6 +101,10 @@ class SessionStore:
     ) -> _Decoded:
         """Run blocking Session work on the database's bounded worker pool."""
         return await self._database.run_async(function, *arguments, **keyword_arguments)
+
+    def _read(self, select: Callable[[sqlite3.Connection], _Decoded]) -> _Decoded:
+        with self._database.read() as connection:
+            return select(connection)
 
     def _read_decoded(
         self, select: Callable[[sqlite3.Connection], Callable[[], _Decoded]]
@@ -122,9 +130,7 @@ class SessionStore:
             except (sqlite3.Error, DatabaseError) as exc:
                 cause = exc if isinstance(exc, sqlite3.Error) else exc.__cause__
                 message = str(cause).lower() if isinstance(cause, sqlite3.Error) else ""
-                if not fts_retried and any(
-                    marker in message for marker in ("fts", "messages_fts", "message_search")
-                ):
+                if not fts_retried and any(marker in message for marker in _FTS_ERROR_MARKERS):
                     # The derived search index failed, not canonical storage:
                     # detach it and retry the write without it.
                     fts_retried = True
@@ -140,6 +146,8 @@ class SessionStore:
         """Exercise the opened read/write path without changing canonical rows."""
         self._database.verify_read_write()
 
+    # -- Session lifecycle -------------------------------------------------------
+
     def create(
         self, address: SessionAddress, created_at: str | None = None, *, generate_id: bool = False
     ) -> SessionAddress:
@@ -151,38 +159,126 @@ class SessionStore:
 
     def ensure_live(self, address: SessionAddress) -> None:
         """Create a missing live Session; an existing one costs only a read."""
-        with self._database.read() as connection:
-            if _store_values._find_live(connection, address) is not None:
-                return
+        if self._read(lambda connection: _store_values._find_live(connection, address)) is not None:
+            return
         self._execute_write(lambda connection: _store_mutations.ensure_live(connection, address))
 
     def exists(self, address: SessionAddress) -> bool:
-        with self._database.read() as connection:
-            return _store_queries.exists(connection, address)
+        return self._read(lambda connection: _store_queries.exists(connection, address))
 
     def existing_addresses(self, addresses: Sequence[SessionAddress]) -> set[SessionAddress]:
-        with self._database.read() as connection:
-            return _store_queries.existing_addresses(connection, addresses)
+        return self._read(
+            lambda connection: _store_queries.existing_addresses(connection, addresses)
+        )
 
-    def state(self, address: SessionAddress) -> sqlite3.Row:
-        """Read one live Session row; a missing Session raises ``SessionNotFoundError``."""
-        with self._database.read() as connection:
-            return _store_values._require_live(connection, address)
+    def require_live(self, address: SessionAddress) -> None:
+        """Raise ``SessionNotFoundError`` unless *address* names a live Session."""
+        self._read(lambda connection: _store_values._require_live(connection, address))
+
+    def history_revision(self, address: SessionAddress) -> int:
+        return int(
+            self._read(lambda connection: _store_values._require_live(connection, address))[
+                "history_revision"
+            ]
+        )
+
+    def archive(self, address: SessionAddress) -> None:
+        return self._execute_write(lambda connection: _store_mutations.archive(connection, address))
+
+    def move(self, source: SessionAddress, target: SessionAddress) -> None:
+        return self._execute_write(
+            lambda connection: _store_mutations.move(connection, source, target)
+        )
+
+    def fork(
+        self,
+        source: SessionAddress,
+        target_scope: SessionAddress,
+        *,
+        title: str | None = None,
+        run_kind: str | None = None,
+        allow_owner_managed_source: bool = False,
+    ) -> SessionAddress:
+        """Fork *source* into a fresh id in *target_scope*; see ``_store_mutations.fork``."""
+        return self._execute_write(
+            lambda connection: _store_mutations.fork(
+                connection,
+                source,
+                target_scope,
+                title=title,
+                run_kind=run_kind,
+                allow_owner_managed_source=allow_owner_managed_source,
+            )
+        )
+
+    def restore(self, address: SessionAddress) -> None:
+        return self._execute_write(lambda connection: _store_mutations.restore(connection, address))
+
+    def delete(self, address: SessionAddress) -> None:
+        return self._execute_write(lambda connection: _store_mutations.delete(connection, address))
+
+    def retarget_identity_agent(self, old_agent_id: str, new_agent_id: str) -> None:
+        return self._execute_write(
+            lambda connection: _store_mutations.retarget_identity_agent(
+                connection, old_agent_id, new_agent_id
+            )
+        )
+
+    def retarget_identity_agent_references(
+        self, old_agent_id: str, new_agent_id: str
+    ) -> tuple[SessionIdentityReferenceUpdate, ...]:
+        return self._execute_write(
+            lambda connection: _store_mutations.retarget_identity_agent_references(
+                connection, old_agent_id, new_agent_id
+            )
+        )
+
+    def restore_identity_agent_references(
+        self, updates: tuple[SessionIdentityReferenceUpdate, ...]
+    ) -> None:
+        self._execute_write(
+            lambda connection: _store_mutations.restore_identity_agent_references(
+                connection, updates
+            )
+        )
+
+    def archive_identity_agent_sessions(self, agent_id: str) -> None:
+        return self._execute_write(
+            lambda connection: _store_mutations.archive_identity_agent_sessions(
+                connection, agent_id
+            )
+        )
+
+    def archive_project_sessions(self, project_id: str) -> None:
+        return self._execute_write(
+            lambda connection: _store_mutations.archive_project_sessions(connection, project_id)
+        )
+
+    # -- Metadata facade ---------------------------------------------------------
 
     def metadata(self, address: SessionAddress) -> JsonObject:
-        return _store_values._session_metadata_from_state(self.state(address))
+        return self._read(
+            lambda connection: _store_values._session_metadata_from_state(
+                _store_values._live_metadata_row(connection, address)
+            )
+        )
 
     def metadata_value(self, address: SessionAddress, key: str) -> Any:
         """Return one metadata value, or ``None`` when the Session has none."""
-        with self._database.read() as connection:
-            return _store_queries.metadata_value(connection, address, key)
+        return self._read(
+            lambda connection: _store_queries.metadata_value(connection, address, key)
+        )
 
     def descriptor_sources(
         self, addresses: Sequence[SessionAddress]
-    ) -> dict[SessionAddress, tuple[JsonObject, int, ChatMessage | None, SessionRecallVisibility]]:
-        return self._read_decoded(
+    ) -> dict[SessionAddress, SessionDescriptorSource]:
+        sources = self._read_decoded(
             lambda connection: _store_queries.descriptor_sources(connection, addresses)
         )
+        return {
+            address: SessionDescriptorSource(metadata, visibility)
+            for address, (metadata, visibility) in sources.items()
+        }
 
     def replace_metadata(self, address: SessionAddress, metadata: JsonObject) -> None:
         return self._execute_write(
@@ -204,8 +300,9 @@ class SessionStore:
         create_missing: bool,
     ) -> tuple[JsonObject, JsonObject]:
         """Try the mutation on a read snapshot; enter the writer only for a real change."""
-        with self._database.read() as connection:
-            state = _store_values._find_live(connection, address)
+        state = self._read(
+            lambda connection: _store_values._find_live_metadata_row(connection, address)
+        )
         if state is not None:
             previous, updated, storage = _store_mutations.metadata_change(state, mutation)
             if storage is None:
@@ -218,19 +315,88 @@ class SessionStore:
             )
         )
 
-    def replace_activity(self, address: SessionAddress, activity: JsonObject) -> None:
+    # -- Prompt state ------------------------------------------------------------
+
+    def prompt_pin(self, address: SessionAddress, slot: str) -> JsonObject | None:
+        return self._read(lambda connection: _store_prompts.prompt_pin(connection, address, slot))
+
+    def ensure_prompt_pin(
+        self,
+        address: SessionAddress,
+        slot: str,
+        value: JsonObject,
+        accept: Callable[[JsonObject], bool],
+    ) -> JsonObject:
+        """Return the pin in *slot* when *accept* keeps it, else pin and return *value*.
+
+        An accepted pin costs only a read; the write re-checks in its transaction.
+        """
+        current = self.prompt_pin(address, slot)
+        if current is not None and accept(current):
+            return current
         return self._execute_write(
-            lambda connection: _store_mutations.replace_activity(connection, address, activity),
+            lambda connection: _store_prompts.ensure_prompt_pin(
+                connection, address, slot, value, accept
+            )
+        )
+
+    def seen_skills(self, address: SessionAddress) -> frozenset[str] | None:
+        return self._read(lambda connection: _store_prompts.seen_skills(connection, address))
+
+    def record_seen_skills(self, address: SessionAddress, update: SeenSkillsUpdate) -> None:
+        def _fn(connection: sqlite3.Connection) -> None:
+            state = _store_values._require_live(connection, address)
+            _store_prompts.record_seen_skills(connection, int(state["session_key"]), update)
+
+        self._execute_write(_fn)
+
+    def prompt_cache_affinity_id(self, address: SessionAddress) -> str:
+        return self._read(
+            lambda connection: _store_prompts.prompt_cache_affinity_id(connection, address)
+        )
+
+    # -- Runs ---------------------------------------------------------------------
+
+    def admit_run(self, address: SessionAddress, admission: SessionRunAdmission) -> None:
+        """Admit one Run with its Run kind and execution owner in one transaction."""
+        self._execute_write(
+            lambda connection: _store_runs.admit_run(connection, address, admission)
+        )
+
+    def finish_run(self, address: SessionAddress, completion: SessionRunCompletion) -> JsonObject:
+        return self._execute_write(
+            lambda connection: _store_runs.finish_run(connection, address, completion),
+            patience_s=TRANSCRIPT_WRITE_PATIENCE_S,
+        )
+
+    def recover_interrupted_runs(self) -> None:
+        self._execute_write(_store_runs.recover_interrupted_runs)
+
+    def record_run_kind(self, address: SessionAddress, run_kind: str) -> None:
+        self._execute_write(
+            lambda connection: _store_mutations.record_run_kind(connection, address, run_kind)
+        )
+
+    def record_terminal_run(
+        self, address: SessionAddress, *, run_id: str, status: str, timestamp: str
+    ) -> None:
+        self._execute_write(
+            lambda connection: _store_runs.record_terminal_run(
+                connection, address, run_id=run_id, status=status, timestamp=timestamp
+            ),
             patience_s=ACTIVITY_WRITE_PATIENCE_S,
         )
 
-    def mutate_activity(
-        self, address: SessionAddress, mutation: Callable[[JsonObject], None]
-    ) -> tuple[JsonObject, JsonObject]:
+    def mark_terminal_run_read(
+        self, address: SessionAddress, run_id: str
+    ) -> tuple[JsonObject, bool]:
+        """Mark the latest completion read; return the activity and whether it changed."""
         return self._execute_write(
-            lambda connection: _store_mutations.mutate_activity(connection, address, mutation),
+            lambda connection: _store_runs.mark_terminal_run_read(connection, address, run_id),
             patience_s=ACTIVITY_WRITE_PATIENCE_S,
         )
+
+    # -- History writes -------------------------------------------------------------
 
     def append_messages(
         self,
@@ -239,41 +405,35 @@ class SessionStore:
         *,
         run_id: str | None = None,
         assistant_message_id: str | None = None,
+        tool_results: Mapping[str, ToolResultFacts] | None = None,
+        seen_skills: SeenSkillsUpdate | None = None,
         continuation_records: Sequence[JsonObject] = (),
         since: SessionReadCursor | None = None,
-        metadata_mutation: Callable[[JsonObject], None] | None = None,
-        require_current: bool = False,
     ) -> SessionReadBatch | None:
         """Append Messages plus any Continuation records in one transaction.
 
-        With *since*, the same transaction also selects every record after that
-        cursor (this append and any concurrent writer's), so the caller needs no
-        follow-up read. ``None`` then means the cursor cannot be continued.
-
-        *metadata_mutation* changes Session metadata in the same transaction, so
-        the Messages and the metadata they depend on commit or roll back together.
-        With *require_current*, the transaction writes nothing and returns
-        ``None`` unless *since* still names the Session's newest record.
+        *tool_results* reports each appended Tool Result's outcome by Tool call
+        id. *seen_skills* records the Skills a persisted announcement named in
+        the same transaction. With *since*, the transaction also selects every
+        entry after that cursor (this append and any concurrent writer's), so
+        the caller needs no follow-up read; ``None`` then means the cursor
+        cannot be continued.
         """
-        if require_current and since is None:
-            raise ValueError("require_current needs the cursor to verify")
 
-        def _fn(connection: sqlite3.Connection) -> _HistoryDelta:
-            if (
-                require_current
-                and since is not None
-                and not _store_history.cursor_is_current(connection, address, since)
-            ):
-                return None
+        def _fn(connection: sqlite3.Connection) -> _store_history.HistoryDelta | None:
             _store_mutations.append_messages(
                 connection,
                 address,
                 messages,
                 run_id=run_id,
                 assistant_message_id=assistant_message_id,
+                tool_results=tool_results,
             )
-            if metadata_mutation is not None:
-                _store_mutations.mutate_metadata(connection, address, metadata_mutation)
+            if seen_skills is not None:
+                state = _store_values._require_live(connection, address)
+                _store_prompts.record_seen_skills(
+                    connection, int(state["session_key"]), seen_skills
+                )
             return self._journal_and_select(connection, address, continuation_records, since)
 
         delta = self._execute_write(_fn, patience_s=TRANSCRIPT_WRITE_PATIENCE_S)
@@ -285,11 +445,77 @@ class SessionStore:
         address: SessionAddress,
         continuation_records: Sequence[JsonObject],
         since: SessionReadCursor | None,
-    ) -> _HistoryDelta:
+    ) -> _store_history.HistoryDelta | None:
         _store_continuation.append_continuation(connection, address, continuation_records)
         if since is None:
             return None
         return _store_history.message_rows_since(connection, address, since)
+
+    def commit_compaction(
+        self,
+        address: SessionAddress,
+        checkpoint: ChatMessage,
+        *,
+        since: SessionReadCursor,
+        epoch: PromptEpoch,
+        run_id: str | None,
+    ) -> tuple[SessionReadBatch, str] | None:
+        """Commit a Compaction checkpoint and its prompt epoch while *since* is current.
+
+        Returns the entries after *since* with the new prompt-cache affinity
+        id, or ``None`` (nothing written) when another writer advanced first.
+        """
+        committed = self._execute_write(
+            lambda connection: _store_operations.commit_compaction(
+                connection, address, checkpoint, since=since, epoch=epoch, run_id=run_id
+            ),
+            patience_s=TRANSCRIPT_WRITE_PATIENCE_S,
+        )
+        if committed is None:
+            return None
+        delta, affinity_id = committed
+        return _store_history.read_batch(delta), affinity_id
+
+    def apply_edit(
+        self,
+        address: SessionAddress,
+        *,
+        target_message_id: str,
+        messages: Sequence[ChatMessage],
+        run_id: str | None,
+        seen_skills: SeenSkillsUpdate | None = None,
+        continuation_records: Sequence[JsonObject] = (),
+    ) -> SessionEditResult:
+        """Replace history from one User message on; see ``_store_operations.apply_edit``."""
+        outcome = self._execute_write(
+            lambda connection: _store_operations.apply_edit(
+                connection,
+                address,
+                target_message_id=target_message_id,
+                messages=messages,
+                run_id=run_id,
+                seen_skills=seen_skills,
+                continuation_records=continuation_records,
+            ),
+            patience_s=TRANSCRIPT_WRITE_PATIENCE_S,
+        )
+        delta, affinity_id = outcome
+        return SessionEditResult(_store_history.read_batch(delta), affinity_id)
+
+    def continuation(self, address: SessionAddress) -> SessionContinuationState | None:
+        return self._read(lambda connection: _store_continuation.continuation(connection, address))
+
+    def append_continuation(self, address: SessionAddress, records: Sequence[JsonObject]) -> None:
+        return self._execute_write(
+            lambda connection: _store_continuation.append_continuation(connection, address, records)
+        )
+
+    def clear_continuation(self, address: SessionAddress) -> None:
+        return self._execute_write(
+            lambda connection: _store_continuation.clear_continuation(connection, address)
+        )
+
+    # -- Extension-owned Sessions -----------------------------------------------------
 
     def create_bound_temporary_session(
         self,
@@ -356,10 +582,11 @@ class SessionStore:
     def temporary_group_titles(
         self, *, owner_name: str, group_ids: Sequence[str]
     ) -> dict[str, str]:
-        with self._database.read() as connection:
-            return _store_owned.temporary_group_titles(
+        return self._read(
+            lambda connection: _store_owned.temporary_group_titles(
                 connection, owner_name=owner_name, group_ids=group_ids
             )
+        )
 
     def owned_session_summaries(
         self,
@@ -385,12 +612,13 @@ class SessionStore:
         deduplicate_carrier: bool = False,
         run_id: str | None = None,
         assistant_message_id: str | None = None,
+        tool_results: Mapping[str, ToolResultFacts] | None = None,
         continuation_records: Sequence[JsonObject] = (),
         since: SessionReadCursor | None = None,
     ) -> SessionReadBatch | None:
         """Receipt-carrying variant of :meth:`append_messages` with the same options."""
 
-        def _fn(connection: sqlite3.Connection) -> _HistoryDelta:
+        def _fn(connection: sqlite3.Connection) -> _store_history.HistoryDelta | None:
             _store_owned.append_messages_with_receipts(
                 connection,
                 address,
@@ -401,6 +629,7 @@ class SessionStore:
                 deduplicate_carrier=deduplicate_carrier,
                 run_id=run_id,
                 assistant_message_id=assistant_message_id,
+                tool_results=tool_results,
             )
             return self._journal_and_select(connection, address, continuation_records, since)
 
@@ -410,75 +639,14 @@ class SessionStore:
     def delivery_receipt(
         self, address: SessionAddress, *, generation_id: str, owner_name: str, receipt_id: str
     ) -> DeliveryReceipt | None:
-        with self._database.read() as connection:
-            return _store_owned.delivery_receipt(
+        return self._read(
+            lambda connection: _store_owned.delivery_receipt(
                 connection,
                 address,
                 generation_id=generation_id,
                 owner_name=owner_name,
                 receipt_id=receipt_id,
             )
-
-    def record_run_owner(
-        self,
-        address: SessionAddress,
-        *,
-        run_id: str,
-        owner: RunExecutionOwner,
-        input_id: str | None = None,
-    ) -> None:
-        return self._execute_write(
-            lambda connection: _store_owned.record_run_owner(
-                connection, address, run_id=run_id, owner=owner, input_id=input_id
-            )
-        )
-
-    def start_run(
-        self,
-        address: SessionAddress,
-        *,
-        run_id: str,
-        work_id: str | None,
-        run_kind: str,
-        contributes_to_activity: bool,
-        started_at: str,
-    ) -> None:
-        from core.sessions import _store_runs
-
-        self._execute_write(
-            lambda connection: _store_runs.start_run(
-                connection,
-                address,
-                run_id=run_id,
-                work_id=work_id,
-                run_kind=run_kind,
-                contributes_to_activity=contributes_to_activity,
-                started_at=started_at,
-            )
-        )
-
-    def finish_run(self, address: SessionAddress, completion: SessionRunCompletion) -> JsonObject:
-        from core.sessions import _store_runs
-
-        return self._execute_write(
-            lambda connection: _store_runs.finish_run(connection, address, completion)
-        )
-
-    def recover_interrupted_runs(self) -> None:
-        from core.sessions import _store_runs
-
-        self._execute_write(_store_runs.recover_interrupted_runs)
-
-    def record_run_kind(self, address: SessionAddress, run_kind: str) -> None:
-        from core.sessions import _store_runs
-
-        self._execute_write(
-            lambda connection: _store_runs.record_run_kind(connection, address, run_kind)
-        )
-
-    def record_run_start(self, address: SessionAddress, *, run_id: str) -> None:
-        return self._execute_write(
-            lambda connection: _store_owned.record_run_start(connection, address, run_id=run_id)
         )
 
     def owned_runs(
@@ -490,8 +658,8 @@ class SessionStore:
         after: int = 0,
         limit: int = 100,
     ) -> list[OwnedRunRecord]:
-        with self._database.read() as connection:
-            return _store_owned.owned_runs(
+        return self._read(
+            lambda connection: _store_owned.owned_runs(
                 connection,
                 owner_name=owner_name,
                 group_id=group_id,
@@ -499,38 +667,47 @@ class SessionStore:
                 after=after,
                 limit=limit,
             )
+        )
 
     def owned_runs_by_id(
         self, *, owner_name: str, group_id: str, run_ids: Sequence[str]
     ) -> dict[str, OwnedRunRecord]:
-        with self._database.read() as connection:
-            return _store_owned.owned_runs_by_id(
+        return self._read(
+            lambda connection: _store_owned.owned_runs_by_id(
                 connection, owner_name=owner_name, group_id=group_id, run_ids=run_ids
             )
+        )
 
     def owned_run_by_input(self, address: SessionAddress, input_id: str) -> OwnedRunRecord | None:
-        with self._database.read() as connection:
-            return _store_owned.owned_run_by_input(connection, address, input_id)
+        return self._read(
+            lambda connection: _store_owned.owned_run_by_input(connection, address, input_id)
+        )
 
-    def run_start_boundaries(self, addresses: Sequence[SessionAddress]) -> list[RunStartBoundary]:
-        with self._database.read() as connection:
-            return _store_owned.run_start_boundaries(connection, addresses)
+    # -- History reads ---------------------------------------------------------------
 
     def messages(self, address: SessionAddress) -> list[ChatMessage]:
+        """The Session's own audit: every entry it wrote, superseded ones included."""
         return self._read_decoded(lambda connection: _store_history.messages(connection, address))
 
     def active_messages(self, address: SessionAddress) -> list[ChatMessage]:
+        """The Session's current view, inherited history included."""
         return self._read_decoded(
             lambda connection: _store_history.active_messages(connection, address)
         )
 
     def active_user_message_count(self, address: SessionAddress, *, limit: int) -> int:
-        with self._database.read() as connection:
-            return _store_history.active_user_message_count(connection, address, limit=limit)
+        return self._read(
+            lambda connection: _store_history.active_user_message_count(
+                connection, address, limit=limit
+            )
+        )
 
     def tool_result_persisted(self, address: SessionAddress, tool_call_id: str) -> bool:
-        with self._database.read() as connection:
-            return _store_history.tool_result_persisted(connection, address, tool_call_id)
+        return self._read(
+            lambda connection: _store_history.tool_result_persisted(
+                connection, address, tool_call_id
+            )
+        )
 
     def latest_note(self, address: SessionAddress, *, content_prefix: str) -> ChatMessage | None:
         return self._read_decoded(
@@ -538,6 +715,19 @@ class SessionStore:
                 connection, address, content_prefix=content_prefix
             )
         )
+
+    def current_skill_activation_messages(self, address: SessionAddress) -> list[ChatMessage]:
+        return self._read_decoded(
+            lambda connection: _store_history.current_skill_activation_messages(connection, address)
+        )
+
+    def messages_since(
+        self, address: SessionAddress, cursor: SessionReadCursor | None
+    ) -> SessionReadBatch | None:
+        delta = self._read(
+            lambda connection: _store_history.message_rows_since(connection, address, cursor)
+        )
+        return None if delta is None else _store_history.read_batch(delta)
 
     def chat_history_snapshot(
         self,
@@ -555,7 +745,7 @@ class SessionStore:
         skip_unchanged: bool = False,
     ) -> SessionChatHistorySnapshot:
         return self._read_decoded(
-            lambda connection: _store_history.chat_history_snapshot(
+            lambda connection: _store_timeline.chat_history_snapshot(
                 connection,
                 address,
                 limit=limit,
@@ -585,10 +775,11 @@ class SessionStore:
         *,
         snapshot_sequence: int | None = None,
     ) -> tuple[str, list[tuple[int, str, str, str]]] | None:
-        with self._database.read() as connection:
-            return _store_history.history_snapshot(
+        return self._read(
+            lambda connection: _store_history.history_snapshot(
                 connection, address, snapshot_sequence=snapshot_sequence
             )
+        )
 
     def history_records(
         self,
@@ -629,8 +820,8 @@ class SessionStore:
         sections: Sequence[tuple[int, int]],
         excluded_tool_name: str,
     ) -> dict[int, tuple[int, str | None, str | None]] | None:
-        with self._database.read() as connection:
-            return _store_history.history_section_stats(
+        return self._read(
+            lambda connection: _store_history.history_section_stats(
                 connection,
                 address,
                 expected_generation_id=expected_generation_id,
@@ -638,6 +829,7 @@ class SessionStore:
                 sections=sections,
                 excluded_tool_name=excluded_tool_name,
             )
+        )
 
     def history_around(
         self,
@@ -670,8 +862,7 @@ class SessionStore:
         )
 
     def reflection_runs(self, address: SessionAddress) -> list[JsonObject]:
-        with self._database.read() as connection:
-            return _store_history.reflection_runs(connection, address)
+        return self._read(lambda connection: _store_history.reflection_runs(connection, address))
 
     def run_messages(self, address: SessionAddress, run_id: str) -> list[ChatMessage]:
         return self._read_decoded(
@@ -705,35 +896,13 @@ class SessionStore:
             )
         )
 
-    def messages_since(
-        self, address: SessionAddress, cursor: SessionReadCursor | None
-    ) -> SessionReadBatch | None:
-        with self._database.read() as connection:
-            delta = _store_history.message_rows_since(connection, address, cursor)
-        return None if delta is None else _store_history.read_batch(delta)
-
-    def continuation(self, address: SessionAddress) -> SessionContinuationState | None:
-        with self._database.read() as connection:
-            return _store_continuation.continuation(connection, address)
-
-    def append_continuation(self, address: SessionAddress, records: Sequence[JsonObject]) -> None:
-        return self._execute_write(
-            lambda connection: _store_continuation.append_continuation(connection, address, records)
+    def recall_context(self, address: SessionAddress, message_id: str) -> builtins.list[JsonObject]:
+        """Return bounded conversation text beside a search anchor."""
+        return self._read(
+            lambda connection: _store_history.recall_context(connection, address, message_id)
         )
 
-    def clear_continuation(self, address: SessionAddress) -> None:
-        return self._execute_write(
-            lambda connection: _store_continuation.clear_continuation(connection, address)
-        )
-
-    def bookend_timestamps(self, address: SessionAddress) -> tuple[str, str] | None:
-        with self._database.read() as connection:
-            return _store_history.bookend_timestamps(connection, address)
-
-    def current_skill_activation_messages(self, address: SessionAddress) -> list[ChatMessage]:
-        return self._read_decoded(
-            lambda connection: _store_history.current_skill_activation_messages(connection, address)
-        )
+    # -- Session lists ------------------------------------------------------------------
 
     def list_addresses(
         self,
@@ -743,22 +912,24 @@ class SessionStore:
         include_all_scopes: bool = False,
         exclude_owner_managed: bool = False,
     ) -> list[SessionAddress]:
-        with self._database.read() as connection:
-            return _store_queries.list_addresses(
+        return self._read(
+            lambda connection: _store_queries.list_addresses(
                 connection,
                 project_id=project_id,
                 agent_id=agent_id,
                 include_all_scopes=include_all_scopes,
                 exclude_owner_managed=exclude_owner_managed,
             )
+        )
 
     def list_agent_ids(
         self, project_id: str | None, *, exclude_owner_managed: bool = False
     ) -> list[str]:
-        with self._database.read() as connection:
-            return _store_queries.list_agent_ids(
+        return self._read(
+            lambda connection: _store_queries.list_agent_ids(
                 connection, project_id, exclude_owner_managed=exclude_owner_managed
             )
+        )
 
     def list_summaries(
         self,
@@ -799,56 +970,51 @@ class SessionStore:
     def list_completion_activity(
         self, scopes: Sequence[tuple[str | None, str]]
     ) -> dict[tuple[str | None, str], list[JsonObject]]:
-        with self._database.read() as connection:
-            return _store_queries.list_completion_activity(connection, scopes)
-
-    def session_ids_with_messages(
-        self,
-        project_id: str | None,
-        agent_id: str,
-        roles: Sequence[str],
-        since: datetime | None,
-        until: datetime | None,
-    ) -> set[str]:
-        with self._database.read() as connection:
-            return _store_queries.session_ids_with_messages(
-                connection, project_id, agent_id, roles, since, until
-            )
+        return self._read(
+            lambda connection: _store_queries.list_completion_activity(connection, scopes)
+        )
 
     def list_history_revisions(
         self, project_id: str | None, agent_id: str
     ) -> list[SessionHistoryRevision]:
-        with self._database.read() as connection:
-            return _store_queries.list_history_revisions(connection, project_id, agent_id)
+        return self._read(
+            lambda connection: _store_queries.list_history_revisions(
+                connection, project_id, agent_id
+            )
+        )
 
     def list_history_versions(
         self, addresses: Sequence[SessionAddress]
     ) -> dict[SessionAddress, tuple[str, int]]:
-        with self._database.read() as connection:
-            return _store_queries.list_history_versions(connection, addresses)
+        return self._read(
+            lambda connection: _store_queries.list_history_versions(connection, addresses)
+        )
+
+    # -- Search -------------------------------------------------------------------------
 
     def fts_health(self) -> FtsHealth:
         """Return operator-facing FTS state with explicit canonical coverage checks."""
         try:
-            with self._database.read() as connection:
-                return _store_fts._fts_health_from_connection(connection, verify_coverage=True)
+            return self._read(
+                lambda connection: _store_fts._fts_health_from_connection(
+                    connection, verify_coverage=True
+                )
+            )
         except Exception as exc:
             return FtsHealth(state="unavailable", reason=f"FTS health check failed: {exc}")
 
     def is_fts_available(self) -> bool:
         """Return cheap marker-backed availability; rebuild verification owns coverage scans."""
         try:
-            with self._database.read() as connection:
-                return _store_fts._fts_health_from_connection(
-                    connection, verify_coverage=False
-                ).available
+            return self._read(
+                lambda connection: (
+                    _store_fts._fts_health_from_connection(
+                        connection, verify_coverage=False
+                    ).available
+                )
+            )
         except Exception:
             return False
-
-    def recall_context(self, address: SessionAddress, message_id: str) -> builtins.list[JsonObject]:
-        """Return bounded conversation text beside a search anchor."""
-        with self._database.read() as connection:
-            return _store_history.recall_context(connection, address, message_id)
 
     def search_messages(
         self,
@@ -868,8 +1034,8 @@ class SessionStore:
         use_fts: bool = True,
     ) -> SessionSearchResult:
         def select(*, use_fts: bool, fallback_reason: str | None = None) -> SessionSearchResult:
-            with self._database.read() as connection:
-                return _store_search.search(
+            return self._read(
+                lambda connection: _store_search.search(
                     connection,
                     query,
                     project_id=project_id,
@@ -886,92 +1052,17 @@ class SessionStore:
                     use_fts=use_fts,
                     fallback_reason=fallback_reason,
                 )
+            )
 
         if not use_fts:
             return select(use_fts=False)
         try:
             return select(use_fts=True)
         except sqlite3.Error as exc:
-            if "fts" in str(exc).lower() or "messages_fts" in str(exc).lower():
+            if any(marker in str(exc).lower() for marker in _FTS_ERROR_MARKERS):
                 error_message = str(exc)
                 with suppress(Exception):
                     self._execute_write(
                         lambda connection: _store_fts._detach_fts(connection, error_message)
                     )
             return select(use_fts=False, fallback_reason="fts_error")
-
-    def archive(self, address: SessionAddress) -> None:
-        return self._execute_write(lambda connection: _store_mutations.archive(connection, address))
-
-    def move(
-        self,
-        source: SessionAddress,
-        target: SessionAddress,
-        prepare_metadata: Callable[[JsonObject, int], None],
-    ) -> None:
-        return self._execute_write(
-            lambda connection: _store_mutations.move(connection, source, target, prepare_metadata)
-        )
-
-    def fork(
-        self,
-        source: SessionAddress,
-        target: SessionAddress,
-        prepare_metadata: Callable[[JsonObject, int], None],
-        *,
-        generate_id: bool = False,
-        allow_owner_managed_source: bool = False,
-    ) -> SessionAddress:
-        return self._execute_write(
-            lambda connection: _store_mutations.fork(
-                connection,
-                source,
-                target,
-                prepare_metadata,
-                generate_id=generate_id,
-                allow_owner_managed_source=allow_owner_managed_source,
-            )
-        )
-
-    def restore(self, address: SessionAddress) -> None:
-        return self._execute_write(lambda connection: _store_mutations.restore(connection, address))
-
-    def delete(self, address: SessionAddress) -> None:
-        return self._execute_write(lambda connection: _store_mutations.delete(connection, address))
-
-    def retarget_identity_agent(self, old_agent_id: str, new_agent_id: str) -> None:
-        return self._execute_write(
-            lambda connection: _store_mutations.retarget_identity_agent(
-                connection, old_agent_id, new_agent_id
-            )
-        )
-
-    def retarget_identity_agent_references(
-        self, old_agent_id: str, new_agent_id: str
-    ) -> tuple[SessionIdentityReferenceUpdate, ...]:
-        return self._execute_write(
-            lambda connection: _store_mutations.retarget_identity_agent_references(
-                connection, old_agent_id, new_agent_id
-            )
-        )
-
-    def restore_identity_agent_references(
-        self, updates: tuple[SessionIdentityReferenceUpdate, ...]
-    ) -> None:
-        self._execute_write(
-            lambda connection: _store_mutations.restore_identity_agent_references(
-                connection, updates
-            )
-        )
-
-    def archive_identity_agent_sessions(self, agent_id: str) -> None:
-        return self._execute_write(
-            lambda connection: _store_mutations.archive_identity_agent_sessions(
-                connection, agent_id
-            )
-        )
-
-    def archive_project_sessions(self, project_id: str) -> None:
-        return self._execute_write(
-            lambda connection: _store_mutations.archive_project_sessions(connection, project_id)
-        )

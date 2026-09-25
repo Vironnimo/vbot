@@ -31,7 +31,7 @@ from core.runs import (
     COMPACTION_COMPLETED_EVENT,
     COMPACTION_STARTED_EVENT,
 )
-from core.sessions import SessionAddress, active_session_messages
+from core.sessions import SessionAddress
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -234,15 +234,15 @@ class CompactionRunCoordinator:
         instruction: str | None,
     ) -> ChatMessage:
         """Execute one manual Compaction inside its canonical Run lifecycle."""
-        await self._host.sessions.record_run_start_async(session.address, run_id=run.id)
         session = session.for_run(run.id)
         request: Any | None = None
         # The divider appears at this emit; its visible duration ends when the
         # checkpoint is stamped below.
         compaction_started_perf = time.perf_counter()
         try:
-            raw_messages, snapshot_cursor = await self._load_compaction_snapshot(run, session)
-            messages = active_session_messages(raw_messages)
+            own_messages, messages, snapshot_cursor = await self._load_compaction_snapshot(
+                run, session
+            )
             context_usage = latest_session_context_usage(messages)
             if context_usage is not None:
                 run.terminal_payload_extras["context_usage"] = context_usage
@@ -348,9 +348,9 @@ class CompactionRunCoordinator:
             ):
                 raise CompactionError("Session context changed during Compaction. Please retry.")
             messages.append(checkpoint)
-            raw_messages.append(checkpoint)
+            own_messages.append(checkpoint)
             self._emit_compaction_completed(run, messages, checkpoint)
-            run.terminal_payload_extras["session_usage"] = aggregate_session_usage(raw_messages)
+            run.terminal_payload_extras["session_usage"] = aggregate_session_usage(own_messages)
             return checkpoint
         except asyncio.CancelledError:
             run.emit(COMPACTION_ABORTED_EVENT, {"reason": "cancelled"})
@@ -371,8 +371,8 @@ class CompactionRunCoordinator:
         self,
         run: Run,
         session: ChatSession,
-    ) -> tuple[list[ChatMessage], SessionReadCursor]:
-        """Load one complete Session snapshot without racing an append."""
+    ) -> tuple[list[ChatMessage], list[ChatMessage], SessionReadCursor]:
+        """Load the own audit and the current view in one snapshot, without racing an append."""
         session_address = SessionAddress(
             project_id=run.project_id, agent_id=run.agent_id, session_id=run.session_id
         )
@@ -380,7 +380,7 @@ class CompactionRunCoordinator:
             snapshot = await session.load_since_async()
         if snapshot is None:
             raise AssertionError("A full Session snapshot must always produce a cursor")
-        return list(snapshot.messages), snapshot.cursor
+        return list(snapshot.messages), list(snapshot.active_messages), snapshot.cursor
 
     async def maybe_auto_compact_state(
         self,
@@ -636,7 +636,9 @@ class CompactionRunCoordinator:
                         )
                 return current_state
             accounting.reset()
-            self._emit_compaction_completed(run, context.session_snapshot.messages, checkpoint)
+            self._emit_compaction_completed(
+                run, context.session_snapshot.active_messages, checkpoint
+            )
             checkpoint_usage = checkpoint.usage or {}
             _LOGGER.info(
                 "Auto-compaction completed (run=%s session=%s estimated_tokens_after=%d)",

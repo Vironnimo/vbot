@@ -16,6 +16,7 @@ from .runs_test_support import (
     Run,
     RunAdmission,
     RunAdmissionBlockedError,
+    RunCancelledError,
     RunKind,
     RunNotFoundError,
     RunStatus,
@@ -387,3 +388,105 @@ async def test_start_run_payload_omits_queue_item_id() -> None:
     assert len(started_events) == 1
     assert started_events[0].payload == {"status": RunStatus.RUNNING.value}
     assert "queue_item_id" not in started_events[0].payload
+
+
+class _BlockingAdmission:
+    """Session persistence whose admission waits for the test to release it."""
+
+    def __init__(self, failure: Exception | None = None) -> None:
+        self.release = asyncio.Event()
+        self.failure = failure
+        self.admitted: list[str] = []
+        self.finished: list[str] = []
+
+    async def start_run(self, run: Run) -> None:
+        await self.release.wait()
+        if self.failure is not None:
+            raise self.failure
+        self.admitted.append(run.id)
+
+    async def finish_run(self, run: Run, status: str, payload: dict[str, Any]) -> dict[str, Any]:
+        del payload
+        self.finished.append(status)
+        return {}
+
+
+async def _settle() -> None:
+    for _ in range(5):
+        await asyncio.sleep(0)
+
+
+async def test_wait_admitted_returns_only_after_the_admission_commits() -> None:
+    persistence = _BlockingAdmission()
+    manager = ChatRunManager(persistence=persistence)
+    executed: list[str] = []
+
+    async def execute(run: Run) -> str:
+        executed.append(run.id)
+        return "done"
+
+    run = await manager.start(
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"), execute
+    )
+    waiter = asyncio.create_task(run.wait_admitted())
+    await _settle()
+    assert not waiter.done()
+    assert executed == []
+
+    persistence.release.set()
+    await waiter
+    assert persistence.admitted == [run.id]
+    assert await run.wait() == "done"
+    assert executed == [run.id]
+    assert persistence.finished == [RunStatus.COMPLETED.value]
+    await asyncio.wait_for(run.wait_admitted(), timeout=1)
+    await manager.aclose()
+
+
+async def test_wait_admitted_raises_the_error_of_a_failed_admission() -> None:
+    persistence = _BlockingAdmission(failure=RuntimeError("admission rejected"))
+    manager = ChatRunManager(persistence=persistence)
+    executed: list[str] = []
+
+    async def execute(run: Run) -> str:
+        executed.append(run.id)
+        return "done"
+
+    run = await manager.start(
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"), execute
+    )
+    waiter = asyncio.create_task(run.wait_admitted())
+    await _settle()
+    persistence.release.set()
+    with pytest.raises(RuntimeError, match="admission rejected"):
+        await waiter
+    assert run.status == RunStatus.FAILED
+    assert executed == []
+    # An unadmitted Run has no durable row to finish.
+    assert persistence.finished == []
+    await manager.aclose()
+
+
+async def test_wait_admitted_raises_for_a_run_that_ended_unadmitted() -> None:
+    run = Run(run_id="run-one", agent_id="coder", session_id="session-one")
+    run.mark_cancelled()
+    with pytest.raises(RunCancelledError, match="run ended before admission: run-one"):
+        await run.wait_admitted()
+
+
+async def test_wait_admitted_returns_at_once_without_session_persistence() -> None:
+    manager = ChatRunManager()
+    release = asyncio.Event()
+
+    async def execute(_run: Run) -> str:
+        await release.wait()
+        return "done"
+
+    run = await manager.start(
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"), execute
+    )
+    await asyncio.wait_for(run.wait_admitted(), timeout=1)
+    assert run.status == RunStatus.RUNNING
+    release.set()
+    assert await run.wait() == "done"
+    await manager.aclose()

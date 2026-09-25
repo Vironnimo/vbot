@@ -509,12 +509,9 @@ class TemporaryExecutionGroups:
                     input_id=input_id,
                 )
                 try:
-                    await self._sessions.record_run_owner_async(
-                        binding.address,
-                        run_id=run.id,
-                        owner=owner,
-                        input_id=input_id,
-                    )
+                    # The owner learns the Run only once its admission, which
+                    # records this owner and input, has committed.
+                    await run.wait_admitted()
                 except BaseException:
                     await self._manager.cancel(run.id, reason="extension")
                     raise

@@ -19,6 +19,7 @@ from core.automation.bootstrap import (
 from core.chat import ChatMessage
 from core.runs import RunStatus
 from core.sessions import ChatSession, ChatSessionManager
+from tests.core.sessions.history_fixtures import complete_run
 
 pytestmark = pytest.mark.usefixtures("current_format_data_directory")
 
@@ -278,7 +279,8 @@ async def test_restart_reconciles_terminal_run_before_retry(
     sessions = ChatSessionManager(tmp_path)
     session = sessions.create("main", session_id="bootstrap-session")
     session = session.start_run("run-before-crash")
-    session.append(
+    complete_run(
+        session,
         ChatMessage.run_summary(
             run_id="run-before-crash",
             status=run_status,
@@ -288,7 +290,7 @@ async def test_restart_reconciles_terminal_run_before_retry(
                 "completed_at": "2026-08-02T12:00:01+00:00",
                 "duration_ms": 1000,
             },
-        )
+        ),
     )
     jobs_path = tmp_path / "bootstrap" / "jobs.json"
     payload = json.loads(jobs_path.read_text(encoding="utf-8"))

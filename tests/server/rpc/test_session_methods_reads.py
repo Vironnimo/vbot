@@ -8,7 +8,8 @@ from typing import Any
 import pytest
 
 from core.chat import ChatMessage
-from core.sessions import FORK_SOURCE_META_KEY, SESSION_FORK_ALWAYS_STRIP_META_KEYS, SessionAddress
+from core.sessions import FORK_SOURCE_META_KEY, SessionAddress
+from core.utils.timestamps import canonical_timestamp
 from server.rpc.methods import dispatch_rpc
 from tests.server.rpc_test_support import StubAdapter, make_state
 
@@ -27,7 +28,7 @@ async def test_session_get_reads_one_summary_by_exact_address(tmp_path: Path) ->
     source = sessions.create("coder", session_id="source")
     source.append(ChatMessage.user("hello"))
     sessions.set_title(source.address, "Release planning")
-    fork = await sessions.fork(source.address, strip_meta_keys=SESSION_FORK_ALWAYS_STRIP_META_KEYS)
+    fork = await sessions.fork(source.address)
     sessions.record_terminal_run(fork.address, "run-one", "completed", "2026-09-20T10:00:00Z")
 
     parent = await _rpc(state, "session.get", {"agent_id": "coder", "session_id": "source"})
@@ -111,3 +112,60 @@ async def test_activity_list_returns_only_completed_sessions_per_address(tmp_pat
     assert rows["read"]["has_unread_completion"] is False
     assert rows["read"]["latest_completion_run_id"] == "run-read"
     assert rows["unread"]["unread_run_status"] == "failed"
+
+
+@pytest.mark.asyncio
+async def test_session_list_pages_with_a_last_activity_cursor(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    sessions = state.runtime.chat_sessions
+    for session_id in ("first", "second", "third"):
+        sessions.create("coder", session_id=session_id).append(ChatMessage.user(session_id))
+
+    first_page = await _rpc(state, "session.list", {"agent_id": "coder", "limit": 2})
+    cursor = first_page["next_cursor"]
+    second_page = await _rpc(
+        state, "session.list", {"agent_id": "coder", "limit": 2, "cursor": cursor}
+    )
+
+    assert set(cursor) == {"last_activity_at", "agent_id", "session_id"}
+    assert canonical_timestamp(cursor["last_activity_at"]) == cursor["last_activity_at"]
+    assert cursor["agent_id"] == "coder"
+    assert cursor["session_id"] == first_page["sessions"][-1]["id"]
+    listed = [row["id"] for row in (*first_page["sessions"], *second_page["sessions"])]
+    # The cursor resumes after the first page: every Session is listed exactly once.
+    assert len(listed) == len(set(listed)) == first_page["total_count"]
+    assert {"first", "second", "third"} <= set(listed)
+    assert second_page["next_cursor"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "last_activity_at",
+    ["2026-09-20T10:00:00+00:00", "2026-09-20T10:00:00Z", "yesterday", 2460000.5, None],
+)
+async def test_session_list_rejects_a_non_canonical_cursor_timestamp(
+    tmp_path: Path, last_activity_at: Any
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    cursor = {"last_activity_at": last_activity_at, "agent_id": "coder", "session_id": "one"}
+
+    response = await dispatch_rpc(
+        state, {"method": "session.list", "params": {"agent_id": "coder", "cursor": cursor}}
+    )
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == "invalid_request"
+    assert "last_activity_at" in response["error"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_session_list_rejects_the_retired_active_sort_cursor(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    cursor = {"active_sort": 2460000.5, "agent_id": "coder", "session_id": "one"}
+
+    response = await dispatch_rpc(
+        state, {"method": "session.list", "params": {"agent_id": "coder", "cursor": cursor}}
+    )
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == "invalid_request"

@@ -8,6 +8,7 @@ from typing import Any
 from core.chat import ChatMessage
 from core.chat.messages import ToolCall
 from core.model_tasks import EmbeddingResult, EmbeddingSpaceIdentity
+from core.runs import RunKind
 from core.sessions import ChatSessionManager
 from core.storage.layout import initialize_data_directory
 
@@ -180,6 +181,16 @@ def recall_matrix() -> list[dict[str, Any]]:
 def seed_sessions(root: Path) -> ChatSessionManager:
     initialize_data_directory(root)
     sessions = ChatSessionManager(root)
+    try:
+        _seed(sessions)
+    except BaseException:
+        # An open store would keep the fixture directory locked on Windows.
+        sessions.close()
+        raise
+    return sessions
+
+
+def _seed(sessions: ChatSessionManager) -> None:
     stamp = datetime(2026, 7, 12, 10, tzinfo=UTC)
     data = {
         "session-retention": [
@@ -254,9 +265,8 @@ def seed_sessions(root: Path) -> ChatSessionManager:
     for name, messages in data.items():
         session = sessions.create("coder", session_id=name)
         session.append_many(messages)
-        sessions.set_metadata(
-            session.address, {"title": name.removeprefix("session-"), "run_kinds": ["user"]}
-        )
+        sessions.set_title(session.address, name.removeprefix("session-"))
+        sessions.record_run_kind(session.address, RunKind.USER)
     sessions.create("coder", session_id="session-retention", project_id="other-project").append(
         ChatMessage.user("Aurora: 999 Tage")
     )
@@ -279,15 +289,14 @@ def seed_sessions(root: Path) -> ChatSessionManager:
             timestamp=stamp,
         )
     )
-    sessions.set_metadata(sub.address, {"run_kinds": ["subagent"]})
+    sessions.record_run_kind(sub.address, RunKind.SUBAGENT)
     old = sessions.create("reviewer", session_id="session-old")
     old.append(
         ChatMessage.assistant(
             model="fixture", content="Aurora-Pruefung: Code 9999.", timestamp=stamp.replace(month=6)
         )
     )
-    sessions.set_metadata(old.address, {"run_kinds": ["subagent"]})
-    return sessions
+    sessions.record_run_kind(old.address, RunKind.SUBAGENT)
 
 
 class FixtureEmbeddings:

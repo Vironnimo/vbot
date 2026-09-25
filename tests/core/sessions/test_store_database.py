@@ -60,7 +60,7 @@ def test_the_session_database_is_a_canonical_generation_one_database(tmp_path: P
     assert spec.snapshot_facts is not None
     assert set(spec.snapshot_facts.queries) == {
         "session_count",
-        "message_count",
+        "entry_count",
         "latest_history_revision",
         "latest_state_revision",
     }
@@ -133,7 +133,12 @@ def test_the_store_opens_after_an_additive_schema_change(
 
     store = SessionStore(tmp_path / "sessions.db")
     try:
-        assert store.state(_address("session"))["reconcile_probe"] == 0
+        probe = store._read(
+            lambda connection: connection.execute(
+                "SELECT reconcile_probe FROM sessions WHERE session_id = 'session'"
+            ).fetchone()
+        )
+        assert tuple(probe) == (0,)
     finally:
         store.close()
 
@@ -161,7 +166,12 @@ def test_a_populated_database_keeps_every_row_when_tables_are_added(tmp_path: Pa
         store.replace_metadata(
             address, {"title": "Retained title", "custom": {"unicode": "Gruesse"}}
         )
-        store.replace_activity(address, {"run_id": "retained-run", "state": "interrupted"})
+        store.record_terminal_run(
+            address,
+            run_id="retained-run",
+            status="interrupted",
+            timestamp="2026-05-01T12:00:00.000000Z",
+        )
         store.append_messages(
             address,
             [
@@ -258,7 +268,7 @@ def test_a_damaged_database_is_restored_from_the_data_snapshot(tmp_path: Path) -
     assert snapshot is not None
     manifest = json.loads((snapshot / SNAPSHOT_MANIFEST_NAME).read_text(encoding="utf-8"))
     assert manifest["members"]["sessions"]["facts"]["session_count"] == 1
-    assert manifest["members"]["sessions"]["facts"]["message_count"] == 1
+    assert manifest["members"]["sessions"]["facts"]["entry_count"] == 1
     (tmp_path / "sessions.db").write_bytes(b"X" * 8192)
 
     manager = ChatSessionManager(tmp_path)
@@ -400,7 +410,7 @@ def test_online_snapshot_completes_while_runs_keep_committing(
     # A standalone rollback-journal file: verification leaves no WAL sidecars behind.
     assert {path.name for path in published.iterdir()} == {"sessions.db", SNAPSHOT_MANIFEST_NAME}
     manifest = json.loads((published / SNAPSHOT_MANIFEST_NAME).read_text(encoding="utf-8"))
-    assert started <= manifest["members"]["sessions"]["facts"]["message_count"] <= commits
+    assert started <= manifest["members"]["sessions"]["facts"]["entry_count"] <= commits
 
 
 def test_list_history_versions_returns_live_sessions_in_one_call(tmp_path: Path) -> None:

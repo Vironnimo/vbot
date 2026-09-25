@@ -12,9 +12,6 @@ import pytest
 from core.chat import (
     ChatMessage,
 )
-from core.chat._request_builder import (
-    SEEN_SKILLS_META_KEY,
-)
 from core.chat._run_state import (
     RequestBuildInputs,
 )
@@ -25,7 +22,7 @@ from core.compaction.compaction import (
     COMPACTION_REFERENCE_PREFIX,
 )
 from core.prompts.pinned_context import (
-    PINNED_SKILL_CATALOG_META_KEY,
+    PINNED_SKILL_CATALOG_SLOT,
     pinned_skill_catalog,
 )
 from core.runs import (
@@ -330,11 +327,13 @@ async def test_manual_compaction_refreshes_skill_catalog_snapshot(tmp_path: Path
 
     reply = await loop.compact_session("coder", "session-one")
 
-    metadata = runtime.chat_sessions.get_metadata(session_address("coder", "session-one"))
+    address = session_address("coder", "session-one")
+    catalog_pin = runtime.chat_sessions.prompt_pin(address, PINNED_SKILL_CATALOG_SLOT)
     assert reply == "Context compacted."
     assert runtime.refresh_skills_for_calls == [(None, "coder")]
-    assert metadata[PINNED_SKILL_CATALOG_META_KEY]["catalog_text"] == "catalog:2"
-    assert metadata[SEEN_SKILLS_META_KEY] == ["one", "two"]
+    assert catalog_pin is not None
+    assert catalog_pin["catalog_text"] == "catalog:2"
+    assert runtime.chat_sessions.seen_skills(address) == frozenset({"one", "two"})
 
 
 @pytest.mark.asyncio

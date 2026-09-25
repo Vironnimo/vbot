@@ -4,26 +4,30 @@ from __future__ import annotations
 
 import threading
 from collections import deque
-from collections.abc import Callable, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from core.chat.errors import ChatSessionError
-from core.sessions._metadata import _decode_chat_history_cursor, _new_prompt_cache_affinity_id
+from core.sessions._metadata import _decode_chat_history_cursor
 from core.sessions._types import (
-    PROMPT_CACHE_AFFINITY_META_KEY,
     JsonObject,
+    PromptEpoch,
+    SeenSkillsUpdate,
     SessionAddress,
     SessionChatHistorySnapshot,
     SessionContinuationState,
+    SessionEditResult,
     SessionHistoryCheckpoint,
     SessionHistoryRecord,
     SessionHistorySectionStats,
     SessionHistorySnapshot,
     SessionReadBatch,
     SessionReadCursor,
+    SessionRunAdmission,
     SessionRunResult,
     SessionStatusSnapshot,
+    ToolResultFacts,
 )
 from core.sessions.history import (
     _skill_context_note_content,
@@ -31,6 +35,7 @@ from core.sessions.history import (
     skill_activation_contents,
 )
 from core.sessions.store import SessionStore
+from core.utils.timestamps import utc_now_timestamp
 
 if TYPE_CHECKING:
     from core.chat.messages import ChatMessage
@@ -59,8 +64,11 @@ class ChatSession:
         self._buffers = _SessionBuffers()
 
     def start_run(self, run_id: str) -> ChatSession:
-        """Admit an execution and return its explicitly bound Session writer."""
-        self._store.record_run_start(self.address, run_id=run_id)
+        """Admit a plain User Run now and return its explicitly bound Session writer."""
+        self._store.admit_run(
+            self.address,
+            SessionRunAdmission(run_id=run_id, run_kind="user", started_at=utc_now_timestamp()),
+        )
         return self.for_run(run_id)
 
     def for_run(self, run_id: str) -> ChatSession:
@@ -80,9 +88,10 @@ class ChatSession:
         self,
         messages: list[ChatMessage],
         *,
+        tool_results: Mapping[str, ToolResultFacts] | None = None,
+        seen_skills: SeenSkillsUpdate | None = None,
         continuation_records: Sequence[JsonObject] = (),
         since: SessionReadCursor | None = None,
-        metadata_mutation: Callable[[JsonObject], None] | None = None,
     ) -> SessionReadBatch | None:
         """Append *messages*; see ``SessionStore.append_messages`` for the options."""
         delta = self._store.append_messages(
@@ -90,75 +99,97 @@ class ChatSession:
             messages,
             run_id=self.run_id,
             assistant_message_id=self.assistant_message_id,
+            tool_results=tool_results,
+            seen_skills=seen_skills,
             continuation_records=continuation_records,
             since=since,
-            metadata_mutation=metadata_mutation,
         )
         self._appended(messages)
         return delta
 
-    def commit_compaction_checkpoint(
+    def commit_compaction(
         self,
         checkpoint: ChatMessage,
         *,
         since: SessionReadCursor,
-        metadata_mutation: Callable[[JsonObject], None] | None = None,
+        epoch: PromptEpoch,
     ) -> tuple[SessionReadBatch, str] | None:
-        """Append a Compaction *checkpoint* only while *since* is still current.
+        """Commit a Compaction *checkpoint* and its prompt epoch while *since* is current.
 
-        One transaction verifies the cursor, appends the checkpoint, applies
-        *metadata_mutation* and rotates the prompt-cache affinity id, because a
-        committed checkpoint starts a new prompt lineage. Returns the records
-        after *since* with the new affinity id, or ``None`` (nothing written)
-        when another writer advanced the Session first.
+        One transaction verifies the cursor, appends the checkpoint, replaces
+        the prompt epoch's pins and seen Skills, and starts a new prompt-cache
+        affinity. Returns the entries after *since* with that affinity id, or
+        ``None`` (nothing written) when another writer advanced the Session first.
         """
-        affinity_id = _new_prompt_cache_affinity_id()
-
-        def mutate(metadata: JsonObject) -> None:
-            if metadata_mutation is not None:
-                metadata_mutation(metadata)
-            metadata[PROMPT_CACHE_AFFINITY_META_KEY] = affinity_id
-
-        delta = self._store.append_messages(
-            self.address,
-            [checkpoint],
-            run_id=self.run_id,
-            assistant_message_id=self.assistant_message_id,
-            since=since,
-            metadata_mutation=mutate,
-            require_current=True,
+        committed = self._store.commit_compaction(
+            self.address, checkpoint, since=since, epoch=epoch, run_id=self.run_id
         )
-        if delta is None:
-            return None
-        self._appended([checkpoint])
-        return delta, affinity_id
+        if committed is not None:
+            self._appended([checkpoint])
+        return committed
 
-    async def commit_compaction_checkpoint_async(
+    async def commit_compaction_async(
         self,
         checkpoint: ChatMessage,
         *,
         since: SessionReadCursor,
-        metadata_mutation: Callable[[JsonObject], None] | None = None,
+        epoch: PromptEpoch,
     ) -> tuple[SessionReadBatch, str] | None:
         return await self._store.run_async(
-            lambda: self.commit_compaction_checkpoint(
-                checkpoint, since=since, metadata_mutation=metadata_mutation
+            lambda: self.commit_compaction(checkpoint, since=since, epoch=epoch)
+        )
+
+    def apply_edit(
+        self,
+        target_message_id: str,
+        messages: list[ChatMessage],
+        *,
+        seen_skills: SeenSkillsUpdate | None = None,
+        continuation_records: Sequence[JsonObject] = (),
+    ) -> SessionEditResult:
+        """Replace history from *target_message_id* on with *messages*, in one transaction.
+
+        The Continuation restarts from *continuation_records* and a new
+        prompt-cache affinity starts; see ``SessionStore.apply_edit``.
+        """
+        result = self._store.apply_edit(
+            self.address,
+            target_message_id=target_message_id,
+            messages=messages,
+            run_id=self.run_id,
+            seen_skills=seen_skills,
+            continuation_records=continuation_records,
+        )
+        # The edit deactivated the tail it replaced; reload the Skill cache on next use.
+        with self._buffers.lock:
+            self._buffers.activated_skill_contents = {}
+            self._buffers.activated_skill_cache_loaded = False
+        return result
+
+    async def apply_edit_async(
+        self,
+        target_message_id: str,
+        messages: list[ChatMessage],
+        *,
+        seen_skills: SeenSkillsUpdate | None = None,
+        continuation_records: Sequence[JsonObject] = (),
+    ) -> SessionEditResult:
+        return await self._store.run_async(
+            lambda: self.apply_edit(
+                target_message_id,
+                list(messages),
+                seen_skills=seen_skills,
+                continuation_records=list(continuation_records),
             )
         )
 
     def _appended(self, messages: list[ChatMessage]) -> None:
-        roles = {message.role for message in messages}
-        if "compaction_checkpoint" in roles:
-            # The appended checkpoint is now the newest history row, so only
+        if any(message.role == "compaction_checkpoint" for message in messages):
+            # The appended checkpoint is now the newest history entry, so only
             # activations later in this same batch survive it.
             with self._buffers.lock:
                 self._buffers.activated_skill_contents = current_skill_activation_contents(messages)
                 self._buffers.activated_skill_cache_loaded = True
-        elif "history_edit" in roles:
-            # An edit deactivates the tail it replaced; reload on next use.
-            with self._buffers.lock:
-                self._buffers.activated_skill_contents = {}
-                self._buffers.activated_skill_cache_loaded = False
 
     async def append_async(self, message: ChatMessage) -> None:
         await self._store.run_async(self.append, message)
@@ -167,18 +198,20 @@ class ChatSession:
         self,
         messages: list[ChatMessage],
         *,
+        tool_results: Mapping[str, ToolResultFacts] | None = None,
+        seen_skills: SeenSkillsUpdate | None = None,
         continuation_records: Sequence[JsonObject] = (),
         since: SessionReadCursor | None = None,
-        metadata_mutation: Callable[[JsonObject], None] | None = None,
     ) -> SessionReadBatch | None:
-        if not messages:
+        if not messages and seen_skills is None:
             return None
         return await self._store.run_async(
             lambda: self.append_many(
                 list(messages),
+                tool_results=tool_results,
+                seen_skills=seen_skills,
                 continuation_records=list(continuation_records),
                 since=since,
-                metadata_mutation=metadata_mutation,
             )
         )
 
@@ -284,13 +317,12 @@ class ChatSession:
             self._buffers.activated_skill_cache_loaded = True
         return dict(current)
 
-    def bookend_timestamps(self) -> tuple[str, str] | None:
-        return self._store.bookend_timestamps(self.address)
-
     def load(self) -> list[ChatMessage]:
+        """The Session's own audit: every entry it wrote, superseded ones included."""
         return self._store.messages(self.address)
 
     def load_active(self) -> list[ChatMessage]:
+        """The Session's current view, inherited history included."""
         return self._store.active_messages(self.address)
 
     async def load_active_async(self) -> list[ChatMessage]:

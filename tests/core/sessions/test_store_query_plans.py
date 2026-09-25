@@ -1,17 +1,18 @@
-"""Planner guards: Session-scoped reads reach each history_records branch by index.
+"""Planner guards: every Session read reaches canonical rows through an index.
 
-``history_records`` is a UNION ALL view. SQLite pushes a Session filter into
-every branch only when the filter names view columns and constants or
-uncorrelated subqueries; a join on ``sessions`` scans each branch whole. These
-tests capture the statements a read issues and fail on plans that scan a
-branch table, scan the messages branch, or build an automatic index.
+A read of one Session's history walks its view ranges (own entries plus
+inherited lineage segments) by ``(session_key, seq)``; search pushes its
+eligible Sessions into both the own and the inherited branch. These tests
+capture the statements a read issues and fail on a plan that scans a canonical
+table or builds an automatic index.
 """
 
 from __future__ import annotations
 
+import asyncio
 import re
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from typing import Any, cast
 
 import pytest
@@ -23,13 +24,16 @@ from core.sessions import (
     _store_owned,
     _store_queries,
     _store_search,
+    _store_timeline,
     _store_values,
 )
-from core.sessions._types import SessionAddress, SessionReadCursor
+from core.sessions._types import SessionAddress, SessionReadCursor, SessionRunAdmission
 from core.sessions.errors import SessionNotFoundError
+from core.utils.timestamps import utc_now_timestamp
+from tests.core.sessions.history_fixtures import complete_run
 from tests.core.sessions.sessions_test_support import manager as manager
 
-_BRANCH_NODES = {"COMPOUND QUERY", "LEFT-MOST SUBQUERY", "UNION ALL"}
+_ALIAS = re.compile(r"\b(?:FROM|JOIN)\s+([A-Za-z_]\w*)(?:\s+AS\s+([A-Za-z_]\w*))?", re.IGNORECASE)
 
 
 class _RecordingConnection:
@@ -56,34 +60,50 @@ def _recording(connection: sqlite3.Connection) -> tuple[sqlite3.Connection, _Sta
     return cast(sqlite3.Connection, recorder), recorder.statements
 
 
+def _plan(connection: sqlite3.Connection, sql: str, params: tuple[Any, ...]) -> list[str]:
+    return [str(row[3]) for row in connection.execute("EXPLAIN QUERY PLAN " + sql, params)]
+
+
 def _violations(connection: sqlite3.Connection, sql: str, params: tuple[Any, ...]) -> list[str]:
-    nodes = {
-        int(row[0]): (int(row[1]), str(row[3]))
-        for row in connection.execute("EXPLAIN QUERY PLAN " + sql, params)
+    """Plan steps that scan a canonical table (by name or alias) or build an index."""
+    tables = {
+        str(row[0])
+        for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND sql NOT LIKE '%VIRTUAL%'"
+        )
     }
-
-    def inside_view_branch(node: int) -> bool:
-        parent = nodes[node][0]
-        while parent in nodes:
-            if nodes[parent][1] in _BRANCH_NODES:
-                return True
-            parent = nodes[parent][0]
-        return False
-
+    scanned_names = set(tables)
+    for table, alias in _ALIAS.findall(sql):
+        if table in tables and alias:
+            scanned_names.add(alias)
     found = []
-    for node, (_parent, detail) in nodes.items():
-        if (
-            "AUTOMATIC" in detail
-            or re.match(r"SCAN (c|e|r|t)\b", detail)
-            or (re.match(r"SCAN m\b", detail) and inside_view_branch(node))
+    for detail in _plan(connection, sql, params):
+        match = re.match(r"SCAN (\w+)", detail)
+        if "AUTOMATIC" in detail or (
+            match and match.group(1) in scanned_names and "VIRTUAL TABLE" not in detail
         ):
             found.append(detail)
     return found
 
 
+def _assert_indexed(connection: sqlite3.Connection, statements: _Statements) -> None:
+    assert statements
+    for sql, params in statements:
+        assert _violations(connection, sql, params) == [], sql
+
+
+def _plans(connection: sqlite3.Connection, statements: _Statements) -> list[str]:
+    return [detail for sql, params in statements for detail in _plan(connection, sql, params)]
+
+
 @pytest.fixture
 def history(manager) -> Iterator[tuple[SessionAddress, str, sqlite3.Connection]]:
-    """Two Sessions whose history fills every view branch."""
+    """Two Sessions and a fork whose history fills every view range kind.
+
+    Each Session has a completed Run with a Tool call, a Compaction checkpoint
+    and an edited draft; the fork of "two" inherits that view and adds its own
+    entry. Returns the fork's address and the id of an inherited answer.
+    """
     anchor = ""
     for session_id in ("one", "two"):
         session = manager.create("agent", session_id=session_id, project_id="project")
@@ -99,7 +119,8 @@ def history(manager) -> Iterator[tuple[SessionAddress, str, sqlite3.Connection]]
         run.append(ChatMessage.tool(tool_call_id="call", name="read", content="needle result"))
         answer = ChatMessage.assistant(model="test", content="needle answer")
         run.append(answer)
-        run.append(
+        complete_run(
+            run,
             ChatMessage.run_summary(
                 run_id=f"run-{session_id}",
                 status="completed",
@@ -109,7 +130,7 @@ def history(manager) -> Iterator[tuple[SessionAddress, str, sqlite3.Connection]]
                     "completed_at": "2026-09-19T10:00:01Z",
                     "duration_ms": 1000,
                 },
-            )
+            ),
         )
         edited = ChatMessage.user("draft")
         session.append_many(
@@ -118,29 +139,30 @@ def history(manager) -> Iterator[tuple[SessionAddress, str, sqlite3.Connection]]
                     summary="needle summary", projection=[], compacted_token_count=1
                 ),
                 edited,
-                ChatMessage.history_edit(edited.id),
-                ChatMessage.user("needle follow-up"),
             ]
         )
+        session.apply_edit(edited.id, [ChatMessage.user("needle follow-up")])
         anchor = answer.id
+    fork = asyncio.run(
+        manager.fork(
+            SessionAddress("project", "agent", "two"),
+            target_project_id="project",
+            title="needle fork",
+        )
+    )
+    fork.append(ChatMessage.user("needle fork question"))
     connection = sqlite3.connect(manager._store.path)
     connection.row_factory = sqlite3.Row
     try:
-        yield SessionAddress("project", "agent", "two"), anchor, connection
+        yield fork.address, anchor, connection
     finally:
         connection.close()
-
-
-def _assert_indexed(connection: sqlite3.Connection, statements: _Statements) -> None:
-    assert statements
-    for sql, params in statements:
-        assert _violations(connection, sql, params) == [], sql
 
 
 @pytest.mark.parametrize(
     "scope",
     [
-        {"agent_id": "agent", "session_id": "two"},
+        {"agent_id": "agent", "session_id": "fork"},
         {"agent_id": "agent"},
         {"agent_id": None},
     ],
@@ -157,10 +179,12 @@ def _assert_indexed(connection: sqlite3.Connection, statements: _Statements) -> 
 )
 @pytest.mark.parametrize("use_fts", [True, False])
 @pytest.mark.parametrize("order", ["relevance", "newest", "oldest"])
-def test_scoped_search_pushes_the_session_scope_into_every_branch(
+def test_scoped_search_pushes_the_eligible_sessions_into_every_branch(
     history, scope, filters, use_fts, order
 ) -> None:
-    _address, _anchor, connection = history
+    address, _anchor, connection = history
+    if scope.get("session_id") == "fork":
+        scope = {**scope, "session_id": address.session_id}
     for query in ("needle", "ne", "absent"):
         recorder, statements = _recording(connection)
         result = _store_search.search(
@@ -177,40 +201,92 @@ def test_scoped_search_pushes_the_session_scope_into_every_branch(
         _assert_indexed(connection, statements)
 
 
-def test_time_filtered_search_reads_messages_through_the_instant_index(history) -> None:
-    _address, _anchor, connection = history
-    recorder, statements = _recording(connection)
-    _store_search.search(
-        recorder, "needle", project_id="project", agent_id="agent", since="2026-01-01T00:00:00Z"
+def test_inherited_search_hits_are_reported_once_for_the_eligible_fork(history) -> None:
+    address, anchor, connection = history
+    scoped = _store_search.search(
+        connection,
+        "needle answer",
+        project_id="project",
+        agent_id="agent",
+        session_id=address.session_id,
+        match_mode="phrase",
     )
-    plans = [
-        str(row[3])
-        for sql, params in statements
-        for row in connection.execute("EXPLAIN QUERY PLAN " + sql, params)
-    ]
-    assert any("messages_by_session_instant (session_key=? AND <expr>>?)" in plan for plan in plans)
+    assert [(hit.message_id, hit.address) for hit in scoped.hits] == [(anchor, address)]
+    everywhere = _store_search.search(
+        connection, "needle answer", project_id="project", agent_id="agent", match_mode="phrase"
+    )
+    # The origin still shows its own entry, so the fork never duplicates it.
+    assert sorted(hit.address.session_id for hit in everywhere.hits) == ["one", "two"]
 
 
-def test_recall_context_reads_its_anchor_by_session_index(history) -> None:
+def _session_reads(address: SessionAddress, anchor: str) -> dict[str, Callable[[Any], Any]]:
+    def snapshot(recorder: Any, *, complete: bool) -> Any:
+        return _store_timeline.chat_history_snapshot(
+            recorder,
+            address,
+            limit=3,
+            before_message_id=None,
+            before_sequence=None,
+            expected_generation_id=None,
+            excluded_roles=("note", "history_edit"),
+            complete_run_segment=complete,
+            background_tool_names=("read",),
+            background_note_marker="needle",
+        )()
+
+    return {
+        "recall_context": lambda r: _store_history.recall_context(r, address, anchor),
+        "rows_since_start": lambda r: _store_history.message_rows_since(r, address, None),
+        "snapshot_complete": lambda r: snapshot(r, complete=True),
+        "snapshot_bounded": lambda r: snapshot(r, complete=False),
+        "status": lambda r: _store_history.status_snapshot(r, address)(),
+        "active_user_count": lambda r: _store_history.active_user_message_count(
+            r, address, limit=2
+        ),
+        "latest_note": lambda r: _store_history.latest_note(r, address, content_prefix="x"),
+        "skill_activations": lambda r: _store_history.current_skill_activation_messages(r, address),
+        "history_snapshot": lambda r: _store_history.history_snapshot(r, address),
+        "run_result": lambda r: _store_history.run_result(r, address, run_id="run-two")(),
+        "run_messages": lambda r: _store_history.run_messages(r, address, "run-two"),
+        "descriptor_sources": lambda r: _store_queries.descriptor_sources(r, [address])(),
+    }
+
+
+@pytest.mark.parametrize("read", sorted(_session_reads(SessionAddress(None, "a", "b"), "")))
+def test_every_session_read_over_a_fork_is_indexed(history, read) -> None:
     address, anchor, connection = history
     recorder, statements = _recording(connection)
-    context = _store_history.recall_context(recorder, address, anchor)
-    assert [item["role"] for item in context] == ["user"]
+    _session_reads(address, anchor)[read](recorder)
     _assert_indexed(connection, statements)
 
 
+def test_fork_reads_see_the_inherited_view(history) -> None:
+    address, anchor, connection = history
+    context = _store_history.recall_context(connection, address, anchor)
+    assert [item["role"] for item in context] == ["user"]
+    snapshot = _store_timeline.chat_history_snapshot(
+        connection,
+        address,
+        limit=None,
+        before_message_id=None,
+        before_sequence=None,
+        expected_generation_id=None,
+        excluded_roles=("note", "history_edit"),
+        complete_run_segment=True,
+    )()
+    assert [(run["run_id"], run["complete"]) for run in snapshot.runs] == [("run-two", True)]
+    run = _store_history.run_result(connection, address, run_id="run-two")()
+    assert run is not None and run[0] is not None and run[0].id == anchor
+
+
 def test_tool_result_probe_reads_one_call_by_its_public_id(history) -> None:
-    address, _anchor, connection = history
+    _address, _anchor, connection = history
+    address = SessionAddress("project", "agent", "two")
     recorder, statements = _recording(connection)
     assert _store_history.tool_result_persisted(recorder, address, "call") is True
     assert _store_history.tool_result_persisted(recorder, address, "missing") is False
     _assert_indexed(connection, statements)
-    details = [
-        str(plan[3])
-        for sql, params in statements
-        for plan in connection.execute("EXPLAIN QUERY PLAN " + sql, params)
-    ]
-    assert any("tool_calls_by_public_id" in detail for detail in details), details
+    assert any("tool_calls_by_call_id" in detail for detail in _plans(connection, statements))
 
 
 def test_existing_addresses_probe_the_live_address_index_in_one_statement(history) -> None:
@@ -222,12 +298,7 @@ def test_existing_addresses_probe_the_live_address_index_in_one_statement(histor
     assert found == {address, other}
     assert len(statements) == 1
     _assert_indexed(connection, statements)
-    details = [
-        str(plan[3])
-        for sql, params in statements
-        for plan in connection.execute("EXPLAIN QUERY PLAN " + sql, params)
-    ]
-    assert any("sessions_one_live_address" in detail for detail in details), details
+    assert any("sessions_one_live_address" in detail for detail in _plans(connection, statements))
 
 
 def test_session_point_reads_probe_the_live_address_index(history) -> None:
@@ -236,18 +307,14 @@ def test_session_point_reads_probe_the_live_address_index(history) -> None:
     recorder, statements = _recording(connection)
     assert _store_queries.exists(recorder, address) is True
     assert _store_queries.exists(recorder, missing) is False
-    assert _store_values._require_live(recorder, address)["session_id"] == "two"
+    assert _store_values._require_live(recorder, address)["session_id"] == address.session_id
     with pytest.raises(SessionNotFoundError):
         _store_values._require_live(recorder, missing)
-    details = [
-        str(plan[3])
-        for sql, params in statements
-        for plan in connection.execute("EXPLAIN QUERY PLAN " + sql, params)
-    ]
+    details = _plans(connection, statements)
     assert len(details) == len(statements) == 4, details
     assert all(
         re.fullmatch(
-            r"SEARCH sessions USING (COVERING )?INDEX sessions_one_live_address "
+            r"SEARCH (sessions|s) USING (COVERING )?INDEX sessions_one_live_address "
             r"\(project_id=\? AND agent_id=\? AND session_id=\?\)",
             detail,
         )
@@ -260,30 +327,29 @@ def test_session_owning_agents_read_distinct_ids_from_the_live_address_index(his
     recorder, statements = _recording(connection)
     agent_ids = _store_queries.list_agent_ids(recorder, "project", exclude_owner_managed=True)
     assert agent_ids == ["agent"]
-    details = [
-        str(plan[3])
-        for sql, params in statements
-        for plan in connection.execute("EXPLAIN QUERY PLAN " + sql, params)
-    ]
+    details = _plans(connection, statements)
     assert not [detail for detail in details if detail.startswith("SCAN sessions")], details
     assert not [detail for detail in details if "TEMP B-TREE" in detail], details
 
 
-def test_delta_read_uses_one_indexed_read_from_the_anchor(history) -> None:
+def test_delta_read_reads_only_the_entries_after_the_cursor(history) -> None:
     address, _anchor, connection = history
-    state = _store_values._require_live(connection, address)
-    count = int(state["message_count"])
     full = _store_history.message_rows_since(connection, address, None)
     assert full is not None
-    rows = full[0]
-    recorder, statements = _recording(connection)
+    last = full.view_rows[-1]
+    previous = full.view_rows[-2]
     cursor = SessionReadCursor(
-        str(state["generation_id"]), 0, count - 1, count - 1, rows[count - 2]["message_id"]
+        full.cursor.generation_id,
+        full.cursor.history_revision,
+        int(last["seq"]),
+        str(previous["entry_id"]),
     )
+    recorder, statements = _recording(connection)
     delta = _store_history.message_rows_since(recorder, address, cursor)
     assert delta is not None
-    assert [int(row["seq"]) for row in delta[0]] == [count - 1]
-    assert sum("history_records" in sql for sql, _params in statements) == 1
+    assert [int(row["seq"]) for row in delta.view_rows] == [int(last["seq"])]
+    assert [int(row["seq"]) for row in delta.audit_rows] == [int(last["seq"])]
+    assert delta.inherited_count == 0
     _assert_indexed(connection, statements)
 
 
@@ -291,102 +357,44 @@ def test_current_delta_cursor_reads_only_the_session_row(history) -> None:
     address, _anchor, connection = history
     full = _store_history.message_rows_since(connection, address, None)
     assert full is not None
-    current = full[1]
     recorder, statements = _recording(connection)
-    assert _store_history.message_rows_since(recorder, address, current) == ([], current)
-    assert [sql for sql, _params in statements if "history_records" in sql] == []
-
-
-def test_page_query_orders_narrow_keys_by_session_index(history) -> None:
-    address, _anchor, connection = history
-    state = _store_values._require_live(connection, address)
-    recorder, statements = _recording(connection)
-    rows, has_more, _editable, _floor = _store_history._active_message_page_from_connection(
-        recorder,
-        state,
-        limit=2,
-        before_message_id=None,
-        before_sequence=None,
-        expected_generation_id=None,
-        excluded_roles=("note", "history_edit"),
-        complete_run_segment=True,
-    )
-    assert rows and has_more
-    _assert_indexed(connection, statements)
-
-
-@pytest.mark.parametrize("complete_run_segment", [True, False])
-def test_chat_history_snapshot_reads_by_session_index(history, complete_run_segment) -> None:
-    address, _anchor, connection = history
-    recorder, statements = _recording(connection)
-    snapshot = _store_history.chat_history_snapshot(
-        recorder,
-        address,
-        limit=6,
-        before_message_id=None,
-        before_sequence=None,
-        expected_generation_id=None,
-        excluded_roles=("note", "history_edit"),
-        complete_run_segment=complete_run_segment,
-        background_tool_names=("read",),
-        background_note_marker="needle",
-        after=None,
-    )()
-    assert [(run["run_id"], run["complete"]) for run in snapshot.runs] == [
-        ("run-two", complete_run_segment)
-    ]
-    assert [(record.role, record.name) for record in snapshot.background_records] == [
-        ("tool", "read")
-    ]
-    _assert_indexed(connection, statements)
+    current = _store_history.message_rows_since(recorder, address, full.cursor)
+    assert current is not None
+    assert (current.audit_rows, current.view_rows, current.cursor) == ([], [], full.cursor)
+    assert not [sql for sql, _params in statements if "entries" in sql]
 
 
 def test_unchanged_history_cursor_reads_only_the_session_row(history) -> None:
     address, _anchor, connection = history
-    full = _store_history.chat_history_snapshot(
-        connection,
-        address,
-        limit=6,
-        before_message_id=None,
-        before_sequence=None,
-        expected_generation_id=None,
-        excluded_roles=("note", "history_edit"),
-        complete_run_segment=True,
-    )()
+
+    def snapshot(recorder: Any, **kwargs: Any) -> Any:
+        return _store_timeline.chat_history_snapshot(
+            recorder,
+            address,
+            limit=6,
+            before_message_id=None,
+            before_sequence=None,
+            expected_generation_id=None,
+            excluded_roles=("note", "history_edit"),
+            complete_run_segment=True,
+            **kwargs,
+        )()
+
+    full = snapshot(connection)
     state = _store_values._require_live(connection, address)
     recorder, statements = _recording(connection)
-    unchanged = _store_history.chat_history_snapshot(
+    unchanged = snapshot(
         recorder,
-        address,
-        limit=6,
-        before_message_id=None,
-        before_sequence=None,
-        expected_generation_id=None,
-        excluded_roles=("note", "history_edit"),
-        complete_run_segment=True,
         background_tool_names=("read",),
         background_note_marker="needle",
-        after=(full.generation_id, int(state["message_count"])),
+        after=(full.generation_id, int(state["next_seq"])),
         skip_unchanged=True,
-    )()
+    )
     assert unchanged.unchanged and unchanged.incremental
     assert unchanged.page.messages == ()
     assert unchanged.after_cursor == full.after_cursor
     assert unchanged.background_records == ()
-    assert len(statements) == 1
-    assert "history_records" not in statements[0][0]
-
-
-def test_session_catalog_reads_scope_history_by_session_index(history) -> None:
-    address, _anchor, connection = history
-    recorder, statements = _recording(connection)
-    assert _store_queries.session_ids_with_messages(
-        recorder, "project", "agent", ("tool",), None, None
-    ) == {"one", "two"}
-    sources = _store_queries.descriptor_sources(recorder, [address])()
-    assert sources[address][2] is not None
-    assert sources[address][3] == "conversation"
-    _assert_indexed(connection, statements)
+    assert not [sql for sql, _params in statements if "entries" in sql]
 
 
 def test_owned_run_point_lookups_probe_indexes_not_group_history(manager) -> None:
@@ -399,8 +407,15 @@ def test_owned_run_point_lookups_probe_indexes_not_group_history(manager) -> Non
     )
     owner = RunExecutionOwner("owner", "group", "peer", binding.generation_id, "epoch")
     for number in range(3):
-        manager._store.record_run_owner(
-            binding.address, run_id=f"run{number}", owner=owner, input_id=f"input{number}"
+        manager._store.admit_run(
+            binding.address,
+            SessionRunAdmission(
+                run_id=f"run{number}",
+                run_kind="system",
+                started_at=utc_now_timestamp(),
+                owner=owner,
+                input_id=f"input{number}",
+            ),
         )
     connection = sqlite3.connect(manager._store.path)
     connection.row_factory = sqlite3.Row
@@ -412,12 +427,8 @@ def test_owned_run_point_lookups_probe_indexes_not_group_history(manager) -> Non
         assert sorted(records) == ["run0", "run2"]
         record = _store_owned.owned_run_by_input(recorder, binding.address, "input1")
         assert record is not None and record.run_id == "run1"
-        details = [
-            str(plan[3])
-            for sql, params in statements
-            for plan in connection.execute("EXPLAIN QUERY PLAN " + sql, params)
-        ]
-        assert not [detail for detail in details if detail.startswith("SCAN")], details
+        _assert_indexed(connection, statements)
+        details = _plans(connection, statements)
         assert any("run_execution_owners_group_run" in detail for detail in details), details
     finally:
         connection.close()
@@ -427,11 +438,7 @@ def test_completion_activity_searches_each_scope_by_live_address_index(history) 
     _address, _anchor, connection = history
     recorder, statements = _recording(connection)
     _store_queries.list_completion_activity(recorder, [("project", "agent"), (None, "other")])
-    plans = [
-        str(row[3])
-        for sql, params in statements
-        for row in connection.execute("EXPLAIN QUERY PLAN " + sql, params)
-    ]
+    plans = _plans(connection, statements)
     assert any(
         re.match(r"SEARCH s USING INDEX \w+ \(project_id=\? AND agent_id=\?", p) for p in plans
     )

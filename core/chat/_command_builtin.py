@@ -31,7 +31,7 @@ from core.projects import (
     parse_agent_address,
 )
 from core.runs import ActiveRunError, ChatRunManager, RunAdmissionBlockedError
-from core.sessions import SESSION_MOVE_STRIP_META_KEYS, SessionAddress
+from core.sessions import SessionAddress
 from core.tools.availability import memory_tool_enabled
 from core.tools.terminal_manager import TerminalManager, TerminalOwner
 
@@ -414,11 +414,7 @@ async def _execute_agent(
             if refusal is not None:
                 return _notice("agent", refusal)
 
-            await sessions.move(
-                source_address,
-                target_address,
-                strip_meta_keys=SESSION_MOVE_STRIP_META_KEYS,
-            )
+            await sessions.move(source_address, target_address)
             async with sessions.write_lock(target_address):
                 destination = await _command_session_io(
                     sessions,

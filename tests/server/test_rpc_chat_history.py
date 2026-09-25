@@ -13,8 +13,9 @@ from core.chat import (
     ToolCall,
 )
 from core.runs import RunAdmission, RunKind
-from core.sessions import SESSION_FORK_ALWAYS_STRIP_META_KEYS, SessionAddress
+from core.sessions import SessionAddress
 from server.rpc.methods import dispatch_rpc
+from tests.core.sessions.history_fixtures import complete_run
 from tests.server.rpc_test_support import (
     StubAdapter,
     _no_models_dev_fetch,
@@ -29,11 +30,7 @@ async def test_reflections_restore_running_and_durable_reviews(tmp_path: Path) -
     state = make_state(tmp_path, StubAdapter())
     sessions = state.runtime.chat_sessions
     source = sessions.create("coder", session_id="source")
-    fork = await sessions.fork(
-        source.address,
-        strip_meta_keys=SESSION_FORK_ALWAYS_STRIP_META_KEYS,
-        run_kind=RunKind.SKILL_REFLECTION,
-    )
+    fork = await sessions.fork(source.address, run_kind=RunKind.SKILL_REFLECTION)
     release = asyncio.Event()
 
     async def execute(run):
@@ -368,10 +365,11 @@ async def test_chat_history_includes_tool_timing_and_run_summary(tmp_path: Path)
         )
     )
     session.append(ChatMessage.assistant(model="openai/gpt-5.2", content="Done"))
-    session.append(
+    complete_run(
+        session,
         ChatMessage.run_summary(
             run_id="run-one", status="completed", timing=timing, iteration_count=1
-        )
+        ),
     )
 
     response = await dispatch_rpc(
@@ -388,10 +386,16 @@ async def test_chat_history_includes_tool_timing_and_run_summary(tmp_path: Path)
         "assistant",
         "run_summary",
     ]
-    assert messages[2]["timing"] == timing
+    # Stored timing comes back in the canonical UTC timestamp form.
+    canonical_timing = {
+        "started_at": "2026-05-03T14:30:01.000000Z",
+        "completed_at": "2026-05-03T14:30:02.000000Z",
+        "duration_ms": 1000,
+    }
+    assert messages[2]["timing"] == canonical_timing
     assert messages[4]["run_id"] == "run-one"
     assert messages[4]["status"] == "completed"
-    assert messages[4]["timing"] == timing
+    assert messages[4]["timing"] == canonical_timing
 
 
 @pytest.mark.asyncio
@@ -443,8 +447,7 @@ async def test_history_completion_cannot_pair_earlier_page_with_idle_run(tmp_pat
 async def test_chat_history_incremental_projection_and_edit_reset(tmp_path: Path) -> None:
     state = make_state(tmp_path, StubAdapter())
     session = state.runtime.chat_sessions.create("coder", session_id="timeline")
-    await state.runtime.chat_sessions.record_run_start_async(session.address, run_id="run-one")
-    session = session.for_run("run-one")
+    session = session.start_run("run-one")
     user = ChatMessage.user("question")
     session.append(user)
 
@@ -477,7 +480,7 @@ async def test_chat_history_incremental_projection_and_edit_reset(tmp_path: Path
     assert "reasoning_meta" not in delta["messages"][0]
     assert delta["history_generation"] == first["history_generation"]
     replacement = ChatMessage.user("edited")
-    session.append_many([ChatMessage.history_edit(user.id), replacement])
+    session.apply_edit(user.id, [replacement])
     reset = await history(after=delta["next_after"], limit=10)
     assert reset["incremental"] is False
     assert reset["history_reset"] is True

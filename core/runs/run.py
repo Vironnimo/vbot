@@ -314,6 +314,8 @@ class Run:
             on_lagged=lambda: _LOGGER.warning("Evicted lagging run subscriber for run %s", self.id),
         )
         self._done = asyncio.Event()
+        # Set once the Run's Session admission committed (or the Run needs none).
+        self._admitted = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
         # ``Task.cancel()`` before a newly created task gets its first event-loop
         # step bypasses the coroutine's try/finally entirely. Keep the task alive
@@ -603,6 +605,30 @@ class Run:
         ) as events:
             async for event in events:
                 yield event
+
+    async def wait_admitted(self) -> None:
+        """Wait until the Run's Session admission committed.
+
+        The admission durably records the Run with its Run kind and execution
+        owner before any output. A Run that ends before its admission commits
+        raises its terminal error (or ``RunCancelledError``) instead.
+        """
+        if not self._admitted.is_set():
+            admitted = asyncio.ensure_future(self._admitted.wait())
+            done = asyncio.ensure_future(self._done.wait())
+            try:
+                await asyncio.wait({admitted, done}, return_when=asyncio.FIRST_COMPLETED)
+            finally:
+                admitted.cancel()
+                done.cancel()
+        if self._admitted.is_set():
+            return
+        if self.error is not None:
+            raise self.error
+        raise RunCancelledError(f"run ended before admission: {self.id}")
+
+    def _mark_admitted(self) -> None:
+        self._admitted.set()
 
     async def wait(self) -> Any:
         """Wait for terminal state and return the run result."""
