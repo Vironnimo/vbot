@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Collection, Mapping
 from typing import Any, Literal
 
 import httpx
+from bs4 import BeautifulSoup
 
 from core.tools._web_search_common import (
     _normalize_text,
@@ -25,6 +27,18 @@ _MAX_RESPONSE_BYTES = 5 * 1024 * 1024
 
 
 _MAX_RESPONSE_SIZE_LABEL = "5 MB"
+
+
+_MAX_DETAIL_CHARS = 200
+
+
+# Statuses providers use when the account's plan or credits are used up
+# (Tavily answers 432/433 for plan and pay-as-you-go limits).
+_QUOTA_STATUSES = frozenset({402, 432, 433})
+
+
+# Brave, for one, answers an invalid key with HTTP 422 naming the token.
+_KEY_PROBLEM = re.compile(r"api[ _-]?key|\btoken\b|unauthori[sz]ed", re.IGNORECASE)
 
 
 _BROWSER_HEADERS: dict[str, str] = {
@@ -76,16 +90,12 @@ async def _read_bounded_response(
     ) as response:
         declared_size = _declared_response_size(response.headers)
         if declared_size is not None and declared_size > _MAX_RESPONSE_BYTES:
-            raise _ResponseTooLargeError(
-                f"provider response exceeds the {_MAX_RESPONSE_SIZE_LABEL} limit"
-            )
+            raise _ResponseTooLargeError(_too_large_message())
 
         body = bytearray()
         async for chunk in response.aiter_bytes():
             if len(body) + len(chunk) > _MAX_RESPONSE_BYTES:
-                raise _ResponseTooLargeError(
-                    f"provider response exceeds the {_MAX_RESPONSE_SIZE_LABEL} limit"
-                )
+                raise _ResponseTooLargeError(_too_large_message())
             body.extend(chunk)
 
         return httpx.Response(
@@ -95,6 +105,46 @@ async def _read_bounded_response(
             request=response.request,
             extensions=response.extensions,
         )
+
+
+def _too_large_message() -> str:
+    return (
+        f"The search provider's response exceeds the {_MAX_RESPONSE_SIZE_LABEL} limit. "
+        "Try again with a lower count."
+    )
+
+
+def _status_message(
+    provider_label: str,
+    status: int,
+    detail: str,
+    *,
+    retryable: bool,
+    credential_key: str | None,
+    hint: str | None,
+) -> str:
+    """Say what the provider's HTTP status means for the Agent and what to do next."""
+    answer = f"HTTP {status}: {detail}"
+    if hint:
+        return f"{provider_label} refused the request ({answer}). {hint}"
+    if status in _QUOTA_STATUSES:
+        return (
+            f"{provider_label} refused the search ({answer}); the account's plan or credits "
+            "may be used up. Tell the user."
+        )
+    if credential_key and (
+        status in {401, 403} or (status < 500 and _KEY_PROBLEM.search(detail) is not None)
+    ):
+        return (
+            f"{provider_label} rejected the API key ({answer}). Tell the user to check "
+            f"{credential_key} in the .env file of the vBot data directory."
+        )
+    if status == 429:
+        return f"{provider_label} is limiting requests ({answer}). Wait before searching again."
+    if status >= 500:
+        again = " after several attempts" if retryable else ""
+        return f"{provider_label} failed to answer{again} ({answer}). Try again later."
+    return f"{provider_label} rejected the search ({answer})."
 
 
 async def _request_bounded(
@@ -107,11 +157,17 @@ async def _request_bounded(
     headers: Mapping[str, str] | None = None,
     status_hints: Mapping[int, str] | None = None,
     extra_retryable_statuses: Collection[int] | None = None,
+    credential_key: str | None = None,
+    unreachable_hint: str | None = None,
 ) -> tuple[httpx.Response | None, HttpRequestFailure | None]:
     """Own bounded search requests, retry timing, and terminal HTTP failures.
 
     GET retries include 500. Search POSTs are billed per attempt, so use the
     narrower transient set (429/502/503/504) plus explicit vendor exceptions.
+    Failure messages name the provider, what its answer means, and the next
+    step: ``credential_key`` names the key to check on 401/403, a
+    ``status_hints`` entry replaces the guidance for its status, and
+    ``unreachable_hint`` replaces the guidance when no connection succeeds.
     """
     async with httpx.AsyncClient(
         headers=_BROWSER_HEADERS,
@@ -131,8 +187,12 @@ async def _request_bounded(
             except httpx.RequestError as error:
                 if attempt >= MAX_RETRIES:
                     _LOGGER.warning("%s web search request failed: %s", provider_label, error)
+                    reason = str(error) or type(error).__name__
+                    guidance = unreachable_hint or (
+                        "The network or the service may be down; try again later."
+                    )
                     return None, HttpRequestFailure(
-                        f"request failed: {error}",
+                        f"Could not reach {provider_label} ({reason}). {guidance}",
                         retryable=True,
                         attempts_made=MAX_RETRIES + 1,
                     )
@@ -149,23 +209,29 @@ async def _request_bounded(
                     await sleep_for_retry(attempt, parse_retry_after(response.headers))
                     continue
                 detail = _extract_error_detail(response)
-                if hint := (status_hints or {}).get(response.status_code):
-                    detail = f"{detail}; {hint}"
                 _LOGGER.warning(
                     "%s web search request failed: HTTP %s: %s",
                     provider_label,
                     response.status_code,
                     detail,
                 )
+                message = _status_message(
+                    provider_label,
+                    response.status_code,
+                    detail,
+                    retryable=retryable,
+                    credential_key=credential_key,
+                    hint=(status_hints or {}).get(response.status_code),
+                )
                 return None, HttpRequestFailure(
-                    f"HTTP {response.status_code}: {detail}",
+                    message,
                     retryable=retryable,
                     attempts_made=(MAX_RETRIES + 1) if retryable else None,
                 )
 
             return response, None
 
-    return None, HttpRequestFailure("request failed")
+    return None, HttpRequestFailure(f"Could not reach {provider_label}.")
 
 
 async def _request_json(
@@ -178,6 +244,8 @@ async def _request_json(
     headers: Mapping[str, str] | None = None,
     status_hints: Mapping[int, str] | None = None,
     extra_retryable_statuses: Collection[int] | None = None,
+    credential_key: str | None = None,
+    unreachable_hint: str | None = None,
 ) -> tuple[Any | None, HttpRequestFailure | None]:
     """Decode JSON only after bounded transport and HTTP failure handling."""
     response, failure = await _request_bounded(
@@ -189,13 +257,41 @@ async def _request_json(
         headers=headers,
         status_hints=status_hints,
         extra_retryable_statuses=extra_retryable_statuses,
+        credential_key=credential_key,
+        unreachable_hint=unreachable_hint,
     )
     if failure is not None or response is None:
         return None, failure
     try:
         return response.json(), None
     except ValueError:
-        return None, HttpRequestFailure("provider returned invalid JSON")
+        return None, HttpRequestFailure(
+            f"{provider_label} answered with something other than search results "
+            "(invalid JSON). Try again later."
+        )
+
+
+def _error_message(value: Any) -> str:
+    """Read a provider error field: text, or an object with detail/message parts."""
+    if isinstance(value, str):
+        return value.strip()
+    if not isinstance(value, dict):
+        return ""
+    message = _normalize_text(value.get("detail")) or _normalize_text(value.get("message"))
+    if not message:
+        message = _error_message(value.get("error"))
+    meta = value.get("meta")
+    problems = meta.get("errors") if isinstance(meta, dict) else None
+    if isinstance(problems, list):
+        # Brave lists each rejected parameter as {"loc": [...], "msg": "..."}.
+        for problem in problems[:3]:
+            if isinstance(problem, dict) and isinstance(problem.get("msg"), str):
+                location = problem.get("loc")
+                where = (
+                    ".".join(str(part) for part in location) if isinstance(location, list) else ""
+                )
+                message += f"; {where}: {problem['msg']}" if where else f"; {problem['msg']}"
+    return message
 
 
 def _extract_error_detail(response: httpx.Response) -> str:
@@ -205,17 +301,17 @@ def _extract_error_detail(response: httpx.Response) -> str:
         payload = None
 
     if isinstance(payload, dict):
-        detail = payload.get("detail")
-        if isinstance(detail, dict):
-            message = _normalize_text(detail.get("error", detail.get("message")))
+        for key in ("detail", "error", "message"):
+            message = _error_message(payload.get(key))
             if message:
-                return message
+                return message[:_MAX_DETAIL_CHARS]
 
-        message = _normalize_text(payload.get("error", payload.get("message")))
-        if message:
-            return message
-
-    fallback = _normalize_text(response.text)
+    text = response.text
+    if "<" in text and ">" in text:
+        soup = BeautifulSoup(text, "html.parser")
+        title = soup.title.get_text(" ", strip=True) if soup.title else ""
+        text = title or soup.get_text(" ", strip=True)
+    fallback = " ".join(text.split())
     if fallback:
-        return fallback[:300]
-    return response.reason_phrase or "request failed"
+        return fallback[:_MAX_DETAIL_CHARS]
+    return response.reason_phrase or "no details"

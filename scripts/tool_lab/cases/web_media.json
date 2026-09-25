@@ -1,0 +1,171 @@
+{
+ "files": {
+  "photos/cat.png": "not really a png",
+  "photos/garden-2026.jpg": "not really a jpeg",
+  "notes.txt": "plain text\n"
+ },
+ "cases": [
+  {
+   "name": "web_fetch: private address is blocked before any request",
+   "tool": "web_fetch",
+   "arguments": {"url": "http://127.0.0.1:9/status"},
+   "expect": {"ok": false, "error_code": "blocked_url", "contains": ["private"]}
+  },
+  {
+   "name": "web_fetch: schemeless URL gets https",
+   "tool": "web_fetch",
+   "arguments": {"url": "10.0.0.5/admin"},
+   "expect": {"ok": false, "error_code": "blocked_url", "contains": ["private"]}
+  },
+  {
+   "name": "web_fetch: markdown link is unwrapped",
+   "tool": "web_fetch",
+   "arguments": {"url": "[status page](http://127.0.0.1:9/status)"},
+   "expect": {"ok": false, "error_code": "blocked_url"}
+  },
+  {
+   "name": "web_fetch: link alias",
+   "tool": "web_fetch",
+   "arguments": {"link": "http://127.0.0.1:9/status"},
+   "expect": {"ok": false, "error_code": "blocked_url"}
+  },
+  {
+   "name": "web_fetch: one-item urls list",
+   "tool": "web_fetch",
+   "arguments": {"urls": ["http://127.0.0.1:9/status"]},
+   "expect": {"ok": false, "error_code": "blocked_url"}
+  },
+  {
+   "name": "web_fetch: several urls name the parallel calls",
+   "tool": "web_fetch",
+   "arguments": {"urls": ["http://127.0.0.1:9/a", "http://127.0.0.1:9/b"]},
+   "expect": {"ok": false, "contains": ["http://127.0.0.1:9/a", "http://127.0.0.1:9/b"]}
+  },
+  {
+   "name": "web_fetch: prompt is accepted",
+   "tool": "web_fetch",
+   "arguments": {"url": "http://127.0.0.1:9/status", "prompt": "What is the uptime?"},
+   "expect": {"ok": false, "error_code": "blocked_url"}
+  },
+  {
+   "name": "web_fetch: max_length is accepted",
+   "tool": "web_fetch",
+   "arguments": {"url": "http://127.0.0.1:9/status", "max_length": 5000},
+   "expect": {"ok": false, "error_code": "blocked_url"}
+  },
+  {
+   "name": "web_fetch: next wrapper is unwrapped",
+   "tool": "web_fetch",
+   "arguments": {"next": {"ref": "tmp_0123456789ab.m.12000"}},
+   "expect": {"ok": false, "error_code": "page_expired"}
+  },
+  {
+   "name": "web_fetch: neither url nor ref",
+   "tool": "web_fetch",
+   "arguments": {"find": "pricing"},
+   "expect": {"ok": false, "contains": ["url"]}
+  },
+  {
+   "name": "web_fetch: ftp scheme is refused",
+   "tool": "web_fetch",
+   "arguments": {"url": "ftp://files.example.com/a.txt"},
+   "expect": {"ok": false, "error_code": "invalid_url"}
+  },
+  {
+   "name": "web_search: missing key tells what to tell the user",
+   "tool": "web_search",
+   "arguments": {"query": "python release"},
+   "expect": {"ok": false, "error_code": "missing_api_key", "contains": ["BRAVE_API_KEY", "Tell the user", "Settings"]}
+  },
+  {
+   "name": "web_search: q alias",
+   "tool": "web_search",
+   "arguments": {"q": "python release"},
+   "expect": {"ok": false, "error_code": "missing_api_key"}
+  },
+  {
+   "name": "web_search: num_results alias",
+   "tool": "web_search",
+   "arguments": {"query": "python release", "num_results": 5},
+   "expect": {"ok": false, "error_code": "missing_api_key"}
+  },
+  {
+   "name": "web_search: allowed_domains alias",
+   "tool": "web_search",
+   "arguments": {"query": "python release", "allowed_domains": ["python.org"]},
+   "expect": {"ok": false, "error_code": "missing_api_key"}
+  },
+  {
+   "name": "web_search: recency week",
+   "tool": "web_search",
+   "arguments": {"query": "python release", "recency": "week"},
+   "expect": {"ok": false, "error_code": "missing_api_key"}
+  },
+  {
+   "name": "web_search: freshness week",
+   "tool": "web_search",
+   "arguments": {"query": "python release", "freshness": "week"},
+   "expect": {"ok": false, "error_code": "missing_api_key"}
+  },
+  {
+   "name": "web_search: time_range past_month",
+   "tool": "web_search",
+   "arguments": {"query": "python release", "time_range": "past_month"},
+   "expect": {"ok": false, "error_code": "missing_api_key"}
+  },
+  {
+   "name": "web_search: days count",
+   "tool": "web_search",
+   "arguments": {"query": "python release", "days": 3},
+   "expect": {"ok": false, "error_code": "missing_api_key"}
+  },
+  {
+   "name": "web_search: empty date filters are dropped",
+   "tool": "web_search",
+   "arguments": {"query": "python release", "date_after": "", "date_before": ""},
+   "expect": {"ok": false, "error_code": "missing_api_key"}
+  },
+  {
+   "name": "web_search: date_before is refused with the reason",
+   "tool": "web_search",
+   "arguments": {"query": "python release", "date_before": "2025-01-01"},
+   "expect": {"ok": false, "contains": ["date_before"]}
+  },
+  {
+   "name": "analyze_image: missing path names the close match",
+   "tool": "analyze_image",
+   "arguments": {"prompt": "Describe it", "images": ["photos/cat.jpg"]},
+   "expect": {"ok": false, "error_code": "image_not_found", "contains": ["photos/cat.png"]}
+  },
+  {
+   "name": "analyze_image: image alias with a string",
+   "tool": "analyze_image",
+   "arguments": {"prompt": "Describe it", "image": "photos/cat.jpg"},
+   "expect": {"ok": false, "error_code": "image_not_found"}
+  },
+  {
+   "name": "analyze_image: image_path alias and question",
+   "tool": "analyze_image",
+   "arguments": {"question": "Describe it", "image_path": "photos/cat.jpg"},
+   "expect": {"ok": false, "error_code": "image_not_found"}
+  },
+  {
+   "name": "analyze_image: web URL is explained",
+   "tool": "analyze_image",
+   "arguments": {"prompt": "Describe it", "images": ["https://example.com/cat.png"]},
+   "expect": {"ok": false, "contains": ["local"]}
+  },
+  {
+   "name": "image_generation: output_dir default is described",
+   "tool": "image_generation",
+   "arguments": {"prompt": "a red bicycle", "n": 2},
+   "expect": {"ok": false}
+  },
+  {
+   "name": "text_to_speech: input alias",
+   "tool": "text_to_speech",
+   "arguments": {"input": "Hello there"},
+   "expect": {"ok": false, "absent": ["was not run"]}
+  }
+ ]
+}

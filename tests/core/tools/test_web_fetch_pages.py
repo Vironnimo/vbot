@@ -1,5 +1,6 @@
 """Behavioral regressions: information retention, bounded Context, and continuation."""
 
+import json
 import re
 from dataclasses import replace
 from unittest.mock import AsyncMock
@@ -21,6 +22,19 @@ def registry():
     result = ToolRegistry()
     register_web_fetch_tool(result, attachment_store=None)
     return result
+
+
+def continuation(data):
+    """The follow-up call a result's more line offers first."""
+    match = re.search(r"Continue with (\{.*?\})[,.]", data["more"])
+    assert match is not None, data["more"]
+    return json.loads(match[1])
+
+
+def shown_range(data):
+    match = re.fullmatch(r"characters (\d+)-(\d+) of (\d+)(?: of the whole page)?", data["shown"])
+    assert match is not None, data["shown"]
+    return int(match[1]), int(match[2]), int(match[3])
 
 
 def test_retains_nested_code_lists_tables_and_meaningful_containers():
@@ -98,15 +112,18 @@ async def test_continuations_recover_all_unicode_text_with_one_fetch(tmp_path, m
         data = response["data"]
         assert response["ok"] and estimate_tokens(data["content"])[0] <= pages.MAX_CONTENT_TOKENS
         assert estimate_json_tokens(response)[0] < 4500
-        assert data["offset"] == sum(map(len, parts))
-        assert data["returned_chars"] == len(data["content"])
+        start, end, total = shown_range(data)
+        assert start == sum(map(len, parts)) + 1
+        assert end - start + 1 == len(data["content"]) and total == len(body)
         parts.append(data["content"])
-        if "next" not in data:
-            assert "hint" not in data
+        if "more" not in data:
             break
-        assert "next" in data["hint"]
-        assert set(data["next"]) == {"ref"}
-        response = await tool.dispatch(context, data["next"])
+        assert data["more"].startswith(f"{total - end} more characters. Continue with ")
+        assert f'search the page with {{"ref": "{data["ref"]}", "find": "..."}}' in data["more"]
+        follow_up = continuation(data)
+        assert set(follow_up) == {"ref"}
+        # A copied continuation object under "next" is accepted as the call itself.
+        response = await tool.dispatch(context, {"next": follow_up})
     assert "".join(parts) == body
     assert len(calls) == 1 and len(parts) > 1
 
@@ -145,14 +162,20 @@ async def test_redundant_url_must_match_owned_saved_final_page(tmp_path, monkeyp
     ref = first["data"]["ref"]
     found = await tool.dispatch(context, {"url": final_url, "ref": ref, "find": "Needle"})
     assert found["ok"] and "Needle fact" in found["data"]["content"]
-    continued = await tool.dispatch(context, {"url": final_url, **first["data"]["next"]})
-    assert continued["ok"] and continued["data"]["offset"] > 0
-    for url in ("https://example.com/other", "https://example.com/redirect"):
-        rejected = await tool.dispatch(context, {"url": url, "ref": ref})
-        assert rejected["error"]["code"] == "validation_error"
+    continued = await tool.dispatch(context, {"url": final_url, **continuation(first["data"])})
+    assert continued["ok"] and shown_range(continued["data"])[0] > 1
+    # The address that was requested names the same saved page as its final URL.
+    requested = await tool.dispatch(context, {"url": "https://example.com/redirect", "ref": ref})
+    assert requested["ok"]
+    rejected = await tool.dispatch(context, {"url": "https://example.com/other", "ref": ref})
+    assert rejected["error"]["code"] == "invalid_arguments"
+    assert rejected["error"]["message"] == (
+        f"ref {ref} is the saved page of {final_url}, not https://example.com/other. Pass "
+        "only ref to read the saved page, or only url to fetch the other address."
+    )
     for changed in (replace(context, session_id="other"), replace(context, agent_id="other")):
         rejected = await tool.dispatch(changed, {"url": final_url, "ref": ref})
-        assert rejected["error"]["code"] == "reference_error"
+        assert rejected["error"]["code"] == "page_expired"
     rejected = await tool.dispatch(context, {"url": final_url, "ref": ref, "output": "raw"})
     assert not rejected["ok"]
     with pytest.raises(ToolContractError, match='"fresh" is not a parameter'):
@@ -160,7 +183,11 @@ async def test_redundant_url_must_match_owned_saved_final_page(tmp_path, monkeyp
     now = pages.time.time()
     monkeypatch.setattr(pages.time, "time", lambda: now + 73 * 3600)
     expired = await tool.dispatch(context, {"url": final_url, "ref": ref})
-    assert expired["error"]["code"] == "reference_error"
+    assert expired["error"]["code"] == "page_expired"
+    assert expired["error"]["message"] == (
+        f"Saved page {ref} is not available: saved pages expire after 72 hours and can only "
+        "be read in the conversation that fetched them. Fetch the page again with url."
+    )
     fetch.assert_awaited_once()
 
 
@@ -176,12 +203,13 @@ async def test_search_continuations_recover_all_matches_without_fetching(tmp_pat
         assert response["ok"]
         data = response["data"]
         found.update(re.findall(r"Needle[0-9]{2}", data["content"]))
-        if "next" not in data:
-            assert "hint" not in data
+        assert 'matching "Needle"' in data["shown"]
+        if "more" not in data:
             break
-        assert "search" in data["hint"] and "next" in data["hint"]
-        assert set(data["next"]) == {"ref", "find"}
-        response = await tool.dispatch(context, data["next"])
+        assert data["more"].startswith("More matches. Continue with ")
+        follow_up = continuation(data)
+        assert set(follow_up) == {"ref", "find"}
+        response = await tool.dispatch(context, follow_up)
     assert found == {f"Needle{i:02d}" for i in range(30)}
     fetch.assert_awaited_once()
 
@@ -196,13 +224,18 @@ async def test_references_reject_cross_session_cross_agent_expiry_and_traversal(
     ref = first["data"]["ref"]
     for changed in (replace(context, session_id="other"), replace(context, agent_id="other")):
         result = await tool.dispatch(changed, {"ref": ref})
-        assert result["error"]["code"] == "reference_error"
+        assert result["error"]["code"] == "page_expired"
     result = await tool.dispatch(context, {"ref": "../settings"})
-    assert result["error"]["code"] == "reference_error"
+    assert result["error"]["code"] == "invalid_ref"
+    assert result["error"]["message"] == (
+        '"../settings" is not a web_fetch ref. Refs come from earlier web_fetch results and '
+        "look like tmp_7k2m9x4q1b3c or tmp_7k2m9x4q1b3c.m.12000. To fetch a page, pass its "
+        "address as url."
+    )
     now = pages.time.time()
     monkeypatch.setattr(pages.time, "time", lambda: now + 73 * 3600)
     expired = await tool.dispatch(context, {"ref": ref})
-    assert expired["error"]["code"] == "reference_error"
+    assert expired["error"]["code"] == "page_expired"
 
 
 @pytest.mark.asyncio
@@ -252,8 +285,8 @@ async def test_saved_limit_is_reported_without_claiming_completeness(tmp_path, m
     monkeypatch.setattr(pages, "MAX_SAVED_CHARS", 1500)
     install_http_get(monkeypatch, lambda url: make_result(text="Text " * 1000, url=url))
     result = await registry().dispatch(make_context(tmp_path), {"url": "https://example.com/"})
-    assert result["data"]["total_chars"] == 1500
-    assert any("partial" in value for value in result["data"]["warnings"])
+    assert len(result["data"]["content"]) == 1500 and "more" not in result["data"]
+    assert "Saved content is partial" in result["data"]["note"]
 
 
 @pytest.mark.asyncio

@@ -17,12 +17,13 @@ from tests.core.tools.web_search_helpers import (
     assert_failure_envelope,
     assert_success_envelope,
     make_context,
+    result_urls,
 )
 
 
 @respx.mock
 @pytest.mark.asyncio
-@pytest.mark.parametrize("recency", ["day", "month", "year"])
+@pytest.mark.parametrize("recency", ["day", "week", "month", "year"])
 async def test_web_search_handler_searxng_maps_canonical_recency_without_api_key(
     tmp_path: Path,
     recency: str,
@@ -61,13 +62,11 @@ async def test_web_search_handler_searxng_maps_canonical_recency_without_api_key
     )
 
     data = assert_success_envelope(result)
-    assert data["provider"] == "searxng"
-    assert "query" not in data
-    assert "count_requested" not in data
-    assert len(data["results"]) == 1
-    assert data["recency"] == recency
-    assert "filters" not in data
-    assert data["warnings"] == ["recency enforcement depends on the configured SearXNG engines"]
+    assert data == {
+        "recency": recency,
+        "note": "Some SearXNG engines ignore the recency limit; check result dates.",
+        "content": "1. vBot docs\nhttps://example.com/vbot\nvBot documentation",
+    }
 
     request = route.calls[0].request
     assert request.url.params["q"] == "vbot"
@@ -75,12 +74,6 @@ async def test_web_search_handler_searxng_maps_canonical_recency_without_api_key
     assert request.url.params["categories"] == "general"
     assert request.url.params["safesearch"] == "0"
     assert request.url.params["time_range"] == recency
-
-    results = data["results"]
-    assert isinstance(results, list)
-    assert len(results) == 1
-    assert results[0]["title"] == "vBot docs"
-    assert results[0]["description"] == "vBot documentation"
 
 
 @respx.mock
@@ -120,13 +113,11 @@ async def test_web_search_handler_searxng_enforces_domain_before_count(tmp_path:
     )
 
     data = assert_success_envelope(result)
-    assert data["applied_domains"] == ["example.com"]
-    assert len(data["results"]) == 1
-    assert data["results"][0]["url"] == "https://docs.example.com/vbot"
-    assert data["warnings"] == [
-        "domain-filter completeness depends on the configured SearXNG engines; "
-        "returned results are still restricted to applied_domains"
-    ]
+    assert data["domains"] == "example.com"
+    assert result_urls(data) == ["https://docs.example.com/vbot"]
+    assert data["note"] == (
+        "Some SearXNG engines ignore site restrictions, so fewer results than requested may remain."
+    )
     assert route.calls[0].request.url.params["q"] == "vbot site:example.com"
 
 
@@ -142,7 +133,64 @@ async def test_web_search_handler_searxng_rejects_invalid_base_url(tmp_path: Pat
         lambda: {"provider": "searxng", "searxng": {"base_url": "localhost:8888"}},
     )
 
-    assert_failure_envelope(result, "provider_request_failed")
+    error = assert_failure_envelope(result, "provider_request_failed")
+    assert error["message"] == (
+        "The SearXNG address in Settings (localhost:8888) is not an http or https URL. Tell "
+        "the user to fix it in Settings under Web search."
+    )
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_web_search_handler_searxng_unreachable_instance_tells_the_user(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def no_sleep(attempt: int, retry_after: float | None = None) -> None:
+        del attempt, retry_after
+
+    monkeypatch.setattr("core.tools._web_search_transport.sleep_for_retry", no_sleep)
+
+    def refuse(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("All connection attempts failed", request=request)
+
+    respx.get(_SEARXNG_ENDPOINT).mock(side_effect=refuse)
+
+    result = await web_search_handler(
+        make_context(tmp_path),
+        {"query": "vbot"},
+        lambda key: "",
+        lambda: {"provider": "searxng", "searxng": {"base_url": "http://localhost:8888"}},
+    )
+
+    error = assert_failure_envelope(result, "provider_request_failed")
+    assert error["message"] == (
+        "Could not reach SearXNG (All connection attempts failed). Tell the user the SearXNG "
+        "instance at http://localhost:8888 is not reachable; they can start it or change its "
+        "address in Settings under Web search."
+    )
+    assert error["retryable"] is True
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_web_search_handler_searxng_html_refusal_is_summarized(tmp_path: Path) -> None:
+    respx.get(_SEARXNG_ENDPOINT).respond(
+        403,
+        text="<!doctype html>\n<html lang=en>\n<title>403 Forbidden</title>\n<h1>Forbidden</h1>",
+    )
+
+    result = await web_search_handler(
+        make_context(tmp_path),
+        {"query": "vbot"},
+        lambda key: "",
+        lambda: {"provider": "searxng", "searxng": {"base_url": "http://localhost:8888"}},
+    )
+
+    error = assert_failure_envelope(result, "provider_request_failed")
+    assert error["message"] == (
+        "SearXNG refused the request (HTTP 403: 403 Forbidden). Tell the user to allow the "
+        "json format under search.formats in the SearXNG instance's settings."
+    )
 
 
 @respx.mock
@@ -178,8 +226,9 @@ async def test_web_search_handler_searxng_page_and_published_date(tmp_path: Path
     )
 
     data = assert_success_envelope(result)
-    assert "page" not in data
-    assert data["results"][0]["page_age"] == "2026-04-30T12:00:00+00:00"
+    assert data["content"] == (
+        "1. vBot docs\nhttps://example.com/vbot\n2026-04-30 - vBot documentation"
+    )
     assert route.calls[0].request.url.params["pageno"] == "2"
 
 
@@ -202,9 +251,8 @@ async def test_web_search_handler_searxng_page_warns_about_pagination_gap(tmp_pa
     )
 
     data = assert_success_envelope(result)
-    warnings = data.get("warnings", [])
-    assert any("page size" in w.lower() for w in warnings), (
-        f"expected a pagination warning, got {warnings}"
+    assert data["note"] == (
+        "SearXNG uses its own page size, so results between pages may be skipped."
     )
 
 
@@ -227,4 +275,4 @@ async def test_web_search_handler_searxng_page1_has_no_pagination_warning(tmp_pa
     )
 
     data = assert_success_envelope(result)
-    assert "warnings" not in data
+    assert "note" not in data

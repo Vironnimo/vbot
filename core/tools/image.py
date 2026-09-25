@@ -6,8 +6,24 @@ import copy
 from pathlib import Path
 from typing import Any
 
-from core.model_tasks import ImageError, ImageOutcomeUnknownError, ImageUnderstandingRunContext
+from core.model_tasks import (
+    ImageConfigurationError,
+    ImageError,
+    ImageExecutionError,
+    ImageOutcomeUnknownError,
+    ImageUnderstandingRunContext,
+    ImageUnderstandingUnavailableError,
+    ImageUnsupportedTargetError,
+)
+from core.tools._image_inputs import (
+    UnusableImageError,
+    normalize_analyze_image_arguments,
+    normalize_image_generation_arguments,
+    resolve_local_images,
+)
+from core.tools._media_failures import provider_failure_message, unavailable_message
 from core.tools.arguments import optional_string
+from core.tools.contracts import compile_tool_contract
 from core.tools.tools import (
     JsonObject,
     ToolContext,
@@ -15,6 +31,7 @@ from core.tools.tools import (
     ToolDefinitionProfileContext,
     ToolDisplay,
     ToolDisplayField,
+    ToolDisplayPart,
     ToolRegistry,
     result_count_fact_builder,
     tool_failure,
@@ -76,11 +93,11 @@ IMAGE_GENERATION_TOOL_PARAMETERS: JsonObject = {
             "type": "string",
             "minLength": 1,
             "description": (
-                "The text prompt for the image. Be specific and concrete — name the "
+                "The text prompt for the image. Be specific and concrete: name the "
                 "subject and its key attributes, the setting, composition, lighting, "
-                "mood, color palette, and the visual medium or style (e.g. photograph, "
-                "oil painting, 3D render, anime, flat vector). For edits, state both "
-                "the changes and what must remain unchanged. Detailed prompts produce "
+                "mood, color palette, and the visual medium or style (for example "
+                "photograph, oil painting, 3D render, anime, flat vector). For edits, state "
+                "both the changes and what must remain unchanged. Detailed prompts produce "
                 "markedly better images than short vague ones."
             ),
         },
@@ -113,9 +130,9 @@ IMAGE_GENERATION_TOOL_PARAMETERS: JsonObject = {
         "output_dir": {
             "type": "string",
             "description": (
-                "Directory to save generated images. Relative paths resolve from the working "
-                "directory; missing directories are created. Omit when no specific destination "
-                "is given."
+                "Folder for the generated images, created if missing; relative paths start at "
+                "the working directory. Omit to use the default image-gen folder; the result "
+                "lists each saved file's path."
             ),
         },
     },
@@ -133,6 +150,52 @@ def _image_generation_text_only_parameters() -> JsonObject:
 
 
 IMAGE_GENERATION_TEXT_ONLY_TOOL_PARAMETERS = _image_generation_text_only_parameters()
+
+_ANALYZE_IMAGE_CONTRACT = compile_tool_contract(
+    name=ANALYZE_IMAGE_TOOL_NAME,
+    input_schema=ANALYZE_IMAGE_TOOL_PARAMETERS,
+    require_closed_input=False,
+)
+_IMAGE_GENERATION_CONTRACT = compile_tool_contract(
+    name=IMAGE_GENERATION_TOOL_NAME,
+    input_schema=IMAGE_GENERATION_TOOL_PARAMETERS,
+    require_closed_input=False,
+)
+_UNDERSTANDING = ("image-understanding", "Image understanding")
+_GENERATION = ("image-generation", "Image generation")
+
+
+def _normalize_analyze_image_arguments(arguments: Any) -> Any:
+    return normalize_analyze_image_arguments(_ANALYZE_IMAGE_CONTRACT, arguments)
+
+
+def _normalize_image_generation_arguments(arguments: Any) -> Any:
+    return normalize_image_generation_arguments(_IMAGE_GENERATION_CONTRACT, arguments)
+
+
+def _invalid(message: str) -> JsonObject:
+    return tool_failure("invalid_arguments", message, retryable=False)
+
+
+def _image_failure(error: ImageError, labels: tuple[str, str]) -> JsonObject:
+    """Project an expected Image-domain failure with wording the Agent can act on."""
+    task, setting = labels
+    message = str(error)
+    if isinstance(error, ImageOutcomeUnknownError):
+        pass
+    elif isinstance(error, ImageExecutionError):
+        message = provider_failure_message(error, task=task, setting=setting)
+    elif isinstance(error, ImageUnderstandingUnavailableError) or (
+        isinstance(error, (ImageConfigurationError, ImageUnsupportedTargetError))
+        and labels == _GENERATION
+    ):
+        message = unavailable_message(error, setting=setting)
+    return tool_failure(
+        error.code,
+        message,
+        retryable=bool(error.retryable),
+        attempts_made=error.attempts_made,
+    )
 
 
 def _generation_supports_source_images(image_service: Any) -> bool:
@@ -174,44 +237,6 @@ def _collect_call_options(arguments: JsonObject) -> JsonObject:
     return call_options
 
 
-def _collect_source_paths(context: ToolContext, arguments: JsonObject) -> tuple[Path, ...]:
-    """Resolve optional source-image paths against the Run's effective cwd."""
-
-    raw_paths = arguments.get("source_images")
-    if raw_paths is None:
-        return ()
-    if not isinstance(raw_paths, list):
-        raise ValueError("source_images must be an array of local image paths")
-
-    resolved_paths: list[Path] = []
-    for index, raw_path in enumerate(raw_paths):
-        path_text = optional_string(raw_path, field_name=f"source_images[{index}]")
-        if path_text is None:
-            raise ValueError(f"source_images[{index}] must be a non-empty string")
-        resolved_paths.append(context.resolve_path(path_text))
-    if not resolved_paths:
-        raise ValueError("source_images must contain at least one local image path")
-    return tuple(resolved_paths)
-
-
-def _collect_analysis_paths(context: ToolContext, arguments: JsonObject) -> tuple[Path, ...]:
-    """Resolve required analysis-image paths against the Run's effective cwd."""
-
-    raw_paths = arguments.get("images")
-    if not isinstance(raw_paths, list):
-        raise ValueError("images must be an array of local image paths")
-
-    resolved_paths: list[Path] = []
-    for index, raw_path in enumerate(raw_paths):
-        path_text = optional_string(raw_path, field_name=f"images[{index}]")
-        if path_text is None:
-            raise ValueError(f"images[{index}] must be a non-empty string")
-        resolved_paths.append(context.resolve_path(path_text))
-    if not resolved_paths:
-        raise ValueError("images must contain at least one local image path")
-    return tuple(resolved_paths)
-
-
 def make_analyze_image_handler(image_service: Any):
     """Create an image-understanding handler bound to the runtime image service."""
 
@@ -219,20 +244,19 @@ def make_analyze_image_handler(image_service: Any):
 
         prompt = arguments.get("prompt")
         if not isinstance(prompt, str) or not prompt.strip():
-            return tool_failure("invalid_arguments", "prompt must be a non-empty string")
+            return _invalid(
+                'Pass what to look for as prompt, for example {"prompt": "Read the text on '
+                'the label"}.'
+            )
         try:
-            image_paths = _collect_analysis_paths(context, arguments)
-        except ValueError as exc:
-            return tool_failure("invalid_arguments", str(exc))
-
-        context.presentation_images.extend(
-            {"path": str(path), "filename": path.name} for path in image_paths
-        )
+            image_paths = resolve_local_images(context, arguments.get("images"), "images")
+        except UnusableImageError as problem:
+            return tool_failure(problem.code, str(problem), retryable=False)
 
         try:
             result = await image_service.analyze(
                 prompt,
-                image_paths=image_paths,
+                image_paths=tuple(image_paths),
                 run_context=ImageUnderstandingRunContext(
                     run_id=context.run_id,
                     agent_id=context.agent_id,
@@ -241,15 +265,22 @@ def make_analyze_image_handler(image_service: Any):
                 ),
             )
         except ImageError as exc:
-            return tool_failure(
-                exc.code,
-                str(exc),
-                retryable=exc.retryable,
-                attempts_made=exc.attempts_made,
-            )
+            return _image_failure(exc, _UNDERSTANDING)
         return tool_success({"analysis": result.content})
 
     return handler
+
+
+def _analyze_image_display_parts(arguments: JsonObject) -> list[ToolDisplayPart]:
+    """Show the analysis request even when the call used another Tool's field names."""
+    try:
+        normalized = _normalize_analyze_image_arguments(arguments)
+    except ValueError:
+        normalized = arguments
+    prompt = normalized.get("prompt") if isinstance(normalized, dict) else None
+    if isinstance(prompt, str) and prompt.strip():
+        return [ToolDisplayPart(prompt.strip(), kind="text", quote=True)]
+    return []
 
 
 def register_analyze_image_tool(registry: ToolRegistry, image_service: Any) -> None:
@@ -263,10 +294,9 @@ def register_analyze_image_tool(registry: ToolRegistry, image_service: Any) -> N
         family="media",
         constraints=("image_fallback_route",),
         open_input_schema=True,
+        argument_normalizer=_normalize_analyze_image_arguments,
         result_schema=_ANALYZE_IMAGE_RESULT_SCHEMA,
-        display=ToolDisplay(
-            primary_candidates=(ToolDisplayField("prompt", kind="text", quote=True),)
-        ),
+        display=ToolDisplay(parts_builder=_analyze_image_display_parts),
     )
 
 
@@ -277,19 +307,30 @@ def make_image_generation_handler(image_service: Any):
 
         prompt = arguments.get("prompt")
         if not isinstance(prompt, str) or not prompt.strip():
-            return tool_failure("invalid_arguments", "prompt must be a non-empty string")
+            return _invalid(
+                'Describe the image as prompt, for example {"prompt": "A red bicycle against '
+                'a white wall, studio photograph"}.'
+            )
         if "source_images" in arguments and not _generation_supports_source_images(image_service):
-            return tool_failure(
-                "invalid_arguments",
-                "source_images is unavailable for the configured image generation model",
+            return _invalid(
+                "The configured image model only generates from text, so it cannot use "
+                "source_images. Remove source_images, or ask the user to choose an Image "
+                "generation model that accepts images in Settings under Specialized Models."
             )
 
         try:
             call_options = _collect_call_options(arguments)
-            source_paths = _collect_source_paths(context, arguments)
             output_dir = _image_generation_output_dir(context, arguments)
         except ValueError as exc:
-            return tool_failure("invalid_arguments", str(exc))
+            return _invalid(str(exc))
+        source_paths: tuple[Path, ...] = ()
+        if "source_images" in arguments:
+            try:
+                source_paths = tuple(
+                    resolve_local_images(context, arguments["source_images"], "source_images")
+                )
+            except UnusableImageError as problem:
+                return tool_failure(problem.code, str(problem), retryable=False)
 
         try:
             artifacts = await image_service.generate_artifacts(
@@ -298,10 +339,8 @@ def make_image_generation_handler(image_service: Any):
                 call_options=call_options,
                 source_paths=source_paths,
             )
-        except ImageOutcomeUnknownError as exc:
-            return tool_failure(exc.code, str(exc), retryable=False)
         except ImageError as exc:
-            return tool_failure("image_error", str(exc))
+            return _image_failure(exc, _GENERATION)
 
         image_payloads: list[JsonObject] = []
         for artifact in artifacts:
@@ -321,9 +360,7 @@ def _image_generation_output_dir(context: ToolContext, arguments: JsonObject) ->
     """Resolve an explicit destination or choose the caller-owned default directory."""
 
     output_dir = optional_string(arguments.get("output_dir"), field_name="output_dir")
-    if output_dir == "":
-        raise ValueError("output_dir must be a non-empty string when provided")
-    if output_dir is not None:
+    if output_dir:
         return context.resolve_path(output_dir)
 
     root = context.workspace if context.project_id is None else context.effective_cwd
@@ -340,6 +377,7 @@ def register_image_generation_tool(registry: ToolRegistry, image_service: Any) -
         make_image_generation_handler(image_service),
         family="media",
         open_input_schema=True,
+        argument_normalizer=_normalize_image_generation_arguments,
         result_schema={"type": "object", "required": ["images"]},
         display=ToolDisplay(
             primary_candidates=(ToolDisplayField("prompt", kind="text", quote=True),),

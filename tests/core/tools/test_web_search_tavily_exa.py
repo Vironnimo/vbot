@@ -21,6 +21,7 @@ from tests.core.tools.web_search_helpers import (
     assert_failure_envelope,
     assert_success_envelope,
     make_context,
+    result_urls,
 )
 
 
@@ -60,18 +61,12 @@ async def test_web_search_handler_tavily_success_maps_results(tmp_path: Path) ->
     )
 
     data = assert_success_envelope(result)
-    assert data["provider"] == "tavily"
-    assert "query" not in data
-    assert "count" not in data
-    assert "page" not in data
-    assert len(data["results"]) == 2
-    assert "recency" not in data
-    assert "warnings" not in data
-    first, second = data["results"]
-    assert (first["rank"], second["rank"]) == (1, 2)
-    assert first["description"] == "vBot documentation"
-    assert first["page_age"] == "2026-08-20"
-    assert "page_age" not in second
+    assert data == {
+        "content": (
+            "1. vBot docs\nhttps://example.com/vbot\n2026-08-20 - vBot documentation\n\n"
+            "2. vBot project\nhttps://example.com/project\nProject page"
+        )
+    }
 
     request = route.calls[0].request
     assert request.headers["authorization"] == "Bearer test-brave-api-key"
@@ -86,7 +81,7 @@ async def test_web_search_handler_tavily_success_maps_results(tmp_path: Path) ->
 
 @respx.mock
 @pytest.mark.asyncio
-@pytest.mark.parametrize("recency", ["day", "month", "year"])
+@pytest.mark.parametrize("recency", ["day", "week", "month", "year"])
 async def test_web_search_handler_tavily_recency_and_domains(tmp_path: Path, recency: str) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -120,8 +115,7 @@ async def test_web_search_handler_tavily_recency_and_domains(tmp_path: Path, rec
 
     data = assert_success_envelope(result)
     assert data["recency"] == recency
-    assert len(data["results"]) == 1
-    assert data["results"][0]["url"] == "https://example.com/vbot"
+    assert result_urls(data) == ["https://example.com/vbot"]
 
     body = _read_json_body(route.calls[0].request)
     assert body["time_range"] == recency
@@ -148,13 +142,43 @@ async def test_web_search_handler_tavily_page_warns_without_paging(tmp_path: Pat
     )
 
     data = assert_success_envelope(result)
-    assert "page" not in data
-    warnings = data.get("warnings", [])
-    assert any("paging" in warning for warning in warnings), (
-        f"expected a pagination warning, got {warnings}"
+    assert data["note"] == (
+        "Tavily cannot page results; these are the first results again, not page 2."
     )
     assert len(route.calls) == 1
     assert "page" not in _read_json_body(route.calls[0].request)
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_web_search_handler_tavily_excludes_domains_natively_and_after(
+    tmp_path: Path,
+) -> None:
+    route = respx.post(_TAVILY_ENDPOINT).respond(
+        200,
+        json={
+            "results": [
+                {"title": "Kept", "url": "https://example.com/a", "content": "ok"},
+                {"title": "Leak", "url": "https://www.reddit.com/r/x", "content": "no"},
+            ]
+        },
+    )
+
+    result = await web_search_handler(
+        make_context(tmp_path),
+        {"query": "vbot", "exclude_domains": ["reddit.com"]},
+        _fake_credential_resolver,
+        lambda: {"provider": "tavily"},
+    )
+
+    data = assert_success_envelope(result)
+    assert data == {
+        "excluded_domains": "reddit.com",
+        "content": "1. Kept\nhttps://example.com/a\nok",
+    }
+    body = _read_json_body(route.calls[0].request)
+    assert body["exclude_domains"] == ["reddit.com"]
+    assert body["query"] == "vbot"
 
 
 @pytest.mark.asyncio
@@ -312,16 +336,13 @@ async def test_web_search_handler_exa_success_maps_results(tmp_path: Path) -> No
     )
 
     data = assert_success_envelope(result)
-    assert data["provider"] == "exa"
-    assert len(data["results"]) == 2
-    assert "recency" not in data
-    assert "warnings" not in data
-    first, second = data["results"]
-    assert (first["rank"], second["rank"]) == (1, 2)
-    assert first["description"] == "vBot documentation agent harness"
-    assert first["page_age"] == "2026-08-20T00:00:00.000Z"
-    assert second["description"] == ""
-    assert "page_age" not in second
+    assert data == {
+        "content": (
+            "1. vBot docs\nhttps://example.com/vbot\n"
+            "2026-08-20 - vBot documentation agent harness\n\n"
+            "2. vBot project\nhttps://example.com/project"
+        )
+    }
 
     request = route.calls[0].request
     assert request.headers["x-api-key"] == "test-brave-api-key"
@@ -335,7 +356,9 @@ async def test_web_search_handler_exa_success_maps_results(tmp_path: Path) -> No
 
 @respx.mock
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("recency", "window_days"), [("day", 1), ("month", 30), ("year", 365)])
+@pytest.mark.parametrize(
+    ("recency", "window_days"), [("day", 1), ("week", 7), ("month", 30), ("year", 365)]
+)
 async def test_web_search_handler_exa_recency_and_domains(
     tmp_path: Path, recency: str, window_days: int
 ) -> None:
@@ -371,11 +394,8 @@ async def test_web_search_handler_exa_recency_and_domains(
 
     data = assert_success_envelope(result)
     assert data["recency"] == recency
-    assert len(data["results"]) == 1
-    warnings = data.get("warnings", [])
-    assert any("published date" in warning for warning in warnings), (
-        f"expected a recency warning, got {warnings}"
-    )
+    assert result_urls(data) == ["https://example.com/vbot"]
+    assert data["note"] == "Exa leaves out pages without a publication date when recency is set."
 
     body = _read_json_body(route.calls[0].request)
     assert body["includeDomains"] == ["example.com"]
@@ -402,12 +422,36 @@ async def test_web_search_handler_exa_page_warns_without_paging(tmp_path: Path) 
     )
 
     data = assert_success_envelope(result)
-    assert "page" not in data
-    warnings = data.get("warnings", [])
-    assert any("paging" in warning for warning in warnings), (
-        f"expected a pagination warning, got {warnings}"
-    )
+    assert data["note"] == "Exa cannot page results; these are the first results again, not page 2."
     assert len(route.calls) == 1
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_web_search_handler_exa_sends_exclusions_only_without_inclusions(
+    tmp_path: Path,
+) -> None:
+    route = respx.post(_EXA_ENDPOINT).respond(200, json={"results": []})
+    context = make_context(tmp_path)
+
+    await web_search_handler(
+        context,
+        {"query": "vbot", "exclude_domains": ["reddit.com"]},
+        _fake_credential_resolver,
+        lambda: {"provider": "exa"},
+    )
+    await web_search_handler(
+        context,
+        {"query": "vbot", "domains": ["example.com"], "exclude_domains": ["blog.example.com"]},
+        _fake_credential_resolver,
+        lambda: {"provider": "exa"},
+    )
+
+    only_excluded, both = (_read_json_body(call.request) for call in route.calls)
+    assert only_excluded["excludeDomains"] == ["reddit.com"]
+    assert "includeDomains" not in only_excluded
+    assert both["includeDomains"] == ["example.com"]
+    assert "excludeDomains" not in both
 
 
 @pytest.mark.asyncio
