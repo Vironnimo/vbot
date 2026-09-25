@@ -75,11 +75,13 @@ class UpdateOffsetStore(Protocol):
     messages as duplicate Runs. The adapter claims each delivered update id and
     skips ids at or below the persisted high-water mark while it is fresh.
     Storage and live adapters expire idle watermarks so randomized ids remain usable.
+    Update ids count per bot, so a watermark applies only to the bot it names;
+    another bot's watermark reads as 0.
     """
 
-    def load_update_offset(self, channel_id: str) -> int: ...
+    def load_update_offset(self, channel_id: str, bot_id: int) -> int: ...
 
-    def save_update_offset(self, channel_id: str, update_id: int) -> None: ...
+    def save_update_offset(self, channel_id: str, bot_id: int, update_id: int) -> None: ...
 
 
 class ChannelAccessRegistry(Protocol):
@@ -103,6 +105,15 @@ class ChannelAccessRegistry(Protocol):
         access_scope_id: str,
         user_id: str,
     ) -> GroupRole: ...
+
+
+def main_conversation_id(channel_id: str) -> str:
+    """Return the anchor of a Channel's shared direct conversation (``dm_scope`` "main").
+
+    It is the only conversation anchor that names no platform id, so its pointer
+    stays valid when the Channel moves to another platform.
+    """
+    return f"ch-{channel_id}-main"
 
 
 class ConversationPointerStore(Protocol):

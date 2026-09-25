@@ -27,6 +27,9 @@ _STATE_TABLES = (
     "channel_polling",
 )
 
+_BOT = 7001
+_OTHER_BOT = 7002
+
 
 def _open(data_dir: Path) -> ChannelStateStore:
     if not (data_dir / "data-store.json").exists():
@@ -37,7 +40,7 @@ def _open(data_dir: Path) -> ChannelStateStore:
 @pytest.fixture
 def store(tmp_path: Path) -> Iterator[ChannelStateStore]:
     state = _open(tmp_path)
-    state.reset("tg")
+    state.reset("tg", "telegram")
     try:
         yield state
     finally:
@@ -73,7 +76,7 @@ async def _fill(state: ChannelStateStore, channel_id: str) -> None:
     await state.record_received(channel_id, "-100:1")
     state.point_conversation(channel_id, f"ch-{channel_id}--100", "group", "ses_next")
     state.save_run_button_binding(channel_id, _binding())
-    state.save_update_offset(channel_id, 42)
+    state.save_update_offset(channel_id, _BOT, 42)
 
 
 def test_channels_db_is_a_canonical_database_of_the_data_directory(tmp_path: Path) -> None:
@@ -103,7 +106,7 @@ async def test_state_writes_for_an_unregistered_channel_are_refused(
     with pytest.raises(ChannelNotFoundError):
         store.save_run_button_binding("gone", _binding())
     with pytest.raises(ChannelNotFoundError):
-        store.save_update_offset("gone", 7)
+        store.save_update_offset("gone", _BOT, 7)
 
     assert _row_counts(store, "gone") == dict.fromkeys(_STATE_TABLES, 0)
 
@@ -112,7 +115,7 @@ async def test_state_writes_for_an_unregistered_channel_are_refused(
 async def test_unregister_deletes_every_row_of_only_that_channel(
     store: ChannelStateStore,
 ) -> None:
-    store.reset("other")
+    store.reset("other", "telegram")
     await _fill(store, "tg")
     await _fill(store, "other")
 
@@ -123,14 +126,14 @@ async def test_unregister_deletes_every_row_of_only_that_channel(
     assert store.role_for("tg", "-100", "50") == "member"
     assert store.role_for("other", "-100", "50") == "admin"
     with pytest.raises(ChannelNotFoundError):
-        store.save_update_offset("tg", 43)
+        store.save_update_offset("tg", _BOT, 43)
 
 
 @pytest.mark.asyncio
 async def test_reset_gives_a_reused_channel_id_empty_state(store: ChannelStateStore) -> None:
     await _fill(store, "tg")
 
-    store.reset("tg")
+    store.reset("tg", "telegram")
 
     assert _row_counts(store, "tg") == dict.fromkeys(_STATE_TABLES, 0)
     assert await store.access_state("tg") == {
@@ -145,14 +148,92 @@ async def test_reset_gives_a_reused_channel_id_empty_state(store: ChannelStateSt
 async def test_adopting_configured_channels_keeps_their_state(tmp_path: Path) -> None:
     state = _open(tmp_path)
     try:
-        state.reset("tg")
+        state.reset("tg", "telegram")
         await _fill(state, "tg")
 
-        state.adopt(["tg", "discord-main"])
+        assert state.adopt({"tg": "telegram", "discord-main": "discord"}) == []
 
         assert _row_counts(state, "tg") == dict.fromkeys(_STATE_TABLES, 1)
         assert state.role_for("tg", "-100", "50") == "admin"
         assert (await state.access_state("discord-main"))["groups"] == []
+        assert _platforms(state) == {"tg": "telegram", "discord-main": "discord"}
+    finally:
+        state.close()
+
+
+def _platforms(state: ChannelStateStore) -> dict[str, str | None]:
+    with state.database.read() as connection:
+        return dict(connection.execute("SELECT channel_id, platform FROM channels").fetchall())
+
+
+@pytest.mark.asyncio
+async def test_a_platform_change_resets_state_but_keeps_the_main_conversation(
+    store: ChannelStateStore,
+) -> None:
+    store.reset("other", "telegram")
+    for channel_id in ("tg", "other"):
+        await _fill(store, channel_id)
+        await store.set_self_user_id(channel_id, "50")
+        store.point_conversation(channel_id, f"ch-{channel_id}-main", "direct", "ses_main")
+
+    assert store.bind_platform("tg", "telegram") is False
+    assert _row_counts(store, "tg")["channel_conversations"] == 2
+
+    assert store.bind_platform("tg", "discord") is True
+
+    counts = _row_counts(store, "tg")
+    assert counts == {**dict.fromkeys(_STATE_TABLES, 0), "channel_conversations": 1}
+    assert store.active_session_id("tg", "ch-tg-main") == "ses_main"
+    assert store.active_session_id("tg", "ch-tg--100") is None
+    assert await store.access_state("tg") == {
+        "channel_id": "tg",
+        "self_user_id": None,
+        "groups": [],
+    }
+    assert store.role_for("tg", "-100", "50") == "member"
+    assert store.load_update_offset("tg", _BOT) == 0
+    assert _platforms(store) == {"tg": "discord", "other": "telegram"}
+    # Another Channel keeps its state and roles.
+    assert _row_counts(store, "other") == {
+        **dict.fromkeys(_STATE_TABLES, 1),
+        "channel_conversations": 2,
+    }
+    assert store.role_for("other", "-100", "50") == "admin"
+    with pytest.raises(ChannelNotFoundError):
+        store.bind_platform("gone", "discord")
+
+
+@pytest.mark.asyncio
+async def test_adopt_records_platforms_and_resets_state_recorded_for_another(
+    tmp_path: Path,
+) -> None:
+    state = _open(tmp_path)
+    try:
+        state.reset("tg", "telegram")
+        state.adopt({"legacy": None})
+        for channel_id in ("tg", "legacy"):
+            await _fill(state, channel_id)
+            state.point_conversation(channel_id, f"ch-{channel_id}-main", "direct", "ses_main")
+
+        # An unreadable config registers its Channel and keeps what was recorded.
+        assert state.adopt({"tg": None, "legacy": None, "new": None}) == []
+        assert _platforms(state) == {"tg": "telegram", "legacy": None, "new": None}
+
+        # A first recorded platform keeps the state; another platform resets it.
+        assert state.adopt({"tg": "slack", "legacy": "slack", "new": "discord"}) == ["tg"]
+
+        assert _platforms(state) == {"tg": "slack", "legacy": "slack", "new": "discord"}
+        assert _row_counts(state, "tg") == {
+            **dict.fromkeys(_STATE_TABLES, 0),
+            "channel_conversations": 1,
+        }
+        assert state.active_session_id("tg", "ch-tg-main") == "ses_main"
+        assert state.role_for("tg", "-100", "50") == "member"
+        assert _row_counts(state, "legacy") == {
+            **dict.fromkeys(_STATE_TABLES, 1),
+            "channel_conversations": 2,
+        }
+        assert state.role_for("legacy", "-100", "50") == "admin"
     finally:
         state.close()
 
@@ -160,7 +241,7 @@ async def test_adopting_configured_channels_keeps_their_state(tmp_path: Path) ->
 @pytest.mark.asyncio
 async def test_group_access_is_durable_and_scoped_per_group(tmp_path: Path) -> None:
     state = _open(tmp_path)
-    state.reset("tg")
+    state.reset("tg", "telegram")
     assert await state.snapshot_participant_role("tg", "-100", "50", "Alice") == "member"
     assert await state.snapshot_participant_role("tg", "-100", "51", "  Bob  ") == "member"
     assert await state.snapshot_participant_role("tg", "-200", "51", "") == "member"
@@ -278,7 +359,7 @@ def test_run_button_claims_are_atomic_and_consumed_rows_block_replays(
     tmp_path: Path,
 ) -> None:
     state = _open(tmp_path)
-    state.reset("tg")
+    state.reset("tg", "telegram")
     state.save_run_button_binding("tg", _binding())
     barrier = threading.Barrier(8)
     statuses: list[str] = []
@@ -346,7 +427,7 @@ async def test_receipts_keep_a_fifo_window_per_channel(
 ) -> None:
     assert state_module.RECEIVED_MESSAGE_WINDOW == 4096
     monkeypatch.setattr(state_module, "RECEIVED_MESSAGE_WINDOW", 3)
-    store.reset("other")
+    store.reset("other", "telegram")
     await store.record_received("other", "keep")
 
     for index in range(5):
@@ -365,14 +446,38 @@ async def test_receipts_keep_a_fifo_window_per_channel(
 
 
 def test_polling_watermark_is_monotonic_while_fresh(store: ChannelStateStore) -> None:
-    assert store.load_update_offset("tg") == 0
+    assert store.load_update_offset("tg", _BOT) == 0
 
-    store.save_update_offset("tg", 100)
-    store.save_update_offset("tg", 90)
-    store.save_update_offset("tg", 100)
-    assert store.load_update_offset("tg") == 100
-    with pytest.raises(ChannelError, match="non-negative integer"):
-        store.save_update_offset("tg", -1)
+    store.save_update_offset("tg", _BOT, 100)
+    store.save_update_offset("tg", _BOT, 90)
+    store.save_update_offset("tg", _BOT, 100)
+    assert store.load_update_offset("tg", _BOT) == 100
+    with pytest.raises(ChannelError, match="update id must be a non-negative integer"):
+        store.save_update_offset("tg", _BOT, -1)
+    with pytest.raises(ChannelError, match="bot id must be a positive integer"):
+        store.save_update_offset("tg", 0, 101)
+    with pytest.raises(ChannelError, match="bot id must be a positive integer"):
+        store.load_update_offset("tg", True)  # type: ignore[arg-type]
+
+
+def test_polling_watermark_applies_only_to_the_bot_it_names(store: ChannelStateStore) -> None:
+    store.save_update_offset("tg", _BOT, 100)
+
+    # Another bot's update ids form their own sequence: lower ids replace the mark.
+    assert store.load_update_offset("tg", _OTHER_BOT) == 0
+    store.save_update_offset("tg", _OTHER_BOT, 5)
+    assert store.load_update_offset("tg", _OTHER_BOT) == 5
+    assert store.load_update_offset("tg", _BOT) == 0
+
+    # A watermark that names no bot applies to none.
+    store.database.write(
+        lambda connection: connection.execute(
+            "UPDATE channel_polling SET bot_id = NULL WHERE channel_id = 'tg'"
+        )
+    )
+    assert store.load_update_offset("tg", _OTHER_BOT) == 0
+    store.save_update_offset("tg", _OTHER_BOT, 3)
+    assert store.load_update_offset("tg", _OTHER_BOT) == 3
 
 
 def test_async_access_runs_off_the_calling_thread(store: ChannelStateStore) -> None:

@@ -16,6 +16,7 @@ from core.channels.adapter import (
     ConversationPointerStore,
     ReplyPlanFacts,
     RouteFacts,
+    main_conversation_id,
 )
 from core.sessions import SessionAddress
 from core.utils.workers import BoundedWorkerPool
@@ -180,7 +181,7 @@ class ChannelSessionRouting:
 
         scope = self._config.dm_scope
         if scope == "main":
-            return f"ch-{self._config.id}-main"
+            return main_conversation_id(self._config.id)
         if scope == "per_peer":
             return f"ch-{self._config.id}-u{conversation.user_id}"
         if scope == "per_account_channel_peer":
