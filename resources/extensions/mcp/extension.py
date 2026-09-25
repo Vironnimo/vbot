@@ -92,7 +92,7 @@ class MCPService:
             raise RuntimeError("MCP requires an owner-bound Extension host")
         self.host = host
         self.store = ConnectionStore(host.state_dir)
-        self.content = ContentStore(host, host.data_dir / "mcp" / "content")
+        self.content = ContentStore(host)
         try:
             self.connections = await run_tool_worker(self.store.load)
         except (ValueError, OSError) as error:
@@ -448,7 +448,7 @@ class MCPService:
             if len(prompts) > 3:
                 preview["server_guidance"]["more_prompts"] = {"action": "search", "kind": "prompt"}
             result = await self._present(runner, context, payload, preview=preview)
-            if len(instructions) > GUIDANCE_PREVIEW_CHARACTERS:
+            if len(instructions) > GUIDANCE_PREVIEW_CHARACTERS and "result_id" in result["data"]:
                 result["data"]["guidance_read"] = {
                     "action": "read",
                     "result_id": result["data"]["result_id"],
@@ -824,6 +824,22 @@ class MCPService:
         return {"job_id": identifier, "state": state, "result": result}
 
 
+# Management calls run outside a Session and return complete payloads inline,
+# so they have no saved result to read.
+_EXPLORE_PROPERTIES: dict[str, Any] = {
+    **{
+        key: value
+        for key, value in MCP_PARAMETERS["properties"].items()
+        if key not in {"result_id", "pointer", "fields"}
+    },
+    "action": {
+        **MCP_PARAMETERS["properties"]["action"],
+        "enum": ["search", "describe", "call"],
+        "description": "Search available items, describe one target, or call it.",
+    },
+}
+
+
 def register(api: ExtensionAPI) -> None:
     service = MCPService(api)
     api.operations.startup.append(service.start)
@@ -851,7 +867,8 @@ def register(api: ExtensionAPI) -> None:
         "job": "Read a management job's running, completed, failed, or cancelled state and result.",
         "cancel-job": "Cancel a management job; remote effects already performed are not undone.",
         "explore": (
-            "Search, describe, call, or read as an Agent; inspect the returned job_id with job."
+            "Search, describe, or call as an Agent; the job result holds the complete "
+            "payload. Inspect the returned job_id with job."
         ),
         "invoke": (
             "Invoke an exact MCP operation as an Agent; inspect the returned job_id with job."
@@ -872,7 +889,7 @@ def register(api: ExtensionAPI) -> None:
         "credential": {**base, "key": {"type": "string"}, "value": {"type": "string"}},
         "respond": {"request_id": {"type": "string"}, "response": {"type": "object"}},
         **{name: {"job_id": {"type": "string"}} for name in ("job", "cancel-job")},
-        "explore": {**base, "agent": {"type": "string"}, **MCP_PARAMETERS["properties"]},
+        "explore": {**base, "agent": {"type": "string"}, **_EXPLORE_PROPERTIES},
         "invoke": {
             **base,
             "agent": {"type": "string"},

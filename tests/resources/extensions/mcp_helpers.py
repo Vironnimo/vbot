@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import sys
+from dataclasses import replace
 from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 import pytest_asyncio
@@ -14,10 +17,37 @@ from core.extensions.extensions import ExtensionAPI, ExtensionDeclarations
 from core.extensions.operations import ExtensionHost
 from core.tools.availability import ToolAccess
 from core.tools.tools import ToolContext, ToolRegistry
+from core.utils.ids import new_id
 from resources.extensions.mcp.client import ConnectionRunner
 from resources.extensions.mcp.config import validate_connection
 from resources.extensions.mcp.extension import MCPService
 from resources.extensions.mcp.interactions import InputRequests
+
+
+class SessionPayloads:
+    """Result payloads kept with Tool Results, visible in the Session that received them.
+
+    Stands in for Chat staging and the Session store: the real visibility rule
+    (own and inherited history) is covered by the Session and host tests.
+    """
+
+    def __init__(self) -> None:
+        self.rows: dict[str, tuple[tuple[str | None, str, str], str]] = {}
+
+    def attach(self, context: ToolContext, payload: Any) -> str:
+        identifier = new_id("res")
+        self.rows[identifier] = (_address(context), json.dumps(payload))
+        return identifier
+
+    async def load(self, context: ToolContext, payload_id: str) -> Any:
+        row = self.rows.get(payload_id)
+        if not context.result_payloads_available or row is None or row[0] != _address(context):
+            return None
+        return json.loads(row[1])
+
+
+def _address(context: ToolContext) -> tuple[str | None, str, str]:
+    return (context.project_id, context.agent_id, context.session_id)
 
 
 @pytest.fixture
@@ -31,6 +61,7 @@ def host(tmp_path):
         memory_prompt_mode="off",
         workspace=str(tmp_path),
     )
+    payloads = SessionPayloads()
     state_dir = tmp_path / "extension-data" / "mcp"
     state_dir.mkdir(parents=True)
     return ExtensionHost(
@@ -44,14 +75,21 @@ def host(tmp_path):
         resolve_credential=lambda key: credentials.get(key, ""),
         set_credential=lambda key, value: credentials.__setitem__(key, value),
         state_dir=state_dir,
+        load_result_payload=payloads.load,
     )
 
 
-def context(host, agent="alice", project=None):
-    return ToolContext(
+def payloads(host) -> SessionPayloads:
+    """The fake payload store behind *host*."""
+    return cast(SessionPayloads, host.load_result_payload.__self__)
+
+
+def context(host, agent="alice", project=None, session: str | None = "session"):
+    """A Tool call in *session*; ``None`` is a call outside any Session."""
+    call = ToolContext(
         agent_id=agent,
         project_id=project,
-        session_id="session",
+        session_id=session or "mcp-management",
         run_id="run",
         tool_call_id="call",
         tool_name="mcp_example",
@@ -59,6 +97,13 @@ def context(host, agent="alice", project=None):
         workspace=host.data_dir,
         vbot_root=host.data_dir,
         data_root=host.data_dir,
+    )
+    if session is None:
+        return call
+    store = payloads(host)
+    return replace(
+        call,
+        result_payload_hook=lambda _call_id, _tool_name, payload: store.attach(call, payload),
     )
 
 
