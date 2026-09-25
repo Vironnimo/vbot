@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from curl_cffi import CurlOpt
 
-import core.tools.web_fetch as web_fetch_module
+import core.tools._public_http as public_http
 from tests.core.tools.web_fetch_helpers import (
     install_http_get,
     make_result,
@@ -20,7 +20,7 @@ from tests.core.tools.web_fetch_helpers import (
 
 @pytest.mark.asyncio
 async def test_validate_public_target_returns_resolved_ip() -> None:
-    host, pinned = await web_fetch_module._validate_public_target("https", "example.com", 443)
+    host, pinned = await public_http._validate_public_target("https", "example.com", 443)
 
     assert host == "example.com"
     assert pinned == "93.184.216.34"
@@ -28,7 +28,7 @@ async def test_validate_public_target_returns_resolved_ip() -> None:
 
 @pytest.mark.asyncio
 async def test_validate_public_target_returns_literal_ip() -> None:
-    host, pinned = await web_fetch_module._validate_public_target("https", "93.184.216.34", 443)
+    host, pinned = await public_http._validate_public_target("https", "93.184.216.34", 443)
 
     assert host == "93.184.216.34"
     assert pinned == "93.184.216.34"
@@ -41,8 +41,8 @@ async def test_fetch_with_retry_pins_validated_ip(monkeypatch: pytest.MonkeyPatc
     install_http_get(monkeypatch, lambda _url: make_result(status_code=200, text="ok", url=url))
 
     resolve_map: dict[tuple[str, int], str] = {}
-    async with web_fetch_module._make_session() as session:
-        result = await web_fetch_module._fetch_with_retry(session, url, resolve_map)
+    async with public_http._make_session("*/*") as session:
+        result = await public_http._fetch_with_retry(session, url, resolve_map)
 
         # The validated IP is both recorded and handed to curl's RESOLVE map so
         # the connection targets exactly the address that cleared validation.
@@ -62,12 +62,12 @@ async def test_fetch_with_retry_brackets_ipv6_resolve_address(
         assert host == "example.com"
         return "example.com", "2606:2800:220:1:248:1893:25c8:1946"
 
-    monkeypatch.setattr(web_fetch_module, "_validate_public_target", validate_ipv6_target)
+    monkeypatch.setattr(public_http, "_validate_public_target", validate_ipv6_target)
     install_http_get(monkeypatch, lambda _url: make_result(status_code=200, text="ok", url=url))
 
     resolve_map: dict[tuple[str, int], str] = {}
-    async with web_fetch_module._make_session() as session:
-        await web_fetch_module._fetch_with_retry(session, url, resolve_map)
+    async with public_http._make_session("*/*") as session:
+        await public_http._fetch_with_retry(session, url, resolve_map)
 
         assert session.curl_options[CurlOpt.RESOLVE] == [
             "example.com:443:[2606:2800:220:1:248:1893:25c8:1946]"

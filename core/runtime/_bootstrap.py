@@ -298,7 +298,9 @@ def bootstrap(runtime: Runtime) -> None:
         register_process_tool(runtime._tools, runtime._process_manager)
         register_text_to_speech_tool(runtime._tools, runtime._speech)
         register_evaluate_tool(runtime._tools, runtime._decisions)
-        register_analyze_image_tool(runtime._tools, runtime._image)
+        register_analyze_image_tool(
+            runtime._tools, runtime._image, attachment_store=runtime._attachment_store
+        )
         register_image_generation_tool(runtime._tools, runtime._image)
         register_generate_video_tool(runtime._tools, runtime._video)
         register_generate_music_tool(runtime._tools, runtime._music)
