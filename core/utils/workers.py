@@ -1,4 +1,4 @@
-"""Bounded worker pools for blocking in-process work.
+"""Bounded worker pools and ordered workers for blocking in-process work.
 
 ``asyncio.to_thread`` protects the Event Loop, but every call shares the loop's
 default executor and submits work before any application-level backpressure can
@@ -6,10 +6,14 @@ apply.  This module owns the stronger cross-domain boundary: a named dedicated
 executor, a per-Event-Loop admission limit, and cancellation that does not report
 completion while an already-started worker is still mutating process state.
 
+``OrderedWorker`` is the single-thread variant for owners whose operations must
+run in exactly the order the Event Loop submitted them, such as full-document
+snapshots written by a scheduler and by operator edits.
+
 Every pool records its admission wait and run durations
 (``worker_pool.<name>.wait`` / ``.run``) and its ``.active`` / ``.waiting``
-gauges; during a performance recording they also appear on the
-``worker pool <name>`` track.
+gauges; an ordered worker records ``worker_pool.<name>.run``. During a
+performance recording they also appear on the ``worker pool <name>`` track.
 """
 
 from __future__ import annotations
@@ -19,7 +23,7 @@ import contextlib
 import threading
 import weakref
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from functools import partial
 from time import perf_counter
 from typing import Any, TypeVar
@@ -27,6 +31,7 @@ from typing import Any, TypeVar
 from core.performance.performance import measure, record_span, set_gauge
 
 _WorkerResult = TypeVar("_WorkerResult")
+_OrderedResult = TypeVar("_OrderedResult")
 # Admission waits shorter than this stay histogram-only in recordings.
 _WAIT_SPAN_MIN_MS = 1.0
 
@@ -155,6 +160,103 @@ class BoundedWorkerPool:
     def shutdown(self, *, wait: bool = True) -> None:
         """Reject new submissions and release an owner's executor on shutdown."""
         self._executor.shutdown(wait=wait, cancel_futures=True)
+
+
+class OrderedWorker:
+    """Run blocking callables on one dedicated thread, strictly in submission order.
+
+    Submission order is the order of the ``call``, ``call_async`` and ``hand_off``
+    calls, so an owner that snapshots its state and submits the write in one
+    synchronous step gets its snapshots on disk in the order it took them, from
+    the Event Loop and from synchronous callers alike.
+
+    A submitted operation always runs. Cancelling a ``call_async`` caller defers
+    the cancellation until its operation has settled, as ``BoundedWorkerPool``
+    does, so shutdown never abandons a half-finished write. ``drain`` waits for
+    every operation submitted so far.
+    """
+
+    def __init__(self, *, name: str) -> None:
+        if not name:
+            raise ValueError("Ordered worker name must be non-empty")
+        self._track = f"worker pool {name}"
+        self._run_metric = f"worker_pool.{name}.run"
+        self._local = threading.local()
+        self._executor = ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix=f"vbot-{name}",
+            initializer=self._mark_worker_thread,
+        )
+        self._hand_offs = 0
+        self._hand_offs_lock = threading.Lock()
+
+    def call(self, operation: Callable[[], _OrderedResult]) -> _OrderedResult:
+        """Run *operation* after all earlier work and wait for it, blocking the caller.
+
+        For synchronous callers only; on the worker thread itself it runs inline.
+        """
+        if getattr(self._local, "is_worker_thread", False):
+            return operation()
+        return self._submit(operation).result()
+
+    async def call_async(self, operation: Callable[[], _OrderedResult]) -> _OrderedResult:
+        """Run *operation* after all earlier work without blocking the Event Loop."""
+        future = asyncio.wrap_future(self._submit(operation))
+        try:
+            return await asyncio.shield(future)
+        except asyncio.CancelledError as cancellation:
+            # Wait for the operation even when the caller is cancelled repeatedly;
+            # cancellation still wins over a late failure once it has settled.
+            while not future.done():
+                try:
+                    await asyncio.shield(future)
+                except asyncio.CancelledError:
+                    continue
+                except BaseException:
+                    break
+            if future.done() and not future.cancelled():
+                with contextlib.suppress(BaseException):
+                    future.exception()
+            raise cancellation
+
+    def hand_off(self, operation: Callable[[], None], *, limit: int) -> bool:
+        """Queue *operation* without waiting; ``False`` when *limit* hand-offs are pending.
+
+        The operation must handle its own failures: nobody observes its result.
+        """
+        with self._hand_offs_lock:
+            if self._hand_offs >= limit:
+                return False
+            self._hand_offs += 1
+        try:
+            future = self._submit(operation)
+        except BaseException:
+            self._settle_hand_off()
+            raise
+        future.add_done_callback(lambda _future: self._settle_hand_off())
+        return True
+
+    async def drain(self) -> None:
+        """Wait until every operation submitted so far has finished."""
+        await self.call_async(_nothing)
+
+    def _submit(self, operation: Callable[[], _OrderedResult]) -> Future[_OrderedResult]:
+        return self._executor.submit(self._run_measured, operation)
+
+    def _run_measured(self, operation: Callable[[], _OrderedResult]) -> _OrderedResult:
+        with measure(self._run_metric, track=self._track, name=_callable_name(operation)):
+            return operation()
+
+    def _settle_hand_off(self) -> None:
+        with self._hand_offs_lock:
+            self._hand_offs -= 1
+
+    def _mark_worker_thread(self) -> None:
+        self._local.is_worker_thread = True
+
+
+def _nothing() -> None:
+    return None
 
 
 def _callable_name(function: Callable[..., Any]) -> str:

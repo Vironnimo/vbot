@@ -453,7 +453,7 @@ class TestTraceThread:
         monkeypatch: pytest.MonkeyPatch,
         blocked_trace_writes: _BlockedTraceWrites,
     ) -> None:
-        monkeypatch.setattr(store_module._TRACE_THREAD, "_max_pending_captures", 2)
+        monkeypatch.setattr(store_module, "MAX_PENDING_CAPTURES", 2)
         store = DebugTraceStore(tmp_path, trace_limit=10)
         traces = {
             trace_id: _make_trace_data(trace_id, f"2025-01-0{index}T00:00:00Z")
