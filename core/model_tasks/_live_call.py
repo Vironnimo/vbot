@@ -20,7 +20,7 @@ from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
 from core.model_tasks._live_arguments import PreparedLiveCall, prepare_live_call
-from core.model_tasks._live_brain import DelegationInput, LiveBrain
+from core.model_tasks._live_brain import DelegationInput, LiveBrain, record_tool_call
 from core.model_tasks._live_tools import LIVE_UPDATE_PREFIX, live_failure, live_result_text
 from core.model_tasks._live_wire import (
     MEDIA_RELAY,
@@ -293,6 +293,7 @@ class LiveCallSession:
     async def _run_tool(self, event: WireToolCall) -> None:
         async with self._delegation_slots:
             self._set_busy(1)
+            started = self._clock()
             try:
                 prepared = prepare_live_call(event.name, event.arguments)
                 result = (
@@ -302,6 +303,15 @@ class LiveCallSession:
                 )
             finally:
                 self._set_busy(-1)
+        record_tool_call(
+            self._host.record,
+            mode="direct",
+            called=event.name,
+            arguments=event.arguments,
+            prepared=prepared,
+            result=result,
+            duration=self._clock() - started,
+        )
         text = live_result_text(result)
         await self._send_command(lambda: self._wire.deliver_result(event.call_id, text))
 

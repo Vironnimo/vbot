@@ -54,6 +54,8 @@ class Harness:
         self.executed: list[tuple[str, dict[str, Any]]] = []
         self.sleeps: list[float] = []
         self.tool_results: list[dict[str, Any]] = []
+        self.records: list[dict[str, Any]] = []
+        self.time = 100.0
         runtime = SimpleNamespace(get_adapter=self._get_adapter, models=SimpleNamespace())
         self.brain = LiveBrain(
             runtime,
@@ -62,6 +64,8 @@ class Harness:
             conversation_id="live:rtc_1",
             max_steps=max_steps,
             sleep=self._sleep,
+            record=self.records.append,
+            clock=self._clock,
         )
 
     def _get_adapter(self, connection: ConnectionRef) -> FakeAdapter:
@@ -74,6 +78,10 @@ class Harness:
 
     async def _sleep(self, seconds: float) -> None:
         self.sleeps.append(seconds)
+
+    def _clock(self) -> float:
+        self.time += 0.25
+        return self.time
 
 
 def _tool_turn(*calls: tuple[str, dict[str, Any]], meta: Any = None) -> dict[str, Any]:
@@ -273,3 +281,57 @@ async def test_calls_in_other_spellings_run_as_the_live_tool_they_mean():
         ("send_message", {"target": "s2", "text": "yes"}),
         ("start_coding_terminal", {"program": "claude"}),
     ]
+
+
+@pytest.mark.asyncio
+async def test_records_every_tool_call_and_the_delegation():
+    harness = Harness(
+        [
+            _tool_turn(("status", {}), ("send_message", {"target": "s1"})),
+            _answer("Nothing runs."),
+        ]
+    )
+    harness.tool_results.append(
+        {"ok": True, "error": None, "data": {"content": "Agents: Coder."}, "artifacts": []}
+    )
+
+    await harness.brain.answer(DELEGATION)
+
+    tool, refused, delegation = harness.records
+    assert tool == {
+        "type": "tool",
+        "mode": "delegated",
+        "called": "status",
+        "tool": "overview",
+        "arguments": {},
+        "run_arguments": {},
+        "ok": True,
+        "result": "Agents: Coder.",
+        "duration_ms": 250,
+    }
+    assert (refused["called"], refused["tool"], refused["ok"]) == ("send_message", None, False)
+    assert refused["result"].startswith("Error (invalid_arguments): ")
+    assert delegation == {
+        "type": "delegation",
+        "request": "Start a Codex terminal",
+        "answer": "Nothing runs.",
+        "steps": 2,
+        "tool_calls": 2,
+        "failure": None,
+        "duration_ms": delegation["duration_ms"],
+    }
+
+
+@pytest.mark.asyncio
+async def test_records_a_failed_delegation_with_its_reason_and_survives_a_broken_recorder():
+    harness = Harness([ProviderError("broken", retryable=False)])
+
+    await harness.brain.answer(DELEGATION)
+    assert harness.records[-1]["failure"] == "the backend model request failed"
+
+    def broken(_event: dict[str, Any]) -> None:
+        raise OSError("disk full")
+
+    harness.brain._record = broken
+    harness.adapter.responses.append(_answer("Still answers."))
+    assert await harness.brain.answer(DELEGATION) == "Still answers."

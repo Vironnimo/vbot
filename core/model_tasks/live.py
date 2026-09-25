@@ -159,8 +159,9 @@ class LiveCallHost(Protocol):
     ``LIVE_TOOL_NAMES`` with validated arguments) and returns a Tool result
     envelope, reporting operation failures inside it. Concurrent delegations
     may call it concurrently; the host serializes executions. ``publish``
-    delivers an accessor update and ``publish_audio`` relayed assistant audio
-    (PCM16 mono 24 kHz), both without blocking.
+    delivers an accessor update, ``publish_audio`` relayed assistant audio
+    (PCM16 mono 24 kHz), and ``record`` one Tool call or delegation record for
+    local measurement, all without blocking.
     """
 
     async def execute_tool(self, name: str, arguments: JsonObject) -> JsonObject: ...
@@ -168,6 +169,8 @@ class LiveCallHost(Protocol):
     def publish(self, update: JsonObject) -> None: ...
 
     def publish_audio(self, pcm: bytes) -> None: ...
+
+    def record(self, event: JsonObject) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -373,6 +376,7 @@ class LiveVoiceService:
                 brain_target,
                 host.execute_tool,
                 conversation_id=f"live:{wire.call_id}",
+                record=host.record,
             )
             if brain_target is not None
             else None

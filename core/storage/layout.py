@@ -92,6 +92,11 @@ class DataDirectoryLayout:
         return self.artifacts / "performance"
 
     @property
+    def live_calls(self) -> Path:
+        """Local Live call records (Tool calls and delegations); created on first write."""
+        return self.artifacts / "live-calls"
+
+    @property
     def temporary(self) -> Path:
         return self.artifacts / "temp"
 
