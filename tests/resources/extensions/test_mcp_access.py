@@ -11,7 +11,7 @@ from core.tools.tools import ToolNotAllowedError
 from resources.extensions.mcp.client import Invocation
 from resources.extensions.mcp.config import validate_connection
 from resources.extensions.mcp.extension import remote_tool_name
-from tests.resources.extensions.mcp_helpers import context
+from tests.resources.extensions.mcp_helpers import context, targets
 from tests.resources.extensions.mcp_helpers import context_service as context_service
 from tests.resources.extensions.mcp_helpers import host as host
 
@@ -50,7 +50,7 @@ async def test_connection_policy_controls_definitions_and_real_dispatch(
         assert calls == []
         return
     result = await registry.dispatch(ctx, {"action": "search", "kind": "tool"}, allowed)
-    target = result["data"]["preview"]["matches"][0]["target"]
+    target = targets(result)[0]
     result = await registry.dispatch(
         ctx, {"action": "call", "target": target, "arguments": {"value": "sentinel"}}, allowed
     )

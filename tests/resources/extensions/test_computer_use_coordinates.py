@@ -131,7 +131,7 @@ def test_window_defaults_execute_once_in_background_with_a_compact_image(compute
     client.call = shallow_capture
     first = service.handle(context, {"action": "capture", "pid": 1, "window_id": 2})
     assert first["data"]["foreground"] is False
-    assert first["data"]["mode"] == "vision"
+    assert "mode" not in first["data"]  # vision is the default and is not echoed
     assert "elements" not in first["data"]
     assert "degraded" not in first["data"] and "elements_complete" not in first["data"]
     result = service.handle(
@@ -189,7 +189,7 @@ def test_zoom_infers_window_keeps_parent_view_and_maps_nested_crops(computer):
         },
     )
     assert first["ok"]
-    assert first["data"]["target"] == initial["target"]
+    assert first["data"]["parent_view_id"] == initial["view_id"]
     second = service.handle(
         context,
         {
@@ -249,7 +249,7 @@ def test_original_resolution_survives_input_zoom_and_explicit_target(computer):
         },
     )["data"]
     assert crop["parent_view_id"] == original["view_id"]
-    assert crop["coordinate_space"] == "image_pixels"
+    assert original["view_id"] in crop["image_note"]
     result = service.handle(
         context, {"action": "click", "view_id": crop["view_id"], "coordinate": [10, 10]}
     )["data"]
@@ -262,13 +262,15 @@ def test_original_resolution_survives_input_zoom_and_explicit_target(computer):
     assert capture(computer, resolution="auto")["data"]["image_width"] == 1600
 
 
-def test_zoom_foreground_is_a_consistency_assertion_not_a_delivery_switch(computer):
+def test_zoom_keeps_the_view_delivery_whatever_foreground_says(computer):
     data = capture(computer, foreground=True)["data"]
     fields = {"view_id": data["view_id"], "coordinate": [0, 0], "to_coordinate": [100, 100]}
-    result = call(computer, "zoom", foreground=False, **fields)
-    assert result["error"]["code"] == "invalid_arguments"
-    assert call(computer, "zoom", foreground=True, **fields)["ok"]
-    assert computer[2].inputs == 0
+    crop = call(computer, "zoom", foreground=False, **fields)
+    assert crop["ok"] and computer[2].inputs == 0
+    # The crop is still a foreground view: input measured in it keeps foreground delivery.
+    assert call(computer, "click", view_id=crop["data"]["view_id"], coordinate=[5, 5])["ok"]
+    sent = next(args for name, args in computer[2].calls if name == "click")
+    assert sent["delivery_mode"] == "foreground" and computer[2].inputs == 1
 
 
 def test_resolution_preference_outlives_views_after_skipped_observation(computer):
