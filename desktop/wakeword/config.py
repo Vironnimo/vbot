@@ -549,6 +549,28 @@ def set_enabled(raw: object, enabled: object) -> dict[str, Any]:
     return section
 
 
+def forget_model(raw: object, model_id: str) -> dict[str, Any]:
+    """Return the stored section without the per-phrase settings of ``model_id``.
+
+    Removes its sensitivity and its action in every server profile, for a
+    model that was deleted from the catalog. Malformed containers are left as
+    they are; ``active_model_ids`` is not touched.
+    """
+    section = _writable_section(raw)
+    sensitivities = section.get(_KEY_MODEL_SENSITIVITIES)
+    if isinstance(sensitivities, dict):
+        sensitivities.pop(model_id, None)
+    profiles = section.get(_KEY_SERVER_PROFILES)
+    if isinstance(profiles, dict):
+        for profile in profiles.values():
+            actions = (
+                profile.get(_PROFILE_KEY_PHRASE_ACTIONS) if isinstance(profile, dict) else None
+            )
+            if isinstance(actions, dict):
+                actions.pop(model_id, None)
+    return section
+
+
 def _writable_section(raw: object) -> dict[str, Any]:
     section = copy.deepcopy(dict(raw)) if isinstance(raw, Mapping) else {}
     section.pop(_KEY_RETIRED_MODEL_ACTIONS, None)

@@ -10,8 +10,8 @@ import pytest
 
 pytest.importorskip("pyopen_wakeword")
 
+from desktop.wakeword.config import DEFAULT_MODEL_IDS, PhraseConfig
 from desktop.wakeword.engine import (
-    DEFAULT_WAKEWORD_MODEL_IDS,
     WakewordEngine,
     WakewordMatch,
     WakewordModelCatalog,
@@ -30,7 +30,9 @@ _SAMPLE_RATE = 16000
     ],
 )
 def test_each_nabu_model_detects_its_positive_audio(model_id: str, fixture_name: str) -> None:
-    engine = WakewordModelCatalog(_FIXTURE_DIRECTORY / "settings.json").create_engine([model_id])
+    engine = WakewordModelCatalog(_FIXTURE_DIRECTORY / "settings.json").create_engine(
+        [PhraseConfig(model_id)]
+    )
 
     matches = _detect_file(engine, _FIXTURE_DIRECTORY / fixture_name)
 
@@ -41,18 +43,18 @@ def test_each_nabu_model_detects_its_positive_audio(model_id: str, fixture_name:
 @pytest.mark.parametrize("fixture_name", ["okay_nabu.wav", "hey_nabu.wav"])
 def test_two_active_nabu_models_emit_one_activation_per_phrase(fixture_name: str) -> None:
     engine = WakewordModelCatalog(_FIXTURE_DIRECTORY / "settings.json").create_engine(
-        list(DEFAULT_WAKEWORD_MODEL_IDS)
+        [PhraseConfig(model_id) for model_id in DEFAULT_MODEL_IDS]
     )
 
     matches = _detect_file(engine, _FIXTURE_DIRECTORY / fixture_name)
 
     assert len(matches) == 1
-    assert matches[0].model_id in DEFAULT_WAKEWORD_MODEL_IDS
+    assert matches[0].model_id in DEFAULT_MODEL_IDS
 
 
 def test_two_active_nabu_models_ignore_unrelated_wakeword_audio() -> None:
     engine = WakewordModelCatalog(_FIXTURE_DIRECTORY / "settings.json").create_engine(
-        list(DEFAULT_WAKEWORD_MODEL_IDS)
+        [PhraseConfig(model_id) for model_id in DEFAULT_MODEL_IDS]
     )
 
     matches = _detect_file(engine, _FIXTURE_DIRECTORY / "unrelated_hey_jarvis.wav")
@@ -62,7 +64,7 @@ def test_two_active_nabu_models_ignore_unrelated_wakeword_audio() -> None:
 
 def test_gated_positive_audio_never_activates_the_models() -> None:
     engine = WakewordModelCatalog(_FIXTURE_DIRECTORY / "settings.json").create_engine(
-        list(DEFAULT_WAKEWORD_MODEL_IDS)
+        [PhraseConfig(model_id) for model_id in DEFAULT_MODEL_IDS]
     )
 
     matches = _detect_file(engine, _FIXTURE_DIRECTORY / "okay_nabu.wav", speech_present=False)

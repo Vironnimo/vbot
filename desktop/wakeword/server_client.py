@@ -232,6 +232,7 @@ class VoiceServerClient:
                 "include_memory_reflections": False,
                 "include_skill_reflections": False,
                 "include_cron": False,
+                "include_channels": False,
             },
             error_code=ERROR_SESSION_RESOLUTION_FAILED,
             attempts=MAX_ATTEMPTS,
@@ -439,6 +440,10 @@ def _backoff_delay(attempt: int) -> float:
 def _upload_budget_for_limit(limit_bytes: int) -> int:
     payload_bytes = max(0, limit_bytes - WAV_HEADER_BYTES)
     return max(_MIN_UPLOAD_BUDGET_BYTES, int(payload_bytes * UPLOAD_SAFETY_FRACTION))
+
+
+DEFAULT_UPLOAD_BUDGET_BYTES = _upload_budget_for_limit(DEFAULT_SPEECH_UPLOAD_LIMIT_BYTES)
+"""The recording budget that applies while the server's own limit is unknown."""
 
 
 def _newest_session_id(sessions: list[Any]) -> str | None:

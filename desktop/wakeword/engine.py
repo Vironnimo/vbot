@@ -33,14 +33,6 @@ from desktop.wakeword.config import (
 
 logger = logging.getLogger("vbot.desktop.wakeword.engine")
 
-# Names the pre-redesign bridge and worker import; the values are owned by
-# ``desktop.wakeword.config``. MAX_ACTIVE_WAKEWORD_MODELS is the old bridge's own
-# two-phrase selection limit; the engine enforces MAX_ACTIVE_PHRASES.
-DEFAULT_WAKEWORD_MODEL_IDS = DEFAULT_MODEL_IDS
-DEFAULT_WAKEWORD_SENSITIVITY = DEFAULT_SENSITIVITY
-MIN_WAKEWORD_SENSITIVITY = MIN_SENSITIVITY
-MAX_WAKEWORD_SENSITIVITY = MAX_SENSITIVITY
-MAX_ACTIVE_WAKEWORD_MODELS = 2
 MAX_CUSTOM_WAKEWORD_MODEL_BYTES = 20 * 1024 * 1024
 
 # Detector kinds the engine can host over the shared feature stream.
@@ -205,18 +197,18 @@ class WakewordModelCatalog:
 
     def create_engine(
         self,
-        phrases: Sequence[PhraseConfig] | Sequence[str],
-        model_sensitivities: Mapping[str, float] | None = None,
+        phrases: Sequence[PhraseConfig],
         *,
         score_listener: Callable[[dict[str, float]], None] | None = None,
     ) -> MultiWakewordEngine:
         """Create one shared-feature detector for 1 to ``MAX_ACTIVE_PHRASES`` phrases.
 
         ``phrases`` are :class:`PhraseConfig` entries with unique model ids.
-        Bare model ids plus ``model_sensitivities`` remain accepted for the
-        pre-redesign bridge until it is removed.
+        ``score_listener`` receives every window's raw per-phrase scores.
         """
-        configured = tuple(_phrase_config(phrase, model_sensitivities) for phrase in phrases)
+        configured = tuple(phrases)
+        if not all(isinstance(phrase, PhraseConfig) for phrase in configured):
+            raise WakewordModelError("Wake phrases must be phrase configurations")
         if not 1 <= len(configured) <= MAX_ACTIVE_PHRASES:
             raise WakewordModelError(f"Choose between 1 and {MAX_ACTIVE_PHRASES} wake phrases")
         model_ids = tuple(phrase.model_id for phrase in configured)
@@ -581,18 +573,6 @@ def _arm_groups(descriptors: tuple[WakewordModelDescriptor, ...]) -> dict[str, s
                 first, second = sorted((root(descriptor.id), root(overlapping_id)))
                 group_of[second] = first
     return {model_id: root(model_id) for model_id in active_ids}
-
-
-def _phrase_config(
-    phrase: PhraseConfig | str,
-    model_sensitivities: Mapping[str, float] | None,
-) -> PhraseConfig:
-    if isinstance(phrase, PhraseConfig):
-        return phrase
-    if isinstance(phrase, str):
-        sensitivities = model_sensitivities or {}
-        return PhraseConfig(phrase, sensitivities.get(phrase, DEFAULT_SENSITIVITY))
-    raise WakewordModelError("Wake phrases must be phrase configurations")
 
 
 def _create_detector(descriptor: WakewordModelDescriptor) -> Any:
