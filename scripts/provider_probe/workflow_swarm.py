@@ -22,19 +22,16 @@ _POST_HEADER = re.compile(r"^\[(pst_[A-Za-z0-9]+)\]", re.MULTILINE)
 
 
 def _continuation(line: str) -> dict[str, Any]:
-    """Return the copyable argument object that ends a Swarm result line."""
+    """Return the copyable argument object inside a Swarm result line."""
 
-    return cast(dict[str, Any], json.loads(line[line.index("{") :]))
+    return cast(dict[str, Any], json.JSONDecoder().raw_decode(line[line.index("{") :])[0])
 
 
 def _received_post_ids(data: dict[str, Any]) -> set[str]:
     """Return the post IDs a successful Swarm result showed the Agent."""
 
-    received = {entry["id"] for entry in data.get("entries", []) if "id" in entry}
     content = data.get("content")
-    if isinstance(content, str):
-        received.update(_POST_HEADER.findall(content))
-    return received
+    return set(_POST_HEADER.findall(content)) if isinstance(content, str) else set()
 
 
 async def _probe_swarm_tool(adapter: Any, args: argparse.Namespace) -> dict[str, Any]:
@@ -384,6 +381,7 @@ async def _probe_swarm_tool(adapter: Any, args: argparse.Namespace) -> dict[str,
                     ("receive_empty", {}, True),
                     ("recovered_count", {"limit": "1"}, True),
                     ("recovered_null_limit", {"limit": None}, True),
+                    ("recovered_limit_clamp", {"limit": 101}, True),
                     ("recovered_action", {"action": "receive"}, True),
                     ("recovered_wrapper", {"receive": {"limti": "1"}}, True),
                     ("recovered_scope", {"swarm_id": sid, "participant_id": pid}, True),
@@ -397,7 +395,6 @@ async def _probe_swarm_tool(adapter: Any, args: argparse.Namespace) -> dict[str,
                             {"cursor": "invented"},
                             {"limit": True},
                             {"limit": 0},
-                            {"limit": 101},
                             {"limit": 1.5},
                         ]
                     )
@@ -414,6 +411,7 @@ async def _probe_swarm_tool(adapter: Any, args: argparse.Namespace) -> dict[str,
                     ("recovered_scope", {"swarm_id": sid, "participant_id": pid}, True),
                     ("status_one", {"limit": 1}, True),
                     ("status_max", {"limit": 100}, True),
+                    ("recovered_limit_clamp", {"limit": 101}, True),
                     (
                         "status_cursor",
                         {"cursor": status["cursor"], "limit": 1},
@@ -450,7 +448,6 @@ async def _probe_swarm_tool(adapter: Any, args: argparse.Namespace) -> dict[str,
                             {"participant_id": "foreign"},
                             {"limit": True},
                             {"limit": 0},
-                            {"limit": 101},
                             {"cursor": "foreign"},
                             {"include_summaries": "true"},
                             {"action": "wait", "include_summaries": True},

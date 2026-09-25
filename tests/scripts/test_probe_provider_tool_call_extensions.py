@@ -48,14 +48,18 @@ def test_swarm_workflow_persists_failed_calls_and_resumes_from_feedback():
 
         async def send(self, messages, **_kwargs):
             results = [json.loads(item["content"]) for item in messages if item["role"] == "tool"]
-            roster = next(
-                (item["data"] for item in results if (item.get("data") or {}).get("self")), {}
-            )
+            # swarm_state lists other participants as "- Name (prt_...): state".
             peer = next(
                 (
-                    row["id"]
-                    for row in roster.get("roster", [])
-                    if row["id"] != roster.get("self", {}).get("id")
+                    match.group(1)
+                    for item in results
+                    if (
+                        match := re.search(
+                            r"^- [^\n]*\((prt_[A-Za-z0-9]+)\): ",
+                            (item.get("data") or {}).get("content") or "",
+                            re.MULTILINE,
+                        )
+                    )
                 ),
                 "",
             )

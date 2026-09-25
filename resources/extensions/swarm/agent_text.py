@@ -12,11 +12,10 @@ BOARD_DESCRIPTION = (
 )
 
 INBOX_DESCRIPTION = (
-    "Receive pending Board messages for you, oldest first. Returned messages count "
-    "as delivered when this Tool Result is saved. Follow next_call when more "
-    "remain. This Tool returns immediately. When you have no further work now, end "
-    "your reply normally; new messages can start another Run according to the "
-    "group's delivery settings."
+    "Receive your pending Board messages, oldest first; returned messages count as received. "
+    "This Tool returns immediately and never waits for new messages. When you have no "
+    "further work now, end your reply normally; new messages can start another Run "
+    "according to the group's delivery settings."
 )
 
 INBOX_PARAMETERS: dict[str, Any] = {
@@ -25,15 +24,15 @@ INBOX_PARAMETERS: dict[str, Any] = {
         "limit": {
             "type": "integer",
             "minimum": 1,
-            "maximum": 100,
-            "description": "Maximum pending messages to receive. Omit for 20.",
+            "description": "Maximum messages to receive, at most 100. Omit for 20.",
         },
     },
     "required": [],
 }
 
 STATE_DESCRIPTION = (
-    "Inspect participants, their Run activity, pending message counts, and delivery settings."
+    "See the participants and their Run activity, your pending messages, and how Board "
+    "messages reach you."
 )
 
 STATE_PARAMETERS: dict[str, Any] = {
@@ -41,13 +40,12 @@ STATE_PARAMETERS: dict[str, Any] = {
     "properties": {
         "cursor": {
             "type": "string",
-            "description": "Roster continuation from a status result. Omit for the first page.",
+            "description": "Continuation from a previous result. Omit for the first page.",
         },
         "limit": {
             "type": "integer",
             "minimum": 1,
-            "maximum": 100,
-            "description": "Maximum roster entries for status. Omit for 20.",
+            "description": "Maximum participants to list, at most 100. Omit for 20.",
         },
     },
     "required": [],
@@ -128,10 +126,7 @@ REPLAYED = (
     "This Tool Call was already applied; its original result is shown and nothing was duplicated."
 )
 
-DELIVERY_PREFIX = (
-    "New Board messages from the authors listed below. If pending_remaining is greater than "
-    "zero, use swarm_inbox to read the remaining messages."
-)
+DELIVERY_PREFIX = "New Board messages for you, oldest first."
 RESUME_REMINDER = (
     "The user resumed your work. Continue toward the group's goal from where you left off."
 )
@@ -167,18 +162,17 @@ ERRORS = {
     "invalid_value": "A required value is missing, has the wrong type, or exceeds its "
     "documented limit. Correct the named field and try again. No "
     "change was applied.",
-    "invalid_cursor": "This cursor is unavailable for this query. Omit cursor to begin "
-    "a new page, then use the returned next_call.",
+    "invalid_cursor": "This cursor only continues the call that returned it, with the same "
+    "other arguments. Omit cursor to start from the first page.",
     "request_conflict": "This request_id was already used with different arguments. "
     "Reuse the original arguments to retrieve its result, or use a "
     "new request_id for a different change.",
-    "discussion_not_found": "This discussion is unavailable in your group. Use "
-    "swarm_board with action list to choose a current "
-    "discussion.",
+    "discussion_not_found": "This discussion does not exist in your group. Call swarm_board "
+    'with {"action": "list"} to see the current discussions.',
     "message_not_found": "This post is unavailable in your group. Read its discussion "
     "to find an available post.",
-    "invalid_recipient": "A recipient is not a participant in your group. Use "
-    "swarm_state to obtain participant IDs.",
+    "invalid_recipient": "A recipient is not a participant in your group. swarm_state lists "
+    "the participants' names and IDs.",
     "reply_discussion_mismatch": "The reply target belongs to another discussion. Omit "
     "discussion_id to reply in the target's discussion, "
     "or omit reply_to for a new post.",
@@ -208,10 +202,47 @@ INBOX_ONLY_RECEIVE = (
     "without arguments, or with limit."
 )
 STATE_ONLY_STATUS = (
-    "swarm_state has no {action} action; it only reports participants, their Run activity, "
-    "pending messages, and delivery settings. Share progress, results, or requests for help on "
-    "the Board with swarm_board, and end your reply normally when you have no further work now."
+    "swarm_state has no {action} action; it only shows the participants, their Run activity, "
+    "your pending messages, and how Board messages reach you. Share progress, results, or "
+    "requests for help on the Board with swarm_board, and end your reply normally when you "
+    "have no further work now."
 )
+
+# Delivered messages: Inbox results and automatic delivery.
+MESSAGES_IN = "In {discussion}:"
+INBOX_MORE = "{count} more pending; call swarm_inbox again{arguments} to continue."
+DELIVERY_MORE = {
+    "inbox": "{count} more pending; receive them with swarm_inbox.",
+    "no_inbox": "{count} more pending.",
+}
+
+# swarm_state results.
+STATE_YOU = "{name} ({participant_id}), {state}"
+STATE_PENDING = {
+    "none": "No pending messages.",
+    "one": "1 message for you; receive it with swarm_inbox.",
+    "many": "{count} messages for you; receive them with swarm_inbox.",
+    "one_no_inbox": "1 message for you.",
+    "many_no_inbox": "{count} messages for you.",
+}
+STATE_ROUTES = {
+    "main": "main-discussion posts",
+    "discussion": "posts in discussions you joined",
+    "ping": "pings",
+}
+STATE_DELIVERY = {
+    "automatic": "{routes} reach you automatically, also while you are running.",
+    "when_idle": "{routes} reach you automatically when you are idle.",
+    "on_request": "{routes} reach you only through swarm_inbox.",
+    "on_request_no_inbox": "{routes} reach you only when you read them with swarm_board.",
+}
+STATE_WAKE = "{routes} start a Run when you are idle."
+STATE_NO_WAKE = "New messages do not start a Run when you are idle."
+STATE_PARTICIPANTS = "{count} ({totals})"
+STATE_ROSTER_HEADER = "Participants:"
+STATE_ROSTER_LINE = "- {name} ({participant_id}{you}): {state}"
+STATE_ROSTER_YOU = ", you"
+STATE_MORE = "More participants exist. Continue with {call}"
 
 # Notes on a call that ran after a repair the Agent should know about.
 LIMIT_CLAMPED = "limit {requested} is above the maximum of {maximum}; used {maximum}."
