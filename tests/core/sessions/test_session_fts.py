@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,11 @@ from core.sessions.schema import (
     FTS_TARGET_HIGH_WATER_KEY,
 )
 from tests.core.sessions.history_fixtures import admit_run, append_tool_fixture, seed_history
+
+
+def _meta(connection: sqlite3.Connection, key: str) -> str | None:
+    row = connection.execute("SELECT value FROM store_meta WHERE key = ?", (key,)).fetchone()
+    return None if row is None else str(row[0])
 
 
 def test_empty_store_bootstrap_does_not_enter_resumable_fts_backfill(
@@ -219,7 +225,14 @@ def test_fts_projection_uses_canonical_message_key_and_recall_text_only(tmp_path
         sessions.close()
 
 
-def test_only_conversation_text_is_indexed_and_an_older_index_rebuilds(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "stored_version",
+    [str(FTS_STORAGE_VERSION - 1), str(FTS_STORAGE_VERSION + 1), None],
+    ids=["older", "newer", "missing"],
+)
+def test_only_conversation_text_is_indexed_and_a_foreign_index_version_rebuilds(
+    tmp_path: Path, stored_version: str | None
+) -> None:
     sessions = ChatSessionManager(tmp_path)
     session = sessions.create("agent", session_id="narrow")
     call = ToolCall(id="call-one", name="bash", arguments={"command": "echo argneedle"})
@@ -228,24 +241,30 @@ def test_only_conversation_text_is_indexed_and_an_older_index_rebuilds(tmp_path:
     )
     session.append_many([ChatMessage.user("visible question"), assistant])
     sessions.close()
-    with sqlite3.connect(tmp_path / "sessions.db") as connection:
-        # An index written by an older storage version is rebuilt on the next open.
-        connection.execute(
-            "UPDATE store_meta SET value = '1' WHERE key = ?", (FTS_STORAGE_VERSION_KEY,)
-        )
+    with closing(sqlite3.connect(tmp_path / "sessions.db")) as connection, connection:
+        generation = _meta(connection, FTS_GENERATION_KEY)
+        # Any stored version but the code's own, including a newer one left by a
+        # later build, drops and rebuilds the index on the next open.
+        if stored_version is None:
+            connection.execute("DELETE FROM store_meta WHERE key = ?", (FTS_STORAGE_VERSION_KEY,))
+        else:
+            connection.execute(
+                "UPDATE store_meta SET value = ? WHERE key = ?",
+                (stored_version, FTS_STORAGE_VERSION_KEY),
+            )
     sessions = ChatSessionManager(tmp_path)
     try:
         assert sessions.fts_health().state == "healthy"
-        with sqlite3.connect(tmp_path / "sessions.db") as connection:
+        with closing(sqlite3.connect(tmp_path / "sessions.db")) as connection:
             columns = [row[1] for row in connection.execute("PRAGMA table_info(entries_fts)")]
-            stored = connection.execute(
-                "SELECT value FROM store_meta WHERE key = ?", (FTS_STORAGE_VERSION_KEY,)
-            ).fetchone()
+            stored = _meta(connection, FTS_STORAGE_VERSION_KEY)
+            rebuilt_generation = _meta(connection, FTS_GENERATION_KEY)
             searchable = connection.execute(
                 "SELECT role, searchable FROM entries ORDER BY seq"
             ).fetchall()
         assert columns == ["content", "search_text"]
-        assert stored == (str(FTS_STORAGE_VERSION),)
+        assert stored == str(FTS_STORAGE_VERSION)
+        assert generation is not None and rebuilt_generation not in {None, generation}
         # Reasoning and Tool calls are not conversation text; the entry stays out.
         assert searchable == [("user", 1), ("assistant", 0)]
         for query in ("reasonneedle", "argneedle"):
@@ -491,6 +510,41 @@ def test_failed_fts_delete_detaches_the_index_and_still_deletes_the_session(
                 "SELECT value FROM store_meta WHERE key = 'fts_stale'"
             ).fetchone()
         assert stale == ("1",)
+    finally:
+        sessions.close()
+
+
+@pytest.mark.parametrize(
+    ("error", "detached"),
+    [("fts5: simulated index failure", True), ("simulated failure elsewhere", False)],
+    ids=["index", "other"],
+)
+def test_a_failed_fts_search_scans_instead_and_detaches_only_a_failed_index(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error: str, detached: bool
+) -> None:
+    from core.sessions import _store_search as search_module
+
+    address = SessionAddress(project_id=None, agent_id="agent", session_id="fallback")
+    sessions = ChatSessionManager(tmp_path)
+    message = ChatMessage.user("scanned fallback words")
+    sessions.create(address.agent_id, session_id=address.session_id).append(message)
+
+    def fail(*_args: object, **_kwargs: object) -> Any:
+        raise sqlite3.OperationalError(error)
+
+    monkeypatch.setattr(search_module, "_fts_candidates", fail)
+    try:
+        result = sessions.search_messages("fallback", project_id=None, agent_id="agent")
+
+        assert (result.method, result.fallback_reason) == ("scan", "fts_error")
+        assert [hit.message_id for hit in result.hits] == [message.id]
+        # Only an error that names the index detaches it; any other error
+        # falls back for this search alone.
+        assert sessions.fts_health().state == ("unavailable" if detached else "healthy")
+        with closing(sqlite3.connect(tmp_path / "sessions.db")) as connection:
+            assert _meta(connection, "fts_stale") == ("1" if detached else None)
+            reason = _meta(connection, FTS_DEGRADED_REASON_KEY)
+        assert reason == (error if detached else "")
     finally:
         sessions.close()
 
