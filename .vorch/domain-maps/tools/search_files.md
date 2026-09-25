@@ -157,10 +157,11 @@ Only `search_files` is registered. New Project ceilings include it; startup neve
 migrates persisted selections, and a `grep`/`glob` name left in a policy is an
 ordinary unknown Tool name without special meaning.
 Claude/OpenCode scanner denials for either capability map to search_files.
-The Generation 1 converter consolidates Agent, Project ceiling and Project override
-policies (`scripts/converters/persistence_generation_1/_tool_access.py`): `search_files`
+The Generation 1 converter replaces grep/glob in every persisted Tool access list
+(`scripts/converters/persistence_generation_1/_tool_access.py`): `search_files`
 is granted only where both old capabilities were, a denial or a mode-all policy that
-lost one capability denies it, and every narrowing is reported. Historical grep/glob
+lost one capability denies it, and every replacement and narrowing is reported
+(`database/generation-1-conversion.md` -> Retired Tool names). Historical grep/glob
 chat rows remain readable.
 
 ## Verification

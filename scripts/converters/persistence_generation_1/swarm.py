@@ -9,11 +9,14 @@ and rewrites the timestamps in the canonical form. The signed-cursor key in
 Generation 1 drops the passive decision tables of the removed Swarm Decisions
 Tool (no API read them) and the request receipts of that Tool. A row the new
 database refuses, such as one that references a missing Swarm, is dropped and
-reported.
+reported. Retired Tool names in the ``tool_access`` of saved profiles and of
+each Swarm's profile snapshot are replaced as in every other Tool access policy
+(``_tool_access``), so a profile keeps starting and a Swarm keeps resuming.
 """
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
 
@@ -37,6 +40,7 @@ from scripts.converters.persistence_generation_1._legacy_sqlite import (
     source_tables,
     table_columns,
 )
+from scripts.converters.persistence_generation_1._tool_access import convert_policy
 
 AREA = "swarm"
 OWNER = "swarm"
@@ -200,6 +204,9 @@ _TABLES = (
 
 # Passive tables of the removed Swarm Decisions Tool; Generation 1 drops them.
 _DROPPED_TABLES = ("decision_events", "decision_positions", "decision_questions")
+# Profile documents whose ``tool_access`` the Swarm Extension applies: saved
+# profiles, and the snapshot a started Swarm runs and resumes with.
+_PROFILE_DOCUMENTS = (("profiles", "payload"), ("swarms", "profile_snapshot"))
 
 
 def database_spec(root: Path) -> DatabaseSpec:
@@ -240,12 +247,39 @@ def convert(context: ConversionContext) -> None:
                 tally = Tally()
                 for table in tables:
                     copy_table(source, connection, table, tally)
+                _convert_retired_tool_names(connection, tally)
                 return tally
 
             database.write(operation).publish(context, AREA)
         finally:
             database.close()
     retire_sidecars(context, DATABASE)
+
+
+def _convert_retired_tool_names(connection: sqlite3.Connection, tally: Tally) -> None:
+    """Replace retired Tool names in the staged profile documents."""
+    for table, column in _PROFILE_DOCUMENTS:
+        rows = connection.execute(f"SELECT id, {column} FROM {table} ORDER BY rowid").fetchall()
+        for row_id, text in rows:
+            try:
+                document = json.loads(text)
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(document, dict) or "tool_access" not in document:
+                continue
+            document["tool_access"], changes = convert_policy(document["tool_access"])
+            if not changes:
+                continue
+            connection.execute(
+                f"UPDATE {table} SET {column}=? WHERE id=?", (_swarm_json(document), row_id)
+            )
+            tally.count("retired_tool_names_converted")
+            tally.skip(f"{table} {row_id}", f"{column}.tool_access: {'; '.join(changes)}")
+
+
+def _swarm_json(value: object) -> str:
+    """A JSON document as the Swarm store writes it."""
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
 def _is_current(source_path: Path, source: sqlite3.Connection) -> bool:

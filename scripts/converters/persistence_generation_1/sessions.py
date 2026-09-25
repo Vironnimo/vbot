@@ -36,7 +36,9 @@ gets exactly the side rows the current store writes for its role:
   ``run_kinds`` keys are not stored, and the retired Channel routing keys are
   dropped. A value the store would refuse is dropped and reported.
 - Continuations are dropped. Owner-managed bindings, group titles, delivery
-  receipts and Run execution owners are kept.
+  receipts and Run execution owners are kept; retired Tool names in a binding's
+  ``tool_access`` are replaced as in every other Tool access policy
+  (``_tool_access``).
 - Three old Assistant Message shapes get their current form, in history and in
   stored checkpoint projections. A line-only output-file reference named a
   line that held just the path, and the server replaced that whole line with
@@ -96,6 +98,7 @@ from scripts.converters.persistence_generation_1._legacy_sqlite import (
     retire_sidecars,
     table_columns,
 )
+from scripts.converters.persistence_generation_1._tool_access import convert_policy
 
 AREA = "sessions"
 DATABASE = "sessions.db"
@@ -710,7 +713,10 @@ class _Conversion:
             if not isinstance(config, dict):
                 self.issues.add(item, "dropped: its configuration is not a JSON object")
                 continue
-            self._insert_owned(
+            changes: list[str] = []
+            if "tool_access" in config:
+                config["tool_access"], changes = convert_policy(config["tool_access"])
+            inserted = self._insert_owned(
                 item,
                 "temporary_session_bindings",
                 ("session_key", "owner_name", "group_id", "participant_id", "config_json"),
@@ -722,6 +728,9 @@ class _Conversion:
                     _store_values._json_object(config, "temporary Session config"),
                 ),
             )
+            if inserted and changes:
+                self.tally.count("retired_tool_names_converted")
+                self.issues.add(item, f"tool_access: {'; '.join(changes)}")
         for row in self.source.execute(
             "SELECT owner_name, group_id, title FROM temporary_group_titles "
             "ORDER BY owner_name, group_id"
@@ -792,7 +801,8 @@ class _Conversion:
 
     def _insert_owned(
         self, item: str, table: str, columns: Sequence[str], values: Sequence[Any]
-    ) -> None:
+    ) -> bool:
+        """Insert one owned row; return whether it was kept."""
         self.target.execute("SAVEPOINT convert_owned")
         try:
             self.target.execute(
@@ -803,8 +813,10 @@ class _Conversion:
         except sqlite3.IntegrityError as error:
             self.target.execute("ROLLBACK TO convert_owned")
             self.issues.add(item, f"dropped: {error}")
+            return False
         else:
             self.tally.count(table)
+            return True
         finally:
             self.target.execute("RELEASE convert_owned")
 
