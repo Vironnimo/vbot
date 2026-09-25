@@ -165,9 +165,11 @@ class VoiceRuntime:
     """Replaceable runtime dependencies (tests inject doubles; ``None`` uses the real one).
 
     ``echo_stage_factory`` creates the echo stage (default:
-    :func:`desktop.wakeword.echo.create_echo_stage`). It runs at most once per
-    process, on the capture thread of the first listener with echo
-    cancellation enabled; later listeners reuse the stage.
+    :func:`desktop.wakeword.echo.create_echo_stage`). It runs in the background
+    when a listener with echo cancellation enabled is built, and again only
+    after a stage failed; later listeners reuse the working stage. It never
+    runs while echo cancellation is disabled, and never again once it returned
+    ``None`` or raised.
     """
 
     audio_backend: Any = None
@@ -636,6 +638,9 @@ class VoiceController:
         if not server_url:
             self._fail_start(generation, ERROR_NO_SERVER)
             return
+        echo_stages = self._echo_stage_pool()
+        if config.echo_cancellation:
+            echo_stages.prepare()  # the canceller loads while the listener is built
         try:
             engine = self._create_engine(config.phrases, generation)
         except WakewordModelError as exc:
@@ -648,15 +653,11 @@ class VoiceController:
             return
 
         from desktop.wakeword import _speech_detection
-        from desktop.wakeword.capture import AudioCapture, EchoStagePool
+        from desktop.wakeword.capture import AudioCapture
         from desktop.wakeword.commands import CommandPipeline, CommandRecorder
         from desktop.wakeword.detection import SUBSCRIPTION_SECONDS, DetectionLoop
 
         runtime = self._runtime
-        with self._lock:
-            if self._echo_stages is None:
-                self._echo_stages = EchoStagePool(runtime.echo_stage_factory or _create_echo_stage)
-            echo_stages = self._echo_stages
         speech_detector_factory = (
             runtime.speech_detector_factory or _speech_detection.SpeechDetector.create
         )
@@ -747,6 +748,17 @@ class VoiceController:
                     logger.warning("The on-device Voice stack is unavailable")
                     self._mode = MODE_UNAVAILABLE
             return self._mode
+
+    def _echo_stage_pool(self) -> EchoStagePool:
+        """The process-wide echo stage pool, created with the first real listener."""
+        from desktop.wakeword.capture import EchoStagePool
+
+        with self._lock:
+            if self._echo_stages is None:
+                self._echo_stages = EchoStagePool(
+                    self._runtime.echo_stage_factory or _create_echo_stage
+                )
+            return self._echo_stages
 
     def _create_engine(self, phrases: Sequence[PhraseConfig], generation: int) -> WakewordEngine:
         def score_listener(scores: dict[str, float]) -> None:
