@@ -22,6 +22,8 @@ from core.database._connections import (
 from core.database.database import Database, open_database, open_offline_database
 from core.database.disposable import DisposableDatabase, ProjectionFailure, projection_failure
 from core.database.errors import (
+    GENERATION_1_CONVERTER_COMMAND,
+    DatabaseConversionRequiredError,
     DatabaseCorruptError,
     DatabaseError,
     DatabaseFormatError,
@@ -88,12 +90,14 @@ __all__ = [
     "APPLICATION_IDS",
     "CANONICAL",
     "DISPOSABLE",
+    "GENERATION_1_CONVERTER_COMMAND",
     "JOURNAL_MODE_DELETE",
     "JOURNAL_MODE_WAL",
     "MAINTENANCE_GUARD_FILE_NAME",
     "MARKER_FILE_NAME",
     "DataStoreMarker",
     "Database",
+    "DatabaseConversionRequiredError",
     "DatabaseCorruptError",
     "DatabaseError",
     "DatabaseFormatError",
