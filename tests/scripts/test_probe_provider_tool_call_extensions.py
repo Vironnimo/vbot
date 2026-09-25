@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from argparse import Namespace
 
 import pytest
@@ -47,23 +48,30 @@ def test_swarm_workflow_persists_failed_calls_and_resumes_from_feedback():
 
         async def send(self, messages, **_kwargs):
             results = [json.loads(item["content"]) for item in messages if item["role"] == "tool"]
-            roster = next(
-                (item["data"] for item in results if (item.get("data") or {}).get("self")), {}
-            )
+            # swarm_state lists other participants as "- Name (prt_...): state".
             peer = next(
                 (
-                    row["id"]
-                    for row in roster.get("roster", [])
-                    if row["id"] != roster.get("self", {}).get("id")
+                    match.group(1)
+                    for item in results
+                    if (
+                        match := re.search(
+                            r"^- [^\n]*\((prt_[A-Za-z0-9]+)\): ",
+                            (item.get("data") or {}).get("content") or "",
+                            re.MULTILINE,
+                        )
+                    )
                 ),
                 "",
             )
             topic = next(
                 (
-                    row["id"]
+                    match.group(1)
                     for item in results
-                    for row in (item.get("data") or {}).get("entries", [])
-                    if row.get("title") == "Topic"
+                    if (
+                        match := re.search(
+                            r'- (\S+) "Topic"', (item.get("data") or {}).get("content") or ""
+                        )
+                    )
                 ),
                 "",
             )
@@ -462,7 +470,8 @@ def test_swarm_unassisted_requires_actual_feedback_and_a_later_publication():
 
         async def send(self, messages, **_kwargs):
             prompt = next(row["content"] for row in messages if row["role"] == "user")
-            goal_id = prompt.split("Board post ", 1)[1].split()[0]
+            # The initial message names the exact read call for the goal post.
+            goal_id = re.search(r'"message_id": "(pst_[A-Za-z0-9]+)"', prompt).group(1)
             calls = [
                 ("swarm_board", {"action": "read", "message_id": goal_id}),
                 ("swarm_inbox", {}),

@@ -64,12 +64,17 @@ DeliveryReceiptLookup = Callable[[SessionAddress, str, str, str], Awaitable[Deli
 
 
 class SwarmStoreError(Exception):
-    """A stable structured persistence error with no runtime guidance text."""
+    """A stable structured persistence error with no runtime guidance text.
 
-    def __init__(self, code: str, *, field: str | None = None) -> None:
+    ``details`` carries structured facts a caller may explain, such as the
+    current revision or the locations of an ambiguous Wiki passage.
+    """
+
+    def __init__(self, code: str, *, field: str | None = None, details: Json | None = None) -> None:
         super().__init__(code)
         self.code = code
         self.field = field
+        self.details = details or {}
 
 
 @dataclass(frozen=True)

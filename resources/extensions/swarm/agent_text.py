@@ -5,19 +5,17 @@ from typing import Any
 BOARD_DESCRIPTION = (
     "Read and contribute to your group's shared Board. Use the main discussion for shared "
     "conversation and coordination. Create an additional discussion when several Agents "
-    "need to work through a specific problem together. Discussions are public to all "
-    "participants; joining controls which future discussion posts reach your Inbox. "
-    "Use recipients to publicly ping participant IDs. Creating a discussion joins it and "
-    "announces it in the main discussion. Joining returns recent posts. Reading posts "
-    "also receives any matching pending Inbox messages when the Tool Result is saved."
+    "need to work through a specific problem together; creating it joins it and announces "
+    "it in the main discussion. Every participant can read every discussion; joining one "
+    "makes its future posts reach you and returns its recent posts. Pending messages among "
+    "the posts you read count as received and are not delivered again."
 )
 
 INBOX_DESCRIPTION = (
-    "Receive pending Board messages for you, oldest first. Returned messages count "
-    "as delivered when this Tool Result is saved. Follow next_call when more "
-    "remain. This Tool returns immediately. When you have no further work now, end "
-    "your reply normally; new messages can start another Run according to the "
-    "group's delivery settings."
+    "Receive your pending Board messages now, oldest first; returned messages count as "
+    "received. New messages also reach you as the group's delivery settings allow, so you need "
+    "not check right after posting. This Tool never waits for new messages: when you have no "
+    "further work now, end your reply normally; new messages can start another Run."
 )
 
 INBOX_PARAMETERS: dict[str, Any] = {
@@ -26,15 +24,15 @@ INBOX_PARAMETERS: dict[str, Any] = {
         "limit": {
             "type": "integer",
             "minimum": 1,
-            "maximum": 100,
-            "description": "Maximum pending messages to receive. Omit for 20.",
+            "description": "Maximum messages to receive, at most 100. Omit for 20.",
         },
     },
     "required": [],
 }
 
 STATE_DESCRIPTION = (
-    "Inspect participants, their Run activity, pending message counts, and delivery settings."
+    "See the participants and their Run activity, your pending messages, and how Board "
+    "messages reach you."
 )
 
 STATE_PARAMETERS: dict[str, Any] = {
@@ -42,13 +40,12 @@ STATE_PARAMETERS: dict[str, Any] = {
     "properties": {
         "cursor": {
             "type": "string",
-            "description": "Roster continuation from a status result. Omit for the first page.",
+            "description": "Continuation from a previous result. Omit for the first page.",
         },
         "limit": {
             "type": "integer",
             "minimum": 1,
-            "maximum": 100,
-            "description": "Maximum roster entries for status. Omit for 20.",
+            "description": "Maximum participants to list, at most 100. Omit for 20.",
         },
     },
     "required": [],
@@ -71,27 +68,30 @@ BOARD_PARAMETERS: dict[str, Any] = {
         },
         "discussion_id": {
             "type": "string",
-            "description": "Discussion to read, post in, join, or leave. Required for join and "
-            "leave. Omit for read to use the main discussion; omit for post to use the "
-            "reply target's discussion, or the main discussion when not replying.",
+            "description": "Discussion to read, post in, join, or leave; required for join and "
+            "leave. When omitted, read and post use the main discussion, and a reply uses the "
+            "discussion of its post.",
         },
         "message_id": {
             "type": "string",
-            "description": "Exact post to read. Omit to read a discussion page; when supplied, "
-            "omit discussion_id, cursor, and limit. Discussion pages start with the newest "
-            "posts, oldest first within each page.",
+            "description": "Post ID for read: show only that post. Omit to read the newest "
+            "posts of a discussion, oldest first.",
+        },
+        "before": {
+            "type": "string",
+            "description": "Post ID for read: show the posts before it in its discussion, to "
+            "page back.",
         },
         "cursor": {
             "type": "string",
-            "description": "Continuation returned by a previous list or read result. "
-            "For read, continuation retrieves older posts. Omit to start a fresh listing "
-            "or read the newest posts.",
+            "description": "Continuation returned by a previous list result. Omit for the "
+            "first page.",
         },
         "limit": {
             "type": "integer",
             "minimum": 1,
-            "maximum": 100,
-            "description": "Maximum entries for list or a discussion-page read. Omit for 20.",
+            "description": "Maximum discussions for list or posts for read, at most 100. "
+            "Omit for 20.",
         },
         "text": {
             "type": "string",
@@ -105,43 +105,35 @@ BOARD_PARAMETERS: dict[str, Any] = {
         },
         "reply_to": {
             "type": "string",
-            "description": "Post to answer with post. Omit for a new message. Its discussion is "
-            "used unless discussion_id explicitly selects the same discussion.",
+            "description": "Post ID to answer with post. Omit for a new message.",
         },
         "recipients": {
             "type": "array",
             "items": {"type": "string"},
-            "description": "Participant IDs to publicly ping with post or on the opening message "
-            "of create. Omit when no explicit ping is needed.",
+            "description": "Participants to publicly ping with post or on the opening message "
+            'of create, by name or ID; "all" pings every other participant. Omit when no '
+            "explicit ping is needed.",
         },
     },
     "required": ["action"],
 }
 
-POST_SAVED = (
-    "The post is saved on the Board. Recipient counts describe routing, not whether "
-    "another participant has read it."
-)
 DISCUSSION_ANNOUNCEMENT = (
-    '{author_name} opened the discussion "{title}".\n'
-    "Discussion ID: {discussion_id}\n"
-    "Opening post ID: {opening_post_id}\n"
-    "Use swarm_board with action read or join and this discussion_id to view the discussion."
+    '{author_name} opened the discussion "{title}" ({discussion_id}) with post '
+    "{opening_post_id}. Read or join it with swarm_board and this discussion_id."
 )
 REPLAYED = (
-    "This request was already applied. The original result is returned; no duplicate was created."
+    "This Tool Call was already applied; its original result is shown and nothing was duplicated."
 )
 
-DELIVERY_PREFIX = (
-    "New Board messages from the authors listed below. If pending_remaining is greater than "
-    "zero, use swarm_inbox to read the remaining messages."
-)
+DELIVERY_PREFIX = "New Board messages for you, oldest first."
 RESUME_REMINDER = (
     "The user resumed your work. Continue toward the group's goal from where you left off."
 )
 INITIAL_MESSAGE = (
-    "Read the user's request in Board post {goal_post_id} using swarm_board, then discuss it "
-    "with the other Agents on the Board before starting implementation.\n\n"
+    "Read the user's request on the Board with swarm_board "
+    '{{"action": "read", "message_id": "{goal_post_id}"}}, then discuss it there with the '
+    "other Agents before starting implementation.\n\n"
     "Take time to understand the request together and explore how to achieve the best possible "
     "result. Respond to one another, ask follow-up questions, compare alternatives, and work "
     "through disagreements. Explain your reasoning so others can examine and improve it. "
@@ -171,18 +163,16 @@ ERRORS = {
     "invalid_value": "A required value is missing, has the wrong type, or exceeds its "
     "documented limit. Correct the named field and try again. No "
     "change was applied.",
-    "invalid_cursor": "This cursor is unavailable for this query. Omit cursor to begin "
-    "a new page, then use the returned next_call.",
-    "request_conflict": "This request_id was already used with different arguments. "
-    "Reuse the original arguments to retrieve its result, or use a "
-    "new request_id for a different change.",
-    "discussion_not_found": "This discussion is unavailable in your group. Use "
-    "swarm_board with action list to choose a current "
-    "discussion.",
+    "invalid_cursor": "This cursor only continues the call that returned it, with the same "
+    "other arguments. Omit cursor to start from the first page.",
+    "request_conflict": "This Tool Call was already applied with different arguments, so "
+    "nothing changed. Make the change in a new Tool Call.",
+    "discussion_not_found": "This discussion does not exist in your group. Call swarm_board "
+    'with {"action": "list"} to see the current discussions.',
     "message_not_found": "This post is unavailable in your group. Read its discussion "
     "to find an available post.",
-    "invalid_recipient": "A recipient is not a participant in your group. Use "
-    "swarm_state to obtain participant IDs.",
+    "invalid_recipient": "A recipient is not a participant in your group. swarm_state lists "
+    "the participants' names and IDs.",
     "reply_discussion_mismatch": "The reply target belongs to another discussion. Omit "
     "discussion_id to reply in the target's discussion, "
     "or omit reply_to for a new post.",
@@ -197,3 +187,195 @@ ERRORS = {
     "remains readable; the user can Resume the Swarm to "
     "continue in its existing Sessions.",
 }
+
+# Calls that reach the wrong Swarm Tool.
+BOARD_FOREIGN_ACTIONS = {
+    "swarm_state": "swarm_board has no {action} action. Use swarm_state to see participants, "
+    "their Run activity, and your pending message count.",
+    "swarm_inbox": "swarm_board has no {action} action. Use swarm_inbox to receive your pending "
+    "Board messages.",
+    "swarm_wiki": "swarm_board has no {action} action. Use swarm_wiki to create, find, and edit "
+    "shared pages.",
+}
+INBOX_ONLY_RECEIVE = (
+    "swarm_inbox has no {action} action; it only receives your pending Board messages. Call it "
+    "without arguments, or with limit."
+)
+STATE_ONLY_STATUS = (
+    "swarm_state has no {action} action; it only shows the participants, their Run activity, "
+    "your pending messages, and how Board messages reach you. Share progress, results, or "
+    "requests for help on the Board with swarm_board, and end your reply normally when you "
+    "have no further work now."
+)
+
+# Delivered messages: Inbox results and automatic delivery.
+MESSAGES_IN = "In {discussion}:"
+INBOX_MORE = "{count} more pending; call swarm_inbox again{arguments} to continue."
+DELIVERY_MORE = {
+    "inbox": "{count} more pending; receive them with swarm_inbox.",
+    "no_inbox": "{count} more pending.",
+}
+
+# swarm_state results.
+STATE_YOU = "{name} ({participant_id}), {state}"
+STATE_PENDING = {
+    "none": "No pending messages.",
+    "one": "1 message for you; receive it with swarm_inbox.",
+    "many": "{count} messages for you; receive them with swarm_inbox.",
+    "one_no_inbox": "1 message for you.",
+    "many_no_inbox": "{count} messages for you.",
+}
+STATE_ROUTES = {
+    "main": "main-discussion posts",
+    "discussion": "posts in discussions you joined",
+    "ping": "pings",
+}
+STATE_DELIVERY = {
+    "automatic": "{routes} reach you automatically, also while you are running.",
+    "when_idle": "{routes} reach you automatically when you are idle.",
+    "on_request": "{routes} reach you only through swarm_inbox.",
+    "on_request_no_inbox": "{routes} reach you only when you read them with swarm_board.",
+}
+STATE_WAKE = "{routes} start a Run when you are idle."
+STATE_NO_WAKE = "New messages do not start a Run when you are idle."
+STATE_PARTICIPANTS = "{count} ({totals})"
+STATE_ROSTER_HEADER = "Participants:"
+STATE_ROSTER_LINE = "- {name} ({participant_id}{you}): {state}"
+STATE_ROSTER_YOU = ", you"
+STATE_MORE = "More participants exist. Continue with {call}"
+
+# Notes on a call that ran after a repair the Agent should know about.
+LIMIT_CLAMPED = "limit {requested} is above the maximum of {maximum}; used {maximum}."
+CURSOR_AS_BEFORE = "cursor {value} is a post ID, so this shows the posts before it."
+FIELD_IGNORED = "{field} is not used by {action} and was ignored."
+CREATE_IGNORES_ID = (
+    'discussion_id "{value}" names no discussion and was ignored; the new discussion has its '
+    "own ID."
+)
+MESSAGE_DISCUSSION_IGNORED = (
+    "discussion_id was ignored: post {post_id} belongs to the discussion shown with it."
+)
+USER_RECIPIENT = (
+    "The user is not a participant and sees every Board post, so no ping was needed for the user."
+)
+POST_BY_NUMBER = (
+    '{field} "{value}" is not a post ID; this uses post {post_id}, which has that number.'
+)
+POST_CLOSE_MATCH = (
+    '{field} "{value}" does not exist; this uses post {post_id}, its only close match.'
+)
+DISCUSSION_CLOSE_MATCH = (
+    'discussion_id "{value}" does not exist; this shows {discussion}, its only close match.'
+)
+
+# Board results.
+BOARD_MAIN_LABEL = "the main discussion ({discussion_id})"
+BOARD_DISCUSSION_LABEL = 'discussion "{title}" ({discussion_id})'
+BOARD_PAGE_NEWEST = "Newest posts of {discussion}, oldest first ({count} shown)."
+BOARD_PAGE_BEFORE = "Posts before {before} in {discussion}, oldest first ({count} shown)."
+BOARD_PAGE_EMPTY = "No posts in {discussion} yet."
+BOARD_PAGE_EMPTY_BEFORE = "No posts before {before} in {discussion}."
+BOARD_PAGE_OLDER = "Older posts of {discussion}, oldest first ({count} shown)."
+BOARD_ONE_POST = "Post {post_id} in {discussion}."
+BOARD_OLDER = "Older posts exist. Continue with {call}"
+BOARD_MORE_DISCUSSIONS = "More discussions exist. Continue with {call}"
+BOARD_USER_REQUEST = "Post {post_id} holds the user's request. Read it with {call}"
+BOARD_QUEUED = "Queued for {participants}{pinged}."
+BOARD_PARTICIPANTS = {"one": "1 participant", "many": "{count} participants"}
+BOARD_QUEUED_NONE = "No other participant receives it; it stays readable on the Board."
+BOARD_PINGED = " ({count} pinged)"
+BOARD_CREATED = "You joined it, and the main discussion announces it."
+BOARD_JOINED = "Joined. New posts in this discussion now reach you."
+BOARD_ALREADY_JOINED = "You had already joined; nothing changed."
+BOARD_LEFT = "Left. New posts in this discussion no longer reach you; you can still read it."
+BOARD_ALREADY_LEFT = "You were not a member; nothing changed."
+BOARD_DISCUSSIONS_HEADER = "Discussions (joined ones deliver their new posts to you):"
+BOARD_DISCUSSION_LINE = '- {discussion_id} "{title}": {details}'
+BOARD_MAIN_DETAIL = "main discussion"
+BOARD_JOINED_DETAIL = "joined"
+BOARD_NOT_JOINED_DETAIL = "not joined"
+BOARD_MEMBERS_DETAIL = "members: {count}"
+BOARD_PENDING_DETAIL = "pending for you: {count}"
+POST_HEADER_REPLY = "reply to {post_id}"
+POST_HEADER_PINGED = "pinged {names}"
+POST_HEADER_IN = "in {discussion}"
+POST_HEADER_MAIN = "the main discussion {discussion_id}"
+POST_HEADER_DISCUSSION = '"{title}" {discussion_id}'
+POST_YOU = "you"
+LIST_AND = " and "
+
+# Board errors that name the next call. Each follows the failed call's cause.
+BOARD_REQUIRED = {
+    "text": "{action} needs text, the message body. Repeat the call with text. Nothing was saved.",
+    "title": "create needs title, the new discussion's title, and text, its opening message. "
+    "Nothing was saved.",
+    "discussion_id": '{action} needs discussion_id. Use {{"action": "list"}} to see the '
+    "discussion IDs.",
+}
+RECIPIENT_UNKNOWN = "recipients: {values} {verb} not a participant in your group."
+RECIPIENT_SUGGESTIONS = "Did you mean {suggestions}?"
+RECIPIENT_ROSTER = "Participants: {roster}."
+RECIPIENT_RETRY = (
+    'Repeat the call with recipients {corrected}. Names also work, and "all" pings every other '
+    "participant. Nothing was saved."
+)
+RECIPIENT_CHOOSE = (
+    'Repeat the call with recipients chosen from these participants; names also work, and "all" '
+    "pings every other participant. Nothing was saved."
+)
+REPLY_NOT_FOUND = 'reply_to "{value}" is not a post ID in your group.'
+POST_SUGGESTION = 'Did you mean post {post_id} by {author} in {discussion}: "{excerpt}"?'
+REPLY_RETRY = 'Repeat the call with reply_to "{post_id}". Nothing was saved.'
+REPLY_CHOOSE = (
+    'Find the post ID with {"action": "read"}, or omit reply_to for a new message. '
+    "Nothing was saved."
+)
+MESSAGE_NOT_FOUND = (
+    '{field} "{value}" is not a post ID in your group. Find post IDs by reading a discussion, '
+    'for example with {{"action": "read"}} for the main discussion.'
+)
+DISCUSSION_NOT_FOUND = 'discussion_id "{value}" is not a discussion in your group.'
+DISCUSSION_CHOICES = "Discussions: {discussions}."
+DISCUSSION_RETRY = 'Repeat the call with discussion_id "{discussion_id}".'
+DISCUSSION_CHOOSE = "Repeat the call with one of these discussion IDs."
+REPLY_DISCUSSION_CONFLICT = (
+    "reply_to {post_id} belongs to {reply_discussion}, but discussion_id names {discussion}. "
+    "Omit discussion_id to reply in {reply_discussion}, or omit reply_to to post a new message "
+    "in {discussion}. Nothing was saved."
+)
+BEFORE_DISCUSSION_CONFLICT = (
+    "before {post_id} belongs to {before_discussion}, but discussion_id names {discussion}. "
+    "Omit discussion_id to read {before_discussion}, or omit before to read the newest posts "
+    "of {discussion}."
+)
+CREATE_IN_DISCUSSION = (
+    "create opens a new discussion, but discussion_id names the existing discussion "
+    "{discussion_id}. To open a new discussion, repeat the call without discussion_id. To add a "
+    'message to that discussion, use action post with discussion_id "{discussion_id}" and text. '
+    "Nothing was saved."
+)
+POST_WITH_MESSAGE_ID = (
+    "message_id selects a post to read. To answer post {post_id}, repeat the call with reply_to "
+    '"{post_id}" instead of message_id; to post a new message, omit message_id. Nothing was saved.'
+)
+POST_WITH_TWO_TARGETS = (
+    "message_id is only for read, and it differs from reply_to. Repeat the call with only "
+    "reply_to, set to the post you answer. Nothing was saved."
+)
+NOTHING_CHANGED = "Nothing was changed."
+FIELD_FOR_OTHER_ACTION = (
+    "{action} does not use {field}, so the call may mean another action. Repeat it without "
+    "{field}, or use an action that takes {field}: {actions}. The call was not run."
+)
+LIST_CURSOR_INVALID = (
+    "This cursor is not valid for this list: it is incomplete or belongs to another query. "
+    "Omit cursor to list from the start."
+)
+READ_CURSOR_INVALID = (
+    "This cursor is not valid for this read: it is incomplete or belongs to another query. "
+    "Omit cursor to read the newest posts, or use before with the oldest post ID you have "
+    "to read the posts before it."
+)
+MESSAGE_WITH_PAGE = (
+    "Use message_id to read one post, or before to read the posts before a post, not both."
+)
