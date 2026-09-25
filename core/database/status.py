@@ -10,7 +10,12 @@ from typing import TYPE_CHECKING, Any
 
 from core.database._connections import classified_error, readonly_sqlite_uri
 from core.database.errors import DatabaseError, DatabaseUnavailableError
-from core.database.marker import MarkerEntry, read_maintenance, read_marker
+from core.database.marker import (
+    MarkerEntry,
+    missing_marker_error,
+    read_maintenance,
+    read_marker,
+)
 from core.database.recovery import active_incidents
 from core.database.snapshots import (
     missing_database_reason,
@@ -59,7 +64,11 @@ def data_store_status(
         marker = None
         problems.append(str(exc))
     if marker is None and not problems:
-        problems.append("the data directory has no data-store marker")
+        problems.append(
+            str(missing_marker_error(data_dir))
+            if data_dir.exists()
+            else f"the data directory {data_dir} does not exist yet; starting vBot creates it"
+        )
     entries = {} if marker is None else dict(marker.databases)
     open_databases = {database.name: database for database in databases}
     known_specs = {spec.name: spec for spec in specs}
