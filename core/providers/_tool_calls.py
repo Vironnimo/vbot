@@ -10,7 +10,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from core.providers._tool_result_text import tool_result_envelope, tool_result_text
+from core.providers._tool_result_text import tool_result_envelope
 
 JsonObject = dict[str, Any]
 
@@ -311,8 +311,8 @@ def project_tool_result_content_fallbacks(
 ) -> list[JsonObject]:
     """Project rich Tool Results onto text-only Tool wires.
 
-    Each Result's content becomes its Model-facing text, and supplemental text
-    remains part of its correlated Tool Result. Media blocks
+    Canonical envelopes and supplemental text remain part of their correlated
+    Tool Result for the wire to render exactly once. Media blocks
     are emitted in one request-only user message after the complete consecutive
     Tool Result batch, preserving Provider tool-cycle ordering without writing
     a synthetic user message to the canonical Session.
@@ -334,22 +334,17 @@ def project_tool_result_content_fallbacks(
 
         projected_message = dict(message)
         projected_message.pop(TOOL_RESULT_CONTENT_BLOCKS_FIELD, None)
-        projected_message["content"] = tool_result_text(message.get("content"))
-        supplemental_text: list[str] = []
+        supplemental_blocks: list[JsonObject] = []
         for block in tool_result_content_blocks(message):
             block_type = block.get("type")
             if block_type == "text":
                 text = block.get("text")
                 if isinstance(text, str) and text:
-                    supplemental_text.append(text)
+                    supplemental_blocks.append(block)
             elif block_type in {"media", "document"}:
                 pending_media.append(block)
-        if supplemental_text:
-            content = projected_message.get("content")
-            base_text = content if isinstance(content, str) else ""
-            projected_message["content"] = "\n\n".join(
-                part for part in (base_text, *supplemental_text) if part
-            )
+        if supplemental_blocks:
+            projected_message[TOOL_RESULT_CONTENT_BLOCKS_FIELD] = supplemental_blocks
         projected.append(projected_message)
 
     flush_media()

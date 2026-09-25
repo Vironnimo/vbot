@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import httpx
@@ -14,7 +15,12 @@ from core.providers.ollama import (
     OllamaAdapter,
     OllamaCloudAdapter,
 )
-from core.tools import HISTORY_TOOL_DESCRIPTION, HISTORY_TOOL_NAME, HISTORY_TOOL_PARAMETERS
+from core.tools import (
+    HISTORY_TOOL_DESCRIPTION,
+    HISTORY_TOOL_NAME,
+    HISTORY_TOOL_PARAMETERS,
+    tool_success,
+)
 from tests.core.providers.ollama_helpers import (
     CLOUD_TEXT_RESPONSE,
     OLLAMA_CHAT_URL,
@@ -426,7 +432,7 @@ class TestMessageTranslation:
             {
                 "role": "tool",
                 "tool_call_id": "call_image",
-                "content": '{"ok":true}',
+                "content": json.dumps(tool_success({"content": "image result"})),
                 TOOL_RESULT_CONTENT_BLOCKS_FIELD: [
                     {
                         "type": "media",
@@ -443,7 +449,7 @@ class TestMessageTranslation:
         assert _last_request_payload(route)["messages"] == [
             {
                 "role": "tool",
-                "content": '{"ok":true}\n\n[Image path: C:/diagram.png]',
+                "content": "image result\n\n[Image path: C:/diagram.png]",
                 "tool_call_id": "call_image",
             },
             {
