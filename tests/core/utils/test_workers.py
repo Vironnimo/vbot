@@ -11,7 +11,7 @@ import pytest
 
 from core.performance import PerformanceService
 from core.performance.performance import reset_for_tests
-from core.utils.workers import BoundedWorkerPool
+from core.utils.workers import BoundedWorkerPool, OrderedWorker
 
 
 @pytest.fixture
@@ -157,3 +157,76 @@ async def test_worker_pool_records_admission_wait_run_time_and_occupancy(
         "wait",
     ]
     assert {span["cat"] for span in spans} == {"worker_pool"}
+
+
+@pytest.mark.asyncio
+async def test_ordered_worker_runs_operations_in_submission_order() -> None:
+    worker = OrderedWorker(name="test-ordered")
+    first_started = threading.Event()
+    release_first = threading.Event()
+    ran: list[str] = []
+
+    def first() -> str:
+        first_started.set()
+        release_first.wait(timeout=5)
+        ran.append("first")
+        return "first"
+
+    try:
+        first_task = asyncio.create_task(worker.call_async(first))
+        assert await asyncio.to_thread(first_started.wait, 5)
+        assert worker.hand_off(lambda: ran.append("handed off"), limit=1) is True
+        assert worker.hand_off(lambda: ran.append("over the limit"), limit=1) is False
+        third_task = asyncio.create_task(worker.call_async(lambda: ran.append("third")))
+        await asyncio.sleep(0.01)
+        assert ran == []
+    finally:
+        release_first.set()
+
+    assert await first_task == "first"
+    await third_task
+    await worker.drain()
+    assert ran == ["first", "handed off", "third"]
+
+
+@pytest.mark.asyncio
+async def test_ordered_worker_runs_a_cancelled_callers_operation_before_cancelling() -> None:
+    worker = OrderedWorker(name="test-ordered-cancel")
+    first_started = threading.Event()
+    release_first = threading.Event()
+    written: list[str] = []
+
+    def first() -> None:
+        first_started.set()
+        release_first.wait(timeout=5)
+
+    try:
+        first_task = asyncio.create_task(worker.call_async(first))
+        assert await asyncio.to_thread(first_started.wait, 5)
+        queued = asyncio.create_task(worker.call_async(lambda: written.append("snapshot")))
+        await asyncio.sleep(0)
+        queued.cancel()
+        queued.cancel()
+        await asyncio.sleep(0.01)
+        assert queued.done() is False
+    finally:
+        release_first.set()
+
+    await first_task
+    with pytest.raises(asyncio.CancelledError):
+        await queued
+    assert written == ["snapshot"]
+
+
+@pytest.mark.asyncio
+async def test_ordered_worker_call_runs_inline_on_its_own_thread() -> None:
+    worker = OrderedWorker(name="test-ordered-nested")
+
+    def outer() -> tuple[str, str]:
+        inner_thread = worker.call(lambda: threading.current_thread().name)
+        return threading.current_thread().name, inner_thread
+
+    outer_thread, inner_thread = await worker.call_async(outer)
+
+    assert outer_thread == inner_thread
+    assert outer_thread.startswith("vbot-test-ordered-nested")

@@ -12,21 +12,19 @@ RPC reads and clears through the ``*_async`` methods.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import re
 import shutil
-import threading
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from functools import partial
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any
 
 from core.storage.layout import DataDirectoryLayout
 from core.utils.atomic import atomic_write_text
 from core.utils.logging import get_logger
+from core.utils.workers import OrderedWorker
 
 _logger = get_logger("debug")
 
@@ -37,66 +35,11 @@ _TRACE_ID_PATTERN = re.compile(r"^[0-9a-f]{12}4[0-9a-f]{3}[89ab][0-9a-f]{15}$")
 # response body; beyond this backlog new captures are dropped, not queued.
 MAX_PENDING_CAPTURES = 32
 
-_Result = TypeVar("_Result")
-
-
-class _TraceThread:
-    """Runs every trace-store operation of the process on one thread, in order.
-
-    Adapters hold separate stores for the same files. One ordered thread keeps
-    publication and cleanup atomic (another capture never mistakes an in-flight
-    file for an orphan), orders an operator clear after earlier captures, and
-    lets a listing observe every capture handed off before it.
-    """
-
-    def __init__(self, *, max_pending_captures: int) -> None:
-        self._local = threading.local()
-        self._executor = ThreadPoolExecutor(
-            max_workers=1,
-            thread_name_prefix="vbot-debug-traces",
-            initializer=self._mark_trace_thread,
-        )
-        self._max_pending_captures = max_pending_captures
-        self._pending_captures = 0
-        self._pending_lock = threading.Lock()
-
-    def call(self, operation: Callable[[], _Result]) -> _Result:
-        """Run *operation* after all earlier work and wait for it (blocking)."""
-        if getattr(self._local, "is_trace_thread", False):
-            return operation()
-        return self._executor.submit(operation).result()
-
-    async def call_async(self, operation: Callable[[], _Result]) -> _Result:
-        """Run *operation* after all earlier work without blocking the Event Loop.
-
-        Cancellation before the operation starts skips it; a started operation
-        always completes, and atomic replacement never exposes a partial file.
-        """
-        return await asyncio.wrap_future(self._executor.submit(operation))
-
-    def hand_off(self, operation: Callable[[], None]) -> bool:
-        """Queue *operation* without waiting; ``False`` when the backlog is full."""
-        with self._pending_lock:
-            if self._pending_captures >= self._max_pending_captures:
-                return False
-            self._pending_captures += 1
-        try:
-            future = self._executor.submit(operation)
-        except BaseException:
-            self._settle_capture()
-            raise
-        future.add_done_callback(lambda _future: self._settle_capture())
-        return True
-
-    def _settle_capture(self) -> None:
-        with self._pending_lock:
-            self._pending_captures -= 1
-
-    def _mark_trace_thread(self) -> None:
-        self._local.is_trace_thread = True
-
-
-_TRACE_THREAD = _TraceThread(max_pending_captures=MAX_PENDING_CAPTURES)
+# Adapters hold separate stores for the same files. One ordered thread keeps
+# publication and cleanup atomic (another capture never mistakes an in-flight
+# file for an orphan), orders an operator clear after earlier captures, and lets
+# a listing observe every capture handed off before it.
+_TRACE_THREAD = OrderedWorker(name="debug-traces")
 
 
 async def drain_debug_traces() -> None:
@@ -104,7 +47,7 @@ async def drain_debug_traces() -> None:
 
     Runtime shutdown awaits this so no handed-off capture is lost.
     """
-    await _TRACE_THREAD.call_async(lambda: None)
+    await _TRACE_THREAD.drain()
 
 
 class InvalidTraceIdError(ValueError):
@@ -200,7 +143,7 @@ class DebugTraceStore:
             except Exception:
                 _logger.warning("Failed to persist debug trace", exc_info=True)
 
-        return _TRACE_THREAD.hand_off(persist)
+        return _TRACE_THREAD.hand_off(persist, limit=MAX_PENDING_CAPTURES)
 
     def get_traces(self) -> list[dict[str, Any]]:
         """Return trace metadata from the index, newest first (blocking).
