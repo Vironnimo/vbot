@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from core.providers.mistral import MistralAdapter
 from tests.core.providers.mistral_helpers import (
     mistral_adapter as mistral_adapter,
@@ -93,18 +95,16 @@ def test_normalize_response_nested_thinking_chunks_flatten_to_reasoning(
     )
 
 
-def test_format_assistant_message_replays_reasoning_as_think_chunk(
+def test_format_assistant_message_never_rebuilds_chunks_from_readable_reasoning(
     mistral_adapter: MistralAdapter,
 ) -> None:
-    """Replayed reasoning renders back into Mistral's content chunk-list shape."""
+    """Without captured chunks only the visible content is replayed."""
     wire = mistral_adapter._format_assistant_message(
         {"role": "assistant", "content": "391", "reasoning": "17*23 = 391"}
     )
 
-    assert wire["content"] == [
-        {"type": "thinking", "thinking": [{"type": "text", "text": "17*23 = 391"}]},
-        {"type": "text", "text": "391"},
-    ]
+    assert wire["content"] == "391"
+    assert "17*23" not in json.dumps(wire)
 
 
 def test_format_assistant_message_replays_original_content_chunks_verbatim(
