@@ -6,11 +6,14 @@ terminals, in seq order. For every Session generation, the check compares the
 ids of that history with the ids of the staged Session's current view, read
 the way the Generation 1 store reads it (own entries plus inherited lineage).
 
-A difference is acceptable only when the Session area reported a drop or an
-approximation for a Session the view reads; any other difference, and any
-Session that appears or disappears, fails the check. The longest live Session
-and one live fork that shares its source's history are also loaded through the
-application's Session manager, which decodes every entry of their views.
+A difference is acceptable only when the Session area reported a history change
+(a skipped item marked ``changes_history``, such as a dropped history record)
+for a Session the view reads, and a Session that disappears only with one for
+itself. Other items, about metadata, timestamps, Run statistics or completion
+pointers, explain nothing. Any other difference, and any Session that appears,
+fails the check. The longest live Session and one live fork that shares its
+source's history are also loaded through the application's Session manager,
+which decodes every entry of their views.
 """
 
 from __future__ import annotations
@@ -119,7 +122,10 @@ def _compare(
     legacy: dict[str, tuple[str, list[str]]],
     staged: sqlite3.Connection,
 ) -> tuple[SessionCheck, list[_Sample]]:
-    reported = {item.item for item in context.report.skipped if item.area == AREA}
+    # The Sessions whose current history the Session area reported changing.
+    changed = {
+        item.item for item in context.report.skipped if item.area == AREA and item.changes_history
+    }
     rows = {str(row["generation_id"]): row for row in staged.execute(_STAGED_SESSIONS_SQL)}
     labels = {int(row["session_key"]): session_label(row) for row in rows.values()}
     check = SessionCheck()
@@ -128,7 +134,7 @@ def _compare(
     fork: _Sample | None = None
     for generation_id in sorted(set(legacy) - set(rows)):
         label = legacy[generation_id][0]
-        (check.explained if label in reported else failures).append(f"{label}: not converted")
+        (check.explained if label in changed else failures).append(f"{label}: not converted")
     for generation_id, row in sorted(rows.items()):
         label = labels[int(row["session_key"])]
         if generation_id not in legacy:
@@ -145,7 +151,7 @@ def _compare(
         if ids != expected:
             readers = {labels.get(view_range.source_key, "") for view_range in ranges}
             difference = f"{label}: {len(expected)} records before, {len(ids)} entries after"
-            (check.explained if readers & reported else failures).append(difference)
+            (check.explained if readers & changed else failures).append(difference)
             continue
         if row["state"] != "live":
             continue
