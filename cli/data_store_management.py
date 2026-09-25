@@ -22,6 +22,7 @@ from cli.server_management import (
 from core.database import (
     DatabaseError,
     SnapshotRestore,
+    UnregisteredDatabase,
     open_database,
     read_marker,
     read_verified_manifest,
@@ -29,7 +30,9 @@ from core.database import (
     snapshot_root,
     snapshot_summaries,
     snapshot_summary,
+    unregister_database,
 )
+from core.utils.server_control import live_server_ports
 
 if TYPE_CHECKING:
     from core.database import DatabaseSpec
@@ -75,6 +78,67 @@ def data_store_incident_acknowledge(instance: ServerInstance, incident_id: str) 
     if not payload.ok:
         return payload.to_command_result()
     return _json_result(instance, payload.data)
+
+
+def data_store_unregister(instance: ServerInstance, name: str, confirm: bool) -> CommandResult:
+    """Release registered Extension database ``name`` whose Extension was removed.
+
+    Its files move to quarantine and its registration is dropped, so data
+    snapshots no longer wait for it; earlier snapshots keep their copy. The
+    running server performs it and refuses while an Extension has the database
+    open. When a loopback target is stopped and no server runs on the data
+    directory, the local data directory is changed directly.
+    """
+    if not confirm:
+        return CommandResult(
+            ok=False,
+            message="refusing to unregister a database without confirmation; re-run with --yes",
+            instance=instance,
+        )
+    payload = rpc_call(instance, "data_store.unregister", {"name": name})
+    if payload.ok:
+        return _json_result(instance, payload.data)
+    health = probe_health(instance)
+    if health.reachable or instance.host not in _LOOPBACK_HOSTS:
+        return payload.to_command_result()
+    try:
+        ports = live_server_ports(instance.data_dir)
+    except OSError as exc:
+        return CommandResult(
+            ok=False,
+            message=f"the servers running on the data directory could not be checked ({exc})",
+            instance=instance,
+            health=health,
+        )
+    if ports:
+        return CommandResult(
+            ok=False,
+            message=(
+                "a vBot server is running on the data directory (port "
+                + ", ".join(str(port) for port in ports)
+                + "); run the command against that server"
+            ),
+            instance=instance,
+            health=health,
+        )
+    try:
+        released = unregister_database(instance.data_dir, name)
+    except (OSError, ValueError, DatabaseError) as exc:
+        return CommandResult(ok=False, message=str(exc), instance=instance, health=health)
+    return CommandResult(
+        ok=True,
+        message=_dump({"unregistered": _released_projection(released), "source": "local"}),
+        instance=instance,
+        health=health,
+    )
+
+
+def _released_projection(released: UnregisteredDatabase) -> dict[str, Any]:
+    return {
+        "name": released.name,
+        "database_id": released.database_id,
+        "quarantine": None if released.quarantine is None else released.quarantine.as_posix(),
+    }
 
 
 def data_store_snapshot_list(instance: ServerInstance) -> CommandResult:
@@ -250,6 +314,8 @@ def _describe_restore(restored: SnapshotRestore) -> str:
         if documents.quarantine is not None:
             described += f"; replaced documents kept at {documents.quarantine}"
         parts.append(described)
+    if restored.registered:
+        parts.append("registered again: " + ", ".join(restored.registered))
     if restored.retired:
         parts.append("moved to quarantine: " + ", ".join(restored.retired))
     return "; ".join(parts)

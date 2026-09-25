@@ -13,9 +13,18 @@ from cli.main import dispatch_data_store_command
 from cli.parser import parse_args
 from cli.server_management import CommandResult, HealthProbeResult, ServerInstance
 from core.chat import ChatMessage
-from core.database import SnapshotRestore, create_data_snapshot, write_bootstrap_marker
+from core.database import (
+    SnapshotRestore,
+    create_data_snapshot,
+    open_database,
+    read_marker,
+    write_bootstrap_marker,
+)
 from core.database.recovery import incident_path
 from core.sessions import ChatSessionManager, SessionAddress
+from tests.core.database.database_test_support import notes_spec
+
+_EXTENSION = "ext.demo.notes"
 
 
 def _instance(tmp_path: Path) -> ServerInstance:
@@ -108,6 +117,10 @@ def test_dispatch_routes_nested_data_store_commands(tmp_path: Path) -> None:
         calls.append(("restore", (snapshot_id, confirm, tuple(databases), documents, complete)))
         return CommandResult(ok=True, message="restore", instance=resolved)
 
+    def unregister(resolved: ServerInstance, name: str, confirm: bool) -> CommandResult:
+        calls.append(("unregister", (name, confirm)))
+        return CommandResult(ok=True, message="unregister", instance=resolved)
+
     status_args = parse_args(["data-store", "status"])
     create_args = parse_args(["data-store", "snapshot", "create", "--reason", "update"])
     restore_args = parse_args(
@@ -115,17 +128,20 @@ def test_dispatch_routes_nested_data_store_commands(tmp_path: Path) -> None:
     )
     documents_args = parse_args(["data-store", "snapshot", "restore", "s-1", "--documents"])
     complete_args = parse_args(["data-store", "snapshot", "restore", "s-1", "--all", "--yes"])
+    unregister_args = parse_args(["data-store", "unregister", _EXTENSION, "--yes"])
 
     assert dispatch_data_store_command(status_args, instance, status_fn=status).ok
     assert dispatch_data_store_command(create_args, instance, snapshot_create_fn=create).ok
     for args in (restore_args, documents_args, complete_args):
         assert dispatch_data_store_command(args, instance, snapshot_restore_fn=restore).ok
+    assert dispatch_data_store_command(unregister_args, instance, unregister_fn=unregister).ok
     assert calls == [
         ("status", instance),
         ("create", "update"),
         ("restore", ("s-1", True, ("sessions",), False, False)),
         ("restore", ("s-1", False, (), True, False)),
         ("restore", ("s-1", True, (), False, True)),
+        ("unregister", (_EXTENSION, True)),
     ]
 
 
@@ -316,3 +332,155 @@ def test_restore_checks_process_shutdown_even_after_listener_closed(
 
     assert result.ok is stop_succeeds
     assert calls == (["check", "stop", "restore"] if stop_succeeds else ["check", "stop"])
+
+
+def _registered_extension(tmp_path: Path) -> Path:
+    """A data directory whose only registered database is ``_EXTENSION``; returns a snapshot."""
+    write_bootstrap_marker(tmp_path)
+    open_database(notes_spec(tmp_path, name=_EXTENSION)).close()
+    snapshot = create_data_snapshot(tmp_path, reason="test")
+    assert snapshot is not None
+    return snapshot
+
+
+def _registered_names(tmp_path: Path) -> set[str]:
+    marker = read_marker(tmp_path)
+    assert marker is not None
+    return set(marker.databases)
+
+
+def test_unregister_requires_confirmation_before_contacting_the_server(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(
+        data_store_management,
+        "rpc_call",
+        lambda *_args: pytest.fail("an unconfirmed unregister must not contact the server"),
+    )
+
+    result = data_store_management.data_store_unregister(_instance(tmp_path), _EXTENSION, False)
+
+    assert not result.ok
+    assert "re-run with --yes" in result.message
+
+
+def test_unregister_is_performed_and_refused_by_a_running_server(
+    tmp_path: Path, monkeypatch
+) -> None:
+    instance = _instance(tmp_path)
+    requests: list[tuple[str, dict]] = []
+
+    class Released:
+        ok = True
+        data = {"unregistered": {"name": _EXTENSION, "database_id": "db-1", "quarantine": None}}
+
+    def released(_instance, method: str, params: dict):
+        requests.append((method, params))
+        return Released()
+
+    monkeypatch.setattr(data_store_management, "rpc_call", released)
+    result = data_store_management.data_store_unregister(instance, _EXTENSION, True)
+    assert result.ok
+    assert json.loads(result.message)["unregistered"]["name"] == _EXTENSION
+    assert requests == [("data_store.unregister", {"name": _EXTENSION})]
+
+    monkeypatch.setattr(
+        data_store_management,
+        "rpc_call",
+        lambda *_args: _FailedPayload(instance, "the database is open by its Extension"),
+    )
+    monkeypatch.setattr(
+        data_store_management,
+        "probe_health",
+        lambda _instance: HealthProbeResult(reachable=True, is_vbot=True, status_code=200),
+    )
+    monkeypatch.setattr(
+        data_store_management,
+        "unregister_database",
+        lambda *_args: pytest.fail("a refusal by the running server must not fall back"),
+    )
+    refused = data_store_management.data_store_unregister(instance, _EXTENSION, True)
+    assert not refused.ok
+    assert refused.message == "the database is open by its Extension"
+
+
+def test_unregister_never_changes_local_data_for_a_remote_target(
+    tmp_path: Path, monkeypatch
+) -> None:
+    instance = replace(_instance(tmp_path), host="remote.example", url="http://remote.example:8420")
+    _stopped_server(monkeypatch, instance)
+    monkeypatch.setattr(
+        data_store_management,
+        "unregister_database",
+        lambda *_args: pytest.fail("a remote target must not change local state"),
+    )
+
+    result = data_store_management.data_store_unregister(instance, _EXTENSION, True)
+
+    assert not result.ok
+    assert result.message == "RPC unavailable"
+
+
+def test_unregister_releases_locally_and_a_restore_registers_it_again(
+    tmp_path: Path, monkeypatch
+) -> None:
+    instance = _instance(tmp_path)
+    snapshot = _registered_extension(tmp_path)
+    path = notes_spec(tmp_path, name=_EXTENSION).path
+    _stopped_server(monkeypatch, instance)
+    monkeypatch.setattr(data_store_management, "live_server_ports", lambda _data_dir: ())
+    monkeypatch.setattr(data_store_management, "is_systemd_managed", lambda *_args: False)
+    monkeypatch.setattr(
+        data_store_management,
+        "stop_server",
+        lambda resolved: CommandResult(ok=True, message="stopped", instance=resolved),
+    )
+
+    result = data_store_management.data_store_unregister(instance, _EXTENSION, True)
+
+    assert result.ok, result.message
+    payload = json.loads(result.message)
+    assert payload["source"] == "local"
+    assert payload["unregistered"]["name"] == _EXTENSION
+    assert (Path(payload["unregistered"]["quarantine"]) / path.name).is_file()
+    assert not path.exists()
+    assert _registered_names(tmp_path) == set()
+
+    restored = data_store_management.data_store_snapshot_restore(
+        instance, snapshot.name, True, [_EXTENSION]
+    )
+
+    assert restored.ok, restored.message
+    assert f"registered again: {_EXTENSION}" in restored.message
+    assert path.is_file()
+    assert _registered_names(tmp_path) == {_EXTENSION}
+
+
+def test_unregister_is_refused_locally_while_a_server_runs_on_the_data_directory(
+    tmp_path: Path, monkeypatch
+) -> None:
+    instance = _instance(tmp_path)
+    _registered_extension(tmp_path)
+    _stopped_server(monkeypatch, instance)
+    monkeypatch.setattr(data_store_management, "live_server_ports", lambda _data_dir: (8421,))
+
+    result = data_store_management.data_store_unregister(instance, _EXTENSION, True)
+
+    assert not result.ok
+    assert "a vBot server is running on the data directory (port 8421)" in result.message
+    assert _registered_names(tmp_path) == {_EXTENSION}
+    assert notes_spec(tmp_path, name=_EXTENSION).path.is_file()
+
+
+def test_local_unregister_refuses_a_core_database(tmp_path: Path, monkeypatch) -> None:
+    instance = _instance(tmp_path)
+    write_bootstrap_marker(tmp_path)
+    ChatSessionManager(tmp_path).close()
+    _stopped_server(monkeypatch, instance)
+    monkeypatch.setattr(data_store_management, "live_server_ports", lambda _data_dir: ())
+
+    result = data_store_management.data_store_unregister(instance, "sessions", True)
+
+    assert not result.ok
+    assert "sessions is a core vBot database and cannot be unregistered" in result.message
+    assert _registered_names(tmp_path) == {"sessions"}

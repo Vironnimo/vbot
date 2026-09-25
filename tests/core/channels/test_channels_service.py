@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import threading
 from pathlib import Path
 from typing import Any, cast
 
@@ -13,6 +14,7 @@ import pytest
 from core.attachments import AttachmentStore
 from core.channels import (
     ChannelConfigError,
+    ChannelError,
     ChannelNotFoundError,
     ChannelStorage,
 )
@@ -22,6 +24,7 @@ from core.channels.adapter import (
 )
 from core.channels.discord import DiscordChannelAdapter
 from core.channels.telegram import TelegramChannelAdapter
+from core.database import DatabaseUnavailableError
 from tests.core.channels.channels_helpers import (
     BlockingAdapter,
     DelayedStopAdapter,
@@ -42,14 +45,15 @@ class DeniedAwareAdapter(BlockingAdapter):
         return self._denied_chat_log.entries()
 
 
-def test_channel_service_create_rejects_duplicate_ids(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_channel_service_create_rejects_duplicate_ids(tmp_path: Path) -> None:
     service = make_service(tmp_path)
-    config = make_config()
+    config = make_config(enabled=False)
 
-    service.create_channel(config)
+    await service.create_channel(config)
 
     with pytest.raises(ChannelConfigError):
-        service.create_channel(config)
+        await service.create_channel(config)
 
 
 def test_channel_service_adapter_factory_builds_telegram_adapter(
@@ -95,11 +99,12 @@ def test_channel_service_adapter_factory_injects_attachment_store(
     assert adapter._transport._attachment_store is attachment_store
 
 
-def test_channel_service_create_validates_agent_exists(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_channel_service_create_validates_agent_exists(tmp_path: Path) -> None:
     service = make_service(tmp_path, known_agent_ids={"main"})
 
     with pytest.raises(ChannelConfigError):
-        service.create_channel(make_config())
+        await service.create_channel(make_config())
 
 
 def test_channel_service_update_validates_agent_exists(tmp_path: Path) -> None:
@@ -162,8 +167,10 @@ def test_channel_service_start_marks_missing_agent_channel_failed(tmp_path: Path
     assert "assistant" in failure_reason
 
 
-def test_channel_config_create_delete_controls_tool_registration_without_liveness(
+@pytest.mark.asyncio
+async def test_channel_config_create_delete_controls_tool_registration_without_liveness(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     service = make_service(tmp_path)
     hook_calls = 0
@@ -173,14 +180,17 @@ def test_channel_config_create_delete_controls_tool_registration_without_livenes
         hook_calls += 1
 
     service._notify_tool_registration_changed_hook = hook
+    monkeypatch.setattr(service, "_create_adapter", lambda _config: BlockingAdapter())
+    # No adapter runs: registration follows the persisted config alone.
+    monkeypatch.setattr(service, "start_channel", lambda *_args, **_kwargs: None)
 
-    service.create_channel(make_config(enabled=True))
+    await service.create_channel(make_config(enabled=True))
 
     assert service.has_enabled_channels() is True
     assert service.has_active_channels() is False
     assert hook_calls == 1
 
-    service.delete_channel("tg-assistant")
+    await service.delete_channel("tg-assistant")
 
     assert service.has_enabled_channels() is False
     assert hook_calls == 2
@@ -190,11 +200,11 @@ def test_channel_config_create_delete_controls_tool_registration_without_livenes
 async def test_channel_state_follows_channel_create_and_delete(tmp_path: Path) -> None:
     service = make_service(tmp_path)
     try:
-        service.create_channel(make_config(enabled=False))
+        await service.create_channel(make_config(enabled=False))
         await service._state.snapshot_participant_role("tg-assistant", "-100", "50", "Alice")
         service._state.save_update_offset("tg-assistant", 42)
 
-        service.delete_channel("tg-assistant")
+        await service.delete_channel("tg-assistant")
 
         # A late write of a stopping adapter cannot resurrect deleted state.
         with pytest.raises(ChannelNotFoundError):
@@ -203,10 +213,126 @@ async def test_channel_state_follows_channel_create_and_delete(tmp_path: Path) -
             for table in ("channel_participants", "channel_polling"):
                 assert connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
 
-        service.create_channel(make_config(enabled=False))
+        await service.create_channel(make_config(enabled=False))
         assert service._state.load_update_offset("tg-assistant") == 0
         assert (await service.channel_access("tg-assistant"))["groups"] == []
     finally:
+        service.close()
+
+
+def _registered_channels(service: Any) -> list[str]:
+    with service.database.read() as connection:
+        return [row[0] for row in connection.execute("SELECT channel_id FROM channels")]
+
+
+@pytest.mark.asyncio
+async def test_channel_create_and_delete_write_channels_db_off_the_event_loop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = make_service(tmp_path)
+    storage = ChannelStorage(tmp_path)
+    loop_thread = threading.get_ident()
+    release = threading.Event()
+    calls: list[tuple[str, bool]] = []
+    real_reset = service._state.reset
+    real_unregister = service._state.unregister
+
+    def held(name: str, write: Any) -> Any:
+        def call(channel_id: str) -> None:
+            calls.append((name, threading.get_ident() != loop_thread))
+            assert release.wait(timeout=5)
+            write(channel_id)
+
+        return call
+
+    monkeypatch.setattr(service._state, "reset", held("reset", real_reset))
+    monkeypatch.setattr(service._state, "unregister", held("unregister", real_unregister))
+    try:
+        creating = asyncio.create_task(service.create_channel(make_config(enabled=False)))
+        await wait_until(lambda: calls == [("reset", True)])
+        # channel.json is written before the registration; the Event Loop keeps
+        # serving meanwhile and refuses other changes of this Channel.
+        assert storage.get("tg-assistant").id == "tg-assistant"
+        with pytest.raises(ChannelError, match="finish being created or removed"):
+            service.update_channel("tg-assistant", enabled=True)
+        with pytest.raises(ChannelError, match="finish being created or removed"):
+            await service.delete_channel("tg-assistant")
+        release.set()
+        await asyncio.wait_for(creating, timeout=5)
+        assert _registered_channels(service) == ["tg-assistant"]
+
+        release.clear()
+        deleting = asyncio.create_task(service.delete_channel("tg-assistant"))
+        await wait_until(lambda: calls[-1] == ("unregister", True))
+        # channel.json goes first; the registration follows.
+        with pytest.raises(ChannelNotFoundError):
+            storage.get("tg-assistant")
+        with pytest.raises(ChannelError, match="finish being created or removed"):
+            await service.create_channel(make_config(enabled=False))
+        release.set()
+        await asyncio.wait_for(deleting, timeout=5)
+        assert _registered_channels(service) == []
+        assert service._pending_config_changes == set()
+    finally:
+        release.set()
+        service.close()
+
+
+@pytest.mark.asyncio
+async def test_a_failed_registration_removes_the_created_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = make_service(tmp_path)
+    storage = ChannelStorage(tmp_path)
+
+    def fail(_channel_id: str) -> None:
+        raise DatabaseUnavailableError("channels is busy")
+
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(service._state, "reset", fail)
+            with pytest.raises(DatabaseUnavailableError, match="channels is busy"):
+                await service.create_channel(make_config(enabled=False))
+
+        with pytest.raises(ChannelNotFoundError):
+            storage.get("tg-assistant")
+        assert _registered_channels(service) == []
+        await service.create_channel(make_config(enabled=False))
+        assert _registered_channels(service) == ["tg-assistant"]
+    finally:
+        service.close()
+
+
+@pytest.mark.asyncio
+async def test_a_create_cancelled_during_registration_removes_config_and_registration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = make_service(tmp_path)
+    storage = ChannelStorage(tmp_path)
+    entered = threading.Event()
+    release = threading.Event()
+    real_reset = service._state.reset
+
+    def reset(channel_id: str) -> None:
+        entered.set()
+        assert release.wait(timeout=5)
+        real_reset(channel_id)
+
+    monkeypatch.setattr(service._state, "reset", reset)
+    try:
+        creating = asyncio.create_task(service.create_channel(make_config(enabled=False)))
+        await wait_until(entered.is_set)
+        creating.cancel()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(creating, timeout=5)
+
+        with pytest.raises(ChannelNotFoundError):
+            storage.get("tg-assistant")
+        assert _registered_channels(service) == []
+        assert service._pending_config_changes == set()
+    finally:
+        release.set()
         service.close()
 
 

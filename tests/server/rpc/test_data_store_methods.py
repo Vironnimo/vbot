@@ -8,19 +8,32 @@ from typing import Any
 
 import pytest
 
+from core.database import (
+    UnregisteredDatabase,
+    open_database,
+    read_marker,
+    unregister_database,
+    write_bootstrap_marker,
+)
 from core.database import snapshots as snapshots_module
-from core.database import write_bootstrap_marker
 from core.database.recovery import write_incident
 from core.sessions import ChatSessionManager
 from server.events import ServerEventBus
 from server.rpc.methods import build_method_handlers, dispatch_rpc
+from tests.core.database.database_test_support import notes_spec
+
+_EXTENSION = "ext.demo.notes"
 
 
 def _state(data_dir: Path, sessions: ChatSessionManager) -> SimpleNamespace:
+    async def unregister_extension_database(name: str) -> UnregisteredDatabase:
+        return unregister_database(data_dir, name)
+
     return SimpleNamespace(
         runtime=SimpleNamespace(
             canonical_databases=lambda: (sessions.database,),
             storage=SimpleNamespace(data_dir=data_dir),
+            unregister_extension_database=unregister_extension_database,
         ),
         event_bus=ServerEventBus(),
     )
@@ -33,6 +46,7 @@ def test_data_store_status_and_incident_methods_are_publicly_catalogued() -> Non
         "data_store.status",
         "data_store.snapshot_create",
         "data_store.incident_acknowledge",
+        "data_store.unregister",
     } <= handlers.keys()
 
 
@@ -142,3 +156,84 @@ async def test_snapshot_create_returns_without_reverifying_the_snapshot_director
         assert len(verification_calls) == 1
     finally:
         sessions.close()
+
+
+@pytest.mark.asyncio
+async def test_snapshot_create_names_why_no_snapshot_was_taken(tmp_path: Path) -> None:
+    write_bootstrap_marker(tmp_path)
+    sessions = ChatSessionManager(tmp_path)
+    open_database(notes_spec(tmp_path, name=_EXTENSION)).close()
+    notes_spec(tmp_path, name=_EXTENSION).path.unlink()
+    try:
+        response = await dispatch_rpc(
+            _state(tmp_path, sessions),
+            {"method": "data_store.snapshot_create", "params": {"reason": "manual"}},
+        )
+    finally:
+        sessions.close()
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == "domain_error"
+    assert response["error"]["message"].startswith(
+        "the data snapshot was not created: data snapshots need every registered database: "
+        f"the registered Extension database {_EXTENSION} has no file"
+    )
+    assert f"vbot data-store unregister {_EXTENSION} --yes" in response["error"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_unregister_releases_an_extension_database(tmp_path: Path) -> None:
+    write_bootstrap_marker(tmp_path)
+    sessions = ChatSessionManager(tmp_path)
+    open_database(notes_spec(tmp_path, name=_EXTENSION)).close()
+    path = notes_spec(tmp_path, name=_EXTENSION).path
+    state = _state(tmp_path, sessions)
+    try:
+        response = await dispatch_rpc(
+            state, {"method": "data_store.unregister", "params": {"name": _EXTENSION}}
+        )
+    finally:
+        sessions.close()
+
+    assert response["ok"] is True
+    released = response["result"]["unregistered"]
+    assert released["name"] == _EXTENSION
+    assert released["database_id"]
+    assert (Path(released["quarantine"]) / path.name).is_file()
+    assert not path.exists()
+    marker = read_marker(tmp_path)
+    assert marker is not None
+    assert set(marker.databases) == {"sessions"}
+    assert state.event_bus.events[-1]["payload"] == {"kind": "data_store"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("params", "message"),
+    [
+        ({"name": "sessions"}, "sessions is a core vBot database and cannot be unregistered"),
+        ({"name": "ext.demo.other"}, "ext.demo.other is not a registered database"),
+        ({}, "params.name must be a non-empty string"),
+        ({"name": _EXTENSION, "force": True}, "force"),
+    ],
+)
+async def test_unregister_refuses_core_unknown_and_malformed_requests(
+    tmp_path: Path, params: dict[str, Any], message: str
+) -> None:
+    write_bootstrap_marker(tmp_path)
+    sessions = ChatSessionManager(tmp_path)
+    open_database(notes_spec(tmp_path, name=_EXTENSION)).close()
+    state = _state(tmp_path, sessions)
+    try:
+        response = await dispatch_rpc(state, {"method": "data_store.unregister", "params": params})
+    finally:
+        sessions.close()
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == "invalid_request"
+    assert message in response["error"]["message"]
+    marker = read_marker(tmp_path)
+    assert marker is not None
+    assert set(marker.databases) == {"sessions", _EXTENSION}
+    assert notes_spec(tmp_path, name=_EXTENSION).path.is_file()
+    assert state.event_bus.events == []

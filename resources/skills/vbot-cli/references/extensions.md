@@ -591,6 +591,7 @@ def register(api):
 - Change the schema only additively: add tables, indexes, or columns that are nullable or have a default to `schema_sql`, and vBot applies them on the next open. Never rename, retype, or drop columns or tables, and never change the constraints of an existing table; vBot refuses to open a database whose existing objects differ from their declaration. To remove an index, delete it from `schema_sql` and list its name in `retired_indexes`. Fill new structures with `Migration(name, apply=fn)` from `core.extensions.databases`: `apply(connection)` runs once per database and must be idempotent; a newly created database records it without running it.
 - Name the columns in every `SELECT` and `INSERT`, because a newer version of the Extension may add columns. Validate values that may grow, such as statuses, in code instead of with CHECK constraints.
 - A handle belongs to the current registration. Shutdown handlers can still use it; afterwards vBot closes it, including on reload and disable. Open it again in the next startup instead of keeping it across reloads, and do not close it yourself.
+- Deleting an Extension keeps its databases registered and in data snapshots. When the user no longer needs that data, release each one with `vbot data-store unregister ext.<extension-id>.<name> --yes` (see `data-store.md`).
 
 ## Explicit Tool permission
 

@@ -10,6 +10,11 @@ and automatic restore. The Extension keeps its DDL, queries and meaning.
 A handle belongs to one Extension registration. Shutdown, live disable and
 reload release the registration, which closes its handles; the next
 registration opens the database again.
+
+Removing an Extension (deleting its directory) leaves its databases registered:
+data snapshots keep copying their files and refuse once a file is gone.
+``unregister`` is the operator's release of such a database; it is refused
+while an Extension has it open.
 """
 
 from __future__ import annotations
@@ -26,9 +31,12 @@ from core.database import (
     Database,
     DatabaseError,
     DatabaseSpec,
+    DatabaseUnavailableError,
     Migration,
+    UnregisteredDatabase,
     canonical_database_path,
     open_database,
+    unregister_database,
 )
 from core.extensions._declarations import ExtensionUnavailableError
 from core.utils.ids import is_safe_id
@@ -118,6 +126,7 @@ class ExtensionDatabases:
         self._changed = threading.Condition()
         self._open: dict[str, _OpenDatabase] = {}
         self._pending: dict[str, Any] = {}
+        self._unregistering: set[str] = set()
         self._released: set[Any] = set()
         self._closed = False
         self._workers = BoundedWorkerPool(name="extension-databases", max_workers=2)
@@ -166,6 +175,9 @@ class ExtensionDatabases:
 
     def _open_blocking(self, owner: Any, spec: DatabaseSpec) -> Database:
         with self._changed:
+            # An open racing an operator unregister waits, then creates anew.
+            while spec.name in self._unregistering:
+                self._changed.wait()
             self._require_admission(owner)
             if spec.name in self._open or spec.name in self._pending:
                 raise ValueError(
@@ -213,6 +225,36 @@ class ExtensionDatabases:
             names = [name for name, entry in self._open.items() if entry.owner == owner]
             databases = [self._open.pop(name).database for name in names]
         self._close_all(databases)
+
+    async def unregister(self, name: str) -> UnregisteredDatabase:
+        """Release registered Extension database ``name`` whose Extension was removed.
+
+        Moves its files to quarantine and drops its data-store registration
+        (``core.database.unregister_database``, which also refuses core and
+        unregistered names). Refused while an Extension registration has the
+        database open or is opening it; an open that starts meanwhile waits and
+        then creates a new, empty database.
+        """
+        with self._changed:
+            if self._closed:
+                raise DatabaseUnavailableError("Extension databases are shut down")
+        return await self._workers.run(self._unregister_blocking, name)
+
+    def _unregister_blocking(self, name: str) -> UnregisteredDatabase:
+        with self._changed:
+            entry = self._open.get(name)
+            if name in self._pending or (entry is not None and not entry.database.is_closed()):
+                raise DatabaseUnavailableError(
+                    f"the {name} database is open by its Extension; disable the Extension "
+                    "before unregistering the database"
+                )
+            self._unregistering.add(name)
+        try:
+            return unregister_database(self._data_dir, name)
+        finally:
+            with self._changed:
+                self._unregistering.discard(name)
+                self._changed.notify_all()
 
     def open_databases(self) -> tuple[Database, ...]:
         """Every open Extension database handle, for data snapshots and status."""

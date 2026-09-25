@@ -12,7 +12,11 @@ from core.database._connections import classified_error, readonly_sqlite_uri
 from core.database.errors import DatabaseError, DatabaseUnavailableError
 from core.database.marker import MarkerEntry, read_maintenance, read_marker
 from core.database.recovery import active_incidents
-from core.database.snapshots import read_snapshot_health, snapshot_inventory
+from core.database.snapshots import (
+    missing_database_reason,
+    read_snapshot_health,
+    snapshot_inventory,
+)
 from core.database.spec import DatabaseHealth, DatabaseSpec, canonical_database_path
 
 if TYPE_CHECKING:
@@ -134,7 +138,7 @@ def _file_state(
     """Check a registered database that is not open here, without changing it."""
     path = canonical_database_path(data_dir, name)
     if not path.is_file():
-        return "unavailable", "the database file is missing", {}
+        return "unavailable", missing_database_reason(name), {}
     try:
         with closing(sqlite3.connect(readonly_sqlite_uri(path), uri=True)) as connection:
             application_id = int(connection.execute("PRAGMA application_id").fetchone()[0])

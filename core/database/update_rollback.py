@@ -41,6 +41,7 @@ from core.database.marker import marker_path, read_maintenance, read_marker
 from core.database.recovery import SnapshotRestore, restore_data_snapshot
 from core.database.snapshots import (
     create_data_snapshot,
+    describe_missing_databases,
     read_manifest,
     read_snapshot_health,
     snapshot_inventory,
@@ -152,13 +153,9 @@ def create_update_snapshot(
         return None
     if not marker.databases:
         return None
-    missing = sorted(
-        name for name in marker.databases if not canonical_database_path(data_dir, name).is_file()
-    )
-    if missing:
-        raise DatabaseUnavailableError(
-            "the data-store marker registers missing databases: " + ", ".join(missing)
-        )
+    missing = describe_missing_databases(data_dir, marker)
+    if missing is not None:
+        raise DatabaseUnavailableError(missing)
     before = data_stamp(data_dir)
     created = create_data_snapshot(data_dir, reason=reason, specs=specs)
     if created is None:

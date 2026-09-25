@@ -8,18 +8,26 @@ first as ``pending`` before anything is replaced, then as ``ok`` once the
 restored file verified. A crash between the two resumes on the next open.
 
 Automatic restore runs only when opening a registered database finds it
-missing, damaged or with another identity; never for a busy or locked file and
-never over a database a newer vBot changed. An operator restore of a data
+missing, damaged or with another identity; never for a busy or locked file,
+never over a database a newer vBot changed, and never over an intact database
+whose schema differs from this vBot's declaration. An operator restore of a data
 snapshot (selected databases, the JSON document set, or the complete snapshot)
 holds the maintenance guard, so Runtime refuses a half-restored data
 directory. A complete restore also retires databases registered after the
 snapshot: their bundles move to quarantine and their registrations are
-removed, so the data directory matches the snapshot again.
+removed, so the data directory matches the snapshot again. A restored member
+whose database is no longer registered (retired or unregistered since the
+snapshot) is registered again with the snapshot's identity.
+
+``unregister_database`` is the operator's release of one Extension database
+whose Extension was removed: its bundle moves to quarantine and its
+registration is dropped, so data snapshots no longer wait for it.
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shutil
 import sqlite3
@@ -49,18 +57,23 @@ from core.database._schema import KERNEL_SCHEMA_SQL, declared_schema, schema_cha
 from core.database.errors import (
     DatabaseCorruptError,
     DatabaseFormatError,
+    DatabaseSchemaMismatchError,
     DatabaseUnavailableError,
     IncidentConflictError,
 )
 from core.database.marker import (
+    MarkerEntry,
     acquire_operation_lock,
     maintenance,
     read_marker,
+    register_database_locked,
+    require_no_maintenance,
     unregister_databases_locked,
     utc_now,
     valid_database_id,
 )
 from core.database.snapshots import (
+    UNUSABLE_COPY_ERRORS,
     SnapshotManifest,
     SnapshotMember,
     member_path,
@@ -73,8 +86,11 @@ from core.database.snapshots import (
 from core.database.spec import (
     DatabaseSpec,
     canonical_database_path,
+    is_extension_database_name,
     validate_database_name,
 )
+
+_LOGGER = logging.getLogger("vbot.database")
 
 QUARANTINE_ROOT_NAME = "quarantine"
 INCIDENT_ROOT_NAME = "incidents"
@@ -118,13 +134,27 @@ class SnapshotRestore:
 
     ``documents`` is ``None`` when the JSON document set was not selected.
     ``retired`` names databases registered after the snapshot that a complete
-    restore moved to quarantine and unregistered.
+    restore moved to quarantine and unregistered. ``registered`` names restored
+    databases that were no longer registered and are registered again.
     """
 
     snapshot_id: str
     databases: tuple[str, ...] = ()
     documents: DocumentRestore | None = None
     retired: tuple[str, ...] = ()
+    registered: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class UnregisteredDatabase:
+    """One Extension database released by ``unregister_database``.
+
+    ``quarantine`` holds its moved files, or is ``None`` when it had none.
+    """
+
+    name: str
+    database_id: str
+    quarantine: Path | None
 
 
 @dataclass(frozen=True)
@@ -403,9 +433,10 @@ def _schema_compatible(connection: sqlite3.Connection, spec: DatabaseSpec) -> bo
         schema_changes(
             connection,
             declared_schema(KERNEL_SCHEMA_SQL + spec.schema_sql),
+            database=spec.name,
             retired_indexes=spec.retired_indexes,
         )
-    except DatabaseCorruptError:
+    except DatabaseSchemaMismatchError:
         return False
     return True
 
@@ -471,7 +502,9 @@ def _probe(spec: DatabaseSpec, expected_database_id: str) -> _Probe:
             if connection.execute("PRAGMA foreign_key_check").fetchone() is not None:
                 return damaged(f"{name} database foreign-key failure")
             if not _schema_compatible(connection, spec):
-                return damaged(f"{name} database table schema mismatch")
+                # An intact file this vBot cannot reconcile is a compatibility
+                # problem; an older snapshot would silently lose its newer data.
+                return untouchable(f"{name} database schema differs from the declaration")
         return _Probe(True, False, "", detected_at)
     except sqlite3.Error as exc:
         translated = classified_error(exc, "")
@@ -519,9 +552,15 @@ def _install_member(
             raise DatabaseUnavailableError(quarantine.reason or f"{name} quarantine failed")
         os.replace(temporary, target)
         fsync_dir(target.parent)
-        verify_database_file(target, name=name, spec=spec, expected_database_id=member.database_id)
+        verify_database_file(
+            target,
+            name=name,
+            spec=spec,
+            expected_database_id=member.database_id,
+            fact_names=member.facts,
+        )
         return quarantine.path
-    except (OSError, sqlite3.Error, DatabaseCorruptError) as exc:
+    except (OSError, sqlite3.Error, *UNUSABLE_COPY_ERRORS) as exc:
         raise DatabaseUnavailableError(
             f"the {name} snapshot member could not be installed"
         ) from exc
@@ -550,7 +589,7 @@ def _restore_member_locked(
         return False
     try:
         verify_member(snapshot_dir, member, spec=spec)
-    except DatabaseCorruptError:
+    except UNUSABLE_COPY_ERRORS:
         return False
     pending = read_incident(data_dir, name)
     if pending is not None and (
@@ -612,7 +651,7 @@ def _confirm_pending(data_dir: Path, spec: DatabaseSpec) -> None:
         return
     try:
         verify_member(snapshot_dir, member, spec=spec, path=spec.path)
-    except DatabaseCorruptError:
+    except UNUSABLE_COPY_ERRORS:
         # An interruption before quarantine left the original usable. It is
         # not evidence that the requested snapshot was restored.
         return
@@ -641,6 +680,11 @@ def auto_restore_if_needed(data_dir: Path, spec: DatabaseSpec, expected_database
     if lock is None:
         return False
     try:
+        marker = read_marker(data_dir)
+        entry = None if marker is None else marker.databases.get(spec.name)
+        if entry is None or entry.database_id != expected_database_id:
+            # Unregistered or replaced meanwhile: nothing here may be restored.
+            return False
         probe = _probe(spec, expected_database_id)
         if probe.usable:
             _confirm_pending(data_dir, spec)
@@ -689,9 +733,11 @@ def restore_data_snapshot(
     member selected) moves databases the marker registers but the snapshot
     does not hold to quarantine and unregisters them. Everything selected
     must verify, and every database member must match the database registered
-    in the marker, before anything changes; ``check_only`` stops after that
-    and returns the plan. The maintenance guard covers the whole restore, so
-    an interrupted restore keeps Runtime from starting until it is repeated.
+    under its name, before anything changes; a member whose name is not
+    registered is restored and registered with the snapshot's identity.
+    ``check_only`` stops after that and returns the plan. The maintenance
+    guard covers the whole restore, so an interrupted restore keeps Runtime
+    from starting until it is repeated.
     ``specs`` add compatibility and owner-fact checks for the members they
     describe.
     """
@@ -710,12 +756,15 @@ def restore_data_snapshot(
     if not selected and not documents:
         raise ValueError("no snapshot member selected")
     known_specs = {spec.name: spec for spec in specs}
+    registered: list[str] = []
     for name in selected:
         member = manifest.members.get(name)
         if member is None:
             raise DatabaseFormatError(f"snapshot {manifest.snapshot_id} has no {name} member")
         entry = marker.databases.get(name)
-        if entry is None or entry.database_id != member.database_id:
+        if entry is None:
+            registered.append(name)
+        elif entry.database_id != member.database_id:
             raise DatabaseFormatError(
                 f"snapshot member {name} does not belong to this data directory's {name} database"
             )
@@ -739,7 +788,9 @@ def restore_data_snapshot(
         if has_live_connection(canonical_database_path(data_dir, name)):
             raise DatabaseUnavailableError(f"the {name} database is open; it cannot be retired")
     if check_only:
-        return SnapshotRestore(manifest.snapshot_id, selected, document_plan, retired)
+        return SnapshotRestore(
+            manifest.snapshot_id, selected, document_plan, retired, tuple(registered)
+        )
     document_result: DocumentRestore | None = None
     with maintenance(data_dir, RESTORE_OPERATION, resume=True):
         lock = acquire_operation_lock(data_dir)
@@ -761,6 +812,11 @@ def restore_data_snapshot(
                     raise DatabaseUnavailableError(
                         f"the {name} member could not be restored; it is open or changed"
                     )
+                if name in registered:
+                    member = manifest.members[name]
+                    register_database_locked(
+                        data_dir, name, MarkerEntry(member.database_id, member.format_generation)
+                    )
             _retire_databases_locked(data_dir, retired)
             if document_members is not None:
                 document_result = restore_documents(
@@ -771,25 +827,89 @@ def restore_data_snapshot(
                 )
         finally:
             lock.release()
-    return SnapshotRestore(manifest.snapshot_id, selected, document_result, retired)
+    return SnapshotRestore(
+        manifest.snapshot_id, selected, document_result, retired, tuple(registered)
+    )
 
 
-def _retire_databases_locked(data_dir: Path, names: Iterable[str]) -> None:
-    """Quarantine each bundle, then drop the registrations; repeatable after a crash."""
+def unregister_database(data_dir: Path, name: str) -> UnregisteredDatabase:
+    """Release a registered Extension database: quarantine its files, drop its registration.
+
+    For the database of an Extension that was removed: data snapshots and
+    updates require every registered database to have its file, and no uninstall
+    flow releases it otherwise. The bundle moves to quarantine first and is never
+    deleted, so a crash leaves at most a registration without a file, which a
+    repeated call releases. Earlier data snapshots keep their copy, and a
+    snapshot restore registers it again.
+
+    Raises ``ValueError`` for a core database (vBot recreates or restores those
+    itself) or a name that is not registered, ``DatabaseFormatError`` while data
+    maintenance is incomplete, and ``DatabaseUnavailableError`` while this
+    process has the database open or its files cannot be moved.
+    """
+    data_dir = Path(data_dir)
+    validate_database_name(name)
+    if not is_extension_database_name(name):
+        raise ValueError(
+            f"{name} is a core vBot database and cannot be unregistered; only Extension "
+            "databases (ext.<extension>.<name>) can"
+        )
+    require_no_maintenance(data_dir)
+    lock = acquire_operation_lock(data_dir)
+    if lock is None:
+        raise DatabaseUnavailableError("the data-store operation lock is busy")
+    try:
+        marker = read_marker(data_dir)
+        if marker is None:
+            raise DatabaseFormatError(
+                f"the data directory does not authorize a current-format data store: {data_dir}"
+            )
+        entry = marker.databases.get(name)
+        if entry is None:
+            known = sorted(item for item in marker.databases if is_extension_database_name(item))
+            raise ValueError(
+                f"{name} is not a registered database; registered Extension databases: "
+                + (", ".join(known) or "none")
+            )
+        if has_live_connection(canonical_database_path(data_dir, name)):
+            raise DatabaseUnavailableError(
+                f"the {name} database is open; disable its Extension before unregistering it"
+            )
+        quarantine = _retire_databases_locked(data_dir, (name,))[name]
+    finally:
+        lock.release()
+    _LOGGER.info(
+        "Unregistered the %s database (database_id=%s, quarantine=%s)",
+        name,
+        entry.database_id,
+        quarantine,
+    )
+    return UnregisteredDatabase(name, entry.database_id, quarantine)
+
+
+def _retire_databases_locked(data_dir: Path, names: Iterable[str]) -> dict[str, Path | None]:
+    """Quarantine each bundle, then drop the registrations; repeatable after a crash.
+
+    Returns each name's quarantine directory, ``None`` when it had no files.
+    """
     names = tuple(names)
+    quarantined: dict[str, Path | None] = {}
     for name in names:
         result = _quarantine_bundle(data_dir, name, canonical_database_path(data_dir, name))
         if result.had_bundle and not result.succeeded:
             raise DatabaseUnavailableError(
                 result.reason or f"the {name} database could not be moved to quarantine"
             )
+        quarantined[name] = result.path
     if names:
         unregister_databases_locked(data_dir, names)
+    return quarantined
 
 
 __all__ = [
     "QuarantineResult",
     "SnapshotRestore",
+    "UnregisteredDatabase",
     "acknowledge_incident",
     "active_incidents",
     "auto_restore_if_needed",
@@ -800,5 +920,6 @@ __all__ = [
     "read_incident",
     "read_incidents",
     "restore_data_snapshot",
+    "unregister_database",
     "write_incident",
 ]

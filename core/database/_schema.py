@@ -6,6 +6,11 @@ it never drops or rewrites an object. A live object whose declared shape
 differs fails closed, because within one format generation a changed object
 gets a new name. Extra live columns, tables and objects are tolerated: a newer
 vBot may have added them, and runtime reads always name their columns.
+
+A live database the reconcile cannot express raises
+``DatabaseSchemaMismatchError``: the file is intact, so the difference is never
+treated as corruption. A declaration SQLite or the parser rejects is a
+programming error and raises ``ValueError``.
 """
 
 from __future__ import annotations
@@ -14,8 +19,9 @@ import re
 import sqlite3
 from dataclasses import dataclass
 from functools import cache
+from typing import NamedTuple
 
-from core.database.errors import DatabaseCorruptError
+from core.database.errors import DatabaseSchemaMismatchError
 
 KERNEL_SCHEMA_SQL = """
 CREATE TABLE kernel_meta (
@@ -73,10 +79,17 @@ class DeclaredSchema:
     table_suffixes: dict[str, str]
     object_text: dict[str, str]
 
+
+class PlannedChange(NamedTuple):
+    """One statement the reconcile plans, with the object it changes."""
+
+    statement: str
+    action: str
+    object_name: str
+
     @property
-    def readable_relations(self) -> tuple[str, ...]:
-        """Every declared table and view, probed for readability on open."""
-        return tuple(name for kind, name, _sql in self.objects if kind in {"table", "view"})
+    def description(self) -> str:
+        return f"{self.action} {self.object_name}"
 
 
 def quote_identifier(name: str) -> str:
@@ -99,7 +112,10 @@ def declared_schema(schema_sql: str) -> DeclaredSchema:
     """
     reference = sqlite3.connect(":memory:")
     try:
-        reference.executescript(schema_sql)
+        try:
+            reference.executescript(schema_sql)
+        except sqlite3.Error as exc:
+            raise ValueError(f"invalid schema declaration: {exc}") from exc
         objects: list[tuple[str, str, str]] = []
         table_columns: dict[str, dict[str, DeclaredColumn]] = {}
         table_constraints: dict[str, tuple[str, ...]] = {}
@@ -112,7 +128,10 @@ def declared_schema(schema_sql: str) -> DeclaredSchema:
                 continue
             objects.append((str(kind), str(name), str(sql)))
             if kind == "table":
-                expressions, constraints, suffix = _table_declaration(str(sql))
+                try:
+                    expressions, constraints, suffix = _table_declaration(str(sql))
+                except ValueError as exc:
+                    raise ValueError(f"invalid schema declaration of table {name}: {exc}") from exc
                 table_columns[str(name)] = {
                     column.name: column
                     for column in _declared_columns(reference, str(name), expressions)
@@ -143,8 +162,8 @@ def _declared_columns(
         _cid, name, type_name, notnull, default, pk, hidden = row
         expression = expressions.get(str(name))
         if expression is None:
-            raise DatabaseCorruptError(
-                f"schema declaration could not resolve column {table_name}.{name}"
+            raise ValueError(
+                f"invalid schema declaration: cannot resolve column {table_name}.{name}"
             )
         columns.append(
             DeclaredColumn(
@@ -160,10 +179,13 @@ def _declared_columns(
 
 
 def _table_declaration(sql: str) -> tuple[dict[str, str], tuple[str, ...], str]:
-    """Return exact column expressions, table constraints, and table suffix."""
+    """Return exact column expressions, table constraints, and table suffix.
+
+    Raises ``ValueError`` for a definition this parser cannot split.
+    """
     open_index = sql.find("(")
     if open_index < 0:
-        raise DatabaseCorruptError("schema declaration has no table body")
+        raise ValueError("the table definition has no body")
     close_index = _matching_parenthesis(sql, open_index)
     expressions: dict[str, str] = {}
     constraints: list[str] = []
@@ -202,7 +224,7 @@ def _matching_parenthesis(sql: str, open_index: int) -> int:
             if depth == 0:
                 return index
         index += 1
-    raise DatabaseCorruptError("schema declaration has an unterminated table body")
+    raise ValueError("the table definition has an unterminated body")
 
 
 def _split_sql_items(body: str) -> list[str]:
@@ -239,7 +261,7 @@ def _split_sql_items(body: str) -> list[str]:
 
 def _first_sql_token(item: str) -> tuple[str, str]:
     if not item:
-        raise DatabaseCorruptError("schema declaration has an empty table item")
+        raise ValueError("the table definition has an empty item")
     opening = item[0]
     if opening in {'"', "`", "["}:
         closing = "]" if opening == "[" else opening
@@ -255,12 +277,12 @@ def _first_sql_token(item: str) -> tuple[str, str]:
                 return "".join(token), item[index + 1 :]
             token.append(character)
             index += 1
-        raise DatabaseCorruptError("schema declaration has an unterminated identifier")
+        raise ValueError("the table definition has an unterminated identifier")
     # A bare token ends at whitespace or at the parenthesis of a table
     # constraint written without a space, such as ``UNIQUE(a,b)``.
     match = _BARE_TOKEN.match(item)
     if match is None or not match.group(2).strip():
-        raise DatabaseCorruptError(f"schema declaration lacks a column type: {item}")
+        raise ValueError(f"the table definition lacks a column type: {item}")
     return match.group(1), match.group(2)
 
 
@@ -268,18 +290,20 @@ def schema_changes(
     connection: sqlite3.Connection,
     declared: DeclaredSchema,
     *,
+    database: str,
     retired_indexes: tuple[str, ...] = (),
-) -> list[tuple[str, str]]:
+) -> list[PlannedChange]:
     """Plan the additive changes, and retired-index drops, for one live snapshot.
 
-    Returns ``(statement, description)`` pairs; empty when the database is
-    current. Raises ``DatabaseCorruptError`` for every shape the additive
-    reconcile cannot express.
+    Returns the planned changes; empty when the database is current. Raises
+    ``DatabaseSchemaMismatchError`` naming ``database`` and the object for every
+    shape the additive reconcile cannot express.
     """
-    planned: list[tuple[str, str]] = []
+    planned: list[PlannedChange] = []
     for table_name, columns in declared.table_columns.items():
         planned.extend(
             _missing_column_statements(
+                database,
                 table_name,
                 columns,
                 declared.table_constraints[table_name],
@@ -287,7 +311,7 @@ def schema_changes(
                 connection,
             )
         )
-    planned.extend(_missing_object_statements(declared, connection))
+    planned.extend(_missing_object_statements(database, declared, connection))
     if retired_indexes:
         live_indexes = {
             str(row[0])
@@ -296,32 +320,41 @@ def schema_changes(
         for name in retired_indexes:
             if name in live_indexes:
                 planned.append(
-                    (f"DROP INDEX {quote_identifier(name)};", f"dropped retired index {name}")
+                    PlannedChange(
+                        f"DROP INDEX {quote_identifier(name)};", "dropped", f"retired index {name}"
+                    )
                 )
     return planned
 
 
 def _missing_column_statements(
+    database: str,
     table_name: str,
     columns: dict[str, DeclaredColumn],
     declared_constraints: tuple[str, ...],
     declared_suffix: str,
     connection: sqlite3.Connection,
-) -> list[tuple[str, str]]:
+) -> list[PlannedChange]:
     """ADD COLUMN statements for addable gaps; any other shape change fails closed."""
     live_rows = connection.execute(f"PRAGMA table_xinfo({quote_identifier(table_name)})").fetchall()
     if not live_rows:
         # The table is created whole by _missing_object_statements.
         return []
+    table = f"table {table_name}"
     live_sql_row = connection.execute(
         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?", (table_name,)
     ).fetchone()
     if live_sql_row is None or live_sql_row[0] is None:
-        raise DatabaseCorruptError(f"schema mismatch: {table_name} has no declared SQL")
-    live_expressions, live_constraints, live_suffix = _table_declaration(str(live_sql_row[0]))
+        raise DatabaseSchemaMismatchError(database, table, "has no stored definition")
+    try:
+        live_expressions, live_constraints, live_suffix = _table_declaration(str(live_sql_row[0]))
+    except ValueError as exc:
+        raise DatabaseSchemaMismatchError(
+            database, table, f"has a stored definition this vBot cannot parse ({exc})"
+        ) from exc
     if live_constraints != declared_constraints or live_suffix.lower() != declared_suffix.lower():
-        raise DatabaseCorruptError(
-            f"schema mismatch: {table_name} constraints or options do not match the declared shape"
+        raise DatabaseSchemaMismatchError(
+            database, table, "has table constraints or options that differ from the declaration"
         )
     live_types = {str(row[1]): str(row[2] or "") for row in live_rows}
     live_generated = {str(row[1]): bool(row[6]) for row in live_rows}
@@ -336,14 +369,14 @@ def _missing_column_statements(
         str(row[1]) for row in sorted((row for row in live_rows if row[5]), key=lambda row: row[5])
     ]
     if declared_pk != live_pk:
-        raise DatabaseCorruptError(
-            f"schema mismatch: {table_name} primary key {live_pk} does not match "
-            f"declared {declared_pk}"
+        raise DatabaseSchemaMismatchError(
+            database, table, f"has the primary key {live_pk}, declared {declared_pk}"
         )
-    statements: list[tuple[str, str]] = []
+    statements: list[PlannedChange] = []
     for column in columns.values():
         if column.name in live_types:
             _verify_declared_shape(
+                database,
                 table_name,
                 column,
                 live_types[column.name],
@@ -352,21 +385,25 @@ def _missing_column_statements(
             )
             continue
         if not column.addable:
-            raise DatabaseCorruptError(
-                f"schema mismatch: {table_name}.{column.name} is missing and cannot be added "
-                "with ADD COLUMN"
+            raise DatabaseSchemaMismatchError(
+                database,
+                f"column {table_name}.{column.name}",
+                "is missing and cannot be added with ADD COLUMN (a key, generated, or NOT NULL "
+                "column without a default)",
             )
         statements.append(
-            (
+            PlannedChange(
                 f"ALTER TABLE {quote_identifier(table_name)} ADD COLUMN "
                 f"{quote_identifier(column.name)} {column.type_expression};",
-                f"added column {table_name}.{column.name}",
+                "added",
+                f"column {table_name}.{column.name}",
             )
         )
     return statements
 
 
 def _verify_declared_shape(
+    database: str,
     table_name: str,
     column: DeclaredColumn,
     live_type: str,
@@ -383,16 +420,18 @@ def _verify_declared_shape(
         or column.generated != live_generated
         or not expression_matches
     ):
-        raise DatabaseCorruptError(
-            f"schema mismatch: {table_name}.{column.name} does not match the declared shape "
-            f"(live type {live_type or 'none'}, generated {live_generated}; declared type "
-            f"{column.type_name or 'none'}, generated {column.generated})"
+        live_definition = _normalized_ddl(live_expression) if live_expression is not None else ""
+        raise DatabaseSchemaMismatchError(
+            database,
+            f"column {table_name}.{column.name}",
+            f"does not match the declared shape (live '{live_definition or live_type}', "
+            f"declared '{_normalized_ddl(column.type_expression)}')",
         )
 
 
 def _missing_object_statements(
-    declared: DeclaredSchema, connection: sqlite3.Connection
-) -> list[tuple[str, str]]:
+    database: str, declared: DeclaredSchema, connection: sqlite3.Connection
+) -> list[PlannedChange]:
     """CREATE statements for declared objects the database lacks by name.
 
     A live index, view or trigger with a declared name but a different
@@ -404,20 +443,19 @@ def _missing_object_statements(
             "SELECT type, name, sql FROM sqlite_master WHERE sql IS NOT NULL"
         )
     }
-    statements: list[tuple[str, str]] = []
+    statements: list[PlannedChange] = []
     for kind, name, sql in declared.objects:
         live_object = live.get(name)
         if live_object is None:
-            statements.append((f"{sql};", f"created {kind} {name}"))
+            statements.append(PlannedChange(f"{sql};", "created", f"{kind} {name}"))
             continue
         live_kind, live_text = live_object
         if live_kind != kind:
-            raise DatabaseCorruptError(
-                f"schema mismatch: {name} is a live {live_kind}, declared as a {kind}"
+            raise DatabaseSchemaMismatchError(
+                database, f"{kind} {name}", f"exists as a {live_kind}"
             )
         if kind != "table" and live_text != declared.object_text[name]:
-            raise DatabaseCorruptError(
-                f"schema mismatch: {kind} {name} does not match the declared definition; "
-                "a changed definition needs a new name"
+            raise DatabaseSchemaMismatchError(
+                database, f"{kind} {name}", "has a definition that differs from the declaration"
             )
     return statements

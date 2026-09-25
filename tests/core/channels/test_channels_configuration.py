@@ -215,7 +215,8 @@ def test_channel_storage_delete_rejects_path_traversal_id(tmp_path: Path) -> Non
     assert sibling.joinpath("keep.txt").read_text(encoding="utf-8") == "important"
 
 
-def test_channel_service_delete_rejects_path_traversal_id(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_channel_service_delete_rejects_path_traversal_id(tmp_path: Path) -> None:
     # The same guard holds one layer up, where channel.delete RPC enters.
     service = make_service(tmp_path)
     (tmp_path / "channels").mkdir()
@@ -224,7 +225,7 @@ def test_channel_service_delete_rejects_path_traversal_id(tmp_path: Path) -> Non
     sibling.joinpath("keep.txt").write_text("important", encoding="utf-8")
 
     with pytest.raises(ChannelConfigError):
-        service.delete_channel("../agents")
+        await service.delete_channel("../agents")
 
     assert sibling.is_dir()
     assert sibling.joinpath("keep.txt").read_text(encoding="utf-8") == "important"
