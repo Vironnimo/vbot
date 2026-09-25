@@ -48,6 +48,12 @@ notices retain normal delivery behavior (`automation.py`,
 `tests/core/automation/test_automation_completion.py`,
 `tests/core/runtime/test_runtime_extension_host.py`).
 
+Once-Cron claim writes join the in-flight execution guard: edits wait for the
+write to settle, then withdraw its unadmitted claim before the replacement task
+starts. Cancellation during the claim write also removes that known-unadmitted
+claim after the ordered writer settles, so a clean restart cannot consume a
+rescheduled future fire (`tests/core/automation/test_cron_execution.py`).
+
 ## Reflection (background self-improvement reviews)
 
 `ReflectionService` exposes `run_review(...)` and the cadence trigger:

@@ -7,9 +7,10 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import yaml
 
 from core.runtime.runtime import Runtime
-from core.skills.skills import SKILL_ORIGIN_AGENT
+from core.skills.skills import SKILL_ORIGIN_AGENT, project_skills_dir
 from core.utils.config import Config
 from server.rpc.agent_methods import _delete_agent
 from server.rpc.skill_methods import method_handlers
@@ -294,3 +295,85 @@ def test_manager_inspects_exact_original_and_projects_write_scope(
             runtime.inspect_skill(str(tmp_path / "external" / "duplicate" / "SKILL.md"))
     finally:
         runtime.stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("disabled", [False, True])
+async def test_manager_evaluates_each_same_name_package(
+    config: Config, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, disabled: bool
+) -> None:
+    for name in (
+        "VBOT_TEST_GLOBAL_REQUIRED",
+        "VBOT_TEST_PROJECT_OPTIONAL",
+        "VBOT_TEST_PRIVATE_REQUIRED",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    runtime = Runtime(config, safe_startup_mode="test")
+    runtime.start()
+    try:
+        runtime.agents.create("two", "Two")
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        project = runtime.projects.create("p", "P", repo)
+        _write_test_skill(runtime.global_skills_dir, "inventory-helper", "Dependency.")
+        packages: tuple[tuple[Path, str, dict[str, object]], ...] = (
+            (runtime.global_skills_dir, "global", {"env": "VBOT_TEST_GLOBAL_REQUIRED"}),
+            (
+                project_skills_dir(repo, project.source_format),
+                "project",
+                {
+                    "all": [{"skill": "inventory-helper"}],
+                    "optional": [{"env": "VBOT_TEST_PROJECT_OPTIONAL"}],
+                },
+            ),
+            (runtime.agent_skills_dir("main"), "main", {}),
+            (runtime.agent_skills_dir("two"), "two", {"env": "VBOT_TEST_PRIVATE_REQUIRED"}),
+        )
+        for root, label, requirements in packages:
+            package = root / "duplicate"
+            package.mkdir(parents=True)
+            frontmatter = yaml.safe_dump(
+                {
+                    "name": "duplicate",
+                    "description": label,
+                    "metadata": {"vbot": {"requirements": requirements}},
+                }
+            )
+            (package / "SKILL.md").write_text(f"---\n{frontmatter}---\n", encoding="utf-8")
+        if disabled:
+            runtime.skill_policy.set_disabled("duplicate", disabled=True)
+
+        entries = {
+            entry["description"]: entry
+            for entry in runtime.skill_inventory()["skills"]
+            if entry["name"] == "duplicate"
+        }
+        expected = {
+            "global": (
+                "unavailable",
+                ["missing environment variable 'VBOT_TEST_GLOBAL_REQUIRED'"],
+                [],
+            ),
+            "project": (
+                "available",
+                [],
+                ["missing environment variable 'VBOT_TEST_PROJECT_OPTIONAL'"],
+            ),
+            "main": ("available", [], []),
+            "two": (
+                "unavailable",
+                ["missing environment variable 'VBOT_TEST_PRIVATE_REQUIRED'"],
+                [],
+            ),
+        }
+        assert entries.keys() == expected.keys()
+        for label, (status, missing, optional_missing) in expected.items():
+            assert entries[label]["status"] == ("disabled" if disabled else status)
+            assert entries[label]["missing"] == missing
+            assert entries[label]["optional_missing"] == optional_missing
+        if not disabled:
+            assert (
+                runtime.skills_for(None, "main").availability_for("duplicate").state == "available"
+            )
+    finally:
+        await runtime.aclose()

@@ -842,6 +842,55 @@ async def test_replaying_start_preserves_the_active_run(lifecycle, tmp_path, con
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("pinned_revision", [False, True])
+@pytest.mark.parametrize("change", ["profile_update", "profile_delete", "directory", "catalog"])
+async def test_start_replay_uses_admitted_snapshot(lifecycle, tmp_path, change, pinned_revision):
+    working = tmp_path / "working"
+    working.mkdir()
+    profile = await single_participant_profile(lifecycle, working)
+    arguments = {"profile_id": profile["id"], "prompt": "saved goal", "request_id": "saved-start"}
+    if pinned_revision:
+        arguments["expected_profile_revision"] = profile["revision"]
+    started = await lifecycle.service.operation("swarms.start", arguments)
+    await lifecycle.runtime.chat_run_manager.get(started["runs"][0]["run_id"]).wait()
+    requests_before = len(lifecycle.runtime.adapter.requests)
+
+    if change == "profile_update":
+        await lifecycle.service.store.save_profile(
+            {
+                **profile,
+                "name": "Changed",
+                "working_directory": {"kind": "directory", "path": str(tmp_path)},
+            },
+            expected_revision=profile["revision"],
+        )
+    elif change == "profile_delete":
+        await lifecycle.service.store.delete_profile(
+            profile["id"], expected_revision=profile["revision"]
+        )
+    elif change == "directory":
+        working.rmdir()
+    else:
+
+        async def empty_catalog():
+            return {"models": [], "tools": [], "skills": [], "projects": []}
+
+        lifecycle.service.host = replace(lifecycle.service.host, catalog=empty_catalog)
+
+    replay = await lifecycle.service.operation("swarms.start", arguments)
+    assert replay == {**started, "replayed": True}
+    assert len(lifecycle.runtime.adapter.requests) == requests_before
+    for changed in (
+        {"profile_id": "another-profile"},
+        {"prompt": "another goal"},
+        {"expected_profile_revision": profile["revision"] + 1},
+        {"working_directory": str(tmp_path)},
+    ):
+        with pytest.raises(ValueError, match="^request_conflict$"):
+            await lifecycle.service.operation("swarms.start", {**arguments, **changed})
+
+
+@pytest.mark.asyncio
 async def test_started_run_is_titled_in_the_background_and_listed_by_title(lifecycle, tmp_path):
     adapter = PausedSwarmAdapter(pause_at=1)
     lifecycle.runtime.adapter = adapter

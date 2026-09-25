@@ -19,6 +19,7 @@ from core.providers.adapter import (
     TERMINAL_OUTCOME_UNKNOWN,
     TerminalOutcome,
     normalize_tool_call_candidates,
+    tool_result_content_blocks,
     tool_result_function_response,
 )
 from core.providers.errors import (
@@ -54,7 +55,9 @@ def _to_gemini_content(message: Mapping[str, Any]) -> tuple[dict[str, Any] | Non
             )
         return ({"role": "model", "parts": parts} if parts else None), 0
     if role == "tool":
-        response = tool_result_function_response(message.get("content", ""))
+        response = tool_result_function_response(
+            message.get("content", ""), content_blocks=tool_result_content_blocks(message)
+        )
         return (
             {
                 "role": "user",

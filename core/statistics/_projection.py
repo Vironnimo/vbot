@@ -64,11 +64,6 @@ def day_key(day: int) -> str:
     return (_EPOCH_DATE + timedelta(days=day)).isoformat()
 
 
-def instant_hour(instant: int) -> int:
-    """Return the UTC hour of an instant."""
-    return (instant // MICROSECONDS_PER_HOUR) % 24
-
-
 def cost_source_class(cost: JsonObject) -> tuple[int, float | None]:
     """Classify one projected call cost the way cost totals count it."""
     amount = nonnegative_amount(cost.get("amount_usd"))

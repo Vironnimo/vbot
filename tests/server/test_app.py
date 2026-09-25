@@ -163,6 +163,7 @@ def test_extension_run_events_streams_only_the_current_owned_page_run(tmp_path: 
     assert response.headers["content-type"].startswith("text/event-stream")
     assert "event: model.response" in response.text
     assert '"text":"visible"' in response.text
+    assert '"file_urls":[]' in response.text
     assert stale_response.status_code == 404
     assert reloading_response.status_code == 404
     assert retired_response.status_code == 404

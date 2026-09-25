@@ -16,6 +16,7 @@ import respx
 import core.providers.opencode_zen as zen_module
 from core.models.models import Capabilities, Model, ModelRegistry, ReasoningCapabilities
 from core.providers._opencode_zen_gemini import _normalize_gemini_stream_chunk
+from core.providers.adapter import TOOL_RESULT_CONTENT_BLOCKS_FIELD
 from core.providers.errors import (
     CatalogEntrySkipped,
     NetworkError,
@@ -26,6 +27,7 @@ from core.providers.errors import (
 )
 from core.providers.opencode_zen import OpenCodeZenAdapter
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
+from core.tools import tool_failure, tool_success
 from core.utils.retry import caller_owns_retries
 
 BASE_URL = "https://opencode.ai/zen/v1"
@@ -465,6 +467,75 @@ async def test_gemini_request_preserves_native_tools_media_thinking_and_replay(
     assert payload["toolConfig"]["functionCallingConfig"] == {"mode": "ANY"}
     assert payload["tools"][0]["functionDeclarations"][0]["name"] == "weather"
     assert adapter.normalize_response(response, model_id="gemini-3.5-flash")["content"] == "done"
+
+
+@respx.mock
+@pytest.mark.asyncio
+@pytest.mark.parametrize("with_media", [False, True])
+async def test_gemini_tool_results_keep_literal_json_and_failure_classification(
+    adapter: OpenCodeZenAdapter, with_media: bool
+) -> None:
+    route = respx.post(GEMINI_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "candidates": [{"content": {"parts": [{"text": "done"}]}, "finishReason": "STOP"}]
+            },
+        )
+    )
+    literal = json.dumps(tool_failure("inner", "Literal file content."), separators=(",", ":"))
+    messages: list[dict[str, Any]] = [
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {"id": "call_read", "name": "read", "arguments": {}},
+                {"id": "call_missing", "name": "read", "arguments": {}},
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_read",
+            "content": json.dumps(tool_success({"content": literal})),
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_missing",
+            "content": json.dumps(tool_failure("not_found", "No file x.")),
+        },
+    ]
+    if with_media:
+        for message in messages[1:]:
+            message[TOOL_RESULT_CONTENT_BLOCKS_FIELD] = [
+                {"type": "media", "base64": "aW1hZ2U=", "media_type": "image/png"},
+                {"type": "text", "text": "Supplemental path"},
+            ]
+    original = json.dumps(messages)
+
+    await adapter.send(messages, model_id="gemini-3.5-flash")
+
+    contents = json.loads(route.calls.last.request.content)["contents"]
+    suffix = "\n\nSupplemental path" if with_media else ""
+    assert contents[1]["parts"][0]["functionResponse"] == {
+        "id": "call_read",
+        "name": "read",
+        "response": {"output": literal + suffix},
+    }
+    assert contents[2]["parts"][0]["functionResponse"] == {
+        "id": "call_missing",
+        "name": "read",
+        "response": {"error": "Error (not_found): No file x." + suffix},
+    }
+    assert len(contents) == (4 if with_media else 3)
+    if with_media:
+        assert contents[3] == {
+            "role": "user",
+            "parts": [
+                {"inlineData": {"mimeType": "image/png", "data": "aW1hZ2U="}},
+                {"inlineData": {"mimeType": "image/png", "data": "aW1hZ2U="}},
+            ],
+        }
+    assert json.dumps(messages) == original
 
 
 def test_gemini_response_normalizes_signature_tools_cache_usage_and_outcome(

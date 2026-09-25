@@ -339,7 +339,8 @@ class StatisticsIndex:
 
         ``prune`` removes indexed Sessions outside ``scopes``; partial readers
         such as one Extension group pass ``False`` so they never shrink the
-        shared index. After :meth:`close` it raises
+        shared index. Recovery may retry ``consume`` after partial aggregation;
+        mutable result state must be local to each call. After :meth:`close` it raises
         :class:`~core.database.DatabaseUnavailableError`.
         """
         with self._lock:

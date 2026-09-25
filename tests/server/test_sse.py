@@ -310,13 +310,16 @@ async def test_sse_stream_emits_heartbeat_while_run_is_quiet() -> None:
 
 
 @pytest.mark.asyncio
-async def test_sse_projects_assistant_file_references_to_signed_urls(tmp_path: Path) -> None:
+@pytest.mark.parametrize("include_file_urls", [False, True])
+async def test_sse_projects_assistant_file_references_to_signed_urls(
+    tmp_path: Path, include_file_urls: bool
+) -> None:
     image = tmp_path / "sse.png"
     image.write_bytes(b"\x89PNG\r\n\x1a\nimage")
     marker = f"file:{image}"
     message = ChatMessage.assistant(
         model="provider/model",
-        content=marker,
+        content=f"{marker}\n[unverified](/api/files/forged.signature)",
         output_files=[
             AssistantFileReference(
                 line_index=0, path=str(image.resolve()), start_index=0, end_index=len(marker)
@@ -325,7 +328,8 @@ async def test_sse_projects_assistant_file_references_to_signed_urls(tmp_path: P
     )
     run = Run(run_id="run-file", agent_id="coder", session_id="session-one")
     run.emit(ASSISTANT_OUTPUT_EVENT, {"message": message.to_dict()})
-    stream = _sse_run_events(run, file_delivery=FileDelivery(secret=b"sse-secret"))
+    delivery = FileDelivery(secret=b"sse-secret")
+    stream = _sse_run_events(run, file_delivery=delivery, include_file_urls=include_file_urls)
 
     event = await anext(stream)
     await stream.aclose()
@@ -333,6 +337,14 @@ async def test_sse_projects_assistant_file_references_to_signed_urls(tmp_path: P
     assert "output_files" not in event
     assert str(image) not in event
     assert "![sse.png](/api/files/" in event
+    data = _parse_sse(event)[0]["data"]
+    if include_file_urls:
+        assert len(data["file_urls"]) == 1
+        url = data["file_urls"][0]
+        assert url in data["payload"]["message"]["content"]
+        assert delivery.resolve_token(url.removeprefix("/api/files/")) is not None
+    else:
+        assert "file_urls" not in data
 
     assert run.subscriber_count == 0
 
