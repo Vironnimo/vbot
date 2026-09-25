@@ -91,7 +91,7 @@ CREATE UNIQUE INDEX sessions_one_live_address
   ON sessions (project_id, agent_id, session_id)
   WHERE state = 'live';
 
--- Archived generations of one address (restore, Run start boundaries).
+-- Archived generations of one address (id allocation, restore).
 CREATE INDEX sessions_archived_address
   ON sessions (project_id, agent_id, session_id)
   WHERE state = 'archived';
