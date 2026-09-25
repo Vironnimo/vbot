@@ -8,7 +8,6 @@ from typing import Any
 
 import pytest
 
-from core.projects.projects import PROJECT_DEFAULT_ALLOWED_TOOLS
 from core.settings import validate_data_dir_config
 from scripts.converters.persistence_generation_1._context import ConversionContext
 from scripts.converters.persistence_generation_1.json_documents import AREA, convert
@@ -348,7 +347,9 @@ def test_invalid_tool_access_is_carried_over_for_the_application_to_report(
     assert context.report.skipped == []
 
 
-def test_project_without_tool_whitelist_gets_the_default_one(tmp_path: Path) -> None:
+def test_project_without_tool_whitelist_gets_the_pre_generation_1_default(
+    tmp_path: Path,
+) -> None:
     context = _context(tmp_path)
     project = {"project_id": "a", "display_name": "A", "cwd": "/srv/a"}
     _write(context.source, "projects/a/project.json", project)
@@ -356,9 +357,21 @@ def test_project_without_tool_whitelist_gets_the_default_one(tmp_path: Path) -> 
 
     convert(context)
 
-    assert _staged(context, "projects/a/project.json")["allowed_tools"] == list(
-        PROJECT_DEFAULT_ALLOWED_TOOLS
-    )
+    # The list the pre-Generation-1 application applied, pinned independently of
+    # the application's current default.
+    assert _staged(context, "projects/a/project.json")["allowed_tools"] == [
+        "read",
+        "apply_patch",
+        "search_files",
+        "bash",
+        "process",
+        "terminal",
+        "web_fetch",
+        "web_search",
+        "status",
+        "subagent",
+        "skill",
+    ]
     assert _staged(context, "projects/b/project.json")["allowed_tools"] == []
     assert context.report.counts[AREA]["project_allowed_tools_filled"] == 1
 
