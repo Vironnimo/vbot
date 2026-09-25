@@ -15,8 +15,6 @@ from core.projects import (
 from core.runs import RunAdmissionBlockedError
 from core.sessions import (
     FORK_SOURCE_META_KEY,
-    SESSION_FORK_ALWAYS_STRIP_META_KEYS,
-    SESSION_FORK_CROSS_AGENT_STRIP_META_KEYS,
     SessionAddress,
     SessionListCursor,
     SessionListFilters,
@@ -24,6 +22,7 @@ from core.sessions import (
 from core.tools.terminal_manager import TerminalOwner
 from core.utils.errors import StorageError
 from core.utils.logging import get_logger
+from core.utils.timestamps import canonical_timestamp
 from server.events import (
     RESOURCE_KIND_AGENTS,
     RESOURCE_KIND_SESSIONS,
@@ -431,7 +430,7 @@ def _session_list_cursor(value: Any) -> SessionListCursor | None:
     if value is None:
         return None
     if not isinstance(value, dict) or set(value) != {
-        "active_sort",
+        "last_activity_at",
         "agent_id",
         "session_id",
     }:
@@ -439,17 +438,19 @@ def _session_list_cursor(value: Any) -> SessionListCursor | None:
             RPC_ERROR_INVALID_REQUEST,
             "params.cursor must be a session.list cursor object",
         )
-    active_sort = value.get("active_sort")
-    if (
-        not isinstance(active_sort, (int, float))
-        or isinstance(active_sort, bool)
-        or not (-10_000_000.0 < float(active_sort) < 10_000_000.0)
-    ):
-        raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.cursor.active_sort is invalid")
+    last_activity_at = value.get("last_activity_at")
+    try:
+        valid = isinstance(last_activity_at, str) and (
+            canonical_timestamp(last_activity_at) == last_activity_at
+        )
+    except ValueError:
+        valid = False
+    if not valid:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.cursor.last_activity_at is invalid")
     agent_id, project_id = _required_agent_address(value, "agent_id")
     session_id = _required_string(value, "session_id")
     return SessionListCursor(
-        active_sort=float(active_sort),
+        last_activity_at=str(last_activity_at),
         project_id=project_id,
         agent_id=agent_id,
         session_id=session_id,
@@ -460,7 +461,7 @@ def _session_list_cursor_payload(cursor: SessionListCursor | None) -> JsonObject
     if cursor is None:
         return None
     return {
-        "active_sort": cursor.active_sort,
+        "last_activity_at": cursor.last_activity_at,
         "agent_id": format_agent_address(cursor.agent_id, cursor.project_id),
         "session_id": cursor.session_id,
     }
@@ -546,11 +547,10 @@ async def _fork_session(state: Any, params: JsonObject) -> JsonObject:
     """Copy a session 1:1 into a fresh id, optionally re-homed to another agent.
 
     A general capability: the fork is a normal, visible session that records its
-    provenance (``fork_source``). Channel- and sub-agent bindings are always
-    stripped so the copy is unbound; a cross-agent fork additionally drops the
-    pinned skill catalog so the target re-pins its own. Sessions owns the shared
-    ``SESSION_FORK_*`` metadata policy; the RPC selects the cross-Agent policy
-    when the destination changes.
+    provenance (``fork_source``). Sessions owns the fork policy: Channel and
+    Sub-Agent bindings stay behind so the fork is unbound, and a fork into
+    another Agent leaves the pinned Skill catalog behind so the target re-pins
+    its own.
     """
     supported_fields = {"agent_id", "session_id", "target_agent_id"}
     _reject_unsupported(params, supported_fields, "session.fork")
@@ -562,10 +562,7 @@ async def _fork_session(state: Any, params: JsonObject) -> JsonObject:
         params, source_agent_id, source_project_id
     )
 
-    strip_meta_keys = SESSION_FORK_ALWAYS_STRIP_META_KEYS
     re_homed = (target_agent_id, target_project_id) != (source_agent_id, source_project_id)
-    if re_homed:
-        strip_meta_keys = strip_meta_keys | SESSION_FORK_CROSS_AGENT_STRIP_META_KEYS
 
     def resolve_endpoints() -> None:
         state.runtime.agent_resolver.resolve_agent(source_project_id, source_agent_id)
@@ -579,8 +576,9 @@ async def _fork_session(state: Any, params: JsonObject) -> JsonObject:
         fork = await state.runtime.chat_sessions.fork(
             _session_address(source_agent_id, session_id, source_project_id),
             target_agent_id=target_agent_id if target_explicit else None,
-            target_project_id=target_project_id if target_explicit else None,
-            strip_meta_keys=strip_meta_keys,
+            # Without a target the fork stays in the source's scope, which for a
+            # Project Session is its Project.
+            target_project_id=target_project_id,
         )
         fork_metadata = await _session_io(
             state.runtime.chat_sessions,

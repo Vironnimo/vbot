@@ -28,6 +28,7 @@ from core.compaction import (
     TOOL_RESULT_COMPACTED_FIELD,
 )
 from core.compaction.compaction import CompactionError
+from core.prompts.pinned_context import PINNED_SKILL_CATALOG_SLOT, pinned_skill_catalog
 from core.providers.adapter import TOOL_RESULT_CONTENT_BLOCKS_FIELD
 from core.runs import (
     COMPACTION_ABORTED_EVENT,
@@ -51,6 +52,8 @@ from tests.core.chat.chat_loop_support import (
     StubCompactionService,
     StubModels,
     StubRuntime,
+    StubSkill,
+    StubSkills,
     StubStorage,
     build_chat_loop,
     persisted_roles,
@@ -63,11 +66,19 @@ _ASYNC_COORDINATION_TIMEOUT_SECONDS = 10.0
 @pytest.mark.asyncio
 async def test_manual_compaction_preserves_note_appended_during_summary(tmp_path):
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=[])
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=StubAdapter([]))
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=StubAdapter([]))
+    runtime.skills = StubSkills([StubSkill("one", "One.", Path("a"))])
     session = runtime.chat_sessions.create("coder", session_id="session-one")
     session.append(ChatMessage.user("Earlier context"))
     service = _BlockingOnceCompactionService()
     loop = build_chat_loop(runtime, compaction_service=cast(Any, service))
+    pinned_skill_catalog(
+        loop._dependencies, "coder", session.id, agent, runtime.skills, None, skill_project_id=None
+    )
+    # The refused commit's prompt epoch would pin this grown registry.
+    runtime.skills = StubSkills(
+        [StubSkill("one", "One.", Path("a")), StubSkill("two", "Two.", Path("b"))]
+    )
     affinity = runtime.chat_sessions.prompt_cache_affinity_id(session.address)
     run = await loop.start_compaction_run("coder", session.id)
     await asyncio.wait_for(service.started.wait(), 10)
@@ -81,7 +92,13 @@ async def test_manual_compaction_preserves_note_appended_during_summary(tmp_path
         await run.wait()
     assert [message.role for message in session.load()] == ["user", "note", "run_summary"]
     assert session.load()[-2].content == "BACKGROUND_RESULT_SENTINEL"
+    # The refused commit wrote no part of the new prompt epoch it prepared.
+    assert runtime.refresh_skills_for_calls == [(None, "coder")]
     assert runtime.chat_sessions.prompt_cache_affinity_id(session.address) == affinity
+    catalog_pin = runtime.chat_sessions.prompt_pin(session.address, PINNED_SKILL_CATALOG_SLOT)
+    assert catalog_pin is not None
+    assert catalog_pin["catalog_text"] == "catalog:1"
+    assert runtime.chat_sessions.seen_skills(session.address) is None
     assert any(event.type == COMPACTION_ABORTED_EVENT for event in run.events)
 
 
@@ -550,6 +567,7 @@ async def test_compaction_reinjects_the_active_continuation_checkpoint(tmp_path:
     compaction_service = StubCompactionService(should_auto=True, checkpoint=checkpoint)
     loop = build_chat_loop(runtime, compaction_service=cast(Any, compaction_service))
 
+    session.start_run("run-one")
     interrupted_tracker = ContinuationTracker(
         session,
         run_id="run-one",
@@ -560,6 +578,7 @@ async def test_compaction_reinjects_the_active_continuation_checkpoint(tmp_path:
     prior = await recover_continuation(session)
     assert prior is not None
     session.append(ChatMessage.user("Keep going"))
+    session.start_run("run-two")
     active_tracker = ContinuationTracker(
         session,
         run_id="run-two",

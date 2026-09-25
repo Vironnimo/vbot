@@ -8,17 +8,13 @@ import hashlib
 import hmac
 import json
 import uuid
-from datetime import UTC, datetime
 from typing import Any
 
 from core.chat.errors import ChatSessionError
 from core.runs import RunKind
 from core.sessions._types import (
     _CHAT_HISTORY_CURSOR_PREFIX,
-    FORK_SOURCE_META_KEY,
     SESSION_ID_PATTERN,
-    SESSION_RUN_KINDS_META_KEY,
-    SESSION_TERMINAL_RUN_STATUSES,
     SESSION_TITLE_MAX_LENGTH,
     JsonObject,
     SessionAddress,
@@ -27,19 +23,6 @@ from core.sessions.errors import SessionPageCursorError
 from core.settings import is_valid_agent_id
 
 _RUN_KIND_VALUES = frozenset(kind.value for kind in RunKind)
-
-
-def _append_run_kind(metadata: JsonObject, run_kind: str) -> None:
-    """Add *run_kind* to the Session's listed Run kinds; a known kind is a no-op."""
-    if run_kind not in _RUN_KIND_VALUES:
-        raise ChatSessionError(f"unknown run kind: {run_kind}")
-    values = metadata.get(SESSION_RUN_KINDS_META_KEY, [])
-    if not isinstance(values, list) or not all(
-        isinstance(value, str) and value in _RUN_KIND_VALUES for value in values
-    ):
-        raise ChatSessionError("session run_kinds metadata is invalid")
-    if run_kind not in values:
-        metadata[SESSION_RUN_KINDS_META_KEY] = [*values, run_kind]
 
 
 def _validate_agent_id(agent_id: str) -> None:
@@ -62,11 +45,6 @@ def _normalize_session_title(title: str) -> str | None:
         raise ChatSessionError("session title must be a string")
     value = " ".join(title.split())
     return value[:SESSION_TITLE_MAX_LENGTH] or None
-
-
-def _format_timestamp(timestamp: datetime | None) -> str:
-    value = datetime.now(UTC) if timestamp is None else timestamp.astimezone(UTC)
-    return value.isoformat().replace("Z", "+00:00")
 
 
 def _new_prompt_cache_affinity_id() -> str:
@@ -98,91 +76,6 @@ def _decode_state_object(payload: str, name: str) -> JsonObject:
     if not isinstance(value, dict):
         raise ChatSessionError(f"invalid {name}")
     return value
-
-
-def _decode_state_json_value(payload: str, name: str, expected_type: type[Any]) -> Any:
-    try:
-        value = json.loads(payload)
-    except (json.JSONDecodeError, TypeError) as exc:
-        raise ChatSessionError(f"invalid {name}") from exc
-    if not isinstance(value, expected_type):
-        raise ChatSessionError(f"invalid {name}")
-    return value
-
-
-def _session_list_summary_from_state(state: Any) -> JsonObject:
-    summary: JsonObject = {
-        "id": str(state["session_id"]),
-        "project_id": str(state["project_id"]) or None,
-        "agent_id": str(state["agent_id"]),
-        "created_at": str(state["created_at"]),
-        "last_active_at": str(state["last_active_at"]),
-    }
-    for key in (
-        "title",
-        "auto_title",
-        "source_channel_id",
-        "platform",
-        "platform_conv_id",
-    ):
-        value = state[key]
-        if value is not None:
-            summary[key] = str(value)
-    if state["is_subagent_session"] is not None:
-        summary["is_subagent_session"] = bool(state["is_subagent_session"])
-    for key, column, expected_type in (
-        ("subagent_parent", "subagent_parent_json", dict),
-        (FORK_SOURCE_META_KEY, "fork_source_json", dict),
-        (SESSION_RUN_KINDS_META_KEY, "run_kinds_json", list),
-        ("compaction_policy", "compaction_policy_json", dict),
-    ):
-        payload = state[column]
-        if payload is not None:
-            summary[key] = _decode_state_json_value(
-                payload,
-                f"Session {key}",
-                expected_type,
-            )
-    summary.update(_completion_activity_from_state(state))
-    return summary
-
-
-def _valid_latest_completion(activity: JsonObject) -> JsonObject | None:
-    latest = activity.get("latest_completion")
-    if latest is None:
-        return None
-    if not isinstance(latest, dict):
-        raise ChatSessionError("session activity latest_completion must be an object")
-    run_id, status, timestamp = latest.get("run_id"), latest.get("status"), latest.get("timestamp")
-    if (
-        not isinstance(run_id, str)
-        or not run_id
-        or status not in SESSION_TERMINAL_RUN_STATUSES
-        or not isinstance(timestamp, str)
-        or not timestamp
-    ):
-        raise ChatSessionError("session activity latest_completion is invalid")
-    return {"run_id": run_id, "status": status, "timestamp": timestamp}
-
-
-def _completion_activity_payload(activity: JsonObject) -> JsonObject:
-    latest = _valid_latest_completion(activity)
-    latest_id = latest["run_id"] if latest else None
-    if latest is None or activity.get("read_run_id") == latest_id:
-        return {
-            "latest_completion_run_id": latest_id,
-            "has_unread_completion": False,
-            "unread_run_id": None,
-            "unread_run_status": None,
-            "unread_run_at": None,
-        }
-    return {
-        "latest_completion_run_id": latest_id,
-        "has_unread_completion": True,
-        "unread_run_id": latest["run_id"],
-        "unread_run_status": latest["status"],
-        "unread_run_at": latest["timestamp"],
-    }
 
 
 def _completion_activity_from_state(state: Any) -> JsonObject:

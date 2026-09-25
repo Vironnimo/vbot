@@ -23,6 +23,7 @@ from core.providers.errors import NetworkError, ProviderTimeoutError
 from core.sessions import ChatSession, ChatSessionManager
 from core.utils.errors import ProviderError
 from tests.core.chat.chat_loop_support import quoted_json_objects
+from tests.core.sessions.history_fixtures import complete_run
 
 pytestmark = pytest.mark.usefixtures("current_format_data_directory")
 
@@ -68,8 +69,13 @@ def _session(tmp_path: Path, *, session_id: str = "session") -> ChatSession:
 
 
 def _stored_state(tmp_path: Path, records: list[dict[str, Any]]) -> ContinuationState:
-    """Fold *records* through the Session store, the way recovery reads them."""
+    """Fold *records* through the Session store, the way recovery reads them.
+
+    Journal records name admitted Runs, so every Run they name is admitted first.
+    """
     session = _session(tmp_path)
+    for run_id in dict.fromkeys(str(record["run_id"]) for record in records):
+        session.start_run(run_id)
     session.append_continuation_records(records)
     state = _loaded_state(session)
     assert state is not None
@@ -259,7 +265,7 @@ def test_fold_discards_replayed_attempt_before_accepting_replacement_delta(
 
 @pytest.mark.asyncio
 async def test_replayed_attempts_keep_every_persisted_partial(tmp_path: Path) -> None:
-    session = _session(tmp_path)
+    session = _session(tmp_path).start_run("run-one")
     tracker = ContinuationTracker(session, run_id="run-one", request="work")
     await tracker.start()
     tracker.record_stream_delta(reasoning="PLAN", content="Visible-A")
@@ -286,7 +292,7 @@ async def test_replayed_attempts_keep_every_persisted_partial(tmp_path: Path) ->
 async def test_failed_boundary_write_keeps_its_deltas_for_the_interruption(
     tmp_path: Path,
 ) -> None:
-    session = _session(tmp_path)
+    session = _session(tmp_path).start_run("run-one")
     tracker = ContinuationTracker(session, run_id="run-one", request="work")
     await tracker.start()
     tracker.record_stream_delta(reasoning="PLAN", content="Visible")
@@ -580,7 +586,7 @@ def test_injection_places_reminder_immediately_before_new_turn_and_deduplicates(
 
 @pytest.mark.asyncio
 async def test_recover_classifies_abandoned_journal_as_process_restart(tmp_path: Path) -> None:
-    session = _session(tmp_path)
+    session = _session(tmp_path).start_run("run-one")
     session.append_continuation_record(
         _record(
             "run_started",
@@ -608,7 +614,8 @@ async def test_restart_reconciliation_uses_only_current_transcript_tail(tmp_path
             tool_calls=[ToolCall(id="old-edit", name="edit")],
         )
     )
-    session.append(
+    complete_run(
+        session,
         ChatMessage.run_summary(
             run_id="old-run",
             status="completed",
@@ -618,7 +625,7 @@ async def test_restart_reconciliation_uses_only_current_transcript_tail(tmp_path
                 "completed_at": "2026-07-11T11:00:01+00:00",
                 "duration_ms": 1_000,
             },
-        )
+        ),
     )
     session = session.start_run("new-run")
     session.append(ChatMessage.user("new work"))
@@ -661,7 +668,8 @@ async def test_recover_clears_stale_journal_when_transcript_proves_normal_comple
     session.append(ChatMessage.user("work"))
     session.append(ChatMessage.assistant(model="test/model", content="done"))
     session = session.start_run("run-one")
-    session.append(
+    complete_run(
+        session,
         ChatMessage.run_summary(
             run_id="run-one",
             status="completed",
@@ -671,7 +679,7 @@ async def test_recover_clears_stale_journal_when_transcript_proves_normal_comple
                 "completed_at": "2026-07-11T12:00:01+00:00",
                 "duration_ms": 1_000,
             },
-        )
+        ),
     )
     session.append_continuation_record(
         _record(

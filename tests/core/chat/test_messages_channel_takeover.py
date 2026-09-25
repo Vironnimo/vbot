@@ -96,7 +96,7 @@ class TestAgentTakeoverMessage:
 
         assert message.to_dict() == {
             "id": message.id,
-            "timestamp": "2026-05-03T14:30:00+00:00",
+            "timestamp": "2026-05-03T14:30:00.000000Z",
             "role": "agent_takeover",
             "content": '{"from":"assistant","to":"builder@vbot"}',
         }

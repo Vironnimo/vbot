@@ -186,11 +186,8 @@ async def test_vector_backend_history_edit_replaces_changed_and_vanished_passage
     await recall.search_page(request(query="car"))
     old_passages = build_session_passages(session.load_active())
 
-    session.append_many(
-        [
-            ChatMessage.history_edit(target.id, timestamp=timestamp(4)),
-            ChatMessage.user("I bought some carrots", timestamp=timestamp(4)),
-        ]
+    session.apply_edit(
+        target.id, [ChatMessage.user("I bought some carrots", timestamp=timestamp(4))]
     )
     documents_before = len(embeddings.document_inputs)
     page = await recall.search_page(request(query="car", limit=10))

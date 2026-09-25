@@ -251,7 +251,7 @@ class TestChatMessageFactories:
 
         assert message.to_dict() == {
             "id": message.id,
-            "timestamp": "2026-05-03T14:30:00+00:00",
+            "timestamp": "2026-05-03T14:30:00.000000Z",
             "role": "system",
             "model": "anthropic/claude-sonnet-4",
             "content": "You are an agent for vBot.",
@@ -262,7 +262,7 @@ class TestChatMessageFactories:
 
         assert message.to_dict() == {
             "id": message.id,
-            "timestamp": "2026-05-03T14:30:00+00:00",
+            "timestamp": "2026-05-03T14:30:00.000000Z",
             "role": "user",
             "content": "What's the weather in Berlin?",
         }
@@ -276,7 +276,7 @@ class TestChatMessageFactories:
 
         assert message.to_dict() == {
             "id": message.id,
-            "timestamp": "2026-05-03T14:30:00+00:00",
+            "timestamp": "2026-05-03T14:30:00.000000Z",
             "role": "user",
             "content": "Hello from the group.",
             "sender": {"id": "50", "display_name": "Alice", "role": "member"},
@@ -307,7 +307,7 @@ class TestChatMessageFactories:
 
         assert message.to_dict() == {
             "id": message.id,
-            "timestamp": "2026-05-03T14:30:00+00:00",
+            "timestamp": "2026-05-03T14:30:00.000000Z",
             "role": "user",
             "content": [
                 {"type": "text", "text": "Please review the document."},
@@ -353,7 +353,7 @@ class TestChatMessageFactories:
         assert message.name is None
         assert message.to_dict() == {
             "id": message.id,
-            "timestamp": "2026-05-03T14:30:00+00:00",
+            "timestamp": "2026-05-03T14:30:00.000000Z",
             "role": "note",
             "content": "Background task completed.",
         }
@@ -377,7 +377,7 @@ class TestChatMessageFactories:
         assert message.name is None
         assert message.to_dict() == {
             "id": message.id,
-            "timestamp": "2026-05-03T14:30:00+00:00",
+            "timestamp": "2026-05-03T14:30:00.000000Z",
             "role": "error",
             "content": "Provider rate limit exceeded.",
             "error_kind": "rate_limit",
@@ -396,7 +396,7 @@ class TestChatMessageFactories:
 
         assert message.to_dict() == {
             "id": message.id,
-            "timestamp": "2026-05-03T14:30:00+00:00",
+            "timestamp": "2026-05-03T14:30:00.000000Z",
             "role": "assistant",
             "model": "anthropic/claude-sonnet-4",
             "reasoning": "I need to call the weather tool.",
@@ -454,7 +454,7 @@ class TestChatMessageFactories:
 
         assert message.to_dict() == {
             "id": message.id,
-            "timestamp": "2026-05-03T14:30:00+00:00",
+            "timestamp": "2026-05-03T14:30:00.000000Z",
             "role": "tool",
             "content": '{"temp":22,"condition":"sunny"}',
             "tool_call_id": "call_abc",
@@ -514,7 +514,7 @@ class TestChatMessageFactories:
 
         assert message.to_dict() == {
             "id": message.id,
-            "timestamp": "2026-05-03T14:30:00+00:00",
+            "timestamp": "2026-05-03T14:30:00.000000Z",
             "role": "run_summary",
             "timing": FIXED_TIMING,
             "run_id": "run-one",

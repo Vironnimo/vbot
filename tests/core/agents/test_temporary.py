@@ -459,9 +459,16 @@ async def test_temporary_group_receipt_lookup_requires_its_exact_owner_and_gener
 
 
 class GroupTestChat:
+    """Chat stand-in whose Session-backed Run manager admits and completes each Run.
+
+    Admission records the execution owner and input; ``release`` gates output.
+    """
+
     def __init__(self, sessions, manager):
         self.sessions = sessions
         self.manager = manager
+        self.release = asyncio.Event()
+        self.release.set()
 
     async def start_temporary_run(
         self, binding, _content, *, owner, input_id, input_already_persisted
@@ -469,29 +476,14 @@ class GroupTestChat:
         assert input_already_persisted
 
         async def execute(run):
-            await self.sessions.record_run_owner_async(
-                binding.address, run_id=run.id, owner=owner, input_id=input_id
-            )
-            session = self.sessions.get(binding.address)
-            session = session.start_run(run.id)
+            await self.release.wait()
+            session = self.sessions.get(binding.address).for_run(run.id)
             await session.append_async(
                 ChatMessage.assistant(model="fixture/model", content="result")
             )
-            await session.append_async(
-                ChatMessage.run_summary(
-                    run_id=run.id,
-                    status="completed",
-                    iteration_count=1,
-                    timing={
-                        "started_at": "2026-09-08T00:00:00+00:00",
-                        "completed_at": "2026-09-08T00:00:01+00:00",
-                        "duration_ms": 1000,
-                    },
-                )
-            )
 
         return await self.manager.start(
-            binding.address, execute, admission=RunAdmission(owner=owner)
+            binding.address, execute, admission=RunAdmission(owner=owner, input_id=input_id)
         )
 
 
@@ -511,10 +503,11 @@ async def test_group_initial_is_durable_idempotent_across_close_and_reopen(tmp_p
     write_bootstrap_marker(tmp_path)
     sessions = ChatSessionManager(tmp_path)
     current = SimpleNamespace(name="fixture", epoch="registration")
-    manager = ChatRunManager()
+    manager = ChatRunManager(persistence=sessions)
+    chat = GroupTestChat(sessions, manager)
     groups = TemporaryExecutionGroups(
         TemporaryAgentRegistry(sessions),
-        GroupTestChat(sessions, manager),
+        chat,
         lambda identity: identity is current,
         current,
         run_manager=manager,
@@ -522,7 +515,15 @@ async def test_group_initial_is_durable_idempotent_across_close_and_reopen(tmp_p
     binding = await groups.create("group", "peer", group_config(tmp_path))
     handle = await groups.open_group("group")
     initial = TemporaryRunInput("initial", "goal", "request")
+    chat.release.clear()
     first = await groups.start(handle, "peer", initial)
+    # The owner learns the Run id only after its admission durably recorded the
+    # owner, so the id already resolves to this group's record before any output.
+    admitted = (await groups.owned_run("group", first.run_id)).record
+    assert admitted.owner == manager.get(first.run_id).execution_owner
+    assert admitted.input_id == f"initial:{binding.generation_id}"
+    assert admitted.terminal_status is None
+    chat.release.set()
     await manager.get(first.run_id).wait()
     duplicate = await groups.start(handle, "peer", initial)
     assert duplicate.existing and duplicate.run_id == first.run_id
@@ -531,7 +532,7 @@ async def test_group_initial_is_durable_idempotent_across_close_and_reopen(tmp_p
     sessions.close()
 
     sessions = ChatSessionManager(tmp_path)
-    manager = ChatRunManager()
+    manager = ChatRunManager(persistence=sessions)
     groups = TemporaryExecutionGroups(
         TemporaryAgentRegistry(sessions),
         GroupTestChat(sessions, manager),

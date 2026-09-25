@@ -26,7 +26,7 @@ Session-scoped, lossless access to canonical messages hidden by Compaction.
 
 - Chat derives the `history` Session grant from persisted checkpoint presence and uses the same loaded Session snapshot to build provider definitions, System Prompt ownership gates, effective Context, and dispatch configuration.
 - A newly appended checkpoint carries model-facing guidance that History is available. If Compaction occurs after a Tool batch, the next provider request in the same Run advertises `history`; if it occurs after a final Assistant response, availability begins on the next Run.
-- Moving or taking over a Session preserves its id and transcript, so History and existing cursors remain valid in the destination scope. Forking copies checkpoints into a fresh Session id, so History is available there but source cursors are invalid.
+- Moving or taking over a Session preserves its id and transcript, so History and existing cursors remain valid in the destination scope. A fork inherits the source's checkpoints through lineage (its current view) under a fresh Session id and generation, so History is available there but source cursors are invalid.
 - `session_search` remains the cross-Session Recall Tool and may use derived indexes. `history` is current-Session-only, checkpoint-gated, canonical, and exact.
 
 ## Constraints & Gotchas

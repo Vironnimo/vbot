@@ -1,4 +1,4 @@
-"""Session catalog, metadata and revision queries in a supplied snapshot."""
+"""Session catalog, list summaries, metadata and revision queries in a supplied snapshot."""
 # ruff: noqa: E501
 
 from __future__ import annotations
@@ -6,15 +6,11 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Callable, Sequence
-from datetime import datetime
 from typing import TYPE_CHECKING, Any, cast
 
 from core.chat.errors import ChatSessionError
-from core.sessions import _store_codec, _store_values
-from core.sessions._metadata import (
-    _completion_activity_from_state,
-    _session_list_summary_from_state,
-)
+from core.sessions import _store_values
+from core.sessions._metadata import _completion_activity_from_state
 from core.sessions._types import (
     JsonObject,
     SessionHistoryRevision,
@@ -24,8 +20,9 @@ from core.sessions._types import (
 from core.sessions.errors import SessionNotFoundError
 
 if TYPE_CHECKING:
-    from core.chat.messages import ChatMessage
     from core.sessions._types import SessionAddress, SessionListFilters, SessionRecallVisibility
+
+_LIST_FROM = f"FROM sessions AS s {_store_values._DERIVED_METADATA_JOIN}"
 
 
 def exists(connection: sqlite3.Connection, address: SessionAddress) -> bool:
@@ -33,7 +30,7 @@ def exists(connection: sqlite3.Connection, address: SessionAddress) -> bool:
     return (
         connection.execute(
             "SELECT 1 FROM sessions WHERE project_id = ? AND agent_id = ? AND session_id = ? "
-            "AND status = 'live'",
+            "AND state = 'live'",
             _store_values._scope(address),
         ).fetchone()
         is not None
@@ -53,7 +50,7 @@ def existing_addresses(
     for start in range(0, len(wanted), _EXISTING_ADDRESS_BATCH_SIZE):
         batch = wanted[start : start + _EXISTING_ADDRESS_BATCH_SIZE]
         rows = connection.execute(
-            "SELECT project_id, agent_id, session_id FROM sessions WHERE status = 'live' "
+            "SELECT project_id, agent_id, session_id FROM sessions WHERE state = 'live' "
             "AND (project_id, agent_id, session_id) IN (VALUES "
             + ", ".join("(?, ?, ?)" for _ in batch)
             + ")",
@@ -63,62 +60,39 @@ def existing_addresses(
     return found
 
 
-def descriptor_sources(
-    connection: sqlite3.Connection, addresses: Sequence[SessionAddress]
-) -> Callable[
-    [], dict[SessionAddress, tuple[JsonObject, int, ChatMessage | None, SessionRecallVisibility]]
-]:
-    """Load compact descriptor inputs for many Sessions in set-oriented reads.
-
-    The returned decoder projects metadata and first User Messages after the
-    read transaction. Each source carries the Session's Recall visibility.
-    """
-    selected: list[tuple[sqlite3.Row, sqlite3.Row | None]] = []
+def _by_scope(addresses: Sequence[SessionAddress]) -> dict[tuple[str, str], list[str]]:
     by_scope: dict[tuple[str, str], list[str]] = {}
     for address in addresses:
         by_scope.setdefault((address.project_id or "", address.agent_id), []).append(
             address.session_id
         )
-    for (project_id, agent_id), session_ids in by_scope.items():
+    return by_scope
+
+
+def descriptor_sources(
+    connection: sqlite3.Connection, addresses: Sequence[SessionAddress]
+) -> Callable[[], dict[SessionAddress, tuple[JsonObject, SessionRecallVisibility]]]:
+    """Load each live Session's metadata and Recall visibility in set-oriented reads."""
+    selected: list[sqlite3.Row] = []
+    for (project_id, agent_id), session_ids in _by_scope(addresses).items():
         for start in range(0, len(session_ids), _store_values._DESCRIPTOR_SOURCE_BATCH_SIZE):
             chunk = session_ids[start : start + _store_values._DESCRIPTOR_SOURCE_BATCH_SIZE]
-            placeholders = ", ".join("?" for _ in chunk)
-            states = connection.execute(
-                f"SELECT session_key, message_count, {_store_values._SESSION_LIST_COLUMNS}, "
-                f"{_store_values._RECALL_VISIBILITY_SQL} AS recall_visibility "
-                "FROM sessions WHERE project_id = ? AND agent_id = ? "
-                "AND status = 'live' "
-                f"AND session_id IN ({placeholders})",
-                (project_id, agent_id, *chunk),
-            ).fetchall()
-            if not states:
-                continue
-            session_keys = [int(state["session_key"]) for state in states]
-            key_placeholders = ", ".join("?" for _ in session_keys)
-            # User records exist only in the messages branch of history_records,
-            # so each first User Message key comes from one index probe.
-            first_user_rows = connection.execute(
-                _store_values._message_records_sql(
-                    where=(
-                        "m.message_key IN (SELECT (SELECT u.message_key FROM messages AS u "
-                        "WHERE u.session_key = s.session_key AND u.role = 'user' "
-                        "ORDER BY u.seq LIMIT 1) FROM sessions AS s "
-                        f"WHERE s.session_key IN ({key_placeholders}))"
-                    ),
-                    order_by="ORDER BY m.session_key",
-                ),
-                session_keys,
-            ).fetchall()
-            first_users = {int(row["session_key"]): row for row in first_user_rows}
-            selected.extend((state, first_users.get(int(state["session_key"]))) for state in states)
+            selected.extend(
+                connection.execute(
+                    f"SELECT {_store_values._SESSION_STATE_COLUMNS}, "
+                    f"{_store_values._DERIVED_METADATA_COLUMNS}, "
+                    f"{_store_values._RECALL_VISIBILITY_SQL} AS recall_visibility "
+                    f"{_LIST_FROM} WHERE s.project_id = ? AND s.agent_id = ? "
+                    "AND s.state = 'live' AND s.session_id IN (SELECT value FROM json_each(?))",
+                    (project_id, agent_id, _store_values._json_list(chunk)),
+                )
+            )
     return lambda: {
-        _store_values._address(state): (
-            _store_values._session_projected_metadata_from_state(state),
-            int(state["message_count"]),
-            None if first_user is None else _store_codec.message_from_row(first_user),
-            cast("SessionRecallVisibility", str(state["recall_visibility"])),
+        _store_values._address(row): (
+            _store_values._session_metadata_from_state(row),
+            cast("SessionRecallVisibility", str(row["recall_visibility"])),
         )
-        for state, first_user in selected
+        for row in selected
     }
 
 
@@ -129,18 +103,18 @@ def _live_scope_filter(
     include_all_scopes: bool,
     exclude_owner_managed: bool,
 ) -> tuple[str, list[str]]:
-    clauses = ["status = 'live'"]
+    clauses = ["s.state = 'live'"]
     params: list[str] = []
     if not include_all_scopes:
-        clauses.append("project_id = ?")
+        clauses.append("s.project_id = ?")
         params.append(project_id or "")
     if agent_id is not None:
-        clauses.append("agent_id = ?")
+        clauses.append("s.agent_id = ?")
         params.append(agent_id)
     if exclude_owner_managed:
         clauses.append(
             "NOT EXISTS (SELECT 1 FROM temporary_session_bindings AS owner_binding "
-            "WHERE owner_binding.session_key = sessions.session_key)"
+            "WHERE owner_binding.session_key = s.session_key)"
         )
     return " AND ".join(clauses), params
 
@@ -160,7 +134,8 @@ def list_addresses(
         exclude_owner_managed=exclude_owner_managed,
     )
     rows = connection.execute(
-        f"SELECT project_id, agent_id, session_id FROM sessions WHERE {where} ORDER BY session_id",
+        "SELECT s.project_id, s.agent_id, s.session_id FROM sessions AS s "
+        f"WHERE {where} ORDER BY s.session_id",
         params,
     ).fetchall()
     return [_store_values._address(row) for row in rows]
@@ -177,36 +152,22 @@ def list_agent_ids(
         exclude_owner_managed=exclude_owner_managed,
     )
     rows = connection.execute(
-        f"SELECT DISTINCT agent_id FROM sessions WHERE {where} ORDER BY agent_id",
+        f"SELECT DISTINCT s.agent_id FROM sessions AS s WHERE {where} ORDER BY s.agent_id",
         params,
     ).fetchall()
     return [str(row["agent_id"]) for row in rows]
 
 
 def metadata_value(connection: sqlite3.Connection, address: SessionAddress, key: str) -> Any:
-    """Read one live Session metadata value without decoding the complete metadata.
-
-    A projected key reads its dedicated column; any other key (or a projected key
-    whose value did not fit its column) reads only its member of the open-ended
-    metadata JSON. A missing key reads as ``None``.
-    """
-    if not key.isidentifier():
-        raise ValueError(f"unsupported Session metadata key: {key!r}")
-    column = _store_values._PROJECTED_METADATA_COLUMNS.get(key, "NULL")
-    row = connection.execute(
-        f"SELECT {column}, json_quote(json_extract(metadata_json, ?)) FROM sessions "
-        "WHERE project_id = ? AND agent_id = ? AND session_id = ? AND status = 'live'",
-        (f"$.{key}", *_store_values._scope(address)),
-    ).fetchone()
+    """Read one live Session's metadata facade value; a missing key reads as ``None``."""
+    row = _store_values._find_live_metadata_row(connection, address)
     if row is None:
         raise SessionNotFoundError(f"session does not exist: {address.session_id}")
-    if row[0] is not None:
-        return _store_values._projected_metadata_value(key, row[0])
-    return json.loads(row[1])
+    return _store_values._session_metadata_from_state(row).get(key)
 
 
 def _summary_metadata_columns(metadata_keys: Sequence[str]) -> tuple[tuple[str, ...], str]:
-    """Validate requested summary metadata and select each key as ``metadata_<key>_json``."""
+    """Validate requested summary values and select each key as ``metadata_<key>_json``."""
     selected_keys = tuple(dict.fromkeys(metadata_keys))
     unknown = set(selected_keys) - _store_values._SUMMARY_METADATA_COLUMNS.keys()
     if unknown:
@@ -214,15 +175,34 @@ def _summary_metadata_columns(metadata_keys: Sequence[str]) -> tuple[tuple[str, 
             f"unsupported Session summary metadata: {', '.join(sorted(unknown))}"
         )
     return selected_keys, "".join(
-        f", json_extract(metadata_json, '{_store_values._SUMMARY_METADATA_COLUMNS[key]}') "
-        f"AS metadata_{key}_json"
+        f", {_store_values._SUMMARY_METADATA_COLUMNS[key]} AS metadata_{key}_json"
         for key in selected_keys
     )
 
 
 def _summary(state: sqlite3.Row, metadata_keys: Sequence[str] = ()) -> JsonObject:
-    """Decode one Session-list row, adding each selected metadata value that is set."""
-    summary = _session_list_summary_from_state(state)
+    """Decode one ``_SESSION_LIST_COLUMNS`` row into its Session-list summary."""
+    summary: JsonObject = {
+        "id": str(state["session_id"]),
+        "project_id": str(state["project_id"]) or None,
+        "agent_id": str(state["agent_id"]),
+        "created_at": str(state["created_at"]),
+        "last_active_at": str(state["last_activity_at"]),
+    }
+    for key in ("title", "auto_title", "source_channel_id", "platform", "platform_conv_id"):
+        if state[key] is not None:
+            summary[key] = str(state[key])
+    if state["is_subagent"]:
+        summary["is_subagent_session"] = True
+    parent = _store_values._subagent_parent_from_state(state)
+    if parent is not None:
+        summary["subagent_parent"] = parent
+    summary.update(_store_values._derived_metadata_from_state(state))
+    if state["compaction_policy_json"] is not None:
+        summary["compaction_policy"] = _store_values._json_from_payload(
+            str(state["compaction_policy_json"]), "Session compaction policy"
+        )
+    summary.update(_completion_activity_from_state(state))
     for key in metadata_keys:
         payload = state[f"metadata_{key}_json"]
         if payload is not None:
@@ -243,9 +223,9 @@ def list_summaries(
     """
     selected_keys, metadata_columns = _summary_metadata_columns(metadata_keys)
     rows = connection.execute(
-        f"SELECT {_store_values._SESSION_LIST_COLUMNS}{metadata_columns} FROM sessions "
-        "WHERE status = 'live' AND project_id = ? AND agent_id = ? "
-        "ORDER BY active_sort DESC, session_id",
+        f"SELECT {_store_values._SESSION_LIST_COLUMNS}{metadata_columns} {_LIST_FROM} "
+        "WHERE s.state = 'live' AND s.project_id = ? AND s.agent_id = ? "
+        "ORDER BY s.last_activity_at DESC, s.session_id",
         (project_id or "", agent_id),
     ).fetchall()
     return lambda: [_summary(row, selected_keys) for row in rows]
@@ -260,7 +240,7 @@ def list_summaries_page(
     filters: SessionListFilters,
     required_address: SessionAddress | None,
 ) -> Callable[[], SessionListPage]:
-    """Read one bounded, globally ordered Session-list page from normalized columns.
+    """Read one bounded, globally ordered Session-list page.
 
     A live ``required_address`` within ``scopes`` is appended when the page lacks
     it; if the filters hide it, it also counts toward the total. The returned
@@ -274,7 +254,7 @@ def list_summaries_page(
     if not normalized_scopes:
         return lambda: SessionListPage(sessions=(), next_cursor=None, total_count=0)
     scope_sql = (
-        "(" + " OR ".join("(project_id = ? AND agent_id = ?)" for _scope in normalized_scopes) + ")"
+        "(" + " OR ".join("(s.project_id = ? AND s.agent_id = ?)" for _ in normalized_scopes) + ")"
     )
     scope_params = [value for scope in normalized_scopes for value in scope]
     visibility_sql, visibility_params = _store_values._session_list_visibility_sql(
@@ -284,18 +264,18 @@ def list_summaries_page(
         include_cron=filters.include_cron,
         include_channels=filters.include_channels,
     )
-    base_where = f"status = 'live' AND {scope_sql}"
+    base_where = f"s.state = 'live' AND {scope_sql} AND {visibility_sql}"
     page_where = ""
     page_params: list[Any] = []
     if cursor is not None:
         page_where = (
-            "WHERE active_sort < ? OR (active_sort = ? AND "
-            "(project_id, agent_id, session_id) > (?, ?, ?))"
+            " AND (s.last_activity_at < ? OR (s.last_activity_at = ? AND "
+            "(s.project_id, s.agent_id, s.session_id) > (?, ?, ?)))"
         )
         page_params.extend(
             (
-                cursor.active_sort,
-                cursor.active_sort,
+                cursor.last_activity_at,
+                cursor.last_activity_at,
                 cursor.project_id or "",
                 cursor.agent_id,
                 cursor.session_id,
@@ -303,15 +283,14 @@ def list_summaries_page(
         )
     total = int(
         connection.execute(
-            f"SELECT COUNT(*) FROM sessions WHERE {base_where} AND {visibility_sql}",
+            f"SELECT COUNT(*) FROM sessions AS s WHERE {base_where}",
             (*scope_params, *visibility_params),
         ).fetchone()[0]
     )
     fetched = connection.execute(
-        f"WITH candidates AS (SELECT {_store_values._SESSION_LIST_COLUMNS} FROM sessions "
-        f"WHERE {base_where} AND {visibility_sql}) "
-        f"SELECT * FROM candidates {page_where} "
-        "ORDER BY active_sort DESC, project_id, agent_id, session_id LIMIT ?",
+        f"SELECT {_store_values._SESSION_LIST_COLUMNS} {_LIST_FROM} "
+        f"WHERE {base_where}{page_where} "
+        "ORDER BY s.last_activity_at DESC, s.project_id, s.agent_id, s.session_id LIMIT ?",
         (*scope_params, *visibility_params, *page_params, limit + 1),
     ).fetchall()
     has_more = len(fetched) > limit
@@ -323,8 +302,8 @@ def list_summaries_page(
             required_row = connection.execute(
                 f"SELECT {_store_values._SESSION_LIST_COLUMNS}, "
                 f"CASE WHEN {visibility_sql} THEN 1 ELSE 0 END AS list_visible "
-                "FROM sessions WHERE status = 'live' AND project_id = ? "
-                "AND agent_id = ? AND session_id = ?",
+                f"{_LIST_FROM} WHERE s.state = 'live' AND s.project_id = ? "
+                "AND s.agent_id = ? AND s.session_id = ?",
                 (*visibility_params, *required_scope),
             ).fetchone()
     if required_row is not None and not bool(required_row["list_visible"]):
@@ -350,7 +329,7 @@ def _summaries_page(
         next_cursor=None
         if last is None
         else SessionListCursor(
-            active_sort=float(last["active_sort"]),
+            last_activity_at=str(last["last_activity_at"]),
             project_id=str(last["project_id"]) or None,
             agent_id=str(last["agent_id"]),
             session_id=str(last["session_id"]),
@@ -364,8 +343,8 @@ def summary(
 ) -> Callable[[], JsonObject | None]:
     """Select one live Session's list columns by its exact address; absent is ``None``."""
     row = connection.execute(
-        f"SELECT {_store_values._SESSION_LIST_COLUMNS} FROM sessions "
-        "WHERE status = 'live' AND project_id = ? AND agent_id = ? AND session_id = ?",
+        f"SELECT {_store_values._SESSION_LIST_COLUMNS} {_LIST_FROM} "
+        "WHERE s.state = 'live' AND s.project_id = ? AND s.agent_id = ? AND s.session_id = ?",
         _store_values._scope(address),
     ).fetchone()
     return lambda: None if row is None else _summary(row)
@@ -396,7 +375,7 @@ def list_completion_activity(
             "s.latest_completion_status, s.latest_completion_at, s.read_completion_run_id "
             "FROM scopes JOIN sessions AS s "
             "ON s.project_id = scopes.project_id AND s.agent_id = scopes.agent_id "
-            "WHERE s.status = 'live' AND s.latest_completion_run_id IS NOT NULL "
+            "WHERE s.state = 'live' AND s.latest_completion_run_id IS NOT NULL "
             "ORDER BY s.project_id, s.agent_id, s.session_id",
             [value for scope in chunk for value in scope],
         ).fetchall():
@@ -406,49 +385,14 @@ def list_completion_activity(
     return result
 
 
-def session_ids_with_messages(
-    connection: sqlite3.Connection,
-    project_id: str | None,
-    agent_id: str,
-    roles: Sequence[str],
-    since: datetime | None,
-    until: datetime | None,
-) -> set[str]:
-    """Select Sessions containing a matching Message without loading histories."""
-    role_values = tuple(dict.fromkeys(roles))
-    if not role_values:
-        return set()
-    # Scope history_records by a subquery rather than a join so SQLite pushes it
-    # into every view branch. The JSON role list keeps a single role from
-    # becoming an equality that invites an automatic index on the view rows.
-    clauses = [
-        "m.session_key IN (SELECT session_key FROM sessions "
-        "WHERE status = 'live' AND project_id = ? AND agent_id = ?)",
-        "m.role IN (SELECT value FROM json_each(?))",
-    ]
-    params: list[str] = [project_id or "", agent_id, json.dumps(role_values)]
-    if since is not None:
-        clauses.append("julianday(m.timestamp) >= julianday(?)")
-        params.append(since.isoformat())
-    if until is not None:
-        clauses.append("julianday(m.timestamp) <= julianday(?)")
-        params.append(until.isoformat())
-    rows = connection.execute(
-        "SELECT session_id FROM sessions WHERE session_key IN "
-        "(SELECT m.session_key FROM history_records AS m WHERE " + " AND ".join(clauses) + ")",
-        params,
-    ).fetchall()
-    return {str(row["session_id"]) for row in rows}
-
-
 def list_history_revisions(
     connection: sqlite3.Connection, project_id: str | None, agent_id: str
 ) -> list[SessionHistoryRevision]:
     """Return every live Session version of one scope with its Recall visibility."""
     rows = connection.execute(
-        "SELECT project_id, agent_id, session_id, generation_id, history_revision, "
-        f"{_store_values._RECALL_VISIBILITY_SQL} AS recall_visibility "
-        "FROM sessions WHERE status = 'live' AND project_id = ? AND agent_id = ? ORDER BY session_id",
+        "SELECT s.project_id, s.agent_id, s.session_id, s.generation_id, s.history_revision, "
+        f"{_store_values._RECALL_VISIBILITY_SQL} AS recall_visibility FROM sessions AS s "
+        "WHERE s.state = 'live' AND s.project_id = ? AND s.agent_id = ? ORDER BY s.session_id",
         (project_id or "", agent_id),
     ).fetchall()
     return [
@@ -467,35 +411,21 @@ def list_history_versions(
 ) -> dict[SessionAddress, tuple[str, int]]:
     """Return the generation id and history revision for many addresses at once.
 
-    Addresses without a live row are absent from the result. Derived
-    projections (Statistics, Recall indexes) refresh their freshness
-    stamps with this one query instead of one query per Session.
+    Addresses without a live row are absent. Derived projections (Statistics,
+    Recall indexes) refresh their freshness stamps with one query per scope
+    chunk instead of one query per Session.
     """
     versions: dict[SessionAddress, tuple[str, int]] = {}
-    # One query per distinct scope: the scope columns are the leading
-    # partial-index columns, so each query is an index scan over that
-    # scope and no IN-list size limits come into play.
-    by_scope: dict[tuple[str, str], list[str]] = {}
-    for address in addresses:
-        by_scope.setdefault((address.project_id or "", address.agent_id), []).append(
-            address.session_id
-        )
-    # SQLite variable limit is 999; chunk per scope to stay well under it and
-    # retain one read snapshot across all chunks.
-    chunk_size = 900
-    for (project_id, agent_id), session_ids in by_scope.items():
-        for start in range(0, len(session_ids), chunk_size):
-            chunk = session_ids[start : start + chunk_size]
-            placeholders = ", ".join("?" for _ in chunk)
-            rows = connection.execute(
+    for (project_id, agent_id), session_ids in _by_scope(addresses).items():
+        for start in range(0, len(session_ids), _store_values._DESCRIPTOR_SOURCE_BATCH_SIZE):
+            chunk = session_ids[start : start + _store_values._DESCRIPTOR_SOURCE_BATCH_SIZE]
+            for row in connection.execute(
                 "SELECT project_id, agent_id, session_id, generation_id, history_revision "
-                "FROM sessions WHERE project_id = ? AND agent_id = ? AND status = 'live' "
-                f"AND session_id IN ({placeholders})",
-                (project_id, agent_id, *chunk),
-            ).fetchall()
-            for row in rows:
-                address = _store_values._address(row)
-                versions[address] = (
+                "FROM sessions WHERE project_id = ? AND agent_id = ? AND state = 'live' "
+                "AND session_id IN (SELECT value FROM json_each(?))",
+                (project_id, agent_id, _store_values._json_list(chunk)),
+            ):
+                versions[_store_values._address(row)] = (
                     str(row["generation_id"]),
                     int(row["history_revision"]),
                 )

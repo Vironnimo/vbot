@@ -20,7 +20,7 @@ def test_history_edit_round_trips_without_user_content() -> None:
 
     assert marker.to_dict() == {
         "id": marker.id,
-        "timestamp": "2026-05-03T14:30:00+00:00",
+        "timestamp": "2026-05-03T14:30:00.000000Z",
         "role": "history_edit",
         "target_message_id": "user-one",
     }

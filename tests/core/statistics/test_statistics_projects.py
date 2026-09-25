@@ -13,7 +13,7 @@ from core.statistics import (
     ProjectDirectory,
     StatisticsService,
 )
-from tests.core.sessions.history_fixtures import seed_history
+from tests.core.sessions.history_fixtures import complete_run, seed_history
 from tests.core.statistics.statistics_test_support import (
     BASE,
     _assistant,
@@ -156,13 +156,13 @@ def test_same_session_id_across_scopes_is_not_double_counted(tmp_path: Path) -> 
         session_id=shared_id,
     )
     identity_session = manager.create("builder", session_id=shared_id).start_run("i1")
-    for message in [
-        _assistant(model=model, at=BASE + timedelta(seconds=2)),
+    identity_session.append(_assistant(model=model, at=BASE + timedelta(seconds=2)))
+    complete_run(
+        identity_session,
         _run_summary(
             status="completed", at=BASE + timedelta(seconds=3), duration_ms=100, run_id="i1"
         ),
-    ]:
-        identity_session.append(message)
+    )
 
     service = StatisticsService(
         manager,

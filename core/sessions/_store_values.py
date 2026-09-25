@@ -1,4 +1,4 @@
-"""Relational Session metadata, scope and value validation."""
+"""Session rows, the metadata facade, scope and value validation."""
 # ruff: noqa: E501
 
 from __future__ import annotations
@@ -6,6 +6,8 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
 from core.chat.errors import ChatSessionError
@@ -14,6 +16,7 @@ from core.sessions.errors import (
     SessionStoreCorruptError,
 )
 from core.utils.ids import new_id
+from core.utils.timestamps import canonical_timestamp
 
 if TYPE_CHECKING:
     from core.sessions._types import SessionAddress
@@ -22,53 +25,60 @@ if TYPE_CHECKING:
 _LOGGER = logging.getLogger("vbot.sessions")
 _DESCRIPTOR_SOURCE_BATCH_SIZE = 900
 JsonObject = dict[str, Any]
-_SESSION_METADATA_SCALAR_COLUMNS = (
-    ("title", "title"),
-    ("auto_title", "auto_title"),
-    ("source_channel_id", "source_channel_id"),
-    ("platform", "platform"),
-    ("platform_conv_id", "platform_conv_id"),
+
+# The Session columns every state read selects; metadata facade reads add the
+# derived values in ``_SESSION_METADATA_SQL``.
+_SESSION_STATE_COLUMNS = """
+    s.session_key, s.generation_id, s.project_id, s.agent_id, s.session_id, s.state,
+    s.created_at, s.archived_at, s.next_seq, s.history_revision, s.state_revision,
+    s.cursor_floor_seq, s.last_activity_at, s.last_entry_id, s.fork_parent_key,
+    s.forked_at, s.fork_point_seq, s.title, s.auto_title, s.auto_title_initialized,
+    s.source_channel_id, s.platform, s.platform_conv_id, s.is_subagent,
+    s.subagent_parent_id, s.subagent_parent_project_id, s.subagent_parent_agent_id,
+    s.subagent_parent_session_id, s.subagent_parent_run_id,
+    s.subagent_parent_tool_call_id, s.subagent_parent_tool_call_index,
+    s.list_visibility_mask, s.latest_completion_run_id, s.latest_completion_status,
+    s.latest_completion_at, s.read_completion_run_id, s.prompt_cache_affinity_id,
+    s.seen_skills_initialized, s.compaction_policy_json, s.metadata_json
+"""
+# Derived facade values: the direct fork source's address and the Run kinds.
+_DERIVED_METADATA_COLUMNS = """
+    fork_parent.project_id AS fork_parent_project_id,
+    fork_parent.agent_id AS fork_parent_agent_id,
+    fork_parent.session_id AS fork_parent_session_id,
+    (SELECT json_group_array(k.run_kind) FROM session_run_kinds AS k
+     WHERE k.session_key = s.session_key) AS run_kinds_json
+"""
+_DERIVED_METADATA_JOIN = (
+    "LEFT JOIN sessions AS fork_parent ON fork_parent.session_key = s.fork_parent_key"
 )
-_SESSION_METADATA_JSON_COLUMNS = (
-    ("subagent_parent", "subagent_parent_json", dict),
-    ("fork_source", "fork_source_json", dict),
-    ("run_kinds", "run_kinds_json", list),
-    ("compaction_policy", "compaction_policy_json", dict),
-)
-_SESSION_METADATA_PROJECTION_COLUMNS = (
-    "title",
-    "auto_title",
-    "source_channel_id",
-    "platform",
-    "platform_conv_id",
-    "is_subagent_session",
-    "subagent_parent_json",
-    "fork_source_json",
-    "run_kinds_json",
-    "compaction_policy_json",
-    "list_visibility_mask",
-)
-_SESSION_LIST_COLUMNS = """
-    project_id,
-    agent_id,
-    session_id,
-    created_at,
-    COALESCE(last_message_at, created_at) AS last_active_at,
-    active_sort,
-    title,
-    auto_title,
-    source_channel_id,
-    platform,
-    platform_conv_id,
-    is_subagent_session,
-    subagent_parent_json,
-    fork_source_json,
-    run_kinds_json,
-    compaction_policy_json,
-    latest_completion_run_id,
-    latest_completion_status,
-    latest_completion_at,
-    read_completion_run_id
+_SESSION_LIST_COLUMNS = f"""
+    s.project_id,
+    s.agent_id,
+    s.session_id,
+    s.created_at,
+    s.last_activity_at,
+    s.title,
+    s.auto_title,
+    s.source_channel_id,
+    s.platform,
+    s.platform_conv_id,
+    s.is_subagent,
+    s.subagent_parent_id,
+    s.subagent_parent_project_id,
+    s.subagent_parent_agent_id,
+    s.subagent_parent_session_id,
+    s.subagent_parent_run_id,
+    s.subagent_parent_tool_call_id,
+    s.subagent_parent_tool_call_index,
+    s.forked_at,
+    s.fork_point_seq,
+    s.compaction_policy_json,
+    s.latest_completion_run_id,
+    s.latest_completion_status,
+    s.latest_completion_at,
+    s.read_completion_run_id,
+    {_DERIVED_METADATA_COLUMNS}
 """
 _SESSION_LIST_BACKGROUND_KINDS = (
     "cron",
@@ -93,7 +103,14 @@ _RECALL_REFLECTION_RUN_KINDS = (
     "skill_reflection",
 )
 _RECALL_USER_FACING_RUN_KINDS = ("user", "channel", "cron", "calendar")
-_SUMMARY_METADATA_COLUMNS = {"seen_skills": "$.seen_skills"}
+# Summary values a Session list may add on request, by name.
+_SUMMARY_METADATA_COLUMNS = {
+    "seen_skills": (
+        "CASE WHEN s.seen_skills_initialized = 1 THEN "
+        "(SELECT json_group_array(k.skill_name) FROM (SELECT skill_name FROM session_seen_skills "
+        "WHERE session_key = s.session_key ORDER BY skill_name) AS k) END"
+    )
+}
 _LIST_VISIBILITY_SUBAGENT_SESSION = 1 << 0
 _LIST_VISIBILITY_BACKGROUND = 1 << 1
 _LIST_VISIBILITY_CRON = 1 << 2
@@ -104,17 +121,61 @@ _LIST_VISIBILITY_VALID_RUN_KINDS = 1 << 6
 _LIST_VISIBILITY_USER_FACING = 1 << 7
 _LIST_VISIBILITY_SUBAGENT_RUN_KIND = 1 << 8
 _LIST_VISIBILITY_SUBAGENT_PARENT = 1 << 9
-_LIST_VISIBILITY_OWNER_MANAGED = 1 << 10
+
+# Metadata facade keys stored in dedicated columns.
+_TITLE_KEYS = ("title", "auto_title")
+_CHANNEL_KEYS = ("source_channel_id", "platform", "platform_conv_id")
+_AUTO_TITLE_INITIALIZED_KEY = "auto_title_initialized"
+_SUBAGENT_FLAG_KEY = "is_subagent_session"
+_SUBAGENT_PARENT_KEY = "subagent_parent"
+_COMPACTION_POLICY_KEY = "compaction_policy"
+# Facade keys derived from relations; a write may repeat but never change them.
+_FORK_SOURCE_KEY = "fork_source"
+_RUN_KINDS_KEY = "run_kinds"
+# Subagent parent fields in facade order, each with its column.
+_SUBAGENT_PARENT_FIELDS = (
+    ("id", "subagent_parent_id"),
+    ("agent_id", "subagent_parent_agent_id"),
+    ("session_id", "subagent_parent_session_id"),
+    ("run_id", "subagent_parent_run_id"),
+    ("tool_call_id", "subagent_parent_tool_call_id"),
+    ("tool_call_index", "subagent_parent_tool_call_index"),
+    ("project_id", "subagent_parent_project_id"),
+)
+# Prompt state has dedicated Session APIs and never enters open metadata.
+_PROMPT_STATE_KEYS = frozenset({"seen_skills", "prompt_cache_affinity_id"})
+_PROMPT_PIN_KEY_PREFIX = "pinned_"
+# Column names a metadata write assigns, in ``_MetadataStorage.columns`` order.
+_METADATA_WRITE_COLUMNS = (
+    "title",
+    "auto_title",
+    "auto_title_initialized",
+    "source_channel_id",
+    "platform",
+    "platform_conv_id",
+    "is_subagent",
+    *(column for _key, column in _SUBAGENT_PARENT_FIELDS),
+    "compaction_policy_json",
+    "metadata_json",
+    "list_visibility_mask",
+)
+
+
+@dataclass(frozen=True)
+class _MetadataStorage:
+    """The persisted form of one metadata facade value."""
+
+    columns: tuple[Any, ...]
 
 
 def _session_list_visibility_mask(metadata: JsonObject) -> int:
     mask = 0
-    if metadata.get("is_subagent_session") is True:
+    if metadata.get(_SUBAGENT_FLAG_KEY) is True:
         mask |= _LIST_VISIBILITY_SUBAGENT_SESSION
-    if isinstance(metadata.get("subagent_parent"), dict):
+    if isinstance(metadata.get(_SUBAGENT_PARENT_KEY), dict):
         mask |= _LIST_VISIBILITY_SUBAGENT_PARENT
 
-    run_kinds = metadata.get("run_kinds")
+    run_kinds = metadata.get(_RUN_KINDS_KEY)
     valid_run_kinds = (
         isinstance(run_kinds, list)
         and bool(run_kinds)
@@ -152,65 +213,144 @@ def _session_list_visibility_mask(metadata: JsonObject) -> int:
     return mask
 
 
-def _session_metadata_storage(metadata: JsonObject) -> tuple[str, tuple[Any, ...]]:
-    """Separate indexed/listable metadata from the open-ended metadata object."""
+def _is_reserved_prompt_key(key: str) -> bool:
+    return key in _PROMPT_STATE_KEYS or key.startswith(_PROMPT_PIN_KEY_PREFIX)
+
+
+def _optional_text_value(metadata: JsonObject, key: str) -> str | None:
+    value = metadata.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ChatSessionError(f"Session metadata {key} must be a string")
+    return value
+
+
+def _subagent_parent_columns(value: Any) -> tuple[Any, ...]:
+    if value is None:
+        return (None,) * len(_SUBAGENT_PARENT_FIELDS)
+    if not isinstance(value, dict):
+        raise ChatSessionError("Session metadata subagent_parent must be an object")
+    known = {key for key, _column in _SUBAGENT_PARENT_FIELDS}
+    unknown = set(value) - known
+    if unknown:
+        raise ChatSessionError(
+            "Session metadata subagent_parent has unsupported fields: " + ", ".join(sorted(unknown))
+        )
+    columns: list[Any] = []
+    for key, _column in _SUBAGENT_PARENT_FIELDS:
+        field = value.get(key)
+        if key == "tool_call_index":
+            if field is not None and (
+                isinstance(field, bool) or not isinstance(field, int) or field < 0
+            ):
+                raise ChatSessionError("Session subagent_parent tool_call_index is invalid")
+        elif field is not None and not isinstance(field, str):
+            raise ChatSessionError(f"Session subagent_parent {key} must be a string")
+        columns.append(field)
+    return tuple(columns)
+
+
+def _session_metadata_storage(metadata: JsonObject, derived: JsonObject) -> _MetadataStorage:
+    """Split the metadata facade into its columns and the open metadata object.
+
+    *derived* holds the current relation-backed values (``fork_source`` and
+    ``run_kinds``); a write may repeat them but not change them. Prompt state
+    keys are rejected: they have dedicated Session APIs.
+    """
+    if not isinstance(metadata, dict):
+        raise ChatSessionError("session metadata must be an object")
     residual = dict(metadata)
-    columns: dict[str, Any] = dict.fromkeys(_SESSION_METADATA_PROJECTION_COLUMNS)
-    columns["list_visibility_mask"] = _session_list_visibility_mask(metadata)
-    for key, column in _SESSION_METADATA_SCALAR_COLUMNS:
-        value = residual.get(key)
-        if isinstance(value, str):
-            columns[column] = value
-            residual.pop(key)
-    subagent_flag = residual.get("is_subagent_session")
-    if isinstance(subagent_flag, bool):
-        columns["is_subagent_session"] = int(subagent_flag)
-        residual.pop("is_subagent_session")
-    for key, column, expected_type in _SESSION_METADATA_JSON_COLUMNS:
-        value = residual.get(key)
-        if isinstance(value, expected_type):
-            columns[column] = json.dumps(
-                value,
-                ensure_ascii=False,
-                separators=(",", ":"),
-            )
-            residual.pop(key)
-    return _json_object(residual, "session metadata"), tuple(
-        columns[column] for column in _SESSION_METADATA_PROJECTION_COLUMNS
+    for key in (_FORK_SOURCE_KEY, _RUN_KINDS_KEY):
+        if key in residual and residual.pop(key) != derived.get(key):
+            raise ChatSessionError(f"Session metadata {key} is managed by Sessions")
+    reserved = sorted(key for key in residual if _is_reserved_prompt_key(key))
+    if reserved:
+        raise ChatSessionError(
+            "Session prompt state has dedicated APIs, not metadata: " + ", ".join(reserved)
+        )
+    titles = tuple(_optional_text_value(residual, key) for key in _TITLE_KEYS)
+    channels = tuple(_optional_text_value(residual, key) for key in _CHANNEL_KEYS)
+    initialized = residual.get(_AUTO_TITLE_INITIALIZED_KEY)
+    if initialized is not None and not isinstance(initialized, bool):
+        raise ChatSessionError("Session metadata auto_title_initialized must be a boolean")
+    subagent = residual.get(_SUBAGENT_FLAG_KEY)
+    if subagent is not None and not isinstance(subagent, bool):
+        raise ChatSessionError("Session metadata is_subagent_session must be a boolean")
+    parent = _subagent_parent_columns(residual.get(_SUBAGENT_PARENT_KEY))
+    policy = residual.get(_COMPACTION_POLICY_KEY)
+    if policy is not None and not isinstance(policy, dict):
+        raise ChatSessionError("Session metadata compaction_policy must be an object")
+    for key in (
+        *_TITLE_KEYS,
+        *_CHANNEL_KEYS,
+        _AUTO_TITLE_INITIALIZED_KEY,
+        _SUBAGENT_FLAG_KEY,
+        _SUBAGENT_PARENT_KEY,
+        _COMPACTION_POLICY_KEY,
+    ):
+        residual.pop(key, None)
+    visibility = dict(metadata)
+    visibility[_RUN_KINDS_KEY] = derived.get(_RUN_KINDS_KEY)
+    return _MetadataStorage(
+        (
+            *titles,
+            int(initialized is True),
+            *channels,
+            int(subagent is True),
+            *parent,
+            None if policy is None else _json_object(policy, "compaction policy"),
+            _json_object(residual, "session metadata"),
+            _session_list_visibility_mask(visibility),
+        )
     )
 
 
-# Metadata keys stored in dedicated columns, in metadata-facade order.
-_PROJECTED_METADATA_COLUMNS: dict[str, str] = {
-    **dict(_SESSION_METADATA_SCALAR_COLUMNS),
-    "is_subagent_session": "is_subagent_session",
-    **{key: column for key, column, _expected_type in _SESSION_METADATA_JSON_COLUMNS},
-}
+def _derived_metadata_from_state(state: sqlite3.Row) -> JsonObject:
+    """Return the relation-backed facade values of one metadata row."""
+    derived: JsonObject = {}
+    if state["fork_parent_session_id"] is not None:
+        derived[_FORK_SOURCE_KEY] = {
+            "agent_id": str(state["fork_parent_agent_id"]),
+            "session_id": str(state["fork_parent_session_id"]),
+            "project_id": str(state["fork_parent_project_id"]) or None,
+            "forked_at": str(state["forked_at"]),
+            "message_count": int(state["fork_point_seq"]),
+        }
+    run_kinds = _json_value_from_payload(
+        str(state["run_kinds_json"] or "[]"), "Session run kinds", list
+    )
+    if run_kinds:
+        derived[_RUN_KINDS_KEY] = sorted(run_kinds)
+    return derived
 
 
-def _projected_metadata_value(key: str, payload: Any) -> Any:
-    """Decode one non-null projected column exactly as the metadata facade does."""
-    if key == "is_subagent_session":
-        return bool(payload)
-    for json_key, _column, expected_type in _SESSION_METADATA_JSON_COLUMNS:
-        if json_key == key:
-            return _json_value_from_payload(payload, f"Session {key}", expected_type)
-    return str(payload)
-
-
-def _session_projected_metadata_from_state(state: Any) -> JsonObject:
-    metadata: JsonObject = {}
-    for key, column in _PROJECTED_METADATA_COLUMNS.items():
-        payload = state[column]
-        if payload is not None:
-            metadata[key] = _projected_metadata_value(key, payload)
+def _session_metadata_from_state(state: sqlite3.Row) -> JsonObject:
+    """Build the metadata facade from one row of ``_SESSION_METADATA_SQL``."""
+    metadata = _json_from_payload(str(state["metadata_json"]), "session metadata")
+    for key in _TITLE_KEYS + _CHANNEL_KEYS:
+        if state[key] is not None:
+            metadata[key] = str(state[key])
+    if state["auto_title_initialized"]:
+        metadata[_AUTO_TITLE_INITIALIZED_KEY] = True
+    if state["is_subagent"]:
+        metadata[_SUBAGENT_FLAG_KEY] = True
+    parent = _subagent_parent_from_state(state)
+    if parent is not None:
+        metadata[_SUBAGENT_PARENT_KEY] = parent
+    if state["compaction_policy_json"] is not None:
+        metadata[_COMPACTION_POLICY_KEY] = _json_from_payload(
+            str(state["compaction_policy_json"]), "Session compaction policy"
+        )
+    metadata.update(_derived_metadata_from_state(state))
     return metadata
 
 
-def _session_metadata_from_state(state: Any) -> JsonObject:
-    metadata = _json_from_payload(state["metadata_json"], "session metadata")
-    metadata.update(_session_projected_metadata_from_state(state))
-    return metadata
+def _subagent_parent_from_state(state: sqlite3.Row) -> JsonObject | None:
+    values = {key: state[column] for key, column in _SUBAGENT_PARENT_FIELDS}
+    if all(value is None for value in values.values()):
+        return None
+    return values
 
 
 def _session_list_visibility_sql(
@@ -221,22 +361,23 @@ def _session_list_visibility_sql(
     include_cron: bool,
     include_channels: bool,
 ) -> tuple[str, list[Any]]:
+    """Return the ``sessions AS s`` predicate of one Session-list filter set."""
     is_subagent = (
-        "((list_visibility_mask & "
+        "((s.list_visibility_mask & "
         f"{_LIST_VISIBILITY_SUBAGENT_SESSION | _LIST_VISIBILITY_SUBAGENT_PARENT}) != 0)"
     )
-    is_background = f"((list_visibility_mask & {_LIST_VISIBILITY_BACKGROUND}) != 0)"
+    is_background = f"((s.list_visibility_mask & {_LIST_VISIBILITY_BACKGROUND}) != 0)"
     background_enabled = (
-        f"((list_visibility_mask & {_LIST_VISIBILITY_CRON}) = 0 OR ? = 1) "
-        f"AND ((list_visibility_mask & {_LIST_VISIBILITY_MEMORY_REFLECTION}) = 0 OR ? = 1) "
-        f"AND ((list_visibility_mask & {_LIST_VISIBILITY_SKILL_REFLECTION}) = 0 OR ? = 1) "
-        f"AND ((list_visibility_mask & {_LIST_VISIBILITY_REFLECTION}) = 0 OR (? = 1 OR ? = 1))"
+        f"((s.list_visibility_mask & {_LIST_VISIBILITY_CRON}) = 0 OR ? = 1) "
+        f"AND ((s.list_visibility_mask & {_LIST_VISIBILITY_MEMORY_REFLECTION}) = 0 OR ? = 1) "
+        f"AND ((s.list_visibility_mask & {_LIST_VISIBILITY_SKILL_REFLECTION}) = 0 OR ? = 1) "
+        f"AND ((s.list_visibility_mask & {_LIST_VISIBILITY_REFLECTION}) = 0 OR (? = 1 OR ? = 1))"
     )
     visible = (
         "NOT EXISTS (SELECT 1 FROM temporary_session_bindings AS owner_binding "
-        "WHERE owner_binding.session_key = sessions.session_key) AND "
-        "(? = 1 OR COALESCE(TRIM(platform), '') = '' "
-        "OR COALESCE(TRIM(platform_conv_id), '') = '') AND "
+        "WHERE owner_binding.session_key = s.session_key) AND "
+        "(? = 1 OR COALESCE(TRIM(s.platform), '') = '' "
+        "OR COALESCE(TRIM(s.platform_conv_id), '') = '') AND "
         f"(({is_subagent} AND ? = 1) OR (NOT {is_subagent} AND "
         f"(NOT {is_background} OR ({background_enabled}))))"
     )
@@ -253,144 +394,38 @@ def _session_list_visibility_sql(
 
 
 _RECALL_SUBAGENT_MASK = _LIST_VISIBILITY_SUBAGENT_SESSION | _LIST_VISIBILITY_SUBAGENT_RUN_KIND
-# The one definition of ``SessionRecallVisibility`` over ``sessions.list_visibility_mask``.
-# Reflection kinds hide a Session even when it also carries User or Sub-Agent
-# markers. Sub-Agent markers (flag or Run kind) make it a delegated Session.
-# Otherwise legacy Sessions without valid Run kinds and Sessions with a
-# User-facing Run kind are conversations; the rest (system-only) stay hidden.
-_RECALL_VISIBILITY_SQL = (
-    "CASE"
-    f" WHEN (list_visibility_mask & {_LIST_VISIBILITY_REFLECTION}) != 0 THEN 'hidden'"
-    f" WHEN (list_visibility_mask & {_RECALL_SUBAGENT_MASK}) != 0 THEN 'subagent'"
-    f" WHEN (list_visibility_mask & {_LIST_VISIBILITY_VALID_RUN_KINDS}) = 0"
-    f" OR (list_visibility_mask & {_LIST_VISIBILITY_USER_FACING}) != 0 THEN 'conversation'"
-    " ELSE 'hidden' END"
-)
 
 
-def _recall_visibility_sql(*, include_subagents: bool) -> str:
-    """Return the ``sessions`` predicate admitting the Sessions one search may return."""
+def _recall_visibility_case(alias: str) -> str:
+    """The one definition of ``SessionRecallVisibility`` over ``list_visibility_mask``.
+
+    Reflection kinds hide a Session even when it also carries User or Sub-Agent
+    markers. Sub-Agent markers (flag or Run kind) make it a delegated Session.
+    Otherwise Sessions without valid Run kinds and Sessions with a User-facing
+    Run kind are conversations; the rest (system-only) stay hidden.
+    """
+    mask = f"{alias}.list_visibility_mask"
+    return (
+        "CASE"
+        f" WHEN ({mask} & {_LIST_VISIBILITY_REFLECTION}) != 0 THEN 'hidden'"
+        f" WHEN ({mask} & {_RECALL_SUBAGENT_MASK}) != 0 THEN 'subagent'"
+        f" WHEN ({mask} & {_LIST_VISIBILITY_VALID_RUN_KINDS}) = 0"
+        f" OR ({mask} & {_LIST_VISIBILITY_USER_FACING}) != 0 THEN 'conversation'"
+        " ELSE 'hidden' END"
+    )
+
+
+_RECALL_VISIBILITY_SQL = _recall_visibility_case("s")
+
+
+def _recall_visibility_sql(*, include_subagents: bool, alias: str = "s") -> str:
+    """Return the predicate admitting the Sessions one search may return."""
     from core.sessions._types import recall_visibilities
 
     admitted = ", ".join(
         f"'{visibility}'" for visibility in recall_visibilities(include_subagents=include_subagents)
     )
-    return f"{_RECALL_VISIBILITY_SQL} IN ({admitted})"
-
-
-_MESSAGE_INSERT = """
-    INSERT INTO messages (
-        message_key, session_key, seq, message_id, role, timestamp, content,
-        content_blocks_json, content_search, model, active, searchable, run_id
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-"""
-_MESSAGE_RECORD_COLUMNS = """
-    m.*,
-    a.reasoning,
-    a.reasoning_meta_json,
-    a.reasoning_summary_json,
-    a.reasoning_scope,
-    a.reasoning_started_at,
-    a.reasoning_completed_at,
-    a.reasoning_duration_ms,
-    a.reasoning_timing_extra_json,
-    a.phase,
-    a.input_tokens,
-    a.output_tokens,
-    a.cache_read_tokens,
-    a.cache_write_tokens,
-    a.reasoning_tokens,
-    a.usage_estimated,
-    a.input_tokens_estimated,
-    a.output_tokens_estimated,
-    a.usage_present,
-    a.usage_extra_json,
-    a.tool_calls_present,
-    a.interrupted,
-    a.interruption_cause,
-    t.tool_call_key,
-    t.tool_call_id,
-    t.name,
-    t.result_content AS role_content,
-    t.started_at AS timing_started_at,
-    t.completed_at AS timing_completed_at,
-    t.duration_ms AS timing_duration_ms,
-    t.timing_extra_json,
-    t.display_json AS tool_display_json,
-    u.sender_id,
-    u.display_name AS sender_display_name,
-    u.role AS sender_role,
-    e.error_kind,
-    c.tail_boundary_id,
-    c.projection_json,
-    c.policy AS compaction_policy,
-    c.strategy AS compaction_strategy,
-    c.compacted_token_count,
-    c.context_tokens_before,
-    c.context_tokens_after,
-    c.compaction_duration_ms,
-    c.usage_present AS compaction_usage_present,
-    c.usage_extra_json AS compaction_usage_extra_json,
-    m.owner_run_id AS run_id,
-    r.work_id,
-    r.status,
-    r.started_at AS run_started_at,
-    r.completed_at AS run_completed_at,
-    r.duration_ms AS run_duration_ms,
-    r.timing_extra_json AS run_timing_extra_json,
-    r.iteration_count,
-    r.changed_files,
-    r.lines_added,
-    r.lines_removed,
-    r.change_stats_extra_json,
-    h.target_message_id,
-    CASE WHEN EXISTS (SELECT 1 FROM tool_calls AS tc WHERE tc.message_key = m.source_key)
-         THEN (SELECT json_group_array(json_array(
-                    ordered.tool_call_id,
-                    ordered.name,
-                    ordered.arguments_json,
-                    ordered.rejection_code,
-                    ordered.rejection_message,
-                    ordered.rejection_fingerprint,
-                    ordered.argument_sequence_index,
-                    ordered.argument_sequence_length
-                ))
-               FROM (SELECT * FROM tool_calls WHERE message_key = m.source_key ORDER BY ordinal) AS ordered)
-         ELSE NULL END AS tool_call_rows_json,
-    CASE WHEN EXISTS (SELECT 1 FROM assistant_output_files AS f WHERE f.message_key = m.source_key)
-         THEN (SELECT json_group_array(json_array(
-                    ordered.path,
-                    ordered.line_index,
-                    ordered.start_index,
-                    ordered.end_index
-                ))
-               FROM (SELECT * FROM assistant_output_files WHERE message_key = m.source_key ORDER BY ordinal) AS ordered)
-         ELSE NULL END AS output_file_rows_json,
-    CASE WHEN EXISTS (SELECT 1 FROM run_change_paths AS p WHERE p.run_key = r.run_key)
-         THEN (SELECT json_group_array(ordered.path)
-               FROM (SELECT path FROM run_change_paths WHERE run_key = r.run_key ORDER BY ordinal) AS ordered)
-         ELSE NULL END AS change_paths_json
-"""
-_MESSAGE_RECORD_JOINS = """
-    LEFT JOIN assistant_messages AS a ON a.message_key = m.source_key
-    LEFT JOIN tool_calls AS t ON t.result_key = m.message_key
-    LEFT JOIN user_message_senders AS u ON u.message_key = m.source_key
-    LEFT JOIN error_messages AS e ON e.message_key = m.source_key
-    LEFT JOIN compaction_checkpoints AS c ON c.snapshot_key = m.message_key
-    LEFT JOIN runs AS r ON r.terminal_key = m.message_key
-    LEFT JOIN history_edits AS h ON h.edit_key = m.message_key
-"""
-
-
-def _message_records_sql(*, where: str, order_by: str = "") -> str:
-    return (
-        f"SELECT {_MESSAGE_RECORD_COLUMNS} FROM history_records AS m "
-        f"{_MESSAGE_RECORD_JOINS} WHERE {where} {order_by}"
-    )
-
-
-# Records named by a JSON array of history keys; each view branch probes its own key.
-_KEYED_RECORDS = "m.message_key IN (SELECT value FROM json_each(?))"
+    return f"{_recall_visibility_case(alias)} IN ({admitted})"
 
 
 _SEARCH_RESULT_LIMIT = 1_000
@@ -405,6 +440,16 @@ def _json_object(value: JsonObject, name: str) -> str:
         return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
     except (TypeError, ValueError) as exc:
         raise ChatSessionError(f"{name} must be JSON-serializable") from exc
+
+
+def _key_list(keys: Sequence[int]) -> str:
+    """Encode integer keys for ``IN (SELECT value FROM json_each(?))``."""
+    return json.dumps([int(key) for key in keys], separators=(",", ":"))
+
+
+def _json_list(values: Sequence[str]) -> str:
+    """Encode text values for ``IN (SELECT value FROM json_each(?))``."""
+    return json.dumps([str(value) for value in values], ensure_ascii=False, separators=(",", ":"))
 
 
 def _canonical_json_payload(payload: str) -> str:
@@ -448,6 +493,18 @@ def _optional_json(value: Any, name: str) -> str | None:
         raise ChatSessionError(f"{name} is not JSON-serializable") from exc
 
 
+def _timestamp(value: str, name: str = "timestamp") -> str:
+    """Return a canonical stored timestamp, rejecting values without an offset."""
+    try:
+        return canonical_timestamp(value)
+    except ValueError as exc:
+        raise ChatSessionError(f"{name} must be an ISO 8601 timestamp with an offset") from exc
+
+
+def _optional_timestamp(value: Any, name: str = "timestamp") -> str | None:
+    return None if value is None else _timestamp(value, name)
+
+
 def _scope(address: SessionAddress) -> tuple[str, str, str]:
     return (address.project_id or "", address.agent_id, address.session_id)
 
@@ -466,14 +523,14 @@ def _allocate_address(connection: sqlite3.Connection, scope: SessionAddress) -> 
     from core.sessions._types import SessionAddress
 
     def available(candidate: str) -> bool:
-        # One probe per status: each address index is partial on its status.
+        # One probe per state: each address index is partial on its state.
         address = _scope(SessionAddress(scope.project_id, scope.agent_id, candidate))
         return (
             connection.execute(
                 "SELECT 1 FROM sessions WHERE project_id = ? AND agent_id = ? "
-                "AND session_id = ? AND status = 'live' "
+                "AND session_id = ? AND state = 'live' "
                 "UNION ALL SELECT 1 FROM sessions WHERE project_id = ? AND agent_id = ? "
-                "AND session_id = ? AND status = 'archived' LIMIT 1",
+                "AND session_id = ? AND state = 'archived' LIMIT 1",
                 (*address, *address),
             ).fetchone()
             is None
@@ -482,15 +539,16 @@ def _allocate_address(connection: sqlite3.Connection, scope: SessionAddress) -> 
     return SessionAddress(scope.project_id, scope.agent_id, new_id("ses", claim=available))
 
 
+_OWNER_MANAGED_ERROR = "This Session is managed by an Extension. Use that Extension to resume it."
+
+
 def _reject_owner_managed_mutation(connection: sqlite3.Connection, state: sqlite3.Row) -> None:
     binding = connection.execute(
         "SELECT 1 FROM temporary_session_bindings WHERE session_key = ?",
         (state["session_key"],),
     ).fetchone()
     if binding is not None:
-        raise ChatSessionError(
-            "This Session is managed by an Extension. Use that Extension to resume it."
-        )
+        raise ChatSessionError(_OWNER_MANAGED_ERROR)
 
 
 def _reject_owner_managed_scope_mutation(
@@ -502,9 +560,10 @@ def _reject_owner_managed_scope_mutation(
         params,
     ).fetchone()
     if binding is not None:
-        raise ChatSessionError(
-            "This Session is managed by an Extension. Use that Extension to resume it."
-        )
+        raise ChatSessionError(_OWNER_MANAGED_ERROR)
+
+
+_LIVE_ADDRESS = "s.project_id = ? AND s.agent_id = ? AND s.session_id = ? AND s.state = 'live'"
 
 
 def _require_live(connection: sqlite3.Connection, address: SessionAddress) -> sqlite3.Row:
@@ -516,10 +575,81 @@ def _require_live(connection: sqlite3.Connection, address: SessionAddress) -> sq
 
 def _find_live(connection: sqlite3.Connection, address: SessionAddress) -> sqlite3.Row | None:
     row = connection.execute(
-        "SELECT * FROM sessions WHERE project_id = ? AND agent_id = ? AND session_id = ? AND status = 'live'",
+        f"SELECT {_SESSION_STATE_COLUMNS} FROM sessions AS s WHERE {_LIVE_ADDRESS}",
         _scope(address),
     ).fetchone()
     return cast(sqlite3.Row | None, row)
+
+
+def _state_by_key(connection: sqlite3.Connection, session_key: int) -> sqlite3.Row:
+    row = connection.execute(
+        f"SELECT {_SESSION_STATE_COLUMNS} FROM sessions AS s WHERE s.session_key = ?",
+        (session_key,),
+    ).fetchone()
+    if row is None:
+        raise SessionStoreCorruptError(f"Session row disappeared: {session_key}")
+    return cast(sqlite3.Row, row)
+
+
+def _metadata_row(connection: sqlite3.Connection, session_key: int) -> sqlite3.Row:
+    """Read one Session's metadata facade inputs, derived values included."""
+    row = connection.execute(
+        f"SELECT {_SESSION_STATE_COLUMNS}, {_DERIVED_METADATA_COLUMNS} FROM sessions AS s "
+        f"{_DERIVED_METADATA_JOIN} WHERE s.session_key = ?",
+        (session_key,),
+    ).fetchone()
+    if row is None:
+        raise SessionStoreCorruptError(f"Session row disappeared: {session_key}")
+    return cast(sqlite3.Row, row)
+
+
+def _live_metadata_row(connection: sqlite3.Connection, address: SessionAddress) -> sqlite3.Row:
+    row = connection.execute(
+        f"SELECT {_SESSION_STATE_COLUMNS}, {_DERIVED_METADATA_COLUMNS} FROM sessions AS s "
+        f"{_DERIVED_METADATA_JOIN} WHERE {_LIVE_ADDRESS}",
+        _scope(address),
+    ).fetchone()
+    if row is None:
+        raise SessionNotFoundError(f"session does not exist: {address.session_id}")
+    return cast(sqlite3.Row, row)
+
+
+def _find_live_metadata_row(
+    connection: sqlite3.Connection, address: SessionAddress
+) -> sqlite3.Row | None:
+    row = connection.execute(
+        f"SELECT {_SESSION_STATE_COLUMNS}, {_DERIVED_METADATA_COLUMNS} FROM sessions AS s "
+        f"{_DERIVED_METADATA_JOIN} WHERE {_LIVE_ADDRESS}",
+        _scope(address),
+    ).fetchone()
+    return cast(sqlite3.Row | None, row)
+
+
+def _metadata_storage_of(state: sqlite3.Row) -> _MetadataStorage:
+    """Return the metadata storage one Session row currently holds."""
+    return _MetadataStorage(tuple(state[column] for column in _METADATA_WRITE_COLUMNS))
+
+
+def _write_metadata_storage(
+    connection: sqlite3.Connection, session_key: int, storage: _MetadataStorage
+) -> None:
+    connection.execute(
+        "UPDATE sessions SET "
+        + ", ".join(f"{column} = ?" for column in _METADATA_WRITE_COLUMNS)
+        + ", state_revision = state_revision + 1 WHERE session_key = ?",
+        (*storage.columns, session_key),
+    )
+
+
+def _refresh_visibility(connection: sqlite3.Connection, session_key: int) -> None:
+    """Recompute the list visibility mask after a relation it reads changed."""
+    row = _metadata_row(connection, session_key)
+    mask = _session_list_visibility_mask(_session_metadata_from_state(row))
+    if mask != int(row["list_visibility_mask"]):
+        connection.execute(
+            "UPDATE sessions SET list_visibility_mask = ? WHERE session_key = ?",
+            (mask, session_key),
+        )
 
 
 def _touch_state(connection: sqlite3.Connection, session_key: int) -> None:
@@ -527,11 +657,3 @@ def _touch_state(connection: sqlite3.Connection, session_key: int) -> None:
         "UPDATE sessions SET state_revision = state_revision + 1 WHERE session_key = ?",
         (session_key,),
     )
-
-
-def _allocate_history_key(connection: sqlite3.Connection) -> int:
-    row = connection.execute(
-        "INSERT INTO store_meta(key, value) VALUES ('history_identity', '1') "
-        "ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1 RETURNING value"
-    ).fetchone()
-    return int(row[0])

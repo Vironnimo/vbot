@@ -74,9 +74,7 @@ async def test_run_end_notifies_reflection_with_internal_flag(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
-async def test_owned_descendant_skips_titles_and_reflection(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_owned_descendant_skips_titles_and_reflection(tmp_path: Path) -> None:
     agent = StubAgent(
         id="coder",
         model="openrouter/anthropic/claude-sonnet-4",
@@ -86,11 +84,15 @@ async def test_owned_descendant_skips_titles_and_reflection(
     adapter = StubAdapter([{"content": "Done", "reasoning": None, "tool_calls": None}])
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
     runtime.chat_sessions.create("coder", session_id="session-one")
-
-    async def record_owned_run(*_args: Any, **_kwargs: Any) -> None:
-        pass
-
-    monkeypatch.setattr(runtime.chat_sessions, "record_run_owner_async", record_owned_run)
+    # The owner's participant binding lives in its own bound Session; the owned
+    # Run executes in a descendant Session the owner continues.
+    binding = runtime.chat_sessions.create_bound_temporary_session(
+        session_address("coder", "participant-session"),
+        owner_name="swarm",
+        group_id="group",
+        participant_id="participant",
+        config={},
+    )
     reflection = RecordingReflection()
 
     class Titles:
@@ -100,7 +102,7 @@ async def test_owned_descendant_skips_titles_and_reflection(
             self.calls.append(kwargs)
 
     loop = build_chat_loop(runtime, reflection_service=reflection, session_title_service=Titles())
-    owner = RunExecutionOwner("swarm", "group", "participant", "generation", "epoch")
+    owner = RunExecutionOwner("swarm", "group", "participant", binding.generation_id, "epoch")
     run = await runtime.chat_run_manager.start(
         session_address("coder", "session-one"),
         loop.run_executor("Continue the assigned task"),
@@ -110,6 +112,12 @@ async def test_owned_descendant_skips_titles_and_reflection(
 
     assert reflection.calls == []
     assert Titles.calls == []
+    # Admission recorded the execution owner with the Run.
+    owned = runtime.chat_sessions.owned_runs(owner_name="swarm", group_id="group")
+    assert [(record.run_id, record.owner, record.address) for record in owned] == [
+        (run.id, owner, session_address("coder", "session-one"))
+    ]
+    assert owned[0].terminal_status == "completed"
 
 
 @pytest.mark.asyncio
@@ -118,6 +126,7 @@ async def test_internal_bootstrap_can_resume_process_restart_continuation(tmp_pa
     adapter = StubAdapter([{"content": "Verified", "reasoning": None, "tool_calls": None}])
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
     session = runtime.chat_sessions.create("coder", session_id="session-one")
+    session.start_run("run-before-restart")
     tracker = ContinuationTracker(session, run_id="run-before-restart", request="update vBot")
     await tracker.interrupt("process_restart")
 
@@ -139,6 +148,7 @@ async def test_ordinary_internal_run_does_not_consume_continuation(tmp_path: Pat
     adapter = StubAdapter([{"content": "Done", "reasoning": None, "tool_calls": None}])
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
     session = runtime.chat_sessions.create("coder", session_id="session-one")
+    session.start_run("run-before-restart")
     tracker = ContinuationTracker(session, run_id="run-before-restart", request="update vBot")
     await tracker.interrupt("process_restart")
 
@@ -159,6 +169,7 @@ async def test_run_commit_failure_preserves_output_and_recoverable_continuation(
     adapter = StubAdapter([{"content": "Verified", "reasoning": None, "tool_calls": None}])
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
     session = runtime.chat_sessions.create("coder", session_id="session-one")
+    session.start_run("run-before-restart")
     tracker = ContinuationTracker(session, run_id="run-before-restart", request="update vBot")
     await tracker.interrupt("process_restart")
 
@@ -193,6 +204,7 @@ async def test_continuation_finalization_failure_does_not_replace_run_result(
     adapter = StubAdapter([{"content": "Done", "reasoning": None, "tool_calls": None}])
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
     session = runtime.chat_sessions.create("coder", session_id="session-one")
+    session.start_run("run-before-restart")
     tracker = ContinuationTracker(session, run_id="run-before-restart", request="update vBot")
     await tracker.interrupt("process_restart")
 
