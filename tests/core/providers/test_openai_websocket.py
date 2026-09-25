@@ -20,6 +20,7 @@ from core.providers.openai import (
     CODEX_WEBSOCKET_BETA,
     OpenAIAdapter,
 )
+from core.utils.tls import shared_ssl_context
 from tests.core.providers.openai_helpers import (
     _CODEX_TOOLS,
     OPENAI_SUBSCRIPTION_URL,
@@ -199,6 +200,8 @@ async def test_codex_websocket_reuses_connection_and_sends_only_new_tool_result(
     assert websocket_headers["OpenAI-Beta"] == CODEX_WEBSOCKET_BETA
     assert websocket_headers["session-id"] == "orchestrator:sess-42"
     assert "session_id" not in websocket_headers
+    # One process-wide TLS context: no CA bundle parse per connection on the loop.
+    assert connect_kwargs["ssl"] is shared_ssl_context()
     await adapter.aclose()
     assert websocket.closed is True
 

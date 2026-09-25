@@ -12,6 +12,7 @@ from websockets.asyncio.client import connect
 from core.channels._network_adapter import NetworkChannelAdapter
 from core.channels.adapter import ConversationFacts, FileData
 from core.channels.config import ChannelError
+from core.utils.tls import shared_ssl_context
 
 
 class MattermostChannelAdapter(NetworkChannelAdapter):
@@ -36,7 +37,13 @@ class MattermostChannelAdapter(NetworkChannelAdapter):
         url = urlunsplit(
             ("wss" if parts.scheme == "https" else "ws", parts.netloc, parts.path, "", "")
         )
-        async with connect(url, max_size=2_097_152, ping_interval=20, proxy=None) as socket:
+        async with connect(
+            url,
+            max_size=2_097_152,
+            ping_interval=20,
+            proxy=None,
+            ssl=shared_ssl_context() if url.startswith("wss://") else None,
+        ) as socket:
             self._socket = socket
             await socket.send(
                 json.dumps(

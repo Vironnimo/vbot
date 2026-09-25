@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from core.debug import DebugTraceStore, ProviderDebugRecorder
-from core.models.database import begin_runtime_model_database_refresh
+from core.models.database import ModelDatabaseRefresh, begin_runtime_model_database_refresh
 from core.models.models import Model, ModelRegistry
 from core.providers.accounts import DEFAULT_ACCOUNT_ID, ConnectionRef, split_connection_id
 from core.providers.adapter import ModelLookup, ProviderAdapter
@@ -48,8 +48,12 @@ from core.providers.token_store import TokenStore
 from core.providers.xai import XAIAdapter
 from core.storage import StorageManager
 from core.utils.errors import ConfigError, StorageError
+from core.utils.workers import BoundedWorkerPool
 
 LOCAL_CATALOG_REFRESH_TTL_SECONDS = 30.0
+# Automatic local catalog refreshes stage, validate, publish, and discard the
+# complete Model DB copy here, never on the Event Loop.
+_LOCAL_CATALOG_WORKERS = BoundedWorkerPool(name="local-catalog", max_workers=1)
 
 ADAPTER_TYPES: dict[str, type[ProviderAdapter]] = {
     "openai_compatible": OpenAICompatibleAdapter,
@@ -245,14 +249,18 @@ class ProviderRuntime:
 
             from core.models.discovery import ModelDiscoveryError, refresh_models
 
-            database_refresh = None
-            refresh_resources_dir = None
+            # Filled on the worker thread, so a cancelled staging hop still
+            # discards its copy.
+            staged: list[ModelDatabaseRefresh] = []
             refreshed_any = False
             try:
-                database_refresh = begin_runtime_model_database_refresh(
+                await _LOCAL_CATALOG_WORKERS.run(
+                    _stage_runtime_refresh,
                     self._resources_path,
                     self._storage.data_dir,
+                    staged,
                 )
+                database_refresh = staged[0]
                 refresh_resources_dir = database_refresh.resources_dir
                 for provider_id, provider, connection in targets:
                     connection_id = f"{provider_id}:{connection.id}"
@@ -304,22 +312,32 @@ class ProviderRuntime:
                     refreshed_any = True
 
                 if refreshed_any:
-                    ModelRegistry.invalidate(refresh_resources_dir)
-                    ModelRegistry.load(refresh_resources_dir)
-                    ModelRegistry.invalidate(refresh_resources_dir)
-                    database_refresh.commit()
-                    self._models.reload(
+                    custom_providers = await _LOCAL_CATALOG_WORKERS.run(
+                        self._publish_staged_catalog,
+                        database_refresh,
+                    )
+                    await self._models.reload_async(
                         self._resources_path,
                         runtime_models_dir=self._storage.layout.models,
-                        custom_providers=self._storage.load_custom_providers_settings(),
+                        custom_providers=custom_providers,
                     )
             except Exception as error:
                 self._logger.warning("Local catalog refresh could not be published: %s", error)
             finally:
-                if refresh_resources_dir is not None:
-                    ModelRegistry.invalidate(refresh_resources_dir)
-                if database_refresh is not None:
-                    database_refresh.discard()
+                for staged_refresh in staged:
+                    await _LOCAL_CATALOG_WORKERS.run(_discard_staged_refresh, staged_refresh)
+
+    def _publish_staged_catalog(
+        self,
+        database_refresh: ModelDatabaseRefresh,
+    ) -> dict[str, dict[str, Any]]:
+        """Validate and commit a staged Model DB; return the overlays to reload with."""
+        refresh_resources_dir = database_refresh.resources_dir
+        ModelRegistry.invalidate(refresh_resources_dir)
+        ModelRegistry.load(refresh_resources_dir)
+        ModelRegistry.invalidate(refresh_resources_dir)
+        database_refresh.commit()
+        return self._storage.load_custom_providers_settings()
 
     def connection_reachability(self, connection_id: str) -> bool | None:
         return self._connection_reachability.get(connection_id)
@@ -450,3 +468,16 @@ class ProviderRuntime:
             raise ConfigError(
                 f"Unknown connection id '{connection_id}' for provider '{provider_config.id}'"
             ) from error
+
+
+def _stage_runtime_refresh(
+    resources_path: Path,
+    data_dir: Path,
+    staged: list[ModelDatabaseRefresh],
+) -> None:
+    staged.append(begin_runtime_model_database_refresh(resources_path, data_dir))
+
+
+def _discard_staged_refresh(database_refresh: ModelDatabaseRefresh) -> None:
+    ModelRegistry.invalidate(database_refresh.resources_dir)
+    database_refresh.discard()

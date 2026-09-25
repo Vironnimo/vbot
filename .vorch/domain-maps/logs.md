@@ -24,8 +24,8 @@ The logs subsystem exposes application log files from `<data_dir>/logs/` for ins
 ## Interfaces
 
 - `core/utils/log_viewer.py`
-  - `LogViewer.list_files()` -> `{ files, default_file }`
-  - `LogViewer.read_file(file_name)` -> `{ file, entries, cursor }`
+  - `await LogViewer.list_files()` -> `{ files, default_file }`
+  - `await LogViewer.read_file(file_name)` -> `{ file, entries, cursor }`
   - `LogViewer.subscribe(file_name, cursor?)` -> async generator of entry and catalog events
 - Server RPC
   - `log.list` - returns the daily log catalog sorted newest-first
@@ -57,6 +57,7 @@ The logs subsystem exposes application log files from `<data_dir>/logs/` for ins
 
 - Newest-file selection assumes daily filenames sort newest-first lexicographically.
 - Initial load reads one full selected daily file into memory.
+- **No log I/O on the Event Loop.** Directory listings, stats, file reads and parsing run on the two-worker `log-viewer` pool (`_LOG_WORKERS`), including the watcher's per-tick metadata checks and re-reads, which reach about ten per second while the server logs. Cursor handoffs, watcher state and event fan-out stay on the Event Loop.
 - Windows watcher events may duplicate or coalesce changes; derive append/reset events from file snapshots rather than raw watcher event counts.
 - If a file is truncated, replaced, or otherwise diverges from the previous parsed prefix, emit a `reset` event so the UI replaces its entry list.
 - **Watcher lifecycle is per-file and ref-counted.** One watcher task per file, shared by all subscribers; it starts on the first subscriber and stops when the last one leaves. `aclose()` (called on server shutdown with a 1 s timeout) tears down every watcher. Snapshots are read and diffed under a single async lock.

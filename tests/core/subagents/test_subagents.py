@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -25,6 +26,7 @@ from tests.core.subagents.subagents_test_support import (
     _handle_subagent,
     make_context,
     make_runtime,
+    wait_for_started,
 )
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("current_format_data_directory")]
@@ -51,6 +53,50 @@ async def test_project_subagent_session_lives_under_project_anchor(tmp_path: Pat
     child_session_id = result["data"]["session_id"]
     assert runtime.chat_sessions.exists(_address("worker", child_session_id, "acme"))
     assert not runtime.chat_sessions.exists(_address("worker", child_session_id))
+
+
+async def test_spawn_opens_the_child_session_off_the_event_loop(tmp_path: Path) -> None:
+    manager = FakeRunManager()
+    runtime = make_runtime(tmp_path, manager)
+    tracker = SubAgentBatchTracker(RecordingTriggerService())
+    context = make_context()
+    create = runtime.chat_sessions.create
+    entered = threading.Event()
+    release = threading.Event()
+    threads: list[int] = []
+
+    def blocked_create(*args: Any, **kwargs: Any) -> Any:
+        threads.append(threading.get_ident())
+        entered.set()
+        release.wait(timeout=5)
+        return create(*args, **kwargs)
+
+    runtime.chat_sessions.create = blocked_create
+    spawning = asyncio.create_task(
+        _handle_subagent(
+            context,
+            {"content": "spawn", "agent_id": "worker"},
+            runtime=runtime,
+            batch_tracker=tracker,
+        )
+    )
+    try:
+        assert await asyncio.to_thread(entered.wait, 5)
+        loop = asyncio.get_running_loop()
+        ticked_at = loop.time()
+        for _ in range(5):
+            await asyncio.sleep(0.01)
+        assert loop.time() - ticked_at < 1
+        assert manager.started == []
+    finally:
+        release.set()
+    result = await asyncio.wait_for(spawning, timeout=5)
+
+    assert result["ok"] is True
+    assert threads and threading.get_ident() not in threads
+    child = _address("worker", result["data"]["session_id"])
+    metadata = runtime.chat_sessions.get_metadata(child)
+    assert metadata["subagent_parent"]["session_id"] == context.session_id
 
 
 async def test_project_subagent_run_carries_project_id(tmp_path: Path) -> None:
@@ -536,8 +582,7 @@ async def test_project_subagent_foreground_at_depth_stays_project_scoped(
             batch_tracker=tracker,
         )
     )
-    await asyncio.sleep(0)
-    started_run = manager.started[0]["run"]
+    started_run = (await wait_for_started(manager))[0]["run"]
     started_run.mark_completed(ChatMessage.assistant(model="openai/gpt-5.2", content="child done"))
     result = await task
 

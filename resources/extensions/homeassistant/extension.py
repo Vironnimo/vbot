@@ -28,6 +28,7 @@ from core.tools.tools import (
     tool_success,
 )
 from core.utils.http_status import HttpRequestFailure, is_retryable_status
+from core.utils.tls import shared_ssl_context
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -309,7 +310,7 @@ async def _ha_request(
     }
     idempotent = method == "GET"
 
-    async with httpx.AsyncClient(timeout=_REQUEST_TIMEOUT) as client:
+    async with httpx.AsyncClient(timeout=_REQUEST_TIMEOUT, verify=shared_ssl_context()) as client:
         for attempt in range(_RETRY_MAX_RETRIES + 1):
             try:
                 if method == "GET":

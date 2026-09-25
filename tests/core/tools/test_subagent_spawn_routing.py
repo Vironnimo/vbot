@@ -33,6 +33,7 @@ from .subagent_test_support import (
     make_runtime,
     pytest,
     register_subagent_tools,
+    wait_until,
 )
 
 pytestmark = pytest.mark.asyncio
@@ -355,7 +356,7 @@ async def test_subagent_tool_emits_session_started_before_foreground_result(
             batch_tracker=tracker,
         )
     )
-    await asyncio.sleep(0)
+    await wait_until(lambda: bool(manager.started))
 
     # Assert
     assert manager.started

@@ -1,8 +1,11 @@
 """Tests for models."""
 
+import asyncio
 import json
 import logging
+import threading
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -490,6 +493,45 @@ class TestModelRegistryLoad:
         assert held_reference is registry
         assert held_reference.get("test_provider", "model-a").name == "Updated"
         # The cache is repointed at this same instance, not a fresh one.
+        assert ModelRegistry.load(tmp_path) is registry
+
+    @pytest.mark.asyncio
+    async def test_reload_async_assembles_off_the_loop_and_swaps_in_place(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        models_dir = tmp_path / "models"
+        models_dir.mkdir()
+        _write_provider_catalog(models_dir, "test_provider", {"model-a": _model_record("Original")})
+        registry = ModelRegistry.load(tmp_path)
+        _write_provider_catalog(models_dir, "test_provider", {"model-a": _model_record("Updated")})
+        assemble = ModelRegistry._assemble_models.__func__  # type: ignore[attr-defined]
+        entered = threading.Event()
+        release = threading.Event()
+        threads: list[int] = []
+
+        def blocked_assemble(cls: Any, *args: Any) -> Any:
+            threads.append(threading.get_ident())
+            entered.set()
+            release.wait(timeout=5)
+            return assemble(cls, *args)
+
+        monkeypatch.setattr(ModelRegistry, "_assemble_models", classmethod(blocked_assemble))
+        reloading = asyncio.create_task(registry.reload_async(tmp_path))
+        try:
+            assert await asyncio.to_thread(entered.wait, 5)
+            loop = asyncio.get_running_loop()
+            ticked_at = loop.time()
+            for _ in range(5):
+                await asyncio.sleep(0.01)
+            assert loop.time() - ticked_at < 1
+            # Readers on the loop keep the old catalog until the swap.
+            assert registry.get("test_provider", "model-a").name == "Original"
+        finally:
+            release.set()
+        await asyncio.wait_for(reloading, timeout=5)
+
+        assert threads and threading.get_ident() not in threads
+        assert registry.get("test_provider", "model-a").name == "Updated"
         assert ModelRegistry.load(tmp_path) is registry
 
     def test_override_file_is_not_loaded_as_its_own_provider(self, tmp_path: Path):

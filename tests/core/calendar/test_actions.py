@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -12,6 +13,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from core.calendar import CalendarService, CalendarStorageError, CalendarValidationError
+from core.calendar import actions as actions_module
 from core.calendar.actions import parse_action_when, validate_calendar_actions_file
 from core.runs import RunKind, RunStatus
 
@@ -31,8 +33,17 @@ def setup(tmp_path: Path, *, start: datetime | None = None, recurring: bool = Fa
             )
         )
     )
-    service.actions.configure(trigger, Mock(), Mock(exists=Mock(return_value=True)))
+    service.actions.configure(trigger, Mock(), session_manager())
     return service, event, trigger, now
+
+
+def session_manager() -> Mock:
+    """Session manager double whose ``run_async`` runs the work like the real pool."""
+    sessions = Mock(exists=Mock(return_value=True))
+    sessions.run_async = AsyncMock(
+        side_effect=lambda function, *args, **kwargs: function(*args, **kwargs)
+    )
+    return sessions
 
 
 def window(service: CalendarService, now: datetime):
@@ -109,7 +120,7 @@ async def test_fires_once_and_reloads_without_duplicate(tmp_path):
     assert row["session"] == "new-session"
     assert trigger.trigger_run.call_args.args[2] is None
     reloaded = CalendarService(tmp_path, tz="Europe/Berlin")
-    reloaded.actions.configure(trigger, Mock(), Mock())
+    reloaded.actions.configure(trigger, Mock(), session_manager())
     await reloaded.actions.tick(now + timedelta(seconds=2))
     assert trigger.trigger_run.await_count == 1
 
@@ -215,7 +226,7 @@ async def test_completed_single_action_rearms_only_after_event_moves(tmp_path):
     await drain(service)
     assert trigger.trigger_run.await_count == 2
     reloaded = CalendarService(tmp_path, tz="Europe/Berlin")
-    reloaded.actions.configure(trigger, Mock(), Mock())
+    reloaded.actions.configure(trigger, Mock(), session_manager())
     await reloaded.actions.tick(now)
     assert trigger.trigger_run.await_count == 2
     row = reloaded.actions.project(window(reloaded, now))[0]
@@ -412,7 +423,7 @@ async def test_uncertain_admission_is_never_replayed(tmp_path):
     await service.actions.aclose()
     assert service.actions.project(window(service, now))[0]["status"] == "interrupted"
     reloaded = CalendarService(tmp_path, tz="Europe/Berlin")
-    reloaded.actions.configure(trigger, Mock(), Mock())
+    reloaded.actions.configure(trigger, Mock(), session_manager())
     await reloaded.actions.tick(now)
     assert trigger.trigger_run.await_count == 1
 
@@ -426,8 +437,7 @@ async def test_restart_recovers_terminal_run_from_session(tmp_path):
     row = next(iter(service.actions._executions.values()))
     row["status"] = "running"
     service.actions._save()
-    sessions = Mock()
-    sessions.exists.return_value = True
+    sessions = session_manager()
     sessions.get.return_value.find_run_summary.return_value = SimpleNamespace(status="completed")
     reloaded = CalendarService(tmp_path, tz="Europe/Berlin")
     reloaded.actions.configure(trigger, Mock(), sessions)
@@ -564,7 +574,7 @@ async def test_invalid_action_is_skipped_kept_verbatim_and_reported(tmp_path, fi
     path.write_text(json.dumps(payload), encoding="utf-8")
 
     reopened = CalendarService(tmp_path, tz="Europe/Berlin")
-    reopened.actions.configure(trigger, Mock(), Mock(exists=Mock(return_value=True)))
+    reopened.actions.configure(trigger, Mock(), session_manager())
     assert reopened.actions.list_actions() == []
     assert reopened.actions.storage_error is None
     await reopened.actions.tick(now)
@@ -593,7 +603,7 @@ async def test_invalid_execution_row_blocks_its_occurrence_and_is_kept(tmp_path)
     path.write_text(json.dumps(payload), encoding="utf-8")
 
     reopened = CalendarService(tmp_path, tz="Europe/Berlin")
-    reopened.actions.configure(trigger, Mock(), Mock(exists=Mock(return_value=True)))
+    reopened.actions.configure(trigger, Mock(), session_manager())
     await reopened.actions.tick(now + timedelta(seconds=1))
     await drain(reopened)
     reopened.actions.update(action["id"], prompt="prepare slides")
@@ -618,7 +628,7 @@ async def test_history_of_unknown_actions_stays_while_invalid_actions_are_kept(t
     path.write_text(json.dumps(payload), encoding="utf-8")
 
     reopened = CalendarService(tmp_path, tz="Europe/Berlin")
-    reopened.actions.configure(trigger, Mock(), Mock(exists=Mock(return_value=True)))
+    reopened.actions.configure(trigger, Mock(), session_manager())
     await reopened.actions.tick(now + timedelta(minutes=2))
 
     # Repairing the action must not refire the occurrence it already consumed.
@@ -627,7 +637,73 @@ async def test_history_of_unknown_actions_stays_while_invalid_actions_are_kept(t
     payload["actions"][0]["when"] = "start - 1h"
     path.write_text(json.dumps(payload), encoding="utf-8")
     repaired = CalendarService(tmp_path, tz="Europe/Berlin")
-    repaired.actions.configure(trigger, Mock(), Mock(exists=Mock(return_value=True)))
+    repaired.actions.configure(trigger, Mock(), session_manager())
     await repaired.actions.tick(now + timedelta(minutes=3))
     await drain(repaired)
     assert trigger.trigger_run.await_count == 1
+
+
+class _BlockedActionWrites:
+    """Holds every actions.json write on the writer thread until released."""
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self.entered = threading.Event()
+        self.release = threading.Event()
+        write = actions_module.write_json_document
+
+        def blocked_write(*args, **kwargs):
+            self.entered.set()
+            self.release.wait(timeout=5)
+            return write(*args, **kwargs)
+
+        monkeypatch.setattr(actions_module, "write_json_document", blocked_write)
+
+
+@pytest.mark.asyncio
+async def test_scheduler_saves_off_the_loop_and_recomputes_after_a_change(tmp_path, monkeypatch):
+    service, event, trigger, now = setup(tmp_path)
+    service.actions.add(event.id, when="start - 1h", prompt="prepare", target="main")
+    writes = _BlockedActionWrites(monkeypatch)
+
+    ticking = asyncio.create_task(service.actions.tick(now))
+    try:
+        assert await asyncio.to_thread(writes.entered.wait, 5)
+        loop = asyncio.get_running_loop()
+        ticked_at = loop.time()
+        for _ in range(5):
+            await asyncio.sleep(0.01)
+        assert loop.time() - ticked_at < 1
+        assert not ticking.done()
+        # An edit while the save is in flight: nothing may start from stale state.
+        service.update_event(event.id, title="Moved")
+    finally:
+        writes.release.set()
+    await ticking
+
+    assert service.actions._workers == {}
+    assert trigger.trigger_run.await_count == 0
+    await service.actions.tick(now)
+    await drain(service)
+    assert trigger.trigger_run.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_an_action_edit_lands_after_an_in_flight_scheduler_save(tmp_path, monkeypatch):
+    service, event, _, now = setup(tmp_path)
+    first = service.actions.add(event.id, when="start - 1h", prompt="prepare", target="main")
+    writes = _BlockedActionWrites(monkeypatch)
+
+    ticking = asyncio.create_task(service.actions.tick(now))
+    try:
+        assert await asyncio.to_thread(writes.entered.wait, 5)
+        releaser = threading.Timer(0.1, writes.release.set)
+        releaser.start()
+        # The blocking edit save queues behind the scheduler's older snapshot.
+        second = service.actions.add(event.id, when="end", prompt="review", target="main")
+    finally:
+        writes.release.set()
+    await ticking
+    await drain(service)
+
+    stored = json.loads((tmp_path / "calendar" / "actions.json").read_text(encoding="utf-8"))
+    assert {action["id"] for action in stored["actions"]} == {first["id"], second["id"]}

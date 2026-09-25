@@ -13,6 +13,20 @@ from core.utils import tls
 
 _REPO_ROOT = Path(__file__).parents[3]
 _HTTPX_CONSTRUCTORS = frozenset({"AsyncClient", "Client", "AsyncHTTPTransport", "HTTPTransport"})
+# Everything that runs inside the server process, bundled Extensions included.
+_SERVER_SOURCE_ROOTS = ("core", "server", "resources/extensions")
+
+
+def _server_modules(marker: str) -> list[tuple[str, ast.Module]]:
+    modules: list[tuple[str, ast.Module]] = []
+    for package in _SERVER_SOURCE_ROOTS:
+        for source_path in (_REPO_ROOT / package).rglob("*.py"):
+            source = source_path.read_text(encoding="utf-8")
+            if marker not in source:
+                continue
+            relative = source_path.relative_to(_REPO_ROOT).as_posix()
+            modules.append((relative, ast.parse(source, filename=str(source_path))))
+    return modules
 
 
 def _reset_shared_context(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -79,23 +93,39 @@ def test_prewarm_builds_off_the_calling_thread_once(monkeypatch: pytest.MonkeyPa
 def test_every_server_httpx_client_uses_an_explicit_tls_context() -> None:
     """A bare httpx client re-parses the CA bundle, blocking the Event Loop per client."""
     missing: list[str] = []
-    for package in ("core", "server"):
-        for source_path in (_REPO_ROOT / package).rglob("*.py"):
-            source = source_path.read_text(encoding="utf-8")
-            if "httpx." not in source:
+    for relative, tree in _server_modules("httpx."):
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
                 continue
-            tree = ast.parse(source, filename=str(source_path))
-            for node in ast.walk(tree):
-                if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
-                    continue
-                target = node.func.value
-                if not (isinstance(target, ast.Name) and target.id == "httpx"):
-                    continue
-                if node.func.attr not in _HTTPX_CONSTRUCTORS:
-                    continue
-                keywords = {keyword.arg for keyword in node.keywords}
-                if not keywords & {"verify", "transport"}:
-                    relative = source_path.relative_to(_REPO_ROOT).as_posix()
-                    missing.append(f"{relative}:{node.lineno}")
+            target = node.func.value
+            if not (isinstance(target, ast.Name) and target.id == "httpx"):
+                continue
+            if node.func.attr not in _HTTPX_CONSTRUCTORS:
+                continue
+            keywords = {keyword.arg for keyword in node.keywords}
+            if not keywords & {"verify", "transport"}:
+                missing.append(f"{relative}:{node.lineno}")
+
+    assert missing == []
+
+
+def test_every_server_websocket_connection_passes_a_tls_context() -> None:
+    """websockets builds a fresh default context per ``wss://`` connection without ``ssl``."""
+    missing: list[str] = []
+    for relative, tree in _server_modules("websockets.asyncio.client"):
+        connect_names = {
+            alias.asname or alias.name
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom) and node.module == "websockets.asyncio.client"
+            for alias in node.names
+            if alias.name == "connect"
+        }
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
+                continue
+            if node.func.id not in connect_names:
+                continue
+            if "ssl" not in {keyword.arg for keyword in node.keywords}:
+                missing.append(f"{relative}:{node.lineno}")
 
     assert missing == []

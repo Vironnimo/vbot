@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import base64
+from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -20,6 +22,8 @@ JsonObject = dict[str, Any]
 
 _LOGGER = get_logger("chat.block_resolver")
 _IMAGE_WORKERS = BoundedWorkerPool(name="chat-images", max_workers=1)
+# Attachment metadata, blob reads, and text renders for request building.
+_ATTACHMENT_WORKERS = BoundedWorkerPool(name="chat-attachments", max_workers=2)
 
 # Reasons appended to a path note when an attachment cannot be delivered as
 # native content. The run degrades to the file path instead of aborting, so the
@@ -53,8 +57,21 @@ class AttachmentResolveError(ChatError):
     """Raised when an attachment blob cannot be loaded for content resolution."""
 
 
+@dataclass(frozen=True)
+class _ResolvedBlocks:
+    """Content blocks already resolved while expanding text attachments."""
+
+    blocks: list[JsonObject]
+
+
 class ContentBlockResolver:
-    """Resolve canonical content blocks into provider-facing request parts."""
+    """Resolve canonical content blocks into provider-facing request parts.
+
+    Attachment metadata and blob reads never run on the Event Loop: earlier
+    turns resolve together in one hop to the ``chat-attachments`` worker pool,
+    and the current turn's native media reads its files there before image
+    conversion or speech-to-text continue on the loop.
+    """
 
     def __init__(
         self,
@@ -88,44 +105,87 @@ class ContentBlockResolver:
         per-modality policy. The resolver holds no provider format knowledge — it
         only intersects the two sets it is handed.
         """
+        resolved_messages = await _ATTACHMENT_WORKERS.run(
+            self._resolve_earlier_messages, messages, current_user_message_id
+        )
+        for index, message in enumerate(messages):
+            content = message.get("content")
+            if (
+                message.get("id") == current_user_message_id
+                and message.get("role") == "user"
+                and isinstance(content, list)
+            ):
+                resolved_messages[index] = {
+                    **message,
+                    "content": await self._resolve_current_content(
+                        content,
+                        input_modalities=input_modalities,
+                        wire_media_types=wire_media_types,
+                        max_image_bytes=max_image_bytes,
+                    ),
+                }
+        return resolved_messages
+
+    def _resolve_earlier_messages(
+        self, messages: list[JsonObject], current_user_message_id: str
+    ) -> list[JsonObject]:
+        """Resolve every earlier user turn; the current turn is copied unresolved. Blocking."""
         resolved_messages: list[JsonObject] = []
         for message in messages:
-            resolved_messages.append(
-                await self._resolve_message(
-                    message,
-                    current_user_message_id=current_user_message_id,
+            resolved_message = dict(message)
+            content = message.get("content")
+            if (
+                message.get("role") == "user"
+                and isinstance(content, list)
+                and message.get("id") != current_user_message_id
+            ):
+                resolved_content: list[JsonObject] = []
+                for part in self._expand_text_attachments(content):
+                    if isinstance(part, _ResolvedBlocks):
+                        resolved_content.extend(part.blocks)
+                    else:
+                        resolved_content.extend(self._resolve_earlier_block(part))
+                resolved_message["content"] = resolved_content
+            resolved_messages.append(resolved_message)
+        return resolved_messages
+
+    async def _resolve_current_content(
+        self,
+        content: list[Any],
+        *,
+        input_modalities: frozenset[str],
+        wire_media_types: frozenset[str],
+        max_image_bytes: int | None,
+    ) -> list[JsonObject]:
+        parts = await _ATTACHMENT_WORKERS.run(self._expand_text_attachments, content)
+        resolved_content: list[JsonObject] = []
+        for part in parts:
+            if isinstance(part, _ResolvedBlocks):
+                resolved_content.extend(part.blocks)
+                continue
+            resolved_content.extend(
+                await self._resolve_current_block(
+                    part,
                     input_modalities=input_modalities,
                     wire_media_types=wire_media_types,
                     max_image_bytes=max_image_bytes,
                 )
             )
-        return resolved_messages
+        return resolved_content
 
-    async def _resolve_message(
-        self,
-        message: JsonObject,
-        *,
-        current_user_message_id: str,
-        input_modalities: frozenset[str],
-        wire_media_types: frozenset[str],
-        max_image_bytes: int | None = None,
-    ) -> JsonObject:
-        resolved_message = dict(message)
-        if message.get("role") != "user":
-            return resolved_message
+    def _expand_text_attachments(self, content: list[Any]) -> list[_ResolvedBlocks | Any]:
+        """Resolve text attachments in turn order; keep every other block as is. Blocking.
 
-        content = message.get("content")
-        if not isinstance(content, list):
-            return resolved_message
-
-        is_current_turn = message.get("id") == current_user_message_id
-        resolved_content: list[JsonObject] = []
+        A text attachment renders the same on every turn. Its full text, which
+        older conversations persisted right after it, is dropped.
+        """
+        parts: list[_ResolvedBlocks | Any] = []
         block_index = 0
         while block_index < len(content):
             block = content[block_index]
             if self._is_text_attachment_block(block):
                 attachment_blocks, raw = self._resolve_text_attachment_block(block)
-                resolved_content.extend(attachment_blocks)
+                parts.append(_ResolvedBlocks(attachment_blocks))
                 if raw is not None and block_index + 1 < len(content):
                     following_block = content[block_index + 1]
                     if self._is_duplicate_attachment_text(following_block, raw):
@@ -133,24 +193,61 @@ class ContentBlockResolver:
                         continue
                 block_index += 1
                 continue
-            resolved_content.extend(
-                await self._resolve_block(
-                    block,
-                    is_current_turn=is_current_turn,
-                    input_modalities=input_modalities,
-                    wire_media_types=wire_media_types,
-                    max_image_bytes=max_image_bytes,
-                )
-            )
+            parts.append(block)
             block_index += 1
-        resolved_message["content"] = resolved_content
-        return resolved_message
+        return parts
 
-    async def _resolve_block(
+    def _resolve_earlier_block(self, block: Any) -> list[JsonObject]:
+        """Resolve one block of an earlier turn: never native content. Blocking."""
+        if not isinstance(block, dict):
+            raise ChatError("content blocks must be objects")
+
+        block_type = block.get("type")
+        if block_type in {"text", "file_mention"}:
+            return self._resolve_text_block(block)
+        if block_type == "media":
+            attachment_id = self._require_string(block, "attachment_id")
+            filename = self._require_string(block, "filename")
+            media_type = self._require_string(block, "media_type")
+            if media_type.startswith("image/"):
+                image_label = _image_label(
+                    self._optional_positive_integer(block, "image_reference")
+                )
+                return [
+                    self._path_note_block(
+                        f"{image_label} from an earlier turn", attachment_id, filename, media_type
+                    )
+                ]
+            if media_type.startswith("audio/"):
+                record = self._load_record_or_none(attachment_id)
+                if record is not None and isinstance(record.transcription, str):
+                    return [
+                        self._transcription_block(filename, media_type, record.transcription),
+                        self._record_path_note("Audio", record, filename, media_type),
+                    ]
+                return [
+                    self._path_note_block(
+                        "Audio from an earlier turn", attachment_id, filename, media_type
+                    )
+                ]
+            if media_type.startswith("video/"):
+                return [self._path_note_block("Video", attachment_id, filename, media_type)]
+            return [
+                self._path_note_block(
+                    "Media", attachment_id, filename, media_type, reason=_UNSUPPORTED_MEDIA_REASON
+                )
+            ]
+        if block_type == "file":
+            attachment_id = self._require_string(block, "attachment_id")
+            filename = self._require_string(block, "filename")
+            media_type = self._require_string(block, "media_type")
+            return [self._path_note_block("File", attachment_id, filename, media_type)]
+        raise ChatError(f"unsupported content block type: {block_type}")
+
+    async def _resolve_current_block(
         self,
         block: Any,
         *,
-        is_current_turn: bool,
         input_modalities: frozenset[str],
         wire_media_types: frozenset[str],
         max_image_bytes: int | None = None,
@@ -159,34 +256,32 @@ class ContentBlockResolver:
             raise ChatError("content blocks must be objects")
 
         block_type = block.get("type")
-        if block_type == "text":
-            return [{"type": "text", "text": self._require_string(block, "text")}]
+        if block_type in {"text", "file_mention"}:
+            return self._resolve_text_block(block)
         if block_type == "media":
             return await self._resolve_media_block(
                 block,
-                is_current_turn=is_current_turn,
                 input_modalities=input_modalities,
                 wire_media_types=wire_media_types,
                 max_image_bytes=max_image_bytes,
             )
         if block_type == "file":
-            return self._resolve_file_block(
-                block,
-                is_current_turn=is_current_turn,
-                input_modalities=input_modalities,
-                wire_media_types=wire_media_types,
+            return await _ATTACHMENT_WORKERS.run(
+                self._resolve_current_file_block, block, input_modalities, wire_media_types
             )
-        if block_type == "file_mention":
+        raise ChatError(f"unsupported content block type: {block_type}")
+
+    def _resolve_text_block(self, block: JsonObject) -> list[JsonObject]:
+        if block.get("type") == "file_mention":
             # A durable send-time snapshot: rendered the same on every turn, so
             # replayed history stays byte-identical (prompt-cache friendly).
             return [{"type": "text", "text": file_mention_request_text(block)}]
-        raise ChatError(f"unsupported content block type: {block_type}")
+        return [{"type": "text", "text": self._require_string(block, "text")}]
 
     async def _resolve_media_block(
         self,
         block: JsonObject,
         *,
-        is_current_turn: bool,
         input_modalities: frozenset[str],
         wire_media_types: frozenset[str],
         max_image_bytes: int | None = None,
@@ -201,7 +296,6 @@ class ContentBlockResolver:
                 filename,
                 media_type,
                 self._optional_positive_integer(block, "image_reference"),
-                is_current_turn=is_current_turn,
                 input_modalities=input_modalities,
                 wire_media_types=wire_media_types,
                 max_image_bytes=max_image_bytes,
@@ -211,24 +305,23 @@ class ContentBlockResolver:
                 attachment_id,
                 filename,
                 media_type,
-                is_current_turn=is_current_turn,
                 input_modalities=input_modalities,
                 wire_media_types=wire_media_types,
             )
         if media_type.startswith("video/"):
-            return self._resolve_video_block(
+            return await _ATTACHMENT_WORKERS.run(
+                self._resolve_current_video_block,
                 attachment_id,
                 filename,
                 media_type,
-                is_current_turn=is_current_turn,
-                input_modalities=input_modalities,
-                wire_media_types=wire_media_types,
+                input_modalities,
+                wire_media_types,
             )
 
         # An unexpected media prefix cannot be shown natively — hand over the file
         # path rather than aborting the run.
         return [
-            self._path_note_block(
+            await self._path_note(
                 "Media", attachment_id, filename, media_type, reason=_UNSUPPORTED_MEDIA_REASON
             )
         ]
@@ -274,19 +367,17 @@ class ContentBlockResolver:
         media_type: str,
         image_reference: int | None,
         *,
-        is_current_turn: bool,
         input_modalities: frozenset[str],
         wire_media_types: frozenset[str],
         max_image_bytes: int | None = None,
     ) -> list[JsonObject]:
-        image_label = f"Image {image_reference}" if image_reference is not None else "Image"
+        image_label = _image_label(image_reference)
         # A current-turn image to a model that cannot see degrades to a path note
         # explaining why, instead of aborting the run — a channel run would
-        # otherwise fail on any inbound image. (Historical images degrade quietly
-        # regardless of capability, below.)
-        if is_current_turn and "image" not in input_modalities:
+        # otherwise fail on any inbound image.
+        if "image" not in input_modalities:
             return [
-                self._path_note_block(
+                await self._path_note(
                     image_label,
                     attachment_id,
                     filename,
@@ -295,13 +386,9 @@ class ContentBlockResolver:
                 )
             ]
 
-        if not is_current_turn:
-            label = f"{image_label} from an earlier turn"
-            return [self._path_note_block(label, attachment_id, filename, media_type)]
-
         if not any(kind.startswith("image/") for kind in wire_media_types):
             return [
-                self._path_note_block(
+                await self._path_note(
                     image_label,
                     attachment_id,
                     filename,
@@ -322,7 +409,7 @@ class ContentBlockResolver:
             )
         except ImageConversionError as exc:
             return [
-                self._path_note_block(
+                await self._path_note(
                     image_label, attachment_id, filename, media_type, reason=str(exc)
                 )
             ]
@@ -336,31 +423,28 @@ class ContentBlockResolver:
         # the original file (e.g. to forward it), not only the pixels.
         return [
             native_block,
-            self._path_note_block(
+            await self._path_note(
                 image_label, attachment_id, filename, media_type, reason=prepared.note
             ),
         ]
 
-    def _resolve_video_block(
+    def _resolve_current_video_block(
         self,
         attachment_id: str,
         filename: str,
         media_type: str,
-        *,
-        is_current_turn: bool,
         input_modalities: frozenset[str],
         wire_media_types: frozenset[str],
     ) -> list[JsonObject]:
-        """Pass current-turn video only when both Model and wire support it."""
+        """Pass current-turn video only when both Model and wire support it. Blocking."""
 
-        if not (is_current_turn and "video" in input_modalities and media_type in wire_media_types):
+        if not ("video" in input_modalities and media_type in wire_media_types):
             return [self._path_note_block("Video", attachment_id, filename, media_type)]
 
-        blob_data = self._read_attachment_bytes(attachment_id)
         return [
             {
                 "type": "media",
-                "base64": base64.b64encode(blob_data).decode("ascii"),
+                "base64": self._read_attachment_base64(attachment_id),
                 "media_type": media_type,
             },
             self._path_note_block("Video", attachment_id, filename, media_type),
@@ -372,48 +456,40 @@ class ContentBlockResolver:
         filename: str,
         media_type: str,
         *,
-        is_current_turn: bool,
         input_modalities: frozenset[str],
         wire_media_types: frozenset[str],
     ) -> list[JsonObject]:
-        record = self._load_record_or_none(attachment_id)
-
-        if record is not None and isinstance(record.transcription, str):
-            return [
-                self._transcription_block(filename, media_type, record.transcription),
-                self._path_note_block("Audio", attachment_id, filename, media_type),
-            ]
-
-        if not is_current_turn:
-            return [
-                self._path_note_block(
-                    "Audio from an earlier turn", attachment_id, filename, media_type
-                )
-            ]
+        record = await _ATTACHMENT_WORKERS.run(self._load_record_or_none, attachment_id)
 
         if record is None:
             # Metadata unreadable: degrade to a path note (renders "file no longer
             # available") instead of aborting the run.
-            return [self._path_note_block("Audio", attachment_id, filename, media_type)]
+            return [await self._path_note("Audio", attachment_id, filename, media_type)]
+
+        if isinstance(record.transcription, str):
+            return [
+                self._transcription_block(filename, media_type, record.transcription),
+                self._record_path_note("Audio", record, filename, media_type),
+            ]
 
         if "audio" in input_modalities and media_type in wire_media_types:
-            blob_data = self._read_attachment_bytes(attachment_id)
             native_block = {
                 "type": "media",
-                "base64": base64.b64encode(blob_data).decode("ascii"),
+                "base64": await _ATTACHMENT_WORKERS.run(
+                    self._read_attachment_base64, attachment_id
+                ),
                 "media_type": media_type,
             }
             return [
                 native_block,
-                self._path_note_block("Audio", attachment_id, filename, media_type),
+                self._record_path_note("Audio", record, filename, media_type),
             ]
 
-        return await self._transcribe_or_path_note(record, attachment_id, filename, media_type)
+        return await self._transcribe_or_path_note(record, filename, media_type)
 
     async def _transcribe_or_path_note(
         self,
         record: Any,
-        attachment_id: str,
         filename: str,
         media_type: str,
     ) -> list[JsonObject]:
@@ -425,12 +501,12 @@ class ContentBlockResolver:
         """
         if self._transcriber is None:
             return [
-                self._path_note_block(
-                    "Audio", attachment_id, filename, media_type, reason=_AUDIO_NO_STT_REASON
+                self._record_path_note(
+                    "Audio", record, filename, media_type, reason=_AUDIO_NO_STT_REASON
                 )
             ]
 
-        blob_data = self._read_attachment_bytes(record.id)
+        blob_data = await _ATTACHMENT_WORKERS.run(self._read_attachment_bytes, record.id)
         try:
             result = await self._transcriber.transcribe(
                 blob_data, filename=filename, media_type=media_type
@@ -443,8 +519,8 @@ class ContentBlockResolver:
                 exc,
             )
             return [
-                self._path_note_block(
-                    "Audio", attachment_id, filename, media_type, reason=_AUDIO_STT_FAILED_REASON
+                self._record_path_note(
+                    "Audio", record, filename, media_type, reason=_AUDIO_STT_FAILED_REASON
                 )
             ]
 
@@ -456,20 +532,24 @@ class ContentBlockResolver:
                 media_type,
             )
             return [
-                self._path_note_block(
-                    "Audio", attachment_id, filename, media_type, reason=_AUDIO_STT_FAILED_REASON
+                self._record_path_note(
+                    "Audio", record, filename, media_type, reason=_AUDIO_STT_FAILED_REASON
                 )
             ]
 
-        try:
-            self._attachment_store.set_transcription(record.id, text)
-        except Exception as exc:
-            _LOGGER.warning("Could not cache transcription for attachment %s: %s", record.id, exc)
-
+        await _ATTACHMENT_WORKERS.run(self._cache_transcription, record.id, text)
         return [
             self._transcription_block(filename, media_type, text),
-            self._path_note_block("Audio", attachment_id, filename, media_type),
+            self._record_path_note("Audio", record, filename, media_type),
         ]
+
+    def _cache_transcription(self, attachment_id: str, text: str) -> None:
+        try:
+            self._attachment_store.set_transcription(attachment_id, text)
+        except Exception as exc:
+            _LOGGER.warning(
+                "Could not cache transcription for attachment %s: %s", attachment_id, exc
+            )
 
     @staticmethod
     def _transcription_block(filename: str, media_type: str, transcription: str) -> JsonObject:
@@ -480,6 +560,22 @@ class ContentBlockResolver:
                 f"may contain recognition errors]:\n{transcription}"
             ),
         }
+
+    async def _path_note(
+        self,
+        label: str,
+        attachment_id: str,
+        filename: str,
+        media_type: str,
+        *,
+        reason: str | None = None,
+    ) -> JsonObject:
+        """Event-Loop-safe :meth:`_path_note_block`."""
+        return await _ATTACHMENT_WORKERS.run(
+            partial(
+                self._path_note_block, label, attachment_id, filename, media_type, reason=reason
+            )
+        )
 
     def _path_note_block(
         self,
@@ -492,14 +588,26 @@ class ContentBlockResolver:
     ) -> JsonObject:
         # Media that is not resent as binary content keeps the blob path visible
         # so the agent can still open the file with the read tool. An optional
-        # reason explains why the binary content itself was withheld.
+        # reason explains why the binary content itself was withheld. Blocking.
         record = self._load_record_or_none(attachment_id)
         if record is None:
             return {
                 "type": "text",
                 "text": f"[{label}: {filename} ({media_type}) — file no longer available]",
             }
-        return self._file_path_note(label, filename, media_type, record.file_path, reason=reason)
+        return self._record_path_note(label, record, filename, media_type, reason=reason)
+
+    @classmethod
+    def _record_path_note(
+        cls,
+        label: str,
+        record: Any,
+        filename: str,
+        media_type: str,
+        *,
+        reason: str | None = None,
+    ) -> JsonObject:
+        return cls._file_path_note(label, filename, media_type, record.file_path, reason=reason)
 
     @staticmethod
     def _file_path_note(
@@ -511,30 +619,27 @@ class ContentBlockResolver:
         )
         return {"type": "text", "text": note_text}
 
-    def _resolve_file_block(
+    def _resolve_current_file_block(
         self,
         block: JsonObject,
-        *,
-        is_current_turn: bool,
         input_modalities: frozenset[str],
         wire_media_types: frozenset[str],
     ) -> list[JsonObject]:
+        """Resolve a current-turn file block, natively when Model and wire accept it. Blocking."""
         attachment_id = self._require_string(block, "attachment_id")
         filename = self._require_string(block, "filename")
         media_type = self._require_string(block, "media_type")
 
         modality = "pdf" if media_type == "application/pdf" else "file"
         native = (
-            is_current_turn
-            and not media_type.startswith("text/")
+            not media_type.startswith("text/")
             and modality in input_modalities
             and media_type in wire_media_types
         )
         if native:
-            blob_data = self._read_attachment_bytes(attachment_id)
             document_block = {
                 "type": "document",
-                "base64": base64.b64encode(blob_data).decode("ascii"),
+                "base64": self._read_attachment_base64(attachment_id),
                 "media_type": media_type,
                 "filename": filename,
             }
@@ -545,8 +650,8 @@ class ContentBlockResolver:
                 self._path_note_block("File", attachment_id, filename, media_type),
             ]
 
-        # Not native (text, unsupported model/wire, or an earlier turn): the path
-        # note keeps the blob openable with the read tool and forwardable as a file.
+        # Not native (text or an unsupported model/wire): the path note keeps the
+        # blob openable with the read tool and forwardable as a file.
         return [self._path_note_block("File", attachment_id, filename, media_type)]
 
     def _resolve_text_attachment_block(
@@ -618,6 +723,9 @@ class ContentBlockResolver:
                 f"Failed to read attachment blob for id '{attachment_id}'"
             ) from exc
 
+    def _read_attachment_base64(self, attachment_id: str) -> str:
+        return base64.b64encode(self._read_attachment_bytes(attachment_id)).decode("ascii")
+
     @staticmethod
     def _require_string(data: JsonObject, key: str) -> str:
         value = data.get(key)
@@ -633,3 +741,7 @@ class ContentBlockResolver:
         if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
             raise ChatError(f"content block field '{key}' must be a positive integer")
         return value
+
+
+def _image_label(image_reference: int | None) -> str:
+    return f"Image {image_reference}" if image_reference is not None else "Image"

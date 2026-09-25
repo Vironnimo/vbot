@@ -215,8 +215,8 @@ class NetworkChannelAdapter(ChannelAdapter):
                 raise ChannelError("Attachment storage is unavailable")
             self._attachment_store.ensure_within_limit(file.get("size"))
             data = await self.download(file)
-            record = await channel_io(
-                self._attachment_store.store, file.get("name") or "attachment", data
+            record = await self._attachment_store.store_async(
+                file.get("name") or "attachment", data
             )
             blocks.extend(content_blocks_for_attachment(record))
         return blocks

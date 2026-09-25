@@ -176,11 +176,11 @@ async def _patch_setting_paths(state: Any, params: JsonObject) -> JsonObject:
     }
 
 
-def _get_settings(state: Any, params: JsonObject) -> JsonObject:
+async def _get_settings(state: Any, params: JsonObject) -> JsonObject:
     if params:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "settings.get does not accept params")
     try:
-        return _settings_response(state)
+        return await _settings_response(state)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 
@@ -222,7 +222,7 @@ async def _update_settings(state: Any, params: JsonObject) -> JsonObject:
             saved_settings,
             refresh_sections=settings_update,
         )
-        response = _settings_response(state)
+        response = await _settings_response(state)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 
@@ -587,7 +587,7 @@ def _validate_recall_backend_known(runtime: Any, backend: str) -> None:
         )
 
 
-def _settings_response(state: Any) -> JsonObject:
+async def _settings_response(state: Any) -> JsonObject:
     runtime = state.runtime
     appearance = runtime.storage.load_appearance_settings()
     subagents = runtime.storage.load_subagent_settings()
@@ -656,7 +656,7 @@ def _settings_response(state: Any) -> JsonObject:
         "debug": {
             "enabled": debug["enabled"],
             "trace_limit": debug["trace_limit"],
-            "trace_count": _trace_count(runtime),
+            "trace_count": await _trace_count(runtime),
         },
         "reflection": dict(reflection),
         "speech": speech,
@@ -673,7 +673,7 @@ def _settings_response(state: Any) -> JsonObject:
     return response
 
 
-def _trace_count(runtime: Any) -> int:
+async def _trace_count(runtime: Any) -> int:
     """Return the number of stored debug traces, or 0 if the store is unavailable."""
     try:
         debug_settings = runtime.storage.load_debug_settings()
@@ -681,7 +681,7 @@ def _trace_count(runtime: Any) -> int:
             data_dir=runtime.storage.data_dir,
             trace_limit=debug_settings.get("trace_limit", 50),
         )
-        return len(store.get_traces())
+        return len(await store.get_traces_async())
     except (FileNotFoundError, OSError):
         # Expected when the trace store has never been written; not an error.
         return 0

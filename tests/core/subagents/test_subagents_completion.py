@@ -32,6 +32,7 @@ from tests.core.subagents.subagents_test_support import (
     _handle_subagent,
     make_context,
     make_runtime,
+    wait_for_started,
 )
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("current_format_data_directory")]
@@ -73,8 +74,7 @@ async def test_foreground_result_keeps_handle_and_child_unread_until_parent_pers
             batch_tracker=tracker,
         )
     )
-    await asyncio.sleep(0)
-    manager.started[0]["run"].mark_completed(
+    (await wait_for_started(manager))[0]["run"].mark_completed(
         ChatMessage.assistant(
             model="openai/gpt-5.2",
             content="child output",
@@ -682,8 +682,7 @@ async def test_status_after_delivery_and_prune_reports_untracked_work(tmp_path: 
             batch_tracker=tracker,
         )
     )
-    await asyncio.sleep(0)
-    manager.started[0]["run"].mark_completed(
+    (await wait_for_started(manager))[0]["run"].mark_completed(
         ChatMessage.assistant(model="openai/gpt-5.2", content="child output")
     )
     delivered = await task
@@ -758,10 +757,11 @@ async def _start_parent_with_queued_foreground_child(
         return "parent continued"
 
     parent = await manager.start(_address("parent", "parent-session"), parent_executor)
-    for _ in range(50):
+    # The spawn opens the child Session on a worker thread before it queues.
+    for _ in range(500):
         if manager.list_queued("worker", "busy-child", project_id=None):
             break
-        await asyncio.sleep(0)
+        await asyncio.sleep(0.01)
     return runtime, busy_run, parent, tool_result
 
 
