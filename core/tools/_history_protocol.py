@@ -41,7 +41,7 @@ HISTORY_MATCH_MODES = ("all_terms", "phrase", "any_term")
 HISTORY_DIRECTIONS = ("start", "end")
 
 
-HISTORY_CURSOR_VERSION = 2
+HISTORY_CURSOR_VERSION = 1
 
 
 _ACTION_FIELDS = {
