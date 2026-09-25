@@ -88,7 +88,7 @@ from core.database.spec import (
     is_extension_database_name,
     validate_database_name,
 )
-from core.utils.timestamps import utc_now_timestamp
+from core.utils.timestamps import parse_timestamp, utc_now_timestamp
 
 _LOGGER = logging.getLogger("vbot.database")
 
@@ -290,12 +290,13 @@ def write_incident(
 
 
 def _valid_instant(value: object) -> bool:
-    if not isinstance(value, str) or not value:
+    if not isinstance(value, str):
         return False
     try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00")).tzinfo is not None
+        parse_timestamp(value)
     except ValueError:
         return False
+    return True
 
 
 def _parse_incident(payload: object, name: str) -> dict[str, Any]:
