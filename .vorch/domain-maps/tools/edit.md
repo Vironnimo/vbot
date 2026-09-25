@@ -1,9 +1,10 @@
 # Archived Edit Tool
 
 The built-in `edit` Tool is retired. Use `apply_patch` for targeted file changes
-and Add File for full-file creation and replacement. There is no
-`replace_all` argument in `apply_patch`; repeated replacements require explicit
-hunks or a script.
+and Add File for full-file creation and replacement. `apply_patch` advertises only
+`patch`, but runs edit-shaped calls (`file_path`/`old_string`/`new_string`,
+`replace_all`, `expected_replacements`, MultiEdit `edits`) when they name one exact
+change; see `apply_patch.md`.
 
 `archive/edit.zip` preserves the implementation, focused tests, prior domain map,
 and original shared integration/probe files at their repository paths. Its

@@ -38,7 +38,8 @@ usable. `--help` and `--type-list` provide on-demand references.
 
 Missing explicit roots produce partial results from the remaining requested roots,
 with `missing_paths`, `searched_paths`, warnings and `complete=false`. If every root
-is missing, the call fails with `path_not_found`. Each missing root names up to five
+is missing, the call fails with `path_not_found`, naming the root relative to the
+working directory when it lies inside it. Each missing root names up to five
 existing suggestions from `core/tools/_path_suggestions.py` (shared with `read`):
 a relative path that repeats the end of the working directory, per-component
 spelling repair, and similar sibling names. Suggestions are never applied, and roots

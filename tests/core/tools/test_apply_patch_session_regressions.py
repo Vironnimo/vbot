@@ -83,8 +83,10 @@ def test_separate_frames_apply_in_order_without_replaying(tmp_path, begin):
         "*** Move File: one.txt -> moved.txt\n*** End Patch\n"
         "*** Add File: last.txt\n+*** End Patch\n*** End Patch",
     )
-    assert result["data"]["status"] == "success"
-    assert [r["operation"] for r in result["data"]["results"]] == [1, 2, 3, 4]
+    assert result["data"] == {
+        "status": "applied",
+        "content": "Created moved.txt (2 lines).\nCreated last.txt (1 line).",
+    }
     assert not (tmp_path / "one.txt").exists()
     assert (tmp_path / "moved.txt").read_bytes() == b"first\nsecond\n"
     assert (tmp_path / "last.txt").read_bytes() == b"*** End Patch\n"
@@ -110,8 +112,7 @@ def test_bad_later_frame_rejects_entire_call_before_writing(tmp_path, tail):
 def test_identical_empty_update_header_is_redundant_not_a_second_edit(tmp_path):
     (tmp_path / "file.txt").write_bytes(b"old\n")
     result = apply(tmp_path, update("*** Update File: file.txt\n@@\n-old\n+new"))
-    assert result["ok"]
-    assert result["data"]["total"] == 1
+    assert result["data"] == {"status": "applied", "content": "Updated file.txt:\n1| new"}
     assert (tmp_path / "file.txt").read_bytes() == b"new\n"
     result = apply(tmp_path, update("*** Update File: different.txt\n@@\n-new\n+bad"))
     assert result["error"]["code"] == "invalid_patch"
@@ -122,8 +123,10 @@ def test_identical_empty_update_header_is_redundant_not_a_second_edit(tmp_path):
 def test_context_block_constrains_later_edit(tmp_path, anchor):
     (tmp_path / "file.txt").write_bytes(b"first\nvalue=1\nsecond\n  details\nvalue=1\n")
     result = apply(tmp_path, update(f"@@\n{anchor}\n@@\n-value=1\n+value=2"))
-    assert result["ok"]
-    assert result["data"]["total"] == 1
+    assert result["data"] == {
+        "status": "applied",
+        "content": "Updated file.txt:\n4|   details\n5| value=2",
+    }
     assert (tmp_path / "file.txt").read_bytes() == b"first\nvalue=1\nsecond\n  details\nvalue=2\n"
 
 
