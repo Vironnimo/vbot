@@ -28,22 +28,31 @@ class ChannelStorage:
         self._data_root = Path(data_root).expanduser()
         self._channels_dir = self._data_root / "channels"
 
-    def channel_ids(self) -> list[str]:
-        """Return the id of every Channel directory holding a config, valid or not."""
+    def platforms(self) -> dict[str, str | None]:
+        """Map every Channel directory holding a config, valid or not, to its platform.
+
+        The platform is None when the config cannot be loaded; the load failure
+        itself surfaces where the config is used.
+        """
         if not self._channels_dir.is_dir():
-            return []
-        channel_ids: list[str] = []
+            return {}
+        platforms: dict[str, str | None] = {}
         try:
             for channel_dir in self._channels_dir.iterdir():
-                if not (channel_dir / _CHANNEL_CONFIG_FILENAME).is_file():
+                config_path = channel_dir / _CHANNEL_CONFIG_FILENAME
+                if not config_path.is_file():
                     continue
                 try:
-                    channel_ids.append(_normalize_channel_id(channel_dir.name))
+                    channel_id = _normalize_channel_id(channel_dir.name)
                 except ChannelConfigError:
                     continue
+                try:
+                    platforms[channel_id] = self._read_config(config_path).platform
+                except ChannelError:
+                    platforms[channel_id] = None
         except OSError as error:
             _LOGGER.warning("Cannot scan Channel configs in %s: %s", self._channels_dir, error)
-        return sorted(channel_ids)
+        return dict(sorted(platforms.items()))
 
     def load_all(self) -> list[ChannelConfig]:
         """Load all valid persisted channel configs in stable id-order.

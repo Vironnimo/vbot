@@ -5,7 +5,8 @@ group access, conversation routing pointers, Run-button origin bindings,
 inbound receipts and the Telegram polling watermark. ``channel.json`` stays the
 configuration document. Every state table references the ``channels`` registry,
 so a Channel's rows exist only while it is registered and leave with it in one
-cascading delete.
+cascading delete. The registry records the platform whose ids the state holds,
+and the polling watermark names the Telegram bot whose update ids it counts.
 """
 
 from __future__ import annotations
@@ -24,8 +25,11 @@ FORMAT_GENERATION = 1
 # so text order is time order. Kinds are validated by the owning code, never by
 # CHECK constraints.
 SCHEMA_SQL = """
+-- platform: the platform whose ids the state rows hold; NULL until a readable
+-- channel.json names it.
 CREATE TABLE channels (
   channel_id TEXT PRIMARY KEY,
+  platform TEXT CHECK (platform IS NULL OR length(platform) > 0),
   self_user_id TEXT CHECK (self_user_id IS NULL OR length(self_user_id) > 0)
 ) STRICT, WITHOUT ROWID;
 
@@ -83,8 +87,11 @@ CREATE TABLE channel_received (
 CREATE INDEX channel_received_by_time
   ON channel_received (channel_id, received_at);
 
+-- bot_id: the Telegram bot whose update ids the watermark counts; another
+-- bot's ids form an independent sequence. A NULL bot_id applies to no bot.
 CREATE TABLE channel_polling (
   channel_id TEXT PRIMARY KEY,
+  bot_id INTEGER CHECK (bot_id IS NULL OR bot_id > 0),
   last_update_id INTEGER NOT NULL CHECK (last_update_id >= 0),
   updated_at TEXT NOT NULL,
   FOREIGN KEY (channel_id) REFERENCES channels (channel_id) ON DELETE CASCADE

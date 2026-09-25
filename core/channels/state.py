@@ -8,7 +8,10 @@ socket platforms and the Telegram polling watermark.
 
 Every state row belongs to a registered Channel. Writes for an unregistered
 Channel are refused, so a late save cannot recreate state after the Channel was
-deleted, and unregistering removes all its rows in one transaction.
+deleted, and unregistering removes all its rows in one transaction. The
+registry records the platform whose ids a Channel's state holds; moving the
+Channel to another platform resets that state, because the ids mean nothing
+there.
 
 Blocking methods run on the calling thread and are meant for worker threads;
 the ``async`` methods run on the database's own worker pool. ``role_for`` reads
@@ -21,7 +24,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -31,6 +34,7 @@ from core.channels.adapter import (
     TELEGRAM_UPDATE_OFFSET_TTL_SECONDS,
     RunButtonBinding,
     RunButtonClaim,
+    main_conversation_id,
 )
 from core.channels.config import (
     ChannelConfigError,
@@ -99,34 +103,78 @@ class ChannelStateStore:
 
     # -- Registry -------------------------------------------------------------------
 
-    def adopt(self, channel_ids: Iterable[str]) -> None:
-        """Register Channels that have configuration, keeping any existing state."""
-        normalized = sorted({_normalize_channel_id(channel_id) for channel_id in channel_ids})
-        if not normalized:
-            return
+    def adopt(self, platforms: Mapping[str, str | None]) -> list[str]:
+        """Register every configured Channel and record the platform of its state.
 
-        def adopt(connection: sqlite3.Connection) -> None:
+        ``platforms`` maps the id of each Channel that has configuration to the
+        platform that configuration names, or to None when it cannot be read;
+        None registers the Channel and keeps what was recorded. Existing state
+        is kept unless it was recorded for another platform, which resets it as
+        ``bind_platform`` does. Returns the ids whose state was reset.
+        """
+        normalized = {
+            _normalize_channel_id(channel_id): None if platform is None else _platform(platform)
+            for channel_id, platform in platforms.items()
+        }
+        if not normalized:
+            return []
+
+        def adopt(connection: sqlite3.Connection) -> list[str]:
             connection.executemany(
-                "INSERT OR IGNORE INTO channels (channel_id) VALUES (?)",
-                [(channel_id,) for channel_id in normalized],
+                "INSERT OR IGNORE INTO channels (channel_id, platform) VALUES (?, ?)",
+                sorted(normalized.items()),
             )
+            return [
+                channel_id
+                for channel_id, platform in sorted(normalized.items())
+                if platform is not None and _bind_platform(connection, channel_id, platform)
+            ]
 
         with self._access_lock:
-            self._database.write(adopt)
+            reset_ids = self._database.write(adopt)
             with self._database.read() as connection:
                 self._roles = _load_all_roles(connection)
+        return reset_ids
 
-    def reset(self, channel_id: str) -> None:
-        """Register a new Channel with empty state, dropping stale rows of its id."""
+    def reset(self, channel_id: str, platform: str) -> None:
+        """Register a new Channel on ``platform`` with empty state, dropping old rows of its id."""
         normalized_id = _normalize_channel_id(channel_id)
+        normalized_platform = _platform(platform)
 
         def reset(connection: sqlite3.Connection) -> None:
             connection.execute("DELETE FROM channels WHERE channel_id = ?", (normalized_id,))
-            connection.execute("INSERT INTO channels (channel_id) VALUES (?)", (normalized_id,))
+            connection.execute(
+                "INSERT INTO channels (channel_id, platform) VALUES (?, ?)",
+                (normalized_id, normalized_platform),
+            )
 
         with self._access_lock:
             self._database.write(reset)
             self._install_roles(normalized_id, _NO_ACCESS_ROLES)
+
+    def bind_platform(self, channel_id: str, platform: str) -> bool:
+        """Record that a registered Channel's state now belongs to ``platform``.
+
+        User, chat and message ids of one platform mean nothing on another, so a
+        different platform drops the Channel's own identity, group access,
+        conversation pointers, Run-button bindings, receipts and polling
+        watermark in one transaction. Only the pointer of the shared direct
+        conversation (``main_conversation_id``), whose anchor names no platform
+        id, is kept. The same platform, or a first recorded one, keeps
+        everything. Returns whether state was reset.
+        """
+        normalized_id = _normalize_channel_id(channel_id)
+        normalized_platform = _platform(platform)
+
+        def bind(connection: sqlite3.Connection) -> bool:
+            _registered_self_user_id(connection, normalized_id)
+            return _bind_platform(connection, normalized_id, normalized_platform)
+
+        with self._access_lock:
+            reset = self._database.write(bind)
+            if reset:
+                self._install_roles(normalized_id, _NO_ACCESS_ROLES)
+        return reset
 
     def unregister(self, channel_id: str) -> None:
         """Delete a Channel and every state row it owns in one transaction."""
@@ -520,36 +568,40 @@ class ChannelStateStore:
 
     # -- Telegram polling watermark ---------------------------------------------------
 
-    def load_update_offset(self, channel_id: str) -> int:
-        """Return the fresh update high-water mark; 0 when unknown or expired."""
+    def load_update_offset(self, channel_id: str, bot_id: int) -> int:
+        """Return the bot's fresh update high-water mark; 0 if unknown, expired or another bot's."""
         normalized_id = _normalize_channel_id(channel_id)
+        normalized_bot_id = _telegram_id(bot_id, "Telegram bot id", minimum=1)
         with self._database.read() as connection:
             row = connection.execute(
-                "SELECT last_update_id, updated_at FROM channel_polling WHERE channel_id = ?",
+                "SELECT bot_id, last_update_id, updated_at FROM channel_polling "
+                "WHERE channel_id = ?",
                 (normalized_id,),
             ).fetchone()
-        if row is None or row[1] <= _polling_expiry_cutoff():
+        if row is None or row[0] != normalized_bot_id or row[2] <= _polling_expiry_cutoff():
             return 0
-        return int(row[0])
+        return int(row[1])
 
-    def save_update_offset(self, channel_id: str, update_id: int) -> None:
-        """Raise the fresh high-water mark; an expired one yields to any new id."""
+    def save_update_offset(self, channel_id: str, bot_id: int, update_id: int) -> None:
+        """Raise the bot's fresh high-water mark; another bot's or an expired mark yields to any."""
         normalized_id = _normalize_channel_id(channel_id)
-        if not isinstance(update_id, int) or isinstance(update_id, bool) or update_id < 0:
-            raise ChannelError("Telegram update id must be a non-negative integer")
+        normalized_bot_id = _telegram_id(bot_id, "Telegram bot id", minimum=1)
+        normalized_update_id = _telegram_id(update_id, "Telegram update id", minimum=0)
         updated_at = utc_now_timestamp()
         cutoff = _polling_expiry_cutoff()
 
         def save(connection: sqlite3.Connection) -> None:
             _registered_self_user_id(connection, normalized_id)
             connection.execute(
-                "INSERT INTO channel_polling (channel_id, last_update_id, updated_at) "
-                "VALUES (?, ?, ?) "
+                "INSERT INTO channel_polling (channel_id, bot_id, last_update_id, updated_at) "
+                "VALUES (?, ?, ?, ?) "
                 "ON CONFLICT (channel_id) DO UPDATE SET "
-                "last_update_id = excluded.last_update_id, updated_at = excluded.updated_at "
-                "WHERE excluded.last_update_id > channel_polling.last_update_id "
+                "bot_id = excluded.bot_id, last_update_id = excluded.last_update_id, "
+                "updated_at = excluded.updated_at "
+                "WHERE channel_polling.bot_id IS NOT excluded.bot_id "
+                "OR excluded.last_update_id > channel_polling.last_update_id "
                 "OR channel_polling.updated_at <= ?",
-                (normalized_id, update_id, updated_at, cutoff),
+                (normalized_id, normalized_bot_id, normalized_update_id, updated_at, cutoff),
             )
 
         self._database.write(save)
@@ -559,6 +611,50 @@ def _polling_expiry_cutoff() -> str:
     return format_canonical_timestamp(
         datetime.now(UTC) - timedelta(seconds=TELEGRAM_UPDATE_OFFSET_TTL_SECONDS)
     )
+
+
+def _telegram_id(value: int, name: str, *, minimum: int) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or value < minimum:
+        qualifier = "positive" if minimum > 0 else "non-negative"
+        raise ChannelError(f"{name} must be a {qualifier} integer")
+    return value
+
+
+def _platform(platform: str) -> str:
+    if not isinstance(platform, str) or not platform.strip():
+        raise ChannelConfigError("Channel platform must be a non-empty string")
+    return platform.strip()
+
+
+def _bind_platform(connection: sqlite3.Connection, channel_id: str, platform: str) -> bool:
+    """Record ``platform`` for a registered Channel; reset state recorded for another one."""
+    row = connection.execute(
+        "SELECT platform FROM channels WHERE channel_id = ?", (channel_id,)
+    ).fetchone()
+    recorded = row[0]
+    if recorded == platform:
+        return False
+    if recorded is None:
+        connection.execute(
+            "UPDATE channels SET platform = ? WHERE channel_id = ?", (platform, channel_id)
+        )
+        return False
+    kept = connection.execute(
+        "SELECT conversation_id, conversation_kind, active_session_id, updated_at "
+        "FROM channel_conversations WHERE channel_id = ? AND conversation_id = ?",
+        (channel_id, main_conversation_id(channel_id)),
+    ).fetchall()
+    connection.execute("DELETE FROM channels WHERE channel_id = ?", (channel_id,))
+    connection.execute(
+        "INSERT INTO channels (channel_id, platform) VALUES (?, ?)", (channel_id, platform)
+    )
+    connection.executemany(
+        "INSERT INTO channel_conversations "
+        "(channel_id, conversation_id, conversation_kind, active_session_id, updated_at) "
+        "VALUES (?, ?, ?, ?, ?)",
+        [(channel_id, *row) for row in kept],
+    )
+    return True
 
 
 def _registered_self_user_id(connection: sqlite3.Connection, channel_id: str) -> str | None:

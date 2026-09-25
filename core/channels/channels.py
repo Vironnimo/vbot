@@ -89,10 +89,13 @@ class ChannelService:
         self._channel_root = Path(data_root) / "channels"
         # channels.db holds the durable state of every configured Channel. A
         # Channel whose config exists is registered, including after its state
-        # database came back from an older data snapshot.
+        # database came back from an older data snapshot. State recorded for
+        # another platform than the config names (a platform change that did
+        # not reach channels.db, or a hand-edited config) is reset here.
         self._state = ChannelStateStore.open(Path(data_root))
         try:
-            self._state.adopt(self._storage.channel_ids())
+            for reset_id in self._state.adopt(self._storage.platforms()):
+                _LOGGER.info("Channel state reset for a new platform (channel=%s)", reset_id)
         except BaseException:
             self._state.close()
             raise
@@ -780,11 +783,15 @@ class ChannelService:
         The caller holds this Channel's config-change mark. ``channel.json`` is
         written on the state database's worker pool before a healthy adapter is
         disturbed, so a failed write leaves config and connection untouched.
-        The adapter then stops and starts on the Event Loop. A failed adapter
-        start, or a cancellation once the write ran, restores ``previous`` and
-        the adapter it ran.
+        The adapter then stops and starts on the Event Loop. A platform change
+        waits for the old adapter to finish stopping, so its last state writes
+        land first, and then resets the Channel state for the new platform
+        (``ChannelStateStore.bind_platform``) before the new adapter starts. A
+        failed adapter start, or a cancellation once the write ran, restores
+        ``previous`` and the adapter it ran.
         """
         channel_id = updated.id
+        platform_changed = updated.platform != previous.platform
         persisted = False
         was_running = False
 
@@ -800,13 +807,23 @@ class ChannelService:
                 persist
             )
             was_running = self._is_running(channel_id) or self._is_stop_in_progress(channel_id)
-            if was_running or not updated.enabled:
+            if was_running or not updated.enabled or platform_changed:
                 self.stop_channel(channel_id)
+            if platform_changed:
+                stopping = self._adapter_stop_tasks.get(channel_id)
+                if stopping is not None:
+                    await asyncio.shield(stopping)
+                if await self._state.database.run_async(
+                    self._state.bind_platform, channel_id, updated.platform
+                ):
+                    _LOGGER.info("Channel state reset for a new platform (channel=%s)", channel_id)
             if updated.enabled:
                 self.start_channel(channel_id, config_override=updated)
         except BaseException:
             if persisted:
-                await self._restore_config(previous, restart_adapter=was_running)
+                await self._restore_config(
+                    previous, restart_adapter=was_running, rebind_state=platform_changed
+                )
             raise
         if had_enabled_channels != has_enabled_channels:
             self._notify_tool_registration_changed()
@@ -832,7 +849,7 @@ class ChannelService:
         self._storage.save(config)
         try:
             # A new Channel never inherits state rows left behind under its id.
-            self._state.reset(config.id)
+            self._state.reset(config.id, config.platform)
         except BaseException:
             self._rollback_created_channel(config.id)
             raise
@@ -858,15 +875,32 @@ class ChannelService:
                 exc_info=(type(error), error, error.__traceback__),
             )
 
-    async def _restore_config(self, previous: ChannelConfig, *, restart_adapter: bool) -> None:
+    async def _restore_config(
+        self, previous: ChannelConfig, *, restart_adapter: bool, rebind_state: bool = False
+    ) -> None:
         """Undo a persisted config change; failures are logged, not raised.
 
-        The previous adapter restarts first, on the Event Loop. Restoring
-        ``channel.json`` on the worker pool then runs to its end even when
-        cancelled meanwhile.
+        With ``rebind_state`` the Channel state is first bound back to the
+        previous platform, which resets it again when the change already reset
+        it; this runs to its end even when cancelled meanwhile, so the previous
+        adapter never writes into state of the abandoned platform. The previous
+        adapter restarts next, on the Event Loop. Restoring ``channel.json`` on
+        the worker pool then runs to its end even when cancelled meanwhile.
         """
         channel_id = previous.id
         self._pending_start_requests.pop(channel_id, None)
+        cancelled = False
+        if rebind_state:
+            try:
+                await _settle(
+                    self._state.database.run_async(
+                        self._state.bind_platform, channel_id, previous.platform
+                    ),
+                    "Rollback failed while restoring the previous platform of channel state "
+                    f"(channel={channel_id})",
+                )
+            except asyncio.CancelledError:
+                cancelled = True
         if restart_adapter and previous.enabled:
             try:
                 self.start_channel(channel_id, config_override=previous)
@@ -881,6 +915,8 @@ class ChannelService:
             self._state.database.run_async(self._storage.save, previous),
             f"Rollback failed while restoring previous channel config (channel={channel_id})",
         )
+        if cancelled:
+            raise asyncio.CancelledError
 
     def _schedule_pending_start(
         self,
@@ -1152,7 +1188,7 @@ class ChannelService:
         )
 
 
-async def _settle(work: Awaitable[None], failure_message: str) -> None:
+async def _settle(work: Awaitable[object], failure_message: str) -> None:
     """Await ``work`` to its end even when cancelled meanwhile, then re-raise the cancellation.
 
     A failure of ``work`` is logged with ``failure_message``, not raised: this
