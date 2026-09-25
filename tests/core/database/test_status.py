@@ -6,6 +6,7 @@ import sqlite3
 from pathlib import Path
 
 from core.database import (
+    GENERATION_1_CONVERTER_COMMAND,
     DatabaseHealth,
     begin_maintenance,
     data_store_status,
@@ -89,11 +90,19 @@ def test_a_missing_or_foreign_registered_database_is_unavailable(data_dir: Path)
     assert foreign["databases"]["notes"]["reason"] == "the database file has another identity"
 
 
-def test_a_data_directory_without_a_marker_is_unavailable(tmp_path: Path) -> None:
+def test_a_data_directory_without_a_marker_names_the_converter(tmp_path: Path) -> None:
     status = data_store_status(tmp_path)
 
     assert status["state"] == "unavailable"
-    assert status["reason"] == "the data directory has no data-store marker"
+    assert f"`{GENERATION_1_CONVERTER_COMMAND} {tmp_path}`" in status["reason"]
+    assert status["databases"] == {}
+
+
+def test_a_missing_data_directory_is_unavailable_without_a_conversion(tmp_path: Path) -> None:
+    status = data_store_status(tmp_path / "absent")
+
+    assert status["state"] == "unavailable"
+    assert GENERATION_1_CONVERTER_COMMAND not in status["reason"]
     assert status["databases"] == {}
 
 

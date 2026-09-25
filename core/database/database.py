@@ -57,8 +57,8 @@ from core.database.errors import (
     DatabaseUnavailableError,
 )
 from core.database.marker import (
-    MARKER_FILE_NAME,
     MarkerEntry,
+    missing_marker_error,
     new_database_id,
     operation_lock,
     read_marker,
@@ -271,11 +271,7 @@ def _open_canonical(spec: DatabaseSpec) -> Database:
     require_no_maintenance(data_dir)
     marker = read_marker(data_dir)
     if marker is None:
-        raise DatabaseConversionRequiredError(
-            f"the data directory {data_dir} has no data-store marker ({MARKER_FILE_NAME}), so it "
-            "holds no current-format data store",
-            data_dir=data_dir,
-        )
+        raise missing_marker_error(data_dir)
     entry = marker.databases.get(spec.name)
     if entry is None:
         return _bootstrap_canonical(spec, data_dir)
