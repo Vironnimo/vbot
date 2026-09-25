@@ -21,6 +21,7 @@ from core.channels.adapter import (
 from core.channels.channels import ChannelService
 from core.channels.state import ChannelStateStore
 from core.chat import ReplySurface
+from core.database import DatabaseUnavailableError
 from core.extensions import InteractionButton
 from core.runs import Run
 from core.sessions import ChatSessionManager, SessionAddress
@@ -345,6 +346,96 @@ async def test_repeated_cancellation_waits_for_unsent_binding_cleanup(
     finally:
         release.set()
         await asyncio.gather(sending, return_exceptions=True)
+        await service.aclose()
+
+
+async def _started_run_button_service(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, sessions: ChatSessionManager
+) -> tuple[ChannelService, BlockingAdapter]:
+    config = make_config(enabled=True)
+    ChannelStorage(tmp_path).save(config)
+    service = make_service(tmp_path, chat_sessions=sessions)
+    adapter = BlockingAdapter()
+    monkeypatch.setattr(service, "_create_adapter", lambda _config: adapter)
+    service.start_channel(config.id)
+    await asyncio.wait_for(adapter.started.wait(), timeout=1)
+    return service, adapter
+
+
+async def _send_run_button(service: ChannelService, origin: RouteFacts) -> None:
+    await service.send(
+        "tg-assistant",
+        "Shopping",
+        "12345",
+        buttons=[[InteractionButton(label="Done", data="run:done")]],
+        run_origin=origin,
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_button_preparation_runs_each_database_on_its_own_pool(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    sessions.create("assistant", session_id="origin-session")
+    service, adapter = await _started_run_button_service(tmp_path, monkeypatch, sessions)
+    threads: dict[str, str] = {}
+    session_exists = sessions.exists
+    save_binding = service._state.save_run_button_binding
+
+    def recorded_exists(address: SessionAddress) -> bool:
+        threads["origin"] = threading.current_thread().name
+        return session_exists(address)
+
+    def recorded_save(channel_id: str, binding: object) -> None:
+        threads["binding"] = threading.current_thread().name
+        save_binding(channel_id, binding)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(sessions, "exists", recorded_exists)
+    monkeypatch.setattr(service._state, "save_run_button_binding", recorded_save)
+    try:
+        await _send_run_button(
+            service, RouteFacts(agent_id="assistant", session_id="origin-session")
+        )
+
+        assert adapter.sent_messages == [("Shopping", "12345")]
+        assert len(_saved_run_button_ids(service, "tg-assistant")) == 1
+        # The origin check on the Session pool, the binding on the Channel state's pool.
+        assert threads["origin"].startswith("vbot-db-sessions")
+        assert threads["binding"].startswith("vbot-db-channels")
+    finally:
+        await service.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("origin", "error"),
+    [
+        (RouteFacts(agent_id="assistant", session_id="missing-session"), ChannelConfigError),
+        (RouteFacts(agent_id="other-agent", session_id="foreign-session"), ChannelConfigError),
+        (RouteFacts(agent_id="assistant", session_id="origin-session"), DatabaseUnavailableError),
+    ],
+    ids=["missing-origin", "foreign-agent", "closed-session-database"],
+)
+async def test_refused_run_button_origin_sends_and_binds_nothing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    origin: RouteFacts,
+    error: type[Exception],
+) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    sessions.create("assistant", session_id="origin-session")
+    sessions.create("other-agent", session_id="foreign-session")
+    service, adapter = await _started_run_button_service(tmp_path, monkeypatch, sessions)
+    if error is DatabaseUnavailableError:
+        sessions.close()
+    try:
+        with pytest.raises(error):
+            await _send_run_button(service, origin)
+
+        assert adapter.sent_messages == []
+        assert _saved_run_button_ids(service, "tg-assistant") == []
+    finally:
         await service.aclose()
 
 

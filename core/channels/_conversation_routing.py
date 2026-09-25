@@ -89,13 +89,14 @@ class ChannelSessionRouting:
             thread_id=conversation.thread_id,
         )
 
-    def ensure_channel_session(self, conversation: ConversationFacts) -> RouteFacts:
+    async def ensure_channel_session(self, conversation: ConversationFacts) -> RouteFacts:
         """Ensure the Session mirroring a conversation exists with channel context."""
-        route = self._route_facts(conversation)
+        route = await self._pointers.run_async(self._route_facts, conversation)
         # Proactive (outbound-only) Sessions get the same channel metadata as inbound
         # ones, so a channel_send-created session is recognizable as a channel session and has
         # a last_reply_target before any inbound message arrives.
-        self._update_session_metadata(
+        await self._chat_sessions.run_async(
+            self._update_session_metadata,
             route,
             conversation,
             ReplyPlanFacts(channel_id=self._config.id, platform_target=conversation.chat_id),

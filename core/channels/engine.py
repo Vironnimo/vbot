@@ -144,9 +144,9 @@ class ChannelConversationEngine:
         """Resolve the active Session and update its Channel metadata."""
         return self._routing.prepare_inbound_route(conversation)
 
-    def ensure_channel_session(self, conversation: ConversationFacts) -> RouteFacts:
+    async def ensure_channel_session(self, conversation: ConversationFacts) -> RouteFacts:
         """Ensure an outbound Channel target has its routed Session."""
-        return self._routing.ensure_channel_session(conversation)
+        return await self._routing.ensure_channel_session(conversation)
 
     async def migrate_group_conversation(self, old_chat_id: str, new_chat_id: str) -> bool:
         """Preserve the active Session across a platform group-id migration."""
