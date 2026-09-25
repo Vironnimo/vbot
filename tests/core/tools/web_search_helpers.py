@@ -74,3 +74,17 @@ def _fake_credential_resolver(key: str) -> str:
 
 def _read_json_body(request: httpx.Request) -> dict[str, Any]:
     return json.loads(request.content.decode("utf-8"))  # type: ignore[no-any-return]
+
+
+def result_blocks(data: dict[str, Any]) -> list[list[str]]:
+    """Split a web_search result's numbered content into the lines of each result."""
+    content = data["content"]
+    assert isinstance(content, str)
+    if content.startswith("No results found."):
+        return []
+    return [block.split("\n") for block in content.split("\n\n")]
+
+
+def result_urls(data: dict[str, Any]) -> list[str]:
+    """Return the URL line of each numbered result."""
+    return [lines[1] for lines in result_blocks(data)]

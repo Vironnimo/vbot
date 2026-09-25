@@ -29,6 +29,17 @@ from tests.core.tools.web_search_helpers import (
     make_context,
 )
 
+_PROVIDER_LABELS = {
+    "brave": "Brave Search",
+    "searxng": "SearXNG",
+    "duckduckgo": "DuckDuckGo",
+    "tavily": "Tavily",
+    "exa": "Exa",
+    "serper": "Serper",
+    "firecrawl": "Firecrawl",
+    "perplexity": "Perplexity",
+}
+
 
 @respx.mock
 @pytest.mark.asyncio
@@ -49,12 +60,70 @@ async def test_web_search_handler_brave_http_error(
             _fake_credential_resolver,
         )
 
-    assert_failure_envelope(result, "provider_request_failed")
+    error = assert_failure_envelope(result, "provider_request_failed")
+    assert error["message"] == (
+        "Brave Search rejected the API key (HTTP 403: forbidden). Tell the user to check "
+        "BRAVE_API_KEY in the .env file of the vBot data directory."
+    )
     assert any(
         record.levelno == logging.WARNING
-        and "Brave web search request failed" in record.getMessage()
+        and "Brave Search web search request failed" in record.getMessage()
         for record in caplog.records
     )
+
+
+@respx.mock
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "body", "message"),
+    [
+        (
+            422,
+            {
+                "type": "ErrorResponse",
+                "error": {
+                    "code": "SUBSCRIPTION_TOKEN_INVALID",
+                    "detail": "The provided subscription token is invalid.",
+                },
+            },
+            "Brave Search rejected the API key (HTTP 422: The provided subscription token is "
+            "invalid.). Tell the user to check BRAVE_API_KEY in the .env file of the vBot "
+            "data directory.",
+        ),
+        (
+            422,
+            {
+                "type": "ErrorResponse",
+                "error": {
+                    "detail": "Unable to validate request parameter(s)",
+                    "meta": {"errors": [{"loc": ["query", "q"], "msg": "String too long"}]},
+                },
+            },
+            "Brave Search rejected the search (HTTP 422: Unable to validate request "
+            "parameter(s); query.q: String too long).",
+        ),
+        (
+            402,
+            {"error": {"message": "Plan limit reached"}},
+            "Brave Search refused the search (HTTP 402: Plan limit reached); the account's "
+            "plan or credits may be used up. Tell the user.",
+        ),
+    ],
+)
+async def test_web_search_provider_refusals_say_what_they_mean(
+    tmp_path: Path, status: int, body: dict[str, object], message: str
+) -> None:
+    respx.get(_BRAVE_ENDPOINT).respond(status, json=body)
+
+    result = await web_search_handler(
+        make_context(tmp_path),
+        {"query": "vbot"},
+        _fake_credential_resolver,
+    )
+
+    error = assert_failure_envelope(result, "provider_request_failed")
+    assert error["message"] == message
+    assert error["retryable"] is False
 
 
 @respx.mock
@@ -85,7 +154,11 @@ async def test_web_search_handler_brave_network_error(
         _fake_credential_resolver,
     )
 
-    assert_failure_envelope(result, "provider_request_failed")
+    error = assert_failure_envelope(result, "provider_request_failed")
+    assert error["message"] == (
+        "Could not reach Brave Search (connection failed). The network or the service may be "
+        "down; try again later."
+    )
     assert len(route.calls) == 4
     assert sleep_attempts == [0, 1, 2]
 
@@ -123,7 +196,7 @@ async def test_web_search_handler_retries_transient_http_status(
     )
 
     data = assert_success_envelope(result)
-    assert len(data["results"]) == 0
+    assert data == {"content": "No results found. Try other or fewer search words."}
     assert len(route.calls) == 2
     assert sleep_attempts == [0]
 
@@ -220,7 +293,7 @@ async def test_web_search_validation_error_signals_not_retryable(tmp_path: Path)
         _fake_credential_resolver,
     )
 
-    error = assert_failure_envelope(result, "validation_error")
+    error = assert_failure_envelope(result, "invalid_arguments")
     assert error["retryable"] is False
 
 
@@ -308,8 +381,16 @@ async def test_web_search_preserves_provider_retry_profiles(
         or (status_code == 500 and method == "GET")
         or (status_code == 408 and provider == "firecrawl")
     )
+    label = _PROVIDER_LABELS[provider]
+    answer = f"HTTP {status_code}: temporary failure"
+    if status_code == 408:
+        expected = f"{label} rejected the search ({answer})."
+    elif retryable:
+        expected = f"{label} failed to answer after several attempts ({answer}). Try again later."
+    else:
+        expected = f"{label} failed to answer ({answer}). Try again later."
     error = assert_failure_envelope(result, "provider_request_failed")
-    assert error["message"] == f"HTTP {status_code}: temporary failure"
+    assert error["message"] == expected
     assert error["retryable"] is retryable
     if retryable:
         assert error["attempts_made"] == MAX_RETRIES + 1

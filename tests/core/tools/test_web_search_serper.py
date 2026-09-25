@@ -19,6 +19,8 @@ from tests.core.tools.web_search_helpers import (
     assert_failure_envelope,
     assert_success_envelope,
     make_context,
+    result_blocks,
+    result_urls,
 )
 
 
@@ -71,16 +73,12 @@ async def test_web_search_handler_serper_success_maps_results(tmp_path: Path) ->
     )
 
     data = assert_success_envelope(result)
-    assert data["provider"] == "serper"
-    assert len(data["results"]) == 2
-    assert "recency" not in data
-    assert "warnings" not in data
-    first, second = data["results"]
-    assert (first["rank"], second["rank"]) == (1, 2)
-    assert first["url"] == "https://example.com/vbot"
-    assert first["description"] == "vBot documentation"
-    assert first["page_age"] == "Aug 20, 2026"
-    assert "page_age" not in second
+    assert data == {
+        "content": (
+            "1. vBot docs\nhttps://example.com/vbot\nAug 20, 2026 - vBot documentation\n\n"
+            "2. vBot project\nhttps://example.com/project\nProject page"
+        )
+    }
 
     request = route.calls[0].request
     assert request.headers["x-api-key"] == "test-brave-api-key"
@@ -94,7 +92,8 @@ async def test_web_search_handler_serper_success_maps_results(tmp_path: Path) ->
 @respx.mock
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("recency", "tbs"), [("day", "qdr:d"), ("month", "qdr:m"), ("year", "qdr:y")]
+    ("recency", "tbs"),
+    [("day", "qdr:d"), ("week", "qdr:w"), ("month", "qdr:m"), ("year", "qdr:y")],
 )
 async def test_web_search_handler_serper_recency_and_domains(
     tmp_path: Path, recency: str, tbs: str
@@ -131,8 +130,7 @@ async def test_web_search_handler_serper_recency_and_domains(
 
     data = assert_success_envelope(result)
     assert data["recency"] == recency
-    assert len(data["results"]) == 1
-    assert data["results"][0]["url"] == "https://example.com/vbot"
+    assert result_urls(data) == ["https://example.com/vbot"]
 
     body = _read_json_body(route.calls[0].request)
     assert body["tbs"] == tbs
@@ -162,10 +160,10 @@ async def test_web_search_handler_serper_fans_out_over_ten_result_pages(
     )
 
     data = assert_success_envelope(result)
-    assert len(data["results"]) == 12
-    assert [entry["rank"] for entry in data["results"]] == list(range(1, 13))
-    assert data["results"][0]["url"] == "https://example.com/1"
-    assert data["results"][11]["url"] == "https://example.com/12"
+    assert [lines[0].split(".")[0] for lines in result_blocks(data)] == [
+        str(number) for number in range(1, 13)
+    ]
+    assert result_urls(data) == [f"https://example.com/{index}" for index in range(1, 13)]
 
     assert len(route.calls) == 2
     first_body = _read_json_body(route.calls[0].request)
@@ -194,11 +192,7 @@ async def test_web_search_handler_serper_page_skips_into_first_serper_page(
     )
 
     data = assert_success_envelope(result)
-    assert len(data["results"]) == 5
-    assert [entry["url"] for entry in data["results"]] == [
-        f"https://example.com/{index}" for index in range(6, 11)
-    ]
-    assert [entry["rank"] for entry in data["results"]] == [1, 2, 3, 4, 5]
+    assert result_urls(data) == [f"https://example.com/{index}" for index in range(6, 11)]
     assert len(route.calls) == 1
     body = _read_json_body(route.calls[0].request)
     assert body["page"] == 1
@@ -222,7 +216,7 @@ async def test_web_search_handler_serper_short_page_stops_fan_out(tmp_path: Path
     )
 
     data = assert_success_envelope(result)
-    assert len(data["results"]) == 3
+    assert len(result_blocks(data)) == 3
     assert len(route.calls) == 1
 
 

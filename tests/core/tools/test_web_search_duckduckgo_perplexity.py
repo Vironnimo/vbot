@@ -9,7 +9,6 @@ import httpx
 import pytest
 import respx
 
-import core.tools._web_search_providers as web_search_providers
 from core.tools.web_search import (
     web_search_handler,
 )
@@ -20,6 +19,7 @@ from tests.core.tools.web_search_helpers import (
     assert_failure_envelope,
     assert_success_envelope,
     make_context,
+    result_urls,
 )
 
 _DUCKDUCKGO_HTML = """<html><body>
@@ -71,26 +71,13 @@ async def test_web_search_handler_duckduckgo_success(tmp_path: Path) -> None:
     assert request.url.params["kp"] == "-1"
 
     data = assert_success_envelope(result)
-    assert data["provider"] == "duckduckgo"
-    assert "query" not in data
-    assert "count" not in data
-    assert "page" not in data
-    assert len(data["results"]) == 3
-    assert "warnings" not in data
-    assert "recency" not in data
-    results = data["results"]
-    assert isinstance(results, list)
-    assert len(results) == 3
-    first = results[0]
-    assert first["rank"] == 1
-    assert first["title"] == "vBot docs"
-    assert first["url"] == "https://example.com/vbot"
-    assert first["description"] == "vBot & documentation for agents"
-    assert "content_trust" not in first
-    third = results[2]
-    assert third["rank"] == 3
-    assert third["url"] == "https://example.org/direct"
-    assert third["description"] == ""
+    assert data == {
+        "content": (
+            "1. vBot docs\nhttps://example.com/vbot\nvBot & documentation for agents\n\n"
+            "2. vBot guide\nhttps://example.com/guide\nGetting started\n\n"
+            "3. Direct link result\nhttps://example.org/direct"
+        )
+    }
 
 
 @respx.mock
@@ -111,17 +98,14 @@ async def test_web_search_handler_duckduckgo_page_slices_client_side(
     )
 
     data = assert_success_envelope(result)
-    assert len(data["results"]) == 1
-    results = data["results"]
-    assert isinstance(results, list)
-    assert len(results) == 1
-    assert results[0]["rank"] == 3
-    assert results[0]["url"] == "https://example.org/direct"
-    assert "recency" not in data
-    assert data["warnings"] == [
-        web_search_providers._DUCKDUCKGO_RECENCY_WARNING,
-        web_search_providers._DUCKDUCKGO_PAGINATION_WARNING,
-    ]
+    assert data == {
+        "note": (
+            "DuckDuckGo cannot limit results by age, so these results are not limited to "
+            "the past month; check result dates. DuckDuckGo returns one result list; later "
+            "pages only split it and may be empty."
+        ),
+        "content": "1. Direct link result\nhttps://example.org/direct",
+    }
 
 
 @respx.mock
@@ -145,8 +129,8 @@ async def test_web_search_handler_duckduckgo_domains_use_site_operator(
 
     assert route.calls[0].request.url.params["q"] == "vbot site:example.com"
     data = assert_success_envelope(result)
-    assert data["applied_domains"] == ["example.com"]
-    assert len(data["results"]) == 2
+    assert data["domains"] == "example.com"
+    assert result_urls(data) == ["https://example.com/vbot", "https://example.com/guide"]
 
 
 @respx.mock
@@ -169,7 +153,11 @@ async def test_web_search_handler_duckduckgo_challenge_is_retryable(
     )
 
     error = assert_failure_envelope(result, "provider_request_failed")
-    assert "challenge" in error["message"]
+    assert error["message"] == (
+        "DuckDuckGo answered with a bot-detection challenge instead of results. Wait a while "
+        "before searching again; if this keeps happening, tell the user they can choose "
+        "another search provider in Settings under Web search."
+    )
     assert error["retryable"] is True
 
 
@@ -191,7 +179,7 @@ async def test_web_search_handler_duckduckgo_rate_limit_is_retryable(
     )
 
     error = assert_failure_envelope(result, "provider_request_failed")
-    assert "rate-limited" in error["message"]
+    assert error["message"].startswith("DuckDuckGo is limiting requests")
     assert error["retryable"] is True
 
 
@@ -245,24 +233,14 @@ async def test_web_search_handler_perplexity_success(tmp_path: Path) -> None:
     assert body["search_domain_filter"] == ["example.com"]
 
     data = assert_success_envelope(result)
-    assert data["provider"] == "perplexity"
-    assert "query" not in data
-    assert "count" not in data
-    assert "page" not in data
-    assert data["recency"] == "month"
-    assert data["applied_domains"] == ["example.com"]
-    assert len(data["results"]) == 2
-    assert "warnings" not in data
-    results = data["results"]
-    assert isinstance(results, list)
-    assert len(results) == 2
-    first = results[0]
-    assert first["rank"] == 1
-    assert first["title"] == "vBot docs"
-    assert first["url"] == "https://example.com/vbot"
-    assert first["description"] == "vBot documentation"
-    assert first["page_age"] == "2026-08-20"
-    assert results[1]["page_age"] == "2026-09-01"
+    assert data == {
+        "domains": "example.com",
+        "recency": "month",
+        "content": (
+            "1. vBot docs\nhttps://example.com/vbot\n2026-08-20 - vBot documentation\n\n"
+            "2. vBot guide\nhttps://example.com/guide\n2026-09-01 - Getting started"
+        ),
+    }
 
 
 @respx.mock
@@ -283,8 +261,10 @@ async def test_web_search_handler_perplexity_page_warns_without_paging(
     )
 
     data = assert_success_envelope(result)
-    assert len(data["results"]) == 0
-    assert data["warnings"] == [web_search_providers._PERPLEXITY_PAGINATION_WARNING]
+    assert data == {
+        "note": "Perplexity cannot page results; these are the first results again, not page 2.",
+        "content": "No results found. Try other or fewer search words.",
+    }
 
 
 @pytest.mark.asyncio
@@ -300,7 +280,12 @@ async def test_web_search_handler_perplexity_missing_api_key(tmp_path: Path) -> 
     )
 
     error = assert_failure_envelope(result, "missing_api_key")
-    assert "PERPLEXITY_API_KEY" in error["message"]
+    assert error["message"] == (
+        "Web search is not set up: the selected provider, Perplexity, needs "
+        "PERPLEXITY_API_KEY in the .env file of the vBot data directory. Tell the user: they "
+        "can add the key, or choose another provider in Settings under Web search "
+        "(DuckDuckGo needs no key)."
+    )
 
 
 @respx.mock
@@ -323,7 +308,10 @@ async def test_web_search_handler_perplexity_unauthorized_hints_at_api_key(
     )
 
     error = assert_failure_envelope(result, "provider_request_failed")
-    assert "PERPLEXITY_API_KEY" in error["message"]
+    assert error["message"] == (
+        "Perplexity rejected the API key (HTTP 401: invalid key). Tell the user to check "
+        "PERPLEXITY_API_KEY in the .env file of the vBot data directory."
+    )
     assert error["retryable"] is False
 
 
@@ -349,12 +337,7 @@ async def test_duckduckgo_parses_html_attributes_and_keeps_snippet_scope(tmp_pat
         lambda: {"provider": "duckduckgo"},
     )
     data = assert_success_envelope(result)
-    assert data["results"] == [
-        {
-            "rank": 1,
-            "title": "A <b>literal</b> & title",
-            "url": "https://example.com/one",
-            "description": "x < y and z > w works",
-        },
-        {"rank": 2, "title": "Second", "url": "https://example.com/two", "description": ""},
-    ]
+    assert data["content"] == (
+        "1. A <b>literal</b> & title\nhttps://example.com/one\nx < y and z > w works\n\n"
+        "2. Second\nhttps://example.com/two"
+    )
