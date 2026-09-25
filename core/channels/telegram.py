@@ -712,9 +712,9 @@ class TelegramChannelAdapter(ChannelAdapter):
                 error,
             )
 
-    def ensure_outbound_session(self, platform_target: str) -> RouteFacts:
+    async def ensure_outbound_session(self, platform_target: str) -> RouteFacts:
         """Ensure the Session mirroring an outbound Telegram chat exists with channel context."""
-        return self._engine.ensure_channel_session(
+        return await self._engine.ensure_channel_session(
             self._conversation_facts_for_target(platform_target)
         )
 

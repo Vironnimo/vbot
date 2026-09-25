@@ -198,9 +198,8 @@ def test_channel_send_binds_run_buttons_to_calling_session(tmp_path: Path) -> No
     channel_service = Mock()
     channel_service.send = AsyncMock()
     channel_service.list_channels.return_value = [make_channel_config()]
-    channel_service.ensure_outbound_session.return_value = RouteFacts(
-        agent_id="agent-1",
-        session_id="telegram-session",
+    channel_service.ensure_outbound_session = AsyncMock(
+        return_value=RouteFacts(agent_id="agent-1", session_id="telegram-session")
     )
     chat_sessions = make_chat_sessions()
     chat_sessions.get_or_create.return_value = Mock()

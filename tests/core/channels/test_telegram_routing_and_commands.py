@@ -337,7 +337,7 @@ async def test_ensure_outbound_session_creates_session_without_reminder(
         allowed_chat_ids=[12345],
     )
 
-    route = adapter.ensure_outbound_session("12345")
+    route = await adapter.ensure_outbound_session("12345")
 
     assert route.agent_id == "assistant"
     assert route.session_id == "ch-tg-assistant-12345"
@@ -360,7 +360,7 @@ async def test_ensure_outbound_session_writes_channel_metadata(
         allowed_chat_ids=[12345],
     )
 
-    adapter.ensure_outbound_session("12345")
+    await adapter.ensure_outbound_session("12345")
 
     metadata = chat_sessions.get_metadata(
         SessionAddress(project_id=None, agent_id="assistant", session_id="ch-tg-assistant-12345")
@@ -388,8 +388,8 @@ async def test_ensure_outbound_session_reuses_existing_session_without_notes(
         allowed_chat_ids=[12345],
     )
 
-    adapter.ensure_outbound_session("12345")
-    adapter.ensure_outbound_session("12345")
+    await adapter.ensure_outbound_session("12345")
+    await adapter.ensure_outbound_session("12345")
 
     session = chat_sessions.get(
         SessionAddress(project_id=None, agent_id="assistant", session_id="ch-tg-assistant-12345")
@@ -411,5 +411,5 @@ async def test_ensure_outbound_session_rejects_non_integer_target(
     )
 
     with pytest.raises(ChannelConfigError):
-        adapter.ensure_outbound_session("not-a-chat-id")
+        await adapter.ensure_outbound_session("not-a-chat-id")
     await adapter.stop()

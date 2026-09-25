@@ -288,6 +288,20 @@ class AgentStore:
             raw_agent = self._load_verified_agent(agent_path)
             return _apply_defaults(raw_agent, self._agent_defaults())
 
+    async def get_async(self, agent_id: str) -> Agent:
+        """Event-Loop-safe :meth:`get`, run as one unit on the Session database's pool.
+
+        The read seeds the Workspace and verifies, and may repair, the
+        current-Session pointer under the store lock, so it runs where Session
+        work runs. A closed Session database raises
+        :class:`~core.database.DatabaseUnavailableError`.
+        """
+        sessions = self._sessions
+        if sessions is None:
+            # A standalone store (tests) opens its own Session service lazily.
+            sessions = self._session_manager()
+        return await sessions.run_async(self.get, agent_id)
+
     def get_raw(self, agent_id: str) -> Agent:
         """Load an agent with its **un-baked** persisted values (no defaults applied).
 

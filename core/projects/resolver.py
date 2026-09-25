@@ -90,8 +90,11 @@ __all__ = [
 ]
 
 
-# Resolution reads Agent and Project configuration files, checks Session storage
-# and may wait for the Agent store's write lock; the async variants run it here.
+# Project Agent resolution and the Project and Model checks applied to other
+# Agents read Project, repository and configuration files; the async variants
+# run them here. Identity Agent reads and temporary bindings run on the Session
+# database's pool instead. The first resolution in a Project whose Team is not
+# cached yet also lists its Session-owning Agents here, for the scan report.
 _RESOLUTION_WORKERS = BoundedWorkerPool(name="agent-resolution", max_workers=4)
 
 
@@ -120,6 +123,12 @@ def _identity_resolution_error(error: Exception) -> AgentResolutionError:
     if isinstance(error, AgentNotFoundError):
         return ResolutionAgentNotFoundError(str(error))
     return AgentResolutionError(str(error))
+
+
+def _require_temporary_binding(agent: TemporaryAgent | None) -> TemporaryAgent:
+    if agent is None:
+        raise AgentResolutionError("temporary Session binding is unavailable")
+    return agent
 
 
 def _orphan_finding(agent_id: str, detail: str) -> ScanFinding:
@@ -201,14 +210,10 @@ class AgentResolver:
         run_overrides: AgentRunOverrides | None = None,
     ) -> RuntimeAgent:
         """Resolve only an exact canonical temporary Session generation."""
-        if self._temporary_agents is None:
-            raise AgentResolutionError("temporary Session is unavailable")
-        agent = self._temporary_agents.resolve(address, generation_id=generation_id)
-        if agent is None:
-            raise AgentResolutionError("temporary Session binding is unavailable")
-        project_id = getattr(address, "project_id", None)
-        agent = self._apply_temporary_project(agent, project_id)
-        return self._apply_run_overrides(agent, run_overrides)
+        binding = self._temporary_registry().resolve(address, generation_id=generation_id)
+        return self._apply_temporary_address(
+            _require_temporary_binding(binding), address, run_overrides
+        )
 
     async def resolve_agent_async(
         self,
@@ -217,10 +222,27 @@ class AgentResolver:
         *,
         run_overrides: AgentRunOverrides | None = None,
     ) -> RuntimeAgent:
-        """Event-Loop-safe :meth:`resolve_agent`."""
-        return await _RESOLUTION_WORKERS.run(
-            self.resolve_agent, project_id, agent_id, run_overrides=run_overrides
-        )
+        """Event-Loop-safe :meth:`resolve_agent`.
+
+        A Project Agent resolves on the ``agent-resolution`` pool. An Identity
+        Agent read verifies, and may repair, its current-Session pointer, so it
+        runs as one unit on the Session database's pool
+        (:meth:`AgentStore.get_async`); Run overrides then check their Model on
+        the ``agent-resolution`` pool.
+        """
+        if project_id is not None:
+            return await _RESOLUTION_WORKERS.run(
+                self.resolve_agent, project_id, agent_id, run_overrides=run_overrides
+            )
+        from core.agents.agents import AgentError
+
+        try:
+            agent: RuntimeAgent = await self._agents.get_async(agent_id)
+        except AgentError as error:
+            raise _identity_resolution_error(error) from error
+        if run_overrides is None or run_overrides.is_empty:
+            return agent
+        return await _RESOLUTION_WORKERS.run(self._apply_run_overrides, agent, run_overrides)
 
     async def resolve_temporary_agent_async(
         self,
@@ -229,12 +251,22 @@ class AgentResolver:
         generation_id: str,
         run_overrides: AgentRunOverrides | None = None,
     ) -> RuntimeAgent:
-        """Event-Loop-safe :meth:`resolve_temporary_agent`."""
+        """Event-Loop-safe :meth:`resolve_temporary_agent`.
+
+        The binding read runs on the Session database's pool; Project ceilings
+        and Run overrides, which read Project and Model configuration, run on the
+        ``agent-resolution`` pool.
+        """
+        registry = self._temporary_registry()
+        agent = _require_temporary_binding(
+            await registry.resolve_async(address, generation_id=generation_id)
+        )
+        if getattr(address, "project_id", None) is None and (
+            run_overrides is None or run_overrides.is_empty
+        ):
+            return agent
         return await _RESOLUTION_WORKERS.run(
-            self.resolve_temporary_agent,
-            address,
-            generation_id=generation_id,
-            run_overrides=run_overrides,
+            self._apply_temporary_address, agent, address, run_overrides
         )
 
     def preview_temporary_agent(
@@ -258,6 +290,21 @@ class AgentResolver:
             thinking_effort=config.thinking_effort,
         )
         return self._apply_temporary_project(agent, project_id)
+
+    def _temporary_registry(self) -> Any:
+        if self._temporary_agents is None:
+            raise AgentResolutionError("temporary Session is unavailable")
+        return self._temporary_agents
+
+    def _apply_temporary_address(
+        self,
+        agent: TemporaryAgent,
+        address: Any,
+        run_overrides: AgentRunOverrides | None,
+    ) -> RuntimeAgent:
+        """Apply the address's Project ceilings, then the Run overrides."""
+        agent = self._apply_temporary_project(agent, getattr(address, "project_id", None))
+        return self._apply_run_overrides(agent, run_overrides)
 
     def _apply_temporary_project(
         self, agent: TemporaryAgent, project_id: str | None

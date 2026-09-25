@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from core.channels.adapter import (
-    ChannelAdapter,
     FileData,
     ReplyPlanFacts,
     RouteFacts,
@@ -19,7 +18,6 @@ from core.extensions import InteractionButton
 from core.sessions import SessionAddress
 from core.utils.logging import get_logger
 from core.utils.timestamps import utc_now_timestamp
-from core.utils.workers import BoundedWorkerPool
 
 if TYPE_CHECKING:
     from core.runs import Run
@@ -33,9 +31,6 @@ if TYPE_CHECKING:
     from core.channels.channels import ChannelService
 
 _LOGGER = get_logger("channels")
-
-_CHANNEL_IO_WORKERS = BoundedWorkerPool(name="channel-io", max_workers=4)
-
 
 _MAX_CALLBACK_DATA_BYTES = 64
 
@@ -161,27 +156,32 @@ async def send(
     if normalized_message is None and not normalized_files:
         raise ChannelConfigError("at least one of message or files must be provided")
 
-    prepared: (
-        tuple[ChannelAdapter, list[list[InteractionButton]] | None, RunButtonBinding | None] | None
-    ) = None
-
-    def prepare() -> None:
-        nonlocal prepared
-        # Retain the result inside the worker: cancellation drains the worker but
-        # does not return its result to the awaiting coroutine.
-        prepared = _prepare_outbound_dispatch(
-            service,
-            normalized_id,
-            normalized_buttons,
-            platform_target,
-            thread_id,
-            run_origin,
-        )
-
+    saved: list[RunButtonBinding] = []
     try:
-        await _CHANNEL_IO_WORKERS.run(prepare)
-        assert prepared is not None
-        adapter, outbound_buttons, _binding = prepared
+        adapter = service._active_adapter(normalized_id)
+        outbound_buttons = normalized_buttons
+        if run_origin is not None and normalized_buttons is not None:
+            # One hop per database: the origin check on the Session database's
+            # pool, then the ownership check and the binding it authorizes as one
+            # unit on the Channel state's pool.
+            chat_sessions = service._chat_sessions
+            origin = SessionAddress(
+                project_id=None, agent_id=run_origin.agent_id, session_id=run_origin.session_id
+            )
+            if not await chat_sessions.run_async(chat_sessions.exists, origin):
+                raise ChannelConfigError(
+                    f"Run-button origin Session does not exist: {run_origin.session_id}"
+                )
+            outbound_buttons = await service._state.run_async(
+                _bind_run_buttons,
+                service,
+                normalized_id,
+                normalized_buttons,
+                platform_target=platform_target,
+                thread_id=thread_id,
+                run_origin=run_origin,
+                saved=saved,
+            )
         await adapter.send(
             normalized_message,
             platform_target,
@@ -190,35 +190,39 @@ async def send(
             buttons=outbound_buttons,
         )
     except BaseException:
-        binding = prepared[2] if prepared is not None else None
-        if binding is not None:
-            cleanup = asyncio.create_task(
-                _CHANNEL_IO_WORKERS.run(
-                    service._state.discard_run_button_binding, normalized_id, binding.id
-                )
-            )
-            cancelled = False
-            try:
-                while not cleanup.done():
-                    try:
-                        await asyncio.shield(cleanup)
-                    except asyncio.CancelledError:
-                        cancelled = True
-                cleanup.result()
-            except Exception as cleanup_error:
-                _LOGGER.warning(
-                    "Could not discard unsent Run-button binding (channel=%s): %s",
-                    normalized_id,
-                    cleanup_error,
-                    exc_info=(
-                        type(cleanup_error),
-                        cleanup_error,
-                        cleanup_error.__traceback__,
-                    ),
-                )
-            if cancelled:
-                raise asyncio.CancelledError from None
+        if saved:
+            await _discard_unsent_binding(service, normalized_id, saved[0])
         raise
+
+
+async def _discard_unsent_binding(
+    service: ChannelService, channel_id: str, binding: RunButtonBinding
+) -> None:
+    """Remove a binding whose message was not sent, even under repeated cancellation."""
+    cleanup = asyncio.create_task(
+        service._state.run_async(service._state.discard_run_button_binding, channel_id, binding.id)
+    )
+    cancelled = False
+    try:
+        while not cleanup.done():
+            try:
+                await asyncio.shield(cleanup)
+            except asyncio.CancelledError:
+                cancelled = True
+        cleanup.result()
+    except Exception as cleanup_error:
+        _LOGGER.warning(
+            "Could not discard unsent Run-button binding (channel=%s): %s",
+            channel_id,
+            cleanup_error,
+            exc_info=(
+                type(cleanup_error),
+                cleanup_error,
+                cleanup_error.__traceback__,
+            ),
+        )
+    if cancelled:
+        raise asyncio.CancelledError from None
 
 
 async def relay_completion_run(
@@ -262,41 +266,31 @@ async def relay_completion_run(
     )
 
 
-def _prepare_outbound_dispatch(
+def _bind_run_buttons(
     service: ChannelService,
     channel_id: str,
-    buttons: list[list[InteractionButton]] | None,
+    buttons: list[list[InteractionButton]],
+    *,
     platform_target: str,
     thread_id: str | None,
-    run_origin: RouteFacts | None,
-) -> tuple[
-    ChannelAdapter,
-    list[list[InteractionButton]] | None,
-    RunButtonBinding | None,
-]:
-    adapter = service._active_adapter(channel_id)
-    binding: RunButtonBinding | None = None
-    outbound_buttons = buttons
-    if run_origin is not None and buttons is not None:
-        config = service._storage.get(channel_id)
-        if run_origin.agent_id != config.agent_id:
-            raise ChannelConfigError(
-                f"Run-button origin agent {run_origin.agent_id} does not own Channel {channel_id}"
-            )
-        if not service._chat_sessions.exists(
-            SessionAddress(
-                project_id=None, agent_id=run_origin.agent_id, session_id=run_origin.session_id
-            )
-        ):
-            raise ChannelConfigError(
-                f"Run-button origin Session does not exist: {run_origin.session_id}"
-            )
-        outbound_buttons, binding = _bind_outbound_run_buttons(
-            buttons,
-            platform_target=platform_target,
-            thread_id=thread_id,
-            origin_session_id=run_origin.session_id,
+    run_origin: RouteFacts,
+    saved: list[RunButtonBinding],
+) -> list[list[InteractionButton]]:
+    """Check that the origin Agent owns the Channel, then persist its Run-button binding."""
+    config = service._storage.get(channel_id)
+    if run_origin.agent_id != config.agent_id:
+        raise ChannelConfigError(
+            f"Run-button origin agent {run_origin.agent_id} does not own Channel {channel_id}"
         )
-        if binding is not None:
-            service._state.save_run_button_binding(channel_id, binding)
-    return adapter, outbound_buttons, binding
+    outbound_buttons, binding = _bind_outbound_run_buttons(
+        buttons,
+        platform_target=platform_target,
+        thread_id=thread_id,
+        origin_session_id=run_origin.session_id,
+    )
+    if binding is not None:
+        service._state.save_run_button_binding(channel_id, binding)
+        # Recorded inside the worker: cancellation drains the worker but does not
+        # return its result, and the caller must still discard the unsent binding.
+        saved.append(binding)
+    return outbound_buttons

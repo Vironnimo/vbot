@@ -1,10 +1,15 @@
 """Config-Agent Tool and Skill resolution tests."""
 
+import threading
 from types import SimpleNamespace
+from typing import Any
 
-from core.agents.temporary import TemporaryAgent
+import pytest
+
+from core.agents.temporary import TemporaryAgent, TemporaryAgentConfig, TemporaryAgentRegistry
+from core.database import DatabaseUnavailableError
 from core.projects.resolver import AgentResolver
-from core.sessions import SessionAddress
+from core.sessions import ChatSessionManager, SessionAddress
 from core.tools.availability import ToolAccess
 
 from .resolver_test_support import (
@@ -160,6 +165,67 @@ def test_temporary_profile_is_narrowed_by_the_selected_project_ceiling(
     assert preview.allowed_skills == resolved.allowed_skills
     assert preview.tools == resolved.tools
     assert preview.prompt_blocks == ["core:working_project"]
+
+
+@pytest.mark.asyncio
+async def test_async_temporary_resolution_reads_the_binding_on_the_session_pool(
+    agents: AgentStore,
+    projects: ProjectStore,
+    repo: Path,
+    data_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = _project(projects, repo)
+    sessions = ChatSessionManager(data_dir)
+    registry = TemporaryAgentRegistry(sessions)
+    binding = registry.create(
+        owner_name="extension",
+        group_id="group",
+        participant_id="participant",
+        config=TemporaryAgentConfig(
+            model="openai/gpt-5.2",
+            cwd=repo,
+            tool_access=ToolAccess(mode="selected", allowed=("read",)),
+            allowed_skills=[],
+            tools={},
+            name="Participant",
+        ),
+        project_id=project.project_id,
+    )
+    resolver = AgentResolver(
+        agents, projects, _openai_configured(), lambda: {}, temporary_agents=registry
+    )
+    threads: dict[str, str] = {}
+    resolve_binding = registry.resolve
+    apply_project = resolver._apply_temporary_project
+
+    def recording_resolve(*args: Any, **kwargs: Any) -> Any:
+        threads["binding"] = threading.current_thread().name
+        return resolve_binding(*args, **kwargs)
+
+    def recording_project(*args: Any) -> Any:
+        threads["project"] = threading.current_thread().name
+        return apply_project(*args)
+
+    monkeypatch.setattr(registry, "resolve", recording_resolve)
+    monkeypatch.setattr(resolver, "_apply_temporary_project", recording_project)
+    try:
+        resolved = await resolver.resolve_temporary_agent_async(
+            binding.address, generation_id=binding.generation_id
+        )
+
+        assert resolved.id == binding.address.agent_id
+        assert resolved.tool_access == ToolAccess(mode="selected", allowed=("read",))
+        assert threads["binding"].startswith("vbot-db-sessions")
+        assert threads["project"].startswith("vbot-agent-resolution")
+
+        sessions.close()
+        with pytest.raises(DatabaseUnavailableError):
+            await resolver.resolve_temporary_agent_async(
+                binding.address, generation_id=binding.generation_id
+            )
+    finally:
+        sessions.close()
 
 
 def test_temporary_selected_empty_policy_stays_empty_inside_a_project(
