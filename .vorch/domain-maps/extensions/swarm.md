@@ -398,6 +398,9 @@ Pending Board reads, automatic delivery, and participant counts use the partial
 Swarm's serialized database operations. The index is created with the current
 schema on open, without changing retained records. Ordered pending reads explicitly
 select this index so SQLite does not scan delivered posts to satisfy sequence order.
+Discussion Post pages likewise select `posts_discussion_page`, so a page of one
+Discussion does not walk the whole Swarm's Posts by sequence. Every index in
+`SCHEMA_SQL` names its reader in the comment above it.
 The regression fixture checks
 bounded SQLite work with 12 peers and 22,000 delivered recipient rows
 (`test_swarm_store_delivery.py`). A separate Wiki test verifies concurrent edits

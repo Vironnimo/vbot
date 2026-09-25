@@ -181,7 +181,8 @@ def _post_page(
         ).fetchone()[0]
     )["batch_chars"]
     rows = connection.execute(
-        f"SELECT {ALIASED_POST_COLUMNS},d.title AS discussion_title,r.route_class FROM posts p "
+        f"SELECT {ALIASED_POST_COLUMNS},d.title AS discussion_title,r.route_class "
+        "FROM posts p INDEXED BY posts_discussion_page "
         "JOIN discussions d ON d.id=p.discussion_id "
         "LEFT JOIN recipients r ON r.post_id=p.id AND r.participant_id=? "
         "WHERE p.swarm_id=? AND p.discussion_id=? AND p.sequence>0 AND p.sequence<=? "
@@ -221,7 +222,8 @@ def _human_post_page(
         ).fetchone()[0]
     )["batch_chars"]
     rows = connection.execute(
-        f"SELECT {POST_COLUMNS} FROM posts WHERE swarm_id=? AND discussion_id=? AND sequence>0 AND sequence<=? "
+        f"SELECT {POST_COLUMNS} FROM posts INDEXED BY posts_discussion_page "
+        "WHERE swarm_id=? AND discussion_id=? AND sequence>0 AND sequence<=? "
         "ORDER BY sequence DESC LIMIT ? OFFSET ?",
         (swarm_id, discussion_id, high_water, limit + 1, offset),
     ).fetchall()
