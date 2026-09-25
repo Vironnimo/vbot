@@ -228,6 +228,106 @@ def test_agent_with_unconvertible_allowed_tools_is_left_unconverted(tmp_path: Pa
     assert skipped.reason.startswith("left unconverted: allowed_tools mixes '*'")
 
 
+@pytest.mark.parametrize(
+    ("policy", "converted", "narrowed"),
+    [
+        (
+            {"mode": "selected", "allowed": ["read", "grep", "glob"]},
+            {"mode": "selected", "allowed": ["read", "search_files"]},
+            False,
+        ),
+        (
+            {"mode": "all", "denied": ["grep", "glob"]},
+            {"mode": "all", "denied": ["search_files"]},
+            False,
+        ),
+        (
+            {"mode": "selected", "allowed": ["read", "grep"]},
+            {"mode": "selected", "allowed": ["read"]},
+            True,
+        ),
+        ({"mode": "all", "denied": ["glob"]}, {"mode": "all", "denied": ["search_files"]}, True),
+        (
+            {"mode": "selected", "allowed": ["grep", "search_files"]},
+            {"mode": "selected", "allowed": ["search_files"]},
+            False,
+        ),
+    ],
+)
+def test_agent_search_tools_are_consolidated_without_widening(
+    tmp_path: Path, policy: dict[str, Any], converted: dict[str, Any], narrowed: bool
+) -> None:
+    context = _context(tmp_path)
+    _write(context.source, "agents/main/agent.json", _agent(tool_access=policy))
+
+    convert(context)
+
+    assert _staged(context, "agents/main/agent.json")["tool_access"] == converted
+    assert context.report.counts[AREA]["search_tools_consolidated"] == 1
+    assert bool(context.report.skipped) == narrowed
+
+
+def test_legacy_allowed_tools_with_both_search_tools_grant_search_files(tmp_path: Path) -> None:
+    context = _context(tmp_path)
+    _write(context.source, "agents/main/agent.json", _agent(allowed_tools=["glob", "grep"]))
+
+    convert(context)
+
+    assert _staged(context, "agents/main/agent.json")["tool_access"] == {
+        "mode": "selected",
+        "allowed": ["search_files"],
+    }
+
+
+def test_project_search_tools_are_consolidated_in_whitelist_and_overrides(tmp_path: Path) -> None:
+    context = _context(tmp_path)
+    project = {
+        "project_id": "a",
+        "display_name": "A",
+        "cwd": "/srv/a",
+        "allowed_tools": ["read", "grep", "glob"],
+        "overrides": {
+            "worker": {
+                "model": "m",
+                "tool_access": {"mode": "selected", "allowed": ["glob", "grep"]},
+            },
+            "reader": {"tool_access": {"mode": "selected", "allowed": ["grep"]}},
+        },
+    }
+    _write(context.source, "projects/a/project.json", project)
+    _write(
+        context.source, "projects/b/project.json", {**project, "allowed_tools": ["read", "glob"]}
+    )
+
+    convert(context)
+
+    converted = _staged(context, "projects/a/project.json")
+    assert converted["allowed_tools"] == ["read", "search_files"]
+    assert converted["overrides"] == {
+        "worker": {"model": "m", "tool_access": {"mode": "selected", "allowed": ["search_files"]}},
+        "reader": {"tool_access": {"mode": "selected", "allowed": []}},
+    }
+    assert _staged(context, "projects/b/project.json")["allowed_tools"] == ["read"]
+    assert sorted(item.reason.split(":")[0] for item in context.report.skipped) == [
+        "allowed_tools",
+        "overrides.reader.tool_access",
+        "overrides.reader.tool_access",
+    ]
+
+
+def test_invalid_tool_access_is_carried_over_for_the_application_to_report(
+    tmp_path: Path,
+) -> None:
+    context = _context(tmp_path)
+    policy = {"mode": "selected", "allowed": ["grep", "grep"]}
+    _write(context.source, "agents/main/agent.json", _agent(tool_access=policy))
+
+    convert(context)
+
+    assert _staged(context, "agents/main/agent.json")["tool_access"] == policy
+    assert context.report.skipped == []
+
+
 def test_project_without_tool_whitelist_gets_the_default_one(tmp_path: Path) -> None:
     context = _context(tmp_path)
     project = {"project_id": "a", "display_name": "A", "cwd": "/srv/a"}
