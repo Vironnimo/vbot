@@ -688,8 +688,15 @@ class LegacySessionStore:
                 "cache_read_tokens",
                 "cache_write_tokens",
                 "reasoning_tokens",
+                "estimated",
+                "input_tokens_estimated",
+                "output_tokens_estimated",
             ),
         )
+        flags = {
+            name: None if usage_columns.get(name) is None else int(usage_columns[name])
+            for name in ("estimated", "input_tokens_estimated", "output_tokens_estimated")
+        }
         timing, timing_extra, _present = _split(
             reasoning_timing, ("started_at", "completed_at", "duration_ms")
         )
@@ -697,8 +704,9 @@ class LegacySessionStore:
             "INSERT INTO assistant_messages (message_key, reasoning, reasoning_started_at, "
             "reasoning_completed_at, reasoning_duration_ms, reasoning_timing_extra_json, "
             "input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, reasoning_tokens, "
+            "usage_estimated, input_tokens_estimated, output_tokens_estimated, "
             "usage_present, usage_extra_json, tool_calls_present, interrupted) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 message_key,
                 reasoning,
@@ -711,6 +719,9 @@ class LegacySessionStore:
                 usage_columns.get("cache_read_tokens"),
                 usage_columns.get("cache_write_tokens"),
                 usage_columns.get("reasoning_tokens"),
+                flags["estimated"],
+                flags["input_tokens_estimated"],
+                flags["output_tokens_estimated"],
                 int(usage_present),
                 usage_extra,
                 int(tool_calls is not None),

@@ -102,7 +102,16 @@ def _legacy_data_dir(root: Path) -> dict[str, list[str]]:
         legacy.start_run(base, "run_1", minute=1)
         history = [
             legacy.user(base, "zebra question", minute=1, run_id="run_1"),
-            legacy.assistant(base, "An answer.", minute=2, run_id="run_1"),
+            # Both old Assistant Message shapes: a whole-turn-only estimate and a
+            # line-only output-file reference.
+            legacy.assistant(
+                base,
+                "An answer.\nanswer.md",
+                minute=2,
+                run_id="run_1",
+                usage={"input_tokens": 12, "output_tokens": 3, "estimated": True},
+                output_files=[{"path": "answer.md", "line_index": 1}],
+            ),
         ]
         history.append(legacy.finish_run(base, "run_1", minute=3))
         branch = legacy.fork(base, "branch", minute=4)
@@ -159,6 +168,8 @@ def test_dry_run_verifies_everything_and_leaves_the_data_directory_unchanged(
     assert after == before
     assert report["result"] == "verified"
     assert report["areas"]["sessions"]["sessions"] == 2
+    assert report["areas"]["sessions"]["usage_provenance_derived"] == 1
+    assert report["areas"]["sessions"]["output_file_spans_derived"] == 1
     verification = report["verification"]
     assert set(verification["databases"]) == {
         "sessions",
