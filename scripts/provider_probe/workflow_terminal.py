@@ -10,7 +10,6 @@ from tempfile import TemporaryDirectory
 from typing import Any
 
 from core.providers.tool_schema import render_tool_definitions
-from core.tools.contracts import ToolContractError
 from scripts.provider_probe.common import PROJECT_ROOT
 
 
@@ -297,7 +296,8 @@ async def _probe_terminal_case(
             if valid:
                 try:
                     result = await registry.dispatch(context, actual, ["terminal"])
-                except ToolContractError:
+                except ValueError:
+                    # Tool execution reports a refused call as invalid_arguments.
                     result = {"ok": False, "error": {"code": "invalid_arguments"}}
                 data = result.get("data") or {}
                 if case.get("error"):

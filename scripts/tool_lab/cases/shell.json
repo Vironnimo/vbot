@@ -840,6 +840,126 @@
    "expect": {
     "ok": true
    }
+  },
+  {
+   "name": "terminal: input waits for the reply",
+   "steps": [
+    {
+     "tool": "terminal",
+     "arguments": {
+      "action": "start",
+      "command": "python",
+      "args": [
+       "-q"
+      ]
+     }
+    },
+    {
+     "tool": "terminal",
+     "arguments": {
+      "action": "input",
+      "terminal_id": "$1.terminal_id",
+      "text": "print(6*7)",
+      "key": "enter",
+      "timeout_ms": 8000
+     }
+    }
+   ],
+   "expect": {
+    "ok": true,
+    "contains": [
+     "42",
+     "timed_out: false"
+    ]
+   }
+  },
+  {
+   "name": "terminal: Codex write_stdin shape",
+   "steps": [
+    {
+     "tool": "terminal",
+     "arguments": {
+      "action": "start",
+      "command": "python",
+      "args": [
+       "-q"
+      ]
+     }
+    },
+    {
+     "tool": "terminal",
+     "arguments": {
+      "action": "write_stdin",
+      "session_id": "$1.terminal_id",
+      "chars": "print(6*7)\r",
+      "yield_time_ms": 8000
+     }
+    }
+   ],
+   "expect": {
+    "ok": true,
+    "contains": [
+     "42"
+    ]
+   }
+  },
+  {
+   "name": "terminal: unknown id lists attached terminals",
+   "steps": [
+    {
+     "tool": "terminal",
+     "arguments": {
+      "action": "start",
+      "command": "python",
+      "args": [
+       "-q"
+      ]
+     }
+    },
+    {
+     "tool": "terminal",
+     "arguments": {
+      "action": "status",
+      "terminal_id": "term_missing"
+     }
+    }
+   ],
+   "expect": {
+    "ok": false,
+    "contains": [
+     "No terminal has the id term_missing",
+     "Terminals attached"
+    ]
+   }
+  },
+  {
+   "name": "terminal: text on wait names the input call",
+   "steps": [
+    {
+     "tool": "terminal",
+     "arguments": {
+      "action": "start",
+      "command": "python",
+      "args": [
+       "-q"
+      ]
+     }
+    },
+    {
+     "tool": "terminal",
+     "arguments": {
+      "action": "wait",
+      "terminal_id": "$1.terminal_id",
+      "text": "y"
+     }
+    }
+   ],
+   "expect": {
+    "ok": false,
+    "contains": [
+     "\"action\": \"input\""
+    ]
+   }
   }
  ]
 }
