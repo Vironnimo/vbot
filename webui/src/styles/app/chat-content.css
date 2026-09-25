@@ -135,6 +135,8 @@
 }
 
 .msg {
+  --msg-content-indent: 34px;
+
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -160,17 +162,17 @@
   font-weight: 600;
 }
 
-.msg.user .msg-avatar {
+.msg.user > .msg-header > .msg-avatar {
   color: var(--accent);
   background: var(--accent-pale);
 }
 
-.msg.assistant .msg-avatar {
+.msg.assistant > .msg-header > .msg-avatar {
   color: var(--text-med);
   background: var(--surface-3);
 }
 
-.msg.error .msg-avatar {
+.msg.error > .msg-header > .msg-avatar {
   color: var(--red);
   background: color-mix(in srgb, var(--red) 10%, transparent);
 }
@@ -181,15 +183,15 @@
   letter-spacing: 0.02em;
 }
 
-.msg.user .msg-author {
+.msg.user > .msg-header > .msg-author {
   color: var(--accent);
 }
 
-.msg.assistant .msg-author {
+.msg.assistant > .msg-header > .msg-author {
   color: var(--text-med);
 }
 
-.msg.error .msg-author {
+.msg.error > .msg-header > .msg-author {
   color: var(--red);
 }
 
@@ -219,25 +221,33 @@
   display: flex;
   flex-direction: column;
   gap: 7px;
-  padding-left: 34px;
+  padding-left: var(--msg-content-indent);
 }
 
 .msg.user {
   align-items: flex-end;
 }
 
-.msg.user .msg-header {
+.msg.user > .msg-header {
   flex-direction: row-reverse;
 }
 
-.msg.user .msg-content {
+.msg.user > .msg-content {
   width: 100%;
   align-items: flex-end;
-  padding-right: 34px;
+  padding-right: var(--msg-content-indent);
   padding-left: 0;
 }
 
-.msg.user .msg-body-text,
+/* Steered User messages share the ordinary message component inside a Run.
+   Undo only that container's indent and duplicate horizontal message padding. */
+.assistant-run-content > .msg.user {
+  margin-left: calc(-1 * var(--msg-content-indent));
+  padding-right: 0;
+  padding-left: 0;
+}
+
+.msg-body-text--user,
 .message-block.user {
   max-width: 75%;
   padding: 10px 16px;
@@ -250,7 +260,7 @@
   line-height: 1.55;
 }
 
-.msg.assistant .msg-body-text,
+.msg.assistant > .msg-content > .msg-body-text,
 .message-block.assistant {
   padding: 2px 0;
   color: var(--text-hi);
@@ -466,7 +476,7 @@
   vertical-align: middle;
 }
 
-.msg.error .msg-body-text {
+.msg.error > .msg-content > .msg-body-text {
   max-width: min(720px, 100%);
   padding: 10px 14px;
   border: 1px solid color-mix(in srgb, var(--red) 24%, transparent);
