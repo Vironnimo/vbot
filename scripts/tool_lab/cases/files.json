@@ -466,6 +466,52 @@
    }
   },
   {
+   "name": "patch: old_string copied with a misspelling is applied and named",
+   "tool": "apply_patch",
+   "arguments": {
+    "path": "src/app.py",
+    "old_string": "return f\"Hello, {self.nmae}!\"",
+    "new_string": "return f\"Hi, {self.nmae}!\""
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "Line 9 did not match your old text exactly"
+    ],
+    "files": {
+     "src/app.py": "import os\n\n\nclass Greeter:\n    def __init__(self, name):\n        self.name = name\n\n    def greet(self):\n        return f\"Hi, {self.name}!\"\n\n\ndef main():\n    g = Greeter(\"world\")\n    print(g.greet())\n"
+    }
+   }
+  },
+  {
+   "name": "patch: hunk with a stale context line is applied",
+   "tool": "apply_patch",
+   "arguments": {
+    "patch": "*** Begin Patch\n*** Update File: src/app.py\n@@\n def main(args):\n-    g = Greeter(\"world\")\n+    g = Greeter(\"mars\")\n*** End Patch"
+   },
+   "expect": {
+    "ok": true,
+    "files": {
+     "src/app.py": "import os\n\n\nclass Greeter:\n    def __init__(self, name):\n        self.name = name\n\n    def greet(self):\n        return f\"Hello, {self.name}!\"\n\n\ndef main():\n    g = Greeter(\"mars\")\n    print(g.greet())\n"
+    }
+   }
+  },
+  {
+   "name": "patch: short old_string with a misspelling is refused",
+   "tool": "apply_patch",
+   "arguments": {
+    "path": "src/app.py",
+    "old_string": "self.nmae",
+    "new_string": "self.title"
+   },
+   "expect": {
+    "ok": false,
+    "files": {
+     "src/app.py": "import os\n\n\nclass Greeter:\n    def __init__(self, name):\n        self.name = name\n\n    def greet(self):\n        return f\"Hello, {self.name}!\"\n\n\ndef main():\n    g = Greeter(\"world\")\n    print(g.greet())\n"
+    }
+   }
+  },
+  {
    "name": "patch: file does not exist",
    "tool": "apply_patch",
    "arguments": {
