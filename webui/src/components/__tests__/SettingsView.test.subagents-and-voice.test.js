@@ -343,10 +343,8 @@ describe('SettingsView', () => {
             active: true,
           },
         ]),
-        getWakewordStatus: vi.fn().mockResolvedValue({
-          enabled: false,
-          state: 'off',
-        }),
+        listMicrophones: vi.fn().mockResolvedValue([]),
+        listWakewordModels: vi.fn().mockResolvedValue([]),
       },
     };
 
@@ -354,7 +352,37 @@ describe('SettingsView', () => {
       target: document.body,
       props: {
         agents: agentsPayload(),
-        desktopCapabilities: { wakeword: true, serverSelection: true },
+        desktopCapabilities: {
+          wakeword: true,
+          voiceApi: 2,
+          serverSelection: true,
+        },
+        desktopVoice: {
+          available: true,
+          status: {
+            enabled: false,
+            mode: 'real',
+            state: 'off',
+            error_code: null,
+            sequence: 1,
+            microphone: null,
+            active_microphone: null,
+            echo_cancellation: { enabled: true, state: 'off' },
+            default_agent_id: null,
+            default_session_behavior: 'active',
+            phrases: [],
+            recording: null,
+            commands: [],
+            calibration: null,
+            limits: {
+              max_active_phrases: 8,
+              min_sensitivity: 0.05,
+              max_sensitivity: 0.95,
+            },
+          },
+          adopt: vi.fn(),
+          refresh: vi.fn(),
+        },
         targetPanelId: 'voice',
         targetPanelRequestId: 1,
       },

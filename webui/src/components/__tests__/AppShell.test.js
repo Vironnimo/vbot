@@ -67,7 +67,7 @@ describe('AppShell Desktop context menu', () => {
       target: document.body,
       props: {
         items: [],
-        desktopCapabilities: { wakeword: true },
+        voiceAvailable: true,
         sidebarFooter: createRawSnippet(() => ({
           render: () => '<button data-live>Start Live</button>',
         })),
@@ -396,7 +396,7 @@ describe('AppShell Desktop context menu', () => {
   });
 });
 
-describe('AppShell wakeword mic indicator', () => {
+describe('AppShell Voice indicator', () => {
   let mountedComponent;
 
   beforeEach(() => {
@@ -416,26 +416,87 @@ describe('AppShell wakeword mic indicator', () => {
     vi.restoreAllMocks();
   });
 
-  function mountMicIndicator({ state, onStop, onNavigate }) {
+  function voiceStatus(overrides = {}) {
+    return {
+      enabled: true,
+      state: 'listening',
+      sequence: 1,
+      recording: null,
+      commands: [],
+      ...overrides,
+    };
+  }
+
+  function mountMicIndicator({
+    status = voiceStatus(),
+    voiceAvailable = true,
+    onStop = vi.fn(),
+    onNavigate = vi.fn(),
+  } = {}) {
     mountedComponent = mount(AppShell, {
       target: document.body,
       props: {
         items: [],
-        desktopCapabilities: { wakeword: true },
-        wakewordStatus: { enabled: true, state },
-        onStopWakewordRecording: onStop,
+        voiceAvailable,
+        voiceStatus: status,
+        onStopVoiceRecording: onStop,
         onNavigateToVoiceSettings: onNavigate,
       },
     });
     flushSync();
+    return document.querySelector('.sidebar-footer__mic');
   }
+
+  it('is absent without the Desktop Voice bridge', () => {
+    expect(mountMicIndicator({ voiceAvailable: false })).toBeNull();
+  });
+
+  it.each([
+    ['off', voiceStatus({ enabled: false, state: 'off' }), 'off', 'Disabled'],
+    ['starting', voiceStatus({ state: 'starting' }), 'processing', 'Starting'],
+    ['listening', voiceStatus(), 'listening', 'Listening'],
+    [
+      'a lost microphone',
+      voiceStatus({ state: 'microphone_disconnected' }),
+      'warning',
+      'Microphone disconnected',
+    ],
+    ['an error', voiceStatus({ state: 'error' }), 'error', 'Voice error'],
+    [
+      'a recording',
+      voiceStatus({ recording: { command_id: 'c-1' } }),
+      'recording',
+      'Recording',
+    ],
+    [
+      'a command in flight',
+      voiceStatus({
+        commands: [{ command_id: 'c-1', model_id: null, stage: 'sending' }],
+      }),
+      'processing',
+      'Sending',
+    ],
+    [
+      'an error during a recording',
+      voiceStatus({ state: 'error', recording: { command_id: 'c-1' } }),
+      'error',
+      'Voice error',
+    ],
+    ['no status yet', null, 'off', 'Disabled'],
+  ])('shows %s', (_label, status, tone, text) => {
+    const indicator = mountMicIndicator({ status });
+    expect(indicator.querySelector(`.mic-icon--${tone}`)).toBeTruthy();
+    expect(indicator.textContent).toContain(text);
+  });
 
   it('stops the recording when the mic indicator is clicked during recording', () => {
     const onStop = vi.fn();
     const onNavigate = vi.fn();
-    mountMicIndicator({ state: 'recording', onStop, onNavigate });
-
-    document.querySelector('.sidebar-footer__mic').click();
+    mountMicIndicator({
+      status: voiceStatus({ recording: { command_id: 'c-1' } }),
+      onStop,
+      onNavigate,
+    }).click();
     flushSync();
 
     expect(onStop).toHaveBeenCalledOnce();
@@ -445,7 +506,11 @@ describe('AppShell wakeword mic indicator', () => {
   it('stops the recording when the mic icon is clicked during recording', () => {
     const onStop = vi.fn();
     const onNavigate = vi.fn();
-    mountMicIndicator({ state: 'recording', onStop, onNavigate });
+    mountMicIndicator({
+      status: voiceStatus({ recording: { command_id: 'c-1' } }),
+      onStop,
+      onNavigate,
+    });
 
     document
       .querySelector('.mic-icon')
@@ -456,24 +521,10 @@ describe('AppShell wakeword mic indicator', () => {
     expect(onNavigate).not.toHaveBeenCalled();
   });
 
-  it('shows wakeword listening as paused while Live voice holds the microphone', () => {
-    mountMicIndicator({
-      state: 'paused',
-      onStop: vi.fn(),
-      onNavigate: vi.fn(),
-    });
-
-    const indicator = document.querySelector('.sidebar-footer__mic');
-    expect(indicator.textContent).toContain('Paused during Live voice');
-    expect(indicator.querySelector('.mic-icon--off')).toBeTruthy();
-  });
-
   it('navigates to voice settings when clicked while not recording', () => {
     const onStop = vi.fn();
     const onNavigate = vi.fn();
-    mountMicIndicator({ state: 'listening', onStop, onNavigate });
-
-    document.querySelector('.sidebar-footer__mic').click();
+    mountMicIndicator({ onStop, onNavigate }).click();
     flushSync();
 
     expect(onNavigate).toHaveBeenCalledOnce();
@@ -481,11 +532,7 @@ describe('AppShell wakeword mic indicator', () => {
   });
 
   it('shows the mic tooltip on the indicator when collapsed', async () => {
-    mountMicIndicator({
-      state: 'listening',
-      onStop: vi.fn(),
-      onNavigate: vi.fn(),
-    });
+    mountMicIndicator();
 
     document.querySelector('.app-shell__sidebar-toggle').click();
     flushSync();
@@ -500,7 +547,7 @@ describe('AppShell wakeword mic indicator', () => {
       ),
     );
     expect(document.querySelector('#app-tooltip').textContent).toBe(
-      'Listening for wakeword',
+      'Listening for wake phrases',
     );
   });
 });
