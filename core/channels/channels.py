@@ -105,6 +105,9 @@ class ChannelService:
         self._adapter_restart_attempts: dict[str, int] = {}
         self._adapter_restart_tasks: dict[str, asyncio.Task[None]] = {}
         self._pending_start_requests: dict[str, tuple[bool, ChannelConfig | None]] = {}
+        # Channel ids whose create or delete persistence is in flight off the
+        # Event Loop; every other change of such a Channel is refused meanwhile.
+        self._pending_config_changes: set[str] = set()
         self._failed_channels: set[str] = set()
         self._failure_reasons: dict[str, str] = {}
         self._started = False
@@ -281,7 +284,7 @@ class ChannelService:
         """
         normalized_id = _normalize_channel_id(channel_id)
         config = self._storage.get(normalized_id)
-        self._require_whatsapp_idle(normalized_id)
+        self._require_idle(normalized_id)
         self._validate_agent_exists(config.agent_id)
         self._preflight_adapter_start(config)
 
@@ -357,12 +360,20 @@ class ChannelService:
         """Revoke one additional group admin and return saved state."""
         return await self._state.revoke_group_admin(channel_id, access_scope_id, user_id)
 
-    def create_channel(self, config: ChannelConfig) -> None:
-        """Validate and persist one channel config, then start it when enabled."""
+    async def create_channel(self, config: ChannelConfig) -> None:
+        """Validate and persist one channel config, then start it when enabled.
+
+        Writing ``channel.json`` and registering the Channel in ``channels.db``
+        run as one unit on the state database's worker pool, off the Event Loop.
+        A failure of either write, of the adapter start, or a cancellation after
+        the unit ran removes both again. Other changes of this Channel id are
+        refused until the create settles.
+        """
         if not isinstance(config, ChannelConfig):
             raise ChannelConfigError("config must be a ChannelConfig instance")
         config.validate()
         self._validate_agent_exists(config.agent_id)
+        self._require_idle(config.id)
         had_enabled_channels = self.has_enabled_channels()
 
         try:
@@ -373,15 +384,27 @@ class ChannelService:
             raise ChannelConfigError(f"Channel already exists: {config.id}")
 
         self._preflight_adapter_start(config)
-        self._storage.save(config)
+        persisted = False
+
+        def persist() -> None:
+            nonlocal persisted
+            self._persist_created_channel(config)
+            persisted = True
+
+        self._pending_config_changes.add(config.id)
         try:
-            # A new Channel never inherits state rows left behind under its id.
-            self._state.reset(config.id)
+            await self._state.database.run_async(persist)
             if config.enabled:
                 self.start_channel(config.id, config_override=config)
-        except Exception:
-            self._rollback_created_channel(config.id)
+        except BaseException:
+            if persisted:
+                await _settle(
+                    self._state.database.run_async(self._rollback_created_channel, config.id),
+                    f"Rollback failed while removing newly created channel (channel={config.id})",
+                )
             raise
+        finally:
+            self._pending_config_changes.discard(config.id)
         self._notify_tool_registration_if_changed(had_enabled_channels)
 
     def update_channel(self, channel_id: str, **fields: Any) -> None:
@@ -395,7 +418,7 @@ class ChannelService:
             raise ChannelConfigError(f"Unsupported channel fields: {joined}")
         if not fields:
             return
-        self._require_whatsapp_idle(normalized_id)
+        self._require_idle(normalized_id)
 
         had_enabled_channels = self.has_enabled_channels()
         updated = replace(config, **fields)
@@ -420,11 +443,18 @@ class ChannelService:
             raise
         self._notify_tool_registration_if_changed(had_enabled_channels)
 
-    def delete_channel(self, channel_id: str) -> None:
-        """Delete one channel config and state, and stop any active adapter task."""
+    async def delete_channel(self, channel_id: str) -> None:
+        """Delete one channel config and state, and stop any active adapter task.
+
+        The adapter stops on the Event Loop; removing the Channel directory with
+        its ``channel.json`` and then unregistering the Channel, which drops every
+        ``channels.db`` row it owns, run as one unit on the state database's
+        worker pool. Other changes of this Channel id are refused until the
+        delete settles.
+        """
         normalized_id = _normalize_channel_id(channel_id)
         config = self._storage.get(normalized_id)
-        self._require_whatsapp_idle(normalized_id)
+        self._require_idle(normalized_id)
         if config.platform in {"whatsapp", "slack", "mattermost"} and (
             self._is_running(normalized_id) or self._is_stop_in_progress(normalized_id)
         ):
@@ -434,19 +464,33 @@ class ChannelService:
         had_enabled_channels = self.has_enabled_channels()
         self.stop_channel(normalized_id)
         self._pending_start_requests.pop(normalized_id, None)
-        self._storage.delete(normalized_id)
-        # Late saves of the stopping adapter are refused once unregistered.
-        self._state.unregister(normalized_id)
-        self._whatsapp_setup_states.pop(normalized_id, None)
-        self._whatsapp_setup_tasks.pop(normalized_id, None)
-        self._whatsapp_operations.pop(normalized_id, None)
-        self._notify_tool_registration_if_changed(had_enabled_channels)
+        removed = False
+
+        def remove() -> None:
+            nonlocal removed
+            self._storage.delete(normalized_id)
+            # Late saves of the stopping adapter are refused once unregistered.
+            self._state.unregister(normalized_id)
+            removed = True
+
+        self._pending_config_changes.add(normalized_id)
+        try:
+            await self._state.database.run_async(remove)
+        finally:
+            self._pending_config_changes.discard(normalized_id)
+            # The worker settles before a cancellation arrives here, so a
+            # completed removal is always followed through.
+            if removed:
+                self._whatsapp_setup_states.pop(normalized_id, None)
+                self._whatsapp_setup_tasks.pop(normalized_id, None)
+                self._whatsapp_operations.pop(normalized_id, None)
+                self._notify_tool_registration_if_changed(had_enabled_channels)
 
     def enable_channel(self, channel_id: str) -> None:
         """Enable one channel and start its adapter task."""
         normalized_id = _normalize_channel_id(channel_id)
         config = self._storage.get(normalized_id)
-        self._require_whatsapp_idle(normalized_id)
+        self._require_idle(normalized_id)
         self._enable_channel(config)
 
     def _enable_channel(self, config: ChannelConfig) -> None:
@@ -465,7 +509,7 @@ class ChannelService:
         """Disable one channel and stop its adapter task."""
         normalized_id = _normalize_channel_id(channel_id)
         config = self._storage.get(normalized_id)
-        self._require_whatsapp_idle(normalized_id)
+        self._require_idle(normalized_id)
         had_enabled_channels = self.has_enabled_channels()
         if config.enabled:
             self._storage.save(replace(config, enabled=False))
@@ -657,6 +701,7 @@ class ChannelService:
         channel_id = _normalize_channel_id(channel_id)
         operation = self._whatsapp_operations.setdefault(channel_id, asyncio.Lock())
         async with operation:
+            self._require_no_config_change(channel_id)
             status = await self.whatsapp_status(channel_id)
             existing = self._whatsapp_setup_tasks.get(channel_id)
             if existing is not None and not existing.done():
@@ -693,6 +738,7 @@ class ChannelService:
         channel_id = _normalize_channel_id(channel_id)
         operation = self._whatsapp_operations.setdefault(channel_id, asyncio.Lock())
         async with operation:
+            self._require_no_config_change(channel_id)
             status = await self.whatsapp_status(channel_id)
             if not status["installed"]:
                 raise ChannelConfigError("Install WhatsApp support first")
@@ -711,13 +757,19 @@ class ChannelService:
             _LOGGER.info("WhatsApp pairing requested (channel=%s reset=%s)", channel_id, reset)
             return await self.whatsapp_status(channel_id)
 
-    def _require_whatsapp_idle(self, channel_id: str) -> None:
+    def _require_idle(self, channel_id: str) -> None:
+        """Refuse a change while a create, delete or WhatsApp operation of it is in flight."""
+        self._require_no_config_change(channel_id)
         operation = self._whatsapp_operations.get(channel_id)
         if operation is not None and operation.locked():
             raise ChannelError("Wait for the WhatsApp connection operation to finish")
         setup = self._whatsapp_setup_tasks.get(channel_id)
         if setup is not None and not setup.done():
             raise ChannelError("Wait for WhatsApp setup to finish before changing this Channel")
+
+    def _require_no_config_change(self, channel_id: str) -> None:
+        if channel_id in self._pending_config_changes:
+            raise ChannelError("Wait for the Channel to finish being created or removed")
 
     def _preflight_adapter_start(self, config: ChannelConfig) -> None:
         if not config.enabled:
@@ -732,7 +784,21 @@ class ChannelService:
         except Exception as error:
             raise ChannelConfigError(f"Unknown agent_id: {agent_id}") from error
 
+    def _persist_created_channel(self, config: ChannelConfig) -> None:
+        """Write ``channel.json``, then register the Channel with empty state; all or nothing.
+
+        Blocking; runs on the state database's worker pool.
+        """
+        self._storage.save(config)
+        try:
+            # A new Channel never inherits state rows left behind under its id.
+            self._state.reset(config.id)
+        except BaseException:
+            self._rollback_created_channel(config.id)
+            raise
+
     def _rollback_created_channel(self, channel_id: str) -> None:
+        """Remove a created Channel's config and registration, logging failures. Blocking."""
         try:
             self._storage.delete(channel_id)
         except Exception as error:
@@ -1050,6 +1116,34 @@ class ChannelService:
             error,
             exc_info=(type(error), error, error.__traceback__),
         )
+
+
+async def _settle(work: Awaitable[None], failure_message: str) -> None:
+    """Await ``work`` to its end even when cancelled meanwhile, then re-raise the cancellation.
+
+    A failure of ``work`` is logged with ``failure_message``, not raised: this
+    runs compensation while another exception is already propagating.
+    """
+    task = asyncio.ensure_future(work)
+    cancelled = False
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            cancelled = True
+        except Exception:
+            break
+    if not task.cancelled():
+        error = task.exception()
+        if error is not None:
+            _LOGGER.error(
+                "%s: %s",
+                failure_message,
+                error,
+                exc_info=(type(error), error, error.__traceback__),
+            )
+    if cancelled:
+        raise asyncio.CancelledError
 
 
 def _get_running_loop_or_none() -> asyncio.AbstractEventLoop | None:
