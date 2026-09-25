@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from pathlib import Path
 from uuid import uuid4
 
@@ -46,6 +47,9 @@ def doctor_config(data_dir: str | Path | None = None) -> CommandResult:
         + _summary(ok, sum(report.warning_count for report in reports)),
         instance=instance,
     )
+
+
+_SUMMARIZE_VALID_DOCUMENTS_FROM = 5
 
 
 def _summary(ok: bool, warnings: int) -> str:
@@ -109,13 +113,26 @@ def _format_config_report(data_dir: Path, reports: tuple[JsonValidationReport, .
     if warning_count:
         lines.append(f"warnings: {warning_count}")
 
+    # A directory of many valid documents (such as attachment sidecars) is one line.
+    valid_per_directory = Counter(
+        _relative_report_path(data_dir, report.file_path.parent)
+        for report in reports
+        if report.exists and not report.diagnostics
+    )
+    summarized: set[str] = set()
     for report in reports:
         relative_path = _relative_report_path(data_dir, report.file_path)
         if not report.exists:
             lines.append(f"{relative_path}: missing (defaults will be used)")
             continue
         if not report.diagnostics:
-            lines.append(f"{relative_path}: valid")
+            directory = _relative_report_path(data_dir, report.file_path.parent)
+            count = valid_per_directory[directory]
+            if count < _SUMMARIZE_VALID_DOCUMENTS_FROM:
+                lines.append(f"{relative_path}: valid")
+            elif directory not in summarized:
+                summarized.add(directory)
+                lines.append(f"{directory}/: {count} documents valid")
             continue
         lines.append(f"{relative_path}:")
         lines.extend(_format_diagnostic(diagnostic) for diagnostic in report.diagnostics)
