@@ -19,7 +19,7 @@ from core.chat.messages import ChatMessage, JsonObject, ToolCall, ToolCallReject
 from core.extensions import ExtensionRegistry, HookContext
 from core.performance import measure, session_track
 from core.runs import TOOL_CALL_RESULT_EVENT, TOOL_CALL_STARTED_EVENT, Run
-from core.sessions import ChatSession
+from core.sessions import ChatSession, ToolResultFacts, ToolResultPayload
 from core.tools import (
     READ_MEDIA_ARTIFACT_KIND,
     ChangeTracker,
@@ -41,6 +41,7 @@ from core.tools.availability import (
     agent_tool_settings,
     resolve_tool_access,
 )
+from core.utils.ids import new_id
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -85,6 +86,12 @@ class ToolDispatchContext:
     _owned_effect_call_ids: set[str] = field(
         default_factory=set, init=False, repr=False, compare=False
     )
+    _result_payloads: dict[str, list[ToolResultPayload]] = field(
+        default_factory=dict, init=False, repr=False, compare=False
+    )
+    _closed_payload_calls: set[str] = field(
+        default_factory=set, init=False, repr=False, compare=False
+    )
 
     def register_result_persisted(
         self,
@@ -115,6 +122,52 @@ class ToolDispatchContext:
         object.__setattr__(self, "_turn_end_requested", True)
         self._owned_effect_call_ids.add(_tool_call_id)
 
+    def stage_result_payload(self, tool_call_id: str, tool_name: str, payload: Any) -> str:
+        """Keep one payload for this call's Tool Result; persisted with that result.
+
+        The owner is the Extension that registered *tool_name*. The payload is
+        serialized now, so later changes to the handler's object have no effect.
+        """
+        if tool_call_id in self._closed_payload_calls:
+            raise RuntimeError("Result payloads can be attached only while the Tool call runs")
+        try:
+            owner_name = self.registry.get(tool_name).extension
+        except ToolNotFoundError:
+            owner_name = None
+        if owner_name is None:
+            raise RuntimeError("Result payloads are available only to Extension Tools")
+        payload_json = json.dumps(
+            payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False
+        )
+        payload_id = new_id("res")
+        self._result_payloads.setdefault(tool_call_id, []).append(
+            ToolResultPayload(payload_id, owner_name, payload_json)
+        )
+        return payload_id
+
+    def discard_result_payloads(self, tool_call_id: str) -> None:
+        """Drop the payloads of a call whose handler did not produce its result."""
+        self._result_payloads.pop(tool_call_id, None)
+
+    def close_result_payloads(self, tool_call_id: str, *, keep: bool) -> None:
+        """Stop accepting payloads for a finished call; drop them unless *keep*."""
+        self._closed_payload_calls.add(tool_call_id)
+        if not keep:
+            self.discard_result_payloads(tool_call_id)
+
+    def with_result_payloads(
+        self, facts: Mapping[str, ToolResultFacts]
+    ) -> dict[str, ToolResultFacts]:
+        """Return *facts* carrying each call's kept payloads, for one atomic append."""
+        return {
+            call_id: (
+                replace(fact, payloads=tuple(self._result_payloads[call_id]))
+                if self._result_payloads.get(call_id)
+                else fact
+            )
+            for call_id, fact in facts.items()
+        }
+
     @property
     def delivery_receipts(self) -> tuple[tuple[str, str, str, str], ...]:
         return tuple(self._delivery_receipts)
@@ -142,8 +195,10 @@ class _EmittingToolRegistry(ToolRegistry):
         rejections: Mapping[int, ToolCallRejection] | None = None,
         tool_restriction: Sequence[str] | None = None,
         assistant_message_id: str | None = None,
+        result_payloads: ToolDispatchContext | None = None,
     ) -> None:
         self._registry = registry
+        self._result_payloads = result_payloads
         self._assistant_message_id = assistant_message_id
         self._run = run
         self._extension_registry = extension_registry
@@ -211,6 +266,8 @@ class _EmittingToolRegistry(ToolRegistry):
         self._run.tool_call_names.add(context.tool_name)
         started_at = datetime.now(UTC)
         started_perf = time.perf_counter()
+        # Payloads persist only with a result this dispatch returns.
+        returned = False
         try:
             rejection = self._rejections.get(context.tool_call_index)
             if rejection is not None:
@@ -438,12 +495,15 @@ class _EmittingToolRegistry(ToolRegistry):
                     "error_code": error_code,
                 },
             )
+            returned = True
             return result
         finally:
             # Per-call cancel registry entries are scoped to a single dispatch.
             # Clearing on every exit path keeps the registry bounded and lets a
             # later call that re-uses the same id start from a clean slate.
             self._run.clear_tool_cancel(context.tool_call_id)
+            if self._result_payloads is not None:
+                self._result_payloads.close_result_payloads(context.tool_call_id, keep=returned)
 
     def take_media_for_call(self, tool_call_id: str, *, tool_message_id: str) -> list[JsonObject]:
         """Transfer in-memory media to the correlated request without retaining a cache."""
@@ -474,23 +534,11 @@ class _EmittingToolRegistry(ToolRegistry):
                 arguments,
                 allowed_tools,
             )
-        except ToolNotFoundError as error:
-            return tool_failure("tool_not_found", str(error))
-        except SessionToolUnavailableError as error:
-            return tool_failure(f"{context.tool_name}_unavailable", str(error))
-        except ToolNotAllowedError as error:
-            return tool_failure("tool_not_allowed", str(error))
-        except InvalidToolResultError as error:
-            return tool_failure("invalid_tool_result", str(error))
-        except ValueError as error:
-            return tool_failure("invalid_arguments", str(error))
         except Exception as error:
-            # The branches above are expected tool/input failures (the normal
-            # tool contract); this catch-all is an unexpected crash inside the
-            # handler. The crash is converted to a result and the run usually
-            # continues, so Run.mark_failed never sees it — log it here.
-            _LOGGER.error("Tool %s crashed unexpectedly", context.tool_name, exc_info=error)
-            return tool_failure("tool_execution_error", str(error))
+            # The failure envelope replaces whatever the handler staged.
+            if self._result_payloads is not None:
+                self._result_payloads.discard_result_payloads(context.tool_call_id)
+            return _failure_envelope(context, error)
 
     async def _dispatch_with_current_registry_signature(
         self,
@@ -512,6 +560,26 @@ class _EmittingToolRegistry(ToolRegistry):
                 timer.discard()
                 raise
             return self.validate_result(context.tool_name, result)
+
+
+def _failure_envelope(context: ToolContext, error: Exception) -> JsonObject:
+    """Convert one failed dispatch into the Tool's failure envelope."""
+    if isinstance(error, ToolNotFoundError):
+        return tool_failure("tool_not_found", str(error))
+    if isinstance(error, SessionToolUnavailableError):
+        return tool_failure(f"{context.tool_name}_unavailable", str(error))
+    if isinstance(error, ToolNotAllowedError):
+        return tool_failure("tool_not_allowed", str(error))
+    if isinstance(error, InvalidToolResultError):
+        return tool_failure("invalid_tool_result", str(error))
+    if isinstance(error, ValueError):
+        return tool_failure("invalid_arguments", str(error))
+    # The branches above are expected tool/input failures (the normal tool
+    # contract); this is an unexpected crash inside the handler. The crash is
+    # converted to a result and the run usually continues, so Run.mark_failed
+    # never sees it — log it here.
+    _LOGGER.error("Tool %s crashed unexpectedly", context.tool_name, exc_info=error)
+    return tool_failure("tool_execution_error", str(error))
 
 
 def _safe_schema_fingerprint(registry: Any, tool_name: str) -> str:
@@ -552,6 +620,7 @@ async def _dispatch_tool_calls(
             for index, tool_call in enumerate(tool_calls)
             if tool_call.rejection is not None
         },
+        result_payloads=context,
     )
     executor = ToolExecutor(emitting_registry)
     workspace = _agent_workspace(agent, context.data_root)
@@ -610,6 +679,7 @@ async def _dispatch_tool_calls(
             tool_turn_end_registrar=(
                 context.request_turn_end if context.allow_owned_effects else None
             ),
+            tool_result_payload_registrar=context.stage_result_payload,
             nesting_depth=context.nesting_depth,
             input_contracts=context.tool_contracts,
             change_tracker=context.change_tracker,

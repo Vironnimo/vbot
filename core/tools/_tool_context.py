@@ -61,6 +61,9 @@ ToolCallResultPersistedRegistrar = Callable[[str, ToolResultPersistedCallback], 
 ToolDeliveryReceipt = tuple[str, str, str]
 ToolDeliveryReceiptHook = Callable[[str, ToolDeliveryReceipt], None]
 ToolTurnEndHook = Callable[[str], None]
+# (tool_call_id, tool_name, payload) -> payload_id. Chat stages the payload and
+# persists it with this call's Tool Result in the same Session transaction.
+ToolResultPayloadHook = Callable[[str, str, Any], str]
 ToolHandler = Callable[["ToolContext", JsonObject], JsonObject | Awaitable[JsonObject]]
 
 
@@ -112,6 +115,9 @@ class ToolContext:
         default=None, repr=False, compare=False
     )
     request_turn_end_hook: ToolTurnEndHook | None = field(default=None, repr=False, compare=False)
+    result_payload_hook: ToolResultPayloadHook | None = field(
+        default=None, repr=False, compare=False
+    )
     _delivery_receipts: list[ToolDeliveryReceipt] = field(
         default_factory=list, init=False, repr=False, compare=False
     )
@@ -267,6 +273,24 @@ class ToolContext:
             raise ValueError("delivery receipt fields must be non-empty strings")
         self._delivery_receipts.append((receipt_id, content_hash, effect_kind))
 
+    @property
+    def result_payloads_available(self) -> bool:
+        """Return whether this call runs in a Session that can keep result payloads."""
+        return self.result_payload_hook is not None
+
+    def attach_result_payload(self, payload: Any) -> str:
+        """Keep one JSON *payload* with this call's Tool Result and return its id.
+
+        The payload is persisted in the same transaction as the Tool Result, so a
+        call that raises, is cancelled, or whose batch is never persisted leaves
+        nothing behind. Only Extension Tools running in a Session can attach
+        payloads; check :attr:`result_payloads_available` first. The owning
+        Extension reads the payload back with ``ExtensionHost.load_result_payload``.
+        """
+        if self.result_payload_hook is None:
+            raise RuntimeError("Result payloads are unavailable for this Tool call")
+        return self.result_payload_hook(self.tool_call_id, self.tool_name, payload)
+
     def request_turn_end(self) -> None:
         """Ask Chat to finish the Run after its complete Tool batch is durable."""
         if self.request_turn_end_hook is None:
@@ -325,6 +349,7 @@ class ToolExecutionConfig:
     tool_call_result_persisted_registrar: ToolCallResultPersistedRegistrar | None = None
     tool_delivery_receipt_registrar: ToolDeliveryReceiptHook | None = None
     tool_turn_end_registrar: ToolTurnEndHook | None = None
+    tool_result_payload_registrar: ToolResultPayloadHook | None = None
     allowed_skills: Sequence[str] | None = None
     skill_env_keys: Sequence[str] = field(default_factory=tuple)
     tool_settings: Mapping[str, Any] | None = None
