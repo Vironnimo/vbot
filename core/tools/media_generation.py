@@ -6,8 +6,24 @@ import copy
 from pathlib import Path
 from typing import Any
 
-from core.model_tasks import MusicError, VideoError, VideoOutcomeUnknownError
+from core.model_tasks import (
+    MusicError,
+    MusicExecutionError,
+    MusicOutcomeUnknownError,
+    VideoError,
+    VideoExecutionError,
+    VideoOutcomeUnknownError,
+)
+from core.tools._image_inputs import (
+    UnusableImageError,
+    normalize_generate_music_arguments,
+    normalize_generate_video_arguments,
+    resolve_local_image,
+    resolve_local_images,
+)
+from core.tools._media_failures import provider_failure_message
 from core.tools.arguments import optional_bool, optional_int, optional_string
+from core.tools.contracts import compile_tool_contract
 from core.tools.tools import (
     JsonObject,
     ToolContext,
@@ -28,17 +44,17 @@ _MUSIC_DIRECTORY_NAME = "music-gen"
 
 GENERATE_VIDEO_TEXT_ONLY_DESCRIPTION = (
     "Generate a video from a text prompt using the configured model. Returns the "
-    "generated video file’s local path."
+    "generated video file's local path."
 )
 GENERATE_VIDEO_FIRST_FRAME_DESCRIPTION = (
     "Generate a video from a text prompt, optionally starting from a local first-frame "
     "image. The local image is uploaded to the configured external provider. Returns "
-    "the generated video file’s local path."
+    "the generated video file's local path."
 )
 GENERATE_VIDEO_FRAME_RANGE_DESCRIPTION = (
     "Generate a video from a text prompt, optionally using local first- and last-frame "
     "images. Local images are uploaded to the configured external provider. Returns the "
-    "generated video file’s local path."
+    "generated video file's local path."
 )
 GENERATE_VIDEO_PARAMETERS: JsonObject = {
     "type": "object",
@@ -82,23 +98,23 @@ GENERATE_VIDEO_PARAMETERS: JsonObject = {
             "type": "string",
             "minLength": 1,
             "description": (
-                "Local image path for the video’s first frame. Relative paths resolve against "
-                "the effective working directory."
+                "Local image path for the video's first frame. Relative paths start at the "
+                "working directory."
             ),
         },
         "last_frame": {
             "type": "string",
             "minLength": 1,
             "description": (
-                "Local image path for the video’s last frame. Relative paths resolve against "
-                "the effective working directory."
+                "Local image path for the video's last frame. Relative paths start at the "
+                "working directory."
             ),
         },
         "output_dir": {
             "type": "string",
             "description": (
-                "Directory for the generated video. Relative paths resolve against the "
-                "effective working directory."
+                "Folder for the generated video, created if missing; relative paths start at "
+                "the working directory. Omit to use the default video-gen folder."
             ),
         },
     },
@@ -108,11 +124,11 @@ GENERATE_VIDEO_PARAMETERS: JsonObject = {
 GENERATE_MUSIC_DESCRIPTION = (
     "Generate music from a text prompt or local reference images using the configured model. "
     "Local images are uploaded to the configured external provider. Returns the generated "
-    "audio file’s local path."
+    "audio file's local path."
 )
 GENERATE_MUSIC_TEXT_ONLY_DESCRIPTION = (
     "Generate music from a text prompt using the configured model. Returns the generated audio "
-    "file’s local path."
+    "file's local path."
 )
 GENERATE_MUSIC_PARAMETERS: JsonObject = {
     "type": "object",
@@ -130,20 +146,54 @@ GENERATE_MUSIC_PARAMETERS: JsonObject = {
             "items": {"type": "string", "minLength": 1},
             "minItems": 1,
             "description": (
-                "Optional local image paths to use as visual references. Relative paths resolve "
-                "against the effective working directory."
+                "Optional local image paths to use as visual references. Relative paths start "
+                "at the working directory."
             ),
         },
         "output_dir": {
             "type": "string",
             "description": (
-                "Directory for the generated music. Relative paths resolve against the effective "
-                "working directory."
+                "Folder for the generated music, created if missing; relative paths start at "
+                "the working directory. Omit to use the default music-gen folder."
             ),
         },
     },
     "required": ["prompt"],
 }
+
+
+_VIDEO_CONTRACT = compile_tool_contract(
+    name=GENERATE_VIDEO_TOOL_NAME,
+    input_schema=GENERATE_VIDEO_PARAMETERS,
+    require_closed_input=False,
+)
+_MUSIC_CONTRACT = compile_tool_contract(
+    name=GENERATE_MUSIC_TOOL_NAME,
+    input_schema=GENERATE_MUSIC_PARAMETERS,
+    require_closed_input=False,
+)
+
+
+def _normalize_video_arguments(arguments: Any) -> Any:
+    return normalize_generate_video_arguments(_VIDEO_CONTRACT, arguments)
+
+
+def _normalize_music_arguments(arguments: Any) -> Any:
+    return normalize_generate_music_arguments(_MUSIC_CONTRACT, arguments)
+
+
+def _invalid(message: str) -> JsonObject:
+    return tool_failure("invalid_arguments", message, retryable=False)
+
+
+def _media_failure(error: VideoError | MusicError, task: str, setting: str) -> JsonObject:
+    """Project an expected media failure; provider refusals say what to do next."""
+    message = str(error)
+    if isinstance(error, (VideoExecutionError, MusicExecutionError)) and not isinstance(
+        error, (VideoOutcomeUnknownError, MusicOutcomeUnknownError)
+    ):
+        message = provider_failure_message(error, task=task, setting=setting)
+    return tool_failure(error.code, message, retryable=bool(getattr(error, "retryable", False)))
 
 
 def _video_profile_resolver(video_service: Any):
@@ -202,17 +252,23 @@ def make_generate_video_handler(video_service: Any):
     async def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
         prompt = arguments.get("prompt")
         if not isinstance(prompt, str) or not prompt.strip():
-            return tool_failure("invalid_arguments", "prompt must be a non-empty string")
+            return _invalid(
+                'Describe the video as prompt, for example {"prompt": "A paper boat drifting '
+                'down a rainy street, slow tracking shot"}.'
+            )
         try:
             call_options = _video_call_options(arguments)
-            frame_paths = _video_frame_paths(context, arguments)
             output_dir = _output_dir(
                 context,
                 arguments,
                 default_name=_VIDEO_DIRECTORY_NAME,
             )
         except ValueError as exc:
-            return tool_failure("invalid_arguments", str(exc))
+            return _invalid(str(exc))
+        try:
+            frame_paths = _video_frame_paths(context, arguments)
+        except UnusableImageError as problem:
+            return tool_failure(problem.code, str(problem), retryable=False)
 
         try:
             artifact = await video_service.generate_artifact(
@@ -221,10 +277,8 @@ def make_generate_video_handler(video_service: Any):
                 call_options=call_options,
                 frame_paths=frame_paths,
             )
-        except VideoOutcomeUnknownError as exc:
-            return tool_failure(exc.code, str(exc), retryable=False)
         except VideoError as exc:
-            return tool_failure(exc.code, str(exc), retryable=exc.retryable)
+            return _media_failure(exc, "video-generation", "Video generation")
         return tool_success({"video": _artifact_payload(artifact)})
 
     return handler
@@ -236,16 +290,26 @@ def make_generate_music_handler(music_service: Any):
     async def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
         prompt = arguments.get("prompt")
         if not isinstance(prompt, str) or not prompt.strip():
-            return tool_failure("invalid_arguments", "prompt must be a non-empty string")
+            return _invalid(
+                'Describe the music as prompt, for example {"prompt": "Calm lo-fi piano, '
+                '80 bpm, no vocals"}.'
+            )
         try:
-            source_paths = _source_paths(context, arguments)
             output_dir = _output_dir(
                 context,
                 arguments,
                 default_name=_MUSIC_DIRECTORY_NAME,
             )
         except ValueError as exc:
-            return tool_failure("invalid_arguments", str(exc))
+            return _invalid(str(exc))
+        source_paths: tuple[Path, ...] = ()
+        if "source_images" in arguments:
+            try:
+                source_paths = tuple(
+                    resolve_local_images(context, arguments["source_images"], "source_images")
+                )
+            except UnusableImageError as problem:
+                return tool_failure(problem.code, str(problem), retryable=False)
 
         try:
             artifact = await music_service.generate_artifact(
@@ -254,7 +318,7 @@ def make_generate_music_handler(music_service: Any):
                 source_paths=source_paths,
             )
         except MusicError as exc:
-            return tool_failure(exc.code, str(exc), retryable=exc.retryable)
+            return _media_failure(exc, "music-generation", "Music generation")
         return tool_success({"music": _artifact_payload(artifact)})
 
     return handler
@@ -281,36 +345,16 @@ def _video_call_options(arguments: JsonObject) -> JsonObject:
 
 
 def _video_frame_paths(context: ToolContext, arguments: JsonObject) -> dict[str, Path]:
-    paths: dict[str, Path] = {}
-    for name in ("first_frame", "last_frame"):
-        value = optional_string(arguments.get(name), field_name=name)
-        if value == "":
-            raise ValueError(f"{name} must be a non-empty string when provided")
-        if value is not None:
-            paths[name] = context.resolve_path(value)
-    return paths
-
-
-def _source_paths(context: ToolContext, arguments: JsonObject) -> tuple[Path, ...]:
-    raw_paths = arguments.get("source_images")
-    if raw_paths is None:
-        return ()
-    if not isinstance(raw_paths, list) or not raw_paths:
-        raise ValueError("source_images must contain at least one local image path")
-    paths: list[Path] = []
-    for index, raw_path in enumerate(raw_paths):
-        value = optional_string(raw_path, field_name=f"source_images[{index}]")
-        if not value:
-            raise ValueError(f"source_images[{index}] must be a non-empty string")
-        paths.append(context.resolve_path(value))
-    return tuple(paths)
+    return {
+        name: resolve_local_image(context, arguments[name], name)
+        for name in ("first_frame", "last_frame")
+        if arguments.get(name) is not None
+    }
 
 
 def _output_dir(context: ToolContext, arguments: JsonObject, *, default_name: str) -> Path:
     value = optional_string(arguments.get("output_dir"), field_name="output_dir")
-    if value == "":
-        raise ValueError("output_dir must be a non-empty string when provided")
-    if value is not None:
+    if value:
         return context.resolve_path(value)
     root = context.workspace if context.project_id is None else context.effective_cwd
     return root / default_name
@@ -334,6 +378,7 @@ def register_generate_video_tool(registry: ToolRegistry, video_service: Any) -> 
         make_generate_video_handler(video_service),
         family="media",
         open_input_schema=True,
+        argument_normalizer=_normalize_video_arguments,
         result_schema={
             "type": "object",
             "properties": {
@@ -373,6 +418,7 @@ def register_generate_music_tool(registry: ToolRegistry, music_service: Any) -> 
         make_generate_music_handler(music_service),
         family="media",
         open_input_schema=True,
+        argument_normalizer=_normalize_music_arguments,
         result_schema={
             "type": "object",
             "properties": {
