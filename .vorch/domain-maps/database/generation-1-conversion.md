@@ -43,7 +43,7 @@ Going back (loses everything written since the install): stop vBot, delete the p
 
 - `sessions.db`: application id 0, `VBOT` or `VBSS` with the frozen legacy tables and columns (`sessions.py`); an older incomplete shape asks to start the last release before Generation 1 once. A leftover `session-store-maintenance.json` refuses. Assistant Messages from before field-level Usage provenance, output-file spans and stored Context snapshots are normalized (rules in `sessions.md` -> Storage Contract; report counts `usage_provenance_derived`, `output_file_spans_derived` and `context_snapshots_derived`, each dropped reference and each Usage left without a snapshot a skipped item). A file already in the Generation 1 shape stays in place and is adopted on the first open.
 - `decisions.db` and `extension-data/swarm/swarm.db`: application id 0 and `user_version` 0 with the frozen legacy columns, or already Generation 1; any other identity refuses.
-- JSON documents, Channel state files, `statistics/provider-usage/*.jsonl` and the MCP Extension's `mcp/connections.json` and `mcp/content/`: the per-area rules in `settings.md`, `channels.md`, `providers/usage.md` and `extensions/mcp.md` (`scripts/converters/persistence_generation_1/mcp.py`). Retired Tool names in persisted Tool access: see Retired Tool names below.
+- JSON documents, Channel state files, `statistics/provider-usage/*.jsonl` and the MCP Extension's `mcp/connections.json` and `mcp/content/`: the per-area rules in `settings.md`, `channels.md`, `providers/usage.md` and `extensions/mcp.md` (`scripts/converters/persistence_generation_1/mcp.py`). Retired Tool names in persisted Tool access: see Retired Tool names below; other retired JSON fields and values: see Retired fields and values below.
 
 Files no area reads (for example old `*.before-*.db` copies) stay in place untouched.
 
@@ -71,6 +71,20 @@ Rules, none of which widens a policy:
 - Invalid policies stay as they are for the application to report. Converting a converted policy changes nothing.
 
 Report: count `retired_tool_names_converted` per area (`json_documents`, `sessions`, `swarm`) and one skipped-or-approximated item per converted field, naming each replacement, drop and narrowing (for example `tool_access: edit and write replaced by apply_patch; grep and glob replaced by search_files`).
+
+## Retired fields and values
+
+A field or value an older vBot wrote and a later one retired or renamed is not unknown future data: the application knows only its successor and would carry the old one around as an unknown field, or ignore it. `json_documents.py` therefore maps each one to its successor, or drops it, in the documents it stages. Each exact conversion is counted; a change of behavior is also reported as a skipped-or-approximated item.
+
+| Document | Retired | Conversion | Count (item) | Retired in |
+|---|---|---|---|---|
+| `agents/*/agent.json`, `settings.json` `defaults.agent` | `fallback_model` (one binding; empty = none of its own) | A binding becomes `fallback_models: [binding]` in its place; empty or `null` is dropped; next to an existing `fallback_models` it is dropped (item); a value of another type is carried over as the chain's only entry, so the application reports it as the old one did (item) | `fallback_model_converted`, `fallback_model_dropped` | `0f67dde58` |
+| `settings.json` | `recall.backend` `jsonl_scan` or `canonical_scan` | `sqlite_fts`, the default Search backend; canonical scan survives only as its internal degraded fallback (item) | `recall_backend_replaced` | `54a24c183` (renamed), `b8db7699f` (no longer selectable) |
+| `settings.json` | `live_voice` (`enabled` opt-in) | Dropped; the Live voice control follows the `model_tasks.live_voice` binding (item) | `live_voice_dropped` | `ee1fca647` |
+| `settings.json` | `reflection.skill_tool_call_interval` (Tool calls) | Dropped, not mapped: its successor `skill_model_step_interval` counts Model steps (item) | `reflection_skill_tool_call_interval_dropped` | `3798a558b` |
+| prompt `layout.json` (default and Agent scopes) | block `core:project_files` | Renamed `core:working_project` in place (dropped when the layout already names it). The same change split the host, version, Workspace and path lines out of `core:runtime` into `core:identity_runtime`, so a layout naming the retired block, and only such a layout, also gets `core:identity_runtime` right after `core:runtime` with its `enabled` state | `prompt_project_files_converted`, `prompt_identity_runtime_added` | `75d3934fa` |
+
+Temporary Session binding configs, Swarm profiles and Project Agent overrides never carried `fallback_model` or a prompt block list naming `core:project_files`: the first two were introduced with `fallback_models` and after the block rename, and overrides never modeled a fallback.
 
 ## Tests
 
