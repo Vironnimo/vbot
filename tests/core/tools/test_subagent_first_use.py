@@ -5,25 +5,19 @@ from __future__ import annotations
 import asyncio
 import copy
 from dataclasses import replace
-from types import SimpleNamespace
 
 import pytest
 import pytest_asyncio
 
 from core.chat import ChatMessage
 from core.sessions import SessionAddress
-from core.subagents import SubAgentCoordinator
-from core.tools.subagent import register_subagent_tools
-from core.tools.tools import ToolRegistry
 
 from .subagent_test_support import (
     BACKGROUND_TASK_SETTLE_TICKS,
     FakeAgentResolver,
     FakeAgents,
-    FakeRunManager,
-    RecordingTriggerService,
+    dispatch_harness,
     make_context,
-    make_runtime,
 )
 
 BRIEF = 'Read-only review of src/a.py. Preserve literal {"action":"CANCEL"}.\nReference R-17.'
@@ -31,26 +25,8 @@ BRIEF = 'Read-only review of src/a.py. Preserve literal {"action":"CANCEL"}.\nRe
 
 @pytest_asyncio.fixture
 async def dispatch_runtime(tmp_path):
-    manager = FakeRunManager()
-    runtime = make_runtime(tmp_path, manager)
-    triggers = RecordingTriggerService()
-    coordinator = SubAgentCoordinator(runtime, triggers, sessions=runtime.chat_sessions)
-    registry = ToolRegistry()
-    register_subagent_tools(registry, coordinator)
-    yield SimpleNamespace(
-        manager=manager,
-        runtime=runtime,
-        registry=registry,
-        triggers=triggers,
-        context=make_context(),
-    )
-    for _, _, _, run in manager.started:
-        run.mark_completed(ChatMessage.assistant(model="fixture", content="done"))
-    await asyncio.sleep(0)
-    await asyncio.sleep(0)
-    for delivery in triggers.deliveries.values():
-        delivery.cancel()
-    runtime.chat_sessions.close()
+    async with dispatch_harness(tmp_path) as harness:
+        yield harness
 
 
 @pytest.mark.asyncio
@@ -179,29 +155,33 @@ async def test_direct_delegation_preserves_run_overrides(dispatch_runtime, effor
 @pytest.mark.parametrize(
     "arguments",
     [
+        # No task, or a decision is missing.
         {},
         {"description": "Review source"},
         {"content": ""},
         {"content": " "},
-        {"content": BRIEF, "action": None},
-        {"content": BRIEF, "action": ""},
-        {"content": BRIEF, "action": "rn"},
-        {"content": BRIEF, "action": "status"},
-        {"content": BRIEF, "action": "cancel"},
+        {"content": "."},
         {"id": "existing-work"},
-        {"id": "existing-work", "content": BRIEF},
-        {"content": BRIEF, "agent_id": ""},
-        {"content": BRIEF, "agent_id": "  "},
-        {"content": BRIEF, "agent_id": None},
-        {"content": BRIEF, "session_id": "existing-session"},
-        {"content": BRIEF, "session_id": "", "agent_id": "worker"},
-        {"content": BRIEF, "session_id": "  ", "agent_id": "worker"},
+        {"id": "sub_abcdefghijkl", "agent_id": "worker"},
+        # An explicit invalid choice never counts as omission.
+        {"content": BRIEF, "action": "rn"},
+        {"content": BRIEF, "action": "cancel"},
+        # An explicit target that does not exist is never replaced.
         {"content": BRIEF, "agent_id": "workre"},
+        {"content": BRIEF, "subagent_type": "Explore"},
+        {"content": BRIEF, "session_id": "existing-session"},
+        # A work id with run could mean continuing that work or starting new work.
+        {"content": BRIEF, "id": "sub_abcdefghijkl"},
+        # Conflicting instructions are never settled by picking one.
         {"content": BRIEF, "agent_id": "worker", "Agent-ID": "parent"},
+        {"content": BRIEF, "prompt": "Another task."},
         {"content": BRIEF, "action": "run", "operation": "cancel"},
-        {"content": BRIEF, "background": False},
+        {"content": BRIEF, "background": True, "blocking": True},
+        # Requests vBot cannot honor as written.
         {"content": BRIEF, "priority": "high"},
         {"content": BRIEF, "run_id": "private-run"},
+        {"content": BRIEF, "toolsets": ["web"]},
+        {"tasks": [{"goal": BRIEF}, {"goal": "Second task."}]},
     ],
 )
 async def test_ambiguity_and_unsupported_constraints_never_start_work(dispatch_runtime, arguments):
