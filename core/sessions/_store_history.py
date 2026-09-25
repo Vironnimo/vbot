@@ -124,16 +124,8 @@ def _own_audit(connection: sqlite3.Connection, state: sqlite3.Row, lower: int) -
 # -- Usage -------------------------------------------------------------------
 
 
-_INPUT_ESTIMATED = (
-    "CASE WHEN a.input_tokens_estimated IS NOT NULL THEN a.input_tokens_estimated "
-    "WHEN a.output_tokens_estimated IS NOT NULL THEN 0 "
-    "ELSE COALESCE(a.usage_estimated, 0) END"
-)
-_OUTPUT_ESTIMATED = (
-    "CASE WHEN a.output_tokens_estimated IS NOT NULL THEN a.output_tokens_estimated "
-    "WHEN a.input_tokens_estimated IS NOT NULL THEN 0 "
-    "ELSE COALESCE(a.usage_estimated, 0) END"
-)
+_INPUT_ESTIMATED = "COALESCE(a.input_tokens_estimated, 0)"
+_OUTPUT_ESTIMATED = "COALESCE(a.output_tokens_estimated, 0)"
 _USAGE_SQL = f"""
 SELECT
   COALESCE(SUM(CASE WHEN a.usage_present = 1

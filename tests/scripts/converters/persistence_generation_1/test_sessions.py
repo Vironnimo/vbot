@@ -171,7 +171,10 @@ def test_a_session_keeps_its_history_side_rows_and_run(tmp_path: Path) -> None:
             "duration_ms": 250,
         }
         assert write.content == _DENIED
-        assert [reference.path for reference in answer.output_files or ()] == ["b.txt"]
+        # The old line-only reference gets the span of the whole line it named.
+        assert [reference.to_dict() for reference in answer.output_files or ()] == [
+            {"line_index": 0, "path": "b.txt", "start_index": 0, "end_index": 17}
+        ]
         assert (note.content, error.error_kind) == ("Remember the deadline", "provider_error")
         assert session.find_run_summary(run_id="run_1") == summary
         assert (summary.status, summary.work_id, summary.iteration_count) == (
@@ -232,6 +235,9 @@ def test_a_session_keeps_its_history_side_rows_and_run(tmp_path: Path) -> None:
         (seq,) for seq in range(8)
     ]
     assert _rows(context, "PRAGMA foreign_key_check") == []
+    assert _rows(
+        context, "SELECT path, line_index, start_index, end_index FROM assistant_output_files"
+    ) == [("b.txt", 0, 0, 17)]
     counts = context.report.counts[AREA]
     assert {
         key: counts[key] for key in ("sessions", "entries", "runs", "tool_calls", "tool_results")
@@ -242,6 +248,8 @@ def test_a_session_keeps_its_history_side_rows_and_run(tmp_path: Path) -> None:
         "tool_calls": 2,
         "tool_results": 2,
     }
+    assert counts["output_file_spans_derived"] == 1
+    assert "usage_provenance_derived" not in counts
     assert counts["search_index_healthy"] == 1
     assert _skips(context) == []
 
@@ -368,6 +376,149 @@ def test_checkpoints_get_a_projection_and_a_policy(tmp_path: Path) -> None:
             f"compaction checkpoint {projected} policy or strategy filled in",
         )
     ]
+
+
+_WHOLE_TURN_ESTIMATE = {"input_tokens": 40, "output_tokens": 5, "estimated": True}
+_FIELD_ESTIMATES = {
+    "input_tokens": 40,
+    "output_tokens": 5,
+    "input_tokens_estimated": True,
+    "output_tokens_estimated": True,
+    "estimated": True,
+}
+
+
+def test_whole_turn_estimates_get_field_level_provenance(tmp_path: Path) -> None:
+    context = _context(tmp_path)
+    partial = {
+        "input_tokens": 40,
+        "output_tokens": 5,
+        "input_tokens_estimated": True,
+        "estimated": True,
+    }
+    with _legacy(context) as legacy:
+        key = legacy.session("s1")
+        whole_turn = legacy.assistant(key, "guessed", minute=1, usage=_WHOLE_TURN_ESTIMATE)
+        measured = legacy.assistant(
+            key,
+            "measured",
+            minute=2,
+            usage={"input_tokens": 40, "output_tokens": 5, "estimated": False},
+        )
+        field_level = legacy.assistant(key, "half guessed", minute=3, usage=partial)
+
+    convert(context)
+
+    with _opened(context) as manager:
+        usages = {message.id: message.usage for message in manager.get(MAIN).load_active()}
+    assert usages == {
+        whole_turn: _FIELD_ESTIMATES,
+        measured: {"input_tokens": 40, "output_tokens": 5},
+        field_level: partial,
+    }
+    assert _rows(
+        context,
+        "SELECT input_tokens_estimated, output_tokens_estimated FROM assistant_entries "
+        "ORDER BY entry_key",
+    ) == [(1, 1), (None, None), (1, None)]
+    assert context.report.counts[AREA]["usage_provenance_derived"] == 1
+    assert _skips(context) == []
+
+
+def test_line_only_file_references_get_a_span_or_are_dropped(tmp_path: Path) -> None:
+    context = _context(tmp_path)
+    with _legacy(context) as legacy:
+        key = legacy.session("s1")
+        answer = legacy.assistant(
+            key,
+            "Files:\n  report.md\n\nchart.png table.csv\nSee file:notes.md",
+            minute=1,
+            output_files=[
+                {"path": "report.md", "line_index": 1},
+                {"path": "blank.md", "line_index": 2},
+                {"path": "chart.png", "line_index": 3},
+                {"path": "table.csv", "line_index": 3},
+                {"path": "gone.md", "line_index": 9},
+                {"path": "notes.md", "line_index": 4, "start_index": 4, "end_index": 17},
+            ],
+        )
+        emptied = legacy.assistant(
+            key, "", minute=2, output_files=[{"path": "empty.md", "line_index": 0}]
+        )
+        label = f"session -/main/s1 ({legacy.generation(key)})"
+
+    convert(context)
+
+    with _opened(context) as manager:
+        messages = {message.id: message for message in manager.get(MAIN).load_active()}
+    # The old server replaced the whole line body, leading whitespace included.
+    assert [reference.to_dict() for reference in messages[answer].output_files or ()] == [
+        {"line_index": 1, "path": "report.md", "start_index": 0, "end_index": 11},
+        {"line_index": 4, "path": "notes.md", "start_index": 4, "end_index": 17},
+    ]
+    assert messages[emptied].output_files is None
+    assert context.report.counts[AREA]["output_file_spans_derived"] == 1
+    dropped = f"assistant {answer} line-only file reference"
+    assert _skips(context) == [
+        (label, f"{dropped} blank.md dropped: it names a missing or empty line"),
+        (label, f"{dropped} chart.png dropped: it shares its line with another reference"),
+        (label, f"{dropped} table.csv dropped: it shares its line with another reference"),
+        (label, f"{dropped} gone.md dropped: it names a missing or empty line"),
+        (
+            label,
+            f"assistant {emptied} line-only file reference empty.md dropped: "
+            "it names a missing or empty line",
+        ),
+    ]
+
+
+def test_stored_checkpoint_projections_get_the_current_assistant_shapes(
+    tmp_path: Path,
+) -> None:
+    context = _context(tmp_path)
+    projected = {
+        "id": "p1",
+        "role": "assistant",
+        "timestamp": at(2),
+        "model": "test-model",
+        "content": "Chart:\nchart.png",
+    }
+    with _legacy(context) as legacy:
+        key = legacy.session("s1")
+        legacy.user(key, "draw it", minute=1)
+        checkpoint = legacy.checkpoint(
+            key,
+            "Drew a chart",
+            minute=3,
+            projection=[
+                {
+                    **projected,
+                    "usage": _WHOLE_TURN_ESTIMATE,
+                    "output_files": [{"path": "chart.png", "line_index": 1}],
+                }
+            ],
+            policy="auto",
+            strategy="auto",
+        )
+
+    convert(context)
+
+    with _opened(context) as manager:
+        converted = next(
+            message for message in manager.get(MAIN).load_active() if message.id == checkpoint
+        )
+    assert converted.projection == [
+        {
+            **projected,
+            "usage": _FIELD_ESTIMATES,
+            "output_files": [
+                {"line_index": 1, "path": "chart.png", "start_index": 0, "end_index": 9}
+            ],
+        }
+    ]
+    counts = context.report.counts[AREA]
+    assert (counts["usage_provenance_derived"], counts["output_file_spans_derived"]) == (1, 1)
+    assert _skips(context) == []
 
 
 def test_a_running_run_settles_like_after_a_crash(tmp_path: Path) -> None:

@@ -41,6 +41,8 @@ def test_measured_and_estimated_tokens_stay_separate(tmp_path: Path) -> None:
                     "input_tokens": 7,
                     "output_tokens": 3,
                     "reasoning_tokens": 2,
+                    "input_tokens_estimated": True,
+                    "output_tokens_estimated": True,
                     "estimated": True,
                 },
             ),
@@ -154,7 +156,13 @@ def test_cache_totals_split_per_provider_model_and_day(tmp_path: Path) -> None:
             _assistant(
                 model=cached_model,
                 at=BASE + timedelta(seconds=30),
-                usage={"input_tokens": 9, "output_tokens": 1, "estimated": True},
+                usage={
+                    "input_tokens": 9,
+                    "output_tokens": 1,
+                    "input_tokens_estimated": True,
+                    "output_tokens_estimated": True,
+                    "estimated": True,
+                },
             ),
         ],
     )

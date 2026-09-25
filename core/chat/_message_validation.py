@@ -188,6 +188,28 @@ def _validate_timing_payload(timing: _records.JsonObject | None) -> None:
         raise ChatMessageValidationError("timing.duration_ms must be a non-negative integer")
 
 
+def _validate_usage_provenance(usage: _records.JsonObject) -> None:
+    """``estimated`` is present, as ``true``, exactly when a primary counter is estimated.
+
+    Estimation provenance lives in the field-level flags; the whole-turn flag only
+    summarizes them and never stands alone.
+    """
+    field_estimated = any(
+        usage.get(field) is True for field in _records._USAGE_ESTIMATION_FIELDS.values()
+    )
+    if "estimated" not in usage:
+        if field_estimated:
+            raise ChatMessageValidationError(
+                "usage with an estimated token counter requires estimated: true"
+            )
+        return
+    if usage["estimated"] is not True or not field_estimated:
+        raise ChatMessageValidationError(
+            "usage.estimated must be true and requires input_tokens_estimated or "
+            "output_tokens_estimated"
+        )
+
+
 def _validate_system_message(message: _records.ChatMessage) -> None:
     if message.model is None:
         raise ChatMessageValidationError("system messages require model")
@@ -296,8 +318,10 @@ def _validate_assistant_message(message: _records.ChatMessage) -> None:
         _validate_timing_payload(message.reasoning_timing)
     if message.phase is not None and not message.phase:
         raise ChatMessageValidationError("assistant phase must be a non-empty string")
-    if message.usage is not None and not isinstance(message.usage, dict):
-        raise ChatMessageValidationError("usage must be an object")
+    if message.usage is not None:
+        if not isinstance(message.usage, dict):
+            raise ChatMessageValidationError("usage must be an object")
+        _validate_usage_provenance(message.usage)
     if message.output_files is not None:
         if not message.output_files:
             raise ChatMessageValidationError("assistant output_files must not be empty")
@@ -316,18 +340,12 @@ def _validate_assistant_message(message: _records.ChatMessage) -> None:
                 "assistant output_files line indexes must identify content lines"
             )
         spans_by_line: dict[int, list[tuple[int, int]]] = {}
-        legacy_lines: set[int] = set()
         for reference in message.output_files:
-            if reference.start_index is None or reference.end_index is None:
-                if reference.start_index is not None or reference.end_index is not None:
-                    raise ChatMessageValidationError(
-                        "assistant output_files spans must be provided together"
-                    )
-                legacy_lines.add(reference.line_index)
-                continue
             if (
                 isinstance(reference.start_index, bool)
                 or isinstance(reference.end_index, bool)
+                or not isinstance(reference.start_index, int)
+                or not isinstance(reference.end_index, int)
                 or reference.start_index < 0
                 or reference.end_index <= reference.start_index
                 or reference.end_index > len(content_lines[reference.line_index])
@@ -337,12 +355,6 @@ def _validate_assistant_message(message: _records.ChatMessage) -> None:
                 )
             spans_by_line.setdefault(reference.line_index, []).append(
                 (reference.start_index, reference.end_index)
-            )
-        if any(line_index in spans_by_line for line_index in legacy_lines) or len(
-            legacy_lines
-        ) != sum(reference.start_index is None for reference in message.output_files):
-            raise ChatMessageValidationError(
-                "assistant output_files legacy references must be unique per line"
             )
         for spans in spans_by_line.values():
             ordered = sorted(spans)

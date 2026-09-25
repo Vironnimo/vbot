@@ -553,17 +553,7 @@ function sessionUsageLines(sessionUsage, format) {
 }
 
 function usageFieldIsEstimated(usage, tokenField) {
-  const estimationField = `${tokenField}_estimated`;
-  if (Object.hasOwn(usage, estimationField)) {
-    return usage[estimationField] === true;
-  }
-  if (
-    Object.hasOwn(usage, 'input_tokens_estimated') ||
-    Object.hasOwn(usage, 'output_tokens_estimated')
-  ) {
-    return false;
-  }
-  return usage.estimated === true;
+  return usage[`${tokenField}_estimated`] === true;
 }
 
 function cacheReadShareLine(cacheRead, input, format) {

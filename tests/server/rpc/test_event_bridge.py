@@ -167,10 +167,15 @@ def test_server_event_forwards_session_usage_on_terminal_events() -> None:
 def test_server_event_projects_assistant_file_reference(tmp_path: Path) -> None:
     image = tmp_path / "bridge.png"
     image.write_bytes(b"\x89PNG\r\n\x1a\nimage")
+    marker = f"file:{image}"
     message = ChatMessage.assistant(
         model="provider/model",
-        content=str(image),
-        output_files=[AssistantFileReference(line_index=0, path=str(image.resolve()))],
+        content=marker,
+        output_files=[
+            AssistantFileReference(
+                line_index=0, path=str(image.resolve()), start_index=0, end_index=len(marker)
+            )
+        ],
     )
     event = RunEvent(
         sequence=2,

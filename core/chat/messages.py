@@ -842,14 +842,9 @@ def usage_token_is_estimated(
     usage: Mapping[str, Any],
     token_field: Literal["input_tokens", "output_tokens"],
 ) -> bool:
-    """Return field-level provenance with legacy whole-turn compatibility."""
+    """Return whether the Usage marks this primary counter as estimated."""
 
-    estimation_field = _USAGE_ESTIMATION_FIELDS[token_field]
-    if estimation_field in usage:
-        return usage.get(estimation_field) is True
-    if any(field in usage for field in _USAGE_ESTIMATION_FIELDS.values()):
-        return False
-    return usage.get("estimated") is True
+    return usage.get(_USAGE_ESTIMATION_FIELDS[token_field]) is True
 
 
 def _new_message_id() -> str:

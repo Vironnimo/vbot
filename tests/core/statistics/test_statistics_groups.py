@@ -192,7 +192,15 @@ async def test_group_usage_combines_peers_resumed_runs_and_rebuilds_exactly(tmp_
                     usage={
                         "input_tokens": tokens,
                         "output_tokens": 1,
-                        "estimated": peer == "two" and index == 1,
+                        **(
+                            {
+                                "input_tokens_estimated": True,
+                                "output_tokens_estimated": True,
+                                "estimated": True,
+                            }
+                            if peer == "two" and index == 1
+                            else {}
+                        ),
                         "cache_read_tokens": 2 if peer == "one" else 0,
                     },
                 )
