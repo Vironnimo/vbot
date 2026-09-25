@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import json
-import re
 from typing import Any
+
+from jsonschema.exceptions import best_match
 
 from core.tools.contracts import ToolContract, ToolContractError, compile_tool_contract
 from scripts.provider_probe.common import ProbeScenario
@@ -171,8 +172,8 @@ def _validation_measurements(
             return _invalid_measurement("arguments_not_object")
         try:
             contracts[name].validate_arguments(arguments)
-        except ToolContractError as error:
-            path, keyword = _validation_location(str(error))
+        except ToolContractError:
+            path, keyword = _validation_location(contracts[name], arguments)
             return {
                 "schema_valid": False,
                 "validation_path": path,
@@ -196,8 +197,18 @@ def _invalid_measurement(error_class: str) -> dict[str, Any]:
     }
 
 
-def _validation_location(message: str) -> tuple[str | None, str | None]:
-    match = re.match(r"^arguments(?P<path>[^:]*):.*\[(?P<keyword>[^\]]+)\]$", message)
-    if match is None:
+def _validation_location(
+    contract: ToolContract, arguments: dict[str, Any]
+) -> tuple[str | None, str | None]:
+    """Locate the first violation structurally, so no argument value is echoed."""
+    schema = contract.input_schema
+    properties = schema.get("properties")
+    root_closed = (
+        schema.get("additionalProperties", False) is False and "patternProperties" not in schema
+    )
+    if root_closed and isinstance(properties, dict) and set(arguments) - set(properties):
+        return "/", "additionalProperties"
+    error = best_match(contract.input_validator.iter_errors(arguments))
+    if error is None:
         return None, None
-    return match.group("path") or "/", match.group("keyword")
+    return "".join(f"/{segment}" for segment in error.absolute_path) or "/", str(error.validator)

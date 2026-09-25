@@ -146,6 +146,7 @@ class ToolDeclaration:
     result_schema: dict[str, Any] | None = None
     parallel_safe: bool = True
     open_input_schema: bool = False
+    unadvertised_parameters: dict[str, Any] | None = None
     coerce_arguments: bool = True
     argument_normalizer: Callable[[Any], Any] | None = None
     session_scoped: bool = False

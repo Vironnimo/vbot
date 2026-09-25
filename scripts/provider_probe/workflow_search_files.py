@@ -468,7 +468,7 @@ def search_cases() -> list[dict[str, Any]]:
             "id": "unknown_feature",
             "arguments": {"args": ["alpha"], "fuzzy": True},
             "error": True,
-            "error_contains": "unknown",
+            "error_contains": "is not a parameter",
         },
         {
             "id": "natural_recipe_call",

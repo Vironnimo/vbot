@@ -219,7 +219,7 @@ async def test_recognizable_search_intent_reaches_same_session(
 
 @pytest.mark.parametrize(
     "extra",
-    [{"periods": "2026-07-01/2026-07-31"}, {"limit": None}, {"roles": ""}, {"session": None}],
+    [{"periods": "2026-07-01/2026-07-31"}, {"session": "other"}],
 )
 async def test_repair_does_not_discard_unknown_effects_or_conflicting_selection(
     tmp_path: Path, extra: JsonObject
@@ -236,6 +236,25 @@ async def test_repair_does_not_discard_unknown_effects_or_conflicting_selection(
     )
     failure(result, "invalid_arguments")
     backend.search_page.assert_not_awaited()
+
+
+@pytest.mark.parametrize("extra", [{"limit": None}, {"roles": ""}, {"session": None}])
+async def test_empty_unknown_arguments_are_dropped_and_the_search_runs(
+    tmp_path: Path, extra: JsonObject
+) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    for name in ("past", "other"):
+        sessions.create("coder", session_id=name).append(
+            ChatMessage.user("needle", timestamp=timestamp(1))
+        )
+    registry = ToolRegistry()
+    register_session_search_tool(registry, CanonicalSessionRecallBackend(sessions))
+
+    result = await registry.dispatch(
+        make_context(tmp_path), {"query": "needle", "session_id": "past", **extra}
+    )
+
+    assert [hit["session_id"] for hit in success(result)["items"]] == ["past"]
 
 
 async def test_duplicate_encoded_search_targets_are_rejected_before_search(tmp_path: Path) -> None:

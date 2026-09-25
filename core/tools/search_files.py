@@ -135,12 +135,6 @@ def search_files_handler(context: ToolContext, arguments: JsonObject) -> JsonObj
         arguments = normalize_search_arguments(arguments)
         if not isinstance(arguments, dict):
             raise ValueError("Provide one search argument object.")
-        unknown = set(arguments) - set(SEARCH_FILES_TOOL_PARAMETERS["properties"])
-        if unknown:
-            raise ValueError(
-                f"Unknown argument(s): {', '.join(sorted(unknown))}. "
-                "Use args for ripgrep arguments; args=['--help'] lists supported options."
-            )
         query = parse_search_args(_strings(arguments, "args", []))
         action, kind = query["action"], query["kind"]
         patterns = query["patterns"]

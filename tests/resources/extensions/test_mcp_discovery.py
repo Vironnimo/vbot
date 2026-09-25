@@ -345,7 +345,6 @@ async def test_fixed_entry_point_uses_real_tools_resources_and_prompts(host, ser
 @pytest.mark.parametrize(
     "arguments",
     [
-        {"action": "search", "unknown": True},
         {"action": "call"},
         {"action": "describe", "target": "connection", "query": "wrong"},
         {"action": "read", "result_id": "../invalid"},
@@ -363,10 +362,22 @@ async def test_browse_rejects_invalid_arguments_without_calling_server(
 
 
 @pytest.mark.asyncio
+async def test_browse_rejects_unknown_arguments_before_calling_server(context_service, host):
+    service, registry, runner, calls = context_service
+
+    with pytest.raises(ToolContractError, match='"unknown" is not a parameter'):
+        await registry.dispatch(
+            context(host), {"action": "search", "unknown": True}, allowed_tools=["mcp_example"]
+        )
+
+    assert calls == []
+
+
+@pytest.mark.asyncio
 async def test_negative_page_limit_fails_contract_before_server_call(context_service, host):
     service, registry, runner, calls = context_service
 
-    with pytest.raises(ToolContractError, match="minimum"):
+    with pytest.raises(ToolContractError, match='"limit" must be at least 1; received -1'):
         await registry.dispatch(
             context(host), {"action": "search", "limit": -1}, allowed_tools=["mcp_example"]
         )

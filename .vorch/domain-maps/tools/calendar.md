@@ -6,7 +6,7 @@ Manages the local calendar through `CalendarService`: listing with expanded occu
 
 - Tool name: `calendar`
 - Registration: `register_calendar_tool(registry, calendar_service)`
-- Schema: one open flat object requiring only `action`. Event operations retain their existing fields; Agent actions add only `prompt`, `target`, and `session`, reusing `id` and `when`. The handler requires `title` + `start` for create, `id` plus changed fields for update, and `id` for delete. It rejects every action-inapplicable or unknown field with a recommendation naming an exact valid call. The model-facing schema emits no branch keywords or `additionalProperties`; `rrule` retains the genuine `object | null` semantic because update uses explicit null to stop repetition.
+- Schema: one open flat object requiring only `action`. Event operations retain their existing fields; Agent actions add only `prompt`, `target`, and `session`, reusing `id` and `when`. The handler requires `title` + `start` for create, `id` plus changed fields for update, and `id` for delete. It rejects every action-inapplicable field with a recommendation naming an exact valid call; unknown fields fail at dispatch. The model-facing schema emits no branch keywords or `additionalProperties`; `rrule` retains the genuine `object | null` semantic because update uses explicit null to stop repetition.
 - Actions: `list`, `create`, `update`, `delete`, `find_free`, `add_action`, `update_action`, `delete_action`.
 - Display: the summary leads with `action`, followed by the first available `title`, `id`, or `when` value. A successful `list` derives an exact presentation-only `occurrences` count; other actions publish no count.
 

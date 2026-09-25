@@ -47,14 +47,44 @@ def _input_schema() -> JsonObject:
     }
 
 
-def test_compile_accepts_explicitly_open_model_facing_object() -> None:
+def test_model_facing_object_compiles_open_but_its_properties_are_the_parameter_list() -> None:
     contract = compile_tool_contract(
         name="sample",
         input_schema={"type": "object", "properties": {"value": {"type": "string"}}},
         require_closed_input=False,
     )
 
-    contract.validate_arguments({"value": "ok", "extra": True})
+    contract.validate_arguments({"value": "ok"})
+    with pytest.raises(ToolContractError) as exc_info:
+        contract.validate_arguments({"value": "ok", "extra": True})
+
+    assert str(exc_info.value) == (
+        'sample was not run:\n- "extra" is not a parameter.\nsample parameters: value.'
+    )
+
+
+@pytest.mark.parametrize(
+    "open_keywords",
+    [{"additionalProperties": True}, {"patternProperties": {"^x_": {"type": "string"}}}],
+)
+def test_explicitly_open_root_accepts_and_keeps_unknown_arguments(
+    open_keywords: JsonObject,
+) -> None:
+    contract = compile_tool_contract(
+        name="sample",
+        input_schema={
+            "type": "object",
+            "properties": {"value": {"type": "string"}},
+            **open_keywords,
+        },
+        require_closed_input=False,
+    )
+    arguments = {"value": "ok", "x_extra": "kept", "x_empty": ""}
+
+    normalized = contract.normalize_arguments(arguments)
+
+    assert normalized == arguments
+    contract.validate_arguments(normalized)
 
 
 def test_compile_rejects_open_object_by_default() -> None:
@@ -87,15 +117,19 @@ def test_compile_rejects_nonportable_tool_names(name: str) -> None:
 @pytest.mark.parametrize(
     ("arguments", "message"),
     [
-        ({}, "arguments: 'count' is a required property [required]"),
+        (
+            {},
+            'sample was not run:\n- "count" is required.\n'
+            "sample parameters: count (required), label.",
+        ),
         (
             {"count": "1.5"},
-            'arguments/count: expected JSON integer, received JSON string "1.5" [type]',
+            'sample was not run: "count" must be an integer; received "1.5".',
         ),
         (
             {"count": 1, "extra": True},
-            "arguments: Additional properties are not allowed ('extra' was unexpected) "
-            "[additionalProperties]",
+            'sample was not run:\n- "extra" is not a parameter.\n'
+            "sample parameters: count (required), label.",
         ),
     ],
 )
@@ -118,6 +152,126 @@ async def test_dispatch_rejects_invalid_arguments_before_handler(
 
     assert str(exc_info.value) == message
     assert calls == 0
+
+
+@pytest.mark.asyncio
+async def test_unadvertised_parameters_are_accepted_and_validated_but_never_offered() -> None:
+    received: list[JsonObject] = []
+
+    def handler(_context: ToolContext, arguments: JsonObject) -> JsonObject:
+        received.append(arguments)
+        return tool_success({"value": "ok"})
+
+    registry = ToolRegistry()
+    registry.register(
+        "sample",
+        "Sample.",
+        {"type": "object", "properties": {"count": {"type": "integer"}}, "required": ["count"]},
+        handler,
+        open_input_schema=True,
+        unadvertised_parameters={"legacy": {"type": "string", "enum": ["raw"]}},
+    )
+
+    await registry.dispatch(_context("sample"), {"count": 1, "legacy": "raw"})
+    with pytest.raises(ToolContractError) as exc_info:
+        await registry.dispatch(_context("sample"), {"legacy": "other"})
+
+    assert received == [{"count": 1, "legacy": "raw"}]
+    assert "legacy" not in registry.provider_definitions()[0]["parameters"]["properties"]
+    assert str(exc_info.value) == (
+        "sample was not run:\n"
+        '- "count" is required.\n'
+        '- "legacy" must be one of "raw"; received "other".\n'
+        "sample parameters: count (required)."
+    )
+
+
+def test_argument_error_names_every_problem_with_a_suggestion_and_the_parameters() -> None:
+    contract = compile_tool_contract(
+        name="read",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Path to the file to read (relative to the working "
+                    "directory, or absolute). Line ranges use offset and limit.",
+                },
+                "offset": {"type": "integer"},
+                "limit": {"type": "integer", "minimum": 1},
+            },
+            "required": ["path"],
+        },
+        require_closed_input=False,
+    )
+
+    with pytest.raises(ToolContractError) as exc_info:
+        contract.validate_arguments({"file_path": "notes.txt", "limit": 0})
+
+    assert str(exc_info.value) == (
+        "read was not run:\n"
+        '- "file_path" is not a parameter. Did you mean "path"?\n'
+        '- "limit" must be at least 1; received 0.\n'
+        '- "path" is required: Path to the file to read (relative to the working '
+        "directory, or absolute).\n"
+        "read parameters: path (required), offset, limit."
+    )
+
+
+def test_nested_argument_problems_name_the_field_by_its_path() -> None:
+    contract = compile_tool_contract(
+        name="edit",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "edits": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {"old_text": {"type": "string", "minLength": 1}},
+                        "required": ["old_text"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+            "required": ["edits"],
+            "additionalProperties": False,
+        },
+    )
+
+    with pytest.raises(ToolContractError) as exc_info:
+        contract.validate_arguments({"edits": [{"old_text": ""}, {"old_text": "a", "new": "b"}]})
+
+    assert str(exc_info.value) == (
+        "edit was not run:\n"
+        '- "edits[0].old_text" must not be empty.\n'
+        '- "edits[1].new" is not a known field of "edits[1]".'
+    )
+
+
+def test_normalization_drops_empty_unknown_arguments_but_keeps_meaningful_ones() -> None:
+    contract = compile_tool_contract(name="sample", input_schema=_input_schema())
+
+    normalized = contract.normalize_arguments(
+        {
+            "count": 1,
+            "label": "",
+            "none": None,
+            "blank": "",
+            "items": [],
+            "mapping": {},
+            "zero": 0,
+            "flag": False,
+        }
+    )
+
+    assert normalized == {"count": 1, "label": "", "zero": 0, "flag": False}
+    with pytest.raises(ToolContractError) as exc_info:
+        contract.validate_arguments(normalized)
+    message = str(exc_info.value)
+    assert '"zero" is not a parameter' in message
+    assert '"flag" is not a parameter' in message
+    assert '"label" must not be empty' in message
 
 
 @pytest.mark.asyncio
@@ -197,7 +351,7 @@ def test_normalization_omits_exact_empty_optional_string_properties() -> None:
     )
 
     assert normalized == {"action": "input", "items": [""]}
-    with pytest.raises(ToolContractError, match=r"arguments/items\[0\]"):
+    with pytest.raises(ToolContractError, match=r'"items\[0\]" must not be empty'):
         contract.validate_arguments(normalized)
 
 
@@ -216,7 +370,7 @@ def test_normalization_keeps_exact_empty_required_string_properties() -> None:
     normalized = contract.normalize_arguments({"value": "", "optional": ""})
 
     assert normalized == {"value": "", "optional": ""}
-    with pytest.raises(ToolContractError, match=r"arguments/value"):
+    with pytest.raises(ToolContractError, match='"value" must not be empty'):
         contract.validate_arguments(normalized)
 
 
@@ -261,23 +415,11 @@ async def test_dispatch_wraps_one_array_item_and_uses_active_input_contract() ->
 @pytest.mark.parametrize(
     ("arguments", "message"),
     [
-        ({"count": "0"}, "0 is less than the minimum of 1 [minimum]"),
-        (
-            {"count": "3.5"},
-            'expected JSON integer, received JSON string "3.5" [type]',
-        ),
-        (
-            {"count": "abc"},
-            'expected JSON integer, received JSON string "abc" [type]',
-        ),
-        (
-            {"count": "1e1000"},
-            'expected JSON integer, received JSON string "1e1000" [type]',
-        ),
-        (
-            {"count": "2", "extra": True},
-            "Additional properties are not allowed ('extra' was unexpected)",
-        ),
+        ({"count": "0"}, '"count" must be at least 1; received 0.'),
+        ({"count": "3.5"}, '"count" must be an integer; received "3.5".'),
+        ({"count": "abc"}, '"count" must be an integer; received "abc".'),
+        ({"count": "1e1000"}, '"count" must be an integer; received "1e1000".'),
+        ({"count": "2", "extra": True}, '"extra" is not a parameter.'),
     ],
 )
 async def test_dispatch_keeps_semantic_and_shape_validation_after_normalization(
@@ -384,8 +526,10 @@ def test_type_error_explains_optional_default_without_coercion() -> None:
     with pytest.raises(ToolContractError) as exc_info:
         contract.validate_arguments({"include_links": "false"})
 
-    assert "arguments/include_links" in str(exc_info.value)
-    assert "boolean" in str(exc_info.value)
+    assert str(exc_info.value) == (
+        'sample was not run: "include_links" must be a boolean; received "false"; '
+        "omit this optional field to use its default true."
+    )
 
 
 def test_type_error_does_not_recommend_omitting_a_required_default() -> None:
@@ -405,7 +549,7 @@ def test_type_error_does_not_recommend_omitting_a_required_default() -> None:
         contract.validate_arguments({"enabled": "true"})
 
     message = str(exc_info.value)
-    assert 'expected JSON boolean, received JSON string "true"' in message
+    assert message == 'sample was not run: "enabled" must be a boolean; received "true".'
     assert "omit" not in message
 
 
@@ -484,7 +628,7 @@ def test_identical_inputs_reuse_one_contract_until_their_content_changes() -> No
     assert changed is not first
     assert first.input_schema["properties"]["count"]["minimum"] == 1
     first.validate_arguments({"count": 1})
-    with pytest.raises(ToolContractError, match="minimum of 5"):
+    with pytest.raises(ToolContractError, match='"count" must be at least 5; received 1'):
         changed.validate_arguments({"count": 1})
 
 

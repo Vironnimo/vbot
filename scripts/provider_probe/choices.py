@@ -368,7 +368,7 @@ SUBAGENT_CASES = (
 TEXT_TO_SPEECH_CASES = ("plain", "unicode_multiline")
 
 
-WEB_FETCH_CASES = ("default", "markdown", "text", "raw")
+WEB_FETCH_CASES = ("default", "find")
 
 
 WEB_SEARCH_CASES = (

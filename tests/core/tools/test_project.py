@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Sequence
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,7 +11,7 @@ from typing import Any, cast
 import pytest
 
 from core.projects import ProjectStore
-from core.tools import FileReadState, StaleReason, ToolContext, ToolRegistry
+from core.tools import FileReadState, StaleReason, ToolContext, ToolContractError, ToolRegistry
 from core.tools.project import (
     PROJECT_TOOL_NAME,
     PROJECT_TOOL_PARAMETERS,
@@ -153,16 +154,25 @@ def test_project_tool_rejects_unknown_project(tmp_path: Path) -> None:
     assert result["error"]["retryable"] is False
 
 
-def test_project_tool_rejects_unknown_argument(tmp_path: Path) -> None:
-    result = _handler(ProjectStore(tmp_path / "data"), FileReadState())(
-        _context(tmp_path), {"project_id": "vbot", "unexpected": True}
+def test_project_tool_rejects_unknown_argument_before_loading(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    agents_file = repo / "AGENTS.md"
+    agents_file.write_text("Follow the Project rules.", encoding="utf-8")
+    projects = ProjectStore(tmp_path / "data")
+    projects.create("vbot", "vBot", repo)
+    file_state = FileReadState()
+    registry = ToolRegistry()
+    register_project_tool(
+        registry, projects, lambda: _Renderer(), lambda _project_id: [], file_state
     )
 
-    assert result["ok"] is False
-    assert result["error"] == {
-        "code": "invalid_arguments",
-        "message": "Unknown argument(s): unexpected",
-    }
+    with pytest.raises(ToolContractError, match='"unexpected" is not a parameter'):
+        asyncio.run(
+            registry.dispatch(_context(tmp_path), {"project_id": "vbot", "unexpected": True})
+        )
+
+    assert file_state.check_stale("session-one", agents_file.resolve()) is StaleReason.NEVER_READ
 
 
 @pytest.mark.parametrize("project_id", [None, 42, ""])

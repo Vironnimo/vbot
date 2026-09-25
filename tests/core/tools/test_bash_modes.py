@@ -13,11 +13,14 @@ import core.tools.bash as bash_module
 from core.tools.bash import (
     _resolve_workdir,
     bash_handler,
+    register_bash_tool,
 )
+from core.tools.contracts import ToolContractError
 from core.tools.process import PROCESS_TOOL_NAME, make_process_handler
 from core.tools.process_manager import ProcessManager
 from core.tools.tools import (
     ToolContext,
+    ToolRegistry,
 )
 from tests.core.tools.bash_helpers import (
     AGENT_ID,
@@ -34,6 +37,14 @@ from tests.core.tools.bash_helpers import (
 from tests.core.tools.bash_helpers import (
     shell_env_cache as shell_env_cache,
 )
+
+
+async def _dispatch_bash(
+    manager: ProcessManager, context: ToolContext, arguments: dict[str, Any]
+) -> dict[str, Any]:
+    registry = ToolRegistry()
+    register_bash_tool(registry, manager)
+    return await registry.dispatch(context, arguments)
 
 
 @pytest.mark.asyncio
@@ -171,22 +182,22 @@ async def test_short_foreground_command_finishes_inline(
 async def test_removed_handoff_parameter_is_rejected(
     manager: ProcessManager,
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
     mode: str,
 ) -> None:
-    context = make_context(tmp_path)
+    monkeypatch.setattr(bash_module, "_shell_argv", python_command)
 
-    result = await bash_handler(
-        context,
-        {
-            "command": "print('never runs')",
-            "mode": mode,
-            "background_after_seconds": 1,
-        },
-        manager,
-    )
+    with pytest.raises(ToolContractError, match='"background_after_seconds" is not a parameter'):
+        await _dispatch_bash(
+            manager,
+            make_context(tmp_path),
+            {
+                "command": "print('never runs')",
+                "mode": mode,
+                "background_after_seconds": 1,
+            },
+        )
 
-    assert result["ok"] is False
-    assert result["error"]["code"] == "invalid_arguments"
     assert manager.list_processes(AGENT_ID) == []
 
 
@@ -525,21 +536,22 @@ async def test_bash_runs_in_cwd_when_no_workdir_argument(
 async def test_env_argument_is_rejected(
     manager: ProcessManager,
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    context = make_context(tmp_path)
+    monkeypatch.setattr(bash_module, "_shell_argv", python_command)
 
-    result = await bash_handler(
-        context,
-        {
-            "command": "echo ignored",
-            "mode": "foreground",
-            "env": {"SAFE_VALUE": "unsupported"},
-        },
-        manager,
-    )
+    with pytest.raises(ToolContractError, match='"env" is not a parameter'):
+        await _dispatch_bash(
+            manager,
+            make_context(tmp_path),
+            {
+                "command": "print('never runs')",
+                "mode": "foreground",
+                "env": {"SAFE_VALUE": "unsupported"},
+            },
+        )
 
-    assert result["ok"] is False
-    assert result["error"]["code"] == "invalid_arguments"
+    assert manager.list_processes(AGENT_ID) == []
 
 
 @pytest.mark.asyncio

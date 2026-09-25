@@ -420,7 +420,8 @@ class TestActionValidation:
         result = _run(registry, tmp_path, {"action": "bogus"})
 
         assert result["ok"] is False
-        assert "not one of" in result["error"]["message"]
+        assert '"action" must be one of' in result["error"]["message"]
+        assert 'received "bogus"' in result["error"]["message"]
 
     def test_rejects_missing_action(self, tmp_path: Path) -> None:
         registry, _service = _registry(tmp_path)

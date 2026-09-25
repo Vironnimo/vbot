@@ -456,7 +456,9 @@ def test_non_skill_file_path_is_rejected(tmp_path: Path) -> None:
     )
 
     assert result["ok"] is False
-    assert "[pattern]" in cast(dict[str, Any], result["error"])["message"]
+    message = cast(dict[str, Any], result["error"])["message"]
+    assert '"file_path" must match the pattern' in message
+    assert 'received "other/data.txt"' in message
 
 
 def test_delete_removes_complete_skill_and_invalidates(tmp_path: Path) -> None:
@@ -492,11 +494,9 @@ def test_global_scope_is_not_available_to_agent_tool(tmp_path: Path) -> None:
         }
     )
 
-    assert result == tool_failure(
-        "invalid_arguments",
-        "Unknown create argument(s): scope",
-        retryable=False,
-    )
+    assert result["ok"] is False
+    assert result["error"]["code"] == "invalid_arguments"
+    assert '"scope" is not a parameter' in result["error"]["message"]
     assert not harness.home("main").exists()
     assert harness.invalidated == []
 
@@ -507,7 +507,9 @@ def test_removed_draft_action_is_rejected(tmp_path: Path) -> None:
     result = harness.run({"action": "begin", "name": "demo"})
 
     assert result["ok"] is False
-    assert "[enum]" in cast(dict[str, Any], result["error"])["message"]
+    message = cast(dict[str, Any], result["error"])["message"]
+    assert '"action" must be one of "create", "edit"' in message
+    assert 'received "begin"' in message
 
 
 def _scope_resolver(

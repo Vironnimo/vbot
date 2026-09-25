@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import copy
+import difflib
 import hashlib
 import json
 import math
 import re
 import threading
 from collections import OrderedDict
+from collections.abc import Mapping
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -45,18 +47,42 @@ class ToolContract:
     schema_fingerprint: str
 
     def normalize_arguments(self, arguments: Any) -> Any:
-        """Repair common unambiguous model encodings in a copied argument value."""
+        """Repair common unambiguous model encodings in a copied argument value.
+
+        An empty value under a name that is not a parameter requests nothing,
+        so it is dropped instead of rejected.
+        """
         copied_arguments = copy.deepcopy(arguments)
-        return _normalize_schema_value(
+        normalized = _normalize_schema_value(
             copied_arguments,
             self.input_schema,
             root_schema=self.input_schema,
             root_validator=self.input_validator,
         )
+        parameters = _closed_root_parameters(self.input_schema)
+        if parameters is None or not isinstance(normalized, dict):
+            return normalized
+        return {
+            key: value
+            for key, value in normalized.items()
+            if key in parameters or value not in (None, "", [], {})
+        }
 
-    def validate_arguments(self, arguments: Any) -> None:
-        """Raise an actionable error when *arguments* violate the input schema."""
-        _validate_instance(self.input_validator, arguments, label="arguments")
+    def validate_arguments(
+        self, arguments: Any, *, unadvertised: Mapping[str, JsonObject] | None = None
+    ) -> None:
+        """Raise one readable error naming every argument problem, if any.
+
+        ``unadvertised`` maps root parameters the Tool accepts without offering
+        them to the Model to their schemas; they are validated but never listed.
+        """
+        problems, names_matter = _argument_problems(
+            self.input_validator, arguments, unadvertised or {}
+        )
+        if problems:
+            raise ToolContractError(
+                _render_argument_problems(self.name, self.input_schema, problems, names_matter)
+            )
 
     def validate_success_data(self, data: Any) -> None:
         """Raise an actionable error when successful Tool data violates its schema."""
@@ -634,6 +660,212 @@ def _validation_error_score(error: ValidationError) -> int:
     if not error.context:
         return 1
     return sum(_validation_error_score(child) for child in error.context)
+
+
+def _closed_root_parameters(schema: Any) -> tuple[str, ...] | None:
+    """Return a Tool input schema's complete top-level parameter names.
+
+    Model-facing schemas omit ``additionalProperties``, so a Tool's declared
+    root properties are its complete parameter list: an omitted keyword closes
+    the root like ``false``. An explicit schema or ``true``, or
+    ``patternProperties``, keeps it open (``None``).
+    """
+    if not isinstance(schema, Mapping):
+        return None
+    properties = schema.get("properties")
+    if not isinstance(properties, dict):
+        return None
+    if schema.get("additionalProperties", False) is not False or "patternProperties" in schema:
+        return None
+    return tuple(properties)
+
+
+_MAX_REPORTED_PROBLEMS = 6
+_MAX_HINT_LENGTH = 160
+_MAX_RECEIVED_LENGTH = 60
+
+
+def _argument_problems(
+    validator: Draft202012Validator, arguments: Any, unadvertised: Mapping[str, JsonObject]
+) -> tuple[list[str], bool]:
+    """Return every argument problem as a sentence, and whether names were wrong.
+
+    Names are wrong when a parameter is missing or unknown; the rendered error
+    then lists the Tool's parameters.
+    """
+    schema = validator.schema
+    if not isinstance(arguments, dict):
+        received = _received(arguments)
+        return [f"Arguments must be a JSON object of named parameters; received {received}."], True
+    problems: list[str] = []
+    names_matter = False
+    parameters = _closed_root_parameters(schema)
+    if parameters is not None:
+        for key in arguments:
+            if key not in parameters and key not in unadvertised:
+                problems.append(_unknown_parameter(key, parameters, arguments))
+                names_matter = True
+    advertised = {key: value for key, value in arguments.items() if key not in unadvertised}
+    errors = list(validator.iter_errors(advertised))
+    supplied = {key: arguments[key] for key in unadvertised if key in arguments}
+    if supplied:
+        extra = Draft202012Validator({"type": "object", "properties": dict(unadvertised)})
+        errors.extend(extra.iter_errors(supplied))
+    for error in errors:
+        best = _best_validation_error(error)
+        root_unknown = best.validator == "additionalProperties" and not best.absolute_path
+        if root_unknown and parameters is not None:
+            continue
+        if best.validator == "required":
+            names_matter = True
+        for problem in _describe_problem(schema, best):
+            if problem not in problems:
+                problems.append(problem)
+    return problems, names_matter
+
+
+def _render_argument_problems(
+    tool_name: str, schema: JsonObject, problems: list[str], names_matter: bool
+) -> str:
+    parameters = schema.get("properties")
+    parameter_line = ""
+    if names_matter and isinstance(parameters, dict) and parameters:
+        required = schema.get("required", [])
+        names = ", ".join(f"{name} (required)" if name in required else name for name in parameters)
+        parameter_line = f"{tool_name} parameters: {names}."
+    if len(problems) == 1 and not parameter_line:
+        return f"{tool_name} was not run: {problems[0]}"
+    shown = problems[:_MAX_REPORTED_PROBLEMS]
+    lines = [f"{tool_name} was not run:", *(f"- {problem}" for problem in shown)]
+    if len(problems) > len(shown):
+        lines.append(f"- ...and {len(problems) - len(shown)} more.")
+    if parameter_line:
+        lines.append(parameter_line)
+    return "\n".join(lines)
+
+
+def _unknown_parameter(key: str, parameters: tuple[str, ...], arguments: JsonObject) -> str:
+    candidates = [name for name in parameters if name not in arguments]
+    suggestion = _similar_name(key, candidates)
+    hint = f' Did you mean "{suggestion}"?' if suggestion else ""
+    return f'"{key}" is not a parameter.{hint}'
+
+
+def _similar_name(key: str, candidates: list[str]) -> str | None:
+    """Suggest a parameter for an unknown name; the suggestion is never applied."""
+    tokens = {token for token in re.split(r"[^a-z0-9]+", key.casefold()) if token}
+    containing = [name for name in candidates if name.casefold() in tokens]
+    if len(containing) == 1:
+        return containing[0]
+    close = difflib.get_close_matches(key, candidates, n=1, cutoff=0.75)
+    return close[0] if close else None
+
+
+def _describe_problem(root_schema: Any, error: ValidationError) -> list[str]:
+    field = _field_name(error.absolute_path)
+    subject = f'"{field}"' if field else "The arguments"
+    keyword = error.validator
+    expected = error.validator_value
+    instance = error.instance
+    if keyword == "required" and isinstance(instance, dict) and isinstance(expected, list):
+        properties = error.schema.get("properties", {}) if isinstance(error.schema, dict) else {}
+        return [
+            _missing_parameter(_field_name([*error.absolute_path, name]), properties.get(name))
+            for name in expected
+            if name not in instance
+        ]
+    if keyword == "additionalProperties" and isinstance(instance, dict):
+        properties = error.schema.get("properties", {}) if isinstance(error.schema, dict) else {}
+        return [
+            f'"{_field_name([*error.absolute_path, key])}" is not a known field of {subject}.'
+            for key in instance
+            if key not in properties
+        ]
+    if keyword == "type":
+        default_hint = _optional_property_default_hint(root_schema, error)
+        return [
+            f"{subject} must be {_expected_types(expected)}; received {_received(instance)}"
+            f"{default_hint}."
+        ]
+    if keyword == "enum" and isinstance(expected, list):
+        options = ", ".join(json.dumps(option, ensure_ascii=False) for option in expected)
+        return [f"{subject} must be one of {options}; received {_received(instance)}."]
+    if keyword == "const":
+        return [f"{subject} must be {json.dumps(expected, ensure_ascii=False)}."]
+    bounds = {
+        "minimum": "at least",
+        "exclusiveMinimum": "greater than",
+        "maximum": "at most",
+        "exclusiveMaximum": "less than",
+    }
+    if keyword in bounds:
+        return [f"{subject} must be {bounds[keyword]} {expected}; received {_received(instance)}."]
+    if keyword in ("minLength", "minItems") and expected == 1:
+        return [f"{subject} must not be empty."]
+    if keyword == "minLength":
+        return [f"{subject} must be at least {expected} characters long."]
+    if keyword == "maxLength" and isinstance(instance, str):
+        return [f"{subject} must be at most {expected} characters long; received {len(instance)}."]
+    if keyword == "minItems" and isinstance(instance, list):
+        return [f"{subject} needs at least {expected} items; received {len(instance)}."]
+    if keyword == "maxItems" and isinstance(instance, list):
+        return [f"{subject} allows at most {expected} items; received {len(instance)}."]
+    if keyword == "uniqueItems":
+        return [f"{subject} must not repeat items."]
+    if keyword == "pattern":
+        return [f"{subject} must match the pattern {expected}; received {_received(instance)}."]
+    message = error.message.rstrip(".")
+    return [f"{subject}: {message}." if field else f"{message}."]
+
+
+def _missing_parameter(field: str, property_schema: Any) -> str:
+    description = property_schema.get("description") if isinstance(property_schema, dict) else None
+    if not isinstance(description, str) or not description.strip():
+        return f'"{field}" is required.'
+    hint = description.strip()
+    sentence_end = hint.find(". ")
+    if sentence_end >= 0:
+        hint = hint[: sentence_end + 1]
+    if len(hint) > _MAX_HINT_LENGTH:
+        hint = hint[: _MAX_HINT_LENGTH - 3].rstrip() + "..."
+    if not hint.endswith((".", "?", "!")):
+        hint += "."
+    return f'"{field}" is required: {hint}'
+
+
+def _field_name(path: Any) -> str:
+    name = ""
+    for segment in path:
+        if isinstance(segment, int):
+            name += f"[{segment}]"
+        else:
+            name += f".{segment}" if name else str(segment)
+    return name
+
+
+def _expected_types(expected: Any) -> str:
+    names = [expected] if isinstance(expected, str) else list(expected or [])
+    articles = {
+        "string": "a string",
+        "integer": "an integer",
+        "number": "a number",
+        "boolean": "a boolean",
+        "array": "an array",
+        "object": "an object",
+        "null": "null",
+    }
+    return " or ".join(articles.get(str(name), str(name)) for name in names)
+
+
+def _received(value: Any) -> str:
+    if isinstance(value, dict):
+        return "an object"
+    if isinstance(value, list):
+        return "an array"
+    text = json.dumps(value, ensure_ascii=False)
+    if isinstance(value, str) and len(text) > _MAX_RECEIVED_LENGTH:
+        return text[: _MAX_RECEIVED_LENGTH - 4] + '..."'
+    return text
 
 
 def _validate_instance(
