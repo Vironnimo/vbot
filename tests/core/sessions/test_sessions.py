@@ -59,11 +59,12 @@ def test_continuation_events_update_one_normalized_current_state(manager) -> Non
             },
             {
                 "version": 1,
-                "type": "tool_started",
+                "type": "assistant_boundary",
                 "run_id": "run-one",
                 "timestamp": "2026-08-31T12:00:03+00:00",
-                "tool_call_id": "call-one",
-                "name": "bash",
+                "step": 1,
+                "message_id": "assistant-one",
+                "tool_calls": [{"id": "call-one", "name": "bash"}],
             },
             {
                 "version": 1,

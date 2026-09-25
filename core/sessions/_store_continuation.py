@@ -66,7 +66,6 @@ def _upsert_operation(
     run_key: int,
     completed: bool,
     ok: bool | None,
-    replace_unknown: bool,
 ) -> None:
     status = "completed" if completed else "unknown"
     existing = connection.execute(
@@ -88,7 +87,7 @@ def _upsert_operation(
                 None if ok is None else int(ok),
             ),
         )
-    elif replace_unknown or completed:
+    elif completed:
         connection.execute(
             "UPDATE continuation_operations SET name = ?, run_key = ?, status = ?, ok = ? "
             "WHERE session_key = ? AND tool_call_id = ?",
@@ -234,20 +233,17 @@ def _apply_record(connection: sqlite3.Connection, session_key: int, record: Json
                     run_key=run_key,
                     completed=False,
                     ok=None,
-                    replace_unknown=False,
                 )
         return
-    if record_type in {"tool_started", "tool_result"}:
-        completed = record_type == "tool_result"
+    if record_type == "tool_result":
         _upsert_operation(
             connection,
             session_key,
             tool_call_id=_continuation_string(record, "tool_call_id"),
             name=_continuation_string(record, "name"),
             run_key=_run_key(connection, session_key, record, "run_id"),
-            completed=completed,
-            ok=record.get("ok") is True if completed else None,
-            replace_unknown=True,
+            completed=True,
+            ok=record.get("ok") is True,
         )
         return
     if record_type == "run_interrupted":
