@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from core.database import DatabaseCorruptError, open_database, open_offline_database
+from core.database import DatabaseSchemaMismatchError, open_database, open_offline_database
 from core.database._schema import KERNEL_SCHEMA_SQL, declared_schema, schema_changes
 from core.database.database import _evolve
 from tests.core.database.database_test_support import (
@@ -38,9 +38,9 @@ def _created(data_dir: Path, *bodies: str) -> Path:
 def _changes(path: Path, schema_sql: str, *, retired: tuple[str, ...] = ()) -> list[str]:
     with closing(sqlite3.connect(path)) as connection:
         return [
-            description
-            for _statement, description in schema_changes(
-                connection, _declared(schema_sql), retired_indexes=retired
+            change.description
+            for change in schema_changes(
+                connection, _declared(schema_sql), database="notes", retired_indexes=retired
             )
         ]
 
@@ -186,9 +186,9 @@ def test_reconcile_refuses_every_non_additive_change(
     path = _created(data_dir, "kept")
     original = path.read_bytes()
 
-    with pytest.raises(DatabaseCorruptError, match=message):
+    with pytest.raises(DatabaseSchemaMismatchError, match=message):
         _changes(path, changed_schema)
-    with pytest.raises(DatabaseCorruptError):
+    with pytest.raises(DatabaseSchemaMismatchError):
         open_offline_database(notes_spec(data_dir, schema_sql=changed_schema))
 
     assert path.read_bytes() == original
@@ -200,7 +200,7 @@ def test_reconcile_refuses_a_changed_view_or_trigger(data_dir: Path) -> None:
     database.close()
 
     changed = with_view.replace("WHERE tag;", "WHERE tag IS NOT NULL;")
-    with pytest.raises(DatabaseCorruptError, match="view tagged"):
+    with pytest.raises(DatabaseSchemaMismatchError, match="view tagged"):
         _changes(database.path, changed)
 
 
@@ -264,7 +264,9 @@ def test_reconcile_rolls_back_all_ddl_when_a_later_statement_fails(data_dir: Pat
         "\nCREATE UNIQUE INDEX unique_values ON duplicate_values (value);"
     )
 
-    with pytest.raises(DatabaseCorruptError):
+    with pytest.raises(
+        DatabaseSchemaMismatchError, match="index unique_values cannot be created over the existing"
+    ):
         open_offline_database(notes_spec(data_dir, schema_sql=future))
 
     with closing(sqlite3.connect(path)) as connection:

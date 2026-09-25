@@ -3,12 +3,20 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from pathlib import Path
+from typing import Any
 
 import pytest
 
-from core.database import APPLICATION_IDS, read_marker, write_bootstrap_marker
+from core.database import (
+    APPLICATION_IDS,
+    DatabaseUnavailableError,
+    read_marker,
+    write_bootstrap_marker,
+)
 from core.extensions import ExtensionRegistrationIdentity
+from core.extensions import databases as databases_module
 from core.extensions._declarations import ExtensionUnavailableError
 from core.extensions.databases import (
     ExtensionDatabases,
@@ -106,6 +114,68 @@ def test_close_closes_every_handle_and_refuses_later_opens(databases) -> None:
     with pytest.raises(ExtensionUnavailableError):
         asyncio.run(databases.open(_identity("late_ext"), "notes", SCHEMA))
     asyncio.run(databases.release(_identity()))  # a late release stays harmless
+
+
+def test_unregister_is_refused_while_open_and_releases_after_the_owner_is_released(
+    databases, data_dir
+) -> None:
+    owner = _identity()
+    database = asyncio.run(databases.open(owner, "notes", SCHEMA))
+    _insert(database, "old")
+
+    with pytest.raises(DatabaseUnavailableError, match="disable the Extension"):
+        asyncio.run(databases.unregister("ext.notes_ext.notes"))
+    asyncio.run(databases.release(owner))
+    released = asyncio.run(databases.unregister("ext.notes_ext.notes"))
+
+    assert released.quarantine is not None
+    assert (released.quarantine / "notes.db").is_file()
+    marker = read_marker(data_dir)
+    assert marker is not None and "ext.notes_ext.notes" not in marker.databases
+    reinstalled = asyncio.run(databases.open(_identity(epoch="epoch-2"), "notes", SCHEMA))
+    assert _bodies(reinstalled) == []
+    assert reinstalled.database_id != database.database_id
+
+
+def test_an_open_during_unregister_waits_and_then_creates_a_new_database(
+    databases, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    owner = _identity()
+    database = asyncio.run(databases.open(owner, "notes", SCHEMA))
+    _insert(database, "old")
+    asyncio.run(databases.release(owner))
+    entered, proceed = threading.Event(), threading.Event()
+    real_unregister = databases_module.unregister_database
+
+    def slow_unregister(data_dir: Path, name: str) -> Any:
+        entered.set()
+        assert proceed.wait(5)
+        return real_unregister(data_dir, name)
+
+    monkeypatch.setattr(databases_module, "unregister_database", slow_unregister)
+    results: dict[str, Any] = {}
+
+    def unregister() -> None:
+        results["released"] = asyncio.run(databases.unregister("ext.notes_ext.notes"))
+
+    def reopen() -> None:
+        results["reopened"] = asyncio.run(
+            databases.open(_identity(epoch="epoch-2"), "notes", SCHEMA)
+        )
+
+    unregistering = threading.Thread(target=unregister)
+    unregistering.start()
+    assert entered.wait(5)
+    opening = threading.Thread(target=reopen)
+    opening.start()
+    opening.join(0.3)
+    assert opening.is_alive()
+    proceed.set()
+    unregistering.join(5)
+    opening.join(5)
+
+    assert results["released"].quarantine is not None
+    assert _bodies(results["reopened"]) == []
 
 
 def test_migrations_and_additive_schema_changes_apply_on_reopen(databases) -> None:

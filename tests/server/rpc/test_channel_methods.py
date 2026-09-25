@@ -18,7 +18,7 @@ from server.rpc.methods import dispatch_rpc
 
 @pytest.mark.asyncio
 async def test_slack_credentials_rollback_together_when_creation_fails() -> None:
-    service = Mock()
+    service = _channel_service_mock()
     service.create_channel.side_effect = ChannelConfigError("cannot create")
     state = _state(channel_service=service)
     state.runtime.storage.credentials["UNRELATED"] = "keep"
@@ -63,7 +63,7 @@ async def test_slack_requires_distinct_credential_keys_before_writing() -> None:
 
 @pytest.mark.asyncio
 async def test_whatsapp_creation_needs_no_token_and_pairing_uses_dedicated_rpc() -> None:
-    service = Mock()
+    service = _channel_service_mock()
     service.pair_whatsapp = AsyncMock(return_value={"state": "pairing", "qr_image": "private-qr"})
     state = _state(channel_service=service)
     response = await dispatch_rpc(
@@ -134,6 +134,14 @@ def _channel_config(
     )
 
 
+def _channel_service_mock() -> Mock:
+    """A ChannelService double whose create and delete are awaitable like the real ones."""
+    service = Mock()
+    service.create_channel = AsyncMock()
+    service.delete_channel = AsyncMock()
+    return service
+
+
 def _state(
     *,
     channel_service: object | None = None,
@@ -161,7 +169,9 @@ def _state(
         return None
 
     runtime = SimpleNamespace(
-        channel_service=channel_service if channel_service is not None else Mock(),
+        channel_service=(
+            channel_service if channel_service is not None else _channel_service_mock()
+        ),
         reload_channel_tool=Mock(),
         reload_environment_credentials=Mock(),
         resolve_environment_credential=resolve_environment_credential,
@@ -176,7 +186,7 @@ def _state(
 @pytest.mark.asyncio
 async def test_channel_list_happy_path_returns_serialized_channels() -> None:
     config = _channel_config()
-    channel_service = Mock()
+    channel_service = _channel_service_mock()
     channel_service.list_channels.return_value = [config]
     state = _state(channel_service=channel_service)
 
@@ -232,7 +242,7 @@ async def test_channel_access_methods_return_saved_state_without_runtime_reload(
             }
         ],
     }
-    channel_service = Mock()
+    channel_service = _channel_service_mock()
     setattr(channel_service, service_method, AsyncMock(return_value=saved))
     state = _state(channel_service=channel_service)
 
@@ -276,7 +286,7 @@ async def test_channel_rpc_rejects_legacy_owner_field(
 
 @pytest.mark.asyncio
 async def test_channel_create_happy_path_calls_service_and_reload() -> None:
-    channel_service = Mock()
+    channel_service = _channel_service_mock()
     state = _state(channel_service=channel_service)
 
     response = await dispatch_rpc(
@@ -305,7 +315,7 @@ async def test_channel_create_happy_path_calls_service_and_reload() -> None:
 
 @pytest.mark.asyncio
 async def test_channel_create_with_managed_token_stores_secret_without_returning_it() -> None:
-    channel_service = Mock()
+    channel_service = _channel_service_mock()
     channel_service.is_running.return_value = True
     channel_service.is_failed.return_value = False
     channel_service.failure_reason.return_value = None
@@ -367,7 +377,7 @@ async def test_channel_create_rejects_ambiguous_token_inputs() -> None:
 
 @pytest.mark.asyncio
 async def test_channel_create_rolls_back_managed_token_when_create_fails() -> None:
-    channel_service = Mock()
+    channel_service = _channel_service_mock()
     channel_service.create_channel.side_effect = ChannelConfigError("create failed")
     state = _state(channel_service=channel_service)
 
@@ -391,7 +401,7 @@ async def test_channel_create_rolls_back_managed_token_when_create_fails() -> No
 
 @pytest.mark.asyncio
 async def test_channel_update_happy_path_calls_service_and_reload() -> None:
-    channel_service = Mock()
+    channel_service = _channel_service_mock()
     updated_config = ChannelConfig(
         id="tg-assistant",
         platform="telegram",
@@ -434,7 +444,7 @@ async def test_channel_update_happy_path_calls_service_and_reload() -> None:
 
 @pytest.mark.asyncio
 async def test_channel_update_validates_agent_when_agent_id_is_present() -> None:
-    channel_service = Mock()
+    channel_service = _channel_service_mock()
     updated_config = _channel_config()
     channel_service.list_channels.return_value = [updated_config]
     state = _state(channel_service=channel_service)
@@ -471,7 +481,7 @@ async def test_channel_mutation_methods_call_service_and_reload(
     method: str,
     service_method: str,
 ) -> None:
-    channel_service = Mock()
+    channel_service = _channel_service_mock()
     config = _channel_config(enabled=method != "channel.disable")
     channel_service.list_channels.return_value = [config]
     state = _state(channel_service=channel_service)
@@ -498,7 +508,7 @@ async def test_channel_set_token_reloads_credentials_and_restarts_only_channel(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     config = _channel_config()
-    channel_service = Mock()
+    channel_service = _channel_service_mock()
     channel_service.list_channels.return_value = [config]
     channel_service.restart_channel.return_value = True
     channel_service.is_running.return_value = True
@@ -547,7 +557,7 @@ async def test_channel_set_token_reloads_credentials_and_restarts_only_channel(
 @pytest.mark.asyncio
 async def test_channel_set_token_reports_process_environment_override_without_restart() -> None:
     config = _channel_config()
-    channel_service = Mock()
+    channel_service = _channel_service_mock()
     channel_service.list_channels.return_value = [config]
     channel_service.is_running.return_value = True
     channel_service.is_failed.return_value = False
@@ -576,7 +586,7 @@ async def test_channel_set_token_reports_process_environment_override_without_re
 @pytest.mark.asyncio
 async def test_channel_set_token_rolls_back_credential_when_restart_fails() -> None:
     config = _channel_config()
-    channel_service = Mock()
+    channel_service = _channel_service_mock()
     channel_service.list_channels.return_value = [config]
     channel_service.restart_channel.side_effect = [ChannelConfigError("restart failed"), True]
     state = _state(channel_service=channel_service)
@@ -599,7 +609,7 @@ async def test_channel_set_token_rolls_back_credential_when_restart_fails() -> N
 @pytest.mark.asyncio
 async def test_channel_status_happy_path_returns_enabled_and_running() -> None:
     config = _channel_config(enabled=True)
-    channel_service = Mock()
+    channel_service = _channel_service_mock()
     channel_service.list_channels.return_value = [config]
     channel_service.is_running = Mock(return_value=True)
     channel_service.is_failed = Mock(return_value=False)
@@ -633,7 +643,7 @@ async def test_channel_status_happy_path_returns_enabled_and_running() -> None:
 @pytest.mark.asyncio
 async def test_channel_status_returns_failure_reason() -> None:
     config = _channel_config(enabled=True)
-    channel_service = Mock()
+    channel_service = _channel_service_mock()
     channel_service.list_channels.return_value = [config]
     channel_service.is_running = Mock(return_value=False)
     channel_service.is_failed = Mock(return_value=True)
@@ -667,7 +677,7 @@ async def test_channel_status_returns_failure_reason() -> None:
 @pytest.mark.asyncio
 async def test_channel_status_returns_denied_chats() -> None:
     config = _channel_config(enabled=True)
-    channel_service = Mock()
+    channel_service = _channel_service_mock()
     channel_service.list_channels.return_value = [config]
     channel_service.is_running = Mock(return_value=True)
     channel_service.is_failed = Mock(return_value=False)
@@ -765,7 +775,7 @@ async def test_session_list_happy_path_returns_bounded_session_summaries() -> No
 @pytest.mark.asyncio
 async def test_session_link_channel_sets_metadata_without_writing_reminder() -> None:
     config = _channel_config()
-    channel_service = Mock()
+    channel_service = _channel_service_mock()
     channel_service.list_channels.return_value = [config]
 
     chat_sessions = Mock()
@@ -817,7 +827,7 @@ async def test_session_link_channel_sets_metadata_without_writing_reminder() -> 
 @pytest.mark.asyncio
 async def test_session_link_channel_rejects_channel_from_other_agent() -> None:
     config = _channel_config()
-    channel_service = Mock()
+    channel_service = _channel_service_mock()
     channel_service.list_channels.return_value = [config]
     chat_sessions = Mock()
     state = _state(channel_service=channel_service, chat_sessions=chat_sessions)
@@ -844,7 +854,7 @@ async def test_session_link_channel_rejects_channel_from_other_agent() -> None:
 
 @pytest.mark.asyncio
 async def test_channel_create_maps_duplicate_error_to_channel_already_exists() -> None:
-    channel_service = Mock()
+    channel_service = _channel_service_mock()
     channel_service.create_channel.side_effect = ChannelConfigError(
         "Channel already exists: tg-assistant"
     )
@@ -869,7 +879,7 @@ async def test_channel_create_maps_duplicate_error_to_channel_already_exists() -
 
 @pytest.mark.asyncio
 async def test_channel_update_maps_config_error_to_channel_config_error() -> None:
-    channel_service = Mock()
+    channel_service = _channel_service_mock()
     channel_service.update_channel.side_effect = ChannelConfigError("invalid channel config")
     state = _state(channel_service=channel_service)
 
@@ -890,7 +900,7 @@ async def test_channel_update_maps_config_error_to_channel_config_error() -> Non
 
 @pytest.mark.asyncio
 async def test_channel_create_rejects_unknown_agent() -> None:
-    state = _state(channel_service=Mock())
+    state = _state(channel_service=_channel_service_mock())
     state.runtime.agents.get.side_effect = KeyError("missing")
 
     response = await dispatch_rpc(
@@ -913,7 +923,7 @@ async def test_channel_create_rejects_unknown_agent() -> None:
 
 @pytest.mark.asyncio
 async def test_channel_update_rejects_unknown_agent() -> None:
-    state = _state(channel_service=Mock())
+    state = _state(channel_service=_channel_service_mock())
     state.runtime.agents.get.side_effect = KeyError("missing")
 
     response = await dispatch_rpc(
@@ -934,7 +944,7 @@ async def test_channel_update_rejects_unknown_agent() -> None:
 
 @pytest.mark.asyncio
 async def test_channel_status_unknown_channel_returns_channel_not_found() -> None:
-    channel_service = Mock()
+    channel_service = _channel_service_mock()
     channel_service.list_channels.return_value = []
     state = _state(channel_service=channel_service)
 
@@ -955,7 +965,7 @@ async def test_channel_status_unknown_channel_returns_channel_not_found() -> Non
 
 @pytest.mark.asyncio
 async def test_channel_create_accepts_discord_platform() -> None:
-    state = _state(channel_service=Mock())
+    state = _state(channel_service=_channel_service_mock())
 
     response = await dispatch_rpc(
         state,
@@ -977,7 +987,7 @@ async def test_channel_create_accepts_discord_platform() -> None:
 
 @pytest.mark.asyncio
 async def test_channel_create_rejects_invalid_platform() -> None:
-    state = _state(channel_service=Mock())
+    state = _state(channel_service=_channel_service_mock())
 
     response = await dispatch_rpc(
         state,
@@ -998,7 +1008,7 @@ async def test_channel_create_rejects_invalid_platform() -> None:
 
 @pytest.mark.asyncio
 async def test_channel_update_rejects_invalid_dm_scope() -> None:
-    state = _state(channel_service=Mock())
+    state = _state(channel_service=_channel_service_mock())
 
     response = await dispatch_rpc(
         state,

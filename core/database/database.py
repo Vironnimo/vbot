@@ -15,6 +15,13 @@ touch the file, refuses unknown ``breaks_older`` migrations, applies the
 additive reconcile and pending migrations in one ``BEGIN IMMEDIATE``
 transaction, runs the owner's ``after_open`` hook and probes every declared
 table and view.
+
+Only classified SQLite corruption and identity failures are
+``DatabaseCorruptError``, the one class a canonical open answers with automatic
+restore. A schema the reconcile cannot express, a declared change the existing
+rows reject, or an unreadable declared relation is
+``DatabaseSchemaMismatchError``; a failing migration or ``after_open`` check is
+``DatabaseFormatError``. Both leave the file where it is.
 """
 
 from __future__ import annotations
@@ -45,6 +52,7 @@ from core.database.errors import (
     DatabaseCorruptError,
     DatabaseError,
     DatabaseFormatError,
+    DatabaseSchemaMismatchError,
     DatabaseUnavailableError,
 )
 from core.database.marker import (
@@ -268,6 +276,8 @@ def _open_canonical(spec: DatabaseSpec) -> Database:
     try:
         return _open_existing(spec, expected_database_id=entry.database_id, data_dir=data_dir)
     except (DatabaseCorruptError, OSError):
+        # Only corruption, identity failures and unreadable files may be
+        # restored; a format or schema mismatch is never grounds to replace data.
         if auto_restore_if_needed(data_dir, spec, entry.database_id):
             return _open_existing(spec, expected_database_id=entry.database_id, data_dir=data_dir)
         raise
@@ -457,9 +467,14 @@ def _open_existing(
                 spec.after_open(writer)
             _probe_structure(writer, spec, declared)
         except sqlite3.Error as exc:
+            # Evolve and the probe classify their own statements; what remains
+            # unclassified here is the owner's after_open check failing on an
+            # intact file, which is never grounds to restore.
             translated = classified_error(exc, f"{spec.name}: the database cannot be opened")
             if translated is None and isinstance(exc, sqlite3.DatabaseError):
-                translated = DatabaseCorruptError(f"{spec.name}: the database cannot be opened")
+                translated = DatabaseFormatError(
+                    f"the {spec.name} database failed its open check: {exc}"
+                )
             if translated is None:
                 raise
             raise translated from exc
@@ -531,16 +546,35 @@ def _refuse_unknown_breaking_migrations(spec: DatabaseSpec, ledger: list[Any]) -
 
 
 def _evolve(writer: sqlite3.Connection, spec: DatabaseSpec, declared: DeclaredSchema) -> None:
-    """Apply the additive reconcile, retired-index drops and pending migrations atomically."""
-    planned = schema_changes(writer, declared, retired_indexes=spec.retired_indexes)
+    """Apply the additive reconcile, retired-index drops and pending migrations atomically.
+
+    A planned statement the existing rows reject raises
+    ``DatabaseSchemaMismatchError`` and a failing migration ``DatabaseFormatError``;
+    either rolls back every change. Classified corruption and unavailability
+    propagate as SQLite errors for the caller to classify.
+    """
+    planned = schema_changes(
+        writer, declared, database=spec.name, retired_indexes=spec.retired_indexes
+    )
     recorded = _recorded_migrations(writer)
     if not planned and all(migration.name in recorded for migration in spec.migrations):
         return
     writer.execute("BEGIN IMMEDIATE")
     try:
-        planned = schema_changes(writer, declared, retired_indexes=spec.retired_indexes)
-        for statement, _description in planned:
-            writer.execute(statement)
+        planned = schema_changes(
+            writer, declared, database=spec.name, retired_indexes=spec.retired_indexes
+        )
+        for change in planned:
+            try:
+                writer.execute(change.statement)
+            except sqlite3.DatabaseError as exc:
+                if classified_error(exc, "") is not None:
+                    raise
+                raise DatabaseSchemaMismatchError(
+                    spec.name,
+                    change.object_name,
+                    f"cannot be {change.action} over the existing rows ({exc})",
+                ) from exc
         ledger = writer.execute("SELECT name, breaks_older FROM kernel_migrations").fetchall()
         _refuse_unknown_breaking_migrations(spec, ledger)
         recorded = {str(row[0]) for row in ledger}
@@ -549,7 +583,15 @@ def _evolve(writer: sqlite3.Connection, spec: DatabaseSpec, declared: DeclaredSc
         version = detect_vbot_version() if pending else ""
         for migration in pending:
             if migration.apply is not None:
-                migration.apply(writer)
+                try:
+                    migration.apply(writer)
+                except sqlite3.DatabaseError as exc:
+                    if classified_error(exc, "") is not None:
+                        raise
+                    raise DatabaseFormatError(
+                        f"the {spec.name} database migration {migration.name} failed: {exc}; "
+                        "nothing was changed"
+                    ) from exc
             writer.execute(
                 "INSERT INTO kernel_migrations(name, applied_at, applied_by_version, breaks_older) "
                 "VALUES (?, ?, ?, ?)",
@@ -567,7 +609,7 @@ def _evolve(writer: sqlite3.Connection, spec: DatabaseSpec, declared: DeclaredSc
             spec.name,
             spec.path,
             "; ".join(
-                [description for _statement, description in planned]
+                [change.description for change in planned]
                 + [f"applied migration {migration.name}" for migration in pending]
             ),
         )
@@ -580,7 +622,20 @@ def _recorded_migrations(connection: sqlite3.Connection) -> set[str]:
 def _probe_structure(
     writer: sqlite3.Connection, spec: DatabaseSpec, declared: DeclaredSchema
 ) -> None:
-    """Read one row from every declared table and view; SQLite errors classify upstream."""
-    del spec
-    for relation in declared.readable_relations:
-        writer.execute(f"SELECT 1 FROM {quote_identifier(relation)} LIMIT 1").fetchone()
+    """Read one row from every declared table and view.
+
+    Classified corruption and unavailability propagate for the caller to
+    classify; any other failure, such as a view over a column the live table
+    lacks, is a schema mismatch on an intact file.
+    """
+    for kind, name, _sql in declared.objects:
+        if kind not in {"table", "view"}:
+            continue
+        try:
+            writer.execute(f"SELECT 1 FROM {quote_identifier(name)} LIMIT 1").fetchone()
+        except sqlite3.DatabaseError as exc:
+            if classified_error(exc, "") is not None:
+                raise
+            raise DatabaseSchemaMismatchError(
+                spec.name, f"{kind} {name}", f"cannot be read ({exc})"
+            ) from exc

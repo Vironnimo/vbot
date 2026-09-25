@@ -191,26 +191,31 @@ def write_bootstrap_marker(data_dir: Path) -> DataStoreMarker:
 def register_database(data_dir: Path, name: str, entry: MarkerEntry) -> DataStoreMarker:
     """List one verified canonical database, preserving every other entry."""
     with operation_lock(data_dir):
-        marker = read_marker(data_dir)
-        if marker is None:
-            raise DatabaseFormatError(
-                f"the data directory does not authorize a current-format data store: {data_dir}"
-            )
-        existing = marker.databases.get(name)
-        if existing == entry:
-            return marker
-        if existing is not None:
-            raise DatabaseFormatError(
-                f"{name} is already registered with a different identity in {data_dir}"
-            )
-        return _write_marker(data_dir, {**marker.databases, name: entry})
+        return register_database_locked(data_dir, name, entry)
+
+
+def register_database_locked(data_dir: Path, name: str, entry: MarkerEntry) -> DataStoreMarker:
+    """``register_database`` for a caller that already holds the operation lock."""
+    marker = read_marker(data_dir)
+    if marker is None:
+        raise DatabaseFormatError(
+            f"the data directory does not authorize a current-format data store: {data_dir}"
+        )
+    existing = marker.databases.get(name)
+    if existing == entry:
+        return marker
+    if existing is not None:
+        raise DatabaseFormatError(
+            f"{name} is already registered with a different identity in {data_dir}"
+        )
+    return _write_marker(data_dir, {**marker.databases, name: entry})
 
 
 def unregister_databases_locked(data_dir: Path, names: Iterable[str]) -> DataStoreMarker:
-    """Remove registrations whose files a restore already moved to quarantine.
+    """Remove registrations whose files were already moved to quarantine.
 
-    The caller holds the operation lock and the maintenance guard; a repeated
-    call after an interruption is harmless.
+    The caller holds the operation lock; a repeated call after an interruption
+    is harmless.
     """
     marker = read_marker(data_dir)
     if marker is None:

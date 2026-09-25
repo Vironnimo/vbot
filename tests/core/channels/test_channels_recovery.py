@@ -187,7 +187,8 @@ def test_channel_service_update_rejects_unknown_fields(tmp_path: Path) -> None:
         service.update_channel(config.id, unknown_field="value")
 
 
-def test_channel_service_create_rolls_back_when_start_fails(
+@pytest.mark.asyncio
+async def test_channel_service_create_rolls_back_when_start_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -208,10 +209,13 @@ def test_channel_service_create_rolls_back_when_start_fails(
     monkeypatch.setattr(service, "start_channel", fail_start_channel)
 
     with pytest.raises(ChannelConfigError, match="start failed"):
-        service.create_channel(config)
+        await service.create_channel(config)
 
     with pytest.raises(ChannelNotFoundError):
         storage.get(config.id)
+    # The registration written with the config is removed with it.
+    with service.database.read() as connection:
+        assert connection.execute("SELECT COUNT(*) FROM channels").fetchone()[0] == 0
 
 
 def test_channel_service_update_rolls_back_when_restart_fails(

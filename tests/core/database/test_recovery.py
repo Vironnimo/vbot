@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import shutil
+import sqlite3
 import threading
 from pathlib import Path
 from typing import Any
@@ -14,18 +15,22 @@ import pytest
 from core.database import (
     DatabaseCorruptError,
     DatabaseFormatError,
+    DatabaseSchemaMismatchError,
     DatabaseUnavailableError,
     IncidentConflictError,
     MarkerEntry,
     acknowledge_incident,
     active_incidents,
+    create_data_snapshot,
     data_store_status,
     has_live_connection,
+    maintenance,
     open_database,
     read_incident,
     read_maintenance,
     read_marker,
     restore_data_snapshot,
+    unregister_database,
 )
 from core.database import marker as marker_module
 from core.database import recovery as recovery_module
@@ -122,19 +127,71 @@ def test_identity_mismatch_recovers_and_leaves_no_connection_open(data_dir: Path
     assert not has_live_connection(path)
 
 
-def test_schema_shape_corruption_recovers_from_a_compatible_snapshot(data_dir: Path) -> None:
+@pytest.mark.parametrize("changed", ["live-table", "declaration"])
+def test_a_schema_mismatch_refuses_without_quarantine_or_restore(
+    data_dir: Path, changed: str
+) -> None:
     snapshot_with_notes(data_dir, "saved")
-    raw_execute(
-        notes_spec(data_dir).path,
-        "PRAGMA writable_schema = ON",
-        "UPDATE sqlite_master SET sql = replace(sql, 'length(tag) <= 40', 'length(tag) <= 39') "
-        "WHERE name = 'notes'",
-    )
+    database = open_database(notes_spec(data_dir))
+    add_note(database, "newer than the snapshot")
+    database.close()
+    path = notes_spec(data_dir).path
+    spec = notes_spec(data_dir)
+    if changed == "live-table":
+        raw_execute(
+            path,
+            "PRAGMA writable_schema = ON",
+            "UPDATE sqlite_master SET sql = replace(sql, 'length(tag) <= 40', "
+            "'length(tag) <= 39') WHERE name = 'notes'",
+        )
+    else:
+        # This vBot changed the table contract without a new name or generation.
+        spec = notes_spec(
+            data_dir, schema_sql=NOTES_SCHEMA_SQL.replace("length(tag) <= 40", "length(tag) <= 41")
+        )
+    original = path.read_bytes()
+
+    with pytest.raises(DatabaseSchemaMismatchError) as caught:
+        open_database(spec)
+
+    assert isinstance(caught.value, DatabaseFormatError)
+    assert not isinstance(caught.value, DatabaseCorruptError)
+    assert caught.value.database == "notes"
+    assert caught.value.object_name == "column notes.tag"
+    assert "declared shape" in caught.value.difference
+    assert "only additive changes are allowed" in str(caught.value)
+    # The locked re-probe of an automatic restore refuses the intact file too.
+    assert _restore(data_dir, spec) is False
+    assert path.read_bytes() == original
+    assert not quarantine_root(data_dir).exists()
+    assert read_incident(data_dir, "notes") is None
+
+
+def test_page_corruption_inside_a_valid_file_still_restores(data_dir: Path) -> None:
+    snapshot_with_notes(data_dir, "saved")
+    path = notes_spec(data_dir).path
+    connection = sqlite3.connect(path)
+    try:
+        page_size = int(connection.execute("PRAGMA page_size").fetchone()[0])
+        # The table and its index: the open probe may read either.
+        root_pages = [
+            int(row[0])
+            for row in connection.execute(
+                "SELECT rootpage FROM sqlite_master WHERE tbl_name = 'notes' AND rootpage > 0"
+            )
+        ]
+    finally:
+        connection.close()
+    with path.open("r+b") as handle:
+        for root_page in root_pages:
+            handle.seek((root_page - 1) * page_size)
+            handle.write(b"\xff" * page_size)
 
     assert stored_bodies(notes_spec(data_dir)) == ["saved"]
     incident = read_incident(data_dir, "notes")
     assert incident is not None
-    assert incident["cause"] == "notes database table schema mismatch"
+    assert incident["verification"] == "ok"
+    assert len(_quarantine_batches(data_dir)) == 1
 
 
 @pytest.mark.parametrize("mode", ["manual", "automatic"])
@@ -682,3 +739,99 @@ def test_acknowledgement_never_acknowledges_a_newer_incident_written_meanwhile(
     assert newer is not None
     assert newer["cause"] == "a newer failure"
     assert newer["acknowledged"] is False
+
+
+_EXTENSION = "ext.demo.notes"
+
+
+def _registered(data_dir: Path) -> set[str]:
+    marker = read_marker(data_dir)
+    assert marker is not None
+    return set(marker.databases)
+
+
+def test_unregistering_an_extension_database_quarantines_it_and_drops_the_entry(
+    data_dir: Path,
+) -> None:
+    snapshot_with_notes(data_dir, "core")
+    snapshot = snapshot_with_notes(data_dir, "extension", name=_EXTENSION)
+    path = notes_spec(data_dir, name=_EXTENSION).path
+    original = path.read_bytes()
+    database_id = _database_id(data_dir, _EXTENSION)
+
+    released = unregister_database(data_dir, _EXTENSION)
+
+    assert released.name == _EXTENSION
+    assert released.database_id == database_id
+    assert released.quarantine is not None
+    assert (released.quarantine / path.name).read_bytes() == original
+    assert not path.exists()
+    assert _registered(data_dir) == {"notes"}
+    # The earlier snapshot keeps its copy; snapshots no longer wait for it.
+    assert snapshot.is_dir()
+    assert create_data_snapshot(data_dir, reason="test") is not None
+    # A database that is no longer registered is never restored automatically.
+    assert (
+        auto_restore_if_needed(data_dir, notes_spec(data_dir, name=_EXTENSION), database_id)
+        is False
+    )
+    assert not path.exists()
+
+
+def test_unregistering_releases_a_registration_whose_file_is_gone(data_dir: Path) -> None:
+    snapshot_with_notes(data_dir, "extension", name=_EXTENSION)
+    notes_spec(data_dir, name=_EXTENSION).path.unlink()
+
+    released = unregister_database(data_dir, _EXTENSION)
+
+    assert released.quarantine is None
+    assert _registered(data_dir) == set()
+
+
+def test_unregistering_is_refused_for_core_unknown_open_or_maintenance(
+    data_dir: Path,
+) -> None:
+    snapshot_with_notes(data_dir, "core")
+    snapshot_with_notes(data_dir, "extension", name=_EXTENSION)
+    path = notes_spec(data_dir, name=_EXTENSION).path
+    original = path.read_bytes()
+
+    with pytest.raises(ValueError, match="notes is a core vBot database"):
+        unregister_database(data_dir, "notes")
+    with pytest.raises(ValueError, match=f"registered Extension databases: {_EXTENSION}"):
+        unregister_database(data_dir, "ext.demo.other")
+    with pytest.raises(ValueError, match="invalid database name"):
+        unregister_database(data_dir, "../notes")
+    database = open_database(notes_spec(data_dir, name=_EXTENSION))
+    try:
+        with pytest.raises(DatabaseUnavailableError, match="disable its Extension"):
+            unregister_database(data_dir, _EXTENSION)
+    finally:
+        database.close()
+    with (
+        maintenance(data_dir, "restore"),
+        pytest.raises(DatabaseFormatError, match="maintenance is incomplete"),
+    ):
+        unregister_database(data_dir, _EXTENSION)
+
+    assert path.read_bytes() == original
+    assert _registered(data_dir) == {"notes", _EXTENSION}
+    assert not quarantine_root(data_dir).exists()
+
+
+def test_restoring_an_unregistered_member_registers_it_again(data_dir: Path) -> None:
+    snapshot = snapshot_with_notes(data_dir, "extension", name=_EXTENSION)
+    database_id = _database_id(data_dir, _EXTENSION)
+    unregister_database(data_dir, _EXTENSION)
+
+    planned = restore_data_snapshot(data_dir, snapshot, names=[_EXTENSION], check_only=True)
+    assert planned.registered == (_EXTENSION,)
+    assert _registered(data_dir) == set()
+
+    restored = restore_data_snapshot(data_dir, snapshot, names=[_EXTENSION])
+
+    assert restored.databases == (_EXTENSION,)
+    assert restored.registered == (_EXTENSION,)
+    assert _database_id(data_dir, _EXTENSION) == database_id
+    assert stored_bodies(notes_spec(data_dir, name=_EXTENSION)) == ["extension"]
+    assert read_maintenance(data_dir) is None

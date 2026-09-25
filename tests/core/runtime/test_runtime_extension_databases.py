@@ -5,7 +5,14 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-from core.database import create_data_snapshot, read_marker, read_verified_manifest
+import pytest
+
+from core.database import (
+    DatabaseUnavailableError,
+    create_data_snapshot,
+    read_marker,
+    read_verified_manifest,
+)
 from core.runtime.runtime import Runtime
 from core.utils.config import Config
 from tests.core.runtime.runtime_extensions_test_support import (
@@ -114,3 +121,44 @@ def test_runtime_stop_closes_extension_databases(tmp_path: Path) -> None:
 
     assert database.is_closed()
     assert runtime.canonical_databases() == ()
+
+
+def test_a_removed_extensions_database_is_unregistered_through_the_runtime(
+    tmp_path: Path,
+) -> None:
+    config = Config(data_dir=tmp_path / "data")
+    data_dir = config.data_dir
+    _write_extension(data_dir, "notes_ext", _notes_extension(tmp_path / "lifecycle.txt"))
+
+    runtime = Runtime(config)
+    runtime.start()
+    try:
+        asyncio.run(runtime.fire_extension_startup())
+        database = _extension_database(runtime)
+        assert database is not None
+        with pytest.raises(DatabaseUnavailableError, match="disable the Extension"):
+            asyncio.run(runtime.unregister_extension_database(DATABASE_NAME))
+        with pytest.raises(ValueError, match="core vBot database"):
+            asyncio.run(runtime.unregister_extension_database("sessions"))
+
+        # Removing an Extension deletes its file; its database stays registered.
+        (data_dir / "extensions" / "notes_ext.py").unlink()
+        asyncio.run(runtime.reload_extensions())
+        assert database.is_closed()
+        marker = read_marker(data_dir)
+        assert marker is not None and DATABASE_NAME in marker.databases
+
+        released = asyncio.run(runtime.unregister_extension_database(DATABASE_NAME))
+
+        assert released.name == DATABASE_NAME
+        assert released.quarantine is not None
+        assert (released.quarantine / "notes.db").is_file()
+        assert not database.path.exists()
+        marker = read_marker(data_dir)
+        assert marker is not None and DATABASE_NAME not in marker.databases
+        assert (
+            create_data_snapshot(data_dir, reason="test", databases=runtime.canonical_databases())
+            is not None
+        )
+    finally:
+        runtime.stop()

@@ -21,7 +21,7 @@ from core.automation import BootstrapService, CronService, ReflectionService, Tr
 from core.calendar import CalendarService
 from core.channels import ChannelService
 from core.chat import ChatLoop, CommandDispatcher
-from core.database import Database
+from core.database import Database, UnregisteredDatabase
 from core.extensions import (
     ExtensionRegistry,
     InteractionEvent,
@@ -1034,6 +1034,15 @@ class Runtime:
         if self._extension_host_factory is not None:
             databases.extend(self._extension_host_factory.databases.open_databases())
         return tuple(databases)
+
+    async def unregister_extension_database(self, name: str) -> UnregisteredDatabase:
+        """Release a registered Extension database whose Extension was removed.
+
+        Runs through the one Extension database coordinator, so it is refused
+        while an Extension has the database open (see
+        ``ExtensionDatabases.unregister``).
+        """
+        return await self._host_operations().databases.unregister(name)
 
     chat_sessions: _StartedService[ChatSessionManager] = _StartedService(
         lambda runtime: runtime._chat_sessions, "Chat session service not available"

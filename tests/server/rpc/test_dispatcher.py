@@ -12,6 +12,7 @@ import pytest
 from core.database import (
     DatabaseCorruptError,
     DatabaseFormatError,
+    DatabaseSchemaMismatchError,
     DatabaseUnavailableError,
     IncidentConflictError,
 )
@@ -77,9 +78,10 @@ def test_key_error_is_not_an_expected_domain_error() -> None:
         DatabaseUnavailableError("sessions: busy"),
         DatabaseCorruptError("sessions: damaged"),
         DatabaseFormatError("sessions: newer generation"),
+        DatabaseSchemaMismatchError("sessions", "table sessions", "has another primary key"),
         SessionStoreCorruptError("stored Session rows are invalid"),
     ],
-    ids=["unavailable", "corrupt", "format", "owner-subclass"],
+    ids=["unavailable", "corrupt", "format", "schema-mismatch", "owner-subclass"],
 )
 def test_every_database_failure_maps_to_one_domain_error(error: Exception) -> None:
     mapped = _map_expected_error(error)
