@@ -16,6 +16,7 @@ OFFERED = (
     "subagent",
     "analyze_image",
     "text_to_speech",
+    "skill",
 )
 
 
@@ -46,6 +47,8 @@ OFFERED = (
         ("google_web_search", "web_search"),
         ("vision_analyze", "analyze_image"),
         ("tts", "text_to_speech"),
+        ("str_replace_based_edit_tool", "apply_patch"),
+        ("skills_list", "skill"),
     ],
 )
 def test_called_names_resolve_to_the_offered_tool_they_mean(called: str, expected: str) -> None:
