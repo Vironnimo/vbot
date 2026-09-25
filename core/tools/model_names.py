@@ -77,6 +77,10 @@ _HARNESS_NAMES = {
             "writetofile",
             "patch",
             "applydiff",
+            "strreplaceeditor",
+            "strreplacebasededittool",
+            "texteditor",
+            "replacefilecontent",
         ),
         "apply_patch",
     ),
@@ -138,7 +142,18 @@ _HARNESS_NAMES = {
         ),
         "subagent",
     ),
-    **dict.fromkeys(("loadskill", "useskill", "skillview", "readskill"), "skill"),
+    **dict.fromkeys(
+        (
+            "loadskill",
+            "useskill",
+            "skillview",
+            "readskill",
+            "skilllist",
+            "skillslist",
+            "listskills",
+        ),
+        "skill",
+    ),
     **dict.fromkeys(
         (
             "viewimage",
