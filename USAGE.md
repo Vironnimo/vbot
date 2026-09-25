@@ -218,7 +218,7 @@ vbot update --no-restart       # prepare a candidate without changing the active
 vbot update activate OPERATION_ID
 ```
 
-Official updates verify the signed package, preserve the selected shape and server target, prepare local changes and Extension dependencies, wait for accepted work to finish, and create a data snapshot of every canonical database. They then verify the candidate before activating it and verify normal startup. Previous code remains available for recovery; vBot never automatically restores an old data snapshot over newer data. If recovery cannot establish a safe result, the operation reports that it needs attention. An open Desktop window can continue using its previous version until reopened.
+Official updates verify the signed package, preserve the selected shape and server target, prepare local changes and Extension dependencies, wait for accepted work to finish, stop the server, and create a data snapshot of every canonical database and the JSON configuration documents. They then verify the candidate before activating it and verify normal startup. If the candidate fails its verification start, the updater restores that snapshot, but only when the candidate changed the data and no other vBot server uses the data directory, and keeps the previous version once its startup is verified. After the candidate passed verification, the snapshot is never restored automatically; apart from this rollback, vBot restores a data snapshot on its own only to repair a damaged or missing database (see Data-store maintenance). If recovery cannot establish a safe result, the operation reports that it needs attention; when a data restore was interrupted, it names the `vbot data-store snapshot restore <snapshot-id> --all --yes` command that finishes it. An open Desktop window can continue using its previous version until reopened.
 
 When called through Bash in a vBot Run, the command saves its operation before returning and automatically arranges a continuation in the same Session. The updater waits for the whole Tool batch to enter Session history, registers that continuation, and cancels and drains only the exact originating Run before draining other accepted work. The continuation checks the saved result; acceptance alone is not update success. Do not create an additional Bootstrap for this packaged update path.
 
@@ -226,7 +226,7 @@ When called through Bash in a vBot Run, the command saves its operation before r
 
 Close every vBot Desktop window on Windows before updating a source installation. The source updater reports each phase, including elapsed time during long steps. Its final summary distinguishes a verified server restart from a pending or skipped restart; failure details include recovery guidance. Output remains plain text when redirected, and `NO_COLOR=1` disables terminal color.
 
-The updater preserves the recorded install shape, Python interpreter, dependency groups, source track, server target, and WebUI policy. Release installations move to the newest release with a matching WebUI asset; development installations update `main` and rebuild when needed. Before replacing current-format code, the updater creates and verifies a data snapshot of every canonical database; runtime data under `~/.vbot` or the configured data directory is not otherwise modified.
+The updater preserves the recorded install shape, Python interpreter, dependency groups, source track, server target, and WebUI policy. Release installations move to the newest release with a matching WebUI asset; development installations update `main` and rebuild when needed. Before replacing current-format code, the updater creates and verifies a data snapshot of every canonical database and the JSON configuration documents; runtime data under `~/.vbot` or the configured data directory is not otherwise modified. A source update never restores that snapshot automatically. When the final server restart fails, the result names the snapshot and the previous revision: check out that revision, reinstall its dependencies, then run `vbot data-store snapshot restore <snapshot-id> --all --yes`, which loses everything written after the snapshot.
 
 Use an explicit policy when the tracked checkout contains local changes or when the server should not restart. `--stash` and `--discard` apply only to source installations:
 
@@ -392,10 +392,13 @@ Setup, Runtime, direct `core/storage/layout.py` use, and managed Worktree creati
 │       ├── atomic/
 │       ├── bash/
 │       ├── subagents/
-│       └── terminals/
+│       ├── terminals/
+│       └── web_fetch/
 ├── statistics/
 ├── agents/
 ├── archive/
+├── bootstrap/
+├── calendar/
 ├── channels/
 ├── cron/
 ├── extensions/
@@ -406,15 +409,24 @@ Setup, Runtime, direct `core/storage/layout.py` use, and managed Worktree creati
 ├── prompts/
 ├── recall/
 ├── skills/
+├── terminals/
 ├── .env
+├── data-store.json
 └── settings.json
 ```
 
-`artifacts/attachments/`, `artifacts/speech/`, `artifacts/models/`, `artifacts/debug/`, and `artifacts/performance/` contain durable domain-owned artifacts; the performance folder keeps the newest 20 Recordings. The four `artifacts/temp/` children remain separate: atomic replacement staging, 72-hour retained Bash and Terminal output, and 24-hour retained Sub-Agent activity. `statistics/` holds only the disposable local Statistics index, which is derived from Sessions; the automatic Provider usage history is the canonical `provider-usage.db` at the data root (see Data-store maintenance below). The tracked system Model DB remains `resources/models/`; only the complete instance runtime Model DB moves under `artifacts/models/`.
+`artifacts/attachments/`, `artifacts/speech/`, `artifacts/models/`, `artifacts/debug/`, and `artifacts/performance/` contain durable domain-owned artifacts; the performance folder keeps the newest 20 Recordings. The `artifacts/temp/` children remain separate: atomic replacement staging, 72-hour retained Bash output, Terminal output and Web Fetch snapshots, and 24-hour retained Sub-Agent activity. `statistics/` holds only the disposable local Statistics index, which is derived from Sessions; the automatic Provider usage history is the canonical `provider-usage.db` at the data root (see Data-store maintenance below). The tracked system Model DB remains `resources/models/`; only the complete instance runtime Model DB moves under `artifacts/models/`.
 
-Independent roots keep their established ownership: `agents/` contains Identity Agent configs, default Workspaces, private Skills, and Sessions; `projects/` contains Project metadata and Project Agent Sessions; `skills/` contains global user Skills; `channels/`, `cron/`, `extensions/`, `prompts/`, `recall/`, `logs/`, `oauth/`, and `archive/` retain their existing records. Custom absolute Workspaces remain outside the data directory. `processes/` is reserved for future persistent process records and is not the Bash-output location.
+Independent roots keep their established ownership: `agents/` contains Identity Agent configs, default Workspaces, and private Skills; `projects/` contains Project metadata; `skills/` contains global user Skills; `bootstrap/`, `calendar/`, `channels/`, `cron/`, `extensions/`, `prompts/`, `recall/`, `terminals/`, `logs/`, `oauth/`, and `archive/` retain their existing records. Sessions of every Agent and Project live in `sessions.db`. Custom absolute Workspaces remain outside the data directory. `processes/` is reserved for future persistent process records and is not the Bash-output location.
 
-The initializer copies `resources/data-dir/.env.example` only when `.env` is absent and creates an empty `settings.json` only when Settings is absent. It never rewrites either existing file; Setup separately retains ownership of fresh-install Settings defaults and explicit port updates.
+Other entries appear at the data root when first needed:
+
+- the canonical databases `sessions.db`, `channels.db`, `provider-usage.db` and `decisions.db`, and Extension databases next to other Extension state under `extension-data/<extension>/`; every database is registered in `data-store.json` (see Data-store maintenance below);
+- `snapshots/`, `incidents/` and `quarantine/` for data snapshots and recovery, `data-store.lock`, and `data-maintenance.json` while an offline data operation is incomplete;
+- `runtime/` with the control records of a running server, and `speech-engines/` after local speech setup;
+- `pre-generation-1/` after converting an older data directory (see below).
+
+The initializer copies `resources/data-dir/.env.example` only when `.env` is absent and creates a `settings.json` holding only `format_version` 1 when Settings is absent. It never rewrites either existing file; Setup separately retains ownership of fresh-install Settings defaults and explicit port updates. It writes `data-store.json` only into a data directory it has just created; an existing directory without it is refused (see Converting an existing data directory).
 
 ### Converting an existing data directory
 
@@ -437,7 +449,7 @@ Current vBot reads only persistence Generation 1: the canonical paths, databases
 5. Start a vBot that includes Generation 1 (the old release refuses the converted directory), check Agents, Projects, Sessions and Channels, then create the first data snapshot:
 
    ```bash
-   vbot data-store snapshot create --reason generation-1
+   vbot data-store snapshot create --reason manual
    ```
 
 The install moves every file it replaces or retires, including the old `sessions.db`, `session-store.json` and `session-snapshots/`, to `<data-dir>/pre-generation-1/` at the same relative path, together with `conversion-report.json`; nothing is deleted. vBot never reads that folder. It also holds old copies of credential files such as OAuth tokens, so treat it like the data directory. Delete it once the converted instance has worked for a while and a data snapshot exists. To go back before that, stop vBot, delete the files the report lists under `install.installed` and `data-store.json`, and move the content of `pre-generation-1/` back.
@@ -458,9 +470,16 @@ vbot data-store snapshot verify <snapshot-id>
 vbot data-store incident acknowledge <incident-id>
 vbot data-store snapshot restore <snapshot-id> --yes
 vbot data-store snapshot restore <snapshot-id> --database sessions --yes
+vbot data-store snapshot restore <snapshot-id> --documents --yes
+vbot data-store snapshot restore <snapshot-id> --all --yes
+vbot data-store unregister ext.<extension>.<name> --yes
 ```
 
-`status` reports safe operational metadata per database, including the Session search index state, verified data snapshots, and every unacknowledged recovery incident without returning Session content. Snapshot creation is an explicit backup of every canonical database. A recovery incident remains visible until the exact incident is acknowledged; acknowledgement does not delete snapshots or quarantine evidence. Offline restore requires `--yes`, proves the exact target server is stopped, restores every database in the snapshot or only those named with `--database`, and must be rehearsed on a copied data directory first. An interrupted restore keeps the server from starting until a restore is repeated and completes.
+`status` reports safe operational metadata per database, including the Session search index state, verified data snapshots, and every unacknowledged recovery incident without returning Session content; for a stopped local server it reads the data directory directly. Snapshot creation is an explicit backup, through the running server, of every canonical database and of the JSON configuration documents (settings, Agents, Projects, Channels, prompt layouts, Cron, Bootstrap and Calendar jobs, the Skill policy, Terminal state, MCP connections and OAuth tokens; attachment and speech metadata stay out, like the files they describe). A recovery incident remains visible until the exact incident is acknowledged; acknowledgement does not delete snapshots or quarantine evidence.
+
+Restore is offline maintenance: it requires `--yes`, checks the snapshot first, stops the exact target server when it runs and starts it again afterwards, and must be rehearsed on a copied data directory first. Without a selector it restores every database in the snapshot; `--database` restores only the named ones; `--documents` restores the JSON documents as one set, alone or together with `--database`; `--all` restores the complete snapshot, moves databases registered after the snapshot to quarantine, and takes no other selector. Restored documents become exactly the snapshot's: documents created after it are removed, and every replaced or removed document is kept under `quarantine/json-documents/`. An interrupted restore keeps the server from starting until a restore is repeated and completes.
+
+`unregister` releases the database of a removed Extension. While it stays registered, data snapshots keep copying it, and once its file is gone, snapshot creation and updates refuse until it is released. The files move to `quarantine/` and the registration is dropped. It accepts only Extension databases (`ext.<extension>.<name>`), is refused while an Extension has the database open, and requires `--yes`. Earlier snapshots keep their copy, and restoring that database from one registers it again.
 
 The Session database stores Runs, Messages, Tool invocations/results and checkpoints relationally.
 
@@ -478,7 +497,7 @@ vbot doctor settings
 vbot doctor config
 ```
 
-Bare `vbot config` is equivalent to `config list`; `config get`, `set`, `unset`, and atomic multi-operation `patch` use public paths rather than internal `settings.json` keys. `config effective` shows the normalized public document, while `config raw` is diagnostic only. `doctor settings` strictly validates the target `settings.json`; `doctor config` checks all user-editable JSON files. At runtime, malformed root Settings fall back safely, invalid top-level Settings sections are omitted while valid siblings remain active, and invalid individual Agent or Project records are skipped. The source file is not silently rewritten, and mutations that could overwrite invalid source state are blocked until it is repaired.
+Bare `vbot config` is equivalent to `config list`; `config get`, `set`, `unset`, and atomic multi-operation `patch` use public paths rather than internal `settings.json` keys. `config effective` shows the normalized public document, while `config raw` is diagnostic only. `doctor settings` strictly validates the target `settings.json`; `doctor config` checks every JSON document vBot keeps in the data directory, from Agent, Project and Channel files to OAuth tokens and attachment metadata. At runtime, malformed root Settings fall back safely, invalid top-level Settings sections are omitted while valid siblings remain active, and invalid individual Agent or Project records are skipped. The source file is not silently rewritten, and mutations that could overwrite invalid source state are blocked until it is repaired.
 
 ## Running the server
 
@@ -1092,7 +1111,7 @@ Installed commands use `vbot`. From a source checkout, `python cli/main.py` and 
 | Agents | `agent list`, `agent show`, `agent create`, `agent update`, `agent rename`, `agent reorder`, `agent delete` |
 | Projects | `project add`, `project list`, `project show`, `project set`, `project override set`, `project override clear`, `project detect`, `project remove` |
 | Sessions | `session list`, `session create`, `session fork`, `session rename`, `session policy set`, `session delete`, `session channel link` |
-| Data store | `data-store status`, `data-store snapshot list|create|verify|restore`, `data-store incident acknowledge` |
+| Data store | `data-store status`, `data-store snapshot list|create|verify|restore`, `data-store incident acknowledge`, `data-store unregister` |
 | Channels | `channel add`, `channel list`, `channel update`, `channel token set`, `channel enable`, `channel disable`, `channel status`, `channel identity`, `channel access`, `channel admin grant`, `channel admin revoke`, `channel whatsapp setup/status/pair`, `channel remove` |
 | Tools and Skills | `tool list`, `skill list`, `skill inventory`, `skill inspect`, `skill install`, `skill read`, `skill enable`, `skill disable`, `skill share`, `skill unshare`, `skill create`, `skill update`, `skill delete`, `skill file write`, `skill file remove` |
 | Memory | `memory list`, `memory add`, `memory replace`, `memory remove` |
@@ -1129,7 +1148,7 @@ Run `vbot <area> --help` and `vbot <area> <command> --help` for every flag and p
 
 The server exposes one JSON RPC endpoint, per-Run SSE, app-wide WebSocket events, Log streaming, attachments, speech, images, and health. The server has no built-in authentication; treat access as host-level code-execution authority.
 
-Data-store operations exposed through RPC are `data_store.status`, `data_store.snapshot_create`, and `data_store.incident_acknowledge`. They return safe health and recovery metadata, publish `resource_changed` with kind `data_store` after successful snapshot or acknowledgement mutations, and never include Session content. Offline snapshot listing, verification, and restore stay in the CLI because they must inspect and control the exact local target.
+Data-store operations exposed through RPC are `data_store.status`, `data_store.snapshot_create`, `data_store.incident_acknowledge`, and `data_store.unregister`. They return safe health and recovery metadata, publish `resource_changed` with kind `data_store` after successful snapshot, acknowledgement, or unregister mutations, and never include Session content. Offline snapshot listing, verification, and restore stay in the CLI because they must inspect and control the exact local target.
 
 ### RPC envelope
 
@@ -1318,5 +1337,5 @@ publish them or migrate an existing source installation.
 - Complete Bash process output under `temp/bash/` is retained for 72 hours after completion; Sub-Agent activity files under `temp/subagents/` are retained for 24 hours. These temporary files supplement canonical Session history.
 - Recall indexes are derived and disposable; deleting `<data-dir>/recall/` does not delete canonical Sessions.
 - A database recovery incident stays visible until explicit acknowledgement. Preserve its quarantine bundle and verified snapshots; never delete evidence as part of acknowledgement.
-- Update protection creates a verified data snapshot of every canonical database before replacing current-format code.
+- Update protection creates a verified data snapshot of every canonical database and the JSON configuration documents before replacing current-format code.
 - The Desktop wakeword listener is independent of Chat text-to-speech playback, so speaker output can trigger a sensitive wakeword Model. Choose device placement and sensitivity accordingly.
