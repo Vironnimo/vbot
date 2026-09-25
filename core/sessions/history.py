@@ -22,16 +22,6 @@ if TYPE_CHECKING:
     from core.chat.messages import ChatMessage
 
 
-def active_session_messages(messages: Sequence[ChatMessage]) -> list[ChatMessage]:
-    active: list[ChatMessage] = []
-    for message in messages:
-        if message.role == "history_edit":
-            active = active[: editable_session_message_index(active, message.target_message_id)]
-        else:
-            active.append(message)
-    return active
-
-
 def editable_session_message_index(messages: Sequence[ChatMessage], message_id: str | None) -> int:
     if not isinstance(message_id, str) or not message_id:
         raise ChatSessionError("history edit target must be a non-empty message id")
@@ -50,22 +40,6 @@ def editable_session_message_index(messages: Sequence[ChatMessage], message_id: 
     if index <= latest_takeover:
         raise ChatSessionError("history edit target cannot precede the latest agent takeover")
     return index
-
-
-def editable_session_message_ids(messages: Sequence[ChatMessage]) -> frozenset[str]:
-    active = active_session_messages(messages)
-    takeover = max(
-        (index for index, message in enumerate(active) if message.role == "agent_takeover"),
-        default=-1,
-    )
-    return frozenset(
-        message.id
-        for index, message in enumerate(active)
-        if index > takeover
-        and message.role == "user"
-        and isinstance(message.content, str)
-        and message.sender is None
-    )
 
 
 def _skill_context_note_content(name: str, content: str) -> str:
