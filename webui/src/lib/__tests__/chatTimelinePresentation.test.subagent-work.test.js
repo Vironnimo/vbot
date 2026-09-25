@@ -12,6 +12,7 @@ import {
   subAgentLastToolName,
   subAgentNeedsStatusVerification,
   subAgentNavigationTarget,
+  subAgentPreview,
   subAgentResultEntryAllowsFetch,
   subAgentResultKey,
   subAgentResultTextFromMessages,
@@ -347,6 +348,78 @@ describe('chatTimelinePresentation', () => {
         arguments: { action: 'status', id: 'sub_child' },
       }),
     ).toBe(false);
+  });
+
+  it('recognizes spawns written in another harness spelling', () => {
+    // The server ran these as delegated work; the persisted arguments keep the
+    // Model's own words, and the delivery mode marks the spawn.
+    expect(
+      isSubAgentSpawnTool(
+        runningSubAgentTool({
+          arguments: { action: 'spawn', task: 'Inspect the project' },
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      isSubAgentSpawnTool(
+        runningSubAgentTool({
+          arguments: {
+            description: 'Inspect',
+            prompt: 'Inspect the project',
+            subagent_type: 'worker',
+          },
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      isSubAgentSpawnTool({
+        name: 'subagent',
+        arguments: { action: 'Run', content: 'Inspect the project' },
+      }),
+    ).toBe(true);
+    // Without delivery metadata an unfamiliar action is not claimed as a spawn,
+    // and explicit status or cancel calls never are.
+    expect(
+      isSubAgentSpawnTool({
+        name: 'subagent',
+        arguments: { action: 'spawn', task: 'Inspect the project' },
+      }),
+    ).toBe(false);
+    expect(
+      isSubAgentSpawnTool({
+        name: 'subagent',
+        arguments: { action: 'stop', id: 'sub_child' },
+      }),
+    ).toBe(false);
+    expect(
+      isSubAgentSpawnTool(
+        runningSubAgentTool({
+          arguments: { action: 'Cancel', id: 'sub_child' },
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it('previews the task under the spelling the call used', () => {
+    expect(
+      subAgentPreview(
+        runningSubAgentTool({
+          arguments: { prompt: 'Review imports', subagent_type: 'worker' },
+        }),
+      ),
+    ).toBe('Review imports');
+    expect(
+      subAgentPreview(
+        runningSubAgentTool({ arguments: { goal: 'Fix tests' } }),
+      ),
+    ).toBe('Fix tests');
+    expect(
+      subAgentPreview(
+        runningSubAgentTool({
+          arguments: { content: 'Canonical task', prompt: 'Other' },
+        }),
+      ),
+    ).toBe('Canonical task');
   });
 
   it('projects automatic Sub-Agent and Bash tasks with active work first', () => {

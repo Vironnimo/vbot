@@ -13,6 +13,23 @@ import { isTextContentBlock } from './messages.js';
 
 const MAX_SUBAGENT_PREVIEW_LENGTH = 96;
 
+const SUBAGENT_WORK_ACTIONS = new Set(['status', 'cancel']);
+
+// Persisted calls keep the Model's own spelling. The server also runs a task
+// sent under another harness's name for it, so the preview reads those too.
+const SUBAGENT_TASK_FIELDS = [
+  'content',
+  'prompt',
+  'task',
+  'goal',
+  'message',
+  'instructions',
+];
+
+const subAgentTaskText = (args) =>
+  SUBAGENT_TASK_FIELDS.map((key) => trimmedString(args[key])).find(Boolean) ??
+  '';
+
 // Real wall-clock runtime of the child run a sub-agent tool refers to, captured
 // from the child run's terminal lifecycle event. Session-keyed fallback applies
 // only when no run id is known: a child session can be reused by later spawns,
@@ -126,8 +143,18 @@ export const isSubAgentSpawnTool = (tool) => {
     return false;
   }
   const args = subAgentArguments(tool);
-  if (args.action) {
-    return args.action === 'run';
+  const action = trimmedString(args.action).toLowerCase();
+  if (SUBAGENT_WORK_ACTIONS.has(action)) {
+    return false;
+  }
+  // Only delegated work carries a delivery mode, from the child's start event
+  // and in its result. It identifies a spawn whatever words the Model's call
+  // used, such as another harness's `spawn` or `delegate` action.
+  if (trimmedString(subAgentResultData(tool).delivery)) {
+    return true;
+  }
+  if (action) {
+    return action === 'run';
   }
   // Persisted history from before the action contract had no top-level action.
   return args.operation !== 'cancel';
@@ -244,7 +271,7 @@ export const subAgentPreview = (tool) => {
   const toolName = toolNameForRunTool(tool);
   if (toolName === 'subagent') {
     return truncateToolLabel(
-      trimmedString(args.content),
+      subAgentTaskText(args),
       MAX_SUBAGENT_PREVIEW_LENGTH,
     );
   }
@@ -526,7 +553,7 @@ export function subAgentToolLabel(toolName, args) {
   }
   const agentId = trimmedString(args.agent_id);
   const preview = truncateToolLabel(
-    trimmedString(args.content),
+    subAgentTaskText(args),
     MAX_SUBAGENT_PREVIEW_LENGTH,
   );
   return [agentId, preview].filter(Boolean).join(' · ');
