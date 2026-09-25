@@ -471,6 +471,34 @@ def test_open_preserves_invalid_incident_evidence(data_dir: Path, serialized: by
     assert evidence.read_bytes() == serialized
 
 
+@pytest.mark.parametrize(
+    "field", ["restored_snapshot_time", "recovered_at", "interval.start", "interval.end"]
+)
+@pytest.mark.parametrize("value", ["2026-09-01T10:00:00Z", "2026-09-01T12:00:00.000000+02:00"])
+def test_a_non_canonical_incident_timestamp_is_invalid_evidence(
+    data_dir: Path, field: str, value: str
+) -> None:
+    snapshot_with_notes(data_dir, "saved")
+    notes_spec(data_dir).path.write_bytes(b"damaged")
+    open_database(notes_spec(data_dir)).close()
+    evidence = incident_path(data_dir, "notes")
+    incident = json.loads(evidence.read_text(encoding="utf-8"))
+    if field.startswith("interval."):
+        incident["possible_loss_interval"][field.removeprefix("interval.")] = value
+    else:
+        incident[field] = value
+    serialized = json.dumps(incident).encode("utf-8")
+    evidence.write_bytes(serialized)
+
+    # An incident is written with canonical timestamps only; another form is
+    # damage, reported and preserved like any unreadable incident.
+    with pytest.raises(DatabaseCorruptError, match="invalid timestamp"):
+        read_incident(data_dir, "notes")
+    with pytest.raises(DatabaseCorruptError):
+        acknowledge_incident(data_dir, incident["incident_id"])
+    assert evidence.read_bytes() == serialized
+
+
 def test_a_pending_restore_never_mistakes_the_untouched_original_for_success(
     data_dir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -46,7 +46,6 @@ from core.config_validation import (
 from core.utils.atomic import atomic_write_text
 
 FORMAT_VERSION_FIELD = "format_version"
-CONVERTER_HINT = "scripts/converters/persistence_generation_1"
 
 #: Every durable JSON document under this contract: a stable kind name and the
 #: document's data-dir relative location, where ``*`` matches within one path
@@ -203,12 +202,10 @@ def validate_format_version(
 
     field_path = child_path(path, FORMAT_VERSION_FIELD)
     if FORMAT_VERSION_FIELD not in data:
-        add_error(
-            diagnostics,
-            field_path,
-            "is required; data from a vBot before persistence Generation 1 must be "
-            f"converted with {CONVERTER_HINT}",
-        )
+        # Imported at call time: the database kernel imports this module.
+        from core.database.errors import generation_1_conversion_hint
+
+        add_error(diagnostics, field_path, f"is required. {generation_1_conversion_hint()}")
         return False
     value = data[FORMAT_VERSION_FIELD]
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:

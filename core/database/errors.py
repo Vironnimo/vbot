@@ -16,6 +16,25 @@ from core.utils.errors import VBotError
 GENERATION_1_CONVERTER_COMMAND = "python -m scripts.converters.persistence_generation_1"
 
 
+def generation_1_conversion_hint(data_dir: Path | None = None) -> str:
+    """Return the one next step for data from before persistence Generation 1.
+
+    Every refusal of such data ends with this text. Without ``data_dir`` the
+    converter command names a ``<data-dir>`` placeholder.
+    """
+    return (
+        "Data written by a vBot before persistence Generation 1 (0.4.x) must be converted "
+        "once, offline, with vBot stopped: in a vBot source checkout (installed builds do "
+        f"not include the converter), run `{_converter_command(data_dir)}`. Follow the "
+        'procedure in USAGE.md of the vBot repository, section "Converting an existing data '
+        'directory", which starts with a backup and a dry run'
+    )
+
+
+def _converter_command(data_dir: Path | None) -> str:
+    return f"{GENERATION_1_CONVERTER_COMMAND} {data_dir if data_dir is not None else '<data-dir>'}"
+
+
 class DatabaseError(VBotError):
     """Base error for an unsafe or unusable database state."""
 
@@ -65,16 +84,8 @@ class DatabaseConversionRequiredError(DatabaseFormatError):
     def __init__(self, problem: str, *, data_dir: Path | None, database: str | None = None) -> None:
         self.database = database
         self.data_dir = data_dir
-        self.converter_command = (
-            f"{GENERATION_1_CONVERTER_COMMAND} {data_dir if data_dir is not None else '<data-dir>'}"
-        )
-        super().__init__(
-            f"{problem}. Data written by a vBot before persistence Generation 1 (0.4.x) must "
-            "be converted once, offline, with vBot stopped: in a vBot source checkout (installed "
-            f"builds do not include the converter), run `{self.converter_command}`. Follow the "
-            'procedure in USAGE.md of the vBot repository, section "Converting an existing data '
-            'directory", which starts with a backup and a dry run'
-        )
+        self.converter_command = _converter_command(data_dir)
+        super().__init__(f"{problem}. {generation_1_conversion_hint(data_dir)}")
 
 
 class DatabaseSchemaMismatchError(DatabaseFormatError):

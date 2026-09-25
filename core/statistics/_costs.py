@@ -273,12 +273,11 @@ class CostAccumulator:
                 model_totals = models[model] = CostTotals()
             model_totals.add_classified(source, amount, retrospective=retro)
             session.add_classified(source, amount, retrospective=retro)
-            if day is not None:
-                key = day_key(day)
-                day_totals = daily.get(key)
-                if day_totals is None:
-                    day_totals = daily[key] = CostTotals()
-                day_totals.add_classified(source, amount, retrospective=retro)
+            key = day_key(day)
+            day_totals = daily.get(key)
+            if day_totals is None:
+                day_totals = daily[key] = CostTotals()
+            day_totals.add_classified(source, amount, retrospective=retro)
             if kind == CALL_KIND_COMPACTION:
                 compactions.add_classified(source, amount, retrospective=retro)
             if unit_slice is not None:
@@ -319,7 +318,7 @@ class CostAccumulator:
                 FROM {scan.source("stat_calls", "c")}
                 JOIN stat_records r ON r.session_key = c.session_key AND r.seq = c.seq
                 WHERE {scan.where("c")}
-                ORDER BY COALESCE(c.instant, :unparseable) DESC, u.unit, c.seq
+                ORDER BY c.instant DESC, u.unit, c.seq
                 LIMIT {RECENT_CALLS}
                 """
             )

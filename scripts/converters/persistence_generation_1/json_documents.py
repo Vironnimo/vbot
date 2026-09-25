@@ -8,7 +8,8 @@ data Generation 1 no longer tolerates is normalized:
 
 - Cron jobs lose the ignored per-job ``timezone`` and get the name vBot derived
   from their prompt at load time.
-- A Project without ``allowed_tools`` gets the default Tool whitelist it used.
+- A Project without ``allowed_tools`` gets the default Tool whitelist the
+  pre-Generation-1 application applied to it, frozen here.
 - An Identity Agent's retired ``allowed_tools`` becomes ``tool_access``, or is
   dropped when ``tool_access`` already exists.
 - The retired ``grep`` and ``glob`` Tools become ``search_files`` in Agent Tool
@@ -40,7 +41,6 @@ from pathlib import Path
 from typing import Any
 
 from core.json_documents import FORMAT_VERSION_FIELD, render_json_document
-from core.projects.projects import PROJECT_DEFAULT_ALLOWED_TOOLS
 from scripts.converters.persistence_generation_1._context import ConversionContext
 from scripts.converters.persistence_generation_1._tool_access import (
     ToolAccessConversionError,
@@ -57,6 +57,24 @@ FORMAT_VERSION = 1
 _CRON_JOB_NAME_MAX_LENGTH = 80
 _MARKDOWN_PREFIX_PATTERN = re.compile(r"^(?:(?:#{1,6}|>|[-*+])\s+|\d+[.)]\s+|\[[ xX]\]\s*)+")
 _POLICY_LEGACY_VERSION = 2
+# The Tool whitelist the pre-Generation-1 application applied to a Project
+# without ``allowed_tools`` (its ``PROJECT_DEFAULT_ALLOWED_TOOLS`` from 0.4.4
+# until the field became required; 0.4.0 to 0.4.3 used the retired ``write``,
+# ``edit``, ``glob`` and ``grep`` for the same access). Frozen here, so a later
+# change of the application default never changes what conversion grants.
+_LEGACY_PROJECT_ALLOWED_TOOLS = (
+    "read",
+    "apply_patch",
+    "search_files",
+    "bash",
+    "process",
+    "terminal",
+    "web_fetch",
+    "web_search",
+    "status",
+    "subagent",
+    "skill",
+)
 _TERMINAL_LEGACY_VERSION = 1
 
 
@@ -193,7 +211,7 @@ def _agent(value: Any, notes: _Notes) -> dict[str, Any]:
 def _project(value: Any, notes: _Notes) -> dict[str, Any]:
     project = _object(value)
     if project.get("allowed_tools") is None:
-        project["allowed_tools"] = list(PROJECT_DEFAULT_ALLOWED_TOOLS)
+        project["allowed_tools"] = list(_LEGACY_PROJECT_ALLOWED_TOOLS)
         notes.count("project_allowed_tools_filled")
     elif isinstance(project["allowed_tools"], list):
         ceiling, narrowed = consolidate_search_ceiling(project["allowed_tools"])

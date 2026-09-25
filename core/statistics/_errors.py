@@ -35,7 +35,7 @@ class ErrorAccumulator:
         for unit, kind, day, hour, current_model, count in scan.execute(
             f"""
             SELECT u.unit, e.kind, e.day,
-                CASE WHEN e.instant IS NULL THEN NULL ELSE {_HOUR_SQL} END AS hour,
+                {_HOUR_SQL} AS hour,
                 (
                     SELECT c.model_key FROM stat_calls c
                     WHERE c.session_key = e.session_key AND c.seq < e.seq AND c.kind = 0
@@ -64,10 +64,8 @@ class ErrorAccumulator:
             if model_key != UNKNOWN_MODEL_KEY:
                 ledger.model(model_key).errors += count
                 ledger.provider(provider).errors += count
-            if hour is not None:
-                self.by_hour[hour] += count
-            if day is not None:
-                ledger.day(day).errors += count
+            self.by_hour[hour] += count
+            ledger.day(day).errors += count
 
     def build(self, ledger: ReportLedger) -> ErrorsSection:
         return ErrorsSection(

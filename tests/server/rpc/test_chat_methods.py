@@ -22,6 +22,7 @@ from server.rpc.chat_methods import (
 from server.rpc.errors import RpcError
 from tests.core.sessions.history_fixtures import complete_run
 from tests.server.rpc.chat_methods_test_support import (
+    _InlineSessionPool,
     _NoCommandDispatcher,
     _RecordingLoop,
 )
@@ -120,7 +121,7 @@ def _make_state(loop: _RecordingLoop) -> SimpleNamespace:
     # The bridge helper reads the event bus; a no-op namespace is enough since the
     # tests assert on the recorded loop call, not on bridged events.
     event_bus = SimpleNamespace(publish=lambda *a, **k: None)
-    runtime = SimpleNamespace()
+    runtime = SimpleNamespace(chat_sessions=_InlineSessionPool())
     return SimpleNamespace(
         chat_loop=loop,
         streaming_chat_loop=loop,
@@ -266,6 +267,7 @@ async def test_send_expands_file_mentions_into_snapshot_blocks(
         ),
         storage=SimpleNamespace(data_dir=str(tmp_path)),
         file_read_state=file_state,
+        chat_sessions=_InlineSessionPool(),
     )
     monkeypatch.setattr("server.rpc.chat_methods._bridge_run_to_event_bus", lambda *a, **k: None)
 

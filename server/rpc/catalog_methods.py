@@ -173,7 +173,11 @@ async def _list_files(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, {"agent_id"}, "files.list")
     agent_id, project_id = _required_agent_address(params, "agent_id")
     try:
-        root = resolve_mention_root(state.runtime, agent_id, project_id)
+        # Resolving the root reads the Agent, whose current-Session pointer it
+        # verifies, so it runs on the Session database's pool.
+        root = await state.runtime.chat_sessions.run_async(
+            resolve_mention_root, state.runtime, agent_id, project_id
+        )
         files, truncated = await _CATALOG_WORKERS.run(list_mention_files, root)
     except Exception as exc:
         raise _map_expected_error(exc) from exc

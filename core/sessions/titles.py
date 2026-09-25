@@ -40,6 +40,8 @@ if TYPE_CHECKING:
 _LOGGER = get_logger("sessions.titles")
 
 SESSION_TITLE_WORKER_LIMIT = 2
+# Parses and validates Model title responses (CPU). Session reads and title
+# writes run on the Session database's pool.
 _SESSION_TITLE_WORKERS = BoundedWorkerPool(
     name="session-title",
     max_workers=SESSION_TITLE_WORKER_LIMIT,
@@ -158,7 +160,7 @@ class SessionTitleService:
         run_id: str,
     ) -> None:
         try:
-            generation = await _SESSION_TITLE_WORKERS.run(
+            generation = await self._runtime.chat_sessions.run_async(
                 self._prepare_title,
                 agent_id=agent_id,
                 session_id=session_id,
@@ -264,8 +266,9 @@ class SessionTitleService:
                 project_id=project_id,
                 debug_run_id=f"title-{run_id}",
             )
-            await _SESSION_TITLE_WORKERS.run(
-                self._runtime.chat_sessions.set_auto_title,
+            chat_sessions = self._runtime.chat_sessions
+            await chat_sessions.run_async(
+                chat_sessions.set_auto_title,
                 SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id),
                 title,
             )

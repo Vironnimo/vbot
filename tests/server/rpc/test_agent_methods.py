@@ -10,9 +10,11 @@ import pytest
 
 from core.agents.agents import AgentStore
 from core.chat import ChatSessionError
+from core.database import write_bootstrap_marker
 from core.projects.resolver import AgentResolver
 from core.projects.store import ProjectStore
 from core.sessions import (
+    ChatSessionManager,
     SessionAddress,
 )
 from server.rpc.agent_methods import (
@@ -459,7 +461,12 @@ def _agent_payload_state(tmp_path: Path, defaults: dict[str, Any]) -> SimpleName
     for filename in ("SOUL.md", "USER.md", "MEMORY.md"):
         (template_dir / filename).write_text(f"# {filename}\n", encoding="utf-8")
 
-    agents = AgentStore(data_dir, template_dir=template_dir, defaults_provider=lambda: defaults)
+    data_dir.mkdir()
+    write_bootstrap_marker(data_dir)
+    sessions = ChatSessionManager(data_dir)
+    agents = AgentStore(
+        data_dir, template_dir=template_dir, defaults_provider=lambda: defaults, sessions=sessions
+    )
     projects = ProjectStore(data_dir)
     checker = ModelConfigurationChecker(
         _PayloadCheckerModels(),
@@ -468,7 +475,10 @@ def _agent_payload_state(tmp_path: Path, defaults: dict[str, Any]) -> SimpleName
     )
     resolver = AgentResolver(agents, projects, checker, lambda: defaults)
     runtime = SimpleNamespace(
-        agents=agents, agent_resolver=resolver, models=_PayloadRuntimeModels()
+        agents=agents,
+        agent_resolver=resolver,
+        chat_sessions=sessions,
+        models=_PayloadRuntimeModels(),
     )
     return SimpleNamespace(runtime=runtime)
 

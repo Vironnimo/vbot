@@ -144,17 +144,16 @@ class RunAccumulator:
                         models=sorted(models),
                     )
                 )
-            if day is not None:
-                bucket = ledger.day(day)
-                bucket.runs += 1
-                if status == "completed":
-                    bucket.completed += 1
-                elif status == "failed":
-                    bucket.failed += 1
-                elif status == "cancelled":
-                    bucket.cancelled += 1
-                elif status == "interrupted":
-                    bucket.interrupted += 1
+            bucket = ledger.day(day)
+            bucket.runs += 1
+            if status == "completed":
+                bucket.completed += 1
+            elif status == "failed":
+                bucket.failed += 1
+            elif status == "cancelled":
+                bucket.cancelled += 1
+            elif status == "interrupted":
+                bucket.interrupted += 1
         for unit, runs in session_runs.items():
             report_unit = ledger.units[unit]
             self.per_session.append(
