@@ -152,6 +152,12 @@ async def test_chat_history_includes_whole_session_usage_totals(tmp_path: Path) 
                 "cache_read_tokens": 1500,
                 "cache_write_tokens": 300,
                 "reasoning_tokens": 40,
+                "context_usage": {
+                    "tokens": 2100,
+                    "estimated": True,
+                    "provider_input_tokens": 2000,
+                    "provider_output_tokens": 100,
+                },
             },
         )
     )
