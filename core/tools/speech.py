@@ -17,7 +17,6 @@ from core.tools.tools import (
 from core.utils.paths import model_path
 
 TEXT_TO_SPEECH_TOOL_NAME = "text_to_speech"
-_TEXT_TO_SPEECH_ARGUMENTS = frozenset({"text"})
 TEXT_TO_SPEECH_TOOL_DESCRIPTION = (
     "Convert text to spoken audio using the configured model. The web chat plays the "
     "returned audio artifact automatically."
@@ -39,10 +38,6 @@ def make_text_to_speech_handler(speech_service: Any):
     """Create a text-to-speech tool handler bound to the runtime speech service."""
 
     async def handler(_context: ToolContext, arguments: JsonObject) -> JsonObject:
-        unknown_arguments = set(arguments) - _TEXT_TO_SPEECH_ARGUMENTS
-        if unknown_arguments:
-            names = ", ".join(sorted(unknown_arguments))
-            return tool_failure("invalid_arguments", f"Unknown argument(s): {names}")
 
         text = arguments.get("text")
         if not isinstance(text, str) or not text.strip():

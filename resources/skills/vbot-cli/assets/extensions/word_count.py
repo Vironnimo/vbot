@@ -41,12 +41,8 @@ _RESULT_SCHEMA = {
 
 
 def _word_count(context, arguments):
-    unknown = sorted(set(arguments) - {"text"})
-    if unknown:
-        return tool_failure(
-            "invalid_arguments",
-            f"Unknown argument(s): {', '.join(unknown)}",
-        )
+    # Dispatch has already rejected unknown arguments: the schema's properties
+    # are the Tool's complete parameter list.
     text = arguments.get("text")
     if not isinstance(text, str):
         # Expected bad input → a failure envelope, never a raised exception.

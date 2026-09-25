@@ -32,7 +32,7 @@ from core.extensions import ExtensionRegistry
 from core.recall.recall import RecallBackendContext, RecallBackendRegistry
 from core.runs import ChatRunManager
 from core.sessions import ChatSessionManager
-from core.tools import ToolContext, ToolRegistry
+from core.tools import ToolContext, ToolContractError, ToolRegistry
 
 
 @pytest.fixture(autouse=True)
@@ -76,14 +76,15 @@ def _ready_tool_extension_source(tool_name: str, *, ready: bool) -> str:
     )
 
 
-def _open_tool_extension_source(tool_name: str) -> str:
+def _open_tool_extension_source(tool_name: str, *, explicitly_open: bool = False) -> str:
+    extra = ", 'additionalProperties': True" if explicitly_open else ""
     return (
         "from core.tools import tool_success\n"
         "def _handler(context, arguments):\n"
         "    return tool_success({'arguments': arguments})\n"
         "def register(api):\n"
         f"    api.register_tool({tool_name!r}, 'desc', "
-        "{'type': 'object', 'properties': {'value': {'type': 'string'}}}, "
+        f"{{'type': 'object', 'properties': {{'value': {{'type': 'string'}}}}{extra}}}, "
         "_handler, open_input_schema=True)\n"
     )
 
@@ -280,12 +281,37 @@ def test_extension_tool_can_declare_an_open_model_facing_schema(tmp_path: Path) 
     assert tool.open_input_schema is True
     assert "additionalProperties" not in tool.parameters
     result = asyncio.run(
+        tool_registry.dispatch(_tool_context("ext_open", tmp_path), {"value": "declared"})
+    )
+    assert result["data"] == {"arguments": {"value": "declared"}}
+    # The declared properties are the complete parameter list.
+    with pytest.raises(ToolContractError, match='"unknown" is not a parameter'):
+        asyncio.run(
+            tool_registry.dispatch(_tool_context("ext_open", tmp_path), {"unknown": "rejected"})
+        )
+
+
+def test_extension_tool_with_explicit_additional_properties_receives_unknown_arguments(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "extensions"
+    _write_single_file(
+        root, "open_ext", _open_tool_extension_source("ext_open", explicitly_open=True)
+    )
+
+    registry = ExtensionRegistry.load(root)
+    tool_registry = ToolRegistry()
+    registry.apply_tools(tool_registry)
+
+    result = asyncio.run(
         tool_registry.dispatch(_tool_context("ext_open", tmp_path), {"unknown": "preserved"})
     )
     assert result["data"] == {"arguments": {"unknown": "preserved"}}
 
 
-def test_word_count_example_uses_an_open_schema_and_handler_validation(tmp_path: Path) -> None:
+def test_word_count_example_uses_an_open_schema_and_rejects_unknown_arguments(
+    tmp_path: Path,
+) -> None:
     examples_root = (
         Path(__file__).resolve().parents[3]
         / "resources"
@@ -305,15 +331,15 @@ def test_word_count_example_uses_an_open_schema_and_handler_validation(tmp_path:
     success = asyncio.run(
         tool_registry.dispatch(_tool_context("word_count", tmp_path), {"text": "one two"})
     )
-    rejected = asyncio.run(
-        tool_registry.dispatch(
-            _tool_context("word_count", tmp_path),
-            {"text": "one", "unknown": True},
-        )
-    )
 
     assert success["data"] == {"word_count": 2}
-    assert rejected["error"]["code"] == "invalid_arguments"
+    with pytest.raises(ToolContractError, match='"unknown" is not a parameter'):
+        asyncio.run(
+            tool_registry.dispatch(
+                _tool_context("word_count", tmp_path),
+                {"text": "one", "unknown": True},
+            )
+        )
 
 
 def test_extension_not_ready_tool_hidden_from_provider_definitions_but_registered(

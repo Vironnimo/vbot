@@ -116,6 +116,7 @@ class ExtensionAPI:
         result_schema: dict[str, Any] | None = None,
         parallel_safe: bool = True,
         open_input_schema: bool = False,
+        unadvertised_parameters: dict[str, Any] | None = None,
         argument_normalizer: Callable[[Any], Any] | None = None,
         family: str | None = None,
     ) -> None:
@@ -151,6 +152,7 @@ class ExtensionAPI:
                 result_schema=result_schema,
                 parallel_safe=parallel_safe,
                 open_input_schema=open_input_schema,
+                unadvertised_parameters=unadvertised_parameters,
                 argument_normalizer=argument_normalizer,
                 family=family,
             )

@@ -73,7 +73,11 @@ def normalize_call_arguments(
         if field in enum_fields and isinstance(item, str):
             options = properties.get(field, {}).get("enum", [])
             item = _formatted_name(item, options) or item
-        item = contract.normalize_arguments({field: item})[field]
+        repaired = contract.normalize_arguments({field: item})
+        if field not in repaired:
+            # An empty value under a name that is not a parameter requests nothing.
+            continue
+        item = repaired[field]
         if field in normalized and not _same_json_value(normalized[field], item):
             raise ToolContractError(f"Conflicting values for {field}; provide one intended value.")
         normalized[field] = item

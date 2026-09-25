@@ -92,11 +92,15 @@ async def test_image_generation_text_only_profile_rejects_source_images_in_handl
         profile_context=ToolDefinitionProfileContext(agent_id="agent-1"),
     )
     contract = registry.contracts_for_provider_definitions(definitions)[IMAGE_GENERATION_TOOL_NAME]
+    arguments = {"prompt": "make it rainy", "source_images": ["photo.png"]}
 
-    result = await registry.dispatch(
-        replace(_make_context(tmp_path), input_contract=contract),
-        {"prompt": "make it rainy", "source_images": ["photo.png"]},
-    )
+    # The advertised text-only contract rejects the parameter before the handler.
+    with pytest.raises(ToolContractError, match='"source_images" is not a parameter'):
+        await registry.dispatch(
+            replace(_make_context(tmp_path), input_contract=contract), arguments
+        )
+    # A call validated against the full schema still meets the handler guard.
+    result = await registry.dispatch(_make_context(tmp_path), arguments)
 
     assert result["ok"] is False
     assert result["error"]["code"] == "invalid_arguments"
@@ -243,18 +247,17 @@ async def test_image_generation_tool_rejects_empty_prompt(tmp_path: Path) -> Non
 
 @pytest.mark.asyncio
 async def test_image_generation_tool_rejects_unknown_arguments(tmp_path: Path) -> None:
+    service = _ImageService(tmp_path / "unused.png")
     registry = ToolRegistry()
-    register_image_generation_tool(registry, _ImageService(tmp_path / "unused.png"))
+    register_image_generation_tool(registry, service)
 
-    result = await registry.dispatch(
-        _make_context(tmp_path),
-        {"prompt": "a red fox", "unexpected": True},
-    )
+    with pytest.raises(ToolContractError, match='"unexpected" is not a parameter'):
+        await registry.dispatch(
+            _make_context(tmp_path),
+            {"prompt": "a red fox", "unexpected": True},
+        )
 
-    assert result["error"] == {
-        "code": "invalid_arguments",
-        "message": "Unknown argument(s): unexpected",
-    }
+    assert service.received_prompt is None
 
 
 @pytest.mark.asyncio
@@ -488,14 +491,11 @@ async def test_analyze_image_tool_rejects_invalid_arguments_and_maps_image_error
 
     with pytest.raises(ToolContractError):
         await registry.dispatch(context, {"prompt": "Describe it.", "images": []})
-    unknown = await registry.dispatch(
-        context,
-        {"prompt": "Describe it.", "images": ["photo.png"], "extra": True},
-    )
-    assert unknown["error"] == {
-        "code": "invalid_arguments",
-        "message": "Unknown argument(s): extra",
-    }
+    with pytest.raises(ToolContractError, match='"extra" is not a parameter'):
+        await registry.dispatch(
+            context,
+            {"prompt": "Describe it.", "images": ["photo.png"], "extra": True},
+        )
     image_error = await registry.dispatch(
         context,
         {"prompt": "Describe it.", "images": ["photo.png"]},

@@ -289,7 +289,9 @@ class TestToolExecutor:
         assert results == [
             tool_failure(
                 "invalid_arguments",
-                "arguments: expected JSON object, received JSON array [type]",
+                "read_file was not run:\n"
+                "- Arguments must be a JSON object of named parameters; received an array.\n"
+                "read_file parameters: path (required).",
             )
         ]
 

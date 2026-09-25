@@ -7,7 +7,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import respx
 
+from core.tools.contracts import ToolContractError
 from core.tools.tools import ToolRegistry
 from core.tools.web_search import (
     WEB_SEARCH_TOOL_DESCRIPTION,
@@ -151,21 +153,27 @@ async def test_web_search_handler_count_out_of_range(tmp_path: Path, count: int)
 
 
 @pytest.mark.asyncio
+@respx.mock
 @pytest.mark.parametrize("retired_field", ["date_after", "date_before"])
-async def test_web_search_handler_rejects_retired_time_filters(
+async def test_web_search_rejects_retired_time_filters_before_searching(
     tmp_path: Path,
     retired_field: str,
 ) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    resolved_keys: list[str] = []
 
-    result = await web_search_handler(
-        make_context(workspace),
-        {"query": "vbot", retired_field: "day"},
-        _fake_credential_resolver,
-    )
+    def credential_resolver(key: str) -> str:
+        resolved_keys.append(key)
+        return _fake_credential_resolver(key)
 
-    assert_failure_envelope(result, "validation_error")
+    registry = ToolRegistry()
+    register_web_search_tool(registry, credential_resolver)
+
+    with pytest.raises(ToolContractError, match=f'"{retired_field}" is not a parameter'):
+        await registry.dispatch(make_context(workspace), {"query": "vbot", retired_field: "day"})
+
+    assert resolved_keys == []
 
 
 @pytest.mark.asyncio

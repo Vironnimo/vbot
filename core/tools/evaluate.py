@@ -74,8 +74,6 @@ EVALUATE_PARAMETERS: dict[str, Any] = {
 
 def register_evaluate_tool(registry: ToolRegistry, service: DecisionService) -> None:
     async def handler(_context: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
-        if set(arguments) - {"state", "questions"}:
-            return tool_failure("invalid_arguments", "Supply state and questions only.")
         try:
             result = await service.evaluate(arguments.get("state"), arguments.get("questions"))
         except DecisionError as exc:

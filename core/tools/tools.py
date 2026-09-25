@@ -176,6 +176,7 @@ class ToolRegistry:
         parallel_safe: bool = True,
         execution_slot_required: bool = True,
         open_input_schema: bool = False,
+        unadvertised_parameters: JsonObject | None = None,
         handler_validates_arguments: bool = False,
         coerce_arguments: bool = True,
         argument_normalizer: Callable[[Any], Any] | None = None,
@@ -229,6 +230,7 @@ class ToolRegistry:
             parallel_safe=parallel_safe,
             execution_slot_required=execution_slot_required,
             open_input_schema=open_input_schema,
+            unadvertised_parameters=unadvertised_parameters,
             handler_validates_arguments=handler_validates_arguments,
             coerce_arguments=coerce_arguments,
             argument_normalizer=argument_normalizer,
@@ -525,7 +527,9 @@ class ToolRegistry:
             input_contract.normalize_arguments(arguments) if tool.coerce_arguments else arguments
         )
         if not tool.handler_validates_arguments:
-            input_contract.validate_arguments(normalized_arguments)
+            input_contract.validate_arguments(
+                normalized_arguments, unadvertised=tool.unadvertised_parameters
+            )
 
         if tool.extension is not None and not inspect.iscoroutinefunction(tool.handler):
             result = await run_tool_worker(

@@ -711,18 +711,6 @@ def _register_user_cancel_callback(
 
 
 def _parse_arguments(arguments: JsonObject) -> JsonObject | str:
-    unknown_arguments = set(arguments) - {
-        "command",
-        "description",
-        "mode",
-        "workdir",
-        "timeout",
-        "env_keys",
-    }
-    if unknown_arguments:
-        names = ", ".join(sorted(unknown_arguments))
-        return f"Unknown argument(s): {names}"
-
     command = arguments.get("command")
     if not isinstance(command, str) or not command:
         return "command must be a non-empty string"

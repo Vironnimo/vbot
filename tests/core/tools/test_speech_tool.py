@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from core.model_tasks import SpeechOutcomeUnknownError
+from core.tools.contracts import ToolContractError
 from core.tools.speech import (
     TEXT_TO_SPEECH_TOOL_NAME,
     TEXT_TO_SPEECH_TOOL_PARAMETERS,
@@ -66,13 +67,8 @@ async def test_text_to_speech_tool_rejects_unknown_arguments(tmp_path: Path) -> 
         data_root=tmp_path,
     )
 
-    result = await registry.dispatch(context, {"text": "hello", "unexpected": True})
-
-    assert result["ok"] is False
-    assert result["error"] == {
-        "code": "invalid_arguments",
-        "message": "Unknown argument(s): unexpected",
-    }
+    with pytest.raises(ToolContractError, match='"unexpected" is not a parameter'):
+        await registry.dispatch(context, {"text": "hello", "unexpected": True})
 
 
 @pytest.mark.asyncio

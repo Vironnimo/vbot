@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from core.tools.contracts import ToolContractError
 from core.tools.search_files import register_search_files_tool, search_files_handler
 from core.tools.tools import ToolContext, ToolRegistry
 
@@ -287,7 +288,6 @@ def test_binary_encodings_and_existence(tmp_path: Path) -> None:
         {"args": ["--dirs", "-e", "run"]},
         {"args": ["run", "-C", "2", "-l"]},
         {"args": ["--files", "--pre", "anything"]},
-        {"args": ["run"], "unknown_feature": True},
         {"args": ["--help", "missing"]},
         {"args": ["--files"], "limit": 0},
         {"args": ["--files"], "offset": -1},
@@ -297,6 +297,14 @@ def test_invalid_calls_preserve_constraints(tree: Path, arguments) -> None:
     result = search_files_handler(context(tree), arguments)
     assert result["ok"] is False
     assert result["data"] is None
+
+
+def test_unknown_argument_is_rejected_before_the_search_runs(tree: Path) -> None:
+    registry = ToolRegistry()
+    register_search_files_tool(registry)
+
+    with pytest.raises(ToolContractError, match='"unknown_feature" is not a parameter'):
+        asyncio.run(registry.dispatch(context(tree), {"args": ["run"], "unknown_feature": True}))
 
 
 @pytest.mark.parametrize("candidates", [False, True])

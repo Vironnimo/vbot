@@ -629,11 +629,6 @@ def make_read_handler(
         if not isinstance(path_argument, str) or not path_argument:
             return tool_failure("invalid_arguments", "path must be a non-empty string")
 
-        unknown_arguments = set(arguments) - {"path", "offset", "limit"}
-        if unknown_arguments:
-            names = ", ".join(sorted(unknown_arguments))
-            return tool_failure("invalid_arguments", f"Unknown argument(s): {names}")
-
         try:
             resolved = context.resolve_path(path_argument)
         except RuntimeError as error:

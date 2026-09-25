@@ -24,10 +24,6 @@ from core.utils.paths import model_path
 
 IMAGE_GENERATION_TOOL_NAME = "image_generation"
 ANALYZE_IMAGE_TOOL_NAME = "analyze_image"
-_IMAGE_GENERATION_ARGUMENTS = frozenset(
-    {"prompt", "source_images", "aspect_ratio", "resolution", "output_dir"}
-)
-_ANALYZE_IMAGE_ARGUMENTS = frozenset({"prompt", "images"})
 _IMAGE_GENERATION_DIRECTORY_NAME = "image-gen"
 _ANALYZE_IMAGE_RESULT_SCHEMA: JsonObject = {
     "type": "object",
@@ -220,10 +216,6 @@ def make_analyze_image_handler(image_service: Any):
     """Create an image-understanding handler bound to the runtime image service."""
 
     async def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
-        unknown_arguments = set(arguments) - _ANALYZE_IMAGE_ARGUMENTS
-        if unknown_arguments:
-            names = ", ".join(sorted(unknown_arguments))
-            return tool_failure("invalid_arguments", f"Unknown argument(s): {names}")
 
         prompt = arguments.get("prompt")
         if not isinstance(prompt, str) or not prompt.strip():
@@ -282,10 +274,6 @@ def make_image_generation_handler(image_service: Any):
     """Create an image generation tool handler bound to the runtime image service."""
 
     async def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
-        unknown_arguments = set(arguments) - _IMAGE_GENERATION_ARGUMENTS
-        if unknown_arguments:
-            names = ", ".join(sorted(unknown_arguments))
-            return tool_failure("invalid_arguments", f"Unknown argument(s): {names}")
 
         prompt = arguments.get("prompt")
         if not isinstance(prompt, str) or not prompt.strip():

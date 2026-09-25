@@ -46,13 +46,6 @@ CHANNEL_SEND_TOOL_DESCRIPTION = (
     "Send a proactive message or any file through a configured channel. Always use "
     "this tool for channel file delivery, including replies."
 )
-_REQUIRED_CHANNEL_SEND_ARGUMENTS = frozenset(("channel_id",))
-_OPTIONAL_CHANNEL_SEND_ARGUMENTS = frozenset(
-    ("message", "platform_target", "thread_id", "file_paths", "buttons")
-)
-_CHANNEL_SEND_ALLOWED_ARGUMENTS = (
-    _REQUIRED_CHANNEL_SEND_ARGUMENTS | _OPTIONAL_CHANNEL_SEND_ARGUMENTS
-)
 _INTERACTION_BUTTON_ARGUMENTS = frozenset(("label", "data"))
 
 
@@ -318,11 +311,6 @@ async def _handle_channel_send_tool(
     *,
     max_attachment_size_bytes: int,
 ) -> JsonObject:
-    unknown_arguments = sorted(set(arguments) - _CHANNEL_SEND_ALLOWED_ARGUMENTS)
-    if unknown_arguments:
-        names = ", ".join(unknown_arguments)
-        return tool_failure("invalid_arguments", f"Unknown argument(s): {names}")
-
     try:
         prepared = await run_tool_worker(
             _prepare_channel_send,

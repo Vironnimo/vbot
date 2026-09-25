@@ -8,6 +8,7 @@ import pytest
 
 from core.tools import _web_fetch_pages as pages
 from core.tools._web_fetch_html import extract_views
+from core.tools.contracts import ToolContractError
 from core.tools.tools import ToolRegistry
 from core.tools.web_fetch import register_web_fetch_tool
 from core.utils.tokens import estimate_json_tokens, estimate_tokens
@@ -152,9 +153,10 @@ async def test_redundant_url_must_match_owned_saved_final_page(tmp_path, monkeyp
     for changed in (replace(context, session_id="other"), replace(context, agent_id="other")):
         rejected = await tool.dispatch(changed, {"url": final_url, "ref": ref})
         assert rejected["error"]["code"] == "reference_error"
-    for extra in ({"output": "raw"}, {"fresh": True}):
-        rejected = await tool.dispatch(context, {"url": final_url, "ref": ref, **extra})
-        assert not rejected["ok"]
+    rejected = await tool.dispatch(context, {"url": final_url, "ref": ref, "output": "raw"})
+    assert not rejected["ok"]
+    with pytest.raises(ToolContractError, match='"fresh" is not a parameter'):
+        await tool.dispatch(context, {"url": final_url, "ref": ref, "fresh": True})
     now = pages.time.time()
     monkeypatch.setattr(pages.time, "time", lambda: now + 73 * 3600)
     expired = await tool.dispatch(context, {"url": final_url, "ref": ref})

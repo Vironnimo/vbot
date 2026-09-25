@@ -9,7 +9,8 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
 - `register_apply_patch_tool(registry, *, file_state)` registers `apply_patch`
   in the `files` family with one required `patch` string. It is an ordinary
   Provider-neutral function Tool, not a Provider-native patch operation. The
-  open model-facing schema is backed by handler-owned unknown-field validation.
+  open model-facing schema's parameter list is enforced at dispatch: unknown
+  arguments fail before the handler.
 - The owner-selected argument repair accepts `input` as the patch-text alias,
   ordinary field formatting and shared call wrappers. Equal aliases coalesce;
   conflicting aliases (including placeholder text) and unsupported fields fail

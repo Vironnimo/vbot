@@ -216,6 +216,7 @@ class ExtensionCapabilityInstaller:
                 result_schema=declaration.result_schema,
                 parallel_safe=declaration.parallel_safe,
                 open_input_schema=declaration.open_input_schema,
+                unadvertised_parameters=declaration.unadvertised_parameters,
                 coerce_arguments=declaration.coerce_arguments,
                 argument_normalizer=declaration.argument_normalizer,
                 session_scoped=declaration.session_scoped,

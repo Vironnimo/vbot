@@ -229,5 +229,5 @@ async def test_invalid_arguments_can_be_corrected_without_running_handler_twice(
     assert assistant.content == "Recovered"
     assert invocations == [{"city": "Berlin"}]
     assert tool_results[0]["error"]["code"] == "invalid_arguments"
-    assert "arguments/city" in tool_results[0]["error"]["message"]
+    assert '"city" must be a string' in tool_results[0]["error"]["message"]
     assert tool_results[1] == tool_success({"city": "Berlin"})

@@ -130,10 +130,6 @@ def make_skill_handler(
     """
 
     async def skill_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
-        unknown_arguments = set(arguments) - {"name", "file_path"}
-        if unknown_arguments:
-            names = ", ".join(sorted(unknown_arguments))
-            return tool_failure("invalid_arguments", f"Unknown argument(s): {names}")
 
         # Identity runs only (``project_id is None``): a config agent's
         # project-local slug must not resolve a same-named identity agent's
