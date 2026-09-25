@@ -13,6 +13,8 @@ from core.tools.terminal_store import (
     TerminalGroup,
     TerminalOperatorStore,
     validate_group_name,
+    validate_terminal_groups_file,
+    validate_terminal_launch_history_file,
 )
 
 _SEED_TIMESTAMP = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
@@ -87,7 +89,8 @@ def test_corrupt_documents_degrade_to_empty_collections(
         "not json",
         '{"format_version": 2, "groups": []}',
         '{"version": 1, "groups": []}',
-        '{"format_version": 1, "groups": [{"id": "broken"}]}',
+        '{"format_version": 1, "groups": {"id": "broken"}}',
+        '{"format_version": 1}',
     ],
 )
 def test_documents_that_failed_to_load_are_never_overwritten(
@@ -113,6 +116,53 @@ def test_documents_that_failed_to_load_are_never_overwritten(
     assert sum("Refusing to overwrite" in message for message in caplog.messages) == 2
     # The change stays in memory for this process.
     assert [entry.command for entry in store.launch_history] == ["pwsh"]
+
+
+def test_invalid_entries_are_skipped_kept_verbatim_and_reported(tmp_path: Path) -> None:
+    history_path = tmp_path / "launch-history.json"
+    groups_path = tmp_path / "groups.json"
+    store = TerminalOperatorStore(
+        launch_history_path=history_path, groups_path=groups_path, data_dir=tmp_path
+    )
+    store.remember_launch(command="pwsh", arguments=[], workdir=None)
+    store.groups["u-1"] = TerminalGroup(
+        group_id="u-1", name="Builds", kind="user", order=[], created_at=_SEED_TIMESTAMP
+    )
+    store.persist_groups()
+    history = json.loads(history_path.read_text(encoding="utf-8"))
+    groups = json.loads(groups_path.read_text(encoding="utf-8"))
+    # A newer vBot may add a launch field that takes part in the id.
+    invalid_launch = {**history["entries"][0], "id": "not-the-content-id", "env": {"A": "1"}}
+    invalid_group = {"id": "u-2", "name": "", "order": [], "created_at": "later"}
+    history["entries"].append(invalid_launch)
+    groups["groups"].extend([invalid_group, groups["groups"][0]])
+    _write_groups(history_path, history)
+    _write_groups(groups_path, groups)
+
+    reloaded = TerminalOperatorStore(
+        launch_history_path=history_path, groups_path=groups_path, data_dir=tmp_path
+    )
+    assert [entry.command for entry in reloaded.launch_history] == ["pwsh"]
+    assert list(reloaded.groups) == ["u-1"]
+    assert not reloaded.group_id_available("u-2")
+    reloaded.remember_launch(command="nvim", arguments=[], workdir=None)
+    reloaded.groups["u-1"].name = "Renamed"
+    reloaded.persist_groups()
+
+    stored_history = json.loads(history_path.read_text(encoding="utf-8"))["entries"]
+    assert [entry["command"] for entry in stored_history] == ["nvim", "pwsh", "pwsh"]
+    assert stored_history[2] == invalid_launch
+    stored_groups = json.loads(groups_path.read_text(encoding="utf-8"))["groups"]
+    assert [group["name"] for group in stored_groups] == ["Renamed", "", "Builds"]
+    assert stored_groups[1] == invalid_group
+    assert [
+        (diagnostic.severity, diagnostic.path)
+        for diagnostic in validate_terminal_launch_history_file(history_path).diagnostics
+    ] == [("warning", "$.entries[2].env"), ("error", "$.entries[2]")]
+    assert [
+        (diagnostic.severity, diagnostic.path)
+        for diagnostic in validate_terminal_groups_file(groups_path).diagnostics
+    ] == [("error", "$.groups[1]"), ("error", "$.groups[2].id")]
 
 
 def test_persist_keeps_unknown_fields_of_the_documents(tmp_path: Path) -> None:
