@@ -309,9 +309,11 @@ class TestTargets:
 
         _envelope, text = tool.call({"target": "signal:+4917", "message": "Hi"})
 
-        assert '"target" "signal:+4917" is not "channel:chat"' in text
-        assert text.endswith(
-            'Send: {"channel_id":"tg-main","platform_target":"<chat id>","message":"Hi"}'
+        assert text == (
+            'Error (invalid_arguments): channel_send was not run: "target" "signal:+4917" is '
+            'not "channel:chat" with one of your Channels (tg-main). Name the Channel and the '
+            'chat separately. Send: {"channel_id":"tg-main","platform_target":"<chat id>",'
+            '"message":"Hi"}'
         )
         assert tool.sent() == []
 
