@@ -20,7 +20,7 @@ Public Connection ids use `provider:connection[:account]`. Account ids match `^[
 
 API-key Accounts map to environment keys through `derive_credential_key()`: default uses the base key; a named Account uses `BASE__<ACCOUNT>`. `BASE__DEFAULT` is rejected as a second spelling. Account discovery scans process environment before the data-dir `.env`, so process values win for the same Account.
 
-Bundled Connections can intentionally share a base credential key: OpenCode Go and Zen both use `OPENCODE_API_KEY`. Their same-named API-key Accounts therefore share edits/removal, while enablement remains Connection-level. Enrollment and conversion details: `opencode-zen.md`.
+Bundled Connections can intentionally share a base credential key: OpenCode Go and Zen both use `OPENCODE_API_KEY`. Their same-named API-key Accounts therefore share edits/removal, while enablement remains Connection-level. Enrollment details and the retired `OPENCODE_GO_API_KEY` names: `opencode-zen.md`.
 
 OAuth Accounts are stored per Account in `TokenStore`: `<provider>-<connection>.json` for default and `<provider>-<connection>--<account>.json` for named slots, under `<data_dir>/oauth/`. Id validation prevents path traversal. An expired OAuth token remains usable only when it has a refresh path. Token files are Generation 1 JSON documents (`format_version` 1, unknown fields kept; contract in `settings.md`). A token file that fails to load (corrupt, unversioned, newer) makes `load` raise `OAuthTokenFileError` and `has_valid_token` report false, and `save` refuses to overwrite it with a hint to disconnect; `provider.disconnect` checks existence (`TokenStore.exists`) instead of loading, so it still removes such a file.
 
