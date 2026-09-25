@@ -236,7 +236,7 @@ async def test_wiki_similar_passage_never_stands_in_for_old_text(board):
             "Steps:\nvalidate(data)\nlog(data)\ndone",
             "Steps:\nvalidate(data)\ndone",
         ),
-        # A similar kept line never excuses a changed line that differs.
+        # A misspelled kept line never excuses a changed line holding another word.
         (
             "Intro\nThe parser handles nested lists correctly.\nStatus: blocked\nEnd",
             "The parser handles nested list correctly.\nStatus: pending",
@@ -244,7 +244,7 @@ async def test_wiki_similar_passage_never_stands_in_for_old_text(board):
         ),
     ],
 )
-async def test_wiki_old_text_must_match_every_changed_line_precisely(board, content, old, new):
+async def test_wiki_old_text_must_not_rest_on_other_text(board, content, old, new):
     page_id = await create(board, content)
     before = await stored(board, page_id)
 
@@ -261,6 +261,31 @@ async def test_wiki_old_text_must_match_every_changed_line_precisely(board, cont
 
     assert result["error"]["code"] == "wiki_edit_conflict"
     assert await stored(board, page_id) == before
+
+
+@pytest.mark.asyncio
+async def test_wiki_old_text_copied_with_a_misspelling_is_applied_and_named(board):
+    page_id = await create(board, "Intro\nThe parser handles nested lists correctly.\nEnd")
+
+    result = await invoke(
+        board,
+        {
+            "action": "update",
+            "page_id": page_id,
+            "expected_revision": 1,
+            "old_text": "Intro\nThe parser handles nested lists corectly.",
+            "new_text": "Intro\nThe parser handles nested lists correctly, even when empty.",
+        },
+    )
+
+    assert result["ok"], result
+    assert (await stored(board, page_id))["content"] == (
+        "Intro\nThe parser handles nested lists correctly, even when empty.\nEnd"
+    )
+    assert (
+        "Line 2 did not match your old text exactly and was edited anyway; it read: "
+        "The parser handles nested lists correctly." in visible(result)
+    )
 
 
 @pytest.mark.asyncio
@@ -607,7 +632,7 @@ async def test_wiki_edit_misses_show_the_closest_passage(board):
         f"Copy old_text exactly from the page, or read it with {read_call}."
     )
     # A fragment of a longer line points at that line.
-    assert await edit("three replicas behind the load balancers") == (
+    assert await edit("three replicas behind the proxy") == (
         "Error (wiki_edit_conflict): old_text does not occur in the current page (revision 1). "
         "Nothing changed.\nClosest passage, at line 2:\n"
         "The deployment uses three replicas behind the load balancer today.\n"

@@ -114,11 +114,14 @@ applied) saves no revision and reports `unchanged`, before any stale check.
 Targeted edits run `_wiki_edit.py`, aligned with `apply_patch`: precise
 `replace_fuzzy` strategies (typography, newline, whitespace, indentation), then the
 same edit without shared blank boundary lines, then already-applied detection, and
-only then similarity for the lines the edit keeps. Every line the edit replaces
-must still match precisely, and the page keeps its own wording in the kept lines,
-so similarity never overwrites a peer's text
-(`test_wiki_old_text_must_match_every_changed_line_precisely`). Ambiguity is
-terminal. Misses carry bounded line hints (closest passages, or the line holding
+only then, unless the new text is already on the page, `copy_match.replace_copied`
+for an `old_text` copied with errors (rules: `tools/apply_patch.md`). The page
+keeps its own wording outside the change, so a copy error never overwrites a
+peer's text; each differing line and respelled word returns in the result's
+`notes` (`test_wiki_old_text_copied_with_a_misspelling_is_applied_and_named`,
+`test_wiki_old_text_must_not_rest_on_other_text`). Ambiguity is terminal; a copy
+resembling several passages sets `details.similar` and uses
+`WIKI_AMBIGUOUS_SIMILAR`. Misses carry bounded line hints (closest passages, or the line holding
 most of a one-line fragment) in `SwarmStoreError.details`. With an older revision,
 only a targeted edit without a title change may proceed. Title changes, delete,
 restore and future revisions otherwise keep strict revision checks. Delete retains
