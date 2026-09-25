@@ -43,7 +43,7 @@ cli     = ["psutil", "cryptography>=46,<51"]
 windows-app = ["pystray>=0.19.5,<0.20", "cryptography>=46,<51", "uv==0.12.11"]
 local-tts = ["uv==0.12.11"]
 local-speech = ["torch>=2.10,<3", "transformers>=5.16.1,<6", "huggingface-hub>=1.30,<2", "librosa>=0.11,<1", "av>=18,<19"]
-desktop = ["pywebview", "pyopen-wakeword>=1.1,<2", "sounddevice", "soxr>=0.5,<2", "webrtcvad-wheels>=2.0.14,<3", "onnxruntime>=1.16,<2"]
+desktop = ["pywebview", "pyopen-wakeword>=1.1,<2", "sounddevice", "soxr>=0.5,<2", "webrtcvad-wheels>=2.0.14,<3", "onnxruntime>=1.16,<2", "livekit>=1.1.20,<1.2", "PyAudioWPatch>=0.2.12.8,<0.3; sys_platform == 'win32'"]
 dev     = ["pytest", "pytest-asyncio", "ruff>=0.16.8", "mypy", "types-jsonschema", "types-python-dateutil", "hatchling", "pytest-xdist", "pytest-timeout", "respx", "fastapi", "uvicorn[standard]", "watchfiles", "python-telegram-bot[rate-limiter]", "discord.py>=2.7,<3", "python-multipart", "psutil", "numpy", "soxr>=0.5,<2", "av>=18,<19", "pystray>=0.19.5,<0.20; sys_platform == 'win32'", "py-spy>=0.4.2,<0.5"]
 
 [tool.hatch.build.targets.sdist]
