@@ -36,6 +36,7 @@ from core.utils.logging import get_logger
 from core.utils.workers import BoundedWorkerPool
 
 __all__ = [
+    "FORMAT_GENERATION",
     "Database",
     "DatabaseError",
     "ExtensionDatabaseOpener",

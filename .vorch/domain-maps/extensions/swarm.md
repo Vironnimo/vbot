@@ -333,8 +333,10 @@ indexes, nullable or defaulted columns); state and kind values are validated in
 code, never by CHECK enums. New timestamps use the canonical UTC form
 `YYYY-MM-DDTHH:MM:SS.ffffffZ` (`_store_values._now`). A database from before
 Persistence Generation 1 is converted by
-`scripts/converters/persistence_generation_1/swarm.py`; the Store has no upgrade
-code. Saved profiles and Swarm snapshots are consumed as stored;
+`scripts/converters/persistence_generation_1/swarm.py` (every table with its keys
+and the cursor key, canonical timestamps; refused rows are dropped and reported;
+round trip through the current Store in `tests/scripts/converters/persistence_generation_1/test_swarm.py`).
+The Store has no upgrade code. Saved profiles and Swarm snapshots are consumed as stored;
 input defaults are resolved when a profile is saved or previewed.
 
 The page offers confirmed deletion after Stop. `swarms.delete` marks a closed
