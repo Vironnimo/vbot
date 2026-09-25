@@ -10,12 +10,15 @@ from unittest.mock import Mock
 import pytest
 
 from desktop.wakeword import engine as engine_module
+from desktop.wakeword.config import DEFAULT_MODEL_IDS, MAX_ACTIVE_PHRASES, PhraseConfig
 from desktop.wakeword.engine import (
     DEFAULT_WAKEWORD_MODEL_IDS,
+    DETECTOR_KIND_TFLITE_HEAD,
     MAX_CUSTOM_WAKEWORD_MODEL_BYTES,
     MultiWakewordEngine,
     WakewordMatch,
     WakewordModelCatalog,
+    WakewordModelDescriptor,
     WakewordModelError,
 )
 
@@ -167,13 +170,186 @@ def test_catalog_creates_two_model_engine_with_independent_thresholds(tmp_path: 
 
 @pytest.mark.parametrize(
     "active_ids",
-    [[], ["builtin/okay_nabu", "builtin/okay_nabu"], [*DEFAULT_WAKEWORD_MODEL_IDS, "x"]],
+    [
+        [],
+        ["builtin/okay_nabu", "builtin/okay_nabu"],
+        [*DEFAULT_WAKEWORD_MODEL_IDS, "builtin/unknown"],
+        [f"custom/{index}" for index in range(MAX_ACTIVE_PHRASES + 1)],
+    ],
 )
 def test_catalog_rejects_invalid_active_model_sets(tmp_path: Path, active_ids: list[str]) -> None:
     catalog = WakewordModelCatalog(tmp_path / "settings.json")
 
     with pytest.raises(WakewordModelError):
         catalog.create_engine(active_ids)
+
+
+def test_catalog_rejects_more_than_the_phrase_limit_before_resolving(tmp_path: Path) -> None:
+    catalog = WakewordModelCatalog(tmp_path / "settings.json")
+    phrases = [PhraseConfig(f"custom/{index}") for index in range(MAX_ACTIVE_PHRASES + 1)]
+
+    with pytest.raises(WakewordModelError, match=f"between 1 and {MAX_ACTIVE_PHRASES}"):
+        catalog.create_engine(phrases)
+
+
+def test_catalog_rejects_entries_that_are_not_phrases(tmp_path: Path) -> None:
+    catalog = WakewordModelCatalog(tmp_path / "settings.json")
+
+    with pytest.raises(WakewordModelError):
+        catalog.create_engine([7])  # type: ignore[arg-type]
+
+
+def test_descriptors_report_detector_kind_and_overlapping_phrases(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(engine_module, "_validate_custom_model", Mock())
+    catalog = WakewordModelCatalog(tmp_path / "settings.json")
+    imported = catalog.import_model("computer.tflite", b"tflite")
+
+    models = {model.id: model.to_dict() for model in catalog.list_models()}
+
+    assert all(model["kind"] == DETECTOR_KIND_TFLITE_HEAD for model in models.values())
+    assert models["builtin/okay_nabu"]["overlaps"] == ["builtin/hey_nabu"]
+    assert models["builtin/hey_nabu"]["overlaps"] == ["builtin/okay_nabu"]
+    assert models["builtin/hey_jarvis"]["overlaps"] == []
+    assert models[imported.id]["overlaps"] == []
+
+
+def test_catalog_hosts_the_maximum_number_of_phrases_with_own_sensitivities(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(engine_module, "_validate_custom_model", Mock())
+    catalog = WakewordModelCatalog(tmp_path / "settings.json")
+    imported = [catalog.import_model(f"phrase{index}.tflite", b"tflite") for index in range(2)]
+    model_ids = [model.id for model in catalog.list_models()]
+    assert len(model_ids) == MAX_ACTIVE_PHRASES
+    phrases = [
+        PhraseConfig(model_id, 0.1 * (index + 1)) for index, model_id in enumerate(model_ids)
+    ]
+    features = Mock()
+    features.process_streaming.return_value = ["features"]
+    models = {model_id: Mock() for model_id in model_ids}
+    for model in models.values():
+        model.process_streaming.return_value = [0.0]
+    # A higher raw score (0.7 over threshold 0.4) loses to the better
+    # score-to-threshold ratio (0.5 over threshold 0.2).
+    models[model_ids[5]].process_streaming.return_value = [0.7]
+    models[imported[1].id].process_streaming.return_value = [0.5]
+    monkeypatch.setattr(
+        engine_module, "_create_pyopenwakeword_features", Mock(return_value=features)
+    )
+    monkeypatch.setattr(
+        engine_module,
+        "_create_pyopenwakeword_model",
+        lambda descriptor: models[descriptor.id],
+    )
+
+    engine = catalog.create_engine(phrases)
+    engine.start()
+
+    assert engine.active_model_ids == tuple(model_ids)
+    assert engine.thresholds == pytest.approx(
+        {phrase.model_id: 1.0 - phrase.sensitivity for phrase in phrases}
+    )
+    match = engine.detect(b"audio")
+    assert match is not None
+    assert (match.model_id, match.score, match.threshold) == (
+        imported[1].id,
+        0.5,
+        pytest.approx(0.2),
+    )
+    engine.stop()
+    assert all(model.close.call_count == 1 for model in models.values())
+
+
+def _two_phrase_engine(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    model_ids: tuple[str, str],
+    scores: tuple[list[float], list[float]],
+) -> MultiWakewordEngine:
+    catalog = WakewordModelCatalog(tmp_path / "settings.json")
+    features = Mock()
+    features.process_streaming.return_value = ["features"]
+    models = []
+    for model_scores in scores:
+        model = Mock()
+        model.process_streaming.side_effect = [[score] for score in model_scores]
+        models.append(model)
+    monkeypatch.setattr(
+        engine_module, "_create_pyopenwakeword_features", Mock(return_value=features)
+    )
+    monkeypatch.setattr(engine_module, "_create_pyopenwakeword_model", Mock(side_effect=models))
+    engine = catalog.create_engine([PhraseConfig(model_id) for model_id in model_ids])
+    engine.start()
+    return engine
+
+
+def test_engine_rearms_each_phrase_independently(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    jarvis, alexa = "builtin/hey_jarvis", "builtin/alexa"
+    engine = _two_phrase_engine(
+        tmp_path,
+        monkeypatch,
+        (jarvis, alexa),
+        ([0.9, 0.9, 0.9, 0.1, 0.9], [0.1, 0.9, 0.9, 0.9, 0.9]),
+    )
+
+    # jarvis fires; alexa still fires while jarvis stays above its threshold.
+    assert engine.detect(b"1") == WakewordMatch(jarvis, 0.9, 0.5)
+    assert engine.detect(b"2") == WakewordMatch(alexa, 0.9, 0.5)
+    # Neither re-fires until its own score drops below its threshold.
+    assert engine.detect(b"3") is None
+    assert engine.detect(b"4") is None
+    assert engine.detect(b"5") == WakewordMatch(jarvis, 0.9, 0.5)
+
+
+def test_engine_rearms_overlapping_phrases_together(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    okay, hey = DEFAULT_MODEL_IDS
+    engine = _two_phrase_engine(
+        tmp_path,
+        monkeypatch,
+        (okay, hey),
+        ([0.1, 0.9, 0.9, 0.1, 0.1, 0.9], [0.9, 0.1, 0.1, 0.1, 0.1, 0.1]),
+    )
+
+    # One utterance: hey peaks first, then okay rises before both are quiet.
+    assert engine.detect(b"1") == WakewordMatch(hey, 0.9, 0.5)
+    assert engine.detect(b"2") is None
+    assert engine.detect(b"3") is None
+    # A window with both below their thresholds re-arms the pair.
+    assert engine.detect(b"4") is None
+    assert engine.detect(b"5") is None
+    assert engine.detect(b"6") == WakewordMatch(okay, 0.9, 0.5)
+
+
+def test_engine_rejects_an_unsupported_detector_kind_and_releases_features(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    features = Mock()
+    monkeypatch.setattr(
+        engine_module, "_create_pyopenwakeword_features", Mock(return_value=features)
+    )
+    descriptor = WakewordModelDescriptor(
+        id="custom/verifier",
+        label="Verifier",
+        source="imported",
+        format="onnx",
+        removable=True,
+        target="verifier.onnx",
+        kind="speaker_verifier",
+    )
+    engine = MultiWakewordEngine((descriptor,), {})
+
+    with pytest.raises(WakewordModelError) as raised:
+        engine.start()
+
+    assert raised.value.error_code == "wakeword_model_unavailable"
+    features.close.assert_called_once_with()
+    assert engine.detect(b"audio") is None
 
 
 def test_engine_shares_features_and_selects_threshold_normalized_winner(

@@ -848,3 +848,215 @@ def test_write_live_hotkey_settings_preserves_other_sections(tmp_path: Path) -> 
     stored = json.loads(settings_file.read_text(encoding="utf-8"))
     assert stored["servers"] == [{"host": "a.lan", "port": 8420}]
     assert stored["live_voice"] == {"future": {"kept": True}, "hotkey": hotkey}
+
+
+# -- Generic section API -------------------------------------------------------
+
+
+@pytest.mark.parametrize("stored", [None, [], "text", 3])
+def test_read_section_returns_empty_for_missing_or_non_object_sections(
+    tmp_path: Path, stored: object
+) -> None:
+    settings_file = tmp_path / "settings.json"
+    content: dict[str, object] = {"servers": []}
+    if stored is not None:
+        content["wakeword"] = stored
+    settings_file.write_text(json.dumps(content), encoding="utf-8")
+
+    assert desktop_settings.read_section("wakeword", settings_file) == {}
+
+
+def test_read_section_returns_an_isolated_copy(tmp_path: Path) -> None:
+    settings_file = tmp_path / "settings.json"
+    settings_file.write_text(
+        json.dumps({"wakeword": {"model_sensitivities": {"builtin/hey_nabu": 0.4}}}),
+        encoding="utf-8",
+    )
+
+    section = desktop_settings.read_section("wakeword", settings_file)
+    section["model_sensitivities"]["builtin/hey_nabu"] = 0.9
+
+    assert desktop_settings.read_section("wakeword", settings_file) == {
+        "model_sensitivities": {"builtin/hey_nabu": 0.4}
+    }
+
+
+def test_read_section_returns_empty_for_an_unreadable_file(tmp_path: Path) -> None:
+    settings_file = tmp_path / "settings.json"
+    settings_file.write_bytes(b"not json")
+
+    assert desktop_settings.read_section("wakeword", settings_file) == {}
+
+
+def test_update_section_mutates_one_section_and_preserves_everything_else(
+    tmp_path: Path,
+) -> None:
+    settings_file = tmp_path / "settings.json"
+    settings_file.write_text(
+        json.dumps(
+            {
+                "servers": [{"host": "a.lan", "port": 8420}],
+                "future": {"kept": True},
+                "wakeword": {"enabled": False, "unknown": [1, 2]},
+            }
+        ),
+        encoding="utf-8",
+    )
+    seen: list[dict[str, object]] = []
+
+    def enable(section: dict[str, object]) -> dict[str, object]:
+        seen.append(dict(section))
+        return {**section, "enabled": True}
+
+    result = desktop_settings.update_section("wakeword", enable, settings_file)
+
+    assert seen == [{"enabled": False, "unknown": [1, 2]}]
+    assert result == {"enabled": True, "unknown": [1, 2]}
+    stored = json.loads(settings_file.read_text(encoding="utf-8"))
+    assert stored == {
+        "servers": [{"host": "a.lan", "port": 8420}],
+        "future": {"kept": True},
+        "wakeword": {"enabled": True, "unknown": [1, 2]},
+    }
+
+
+@pytest.mark.parametrize("stored", [None, ["not", "an", "object"]])
+def test_update_section_starts_from_empty_for_missing_or_non_object_sections(
+    tmp_path: Path, stored: object
+) -> None:
+    settings_file = tmp_path / "settings.json"
+    content: dict[str, object] = {"servers": []}
+    if stored is not None:
+        content["wakeword"] = stored
+    settings_file.write_text(json.dumps(content), encoding="utf-8")
+    seen: list[dict[str, object]] = []
+
+    def enable(section: dict[str, object]) -> dict[str, object]:
+        seen.append(dict(section))
+        return {"enabled": True}
+
+    desktop_settings.update_section("wakeword", enable, settings_file)
+
+    assert seen == [{}]
+    stored_settings = json.loads(settings_file.read_text(encoding="utf-8"))
+    assert stored_settings == {"servers": [], "wakeword": {"enabled": True}}
+
+
+def test_update_section_creates_a_missing_settings_file(tmp_path: Path) -> None:
+    settings_file = tmp_path / "config" / "settings.json"
+
+    desktop_settings.update_section("wakeword", lambda _section: {"enabled": True}, settings_file)
+
+    assert json.loads(settings_file.read_text(encoding="utf-8")) == {"wakeword": {"enabled": True}}
+
+
+def test_update_section_does_not_rewrite_an_unchanged_section(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings_file = tmp_path / "settings.json"
+    settings_file.write_text(json.dumps({"wakeword": {"enabled": True}}), encoding="utf-8")
+    writes: list[object] = []
+    monkeypatch.setattr(
+        desktop_settings,
+        "_write_settings_unlocked",
+        lambda settings, _path: writes.append(settings),
+    )
+
+    result = desktop_settings.update_section("wakeword", lambda section: section, settings_file)
+
+    assert result == {"enabled": True}
+    assert writes == []
+
+
+def test_update_section_writes_nothing_when_the_mutation_raises(tmp_path: Path) -> None:
+    settings_file = tmp_path / "settings.json"
+    original = b'{"wakeword": {"enabled": false}}'
+    settings_file.write_bytes(original)
+
+    def reject(section: dict[str, object]) -> dict[str, object]:
+        section["enabled"] = True  # the stored document must not see this edit
+        raise ValueError("invalid change")
+
+    with pytest.raises(ValueError, match="invalid change"):
+        desktop_settings.update_section("wakeword", reject, settings_file)
+
+    assert settings_file.read_bytes() == original
+
+
+def test_update_section_rejects_a_non_object_result(tmp_path: Path) -> None:
+    settings_file = tmp_path / "settings.json"
+    original = b'{"wakeword": {"enabled": false}}'
+    settings_file.write_bytes(original)
+
+    with pytest.raises(TypeError):
+        desktop_settings.update_section(
+            "wakeword",
+            lambda _section: ["enabled"],  # type: ignore[arg-type,return-value]
+            settings_file,
+        )
+
+    assert settings_file.read_bytes() == original
+
+
+@pytest.mark.parametrize("original", [b"not json", b"[]"])
+def test_update_section_refuses_to_replace_an_unreadable_document(
+    tmp_path: Path, original: bytes
+) -> None:
+    settings_file = tmp_path / "settings.json"
+    settings_file.write_bytes(original)
+    calls: list[dict[str, object]] = []
+
+    def enable(section: dict[str, object]) -> dict[str, object]:
+        calls.append(section)
+        return {"enabled": True}
+
+    with pytest.raises(ValueError):
+        desktop_settings.update_section("wakeword", enable, settings_file)
+
+    assert calls == []
+    assert settings_file.read_bytes() == original
+
+
+def test_update_section_serializes_with_other_section_writers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings_file = tmp_path / "settings.json"
+    settings_file.write_text(json.dumps({"wakeword": {"enabled": False}}), encoding="utf-8")
+    mutation_started = threading.Event()
+    release_mutation = threading.Event()
+    server_write_finished = threading.Event()
+
+    def slow_enable(section: dict[str, object]) -> dict[str, object]:
+        mutation_started.set()
+        assert release_mutation.wait(timeout=2)
+        return {**section, "enabled": True}
+
+    voice_thread = threading.Thread(
+        target=desktop_settings.update_section,
+        args=("wakeword", slow_enable, settings_file),
+    )
+
+    def write_servers() -> None:
+        desktop_settings.write_servers([{"host": "new.lan", "port": 9000}], settings_file)
+        server_write_finished.set()
+
+    server_thread = threading.Thread(target=write_servers)
+    voice_thread.start()
+    assert mutation_started.wait(timeout=2)
+    server_thread.start()
+
+    try:
+        assert not server_write_finished.wait(timeout=0.1)
+    finally:
+        release_mutation.set()
+        voice_thread.join(timeout=2)
+        server_thread.join(timeout=2)
+
+    assert not voice_thread.is_alive()
+    assert not server_thread.is_alive()
+    stored = json.loads(settings_file.read_text(encoding="utf-8"))
+    assert stored == {
+        "servers": [{"host": "new.lan", "port": 9000}],
+        "wakeword": {"enabled": True},
+    }
