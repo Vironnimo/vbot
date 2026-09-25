@@ -28,6 +28,26 @@ describe('chatTimelinePresentation', () => {
     ).toBe('-F call( src');
   });
 
+  it('summarizes named search fields before extra ripgrep arguments', () => {
+    expect(
+      toolArgumentSummary({
+        name: 'search_files',
+        arguments: {
+          pattern: 'load',
+          path: ['src', 'docs'],
+          glob: '*.py',
+          args: ['-i'],
+        },
+      }),
+    ).toBe('load · src, docs · *.py · -i');
+    expect(
+      toolArgumentSummary({
+        name: 'search_files',
+        arguments: { glob: '*.md' },
+      }),
+    ).toBe('*.md');
+  });
+
   it('summarizes search pattern arrays and retains continuation metadata', () => {
     expect(
       toolArgumentSummary({

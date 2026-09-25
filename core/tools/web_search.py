@@ -61,9 +61,6 @@ _LOGGER = get_logger("tools.web_search")
 _RECENCY_VALUES = ("day", "month", "year")
 
 
-_ALLOWED_ARGUMENTS = frozenset({"query", "domains", "count", "page", "recency"})
-
-
 WEB_SEARCH_TOOL_NAME = "web_search"
 
 
@@ -218,11 +215,6 @@ async def web_search_handler(
 ) -> JsonObject:
     """Handle a web_search tool call in the stable vBot envelope."""
     del context
-
-    unknown_arguments = sorted(set(arguments) - _ALLOWED_ARGUMENTS)
-    if unknown_arguments:
-        names = ", ".join(unknown_arguments)
-        return tool_failure("validation_error", f"Unknown argument(s): {names}", retryable=False)
 
     query = _normalize_text(arguments.get("query"))
     if not query:

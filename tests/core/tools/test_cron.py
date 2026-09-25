@@ -718,7 +718,8 @@ def test_invalid_operation_returns_contract_failure(tmp_path: Path) -> None:
     error = cast(dict[str, Any], result["error"])
     assert error["code"] == "invalid_arguments"
     assert error["retryable"] is False
-    assert "[enum]" in error["message"]
+    assert '"action" must be one of "create", "list"' in error["message"]
+    assert 'received "invalid"' in error["message"]
 
 
 def test_multiple_top_level_operation_objects_are_rejected(tmp_path: Path) -> None:
@@ -779,8 +780,7 @@ def test_removed_agent_fields_are_rejected(
     error = cast(dict[str, Any], result["error"])
     assert error["code"] == "invalid_arguments"
     assert error["retryable"] is False
-    assert "does not accept" in error["message"]
-    assert removed_field in error["message"]
+    assert f'"{removed_field}" is not a parameter' in error["message"]
     cron_service.create_job.assert_not_called()
 
 

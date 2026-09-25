@@ -164,6 +164,33 @@ async def test_windows_shell_eof_and_command_pipelines(manager, tmp_path, comman
 
 
 @pytest.mark.asyncio
+@pytest.mark.skipif(sys.platform != "win32", reason="PowerShell exit status")
+@pytest.mark.parametrize(
+    "command, exit_code",
+    [
+        ("python -c 'raise SystemExit(5)'", 5),
+        ("cmd /c exit 4", 4),
+        ("python -c 'raise SystemExit(5)'; Write-Output after", 0),
+        ("Get-Item does-not-exist", 1),
+        ("exit 7", 7),
+        ("Write-Output ok", 0),
+        ('param($code = 3) python -c "raise SystemExit($code)"', 3),
+    ],
+)
+async def test_windows_shell_reports_the_last_program_exit_code(
+    manager, tmp_path, monkeypatch, command, exit_code
+):
+    monkeypatch.setattr(bash_environment, "_cached_shell_env", dict(os.environ))
+
+    result = await asyncio.wait_for(
+        bash_handler(make_context(tmp_path), {"command": command}, manager), 30
+    )
+
+    assert result["ok"] is True
+    assert result["data"]["exit_code"] == exit_code
+
+
+@pytest.mark.asyncio
 @pytest.mark.skipif(sys.platform != "win32", reason="PowerShell console code page")
 @pytest.mark.parametrize(
     "command, expected",

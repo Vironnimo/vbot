@@ -18,26 +18,26 @@ The owner opts into call-field formatting and known argument wrappers. Identifie
 
 ### `ha_list_entities`
 
-- `GET /api/states`. Model-facing schema: open flat object with optional non-empty string `domain` and optional non-empty string `area`; omission includes every domain or area, and the handler rejects unknown fields and invalid values.
+- `GET /api/states`. Model-facing schema: open flat object with optional non-empty string `domain` and optional non-empty string `area`; omission includes every domain or area; unknown fields fail at dispatch and the handler rejects invalid values.
 - Runtime repair normalizes domain capitalization and surrounding whitespace before validation.
 - `domain` filters by `entity_id` prefix; `area` filters by `friendly_name` substring (case-insensitive).
 - Returns `{ count, entities: [{ entity_id, state, friendly_name }] }`.
 
 ### `ha_get_state`
 
-- `GET /api/states/{entity_id}`. Model-facing schema: open flat object with required `entity_id` (validated `^[a-z_][a-z0-9_]*\.[a-z0-9_]+$`); the handler rejects unknown fields and invalid values.
+- `GET /api/states/{entity_id}`. Model-facing schema: open flat object with required `entity_id` (validated `^[a-z_][a-z0-9_]*\.[a-z0-9_]+$`); unknown fields fail at dispatch and the handler rejects invalid values.
 - Runtime repair normalizes entity identifier capitalization and surrounding whitespace before target validation.
 - Returns `{ entity_id, state, attributes, last_changed, last_updated }`. Display summary field: `entity_id`.
 
 ### `ha_list_services`
 
-- `GET /api/services`. Model-facing schema: open flat object with optional non-empty string `domain`; omission includes every domain, and the handler rejects unknown fields and invalid values.
+- `GET /api/services`. Model-facing schema: open flat object with optional non-empty string `domain`; omission includes every domain; unknown fields fail at dispatch and the handler rejects invalid values.
 - Runtime repair normalizes domain capitalization and surrounding whitespace before validation.
 - Returns `{ count, domains: [{ domain, services: { name: { description, fields } } }] }`.
 
 ### `ha_call_service`
 
-- `POST /api/services/{domain}/{service}`. Model-facing schema: open flat object with required non-empty strings `domain` and `service`, optional non-empty string `entity_id`, and optional open `data` object; the handler rejects unknown top-level fields and invalid values.
+- `POST /api/services/{domain}/{service}`. Model-facing schema: open flat object with required non-empty strings `domain` and `service`, optional non-empty string `entity_id`, and optional open `data` object; unknown top-level fields fail at dispatch and the handler rejects invalid values.
 - `domain`/`service` validated `^[a-z][a-z0-9_]*$`; `entity_id` validated with the entity regex when provided. Display summary fields: `domain`, `service`, `entity_id`.
 - The preferred target is top-level `entity_id`. Runtime repair lifts `data.entity_id` to that field before the same target validation, accepts matching duplicates, and rejects contradictory targets before HTTP. Domain/service/entity identifiers accept surrounding whitespace and capitalization; a qualified service such as `light.turn_on` supplies its domain unless an explicit domain contradicts it.
 - Blocked domains: `shell_command`, `command_line`, `python_script`, `pyscript`, `hassio`, `rest_command`.
@@ -72,7 +72,7 @@ All four tools share `ready=lambda: bool(api.resolve_credential("HASS_TOKEN").st
 | Condition | Code |
 |---|---|
 | Unrepairable schema mismatch or contradictory target/service fields | `invalid_arguments` |
-| Handler validation (unknown arguments or other invalid intended input) | `validation_error` |
+| Handler validation (invalid intended input; unknown arguments already fail at dispatch with `invalid_arguments`) | `validation_error` |
 | Blocked domain | `blocked_domain` |
 | HA HTTP error or unreachable | `home_assistant_error` |
 | Empty token at call time (handler guard) | `home_assistant_error` ("HASS_TOKEN is not configured") |
@@ -82,7 +82,7 @@ Retry signalling (inside `error`): an exhausted retryable status / transport err
 ## Constraints & Gotchas
 
 - `entity_id`, `domain`, and `service` are regex-validated before URL construction - prevents path traversal; the `ha_call_service` domain blocklist stops code-execution / SSRF domains.
-- Every handler independently rejects unknown keys and wrong optional-field types before issuing an HTTP request; the runtime does not assume the Provider enforced JSON Schema.
+- Dispatch rejects unknown keys and every handler rejects wrong optional-field types before issuing an HTTP request; the runtime does not assume the Provider enforced JSON Schema.
 - The token is **never logged** (`_ha_request` logs status/detail, never the bearer value).
 - The handler guard (empty token -> `home_assistant_error`) is defense in depth behind the dispatch-time readiness check; it fires without attempting any request.
 - Tests live in `tests/resources/extensions/test_homeassistant.py` (registration/live configuration), `test_homeassistant_entities.py`, `test_homeassistant_services.py`, and `test_homeassistant_retry.py`, loaded through the real bundled root. `resources/` is not a mirrored quality-runner package, so a scoped gate must name these suites or their test directory explicitly.

@@ -16,8 +16,11 @@ from core.projects import (
     ResolutionAgentNotFoundError,
     ResolutionProjectNotFoundError,
 )
-from core.subagents.subagents import _handle_subagent as _handle_subagent_impl
+from core.subagents.subagents import SubAgentCoordinator
 from core.subagents.tracker import SubAgentBatchTracker
+from core.tools.contracts import ToolContractError
+from core.tools.subagent import register_subagent_tools
+from core.tools.tools import ToolRegistry
 from tests.core.subagents.subagents_test_support import (
     FakeRunManager,
     JsonObject,
@@ -316,26 +319,79 @@ async def test_identity_subagent_session_unchanged_and_link_project_is_none(
 async def test_subagent_actions_reject_unknown_arguments(tmp_path: Path, action: str) -> None:
     manager = FakeRunManager()
     runtime = make_runtime(tmp_path, manager)
-    tracker = SubAgentBatchTracker(RecordingTriggerService())
-    context = make_context()
+    trigger_service = RecordingTriggerService()
+    registry = ToolRegistry()
+    register_subagent_tools(
+        registry,
+        SubAgentCoordinator(
+            runtime, trigger_service, batch_tracker=SubAgentBatchTracker(trigger_service)
+        ),
+    )
     arguments: JsonObject = {"action": action, "unexpected": True}
     if action == "run":
         arguments["content"] = "spawn"
     else:
         arguments["id"] = "sub_test"
 
-    result = await _handle_subagent_impl(
-        context,
-        arguments,
-        runtime=runtime,
-        batch_tracker=tracker,
+    with pytest.raises(ToolContractError, match='"unexpected" is not a parameter'):
+        await registry.dispatch(make_context(), arguments)
+
+    assert manager.started == []
+
+
+@pytest.mark.parametrize(
+    ("arguments", "message"),
+    [
+        (
+            {"action": "status", "content": "spawn"},
+            'Action "status" takes only "id"; remove "content".',
+        ),
+        (
+            {"action": "cancel", "id": "sub_test", "agent_id": "worker"},
+            'Action "cancel" takes only "id"; remove "agent_id".',
+        ),
+        (
+            {"action": "run", "content": "spawn", "id": "sub_test"},
+            'Action "run" does not take "id"; remove it.',
+        ),
+    ],
+)
+async def test_subagent_actions_reject_fields_they_would_ignore(
+    tmp_path: Path, arguments: JsonObject, message: str
+) -> None:
+    manager = FakeRunManager()
+    runtime = make_runtime(tmp_path, manager)
+    trigger_service = RecordingTriggerService()
+    registry = ToolRegistry()
+    register_subagent_tools(
+        registry,
+        SubAgentCoordinator(
+            runtime, trigger_service, batch_tracker=SubAgentBatchTracker(trigger_service)
+        ),
     )
 
-    assert result["ok"] is False
-    assert result["error"] == {
-        "code": "invalid_arguments",
-        "message": "Unknown argument(s): unexpected",
-    }
+    result = await registry.dispatch(make_context(), arguments)
+
+    assert result["error"]["code"] == "invalid_arguments"
+    assert result["error"]["message"].startswith(message)
+    assert manager.started == []
+
+
+async def test_subagent_drops_an_empty_argument_that_is_not_a_parameter(tmp_path: Path) -> None:
+    manager = FakeRunManager()
+    runtime = make_runtime(tmp_path, manager)
+    trigger_service = RecordingTriggerService()
+    registry = ToolRegistry()
+    register_subagent_tools(
+        registry,
+        SubAgentCoordinator(
+            runtime, trigger_service, batch_tracker=SubAgentBatchTracker(trigger_service)
+        ),
+    )
+
+    result = await registry.dispatch(make_context(), {"action": "status", "ids": []})
+
+    assert result == {"ok": True, "error": None, "data": {"subagents": []}, "artifacts": []}
     assert manager.started == []
 
 

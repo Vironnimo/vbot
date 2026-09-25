@@ -8,7 +8,7 @@ allowed-tools: Bash(playwright-cli:*) Bash(npx:*) Bash(npm:*)
 
 ## Using this Skill in vBot
 
-Run CLI commands through `bash` on the server host. Check `playwright-cli --version`; these instructions accompany `@playwright/cli` 0.1.19. If the CLI is missing or older, follow Installation below. Node.js 18 or newer and npm are required for installation. A missing browser executable requires the browser installation command reported by the CLI. Headed windows and the annotation dashboard appear on the server host; use headless operation when that host has no graphical display.
+Run CLI commands through the shell Tool on the server host. Check `playwright-cli --version`; these instructions accompany `@playwright/cli` 0.1.19. If the CLI is missing or older, follow Installation below. Node.js 18 or newer and npm are required for installation. A missing browser executable requires the browser installation command reported by the CLI. Headed windows and the annotation dashboard appear on the server host; use headless operation when that host has no graphical display.
 
 Choose a unique browser session name for the current task and pass `-s=<name>` on every browser command, including the examples below. Reuse that name across calls. Close only your named session when finished; detach from browsers you attached to. Use `close-all`, `kill-all`, or profile deletion only when the user's task explicitly covers those other sessions or data.
 

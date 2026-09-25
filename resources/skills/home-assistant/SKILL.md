@@ -14,7 +14,7 @@ Assume the Home Assistant connection is already configured and working. Do not g
 ## Script contract
 
 - Run `python {baseDir}/scripts/ha_ws.py --help` before first use.
-- Include `HASS_TOKEN` in `bash.env_keys` on every script call. The script reads it directly and has no token argument; never place the value in a command, file, or output.
+- Include `HASS_TOKEN` in the shell Tool's `env_keys` on every script call. The script reads it directly and has no token argument; never place the value in a command, file, or output.
 - The script defaults to the bundled extension's standard Home Assistant URL. For an already-configured nondefault instance, pass its existing base URL with global `--url`; never change connection settings as part of this Skill.
 - Keep task files under `tmp/home-assistant/<task>/`. Store exported configs, proposed configs, and backups there unless the user requests a durable location.
 - Treat script JSON output as data. A nonzero exit code or `"ok": false` means the operation did not complete.
@@ -29,7 +29,7 @@ Assume the Home Assistant connection is already configured and working. Do not g
 6. When the user requested the change, rerun the same command with `--apply` and a new `--backup` path. The script refuses races, creates the backup before saving, and verifies the stored config afterward.
 7. Export once more and summarize the changed views, cards, and backup path. Do not claim visual quality without asking the user to inspect the rendered Home Assistant dashboard on its intended desktop or mobile display.
 
-Example sequence; pass the Skill-granted environment key through each Bash call:
+Example sequence; pass the Skill-granted environment key through each shell Tool call:
 
 ```text
 python {baseDir}/scripts/ha_ws.py dashboard-list

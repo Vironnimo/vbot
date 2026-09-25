@@ -485,6 +485,11 @@ OPTIONS = (
         "Already provided by this Tool; accepted without changing results.",
         content=True,
     ),
+    _option(
+        "-r -R --recursive -I",
+        "satisfied",
+        "Recursive search that skips binary files is the default; accepted without changes.",
+    ),
     _option("--no-config", "satisfied", "Ambient ripgrep configuration is always disabled."),
     _option(
         "--color",
@@ -676,8 +681,10 @@ def size_bytes(value: str) -> int:
 
 def help_text() -> str:
     lines = [
-        "Pass one ripgrep argument per args item; no shell quoting or expansion.",
-        "Content: ['-w', 'TODO', 'src']. Literal: ['-F', 'call(', 'src'].",
+        "Fields: pattern (regex; omit it to list files), path, glob, output "
+        "(content, files, count), context, limit, offset.",
+        "args adds ripgrep arguments, one per item; no shell quoting or expansion.",
+        "args alone also works: ['-w', 'TODO', 'src']. Literal: ['-F', 'call(', 'src'].",
         "Repeat -e/--regexp for OR patterns. -- ends option parsing.",
         "Paths: ['--files', '-g', '*.py', 'src']; --dirs finds directories; --entries finds both.",
         "Repeated flags follow their documented order; repeated globs are ordered filters.",
@@ -718,7 +725,7 @@ def help_text() -> str:
     lines.extend(
         [
             "\nExamples:",
-            '{"args":["-w","-g","*.py","-C","2","run","src","tests"]}',
+            '{"pattern":"run","path":["src","tests"],"glob":"*.py","context":2,"args":["-w"]}',
             '{"args":["--dirs","-g","migrations"]}',
             '{"args":["-F","-i","-l","-u","error"]}',
         ]

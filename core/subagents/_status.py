@@ -173,11 +173,6 @@ async def _handle_subagent_cancel(
     batch_tracker: SubAgentBatchTracker,
 ) -> JsonObject:
     """Cancel one exact owned child through its stable public work id."""
-    unknown_arguments = set(arguments) - {"action", "id"}
-    if unknown_arguments:
-        names = ", ".join(sorted(unknown_arguments))
-        return tool_failure("invalid_arguments", f"Unknown argument(s): {names}")
-
     try:
         work_id = required_string(arguments.get("id"), field_name="id")
     except ToolArgumentError as error:
@@ -362,11 +357,6 @@ async def _handle_subagent_status(
     runtime: RuntimeServices,
     batch_tracker: SubAgentBatchTracker,
 ) -> JsonObject:
-    unknown_arguments = set(arguments) - {"action", "id"}
-    if unknown_arguments:
-        names = ", ".join(sorted(unknown_arguments))
-        return tool_failure("invalid_arguments", f"Unknown argument(s): {names}")
-
     if "id" not in arguments:
         entries = batch_tracker.owned_entries(
             context.agent_id, context.session_id, context.project_id

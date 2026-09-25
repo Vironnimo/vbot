@@ -8,7 +8,7 @@ If the available Tools cannot retrieve missing text, use only the evidence you c
 
 `vbot session list <agent-id> --all` lists an Agent's Sessions; use `<agent-id>@<project-id>` for a Project Agent. For direct reads, run `vbot home` on the server machine and use its exact `data_dir`. The database is `<data_dir>/sessions.db`. Do not infer a remote server's data directory from a local CLI invocation.
 
-The following Python snippets use only the standard library. Run the setup and the relevant query in one script through Bash. Replace the example path and identifiers with the actual target. Open read-only: never write the database or make a copy just to search it.
+The following Python snippets use only the standard library. Run the setup and the relevant query in one script through the shell Tool. Replace the example path and identifiers with the actual target. Open read-only: never write the database or make a copy just to search it.
 
 ```python
 import json

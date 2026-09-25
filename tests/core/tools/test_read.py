@@ -23,6 +23,7 @@ from core.tools import (
     ChangeTracker,
     FileReadState,
     ToolContext,
+    ToolContractError,
     ToolRegistry,
     is_tool_result_envelope,
     make_read_handler,
@@ -272,18 +273,28 @@ async def test_read_returns_failure_envelope_for_missing_path_argument(tmp_path:
 
 
 @pytest.mark.asyncio
-async def test_read_returns_failure_envelope_for_unknown_argument(tmp_path: Path) -> None:
+async def test_read_rejects_unknown_argument_before_reading(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    workspace.joinpath("notes.txt").write_bytes(b"hello\n")
-
-    result = await make_handler()(
-        make_context(workspace),
-        {"path": "notes.txt", "description": "display-only label"},
+    target = workspace / "notes.txt"
+    target.write_bytes(b"hello\n")
+    file_state = FileReadState()
+    registry = ToolRegistry()
+    register_read_tool(
+        registry,
+        attachment_store=_FakeAttachmentStore(),
+        speech_service=_FakeSpeech(),
+        file_state=file_state,
+        speech_max_size_bytes=20_971_520,
     )
 
-    error = assert_failure_envelope(result, "invalid_arguments")
-    assert isinstance(error["message"], str)
+    with pytest.raises(ToolContractError, match='"description" is not a parameter'):
+        await registry.dispatch(
+            make_context(workspace),
+            {"path": "notes.txt", "description": "display-only label"},
+        )
+
+    assert file_state.check_stale("session-1", target.resolve()) is StaleReason.NEVER_READ
 
 
 @pytest.mark.asyncio

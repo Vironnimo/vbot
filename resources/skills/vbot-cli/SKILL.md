@@ -5,7 +5,7 @@ description: "Configure and operate vBot: Agents, Projects, Sessions, Settings, 
 
 # vBot CLI
 
-Use `vbot` through Bash to inspect and configure the application. The server runs Agents and owns the state used by the CLI, WebUI, Desktop, and Channels. A saved configuration change affects that server instance.
+Use `vbot` through the shell Tool to inspect and configure the application. The server runs Agents and owns the state used by the CLI, WebUI, Desktop, and Channels. A saved configuration change affects that server instance.
 
 Choose the area and action first: `vbot <area> <action> [target] [options]`. Related actions can be grouped, for example `vbot project override set`, `vbot channel token set`, and `vbot skill file write`. There is no fixed word count. Resource ids are positional; flags supply options and values. Use the commands shown by help instead of inventing action flags such as `--restart`.
 

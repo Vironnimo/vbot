@@ -7,6 +7,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from jsonschema import Draft202012Validator
+
 from core.tools._tool_context import ToolHandler
 from core.tools._tool_display import ToolDisplay
 from core.tools.availability import (
@@ -154,6 +156,11 @@ class Tool:
     # Coordinators wait on separately bounded child work and must not hold its slots.
     execution_slot_required: bool = True
     open_input_schema: bool = False
+    # Root parameters the handler accepts without offering them to the Model,
+    # such as options copied from older conversation history, mapped to their
+    # schemas. Dispatch validates them like advertised parameters but never
+    # lists them in Provider definitions or argument errors.
+    unadvertised_parameters: JsonObject | None = None
     # Independently executed batches may need malformed items to reach the
     # handler so valid siblings still run. The handler then owns complete root
     # and per-item validation; the precise Provider schema remains unchanged.
@@ -195,9 +202,31 @@ class Tool:
             parallel_safe=self.parallel_safe,
             require_closed_input=not self.open_input_schema,
         )
+        object.__setattr__(
+            self,
+            "unadvertised_parameters",
+            _checked_unadvertised_parameters(self.unadvertised_parameters, contract.input_schema),
+        )
         object.__setattr__(self, "parameters", copy.deepcopy(contract.input_schema))
         object.__setattr__(self, "result_schema", copy.deepcopy(contract.result_schema))
         object.__setattr__(self, "contract", contract)
+
+
+def _checked_unadvertised_parameters(
+    parameters: JsonObject | None, input_schema: JsonObject
+) -> JsonObject | None:
+    if not parameters:
+        return None
+    if not isinstance(parameters, dict):
+        raise ValueError("unadvertised_parameters must map parameter names to schemas")
+    advertised = input_schema.get("properties", {})
+    for name, schema in parameters.items():
+        if not isinstance(name, str) or not name or not isinstance(schema, dict):
+            raise ValueError("unadvertised_parameters must map parameter names to schemas")
+        if name in advertised:
+            raise ValueError(f"unadvertised parameter is also advertised: {name}")
+        Draft202012Validator.check_schema(schema)
+    return copy.deepcopy(parameters)
 
 
 def tool_is_ready(tool: Tool) -> bool:

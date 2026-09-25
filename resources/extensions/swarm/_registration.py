@@ -49,7 +49,7 @@ def session_tool_catalog() -> list[Json]:
 
 
 def register(api: ExtensionAPI) -> None:
-    from .extension import SwarmExtension, _normalize_arguments
+    from .extension import UNADVERTISED_PARAMETERS, SwarmExtension, _normalize_arguments
 
     service = SwarmExtension(api)
     api.operations.startup.append(service.start)
@@ -60,6 +60,7 @@ def register(api: ExtensionAPI) -> None:
         BOARD_PARAMETERS,
         service.board,
         argument_normalizer=lambda arguments: _normalize_arguments("swarm_board", arguments),
+        unadvertised_parameters=UNADVERTISED_PARAMETERS["swarm_board"],
     )
     api.register_session_tool(
         "swarm_inbox",
@@ -67,6 +68,7 @@ def register(api: ExtensionAPI) -> None:
         INBOX_PARAMETERS,
         service.inbox,
         argument_normalizer=lambda arguments: _normalize_arguments("swarm_inbox", arguments),
+        unadvertised_parameters=UNADVERTISED_PARAMETERS["swarm_inbox"],
     )
     api.register_session_tool(
         "swarm_state",
@@ -75,6 +77,7 @@ def register(api: ExtensionAPI) -> None:
         service.state,
         parallel_safe=False,
         argument_normalizer=lambda arguments: _normalize_arguments("swarm_state", arguments),
+        unadvertised_parameters=UNADVERTISED_PARAMETERS["swarm_state"],
     )
     api.register_session_tool(
         "swarm_wiki",
@@ -82,6 +85,7 @@ def register(api: ExtensionAPI) -> None:
         WIKI_PARAMETERS,
         service.wiki,
         argument_normalizer=lambda arguments: _normalize_arguments("swarm_wiki", arguments),
+        unadvertised_parameters=UNADVERTISED_PARAMETERS["swarm_wiki"],
     )
     api.register_session_runtime(
         before_request=service._before_request,

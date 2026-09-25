@@ -22,9 +22,7 @@ def _web_fetch_scenario(case_name: str) -> ProbeScenario:
     url = "https://example.com/provider-tool-probe"
     web_fetch_arguments: dict[str, dict[str, Any]] = {
         "default": {"url": url},
-        "markdown": {"url": url, "output": "markdown"},
-        "text": {"url": url, "output": "text"},
-        "raw": {"url": url, "output": "raw"},
+        "find": {"url": url, "find": "provider tool probe"},
     }
     expected_arguments = web_fetch_arguments[case_name]
     rendered_arguments = json.dumps(expected_arguments, separators=(",", ":"))

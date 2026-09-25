@@ -19,6 +19,7 @@ from core.providers.adapter import (
     canonical_tool_result_is_error,
     normalize_tool_call_candidates,
     tool_result_content_blocks,
+    tool_result_text,
 )
 from core.providers.errors import ProviderError
 from core.providers.reasoning import (
@@ -115,10 +116,11 @@ def _to_anthropic_tool_result_message(blocks: list[dict[str, Any]]) -> dict[str,
 
 def _to_anthropic_tool_result_block(message: dict[str, Any]) -> dict[str, Any]:
     rich_content = tool_result_content_blocks(message)
-    content: str | list[dict[str, Any]] = message["content"]
+    text = tool_result_text(message["content"])
+    content: str | list[dict[str, Any]] = text
     if rich_content:
         content = [
-            {"type": "text", "text": message["content"]},
+            {"type": "text", "text": text},
             *[_to_anthropic_user_content_block(block) for block in rich_content],
         ]
     block: dict[str, Any] = {

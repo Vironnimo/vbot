@@ -10,6 +10,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from core.providers._tool_result_text import tool_result_envelope, tool_result_text
+
 JsonObject = dict[str, Any]
 
 _ALPHANUMERIC_TOOL_CALL_ID_CHARACTERS = frozenset(string.ascii_letters + string.digits)
@@ -19,8 +21,6 @@ _DASH_UNDERSCORE_TOOL_CALL_ID_CHARACTERS = frozenset(string.ascii_letters + stri
 _TOOL_CALL_ID_HASH_LENGTH = 12
 
 _RESPONSES_OUTPUT_META_KEY = "response_output"
-
-_TOOL_RESULT_ENVELOPE_KEYS = frozenset({"ok", "error", "data", "artifacts"})
 
 TOOL_RESULT_CONTENT_BLOCKS_FIELD = "tool_result_content"
 
@@ -287,21 +287,8 @@ def canonical_tool_result_is_error(message: Mapping[str, Any]) -> bool:
 
     if message.get("role") != "tool":
         return False
-    content = message.get("content")
-    if not isinstance(content, str):
-        return False
-    try:
-        result = json.loads(content)
-    except (TypeError, ValueError):
-        return False
-    return (
-        isinstance(result, Mapping)
-        and frozenset(result) == _TOOL_RESULT_ENVELOPE_KEYS
-        and result.get("ok") is False
-        and result.get("data") is None
-        and isinstance(result.get("error"), Mapping)
-        and isinstance(result.get("artifacts"), list)
-    )
+    envelope = tool_result_envelope(message.get("content"))
+    return envelope is not None and envelope["ok"] is False
 
 
 def tool_result_content_blocks(message: Mapping[str, Any]) -> list[JsonObject]:
@@ -324,7 +311,8 @@ def project_tool_result_content_fallbacks(
 ) -> list[JsonObject]:
     """Project rich Tool Results onto text-only Tool wires.
 
-    Supplemental text remains part of its correlated Tool Result. Media blocks
+    Each Result's content becomes its Model-facing text, and supplemental text
+    remains part of its correlated Tool Result. Media blocks
     are emitted in one request-only user message after the complete consecutive
     Tool Result batch, preserving Provider tool-cycle ordering without writing
     a synthetic user message to the canonical Session.
@@ -346,6 +334,7 @@ def project_tool_result_content_fallbacks(
 
         projected_message = dict(message)
         projected_message.pop(TOOL_RESULT_CONTENT_BLOCKS_FIELD, None)
+        projected_message["content"] = tool_result_text(message.get("content"))
         supplemental_text: list[str] = []
         for block in tool_result_content_blocks(message):
             block_type = block.get("type")

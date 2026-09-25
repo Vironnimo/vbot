@@ -858,10 +858,6 @@ def _shape_success_for_mode(
 
 
 def _validate_arguments(arguments: JsonObject) -> None:
-    allowed = set(WEB_FETCH_TOOL_PARAMETERS["properties"]) | set(_LEGACY_PARAMETERS)
-    unknown = set(arguments) - allowed
-    if unknown:
-        raise ValueError("Unknown argument(s): " + ", ".join(sorted(unknown)))
     if "url" not in arguments and "ref" not in arguments:
         raise ValueError("Supply url for a fresh fetch or ref for a saved page.")
     for key in ("url", "ref", "find"):
@@ -1040,6 +1036,7 @@ def register_web_fetch_tool(
         ),
         parallel_safe=True,
         open_input_schema=True,
+        unadvertised_parameters=_LEGACY_PARAMETERS,
         argument_normalizer=_normalize_web_fetch_arguments,
     )
 

@@ -2,7 +2,7 @@
 
 ## Install a Skill
 
-When the user asks you to install a Skill for yourself, use `vbot skill install <source> --scope own`. Use `global` only when the user wants a shared installation. `own` resolves the current Identity Agent from the Run's Bash environment; it also works when that Agent has a Project loaded. Outside such a Run, choose `agent:<id>` using the exact Identity Agent id from `vbot agent list`. Project/Team Agents have no private Skill home: use an explicitly requested global installation, or maintain a repository Skill with the ordinary file Tools.
+When the user asks you to install a Skill for yourself, use `vbot skill install <source> --scope own`. Use `global` only when the user wants a shared installation. `own` resolves the current Identity Agent from the Run's shell environment; it also works when that Agent has a Project loaded. Outside such a Run, choose `agent:<id>` using the exact Identity Agent id from `vbot agent list`. Project/Team Agents have no private Skill home: use an explicitly requested global installation, or maintain a repository Skill with the ordinary file Tools.
 
 ```bash
 vbot skill install https://example.org/downloads/research.skill --scope own

@@ -5,6 +5,7 @@ from __future__ import annotations
 import core.subagents._constants as subagent_constants
 import core.subagents.tracker as subagent_tracker
 from core.runs import RunInterruptedError
+from core.tools.contracts import ToolContractError
 from tests.core.chat.chat_loop_support import build_chat_loop
 
 from .subagent_test_support import (
@@ -18,6 +19,7 @@ from .subagent_test_support import (
     Run,
     SimpleNamespace,
     SubAgentBatchTracker,
+    ToolRegistry,
     _handle_subagent,
     _wait_for_subagent_result,
     activity_path_from_note,
@@ -26,6 +28,7 @@ from .subagent_test_support import (
     make_context,
     make_runtime,
     pytest,
+    register_subagent_tools,
     subagent_module,
     wait_until,
 )
@@ -205,49 +208,28 @@ async def test_subagent_tool_runs_in_foreground_at_depth(tmp_path: Path) -> None
     assert tracker.spawn_count((context.agent_id, context.session_id, context.run_id)) == 0
 
 
-async def test_subagent_tool_rejects_retired_background_true(
+@pytest.mark.parametrize("background", [True, False])
+async def test_subagent_tool_rejects_retired_background(
     tmp_path: Path,
+    background: bool,
 ) -> None:
     manager = FakeRunManager()
     runtime = make_runtime(tmp_path, manager)
-    tracker = SubAgentBatchTracker(RecordingTriggerService())
-    context = make_context(nesting_depth=1)
+    trigger_service = RecordingTriggerService()
+    coordinator = subagent_module.SubAgentCoordinator(
+        runtime, trigger_service, batch_tracker=SubAgentBatchTracker(trigger_service)
+    )
+    registry = ToolRegistry()
+    register_subagent_tools(registry, coordinator)
 
     # Act
-    result = await _handle_subagent(
-        context,
-        {"content": "do work", "background": True},
-        runtime=runtime,
-        batch_tracker=tracker,
-    )
+    with pytest.raises(ToolContractError, match='"background" is not a parameter'):
+        await registry.dispatch(
+            make_context(nesting_depth=1),
+            {"content": "do work", "background": background},
+        )
 
     # Assert
-    assert result["ok"] is False
-    assert result["error"]["code"] == "invalid_arguments"
-    assert "background" in result["error"]["message"]
-    assert manager.started == []
-
-
-async def test_subagent_tool_rejects_retired_background_false(
-    tmp_path: Path,
-) -> None:
-    manager = FakeRunManager()
-    runtime = make_runtime(tmp_path, manager)
-    tracker = SubAgentBatchTracker(RecordingTriggerService())
-    context = make_context(nesting_depth=1)
-
-    # Act
-    result = await _handle_subagent(
-        context,
-        {"content": "do work", "background": False},
-        runtime=runtime,
-        batch_tracker=tracker,
-    )
-
-    # Assert
-    assert result["ok"] is False
-    assert result["error"]["code"] == "invalid_arguments"
-    assert "background" in result["error"]["message"]
     assert manager.started == []
 
 

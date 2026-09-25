@@ -69,25 +69,31 @@ __all__ = ["Json", "SwarmExtension", "register"]
 _LOGGER = get_logger("extensions.swarm")
 
 
+_TOOL_PARAMETERS = (
+    ("swarm_board", BOARD_PARAMETERS, None),
+    ("swarm_inbox", INBOX_PARAMETERS, "receive"),
+    ("swarm_state", STATE_PARAMETERS, "status"),
+    ("swarm_wiki", WIKI_PARAMETERS, None),
+)
+# Accepted without being offered: a Participant's own identity copied from its
+# reminders, and the single action of the inbox and state Tools.
+UNADVERTISED_PARAMETERS: dict[str, Json] = {
+    name: {
+        **({"action": {"type": "string", "enum": [action]}} if action else {}),
+        **{field: {"type": "string"} for field in ("swarm_id", "participant_id", "sender")},
+    }
+    for name, _parameters, action in _TOOL_PARAMETERS
+}
 _RUNTIME_CONTRACTS = {
     name: compile_tool_contract(
         name=name,
         input_schema={
             **parameters,
-            "properties": {
-                **parameters["properties"],
-                **({"action": {"type": "string", "enum": [action]}} if action else {}),
-                **{field: {"type": "string"} for field in ("swarm_id", "participant_id", "sender")},
-            },
+            "properties": {**parameters["properties"], **UNADVERTISED_PARAMETERS[name]},
         },
         require_closed_input=False,
     )
-    for name, parameters, action in (
-        ("swarm_board", BOARD_PARAMETERS, None),
-        ("swarm_inbox", INBOX_PARAMETERS, "receive"),
-        ("swarm_state", STATE_PARAMETERS, "status"),
-        ("swarm_wiki", WIKI_PARAMETERS, None),
-    )
+    for name, parameters, _action in _TOOL_PARAMETERS
 }
 
 

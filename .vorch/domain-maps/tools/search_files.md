@@ -12,32 +12,47 @@ results; these are implementation units of the existing Tools owner, not public 
 The async handler offloads the complete operation through `run_tool_worker`.
 
 The definition directs file/content discovery to this Tool instead of shell
-rg/grep/find/ls. Three advertised fields: required `args`, plus `limit` and `offset`. `args` is a
-ripgrep argument vector, without an executable name, shell quoting, or shell
-expansion. `_search_arguments.py` separates patterns, options, and literal roots:
-content search uses the first operand as its regex and subsequent operands as
-roots; `-F` selects literal matching. Repeated `-e`/`--regexp` patterns are ORed
-and make every operand a root. Options may precede or follow operands; `--` ends
-option parsing. Option values remain literal even when they resemble other flags.
+rg/grep/find/ls. No field is required. Named fields cover the common calls:
+`pattern` (one regex), `path` and `glob` (a string or a list), `output`
+(`content`, `files`, `count`) and `context`; `limit` and `offset` page. `args`
+adds ripgrep arguments, without an executable name, shell quoting, or shell
+expansion, and alone remains a complete ripgrep argument vector.
+`interpret_search_call` in `search_files.py` combines both into one query (the
+provider probes use it too): `pattern` acts like `-e`, `path` entries are trailing
+roots, `glob` entries are leading `-g` filters, and `output`/`context` become
+`-l`/`-c`/`-C` for content searches. `_search_arguments.py` separates patterns,
+options, and literal roots in `args`: without a named pattern or `-e`, the first
+operand is the regex and later operands are roots; `-F` selects literal matching.
+Repeated `-e`/`--regexp` patterns are ORed and make every operand a root. Options
+may precede or follow operands; `--` ends option parsing. Option values remain
+literal even when they resemble other flags.
 
-`--files`, `--dirs`, and `--entries` select file, directory, and combined discovery;
-they are mutually exclusive, all operands are roots, and `-g` filters names.
-Directory discovery includes empty directories. No roots means `effective_cwd`;
-explicit empty roots and stdin reject. Relative roots use that cwd, absolute roots
-are allowed, and symlink spelling stays usable. Omitting name filters lists every
-eligible entry. `--help` and `--type-list` provide on-demand references.
+A call without any pattern or operand lists files (`{}` lists the working
+directory; `glob`/`path` narrow it). `--files`, `--dirs`, and `--entries` select
+file, directory, and combined discovery explicitly; they are mutually exclusive,
+all operands are roots, and `-g` filters names. `output: "count"` and `context`
+without a pattern reject with the correction. Directory discovery includes empty
+directories. No roots means `effective_cwd`; explicit empty roots and stdin reject.
+Relative roots use that cwd, absolute roots are allowed, and symlink spelling stays
+usable. `--help` and `--type-list` provide on-demand references.
 
 Missing explicit roots produce partial results from the remaining requested roots,
 with `missing_paths`, `searched_paths`, warnings and `complete=false`. If every root
-is missing, the call fails with `path_not_found`. Roots are never reinterpreted as
-patterns or replaced by the working directory. Content-search diagnostics explain
-the operand interpretation and repeated `-e` syntax for multiple patterns.
+is missing, the call fails with `path_not_found`. Each missing root names up to five
+existing suggestions from `core/tools/_path_suggestions.py` (shared with `read`):
+a relative path that repeats the end of the working directory, per-component
+spelling repair, and similar sibling names. Suggestions are never applied, and roots
+are never reinterpreted as patterns or replaced by the working directory. When the
+pattern came from the first `args` operand, the diagnostic shows how to search the
+missing operand as another pattern (`pattern "a|b"`, or repeated `-e` with `-F`).
 
 The option catalog in `_search_options.py` owns aliases, arity, repeat/order
 semantics, native forwarding, applicability, validation, and on-demand help.
 This is a bounded search interface, never a shell command or unrestricted native
 passthrough. The old `action`/`patterns`/`paths`/`options`/`kind` fields are no longer
-part of the callable interface; historical persisted rows remain readable.
+part of the advertised interface (`options`, `patterns`, and `paths` are accepted
+as aliases of `args`, `pattern`, and `path`);
+historical persisted rows remain readable.
 Supported families cover case/literal/word/line matching, PCRE2 and multiline,
 contexts, file/count/absence/quiet output, globs and types, ignores, hidden paths,
 symlinks, depth/size/filesystem limits, ordering, encoding, CRLF/NUL, binary
@@ -45,19 +60,38 @@ handling, and diagnostics. Unknown flags, missing operands, or incompatible
 effects reject with a correction. Plain source coordinates and
 formatting are fixed; formatting flags already satisfied by output are accepted.
 
-Common scalar/container encodings and known call wrappers use shared repair;
-`argv` is an unadvertised alias for `args`. Conflicting aliases and unknown effects
-reject. Arguments such as `true`, `false`, `rg`, literal quotes, and shell syntax
-remain search payloads, never executable prefixes or flag booleans. Complete
-content/path examples in the definition teach the canonical first call.
+Common scalar/container encodings and known call wrappers use shared repair.
+The owner normalizer also accepts field names from other search Tools and
+command-line habits when their meaning is exact (`search_files.py` ->
+`_FIELD_ALIASES`, `_translate_flag_fields`): renames such as `query`/`include`/
+`output_mode`/`head_limit`/`argv`, flag fields such as `-i`, `ignore_case`,
+`literal`, `-C`, `-A`, `type`, `exclude`, `recursive: false` and Hermes-style
+`target: "files"`, which become `args` tokens or named fields. Single-letter keys
+keep ripgrep's case (`-c` counts, `-C` is context). A `pattern` list becomes
+repeated `-e`. Unclear values (for example `ignore_case: "maybe"`), conflicting
+aliases, and unknown fields reject. Inside `args`, grep spellings keep their
+meaning: `-r`/`-R`/`-I` are accepted defaults, `--include`/`--exclude`/
+`--exclude-dir` become `-g` filters, and `-E` followed by a non-encoding is grep's
+extended-regex flag rather than ripgrep's encoding option. Arguments such as
+`true`, `false`, `rg`, literal quotes, and shell syntax remain search payloads,
+never executable prefixes or flag booleans. Complete content/listing examples in
+the definition teach the canonical first call.
+
+A glob-shaped pattern (no whitespace or `()|^$+\`, and a leading `*`, a `**`, or
+`/*.`) with no `-F`, glob filter, context, count, or other content-only option lists
+files matching it with a `note`; ripgrep rejects a leading `*` as a regex anyway.
 
 Before shared scalar-array conversion, the owning `args` normalizer recognizes
 double-quoted encoded lists. It preserves regex backslashes omitted from their
 JSON escaping, such as field text `["-e","findMe\("]`. Broken list syntax or malformed
 lists with ambiguous JSON control/unicode escapes require correction. Valid encoded JSON and
 members of actual arrays retain their existing semantics, including literal quotes
-and character classes. It never splits a shell command string into arguments or
-strips quotes from a scalar search pattern.
+and character classes. A scalar `args` string that starts with an option and has
+no backslash splits like a command line, with quotes grouping words
+(`"-F computeDamage( src"`); backslashes would be shell escapes there but regex
+escapes here, so such a string stays one item and the parser asks for one argument
+per item with the split list as example. Other scalar strings stay one pattern,
+and quotes are never stripped from a scalar search pattern.
 
 ## Selection Contract
 
@@ -126,8 +160,12 @@ bounded warnings. Regex errors fail even when selection is empty: the native con
 run reports pattern and option errors itself, and a separate native check against an
 empty file runs only when no candidate file was selected. Native exit 1
 means no match; native diagnostics cannot become a successful empty search.
-Invalid-regex diagnostics suggest `-F` only as an explicit caller correction;
-the Tool never changes regex semantics automatically. A child that exits before
+A rejected regex is retried once, only when nothing was observed and the intent is
+evident (`_search_execution.py` -> `pattern_retry`): look-around or backreferences
+rerun with PCRE2, and an unmatched parenthesis or a repetition operator with nothing
+to repeat is escaped while the rest keeps its regex meaning. The result's `note`
+names the change and `-F`. Anything else, such as an unclosed character class,
+fails with the native diagnostic plus the `-F` correction. A child that exits before
 process monitoring attaches still has its output, diagnostics and exit code drained
 through the original process handle; memory monitoring remains active when available
 and polls the child every 50 ms rather than per output record.
@@ -136,8 +174,9 @@ Independent bounds cover 50 KiB content output, 8 MiB native protocol records,
 bounded pipe queues/stderr, 512 MiB child RSS, candidate storage (128 MiB), one
 million observed entries, glob expansion, and process arguments. Failures and
 exhausted bounds report actionable scope reductions. No persistent search handle
-or candidate database survives the call. UI display includes the argument vector
-and a result-count fact; detail views retain warnings and continuation metadata.
+or candidate database survives the call. UI display shows the named fields and the
+argument vector with a result-count fact; detail views retain warnings and
+continuation metadata.
 
 ## Native Dependency and Permissions
 
@@ -166,8 +205,10 @@ chat rows remain readable.
 
 ## Verification
 
-Primary tests: `tests/core/tools/test_search_files*.py` (including encoded-list,
-literal-payload, conflict, and empty-scope regressions in `test_search_files_recovery.py`),
+Primary tests: `tests/core/tools/test_search_files*.py` (encoded-list,
+literal-payload, conflict, regex-repair, and empty-scope regressions in
+`test_search_files_recovery.py`; named fields, other interfaces' spellings, grep
+habits, command-line strings, and path suggestions in `test_search_files_fields.py`),
 `tests/cli/test_search_runtime.py`, `tests/scripts/converters/persistence_generation_1/test_json_documents.py`,
 `tests/scripts/test_probe_search_files.py`, plus runtime, scanner, Chat, packaging,
 and Tool row integration tests. Tests execute the private native engine.

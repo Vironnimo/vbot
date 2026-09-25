@@ -43,6 +43,7 @@ from core.providers.adapter import (
     TOOL_CALL_REJECTION_FIELD,
     normalize_tool_call_ids,
     tool_result_content_blocks,
+    tool_result_text,
 )
 from core.providers.errors import (
     ProviderError,
@@ -388,7 +389,7 @@ def _tool_message_to_function_output(
     *,
     document_media_types: frozenset[str],
 ) -> dict[str, Any]:
-    output: str | list[dict[str, Any]] = _string_or(message.get("content"), "")
+    output: str | list[dict[str, Any]] = _string_or(tool_result_text(message.get("content")), "")
     rich_content = tool_result_content_blocks(message)
     if rich_content:
         output = [

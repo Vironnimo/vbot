@@ -7,7 +7,7 @@ Pinned memory CRUD over `USER.md` and `MEMORY.md`.
 - Tool name: `memory`
 - Registration: `register_memory_tool(registry, memory_service)`
 - Bound service: `MemoryService`
-- Model-facing schema: one flat object with required `action` (`list`, `add`, `replace`, or `remove`) and `scope`, plus optional sibling fields `content` and `entry_id`; it has no `additionalProperties` keyword or defaults. Descriptions state each field's action dependency, and the handler rejects missing, inapplicable, unknown, or malformed arguments. Known action wrappers and action/scope formatting are repaired by the Tool-owned argument normalizer before handler validation; content remains payload.
+- Model-facing schema: one flat object with required `action` (`list`, `add`, `replace`, or `remove`) and `scope`, plus optional sibling fields `content` and `entry_id`; it has no `additionalProperties` keyword or defaults. Descriptions state each field's action dependency, and dispatch rejects unknown arguments and the handler rejects missing, inapplicable, or malformed ones. Known action wrappers and action/scope formatting are repaired by the Tool-owned argument normalizer before handler validation; content remains payload.
 - `scope`: one of `user` or `agent`.
 - `content`: required for `add` and `replace`.
 - `entry_id`: required for `replace` and `remove`; 1-based id from the current list response.

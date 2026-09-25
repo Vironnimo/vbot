@@ -4,8 +4,11 @@ from dataclasses import replace
 from types import SimpleNamespace
 from typing import cast
 
+import pytest
+
 from core.projects import ProjectStore
 from core.subagents import SubAgentPromptTarget
+from core.tools import model_names
 from core.tools.bash import register_bash_tool
 from core.tools.file_state import FileReadState
 from core.tools.process_manager import ProcessManager
@@ -523,15 +526,10 @@ def test_project_block_lists_projects_only_for_identity_agent_with_tool(
     assert '<project id="vbot"' not in manager.build_system_prompt(config_agent)
 
 
-def test_enabling_tools_list_block_renders_tool_descriptions(
-    workspace: Path, tmp_path: Path
-) -> None:
-    # core:tools_list ships disabled (default_enabled=False + bundled layout off);
-    # a saved layout that switches it on renders the full name/description list —
-    # the opt-in booster for models that attend poorly to native tool schemas.
+def _tools_list_manager(tmp_path: Path) -> SystemPromptManager:
     layout = [LayoutEntry(id="core:tools_list", enabled=True, source="core")]
     store = StubBlockStore(layouts={"default": layout})
-    manager = SystemPromptManager(
+    return SystemPromptManager(
         StubStorage(),
         StubTools(),
         StubSkills([]),
@@ -544,11 +542,30 @@ def test_enabling_tools_list_block_renders_tool_descriptions(
         timezone_name=lambda: "Europe/Berlin",
         block_store=store,
     )
+
+
+def test_enabling_tools_list_block_renders_tool_descriptions(
+    workspace: Path, tmp_path: Path
+) -> None:
+    # core:tools_list ships disabled (default_enabled=False + bundled layout off);
+    # a saved layout that switches it on renders the full name/description list —
+    # the opt-in booster for models that attend poorly to native tool schemas.
     agent = _agent(workspace, allowed_tools=["read_file"])
 
-    prompt = manager.build_system_prompt(agent)
+    prompt = _tools_list_manager(tmp_path).build_system_prompt(agent)
 
     assert "- read_file: Read a workspace file" in prompt
+
+
+def test_tools_list_block_names_tools_as_the_model_sees_them(
+    workspace: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(model_names, "_MODEL_NAMES", {"read_file": "host_read"})
+    agent = _agent(workspace, allowed_tools=["read_file"])
+
+    prompt = _tools_list_manager(tmp_path).build_system_prompt(agent)
+
+    assert "- host_read: Read a workspace file" in prompt
 
 
 def test_session_grant_drives_provider_and_enabled_live_tool_list(

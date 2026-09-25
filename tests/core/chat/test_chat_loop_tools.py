@@ -24,6 +24,8 @@ from core.tools import (
     ToolAccess,
     ToolContext,
     ToolRegistry,
+    model_names,
+    model_tool_name,
     register_history_tool,
     tool_success,
 )
@@ -105,6 +107,51 @@ async def test_sibling_tool_results_use_one_ordered_session_batch(
         "first",
         "second",
     ]
+
+
+@pytest.mark.asyncio
+async def test_provider_requests_use_model_tool_names_while_the_session_keeps_registry_names(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(model_names, "_MODEL_NAMES", {"probe": "host_probe"})
+    monkeypatch.setattr(model_names, "_REGISTRY_NAMES", {"host_probe": "probe"})
+    dispatched: list[str] = []
+
+    def probe(context: ToolContext, _arguments: JsonObject) -> JsonObject:
+        dispatched.append(context.tool_name)
+        return tool_success({"id": context.tool_call_id})
+
+    tools = ToolRegistry()
+    tools.register("probe", "Return the probe id.", {"type": "object"}, probe)
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["probe"])
+    adapter = StubAdapter(
+        [
+            {
+                "content": None,
+                "tool_calls": [{"id": "first", "name": "host_probe", "arguments": {}}],
+            },
+            {"content": "done", "tool_calls": None},
+        ]
+    )
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
+
+    await build_chat_loop(runtime).send("coder", "probe", session_id="session-one")
+
+    assert dispatched == ["probe"]
+    persisted = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
+    assert [call.name for message in persisted for call in message.tool_calls or []] == ["probe"]
+    follow_up = adapter.requests[1]
+    assert [tool["name"] for tool in follow_up["kwargs"]["tools"]] == ["host_probe"]
+    wire_calls = [
+        call["name"]
+        for message in follow_up["messages"]
+        for call in message.get("tool_calls") or []
+    ]
+    assert wire_calls == ["host_probe"]
+    assert [
+        message.get("name") for message in follow_up["messages"] if message["role"] == "tool"
+    ] == ["host_probe"]
 
 
 @pytest.mark.asyncio
@@ -202,13 +249,14 @@ async def test_nested_run_receives_non_handoff_bash_definition(tmp_path: Path) -
 
     top_level_definition = adapter.requests[0]["kwargs"]["tools"][0]
     nested_definition = adapter.requests[1]["kwargs"]["tools"][0]
+    # The Provider request carries the name the Model knows on this host.
     assert top_level_definition == {
-        "name": BASH_TOOL_NAME,
+        "name": model_tool_name(BASH_TOOL_NAME),
         "description": BASH_TOOL_DESCRIPTION,
         "parameters": BASH_TOOL_PARAMETERS,
     }
     assert nested_definition == {
-        "name": BASH_TOOL_NAME,
+        "name": model_tool_name(BASH_TOOL_NAME),
         "description": BASH_SUBAGENT_TOOL_DESCRIPTION,
         "parameters": BASH_SUBAGENT_TOOL_PARAMETERS,
     }

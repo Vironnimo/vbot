@@ -6,6 +6,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from core.tools import registry_tool_name
+
 
 def _provider_tools_from_wire(raw_tools: Any) -> list[dict[str, Any]]:
     if not isinstance(raw_tools, list):
@@ -23,7 +25,8 @@ def _provider_tools_from_wire(raw_tools: Any) -> list[dict[str, Any]]:
         if isinstance(name, str) and isinstance(description, str) and isinstance(parameters, dict):
             tools.append(
                 {
-                    "name": name,
+                    # Probes use registry names; the adapter view renames them again.
+                    "name": registry_tool_name(name),
                     "description": description,
                     "parameters": parameters,
                 }

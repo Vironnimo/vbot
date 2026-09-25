@@ -76,6 +76,7 @@ from core.tools.availability import (
     TOOL_ACTIVATION_CONFIGURABLE,
 )
 from core.tools.contracts import ToolContract, compile_tool_contract
+from core.tools.model_names import model_tool_name, reserved_model_name
 from core.utils.logging import get_logger
 from core.utils.workers import BoundedWorkerPool
 
@@ -176,6 +177,7 @@ class ToolRegistry:
         parallel_safe: bool = True,
         execution_slot_required: bool = True,
         open_input_schema: bool = False,
+        unadvertised_parameters: JsonObject | None = None,
         handler_validates_arguments: bool = False,
         coerce_arguments: bool = True,
         argument_normalizer: Callable[[Any], Any] | None = None,
@@ -204,7 +206,8 @@ class ToolRegistry:
             ready,
             definition_profile_resolver,
         )
-        if name in self._tools:
+        if name in self._tools or reserved_model_name(name):
+            # A reserved name is how the Model already sees another Tool.
             raise DuplicateToolError(f"Tool already registered: {name}")
         tool = Tool(
             name=name,
@@ -229,6 +232,7 @@ class ToolRegistry:
             parallel_safe=parallel_safe,
             execution_slot_required=execution_slot_required,
             open_input_schema=open_input_schema,
+            unadvertised_parameters=unadvertised_parameters,
             handler_validates_arguments=handler_validates_arguments,
             coerce_arguments=coerce_arguments,
             argument_normalizer=argument_normalizer,
@@ -306,7 +310,10 @@ class ToolRegistry:
         owned = {tool.name: tool for tool in previous}
         for tool in candidates:
             existing = self._tools.get(tool.name)
-            if existing is not None and existing is not owned.get(tool.name):
+            if (
+                existing is not None and existing is not owned.get(tool.name)
+            ) or reserved_model_name(tool.name):
+                # A reserved name is how the Model already sees another Tool.
                 raise DuplicateToolError(f"Tool already registered: {tool.name}")
         for name, tool in owned.items():
             if self._tools.get(name) is tool:
@@ -505,7 +512,7 @@ class ToolRegistry:
         if (
             tool.requires_opt_in and context.tool_name not in (allowed_tools or ())
         ) or not self._is_allowed(context.tool_name, allowed_tools, internal=tool.internal):
-            raise ToolNotAllowedError(f"Tool not allowed: {context.tool_name}")
+            raise ToolNotAllowedError(f"Tool not allowed: {model_tool_name(context.tool_name)}")
         # Readiness safety net: dispatch is not list-filtered, so a prompt built
         # moments before the credential vanished could still request a now
         # not-ready tool. Re-evaluate live and return a clean failure envelope
@@ -515,7 +522,8 @@ class ToolRegistry:
             return tool_failure(
                 "tool_not_ready",
                 tool.readiness_hint
-                or f"tool '{context.tool_name}' is not available: its extension is not configured",
+                or f"tool '{model_tool_name(context.tool_name)}' is not available: "
+                "its extension is not configured",
                 retryable=False,
             )
         input_contract = context.input_contract or tool.contract
@@ -525,7 +533,9 @@ class ToolRegistry:
             input_contract.normalize_arguments(arguments) if tool.coerce_arguments else arguments
         )
         if not tool.handler_validates_arguments:
-            input_contract.validate_arguments(normalized_arguments)
+            input_contract.validate_arguments(
+                normalized_arguments, unadvertised=tool.unadvertised_parameters
+            )
 
         if tool.extension is not None and not inspect.iscoroutinefunction(tool.handler):
             result = await run_tool_worker(

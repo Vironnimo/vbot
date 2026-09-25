@@ -9,7 +9,8 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
 - `register_apply_patch_tool(registry, *, file_state)` registers `apply_patch`
   in the `files` family with one required `patch` string. It is an ordinary
   Provider-neutral function Tool, not a Provider-native patch operation. The
-  open model-facing schema is backed by handler-owned unknown-field validation.
+  open model-facing schema's parameter list is enforced at dispatch: unknown
+  arguments fail before the handler.
 - The owner-selected argument repair accepts `input` as the patch-text alias,
   ordinary field formatting and shared call wrappers. Equal aliases coalesce;
   conflicting aliases (including placeholder text) and unsupported fields fail
@@ -118,6 +119,12 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   excerpts; similar candidates failing this rule are discarded before the
   ambiguity check (`replace_fuzzy(required_lines=...)`). Only changed lines are
   emitted from the replacement; context lines keep their actual original bytes.
+- Changed lines matched with different indentation are written in the file's
+  indentation style: each indent the matched lines show maps to its file
+  indent, and other indents (new deeper lines) convert level by level between
+  the model's and the file's unit (tabs or N spaces, learned from the whole
+  file), including a dropped outer level. Mixed tab/space output from a
+  spaces-for-tabs model is a defect.
 - Read-output gutters recover after raw matching misses, including single lines,
   mixed raw/numbered locators, and stale line numbers. Their stripped contents
   must identify a unique whole-line target; line numbers never resolve ambiguity.
