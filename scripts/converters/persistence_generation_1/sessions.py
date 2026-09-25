@@ -37,14 +37,18 @@ gets exactly the side rows the current store writes for its role:
   dropped. A value the store would refuse is dropped and reported.
 - Continuations are dropped. Owner-managed bindings, group titles, delivery
   receipts and Run execution owners are kept.
-- Two old Assistant Message shapes get their current form, in history and in
+- Three old Assistant Message shapes get their current form, in history and in
   stored checkpoint projections. A line-only output-file reference named a
   line that held just the path, and the server replaced that whole line with
   the file link; it gets the span of the whole line. One whose line is missing
   or empty, or that shares its line with another reference, is dropped and
   reported. A Usage whose only provenance was the whole-turn ``estimated``
   meant that both primary counters were estimated; it gets both field-level
-  flags, and ``estimated`` stays their summary.
+  flags, and ``estimated`` stays their summary. A Usage without the
+  ``context_usage`` snapshot every current Assistant step stores gets the
+  Context the old reader derived from it: input plus output, each measured
+  unless estimated. One without an input count to derive it from, where the
+  old reader showed no Context, keeps no snapshot and is reported.
 
 The source is opened read-only. Timestamps become canonical UTC, and every drop
 or approximation is reported. The staged database is reopened once, so its
@@ -1777,12 +1781,23 @@ def _build_search_index(path: Path, tally: Tally) -> None:
 
 
 def _current_assistant_shape(record: _Record, what: str, data: dict[str, Any]) -> None:
-    """Give old Assistant Message data the Usage provenance and file spans it meant."""
+    """Give old Assistant Message data the Usage and file spans it meant."""
     if data.get("role") != "assistant":
         return
     usage = data.get("usage")
-    if isinstance(usage, dict) and _with_field_provenance(usage):
-        record.reshaped["usage_provenance_derived"] += 1
+    if isinstance(usage, dict):
+        if _with_field_provenance(usage):
+            record.reshaped["usage_provenance_derived"] += 1
+        snapshot = usage.get("context_usage")
+        if not (isinstance(snapshot, dict) and _is_count(snapshot.get("tokens"))):
+            derived = _old_reader_context(usage)
+            if derived is None:
+                record.reshape_drops.append(
+                    f"{what} Usage keeps no Context snapshot: it has no input count to derive one"
+                )
+            else:
+                usage["context_usage"] = derived
+                record.reshaped["context_snapshots_derived"] += 1
     references = data.get("output_files")
     if not isinstance(references, list):
         return
@@ -1844,6 +1859,34 @@ def _with_field_provenance(usage: dict[str, Any]) -> bool:
     else:
         usage.pop("estimated", None)
     return legacy
+
+
+def _old_reader_context(usage: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Return the Context the old reader projected for a Usage without a snapshot.
+
+    It projected input plus output, each Provider-measured unless its
+    field-level flag says estimated, and any output made the projection an
+    estimate; Messages after the Usage are added at read time, as for every
+    snapshot. Without an input count it showed no Context. Needs the
+    field-level provenance in place.
+    """
+    input_tokens: Any = usage.get("input_tokens")
+    if not _is_count(input_tokens):
+        return None
+    output_tokens: Any = usage.get("output_tokens")
+    if not _is_count(output_tokens):
+        output_tokens = 0
+    input_estimated = usage.get("input_tokens_estimated") is True
+    output_estimated = usage.get("output_tokens_estimated") is True
+    context: dict[str, Any] = {
+        "tokens": input_tokens + output_tokens,
+        "estimated": input_estimated or output_estimated or bool(output_tokens),
+    }
+    if not input_estimated:
+        context["provider_input_tokens"] = input_tokens
+    if not output_estimated:
+        context["provider_output_tokens"] = output_tokens
+    return context
 
 
 def _legacy_message_data(

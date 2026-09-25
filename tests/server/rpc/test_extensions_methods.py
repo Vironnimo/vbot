@@ -893,7 +893,16 @@ def test_temporary_history_context_uses_canonical_tail_outside_visible_page():
                 timestamp="2026-09-08T09:00:00+00:00",
                 role="assistant",
                 content="measured",
-                usage={"input_tokens": 120, "output_tokens": 30},
+                usage={
+                    "input_tokens": 120,
+                    "output_tokens": 30,
+                    "context_usage": {
+                        "tokens": 150,
+                        "estimated": True,
+                        "provider_input_tokens": 120,
+                        "provider_output_tokens": 30,
+                    },
+                },
             ),
         ),
     )
