@@ -189,8 +189,8 @@ def called_tool_name(
         for tool in offered
         if key in (_spelling_key(tool), _spelling_key(model_tool_name(tool)))
     }
-    if len(same_spelling) == 1:
-        return same_spelling.pop()
+    if same_spelling:
+        return same_spelling.pop() if len(same_spelling) == 1 else name
     target = _HARNESS_NAMES.get(key)
     return target if target is not None and target in offered else name
 

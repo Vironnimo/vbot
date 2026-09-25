@@ -72,5 +72,14 @@ def test_an_offered_tool_wins_over_a_harness_name() -> None:
     assert called_tool_name("terminal", (BASH_TOOL_NAME,)) == BASH_TOOL_NAME
 
 
-def test_ambiguous_spelling_stays_as_called() -> None:
-    assert called_tool_name("WebFetch", ("web_fetch", "webfetch")) == "WebFetch"
+@pytest.mark.parametrize(
+    ("called", "offered"),
+    [
+        ("WebFetch", ("web_fetch", "webfetch")),
+        ("ReadFile", ("read", "read_file", "readfile")),
+        ("SearchWeb", ("web_search", "search_web", "searchweb")),
+        ("functions.ReadFile", ("read", "read_file", "readfile")),
+    ],
+)
+def test_ambiguous_spelling_stays_as_called(called: str, offered: tuple[str, ...]) -> None:
+    assert called_tool_name(called, offered) == called
