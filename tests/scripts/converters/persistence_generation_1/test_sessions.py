@@ -155,7 +155,17 @@ def test_a_session_keeps_its_history_side_rows_and_run(tmp_path: Path) -> None:
             "completed_at": canonical(2),
             "duration_ms": 30000,
         }
-        assert assistant.usage == {"input_tokens": 120, "output_tokens": 30, "provider_cost": 0.01}
+        assert assistant.usage == {
+            "input_tokens": 120,
+            "output_tokens": 30,
+            "provider_cost": 0.01,
+            "context_usage": {
+                "tokens": 150,
+                "estimated": True,
+                "provider_input_tokens": 120,
+                "provider_output_tokens": 30,
+            },
+        }
         assert [(call.id, call.name, call.arguments) for call in assistant.tool_calls or ()] == [
             ("call_read", "read_file", {"path": "a.txt"}),
             ("call_write", "write_file", {"path": "b.txt"}),
@@ -250,6 +260,7 @@ def test_a_session_keeps_its_history_side_rows_and_run(tmp_path: Path) -> None:
     }
     assert counts["output_file_spans_derived"] == 1
     assert "usage_provenance_derived" not in counts
+    assert counts["context_snapshots_derived"] == 1
     assert counts["search_index_healthy"] == 1
     assert _skips(context) == []
 
@@ -379,13 +390,17 @@ def test_checkpoints_get_a_projection_and_a_policy(tmp_path: Path) -> None:
 
 
 _WHOLE_TURN_ESTIMATE = {"input_tokens": 40, "output_tokens": 5, "estimated": True}
-_FIELD_ESTIMATES = {
+_FIELD_ESTIMATES: dict[str, Any] = {
     "input_tokens": 40,
     "output_tokens": 5,
     "input_tokens_estimated": True,
     "output_tokens_estimated": True,
     "estimated": True,
 }
+
+
+def _without_context_snapshot(usage: dict[str, Any] | None) -> dict[str, Any] | None:
+    return None if usage is None else {k: v for k, v in usage.items() if k != "context_usage"}
 
 
 def test_whole_turn_estimates_get_field_level_provenance(tmp_path: Path) -> None:
@@ -410,7 +425,10 @@ def test_whole_turn_estimates_get_field_level_provenance(tmp_path: Path) -> None
     convert(context)
 
     with _opened(context) as manager:
-        usages = {message.id: message.usage for message in manager.get(MAIN).load_active()}
+        usages = {
+            message.id: _without_context_snapshot(message.usage)
+            for message in manager.get(MAIN).load_active()
+        }
     assert usages == {
         whole_turn: _FIELD_ESTIMATES,
         measured: {"input_tokens": 40, "output_tokens": 5},
@@ -423,6 +441,75 @@ def test_whole_turn_estimates_get_field_level_provenance(tmp_path: Path) -> None
     ) == [(1, 1), (None, None), (1, None)]
     assert context.report.counts[AREA]["usage_provenance_derived"] == 1
     assert _skips(context) == []
+
+
+def test_usage_without_a_context_snapshot_gets_the_one_the_old_reader_derived(
+    tmp_path: Path,
+) -> None:
+    context = _context(tmp_path)
+    stored = {"tokens": 7, "estimated": False, "provider_input_tokens": 7}
+    with _legacy(context) as legacy:
+        key = legacy.session("s1")
+        ids = {
+            "measured": legacy.assistant(
+                key, "a", minute=1, usage={"input_tokens": 40, "output_tokens": 5}
+            ),
+            "output_guessed": legacy.assistant(
+                key,
+                "b",
+                minute=2,
+                usage={
+                    "input_tokens": 40,
+                    "output_tokens": 5,
+                    "output_tokens_estimated": True,
+                    "estimated": True,
+                },
+            ),
+            "whole_turn": legacy.assistant(key, "c", minute=3, usage=_WHOLE_TURN_ESTIMATE),
+            "no_output": legacy.assistant(key, "d", minute=4, usage={"input_tokens": 40}),
+            "no_input": legacy.assistant(key, "e", minute=5, usage={"output_tokens": 5}),
+            "stored": legacy.assistant(
+                key,
+                "f",
+                minute=6,
+                usage={"input_tokens": 7, "output_tokens": 0, "context_usage": stored},
+            ),
+        }
+        label = f"session -/main/s1 ({legacy.generation(key)})"
+
+    convert(context)
+
+    with _opened(context) as manager:
+        snapshots = {
+            message.id: (message.usage or {}).get("context_usage")
+            for message in manager.get(MAIN).load_active()
+        }
+    assert snapshots == {
+        ids["measured"]: {
+            "tokens": 45,
+            "estimated": True,
+            "provider_input_tokens": 40,
+            "provider_output_tokens": 5,
+        },
+        ids["output_guessed"]: {"tokens": 45, "estimated": True, "provider_input_tokens": 40},
+        ids["whole_turn"]: {"tokens": 45, "estimated": True},
+        ids["no_output"]: {
+            "tokens": 40,
+            "estimated": False,
+            "provider_input_tokens": 40,
+            "provider_output_tokens": 0,
+        },
+        ids["no_input"]: None,
+        ids["stored"]: stored,
+    }
+    assert context.report.counts[AREA]["context_snapshots_derived"] == 4
+    assert _skips(context) == [
+        (
+            label,
+            f"assistant {ids['no_input']} Usage keeps no Context snapshot: "
+            "it has no input count to derive one",
+        )
+    ]
 
 
 def test_line_only_file_references_get_a_span_or_are_dropped(tmp_path: Path) -> None:
@@ -510,14 +597,18 @@ def test_stored_checkpoint_projections_get_the_current_assistant_shapes(
     assert converted.projection == [
         {
             **projected,
-            "usage": _FIELD_ESTIMATES,
+            "usage": dict(_FIELD_ESTIMATES, context_usage={"tokens": 45, "estimated": True}),
             "output_files": [
                 {"line_index": 1, "path": "chart.png", "start_index": 0, "end_index": 9}
             ],
         }
     ]
     counts = context.report.counts[AREA]
-    assert (counts["usage_provenance_derived"], counts["output_file_spans_derived"]) == (1, 1)
+    assert (
+        counts["usage_provenance_derived"],
+        counts["output_file_spans_derived"],
+        counts["context_snapshots_derived"],
+    ) == (1, 1, 1)
     assert _skips(context) == []
 
 
