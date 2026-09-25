@@ -9,6 +9,7 @@ import pytest
 from core.utils.timestamps import (
     canonical_timestamp,
     format_canonical_timestamp,
+    parse_canonical_timestamp,
     parse_timestamp,
     utc_now_timestamp,
 )
@@ -53,3 +54,25 @@ def test_formatting_and_the_clock_use_the_canonical_form() -> None:
     assert len(now) == len("2026-07-01T12:00:00.000000Z") and now.endswith("Z")
     assert canonical_timestamp(now) == now
     assert parse_timestamp(now) <= datetime.now(UTC)
+
+
+def test_stored_values_parse_only_in_the_canonical_form() -> None:
+    assert parse_canonical_timestamp("2026-07-01T12:00:00.250000Z") == datetime(
+        2026, 7, 1, 12, 0, 0, 250_000, tzinfo=UTC
+    )
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "2026-07-01T12:00:00Z",
+        "2026-07-01T12:00:00.000000+00:00",
+        "2026-07-01T12:00:00.000000z",
+        "2026-07-01T12:00:00.25Z",
+        "2026-07-01T12:00:00.000000",
+        "",
+    ],
+)
+def test_a_stored_value_in_any_other_form_is_bad_data(value: str) -> None:
+    with pytest.raises(ValueError):
+        parse_canonical_timestamp(value)

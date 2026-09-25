@@ -272,7 +272,7 @@ def _matching_passages(
     table = query.table
     conditions = [f"{table} MATCH ?", f"p.passage_ref IN ({VIEWED_BY_SESSIONS})"]
     parameters: list[Any] = [query.expression, refs_parameter(refs)]
-    bounds, bound_parameters = time_bounds("p", request.since, request.until, lenient=False)
+    bounds, bound_parameters = time_bounds("p", request.since, request.until)
     conditions.extend(bounds)
     parameters.extend(bound_parameters)
     sql = f"""

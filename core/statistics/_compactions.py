@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections import Counter
-from datetime import UTC, datetime
 
 from core.statistics._measurements import _mean, _nearest_rank_percentile
 from core.statistics._units import UnitScan
@@ -15,7 +14,7 @@ from core.statistics.report import (
     CompactionsSection,
     CompactionStrategyCount,
 )
-from core.statistics.timestamps import parse_timestamp
+from core.utils.timestamps import parse_canonical_timestamp
 
 
 class CompactionAccumulator:
@@ -167,7 +166,7 @@ class CompactionAccumulator:
             ),
             recent=sorted(
                 rows,
-                key=lambda row: parse_timestamp(row.timestamp) or datetime.min.replace(tzinfo=UTC),
+                key=lambda row: parse_canonical_timestamp(row.timestamp),
                 reverse=True,
             )[:50],
         )
