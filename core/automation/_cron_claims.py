@@ -1,4 +1,10 @@
-"""Durable once-job admission claims, independent from the running scheduler."""
+"""Once-job admission claims, independent from the running scheduler.
+
+A claim exists from before admission until the job's resulting state is saved, or
+until the next start reconciles it after a crash. It is transient runtime state, not a durable
+JSON document under the Generation 1 contract, so it carries no
+``format_version``; an unreadable claim holds its job instead of refiring it.
+"""
 
 from __future__ import annotations
 
