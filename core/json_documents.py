@@ -3,8 +3,9 @@
 Every in-scope document is a JSON object with a top-level ``format_version``. Its
 owner describes the object levels it models with a :class:`JsonShape` and keeps
 validating the content itself (see :mod:`core.config_validation`). This module
-owns the list of in-scope documents (:data:`DURABLE_DOCUMENTS`) and only the
-contract mechanics every owner shares:
+owns the list of in-scope documents (:data:`DURABLE_DOCUMENTS`), the part of it
+data snapshots capture (:data:`SNAPSHOT_DOCUMENTS`), and only the contract
+mechanics every owner shares:
 
 - :func:`validate_format_version` refuses a missing, malformed, older, or newer
   version. A newer version comes from a newer vBot and is never overwritten.
@@ -49,8 +50,9 @@ CONVERTER_HINT = "scripts/converters/persistence_generation_1"
 
 #: Every durable JSON document under this contract: a stable kind name and the
 #: document's data-dir relative location, where ``*`` matches within one path
-#: segment. ``vbot doctor config`` validates each kind through its owner and data
-#: snapshots capture every matching file as one set. A new document joins here.
+#: segment. ``vbot doctor config`` validates each kind through its owner. A new
+#: document joins here, and with it the data snapshot set unless it is listed in
+#: :data:`DOCUMENTS_OUTSIDE_SNAPSHOTS`.
 DURABLE_DOCUMENTS: Mapping[str, str] = MappingProxyType(
     {
         "settings": "settings.json",
@@ -69,6 +71,24 @@ DURABLE_DOCUMENTS: Mapping[str, str] = MappingProxyType(
         "terminal_groups": "terminals/groups.json",
         "oauth_token": "oauth/*.json",
         "mcp_connections": "extension-data/mcp/connections.json",
+        "attachment_metadata": "artifacts/attachments/*.json",
+        "speech_artifact_metadata": "artifacts/speech/*.json",
+    }
+)
+
+#: Kinds that data snapshots leave out. Each is the sidecar of a blob stored beside
+#: it: a snapshot holds no blobs, and restoring its document set would delete every
+#: sidecar created after the snapshot while its blob stays.
+DOCUMENTS_OUTSIDE_SNAPSHOTS: frozenset[str] = frozenset(
+    {"attachment_metadata", "speech_artifact_metadata"}
+)
+
+#: The JSON document set of a data snapshot: every other durable document.
+SNAPSHOT_DOCUMENTS: Mapping[str, str] = MappingProxyType(
+    {
+        kind: pattern
+        for kind, pattern in DURABLE_DOCUMENTS.items()
+        if kind not in DOCUMENTS_OUTSIDE_SNAPSHOTS
     }
 )
 
@@ -83,7 +103,10 @@ class JsonShape:
     - ``object``: ``fields`` are the declared keys; every other key is unknown.
       ``nested`` gives the shape of declared keys whose values are modeled too.
     - ``map``: every key is data. ``values`` is the shape of each value;
-      ``known`` overrides it for specific keys.
+      ``known`` overrides it for specific keys. With ``drop_empty`` an entry
+      whose value is an empty object once the unknown fields are merged back is
+      not written: the owner keeps such an entry (``{}``) when this vBot models
+      none of its fields, and it disappears only when it holds no field at all.
     - ``list``: an array of ``items``; entries are matched across versions by
       their ``key`` field.
     - ``opaque``: the owner writes the whole value; nothing inside is preserved.
@@ -96,6 +119,7 @@ class JsonShape:
     known: Mapping[str, JsonShape] = field(default_factory=dict)
     items: JsonShape | None = None
     key: str | None = None
+    drop_empty: bool = False
 
 
 OPAQUE = JsonShape("opaque")
@@ -119,10 +143,14 @@ def json_map(
     values: JsonShape = OPAQUE,
     *,
     known: Mapping[str, JsonShape] | None = None,
+    drop_empty: bool = False,
 ) -> JsonShape:
-    """Return the shape of an object whose keys are data rather than fields."""
+    """Return the shape of an object whose keys are data rather than fields.
 
-    return JsonShape("map", values=values, known=dict(known or {}))
+    ``drop_empty`` leaves out entries that are empty objects after the merge.
+    """
+
+    return JsonShape("map", values=values, known=dict(known or {}), drop_empty=drop_empty)
 
 
 def json_list(items: JsonShape, *, key: str) -> JsonShape:
@@ -348,7 +376,8 @@ def write_json_document(
     """Atomically write one document, preserving the unknown fields on disk.
 
     ``body`` holds the owner's modeled fields; ``format_version`` is set here.
-    ``reset=True`` replaces the file without the load guard or preservation, for
+    Entries of ``drop_empty`` maps that are still empty objects after the merge
+    are left out. ``reset=True`` replaces the file without the load guard or preservation, for
     an explicit user reset. Raises :class:`JsonDocumentWriteError` when the file
     on disk failed to load, ``TypeError``/``ValueError`` for an unserializable
     body, and ``OSError`` for write failures.
@@ -360,6 +389,7 @@ def write_json_document(
         if previous is not None:
             payload = preserve_unknown_fields(previous, payload, fmt.shape)
             payload.pop(FORMAT_VERSION_FIELD, None)
+    payload = _drop_empty_entries(payload, fmt.shape)
     text = render_json_document(payload, version=fmt.version, sort_keys=fmt.sort_keys)
     path.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_text(path, text, data_dir=data_dir, mode=mode)
@@ -379,8 +409,8 @@ def render_json_document(
     return json.dumps(document, ensure_ascii=False, indent=2) + "\n"
 
 
-def durable_document_paths(data_dir: Path) -> tuple[str, ...]:
-    """Every existing durable JSON document in ``data_dir`` as a relative POSIX path.
+def snapshot_document_paths(data_dir: Path) -> tuple[str, ...]:
+    """Every existing snapshot document in ``data_dir`` as a relative POSIX path.
 
     Only regular files reached through real directories count. Symbolic links,
     Windows junctions and names starting with ``.`` (staging files) never match, so
@@ -390,13 +420,13 @@ def durable_document_paths(data_dir: Path) -> tuple[str, ...]:
 
     root = Path(data_dir)
     found: set[str] = set()
-    for pattern in DURABLE_DOCUMENTS.values():
+    for pattern in SNAPSHOT_DOCUMENTS.values():
         found.update(_matching_documents(root, tuple(pattern.split("/")), ()))
     return tuple(sorted(found))
 
 
-def is_durable_document_path(path: str) -> bool:
-    """Whether ``path`` is a relative POSIX path the document set may contain."""
+def is_snapshot_document_path(path: str) -> bool:
+    """Whether ``path`` is a relative POSIX path the snapshot document set may contain."""
 
     if not isinstance(path, str) or not path or any(char in path for char in "\\:\0"):
         return False
@@ -405,7 +435,7 @@ def is_durable_document_path(path: str) -> bool:
         return False
     return any(
         len(parts) == len(pattern) and all(map(_segment_matches, parts, pattern))
-        for pattern in (tuple(value.split("/")) for value in DURABLE_DOCUMENTS.values())
+        for pattern in (tuple(value.split("/")) for value in SNAPSHOT_DOCUMENTS.values())
     )
 
 
@@ -454,6 +484,28 @@ def _refusal_message(path: Path, fmt: JsonDocumentFormat, report: JsonValidation
         f"Refusing to overwrite {fmt.name} {path}: the file failed to load ({details}). "
         "Repair it or reset it explicitly."
     )
+
+
+def _drop_empty_entries(value: Any, shape: JsonShape | None) -> Any:
+    """Leave out the empty entries of every ``drop_empty`` map within ``value``."""
+
+    if shape is None:
+        return value
+    if shape.kind == "object" and isinstance(value, dict):
+        return {
+            key: _drop_empty_entries(item, shape.nested.get(key)) for key, item in value.items()
+        }
+    if shape.kind == "map" and isinstance(value, dict):
+        entries = {
+            key: _drop_empty_entries(item, _map_value_shape(shape, key))
+            for key, item in value.items()
+        }
+        if shape.drop_empty:
+            return {key: item for key, item in entries.items() if item != {}}
+        return entries
+    if shape.kind == "list" and isinstance(value, list):
+        return [_drop_empty_entries(item, shape.items) for item in value]
+    return value
 
 
 def _map_value_shape(shape: JsonShape, key: Any) -> JsonShape | None:

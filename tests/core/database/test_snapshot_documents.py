@@ -73,6 +73,8 @@ def test_a_snapshot_holds_every_durable_document_and_nothing_else(data_dir: Path
     _write(data_dir, "agents/.main.json", "{}")
     _write(data_dir, ".settings.json.tmp", "{}")
     _write(data_dir, "workspaces/main/project.json", "{}")
+    # Blob sidecars stay out: a snapshot holds no blobs.
+    _write(data_dir, "artifacts/attachments/att_000000000001.json", "{}")
 
     snapshot = _with_documents(data_dir)
 

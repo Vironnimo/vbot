@@ -3,16 +3,36 @@
 from __future__ import annotations
 
 import io
-import json
 import lzma
 import zlib
 from contextlib import suppress
-from dataclasses import asdict, dataclass, replace
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from zipfile import BadZipFile, ZipFile
 
+from core.config_validation import (
+    JsonConfigValidationError,
+    JsonDiagnostic,
+    JsonValidationReport,
+    add_error,
+    error_diagnostic,
+    load_validated_json_file,
+    validate_json_file,
+    validate_non_empty_string,
+    validate_optional_string,
+    warn_unknown_keys,
+)
+from core.json_documents import (
+    JsonDocumentFormat,
+    JsonDocumentWriteError,
+    json_document,
+    render_json_document,
+    strip_unknown_fields,
+    validate_format_version,
+    write_json_document,
+)
 from core.storage.layout import DataDirectoryLayout
 from core.utils.atomic import atomic_write_bytes, atomic_write_text
 from core.utils.errors import VBotError
@@ -76,6 +96,12 @@ _CANONICAL_EXTENSION_BY_MEDIA_TYPE = {
 }
 _CANONICAL_BLOB_EXTENSIONS = frozenset(_CANONICAL_EXTENSION_BY_MEDIA_TYPE.values())
 
+ATTACHMENT_METADATA_FORMAT_VERSION = 1
+# The blob path is not stored: it follows from the data directory, id and type.
+ATTACHMENT_METADATA_SHAPE = json_document(
+    {"id", "filename", "media_type", "size_bytes", "stored_at", "transcription"}
+)
+
 _LOGGER = get_logger("attachments")
 
 
@@ -95,6 +121,45 @@ class AttachmentTypeNotAllowedError(AttachmentError):
     """Raised when a file's sniffed MIME type is outside the allowlist."""
 
 
+def validate_attachment_metadata_data(data: Any) -> list[JsonDiagnostic]:
+    """Validate one decoded attachment sidecar (``artifacts/attachments/<id>.json``)."""
+
+    if not isinstance(data, dict):
+        return [error_diagnostic("$", f"Expected a JSON object, got {type(data).__name__}")]
+    diagnostics: list[JsonDiagnostic] = []
+    if not validate_format_version(diagnostics, data, ATTACHMENT_METADATA_FORMAT_VERSION):
+        return diagnostics
+    warn_unknown_keys(
+        diagnostics, "$", data, ATTACHMENT_METADATA_SHAPE.fields, "attachment metadata field"
+    )
+    for name in ("id", "filename", "stored_at"):
+        validate_non_empty_string(diagnostics, f"$.{name}", data.get(name), required=True)
+    media_type = data.get("media_type")
+    if media_type not in _CANONICAL_EXTENSION_BY_MEDIA_TYPE:
+        add_error(diagnostics, "$.media_type", "must be a media type vBot stores attachments as")
+    size_bytes = data.get("size_bytes")
+    if isinstance(size_bytes, bool) or not isinstance(size_bytes, int) or size_bytes < 0:
+        add_error(diagnostics, "$.size_bytes", "must be a non-negative integer")
+    validate_optional_string(diagnostics, "$.transcription", data.get("transcription"))
+    return diagnostics
+
+
+def validate_attachment_metadata_file(path: str | Path) -> JsonValidationReport:
+    """Validate one attachment sidecar without reading its blob."""
+
+    return validate_json_file(path, validate_attachment_metadata_data, missing_ok=False)
+
+
+# Written only to cache a transcription; a sidecar that fails to load is left unchanged.
+ATTACHMENT_METADATA_FORMAT = JsonDocumentFormat(
+    name="Attachment metadata",
+    version=ATTACHMENT_METADATA_FORMAT_VERSION,
+    shape=ATTACHMENT_METADATA_SHAPE,
+    validate=validate_attachment_metadata_data,
+    sort_keys=True,
+)
+
+
 @dataclass(frozen=True)
 class AttachmentRecord:
     """Persisted metadata for one attachment blob."""
@@ -104,6 +169,7 @@ class AttachmentRecord:
     media_type: str
     size_bytes: int
     stored_at: str
+    # The blob's current location, derived on load and never stored in the sidecar.
     file_path: str
     # Cached speech-to-text result for audio attachments; written once on first
     # transcription so later requests reuse it instead of re-calling STT.
@@ -192,7 +258,7 @@ class AttachmentStore:
 
         try:
             self._write_blob(blob_path, data)
-            self._write_sidecar(sidecar_path, asdict(record))
+            self._write_new_sidecar(sidecar_path, record)
         except AttachmentError:
             self._safe_remove_path(blob_path)
             self._safe_remove_path(sidecar_path)
@@ -210,26 +276,33 @@ class AttachmentStore:
             raise AttachmentNotFoundError(f"Attachment not found: {normalized_id}")
 
         try:
-            data = json.loads(sidecar_path.read_text(encoding="utf-8"))
+            data = load_validated_json_file(
+                sidecar_path, validate_attachment_metadata_data, missing_ok=False
+            )
         except OSError as exc:
             raise AttachmentError(f"Cannot read attachment metadata {sidecar_path}: {exc}") from exc
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise AttachmentError(f"Invalid attachment metadata JSON: {sidecar_path}") from exc
+        except JsonConfigValidationError as exc:
+            raise AttachmentError(f"Invalid attachment metadata: {exc}") from exc
 
-        if not isinstance(data, dict):
-            raise AttachmentError(f"Attachment metadata must be an object: {sidecar_path}")
-
-        record = _record_from_dict(data)
-        if record.id.lower() != normalized_id:
+        metadata = strip_unknown_fields(data, ATTACHMENT_METADATA_SHAPE)
+        if metadata["id"].lower() != normalized_id:
             raise AttachmentError(
-                f"Attachment metadata id mismatch: expected {normalized_id}, got {record.id}"
+                f"Attachment metadata id mismatch: expected {normalized_id}, got {metadata['id']}"
             )
 
-        blob_path = self._blob_path(normalized_id, record.media_type)
+        blob_path = self._blob_path(normalized_id, metadata["media_type"])
         if not blob_path.is_file():
             raise AttachmentNotFoundError(f"Attachment blob not found: {normalized_id}")
 
-        return replace(record, id=normalized_id, file_path=str(blob_path))
+        return AttachmentRecord(
+            id=normalized_id,
+            filename=metadata["filename"],
+            media_type=metadata["media_type"],
+            size_bytes=metadata["size_bytes"],
+            stored_at=metadata["stored_at"],
+            file_path=str(blob_path),
+            transcription=metadata.get("transcription"),
+        )
 
     def set_transcription(self, attachment_id: str, transcription: str) -> AttachmentRecord:
         """Persist a cached transcription for one attachment and return the record."""
@@ -239,7 +312,15 @@ class AttachmentStore:
 
         record = self.get(attachment_id)
         updated_record = replace(record, transcription=transcription)
-        self._write_sidecar(self._sidecar_path(updated_record.id), asdict(updated_record))
+        sidecar_path = self._sidecar_path(updated_record.id)
+        try:
+            write_json_document(
+                sidecar_path, _metadata_body(updated_record), ATTACHMENT_METADATA_FORMAT
+            )
+        except (OSError, JsonDocumentWriteError) as exc:
+            raise AttachmentError(
+                f"Cannot write attachment metadata {sidecar_path}: {exc}"
+            ) from exc
         return updated_record
 
     def delete(self, attachment_id: str) -> None:
@@ -273,8 +354,11 @@ class AttachmentStore:
         except OSError as exc:
             raise AttachmentError(f"Cannot write attachment blob {path}: {exc}") from exc
 
-    def _write_sidecar(self, path: Path, payload: JsonObject) -> None:
-        serialized = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    def _write_new_sidecar(self, path: Path, record: AttachmentRecord) -> None:
+        # Replaces the empty reservation of a new attachment: there is nothing to keep.
+        serialized = render_json_document(
+            _metadata_body(record), version=ATTACHMENT_METADATA_FORMAT_VERSION, sort_keys=True
+        )
         try:
             atomic_write_text(path, serialized)
         except OSError as exc:
@@ -499,37 +583,18 @@ def _is_allowed_mime(media_type: str) -> bool:
     return media_type in _MIME_ALLOWLIST
 
 
-def _record_from_dict(data: JsonObject) -> AttachmentRecord:
-    attachment_id = _require_string(data, "id")
-    filename = _require_string(data, "filename")
-    media_type = _require_string(data, "media_type")
-    stored_at = _require_string(data, "stored_at")
-    file_path = _require_string(data, "file_path")
-
-    size_bytes = data.get("size_bytes")
-    if not isinstance(size_bytes, int) or isinstance(size_bytes, bool):
-        raise AttachmentError("Attachment metadata field 'size_bytes' must be an integer")
-
-    transcription = data.get("transcription")
-    if transcription is not None and not isinstance(transcription, str):
-        raise AttachmentError("Attachment metadata field 'transcription' must be a string or null")
-
-    return AttachmentRecord(
-        id=attachment_id,
-        filename=filename,
-        media_type=media_type,
-        size_bytes=size_bytes,
-        stored_at=stored_at,
-        file_path=file_path,
-        transcription=transcription,
-    )
-
-
-def _require_string(data: JsonObject, key: str) -> str:
-    value = data.get(key)
-    if not isinstance(value, str):
-        raise AttachmentError(f"Attachment metadata field '{key}' must be a string")
-    return value
+def _metadata_body(record: AttachmentRecord) -> JsonObject:
+    """The sidecar fields of one record; the blob path is derived, never stored."""
+    body: JsonObject = {
+        "id": record.id,
+        "filename": record.filename,
+        "media_type": record.media_type,
+        "size_bytes": record.size_bytes,
+        "stored_at": record.stored_at,
+    }
+    if record.transcription is not None:
+        body["transcription"] = record.transcription
+    return body
 
 
 __all__ = [
@@ -541,4 +606,5 @@ __all__ = [
     "AttachmentTypeNotAllowedError",
     "canonical_extension_for_media_type",
     "sniff_media_type",
+    "validate_attachment_metadata_file",
 ]

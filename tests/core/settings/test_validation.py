@@ -69,6 +69,20 @@ def test_validate_data_dir_config_delegates_bootstrap_jobs(tmp_path: Path) -> No
     assert bootstrap_reports[0].ok is False
 
 
+_ATTACHMENT_METADATA: dict[str, object] = {
+    "id": "att_000000000001",
+    "filename": "notes.txt",
+    "media_type": "text/plain",
+    "size_bytes": 5,
+    "stored_at": "2026-06-18T10:00:00+00:00",
+}
+_SPEECH_ARTIFACT_METADATA: dict[str, object] = {
+    "id": "aud_000000000001",
+    "filename": "aud_000000000001.mp3",
+    "media_type": "audio/mpeg",
+    "size_bytes": 3,
+}
+
 # Every durable JSON document the doctor covers, in its pre-Generation-1 form and
 # in a minimal current form.
 _DATA_DIR_DOCUMENTS: dict[str, tuple[str, dict[str, object]]] = {
@@ -88,6 +102,14 @@ _DATA_DIR_DOCUMENTS: dict[str, tuple[str, dict[str, object]]] = {
     "terminals/groups.json": ('{"version": 1, "groups": []}', {"groups": []}),
     "oauth/github-copilot-oauth.json": ('{"access_token": "token"}', {"access_token": "token"}),
     "extension-data/mcp/connections.json": ("[]", {"connections": []}),
+    "artifacts/attachments/att_000000000001.json": (
+        json.dumps(_ATTACHMENT_METADATA),
+        _ATTACHMENT_METADATA,
+    ),
+    "artifacts/speech/aud_000000000001.json": (
+        json.dumps(_SPEECH_ARTIFACT_METADATA),
+        _SPEECH_ARTIFACT_METADATA,
+    ),
 }
 
 

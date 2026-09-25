@@ -8,15 +8,16 @@ Blob-backed original-file storage, attachment-specific message shaping, and shar
 
 ## Data Model
 
-- `AttachmentRecord`: `id` (opaque blob basename; newly generated `att_` plus 12 lowercase base32 characters), `filename` (display name), `media_type` (server-sniffed), `size_bytes`, `stored_at`, `file_path` (informational - recomputed on read), optional cached `transcription` written on first STT.
+- `AttachmentRecord`: `id` (opaque blob basename; newly generated `att_` plus 12 lowercase base32 characters), `filename` (display name), `media_type` (server-sniffed), `size_bytes`, `stored_at`, `file_path` (the blob's current location, derived on load and never stored), optional cached `transcription` written on first STT.
 - Blob at `<id><canonical-extension>` (extension from sniffed type, never client metadata); sidecar `<id>.json`. No index, no DB, no cleanup pass.
+- The sidecar is a durable JSON document under the Generation 1 contract (`settings.md` -> JSON Document Contract; registry kind `attachment_metadata`): `format_version` 1 plus `id`, `filename`, `media_type`, `size_bytes`, `stored_at` and an optional `transcription` (`null` also reads as none). `validate_attachment_metadata_file` backs `doctor config`. Sidecars are not data-snapshot members: a snapshot holds no blobs. The Generation 1 converter stamped existing sidecars and dropped their stored `file_path` and the retired `text_content` cache.
 
 ## Contracts
 
 - Store rejects non-positive limits and exposes `max_size_bytes` so transports reject oversized payloads before materializing bodies. `ensure_within_limit(reported_size)` pre-checks platform-reported sizes before download (`None` skips, leaving the post-download check as backstop).
 - `store(filename, data)` checks size, sniffs MIME, enforces the allowlist, appends the canonical extension when the display filename lacks one, reserves the sidecar filename exclusively, then publishes the extension-bearing blob and valid sidecar atomically in that order. Collisions across extensions and orphan blobs retry without replacing files; a failed write removes the new blob and reservation. An interrupted reservation is invalid metadata, never a readable attachment.
-- `get(id)` accepts bounded lowercase alphanumeric/underscore/hyphen basenames (normalizing case) (anything else is `AttachmentNotFoundError`/404, not a validation error), re-checks blob existence and sidecar id match, and **recomputes** `file_path` from current data-dir + id + persisted type instead of trusting the stored path - moving the data directory cannot break resolution.
-- `sniff_media_type(data, filename)` is the public side-effect-free wrapper (no disk, no allowlist) used by tools to branch before storing; `set_transcription` caches STT results rejecting empty text; expected errors are `AttachmentError`/`NotFound`/`TooLarge`/`TypeNotAllowed`.
+- `get(id)` accepts bounded lowercase alphanumeric/underscore/hyphen basenames (normalizing case) (anything else is `AttachmentNotFoundError`/404, not a validation error), validates the sidecar (a missing, older or newer `format_version` or an invalid field is an `AttachmentError`; unknown fields are ignored), re-checks blob existence and sidecar id match, and derives `file_path` from current data-dir + id + stored type - moving the data directory cannot break resolution.
+- `sniff_media_type(data, filename)` is the public side-effect-free wrapper (no disk, no allowlist) used by tools to branch before storing; `set_transcription` caches STT results rejecting empty text, rewrites the sidecar through `write_json_document` (unknown fields kept) and never rewrites one that fails to load; expected errors are `AttachmentError`/`NotFound`/`TooLarge`/`TypeNotAllowed`.
 
 ## Sniffing & conventions
 

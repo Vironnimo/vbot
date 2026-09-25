@@ -306,10 +306,3 @@ def test_explicit_grants_round_trip_and_preserve_unavailable_tools(mode):
 def test_invalid_explicit_grants_are_rejected(granted):
     with pytest.raises(ValueError):
         normalize_tool_access({"mode": "all", "granted": granted})
-
-
-@pytest.mark.parametrize("retired", ["grep", "glob"])
-def test_a_retired_search_denial_never_grants_the_consolidated_search_tool(retired):
-    policy = ToolAccess(mode="all", denied=(retired,))
-    result = resolve_tool_access(policy, [_tool("search_files")], "off")
-    assert "search_files" not in result.allowed_tools

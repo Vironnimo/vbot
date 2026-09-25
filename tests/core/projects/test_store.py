@@ -19,7 +19,7 @@ from core.projects.projects import (
     ProjectError,
     ProjectNotFoundError,
 )
-from core.projects.store import ProjectStore, _validate_agent_id, _validate_project_id
+from core.projects.store import ProjectStore, _validate_project_id
 from core.sessions import ChatSessionManager, SessionAddress
 
 
@@ -45,7 +45,7 @@ def test_create_writes_anchor_layout(data_dir: Path, repo: Path) -> None:
 
     anchor = data_dir / "projects" / "vbot"
     assert (anchor / "project.json").is_file()
-    assert (anchor / "agents").is_dir()
+    assert not (anchor / "agents").exists()
     assert project.cwd == str(Path(os.path.realpath(repo)))
 
 
@@ -312,17 +312,39 @@ def test_project_update_keeps_unknown_fields_on_disk(data_dir: Path, repo: Path)
     loaded = store.get("vbot")
     store.set_override("vbot", "builder", "temperature", 0.5)
 
-    assert loaded.overrides == {"builder": {"model": "openai/gpt-5"}}
+    # An override with no known field overrides nothing but stays an entry.
+    assert loaded.overrides == {"builder": {"model": "openai/gpt-5"}, "future_only": {}}
     rewritten = json.loads(config_path.read_text("utf-8"))
     assert rewritten["format_version"] == 1
     assert rewritten["future_field"] == [1, 2]
-    assert rewritten["overrides"]["builder"] == {
-        "model": "openai/gpt-5",
-        "temperature": 0.5,
-        "future_override": True,
+    assert rewritten["overrides"] == {
+        "builder": {
+            "model": "openai/gpt-5",
+            "temperature": 0.5,
+            "future_override": True,
+        },
+        "future_only": {"future": 1},
     }
-    # An override with no known field is not modeled, so an update drops it.
-    assert "future_only" not in rewritten["overrides"]
+
+
+def test_clearing_the_last_known_override_field_keeps_unknown_fields(
+    data_dir: Path, repo: Path
+) -> None:
+    store = ProjectStore(data_dir)
+    store.create("vbot", "vBot", repo)
+    store.set_override("vbot", "plain", "model", "openai/gpt-5")
+    config_path = data_dir / "projects" / "vbot" / "project.json"
+    payload = json.loads(config_path.read_text("utf-8"))
+    payload["overrides"]["builder"] = {"model": "openai/gpt-5", "future_override": True}
+    config_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    store.clear_override("vbot", "builder", "model")
+    store.clear_override("vbot", "plain", "model")
+
+    rewritten = json.loads(config_path.read_text("utf-8"))
+    # The entry with an unknown field survives; the one left with no field is removed.
+    assert rewritten["overrides"] == {"builder": {"future_override": True}}
+    assert store.get("vbot").overrides == {"builder": {}}
 
 
 def test_project_written_by_a_newer_vbot_is_never_overwritten(data_dir: Path, repo: Path) -> None:
@@ -893,37 +915,6 @@ def test_delete_rejects_path_traversal_id_leaves_sibling_untouched(
 
     assert sibling.is_dir()
     assert sibling.joinpath("keep.txt").read_text(encoding="utf-8") == "important"
-
-
-@pytest.mark.parametrize(
-    "bad_id",
-    ["../builder", "..", "foo/bar", "a\\b", "/etc", ".", "x/../y", "agent/", "", "-agent"],
-)
-def test_validate_agent_id_rejects_path_components(bad_id: str) -> None:
-    # The agent id is a path segment under a project anchor; traversal must be refused.
-    with pytest.raises(ProjectError):
-        _validate_agent_id(bad_id)
-
-
-def test_validate_agent_id_accepts_valid_slug() -> None:
-    assert _validate_agent_id("orchestrator") == "orchestrator"
-
-
-def test_workspace_dir_rejects_path_traversal_agent_id(data_dir: Path, repo: Path) -> None:
-    store = ProjectStore(data_dir)
-    store.create("vbot", "vBot", repo)
-
-    with pytest.raises(ProjectError):
-        store.workspace_dir("vbot", "../escape")
-
-
-def test_workspace_dir_is_under_agent_anchor(data_dir: Path, repo: Path) -> None:
-    store = ProjectStore(data_dir)
-    store.create("vbot", "vBot", repo)
-
-    workspace_dir = store.workspace_dir("vbot", "rooted")
-
-    assert workspace_dir == data_dir / "projects" / "vbot" / "agents" / "rooted" / "workspace"
 
 
 def _write_anchor_session(manager: ChatSessionManager, project_id: str, agent_id: str) -> None:

@@ -136,6 +136,35 @@ def test_doctor_config_reports_all_config_files(tmp_path: Path) -> None:
     assert "$.allowed_tools" in result.message
 
 
+def test_doctor_config_summarizes_a_directory_of_many_valid_documents(tmp_path: Path) -> None:
+    (tmp_path / "settings.json").write_text(json.dumps({"format_version": 1}), encoding="utf-8")
+    attachments = tmp_path / "artifacts" / "attachments"
+    attachments.mkdir(parents=True)
+    for index in range(1, 7):
+        attachment_id = f"att_00000000000{index}"
+        sidecar = {
+            "format_version": 1,
+            "id": attachment_id,
+            "filename": "notes.txt",
+            "media_type": "text/plain",
+            "size_bytes": 5,
+            "stored_at": "2026-06-18T10:00:00+00:00",
+        }
+        if index == 6:
+            sidecar["size_bytes"] = -1
+        (attachments / f"{attachment_id}.json").write_text(json.dumps(sidecar), encoding="utf-8")
+
+    result = doctor_management.doctor_config(tmp_path)
+
+    lines = result.message.splitlines()
+    assert result.ok is False
+    assert "files_checked: 7" in lines
+    assert "settings.json: valid" in lines
+    assert "artifacts/attachments/: 5 documents valid" in lines
+    assert "artifacts/attachments/att_000000000006.json:" in lines
+    assert not any(line.endswith("att_000000000001.json: valid") for line in lines)
+
+
 def test_run_dispatches_doctor_settings(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
