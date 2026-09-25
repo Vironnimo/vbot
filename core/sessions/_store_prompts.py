@@ -249,7 +249,7 @@ def carry_prompt_state(
     Within one scope everything carries over, including the effective affinity
     id. Into another scope, Agent-bound pins and the seen Skills stay behind
     and the target starts a new prompt-cache lineage, so its own Agent pins its
-    own Skill catalog.
+    own Skill catalog, SOUL block and pinned memory.
     """
     source_key = int(source["session_key"])
     if source_key != target_key:
