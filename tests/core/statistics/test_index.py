@@ -574,7 +574,13 @@ def test_index_file_and_transient_projection_agree_on_forks_windows_and_run_acti
                 model="other/model",
                 content="new work",
                 timestamp=BASE + timedelta(seconds=2),
-                usage={"input_tokens": 7, "output_tokens": 3, "estimated": True},
+                usage={
+                    "input_tokens": 7,
+                    "output_tokens": 3,
+                    "input_tokens_estimated": True,
+                    "output_tokens_estimated": True,
+                    "estimated": True,
+                },
             ),
             ChatMessage.run_summary(
                 run_id="fork-run",

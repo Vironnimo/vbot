@@ -132,7 +132,13 @@ describe('ChatView', () => {
   it('renders the context ring when Context Usage is estimated', async () => {
     rpcMock.mockImplementation(
       createChatRpcMock({
-        usage: { input_tokens: 3886, output_tokens: 92, estimated: true },
+        usage: {
+          input_tokens: 3886,
+          input_tokens_estimated: true,
+          output_tokens: 92,
+          output_tokens_estimated: true,
+          estimated: true,
+        },
       }),
     );
 

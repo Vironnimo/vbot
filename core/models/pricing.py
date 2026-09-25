@@ -190,10 +190,7 @@ def price_usage(usage: Mapping[str, Any] | None, pricing: TokenPricing | None) -
         ),
         Decimal(0),
     )
-    estimated = any(
-        usage.get(f"{field}_estimated", usage.get("estimated", False))
-        for field in ("input_tokens", "output_tokens")
-    )
+    estimated = usage.get("estimated") is True
     return {
         "amount_usd": float(amount),
         "source": "catalog",

@@ -314,6 +314,7 @@ def test_chat_history_sql_usage_matches_canonical_python_aggregation(manager) ->
                 "output_tokens": 10,
                 "input_tokens_estimated": True,
                 "output_tokens_estimated": False,
+                "estimated": True,
             },
         ),
         ChatMessage.assistant(
@@ -325,6 +326,7 @@ def test_chat_history_sql_usage_matches_canonical_python_aggregation(manager) ->
                 "cache_read_tokens": 25,
                 "input_tokens_estimated": False,
                 "output_tokens_estimated": True,
+                "estimated": True,
             },
         ),
     ]

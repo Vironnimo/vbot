@@ -251,7 +251,6 @@ CREATE TABLE assistant_entries (
   cache_read_tokens INTEGER CHECK (cache_read_tokens IS NULL OR cache_read_tokens >= 0),
   cache_write_tokens INTEGER CHECK (cache_write_tokens IS NULL OR cache_write_tokens >= 0),
   reasoning_tokens INTEGER CHECK (reasoning_tokens IS NULL OR reasoning_tokens >= 0),
-  usage_estimated INTEGER CHECK (usage_estimated IS NULL OR usage_estimated IN (0, 1)),
   input_tokens_estimated INTEGER CHECK (input_tokens_estimated IS NULL OR input_tokens_estimated IN (0, 1)),
   output_tokens_estimated INTEGER CHECK (output_tokens_estimated IS NULL OR output_tokens_estimated IN (0, 1)),
   reasoning_started_at TEXT,
@@ -273,9 +272,8 @@ CREATE TABLE assistant_output_files (
   ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
   path TEXT NOT NULL,
   line_index INTEGER NOT NULL CHECK (line_index >= 0),
-  start_index INTEGER CHECK (start_index IS NULL OR start_index >= 0),
-  end_index INTEGER CHECK (end_index IS NULL OR end_index > 0),
-  CHECK ((start_index IS NULL) = (end_index IS NULL)),
+  start_index INTEGER NOT NULL CHECK (start_index >= 0),
+  end_index INTEGER NOT NULL CHECK (end_index > start_index),
   PRIMARY KEY (entry_key, ordinal)
 ) STRICT, WITHOUT ROWID;
 

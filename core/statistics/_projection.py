@@ -264,6 +264,8 @@ class ProjectedRows:
     ) -> None:
         model_key = _provider_model_key(model) if isinstance(model, str) else UNKNOWN_MODEL_KEY
         values: JsonObject = usage if isinstance(usage, dict) else {}
+        input_estimated = usage_token_is_estimated(values, "input_tokens")
+        output_estimated = usage_token_is_estimated(values, "output_tokens")
         pricing = PricingInputs(
             reported_cost_usd=nonnegative_amount(values.get("reported_cost_usd")),
             input_tokens=_usage_nonnegative_int(values, "input_tokens"),
@@ -274,10 +276,7 @@ class ProjectedRows:
             cache_write_present="cache_write_tokens" in values,
             reasoning_tokens=_usage_nonnegative_int(values, "reasoning_tokens"),
             reasoning_present="reasoning_tokens" in values,
-            estimated=any(
-                values.get(f"{name}_estimated", values.get("estimated", False))
-                for name in ("input_tokens", "output_tokens")
-            ),
+            estimated=input_estimated or output_estimated,
         )
         snapshot = project_cost(values["cost"]) if "cost" in values else None
         retrospective = not isinstance(snapshot, dict)
@@ -305,8 +304,8 @@ class ProjectedRows:
                 pricing.reasoning_tokens,
                 pricing.cache_read_tokens,
                 pricing.cache_write_tokens,
-                int(usage_token_is_estimated(values, "input_tokens")),
-                int(usage_token_is_estimated(values, "output_tokens")),
+                int(input_estimated),
+                int(output_estimated),
                 int(pricing.cache_read_present or pricing.cache_write_present),
                 int(pricing.reasoning_present),
                 int(pricing.cache_read_present),

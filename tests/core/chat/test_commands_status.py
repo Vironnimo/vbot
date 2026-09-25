@@ -329,7 +329,13 @@ def test_build_status_text_with_full_data() -> None:
         ChatMessage.assistant(
             model="openai/gpt-5.2",
             content="All systems go.",
-            usage={"input_tokens": 987, "output_tokens": 12, "estimated": True},
+            usage={
+                "input_tokens": 987,
+                "output_tokens": 12,
+                "input_tokens_estimated": True,
+                "output_tokens_estimated": True,
+                "estimated": True,
+            },
             timestamp=session_started,
         ),
     ]

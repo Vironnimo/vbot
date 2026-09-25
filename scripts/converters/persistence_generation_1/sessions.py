@@ -37,6 +37,14 @@ gets exactly the side rows the current store writes for its role:
   dropped. A value the store would refuse is dropped and reported.
 - Continuations are dropped. Owner-managed bindings, group titles, delivery
   receipts and Run execution owners are kept.
+- Two old Assistant Message shapes get their current form, in history and in
+  stored checkpoint projections. A line-only output-file reference named a
+  line that held just the path, and the server replaced that whole line with
+  the file link; it gets the span of the whole line. One whose line is missing
+  or empty, or that shares its line with another reference, is dropped and
+  reported. A Usage whose only provenance was the whole-turn ``estimated``
+  meant that both primary counters were estimated; it gets both field-level
+  flags, and ``estimated`` stays their summary.
 
 The source is opened read-only. Timestamps become canonical UTC, and every drop
 or approximation is reported. The staged database is reopened once, so its
@@ -52,7 +60,7 @@ import bisect
 import heapq
 import json
 import sqlite3
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
@@ -116,6 +124,8 @@ _RUNNING = "running"
 _INTERRUPTED = "interrupted"
 _CANCELLED = "cancelled"
 _UNFINISHED_CALL_STATUSES = frozenset({"pending", "running"})
+# Field-level Usage provenance; ``estimated`` is their whole-turn summary.
+_USAGE_ESTIMATION_FIELDS = ("input_tokens_estimated", "output_tokens_estimated")
 _VERIFY_BATCH = 500
 
 # The pre-Generation-1 columns this area reads, frozen from the old schema.
@@ -441,6 +451,10 @@ class _Record:
     # A boundary checkpoint still needs the projection the old reader derived.
     needs_projection: bool = False
     tail_boundary_id: str | None = None
+    # Old Assistant shapes brought to their current form: counts and drops, reported
+    # only once the record is written, so a fork's shared copies are not counted twice.
+    reshaped: Counter[str] = field(default_factory=Counter)
+    reshape_drops: list[str] = field(default_factory=list)
 
     def visible_at(self, seq: int) -> bool:
         """Whether the record was current when history reached ``seq``."""
@@ -927,6 +941,7 @@ class _SessionConversion:
                 previous = self._normalize_message_times(record, data, previous)
                 if record.kind == "checkpoint":
                     self._prepare_checkpoint(record, data)
+                _current_assistant_shape(record, f"{record.role} {record.entry_id}", data)
                 record.message = ChatMessage.from_dict(data)
             except (ChatError, KeyError, TypeError, ValueError) as error:
                 record.problem = str(error) or type(error).__name__
@@ -997,6 +1012,14 @@ class _SessionConversion:
         else:
             if isinstance(projection, list):
                 data["projection"] = self._without_tail_guidance(projection)
+                for entry in data["projection"]:
+                    if isinstance(entry, dict):
+                        _current_assistant_shape(
+                            record,
+                            f"compaction checkpoint {record.entry_id} projection "
+                            f"{entry.get('role')} {entry.get('id')}",
+                            entry,
+                        )
             if not policy or not strategy:
                 self.issue(f"compaction checkpoint {record.entry_id} policy or strategy filled in")
         data["compaction_policy"] = policy or strategy or _LEGACY_CHECKPOINT_STRATEGY
@@ -1470,6 +1493,10 @@ class _SessionConversion:
             if record.kind == "message":
                 message_ids[record.key] = record.entry_id
             self.tally.count("entries")
+            for name, count in record.reshaped.items():
+                self.tally.count(name, count)
+            for reason in record.reshape_drops:
+                self.issue(reason)
         return written
 
     def _write_record(
@@ -1747,6 +1774,76 @@ def _build_search_index(path: Path, tally: Tally) -> None:
 
 
 # -- The old reader --------------------------------------------------------------------
+
+
+def _current_assistant_shape(record: _Record, what: str, data: dict[str, Any]) -> None:
+    """Give old Assistant Message data the Usage provenance and file spans it meant."""
+    if data.get("role") != "assistant":
+        return
+    usage = data.get("usage")
+    if isinstance(usage, dict) and _with_field_provenance(usage):
+        record.reshaped["usage_provenance_derived"] += 1
+    references = data.get("output_files")
+    if not isinstance(references, list):
+        return
+    content = data.get("content")
+    lines = content.splitlines() if isinstance(content, str) else []
+    per_line = Counter(
+        reference.get("line_index") for reference in references if isinstance(reference, dict)
+    )
+    kept: list[Any] = []
+    for reference in references:
+        if (
+            not isinstance(reference, dict)
+            or reference.get("start_index") is not None
+            or reference.get("end_index") is not None
+        ):
+            kept.append(reference)
+            continue
+        line_index = reference.get("line_index")
+        line = (
+            lines[line_index]
+            if isinstance(line_index, int)
+            and not isinstance(line_index, bool)
+            and 0 <= line_index < len(lines)
+            else ""
+        )
+        if not line:
+            why = "names a missing or empty line"
+        elif per_line[line_index] > 1:
+            why = "shares its line with another reference"
+        else:
+            kept.append({**reference, "start_index": 0, "end_index": len(line)})
+            record.reshaped["output_file_spans_derived"] += 1
+            continue
+        record.reshape_drops.append(
+            f"{what} line-only file reference {reference.get('path')} dropped: it {why}"
+        )
+    if kept:
+        data["output_files"] = kept
+    else:
+        del data["output_files"]
+
+
+def _with_field_provenance(usage: dict[str, Any]) -> bool:
+    """Give a whole-turn-only ``estimated`` the field-level provenance it meant.
+
+    Without either field-level flag the old reader applied ``estimated`` to both
+    primary counters. ``estimated`` is then recomputed as the summary of the
+    field-level flags, as current writers keep it. Return whether the Usage had
+    the old shape.
+    """
+    legacy = usage.get("estimated") is True and not any(
+        field in usage for field in _USAGE_ESTIMATION_FIELDS
+    )
+    if legacy:
+        for field in _USAGE_ESTIMATION_FIELDS:
+            usage[field] = True
+    if any(usage.get(field) is True for field in _USAGE_ESTIMATION_FIELDS):
+        usage["estimated"] = True
+    else:
+        usage.pop("estimated", None)
+    return legacy
 
 
 def _legacy_message_data(
