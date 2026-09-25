@@ -7,7 +7,7 @@ import binascii
 import hashlib
 import hmac
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from core.sessions import (
@@ -110,6 +110,8 @@ class _Request:
     message_id: str | None
     next_sequence: int | None = None
     within_offset: int = 0
+    # Fields the call sent that this action does not use; the result names them.
+    notes: tuple[str, ...] = ()
 
 
 def _cursor_payload(arguments: JsonObject, session_id: str) -> JsonObject | None:
@@ -118,10 +120,6 @@ def _cursor_payload(arguments: JsonObject, session_id: str) -> JsonObject | None
         return None
     if not isinstance(cursor, str) or not cursor.strip():
         raise _HistoryError("invalid_arguments", "cursor must be a non-blank string")
-    if set(arguments) != {"action", "cursor"}:
-        raise _HistoryError(
-            "invalid_arguments", "A cursor continuation accepts only action and cursor."
-        )
     payload = _decode_cursor(cursor)
     if payload.get("session_id") != session_id:
         raise _HistoryError("invalid_cursor", "History cursor is invalid.")
@@ -134,12 +132,8 @@ def _request_from_arguments(arguments: JsonObject, snapshot: _Snapshot) -> _Requ
     action = arguments.get("action")
     if not isinstance(action, str) or action not in HISTORY_ACTIONS:
         raise _HistoryError("invalid_arguments", "action must be a supported History action")
-    unsupported = sorted(set(arguments) - _ACTION_FIELDS[action])
-    if unsupported:
-        raise _HistoryError(
-            "invalid_arguments",
-            f"Unsupported arguments for {action}: {', '.join(unsupported)}",
-        )
+    # Fields this action does not use were refused or noted by validation.
+    arguments = {key: value for key, value in arguments.items() if key in _ACTION_FIELDS[action]}
     checkpoint = _optional_checkpoint(arguments.get("checkpoint"), snapshot)
     roles = _roles(arguments.get("roles"))
     query: str | None = None
@@ -182,23 +176,14 @@ def _request_from_arguments(arguments: JsonObject, snapshot: _Snapshot) -> _Requ
     )
 
 
-def _validate_history_action_arguments(arguments: JsonObject, action: str) -> None:
-    unsupported = sorted(set(arguments) - _ACTION_FIELDS[action])
-    if unsupported:
-        raise _HistoryError(
-            "invalid_arguments",
-            f"Unsupported arguments for {action}: {', '.join(unsupported)}",
-        )
+def _validate_history_action_arguments(arguments: JsonObject, action: str) -> tuple[str, ...]:
+    """Refuse calls this action cannot serve; return notes for fields it ignores."""
+    notes = _unused_field_notes(arguments, action)
     if "cursor" in arguments:
         cursor = arguments.get("cursor")
         if not isinstance(cursor, str) or not cursor.strip():
             raise _HistoryError("invalid_arguments", "cursor must be a non-blank string")
-        if set(arguments) != {"action", "cursor"}:
-            raise _HistoryError(
-                "invalid_arguments",
-                "A cursor continuation accepts only action and cursor.",
-            )
-        return
+        return notes
     if action == "search":
         query = arguments.get("query")
         if not isinstance(query, str) or not query.strip():
@@ -207,6 +192,78 @@ def _validate_history_action_arguments(arguments: JsonObject, action: str) -> No
         message_id = arguments.get("message_id")
         if not isinstance(message_id, str) or not message_id.strip():
             raise _HistoryError("invalid_arguments", "around requires a non-blank message_id")
+    return notes
+
+
+def _unused_field_notes(arguments: JsonObject, action: str) -> tuple[str, ...]:
+    """Refuse a field that asks for another action's result; note the harmless rest."""
+    unused = sorted(set(arguments) - _ACTION_FIELDS[action])
+    if not unused:
+        return ()
+    if "query" in unused:
+        raise _HistoryError("invalid_arguments", _query_refusal(arguments, action))
+    if "message_id" in unused:
+        raise _HistoryError("invalid_arguments", _message_id_refusal(arguments, action))
+    if "direction" in unused and arguments.get("direction") != "start":
+        raise _HistoryError(
+            "invalid_arguments",
+            f"{action} returns records oldest first; direction applies only to read. Omit "
+            "direction, or use action read to page from the newest records.",
+        )
+    if action == "around" and unused == ["limit"]:
+        return ("Ignored limit: around returns before + after + 1 records.",)
+    note = f"Ignored {', '.join(unused)}: not used by {action}."
+    if {"before", "after"} & set(unused):
+        note += " To read records around one, use action around with its message_id."
+    return (note,)
+
+
+def _query_refusal(arguments: JsonObject, action: str) -> str:
+    call: JsonObject = {"action": "search", "query": arguments.get("query")}
+    call |= {key: arguments[key] for key in ("checkpoint", "roles", "limit") if key in arguments}
+    rest = {
+        "read": "to read records in order, omit query.",
+        "around": "to read records around message_id, omit query.",
+        "overview": "to list the checkpoint sections, omit query.",
+    }[action]
+    return (
+        f"{action} takes no query. To find records containing it, call history with "
+        f"{json.dumps(call, ensure_ascii=False)}; {rest}"
+    )
+
+
+def _message_id_refusal(arguments: JsonObject, action: str) -> str:
+    call: JsonObject = {"action": "around", "message_id": arguments.get("message_id")}
+    call |= {key: arguments[key] for key in ("checkpoint", "roles") if key in arguments}
+    return (
+        f"{action} takes no message_id. To read records around that message, call history "
+        f"with {json.dumps(call, ensure_ascii=False)}; otherwise omit message_id."
+    )
+
+
+def _continued_request(request: _Request, arguments: JsonObject) -> _Request:
+    """Apply fields sent beside a cursor: repeated values pass, a new limit sets page size."""
+    for key in sorted(_ACTION_FIELDS[request.action] - {"action", "cursor", "limit"}):
+        if key not in arguments:
+            continue
+        given = arguments[key]
+        if isinstance(given, str):
+            given = given.strip()
+        if key == "roles" and isinstance(given, list):
+            given = tuple(given)
+        current = getattr(request, key)
+        if given != current:
+            shown = json.dumps(list(current) if isinstance(current, tuple) else current)
+            raise _HistoryError(
+                "invalid_arguments",
+                f"This cursor continues a {request.action} with {key} {shown}, but {key} is "
+                f"{json.dumps(arguments[key], ensure_ascii=False)}. To continue, call history "
+                f'with {{"action": "{request.action}", "cursor": ...}} only; to change {key}, '
+                "omit cursor and start again.",
+            )
+    if "limit" in arguments and request.action != "around":
+        request = replace(request, limit=_bounded_int(arguments["limit"], "limit", 1, 100))
+    return request
 
 
 def _request_from_cursor(
