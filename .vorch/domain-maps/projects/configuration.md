@@ -32,11 +32,9 @@ Project defaults are fallback inputs shared by its Agents. Overrides target one 
 ```text
 <data-dir>/projects/<project-id>/
   project.json
-  AGENTS.md
-  agents/<agent-id>/workspace/
 ```
 
-Creation seeds the anchor `AGENTS.md` if it is missing; later Project updates never reseed it. Project-scoped Sessions are addressed by `(project_id, agent_id, session_id)` in the canonical `<data-dir>/sessions.db`; the Project Anchor contains no Session files. Keep path construction behind Store helpers rather than joining untrusted identifiers at call sites.
+Older anchors may still hold an empty, unused `agents/` directory. Creation seeds the repository-relative `AGENTS.md` as the first `auto_load` entry; later Project updates never reseed it. Project-scoped Sessions are addressed by `(project_id, agent_id, session_id)` in the canonical `<data-dir>/sessions.db`; the Project Anchor contains no Session files. Keep path construction behind Store helpers rather than joining untrusted identifiers at call sites.
 
 The repository at `cwd` remains outside the anchor and is never mutated. Changing `cwd` keeps the Project id, anchor, and existing Sessions.
 
