@@ -56,19 +56,20 @@ class Tally:
     """
 
     counts: dict[str, int] = field(default_factory=dict)
-    skipped: list[tuple[str, str]] = field(default_factory=list)
+    # (item, reason, changes_history), as ConversionReport.skip takes them.
+    skipped: list[tuple[str, str, bool]] = field(default_factory=list)
 
     def count(self, key: str, amount: int = 1) -> None:
         self.counts[key] = self.counts.get(key, 0) + amount
 
-    def skip(self, item: str, reason: str) -> None:
-        self.skipped.append((item, reason))
+    def skip(self, item: str, reason: str, *, changes_history: bool = False) -> None:
+        self.skipped.append((item, reason, changes_history))
 
     def publish(self, context: ConversionContext, area: str) -> None:
         for key, amount in self.counts.items():
             context.report.count(area, key, amount)
-        for item, reason in self.skipped:
-            context.report.skip(area, item, reason)
+        for item, reason, changes_history in self.skipped:
+            context.report.skip(area, item, reason, changes_history=changes_history)
 
 
 RowCheck = Callable[[sqlite3.Row], str | None]

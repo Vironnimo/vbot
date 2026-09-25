@@ -62,7 +62,11 @@ gets exactly the side rows the current store writes for its role:
   readable reasoning is sent back as ``reasoning_content``.
 
 The source is opened read-only. Timestamps become canonical UTC, and every drop
-or approximation is reported. The staged database is reopened once, so its
+or approximation is reported. Only a dropped history record (a Message, Tool
+result, checkpoint or Run terminal) removes an entry from a Session's current
+history, so only its report item is marked as a history change: superseding
+follows the old ``active`` flags, and a fork either shares a prefix that matches
+its copies or keeps the copies. The staged database is reopened once, so its
 search indexes are built and verified. The old Session store's marker
 ``session-store.json``, its snapshot health and its ``session-snapshots`` are
 retired: the database kernel replaced them.
@@ -575,16 +579,26 @@ def _ranges(key: int, segments: Sequence[_Segment]) -> tuple[ViewRange, ...]:
 
 @dataclass
 class _Issues:
-    """Drops and approximations of one conversion, merged per item and reason."""
+    """Drops and approximations of one conversion, merged per item and reason.
+
+    A merged item changes history when any of its occurrences does.
+    """
 
     counts: dict[tuple[str, str], int] = field(default_factory=dict)
+    history_changes: set[tuple[str, str]] = field(default_factory=set)
 
-    def add(self, item: str, reason: str) -> None:
+    def add(self, item: str, reason: str, *, changes_history: bool = False) -> None:
         self.counts[(item, reason)] = self.counts.get((item, reason), 0) + 1
+        if changes_history:
+            self.history_changes.add((item, reason))
 
     def publish(self, tally: Tally) -> None:
         for (item, reason), count in self.counts.items():
-            tally.skip(item, reason if count == 1 else f"{reason} ({count} times)")
+            tally.skip(
+                item,
+                reason if count == 1 else f"{reason} ({count} times)",
+                changes_history=(item, reason) in self.history_changes,
+            )
 
 
 # -- Conversion ------------------------------------------------------------------------
@@ -900,8 +914,13 @@ class _SessionConversion:
         self.call_keys: dict[int, int] = {}  # old tool_call_key -> new call_key
         self.truncations: list[tuple[int, int]] = []
 
-    def issue(self, reason: str) -> None:
-        self.conversion.issues.add(self.label, reason)
+    def issue(self, reason: str, *, changes_history: bool = False) -> None:
+        """Report a drop or approximation of this Session.
+
+        ``changes_history`` marks one that can change which entries the
+        Session's current history shows; see ``_session_check``.
+        """
+        self.conversion.issues.add(self.label, reason, changes_history=changes_history)
 
     def _time(self, value: Any, what: str, fallback: str) -> str:
         canonical, problem = _normalize_timestamp(value)
@@ -1010,7 +1029,7 @@ class _SessionConversion:
         for record in records:
             if record.seq < 0 or record.seq in taken:
                 why = "negative seq" if record.seq < 0 else f"seq {record.seq} is taken"
-                self.issue(f"{record.role} {record.entry_id} dropped: {why}")
+                self.issue(f"{record.role} {record.entry_id} dropped: {why}", changes_history=True)
                 continue
             taken.add(record.seq)
             self.records.append(record)
@@ -1157,7 +1176,10 @@ class _SessionConversion:
         )
         if terminal is not None:
             if completed_at is None:
-                self.issue(f"{what} terminal record dropped: the Run is still running")
+                self.issue(
+                    f"{what} terminal record dropped: the Run is still running",
+                    changes_history=True,
+                )
             else:
                 self._plan_summary(row, run, timing_extra, change_extra)
         return run
@@ -1203,7 +1225,7 @@ class _SessionConversion:
         try:
             run.summary = ChatMessage.from_dict(data)
         except ChatError as error:
-            self.issue(f"Run {run.run_id} summary dropped: {error}")
+            self.issue(f"Run {run.run_id} summary dropped: {error}", changes_history=True)
             return
         _timing, extra, _present = _store_codec._timing_fields(timing)
         run.timing_started_at = run.started_at
@@ -1545,7 +1567,10 @@ class _SessionConversion:
         message_ids: dict[int, str] = {}
         for record in records:
             if record.message is None:
-                self.issue(f"{record.role} {record.entry_id} dropped: {record.problem}")
+                self.issue(
+                    f"{record.role} {record.entry_id} dropped: {record.problem}",
+                    changes_history=True,
+                )
                 continue
             run_key = None if record.run_id is None else run_keys.get(record.run_id)
             if record.run_id is not None and run_key is None and record.kind != "terminal":
@@ -1558,7 +1583,9 @@ class _SessionConversion:
             except (sqlite3.IntegrityError, ChatError) as error:
                 self.target.execute("ROLLBACK TO convert_entry")
                 self.target.execute("RELEASE convert_entry")
-                self.issue(f"{record.role} {record.entry_id} dropped: {error}")
+                self.issue(
+                    f"{record.role} {record.entry_id} dropped: {error}", changes_history=True
+                )
                 continue
             self.target.execute("RELEASE convert_entry")
             written[id(record)] = entry_key
