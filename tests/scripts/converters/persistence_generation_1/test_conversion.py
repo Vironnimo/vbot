@@ -50,6 +50,8 @@ BASE = SessionAddress(project_id=None, agent_id="main", session_id="base")
 BRANCH = SessionAddress(project_id=None, agent_id="main", session_id="branch")
 _TIMESTAMP = "2026-06-18T10:00:00Z"
 _LOCK_FILE = "data-store.lock"
+# A saved MCP result that no Tool Result returned: dropped and reported.
+_MCP_RESULT = "mcp/content/results/res_000000000001.json"
 
 
 def _write(root: Path, relative: str, value: Any) -> None:
@@ -87,6 +89,8 @@ def _legacy_data_dir(root: Path) -> dict[str, list[str]]:
     )
     _write(root, "channels/tg/polling.json", {"version": 1, "last_update_id": 41})
     _write(root, "cron/jobs.json", [])
+    _write(root, "mcp/connections.json", [{"id": "docs", "transport": "stdio", "command": "x"}])
+    _write(root, _MCP_RESULT, {"owner": {"agent_id": "main"}, "payload": {"rows": [1]}})
     _write(root, "statistics/provider-usage/2026-09.jsonl", "not a sample\n")
     _write(root, "session-store.json", {"format_version": 1, "state": "ready"})
     _write(root, "session-snapshot-health.json", {"state": "healthy"})
@@ -168,6 +172,7 @@ def test_dry_run_verifies_everything_and_leaves_the_data_directory_unchanged(
     assert len(verification["sessions"]["loaded_through_the_application"]) == 2
     assert verification["json_documents"]["documents_with_errors"] == 0
     assert "sessions.db-wal" in report["install"]["moved_aside"]
+    assert report["skipped_by_area"] == {"provider_usage": 1, "mcp": 1}
     assert report["sizes"]["installed_bytes"] > 0
     assert read_maintenance(data_dir) is None
 
@@ -195,9 +200,17 @@ def test_install_registers_every_database_and_moves_replaced_files_aside(
         "channels/tg/channel.json",
         "channels/tg/polling.json",
         "statistics/provider-usage/2026-09.jsonl",
+        "mcp/connections.json",
+        _MCP_RESULT,
     ):
         assert (backup / relative).read_bytes() == before[relative], relative
-    for relative in ("sessions.db-wal", "channels.db-journal", "session-store.json"):
+    for relative in (
+        "sessions.db-wal",
+        "channels.db-journal",
+        "session-store.json",
+        "mcp/connections.json",
+        _MCP_RESULT,
+    ):
         assert not (data_dir / relative).exists()
     assert not (data_dir / "generation-1-staging").exists()
     assert read_maintenance(data_dir) is None
@@ -215,6 +228,8 @@ def test_install_registers_every_database_and_moves_replaced_files_aside(
     assert all(report.ok for report in validate_data_dir_config(data_dir))
     agent = json.loads((data_dir / "agents/main/agent.json").read_text(encoding="utf-8"))
     assert agent["tool_access"]["allowed"] == ["read", "search_files"]
+    connections = data_dir / "extension-data/mcp/connections.json"
+    assert json.loads(connections.read_text(encoding="utf-8"))["connections"][0]["id"] == "docs"
 
 
 def test_the_cli_prints_a_summary_and_writes_the_report(
