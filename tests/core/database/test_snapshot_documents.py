@@ -13,7 +13,6 @@ import pytest
 
 from core.database import (
     DatabaseCorruptError,
-    DatabaseFormatError,
     DatabaseUnavailableError,
     list_data_snapshots,
     open_database,
@@ -150,7 +149,15 @@ def test_a_missing_document_copy_hides_the_snapshot_from_status(data_dir: Path) 
 
 @pytest.mark.parametrize(
     "path",
-    ["../settings.json", "settings.txt", "agents/main/../agent.json", "Settings.json", "x\\y"],
+    [
+        "../settings.json",
+        "agents/main/../agent.json",
+        "agents/.main/agent.json",
+        "/settings.json",
+        "C:/settings.json",
+        "Settings.json",
+        "x\\y",
+    ],
 )
 def test_a_manifest_with_an_invalid_document_path_is_not_a_snapshot(
     data_dir: Path, path: str
@@ -164,15 +171,45 @@ def test_a_manifest_with_an_invalid_document_path_is_not_a_snapshot(
     assert list_data_snapshots(data_dir) == []
 
 
-def test_an_older_manifest_without_documents_restores_only_databases(data_dir: Path) -> None:
+@pytest.mark.parametrize(
+    "change",
+    [
+        lambda payload: payload.pop("documents"),
+        lambda payload: payload["documents"]["settings.json"].pop("sha256"),
+    ],
+    ids=["document-set", "document-field"],
+)
+def test_a_manifest_without_its_document_set_is_not_a_snapshot(
+    data_dir: Path, change: Callable[[dict[str, Any]], None]
+) -> None:
     snapshot = _with_documents(data_dir)
-    _rewrite_manifest(snapshot, lambda payload: payload.pop("documents"))
+    _rewrite_manifest(snapshot, change)
+
+    assert list_data_snapshots(data_dir) == []
+    assert snapshot_inventory(data_dir) == []
+
+
+def test_an_older_vbot_ignores_documents_and_fields_a_newer_one_added(data_dir: Path) -> None:
+    snapshot = _with_documents(data_dir)
+    future = _write(data_dir, "future/state.json", '{"format_version": 1}\n')
+
+    def newer(payload: dict[str, Any]) -> None:
+        payload["documents"]["settings.json"]["encoding"] = "utf-8"
+        # A document kind this vBot does not know; its copy is not even there.
+        payload["documents"]["future/state.json"] = {"file_size": 1, "sha256": "0" * 64}
+
+    _rewrite_manifest(snapshot, newer)
+    _write(data_dir, "settings.json", '{"format_version": 1, "theme": "light"}\n')
 
     assert list_data_snapshots(data_dir) == [snapshot]
-    assert snapshot_summaries(data_dir)[0]["documents"] is None
-    with pytest.raises(DatabaseFormatError, match="holds no JSON document set"):
-        restore_data_snapshot(data_dir, snapshot, documents=True)
-    assert restore_data_snapshot(data_dir, snapshot).databases == ("notes",)
+    assert snapshot_summaries(data_dir)[0]["documents"]["count"] == len(_DOCUMENTS)
+    result = restore_data_snapshot(data_dir, snapshot, names=(), documents=True)
+
+    assert result.documents is not None
+    assert result.documents.restored == ("settings.json",)
+    assert result.documents.removed == ()
+    assert (data_dir / "settings.json").read_text(encoding="utf-8") == _DOCUMENTS["settings.json"]
+    assert future.read_text(encoding="utf-8") == '{"format_version": 1}\n'
 
 
 def test_the_document_set_is_restored_as_one_unit(data_dir: Path) -> None:
