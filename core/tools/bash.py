@@ -99,19 +99,50 @@ def _shell_syntax_notes() -> str:
     return " Commands run in bash on this host."
 
 
+# Dedicated Tools the description points to, by what they do better than a shell.
+# Registry names of the Files and Web families; literal to avoid importing them.
+_FILE_TOOL_USES = (("reading", "read"), ("searching", "search_files"), ("editing", "apply_patch"))
+_WEB_PAGE_TOOL = "web_fetch"
+# Offered with the shell in practice; the registered description names these,
+# and each request's projection names the ones that Agent is actually offered.
+_USUAL_DEDICATED_TOOLS = frozenset(name for _use, name in _FILE_TOOL_USES)
+
+
+def _joined(words: Sequence[str]) -> str:
+    return words[0] if len(words) == 1 else ", ".join(words[:-1]) + " and " + words[-1]
+
+
+def _dedicated_tools_sentence(offered: frozenset[str]) -> str:
+    """One sentence naming the offered Tools for file and web work, or nothing."""
+    uses = [(use, name) for use, name in _FILE_TOOL_USES if name in offered]
+    clauses = []
+    if uses:
+        clauses.append(
+            f"for {_joined([use for use, _ in uses])} files use "
+            f"{_joined([name for _, name in uses])}"
+        )
+    if _WEB_PAGE_TOOL in offered:
+        clauses.append(f"for web pages use {_WEB_PAGE_TOOL}")
+    if not clauses:
+        return ""
+    sentence = "; ".join(clauses)
+    return sentence[0].upper() + sentence[1:] + ". "
+
+
+_USUAL_DEDICATED_TOOLS_SENTENCE = _dedicated_tools_sentence(_USUAL_DEDICATED_TOOLS)
 BASH_TOOL_DESCRIPTION = (
     "Run an unattended shell command and capture its output, such as scripts, builds, "
     "non-interactive Git, file operations, and servers. "
-    "For file discovery and content search, use search_files when available. "
-    "No interactive input or live screen "
+    + _USUAL_DEDICATED_TOOLS_SENTENCE
+    + "No interactive input or live screen "
     "is available; provide input through files or pipelines. Never manually detach or "
     "daemonize commands." + _shell_syntax_notes()
 )
 BASH_SUBAGENT_TOOL_DESCRIPTION = (
     "Run an unattended shell command and wait for its output, such as scripts, builds, "
     "non-interactive Git, and file operations. "
-    "For file discovery and content search, use search_files when available. "
-    "Background execution is unavailable. "
+    + _USUAL_DEDICATED_TOOLS_SENTENCE
+    + "Background execution is unavailable. "
     "No interactive input or live screen is available; provide input through files or "
     "pipelines. Never manually detach or daemonize commands." + _shell_syntax_notes()
 )
@@ -205,8 +236,15 @@ def project_bash_tool_definitions(
     *,
     nesting_depth: int,
 ) -> list[JsonObject]:
-    """Narrow Bash's Provider definition to the execution modes valid at this depth."""
-    if nesting_depth < 1:
+    """Fit the shell definition to this request.
+
+    It keeps only the execution modes valid at this depth, and its description
+    names the dedicated file and web Tools among ``definitions`` - the Tools
+    offered alongside it - instead of the usual set.
+    """
+    offered = frozenset(str(definition.get("name")) for definition in definitions)
+    sentence = _dedicated_tools_sentence(offered)
+    if nesting_depth < 1 and sentence == _USUAL_DEDICATED_TOOLS_SENTENCE:
         return definitions
 
     projected: list[JsonObject] = []
@@ -215,8 +253,14 @@ def project_bash_tool_definitions(
             projected.append(definition)
             continue
         narrowed = deepcopy(definition)
-        narrowed["description"] = BASH_SUBAGENT_TOOL_DESCRIPTION
-        narrowed["parameters"] = deepcopy(BASH_SUBAGENT_TOOL_PARAMETERS)
+        if nesting_depth >= 1:
+            narrowed["description"] = BASH_SUBAGENT_TOOL_DESCRIPTION
+            narrowed["parameters"] = deepcopy(BASH_SUBAGENT_TOOL_PARAMETERS)
+        description = narrowed.get("description")
+        if isinstance(description, str):
+            narrowed["description"] = description.replace(
+                _USUAL_DEDICATED_TOOLS_SENTENCE, sentence, 1
+            )
         projected.append(narrowed)
     return projected
 

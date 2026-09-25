@@ -21,6 +21,7 @@ from core.tools.bash import (
 )
 from core.tools.process_manager import ProcessManager
 from core.tools.tools import (
+    JsonObject,
     ToolCall,
     ToolContext,
     ToolExecutionConfig,
@@ -91,17 +92,16 @@ def test_register_bash_tool() -> None:
 
 
 def test_subagent_projection_exposes_only_non_handoff_bash_modes() -> None:
-    definitions = [
+    definitions: list[JsonObject] = [
         {
             "name": "bash",
             "description": BASH_TOOL_DESCRIPTION,
             "parameters": BASH_TOOL_PARAMETERS,
         },
-        {
-            "name": "read",
-            "description": "Read a file.",
-            "parameters": {"type": "object"},
-        },
+        *(
+            {"name": name, "description": "Dedicated Tool.", "parameters": {"type": "object"}}
+            for name in ("read", "search_files", "apply_patch")
+        ),
     ]
 
     assert project_bash_tool_definitions(definitions, nesting_depth=0) is definitions
@@ -120,6 +120,49 @@ def test_subagent_projection_exposes_only_non_handoff_bash_modes() -> None:
     assert projected[1] is definitions[1]
     assert definitions[0]["description"] == BASH_TOOL_DESCRIPTION
     assert definitions[0]["parameters"] == BASH_TOOL_PARAMETERS
+
+
+USUAL_POINTER = "For reading, searching and editing files use read, search_files and apply_patch. "
+
+
+@pytest.mark.parametrize(
+    ("offered", "nesting_depth", "pointer"),
+    [
+        (
+            ("read", "search_files", "apply_patch", "web_fetch"),
+            0,
+            "For reading, searching and editing files use read, search_files and apply_patch; "
+            "for web pages use web_fetch. ",
+        ),
+        (("search_files",), 0, "For searching files use search_files. "),
+        (("read", "apply_patch"), 0, "For reading and editing files use read and apply_patch. "),
+        (("web_fetch",), 0, "For web pages use web_fetch. "),
+        ((), 0, ""),
+        (("read", "web_fetch"), 1, "For reading files use read; for web pages use web_fetch. "),
+        ((), 1, ""),
+    ],
+)
+def test_description_points_only_to_the_dedicated_tools_offered(
+    offered: tuple[str, ...], nesting_depth: int, pointer: str
+) -> None:
+    bash_definition = {
+        "name": "bash",
+        "description": BASH_TOOL_DESCRIPTION,
+        "parameters": BASH_TOOL_PARAMETERS,
+    }
+    definitions: list[JsonObject] = [
+        bash_definition,
+        *({"name": name, "description": "Dedicated Tool."} for name in offered),
+        {"name": "web_search", "description": "Search the web."},
+    ]
+
+    projected = project_bash_tool_definitions(definitions, nesting_depth=nesting_depth)
+
+    base = BASH_SUBAGENT_TOOL_DESCRIPTION if nesting_depth else BASH_TOOL_DESCRIPTION
+    assert USUAL_POINTER in base
+    assert projected[0]["description"] == base.replace(USUAL_POINTER, pointer)
+    assert projected[1:] == definitions[1:]
+    assert bash_definition["description"] == BASH_TOOL_DESCRIPTION
 
 
 @pytest.mark.asyncio
