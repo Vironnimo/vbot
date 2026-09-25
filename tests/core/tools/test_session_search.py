@@ -24,6 +24,7 @@ from core.tools.session_search import (
 from core.tools.tools import ToolRegistry
 from scripts.provider_probe.choices import SESSION_SEARCH_CASES
 from scripts.provider_probe.scenario_history import _session_search_scenario
+from tests.core.sessions.history_fixtures import admit_run
 from tests.core.tools.session_search_helpers import (
     JsonObject,
     failure,
@@ -177,7 +178,7 @@ async def test_dispatch_accepts_unambiguous_boolean_encodings(
     sessions = ChatSessionManager(tmp_path)
     session = sessions.create("coder", session_id="delegated")
     session.append(ChatMessage.user("needle"))
-    sessions.record_run_kind(session.address, RunKind.SUBAGENT)
+    await admit_run(sessions, session.address, RunKind.SUBAGENT)
     registry = ToolRegistry()
     register_session_search_tool(registry, CanonicalSessionRecallBackend(sessions))
     arguments = {"query": "needle", "include_subagents": value}

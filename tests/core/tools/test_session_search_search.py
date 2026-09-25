@@ -28,7 +28,7 @@ from core.tools.session_search import (
     SESSION_SEARCH_RESULT_MAX_BYTES,
     session_search_handler,
 )
-from tests.core.sessions.history_fixtures import append_tool_fixture
+from tests.core.sessions.history_fixtures import admit_run, append_tool_fixture
 from tests.core.tools.session_search_helpers import (
     make_context,
     success,
@@ -79,7 +79,7 @@ async def test_unscoped_search_keeps_repeated_hits_and_one_session_descriptor(
     session.append(second)
     address = SessionAddress(project_id=None, agent_id="coder", session_id="repeated-context")
     sessions.set_title(address, "Repeated context")
-    sessions.record_run_kind(address, RunKind.USER)
+    await admit_run(sessions, address, RunKind.USER)
 
     data = success(
         await session_search_handler(

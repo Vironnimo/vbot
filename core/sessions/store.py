@@ -175,13 +175,6 @@ class SessionStore:
         """Raise ``SessionNotFoundError`` unless *address* names a live Session."""
         self._read(lambda connection: _store_values._require_live(connection, address))
 
-    def history_revision(self, address: SessionAddress) -> int:
-        return int(
-            self._read(lambda connection: _store_values._require_live(connection, address))[
-                "history_revision"
-            ]
-        )
-
     def archive(self, address: SessionAddress) -> None:
         return self._execute_write(lambda connection: _store_mutations.archive(connection, address))
 
@@ -371,11 +364,6 @@ class SessionStore:
 
     def recover_interrupted_runs(self) -> None:
         self._execute_write(_store_runs.recover_interrupted_runs)
-
-    def record_run_kind(self, address: SessionAddress, run_kind: str) -> None:
-        self._execute_write(
-            lambda connection: _store_mutations.record_run_kind(connection, address, run_kind)
-        )
 
     def record_terminal_run(
         self, address: SessionAddress, *, run_id: str, status: str, timestamp: str

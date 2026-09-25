@@ -40,7 +40,7 @@ async def _evaluate_case(
     with TemporaryDirectory(prefix="vbot-recall-workflow-") as temporary:
         root = Path(temporary)
         data_root = root / "data"
-        sessions = seed_sessions(data_root)
+        sessions = await seed_sessions(data_root)
         manager = ProcessManager()
         registry = ToolRegistry()
         skills = SkillRegistry.load(PROJECT_ROOT / "resources/skills")
