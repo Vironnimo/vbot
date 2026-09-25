@@ -7,7 +7,13 @@ never mistaken for a domain outcome such as a missing Session.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from core.utils.errors import VBotError
+
+#: The offline converter that brings a data directory from before persistence
+#: Generation 1 to the current format. It ships only with a vBot source checkout.
+GENERATION_1_CONVERTER_COMMAND = "python -m scripts.converters.persistence_generation_1"
 
 
 class DatabaseError(VBotError):
@@ -39,10 +45,36 @@ class DatabaseFormatError(DatabaseError):
 
     A newer or unknown format generation, an unknown migration that declares
     older versions cannot read the result, a migration that fails, a missing or
-    unreadable marker, an incomplete maintenance operation, and (as
+    unreadable marker, an incomplete maintenance operation, (as
+    :class:`DatabaseConversionRequiredError`) an older format generation or a
+    data directory without a marker, and (as
     :class:`DatabaseSchemaMismatchError`) a schema this vBot cannot reconcile.
     Never grounds to quarantine or restore.
     """
+
+
+class DatabaseConversionRequiredError(DatabaseFormatError):
+    """Data from an older vBot that only the offline converter can make current.
+
+    Raised for a database of an older format generation and for an existing
+    data directory without a data-store marker, which is what every data
+    directory from before persistence Generation 1 looks like. The message
+    names the converter command for ``data_dir`` and where it is documented.
+    """
+
+    def __init__(self, problem: str, *, data_dir: Path | None, database: str | None = None) -> None:
+        self.database = database
+        self.data_dir = data_dir
+        self.converter_command = (
+            f"{GENERATION_1_CONVERTER_COMMAND} {data_dir if data_dir is not None else '<data-dir>'}"
+        )
+        super().__init__(
+            f"{problem}. Data written by a vBot before persistence Generation 1 (0.4.x) must "
+            "be converted once, offline, with vBot stopped: in a vBot source checkout (installed "
+            f"builds do not include the converter), run `{self.converter_command}`. Follow the "
+            'procedure in USAGE.md of the vBot repository, section "Converting an existing data '
+            'directory", which starts with a backup and a dry run'
+        )
 
 
 class DatabaseSchemaMismatchError(DatabaseFormatError):

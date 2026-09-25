@@ -172,7 +172,7 @@ def create_update_snapshot(
             "another process is writing to the data directory"
         )
     manifest = read_manifest(data_dir, created)
-    if manifest is None or manifest.documents is None:
+    if manifest is None:
         raise DatabaseCorruptError("the pre-update data snapshot could not be read back")
     if {path: member.sha256 for path, member in manifest.documents.items()} != dict(
         after.documents
@@ -247,9 +247,9 @@ def _require_restorable(data_dir: Path, snapshot_dir: Path, snapshot: UpdateSnap
         raise refuse("it is missing or malformed")
     if manifest.reason != update_snapshot_reason(snapshot.operation_id):
         raise refuse("it belongs to another operation")
-    if manifest.documents is None or {
-        path: member.sha256 for path, member in manifest.documents.items()
-    } != dict(snapshot.stamp.documents):
+    if {path: member.sha256 for path, member in manifest.documents.items()} != dict(
+        snapshot.stamp.documents
+    ):
         raise refuse("its JSON documents differ from the ones captured for this update")
     if {name: member.sha256 for name, member in manifest.members.items()} != dict(
         snapshot.member_hashes

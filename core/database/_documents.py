@@ -131,24 +131,37 @@ def _data_path(data_dir: Path, path: str) -> Path:
 # ---------------------------------------------------------------------------
 
 
+def _is_relative_path(path: object) -> bool:
+    """A relative POSIX path whose segments are plain names, as document paths are."""
+    if not isinstance(path, str) or not path or any(char in path for char in "\\:\0"):
+        return False
+    return all(part and not part.startswith(".") for part in path.split("/"))
+
+
 def parse_documents(payload: object) -> dict[str, DocumentMember]:
-    """Strictly parse the manifest's document set; malformed is corrupt."""
+    """Parse the manifest's document set; malformed is corrupt.
+
+    Every entry needs its known fields; unknown fields are ignored. A well-formed
+    path of a document this vBot does not know (a newer vBot added it) is left
+    out, so this vBot neither verifies nor restores it.
+    """
     if not isinstance(payload, dict):
         raise DatabaseCorruptError("snapshot manifest has an invalid document set")
     members: dict[str, DocumentMember] = {}
     folded: set[str] = set()
     for path, entry in payload.items():
-        if not is_durable_document_path(path) or path.casefold() in folded:
+        if not _is_relative_path(path) or path.casefold() in folded:
             raise DatabaseCorruptError("snapshot manifest lists an invalid document path")
         folded.add(path.casefold())
-        if not isinstance(entry, dict) or set(entry) != _DOCUMENT_KEYS:
+        if not isinstance(entry, dict) or not set(entry) >= _DOCUMENT_KEYS:
             raise DatabaseCorruptError(f"snapshot document {path} has an unexpected shape")
         size, digest = entry["file_size"], entry["sha256"]
         if not isinstance(size, int) or isinstance(size, bool) or size < 0:
             raise DatabaseCorruptError(f"snapshot document {path} has an invalid file_size")
         if not isinstance(digest, str) or _HEX64_PATTERN.fullmatch(digest) is None:
             raise DatabaseCorruptError(f"snapshot document {path} has an invalid sha256")
-        members[path] = DocumentMember(path=path, file_size=size, sha256=digest)
+        if is_durable_document_path(path):
+            members[path] = DocumentMember(path=path, file_size=size, sha256=digest)
     return members
 
 

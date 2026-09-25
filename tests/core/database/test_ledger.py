@@ -9,6 +9,8 @@ from pathlib import Path
 import pytest
 
 from core.database import (
+    GENERATION_1_CONVERTER_COMMAND,
+    DatabaseConversionRequiredError,
     DatabaseFormatError,
     MarkerEntry,
     Migration,
@@ -180,12 +182,9 @@ def test_older_binary_simulation_reads_additive_growth_and_refuses_a_breaking_ch
     assert not quarantine_root(data_dir).exists()
 
 
-@pytest.mark.parametrize(
-    ("file_generation", "message"),
-    [(2, "newer than this vBot supports"), (0, "Run the converter first")],
-)
+@pytest.mark.parametrize("file_generation", [2, 0])
 def test_a_file_of_another_format_generation_is_refused_untouched(
-    data_dir: Path, file_generation: int, message: str
+    data_dir: Path, file_generation: int
 ) -> None:
     open_database(notes_spec(data_dir)).close()
     path = notes_spec(data_dir).path
@@ -196,8 +195,18 @@ def test_a_file_of_another_format_generation_is_refused_untouched(
     )
     original = path.read_bytes()
 
-    with pytest.raises(DatabaseFormatError, match=message):
+    with pytest.raises(DatabaseFormatError) as refused:
         open_offline_database(notes_spec(data_dir))
+    # Only older data has a converter; newer data needs a newer vBot.
+    assert isinstance(refused.value, DatabaseConversionRequiredError) is (file_generation == 0)
+    with pytest.raises(DatabaseFormatError) as refused:
+        open_database(notes_spec(data_dir))
+    assert isinstance(refused.value, DatabaseConversionRequiredError) is (file_generation == 0)
+    if isinstance(refused.value, DatabaseConversionRequiredError):
+        assert refused.value.database == "notes"
+        assert refused.value.converter_command == (
+            f"{GENERATION_1_CONVERTER_COMMAND} {data_dir.resolve()}"
+        )
     assert path.read_bytes() == original
 
 
@@ -222,8 +231,10 @@ def test_a_marker_entry_of_a_newer_generation_is_refused_before_the_file_is_read
 def test_a_newer_generation_spec_refuses_an_older_database(data_dir: Path) -> None:
     open_database(notes_spec(data_dir)).close()
 
-    with pytest.raises(DatabaseFormatError, match="Run the converter first"):
+    with pytest.raises(DatabaseConversionRequiredError) as refused:
         open_database(notes_spec(data_dir, format_generation=2))
+    assert refused.value.database == "notes"
+    assert refused.value.converter_command.startswith(GENERATION_1_CONVERTER_COMMAND)
 
 
 def test_offline_api_builds_a_registered_database_outside_the_marker(tmp_path: Path) -> None:
