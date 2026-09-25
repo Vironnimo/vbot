@@ -547,6 +547,25 @@
    }
   },
   {
+   "name": "skill_manage: patch copied with a misspelling is applied and named",
+   "tool": "skill_manage",
+   "arguments": {
+    "action": "patch",
+    "name": "deploy-checklist",
+    "old_string": "- Check the Friday freeze calender.",
+    "new_string": "- Check the Friday freeze calender weekly."
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "did not match your old text exactly"
+    ],
+    "files": {
+     "../../data/agents/main/skills/deploy-checklist/SKILL.md": "---\nname: deploy-checklist\ndescription: Steps to deploy the Atlas service safely. Use before any production deploy.\nmetadata:\n  vbot:\n    author: agent\n---\n\n# Deploy checklist\n\n1. Run the test suite with `pytest -n auto`.\n2. Tag the release: \"v1.2.3\".\n3. Deploy with `make deploy`.\n\n## Pitfalls\n\n- Never deploy on Fridays.\n- Check the Friday freeze calendar weekly.\n"
+    }
+   }
+  },
+  {
    "name": "skill_manage: ambiguous patch offers replace_all",
    "tool": "skill_manage",
    "arguments": {
