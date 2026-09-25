@@ -88,7 +88,7 @@ from core.database.spec import (
     is_extension_database_name,
     validate_database_name,
 )
-from core.utils.timestamps import parse_timestamp, utc_now_timestamp
+from core.utils.timestamps import is_canonical_timestamp, utc_now_timestamp
 
 _LOGGER = logging.getLogger("vbot.database")
 
@@ -307,16 +307,6 @@ def _unknown_fields(payload: object, known: frozenset[str]) -> dict[str, Any]:
     return {key: value for key, value in payload.items() if key not in known}
 
 
-def _valid_instant(value: object) -> bool:
-    if not isinstance(value, str):
-        return False
-    try:
-        parse_timestamp(value)
-    except ValueError:
-        return False
-    return True
-
-
 def _parse_incident(payload: object, name: str) -> dict[str, Any]:
     """Validate every known field; fields a newer vBot added are kept."""
     if not isinstance(payload, dict) or not set(payload) >= _INCIDENT_KEYS:
@@ -340,7 +330,8 @@ def _parse_incident(payload: object, name: str) -> dict[str, Any]:
     instants = [payload["restored_snapshot_time"], interval["start"], interval["end"]]
     if verification == "ok":
         instants.append(payload["recovered_at"])
-    if not all(_valid_instant(value) for value in instants):
+    # An incident is written with canonical timestamps; any other form is damage.
+    if not all(is_canonical_timestamp(value) for value in instants):
         raise DatabaseCorruptError(f"the {name} recovery incident has an invalid timestamp")
     return payload
 

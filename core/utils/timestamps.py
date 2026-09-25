@@ -55,6 +55,21 @@ def parse_canonical_timestamp(value: str) -> datetime:
     return parsed
 
 
+def is_canonical_timestamp(value: object) -> bool:
+    """Whether *value* is text in the canonical stored form.
+
+    For validating a stored record whose other damage is also reported as a
+    whole, where a raised ``ValueError`` would carry nothing more.
+    """
+    if not isinstance(value, str):
+        return False
+    try:
+        parse_canonical_timestamp(value)
+    except ValueError:
+        return False
+    return True
+
+
 def canonical_timestamp(value: str | datetime) -> str:
     """Return *value*, an aware datetime or ISO 8601 text, as a canonical UTC timestamp."""
     if isinstance(value, datetime):

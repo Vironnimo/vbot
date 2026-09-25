@@ -69,7 +69,11 @@ from core.database.spec import (
 )
 from core.json_documents import snapshot_document_paths
 from core.utils.atomic import atomic_write_text
-from core.utils.timestamps import parse_timestamp, utc_now_timestamp
+from core.utils.timestamps import (
+    is_canonical_timestamp,
+    parse_canonical_timestamp,
+    utc_now_timestamp,
+)
 from core.utils.version import detect_vbot_version
 
 if TYPE_CHECKING:
@@ -152,7 +156,7 @@ class SnapshotManifest:
         )
 
     def created_instant(self) -> datetime:
-        return parse_timestamp(self.created_at)
+        return parse_canonical_timestamp(self.created_at)
 
 
 @dataclass(frozen=True)
@@ -232,7 +236,12 @@ def read_snapshot_health(data_dir: Path) -> dict[str, Any]:
         payload = json.loads(_health_path(data_dir).read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError):
         return {"state": "unknown", "reason": None, "snapshot_id": None, "observed_at": None}
-    if not isinstance(payload, dict) or payload.get("state") not in {"healthy", "degraded"}:
+    if (
+        not isinstance(payload, dict)
+        or payload.get("state") not in {"healthy", "degraded"}
+        # The record is written with a canonical time; any other is damage.
+        or not is_canonical_timestamp(payload.get("observed_at"))
+    ):
         return {
             "state": "degraded",
             "reason": "snapshot health record is malformed",
@@ -315,7 +324,8 @@ def _parse_manifest(payload: object, *, child_name: str) -> SnapshotManifest:
     try:
         if not isinstance(created_at, str):
             raise ValueError("created_at is not text")
-        parse_timestamp(created_at)
+        # A manifest is written with a canonical timestamp; any other is damage.
+        parse_canonical_timestamp(created_at)
     except ValueError as exc:
         raise DatabaseCorruptError("snapshot manifest has an invalid created_at") from exc
     if payload["complete"] is not True:
