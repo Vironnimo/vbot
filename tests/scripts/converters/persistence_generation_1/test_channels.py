@@ -15,8 +15,9 @@ import pytest
 
 import scripts.converters.persistence_generation_1.channels as channels_area
 from core.channels import channel_database_spec
-from core.channels.state import ChannelStateStore, state_timestamp
+from core.channels.state import ChannelStateStore
 from core.database import open_offline_database
+from core.utils.timestamps import format_canonical_timestamp
 from scripts.converters.persistence_generation_1._context import ConversionContext
 from scripts.converters.persistence_generation_1.channels import AREA, convert
 
@@ -186,11 +187,14 @@ async def test_converts_every_state_file_of_a_channel_and_retires_it(tmp_path: P
                 )
             ]
     # A consumed binding and the watermark take the time the file was last written.
-    assert tuple(used_row) == ("2026-06-18T09:00:00.000000Z", state_timestamp(_FILE_TIME))
-    assert tuple(polling_row) == (state_timestamp(_FILE_TIME),)
+    assert tuple(used_row) == (
+        "2026-06-18T09:00:00.000000Z",
+        format_canonical_timestamp(_FILE_TIME),
+    )
+    assert tuple(polling_row) == (format_canonical_timestamp(_FILE_TIME),)
     # Receipts keep their order and end at the time the file was last written.
     assert [message_ref for message_ref, _received_at in receipts] == ["-100:1", "-100:2"]
-    assert receipts[-1][1] == state_timestamp(_FILE_TIME)
+    assert receipts[-1][1] == format_canonical_timestamp(_FILE_TIME)
 
     assert context.retired == [
         PurePosixPath(f"channels/tg-assistant/{name}")
@@ -341,7 +345,7 @@ async def test_invalid_state_is_dropped_and_reported_without_failing(tmp_path: P
         )
         assert claim.status == "claimed"
         assert claim.binding is not None
-        assert claim.binding.created_at == state_timestamp(_FILE_TIME)
+        assert claim.binding.created_at == format_canonical_timestamp(_FILE_TIME)
         assert store.load_update_offset("tg-assistant") == 0
         assert await store.has_received("tg-assistant", "-100:1")
     skipped = _skipped(context)

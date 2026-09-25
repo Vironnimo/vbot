@@ -22,10 +22,10 @@ from core.database import (
     SnapshotFacts,
     open_database,
 )
-from core.database.marker import utc_now
 from core.model_tasks.decision_types import DecisionError, text, validate_draft
 from core.utils.ids import new_id
 from core.utils.logging import get_logger
+from core.utils.timestamps import utc_now_timestamp
 
 _LOGGER = get_logger("decisions")
 
@@ -79,11 +79,6 @@ _EVALUATION_COLUMNS = (
 )
 
 
-def now() -> str:
-    """Canonical fixed-width UTC timestamp for stored values."""
-    return utc_now()
-
-
 def decision_database_spec(path: Path) -> DatabaseSpec:
     """Declare the canonical decisions database at ``path`` (``<data-dir>/decisions.db``)."""
     return DatabaseSpec(
@@ -118,7 +113,7 @@ class DecisionStore:
         def operation(connection: sqlite3.Connection) -> int:
             return connection.execute(
                 "UPDATE evaluations SET status='interrupted', completed_at=? WHERE status=?",
-                (now(), RUNNING),
+                (utc_now_timestamp(), RUNNING),
             ).rowcount
 
         interrupted = self.database.write(operation)
@@ -156,7 +151,7 @@ class DecisionStore:
             raise DecisionError("Supply the experiment revision before saving.")
 
         def operation(db: sqlite3.Connection) -> sqlite3.Row:
-            stamp = now()
+            stamp = utc_now_timestamp()
             saved_id = identifier
             if saved_id is None:
 
@@ -284,7 +279,7 @@ class DecisionStore:
                             "(id,experiment_id,request_id,status,snapshot,created_at) "
                             "VALUES (?,?,?,?,?,?)"
                         ),
-                        (candidate, identifier, request_id, RUNNING, encoded, now()),
+                        (candidate, identifier, request_id, RUNNING, encoded, utc_now_timestamp()),
                     ).rowcount
                     == 1
                 )
@@ -310,7 +305,7 @@ class DecisionStore:
                     "status=?,result=COALESCE(?,result),error=?,completed_at=? "
                     "WHERE id=? AND status=?"
                 ),
-                (status, encoded_result, encoded_error, now(), identifier, RUNNING),
+                (status, encoded_result, encoded_error, utc_now_timestamp(), identifier, RUNNING),
             ).rowcount
 
         if self.database.write(operation):

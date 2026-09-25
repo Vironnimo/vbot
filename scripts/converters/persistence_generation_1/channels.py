@@ -42,8 +42,13 @@ from typing import Any
 
 from core.channels import channel_database_spec
 from core.channels.config import ChannelConfigError, _normalize_channel_id
-from core.channels.state import RECEIVED_MESSAGE_WINDOW, state_timestamp
+from core.channels.state import RECEIVED_MESSAGE_WINDOW
 from core.database import open_offline_database
+from core.utils.timestamps import (
+    canonical_timestamp,
+    format_canonical_timestamp,
+    utc_now_timestamp,
+)
 from scripts.converters.persistence_generation_1._context import ConversionContext
 
 AREA = "channels"
@@ -221,7 +226,7 @@ def _read_access(
                 context.report.skip(
                     AREA, f"{item}/{user_id}", "invalid last_seen_at replaced by the file time"
                 )
-                last_seen_at = state_timestamp(file_time)
+                last_seen_at = format_canonical_timestamp(file_time)
             rows.participants.append(
                 (channel_id, scope_id, user_id, display_name.strip(), last_seen_at)
             )
@@ -249,7 +254,7 @@ def _read_run_buttons(
         created_at = _canonical_time(binding.get("created_at"))
         if created_at is None:
             context.report.skip(AREA, item, "invalid created_at replaced by the file time")
-            created_at = state_timestamp(file_time)
+            created_at = format_canonical_timestamp(file_time)
         rows.run_buttons.append(
             (
                 channel_id,
@@ -260,7 +265,7 @@ def _read_run_buttons(
                 json.dumps(binding["original_button_data"], ensure_ascii=False),
                 created_at,
                 # The last write of the file is the latest possible claim time.
-                state_timestamp(file_time) if binding["consumed"] else None,
+                format_canonical_timestamp(file_time) if binding["consumed"] else None,
             )
         )
 
@@ -300,7 +305,7 @@ def _read_polling(
     update_id = _versioned_object(payload).get("last_update_id")
     if not isinstance(update_id, int) or isinstance(update_id, bool) or update_id < 0:
         raise _UnreadableError("last_update_id must be a non-negative integer")
-    rows.polling.append((channel_id, update_id, state_timestamp(file_time)))
+    rows.polling.append((channel_id, update_id, format_canonical_timestamp(file_time)))
 
 
 def _read_received(
@@ -319,7 +324,7 @@ def _read_received(
     # Oldest first; a repeated receipt keeps its newest position.
     ordered = list(dict.fromkeys(reversed(receipts)))[:RECEIVED_MESSAGE_WINDOW]
     for age, message_ref in enumerate(ordered):
-        received_at = state_timestamp(file_time - timedelta(microseconds=age))
+        received_at = format_canonical_timestamp(file_time - timedelta(microseconds=age))
         rows.received.append((channel_id, message_ref, received_at))
 
 
@@ -335,7 +340,7 @@ def _convert_routing_pointers(
     except sqlite3.Error as error:
         context.report.skip(AREA, SOURCE_SESSIONS_DATABASE, f"routing pointers dropped ({error})")
         return
-    updated_at = state_timestamp()
+    updated_at = utc_now_timestamp()
     for (agent_id, session_id), (source_channel_id, metadata) in sorted(sessions.items()):
         active_session_id = metadata.get("active_session_id")
         if not isinstance(active_session_id, str) or not active_session_id:
@@ -448,15 +453,12 @@ def _versioned_object(payload: Any) -> dict[str, Any]:
 
 def _canonical_time(value: Any) -> str | None:
     """Return an aware ISO 8601 time as canonical UTC text, or ``None``."""
-    if not isinstance(value, str) or not value:
+    if not isinstance(value, str):
         return None
     try:
-        moment = datetime.fromisoformat(value)
+        return canonical_timestamp(value)
     except ValueError:
         return None
-    if moment.tzinfo is None:
-        return None
-    return state_timestamp(moment)
 
 
 def _file_time(path: Path) -> datetime:

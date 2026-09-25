@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import sqlite3
 
+from core.utils.timestamps import utc_now_timestamp
+
 from ._store_database import ALIASED_POST_COLUMNS, DISCUSSION_COLUMNS, PARTICIPANT_COLUMNS
 from ._store_values import (
     _MUTABLE_SWARM_STATES,
@@ -14,7 +16,6 @@ from ._store_values import (
     SwarmStoreError,
     _dump,
     _load,
-    _now,
     _post,
 )
 
@@ -48,7 +49,15 @@ def _record_lifecycle_request(
 ) -> None:
     connection.execute(
         "INSERT INTO swarm_events(swarm_id,kind,actor,old_json,new_json,settings_revision,created_at) VALUES(?,?,?,?,?,?,?)",
-        (swarm_id, kind, actor, _dump({"state": old_state}), _dump(result), None, _now()),
+        (
+            swarm_id,
+            kind,
+            actor,
+            _dump({"state": old_state}),
+            _dump(result),
+            None,
+            utc_now_timestamp(),
+        ),
     )
     connection.execute(
         "INSERT INTO requests(scope,request_id,payload_hash,outcome) VALUES(?,?,?,?)",

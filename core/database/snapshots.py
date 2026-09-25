@@ -55,7 +55,6 @@ from core.database.marker import (
     acquire_operation_lock,
     read_marker,
     require_no_maintenance,
-    utc_now,
     valid_database_id,
 )
 from core.database.spec import (
@@ -66,6 +65,7 @@ from core.database.spec import (
 )
 from core.json_documents import durable_document_paths
 from core.utils.atomic import atomic_write_text
+from core.utils.timestamps import utc_now_timestamp
 from core.utils.version import detect_vbot_version
 
 if TYPE_CHECKING:
@@ -222,7 +222,7 @@ def _record_snapshot_health(
         "state": state,
         "reason": reason,
         "snapshot_id": snapshot_id,
-        "observed_at": utc_now(),
+        "observed_at": utc_now_timestamp(),
     }
     with suppress(OSError):
         atomic_write_text(
@@ -907,7 +907,7 @@ def create_data_snapshot(
         manifest = SnapshotManifest(
             snapshot_id=snapshot_id,
             reason=reason,
-            created_at=utc_now(),
+            created_at=utc_now_timestamp(),
             vbot_version=detect_vbot_version(),
             sqlite_version=sqlite3.sqlite_version,
             sqlite_source_id=sqlite_source_id() or "unknown",
