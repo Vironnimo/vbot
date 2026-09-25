@@ -46,6 +46,7 @@ from core.runs import RunKind
 from core.sessions import SessionAddress
 from core.utils.ids import new_id
 from core.utils.logging import get_logger
+from core.utils.workers import OrderedWorker
 
 if TYPE_CHECKING:
     from core.automation import TriggerService
@@ -63,6 +64,10 @@ _MAX_ACTIONS = 16
 # window no longer reaches its occurrence (it can then never become due again).
 _RETENTION = timedelta(days=30)
 _EXECUTION_STATUSES = _TERMINAL | {"pending", "claimed", "running"}
+# Every actions.json write runs here in the order its snapshot was taken: the
+# scheduler's and a Run's saves never block the Event Loop, and an operator
+# edit's blocking save still lands after them.
+_ACTIONS_WRITER = OrderedWorker(name="calendar-actions")
 
 CALENDAR_ACTIONS_FORMAT_VERSION = 1
 _ACTION_FIELDS = frozenset(
@@ -229,6 +234,10 @@ class CalendarActions:
     invalid action never runs, and while one is kept the history of actions this
     store does not know stays. An invalid execution row blocks its occurrence: the
     row may record a consumed claim, so that occurrence never fires until repaired.
+
+    Scheduling and execution run on the Event Loop and await their saves on the
+    ``calendar-actions`` ordered writer; action edits save through the same
+    writer and wait for it.
     """
 
     def __init__(self, calendar: CalendarService, data_root: Path) -> None:
@@ -247,6 +256,8 @@ class CalendarActions:
         self._workers: dict[str, asyncio.Task[None]] = {}
         self._runs: dict[str, Run] = {}
         self._changed = asyncio.Event()
+        # Counts wake-ups, so a tick notices a change made while it awaited a save.
+        self._generation = 0
         self._sleep_seconds = 30.0
         self._recovery_pending: set[str] = set()
         self._calendar.add_changed_callback(self._wake)
@@ -257,6 +268,7 @@ class CalendarActions:
         self._trigger, self._resolver, self._sessions = trigger, resolver, sessions
 
     def _wake(self) -> None:
+        self._generation += 1
         self._changed.set()
         # Withdraw work still awaiting admission; active Runs retain their history.
         for key, task in tuple(self._workers.items()):
@@ -315,17 +327,37 @@ class CalendarActions:
             self._executions[key] = row
 
     def _save(self) -> None:
-        """Write actions and history, keeping invalid entries and unknown fields on disk."""
-        payload = {
-            "actions": [*self._actions.values(), *self._invalid_actions],
-            "executions": {**self._executions, **self._invalid_executions},
-        }
+        """Write actions and history, blocking until this and every earlier save landed."""
+        _ACTIONS_WRITER.call(partial(self._write, self._snapshot()))
+
+    async def _save_async(self) -> None:
+        """Event-Loop-safe :meth:`_save`; the snapshot is taken before the first await."""
+        await _ACTIONS_WRITER.call_async(partial(self._write, self._snapshot()))
+
+    def _snapshot(self) -> dict[str, Any]:
+        # The Event Loop keeps changing rows while the writer serializes them.
+        return copy.deepcopy(
+            {
+                "actions": [*self._actions.values(), *self._invalid_actions],
+                "executions": {**self._executions, **self._invalid_executions},
+            }
+        )
+
+    def _write(self, payload: dict[str, Any]) -> None:
+        """Write one snapshot, keeping invalid entries and unknown fields on disk."""
         try:
             write_json_document(self._path, payload, CALENDAR_ACTIONS_FORMAT)
         except JsonDocumentWriteError as error:
             raise CalendarStorageError(str(error)) from error
         except OSError as error:
             raise CalendarStorageError(f"Cannot save calendar actions: {error}") from error
+
+    async def _validate_async(self, action: dict[str, Any]) -> None:
+        """Event-Loop-safe :meth:`_validate`: Agent and Session reads use the Session pool."""
+        if self._sessions is None:
+            self._validate(action)
+            return
+        await self._sessions.run_async(self._validate, action)
 
     def _validate(self, action: dict[str, Any], *, references: bool = True) -> None:
         _validate_action_record(action)
@@ -571,7 +603,8 @@ class CalendarActions:
         now = now or datetime.now(UTC)
         self._sleep_seconds = 30.0
         self._calendar._ensure_events_loaded()
-        self._recover()
+        await self._recover()
+        generation = self._generation
         live = {event.id: event for event in self._calendar.list_events()}
         desired: dict[
             str, tuple[dict[str, Any], dict[str, Any], CalendarEvent, EventOccurrence]
@@ -634,7 +667,12 @@ class CalendarActions:
                 del self._executions[key]
                 changed = True
         if changed:
-            self._save()
+            await self._save_async()
+            if self._generation != generation:
+                # Events or actions changed while the save was in flight; the
+                # woken scheduler recomputes before starting anything.
+                self._calendar._notify_action_changed()
+                return
         for key, values in desired.items():
             if key in self._workers or len(self._workers) >= 4 or self._trigger is None:
                 continue
@@ -673,7 +711,8 @@ class CalendarActions:
             error = task.exception()
             _LOGGER.error("Calendar action worker failed", exc_info=error)
 
-    def _recover(self) -> None:
+    async def _recover(self) -> None:
+        """Settle rows a previous process left claimed or running (once per load)."""
         if not self._recovery_pending or self._sessions is None:
             return
         for key in self._recovery_pending:
@@ -687,7 +726,7 @@ class CalendarActions:
                     summary = self._sessions.get(address).find_run_summary(run_id=row["run_id"])
                     if summary is not None and summary.status in _TERMINAL:
                         row["status"] = summary.status
-        self._save()
+        await self._save_async()
         self._recovery_pending.clear()
 
     async def _execute(
@@ -712,14 +751,14 @@ class CalendarActions:
 
         try:
             assert self._trigger is not None
-            self._validate(action)
+            await self._validate_async(action)
             remaining = (_instant(row["expires_at"]) - datetime.now(UTC)).total_seconds()
             if remaining <= 0:
                 mark(status="missed")
                 return
-            # The claim precedes any await that can admit work.
+            # The claim is durable before any await that can admit work.
             mark(status="claimed")
-            self._save()
+            await self._save_async()
             agent, project = parse_agent_address(action["target"])
             message = json.dumps(
                 {
@@ -748,7 +787,7 @@ class CalendarActions:
             self._runs[key] = run
             mark(status="running", run_id=run.id, session=run.session_id)
             try:
-                self._save()
+                await self._save_async()
             except CalendarStorageError:
                 _LOGGER.exception("Cannot persist admitted calendar Run (action=%s)", action["id"])
             self._calendar._notify_action_changed()
@@ -774,7 +813,7 @@ class CalendarActions:
         finally:
             self._runs.pop(key, None)
             self._workers.pop(key, None)
-            self._save()
+            await self._save_async()
             self._calendar._notify_action_changed()
 
 
