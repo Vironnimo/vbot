@@ -461,10 +461,15 @@ def test_file_type_is_rechecked_after_original_changes(tmp_path: Path) -> None:
 def test_public_projection_is_fail_closed_and_regenerates_urls(tmp_path: Path) -> None:
     image = tmp_path / "image.png"
     image.write_bytes(b"\x89PNG\r\n\x1a\nimage")
+    marker = f"file:{image}"
     message = ChatMessage.assistant(
         model="provider/model",
-        content=f"Result:\n{image}",
-        output_files=[AssistantFileReference(line_index=1, path=str(image.resolve()))],
+        content=f"Result:\n{marker}",
+        output_files=[
+            AssistantFileReference(
+                line_index=1, path=str(image.resolve()), start_index=0, end_index=len(marker)
+            )
+        ],
     )
 
     without_delivery = _visible_message(message)
@@ -558,10 +563,18 @@ def test_rpc_final_message_and_history_share_signed_original_file_projection(
 
 
 def _assistant_payload(path: Path) -> dict[str, Any]:
+    marker = f"file:{path}"
     return {
         "role": "assistant",
-        "content": str(path),
-        "output_files": [{"line_index": 0, "path": str(path.resolve())}],
+        "content": marker,
+        "output_files": [
+            {
+                "line_index": 0,
+                "path": str(path.resolve()),
+                "start_index": 0,
+                "end_index": len(marker),
+            }
+        ],
     }
 
 

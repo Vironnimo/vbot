@@ -382,7 +382,8 @@ def test_role_specific_relational_message_storage_round_trips(
             "input_tokens": 12,
             "output_tokens": 4,
             "cache_read_tokens": 2,
-            "estimated": False,
+            "output_tokens_estimated": True,
+            "estimated": True,
             "provider_detail": {"tier": "test"},
         },
         tool_calls=[
@@ -481,6 +482,11 @@ def test_role_specific_relational_message_storage_round_trips(
         assert connection.execute(
             "SELECT status, result_entry_key FROM tool_calls WHERE call_id = 'call-two'"
         ).fetchone() == ("interrupted", None)
+        # Usage provenance is stored per counter; the whole-turn summary is derived on read.
+        assert connection.execute(
+            "SELECT input_tokens_estimated, output_tokens_estimated, usage_extra_json "
+            "FROM assistant_entries WHERE usage_present = 1"
+        ).fetchone() == (None, 1, '{"provider_detail":{"tier":"test"}}')
         entries_before = connection.execute("SELECT COUNT(*) FROM entries").fetchone()[0]
 
     def fail_message_reconstruction(*_args, **_kwargs):

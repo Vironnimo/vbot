@@ -96,7 +96,6 @@ _USAGE_VALIDATORS: dict[str, Callable[[Any], bool]] = {
     "cache_read_tokens": _is_non_negative_int,
     "cache_write_tokens": _is_non_negative_int,
     "reasoning_tokens": _is_non_negative_int,
-    "estimated": _is_bool,
     "input_tokens_estimated": _is_bool,
     "output_tokens_estimated": _is_bool,
 }
@@ -106,11 +105,10 @@ _CHECKPOINT_USAGE_VALIDATORS: dict[str, Callable[[Any], bool]] = {
     "context_tokens_after": _is_non_negative_int,
     "compaction_duration_ms": _is_non_negative_int,
 }
-_USAGE_FLAG_COLUMNS = (
-    ("estimated", "usage_estimated"),
-    ("input_tokens_estimated", "input_tokens_estimated"),
-    ("output_tokens_estimated", "output_tokens_estimated"),
-)
+_USAGE_FLAG_COLUMNS = ("input_tokens_estimated", "output_tokens_estimated")
+# The whole-turn ``estimated`` summarizes the field-level flags (Message
+# validation keeps them in step), so it is derived on read instead of stored.
+_USAGE_SUMMARY_KEY = "estimated"
 _USAGE_COUNT_COLUMNS = (
     "input_tokens",
     "output_tokens",
@@ -235,15 +233,20 @@ def insert_entry(
 
 
 def _insert_assistant(connection: sqlite3.Connection, entry_key: int, message: ChatMessage) -> None:
-    usage, usage_extra, usage_present = _split_structured_fields(message.usage, _USAGE_VALIDATORS)
+    stored_usage = (
+        None
+        if message.usage is None
+        else {key: value for key, value in message.usage.items() if key != _USAGE_SUMMARY_KEY}
+    )
+    usage, usage_extra, usage_present = _split_structured_fields(stored_usage, _USAGE_VALIDATORS)
     timing, timing_extra, _timing_present = _timing_fields(message.reasoning_timing)
     connection.execute(
         "INSERT INTO assistant_entries (entry_key, phase, reasoning_scope, has_tool_calls, "
         "interrupted, interruption_cause, usage_present, input_tokens, output_tokens, "
-        "cache_read_tokens, cache_write_tokens, reasoning_tokens, usage_estimated, "
-        "input_tokens_estimated, output_tokens_estimated, reasoning_started_at, "
-        "reasoning_completed_at, reasoning_duration_ms, usage_extra_json, "
-        "reasoning_timing_extra_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "cache_read_tokens, cache_write_tokens, reasoning_tokens, input_tokens_estimated, "
+        "output_tokens_estimated, reasoning_started_at, reasoning_completed_at, "
+        "reasoning_duration_ms, usage_extra_json, reasoning_timing_extra_json) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             entry_key,
             message.phase,
@@ -253,10 +256,7 @@ def _insert_assistant(connection: sqlite3.Connection, entry_key: int, message: C
             message.interruption_cause,
             int(usage_present),
             *(usage.get(column) for column in _USAGE_COUNT_COLUMNS),
-            *(
-                None if key not in usage else int(usage[key])
-                for key, _column in _USAGE_FLAG_COLUMNS
-            ),
+            *(None if key not in usage else int(usage[key]) for key in _USAGE_FLAG_COLUMNS),
             _store_values._optional_timestamp(timing.get("started_at"), "reasoning timing"),
             _store_values._optional_timestamp(timing.get("completed_at"), "reasoning timing"),
             timing.get("duration_ms"),
@@ -523,9 +523,11 @@ class EntryBatch:
             for column in _USAGE_COUNT_COLUMNS:
                 if assistant[column] is not None:
                     usage[column] = assistant[column]
-            for usage_key, column in _USAGE_FLAG_COLUMNS:
+            for column in _USAGE_FLAG_COLUMNS:
                 if assistant[column] is not None:
-                    usage[usage_key] = bool(assistant[column])
+                    usage[column] = bool(assistant[column])
+            if any(assistant[column] == 1 for column in _USAGE_FLAG_COLUMNS):
+                usage[_USAGE_SUMMARY_KEY] = True
             data["usage"] = usage
         if assistant["has_tool_calls"]:
             calls: list[JsonObject] = []
@@ -552,8 +554,8 @@ class EntryBatch:
                 {
                     "path": file["path"],
                     "line_index": file["line_index"],
-                    **({} if file["start_index"] is None else {"start_index": file["start_index"]}),
-                    **({} if file["end_index"] is None else {"end_index": file["end_index"]}),
+                    "start_index": file["start_index"],
+                    "end_index": file["end_index"],
                 }
                 for file in files
             ]
@@ -664,7 +666,7 @@ _ASSISTANT_COLUMNS = (
     "usage_present, "
     + ", ".join(_USAGE_COUNT_COLUMNS)
     + ", "
-    + ", ".join(column for _key, column in _USAGE_FLAG_COLUMNS)
+    + ", ".join(_USAGE_FLAG_COLUMNS)
     + ", reasoning_started_at, reasoning_completed_at, reasoning_duration_ms, "
     "usage_extra_json, reasoning_timing_extra_json"
 )

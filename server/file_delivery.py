@@ -561,7 +561,7 @@ class FileDelivery:
             return projected
 
         lines = content.splitlines(keepends=True)
-        replacements_by_line: dict[int, list[tuple[int | None, int | None, str]]] = {}
+        replacements_by_line: dict[int, list[tuple[int, int, str]]] = {}
         for reference in references:
             if not isinstance(reference, dict):
                 continue
@@ -575,21 +575,14 @@ class FileDelivery:
                 or line_index < 0
                 or line_index >= len(lines)
                 or not isinstance(path_value, str)
+                or isinstance(start_index, bool)
+                or not isinstance(start_index, int)
+                or isinstance(end_index, bool)
+                or not isinstance(end_index, int)
             ):
                 continue
             presentation = self._presentation_for_path(path_value)
             if presentation is None:
-                continue
-            if start_index is None and end_index is None:
-                span: tuple[int | None, int | None] = (None, None)
-            elif (
-                isinstance(start_index, int)
-                and not isinstance(start_index, bool)
-                and isinstance(end_index, int)
-                and not isinstance(end_index, bool)
-            ):
-                span = (start_index, end_index)
-            else:
                 continue
             token = self._mint_token(presentation.path)
             label = _escape_markdown_label(presentation.path.name)
@@ -601,11 +594,7 @@ class FileDelivery:
                 else f'[{label}]({FILE_URL_PREFIX}{token} "{title}")'
             )
             replacements_by_line.setdefault(line_index, []).append(
-                (
-                    span[0],
-                    span[1],
-                    markdown,
-                )
+                (start_index, end_index, markdown)
             )
         for line_index, replacements in replacements_by_line.items():
             lines[line_index] = _apply_line_replacements(lines[line_index], replacements)
@@ -744,26 +733,16 @@ def _line_ending(value: str) -> str:
 
 def _apply_line_replacements(
     line: str,
-    replacements: list[tuple[int | None, int | None, str]],
+    replacements: list[tuple[int, int, str]],
 ) -> str:
     ending = _line_ending(line)
     body = line[: -len(ending)] if ending else line
-    legacy = [replacement for replacement in replacements if replacement[0] is None]
-    if legacy:
-        return legacy[-1][2] + ending
-
     for start_index, end_index, markdown in sorted(
         replacements,
-        key=lambda replacement: int(replacement[0] or 0),
+        key=lambda replacement: replacement[0],
         reverse=True,
     ):
-        if (
-            start_index is None
-            or end_index is None
-            or start_index < 0
-            or end_index <= start_index
-            or end_index > len(body)
-        ):
+        if start_index < 0 or end_index <= start_index or end_index > len(body):
             continue
         body = body[:start_index] + markdown + body[end_index:]
     return body + ending

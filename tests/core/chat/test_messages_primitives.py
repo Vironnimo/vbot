@@ -167,6 +167,25 @@ class TestReplySurface:
         assert "output_files" not in _message_to_request_dict(message)
         assert "output_files" not in _assistant_continuation_dict(message)
 
+    @pytest.mark.parametrize(
+        "span",
+        [
+            {},
+            {"start_index": 7},
+            {"start_index": 7, "end_index": 7},
+            {"start_index": -1, "end_index": 29},
+            {"start_index": True, "end_index": 29},
+        ],
+    )
+    def test_assistant_output_files_require_a_marker_span(self, span):
+        data = ChatMessage.assistant(
+            model="openai/gpt-5.2", content="Chart: file:chart.png"
+        ).to_dict()
+        data["output_files"] = [{"line_index": 0, "path": "chart.png", **span}]
+
+        with pytest.raises(ChatMessageValidationError, match="start_index and end_index"):
+            ChatMessage.from_dict(data)
+
     def test_channel_note_round_trips_and_renders_exact_reminder(self):
         surface = ReplySurface.channel(
             platform="telegram",
@@ -546,6 +565,34 @@ class TestChatMessageFactories:
         assert message.usage == expected_usage
         result = message.to_dict()
         assert result["usage"] == expected_usage
+
+    def test_assistant_usage_estimate_summary_round_trips_with_field_provenance(self):
+        usage = {"input_tokens": 150, "output_tokens": 12, "output_tokens_estimated": True, "estimated": True}
+        message = ChatMessage.assistant(model="openai/gpt-4.1", content="Hi", usage=usage)
+
+        assert ChatMessage.from_dict(message.to_dict()).usage == usage
+
+    @pytest.mark.parametrize(
+        ("usage", "error"),
+        [
+            ({"input_tokens": 150, "output_tokens": 12, "estimated": True}, "usage.estimated"),
+            ({"input_tokens": 150, "output_tokens": 12, "estimated": False}, "usage.estimated"),
+            (
+                {"input_tokens": 150, "output_tokens": 12, "input_tokens_estimated": False, "estimated": True},
+                "usage.estimated",
+            ),
+            (
+                {"input_tokens": 150, "output_tokens": 12, "input_tokens_estimated": True},
+                "requires estimated: true",
+            ),
+        ],
+    )
+    def test_assistant_usage_estimate_summary_must_match_field_provenance(self, usage, error):
+        data = ChatMessage.assistant(model="openai/gpt-4.1", content="Hi").to_dict()
+        data["usage"] = usage
+
+        with pytest.raises(ChatMessageValidationError, match=error):
+            ChatMessage.from_dict(data)
 
     def test_assistant_message_without_usage_defaults_to_none(self):
         message = ChatMessage.assistant(

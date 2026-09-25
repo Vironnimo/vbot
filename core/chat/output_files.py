@@ -23,19 +23,24 @@ _TRAILING_PROSE_DELIMITERS = frozenset('.,;!?)]}"`')
 
 @dataclass(frozen=True)
 class AssistantFileReference:
-    """One resolved regular file marked inside an Assistant-content line."""
+    """One resolved regular file marked inside an Assistant-content line.
+
+    ``start_index``/``end_index`` delimit the marker within that line; the server
+    projection replaces exactly this span.
+    """
 
     line_index: int
     path: str
-    start_index: int | None = None
-    end_index: int | None = None
+    start_index: int
+    end_index: int
 
     def to_dict(self) -> JsonObject:
-        payload: JsonObject = {"line_index": self.line_index, "path": self.path}
-        if self.start_index is not None:
-            payload["start_index"] = self.start_index
-            payload["end_index"] = self.end_index
-        return payload
+        return {
+            "line_index": self.line_index,
+            "path": self.path,
+            "start_index": self.start_index,
+            "end_index": self.end_index,
+        }
 
     @classmethod
     def from_dict(cls, data: Any) -> AssistantFileReference:
@@ -51,11 +56,7 @@ class AssistantFileReference:
             raise ChatMessageValidationError("output_files path must be a non-empty string")
         start_index = data.get("start_index")
         end_index = data.get("end_index")
-        if (start_index is None) != (end_index is None):
-            raise ChatMessageValidationError(
-                "output_files start_index and end_index must be provided together"
-            )
-        if start_index is not None and (
+        if (
             isinstance(start_index, bool)
             or not isinstance(start_index, int)
             or start_index < 0
@@ -64,7 +65,7 @@ class AssistantFileReference:
             or end_index <= start_index
         ):
             raise ChatMessageValidationError(
-                "output_files spans must be increasing non-negative integers"
+                "output_files start_index and end_index must be increasing non-negative integers"
             )
         return cls(
             line_index=line_index,

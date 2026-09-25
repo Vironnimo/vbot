@@ -83,7 +83,7 @@ def test_run_activity_returns_overlapping_runs_with_local_usage(tmp_path: Path) 
             _assistant(
                 model="openai/gpt-5",
                 at=BASE + timedelta(minutes=1),
-                usage={"input_tokens": 10, "output_tokens": 3, "estimated": True},
+                usage={"input_tokens": 10, "output_tokens": 3, "input_tokens_estimated": True, "output_tokens_estimated": True, "estimated": True},
             ),
             _tool(
                 name="read",

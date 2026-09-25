@@ -60,6 +60,8 @@ def test_estimated_turns_are_counted_but_never_summed() -> None:
                 "input_tokens": 9999,
                 "output_tokens": 9999,
                 "reasoning_tokens": 5000,
+                "input_tokens_estimated": True,
+                "output_tokens_estimated": True,
                 "estimated": True,
             }
         ),
@@ -203,7 +205,13 @@ def test_context_usage_falls_back_to_complete_request_without_provider_measureme
         {"role": "assistant", "content": "world"},
     ]
     context_usage = build_model_step_context_usage(
-        {"input_tokens": 10, "output_tokens": 2, "estimated": True},
+        {
+            "input_tokens": 10,
+            "output_tokens": 2,
+            "input_tokens_estimated": True,
+            "output_tokens_estimated": True,
+            "estimated": True,
+        },
         current_request,
     )
 
