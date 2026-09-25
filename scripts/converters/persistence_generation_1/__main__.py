@@ -142,7 +142,8 @@ def _verification_lines(verification: dict[str, Any]) -> list[str]:
         lines.append(
             f"  Sessions: {sessions['sessions_compared']} compared with their source history "
             f"({sessions['view_entries_compared']} entries), "
-            f"{sessions['explained_differences']} differences explained by skipped items"
+            f"{sessions['explained_differences']} differences explained by reported "
+            "history changes"
         )
         for loaded in sessions["loaded_through_the_application"]:
             lines.append(f"  Loaded: {loaded}")

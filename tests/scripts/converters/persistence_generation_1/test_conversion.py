@@ -48,7 +48,6 @@ from tests.scripts.converters.persistence_generation_1.legacy_sessions_support i
 
 BASE = SessionAddress(project_id=None, agent_id="main", session_id="base")
 BRANCH = SessionAddress(project_id=None, agent_id="main", session_id="branch")
-COUNTERS = SessionAddress(project_id=None, agent_id="main", session_id="counters")
 _TIMESTAMP = "2026-06-18T10:00:00Z"
 _LOCK_FILE = "data-store.lock"
 # A saved MCP result that no Tool Result returned: dropped and reported.
@@ -123,12 +122,14 @@ def _legacy_data_dir(root: Path) -> dict[str, list[str]]:
         history.append(legacy.finish_run(base, "run_1", minute=3))
         branch = legacy.fork(base, "branch", minute=4)
         branch_history = [*history, legacy.user(branch, "a follow-up", minute=5)]
-        # Retired Reflection counters: one renamed, and one dropped and reported in a
-        # Session without history, whose report item explains no history difference.
+        # Retired Reflection counters: one renamed, and one dropped and reported. The
+        # fork's report item is about metadata, so it explains no history difference.
         legacy.mutate_metadata(
             base, lambda metadata: metadata.update(reflection_counters=_RENAMED_COUNTERS)
         )
-        legacy.session("counters", minute=8, metadata={"reflection_counters": _DROPPED_COUNTERS})
+        legacy.mutate_metadata(
+            branch, lambda metadata: metadata.update(reflection_counters=_DROPPED_COUNTERS)
+        )
         # The source goes on after the fork; the fork keeps its view.
         history.append(legacy.user(base, "later", minute=6))
         history.append(legacy.note(base, "a note", minute=7))
@@ -180,7 +181,7 @@ def test_dry_run_verifies_everything_and_leaves_the_data_directory_unchanged(
     after.pop(_LOCK_FILE, None)
     assert after == before
     assert report["result"] == "verified"
-    assert report["areas"]["sessions"]["sessions"] == 3
+    assert report["areas"]["sessions"]["sessions"] == 2
     assert report["areas"]["sessions"]["usage_provenance_derived"] == 1
     assert report["areas"]["sessions"]["output_file_spans_derived"] == 1
     assert report["areas"]["sessions"]["reflection_counter_renamed"] == 1
@@ -193,7 +194,7 @@ def test_dry_run_verifies_everything_and_leaves_the_data_directory_unchanged(
         "channels",
         "ext.swarm.swarm",
     }
-    assert verification["sessions"]["sessions_compared"] == 3
+    assert verification["sessions"]["sessions_compared"] == 2
     assert verification["sessions"]["explained_differences"] == 0
     assert len(verification["sessions"]["loaded_through_the_application"]) == 2
     assert verification["json_documents"]["documents_with_errors"] == 0
@@ -208,6 +209,8 @@ def test_dry_run_verifies_everything_and_leaves_the_data_directory_unchanged(
         "channels": 1,
         "sessions": 1,
     }
+    [counter] = [item for item in report["skipped"] if item["area"] == "sessions"]
+    assert counter["changes_history"] is False
     assert report["areas"]["json_documents"]["retired_tool_names_converted"] == 1
     assert report["sizes"]["installed_bytes"] > 0
     assert read_maintenance(data_dir) is None
@@ -266,7 +269,7 @@ def test_install_registers_every_database_and_moves_replaced_files_aside(
             "iterations_since_skill_review": 3,
             "generation": 0,
         }
-        assert manager.get_metadata(COUNTERS)["reflection_counters"] == {
+        assert manager.get_metadata(BRANCH)["reflection_counters"] == {
             "turns_since_memory_review": 2
         }
     assert all(report.ok for report in validate_data_dir_config(data_dir))
@@ -342,27 +345,62 @@ def test_a_failing_area_leaves_the_source_untouched_and_releases_the_guard(
     assert read_maintenance(data_dir) is None
 
 
+@pytest.mark.parametrize(
+    "change",
+    [
+        "UPDATE entries SET superseded_at_seq = seq WHERE entry_id = :last",
+        "DELETE FROM sessions WHERE session_id = 'branch'",
+    ],
+    ids=["an entry hidden", "the Session missing"],
+)
 def test_a_session_whose_history_changed_unreported_fails_verification(
-    data_dir: Path, monkeypatch: pytest.MonkeyPatch
+    data_dir: Path, monkeypatch: pytest.MonkeyPatch, change: str
 ) -> None:
     histories = _legacy_data_dir(data_dir)
 
-    def lose_an_entry(context: ConversionContext) -> None:
+    def change_the_branch(context: ConversionContext) -> None:
         sessions.convert(context)
+        # The fork has a report item, but one about its metadata.
+        assert [
+            item.changes_history
+            for item in context.report.skipped
+            if item.area == sessions.AREA and "/main/branch " in item.item
+        ] == [False]
         with closing(sqlite3.connect(context.staging / "sessions.db")) as connection:
-            connection.execute(
-                "UPDATE entries SET superseded_at_seq = seq WHERE entry_id = ?",
-                (histories["branch"][-1],),
-            )
+            connection.execute(change, {"last": histories["branch"][-1]})
             connection.commit()
 
     areas = tuple(
-        Area(area.name, lose_an_entry) if area.name == sessions.AREA else area for area in AREAS
+        Area(area.name, change_the_branch) if area.name == sessions.AREA else area for area in AREAS
     )
     monkeypatch.setattr(conversion, "AREAS", areas)
 
     with pytest.raises(ConversionFailedError, match="differ from their source history"):
         convert_data_directory(data_dir, dry_run=True)
+
+
+def test_a_reported_history_change_explains_the_difference(data_dir: Path) -> None:
+    histories = _legacy_data_dir(data_dir)
+    # The source's last Message, a note written after the fork, lost its content:
+    # the converter drops it.
+    with closing(sqlite3.connect(data_dir / "sessions.db")) as connection:
+        connection.execute(
+            "UPDATE messages SET content = NULL WHERE message_id = ?", (histories["base"][-1],)
+        )
+        connection.commit()
+
+    report = convert_data_directory(data_dir, dry_run=True)
+
+    [dropped] = [
+        item
+        for item in report["skipped"]
+        if item["area"] == "sessions" and histories["base"][-1] in item["reason"]
+    ]
+    assert dropped["changes_history"] is True
+    assert "/main/base " in dropped["item"]
+    check = report["verification"]["sessions"]
+    assert check["explained_differences"] == 1
+    assert check["explained_examples"][0].startswith(dropped["item"])
 
 
 def test_sources_changed_during_the_conversion_are_not_installed(

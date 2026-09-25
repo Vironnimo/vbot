@@ -44,8 +44,22 @@ def test_report_accumulates_counts_and_skips(tmp_path: Path) -> None:
     context.report.count("sessions", "entries", 3)
     context.report.count("sessions", "entries")
     context.report.skip("mcp", "res_abc", "no matching Tool result")
+    context.report.skip("sessions", "session s1", "user msg_1 dropped", changes_history=True)
 
     assert context.report.to_dict() == {
         "counts": {"sessions": {"entries": 4}},
-        "skipped": [{"area": "mcp", "item": "res_abc", "reason": "no matching Tool result"}],
+        "skipped": [
+            {
+                "area": "mcp",
+                "item": "res_abc",
+                "reason": "no matching Tool result",
+                "changes_history": False,
+            },
+            {
+                "area": "sessions",
+                "item": "session s1",
+                "reason": "user msg_1 dropped",
+                "changes_history": True,
+            },
+        ],
     }
