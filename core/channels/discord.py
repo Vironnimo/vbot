@@ -187,7 +187,7 @@ class DiscordChannelAdapter(ChannelAdapter):
         """Relay one background Run through the composed conversation engine."""
         await self._engine.relay_run(run, reply_plan)
 
-    def ensure_outbound_session(self, platform_target: str) -> RouteFacts:
+    async def ensure_outbound_session(self, platform_target: str) -> RouteFacts:
         """Ensure the Session mirroring a cached Discord target exists."""
         target_id = _parse_platform_target(platform_target)
         normalized_target = str(target_id)
@@ -204,7 +204,7 @@ class DiscordChannelAdapter(ChannelAdapter):
             self._remember_conversation(conversation)
         else:
             self._known_conversations.move_to_end(normalized_target)
-        return self._engine.ensure_channel_session(conversation)
+        return await self._engine.ensure_channel_session(conversation)
 
     # -- ConversationTransport --------------------------------------------------------
 

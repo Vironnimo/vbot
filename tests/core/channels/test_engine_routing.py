@@ -6,6 +6,7 @@ import asyncio
 import threading
 from typing import Any
 
+from core.database import DatabaseUnavailableError
 from core.sessions import SessionAddress
 
 from .engine_test_support import (
@@ -54,9 +55,11 @@ def test_derive_session_id(
 
 
 @pytest.mark.asyncio
-async def test_async_route_preparation_runs_each_database_on_its_own_pool(
+@pytest.mark.parametrize("direction", ["inbound", "outbound"])
+async def test_async_routing_runs_each_database_on_its_own_pool(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    direction: str,
 ) -> None:
     engine, _sessions, _trigger, _transport = make_engine(tmp_path)
     routing = engine._routing
@@ -78,18 +81,49 @@ async def test_async_route_preparation_runs_each_database_on_its_own_pool(
 
     monkeypatch.setattr(routing, "_route_facts", blocking_route_facts)
     monkeypatch.setattr(routing, "_update_session_metadata", recorded_update)
-    route_task = asyncio.create_task(routing._prepare_inbound_route_async(make_conversation()))
+
+    async def route_conversation() -> RouteFacts:
+        if direction == "inbound":
+            route, _reply_plan = await routing._prepare_inbound_route_async(make_conversation())
+            return route
+        # A proactive channel_send target.
+        return await engine.ensure_channel_session(make_conversation())
+
+    route_task = asyncio.create_task(route_conversation())
     assert await asyncio.to_thread(started.wait, 2)
     await asyncio.sleep(0)
 
     assert route_task.done() is False
     release.set()
-    route, _reply_plan = await route_task
+    route = await route_task
     assert route.session_id == SESSION_ID
     # Pointer work on the Channel state's pool, Session work on the Session pool.
     assert threads["pointer"].startswith("vbot-db-channels")
     assert threads["session"].startswith("vbot-db-sessions")
     await engine.stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("closed", ["channels", "sessions"])
+async def test_outbound_routing_on_a_closed_database_fails_cleanly(
+    tmp_path: Path, closed: str
+) -> None:
+    engine, chat_sessions, _trigger, _transport = make_engine(tmp_path)
+    try:
+        if closed == "channels":
+            channel_state(tmp_path).close()
+        else:
+            chat_sessions.close()
+
+        with pytest.raises(DatabaseUnavailableError):
+            await engine.ensure_channel_session(make_conversation())
+
+        if closed == "channels":
+            # The pointer read fails before any Session is created.
+            address = SessionAddress(project_id=None, agent_id="assistant", session_id=SESSION_ID)
+            assert chat_sessions.exists(address) is False
+    finally:
+        await engine.stop()
 
 
 @pytest.mark.asyncio
@@ -132,8 +166,8 @@ async def test_ensure_channel_session_reuses_session_without_writing_notes(
 ) -> None:
     engine, chat_sessions, _trigger, _transport = make_engine(tmp_path)
 
-    route = engine.ensure_channel_session(make_conversation())
-    engine.ensure_channel_session(make_conversation())
+    route = await engine.ensure_channel_session(make_conversation())
+    await engine.ensure_channel_session(make_conversation())
 
     assert route == RouteFacts(agent_id="assistant", session_id=SESSION_ID)
     session = chat_sessions.get(
@@ -194,6 +228,6 @@ async def test_ensure_channel_session_follows_pointer_after_new(tmp_path: Path) 
     new_session_id = channel_state(tmp_path).active_session_id("tg-assistant", SESSION_ID)
     assert new_session_id is not None
     # Proactive channel_send resolves to the active (pointer) session, not the anchor.
-    route = engine.ensure_channel_session(make_conversation())
+    route = await engine.ensure_channel_session(make_conversation())
     assert route == RouteFacts(agent_id="assistant", session_id=new_session_id)
     await engine.stop()

@@ -107,8 +107,8 @@ async def channel_case(
         service = Mock()
         service.list_channels.return_value = configs
         service.send = AsyncMock(side_effect=receive)
-        service.ensure_outbound_session.return_value = RouteFacts(
-            agent_id="probe-agent", session_id="target"
+        service.ensure_outbound_session = AsyncMock(
+            return_value=RouteFacts(agent_id="probe-agent", session_id="target")
         )
         registry = ToolRegistry()
         register_channel_send_tool(registry, service, sessions, max_attachment_size_bytes=10000)

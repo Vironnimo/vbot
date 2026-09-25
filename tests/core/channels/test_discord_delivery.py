@@ -204,7 +204,7 @@ async def test_ensure_outbound_session_uses_cached_target_kind(tmp_path: Path) -
         allowed_chat_ids=[100],
     )
 
-    route = adapter.ensure_outbound_session("100")
+    route = await adapter.ensure_outbound_session("100")
 
     assert route.session_id == "ch-dc-assistant-100"
     assert chat_sessions.exists(
