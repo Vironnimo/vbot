@@ -13,11 +13,17 @@ class ConversionError(Exception):
 
 @dataclass(frozen=True, slots=True)
 class SkippedItem:
-    """One source item an area dropped or approximated."""
+    """One source item an area dropped or approximated.
+
+    ``changes_history`` marks an item that can change which entries a Session's
+    current history shows, such as a dropped history record. Only such items
+    explain a history difference in the Session check.
+    """
 
     area: str
     item: str
     reason: str
+    changes_history: bool = False
 
 
 @dataclass(slots=True)
@@ -31,14 +37,21 @@ class ConversionReport:
         area_counts = self.counts.setdefault(area, {})
         area_counts[key] = area_counts.get(key, 0) + amount
 
-    def skip(self, area: str, item: str, reason: str) -> None:
-        self.skipped.append(SkippedItem(area=area, item=item, reason=reason))
+    def skip(self, area: str, item: str, reason: str, *, changes_history: bool = False) -> None:
+        self.skipped.append(
+            SkippedItem(area=area, item=item, reason=reason, changes_history=changes_history)
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "counts": {area: dict(values) for area, values in self.counts.items()},
             "skipped": [
-                {"area": item.area, "item": item.item, "reason": item.reason}
+                {
+                    "area": item.area,
+                    "item": item.item,
+                    "reason": item.reason,
+                    "changes_history": item.changes_history,
+                }
                 for item in self.skipped
             ],
         }
