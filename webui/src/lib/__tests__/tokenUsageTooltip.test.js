@@ -112,7 +112,13 @@ describe('formatTokenUsageTooltip', () => {
   it('appends the estimation note for estimated usage', () => {
     const tooltip = formatTokenUsageTooltip(
       null,
-      { input_tokens: 100, output_tokens: 10, estimated: true },
+      {
+        input_tokens: 100,
+        input_tokens_estimated: true,
+        output_tokens: 10,
+        output_tokens_estimated: true,
+        estimated: true,
+      },
       null,
     );
 
@@ -309,7 +315,13 @@ describe('contextUsageCardModel', () => {
   it('keeps estimation notes with their section', () => {
     const card = contextUsageCardModel(
       null,
-      { input_tokens: 10, output_tokens: 2, estimated: true },
+      {
+        input_tokens: 10,
+        input_tokens_estimated: true,
+        output_tokens: 2,
+        output_tokens_estimated: true,
+        estimated: true,
+      },
       null,
       262144,
     );
