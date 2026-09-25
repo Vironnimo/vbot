@@ -187,6 +187,12 @@ async def test_missing_old_string_shows_closest_text_and_existing_new_text(run):
         "The new text already occurs at line 1; if this change was made earlier, nothing more "
         "is needed."
     ) in done["error"]["message"]
+    # What remains of a deletion occurs anyway and proves nothing.
+    leftover = await run(
+        {"file_path": "c.py", "old_string": "x = 1\ny = 2", "new_string": "y = 2"},
+        **{"c.py": "x = 5\ny = 2\n"},
+    )
+    assert "already occurs" not in leftover["error"]["message"]
 
 
 @pytest.mark.asyncio

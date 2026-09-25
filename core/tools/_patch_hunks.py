@@ -35,6 +35,10 @@ from core.tools.tools import JsonObject
 
 _GUTTER_WARNING = "Removed read-output line-number prefixes before applying the hunk."
 _ESCAPE_WARNING = "Normalized escaped patch text after the literal text did not match."
+_EOF_WARNING = (
+    "The lines before *** End of File are not at the end of the file; the hunk was applied "
+    "where they are."
+)
 _BREAK = TEXT_LINE_BREAK
 _GUTTER = re.compile(r"^\s*[1-9][0-9]*(?::[1-9][0-9]*)?\|")
 _ESCAPE = re.compile(r"\\(n|r|t|\\|\"|')")
@@ -316,7 +320,10 @@ def _apply_replacement(content: str, hunk: _Hunk, path: object) -> tuple[str, li
             replace_all=True,
             typographic=True,
         )
-        if isinstance(present, FuzzyReplacement):
+        # Text the old text already holds proves nothing about an earlier edit.
+        if isinstance(present, FuzzyReplacement) and replacement.new.strip() not in (
+            replacement.old
+        ):
             details["already_present"] = present.first_changed_line
     if not replace_all and present is None and not hunk.precise_only:
         copied = replace_copied(content, replacement.old, replacement.new)
@@ -492,6 +499,16 @@ def _apply_hunk(content: str, hunk: _Hunk, path: object) -> tuple[str, list[str]
     if isinstance(found, AmbiguousFuzzyMatch):
         details, values = _ambiguity(content, found, offset)
         raise _PatchError("ambiguous_match", path=path, label=hunk.label, details=details, **values)
+    if found is None and hunk.eof:
+        # The marker only claims where the lines are; the lines alone may still place
+        # them. Text found elsewhere never proves the change was made earlier.
+        try:
+            edited, placed = _apply_hunk(content, replace(hunk, eof=False), path)
+        except _PatchError:
+            pass
+        else:
+            if edited != content:
+                return edited, [*warnings, _EOF_WARNING, *placed]
     if found is None:
         if any(_GUTTER.match(t) for _, t in hunk.lines):
             raise _PatchError(
