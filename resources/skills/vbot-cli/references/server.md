@@ -129,4 +129,15 @@ vbot doctor settings [--data-dir <path>]
 vbot doctor config [--data-dir <path>]
 ```
 
-Local validation with file/path diagnostics; no server needed. `settings` checks `settings.json` only; `config` checks the full user-editable JSON bundle (settings, agents, channels, cron jobs, Bootstrap jobs). Run `doctor config` after any manual JSON edit. Doctor takes only `--data-dir`, no `--host`/`--port`.
+Local validation with file/path diagnostics; no server needed. Doctor takes only `--data-dir`, no `--host`/`--port`. Run `doctor config` after any manual JSON edit.
+
+- `settings` checks `settings.json` only.
+- `config` checks every JSON document vBot keeps in the data directory: `settings.json`, Agent configs and the Agent order, Project files, Channel configs, Cron and Bootstrap jobs, Calendar events and actions, the Skill policy, Terminal groups and launch history, System Prompt layouts, OAuth token files, MCP connections, and attachment and speech metadata. It does not check the databases; `vbot data-store status` reports their health (`data-store.md`).
+
+Reading the `doctor config` report:
+
+- The header shows `doctor config: ok` or `doctor config: failed`, the `data_dir`, `files_checked`, and `errors:` and `warnings:` counts when there are any. A final line summarizes the result.
+- Each document then gets one line, `<path>: valid`; a missing `settings.json` shows as `missing (defaults will be used)`. A directory with five or more valid documents, typically attachment metadata, shows as one line `<dir>/: N documents valid`.
+- A document with problems is always listed by name, `<path>:`, followed by one line per problem: `- error <json-path>: <message>` or `- warning <json-path>: <message>`.
+- Errors fail the command; warnings do not. An unknown field is a warning: vBot ignores it but keeps it when it rewrites the file.
+- A `format_version` error saying the version is required means the file comes from a vBot release before the current data format and the whole data directory needs the one-time offline conversion; a version newer than this vBot reads means a newer vBot wrote the file. Do not edit `format_version`; report either case to the user.

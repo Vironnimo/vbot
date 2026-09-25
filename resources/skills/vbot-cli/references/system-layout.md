@@ -41,14 +41,15 @@ Some directories are created only when their owning feature first writes data.
 | `.env` | Sensitive fallback credentials; the process environment has higher precedence | Use Provider, Channel, or Extension credential commands; never print the file or expose values |
 | `agents/<agent-id>/agent.json` | Identity Agent configuration | `vbot agent show/list/update` |
 | `agents/<agent-id>/workspace/` | Default Workspace with `SOUL.md`, `USER.md`, and `MEMORY.md`; the configured Workspace may instead be external | `vbot agent show`; use the Memory and file Tools according to their ownership |
-| `sessions.db` and `data-store.json` | Canonical current-format Session history, and the marker that authorizes every canonical database and records its identity | Use `vbot session ...` for Sessions and `vbot data-store ...` for health, snapshots, recovery, and incident acknowledgement; legacy JSONL is input only for the explicit offline converter. |
+| `sessions.db`, `channels.db`, `provider-usage.db`, `decisions.db`, and `data-store.json` | Canonical SQLite databases: Session history (Project and Identity Sessions, archived ones included), Channel state (conversation routing, group access, delivery receipts), Provider usage samples, and experiment/evaluation decisions; `data-store.json` is the marker that authorizes every canonical database and records its identity | Use `vbot session ...` for Sessions and `vbot data-store ...` for health, snapshots, recovery, and incident acknowledgement; read `sessions.db` only read-only as `session-search.md` describes; never write or copy these files |
 | `agents/<agent-id>/skills/` | Skills private to one Identity Agent | `vbot skill read/create/update/delete --scope agent:<agent-id>` |
 | `agents/<agent-id>/prompts/` | Agent-scoped System Prompt layout and overrides when custom prompting is enabled | `vbot prompt ... --scope agent:<agent-id>` |
 | `projects/<project-id>/project.json` | Project record, including the external cwd and Project policy | `vbot project show/list/set` |
-| `snapshots/`, `incidents/` and `quarantine/` | Verified data snapshots of the canonical databases and JSON documents, recovery incidents, and damaged database files or replaced JSON documents kept as evidence | `vbot data-store ...`; Project and Identity Session history both live in `sessions.db` |
+| `extension-data/<extension-id>/` | Extension-owned data: canonical Extension databases (`*.db`, registered in `data-store.json`) and files such as the MCP Extension's `connections.json` | Managed by the owning Extension; for a removed Extension, `vbot data-store unregister ext.<extension-id>.<name> --yes` releases its database, only when the user asks (`data-store.md`) |
+| `snapshots/`, `incidents/` and `quarantine/` | Verified data snapshots of the canonical databases and JSON documents, recovery incidents, and damaged database files or replaced JSON documents kept as evidence | `vbot data-store ...` |
 | `skills/` | User-global Skills shared across Identity Agents, subject to their policy | `vbot skill ... --scope global` |
 | `prompts/` | Default-scope System Prompt layout and overrides | `vbot prompt ... --scope default` |
-| `channels/<channel-id>/` | Channel configuration plus Channel-owned routing/idempotency state | `vbot channel list/status/update`; credentials remain outside Channel JSON |
+| `channels/<channel-id>/` | Channel configuration `channel.json`; a WhatsApp Channel also keeps its bridge installation and pairing files here. Routing and delivery state live in `channels.db` | `vbot channel list/status/update`; credentials remain outside Channel JSON |
 | `cron/` | Cron jobs and scheduler-owned once-fire claims | `vbot cron list/create/update/delete` |
 | `bootstrap/` | Startup-triggered Agent Run jobs | `vbot bootstrap list/create/update/delete` |
 | `artifacts/attachments/` | Durable uploaded/downloaded blobs with JSON sidecars | Resolve through Session/attachment behavior; do not infer content from filename extensions alone |
@@ -60,7 +61,8 @@ Some directories are created only when their owning feature first writes data.
 | `artifacts/performance/` | Performance recordings: a timeline trace plus a summary per recording; the newest 20 are kept | `vbot performance recordings/record`; do not hand-edit |
 | `oauth/` | Sensitive OAuth token state | Provider connect/status/disconnect commands; never print or copy tokens into chat |
 | `extensions/` | User-installed single-file or package Extensions and optional bundled Extension Skills | `vbot extensions list/reload/enable/disable`; additional configured roots may live elsewhere |
-| `archive/` | System-owned archived Agent, Project, and Session trees created by destructive lifecycle operations | Inspect only to understand or recover an archived resource; do not treat it as active state |
+| `archive/` | System-owned archived Agent and Project trees (`archive/agents/`, `archive/projects/`) created by delete operations; archived Sessions stay in `sessions.db` | Inspect only to understand or recover an archived resource; do not treat it as active state |
+| `pre-generation-1/` | Present only after the one-time conversion to the current data format: every file the conversion replaced, including old copies of credential files, plus `conversion-report.json`; vBot never reads it | Do not read credentials from it or restore files from it; deleting it is the user's decision |
 | `artifacts/temp/bash/` and `artifacts/temp/subagents/` | Retained diagnostic output with category-specific expiry | Inspect when a Tool points to a retained file; do not treat it as durable application state |
 | `artifacts/temp/atomic/` | Short-lived atomic-write and refresh staging | Never use as a source of truth |
 
