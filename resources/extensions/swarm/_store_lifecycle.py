@@ -112,61 +112,63 @@ def _participant_status(
     cursor: str | None,
     limit: int,
 ) -> Json:
-    connection = db._require_connection()
-    _participant(connection, swarm_id, participant_id)
-    high = int(
-        connection.execute(
-            "SELECT COALESCE(MAX(ordinal),0) FROM participants WHERE swarm_id=?", (swarm_id,)
-        ).fetchone()[0]
-    )
-    scope = f"{swarm_id}:{participant_id}:{limit}"
-    offset = db._cursor(cursor, "status", scope, high)[0] if cursor else 0
-    rows = connection.execute(
-        "SELECT id,display_name,state FROM participants WHERE swarm_id=? ORDER BY ordinal LIMIT ? OFFSET ?",
-        (swarm_id, limit + 1, offset),
-    ).fetchall()
-
-    self_row = connection.execute(
-        "SELECT id,state FROM participants WHERE id=?",
-        (participant_id,),
-    ).fetchone()
-    totals = {
-        str(row["state"]): int(row["count"])
-        for row in connection.execute(
-            "SELECT state,COUNT(*) AS count FROM participants WHERE swarm_id=? GROUP BY state",
-            (swarm_id,),
+    with db._read() as connection:
+        _participant(connection, swarm_id, participant_id)
+        high = int(
+            connection.execute(
+                "SELECT COALESCE(MAX(ordinal),0) FROM participants WHERE swarm_id=?", (swarm_id,)
+            ).fetchone()[0]
         )
-    }
-    settings = connection.execute(
-        "SELECT delivery_json FROM swarm_settings WHERE swarm_id=?", (swarm_id,)
-    ).fetchone()
-    delivery = _load(settings["delivery_json"])
-    receive = {
-        label: [
-            route for route in ("main", "discussion", "ping") if delivery[route]["mode"] == mode
+        scope = f"{swarm_id}:{participant_id}:{limit}"
+        offset = db._cursor(cursor, "status", scope, high)[0] if cursor else 0
+        rows = connection.execute(
+            "SELECT id,display_name,state FROM participants WHERE swarm_id=? ORDER BY ordinal LIMIT ? OFFSET ?",
+            (swarm_id, limit + 1, offset),
+        ).fetchall()
+
+        self_row = connection.execute(
+            "SELECT id,state FROM participants WHERE id=?",
+            (participant_id,),
+        ).fetchone()
+        totals = {
+            str(row["state"]): int(row["count"])
+            for row in connection.execute(
+                "SELECT state,COUNT(*) AS count FROM participants WHERE swarm_id=? GROUP BY state",
+                (swarm_id,),
+            )
+        }
+        settings = connection.execute(
+            "SELECT delivery_json FROM swarm_settings WHERE swarm_id=?", (swarm_id,)
+        ).fetchone()
+        delivery = _load(settings["delivery_json"])
+        receive = {
+            label: [
+                route for route in ("main", "discussion", "ping") if delivery[route]["mode"] == mode
+            ]
+            for label, mode in (("automatic", "all"), ("when_idle", "idle"), ("on_request", "pull"))
+        }
+        roster = [
+            {"id": row["id"], "name": row["display_name"], "state": row["state"]}
+            for row in rows[:limit]
         ]
-        for label, mode in (("automatic", "all"), ("when_idle", "idle"), ("on_request", "pull"))
-    }
-    roster = [
-        {"id": row["id"], "name": row["display_name"], "state": row["state"]}
-        for row in rows[:limit]
-    ]
-    consumed = len(roster)
-    has_more = consumed < len(rows)
-    main = _main(connection, swarm_id)
-    return {
-        "self": {"id": self_row["id"], "state": self_row["state"]},
-        "main_discussion_id": main,
-        "delivery": {label: routes for label, routes in receive.items() if routes},
-        "wake_on_messages": [
-            route for route in ("main", "discussion", "ping") if delivery[route]["wake_idle"]
-        ],
-        "pending_count": _pending_count(connection, swarm_id, participant_id),
-        "state_totals": totals,
-        "roster": roster,
-        "has_more": has_more,
-        "cursor": db._make_cursor("status", scope, high, offset + consumed) if has_more else None,
-    }
+        consumed = len(roster)
+        has_more = consumed < len(rows)
+        main = _main(connection, swarm_id)
+        return {
+            "self": {"id": self_row["id"], "state": self_row["state"]},
+            "main_discussion_id": main,
+            "delivery": {label: routes for label, routes in receive.items() if routes},
+            "wake_on_messages": [
+                route for route in ("main", "discussion", "ping") if delivery[route]["wake_idle"]
+            ],
+            "pending_count": _pending_count(connection, swarm_id, participant_id),
+            "state_totals": totals,
+            "roster": roster,
+            "has_more": has_more,
+            "cursor": db._make_cursor("status", scope, high, offset + consumed)
+            if has_more
+            else None,
+        }
 
 
 def _record_run_started(

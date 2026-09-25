@@ -61,7 +61,7 @@ from .agent_text import (
     REPLAYED,
     STATE_PARAMETERS,
 )
-from .store import SwarmStore, SwarmStoreError
+from .store import DATABASE_NAME, SCHEMA_SQL, SwarmStore, SwarmStoreError
 from .wiki_text import WIKI_ERRORS, WIKI_PARAMETERS
 
 __all__ = ["Json", "SwarmExtension", "register"]
@@ -114,7 +114,7 @@ class SwarmExtension:
         self._control_lock = asyncio.Lock()
 
     async def start(self, host: ExtensionHost) -> None:
-        if host.state_dir is None or host.temporary_agents is None:
+        if host.open_database is None or host.temporary_agents is None:
             raise RuntimeError("Swarm requires the owner-bound Extension host")
         self.host = host
         groups = host.temporary_agents
@@ -124,10 +124,8 @@ class SwarmExtension:
                 return None
             return await groups.delivery_receipt(address, generation, receipt_id)
 
-        self.store = SwarmStore(
-            host.state_dir / "swarm.db",
-            lookup_delivery_receipt=receipt,
-        )
+        database = await host.open_database(DATABASE_NAME, SCHEMA_SQL)
+        self.store = SwarmStore(database, lookup_delivery_receipt=receipt)
         await self.store.open()
         await self.store.recover_interrupted()
 

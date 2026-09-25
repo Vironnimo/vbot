@@ -14,7 +14,13 @@ from core.agents.temporary import (
 from core.chat import ChatMessage
 from core.chat.messages import ToolCall
 from core.database import write_bootstrap_marker
-from core.extensions import ExtensionAPI, ExtensionRecord, ExtensionRegistry
+from core.extensions import (
+    ExtensionAPI,
+    ExtensionRecord,
+    ExtensionRegistrationIdentity,
+    ExtensionRegistry,
+)
+from core.extensions.databases import ExtensionDatabases
 from core.extensions.extensions import ExtensionDeclarations
 from core.extensions.operations import ExtensionHost
 from core.runs import ChatRunManager, RunExecutionOwner
@@ -49,6 +55,7 @@ async def board(tmp_path):
     )
     tools = ToolRegistry()
     registry.apply_tools(tools)
+    databases = ExtensionDatabases(tmp_path)
     host = ExtensionHost(
         data_dir=tmp_path,
         sample=None,
@@ -59,6 +66,7 @@ async def board(tmp_path):
         set_credential=None,
         state_dir=tmp_path,
         temporary_agents=groups,
+        open_database=databases.opener(ExtensionRegistrationIdentity("swarm", "registration")),
     )
     await api.operations.startup[0](host)
     service = declarations.tools[0].handler.__self__
@@ -134,11 +142,13 @@ async def board(tmp_path):
         tools=tools,
         registry=registry,
         groups=groups,
+        databases=databases,
     )
     try:
         yield fixture
     finally:
         await service.close()
+        databases.close()
         await manager.aclose()
         sessions.close()
 
@@ -699,20 +709,21 @@ async def test_delete_removes_board_and_bound_sessions_but_keeps_profile_and_oth
     assert board.sessions.exists(ordinary) and board.sessions.exists(foreign.address)
     assert await board.store.get_profile(profile["id"]) == profile
     assert [row["id"] for row in (await board.store.list_swarms()).entries] == [other["swarm_id"]]
-    connection = board.store._database._connection
-    for table in (
-        "posts",
-        "recipients",
-        "delivery_batches",
-        "delivery_batch_entries",
-        "participant_sessions",
-        "swarm_events",
-    ):
-        assert connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == (
-            1 if table == "posts" else 0
-        )
-    assert not connection.execute("PRAGMA foreign_key_check").fetchall()
-    assert connection.execute("SELECT COUNT(*) FROM requests").fetchone()[0] == 1
+    (database,) = board.databases.open_databases()
+    with database.read() as connection:
+        for table in (
+            "posts",
+            "recipients",
+            "delivery_batches",
+            "delivery_batch_entries",
+            "participant_sessions",
+            "swarm_events",
+        ):
+            assert connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == (
+                1 if table == "posts" else 0
+            )
+        assert not connection.execute("PRAGMA foreign_key_check").fetchall()
+        assert connection.execute("SELECT COUNT(*) FROM requests").fetchone()[0] == 1
     with pytest.raises(ValueError, match="swarm_not_found"):
         await board.service.operation("swarms.resume", {"swarm_id": sid, "request_id": "resume"})
 

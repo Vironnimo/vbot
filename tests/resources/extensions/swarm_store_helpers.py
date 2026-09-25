@@ -3,9 +3,18 @@
 from __future__ import annotations
 
 # mypy: disable-error-code=arg-type
+from pathlib import Path
+
 import pytest_asyncio
 
-from resources.extensions.swarm.store import SwarmStore
+from core.database import open_offline_database
+from core.extensions.databases import Database, extension_database_spec
+from resources.extensions.swarm.store import SCHEMA_SQL, SwarmStore
+
+
+def open_swarm_database(directory: Path, name: str = "swarm") -> Database:
+    """Open a Swarm-schema kernel database outside any data store, for store tests."""
+    return open_offline_database(extension_database_spec(directory, "swarm", name, SCHEMA_SQL))
 
 
 def _profile(*, slug: str = "research", count: int = 2) -> dict[str, object]:
@@ -20,12 +29,20 @@ def _profile(*, slug: str = "research", count: int = 2) -> dict[str, object]:
     }
 
 
+def query(store: SwarmStore, sql: str, parameters: tuple[object, ...] = ()) -> list:
+    """Rows of one read-only query on the store's kernel database, for assertions."""
+    with store._database._database.read() as connection:  # noqa: SLF001 - test inspection
+        return connection.execute(sql, parameters).fetchall()
+
+
 @pytest_asyncio.fixture
 async def store(tmp_path):
-    value = SwarmStore(tmp_path / "swarm.db")
+    database = open_swarm_database(tmp_path)
+    value = SwarmStore(database)
     await value.open()
     yield value
     await value.close()
+    database.close()
 
 
 async def _swarm(store: SwarmStore, *, count: int = 2) -> dict[str, object]:

@@ -10,6 +10,8 @@ from resources.extensions.swarm.store import SwarmStore, SwarmStoreError
 from tests.resources.extensions.swarm_store_helpers import (
     _profile,
     _swarm,
+    open_swarm_database,
+    query,
 )
 from tests.resources.extensions.swarm_store_helpers import (
     store as store,
@@ -106,8 +108,8 @@ async def test_stop_resume_retires_old_epoch_and_settings_toggle_retracts_wake(
 
 @pytest.mark.asyncio
 async def test_recovery_interrupts_open_swarms_without_admitting_work(tmp_path) -> None:
-    path = tmp_path / "recovery.db"
-    first = SwarmStore(path)
+    database = open_swarm_database(tmp_path, "recovery")
+    first = SwarmStore(database)
     await first.open()
     started = await _swarm(first)
     swarm = await first.get_swarm(started["swarm_id"])
@@ -115,8 +117,10 @@ async def test_recovery_interrupts_open_swarms_without_admitting_work(tmp_path) 
     await first.set_swarm_state(started["swarm_id"], "running")
     await first.set_participant_state(started["swarm_id"], participant, "running")
     await first.close()
+    database.close()
 
-    recovered = SwarmStore(path)
+    database = open_swarm_database(tmp_path, "recovery")
+    recovered = SwarmStore(database)
     await recovered.open()
     try:
         assert await recovered.recover_interrupted() == [
@@ -132,6 +136,7 @@ async def test_recovery_interrupts_open_swarms_without_admitting_work(tmp_path) 
             )
     finally:
         await recovered.close()
+        database.close()
 
 
 @pytest.mark.asyncio
@@ -243,14 +248,8 @@ async def test_unadmitted_wake_coalesces_without_advancing_watermark(store: Swar
             started["swarm_id"], recipient, expected_epoch=0, admission_boundary=4
         )
     )["wake"]
-    connection = store._database._connection  # noqa: SLF001 - durable watermark assertion
-    assert connection is not None
-    assert (
-        connection.execute(
-            "SELECT wake_announced_seq FROM participants WHERE id=?", (recipient,)
-        ).fetchone()[0]
-        == 0
-    )
+    announced = "SELECT wake_announced_seq FROM participants WHERE id=?"
+    assert query(store, announced, (recipient,))[0][0] == 0
     await store.post(started["swarm_id"], sender, text="B", request_id="wake-b")
     assert not (
         await store.prepare_automatic_delivery(
@@ -261,12 +260,7 @@ async def test_unadmitted_wake_coalesces_without_advancing_watermark(store: Swar
     await store.mark_wake_admitted(
         started["swarm_id"], recipient, expected_epoch=0, run_id="wake", boundary=4
     )
-    assert (
-        connection.execute(
-            "SELECT wake_announced_seq FROM participants WHERE id=?", (recipient,)
-        ).fetchone()[0]
-        == 1
-    )
+    assert query(store, announced, (recipient,))[0][0] == 1
 
 
 @pytest.mark.asyncio
@@ -490,15 +484,8 @@ async def test_no_participant_lifecycle_storage_or_summary_contract(store):
         for p in participants
     )
     assert "done_count" not in (await store.list_swarms()).entries[0]
-    assert (
-        store._database._connection.execute(
-            "SELECT name FROM sqlite_master WHERE name='lifecycle_intents'"
-        ).fetchone()
-        is None
-    )
-    columns = {
-        r["name"] for r in store._database._connection.execute("PRAGMA table_info(participants)")
-    }
+    assert query(store, "SELECT name FROM sqlite_master WHERE name='lifecycle_intents'") == []
+    columns = {r["name"] for r in query(store, "PRAGMA table_info(participants)")}
     assert not {"wait_reason", "summary_json", "artifacts_json", "completion_call_id"} & columns
 
 
