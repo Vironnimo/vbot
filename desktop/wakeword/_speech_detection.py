@@ -232,6 +232,7 @@ class SpeechGate:
     0.2-0.5 s after it ended, when the current chunk is already silent. Like
     upstream, the gate stays closed for the first four chunks after creation or
     :meth:`reset`, and the fifth and sixth consult the shorter history they have.
+    Without any speech detector the gate is open, as upstream without VAD.
     """
 
     def __init__(self, speech_detector: SpeechDetector | None, fallback_vad: Any | None) -> None:
@@ -241,6 +242,8 @@ class SpeechGate:
 
     def admits(self, detection_pcm16: bytes) -> bool:
         """Record this chunk's speech decision and return whether its scores count."""
+        if self._detector is None and self._fallback_vad is None:
+            return True
         self._speech.append(
             chunk_contains_speech(detection_pcm16, self._detector, self._fallback_vad)
         )
