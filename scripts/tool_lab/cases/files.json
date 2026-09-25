@@ -111,6 +111,153 @@
    }
   },
   {
+   "name": "read: view_range from a text editor tool",
+   "tool": "read",
+   "arguments": {
+    "path": "src/app.py",
+    "view_range": [
+     8,
+     9
+    ]
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "8|     def greet"
+    ],
+    "absent": [
+     "import os"
+    ]
+   }
+  },
+  {
+   "name": "read: lines given as a range string",
+   "tool": "read",
+   "arguments": {
+    "filePath": "src/app.py",
+    "lines": "12-13"
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "12| def main"
+    ],
+    "absent": [
+     "print("
+    ]
+   }
+  },
+  {
+   "name": "read: negative offset reads the last lines",
+   "tool": "read",
+   "arguments": {
+    "path": "README.md",
+    "offset": -2
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "2999| line 2999",
+     "3000| line 3000"
+    ],
+    "absent": [
+     "2998|"
+    ]
+   }
+  },
+  {
+   "name": "read: a cut-off read reports the line count",
+   "tool": "read",
+   "arguments": {
+    "path": "README.md",
+    "limit": 3
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "[Showing lines 1-3 of 3000. Use offset=4 to continue.]"
+    ]
+   }
+  },
+  {
+   "name": "read: offset 0 and limit 0 read from the top",
+   "tool": "read",
+   "arguments": {
+    "path": "src/app.py",
+    "offset": 0,
+    "limit": 0
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "1| import os",
+     "14|     print"
+    ]
+   }
+  },
+  {
+   "name": "read: pattern field shows matching lines",
+   "tool": "read",
+   "arguments": {
+    "path": "src/app.py",
+    "pattern": "Greeter"
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "4| class Greeter",
+     "13|     g = Greeter"
+    ],
+    "absent": [
+     "import os"
+    ]
+   }
+  },
+  {
+   "name": "read: pattern on a directory names the search call",
+   "tool": "read",
+   "arguments": {
+    "path": "src",
+    "pattern": "greet"
+   },
+   "expect": {
+    "ok": false,
+    "contains": [
+     "search_files(pattern=\"greet\", path=\"src\")"
+    ]
+   }
+  },
+  {
+   "name": "read: contradictory line windows name both calls",
+   "tool": "read",
+   "arguments": {
+    "path": "src/app.py",
+    "offset": 2,
+    "lines": "8-9"
+   },
+   "expect": {
+    "ok": false,
+    "contains": [
+     "offset=2 or offset=8, limit=2"
+    ]
+   }
+  },
+  {
+   "name": "read: a bare line count is ambiguous",
+   "tool": "read",
+   "arguments": {
+    "path": "src/app.py",
+    "lines": 5
+   },
+   "expect": {
+    "ok": false,
+    "contains": [
+     "limit=5",
+     "offset=5, limit=1"
+    ]
+   }
+  },
+  {
    "name": "patch: canonical update",
    "tool": "apply_patch",
    "arguments": {

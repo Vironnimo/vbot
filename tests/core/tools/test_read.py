@@ -13,6 +13,7 @@ from zipfile import ZipFile
 
 import pytest
 
+import core.tools._read_text as read_text_module
 import core.tools.read as read_module
 import core.tools.read_extract as read_extract_module
 from core.attachments import AttachmentTooLargeError
@@ -30,7 +31,6 @@ from core.tools import (
     register_read_tool,
 )
 from core.tools.file_state import StaleReason
-from core.utils.paths import model_path
 
 
 @dataclass(frozen=True)
@@ -181,11 +181,8 @@ def test_register_read_tool_exposes_provider_schema_without_description_property
     assert "additionalProperties" not in parameters
     assert set(parameters["properties"]) == {"path", "offset", "limit"}
     assert parameters["properties"]["offset"]["oneOf"] == [
-        {"type": "integer", "minimum": 1},
-        {
-            "type": "string",
-            "pattern": r"^[1-9][0-9]*:[1-9][0-9]*$",
-        },
+        {"type": "integer"},
+        {"type": "string", "pattern": r"^[1-9][0-9]*:[1-9][0-9]*$"},
     ]
     assert all(
         isinstance(property_schema.get("description"), str) and property_schema["description"]
@@ -200,9 +197,14 @@ def test_register_read_tool_exposes_provider_schema_without_description_property
     continued_display = registry.display_for_call(
         "read", {"path": "notes.txt", "offset": "170:42", "limit": 10}
     )
+    dialect_display = registry.display_for_call(
+        "read", {"file_path": "notes.txt", "start_line": 5, "end_line": 9}
+    )
     assert ranged_display["facts"] == [{"kind": "line_range", "start": 170, "end": 280}]
     assert default_display["facts"] == []
     assert continued_display["facts"] == [{"kind": "line_range", "start": 170, "end": 179}]
+    assert dialect_display["facts"] == [{"kind": "line_range", "start": 5, "end": 9}]
+    assert dialect_display["primary"][0]["value"] == "notes.txt"
 
 
 @pytest.mark.asyncio
@@ -324,12 +326,30 @@ async def test_read_suggests_ranked_similar_files_for_missing_path(tmp_path: Pat
 
     error = assert_failure_envelope(result, "file_not_found")
     message = error["message"]
-    assert "Similar files:" in message
-    assert model_path(same_stem) in message
-    assert model_path(typo) in message
-    assert model_path(unrelated) not in message
-    assert "settings.txt.backup" not in message
-    assert message.index(model_path(same_stem)) < message.index(model_path(typo))
+    assert message.startswith("File not found: settings.txt (similar: settings.yaml, ")
+    assert "settngs.txt" in message
+    assert "release-notes.md" not in message
+    assert str(workspace) not in message
+    assert message.index("settings.yaml") < message.index("settngs.txt")
+
+
+@pytest.mark.asyncio
+async def test_read_missing_file_without_similar_names_names_the_listing_call(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    (workspace / "docs").mkdir(parents=True)
+    workspace.joinpath("docs/zeta.md").write_text("z", encoding="utf-8")
+
+    in_existing = await make_handler()(make_context(workspace), {"path": "docs/alpha.txt"})
+    in_missing = await make_handler()(make_context(workspace), {"path": "gone/alpha.txt"})
+
+    assert assert_failure_envelope(in_existing, "file_not_found")["message"] == (
+        "File not found: docs/alpha.txt. Read docs to list that directory."
+    )
+    assert assert_failure_envelope(in_missing, "file_not_found")["message"] == (
+        "File not found: gone/alpha.txt. Its directory gone does not exist."
+    )
 
 
 @pytest.mark.asyncio
@@ -342,20 +362,50 @@ async def test_read_bounds_similar_file_suggestions(tmp_path: Path) -> None:
     result = await make_handler()(make_context(workspace), {"path": "settings.txt"})
 
     error = assert_failure_envelope(result, "file_not_found")
-    suggestions = [line for line in error["message"].splitlines() if line.startswith("- ")]
-    assert len(suggestions) == 5
+    assert error["message"].count("settings-") == 5
 
 
 @pytest.mark.asyncio
-async def test_read_returns_failure_envelope_for_directory_path(tmp_path: Path) -> None:
+async def test_read_lists_a_directory_without_stamping_it(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    workspace.joinpath("folder").mkdir()
+    folder = workspace / "folder"
+    (folder / "Sub").mkdir(parents=True)
+    folder.joinpath("b.txt").write_text("b", encoding="utf-8")
+    folder.joinpath("a.py").write_text("a", encoding="utf-8")
+    folder.joinpath(".hidden").write_text("h", encoding="utf-8")
+    file_state = FileReadState()
 
-    result = await make_handler()(make_context(workspace), {"path": "folder"})
+    result = await make_handler(file_state=file_state)(make_context(workspace), {"path": "folder"})
 
-    error = assert_failure_envelope(result, "not_a_file")
-    assert "folder" in error["message"]
+    assert assert_success_envelope(result)["content"] == (
+        "Directory folder/ (4 entries):\n.hidden\na.py\nb.txt\nSub/"
+    )
+    assert file_state.check_stale("session-1", folder.resolve()) is StaleReason.NEVER_READ
+
+
+@pytest.mark.asyncio
+async def test_read_pages_a_large_directory_like_file_lines(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    folder = workspace / "many"
+    folder.mkdir(parents=True)
+    for index in range(1, 8):
+        folder.joinpath(f"f{index}.txt").write_text("x", encoding="utf-8")
+    empty = workspace / "empty"
+    empty.mkdir()
+    handler = make_handler()
+
+    first = await handler(make_context(workspace), {"path": "many", "limit": 3})
+    last = await handler(make_context(workspace), {"path": "many", "offset": -2})
+    nothing = await handler(make_context(workspace), {"path": "empty"})
+
+    assert assert_success_envelope(first)["content"] == (
+        "Directory many/ (7 entries):\nf1.txt\nf2.txt\nf3.txt\n"
+        "[Showing entries 1-3 of 7. Use offset=4 to continue.]"
+    )
+    assert assert_success_envelope(last)["content"] == (
+        "Directory many/ (7 entries):\nf6.txt\nf7.txt"
+    )
+    assert assert_success_envelope(nothing)["content"] == "empty/ is an empty directory."
 
 
 @pytest.mark.asyncio
@@ -376,8 +426,7 @@ async def test_read_returns_failure_envelope_for_read_time_filesystem_error(
     result = await make_handler()(make_context(workspace), {"path": "notes.txt"})
 
     error = assert_failure_envelope(result, "file_read_error")
-    assert model_path(target.resolve()) in error["message"]
-    assert "access denied while reading" in error["message"]
+    assert error["message"] == "Failed to read notes.txt: access denied while reading"
 
 
 @pytest.mark.asyncio
@@ -391,7 +440,9 @@ async def test_read_applies_line_offset_and_limit(tmp_path: Path) -> None:
     )
 
     data = assert_success_envelope(result)
-    assert data["content"] == "2| two\n3| three\n[Showing lines 2-3. Use offset=4 to continue.]"
+    assert data["content"] == (
+        "2| two\n3| three\n[Showing lines 2-3 of 4. Use offset=4 to continue.]"
+    )
 
 
 @pytest.mark.asyncio
@@ -579,8 +630,7 @@ async def test_read_default_limit_truncates_large_file(tmp_path: Path) -> None:
     data = assert_success_envelope(result)
     content = data["content"]
     assert isinstance(content, str)
-    assert "[Showing lines 1-2000. Use offset=2001 to continue.]" in content
-    assert "of 2001" not in content
+    assert content.endswith("[Showing lines 1-2000 of 2001. Use offset=2001 to continue.]")
     assert "line2001" not in content
 
 
@@ -665,7 +715,7 @@ async def test_line_numbers_break_only_at_lf_crlf_and_cr_like_search_files(
     search = search_files_handler(make_context(workspace, "search_files"), {"args": ["pass"]})
 
     assert whole["content"] == (
-        f"1| import os\n2| {separator}\n3| def foo():\r\n4|     pass\n5| x = 1\n"
+        f"1| import os\n2| {separator}\n3| def foo():\n4|     pass\n5| x = 1\n"
     )
     assert str(line["content"]).startswith("4|     pass\n")
     assert search["data"]["content"] == "ff.py:4:    pass"
@@ -680,7 +730,7 @@ async def test_streaming_text_matches_byte_renderer_across_chunked_line_endings(
     workspace.mkdir()
     raw = b"\xef\xbb\xbf" + "alpha\r\nbeta\rgamma\u2028delta".encode()
     workspace.joinpath("line-endings.txt").write_bytes(raw)
-    monkeypatch.setattr(read_module, "_TEXT_STREAM_CHUNK_CHARACTERS", 2)
+    monkeypatch.setattr(read_text_module, "_TEXT_STREAM_CHUNK_CHARACTERS", 2)
 
     result = await make_handler()(make_context(workspace), {"path": "line-endings.txt"})
 
@@ -716,8 +766,7 @@ async def test_read_returns_binary_notice_for_nul_bytes(tmp_path: Path) -> None:
     data = assert_success_envelope(result)
     content = data["content"]
     assert isinstance(content, str)
-    assert "Binary file" in content
-    assert "data.bin" in content
+    assert content == "[data.bin is a binary file; it is not shown as text.]"
 
 
 @pytest.mark.asyncio
@@ -745,9 +794,9 @@ async def test_read_text_binary_and_video_paths_never_use_full_file_reader(
 
     text_content = str(assert_success_envelope(text_result)["content"])
     assert text_content.startswith("1| first")
-    assert text_content.endswith("[Showing lines 1-1. Use offset=2 to continue.]")
-    assert "Binary file" in str(assert_success_envelope(binary_result)["content"])
-    assert "Video: clip.mp4" in str(assert_success_envelope(video_result)["content"])
+    assert text_content.endswith("[Showing lines 1-1 of 2. Use offset=2 to continue.]")
+    assert "binary file" in str(assert_success_envelope(binary_result)["content"])
+    assert "clip.mp4 is a video" in str(assert_success_envelope(video_result)["content"])
 
 
 @pytest.mark.asyncio
@@ -871,8 +920,7 @@ async def test_read_video_returns_path_note_without_attachment(tmp_path: Path) -
     data = assert_success_envelope(result)
     content = data["content"]
     assert isinstance(content, str)
-    assert "[Video: clip.mp4 (video/mp4)" in content
-    assert "cannot view video" in content
+    assert content == "[clip.mp4 is a video (video/mp4); this model cannot view video.]"
     assert store.stored == []
 
 
@@ -952,7 +1000,7 @@ async def test_read_malformed_docx_falls_back_to_binary_notice(tmp_path: Path) -
     data = assert_success_envelope(result)
     content = data["content"]
     assert isinstance(content, str)
-    assert "[Binary file: broken.docx" in content
+    assert content == "[broken.docx is a binary file; it is not shown as text.]"
 
 
 def _minimal_pdf(lines: list[str]) -> bytes:
@@ -1028,7 +1076,7 @@ async def test_read_malformed_pdf_falls_back_to_binary_notice(tmp_path: Path) ->
     data = assert_success_envelope(result)
     content = data["content"]
     assert isinstance(content, str)
-    assert "[Binary file: broken.pdf" in content
+    assert content == "[broken.pdf is a binary file; it is not shown as text.]"
 
 
 @pytest.mark.asyncio
@@ -1122,13 +1170,13 @@ async def test_read_stamp_predates_bytes_so_a_concurrent_write_forces_reread(
     target = workspace / "notes.txt"
     target.write_bytes(b"before\n")
     file_state = FileReadState()
-    render = read_module._render_text_path
+    render = read_module.render_text_path
 
     def render_after_external_write(resolved: Path, arguments: dict[str, Any]) -> str:
         target.write_bytes(b"written during the read\n")
         return render(resolved, arguments)
 
-    monkeypatch.setattr(read_module, "_render_text_path", render_after_external_write)
+    monkeypatch.setattr(read_module, "render_text_path", render_after_external_write)
 
     result = await make_handler(file_state=file_state)(
         make_context(workspace), {"path": "notes.txt"}
