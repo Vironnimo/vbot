@@ -13,7 +13,11 @@ import core.model_tasks.live as live_module
 from core.model_tasks._live_brain import DelegationInput
 from core.model_tasks._live_call import LiveCallSession
 from core.model_tasks._live_openai import ControlJoinError
-from core.model_tasks._live_tools import DIRECT_VOICE_INSTRUCTIONS, VOICE_INSTRUCTIONS
+from core.model_tasks._live_tools import (
+    DIRECT_VOICE_INSTRUCTIONS,
+    VOICE_INSTRUCTIONS,
+    voice_instructions,
+)
 from core.model_tasks._live_wire import (
     WireAudio,
     WireCaption,
@@ -866,4 +870,57 @@ async def test_xai_with_a_backend_model_delegates_to_it(
     assert [(target.provider_id, target.model_id) for target in brains] == [
         ("xai", "gpt-5.6-terra")
     ]
+    await call.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model_tasks", "media", "opener", "direct_tools"),
+    [
+        (FakeModelTasks(), "webrtc", "open_openai_live_wire", False),
+        (
+            FakeModelTasks(target=XAI_TARGET, options={"voice": "eve", "backend_model": ""}),
+            "relay",
+            "open_xai_live_wire",
+            True,
+        ),
+        (
+            FakeModelTasks(
+                target=XAI_TARGET, options={"voice": "eve", "backend_model": "gpt-5.6-terra"}
+            ),
+            "relay",
+            "open_xai_live_wire",
+            False,
+        ),
+    ],
+    ids=["openai", "xai-direct-tools", "xai-delegate"],
+)
+async def test_wake_phrases_reach_the_voice_instructions_of_every_wire(
+    model_tasks: FakeModelTasks,
+    media: str,
+    opener: str,
+    direct_tools: bool,
+    candidates: list[tuple[Any, ...]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    opened: list[dict[str, Any]] = []
+    phrases = ("Hey Nabu", "Hey Jarvis")
+
+    async def open_wire(runtime: Any, target_ref: Any, **kwargs: Any) -> FakeWire:
+        opened.append(kwargs)
+        return FakeWire(relay=media == "relay")
+
+    monkeypatch.setattr(live_module, opener, open_wire)
+    monkeypatch.setattr(live_module, "LiveBrain", lambda *args, **kwargs: FakeBrain())
+
+    call = await _service(model_tasks).start_call(
+        media=media,
+        offer_sdp=OFFER if media == "webrtc" else None,
+        wake_phrases=phrases,
+        host=FakeHost(),
+    )
+
+    instructions = opened[0]["instructions"]
+    assert instructions == voice_instructions(direct_tools=direct_tools, wake_phrases=phrases)
+    assert instructions != voice_instructions(direct_tools=direct_tools)
     await call.close()
