@@ -22,7 +22,6 @@ that still shows it.
 
 from __future__ import annotations
 
-import asyncio
 import contextlib
 import hashlib
 import json
@@ -609,7 +608,7 @@ class PassageCatalog:
             lambda connection: read_stamps(connection, agent_id=agent_id, project=project)
         )
         try:
-            plan = await asyncio.to_thread(
+            plan = await sessions.run_async(
                 plan_refresh, sessions, agent_id, project_id, scope, stamps
             )
         except Exception as error:

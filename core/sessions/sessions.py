@@ -8,7 +8,7 @@ import logging
 import threading
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from core.chat.errors import ChatSessionError
 from core.runs import RunKind
@@ -53,6 +53,8 @@ if TYPE_CHECKING:
     from core.database import Database
     from core.runs import Run
 
+_Result = TypeVar("_Result")
+
 
 class ChatSessionManager:
     """One SQLite-only Session service, injected into Runtime consumers."""
@@ -78,6 +80,17 @@ class ChatSessionManager:
     def database(self) -> Database:
         """The Session database handle, for data snapshots and data-store status."""
         return self._store.database
+
+    async def run_async(
+        self, function: Callable[..., _Result], *arguments: Any, **keyword_arguments: Any
+    ) -> _Result:
+        """Run blocking work that reads or writes Sessions on the Session database's pool.
+
+        For a caller's own unit of Session work, such as several reads and their
+        projection, that has no dedicated ``*_async`` method. A closed Session
+        database raises :class:`~core.database.DatabaseUnavailableError`.
+        """
+        return await self._store.run_async(function, *arguments, **keyword_arguments)
 
     def add_title_changed_callback(
         self, callback: Callable[[SessionAddress], None]

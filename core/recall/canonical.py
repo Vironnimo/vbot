@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import json
 import re
@@ -143,7 +142,7 @@ class CanonicalSessionRecallBackend:
         )
 
     async def search_page(self, request: RecallSearchRequest) -> RecallSearchPage:
-        return await asyncio.to_thread(self._search_page, request, use_fts=False)
+        return await self.sessions.run_async(self._search_page, request, use_fts=False)
 
     def _search_page(self, request: RecallSearchRequest, *, use_fts: bool) -> RecallSearchPage:
         """Return one Message page of exact literal matches.

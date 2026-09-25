@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
 from contextlib import closing
 from pathlib import Path
 from typing import Any
@@ -190,6 +191,51 @@ def test_a_disposable_database_is_discarded_at_runtime_and_rebuilt_empty(
         projection.close()
     with pytest.raises(DatabaseUnavailableError, match="closed"):
         projection.get()
+
+
+def _worker_thread() -> str:
+    return threading.current_thread().name
+
+
+@pytest.mark.asyncio
+async def test_a_disposable_database_serves_every_handle_from_one_worker_pool(
+    tmp_path: Path,
+) -> None:
+    projection = DisposableDatabase(projection_spec(tmp_path / "index.db"))
+    try:
+        first = await projection.get_async()
+        threads = {await projection.run_async(_worker_thread)}
+        threads.add(await first.run_async(_worker_thread))
+
+        await projection.discard_async()
+        rebuilt = await projection.get_async()
+        threads.add(await rebuilt.read_async(lambda _connection: _worker_thread()))
+
+        assert rebuilt is not first
+        assert all(name.startswith("vbot-db-notes_index") for name in threads)
+        # A discarded handle refuses work although the shared pool lives on.
+        with pytest.raises(DatabaseUnavailableError):
+            await first.run_async(_worker_thread)
+    finally:
+        projection.close()
+
+
+@pytest.mark.asyncio
+async def test_work_on_a_closed_disposable_database_is_unavailable(tmp_path: Path) -> None:
+    projection = DisposableDatabase(projection_spec(tmp_path / "index.db"))
+    handle = await projection.get_async()
+    projection.close()
+
+    assert projection.is_closed() is True
+    assert handle.is_closed() is True
+    for work in (
+        lambda: projection.run_async(_worker_thread),
+        projection.get_async,
+        projection.discard_async,
+        lambda: handle.read_async(lambda connection: connection.execute("SELECT 1").fetchone()),
+    ):
+        with pytest.raises(DatabaseUnavailableError):
+            await work()
 
 
 def test_a_disposable_database_open_in_another_handle_is_never_discarded(

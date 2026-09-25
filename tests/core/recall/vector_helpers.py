@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import sqlite3
+import threading
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -209,9 +210,11 @@ def forbid_event_loop_calls(monkeypatch: pytest.MonkeyPatch, *targets: object) -
 
 
 def forbid_database_calls_on_loop(monkeypatch: pytest.MonkeyPatch) -> list[str]:
-    """Fail any blocking kernel database read or write made on the event loop.
+    """Fail any blocking kernel database read or write made off its own worker pool.
 
-    Returns ``<database>.<read|write>`` for every call made off the loop, in order.
+    A call on the event loop fails, and so does one on any thread other than
+    the database's bounded worker pool. Returns ``<database>.<read|write>`` for
+    every call made on the pool, in order.
     """
 
     calls: list[str] = []
@@ -224,6 +227,11 @@ def forbid_database_calls_on_loop(monkeypatch: pytest.MonkeyPatch) -> list[str]:
             try:
                 asyncio.get_running_loop()
             except RuntimeError:
+                thread = threading.current_thread().name
+                if not thread.startswith(f"vbot-db-{self.name}_"):
+                    raise AssertionError(
+                        f"{self.name}.{_name} ran on {thread}, not on the database's worker pool"
+                    ) from None
                 calls.append(f"{self.name}.{_name}")
                 return _method(self, *args, **kwargs)
             raise AssertionError(f"{self.name}.{_name} ran synchronously on the event loop")

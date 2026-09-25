@@ -38,8 +38,13 @@ class SwarmDatabase:
         self._database = database
         self._cursor_key: str | None = None
 
-    def call(self, function: Callable[..., Any], *arguments: Any) -> Any:
-        return function(self, *arguments)
+    async def run(self, function: Callable[..., Any], *arguments: Any) -> Any:
+        """Run ``function(self, *arguments)`` on the database's own worker pool.
+
+        After the host closes the database it raises the kernel's
+        ``DatabaseUnavailableError``.
+        """
+        return await self._database.run_async(function, self, *arguments)
 
     def _open(self) -> None:
         with self._database.read() as connection:

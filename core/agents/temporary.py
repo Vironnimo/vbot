@@ -311,7 +311,7 @@ class TemporaryExecutionGroups:
                 raise RunAdmissionBlockedError(
                     "This Session is no longer available. Check its state through its Extension."
                 )
-            binding = await asyncio.to_thread(
+            binding = await self._sessions.run_async(
                 self._registry.create,
                 owner_name=self._identity.name,
                 group_id=group_id,
@@ -670,7 +670,7 @@ class TemporaryExecutionGroups:
         ):
             raise ValueError("invalid temporary history query")
         self._require_current()
-        binding = await asyncio.to_thread(
+        binding = await self._sessions.run_async(
             self._sessions.temporary_binding_by_participant,
             owner_name=self._identity.name,
             group_id=group_id,
@@ -690,7 +690,7 @@ class TemporaryExecutionGroups:
                 complete_run_segment=True,
             )
 
-        result = await asyncio.to_thread(read)
+        result = await self._sessions.run_async(read)
         self._require_current()
         return result
 
@@ -728,7 +728,7 @@ class TemporaryExecutionGroups:
     ) -> DeliveryReceipt | None:
         """Read one canonical receipt only within this owner's exact binding."""
         self._require_current()
-        binding = await asyncio.to_thread(self._sessions.temporary_binding, address)
+        binding = await self._sessions.run_async(self._sessions.temporary_binding, address)
         self._require_current()
         if (
             binding is None
