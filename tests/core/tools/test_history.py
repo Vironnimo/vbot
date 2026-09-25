@@ -571,12 +571,17 @@ def test_cursor_survives_manager_restart_but_not_action_session_or_corruption(
     assert wrong_session["error"]["code"] == "invalid_cursor"
 
 
-def test_cursor_continuation_rejects_repeated_scope_arguments(tmp_path: Path) -> None:
+def _paged_session(tmp_path: Path, count: int = 3) -> tuple[ChatSessionManager, ChatSession]:
     manager = ChatSessionManager(tmp_path)
     session = manager.create("agent", session_id="session-one")
-    session.append(ChatMessage.user("first"))
-    session.append(ChatMessage.user("second"))
+    for index in range(count):
+        session.append(ChatMessage.user(f"entry {index}"))
     session.append(_checkpoint())
+    return manager, session
+
+
+def test_cursor_continuation_rejects_conflicting_scope_arguments(tmp_path: Path) -> None:
+    manager, session = _paged_session(tmp_path)
     cursor = _data(_call(manager, session, {"action": "read", "limit": 1}))["next_cursor"]
 
     result = _call(
@@ -586,6 +591,149 @@ def test_cursor_continuation_rejects_repeated_scope_arguments(tmp_path: Path) ->
     )
 
     assert result["error"]["code"] == "invalid_arguments"
+    assert result["error"]["message"] == (
+        "This cursor continues a read with checkpoint null, but checkpoint is 1. To "
+        'continue, call history with {"action": "read", "cursor": ...} only; to change '
+        "checkpoint, omit cursor and start again."
+    )
+
+
+def test_cursor_continuation_accepts_repeated_fields_and_a_new_limit(tmp_path: Path) -> None:
+    manager, session = _paged_session(tmp_path, count=5)
+    first = _data(_call(manager, session, {"action": "read", "checkpoint": 1, "limit": 1}))
+
+    repeated = _data(
+        _call(
+            manager,
+            session,
+            {"action": "read", "cursor": first["next_cursor"], "checkpoint": 1, "limit": 3},
+        )
+    )
+
+    assert [message["content"] for message in _messages(first)] == ["entry 0"]
+    assert [message["content"] for message in _messages(repeated)] == [
+        "entry 1",
+        "entry 2",
+        "entry 3",
+    ]
+    assert "note" not in repeated
+    rest = _data(_call(manager, session, {"action": "read", "cursor": repeated["next_cursor"]}))
+    assert [message["content"] for message in _messages(rest)] == ["entry 4"]
+
+
+def test_records_omit_replay_accounting_and_presentation_fields(tmp_path: Path) -> None:
+    manager = ChatSessionManager(tmp_path)
+    session = manager.create("agent", session_id="session-one")
+    answer = ChatMessage.assistant(
+        model="openai/gpt",
+        content="The answer.",
+        reasoning="Visible reasoning.",
+        reasoning_meta={"signature": "opaque"},
+        reasoning_scope="scope",
+        reasoning_timing={
+            "started_at": "2026-05-01T12:00:00+00:00",
+            "completed_at": "2026-05-01T12:00:01+00:00",
+            "duration_ms": 1000,
+        },
+        usage={"input_tokens": 10},
+    )
+    opaque_only = ChatMessage.assistant(
+        model="openai/gpt", content=None, reasoning_meta={"encrypted": "opaque"}
+    )
+    for message in (answer, opaque_only, _checkpoint()):
+        session.append(message)
+
+    read = _messages(_data(_call(manager, session, {"action": "read"})))
+    around = _messages(
+        _data(_call(manager, session, {"action": "around", "message_id": answer.id}))
+    )
+
+    for records in (read, around):
+        assert [record["id"] for record in records] == [answer.id, opaque_only.id]
+        assert records[0]["content"] == "The answer."
+        assert records[0]["reasoning"] == "Visible reasoning."
+        for record in records:
+            assert not {
+                "reasoning_meta",
+                "reasoning_scope",
+                "reasoning_timing",
+                "usage",
+                "timing",
+                "tool_display",
+            } & set(record)
+
+
+@pytest.mark.parametrize(
+    ("arguments", "message"),
+    [
+        (
+            {"action": "read", "checkpoint": 1, "limit": 3, "query": "deploy"},
+            'read takes no query. To find records containing it, call history with {"action": '
+            '"search", "query": "deploy", "checkpoint": 1, "limit": 3}; to read records in '
+            "order, omit query.",
+        ),
+        (
+            {"action": "overview", "query": "deploy"},
+            'overview takes no query. To find records containing it, call history with {"action":'
+            ' "search", "query": "deploy"}; to list the checkpoint sections, omit query.',
+        ),
+        (
+            {"action": "search", "query": "deploy", "message_id": "m-1"},
+            "search takes no message_id. To read records around that message, call history with "
+            '{"action": "around", "message_id": "m-1"}; otherwise omit message_id.',
+        ),
+        (
+            {"action": "search", "query": "deploy", "direction": "end"},
+            "search returns records oldest first; direction applies only to read. Omit "
+            "direction, or use action read to page from the newest records.",
+        ),
+    ],
+)
+def test_fields_asking_for_another_action_name_the_corrected_call(
+    tmp_path: Path, arguments: dict[str, Any], message: str
+) -> None:
+    manager, session = _paged_session(tmp_path)
+
+    result = _call(manager, session, arguments)
+
+    assert result["ok"] is False
+    assert result["error"]["code"] == "invalid_arguments"
+    assert result["error"]["message"] == message
+
+
+@pytest.mark.parametrize(
+    ("arguments", "note"),
+    [
+        ({"action": "overview", "checkpoint": 1}, "Ignored checkpoint: not used by overview."),
+        (
+            {"action": "search", "query": "entry", "before": 1, "direction": "start"},
+            "Ignored before, direction: not used by search. To read records around one, use "
+            "action around with its message_id.",
+        ),
+        ({"action": "read", "match": "phrase"}, "Ignored match: not used by read."),
+    ],
+)
+def test_fields_an_action_does_not_use_are_noted_and_the_call_runs(
+    tmp_path: Path, arguments: dict[str, Any], note: str
+) -> None:
+    manager, session = _paged_session(tmp_path)
+
+    data = _data(_call(manager, session, arguments))
+
+    assert data["items"]
+    assert data["note"] == note
+
+
+def test_around_notes_an_unused_limit(tmp_path: Path) -> None:
+    manager, session = _paged_session(tmp_path)
+    anchor = _messages(_data(_call(manager, session, {"action": "read", "limit": 1})))[0]
+
+    data = _data(
+        _call(manager, session, {"action": "around", "message_id": anchor["id"], "limit": 1})
+    )
+
+    assert data["note"] == "Ignored limit: around returns before + after + 1 records."
+    assert len(data["items"]) == 3
 
 
 def test_oversized_unicode_record_continues_losslessly_under_50_kib(tmp_path: Path) -> None:

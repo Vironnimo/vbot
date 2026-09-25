@@ -931,6 +931,6 @@ def test_real_skill_authoring_prompts_do_not_teach_removed_fields(fragment_name:
     prompt = prompt_path.read_text(encoding="utf-8")
 
     assert "file_content" not in prompt
-    assert "old_string" not in prompt
-    assert "new_string" not in prompt
-    assert "replace_all" not in prompt
+    assert "`match`" not in prompt
+    # The catalog shows origin headings, not origin tags.
+    assert "origin `agent`" not in prompt

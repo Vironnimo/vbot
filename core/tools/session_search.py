@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import calendar
 import inspect
+import re
 import time
-from dataclasses import replace
-from datetime import UTC, datetime
+from collections.abc import Callable
+from dataclasses import dataclass, replace
+from datetime import UTC, date, datetime, tzinfo
 from datetime import time as datetime_time
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from core.recall import (
     RECALL_BACKEND_CANONICAL_SCAN,
@@ -85,9 +89,9 @@ def build_session_search_parameters(recall_backend: Any | None = None) -> JsonOb
                 "minLength": 2,
                 "description": (
                     "Time range as ISO-8601 start/end, for example 2026-07-01/2026-07-31. "
-                    "Both dates are included; either endpoint may be empty. Dates and "
-                    "timestamps without an offset use UTC. Omit for all dates. "
-                    "Filters matches; selected context may fall outside the range."
+                    "Both ends are included and either may be empty; a single date or month "
+                    "means all of it. Dates and times without an offset are local time. Omit "
+                    "for all dates. Filters matches; selected context may fall outside the range."
                 ),
             },
             "agent_id": {
@@ -124,9 +128,29 @@ def build_session_search_description(recall_backend: Any) -> str:
     return f"Search past conversations. {_DESCRIPTION_SUFFIX} {capabilities.guidance}"
 
 
+@dataclass(frozen=True)
+class _Zone:
+    """The timezone that reads dates and times given without an offset."""
+
+    tz: tzinfo
+    name: str
+
+
+_UTC_ZONE = _Zone(UTC, "UTC")
+
+
+@dataclass(frozen=True)
+class _Period:
+    since: datetime | None
+    until: datetime | None
+    # The inclusive range searched, as the Model should read it back.
+    text: str
+
+
 def make_session_search_handler(
     recall_backend: Any,
     sessions: ChatSessionManager | None = None,
+    timezone_name_loader: Callable[[], str] | None = None,
 ):
     resolved_sessions = sessions or _backend_sessions(recall_backend)
 
@@ -136,6 +160,7 @@ def make_session_search_handler(
             arguments,
             recall_backend,
             sessions=resolved_sessions,
+            timezone_name_loader=timezone_name_loader,
         )
 
     return handler
@@ -147,18 +172,30 @@ async def session_search_handler(
     recall_backend: Any,
     *,
     sessions: ChatSessionManager | None = None,
+    timezone_name_loader: Callable[[], str] | None = None,
 ) -> JsonObject:
+    """Search past Sessions.
+
+    ``timezone_name_loader`` returns the configured IANA timezone that reads
+    period dates and times without an offset; without it they read as UTC.
+    """
     started = time.perf_counter()
     resolved_sessions = sessions or _backend_sessions(recall_backend)
     resolved_name = _backend_name(recall_backend)
     try:
-        arguments = _normalize_search_arguments(arguments)
+        # The loader reads Settings; keep that file access off the Event Loop.
+        zone = (
+            await run_tool_worker(_local_zone, timezone_name_loader)
+            if timezone_name_loader is not None
+            else _UTC_ZONE
+        )
+        arguments = _normalize_search_arguments(arguments, zone)
         if not isinstance(arguments, dict):
             raise _SessionSearchError("invalid_arguments", "arguments must be an object")
-        _validate_session_search_fields(arguments)
+        _validate_session_search_fields(arguments, zone)
         capabilities = _search_capabilities(recall_backend)
         data = await _search_sessions(
-            context, arguments, recall_backend, capabilities, resolved_sessions
+            context, arguments, recall_backend, capabilities, resolved_sessions, zone
         )
         result = tool_success(data)
         _LOGGER.info(
@@ -207,6 +244,8 @@ def register_session_search_tool(
     registry: ToolRegistry,
     recall_backend: Any,
     sessions: ChatSessionManager | None = None,
+    *,
+    timezone_name_loader: Callable[[], str] | None = None,
 ) -> None:
     if isinstance(recall_backend, ChatSessionManager):
         sessions = recall_backend
@@ -215,7 +254,7 @@ def register_session_search_tool(
         SESSION_SEARCH_TOOL_NAME,
         build_session_search_description(recall_backend),
         build_session_search_parameters(recall_backend),
-        make_session_search_handler(recall_backend, sessions),
+        make_session_search_handler(recall_backend, sessions, timezone_name_loader),
         family="sessions",
         open_input_schema=True,
         handler_validates_arguments=True,
@@ -238,6 +277,7 @@ async def _search_sessions(
     recall_backend: Any,
     capabilities: RecallSearchCapabilities,
     sessions: ChatSessionManager | None,
+    zone: _Zone,
 ) -> JsonObject:
     query = _required_string(arguments, "query")
     agent_id = _agent_id(arguments, context)
@@ -252,7 +292,9 @@ async def _search_sessions(
     roles = SESSION_RECALL_DEFAULT_ROLES
     match_mode = "all_terms"
     raw_order = capabilities.default_order
-    since, until = _parse_period(arguments.get("period"))
+    period = _parse_period(arguments.get("period"), zone)
+    since, until = (period.since, period.until) if period is not None else (None, None)
+    limit, notes = _limit(arguments.get("limit"))
     if sessions is None:
         raise _SessionSearchError(
             "session_search_unavailable",
@@ -274,7 +316,7 @@ async def _search_sessions(
         match_mode=match_mode,  # type: ignore[arg-type]
         order=str(raw_order),  # type: ignore[arg-type]
         offset=0,
-        limit=SESSION_SEARCH_DEFAULT_LIMIT,
+        limit=limit,
         snapshot_id=None,
         excluded_session_ids=excluded_session_ids,
         include_subagents=include_subagents,
@@ -292,9 +334,29 @@ async def _search_sessions(
     if len(hits) != len(page.hits):
         page = replace(page, hits=tuple(hits))
     data = _render_search_page(
-        page, targets, session_contexts, project_id=context.project_id, agent_id=agent_id
+        page,
+        targets,
+        session_contexts,
+        project_id=context.project_id,
+        agent_id=agent_id,
+        period=period.text if period is not None else None,
+        limit=limit,
+        notes=notes,
     )
     return data
+
+
+def _limit(value: Any) -> tuple[int, list[str]]:
+    """The requested hit count (validated before) capped at the Tool's maximum."""
+    if value is None:
+        return SESSION_SEARCH_DEFAULT_LIMIT, []
+    requested = int(value)
+    if requested > SESSION_SEARCH_DEFAULT_LIMIT:
+        return SESSION_SEARCH_DEFAULT_LIMIT, [
+            f"limit is at most {SESSION_SEARCH_DEFAULT_LIMIT}; this search returned up to "
+            f"{SESSION_SEARCH_DEFAULT_LIMIT} matches."
+        ]
+    return requested, []
 
 
 async def _call_search_page(backend: Any, request: RecallSearchRequest) -> RecallSearchPage:
@@ -343,7 +405,7 @@ def _backend_name(backend: Any) -> str:
     return known.get(class_name, class_name.removesuffix("RecallBackend").lower() or "backend")
 
 
-def _normalize_search_arguments(arguments: Any) -> JsonObject:
+def _normalize_search_arguments(arguments: Any, zone: _Zone = _UTC_ZONE) -> JsonObject:
     """Recover clear search intent without dropping meaningful instructions."""
     if isinstance(arguments, str):
         try:
@@ -360,12 +422,27 @@ def _normalize_search_arguments(arguments: Any) -> JsonObject:
     entries: list[tuple[str, Any]] = []
     for wrapper in ("request", "search"):
         if wrapper in values:
-            entries.extend(_normalize_search_arguments(values.pop(wrapper)).items())
+            entries.extend(_normalize_search_arguments(values.pop(wrapper), zone).items())
     entries.extend(values.items())
-    fields = ("query", "period", "agent_id", "session_id", "include_subagents", "since", "until")
+    fields = (
+        "query",
+        "period",
+        "agent_id",
+        "session_id",
+        "include_subagents",
+        "limit",
+        "since",
+        "until",
+    )
     spellings = {key.replace("_", ""): key for key in fields}
     spellings.update(
-        q="query", qurey="query", searchquery="query", agent="agent_id", session="session_id"
+        q="query",
+        qurey="query",
+        searchquery="query",
+        agent="agent_id",
+        session="session_id",
+        maxresults="limit",
+        topk="limit",
     )
     normalized: JsonObject = {}
     for key, value in entries:
@@ -396,6 +473,8 @@ def _normalize_search_arguments(arguments: Any) -> JsonObject:
             value = str(value)
         if field in {"query", "agent_id", "session_id"} and isinstance(value, str):
             value = value.strip()
+        if field == "limit" and isinstance(value, str) and value.strip().isdigit():
+            value = int(value.strip())
         if field in normalized and normalized[field] != value:
             raise _SessionSearchError(
                 "invalid_arguments", f"Conflicting values for {field}; provide one intended value."
@@ -413,8 +492,8 @@ def _normalize_search_arguments(arguments: Any) -> JsonObject:
                 "invalid_arguments", "Use ISO-8601 dates for the search period."
             )
         interval = f"{start}/{end}"
-        if "period" in normalized and _parse_period(normalized["period"]) != _parse_period(
-            interval
+        if "period" in normalized and _period_bounds(normalized["period"], zone) != (
+            _period_bounds(interval, zone)
         ):
             raise _SessionSearchError(
                 "invalid_arguments",
@@ -424,15 +503,23 @@ def _normalize_search_arguments(arguments: Any) -> JsonObject:
     return normalized
 
 
-def _validate_session_search_fields(arguments: JsonObject) -> None:
-    allowed = {"query", "period", "agent_id", "session_id", "include_subagents"}
+_PAGING_FIELDS = frozenset({"page", "offset", "cursor", "next_cursor"})
+
+
+def _validate_session_search_fields(arguments: JsonObject, zone: _Zone = _UTC_ZONE) -> None:
+    allowed = {"query", "period", "agent_id", "session_id", "include_subagents", "limit"}
     unsupported = sorted(set(arguments) - allowed)
     if unsupported:
+        paging = (
+            " There are no result pages; narrow query, period or session_id to see other matches."
+            if _PAGING_FIELDS.intersection(unsupported)
+            else ""
+        )
         raise _SessionSearchError(
             "invalid_arguments",
             f"Unsupported arguments: {', '.join(unsupported)}. Use query with optional period, "
             "agent_id, session_id and include_subagents. This Tool searches text; it cannot "
-            "list Sessions or read a full transcript.",
+            f"list Sessions or read a full transcript.{paging}",
         )
     _required_string(arguments, "query")
     for key in ("agent_id", "session_id"):
@@ -443,9 +530,18 @@ def _validate_session_search_fields(arguments: JsonObject) -> None:
             raise _SessionSearchError(
                 "invalid_arguments", "period must be an ISO-8601 start/end interval"
             )
-        _parse_period(arguments["period"])
+        _parse_period(arguments["period"], zone)
     if "include_subagents" in arguments and not isinstance(arguments["include_subagents"], bool):
         raise _SessionSearchError("invalid_arguments", "include_subagents must be a boolean")
+    limit = arguments.get("limit")
+    if "limit" in arguments and (
+        not isinstance(limit, int) or isinstance(limit, bool) or limit < 1
+    ):
+        raise _SessionSearchError(
+            "invalid_arguments",
+            f"limit must be a whole number from 1 to {SESSION_SEARCH_DEFAULT_LIMIT}; omit it "
+            f"for up to {SESSION_SEARCH_DEFAULT_LIMIT} matches.",
+        )
 
 
 def _agent_id(arguments: JsonObject, context: ToolContext) -> str:
@@ -472,49 +568,103 @@ def _optional_string(value: Any) -> str | None:
     return value.strip() if isinstance(value, str) and value.strip() else None
 
 
-def _parse_datetime(value: Any, name: str, *, end_of_day: bool) -> datetime | None:
-    if value is None:
-        return None
-    if not isinstance(value, str) or not value.strip():
-        raise _SessionSearchError("invalid_arguments", f"{name} must be an ISO-8601 string")
+def _local_zone(timezone_name_loader: Callable[[], str] | None) -> _Zone:
+    if timezone_name_loader is None:
+        return _UTC_ZONE
+    try:
+        name = timezone_name_loader()
+        return _Zone(ZoneInfo(name), name)
+    except (ZoneInfoNotFoundError, ValueError, OSError):
+        _LOGGER.warning("session_search could not load the configured timezone; using UTC")
+        return _UTC_ZONE
+
+
+_MONTH = re.compile(r"\d{4}-\d{2}")
+_DAY = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+def _parse_datetime(
+    value: str, name: str, *, end_of_range: bool, zone: _Zone
+) -> tuple[datetime, bool]:
+    """Parse one period endpoint; also report whether it was read in local time.
+
+    A date or month covers all of it; a value without an offset is local time.
+    """
     raw = value.strip()
     try:
-        if len(raw) == 10 and raw[4] == "-" and raw[7] == "-":
-            parsed_date = datetime.fromisoformat(raw).date()
-            boundary = datetime_time.max if end_of_day else datetime_time.min
-            return datetime.combine(parsed_date, boundary, tzinfo=UTC)
-        normalized = raw.removesuffix("Z") + "+00:00" if raw.endswith("Z") else raw
+        if _MONTH.fullmatch(raw) or _DAY.fullmatch(raw):
+            year, month = int(raw[:4]), int(raw[5:7])
+            if len(raw) == 10:
+                first = last = date.fromisoformat(raw)
+            else:
+                first = date(year, month, 1)
+                last = date(year, month, calendar.monthrange(year, month)[1])
+            day, boundary = (
+                (last, datetime_time.max) if end_of_range else (first, datetime_time.min)
+            )
+            return datetime.combine(day, boundary, tzinfo=zone.tz), True
+        normalized = raw[:-1] + "+00:00" if raw[-1:] in ("Z", "z") else raw
         parsed = datetime.fromisoformat(normalized)
     except ValueError as error:
-        raise _SessionSearchError("invalid_arguments", f"{name} must be valid ISO-8601") from error
+        raise _SessionSearchError(
+            "invalid_arguments",
+            f"{name} '{raw}' is not an ISO-8601 date or time, such as 2026-07-01 or "
+            "2026-07-01T09:00.",
+        ) from error
     if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=UTC)
-    return parsed.astimezone(UTC)
+        return parsed.replace(tzinfo=zone.tz), True
+    return parsed, False
 
 
-def _parse_period(value: Any) -> tuple[datetime | None, datetime | None]:
+def _parse_period(value: Any, zone: _Zone = _UTC_ZONE) -> _Period | None:
+    """Resolve a period to UTC bounds plus the range text the result states."""
     if value is None:
-        return None, None
+        return None
     if not isinstance(value, str) or not value.strip():
         raise _SessionSearchError(
             "invalid_arguments", "period must be an ISO-8601 start/end interval"
         )
     raw = value.strip()
+    if "/" not in raw and (_MONTH.fullmatch(raw) or _DAY.fullmatch(raw)):
+        raw = f"{raw}/{raw}"
     if raw.count("/") != 1:
+        hint = f' For everything from {raw} on, use "{raw}/".' if "/" not in raw else ""
         raise _SessionSearchError(
             "invalid_arguments",
             "period must use start/end, such as 2026-07-01/2026-07-31. Omit "
-            "period to search all dates.",
+            f"period to search all dates.{hint}",
         )
-    start_raw, end_raw = raw.split("/", 1)
+    start_raw, end_raw = (part.strip() for part in raw.split("/", 1))
     if not start_raw and not end_raw:
         raise _SessionSearchError("invalid_arguments", "period must contain at least one endpoint")
-    since = _parse_datetime(start_raw or None, "period start", end_of_day=False)
-    until = _parse_datetime(end_raw or None, "period end", end_of_day=True)
-    if since is not None and until is not None and since > until:
-        since = _parse_datetime(end_raw, "period start", end_of_day=False)
-        until = _parse_datetime(start_raw, "period end", end_of_day=True)
-    return since, until
+    start = _endpoint(start_raw, "period start", end_of_range=False, zone=zone)
+    end = _endpoint(end_raw, "period end", end_of_range=True, zone=zone)
+    if start is not None and end is not None and start[0] > end[0]:
+        start = _endpoint(end_raw, "period start", end_of_range=False, zone=zone)
+        end = _endpoint(start_raw, "period end", end_of_range=True, zone=zone)
+    local = any(bound is not None and bound[1] for bound in (start, end))
+    text = "/".join(
+        bound[0].isoformat(timespec="seconds") if bound is not None else ""
+        for bound in (start, end)
+    )
+    return _Period(
+        since=start[0].astimezone(UTC) if start is not None else None,
+        until=end[0].astimezone(UTC) if end is not None else None,
+        text=f"{text} ({zone.name})" if local else text,
+    )
+
+
+def _endpoint(
+    raw: str, name: str, *, end_of_range: bool, zone: _Zone
+) -> tuple[datetime, bool] | None:
+    if not raw:
+        return None
+    return _parse_datetime(raw, name, end_of_range=end_of_range, zone=zone)
+
+
+def _period_bounds(value: Any, zone: _Zone) -> tuple[datetime | None, datetime | None]:
+    period = _parse_period(value, zone)
+    return (period.since, period.until) if period is not None else (None, None)
 
 
 def _display_search_parts(arguments: JsonObject) -> tuple[ToolDisplayPart, ...]:

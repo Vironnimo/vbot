@@ -164,86 +164,106 @@ class TestEdit:
         assert "\n" not in text.replace("\r\n", "")
 
 
-class TestPatch:
-    def test_applies_unique_replacement(
+def _replace(old: str, new: str):
+    def edit(text: str) -> str:
+        assert "\r" not in text
+        return text.replace(old, new)
+
+    return edit
+
+
+class TestRewrite:
+    def test_rewrites_skill_md_through_the_edit(
         self, service: SkillAuthoringService, tmp_path: Path
     ) -> None:
         service.create(tmp_path, "demo", skill_document(body="# Demo\nold line"), author="agent")
 
-        service.patch(tmp_path, "demo", "old line", "new line", author="agent")
+        result = service.rewrite(
+            tmp_path, "demo", "SKILL.md", _replace("old line", "new line"), author="agent"
+        )
 
+        assert result.operation == "rewrite"
         assert "new line" in (tmp_path / "demo" / "SKILL.md").read_text(encoding="utf-8")
 
-    def test_patch_not_found(self, service: SkillAuthoringService, tmp_path: Path) -> None:
+    def test_create_writes_lf(self, service: SkillAuthoringService, tmp_path: Path) -> None:
         service.create(tmp_path, "demo", skill_document(), author="agent")
 
-        with pytest.raises(SkillAuthoringError, match="file_path"):
-            service.patch(tmp_path, "demo", "absent", "x", author="agent")
+        assert b"\r" not in (tmp_path / "demo" / "SKILL.md").read_bytes()
 
-    def test_patch_not_unique(self, service: SkillAuthoringService, tmp_path: Path) -> None:
-        service.create(tmp_path, "demo", skill_document(body="dup\ndup"), author="agent")
-
-        with pytest.raises(SkillAuthoringError, match=r"line\(s\) 9, 10"):
-            service.patch(tmp_path, "demo", "dup", "x", author="agent")
-
-    def test_patch_identical_strings(self, service: SkillAuthoringService, tmp_path: Path) -> None:
-        service.create(tmp_path, "demo", skill_document(), author="agent")
-
-        with pytest.raises(SkillAuthoringError):
-            service.patch(tmp_path, "demo", "same", "same", author="agent")
-
-    def test_patch_tolerates_crlf_match_on_lf_file(
+    def test_failed_edit_writes_nothing(
         self, service: SkillAuthoringService, tmp_path: Path
     ) -> None:
-        service.create(tmp_path, "demo", skill_document(body="# Demo\nold line\n"), author="agent")
+        service.create(tmp_path, "demo", skill_document(), author="agent")
+        skill_file = tmp_path / "demo" / "SKILL.md"
+        before = skill_file.read_bytes()
 
-        service.patch(tmp_path, "demo", "old line\r\n", "new line\r\n", author="agent")
+        def refuse(_text: str) -> str:
+            raise LookupError("no match")
 
-        assert "new line" in (tmp_path / "demo" / "SKILL.md").read_text(encoding="utf-8")
+        with pytest.raises(LookupError):
+            service.rewrite(tmp_path, "demo", "SKILL.md", refuse, author="agent")
 
-    def test_patch_on_crlf_file_preserves_style(
+        assert skill_file.read_bytes() == before
+
+    def test_rewritten_document_is_validated(
+        self, service: SkillAuthoringService, tmp_path: Path
+    ) -> None:
+        service.create(tmp_path, "demo", skill_document(), author="agent")
+        skill_file = tmp_path / "demo" / "SKILL.md"
+        before = skill_file.read_bytes()
+
+        with pytest.raises(SkillAuthoringError, match="must match its directory name"):
+            service.rewrite(
+                tmp_path, "demo", "SKILL.md", _replace("name: demo", "name: other"), author="agent"
+            )
+
+        assert skill_file.read_bytes() == before
+
+    def test_rewrite_on_crlf_file_preserves_style(
         self, service: SkillAuthoringService, tmp_path: Path
     ) -> None:
         service.create(tmp_path, "demo", skill_document(body="# Demo\nold line\n"), author="agent")
         skill_file = tmp_path / "demo" / "SKILL.md"
-        skill_file.write_text(
-            skill_file.read_text(encoding="utf-8").replace("\n", "\r\n"),
-            encoding="utf-8",
-            newline="",
-        )
+        skill_file.write_bytes(skill_file.read_bytes().replace(b"\n", b"\r\n"))
 
-        service.patch(tmp_path, "demo", "old line", "new line", author="agent")
+        service.rewrite(
+            tmp_path, "demo", "SKILL.md", _replace("old line", "new line"), author="agent"
+        )
 
         text = read_raw(skill_file)
         assert "new line" in text
-        assert "\r\n" in text
         assert "\n" not in text.replace("\r\n", "")
 
-    def test_patch_crlf_support_file_with_lf_match(
+    def test_rewrite_crlf_support_file(
         self, service: SkillAuthoringService, tmp_path: Path
     ) -> None:
         service.create(tmp_path, "demo", skill_document(), author="agent")
-        service.write_file(tmp_path, "demo", "references/notes.md", "notes\n")
         resource = tmp_path / "demo" / "references" / "notes.md"
-        resource.write_text(
-            resource.read_text(encoding="utf-8").replace("\n", "\r\n"),
-            encoding="utf-8",
-            newline="",
-        )
+        service.write_file(tmp_path, "demo", "references/notes.md", "notes\n")
+        resource.write_bytes(b"notes\r\nmore\r\n")
 
-        service.patch(
+        service.rewrite(
             tmp_path,
             "demo",
-            "notes",
-            "ideas",
+            "references/notes.md",
+            _replace("notes", "ideas"),
             author="agent",
-            relative_path="references/notes.md",
         )
 
-        text = read_raw(resource)
-        assert "ideas" in text
-        assert "\r\n" in text
-        assert "\n" not in text.replace("\r\n", "")
+        assert resource.read_bytes() == b"ideas\r\nmore\r\n"
+        assert service.read_text(tmp_path, "demo", "references/notes.md") == "ideas\nmore\n"
+
+    def test_rewrite_missing_or_binary_file_fails(
+        self, service: SkillAuthoringService, tmp_path: Path
+    ) -> None:
+        service.create(tmp_path, "demo", skill_document(), author="agent")
+        (tmp_path / "demo" / "assets").mkdir()
+        (tmp_path / "demo" / "assets" / "logo.bin").write_bytes(b"\xff\xfe\x00")
+
+        with pytest.raises(SkillAuthoringError, match="Skill file not found"):
+            service.rewrite(tmp_path, "demo", "references/none.md", str.upper, author="agent")
+        with pytest.raises(SkillAuthoringError, match="not UTF-8"):
+            service.rewrite(tmp_path, "demo", "assets/logo.bin", str.upper, author="agent")
 
 
 class TestDelete:
@@ -281,13 +301,8 @@ def test_mutations_leave_non_package_directories_untouched(
         elif action == "remove_file":
             service.remove_file(tmp_path, "demo", "references/notes.md")
         else:
-            service.patch(
-                tmp_path,
-                "demo",
-                "keep",
-                "replace",
-                author="agent",
-                relative_path="references/notes.md",
+            service.rewrite(
+                tmp_path, "demo", "references/notes.md", _replace("keep", "replace"), author="agent"
             )
 
     assert resource.read_text(encoding="utf-8") == "keep this file"
@@ -491,13 +506,12 @@ def test_support_alias_cannot_bypass_document_validation(
 
     with pytest.raises(SkillAuthoringError):
         if action == "patch":
-            service.patch(
+            service.rewrite(
                 tmp_path,
                 "demo",
-                "name: demo",
-                "name: other",
+                alias.relative_to(document.parent).as_posix(),
+                _replace("name: demo", "name: other"),
                 author="agent",
-                relative_path=alias.relative_to(document.parent).as_posix(),
             )
         elif action == "write_file":
             service.write_file(

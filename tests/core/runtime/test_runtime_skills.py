@@ -295,8 +295,8 @@ def test_reload_skills_updates_system_prompt_skill_registry(config: Config, tmp_
     runtime.reload_skills()
     prompt_after_reload = runtime.system_prompts.build_system_prompt(agent)
 
-    assert f"<name>{RELOADED_SKILL_NAME}</name>" not in prompt_before_reload
-    assert f"<name>{RELOADED_SKILL_NAME}</name>" in prompt_after_reload
+    assert f"- {RELOADED_SKILL_NAME}:" not in prompt_before_reload
+    assert f"- {RELOADED_SKILL_NAME}:" in prompt_after_reload
     assert "Fresh skill loaded after settings update." in prompt_after_reload
 
 
