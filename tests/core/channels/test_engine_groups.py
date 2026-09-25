@@ -14,6 +14,7 @@ from .engine_test_support import (
     Path,
     RunKind,
     assert_member_trigger,
+    channel_state,
     command_outcome,
     drain,
     make_command_dispatcher,
@@ -224,45 +225,33 @@ async def test_group_sender_display_name_falls_back_to_user_id(tmp_path: Path) -
 
 
 @pytest.mark.asyncio
-async def test_participants_metadata_written_for_groups_only(tmp_path: Path) -> None:
-    engine, chat_sessions, _trigger, _transport = make_engine(tmp_path)
-
-    engine.prepare_inbound_route(make_conversation(kind="direct", user_display_name="Alice"))
-    direct_metadata = chat_sessions.get_metadata(
-        SessionAddress(project_id=None, agent_id="assistant", session_id=SESSION_ID)
+async def test_group_participants_live_in_channel_state_not_session_metadata(
+    tmp_path: Path,
+) -> None:
+    state = channel_state(tmp_path)
+    engine, chat_sessions, _trigger, _transport = make_engine(
+        tmp_path, observe_unaddressed=True, access_registry=state
     )
-    assert "participants" not in direct_metadata
 
-    engine.prepare_inbound_route(make_conversation(kind="group", user_display_name="Alice"))
-    group_metadata = chat_sessions.get_metadata(
-        SessionAddress(project_id=None, agent_id="assistant", session_id=SESSION_ID)
-    )
-    # Sighting times live in the Channel access record, not in Session metadata.
-    assert group_metadata["participants"] == {"50": {"display_name": "Alice"}}
+    for user_id, display_name in ((50, "Alice"), (51, "Bob"), (50, "Alice Renamed")):
+        await engine.handle_inbound_text(
+            make_conversation(kind="group", user_id=user_id, user_display_name=display_name),
+            "hello everyone",
+        )
+    await drain(engine, 12345)
     await engine.stop()
 
-
-@pytest.mark.asyncio
-async def test_participants_metadata_updated_on_repeat_messages(tmp_path: Path) -> None:
-    engine, chat_sessions, _trigger, _transport = make_engine(tmp_path)
-
-    engine.prepare_inbound_route(
-        make_conversation(kind="group", user_id=50, user_display_name="Alice")
-    )
-    engine.prepare_inbound_route(
-        make_conversation(kind="group", user_id=51, user_display_name="Bob")
-    )
-    engine.prepare_inbound_route(
-        make_conversation(kind="group", user_id=50, user_display_name="Alice Renamed")
-    )
-
-    participants = chat_sessions.get_metadata(
+    access = await state.access_state("tg-assistant")
+    [group] = access["groups"]
+    assert group["access_scope_id"] == "12345"
+    assert [
+        (participant["user_id"], participant["display_name"], participant["role"])
+        for participant in group["participants"]
+    ] == [("50", "Alice Renamed", "member"), ("51", "Bob", "member")]
+    metadata = chat_sessions.get_metadata(
         SessionAddress(project_id=None, agent_id="assistant", session_id=SESSION_ID)
-    )["participants"]
-    assert set(participants) == {"50", "51"}
-    assert participants["50"]["display_name"] == "Alice Renamed"
-    assert participants["51"]["display_name"] == "Bob"
-    await engine.stop()
+    )
+    assert not {"participants", "conversation_kind", "active_session_id"} & metadata.keys()
 
 
 @pytest.mark.asyncio
@@ -286,11 +275,11 @@ async def test_routing_a_known_conversation_again_takes_no_writer_transaction(
     assert len(writes) == 1
     engine.prepare_inbound_route(conversation)
     assert len(writes) == 1
-    # Only a real change, such as a new participant, writes again.
+    # Participants are Channel state, so a new sender leaves the Session alone.
     engine.prepare_inbound_route(
         make_conversation(kind="group", user_id=51, user_display_name="Bob")
     )
-    assert len(writes) == 2
+    assert len(writes) == 1
 
     writes.clear()
     await engine.handle_inbound_text(conversation, "hello everyone")
@@ -354,7 +343,7 @@ async def test_group_unaddressed_text_is_observed_as_note(tmp_path: Path) -> Non
 
 
 @pytest.mark.asyncio
-async def test_observed_group_message_updates_metadata_and_participant(tmp_path: Path) -> None:
+async def test_observed_group_message_updates_reply_target(tmp_path: Path) -> None:
     engine, chat_sessions, _trigger, _transport = make_engine(
         tmp_path,
         observe_unaddressed=True,
@@ -373,7 +362,7 @@ async def test_observed_group_message_updates_metadata_and_participant(tmp_path:
         "channel_id": "tg-assistant",
         "platform_target": "12345",
     }
-    assert metadata["participants"] == {"50": {"display_name": "Alice"}}
+    assert "participants" not in metadata
     await engine.stop()
 
 

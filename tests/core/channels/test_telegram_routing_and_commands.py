@@ -19,6 +19,7 @@ from core.chat import MessageSender
 from core.sessions import ChatSessionManager, SessionAddress
 from tests.core.channels.engine_test_support import (
     assert_member_trigger,
+    channel_state,
 )
 from tests.core.channels.telegram_test_support import (
     CHANNEL_GROUP_REPLY_SURFACE,
@@ -131,6 +132,7 @@ def test_constructor_requires_token_env_var(
             chat_sessions=cast(Any, ChatSessionManager(tmp_path)),
             credential_resolver=lambda key: os.environ.get(key, ""),
             command_dispatcher=cast(Any, make_command_dispatcher()),
+            conversation_pointers=channel_state(tmp_path),
         )
 
 
@@ -146,6 +148,7 @@ def test_constructor_resolves_token_through_injected_credential_resolver(
         chat_sessions=cast(Any, ChatSessionManager(tmp_path)),
         credential_resolver=lambda _key: "runtime-token",
         command_dispatcher=cast(Any, make_command_dispatcher()),
+        conversation_pointers=channel_state(tmp_path),
     )
 
     assert adapter._token == "runtime-token"

@@ -6,7 +6,6 @@ import asyncio
 import threading
 from typing import Any
 
-import core.channels._conversation_routing as routing_module
 from core.sessions import SessionAddress
 
 from .engine_test_support import (
@@ -16,6 +15,7 @@ from .engine_test_support import (
     Path,
     RouteFacts,
     RunKind,
+    channel_state,
     drain,
     logging,
     make_completed_run,
@@ -171,10 +171,7 @@ async def test_channel_without_new_routes_to_derived_anchor(tmp_path: Path) -> N
         reply_surface=CHANNEL_REPLY_SURFACE,
         run_kind=RunKind.CHANNEL,
     )
-    metadata = chat_sessions.get_metadata(
-        SessionAddress(project_id=None, agent_id="assistant", session_id=SESSION_ID)
-    )
-    assert routing_module.ACTIVE_SESSION_METADATA_KEY not in metadata
+    assert channel_state(tmp_path).active_session_id("tg-assistant", SESSION_ID) is None
     await engine.stop()
 
 
@@ -188,9 +185,8 @@ async def test_ensure_channel_session_follows_pointer_after_new(tmp_path: Path) 
     await engine.handle_inbound_text(make_conversation(), "/new")
     await drain(engine, 12345)
 
-    new_session_id = chat_sessions.get_metadata(
-        SessionAddress(project_id=None, agent_id="assistant", session_id=SESSION_ID)
-    )[routing_module.ACTIVE_SESSION_METADATA_KEY]
+    new_session_id = channel_state(tmp_path).active_session_id("tg-assistant", SESSION_ID)
+    assert new_session_id is not None
     # Proactive channel_send resolves to the active (pointer) session, not the anchor.
     route = engine.ensure_channel_session(make_conversation())
     assert route == RouteFacts(agent_id="assistant", session_id=new_session_id)

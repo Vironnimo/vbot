@@ -187,6 +187,30 @@ def test_channel_config_create_delete_controls_tool_registration_without_livenes
 
 
 @pytest.mark.asyncio
+async def test_channel_state_follows_channel_create_and_delete(tmp_path: Path) -> None:
+    service = make_service(tmp_path)
+    try:
+        service.create_channel(make_config(enabled=False))
+        await service._state.snapshot_participant_role("tg-assistant", "-100", "50", "Alice")
+        service._state.save_update_offset("tg-assistant", 42)
+
+        service.delete_channel("tg-assistant")
+
+        # A late write of a stopping adapter cannot resurrect deleted state.
+        with pytest.raises(ChannelNotFoundError):
+            service._state.save_update_offset("tg-assistant", 43)
+        with service.database.read() as connection:
+            for table in ("channel_participants", "channel_polling"):
+                assert connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
+
+        service.create_channel(make_config(enabled=False))
+        assert service._state.load_update_offset("tg-assistant") == 0
+        assert (await service.channel_access("tg-assistant"))["groups"] == []
+    finally:
+        service.close()
+
+
+@pytest.mark.asyncio
 async def test_channel_service_start_and_stop_manage_enabled_adapters(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

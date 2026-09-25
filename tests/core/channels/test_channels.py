@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import threading
 from pathlib import Path
 from unittest.mock import AsyncMock
@@ -19,6 +18,8 @@ from core.channels.adapter import (
     RouteFacts,
     parse_bound_run_callback_data,
 )
+from core.channels.channels import ChannelService
+from core.channels.state import ChannelStateStore
 from core.chat import ReplySurface
 from core.extensions import InteractionButton
 from core.runs import Run
@@ -30,6 +31,15 @@ from tests.core.channels.channels_helpers import (
 )
 
 pytestmark = pytest.mark.usefixtures("current_format_data_directory")
+
+
+def _saved_run_button_ids(service: ChannelService, channel_id: str) -> list[str]:
+    with service.database.read() as connection:
+        rows = connection.execute(
+            "SELECT binding_id FROM channel_run_buttons WHERE channel_id = ?",
+            (channel_id,),
+        ).fetchall()
+    return [str(row[0]) for row in rows]
 
 
 @pytest.mark.asyncio
@@ -172,8 +182,13 @@ async def test_channel_service_persists_and_rewrites_origin_bound_run_buttons(
     binding_id, button_index = parsed
     assert button_index == 0
 
-    # A fresh storage instance proves the binding is durable, not adapter memory.
-    reloaded_storage = ChannelStorage(tmp_path)
+    service.stop()
+    await asyncio.wait_for(adapter.stopped.wait(), timeout=1)
+    await asyncio.sleep(0)
+    service.close()
+
+    # A reopened state store proves the binding is durable, not adapter memory.
+    reloaded_storage = ChannelStateStore.open(tmp_path)
     mismatch = reloaded_storage.claim_run_button_binding(
         config.id,
         binding_id,
@@ -198,10 +213,7 @@ async def test_channel_service_persists_and_rewrites_origin_bound_run_buttons(
         thread_id=None,
     )
     assert second_claim.status == "consumed"
-
-    service.stop()
-    await asyncio.wait_for(adapter.stopped.wait(), timeout=1)
-    await asyncio.sleep(0)
+    reloaded_storage.close()
 
 
 @pytest.mark.asyncio
@@ -230,9 +242,7 @@ async def test_channel_service_discards_run_binding_when_send_fails(
             run_origin=RouteFacts(agent_id="assistant", session_id="origin-session"),
         )
 
-    binding_path = tmp_path / "channels" / config.id / "run-button-bindings.json"
-    payload = json.loads(binding_path.read_text(encoding="utf-8"))
-    assert payload["bindings"] == {}
+    assert _saved_run_button_ids(service, config.id) == []
     service.stop()
     await asyncio.wait_for(adapter.stopped.wait(), timeout=1)
     await asyncio.sleep(0)
@@ -254,14 +264,14 @@ async def test_cancel_during_run_button_preparation_discards_unsent_binding(
     saved = asyncio.Event()
     release = threading.Event()
     loop = asyncio.get_running_loop()
-    original_save = service._storage.save_run_button_binding
+    original_save = service._state.save_run_button_binding
 
     def blocked_save(channel_id, binding):
         original_save(channel_id, binding)
         loop.call_soon_threadsafe(saved.set)
         assert release.wait(timeout=5)
 
-    monkeypatch.setattr(service._storage, "save_run_button_binding", blocked_save)
+    monkeypatch.setattr(service._state, "save_run_button_binding", blocked_save)
     sending = asyncio.create_task(
         service.send(
             config.id,
@@ -279,10 +289,7 @@ async def test_cancel_during_run_button_preparation_discards_unsent_binding(
         release.set()
         with pytest.raises(asyncio.CancelledError):
             await sending
-        payload = json.loads(
-            (tmp_path / "channels" / config.id / "run-button-bindings.json").read_text()
-        )
-        assert payload["bindings"] == {}
+        assert _saved_run_button_ids(service, config.id) == []
         assert adapter.sent_messages == []
     finally:
         release.set()
@@ -307,14 +314,14 @@ async def test_repeated_cancellation_waits_for_unsent_binding_cleanup(
     cleaning = asyncio.Event()
     release = threading.Event()
     loop = asyncio.get_running_loop()
-    original_discard = service._storage.discard_run_button_binding
+    original_discard = service._state.discard_run_button_binding
 
     def blocked_discard(channel_id, binding_id):
         loop.call_soon_threadsafe(cleaning.set)
         assert release.wait(timeout=5)
         original_discard(channel_id, binding_id)
 
-    monkeypatch.setattr(service._storage, "discard_run_button_binding", blocked_discard)
+    monkeypatch.setattr(service._state, "discard_run_button_binding", blocked_discard)
     sending = asyncio.create_task(
         service.send(
             config.id,
@@ -334,10 +341,7 @@ async def test_repeated_cancellation_waits_for_unsent_binding_cleanup(
         release.set()
         with pytest.raises(asyncio.CancelledError):
             await sending
-        payload = json.loads(
-            (tmp_path / "channels" / config.id / "run-button-bindings.json").read_text()
-        )
-        assert payload["bindings"] == {}
+        assert _saved_run_button_ids(service, config.id) == []
     finally:
         release.set()
         await asyncio.gather(sending, return_exceptions=True)

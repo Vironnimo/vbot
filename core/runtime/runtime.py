@@ -397,6 +397,8 @@ class Runtime:
             self._keep_awake.close()
         if self._storage is not None:
             self._storage.temporary_files.stop()
+        if self._channel_service is not None:
+            self._channel_service.close()
         if self._chat_sessions is not None:
             self._chat_sessions.close()
 
@@ -474,6 +476,8 @@ class Runtime:
             self._keep_awake.close()
         if self._storage is not None:
             await self._storage.temporary_files.aclose()
+        if self._channel_service is not None:
+            self._channel_service.close()
         if self._chat_sessions is not None:
             self._chat_sessions.close()
 
@@ -512,6 +516,9 @@ class Runtime:
         if self._storage is not None:
             with suppress(Exception):
                 self._storage.temporary_files.stop()
+        if self._channel_service is not None:
+            with suppress(Exception):
+                self._channel_service.close()
         if self._chat_sessions is not None:
             with suppress(Exception):
                 self._chat_sessions.close()
@@ -1011,6 +1018,8 @@ class Runtime:
             provider_usage = self._provider_usage.history_database
             if provider_usage is not None:
                 databases.append(provider_usage)
+        if self._channel_service is not None:
+            databases.append(self._channel_service.database)
         return tuple(databases)
 
     chat_sessions: _StartedService[ChatSessionManager] = _StartedService(

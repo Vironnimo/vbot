@@ -26,7 +26,11 @@ from core.database import write_bootstrap_marker
 from core.runs import ASSISTANT_OUTPUT_EVENT, Run, WaitingWorkAdmission
 from core.sessions import ChatSessionManager
 
-from .engine_test_support import QUEUE_DRAIN_TIMEOUT_SECONDS, MemoryChannelAccessRegistry
+from .engine_test_support import (
+    QUEUE_DRAIN_TIMEOUT_SECONDS,
+    MemoryChannelAccessRegistry,
+    channel_state,
+)
 
 CHANNEL_REPLY_SURFACE = ReplySurface.channel(
     platform="telegram",
@@ -307,6 +311,7 @@ def make_adapter(
         credential_resolver or (lambda key: os.environ.get(key, "")),
         attachment_store=attachment_store,
         command_dispatcher=cast(Any, resolved_command_dispatcher),
+        conversation_pointers=channel_state(tmp_path),
         chat_migration_persister=chat_migration_persister,
         access_registry=MemoryChannelAccessRegistry(list(admin_user_ids or [])),
         update_offset_store=update_offset_store,
