@@ -17,7 +17,7 @@ Run once per data directory, from a vBot checkout that includes Generation 1:
    It converts and verifies into a staging directory, prints a summary (counts per area, verification, skipped or approximated items, sizes) and discards the staging directory. The data directory keeps its content; only an empty `data-store.lock` remains. Read the skipped items and the JSON document errors before installing.
 4. Install: the same command without `--dry-run`.
 5. Start a vBot that includes Generation 1, never the old release: it finds no `session-store.json` and refuses to open its Session store. Check Agents, Projects, Sessions and Channels, then take the first data snapshot: `vbot data-store snapshot create --reason generation-1` (status reports `snapshot_degraded` until one exists).
-6. `pre-generation-1/` holds every file the install replaced or retired, at its original relative path, plus `conversion-report.json`. vBot never reads it. Delete it once the converted instance has worked for a while and a data snapshot exists.
+6. `pre-generation-1/` holds every file the install replaced or retired, at its original relative path, plus `conversion-report.json`. vBot never reads it. It includes old copies of credential files such as OAuth tokens, so it needs the data directory's protection. Delete it once the converted instance has worked for a while and a data snapshot exists.
 
 Going back (loses everything written since the install): stop vBot, delete the paths the report lists under `install.installed` and `data-store.json`, then move the content of `pre-generation-1/` (except `conversion-report.json`) back to the same relative paths.
 
