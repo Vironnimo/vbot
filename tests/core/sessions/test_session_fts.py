@@ -66,6 +66,29 @@ def test_search_availability_uses_lifecycle_markers_without_coverage_scans(
         sessions.close()
 
 
+def test_search_without_trigram_support_uses_the_standard_index(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from core.sessions import _store_fts as store_module
+
+    # SQLite builds without the trigram tokenizer create the standard index only.
+    monkeypatch.setattr(store_module, "FTS_SQL", store_module.FTS_SQL_FALLBACK)
+    sessions = ChatSessionManager(tmp_path)
+    try:
+        message = ChatMessage.user("standard index needle")
+        sessions.create("agent", session_id="no-trigram").append(message)
+
+        result = sessions.search_messages(
+            "needle", project_id=None, agent_id="agent", roles=("user", "assistant")
+        )
+
+        assert [hit.message_id for hit in result.hits] == [message.id]
+        assert result.method == "fts"
+        assert sessions.fts_health().state == "healthy"
+    finally:
+        sessions.close()
+
+
 def test_detached_fts_reopens_complete_when_canonical_projection_already_exists(
     tmp_path: Path,
 ) -> None:
