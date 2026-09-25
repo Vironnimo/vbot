@@ -13,7 +13,7 @@ OpenAI-compatible gateway with per-Model protocol/request profiles across **thre
 
 ## Shared OpenCode credentials
 
-Go uses `OPENCODE_API_KEY`, including named Account suffixes, in common with Zen. Key changes through either Provider affect both; enablement and billing endpoints remain independent. Go uses subscription allowance and may use Zen credits only when the user enabled OpenCode's upstream "Use balance" option. Enrollment, the explicit old-key converter, and the OpenCode-only free-tier restriction are documented in `opencode-zen.md` -> Go credentials and free-tier access.
+Go uses `OPENCODE_API_KEY`, including named Account suffixes, in common with Zen. Key changes through either Provider affect both; enablement and billing endpoints remain independent. Go uses subscription allowance and may use Zen credits only when the user enabled OpenCode's upstream "Use balance" option. Enrollment, the retired `OPENCODE_GO_API_KEY` names (renamed by hand; no fallback), and the OpenCode-only free-tier restriction are documented in `opencode-zen.md` -> Go credentials and free-tier access.
 
 ## Runtime Behavior
 
