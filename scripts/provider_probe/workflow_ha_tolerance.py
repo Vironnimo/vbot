@@ -140,7 +140,7 @@ async def ha_case(adapter: Any, args: argparse.Namespace, case: dict[str, Any]) 
             },
         ]
 
-        services = [
+        services: list[dict[str, Any]] = [
             {"domain": "light", "services": {"turn_on": {"description": "Turn on", "fields": {}}}},
             {
                 "domain": "climate",
@@ -196,8 +196,13 @@ async def ha_case(adapter: Any, args: argparse.Namespace, case: dict[str, Any]) 
             domain = case["arguments"].get("domain", "").strip().lower()
             expected_services = [s for s in services if not domain or s["domain"] == domain]
             checks["receiver"] = received == [{"path": "/api/services", "body": None}]
-            checks["result"] = (
-                bool(results) and results[0].get("data", {}).get("domains") == expected_services
+            lines = (
+                (results[0].get("data") or {}).get("content", "").splitlines() if results else []
+            )
+            checks["result"] = [line.split(":")[0] for line in lines] == (
+                [next(iter(s["services"])) for s in expected_services]
+                if domain
+                else sorted(s["domain"] for s in expected_services)
             )
         elif name == "ha_list_entities" and case.get("success", True):
             request = case["arguments"]
@@ -215,9 +220,11 @@ async def ha_case(adapter: Any, args: argparse.Namespace, case: dict[str, Any]) 
                 and request.get("area", "").lower() in e["attributes"]["friendly_name"].lower()
             ]
             checks["receiver"] = received == [{"path": "/api/states", "body": None}]
-            checks["result"] = (
-                bool(results) and results[0].get("data", {}).get("entities") == expected
-            )
+            content = (results[0].get("data") or {}).get("content", "") if results else ""
+            checks["result"] = content.splitlines() == [
+                f"{e['entity_id']}: {e['state']} ({e['friendly_name']})"
+                for e in sorted(expected, key=lambda item: item["entity_id"])
+            ]
         elif name == "ha_get_state" and case.get("success", True):
             request = case["arguments"]
             entity = request.get("entity_id", request.get("entityId")).strip().lower()
@@ -232,9 +239,11 @@ async def ha_case(adapter: Any, args: argparse.Namespace, case: dict[str, Any]) 
             if entity:
                 body["entity_id"] = entity.strip().lower()
             checks["receiver"] = received == [{"path": "/api/services/light/turn_on", "body": body}]
-            checks["result"] = bool(results) and results[0].get("data", {}).get("result") == [
-                {"entity_id": "light.living_room", "state": "on"}
-            ]
+            checks["result"] = bool(results) and results[0].get("data") == {
+                "service": "light.turn_on",
+                "changed": 1,
+                "content": "light.living_room: on",
+            }
         else:
             checks["rejected_without_effect"] = (
                 bool(results) and not results[0]["ok"] and not received
