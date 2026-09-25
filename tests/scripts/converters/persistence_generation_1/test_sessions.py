@@ -613,6 +613,54 @@ def test_stored_checkpoint_projections_get_the_current_assistant_shapes(
     assert _skips(context) == []
 
 
+def test_the_retired_reasoning_key_marker_is_dropped(tmp_path: Path) -> None:
+    context = _context(tmp_path)
+    marker = {"_reasoning_key": "reasoning_content"}
+    details = {"reasoning_details": [{"type": "reasoning.text", "text": "Check both."}]}
+    projected = {
+        "id": "p1",
+        "role": "assistant",
+        "timestamp": at(1),
+        "model": "test-model",
+        "content": "Earlier answer.",
+        "reasoning": "Earlier thought.",
+    }
+    with _legacy(context) as legacy:
+        key = legacy.session("s1")
+        only = legacy.assistant(
+            key, "One.", minute=2, reasoning="Short thought.", reasoning_meta=marker
+        )
+        mixed = legacy.assistant(
+            key, "Two.", minute=3, reasoning="Check both.", reasoning_meta={**marker, **details}
+        )
+        checkpoint = legacy.checkpoint(
+            key,
+            "Answered twice",
+            minute=4,
+            projection=[{**projected, "reasoning_meta": marker}],
+            policy="auto",
+            strategy="auto",
+        )
+        label = f"session -/main/s1 ({legacy.generation(key)})"
+
+    convert(context)
+
+    with _opened(context) as manager:
+        messages = {message.id: message for message in manager.get(MAIN).load_active()}
+    assert messages[only].reasoning == "Short thought."
+    assert messages[only].reasoning_meta is None
+    assert messages[mixed].reasoning_meta == details
+    assert messages[checkpoint].projection == [projected]
+    assert context.report.counts[AREA]["reasoning_keys_dropped"] == 3
+    assert _skips(context) == [
+        (
+            label,
+            "retired reasoning_meta._reasoning_key dropped: the Provider adapter decides "
+            "whether readable reasoning is sent back as reasoning_content (3 times)",
+        )
+    ]
+
+
 def test_a_running_run_settles_like_after_a_crash(tmp_path: Path) -> None:
     context = _context(tmp_path)
     with _legacy(context) as legacy:
@@ -781,6 +829,92 @@ def test_metadata_moves_into_columns_and_relations(tmp_path: Path) -> None:
             "session -/main/s1 (gen_0001)",
             "metadata run_kinds entries dropped: unknown Run kinds ['retired_kind']",
         )
+    ]
+
+
+def test_retired_metadata_keys_are_renamed_or_dropped_and_reported(tmp_path: Path) -> None:
+    context = _context(tmp_path)
+    with _legacy(context) as legacy:
+        renamed = legacy.session(
+            "s1",
+            metadata={
+                "reflection_counters": {
+                    "turns_since_memory_review": 2,
+                    "model_steps_since_skill_review": 6,
+                    "generation": 1,
+                },
+                "visited_projects": ["vbot"],
+            },
+        )
+        tool_calls = legacy.session(
+            "s2",
+            metadata={
+                "reflection_counters": {
+                    "turns_since_memory_review": 1,
+                    "tool_calls_since_skill_review": 17,
+                }
+            },
+        )
+        # Never written together; the current counter wins over both retired ones.
+        together = legacy.session(
+            "s3",
+            metadata={
+                "reflection_counters": {
+                    "model_steps_since_skill_review": 4,
+                    "iterations_since_skill_review": 9,
+                    "tool_calls_since_skill_review": 3,
+                    "generation": 0,
+                }
+            },
+        )
+        labels = [
+            f"session -/main/{session_id} ({legacy.generation(key)})"
+            for session_id, key in (("s1", renamed), ("s2", tool_calls), ("s3", together))
+        ]
+
+    convert(context)
+
+    with _opened(context) as manager:
+        metadata = {
+            session_id: manager.get_metadata(
+                SessionAddress(project_id=None, agent_id="main", session_id=session_id)
+            )
+            for session_id in ("s1", "s2", "s3")
+        }
+    assert metadata == {
+        "s1": {
+            "reflection_counters": {
+                "turns_since_memory_review": 2,
+                "iterations_since_skill_review": 6,
+                "generation": 1,
+            }
+        },
+        "s2": {"reflection_counters": {"turns_since_memory_review": 1}},
+        "s3": {"reflection_counters": {"iterations_since_skill_review": 9, "generation": 0}},
+    }
+    counts = context.report.counts[AREA]
+    assert (
+        counts["reflection_counter_renamed"],
+        counts["reflection_counter_dropped"],
+        counts["visited_projects_dropped"],
+    ) == (1, 3, 1)
+    tool_calls_dropped = (
+        "metadata reflection_counters.tool_calls_since_skill_review dropped: it counted Tool "
+        "calls, and its successor iterations_since_skill_review counts Model steps; "
+    )
+    assert _skips(context) == [
+        (
+            labels[0],
+            "metadata visited_projects dropped: automatic Project visits were retired; an "
+            "Agent loads another Project's context with the project Tool",
+        ),
+        (labels[1], f"{tool_calls_dropped}the count toward the next Skill review starts at zero"),
+        (
+            labels[2],
+            "metadata reflection_counters.model_steps_since_skill_review dropped: retired name "
+            "of iterations_since_skill_review; the existing iterations_since_skill_review applies",
+        ),
+        (labels[2], f"{tool_calls_dropped}the existing iterations_since_skill_review applies"),
     ]
 
 
