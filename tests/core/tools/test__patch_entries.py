@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from core.tools.file_state import FileReadState
-from tests.core.tools.apply_patch_helpers import apply, update
+from tests.core.tools.apply_patch_helpers import apply, text, update
 
 
 def _patch(body: str) -> str:
@@ -38,9 +38,7 @@ def test_delete_removes_the_link_and_keeps_its_target(tmp_path):
     result = apply(tmp_path, _patch("*** Delete File: link.txt"))
 
     assert result["ok"], result
-    link_path = result["data"]["results"][0]["path"]
-    assert link_path.endswith("/link.txt")
-    assert result["data"]["files"] == [{"path": link_path, "action": "delete"}]
+    assert text(result) == "Deleted link.txt."
     assert not os.path.lexists(link)
     assert target.read_bytes() == b"precious\n"
 
@@ -58,7 +56,7 @@ def test_move_renames_the_link_and_keeps_its_target(tmp_path):
     assert moved.is_symlink()
     assert moved.resolve() == target.resolve()
     assert target.read_bytes() == b"precious\n"
-    assert sorted(entry["action"] for entry in result["data"]["files"]) == ["add", "delete"]
+    assert text(result) == "Moved link.txt to moved.txt."
 
 
 def test_update_through_a_link_edits_the_target_and_move_to_renames_the_link(tmp_path):
@@ -72,7 +70,8 @@ def test_update_through_a_link_edits_the_target_and_move_to_renames_the_link(tmp
     )
 
     assert result["ok"], result
-    assert [entry["status"] for entry in result["data"]["results"]] == ["applied", "applied"]
+    # The edit lands in the link's target, and the link itself is renamed.
+    assert text(result) == "Updated shared/real.txt:\n1| edited\nMoved link.txt to renamed.txt."
     assert target.read_bytes() == b"edited\n"
     assert (tmp_path / "renamed.txt").is_symlink()
     assert not os.path.lexists(link)
@@ -126,9 +125,7 @@ def test_case_only_move_renames_the_file(tmp_path):
     result = apply(tmp_path, _patch("*** Move File: readme.txt -> README.txt"), state=state)
 
     assert result["ok"], result
-    assert result["data"]["results"][0]["status"] == "applied"
-    assert "no_change" not in result["data"]
-    assert sorted(entry["action"] for entry in result["data"]["files"]) == ["add", "delete"]
+    assert result["data"] == {"status": "applied", "content": "Moved readme.txt to README.txt."}
     assert os.listdir(tmp_path) == ["README.txt"]
     assert (tmp_path / "README.txt").read_bytes() == b"hi\n"
     # The renamed file counts as read for a later full replacement.
@@ -142,7 +139,7 @@ def test_update_with_case_only_move_to_edits_and_renames(tmp_path):
     result = apply(tmp_path, update("*** Move to: README.TXT\n@@\n-hi\n+hello", "readme.txt"))
 
     assert result["ok"], result
-    assert [entry["status"] for entry in result["data"]["results"]] == ["applied", "applied"]
+    assert text(result) == "Updated readme.txt and moved it to README.TXT:\n1| hello"
     assert os.listdir(tmp_path) == ["README.TXT"]
     assert (tmp_path / "README.TXT").read_bytes() == b"hello\n"
 
@@ -153,5 +150,8 @@ def test_move_to_the_existing_spelling_is_already_applied(tmp_path):
     result = apply(tmp_path, _patch("*** Move File: readme.txt -> readme.txt"))
 
     assert result["ok"], result
-    assert result["data"]["already_applied"] is True
+    assert result["data"] == {
+        "status": "unchanged",
+        "content": "readme.txt already has that name. No file was changed.",
+    }
     assert os.listdir(tmp_path) == ["readme.txt"]

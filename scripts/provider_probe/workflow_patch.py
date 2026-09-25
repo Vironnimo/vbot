@@ -132,7 +132,7 @@ def _apply_patch_cases() -> list[dict[str, Any]]:
             ),
             "expected": {"one.txt": "first=new\nsecond=new\n"},
             "status": "partial",
-            "entries": ["applied", "failed", "applied"],
+            "mentions": ["Failed: one.txt, hunk 2: the lines to replace were not found."],
         },
         {
             "id": "partial_files",
@@ -143,7 +143,7 @@ def _apply_patch_cases() -> list[dict[str, Any]]:
             ),
             "expected": {"first.txt": "one\n", "last.txt": "two\n"},
             "status": "partial",
-            "entries": ["applied", "failed", "applied"],
+            "mentions": ["2 of 3 changes applied", "Failed: File not found: missing.txt"],
         },
         {
             "id": "failed_move_dependency",
@@ -159,7 +159,7 @@ def _apply_patch_cases() -> list[dict[str, Any]]:
                 "good.txt": "done\n",
             },
             "status": "partial",
-            "entries": ["failed", "skipped", "applied"],
+            "mentions": ["Failed: Cannot move to destination.txt", "Skipped: destination.txt"],
         },
         {
             "id": "recover_without_replay",
@@ -373,6 +373,7 @@ def _apply_patch_cases() -> list[dict[str, Any]]:
             "before": {"one.txt": "alpha\nnew\nomega\n"},
             "arguments": patch("*** Update File: one.txt\n@@\n alpha\n-old\n+new\n omega"),
             "expected": {"one.txt": "alpha\nnew\nomega\n"},
+            "status": "unchanged",
         },
         {
             "id": "ambiguous",
@@ -401,8 +402,20 @@ def _apply_patch_cases() -> list[dict[str, Any]]:
         {
             "id": "unknown_field",
             "before": {},
-            "arguments": {**patch("*** Add File: new.txt\n+hello"), "path": "new.txt"},
+            "arguments": {**patch("*** Add File: new.txt\n+hello"), "dry_run": True},
             "error": "invalid_arguments",
+        },
+        {
+            "id": "edit_fields",
+            "before": {"one.txt": "alpha\nold\nomega\n"},
+            "arguments": {"file_path": "one.txt", "old_string": "old", "new_string": "new"},
+            "expected": {"one.txt": "alpha\nnew\nomega\n"},
+        },
+        {
+            "id": "write_fields",
+            "before": {},
+            "arguments": {"file_path": "new.txt", "content": "hello\n"},
+            "expected": {"new.txt": "hello\n"},
         },
     ]
 
@@ -410,8 +423,7 @@ def _apply_patch_cases() -> list[dict[str, Any]]:
 async def _probe_apply_patch_case(
     adapter: Any, args: argparse.Namespace, case: dict[str, Any]
 ) -> dict[str, Any]:
-    from core.tools._patch_syntax import _parse
-    from core.tools.apply_patch import register_apply_patch_tool
+    from core.tools.apply_patch import patch_targets, register_apply_patch_tool
     from core.tools.file_state import FileReadState
     from core.tools.read import register_read_tool
     from core.tools.tools import ToolContext, ToolRegistry
@@ -537,24 +549,15 @@ async def _probe_apply_patch_case(
                 normalized = (
                     tool.argument_normalizer(arguments) if tool.argument_normalizer else arguments
                 )
-                normalized = tool.contract.normalize_arguments(normalized)
-                operations = _parse(normalized.get("patch", ""))
+                names = patch_targets(tool.contract.normalize_arguments(normalized))
             except Exception:
-                operations = []  # Let the real handler diagnose malformed input.
-            safe = all(
-                (root / name).resolve().is_relative_to(root)
-                for operation in operations
-                for name in (operation.path, operation.destination)
-                if name is not None
-            )
+                names = []  # Let the real handler diagnose malformed input.
+            safe = all((root / name).resolve().is_relative_to(root) for name in names)
             if not safe or call.get("name") != "apply_patch":
                 outcomes.append({"ok": False, "error": {"code": "probe_scope_violation"}})
                 continue
             touched_paths.update(
-                (root / name).resolve().relative_to(root).as_posix()
-                for operation in operations
-                for name in (operation.path, operation.destination)
-                if name is not None
+                (root / name).resolve().relative_to(root).as_posix() for name in names
             )
             context = ToolContext(
                 agent_id="probe",
@@ -582,11 +585,11 @@ async def _probe_apply_patch_case(
         expected = case.get("expected", case["before"])
         codes = [outcome["error"]["code"] if not outcome["ok"] else None for outcome in outcomes]
         data = (outcomes[0].get("data") or {}) if len(outcomes) == 1 else {}
-        entries = [entry["status"] for entry in data.get("results", [])]
         result_ok = (
-            (case.get("status", "success") == data.get("status")) if not case.get("error") else True
+            (case.get("status", "applied") == data.get("status")) if not case.get("error") else True
         )
-        entries_ok = entries == case["entries"] if "entries" in case else True
+        content = str(data.get("content", ""))
+        entries_ok = all(text in content for text in case.get("mentions", []))
         recovery_ok = touched_paths == set(case["only_paths"]) if "only_paths" in case else True
         passed = (
             len(outcomes) == 1

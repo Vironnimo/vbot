@@ -99,7 +99,7 @@ def test_patch_recovery_probe_supplies_real_result_and_rejects_replay():
     assert row["passed"] and row["recovery_ok"]
     result = json.loads(adapter.messages[-1]["content"])
     assert result["data"]["status"] == "partial"
-    assert result["data"]["results"][1]["error"]["candidates"]
+    assert "The closest text in the file, lines 1-3:" in result["data"]["content"]
     replay = _PatchAdapter({"patch": "*** Update File: log.txt\n@@\n+done\n" + patch})
     row = asyncio.run(probe_workflow_patch._probe_apply_patch_case(replay, args, case))
     assert not row["passed"] and not row["recovery_ok"] and not row["effect_ok"]

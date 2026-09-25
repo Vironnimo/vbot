@@ -11,6 +11,7 @@ from core.tools.read import make_read_handler
 from tests.core.tools.apply_patch_helpers import (
     apply,
     context,
+    text,
     update,
 )
 
@@ -168,7 +169,7 @@ def test_complete_read_gutters_recover_without_corrupting_added_lines(tmp_path, 
     result = apply(tmp_path, update(hunk))
     assert result["ok"], result
     assert path.read_bytes() == b"alpha\nnew\nomega\n"
-    assert result["data"]["files"][0]["warnings"]
+    assert "Note: Removed read-output line-number prefixes" in text(result)
 
 
 def test_literal_gutter_shaped_content_wins(tmp_path):
@@ -210,7 +211,7 @@ def test_single_mixed_and_stale_read_gutters_use_unique_current_lines(tmp_path, 
     result = apply(tmp_path, update(hunk))
     assert result["ok"], result
     assert path.read_bytes() == b"alpha\nnew\nomega\n"
-    assert result["data"]["files"][0]["warnings"]
+    assert "Note: Removed read-output line-number prefixes" in text(result)
 
 
 def test_normalized_read_gutters_do_not_resolve_ambiguity_by_number(tmp_path):
@@ -255,7 +256,7 @@ def test_escaped_text_requires_matching_evidence(tmp_path):
     result = apply(tmp_path, update("@@\n alpha\n-\\told\n+\\tnew\n omega"))
     assert result["ok"], result
     assert path.read_bytes() == b"alpha\n\tnew\nomega\n"
-    assert result["data"]["files"][0]["warnings"]
+    assert "Note: Normalized escaped patch text" in text(result)
 
 
 def test_literal_backslashes_are_preserved(tmp_path):
@@ -307,7 +308,7 @@ def test_similarity_never_replaces_a_different_removed_line(tmp_path, before, bo
     result = apply(tmp_path, update("@@\n" + body))
 
     assert result["error"]["code"] == "text_not_found"
-    assert '"candidates": [{"line": 1' in result["error"]["message"]
+    assert "The closest text in the file, lines 1-" in text(result)
     assert path.read_bytes() == before.encode()
 
 
@@ -426,7 +427,9 @@ def test_hint_may_be_repeated_in_context_and_insert_retry_is_anchored(tmp_path):
     patch = update("@@ section\n+inserted")
     assert apply(tmp_path, patch)["ok"]
     before = path.read_bytes()
-    assert apply(tmp_path, patch)["data"]["already_applied"]
+    retried = apply(tmp_path, patch)
+    assert retried["data"]["status"] == "unchanged"
+    assert "file.txt already contains this change" in text(retried)
     assert path.read_bytes() == before == b"section\ninserted\nnew\ntail\n"
 
 
