@@ -257,7 +257,12 @@ async def _preview_prompt(state: Any, params: JsonObject) -> JsonObject:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.include_tools must be a boolean")
     scope = params.get("scope")
     try:
-        prompt_scope = _prompt_manager(state).validate_scope(scope) if scope is not None else None
+        # An Agent scope reads its Agent, so validation runs off the Event Loop.
+        prompt_scope = (
+            await _PROMPT_RPC_WORKERS.run(_prompt_manager(state).validate_scope, scope)
+            if scope is not None
+            else None
+        )
     except PromptError as exc:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
 
