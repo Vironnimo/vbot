@@ -55,7 +55,7 @@ async def test_web_fetch_handler_reddit_challenge_page_signals_not_retryable(
 
     result = await web_fetch_handler(make_context(workspace), web_fetch_arguments(url))
 
-    error = assert_failure_envelope(result, "request_error")
+    error = assert_failure_envelope(result, "access_denied")
     assert error["retryable"] is False
     assert "another source" in error["message"]
 
@@ -98,7 +98,7 @@ async def test_web_fetch_handler_reddit_login_wall_signals_not_retryable(
 
     result = await web_fetch_handler(make_context(workspace), web_fetch_arguments(requested))
 
-    error = assert_failure_envelope(result, "request_error")
+    error = assert_failure_envelope(result, "access_denied")
     assert error["retryable"] is False
     assert "another source" in error["message"]
 
@@ -129,7 +129,7 @@ async def test_web_fetch_handler_challenge_title_signals_not_retryable(
 
     result = await web_fetch_handler(make_context(workspace), web_fetch_arguments(url))
 
-    error = assert_failure_envelope(result, "request_error")
+    error = assert_failure_envelope(result, "access_denied")
     assert error["retryable"] is False
 
 
@@ -259,7 +259,7 @@ async def test_web_fetch_handler_tweet_shaped_page_with_login_links_stays_ok(
 
 
 @pytest.mark.asyncio
-async def test_web_fetch_handler_validation_error_signals_not_retryable(
+async def test_web_fetch_handler_invalid_url_signals_not_retryable(
     tmp_path: Path,
 ) -> None:
     workspace = tmp_path / "workspace"
@@ -270,5 +270,5 @@ async def test_web_fetch_handler_validation_error_signals_not_retryable(
         web_fetch_arguments("ftp://example.com"),
     )
 
-    error = assert_failure_envelope(result, "validation_error")
+    error = assert_failure_envelope(result, "invalid_url")
     assert error["retryable"] is False

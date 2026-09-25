@@ -216,21 +216,21 @@ async def test_image_generation_accepts_absolute_output_directory(tmp_path: Path
 
 
 @pytest.mark.asyncio
-async def test_image_generation_rejects_blank_output_directory(tmp_path: Path) -> None:
+@pytest.mark.parametrize("blank", ["", "   "])
+async def test_image_generation_blank_output_directory_uses_the_default(
+    tmp_path: Path, blank: str
+) -> None:
     service = _ImageService(tmp_path / "artifact.png")
     registry = ToolRegistry()
     register_image_generation_tool(registry, service)
 
     result = await registry.dispatch(
         _make_context(tmp_path),
-        {"prompt": "export image", "output_dir": "   "},
+        {"prompt": "export image", "output_dir": blank},
     )
 
-    assert result["error"] == {
-        "code": "invalid_arguments",
-        "message": "output_dir must be a non-empty string when provided",
-    }
-    assert service.received_output_dirs == []
+    assert result["ok"] is True
+    assert service.received_output_dirs == [tmp_path / "image-gen"]
 
 
 @pytest.mark.asyncio
@@ -364,21 +364,32 @@ async def test_image_generation_tool_rejects_empty_source_images(tmp_path: Path)
         _make_context(tmp_path),
         {"prompt": "make it rainy", "source_images": []},
     )
-    assert handler_result["error"]["code"] == "invalid_arguments"
-    assert "at least one" in handler_result["error"]["message"]
+    assert handler_result["error"] == {
+        "code": "invalid_arguments",
+        "message": "source_images is empty; pass at least one local image path.",
+        "retryable": False,
+    }
     assert service.received_source_paths is None
 
 
 @pytest.mark.asyncio
-async def test_image_generation_tool_rejects_invalid_source_paths_shape(tmp_path: Path) -> None:
+async def test_image_generation_tool_unwraps_one_path_object_only(tmp_path: Path) -> None:
+    source = _image(tmp_path / "photo.png")
     service = _ImageService(tmp_path / "artifact-1.png")
     registry = ToolRegistry()
     register_image_generation_tool(registry, service)
 
+    result = await registry.dispatch(
+        _make_context(tmp_path),
+        {"prompt": "make it rainy", "source_images": {"path": "photo.png"}},
+    )
+    assert result["ok"] is True
+    assert service.received_source_paths == (source.resolve(),)
+
     with pytest.raises(ToolContractError):
         await registry.dispatch(
             _make_context(tmp_path),
-            {"prompt": "make it rainy", "source_images": {"path": "photo.png"}},
+            {"prompt": "make it rainy", "source_images": {"path": "a.png", "url": "b.png"}},
         )
 
 
@@ -388,8 +399,8 @@ async def test_analyze_image_tool_resolves_paths_and_returns_analysis(
 ) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    first = workspace / "first.png"
-    second = workspace / "second.png"
+    first = _image(workspace / "first.png")
+    second = _image(workspace / "second.png")
     service = _ImageService(tmp_path / "unused.png")
     registry = ToolRegistry()
     register_analyze_image_tool(registry, service)
@@ -488,6 +499,7 @@ async def test_analyze_image_tool_rejects_invalid_arguments_and_maps_image_error
     )
     register_analyze_image_tool(registry, service)
     context = _make_context(tmp_path, tool_name=ANALYZE_IMAGE_TOOL_NAME)
+    _image(tmp_path / "photo.png")
 
     with pytest.raises(ToolContractError):
         await registry.dispatch(context, {"prompt": "Describe it.", "images": []})
@@ -510,25 +522,36 @@ async def test_analyze_image_tool_rejects_invalid_arguments_and_maps_image_error
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("analysis_error", "expected_code"),
+    ("analysis_error", "expected_code", "expected_message"),
     [
-        (ImageNotFoundError("missing"), "image_not_found"),
-        (ImageReadError("unreadable"), "image_read_error"),
-        (ImageTooLargeError("too large"), "image_too_large"),
-        (ImageUnsupportedMediaTypeError("unsupported"), "unsupported_image_type"),
-        (ImageUnderstandingUnavailableError("not configured"), "image_understanding_unavailable"),
+        (ImageNotFoundError("missing"), "image_not_found", "missing"),
+        (ImageReadError("unreadable"), "image_read_error", "unreadable"),
+        (ImageTooLargeError("too large"), "image_too_large", "too large"),
+        (
+            ImageUnsupportedMediaTypeError("unsupported"),
+            "unsupported_image_type",
+            "unsupported",
+        ),
+        (
+            ImageUnderstandingUnavailableError("not configured"),
+            "image_understanding_unavailable",
+            "Image understanding is not available (not configured). Tell the user to choose "
+            "a working Image understanding model in Settings under Specialized Models.",
+        ),
     ],
 )
 async def test_analyze_image_tool_projects_stable_expected_error_codes(
     tmp_path: Path,
     analysis_error: ImageInputError | ImageUnderstandingUnavailableError,
     expected_code: str,
+    expected_message: str,
 ) -> None:
     registry = ToolRegistry()
     register_analyze_image_tool(
         registry,
         _ImageService(tmp_path / "unused.png", analysis_error=analysis_error),
     )
+    _image(tmp_path / "photo.png")
 
     result = await registry.dispatch(
         _make_context(tmp_path, tool_name=ANALYZE_IMAGE_TOOL_NAME),
@@ -537,7 +560,7 @@ async def test_analyze_image_tool_projects_stable_expected_error_codes(
 
     assert result["error"] == {
         "code": expected_code,
-        "message": str(analysis_error),
+        "message": expected_message,
         "retryable": False,
     }
 
@@ -554,6 +577,7 @@ async def test_analyze_image_tool_preserves_provider_retry_metadata(tmp_path: Pa
         registry,
         _ImageService(tmp_path / "unused.png", analysis_error=provider_error),
     )
+    _image(tmp_path / "photo.png")
 
     result = await registry.dispatch(
         _make_context(tmp_path, tool_name=ANALYZE_IMAGE_TOOL_NAME),
@@ -562,7 +586,7 @@ async def test_analyze_image_tool_preserves_provider_retry_metadata(tmp_path: Pa
 
     assert result["error"] == {
         "code": "provider_error",
-        "message": "rate limited",
+        "message": "The image-understanding provider failed (rate limited). Try again later.",
         "retryable": True,
         "attempts_made": 4,
     }
@@ -578,12 +602,18 @@ async def test_analyze_image_tool_does_not_mask_unexpected_failure(tmp_path: Pat
             analysis_error=RuntimeError("implementation defect"),
         ),
     )
+    _image(tmp_path / "photo.png")
 
     with pytest.raises(RuntimeError):
         await registry.dispatch(
             _make_context(tmp_path, tool_name=ANALYZE_IMAGE_TOOL_NAME),
             {"prompt": "Describe it.", "images": ["photo.png"]},
         )
+
+
+def _image(path: Path) -> Path:
+    path.write_bytes(b"\x89PNG\r\n\x1a\nimage")
+    return path
 
 
 def _make_context(

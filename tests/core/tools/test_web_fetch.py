@@ -146,41 +146,32 @@ def test_web_fetch_openai_wire_exposes_reading_actions_without_backend_controls(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("arguments", "message"),
+    ("url", "message"),
     [
-        (
-            {"url": "https://example.com", "output": "unsupported"},
-            "output must be one of",
-        ),
+        ("ftp://example.com", "Only http and https URLs can be fetched, not ftp: URLs."),
+        ("mailto:someone@example.com", "not mailto: URLs"),
+        ("notes about the page", "This is not a web address."),
+        ("https:///path-only", "The URL has no host name."),
     ],
 )
-async def test_web_fetch_handler_rejects_invalid_output_arguments(
-    tmp_path: Path,
-    arguments: dict[str, Any],
-    message: str,
+async def test_web_fetch_rejects_addresses_that_are_not_web_urls(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, url: str, message: str
 ) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
+    fetch = AsyncMock()
+    monkeypatch.setattr(web_fetch_module, "_http_get", fetch)
 
-    result = await web_fetch_handler(make_context(workspace), arguments)
+    result = await _registry().dispatch(make_context(tmp_path), {"url": url})
 
-    error = assert_failure_envelope(result, "validation_error")
+    error = assert_failure_envelope(result, "invalid_url")
     assert message in error["message"]
     assert error["retryable"] is False
+    fetch.assert_not_awaited()
 
 
-@pytest.mark.asyncio
-async def test_web_fetch_handler_rejects_non_http_scheme(tmp_path: Path) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    result = await web_fetch_handler(
-        make_context(workspace),
-        web_fetch_arguments("ftp://example.com"),
-    )
-
-    error = assert_failure_envelope(result, "validation_error")
-    assert "http/https" in error["message"]
+def _registry() -> ToolRegistry:
+    registry = ToolRegistry()
+    register_web_fetch_tool(registry, attachment_store=None)
+    return registry
 
 
 @pytest.mark.asyncio
@@ -198,28 +189,30 @@ async def test_web_fetch_handler_rejects_ssrf_prefixes(tmp_path: Path, url: str)
 
     result = await web_fetch_handler(make_context(workspace), web_fetch_arguments(url))
 
-    error = assert_failure_envelope(result, "validation_error")
-    assert "blocked" in error["message"].lower()
+    error = assert_failure_envelope(result, "blocked_url")
+    assert "private or local network address" in error["message"]
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "url",
+    ("url", "message"),
     [
-        "http://2130706433/private",
-        "http://0x7f000001/private",
-        "http://127.1/private",
-        "http://example.com@127.0.0.1/private",
+        ("http://2130706433/private", "private or local network address"),
+        ("http://0x7f000001/private", "private or local network address"),
+        ("http://127.1/private", "private or local network address"),
+        ("http://example.com@127.0.0.1/private", "user name or password"),
     ],
 )
-async def test_web_fetch_handler_rejects_obfuscated_private_hosts(tmp_path: Path, url: str) -> None:
+async def test_web_fetch_handler_rejects_obfuscated_private_hosts(
+    tmp_path: Path, url: str, message: str
+) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
 
     result = await web_fetch_handler(make_context(workspace), web_fetch_arguments(url))
 
-    error = assert_failure_envelope(result, "validation_error")
-    assert "blocked" in error["message"].lower()
+    error = assert_failure_envelope(result, "blocked_url")
+    assert message in error["message"]
 
 
 @pytest.mark.asyncio
@@ -243,26 +236,12 @@ async def test_web_fetch_handler_rejects_redirect_to_private_host(
 
     result = await web_fetch_handler(make_context(workspace), web_fetch_arguments(start_url))
 
-    error = assert_failure_envelope(result, "request_error")
-    assert "blocked" in error["message"].lower()
-    assert blocked_redirect not in fetched
-
-
-@pytest.mark.asyncio
-async def test_web_fetch_handler_first_hop_blocked_is_validation_error(
-    tmp_path: Path,
-) -> None:
-    """A first-hop private URL must still be validation_error (B5 boundary)."""
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    result = await web_fetch_handler(
-        make_context(workspace),
-        web_fetch_arguments("http://127.0.0.1/admin"),
+    error = assert_failure_envelope(result, "blocked_url")
+    assert error["message"].startswith(
+        f"{start_url} redirected to an address web_fetch does not follow. 127.0.0.1 is a "
+        "private or local network address"
     )
-
-    error = assert_failure_envelope(result, "validation_error")
-    assert "blocked" in error["message"].lower()
+    assert blocked_redirect not in fetched
 
 
 @pytest.mark.asyncio
@@ -276,7 +255,7 @@ async def test_web_fetch_handler_first_hop_blocked_is_validation_error(
         {"output": "markdown", "include_links": False},
         {"raw": None},
         {"include_links": None},
-        {"output": None},
+        {"output": "unsupported"},
     ],
 )
 async def test_dispatch_rejects_every_conflicting_output_constraint_before_http(

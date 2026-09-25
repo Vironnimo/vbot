@@ -381,6 +381,7 @@ WEB_SEARCH_CASES = (
     "page_first",
     "page_later",
     "recency_day",
+    "recency_week",
     "recency_month",
     "recency_year",
     "all",

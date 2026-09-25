@@ -62,6 +62,7 @@ def _web_search_scenario(case_name: str) -> ProbeScenario:
         "page_first": {"query": query, "page": 1},
         "page_later": {"query": query, "page": 3},
         "recency_day": {"query": query, "recency": "day"},
+        "recency_week": {"query": query, "recency": "week"},
         "recency_month": {"query": query, "recency": "month"},
         "recency_year": {"query": query, "recency": "year"},
         "all": {
