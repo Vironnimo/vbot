@@ -470,7 +470,8 @@ def test_swarm_unassisted_requires_actual_feedback_and_a_later_publication():
 
         async def send(self, messages, **_kwargs):
             prompt = next(row["content"] for row in messages if row["role"] == "user")
-            goal_id = prompt.split("Board post ", 1)[1].split()[0]
+            # The initial message names the exact read call for the goal post.
+            goal_id = re.search(r'"message_id": "(pst_[A-Za-z0-9]+)"', prompt).group(1)
             calls = [
                 ("swarm_board", {"action": "read", "message_id": goal_id}),
                 ("swarm_inbox", {}),

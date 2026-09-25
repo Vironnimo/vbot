@@ -541,7 +541,9 @@ async def test_profile_prompt_selection_reaches_model_without_hidden_orientation
     ]
     inputs = [message["content"] for message in messages if message["role"] == "user"]
     swarm = await lifecycle.service.store.get_swarm(started["swarm_id"])
-    assert len(inputs) == 1 and swarm["goal_post_id"] in inputs[0]
+    assert len(inputs) == 1
+    # The initial input names the exact call that reads the goal post.
+    assert f'{{"action": "read", "message_id": "{swarm["goal_post_id"]}"}}' in inputs[0]
     assert "goal-sentinel" not in str(messages)
     goal = await lifecycle.service.store.read_human_posts(
         swarm["id"], message_id=swarm["goal_post_id"]
