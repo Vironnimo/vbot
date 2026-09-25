@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
@@ -25,10 +24,20 @@ from core.utils.ids import new_id
 from core.utils.logging import get_logger
 
 from ._board_tool import BoardCall, prepare_board_call
-from ._board_view import resolve_recipients, unknown_recipients_message, with_notes
+from ._board_view import (
+    Roster,
+    call_text,
+    delivery_text,
+    messages_text,
+    resolve_recipients,
+    status_data,
+    unknown_recipients_message,
+    with_notes,
+)
 from ._extension_values import (
     AgentCallError,
     Json,
+    _clamped_limit,
     _exact,
     _failure,
     _initial_message,
@@ -42,6 +51,7 @@ from ._extension_values import (
     _string,
     _swarm_command_argument,
     _swarm_projection,
+    _tool_available,
     _validate_profile_catalog,
     _validate_state,
 )
@@ -56,8 +66,10 @@ from .agent_text import (
     DEFAULT_PROMPT_BLOCKS,
     DEFAULT_REMINDERS,
     EMPTY_INBOX,
+    INBOX_MORE,
     INBOX_PARAMETERS,
     REMINDER_TEXTS,
+    STATE_MORE,
     STATE_PARAMETERS,
 )
 from .store import DATABASE_NAME, SCHEMA_SQL, SwarmStore, SwarmStoreError
@@ -254,7 +266,7 @@ class SwarmExtension:
 
     async def inbox(self, context: ToolContext, arguments: Json) -> Json:
         try:
-            binding, _swarm, arguments = await self._bound_arguments(
+            binding, swarm, arguments = await self._bound_arguments(
                 context, "swarm_inbox", arguments
             )
             if arguments.get("action") == "receive":
@@ -262,9 +274,8 @@ class SwarmExtension:
             unexpected = sorted(set(arguments) - {"limit"})
             if unexpected:
                 raise SwarmStoreError("invalid_arguments", field=unexpected[0])
-            limit = arguments.get("limit", 20)
-            if type(limit) is not int or not 1 <= limit <= 100:
-                raise SwarmStoreError("invalid_arguments", field="limit")
+            notes: list[str] = []
+            limit = _clamped_limit(arguments, notes)
             prepared = await self._store().prepare_inbox_delivery(
                 binding.group_id, binding.participant_id, limit=limit
             )
@@ -272,39 +283,47 @@ class SwarmExtension:
                 context.record_delivery_receipt(
                     prepared["receipt_id"], prepared["content_hash"], prepared["effect_kind"]
                 )
-            data: Json = {
-                "entries": prepared["entries"],
-                "pending_remaining": prepared["pending_remaining"],
-            }
             if not prepared["entries"]:
-                data["guidance"] = EMPTY_INBOX
-            elif prepared["pending_remaining"]:
-                data["next_call"] = {"tool": "swarm_inbox", "arguments": dict(arguments)}
-            return tool_success(data)
+                return tool_success(with_notes({"content": EMPTY_INBOX}, notes))
+            data: Json = {}
+            if prepared["pending_remaining"]:
+                again = f" with {call_text(arguments)}" if arguments else ""
+                data["more"] = INBOX_MORE.format(
+                    count=prepared["pending_remaining"], arguments=again
+                )
+            roster = Roster.of(swarm, binding.participant_id)
+            data["content"] = messages_text(
+                prepared["entries"], roster, swarm["main_discussion_id"]
+            )
+            return tool_success(with_notes(data, notes))
         except SwarmStoreError as error:
             return _failure(error, arguments, INBOX_PARAMETERS)
 
     async def state(self, context: ToolContext, arguments: Json) -> Json:
         try:
-            binding, _, arguments = await self._bound_arguments(context, "swarm_state", arguments)
+            binding, swarm, arguments = await self._bound_arguments(
+                context, "swarm_state", arguments
+            )
             if arguments.get("action") == "status":
                 arguments.pop("action")
             _validate_state(arguments)
-            data = await self._store().participant_status(
+            notes: list[str] = []
+            limit = _clamped_limit(arguments, notes)
+            status = await self._store().participant_status(
                 binding.group_id,
                 binding.participant_id,
                 cursor=arguments.get("cursor"),
-                limit=arguments.get("limit", 20),
+                limit=limit,
             )
-            cursor = data.pop("cursor", None)
-            if data["pending_count"]:
-                data["inbox_call"] = {"tool": "swarm_inbox", "arguments": {}}
-            if data["has_more"]:
-                data["next_call"] = {
-                    "tool": "swarm_state",
-                    "arguments": {**arguments, "cursor": cursor},
-                }
-            return tool_success(data)
+            data = status_data(
+                status,
+                Roster.of(swarm, binding.participant_id),
+                inbox=_tool_available(swarm, "swarm_inbox"),
+            )
+            if status["has_more"]:
+                continuation = {**arguments, "cursor": status["cursor"]}
+                data["more"] = STATE_MORE.format(call=call_text(continuation))
+            return tool_success(with_notes(data, notes))
         except SwarmStoreError as error:
             return _failure(error, arguments, STATE_PARAMETERS)
 
@@ -1061,18 +1080,13 @@ class SwarmExtension:
         )
         if not prepared.get("entries"):
             return None
-        entry = "\n\n".join(
-            (
-                _reminder(swarm, "delivery"),
-                json.dumps(
-                    {
-                        "entries": prepared["entries"],
-                        "pending_remaining": prepared["pending_remaining"],
-                        "settings_revision": prepared["settings_revision"],
-                    },
-                    ensure_ascii=False,
-                ),
-            )
+        entry = delivery_text(
+            _reminder(swarm, "delivery"),
+            prepared["entries"],
+            prepared["pending_remaining"],
+            Roster.of(swarm, binding.participant_id),
+            swarm["main_discussion_id"],
+            inbox=_tool_available(swarm, "swarm_inbox"),
         )
         return PreparedSessionDelivery(
             prepared["receipt_id"],

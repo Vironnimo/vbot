@@ -194,22 +194,34 @@ explicitly reads Inbox; the retained wake boundary does not permit automatic
 delivery during later Model requests of that Run. All-mode delivery still reaches
 the next Model request while running (`test_swarm_lifecycle.py`).
 
-Automatic delivery and Inbox entries retain the Swarm-wide post sequence, UTC
-creation time, author identity, discussion id/title, reply target and explicit
-ping recipients. The saved per-recipient route (`main`, `discussion`, `ping`)
-explains why this participant received the post; Board reads expose it only for
-participants in the original audience. Delivery batches are oldest-first, but
-mixed route policies can deliver newer posts before older deferred ones; the
-original sequence and timestamp remain unchanged. Tests: `test_swarm_inbox.py`
-and `test_swarm_lifecycle.py`.
+Store delivery entries retain the Swarm-wide post sequence, UTC creation time,
+author identity, discussion id/title, reply target, explicit ping recipients and
+the saved per-recipient route (`main`, `discussion`, `ping`); Board reads expose
+the route only for participants in the original audience. The receipt content
+hash covers these entries, not their rendering. Agents read deliveries as plain
+text (`_board_view.py`): a heading per run of one discussion ("In the main
+discussion (id):" or the titled discussion), then one block per post with its id,
+author name, reply target and pinged names ("you" for the reader) followed by the
+verbatim text. Sequence, timestamps and route names stay out of the Agent text;
+the heading and "pinged you" convey why a post arrived. Automatic delivery prefixes
+the enabled delivery reminder and ends with the remaining pending count, naming
+`swarm_inbox` only when the profile leaves it available. Delivery batches are
+oldest-first, but mixed route policies can deliver newer posts before older
+deferred ones; the stored sequence and timestamp remain unchanged. Tests:
+`test_swarm_inbox.py` and `test_swarm_lifecycle.py`.
 
-Inbox reads are nonblocking and consume only messages in their saved carrier;
-continuations preserve an omitted limit. Empty results permit a normal final
-reply; no Swarm Tool requests a Run end (`test_swarm_inbox.py`).
+Inbox reads are nonblocking and consume only messages in their saved carrier. A
+limit above 100 runs as 100 with a note. When more remain, the `more` line names
+the exact repeat call, preserving an omitted limit. Empty results return only the
+empty-Inbox guidance and permit a normal final reply; no Swarm Tool requests a Run
+end (`test_swarm_inbox.py`).
 
-`swarm_state` is read-only, with optional cursor and limit. It returns a compact paged
-roster, pending count and delivery/wake policy; cursors bind page size. Participants
-cannot rename themselves. The Store shuffles a curated pool of 300 short given
+`swarm_state` is read-only, with optional cursor and limit (above 100 runs as 100
+with a note). It returns readable fields: `you` (name, id, state), `pending`
+(count and how to receive it), `delivery` and `wake` (the route policies as
+sentences), `participants` (count by state), `more` with a copyable continuation,
+and a roster listing "- Name (id): state" that marks the reader; cursors bind page
+size (`test_swarm_board.py`). Participants cannot rename themselves. The Store shuffles a curated pool of 300 short given
 names and callsigns once per new Swarm, assigning without replacement across
 formation rows. Larger Swarms use numbered suffixes after the pool is exhausted.
 Saved names survive request replay, restart and Resume; stored recipients remain

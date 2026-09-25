@@ -14,6 +14,7 @@ from core.tools.tools import run_tool_worker
 from ._store_values import _hash
 from .agent_text import (
     ERRORS,
+    LIMIT_CLAMPED,
     REMINDER_TEXTS,
 )
 from .store import Page, SwarmStoreError
@@ -149,13 +150,23 @@ def _participant_config(profile: Json, participant: Json, cwd: Path) -> Temporar
 
 def _reminder(swarm: Json, event: str) -> str:
     enabled = swarm["profile_snapshot"]["reminders"][event]
-    if (
-        enabled
-        and event == "delivery"
-        and "swarm_inbox" in swarm["profile_snapshot"]["tool_access"].get("denied", [])
-    ):
-        return "New Board messages from the authors listed below."
     return REMINDER_TEXTS[event] if enabled else ""
+
+
+def _tool_available(swarm: Json, name: str) -> bool:
+    return name not in swarm["profile_snapshot"]["tool_access"].get("denied", [])
+
+
+def _clamped_limit(arguments: Json, notes: list[str], maximum: int = 100) -> int:
+    """Return the requested page size, lowered to ``maximum`` with a note."""
+
+    limit = arguments.get("limit", 20)
+    if type(limit) is not int or limit < 1:
+        raise SwarmStoreError("invalid_arguments", field="limit")
+    if limit > maximum:
+        notes.append(LIMIT_CLAMPED.format(requested=limit, maximum=maximum))
+        arguments["limit"] = limit = maximum
+    return limit
 
 
 def _initial_message(swarm: Json) -> str:
@@ -242,9 +253,6 @@ def _validate_state(arguments: Json) -> None:
     unexpected = sorted(set(arguments) - {"cursor", "limit"})
     if unexpected:
         raise SwarmStoreError("inapplicable_field", field=unexpected[0])
-    for key, value in arguments.items():
-        valid = (key == "limit" and type(value) is int and 1 <= value <= 100) or (
-            key == "cursor" and isinstance(value, str) and bool(value.strip())
-        )
-        if not valid:
-            raise SwarmStoreError("invalid_arguments", field=key)
+    cursor = arguments.get("cursor")
+    if cursor is not None and not (isinstance(cursor, str) and cursor.strip()):
+        raise SwarmStoreError("invalid_arguments", field="cursor")

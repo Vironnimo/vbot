@@ -1,7 +1,9 @@
 import asyncio
 import json
+import re
 from dataclasses import replace
 from types import SimpleNamespace
+from typing import NamedTuple
 
 import pytest
 import pytest_asyncio
@@ -196,9 +198,51 @@ def visible(result):
 
 
 def continuation(line):
-    """Return the argument object of a result line ending in a copyable call."""
+    """Return the argument object of a result line that contains a copyable call."""
 
-    return json.loads(line[line.index("{") :])
+    return json.JSONDecoder().raw_decode(line[line.index("{") :])[0]
+
+
+class Received(NamedTuple):
+    discussion: str | None
+    post_id: str
+    author: str
+    details: str | None
+    text: str
+
+
+_MESSAGE = re.compile(
+    r"\[(?P<id>pst_[A-Za-z0-9]+)\] (?P<author>[^\n(]*?)(?: \((?P<details>[^\n]*)\))?:\n"
+    r"(?P<text>.*)",
+    re.DOTALL,
+)
+
+
+def received(content):
+    """Parse the messages an Agent reads from delivered text with single-paragraph posts."""
+
+    messages, discussion = [], None
+    for block in content.split("\n\n"):
+        if block.startswith("In ") and block.endswith(":"):
+            discussion = block[3:-1]
+        elif match := _MESSAGE.fullmatch(block):
+            messages.append(
+                Received(discussion, match["id"], match["author"], match["details"], match["text"])
+            )
+    return messages
+
+
+def deny_inbox(board, monkeypatch):
+    """Serve the Swarm as if its profile had disabled swarm_inbox."""
+
+    stored = board.store.get_swarm
+
+    async def get_swarm(swarm_id):
+        swarm = await stored(swarm_id)
+        swarm["profile_snapshot"]["tool_access"]["denied"] = ["swarm_inbox"]
+        return swarm
+
+    monkeypatch.setattr(board.store, "get_swarm", get_swarm)
 
 
 async def board_posts(board, peer=0, **query):
@@ -616,7 +660,9 @@ async def test_create_retains_opening_and_announcement_for_inactive_peers(board)
 
 
 @pytest.mark.asyncio
-async def test_status_delivery_policy_and_pending_messages_enable_direct_receiving(board):
+async def test_status_delivery_policy_and_pending_messages_enable_direct_receiving(
+    board, monkeypatch
+):
     peer = board.bindings[1].participant_id
     await board.store.post(board.swarm["id"], peer, text="Question", request_id="pending")
     swarm = await board.store.get_swarm(board.swarm["id"])
@@ -631,17 +677,32 @@ async def test_status_delivery_policy_and_pending_messages_enable_direct_receivi
         request_id="policy",
         actor="test",
     )
-    result = await board.service.state(board.contexts[0], {})
-    data = result["data"]
-    assert data["delivery"] == {
-        "automatic": ["ping"],
-        "when_idle": ["discussion"],
-        "on_request": ["main"],
-    }
-    assert data["wake_on_messages"] == ["discussion", "ping"]
-    assert data["pending_count"] == 1
-    received = await board.service.inbox(board.contexts[0], data["inbox_call"]["arguments"])
-    assert len(received["data"]["entries"]) == 1
+    result, _ = await dispatch(board, {}, name="swarm_state")
+    roster = "\n".join(
+        f"- {_name(board, peer)} ({binding.participant_id}{', you' if peer == 0 else ''}): idle"
+        for peer, binding in enumerate(board.bindings)
+    )
+    assert visible(result) == (
+        f"you: {_name(board, 0)} ({board.bindings[0].participant_id}), idle\n"
+        "pending: 1 message for you; receive it with swarm_inbox.\n"
+        "delivery: Pings reach you automatically, also while you are running. "
+        "Posts in discussions you joined reach you automatically when you are idle. "
+        "Main-discussion posts reach you only through swarm_inbox.\n"
+        "wake: Posts in discussions you joined and pings start a Run when you are idle.\n"
+        f"participants: 3 (3 idle)\n\nParticipants:\n{roster}"
+    )
+    inbox, _ = await dispatch(board, {}, name="swarm_inbox")
+    assert [(message.author, message.text) for message in received(inbox["data"]["content"])] == [
+        (_name(board, 1), "Question")
+    ]
+    # The Inbox receipt above was never saved with a Tool Result, so the post stays pending.
+    deny_inbox(board, monkeypatch)
+    without_inbox, _ = await dispatch(board, {}, name="swarm_state")
+    lines = visible(without_inbox).splitlines()
+    assert lines[1] == "pending: 1 message for you."
+    assert lines[2].endswith(
+        "Main-discussion posts reach you only when you read them with swarm_board."
+    )
 
 
 @pytest.mark.asyncio
@@ -703,15 +764,21 @@ async def test_status_pages_only_report_automatic_activity(board):
     first = (await board.tools.dispatch(context, {"limit": 1}, allowed_tools=["swarm_state"]))[
         "data"
     ]
-    assert set(first["roster"][0]) == {"id", "name", "state"}
-    second = (
-        await board.tools.dispatch(
-            context, first["next_call"]["arguments"], allowed_tools=["swarm_state"]
-        )
-    )["data"]
-    assert first["roster"][0]["id"] != second["roster"][0]["id"]
-    changed = await board.service.state(context, {**first["next_call"]["arguments"], "limit": 2})
+    you = board.bindings[0].participant_id
+    assert first["content"] == f"Participants:\n- {_name(board, 0)} ({you}, you): idle"
+    assert first["more"].startswith("More participants exist. Continue with ")
+    follow = continuation(first["more"])
+    assert set(follow) == {"limit", "cursor"} and follow["limit"] == 1
+    second = (await board.tools.dispatch(context, follow, allowed_tools=["swarm_state"]))["data"]
+    other = board.bindings[1].participant_id
+    assert second["content"] == f"Participants:\n- {_name(board, 1)} ({other}): idle"
+    changed = await board.service.state(context, {**follow, "limit": 2})
     assert changed["error"]["code"] == "invalid_cursor"
+    clamped = (await board.tools.dispatch(context, {"limit": 500}, allowed_tools=["swarm_state"]))[
+        "data"
+    ]
+    assert clamped["note"] == "limit 500 is above the maximum of 100; used 100."
+    assert clamped["content"].count("\n- ") == 3 and "more" not in clamped
     assert not context._turn_end_requested
 
 

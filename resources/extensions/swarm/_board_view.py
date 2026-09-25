@@ -227,6 +227,82 @@ def posts_text(
     )
 
 
+def messages_text(posts: Iterable[Json], roster: Roster, main_id: str) -> str:
+    """Render delivered messages in order, under a heading per run of one discussion."""
+
+    blocks: list[str] = []
+    current = None
+    for post in posts:
+        if post["discussion_id"] != current:
+            current = post["discussion_id"]
+            label = discussion_label(current, post.get("discussion_title"), main_id)
+            blocks.append(text.MESSAGES_IN.format(discussion=label))
+        blocks.append(post_block(post, roster, main_id, with_discussion=False))
+    return "\n\n".join(blocks)
+
+
+def delivery_text(
+    prefix: str, posts: Sequence[Json], remaining: int, roster: Roster, main_id: str, *, inbox: bool
+) -> str:
+    """Render one automatic delivery: guidance, messages, and what remains pending."""
+
+    parts = [prefix, messages_text(posts, roster, main_id)]
+    if remaining:
+        parts.append(text.DELIVERY_MORE["inbox" if inbox else "no_inbox"].format(count=remaining))
+    return "\n\n".join(part for part in parts if part)
+
+
+def status_data(status: Json, roster: Roster, *, inbox: bool) -> Json:
+    """Render participant status as readable fields and a roster listing."""
+
+    you = status["self"]
+    count = status["pending_count"]
+    if not count:
+        pending = text.STATE_PENDING["none"]
+    else:
+        key = ("one" if count == 1 else "many") + ("" if inbox else "_no_inbox")
+        pending = text.STATE_PENDING[key].format(count=count)
+    delivery = " ".join(
+        text.STATE_DELIVERY[
+            mode if inbox or mode != "on_request" else "on_request_no_inbox"
+        ].format(routes=_routes(routes, capital=True))
+        for mode, routes in status["delivery"].items()
+    )
+    wake = status["wake_on_messages"]
+    totals = status["state_totals"]
+    data: Json = {
+        "you": text.STATE_YOU.format(
+            name=roster.name(you["id"]), participant_id=you["id"], state=you["state"]
+        ),
+        "pending": pending,
+        "delivery": delivery,
+        "wake": text.STATE_WAKE.format(routes=_routes(wake, capital=True))
+        if wake
+        else text.STATE_NO_WAKE,
+        "participants": text.STATE_PARTICIPANTS.format(
+            count=sum(totals.values()),
+            totals=", ".join(f"{number} {state}" for state, number in sorted(totals.items())),
+        ),
+    }
+    lines = [text.STATE_ROSTER_HEADER]
+    lines.extend(
+        text.STATE_ROSTER_LINE.format(
+            name=row["name"],
+            participant_id=row["id"],
+            you=text.STATE_ROSTER_YOU if row["id"] == roster.self_id else "",
+            state=row["state"],
+        )
+        for row in status["roster"]
+    )
+    data["content"] = "\n".join(lines)
+    return data
+
+
+def _routes(routes: Sequence[str], *, capital: bool) -> str:
+    spoken = spoken_list([text.STATE_ROUTES[route] for route in routes])
+    return spoken[:1].upper() + spoken[1:] if capital else spoken
+
+
 def discussions_text(entries: Iterable[Json], main_id: str) -> str:
     lines = [text.BOARD_DISCUSSIONS_HEADER]
     for entry in entries:
@@ -269,13 +345,16 @@ __all__ = [
     "close_discussion",
     "discussion_choices",
     "discussion_label",
+    "delivery_text",
     "discussions_text",
     "excerpt",
+    "messages_text",
     "post_block",
     "post_suggestion",
     "posts_text",
     "queued_text",
     "resolve_recipients",
+    "status_data",
     "unknown_recipients_message",
     "with_notes",
 ]
