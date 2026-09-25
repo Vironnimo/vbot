@@ -68,8 +68,9 @@ def test_skill_tool_result_separates_instructions_and_resource_files(tmp_path: P
     assert "frontmatter" not in content
     assert data["resource_files"] == {
         "guidance": (
-            "These are additional files for this Skill; read them only when the SKILL.md "
-            "instructions tell you to."
+            f"Files of this Skill. Run a scripts/ file by its absolute path with "
+            f"`{SHELL_MODEL_NAME}`; read another file with `skill` using this name and its "
+            "relative file_path only when the instructions call for it."
         ),
         "files": [
             f"{skill_directory}/scripts/run.py",
@@ -171,7 +172,9 @@ def test_skill_tool_unknown_skill_rescans_once_then_fails(tmp_path: Path) -> Non
 
     result = asyncio.run(async_dispatch(tools, _context(tmp_path), {"name": "missing"}))
 
-    assert result == tool_failure("skill_not_found", "Skill not found: missing")
+    assert result == tool_failure(
+        "skill_not_found", "Skill not found: missing. Available Skills: debugging."
+    )
     assert refresh_calls["count"] == 1
 
 
@@ -341,7 +344,7 @@ def test_skill_tool_file_path_requires_name(tmp_path: Path) -> None:
 
     assert result == tool_failure(
         "invalid_arguments",
-        "file_path requires a non-empty name",
+        "file_path needs the Skill's name: call skill with name and file_path.",
     )
 
 
@@ -410,7 +413,9 @@ def test_skill_tool_resolves_registry_from_project_id(tmp_path: Path) -> None:
 
     assert project_result["ok"] is True
     # The project-only skill is not in the global registry, so the identity run fails.
-    assert identity_result == tool_failure("skill_not_found", "Skill not found: proj-skill")
+    assert identity_result == tool_failure(
+        "skill_not_found", "Skill not found: proj-skill. Available Skills: debugging."
+    )
 
 
 def test_skill_tool_without_arguments_returns_grouped_live_catalog(tmp_path: Path) -> None:
@@ -432,17 +437,15 @@ def test_skill_tool_without_arguments_returns_grouped_live_catalog(tmp_path: Pat
     data = cast(dict[str, Any], result["data"])
 
     assert result["ok"] is True
-    groups = {
-        group["origin"]: [s["name"] for s in group["skills"]] for group in data["skill_groups"]
+    # Same groups, order and labels as the System Prompt catalog.
+    assert data == {
+        "count": 2,
+        "content": (
+            "Your global skills:\n- debugging: Debug failures.\nYour own skills:\n- mine: Mine."
+        ),
     }
-    assert groups == {"agent": ["mine"], "global": ["debugging"]}
-    assert data["count"] == 2
     display = tools.display_for_call(SKILL_TOOL_NAME, {}, result=result)
     assert display["facts"] == [{"kind": "count", "value": 2, "unit": "results", "at_least": False}]
-    # Sort order: global before agent.
-    origins_in_order = [group["origin"] for group in data["skill_groups"]]
-    assert origins_in_order.index("global") < origins_in_order.index("agent")
-    assert "<skill_content" not in str(result)
 
 
 def test_skill_tool_blank_optional_name_lists_available_skills(tmp_path: Path) -> None:
@@ -786,3 +789,152 @@ def test_loaded_nontriggerable_name_is_addressable_through_dispatch(
     assert activated["data"]["content"] == "Use the sentinel procedure."
     assert reference["data"]["content"] == "Reference sentinel"
     assert denied["ok"] is False
+
+
+def _dispatch_debugging(
+    tmp_path: Path, arguments: dict[str, object], **context: Any
+) -> dict[str, Any]:
+    registry = SkillRegistry.load(_skills_dir(tmp_path))
+    tools = ToolRegistry()
+    register_skill_tool(tools, _fixed_registry(registry), _no_refresh)
+    return cast(
+        dict[str, Any],
+        asyncio.run(async_dispatch(tools, _context(tmp_path, **context), arguments)),
+    )
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"name": "Debugging"},
+        {"name": "/debugging"},
+        {"name": "$debugging"},
+        {"name": "debugging/SKILL.md"},
+        {"name": "skills/debugging"},
+        {"skill": "debugging"},
+        {"command": "/debugging"},
+    ],
+)
+def test_skill_names_differing_only_in_form_load_the_skill(
+    tmp_path: Path, arguments: dict[str, object]
+) -> None:
+    result = _dispatch_debugging(tmp_path, arguments)
+
+    assert result["ok"] is True
+    assert result["data"]["name"] == "debugging"
+    assert result["data"]["status"] == "loaded"
+    assert "note" not in result["data"]
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"name": "debugging/references/guide.md"},
+        {"file_path": "debugging/references/guide.md"},
+        {"name": "debugging", "file_path": "debugging/references/guide.md"},
+        {"name": "debugging", "file_path": "./references/guide.md"},
+        {"skill": "debugging", "path": "references\\guide.md"},
+    ],
+)
+def test_package_paths_read_the_named_file(tmp_path: Path, arguments: dict[str, object]) -> None:
+    result = _dispatch_debugging(tmp_path, arguments)
+
+    assert result["data"] == {
+        "name": "debugging",
+        "status": "file_loaded",
+        "file_path": "references/guide.md",
+        "content": "Read the evidence first.\n",
+    }
+
+
+def test_absolute_script_path_from_the_resource_list_reads_the_script(tmp_path: Path) -> None:
+    script = f"{_skill_directory(tmp_path)}/scripts/run.py"
+
+    result = _dispatch_debugging(tmp_path, {"name": "debugging", "file_path": script})
+
+    assert result["data"]["file_path"] == "scripts/run.py"
+    assert result["data"]["content"] == "print('debugging')\n"
+
+
+def test_skill_arguments_from_another_harness_are_noted(tmp_path: Path) -> None:
+    result = _dispatch_debugging(tmp_path, {"skill": "debugging", "args": "the flaky test"})
+
+    assert result["data"]["status"] == "loaded"
+    assert result["data"]["note"] == (
+        "Skills take no arguments; apply the loaded instructions to them yourself."
+    )
+
+
+def test_contradictory_skill_addresses_are_refused(tmp_path: Path) -> None:
+    with pytest.raises(ToolContractError, match="Conflicting values for name"):
+        _dispatch_debugging(tmp_path / "one", {"name": "debugging", "skill": "other"})
+
+    result = _dispatch_debugging(
+        tmp_path / "two",
+        {"name": "debugging/references/guide.md", "file_path": "assets/checklist.txt"},
+    )
+
+    assert result == tool_failure(
+        "invalid_arguments",
+        "name points to file 'references/guide.md' but file_path is 'assets/checklist.txt'; "
+        'call skill with name "debugging" and the one file_path you mean.',
+    )
+
+
+@pytest.mark.parametrize(
+    ("name", "message"),
+    [
+        (
+            "cdebugging",
+            'Skill not found: cdebugging. Did you mean "debugging"? Load it with name "debugging".',
+        ),
+        (
+            "debug",
+            'Skill not found: debug. Did you mean "debugging"? Load it with name "debugging".',
+        ),
+        ("zzz", "Skill not found: zzz. Available Skills: debugging."),
+    ],
+)
+def test_unknown_skill_names_suggest_close_names_without_loading(
+    tmp_path: Path, name: str, message: str
+) -> None:
+    activated: list[str] = []
+
+    def activate(skill: str, _content: str) -> bool:
+        activated.append(skill)
+        return True
+
+    registry = SkillRegistry.load(_skills_dir(tmp_path))
+    tools = ToolRegistry()
+    register_skill_tool(tools, _fixed_registry(registry), _no_refresh)
+
+    result = asyncio.run(async_dispatch(tools, _context(tmp_path, activate), {"name": name}))
+
+    assert result == tool_failure("skill_not_found", message)
+    assert activated == []
+
+
+def test_names_matching_several_skills_in_form_are_not_guessed(tmp_path: Path) -> None:
+    root = tmp_path / "skills"
+    for directory, name in (("one", "deploy-app"), ("two", "deploy_app")):
+        (root / directory).mkdir(parents=True)
+        (root / directory / "SKILL.md").write_text(
+            f"---\nname: {name}\ndescription: Deploy.\n---\n\nBody.\n", encoding="utf-8"
+        )
+    tools = ToolRegistry()
+    register_skill_tool(tools, _fixed_registry(SkillRegistry.load(root)), _no_refresh)
+
+    result = asyncio.run(async_dispatch(tools, _context(tmp_path), {"name": "Deploy-App"}))
+
+    assert result == tool_failure(
+        "skill_not_found",
+        'Skill not found: Deploy-App. Did you mean one of: "deploy-app", "deploy_app"?',
+    )
+
+
+def test_disallowed_skills_are_neither_resolved_nor_suggested(tmp_path: Path) -> None:
+    result = _dispatch_debugging(tmp_path, {"name": "Debugging"}, allowed_skills=[])
+
+    assert result == tool_failure(
+        "skill_not_found", "Skill not found: Debugging. No Skills are available to you."
+    )
