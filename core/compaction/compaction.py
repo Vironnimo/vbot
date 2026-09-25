@@ -41,10 +41,6 @@ TRIGGER_INPUT_TOKENS = "input_tokens"
 STRATEGY_SUMMARY_TAIL = "summary_tail"
 STRATEGY_CONTINUATION = "continuation"
 COMPACTION_POLICY_META_KEY = "compaction_policy"
-_LEGACY_COMPACTION_TAIL_GUIDANCE = (
-    "The messages below are the most recent verbatim Session activity retained after this "
-    "Compaction checkpoint. They chronologically follow the summary above."
-)
 COMPACTION_REFERENCE_PREFIX = (
     "[CONTEXT COMPACTION] The summary below records the conversation and task state up to "
     "a cutoff. The historical User quote attached to this checkpoint, if present, belongs "
@@ -768,13 +764,8 @@ def _is_compaction_checkpoint_note(message: ChatMessage) -> bool:
         or _is_compaction_user_quote(message)
         or (
             message.role == "note"
-            and (
-                message.content == _LEGACY_COMPACTION_TAIL_GUIDANCE
-                or (
-                    isinstance(message.content, str)
-                    and message.content.startswith(COMPACTION_SKILL_NOTE_PREFIX)
-                )
-            )
+            and isinstance(message.content, str)
+            and message.content.startswith(COMPACTION_SKILL_NOTE_PREFIX)
         )
     )
 

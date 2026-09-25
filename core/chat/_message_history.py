@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
-from datetime import datetime
 from typing import cast
 
 from core.chat import messages as _records
@@ -289,10 +288,9 @@ def effective_compaction_messages(
         (index for index, message in enumerate(messages) if message.id == checkpoint.id),
         len(messages),
     )
-    if checkpoint.projection is not None:
-        projection = [_records.ChatMessage.from_dict(entry) for entry in checkpoint.projection]
-    else:
-        projection = _legacy_checkpoint_projection(messages, checkpoint, checkpoint_index)
+    if checkpoint.projection is None:
+        raise ChatMessageValidationError("compaction checkpoints require a projection")
+    projection = [_records.ChatMessage.from_dict(entry) for entry in checkpoint.projection]
     appended = [
         message
         for message in messages[checkpoint_index + 1 :]
@@ -356,31 +354,3 @@ def _overlay_pending_tool_batch(
         *batch,
         *kept_appended[later:],
     ]
-
-
-def _legacy_checkpoint_projection(
-    messages: list[_records.ChatMessage], checkpoint: _records.ChatMessage, checkpoint_index: int
-) -> list[_records.ChatMessage]:
-    """Materialize one old boundary-based checkpoint without rewriting it."""
-    summary = checkpoint.content if isinstance(checkpoint.content, str) else ""
-    projection = [
-        _records.ChatMessage.note(
-            f"{_records.COMPACTION_SUMMARY_NOTE_PREFIX}{summary}",
-            timestamp=datetime.fromisoformat(checkpoint.timestamp),
-        )
-    ]
-    boundary_id = checkpoint.tail_boundary_id
-    boundary_index = next(
-        (
-            index
-            for index, message in enumerate(messages[:checkpoint_index])
-            if message.id == boundary_id
-        ),
-        checkpoint_index,
-    )
-    projection.extend(
-        message
-        for message in messages[boundary_index:checkpoint_index]
-        if message.role != "compaction_checkpoint"
-    )
-    return projection
