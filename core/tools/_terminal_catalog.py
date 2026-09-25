@@ -110,9 +110,7 @@ class TerminalCatalog:
         if self._operator_store.group_name_taken(name):
             raise TerminalManagerError(f"A Terminal group named '{name}' already exists")
         group = TerminalGroup(
-            group_id=new_id(
-                "grp", claim=lambda candidate: candidate not in self._operator_store.groups
-            ),
+            group_id=new_id("grp", claim=self._operator_store.group_id_available),
             name=name,
             kind="user",
             order=[],
@@ -206,9 +204,7 @@ class TerminalCatalog:
         if existing is not None:
             return existing
         group = TerminalGroup(
-            group_id=new_id(
-                "grp", claim=lambda candidate: candidate not in self._operator_store.groups
-            ),
+            group_id=new_id("grp", claim=self._operator_store.group_id_available),
             name=name,
             kind="agent",
             order=[],
