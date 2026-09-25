@@ -137,11 +137,13 @@ def search(
     if use_fts:
         if _store_fts._fts_health_from_connection(connection, verify_coverage=False).available:
             tool_inclusive = roles is None or "tool" in roles
-            table = (
-                FTS_TABLE
-                if tool_inclusive or not _trigram_supported(compact, match_mode)
-                else FTS_TRIGRAM_TABLE
+            # SQLite builds without the trigram tokenizer have no trigram index.
+            trigram = (
+                not tool_inclusive
+                and _trigram_supported(compact, match_mode)
+                and _store_fts._fts_table_exists(connection, FTS_TRIGRAM_TABLE)
             )
+            table = FTS_TRIGRAM_TABLE if trigram else FTS_TABLE
             hits, complete = check.run(
                 _fts_candidates(
                     connection, table, _fts_expression(compact, match_mode), search_filter, order

@@ -209,7 +209,7 @@ def _fts_health_from_connection(
     """Read FTS lifecycle state, optionally proving canonical row coverage.
 
     The trigram index is optional: SQLite builds without its tokenizer keep
-    the standard index only, and search then matches short terms by scan.
+    the standard index only, and search then matches whole tokens there.
     """
     if not _fts_table_exists(connection):
         return FtsHealth(state="unavailable", reason="FTS tables are missing")
