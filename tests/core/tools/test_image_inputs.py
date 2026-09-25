@@ -92,7 +92,7 @@ def photos(tmp_path: Path) -> Path:
 
 async def analyze(root: Path, arguments: Any, service: _Service | None = None) -> dict[str, Any]:
     registry = ToolRegistry()
-    register_analyze_image_tool(registry, service or _Service())
+    register_analyze_image_tool(registry, service or _Service(), attachment_store=None)
     return await registry.dispatch(_context(root), arguments)
 
 
@@ -189,7 +189,7 @@ async def test_missing_images_name_similar_files_without_substituting(
 ) -> None:
     service = _Service()
     registry = ToolRegistry()
-    register_analyze_image_tool(registry, service)
+    register_analyze_image_tool(registry, service, attachment_store=None)
     context = _context(photos)
 
     result = await registry.dispatch(context, {"prompt": "Describe", "images": images})
@@ -208,29 +208,35 @@ async def test_missing_images_name_similar_files_without_substituting(
     [
         (
             "https://example.com/cat.png",
-            "images must be local image files; web addresses such as "
+            "source_images must be local image files; web addresses such as "
+            "https://example.com/cat.png cannot be opened. Save the image to a file first, "
+            "then pass that file's path.",
+        ),
+        (
+            "<https:/example.com/cat.png>",
+            "source_images must be local image files; web addresses such as "
             "https://example.com/cat.png cannot be opened. Save the image to a file first, "
             "then pass that file's path.",
         ),
         (
             "data:image/png;base64,iVBORw0KGgo=",
-            "images must be local image files; data: URLs cannot be opened. Save the image "
-            "to a file first, then pass that file's path.",
+            "source_images must be local image files; data: URLs cannot be opened. Save the "
+            "image to a file first, then pass that file's path.",
         ),
     ],
 )
-async def test_web_and_data_addresses_are_refused_with_the_reason(
+async def test_generation_refuses_web_and_data_addresses_with_the_reason(
     photos: Path, image: str, message: str
 ) -> None:
     service = _Service()
     registry = ToolRegistry()
-    register_analyze_image_tool(registry, service)
-    context = _context(photos)
+    register_image_generation_tool(registry, service)
+    context = _context(photos, IMAGE_GENERATION_TOOL_NAME)
 
-    result = await registry.dispatch(context, {"prompt": "Describe", "images": [image]})
+    result = await registry.dispatch(context, {"prompt": "Rainy", "source_images": [image]})
 
     assert result["error"] == {"code": "invalid_arguments", "message": message, "retryable": False}
-    assert service.analyzed is None
+    assert service.generated is None
     assert context.presentation_images == []
 
 
@@ -398,7 +404,7 @@ async def test_generation_failures_keep_their_code_and_name_the_fix(
 
 def test_display_shows_the_request_under_any_spelling(tmp_path: Path) -> None:
     registry = ToolRegistry()
-    register_analyze_image_tool(registry, _Service())
+    register_analyze_image_tool(registry, _Service(), attachment_store=None)
 
     display = registry.display_for_call(
         ANALYZE_IMAGE_TOOL_NAME, {"question": "What animal?", "image": "cat.png"}
