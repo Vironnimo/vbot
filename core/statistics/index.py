@@ -277,8 +277,9 @@ class StatisticsScope:
 class IndexedSession:
     """One reconciled Session: its index key, canonical generation and summary.
 
-    ``summary`` is the last listed summary of the Session across all scopes,
-    which also decides its fork boundary.
+    ``summary`` is the last listed summary of the Session across all scopes;
+    reports read its title, creation and last activity times, and offered
+    Skills from it.
     """
 
     session_key: int
