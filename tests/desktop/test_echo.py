@@ -7,6 +7,7 @@ timeline. An optional test runs the real WebRTC canceller when it is installed.
 
 from __future__ import annotations
 
+import logging
 import sys
 import threading
 import time
@@ -367,14 +368,16 @@ def test_a_lagging_reference_holds_frames_no_longer_than_the_hard_limit(
     reference = noise(RATE * 3, seed=10)
     mic = noise(RATE * 3, seed=11)
     released = 0
-    waited_beyond_grace = False
+    waited_beyond_grace = held_to_the_limit = False
     block = 0
     for end in range(3840, len(mic) + 1, 3840):
-        # A loopback at half speed: blocks keep arriving (the loopback is not
-        # idle) while their contiguous placement falls further behind.
-        while (block + 1) * 2 * FRAME <= end:
+        # A loopback at a ninth of its speed: blocks keep arriving (the loopback
+        # is not idle), and the clock follows a device falling behind only as
+        # far as the floor of its confirmation window, which here trails the
+        # arrivals by more than the hard limit at times.
+        while (block + 1) * 9 * FRAME <= end:
             samples = reference[block * FRAME : (block + 1) * FRAME]
-            harness.push_reference(samples, (block + 1) * 2 * FRAME)
+            harness.push_reference(samples, (block + 1) * 9 * FRAME)
             block += 1
         released += len(harness.process(mic[end - 3840 : end], end))
 
@@ -383,8 +386,9 @@ def test_a_lagging_reference_holds_frames_no_longer_than_the_hard_limit(
 
         assert released >= frames_due(HARD_LIMIT)
         waited_beyond_grace = waited_beyond_grace or released < frames_due(GRACE)
+        held_to_the_limit = held_to_the_limit or released == frames_due(HARD_LIMIT)
     assert waited_beyond_grace
-    assert released == frames_due(HARD_LIMIT)
+    assert held_to_the_limit
 
 
 def test_capture_passes_through_unchanged_without_a_reference() -> None:
@@ -427,9 +431,60 @@ def test_reference_realigns_after_a_silence_gap(harness: Harness) -> None:
         expected = reference[start : start + FRAME]
         if len(expected) == FRAME:
             assert np.array_equal(reverse, expected), f"frame {index}"
-    placer = harness.stage._reference
-    assert placer is not None
-    assert placer.clock.resyncs >= 1
+    stats = harness.stage.stats()["reference"]
+    assert stats["anchors"] >= 1
+    assert stats["steps"] == 0  # a silent loopback is a pause, not lost samples
+
+
+def test_reference_that_silently_loses_samples_steps_back_into_place(harness: Harness) -> None:
+    harness.open()
+    reference = noise(2 * RATE, seed=16)
+    lost = RATE * 20 // 1000  # 20 ms of loopback samples vanish without a reported discontinuity
+    for start in range(0, len(reference) - FRAME + 1, FRAME):
+        if not RATE // 2 <= start < RATE // 2 + lost:
+            late = every_third_late(start // FRAME)
+            harness.push_reference(reference[start : start + FRAME], start + FRAME + late)
+
+    stats = harness.stage.stats()["reference"]
+    assert (stats["steps"], stats["anchors"], stats["pullbacks"]) == (1, 0, 0)
+    assert stats["step_ms_total"] == 20
+    settled = RATE // 2 + lost + CONFIRM + 4 * FRAME
+    assert np.array_equal(
+        harness.stage._ring.read(BASE + settled, len(reference) - settled), reference[settled:]
+    )
+
+
+def test_a_new_loopback_format_restarts_the_reference_placement(harness: Harness) -> None:
+    loopback = harness.loopback
+    assert loopback is not None
+    harness.open()
+
+    def tones(seconds: np.ndarray) -> np.ndarray:
+        frequencies = np.array([211.0, 1013.0, 2711.0])
+        phases = 2 * np.pi * np.outer(seconds, frequencies) + frequencies
+        mixed: np.ndarray = np.sin(phases).sum(axis=1) / 4
+        return mixed
+
+    first = tones(np.arange(RATE) / RATE)
+    for start in range(0, RATE, FRAME):
+        block = np.repeat(first[start : start + FRAME, None], 2, axis=1).astype(np.float32)
+        loopback.sinks[-1](block, RATE, (BASE + start + FRAME) / RATE, False)
+    loopback.endpoint = "headphones"  # the new default endpoint runs 44.1 kHz, 5.1 channels
+    wait_for(lambda: len(loopback.sinks) == 2)
+    second = tones(1 + np.arange(44100) / 44100)
+    for index, start in enumerate(range(0, 44100, 441)):
+        block = np.repeat(second[start : start + 441, None], 6, axis=1).astype(np.float32)
+        loopback.sinks[-1](block, 44100, (BASE + RATE + (index + 1) * FRAME) / RATE, False)
+
+    ring = harness.stage._ring
+    assert ring.written_until is not None
+    start, end = RATE + FRAME, ring.written_until - BASE  # past the resampler's start-up
+    assert end > 2 * RATE - 2 * FRAME  # the resampler holds back only its filter length
+    expected = tones(np.arange(start, end) / RATE) * 32767
+    residual = ring.read(BASE + start, end - start) - expected
+    assert np.sqrt(np.mean(residual**2)) < 0.001 * np.sqrt(np.mean(expected**2))
+    stats = harness.stage.stats()["reference"]
+    assert (stats["steps"], stats["pullbacks"], stats["anchors"]) == (0, 0, 0)
 
 
 def test_overflow_discontinuity_reanchors_the_reference(harness: Harness) -> None:
@@ -444,6 +499,10 @@ def test_overflow_discontinuity_reanchors_the_reference(harness: Harness) -> Non
     assert ring.written_until == BASE + 11040
     assert np.array_equal(ring.read(BASE + 10560, FRAME), reference[10560:11040])
     assert not ring.read(BASE + 9600, 960).any()  # the lost span is silence
+
+
+DEADBAND = round(echo._CLOCK_DEADBAND_S * RATE)
+CONFIRM = round(echo._CLOCK_CONFIRM_S * RATE)
 
 
 @pytest.mark.parametrize("ppm", [200.0, -200.0])
@@ -462,8 +521,13 @@ def test_clock_corrects_device_drift_one_sample_at_a_time(ppm: float) -> None:
 
     uncorrected = abs(ppm) * 1e-6 * seconds * RATE
     assert uncorrected > 500
-    assert max(abs(error) for error in errors) <= 2 * echo._CLOCK_SLIP_SAMPLES
-    assert clock.slips > 100
+    assert max(abs(error) for error in errors) <= 2 * DEADBAND
+    stats = clock.stats
+    assert stats.steps == 0  # drift is never mistaken for lost samples
+    if ppm > 0:  # a fast device: early blocks pull it back a sample at a time
+        assert stats.pullbacks > 100 and stats.largest_pullback <= 2
+    else:
+        assert stats.slips > 100
 
 
 def test_clock_reanchors_after_a_gap_and_after_a_persistent_jump() -> None:
@@ -479,14 +543,216 @@ def test_clock_reanchors_after_a_gap_and_after_a_persistent_jump() -> None:
         deliver()
     end += RATE // 2  # 500 ms without blocks (silent loopback)
     assert deliver() == BASE + end - FRAME
-    assert clock.resyncs == 1
+    assert clock.stats.anchors == 1
 
     for _ in range(60):
         deliver()
     for _ in range(60):  # from now on every block arrives 50 ms after its samples
         placed = deliver(2400)
-    assert clock.resyncs == 2
+    assert (clock.stats.anchors, clock.stats.steps) == (1, 1)
     assert placed == BASE + end + 2400 - FRAME
+
+
+MIC_BLOCK = 1920  # the capture's 40 ms blocks
+
+
+def deliver_device(
+    *,
+    seconds: float = 30.0,
+    ppm: float = 0.0,
+    changes: dict[int, int] | None = None,
+    late: Callable[[int], float] | None = None,
+) -> tuple[echo._StreamClock, np.ndarray]:
+    """Feed a simulated capture device to a clock; return it and each block's placement error.
+
+    The device clock runs ``ppm`` off the timeline. ``changes`` maps a block
+    index to device samples lost (positive) or inserted (negative) just before
+    that block. Every fourth block arrives on time and the others up to 2 ms
+    late, unless ``late`` gives each block's delay in samples.
+    """
+    clock = echo._StreamClock(RATE)
+    rng = np.random.default_rng(31)
+    scale = 1 + ppm * 1e-6
+    skipped = 0
+    errors = []
+    for index in range(round(seconds * RATE) // MIC_BLOCK):
+        skipped += (changes or {}).get(index, 0)
+        true_start = (index * MIC_BLOCK + skipped) / scale
+        delay = late(index) if late else 0.0 if index % 4 == 0 else rng.uniform(0, 96)
+        arrival = (BASE + true_start + MIC_BLOCK / scale + delay) / RATE
+        errors.append(clock.place(MIC_BLOCK, arrival) - (BASE + true_start))
+    return clock, np.array(errors)
+
+
+def test_clock_undoes_lost_microphone_chunks_after_the_confirmation_window() -> None:
+    lost = RATE * 30 // 1000
+    period = 3 * RATE // MIC_BLOCK  # a 30 ms chunk vanishes every 3 s
+    changes = dict.fromkeys(range(period, 30 * RATE // MIC_BLOCK, period), lost)
+
+    clock, errors = deliver_device(changes=changes)
+
+    settle = -(-CONFIRM // MIC_BLOCK) + 2
+    for index in changes:
+        assert errors[index] == -lost  # placed early by the loss until it is confirmed,
+        assert np.abs(errors[index + settle : index + period]).max() <= 1  # then back on time
+    assert errors.max() <= 1  # never overshoots
+    assert clock.stats.steps == len(changes)
+    assert clock.stats.step_samples == len(changes) * lost
+
+
+@pytest.mark.parametrize(("ppm", "bound_ms"), [(-10000.0, 4.0), (10000.0, 2.0)])
+def test_clock_bounds_the_error_of_a_device_one_percent_off(ppm: float, bound_ms: float) -> None:
+    clock, errors = deliver_device(ppm=ppm)
+
+    # A slow device falls behind continuously and is corrected in small steps
+    # whenever the floor of a confirmation window lies beyond the jitter
+    # margin: the placement trails by about the drift across one window (3 ms
+    # at 1 %) and never jumps by more than the margin. A fast one delivers
+    # early: every on-time block pulls it back.
+    settled = errors[2 * CONFIRM // MIC_BLOCK :]
+    assert np.abs(settled).max() <= bound_ms * RATE / 1000
+    assert (clock.stats.steps > 0) == (ppm < 0)
+    assert max(clock.stats.largest_step, clock.stats.largest_pullback) <= 2.5 * RATE / 1000
+
+
+@pytest.mark.parametrize("ppm", [-450.0, 450.0])
+def test_clock_follows_a_steady_device_one_sample_at_a_time(ppm: float) -> None:
+    # Without jitter the step margin is at its smallest, and at 40 ms blocks
+    # this drift is close to what one-sample corrections can follow (520 ppm).
+    clock, errors = deliver_device(seconds=60, ppm=ppm, late=lambda index: 0.0)
+
+    stats = clock.stats
+    assert (stats.steps, stats.anchors) == (0, 0)  # drift is never mistaken for lost samples
+    # The placement trails a slow device by up to the drift across a slip
+    # window; that delay is steady (the canceller absorbs a constant delay).
+    assert np.abs(errors).max() <= DEADBAND + echo._CLOCK_WINDOW_BLOCKS
+    assert np.ptp(errors[-500:]) <= 2
+    assert (stats.slips if ppm < 0 else stats.pullbacks) > 1000
+    assert stats.largest_pullback <= 1
+
+
+def test_clock_pulls_back_at_once_when_the_device_inserts_samples() -> None:
+    inserted = RATE * 20 // 1000  # packet-loss concealment adds 20 ms every 2 s
+    changes = dict.fromkeys(range(50, 30 * RATE // MIC_BLOCK, 50), -inserted)
+
+    clock, errors = deliver_device(changes=changes)
+
+    assert np.abs(errors).max() <= 96  # never off by more than one block's lateness
+    assert clock.stats.steps == 0
+    assert clock.stats.pullback_samples >= len(changes) * (inserted - 96)
+
+
+def test_clock_does_not_chase_delivery_bursts() -> None:
+    stall = RATE // 10  # every 2 s the reader stalls 100 ms, then gets the queue at once
+
+    def late(index: int) -> float:
+        phase = ((index + 1) * MIC_BLOCK - RATE) % (2 * RATE)
+        return float(stall - phase) if phase < stall else 0.0
+
+    clock, errors = deliver_device(late=late)
+
+    assert late(25) > 0  # the stalls are there
+    assert not errors.any()
+    assert (clock.stats.steps, clock.stats.slips, clock.stats.anchors) == (0, 0, 0)
+
+
+@pytest.mark.parametrize(("lag_ms", "reanchor"), [(80, "steps"), (150, "anchors")])
+def test_clock_recovers_on_its_own_from_a_wrong_reanchor(lag_ms: int, reanchor: str) -> None:
+    lag = RATE * lag_ms // 1000  # the reader lags for a second, then catches up
+
+    def late(index: int) -> float:
+        return float(lag) if 100 <= index < 125 else 0.0
+
+    clock, errors = deliver_device(late=late)
+
+    # A second of uniformly late blocks is indistinguishable from lost samples
+    # (a lag beyond the gap limit even starts a new segment); the first
+    # on-time block afterwards proves otherwise and pulls the stream back.
+    assert getattr(clock.stats, reanchor) == 1
+    assert clock.stats.largest_pullback == lag
+    assert not errors[125:].any()
+
+
+def timing_logs(caplog: pytest.LogCaptureFixture, level: int) -> list[str]:
+    return [
+        record.getMessage()
+        for record in caplog.records
+        if record.levelno == level and "timing" in record.getMessage()
+    ]
+
+
+def test_clock_reports_lost_samples_once_and_summarises_at_most_once_a_minute(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.DEBUG, logger=echo.logger.name)
+    seconds, period = 200, 3 * RATE // MIC_BLOCK
+    lost = RATE * 30 // 1000
+    changes = dict.fromkeys(range(period, seconds * RATE // MIC_BLOCK, period), lost)
+
+    deliver_device(seconds=seconds, changes=changes)
+
+    reported = timing_logs(caplog, logging.INFO)
+    assert len(reported) == 1
+    assert "1 lost-sample re-anchors (largest 30.0 ms" in reported[0]
+    assert 1 <= len(timing_logs(caplog, logging.DEBUG)) <= seconds // 60
+
+
+def test_clock_stays_quiet_about_a_healthy_device(caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.DEBUG, logger=echo.logger.name)
+
+    clock, _errors = deliver_device(seconds=120, ppm=-200.0)
+
+    assert clock.stats.slips > 0
+    assert not timing_logs(caplog, logging.INFO) and not timing_logs(caplog, logging.DEBUG)
+
+
+def coded(true_positions: np.ndarray) -> np.ndarray:
+    """Samples whose value is their true timeline position, so pairing is readable."""
+    return (true_positions % 30000).astype(np.int16)
+
+
+def test_stage_keeps_the_microphone_paired_while_it_loses_chunks(harness: Harness) -> None:
+    harness.open()
+    seconds, lost, period = 8, RATE * 30 // 1000, 2 * RATE  # 30 ms lost every 2 s
+    true_positions = np.arange(seconds * RATE)
+    delivered = np.concatenate(
+        [
+            true_positions[start + lost : start + period]
+            for start in range(0, len(true_positions), period)
+        ]
+    )
+    delivered = np.concatenate((true_positions[:lost], delivered))  # nothing lost before 2 s
+    events: list[tuple[int, int, int]] = []
+    for start in range(0, len(true_positions) - FRAME + 1, FRAME):
+        events.append((start + FRAME, 0, start))
+    for start in range(0, len(delivered) - MIC_BLOCK + 1, MIC_BLOCK):
+        end = int(delivered[start + MIC_BLOCK - 1]) + 1
+        events.append((end + every_third_late(start // MIC_BLOCK), 1, start))
+    events.sort()
+    for arrival, kind, start in events:
+        if kind == 0:
+            harness.push_reference(coded(true_positions[start : start + FRAME]), arrival)
+        else:
+            harness.process(coded(delivered[start : start + MIC_BLOCK]), arrival)
+    harness.stage.flush()
+
+    processor = harness.processor
+    errors = []
+    for index, (reverse, capture) in enumerate(
+        zip(processor.reverse, processor.capture, strict=True)
+    ):
+        true_start = int(delivered[min(index * FRAME, len(delivered) - 1)])
+        error = (int(reverse[0]) - LEAD - int(capture[0]) + 15000) % 30000 - 15000
+        errors.append((true_start, error))
+    for true_start, error in errors[: len(errors) - 4]:  # the flush may run past the reference
+        since_loss = true_start % period if true_start >= period else period
+        if since_loss >= lost + CONFIRM + 2 * MIC_BLOCK:
+            assert error == 0, f"frame at {true_start}"
+        else:  # placed early by the loss until it is confirmed, never late
+            assert -lost <= error <= 0, f"frame at {true_start}"
+    stats = harness.stage.stats()["microphone"]
+    assert stats["step_ms_total"] == (seconds // 2 - 1) * 30
+    assert stats["pullbacks"] == 0
 
 
 def test_reference_ring_keeps_only_its_window() -> None:
