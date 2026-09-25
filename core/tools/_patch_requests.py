@@ -74,7 +74,15 @@ _FIELD_ALIASES = SpellingAliases(
             "relative_path",
             "relative_workspace_path",
         ),
-        "old_string": ("old_str", "old_text", "old", "search", "target_content", "original"),
+        "old_string": (
+            "old_str",
+            "old_text",
+            "old",
+            "search",
+            "find",
+            "target_content",
+            "original",
+        ),
         "new_string": (
             "new_str",
             "new_text",
@@ -105,6 +113,11 @@ _FIELD_ALIASES = SpellingAliases(
 # Remarks some harnesses attach to an edit; they request no effect. Roo's
 # write_to_file adds line_count, a count of the content's lines.
 _REMARKS = frozenset({"explanation", "instructions", "instruction", "description", "linecount"})
+# Switches that ask for nothing extra while off: Windsurf's EmptyFile, Roo's
+# use_regex and ignore_case, and dryRun from the MCP filesystem server. Turned
+# on, each asks for an effect of its own and stays an unknown parameter, except
+# EmptyFile without content, which is an empty file.
+_OFF_SWITCHES = frozenset({"emptyfile", "useregex", "ignorecase", "dryrun"})
 
 _CHANGE_FIELDS = {
     "patch": "patch",
@@ -142,6 +155,7 @@ def normalize_patch_arguments(arguments: Any) -> Any:
     if not isinstance(normalized, dict):
         return normalized
     result = {key: value for key, value in normalized.items() if spelling(key) not in _REMARKS}
+    _drop_off_switches(result)
     if "code_edit" in result:
         raise ValueError(
             "code_edit cannot be applied: it marks unchanged code with placeholder "
@@ -157,6 +171,18 @@ def normalize_patch_arguments(arguments: Any) -> Any:
     _check_change(result)
     _carry_empty_text(result)
     return result
+
+
+def _drop_off_switches(arguments: dict[str, Any]) -> None:
+    for key, value in list(arguments.items()):
+        name = spelling(key)
+        if name not in _OFF_SWITCHES:
+            continue
+        if value is True and name == "emptyfile" and arguments.get("content", "") == "":
+            arguments["content"] = ""
+            del arguments[key]
+        elif value is False:
+            del arguments[key]
 
 
 def _translate_command(arguments: dict[str, Any]) -> None:

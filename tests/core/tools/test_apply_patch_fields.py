@@ -52,6 +52,16 @@ def content_of(run, name):
         {"patch": "*** Begin Patch\n*** Edit File: a.py\n@@\n-x = 1\n+x = 3\n*** End Patch"},
         {"path": "a.py", "patch": "@@\n-x = 1\n+x = 3"},
         {"mode": "patch", "patch": "*** Update File: a.py\n@@\n-x = 1\n+x = 3"},
+        # Switches that are off ask for nothing extra.
+        {"path": "a.py", "search": "x = 1", "replace": "x = 3", "use_regex": False},
+        {"path": "a.py", "edits": [{"oldText": "x = 1", "newText": "x = 3"}], "dryRun": False},
+        {
+            "TargetFile": "a.py",
+            "ReplacementChunks": [
+                {"AllowMultiple": False, "TargetContent": "x = 1", "ReplacementContent": "x = 3"}
+            ],
+            "Instruction": "Bump x.",
+        },
         # A header repeated before Begin Patch names the same single change.
         {
             "patch": "*** Update File: a.py\n*** Begin Patch\n*** Update File: a.py\n@@\n-x = 1\n"
@@ -164,6 +174,11 @@ async def test_write_shapes_create_replace_and_empty_files(run):
     emptied = await run({"file_path": "made.txt", "content": ""})
     assert text(emptied) == "Replaced the content of made.txt (empty)."
     assert content_of(run, "made.txt") == b""
+    # Windsurf's write_to_file names an empty file with a switch.
+    windsurf = await run({"TargetFile": "w.txt", "CodeContent": "w\n", "EmptyFile": False})
+    assert windsurf["ok"] and content_of(run, "w.txt") == b"w\n"
+    blank = await run({"TargetFile": "blank.txt", "EmptyFile": True})
+    assert text(blank) == "Created blank.txt (empty)."
 
 
 @pytest.mark.asyncio
@@ -249,6 +264,16 @@ async def test_open_or_conflicting_shapes_fail_before_any_change(run, arguments,
         await run(arguments, **{"a.txt": "one\n"})
     assert message in str(raised.value)
     assert sorted(p.name for p in run.root.iterdir()) == ["a.txt"]
+    assert content_of(run, "a.txt") == b"one\n"
+
+
+@pytest.mark.asyncio
+async def test_a_switch_that_asks_for_a_dry_run_writes_nothing(run):
+    with pytest.raises(ValueError, match='"dryRun" is not a parameter'):
+        await run(
+            {"path": "a.txt", "edits": [{"oldText": "one", "newText": "two"}], "dryRun": True},
+            **{"a.txt": "one\n"},
+        )
     assert content_of(run, "a.txt") == b"one\n"
 
 
