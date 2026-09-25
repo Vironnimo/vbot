@@ -418,39 +418,33 @@ The initializer copies `resources/data-dir/.env.example` only when `.env` is abs
 
 ### Converting an existing data directory
 
-Current application code reads only the canonical paths. Convert every older data directory explicitly before starting the updated instance; Setup and Runtime do not migrate or dual-read old paths.
+Current vBot reads only persistence Generation 1: the canonical paths, databases registered in `data-store.json`, and JSON documents with a `format_version`. Setup and Runtime never convert or dual-read older data. A data directory written by a vBot release before Generation 1 (0.4.x) is converted once, offline, from a vBot checkout that includes Generation 1:
 
-1. Stop the exact vBot instance that uses the target data directory.
+1. Stop vBot completely, including the desktop and tray application. The converter refuses while a server uses the data directory.
 2. Back up the complete data directory with your normal filesystem backup mechanism.
-3. From the updated vBot checkout, run the converter without `--apply` and resolve every reported unsupported legacy `temp/` entry or destination collision:
+3. Run a dry run and read its summary: counts per area, verification, and every skipped or approximated item. The data directory keeps its content.
 
    ```bash
-   python scripts/converters/data_dir_artifacts_layout.py <data-dir>
+   python -m scripts.converters.persistence_generation_1 <data-dir> --dry-run --report <file-outside-the-data-dir>
    ```
 
-4. Apply the same preflighted conversion while vBot remains stopped:
+4. Install the conversion:
 
    ```bash
-   python scripts/converters/data_dir_artifacts_layout.py <data-dir> --apply
+   python -m scripts.converters.persistence_generation_1 <data-dir> --report <file-outside-the-data-dir>
    ```
 
-5. If the data predates extension-bearing Attachment blobs, run the Attachment schema converter after the structural conversion:
+5. Start a vBot that includes Generation 1 (the old release refuses the converted directory), check Agents, Projects, Sessions and Channels, then create the first data snapshot:
 
    ```bash
-   python scripts/converters/attachment_blob_extensions.py <data-dir>
+   vbot data-store snapshot create --reason generation-1
    ```
 
-6. Validate all configuration files:
+The install moves every file it replaces or retires, including the old `sessions.db`, `session-store.json` and `session-snapshots/`, to `<data-dir>/pre-generation-1/` at the same relative path, together with `conversion-report.json`; nothing is deleted. vBot never reads that folder. It also holds old copies of credential files such as OAuth tokens, so treat it like the data directory. Delete it once the converted instance has worked for a while and a data snapshot exists. To go back before that, stop vBot, delete the files the report lists under `install.installed` and `data-store.json`, and move the content of `pre-generation-1/` back.
 
-   ```bash
-   vbot doctor config --data-dir <data-dir>
-   ```
+The converter refuses, changing nothing, while a server runs, when the directory is already converted, when `pre-generation-1/` already exists, when a source has an unsupported shape, or when the volume lacks the free space for staging. A failure before the install leaves the data directory unchanged. An interrupted install keeps vBot from starting on the directory; running the same command again finishes it.
 
-7. Start the instance and verify its reported data root, Agents and Sessions, artifact serving, Debug status when enabled, and Provider usage history.
-
-The structural converter defaults to a read-only preflight, rejects symlinks, special files, unknown legacy temporary categories, and every matching destination, and never overwrites data. Apply moves regular leaf files atomically within the data root and is resumable after interruption. Retired `temp/skill-drafts/` content is preserved in place but ignored by current vBot; remove it manually only after confirming it contains nothing you want to recover. Previously persisted absolute paths in old Session text are not rewritten.
-
-### Data-store maintenance and legacy conversion
+### Data-store maintenance
 
 The canonical databases, such as the Session database `<data-dir>/sessions.db` and the Provider usage history `<data-dir>/provider-usage.db`, are authorized by `<data-dir>/data-store.json`, which records each database's identity and format generation. FTS, Recall, Vector, Statistics, data snapshots under `snapshots/`, and quarantine bundles under `quarantine/` are derived or recovery data and never replace canonical history. Runtime refuses an existing root without a valid marker and never searches legacy files to guess how to initialize it. A damaged or missing canonical database is restored automatically from the newest verified data snapshot; the damaged files move to quarantine and a recovery incident under `incidents/` records the possible loss interval.
 
