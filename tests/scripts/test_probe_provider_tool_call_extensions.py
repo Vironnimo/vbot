@@ -416,9 +416,11 @@ def test_mcp_probe_uses_the_production_definition_for_every_case():
 
 
 def test_computer_probe_uses_production_definition_and_validates_matrix():
+    from core.tools.contracts import ToolContractError
     from resources.extensions.computer_use._arguments import (
         _validate_arguments,
     )
+    from resources.extensions.computer_use._dialects import normalize_computer_arguments
     from resources.extensions.computer_use.extension import (
         COMPUTER_PARAMETERS,
         InvalidComputerArgumentsError,
@@ -447,8 +449,8 @@ def test_computer_probe_uses_production_definition_and_validates_matrix():
                 }
                 else None
             )
-            _validate_arguments(expected, reference)
-        except InvalidComputerArgumentsError:
+            _validate_arguments(normalize_computer_arguments(dict(expected)), reference)
+        except (InvalidComputerArgumentsError, ToolContractError):
             assert case.startswith("invalid_")
         else:
             assert not case.startswith("invalid_")

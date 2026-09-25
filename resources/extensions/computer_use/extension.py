@@ -17,28 +17,185 @@ from core.utils.ids import new_id
 from . import observations
 from ._arguments import (
     _BACKGROUND_FOCUS_HINT,
-    _FIELDS,
     _MUTATIONS,
     _NO_EFFECT_HINT,
     _POST_INPUT_OBSERVATION_MS,
     _READINESS_HINT,
     _TARGET,
+    _TARGETED,
     _WINDOW,
     COMPUTER_DESCRIPTION,
     COMPUTER_PARAMETERS,
+    UNADVERTISED_PARAMETERS,
     InvalidComputerArgumentsError,
-    _invalid,
+    _describe_target,
     _target,
     _target_fields,
     _validate_arguments,
+    call_text,
+    capture_call,
 )
+from ._dialects import normalize_computer_arguments
 from ._session_views import (
     DesktopSession,
     _observation,
     _outcome,
     _reference,
+    with_latest_view,
 )
 from .driver import ComputerUseError, ComputerUseInterruptedError, CuaDriver, EmergencyHotkey
+
+# Failures raised before the driver sends anything: the requested input did not happen.
+_NOT_SENT = {
+    "capture_required",
+    "computer_session_expired",
+    "focus_refused",
+    "foreground_required",
+    "invalid_arguments",
+    "invalid_coordinates",
+    "stale_element",
+    "stale_view",
+    "stale_window",
+    "target_blocked",
+    "unknown_element",
+    "unsupported_capability",
+    "window_not_visible",
+}
+
+_DESKTOP_ROUTE = (
+    'capture the desktop with {"action":"capture"}, click the window or its taskbar entry '
+    "there, then capture the window with foreground=true"
+)
+
+
+def _explained(error: ComputerUseError, args: dict[str, Any]) -> str:
+    """Return the failure message with the exact next call for runtime refusals."""
+    code = error.code
+    target = _target(args) if _TARGET & args.keys() else ("desktop", None)
+    name = _describe_target(target)
+    foreground = bool(args.get("foreground", target[0] != "window"))
+    if target[0] == "window" and code in {"target_not_foreground", "focus_refused"}:
+        cause = (
+            f"{name.capitalize()} is not the active window, so a foreground capture cannot show "
+            "what foreground input would reach."
+            if code == "target_not_foreground"
+            else f"Windows refused to bring {name} to the front."
+        )
+        return (
+            f"{cause} No input was sent. For background input, capture it with "
+            f"{capture_call(target, False)}. For foreground input, {_DESKTOP_ROUTE}."
+        )
+    if code == "window_not_visible":
+        return (
+            f"{name.capitalize()} is minimized. No input was sent. Capture the desktop with "
+            '{"action":"capture"} and restore the window from its taskbar entry, then capture '
+            "the window again."
+        )
+    if code == "target_blocked" and target[0] == "window":
+        return (
+            f"{name.capitalize()} has an open dialog that blocks input. No input was sent. "
+            f"Capture it with {capture_call(target, foreground)}; the capture shows the dialog "
+            "and returns its window_id for the next input."
+        )
+    if code == "stale_window":
+        return (
+            f"{name.capitalize()} no longer exists. No input was sent. List the current windows "
+            'with {"action":"windows"}.'
+        )
+    if code == "capture_required" and "No input was sent" not in str(error):
+        return (
+            f"{name.capitalize()} moved, resized or was not captured with this delivery setting "
+            f"since its screenshot. No input was sent. Capture it with "
+            f"{capture_call(target, foreground)} and measure the coordinates in the new image."
+        )
+    if code == "computer_session_expired":
+        return (
+            "The desktop connection was renewed, so earlier screenshots no longer apply. No "
+            f"input was sent. Capture the target again with {capture_call(target, foreground)}."
+        )
+    return str(error)
+
+
+_LISTING_CHARACTERS = 16_000
+
+
+def _listing(action: str, items: Any, args: dict[str, Any]) -> dict[str, Any]:
+    """Return apps or windows as one line each, filtered by pid, app or query."""
+    rows = [item for item in items or [] if isinstance(item, dict)]
+    if action == "windows" and "pid" in args:
+        rows = [item for item in rows if item.get("pid") == args["pid"]]
+    searched = ("name",) if action == "apps" else ("app_name", "title")
+    for text in dict.fromkeys(value for value in (args.get("app"), args.get("query")) if value):
+        needle = text.casefold()
+        rows = [
+            item
+            for item in rows
+            if any(needle in str(item.get(key) or "").casefold() for key in searched)
+        ]
+    lines = []
+    for item in rows:
+        if action == "apps":
+            details = [
+                label
+                for label, shown in (
+                    ("running", item.get("running")),
+                    (f"pid {item.get('pid')}", item.get("pid") is not None),
+                    ("active", item.get("active")),
+                )
+                if shown
+            ]
+            lines.append(f"{item.get('name')}" + (f" ({', '.join(details)})" if details else ""))
+        else:
+            title = str(item.get("title") or "").strip()
+            name = str(item.get("app_name") or "").strip()
+            label = f"{title} ({name})" if title and name else title or name or "untitled"
+            flags = [
+                flag
+                for flag, shown in (
+                    ("minimized", item.get("minimized")),
+                    ("off-screen", item.get("is_on_screen") is False),
+                )
+                if shown
+            ]
+            lines.append(
+                f"pid {item.get('pid')} window_id {item.get('window_id')}: {label}"
+                + (f" [{', '.join(flags)}]" if flags else "")
+            )
+    result: dict[str, Any] = {"count": len(lines)}
+    shown = []
+    size = 0
+    for line in lines:
+        size += len(line) + 1
+        if size > _LISTING_CHARACTERS:
+            break
+        shown.append(line)
+    if len(shown) < len(lines):
+        result["note"] = (
+            f"Showing {len(shown)} of {len(lines)}. Narrow the list with app, for example "
+            f"{call_text({'action': action, 'app': 'name'})}."
+        )
+    elif not lines and (args.get("app") or args.get("query") or "pid" in args):
+        result["note"] = f"Nothing matches. List all with {call_text({'action': action})}."
+    if shown:
+        result["content"] = "\n".join(shown)
+    return result
+
+
+def _foreground_mismatch(
+    observation: observations.Observation, foreground: bool
+) -> ComputerUseError:
+    target = observation.target
+    setting = "foreground" if observation.foreground else "background"
+    wanted = "foreground" if foreground else "background"
+    return ComputerUseError(
+        f"View {observation.view_id} was captured for {setting} input, but this call asks for "
+        f"{wanted} input, and coordinates must come from a screenshot with the same setting. No "
+        f"input was sent. Omit foreground to send {setting} input with this view, or capture "
+        f"with {capture_call(target, foreground)} first and measure the coordinates in that "
+        "image.",
+        "capture_required",
+    )
+
 
 __all__ = [
     "COMPUTER_DESCRIPTION",
@@ -123,10 +280,7 @@ class ComputerUseService:
 
     def _client(self) -> CuaDriver:
         if not self.executable:
-            raise ComputerUseError(
-                "Computer Use is unavailable. Install cua-driver on the server host "
-                "and reload Extensions."
-            )
+            raise ComputerUseError(_READINESS_HINT, "tool_not_ready")
         if self._driver is not None and self._driver.broken:
             self._driver.close()
             self._driver = None
@@ -151,7 +305,12 @@ class ComputerUseService:
         try:
             agent = self.host.resolve_tool_agent(context)
         except ValueError as error:
-            raise ComputerUseError(str(error)) from error
+            raise ComputerUseError(
+                f"Computer Use cannot identify the calling Agent ({error}), so it cannot check "
+                "that this Agent may use the computer. Nothing was done. Tell the user that "
+                "Computer Use is unavailable for this Agent.",
+                "computer_use_unavailable",
+            ) from error
         allowed = resolve_tool_access(
             agent.tool_access,
             self.api.operations.tool_registry.list_tools(),
@@ -195,9 +354,11 @@ class ComputerUseService:
             if target is None:
                 session.observations.clear()
                 session.views.clear()
+                session.latest.clear()
                 session.observation_data.clear()
             else:
                 session.observations.pop(target, None)
+                session.latest.pop(target, None)
                 session.observation_data.pop(target, None)
                 session.views = {
                     key: view for key, view in session.views.items() if view.target != target
@@ -209,6 +370,7 @@ class ComputerUseService:
     ) -> None:
         if not crop:
             session.observations[observation.target] = observation
+            session.last_target = observation.target
             session.issued_elements.update(
                 (token, observation.target) for token in observation.elements.values()
             )
@@ -216,6 +378,7 @@ class ComputerUseService:
                 del session.issued_elements[next(iter(session.issued_elements))]
         if observation.view_id:
             session.views[observation.view_id] = observation
+            session.latest[observation.target] = observation.view_id
         # Cropping is read-only: retain the parent and recent sibling crops.
         while len(session.views) > 16:
             del session.views[next(iter(session.views))]
@@ -257,87 +420,20 @@ class ComputerUseService:
         session.resolutions[target] = observation.resolution
         session.foregrounds[target] = observation.foreground
         self._remember(session, observation)
-        result.update(target=_target_fields(target), foreground=observation.foreground, mode=mode)
+        if target_fields := _target_fields(target):
+            result["target"] = target_fields
+        result["foreground"] = observation.foreground
+        if mode != "vision":
+            result["mode"] = mode
         if requested_target != target:
             result["requested_target"] = _target_fields(requested_target)
         session.observation_data[target] = result
         return result
 
-    def _reference_failure(
-        self,
-        context: ToolContext,
-        session: DesktopSession | None,
-        arguments: dict[str, Any],
-        error: ComputerUseError,
-    ) -> dict[str, Any]:
-        # Only the requesting Run's retained observations can supply recovery context.
+    def _reference_failure(self, context: ToolContext, error: ComputerUseError) -> dict[str, Any]:
+        # Reference messages name current views, which only an authorized caller may learn.
         self._check_access(context)
-        result = tool_failure(error.code, str(error), retryable=False)
-        if session is None:
-            return result
-        target = _target(arguments) if _TARGET & arguments.keys() else None
-        steps = arguments.get("steps")
-        candidates = [arguments, *(steps if isinstance(steps, list) else [])]
-        # Conflicting explicit targets must not repurpose an owned stale reference.
-        for candidate in candidates:
-            if not isinstance(candidate, dict):
-                continue
-            view_id = candidate.get("view_id")
-            view = session.views.get(view_id) if isinstance(view_id, str) else None
-            owned_target = (
-                view.target
-                if view
-                else session.retired_views.get(view_id)
-                if isinstance(view_id, str)
-                else None
-            )
-            if owned_target is None and isinstance(candidate.get("element"), str):
-                owned_target = session.issued_elements.get(candidate["element"])
-            if owned_target is not None:
-                if target is not None and target != owned_target:
-                    return result
-                target = owned_target
-        retained = session.observation_data.get(target) if target is not None else None
-        if retained is not None:
-            result["artifacts"].append(
-                {
-                    "kind": "computer_observation",
-                    "applied": False,
-                    "observation": retained,
-                    "observation_note": (
-                        "No input was sent. This is the retained observation, not a new capture. "
-                        "Capture its target again for fresh state, or use its returned refs "
-                        "if the application has not changed."
-                    ),
-                }
-            )
-        elif target is not None:
-            # A retired reference can explain recovery, but never authorize input.
-            recovery_args: dict[str, Any] = {
-                "action": "capture",
-                **_target_fields(target),
-                "foreground": arguments.get(
-                    "foreground", session.foregrounds.get(target, target[0] != "window")
-                ),
-                "resolution": arguments.get("resolution", session.resolutions.get(target, "auto")),
-                "mode": arguments.get(
-                    "mode",
-                    "som"
-                    if "query" in arguments
-                    or "limit" in arguments
-                    or any("element" in candidate for candidate in candidates)
-                    else "vision",
-                ),
-                **{key: arguments[key] for key in ("query", "limit") if key in arguments},
-            }
-            result["artifacts"].append(
-                {
-                    "kind": "computer_observation",
-                    "applied": False,
-                    **self._recovery(context, recovery_args, error),
-                }
-            )
-        return result
+        return tool_failure(error.code, str(error), retryable=False)
 
     def _recovery(
         self,
@@ -365,17 +461,23 @@ class ComputerUseService:
         if code == "stale_window":
             recovery = {"action": "windows"}
         elif code in {"target_not_foreground", "focus_refused", "window_not_visible"}:
-            return {
-                "target": target,
-                "foreground": args["foreground"],
-                "recovery": {"action": "capture"},
-                "recovery_note": (
-                    "The next observation is the desktop. Call computer with recovery as the "
-                    "complete arguments, without adding the window target or an old view_id. "
-                    "Select the intended window there before capturing it with foreground=true."
-                ),
-            }
-        return {"target": target, "foreground": args["foreground"], "recovery": recovery}
+            # Selecting the window happens on the desktop, never through a guessed activation.
+            recovery = {"action": "capture"}
+        return {"recovery": recovery}
+
+    def _unexpected(self, context: ToolContext, args: dict[str, Any], error: Exception) -> str:
+        action = args["action"]
+        message = (
+            f"Computer Use failed unexpectedly during {action} ({type(error).__name__}). This is "
+            "a vBot problem, not a problem with the call; the server log has the details. "
+        )
+        if action in _MUTATIONS:
+            message += "Input may have been sent. "
+            if recovery := self._recovery(context, args).get("recovery"):
+                message += f"See the current state with {call_text(recovery)} before more input. "
+        else:
+            message += "Nothing was changed, so one more try is safe. "
+        return message + "If it happens again, tell the user that Computer Use is failing."
 
     def _mutation(
         self,
@@ -397,14 +499,10 @@ class ComputerUseService:
         if "element" in args:
             assert observation is not None
             payload["element_token"] = observation.token(args["element"])
-        if "coordinate" in args and "view_id" in args:
+        if "coordinate" in args and "view_id" in args and action != "resize":
             assert observation is not None
             if observation.foreground != args["foreground"]:
-                raise ComputerUseError(
-                    "Capture this target with the requested foreground setting before "
-                    "coordinate input.",
-                    "capture_required",
-                )
+                raise _foreground_mismatch(observation, args["foreground"])
             x, y = observation.point(args["view_id"], *args["coordinate"])
             if action == "drag":
                 x2, y2 = observation.point(args["view_id"], *args["to_coordinate"])
@@ -423,8 +521,13 @@ class ComputerUseService:
                 name = "right_click"
             elif args["button"] == "left" and args["count"] == 2:
                 name = "double_click"
-            elif args["button"] != "left":
-                _invalid("button")
+            elif args["button"] != "left" or args["count"] != 1:
+                raise ComputerUseError(
+                    f"This driver cannot send {args['count']} {args['button']} click(s) to this "
+                    "target; it supports single left or right clicks and left double clicks. "
+                    "No input was sent.",
+                    "unsupported_capability",
+                )
         elif action in {"type", "set_value"}:
             name = "type_text" if action == "type" else "set_value"
             payload["text" if action == "type" else "value"] = args["text"]
@@ -453,7 +556,7 @@ class ComputerUseService:
                 )
             )
         else:
-            _invalid("action")
+            raise InvalidComputerArgumentsError(f"{action} does not send input.")
         if (
             name in {"set_value", "invoke_menu", "set_window_frame"}
             and "delivery_mode" not in self._client().schemas.get(name, {}).get("properties", {})
@@ -488,8 +591,8 @@ class ComputerUseService:
                 **self._recovery(context, args),
                 "next_action": result.get(
                     "next_action",
-                    "Input was dispatched without a new observation. Use recovery to observe "
-                    "before further input.",
+                    "Input was sent without a new screenshot. Call computer with recovery as "
+                    "the arguments before further input.",
                 ),
             }
         try:
@@ -497,13 +600,6 @@ class ComputerUseService:
             # Do not infer completion from changing or quiet pixels (animations/carets).
             self._wait(context, {"duration_ms": _POST_INPUT_OBSERVATION_MS})
             result["observation"] = self._observe(context, session, target, args)
-            result["observation_delay_ms"] = _POST_INPUT_OBSERVATION_MS
-            if result.get("applied"):
-                result["observation_note"] = (
-                    "Input was dispatched. This observation does not confirm that application "
-                    "work has finished. If the expected result is missing, use wait or verify "
-                    "before repeating input."
-                )
         except Exception as error:
             if not isinstance(error, (ComputerUseError, OSError)):
                 self.api.logger.exception("Computer Use observation failed")
@@ -524,8 +620,9 @@ class ComputerUseService:
                 result["next_action"] = (
                     str(error)
                     if "recovery" not in result
-                    else "Input was dispatched but its result could not be observed. Use "
-                    "recovery to inspect the current state before deciding what remains."
+                    else "Input was sent but its result could not be captured. Call computer "
+                    "with recovery as the arguments to see the current state before deciding "
+                    "what remains; do not repeat the input."
                 )
         return result
 
@@ -540,12 +637,8 @@ class ComputerUseService:
                 _observation(session, target, step["view_id"]) if "view_id" in step else initial
             )
             step_observations.append(observation)
-            if "view_id" in step and observation.foreground != args["foreground"]:
-                raise ComputerUseError(
-                    "Capture this target with the requested foreground setting before "
-                    "coordinate input.",
-                    "capture_required",
-                )
+            if "coordinate" in step and observation.foreground != args["foreground"]:
+                raise _foreground_mismatch(observation, args["foreground"])
             if "coordinate" in step:
                 observation.point(step["view_id"], *step["coordinate"])
                 if step["action"] == "drag":
@@ -563,14 +656,14 @@ class ComputerUseService:
         for index, (step, observation) in enumerate(
             zip(args["steps"], step_observations, strict=True)
         ):
+            step_args = {
+                **{key: value for key, value in args.items() if key != "view_id"},
+                **step,
+            }
+            step_args.setdefault("button", "left")
+            step_args.setdefault("count", 1)
             try:
                 self._check_access(context)
-                step_args = {
-                    **{key: value for key, value in args.items() if key != "view_id"},
-                    **step,
-                }
-                step_args.setdefault("button", "left")
-                step_args.setdefault("count", 1)
                 self._invalidate()
                 if step["action"] == "wait":
                     self._wait(context, step_args)
@@ -594,23 +687,30 @@ class ComputerUseService:
                     self.api.logger.exception("Computer Use input step failed")
                     error = ComputerUseError(
                         (
-                            "Input stopped unexpectedly and may have partial effects. Inspect"
-                            " the observation before deciding what remains; do not replay "
-                            "completed steps."
+                            f"Step {index + 1} stopped unexpectedly ({type(error).__name__}) "
+                            "and may have partial effects. This is a vBot problem, not a "
+                            "problem with the call."
                         ),
                         "computer_use_failed",
                     )
                 result.update(
                     partial=True,
                     stopped_step=index + 1,
-                    error={"code": error.code, "message": str(error)},
+                    error={"code": error.code, "message": _explained(error, step_args)},
                     next_action=(
-                        "The sequence stopped. Inspect the completed step count and fresh "
-                        "observation before continuing."
+                        f"The sequence stopped at step {index + 1}; {completed} earlier "
+                        f"step(s) were sent. Check the new screenshot before continuing, and "
+                        "do not repeat completed steps."
                     ),
                 )
                 break
         result.update(applied=completed > 0, completed_steps=completed)
+        routine = {"dispatched", "waited", "unverifiable"}
+        if not result.get("partial") and all(
+            set(item) <= {"step", "action", "effect"} and item.get("effect") in routine
+            for item in result["step_results"]
+        ):
+            del result["step_results"]
         return self._after_input(context, session, target, args, result)
 
     def _wait(self, context: ToolContext, args: dict[str, Any]) -> None:
@@ -669,17 +769,7 @@ class ComputerUseService:
         action = args["action"]
         if action in {"apps", "windows"}:
             payload = self._call(context, session, "list_" + action, {})
-            fields = (
-                ("name", "pid", "running", "active")
-                if action == "apps"
-                else ("pid", "window_id", "title", "app_name", "minimized", "is_on_screen")
-            )
-            items = [
-                {key: item[key] for key in fields if key in item and item[key] is not None}
-                for item in payload.get(action, [])
-                if isinstance(item, dict)
-            ]
-            return {"action": action, **observations.bounded(context, {action: items})}
+            return {"action": action, **_listing(action, payload.get(action), args)}
         if action == "capture":
             return {"action": action, **self._observe(context, session, _target(args), args)}
         if action == "monitors":
@@ -691,13 +781,7 @@ class ComputerUseService:
                 context, current, args["view_id"], *args["coordinate"], *args["to_coordinate"]
             )
             self._remember(session, zoomed, crop=True)
-            return {
-                "action": action,
-                **result,
-                "target": _target_fields(target),
-                "foreground": zoomed.foreground,
-                "mode": "vision",
-            }
+            return {"action": action, **result}
         if action == "wait":
             self._invalidate()
             self._wait(context, args)
@@ -727,33 +811,31 @@ class ComputerUseService:
         # Resolve references before invalidating, including on uncertain input.
         if "element" in args:
             observation.token(args["element"])
-        if "view_id" in args:
+        if "view_id" in args and "coordinate" in args and action != "resize":
             if observation.foreground != args["foreground"]:
-                raise ComputerUseError(
-                    "Capture this target with the requested foreground setting before "
-                    "coordinate input.",
-                    "capture_required",
-                )
-            if "coordinate" in args:
-                observation.point(args["view_id"], *args["coordinate"])
-                if args["action"] == "drag":
-                    observation.point(args["view_id"], *args["to_coordinate"])
+                raise _foreground_mismatch(observation, args["foreground"])
+            observation.point(args["view_id"], *args["coordinate"])
+            if args["action"] == "drag":
+                observation.point(args["view_id"], *args["to_coordinate"])
         failure = None
         try:
             payload = self._mutation(context, session, args, observation)
         except Exception as error:
+            if isinstance(error, ComputerUseError) and error.code in _NOT_SENT:
+                raise
             if not isinstance(error, ComputerUseError):
                 self.api.logger.exception("Computer Use input failed")
                 error = ComputerUseError(
-                    "Input stopped unexpectedly and may have partial effects. Inspect the "
-                    "observation before deciding what remains; do not replay completed steps.",
+                    f"Input stopped unexpectedly ({type(error).__name__}) and may have partial "
+                    "effects. This is a vBot problem, not a problem with the call. Check the "
+                    "current state before deciding what remains.",
                     "computer_use_failed",
                 )
             failure = {
                 "action": action,
                 "applied": False,
                 "partial": True,
-                "error": {"code": error.code, "message": str(error)},
+                "error": {"code": error.code, "message": _explained(error, args)},
             }
             payload = {}
         finally:
@@ -776,6 +858,7 @@ class ComputerUseService:
                 reference_error = None
                 if isinstance(arguments, dict):
                     try:
+                        arguments = with_latest_view(session, arguments)
                         reference = _reference(session, arguments)
                     except ComputerUseError as error:
                         reference_error = error
@@ -795,14 +878,20 @@ class ComputerUseService:
                 )
                 if reference_error is not None:
                     raise reference_error
-            except InvalidComputerArgumentsError as error:
-                return tool_failure("invalid_arguments", str(error))
             except ComputerUseError as error:
+                if reference_error is None and isinstance(error, InvalidComputerArgumentsError):
+                    return tool_failure("invalid_arguments", str(error))
                 try:
-                    return self._reference_failure(context, session, arguments, error)
+                    return self._reference_failure(context, error)
                 except ComputerUseError as denied:
                     return tool_failure(denied.code, str(denied), retryable=False)
-            if "resolution" not in arguments and reference is None and session is not None:
+            ignored = args.pop("_ignored", None)
+            if (
+                args["action"] in _TARGETED
+                and "resolution" not in arguments
+                and reference is None
+                and session is not None
+            ):
                 args["resolution"] = session.resolutions.get(_target(args), args["resolution"])
             owner = new_id("ctl")
             try:
@@ -826,9 +915,9 @@ class ComputerUseService:
                     return tool_success(
                         {
                             "action": "status",
+                            "ready": True,
                             "version": client.version,
                             "host": "server",
-                            "actions": sorted(_FIELDS),
                         }
                     )
                 if args["action"] == "close":
@@ -847,13 +936,15 @@ class ComputerUseService:
                 if result.get("error") and not result["applied"]:
                     failure = tool_failure(
                         result["error"]["code"],
-                        (
-                            "No sequence step completed successfully. Inspect the observation "
-                            "before deciding whether to repeat input. "
-                            if args["action"] == "sequence"
+                        ("No sequence step completed. " if args["action"] == "sequence" else "")
+                        + result["error"]["message"].rstrip()
+                        + (
+                            f" See the current state with "
+                            f"{capture_call(_target(args), args['foreground'])} before deciding "
+                            "whether to repeat input."
+                            if result.get("observation") or result.get("recovery")
                             else ""
-                        )
-                        + result["error"]["message"],
+                        ),
                         retryable=False,
                     )
                     failure["artifacts"].append(
@@ -863,25 +954,21 @@ class ComputerUseService:
                         }
                     )
                     return failure
+                if ignored:
+                    result["note"] = (
+                        f"Ignored {', '.join(ignored)}: {args['action']} does not use "
+                        f"{'it' if len(ignored) == 1 else 'them'}."
+                    )
                 return tool_success(result)
             except ComputerUseError as error:
                 if self._driver is not None and self._driver.broken:
                     self._sessions.clear()
-                failure = tool_failure(error.code, str(error), retryable=False)
-                if recovery := self._recovery(context, args, error):
-                    failure["artifacts"].append({"kind": "computer_observation", **recovery})
-                return failure
-            except Exception:
+                return tool_failure(error.code, _explained(error, args), retryable=False)
+            except Exception as error:
                 self.api.logger.exception("Computer Use request failed")
-                failure = tool_failure(
-                    "computer_use_failed",
-                    "Computer Use could not complete the request. Check the Extension "
-                    "diagnostics and capture the window before repeating input.",
-                    retryable=False,
+                return tool_failure(
+                    "computer_use_failed", self._unexpected(context, args, error), retryable=False
                 )
-                if recovery := self._recovery(context, args):
-                    failure["artifacts"].append({"kind": "computer_observation", **recovery})
-                return failure
             finally:
                 try:
                     if self._driver is not None and (self._driver.broken or not self._sessions):
@@ -967,6 +1054,8 @@ def register(api: ExtensionAPI) -> None:
         requires_opt_in=True,
         parallel_safe=False,
         open_input_schema=True,
+        unadvertised_parameters=UNADVERTISED_PARAMETERS,
+        argument_normalizer=normalize_computer_arguments,
         ready=service.ready,
         readiness_hint=_READINESS_HINT,
         display=ToolDisplay(summary_fields=("action", "pid", "window_id")),
