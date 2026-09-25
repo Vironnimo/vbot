@@ -261,10 +261,11 @@ def _populate(manager: ChatSessionManager, session_id: str) -> ChatSession:
             },
             {
                 "version": 1,
-                "type": "tool_started",
+                "type": "assistant_boundary",
                 "run_id": run_id,
-                "tool_call_id": "operation",
-                "name": "read",
+                "step": 1,
+                "message_id": f"{session_id}-partial",
+                "tool_calls": [{"id": "operation", "name": "read"}],
             },
         ]
     )

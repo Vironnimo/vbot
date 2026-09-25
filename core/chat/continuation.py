@@ -221,8 +221,7 @@ class ContinuationTracker:
     def assistant_boundary(self, message: ChatMessage) -> JournalBoundary:
         """Records for one persisted Assistant *message*, including its Tool Calls.
 
-        Its Calls count as started: the fold treats them exactly like the
-        ``tool_started`` records of older journals.
+        The Sessions fold registers its Calls as started operations.
         """
         record = self._record(
             "assistant_boundary",
