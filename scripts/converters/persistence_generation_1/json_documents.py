@@ -11,6 +11,9 @@ data Generation 1 no longer tolerates is normalized:
 - A Project without ``allowed_tools`` gets the default Tool whitelist it used.
 - An Identity Agent's retired ``allowed_tools`` becomes ``tool_access``, or is
   dropped when ``tool_access`` already exists.
+- The retired ``grep`` and ``glob`` Tools become ``search_files`` in Agent Tool
+  access, Project Tool whitelists and Project Agent overrides, without widening
+  any policy (see ``_tool_access``).
 - A Channel's retired ``owner_user_ids`` is dropped.
 
 The MCP ``connections.json`` moves from ``mcp/`` into the MCP Extension's state
@@ -35,11 +38,13 @@ from typing import Any
 
 from core.json_documents import FORMAT_VERSION_FIELD, render_json_document
 from core.projects.projects import PROJECT_DEFAULT_ALLOWED_TOOLS
-from scripts.converters.agent_tool_access import (
-    AgentToolAccessConversionError,
+from scripts.converters.persistence_generation_1._context import ConversionContext
+from scripts.converters.persistence_generation_1._tool_access import (
+    ToolAccessConversionError,
+    consolidate_search_ceiling,
+    consolidate_search_policy,
     convert_legacy_allowed_tools,
 )
-from scripts.converters.persistence_generation_1._context import ConversionContext
 
 AREA = "json_documents"
 FORMAT_VERSION = 1
@@ -165,19 +170,20 @@ def _named_array(collection: str) -> Callable[[Any, _Notes], dict[str, Any]]:
 
 def _agent(value: Any, notes: _Notes) -> dict[str, Any]:
     agent = _object(value)
-    if "allowed_tools" not in agent:
-        return agent
-    legacy = agent.pop("allowed_tools")
+    if "allowed_tools" in agent:
+        legacy = agent.pop("allowed_tools")
+        if "tool_access" in agent:
+            notes.count("agent_allowed_tools_dropped")
+            notes.approximate("retired allowed_tools dropped; the existing tool_access applies")
+        else:
+            try:
+                policy = convert_legacy_allowed_tools(legacy)
+            except ToolAccessConversionError as error:
+                raise _UnconvertibleError(str(error)) from error
+            agent["tool_access"] = policy.to_dict()
+            notes.count("agent_allowed_tools_converted")
     if "tool_access" in agent:
-        notes.count("agent_allowed_tools_dropped")
-        notes.approximate("retired allowed_tools dropped; the existing tool_access applies")
-        return agent
-    try:
-        policy = convert_legacy_allowed_tools(legacy, Path(notes.relative))
-    except AgentToolAccessConversionError as error:
-        raise _UnconvertibleError(str(error)) from error
-    agent["tool_access"] = policy.to_dict()
-    notes.count("agent_allowed_tools_converted")
+        agent["tool_access"] = _search_policy(agent["tool_access"], "tool_access", notes)
     return agent
 
 
@@ -186,7 +192,43 @@ def _project(value: Any, notes: _Notes) -> dict[str, Any]:
     if project.get("allowed_tools") is None:
         project["allowed_tools"] = list(PROJECT_DEFAULT_ALLOWED_TOOLS)
         notes.count("project_allowed_tools_filled")
+    elif isinstance(project["allowed_tools"], list):
+        ceiling, narrowed = consolidate_search_ceiling(project["allowed_tools"])
+        if ceiling != project["allowed_tools"]:
+            project["allowed_tools"] = ceiling
+            notes.count("search_tools_consolidated")
+        if narrowed is not None:
+            notes.approximate(f"allowed_tools: {narrowed}")
+    overrides = project.get("overrides")
+    if isinstance(overrides, dict):
+        project["overrides"] = {
+            agent_id: _override(agent_id, override, notes)
+            for agent_id, override in overrides.items()
+        }
     return project
+
+
+def _override(agent_id: str, override: Any, notes: _Notes) -> Any:
+    if not isinstance(override, dict) or "tool_access" not in override:
+        return override
+    policy = _search_policy(override["tool_access"], f"overrides.{agent_id}.tool_access", notes)
+    return {**override, "tool_access": policy}
+
+
+def _search_policy(policy: Any, field: str, notes: _Notes) -> Any:
+    """Consolidate the retired search Tools of one policy; an invalid one stays as it is."""
+    if not isinstance(policy, dict):
+        return policy
+    try:
+        converted, narrowed = consolidate_search_policy(policy)
+    except ValueError:
+        # The application reports the invalid policy; nothing here can repair it.
+        return policy
+    if converted != policy:
+        notes.count("search_tools_consolidated")
+    if narrowed is not None:
+        notes.approximate(f"{field}: {narrowed}")
+    return converted
 
 
 def _channel(value: Any, notes: _Notes) -> dict[str, Any]:

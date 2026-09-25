@@ -19,9 +19,9 @@ The default Tool ceiling uses `apply_patch` instead of the archived `edit`. Expl
 persisted ceilings remain unchanged; an unavailable `edit` entry remains removable
 and does not automatically grant `apply_patch`.
 
-The default search capability is `search_files`. Explicit retired grep/glob
-ceilings and overrides use the manual `scripts/converters/search_files_access.py`
-converter; mixed permissions require an explicit choice rather than widening.
+The default search capability is `search_files`. The Generation 1 converter
+consolidates retired grep/glob ceilings and override policies into `search_files`
+without widening access (`database/generation-1-conversion.md`).
 
 Project defaults are fallback inputs shared by its Agents. Overrides target one current Team member and take precedence during resolution; they are not edits to the repository Agent file.
 

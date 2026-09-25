@@ -153,19 +153,20 @@ A verified existing asset works offline. Missing/corrupt assets make the Tool
 not ready with an installation-repair hint; Tool invocation never provisions it.
 Server packaging includes the executable and notices; desktop-client excludes it.
 
-Only `search_files` is registered. New Project ceilings include it; persisted
-selections are not auto-migrated. A retired grep/glob denial vetoes the union Tool.
+Only `search_files` is registered. New Project ceilings include it; startup never
+migrates persisted selections. A retired grep/glob denial vetoes the union Tool.
 Claude/OpenCode scanner denials for either capability map to search_files.
-`python scripts/converters/search_files_access.py <data-dir>` previews manual
-Agent/Project policy conversion; `--apply` writes after complete preflight. Mixed
-grants/denials require an explicit user choice and never silently widen access.
-Historical grep/glob chat rows remain readable.
+The Generation 1 converter consolidates Agent, Project ceiling and Project override
+policies (`scripts/converters/persistence_generation_1/_tool_access.py`): `search_files`
+is granted only where both old capabilities were, a denial or a mode-all policy that
+lost one capability denies it, and every narrowing is reported. Historical grep/glob
+chat rows remain readable.
 
 ## Verification
 
 Primary tests: `tests/core/tools/test_search_files*.py` (including encoded-list,
 literal-payload, conflict, and empty-scope regressions in `test_search_files_recovery.py`),
-`tests/cli/test_search_runtime.py`, `tests/scripts/test_search_files_access.py`,
+`tests/cli/test_search_runtime.py`, `tests/scripts/converters/persistence_generation_1/test_json_documents.py`,
 `tests/scripts/test_probe_search_files.py`, plus runtime, scanner, Chat, packaging,
 and Tool row integration tests. Tests execute the private native engine.
 
