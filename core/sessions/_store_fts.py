@@ -48,8 +48,8 @@ _FTS_BATCH_WINDOW = 500
 _FTS_REBUILD_THROTTLE_S = 0.01
 _FTS_REBUILD_HOOK: Callable[[str, int], None] | None = None
 
-_STANDARD_COLUMNS = "content, search_text, reasoning, name, error_kind, tool_calls"
-_TRIGRAM_COLUMNS = "content, search_text"
+# Both indexes hold the same conversation-text columns.
+_COLUMNS = "content, search_text"
 
 
 def _fts_meta(connection: sqlite3.Connection, key: str) -> str | None:
@@ -81,13 +81,7 @@ def _message_is_searchable(message: ChatMessage) -> bool:
         or is_skill_context_note(message)
     ):
         return False
-    return bool(
-        message.content
-        or message.reasoning
-        or message.name
-        or message.error_kind
-        or message.tool_calls
-    )
+    return bool(message.content)
 
 
 def _fts_table_exists(connection: sqlite3.Connection, table: str = FTS_TABLE) -> bool:
@@ -117,15 +111,15 @@ def _project(
 ) -> None:
     command = "'delete', " if delete else ""
     connection.execute(
-        f"INSERT INTO {FTS_TABLE} ({FTS_TABLE + ', ' if delete else ''}rowid, {_STANDARD_COLUMNS}) "
-        f"SELECT {command}source.entry_key, {_STANDARD_COLUMNS} FROM {FTS_VIEW} AS source "
+        f"INSERT INTO {FTS_TABLE} ({FTS_TABLE + ', ' if delete else ''}rowid, {_COLUMNS}) "
+        f"SELECT {command}source.entry_key, {_COLUMNS} FROM {FTS_VIEW} AS source "
         f"WHERE source.entry_key IN ({keys_sql})",
         params,
     )
     if _fts_table_exists(connection, FTS_TRIGRAM_TABLE):
         connection.execute(
-            f"INSERT INTO {FTS_TRIGRAM_TABLE} ({FTS_TRIGRAM_TABLE + ', ' if delete else ''}rowid, {_TRIGRAM_COLUMNS}) "
-            f"SELECT {command}source.entry_key, {_TRIGRAM_COLUMNS} FROM {FTS_TRIGRAM_VIEW} AS source "
+            f"INSERT INTO {FTS_TRIGRAM_TABLE} ({FTS_TRIGRAM_TABLE + ', ' if delete else ''}rowid, {_COLUMNS}) "
+            f"SELECT {command}source.entry_key, {_COLUMNS} FROM {FTS_TRIGRAM_VIEW} AS source "
             f"WHERE source.entry_key IN ({keys_sql})",
             params,
         )
