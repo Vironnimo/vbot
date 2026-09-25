@@ -77,8 +77,8 @@ def _map_expected_error(error: Exception) -> RpcError:
         return RpcError(RPC_ERROR_CANCELLED, str(error))
     if isinstance(error, (SessionPageCursorError, IncidentConflictError)):
         return RpcError(RPC_ERROR_INVALID_REQUEST, str(error))
-    # Every database failure (unavailable, corrupt, format) maps uniformly;
-    # the message names the database and the kind of failure.
+    # Every database failure (unavailable, corrupt, format, schema mismatch)
+    # maps uniformly; the message names the database and the kind of failure.
     if isinstance(error, DatabaseError):
         return RpcError(RPC_ERROR_DOMAIN, str(error))
     # Agent resolution keeps a missing Project or Agent precise, so a missing
