@@ -847,6 +847,9 @@ export default Object.freeze({
     'Update the vBot Desktop app to use Voice with this server.',
   'settings.voice.phraseLimit': '{count} of {max} phrases active',
   'settings.voice.phraseNotReady': 'Not ready',
+  'settings.voice.phraseUnavailable': 'Not installed',
+  'settings.voice.deactivatePhrase': 'Stop listening',
+  'settings.voice.deactivatePhraseAria': 'Stop listening for {name}',
   'settings.voice.overlapWarning':
     '“{name}” can also be heard as {others}, which does something else. Give them the same action or keep only one of them active.',
   'settings.voice.actionCommand': 'Send a command',
@@ -991,5 +994,7 @@ export default Object.freeze({
     'Voice could not verify the Speech-to-text configuration. Check the Desktop log and try again.',
   'settings.voice.error.pipeline':
     'The Voice pipeline stopped unexpectedly. Retry listening or restart the Desktop app.',
+  'settings.voice.error.recordingInterrupted':
+    'The recording was interrupted. Say the wake phrase again.',
   'settings.voice.microphoneDisconnectedTitle': 'Microphone disconnected',
 });

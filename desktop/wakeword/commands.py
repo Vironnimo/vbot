@@ -11,9 +11,14 @@ of the utterance on 32 ms hops:
 - :data:`SPEECH_END_SILENCE_SECONDS` of silence after speech ends the
   recording; no speech within :data:`SPEECH_START_TIMEOUT_SECONDS` ends it as
   ``no_speech``;
-- the kept audio never reaches the server's upload budget;
+- the kept audio never reaches the server's upload budget, and a recording
+  ends after :data:`MAX_RECORDING_SECONDS` at the latest; both end it like
+  the trailing silence does, keeping what was captured;
 - a user stop ends the recording and keeps what was captured;
-- a capture gap discards the recording (``microphone_read_failed``).
+- a capture gap discards the recording: ``microphone_read_failed`` when the
+  microphone could not be read, ``recording_interrupted`` for any other
+  missing audio (an overflow, a lagging reader, the echo stage attaching or
+  failing, a changed recording rate).
 
 The WAV uses the capture's recording rate (the echo stage output).
 
@@ -41,7 +46,12 @@ from desktop.wakeword._speech_detection import (
     SpeechDetector,
     frame_is_speech,
 )
-from desktop.wakeword.capture import AudioBlock, CaptureGap, CaptureSubscription
+from desktop.wakeword.capture import (
+    GAP_READ_FAILED,
+    AudioBlock,
+    CaptureGap,
+    CaptureSubscription,
+)
 from desktop.wakeword.server_client import (
     VoiceRequestCancelled,
     VoiceServerClient,
@@ -55,6 +65,8 @@ PRE_SPEECH_SECONDS = 0.4
 
 SPEECH_END_SILENCE_SECONDS = 1.0
 SPEECH_START_TIMEOUT_SECONDS = 1.5
+MAX_RECORDING_SECONDS = 120.0
+"""Longest recording; audio read from the capture, the pre-roll not counted."""
 SUBSCRIPTION_SECONDS = 10.0
 """Queue bound of the recording subscription."""
 
@@ -73,6 +85,7 @@ EVENT_TRANSCRIPTION_FAILED = "transcription_failed"
 EVENT_COMMAND_FAILED = "command_failed"
 
 ERROR_MICROPHONE_READ_FAILED = "microphone_read_failed"
+ERROR_RECORDING_INTERRUPTED = "recording_interrupted"
 ERROR_PIPELINE_FAILED = "pipeline_failed"
 
 MAX_COMMAND_WORKERS = 3
@@ -136,7 +149,8 @@ class CommandRecorder:
         self._fallback_vad_factory = fallback_vad_factory
         self._budget_bytes = budget_bytes
         self._lock = threading.Lock()
-        self._thread: threading.Thread | None = None
+        self._busy = False
+        self._threads: list[threading.Thread] = []
         self._user_stop = threading.Event()
         self._detector: Any = _NOT_CREATED
         self._fallback_vad: Any = _NOT_CREATED
@@ -150,20 +164,24 @@ class CommandRecorder:
         """Record from ``subscription`` seeded with ``pre_roll``; ``False`` while busy.
 
         ``on_done`` receives the result on the recorder thread, also when the
-        recording is cancelled or fails. The recorder closes the subscription.
+        recording is cancelled or fails. The recorder closes the subscription
+        and is ready for the next recording before ``on_done`` runs, so the
+        handler may already start one.
         """
         with self._lock:
-            if self._thread is not None and self._thread.is_alive():
+            if self._busy:
                 return False
             user_stop = threading.Event()
             self._user_stop = user_stop
-            self._thread = threading.Thread(
+            thread = threading.Thread(
                 target=self._run,
                 args=(tuple(pre_roll), subscription, on_done, user_stop),
                 name="vbot-voice-recorder",
                 daemon=True,
             )
-            self._thread.start()
+            thread.start()
+            self._busy = True
+            self._threads = [*(alive for alive in self._threads if alive.is_alive()), thread]
         return True
 
     def stop(self) -> None:
@@ -172,13 +190,13 @@ class CommandRecorder:
             self._user_stop.set()
 
     def join(self, timeout: float) -> bool:
-        """Wait for the current recording thread; ``True`` once none runs."""
+        """Wait for the recording threads; ``True`` once none runs."""
+        deadline = time.monotonic() + timeout
         with self._lock:
-            thread = self._thread
-        if thread is None:
-            return True
-        thread.join(timeout)
-        return not thread.is_alive()
+            threads = list(self._threads)
+        for thread in threads:
+            thread.join(max(0.0, deadline - time.monotonic()))
+        return not any(thread.is_alive() for thread in threads)
 
     def _run(
         self,
@@ -194,6 +212,8 @@ class CommandRecorder:
             result = RecordingResult(OUTCOME_FAILED, error_code=ERROR_PIPELINE_FAILED)
         finally:
             subscription.close()
+            with self._lock:
+                self._busy = False
         try:
             on_done(result)
         except Exception:
@@ -224,6 +244,7 @@ class CommandRecorder:
         has_speech = False
         silent_hops = 0
         waited_hops = 0
+        recorded_seconds = 0.0
         pending = bytearray()
 
         while True:
@@ -239,13 +260,21 @@ class CommandRecorder:
                 continue
             if isinstance(item, CaptureGap):
                 logger.warning("Voice recording lost audio (%s); discarding it", item.reason)
-                return RecordingResult(OUTCOME_FAILED, error_code=ERROR_MICROPHONE_READ_FAILED)
+                return RecordingResult(
+                    OUTCOME_FAILED,
+                    error_code=(
+                        ERROR_MICROPHONE_READ_FAILED
+                        if item.reason == GAP_READ_FAILED
+                        else ERROR_RECORDING_INTERRUPTED
+                    ),
+                )
             if rate is None:
                 rate = item.recording_rate
             elif item.recording_rate != rate:
                 logger.warning("Voice recording rate changed; discarding it")
-                return RecordingResult(OUTCOME_FAILED, error_code=ERROR_MICROPHONE_READ_FAILED)
+                return RecordingResult(OUTCOME_FAILED, error_code=ERROR_RECORDING_INTERRUPTED)
 
+            recorded_seconds += item.duration
             pending += item.pcm16
             decisions: list[bool] = []
             while len(pending) >= _HOP_BYTES:
@@ -284,6 +313,9 @@ class CommandRecorder:
             if has_speech and silent_hops >= _SILENCE_HOPS:
                 break
             if not has_speech and waited_hops >= _START_TIMEOUT_HOPS:
+                break
+            if recorded_seconds >= MAX_RECORDING_SECONDS:
+                logger.warning("Voice recording reached %.0f seconds; stopping", recorded_seconds)
                 break
 
         if not has_speech or rate is None:

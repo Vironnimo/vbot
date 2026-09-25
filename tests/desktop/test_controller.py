@@ -24,7 +24,7 @@ import numpy as np
 import pytest
 
 from desktop import settings as desktop_settings
-from desktop.wakeword.config import PhraseConfig
+from desktop.wakeword.config import PhraseConfig, VoiceConfigError
 from desktop.wakeword.controller import VoiceControlError, VoiceController, VoiceRuntime
 from tests.desktop.voice_fakes import (
     AmplitudeVad,
@@ -374,7 +374,7 @@ def test_a_capture_gap_discards_the_recording_and_listening_continues(
     rig.sd.feed(tone(0.2, 16000), Overflow(), tone(0.2, 16000))
     failed = rig.sink.wait_for_event("command_failed")
 
-    assert failed["error_code"] == "microphone_read_failed"
+    assert failed["error_code"] == "recording_interrupted"
     assert failed["command_id"] == "c1"
     assert rig.sink.kinds()[-2:] == ["recording_ended", "command_failed"]
     assert rig.server.uploads == []
@@ -578,6 +578,20 @@ def test_a_config_change_during_a_recording_restarts_the_listener_and_drops_it(
     assert rig.voice.status()["recording"] is None
 
 
+def test_an_active_phrase_whose_model_is_gone_can_still_be_removed(
+    voice_rig: Callable[..., Rig],
+) -> None:
+    rig = voice_rig(settings={"active_model_ids": [OKAY, "custom/gone"]})
+    rig.wait_state("listening")
+
+    with pytest.raises(VoiceConfigError) as added:
+        rig.voice.update_config({"active_model_ids": [OKAY, "custom/gone", "custom/other"]})
+    status = rig.voice.update_config({"active_model_ids": [OKAY]})
+
+    assert added.value.field == "active_model_ids"
+    assert [phrase["model_id"] for phrase in status["phrases"]] == [OKAY]
+
+
 def test_a_routing_change_applies_without_reopening_the_microphone(
     voice_rig: Callable[..., Rig],
 ) -> None:
@@ -666,6 +680,40 @@ def test_an_engine_that_cannot_start_is_an_error_until_a_retry(
 
     rig.wait_state("listening")
     assert error["error_code"] == "engine_start_failed"
+
+
+def test_retry_refreshes_the_devices_while_no_microphone_stream_is_open(
+    voice_rig: Callable[..., Rig],
+) -> None:
+    rig = voice_rig()
+    rig.wait_state("listening")
+
+    rig.voice.retry()
+    wait_until(lambda: len(rig.engines) == 2)
+    rig.wait_state("listening")
+
+    assert rig.sd.events == [
+        "stream.open",
+        "stream.close",
+        "terminate",
+        "initialize",
+        "stream.open",
+    ]
+
+
+def test_listing_microphones_refreshes_the_devices_unless_voice_holds_a_stream(
+    voice_rig: Callable[..., Rig],
+) -> None:
+    rig = voice_rig(start=False)
+
+    idle = rig.voice.list_microphones()
+    rig.voice.start()
+    rig.wait_state("listening")
+    listening = rig.voice.list_microphones()
+
+    assert [device["name"] for device in idle] == ["Mic"]
+    assert listening == idle
+    assert rig.sd.events == ["terminate", "initialize", "stream.open"]
 
 
 def test_voice_waits_for_start_and_needs_a_server(voice_rig: Callable[..., Rig]) -> None:

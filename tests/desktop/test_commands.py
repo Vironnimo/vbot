@@ -15,6 +15,7 @@ import pytest
 from desktop.wakeword.capture import CaptureSubscription
 from desktop.wakeword.commands import (
     MAX_COMMAND_WORKERS,
+    MAX_RECORDING_SECONDS,
     Command,
     CommandOutcome,
     CommandPipeline,
@@ -223,14 +224,27 @@ def test_a_user_stop_keeps_the_audio_captured_so_far(
     assert _wav(result)[1] == b"".join(block.recording for block in speech)
 
 
-def test_a_capture_gap_discards_the_recording(harness: Callable[..., RecorderHarness]) -> None:
+@pytest.mark.parametrize(
+    ("reason", "error_code"),
+    [
+        ("read_failed", "microphone_read_failed"),
+        ("overflow", "recording_interrupted"),
+        ("overrun", "recording_interrupted"),
+        ("history", "recording_interrupted"),
+        ("echo_failed", "recording_interrupted"),
+        ("echo_attached", "recording_interrupted"),
+    ],
+)
+def test_a_capture_gap_discards_the_recording(
+    harness: Callable[..., RecorderHarness], reason: str, error_code: str
+) -> None:
     rig = harness()
     recording = rig.record()
 
     recording.subscription.push_audio(tone(0.2, 16000))
-    recording.subscription.push_gap("read_failed")
+    recording.subscription.push_gap(reason)
 
-    assert recording.result() == RecordingResult("failed", error_code="microphone_read_failed")
+    assert recording.result() == RecordingResult("failed", error_code=error_code)
 
 
 def test_a_rate_change_discards_the_recording(harness: Callable[..., RecorderHarness]) -> None:
@@ -240,7 +254,7 @@ def test_a_rate_change_discards_the_recording(harness: Callable[..., RecorderHar
     recording.subscription.push_audio(tone(0.2, 16000), recording_rate=48000)
     recording.subscription.push_audio(tone(0.2, 16000))
 
-    assert recording.result() == RecordingResult("failed", error_code="microphone_read_failed")
+    assert recording.result() == RecordingResult("failed", error_code="recording_interrupted")
 
 
 def test_stopping_the_listener_cancels_the_recording(
@@ -274,6 +288,20 @@ def test_the_upload_budget_ends_the_recording(harness: Callable[..., RecorderHar
 
     assert result.outcome == "audio"
     assert 16000 - 1280 < len(_wav(result)[1]) <= 16000
+
+
+def test_a_recording_that_never_pauses_ends_at_the_maximum_duration(
+    harness: Callable[..., RecorderHarness],
+) -> None:
+    rig = harness()
+    recording = rig.record()
+
+    recording.subscription.push_audio(tone(MAX_RECORDING_SECONDS + 5, 16000))
+    result = recording.result()
+
+    assert result.outcome == "audio"
+    seconds = len(_wav(result)[1]) / 2 / 16000
+    assert MAX_RECORDING_SECONDS <= seconds <= MAX_RECORDING_SECONDS + 0.04
 
 
 def test_one_recording_at_a_time_and_speech_deciders_are_reused(
@@ -314,6 +342,29 @@ def test_the_result_handler_runs_on_the_recorder_thread_and_may_fail(
     assert rig.recorder.join(5)
     assert [thread.name for thread in threads] == ["vbot-voice-recorder"]
     assert threads[0].daemon
+
+
+def test_the_result_handler_can_already_start_the_next_recording(
+    harness: Callable[..., RecorderHarness],
+) -> None:
+    rig = harness()
+    second = Recording(FakeSubscription())
+    started: list[bool] = []
+
+    def on_done(_result: RecordingResult) -> None:
+        started.append(
+            rig.recorder.start([], cast(CaptureSubscription, second.subscription), second.on_done)
+        )
+
+    first = FakeSubscription()
+    assert rig.recorder.start([], cast(CaptureSubscription, first), on_done)
+    first.close()
+    wait_until(lambda: bool(started))
+    second.subscription.close()
+
+    assert started == [True]
+    assert second.result() == RecordingResult("cancelled")
+    assert rig.recorder.join(5)
 
 
 # -- Pipeline ----------------------------------------------------------------------------

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -467,6 +468,21 @@ def test_apply_changes_rejects_invalid_input_with_the_offending_field(
     assert raw == {"enabled": True}
 
 
+def test_active_phrases_whose_model_is_gone_may_stay_but_not_be_added() -> None:
+    raw = {"active_model_ids": ["builtin/okay_nabu", "custom/gone"]}
+
+    kept = _apply(raw, {"active_model_ids": ["custom/gone", "builtin/alexa"]})
+    removed = _apply(raw, {"active_model_ids": ["builtin/okay_nabu"]})
+    with pytest.raises(VoiceConfigError) as raised:
+        _apply(raw, {"active_model_ids": ["custom/gone", "custom/also-gone"]})
+
+    assert kept["active_model_ids"] == ["custom/gone", "builtin/alexa"]
+    assert removed["active_model_ids"] == ["builtin/okay_nabu"]
+    assert raised.value.field == "active_model_ids"
+    with pytest.raises(VoiceConfigError):
+        _apply(removed, {"active_model_ids": ["builtin/okay_nabu", "custom/gone"]})
+
+
 def test_apply_changes_rejects_a_whole_change_when_one_part_is_invalid() -> None:
     raw: dict[str, Any] = {}
 
@@ -544,6 +560,89 @@ def test_forget_model_drops_its_sensitivity_and_actions_in_every_profile() -> No
     }
     assert raw == before
     assert forget_model("malformed", "custom/1") == {}
+
+
+def test_retired_live_voice_actions_move_into_every_profile(tmp_path: Path) -> None:
+    raw = {
+        "enabled": False,
+        "model_actions": {
+            "builtin/okay_nabu": "live_voice",
+            "builtin/hey_nabu": "command",
+            " custom/1 ": "live_voice",
+        },
+        "server_profiles": {
+            SERVER: {
+                "target_agent_id": "main",
+                "phrase_actions": {"custom/1": {"type": "command", "agent_id": "coder"}},
+            },
+            "http://pi.lan:8421": {"session_behavior": "new"},
+        },
+    }
+    settings_file = tmp_path / "settings.json"
+    settings_file.write_text(json.dumps({"wakeword": raw}), encoding="utf-8")
+    before = copy.deepcopy(raw)
+
+    config = parse_voice_config(raw)
+    desktop_settings.update_section(
+        "wakeword", lambda section: set_enabled(section, True), settings_file
+    )
+    stored = desktop_settings.read_section("wakeword", settings_file)
+
+    assert raw == before
+    assert config.profiles[SERVER].phrase_actions == {
+        "custom/1": CommandAction("coder"),
+        "builtin/okay_nabu": LiveVoiceAction("start"),
+    }
+    assert stored == {
+        "enabled": True,
+        "server_profiles": {
+            SERVER: {
+                "target_agent_id": "main",
+                "phrase_actions": {
+                    "custom/1": {"type": "command", "agent_id": "coder"},
+                    "builtin/okay_nabu": {"type": "live_voice", "mode": "start"},
+                },
+            },
+            "http://pi.lan:8421": {
+                "session_behavior": "new",
+                "phrase_actions": {
+                    "builtin/okay_nabu": {"type": "live_voice", "mode": "start"},
+                    "custom/1": {"type": "live_voice", "mode": "start"},
+                },
+            },
+        },
+    }
+    assert parse_voice_config(stored) == replace(config, enabled=True)
+    assert set_enabled(stored, True) == stored
+
+
+def test_retired_live_voice_actions_wait_for_the_first_profile() -> None:
+    raw = {"model_actions": {"builtin/okay_nabu": "live_voice", "custom/1": "live_voice"}}
+
+    unrelated = _apply(raw, {"echo_cancellation": False})
+    forgotten = forget_model(unrelated, "custom/1")
+    targeted = _apply(forgotten, {"default_agent_id": "main"})
+    overridden = _apply(
+        forgotten,
+        {"phrase_actions": {"builtin/okay_nabu": {"type": "command", "agent_id": "coder"}}},
+    )
+
+    assert dict(parse_voice_config(raw).profiles) == {}
+    assert unrelated["model_actions"] == raw["model_actions"]
+    assert forgotten["model_actions"] == {"builtin/okay_nabu": "live_voice"}
+    assert targeted == {
+        "echo_cancellation": False,
+        "server_profiles": {
+            SERVER: {
+                "phrase_actions": {"builtin/okay_nabu": {"type": "live_voice", "mode": "start"}},
+                "target_agent_id": "main",
+            }
+        },
+    }
+    assert overridden["server_profiles"] == {
+        SERVER: {"phrase_actions": {"builtin/okay_nabu": {"type": "command", "agent_id": "coder"}}}
+    }
+    assert "model_actions" not in overridden
 
 
 def test_changes_compose_with_the_settings_section_transaction(tmp_path: Path) -> None:

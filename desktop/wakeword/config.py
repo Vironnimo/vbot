@@ -41,8 +41,14 @@ Stored shape (every field optional)::
 Acoustic settings (active phrases, sensitivities, microphone, echo
 cancellation) are global. Agent ids are server-specific, so the default command
 target and the per-phrase actions live in the profile of one server. Writers
-keep unknown keys inside and outside the section; the unreleased global
-``model_actions`` is ignored on read and removed on the next write.
+keep unknown keys inside and outside the section.
+
+The retired global ``model_actions`` (``{model_id: "command" | "live_voice"}``)
+is carried over on read and write: each ``live_voice`` entry becomes a
+``{"type": "live_voice", "mode": "start"}`` action in every stored profile
+without a valid action for that model (``start`` is what it did). The key is
+removed by the next write once it was carried over; while no profile exists
+it stays and is carried into the first profile a write creates.
 """
 
 from __future__ import annotations
@@ -314,9 +320,10 @@ def parse_voice_config(raw: object) -> VoiceConfig:
     falls back to its default on its own: malformed ``active_model_ids`` (not
     1 to :data:`MAX_ACTIVE_PHRASES` unique non-empty ids) select the default
     phrases; malformed sensitivities, profiles and phrase actions are dropped
-    entry by entry. Unknown keys and the retired ``model_actions`` are ignored.
+    entry by entry. Unknown keys are ignored; the retired ``model_actions`` is
+    carried over into the stored profiles first (see the module docstring).
     """
-    section: Mapping[str, Any] = raw if isinstance(raw, Mapping) else {}
+    section = _writable_section(raw)
     enabled = section.get(_KEY_ENABLED)
     echo_cancellation = section.get(_KEY_ECHO_CANCELLATION)
     model_ids = _parse_active_model_ids(section.get(_KEY_ACTIVE_MODEL_IDS))
@@ -466,7 +473,9 @@ def apply_voice_changes(
 
     ``changes`` keys: ``microphone`` (descriptor or ``null``),
     ``echo_cancellation`` (bool), ``active_model_ids`` (1 to
-    :data:`MAX_ACTIVE_PHRASES` unique known ids), ``model_sensitivities``
+    :data:`MAX_ACTIVE_PHRASES` unique ids; an id that is not active yet must
+    be known, while an active one whose model is gone may stay, so the other
+    phrases stay editable), ``model_sensitivities``
     (merged; each known id maps to a number within the sensitivity range),
     ``default_agent_id`` (non-empty id or ``null``), ``default_session_behavior``
     (``active`` | ``new``) and ``phrase_actions`` (merged per known id; a
@@ -476,8 +485,8 @@ def apply_voice_changes(
     ``known_model_ids`` answers whether a model id names an installed catalog
     model. Any invalid part rejects the whole change with
     :class:`VoiceConfigError` naming the offending field; ``raw`` is never
-    mutated. The returned section keeps unknown keys and drops the retired
-    ``model_actions``.
+    mutated. The returned section keeps unknown keys and carries the retired
+    ``model_actions`` over.
     """
     if not isinstance(changes, Mapping):
         raise VoiceConfigError("Voice config changes must be an object")
@@ -497,8 +506,10 @@ def apply_voice_changes(
             changes[_CHANGE_ECHO_CANCELLATION], _CHANGE_ECHO_CANCELLATION
         )
     if _CHANGE_ACTIVE_MODEL_IDS in changes:
+        active = frozenset(parse_voice_config(section).active_model_ids)
         section[_KEY_ACTIVE_MODEL_IDS] = _validated_active_model_ids(
-            changes[_CHANGE_ACTIVE_MODEL_IDS], known_model_ids
+            changes[_CHANGE_ACTIVE_MODEL_IDS],
+            lambda model_id: model_id in active or known_model_ids(model_id),
         )
     if _CHANGE_MODEL_SENSITIVITIES in changes:
         sensitivities = _validated_sensitivities(
@@ -560,6 +571,10 @@ def forget_model(raw: object, model_id: str) -> dict[str, Any]:
     sensitivities = section.get(_KEY_MODEL_SENSITIVITIES)
     if isinstance(sensitivities, dict):
         sensitivities.pop(model_id, None)
+    retired_actions = section.get(_KEY_RETIRED_MODEL_ACTIONS)
+    if isinstance(retired_actions, dict):
+        for key in [key for key in retired_actions if _non_empty_string(key) == model_id]:
+            del retired_actions[key]
     profiles = section.get(_KEY_SERVER_PROFILES)
     if isinstance(profiles, dict):
         for profile in profiles.values():
@@ -573,15 +588,51 @@ def forget_model(raw: object, model_id: str) -> dict[str, Any]:
 
 def _writable_section(raw: object) -> dict[str, Any]:
     section = copy.deepcopy(dict(raw)) if isinstance(raw, Mapping) else {}
-    section.pop(_KEY_RETIRED_MODEL_ACTIONS, None)
+    _carry_over_retired_actions(section)
     return section
+
+
+def _carry_over_retired_actions(section: dict[str, Any]) -> None:
+    """Move the retired global ``model_actions`` into the stored profiles.
+
+    Every ``live_voice`` entry becomes a Live voice start action in each
+    profile that has no entry for that model; ``command`` entries were the
+    default and need nothing. The key is kept while it still has something to
+    carry and no profile exists to receive it.
+    """
+    if _KEY_RETIRED_MODEL_ACTIONS not in section:
+        return
+    retired = section[_KEY_RETIRED_MODEL_ACTIONS]
+    live_model_ids: list[str] = []
+    if isinstance(retired, Mapping):
+        for raw_model_id, action in retired.items():
+            model_id = _non_empty_string(raw_model_id)
+            if model_id is not None and action == ACTION_LIVE_VOICE:
+                live_model_ids.append(model_id)
+    stored_profiles = section.get(_KEY_SERVER_PROFILES)
+    profiles: dict[Any, Any] = stored_profiles if isinstance(stored_profiles, dict) else {}
+    stored_keys = list(_stored_profile_keys(profiles).values())
+    if live_model_ids and not stored_keys:
+        return
+    for stored_key in stored_keys:
+        stored_actions = profiles[stored_key].get(_PROFILE_KEY_PHRASE_ACTIONS)
+        actions = dict(stored_actions) if isinstance(stored_actions, Mapping) else {}
+        present = {_non_empty_string(model_id) for model_id in actions}
+        missing = [model_id for model_id in live_model_ids if model_id not in present]
+        if not missing:
+            continue
+        for model_id in missing:
+            actions[model_id] = {"type": ACTION_LIVE_VOICE, "mode": LIVE_MODE_START}
+        profiles[stored_key] = {**profiles[stored_key], _PROFILE_KEY_PHRASE_ACTIONS: actions}
+    del section[_KEY_RETIRED_MODEL_ACTIONS]
 
 
 def _writable_profile(section: dict[str, Any], profile_key: str) -> dict[str, Any]:
     """Return the stored profile dict for ``profile_key``, created on demand.
 
     A profile stored under an alias spelling moves to the canonical key so the
-    written values and every later read address the same entry.
+    written values and every later read address the same entry. A new profile
+    receives the retired ``model_actions`` that waited for one.
     """
     stored_profiles = section.get(_KEY_SERVER_PROFILES)
     profiles = stored_profiles if isinstance(stored_profiles, dict) else {}
@@ -591,7 +642,9 @@ def _writable_profile(section: dict[str, Any], profile_key: str) -> dict[str, An
     if stored_key is not None and stored_key != profile_key:
         del profiles[stored_key]
     profiles[profile_key] = profile
-    return profile
+    _carry_over_retired_actions(section)
+    written: dict[str, Any] = profiles[profile_key]
+    return written
 
 
 def _validated_bool(value: object, field_name: str) -> bool:

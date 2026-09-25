@@ -403,6 +403,9 @@ describe('Live voice with Desktop Voice', () => {
     expect(fake.wakePhrases()).toEqual(['Okay Nabu']);
 
     props.set('voiceStatus', voiceStatus({ state: 'microphone_disconnected' }));
+    expect(fake.wakePhrases()).toEqual(['Okay Nabu']);
+
+    props.set('voiceStatus', voiceStatus({ enabled: false }));
     expect(fake.wakePhrases()).toEqual([]);
   });
 

@@ -165,6 +165,10 @@ function knownErrorMessage(code) {
       'settings.voice.error.microphoneRead',
       'The microphone stopped responding. Check the device connection and retry.',
     ),
+    recording_interrupted: t(
+      'settings.voice.error.recordingInterrupted',
+      'The recording was interrupted. Say the wake phrase again.',
+    ),
     detection_failed: t(
       'settings.voice.error.detection',
       'Wakeword detection stopped unexpectedly. Retry listening.',
