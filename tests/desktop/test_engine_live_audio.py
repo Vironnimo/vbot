@@ -10,8 +10,9 @@ import pytest
 
 pytest.importorskip("pyopen_wakeword")
 
+from desktop.wakeword._speech_detection import SpeechDetector, SpeechGate
+from desktop.wakeword.config import DEFAULT_MODEL_IDS, PhraseConfig
 from desktop.wakeword.engine import (
-    DEFAULT_WAKEWORD_MODEL_IDS,
     WakewordEngine,
     WakewordMatch,
     WakewordModelCatalog,
@@ -30,7 +31,9 @@ _SAMPLE_RATE = 16000
     ],
 )
 def test_each_nabu_model_detects_its_positive_audio(model_id: str, fixture_name: str) -> None:
-    engine = WakewordModelCatalog(_FIXTURE_DIRECTORY / "settings.json").create_engine([model_id])
+    engine = WakewordModelCatalog(_FIXTURE_DIRECTORY / "settings.json").create_engine(
+        [PhraseConfig(model_id)]
+    )
 
     matches = _detect_file(engine, _FIXTURE_DIRECTORY / fixture_name)
 
@@ -41,18 +44,18 @@ def test_each_nabu_model_detects_its_positive_audio(model_id: str, fixture_name:
 @pytest.mark.parametrize("fixture_name", ["okay_nabu.wav", "hey_nabu.wav"])
 def test_two_active_nabu_models_emit_one_activation_per_phrase(fixture_name: str) -> None:
     engine = WakewordModelCatalog(_FIXTURE_DIRECTORY / "settings.json").create_engine(
-        list(DEFAULT_WAKEWORD_MODEL_IDS)
+        [PhraseConfig(model_id) for model_id in DEFAULT_MODEL_IDS]
     )
 
     matches = _detect_file(engine, _FIXTURE_DIRECTORY / fixture_name)
 
     assert len(matches) == 1
-    assert matches[0].model_id in DEFAULT_WAKEWORD_MODEL_IDS
+    assert matches[0].model_id in DEFAULT_MODEL_IDS
 
 
 def test_two_active_nabu_models_ignore_unrelated_wakeword_audio() -> None:
     engine = WakewordModelCatalog(_FIXTURE_DIRECTORY / "settings.json").create_engine(
-        list(DEFAULT_WAKEWORD_MODEL_IDS)
+        [PhraseConfig(model_id) for model_id in DEFAULT_MODEL_IDS]
     )
 
     matches = _detect_file(engine, _FIXTURE_DIRECTORY / "unrelated_hey_jarvis.wav")
@@ -62,7 +65,7 @@ def test_two_active_nabu_models_ignore_unrelated_wakeword_audio() -> None:
 
 def test_gated_positive_audio_never_activates_the_models() -> None:
     engine = WakewordModelCatalog(_FIXTURE_DIRECTORY / "settings.json").create_engine(
-        list(DEFAULT_WAKEWORD_MODEL_IDS)
+        [PhraseConfig(model_id) for model_id in DEFAULT_MODEL_IDS]
     )
 
     matches = _detect_file(engine, _FIXTURE_DIRECTORY / "okay_nabu.wav", speech_present=False)
@@ -70,8 +73,56 @@ def test_gated_positive_audio_never_activates_the_models() -> None:
     assert matches == []
 
 
+# The heads score a phrase highest after it ended; the detection loop's delayed
+# speech gate must still let that peak through.
+@pytest.mark.parametrize(
+    ("model_id", "fixture_name"),
+    [
+        ("builtin/okay_nabu", "okay_nabu.wav"),
+        ("builtin/hey_nabu", "hey_nabu.wav"),
+    ],
+)
+def test_the_speech_gate_lets_each_nabu_model_detect_its_positive_audio(
+    model_id: str, fixture_name: str
+) -> None:
+    engine = WakewordModelCatalog(_FIXTURE_DIRECTORY / "settings.json").create_engine(
+        [PhraseConfig(model_id)]
+    )
+
+    matches = _detect_file(engine, _FIXTURE_DIRECTORY / fixture_name, gate=_speech_gate())
+
+    assert [match.model_id for match in matches] == [model_id]
+
+
+@pytest.mark.parametrize(
+    ("fixture_name", "activations"),
+    [("okay_nabu.wav", 1), ("hey_nabu.wav", 1), ("unrelated_hey_jarvis.wav", 0)],
+)
+def test_the_speech_gate_keeps_one_activation_per_phrase_for_two_models(
+    fixture_name: str, activations: int
+) -> None:
+    engine = WakewordModelCatalog(_FIXTURE_DIRECTORY / "settings.json").create_engine(
+        [PhraseConfig(model_id) for model_id in DEFAULT_MODEL_IDS]
+    )
+
+    matches = _detect_file(engine, _FIXTURE_DIRECTORY / fixture_name, gate=_speech_gate())
+
+    assert len(matches) == activations
+
+
+def _speech_gate() -> SpeechGate:
+    pytest.importorskip("onnxruntime")
+    detector = SpeechDetector.create()
+    assert detector is not None
+    return SpeechGate(detector, None)
+
+
 def _detect_file(
-    engine: WakewordEngine, path: Path, *, speech_present: bool = True
+    engine: WakewordEngine,
+    path: Path,
+    *,
+    speech_present: bool = True,
+    gate: SpeechGate | None = None,
 ) -> list[WakewordMatch]:
     audio = _read_pcm16_mono(path)
     padding = np.zeros(_SAMPLE_RATE, dtype=np.int16).tobytes()
@@ -81,6 +132,8 @@ def _detect_file(
     try:
         for offset in range(0, len(stream), _CHUNK_BYTES):
             chunk = stream[offset : offset + _CHUNK_BYTES].ljust(_CHUNK_BYTES, b"\0")
+            if gate is not None:
+                speech_present = gate.admits(chunk)
             match = engine.detect(chunk, speech_present=speech_present)
             if match is not None:
                 matches.append(match)

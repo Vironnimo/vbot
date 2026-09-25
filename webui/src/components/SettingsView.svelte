@@ -39,6 +39,8 @@
     onNavigateToAgentDefaults = noop,
     agents = [],
     desktopCapabilities = null,
+    // The app-level Desktop Voice owner (see app/desktop.svelte.js).
+    desktopVoice = null,
     targetPanelId = '',
     targetPanelRequestId = 0,
     onDebugEnabledChange = noop,
@@ -571,7 +573,7 @@
       {agents}
       {settings}
       wakewordAvailable={desktopCapabilities?.wakeword === true}
-      liveWakewordAvailable={desktopCapabilities?.liveWakeword === true}
+      {desktopVoice}
       onCommit={commitSettings}
       {onToast}
       onError={(message) => reportSettingsError(message)}

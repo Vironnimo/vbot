@@ -129,6 +129,9 @@ export function createLiveVoiceState() {
     captions: [],
     // Last error code that ended a call; kept until the next start.
     error: '',
+    // The call is held (microphone and assistant audio off) for something
+    // else that uses the microphone, independent of the user's mute.
+    held: false,
     closeReason: null,
     usage: null,
   };
@@ -139,14 +142,16 @@ export function createLiveVoiceState() {
 // `terminalView({op, terminal_id?, group_id?}, guard)`. `guard.isCurrent()`
 // turns false once the requesting call stops. `onNotice({code, severity})`
 // reports errors ('error'/'warn') and call endings the user did not request
-// ('info'). An optional `microphoneLease` ({acquire, release}) is taken before
-// the microphone opens and released with it; `acquire()` resolves a notice code
-// that ends the start, or null to continue.
+// ('info'). An optional `checkMicrophoneAccess()` runs before the microphone
+// opens and resolves a notice code that ends the start, or null to continue.
+// `wakePhrases()` returns the wake phrases that address other Agents during
+// the call; they are sent with each start request.
 export function createLiveVoice({
   state,
   api = defaultApi,
   mediaDevices = globalThis.navigator?.mediaDevices,
-  microphoneLease = null,
+  checkMicrophoneAccess = null,
+  wakePhrases = () => [],
   createPeer = () => new RTCPeerConnection(),
   audio = null,
   createAudio = createRelayAudio,
@@ -196,15 +201,31 @@ export function createLiveVoice({
     stopTracks(call.microphone);
     call.microphone = null;
     releaseRelayAudio(call);
-    if (call.leased) {
-      call.leased = false;
-      microphoneLease.release();
-    }
     if (call.playing && audio) {
       audio.pause?.();
       audio.srcObject = null;
     }
     call.playing = false;
+    if (call.outputMuted && audio) audio.muted = false;
+    call.outputMuted = false;
+  }
+
+  const isHeld = (call) => call.holds.size > 0;
+
+  // The microphone sends only while neither the user nor a hold mutes it.
+  function applyMicrophone(call) {
+    const enabled = !state.muted && !isHeld(call);
+    for (const track of call.microphone?.getAudioTracks?.() ?? [])
+      track.enabled = enabled;
+  }
+
+  // WebRTC plays through the audio element; relay audio is dropped on arrival
+  // while held (see attachSocket).
+  function applyOutput(call) {
+    const muted = isHeld(call);
+    if (!audio || call.outputMuted === muted) return;
+    call.outputMuted = muted;
+    audio.muted = muted;
   }
 
   function releasePeer(call) {
@@ -225,10 +246,12 @@ export function createLiveVoice({
     const { socket } = call;
     call.socket = null;
     socket?.close();
+    call.holds.clear();
     Object.assign(state, {
       phase: 'off',
       callId: null,
       muted: false,
+      held: false,
       busy: false,
       activityLabel: null,
     });
@@ -285,6 +308,7 @@ export function createLiveVoice({
       if (!isCurrent(call) || call.closing || !audio) return;
       audio.srcObject = event.streams?.[0] ?? new MediaStream([event.track]);
       call.playing = true;
+      applyOutput(call);
       let playback;
       try {
         playback = audio.play();
@@ -323,7 +347,7 @@ export function createLiveVoice({
           handleFrame(frame, call);
         },
         onAudio: (pcm) => {
-          if (owns() && !call.closing) call.relay?.play(pcm);
+          if (owns() && !call.closing && !isHeld(call)) call.relay?.play(pcm);
         },
         onClose: (_event, outcome) => {
           if (owns()) socketLost(call, outcome);
@@ -580,6 +604,7 @@ export function createLiveVoice({
     return api.startLiveCall({
       media: MEDIA_WEBRTC,
       sdp: peer.localDescription.sdp,
+      wakePhrases: currentWakePhrases(),
     });
   }
 
@@ -608,7 +633,10 @@ export function createLiveVoice({
       return null;
     }
     call.relay = relay;
-    return api.startLiveCall({ media: MEDIA_RELAY });
+    return api.startLiveCall({
+      media: MEDIA_RELAY,
+      wakePhrases: currentWakePhrases(),
+    });
   }
 
   function connectRelay(_call, media) {
@@ -621,6 +649,25 @@ export function createLiveVoice({
   function sendAudio(call, pcm) {
     if (!isCurrent(call) || !call.reachedLive || call.closing) return;
     call.socket?.sendAudio?.(pcm);
+  }
+
+  function currentWakePhrases() {
+    try {
+      const phrases = wakePhrases();
+      return Array.isArray(phrases) ? phrases : [];
+    } catch {
+      return [];
+    }
+  }
+
+  // An access check that fails does not block the call.
+  async function microphoneAccessNotice() {
+    if (typeof checkMicrophoneAccess !== 'function') return null;
+    try {
+      return (await checkMicrophoneAccess()) || null;
+    } catch {
+      return null;
+    }
   }
 
   function abandonLateCall(result) {
@@ -651,7 +698,9 @@ export function createLiveVoice({
       reachedLive: false,
       announcedActive: false,
       playing: false,
-      leased: false,
+      outputMuted: false,
+      // Hold count per reason; see hold().
+      holds: new Map(),
     };
     current = call;
     Object.assign(state, createLiveVoiceState(), { phase: 'connecting' });
@@ -661,15 +710,9 @@ export function createLiveVoice({
       if (!isCurrent(call)) return;
       checkStatus(status);
 
-      if (microphoneLease) {
-        const blocked = await microphoneLease.acquire();
-        if (!isCurrent(call)) {
-          if (!blocked) microphoneLease.release();
-          return;
-        }
-        if (blocked) throw failure(blocked);
-        call.leased = true;
-      }
+      const blocked = await microphoneAccessNotice();
+      if (!isCurrent(call)) return;
+      if (blocked) throw failure(blocked);
       const microphone = await openMicrophone();
       if (!isCurrent(call)) {
         stopTracks(microphone);
@@ -678,8 +721,8 @@ export function createLiveVoice({
       call.microphone = microphone;
       // The permission prompt is user time; bound only the connection from here.
       armStartupTimer(call);
+      applyMicrophone(call);
       for (const track of microphone.getAudioTracks()) {
-        track.enabled = !state.muted;
         track.addEventListener('ended', () => {
           if (isCurrent(call) && !call.closing)
             fail(call, 'microphone_unavailable');
@@ -741,8 +784,47 @@ export function createLiveVoice({
     const call = current;
     if (!call || call.closing) return;
     state.muted = muted === true;
-    for (const track of call.microphone?.getAudioTracks?.() ?? [])
-      track.enabled = !state.muted;
+    applyMicrophone(call);
+  }
+
+  // Hold the running call for `reason`: the microphone stops sending and the
+  // assistant goes silent (queued relay audio is dropped) until every hold of
+  // every reason is released. Holds count per reason, are independent of the
+  // user's mute and end with the call. Returns whether the hold was taken.
+  function hold(reason) {
+    const call = current;
+    if (!call || call.closing || !isText(reason)) return false;
+    const wasHeld = isHeld(call);
+    call.holds.set(reason, (call.holds.get(reason) ?? 0) + 1);
+    if (!wasHeld) {
+      state.held = true;
+      applyMicrophone(call);
+      call.relay?.clear();
+      applyOutput(call);
+    }
+    return true;
+  }
+
+  function release(reason) {
+    const call = current;
+    const count = call?.holds.get(reason);
+    if (!count) return;
+    if (count > 1) {
+      call.holds.set(reason, count - 1);
+      return;
+    }
+    call.holds.delete(reason);
+    if (isHeld(call)) return;
+    state.held = false;
+    applyMicrophone(call);
+    applyOutput(call);
+  }
+
+  // Whether the current call is held for `reason`, or for any reason.
+  function held(reason) {
+    const call = current;
+    if (!call) return false;
+    return reason === undefined ? isHeld(call) : call.holds.has(reason);
   }
 
   function destroy() {
@@ -756,6 +838,9 @@ export function createLiveVoice({
     start,
     stop,
     mute,
+    hold,
+    release,
+    held,
     active: () => state.phase === 'live',
     destroy,
     handleFrame: (frame) => handleFrame(frame),
