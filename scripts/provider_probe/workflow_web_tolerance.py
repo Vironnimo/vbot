@@ -10,7 +10,8 @@ from typing import Any
 from unittest.mock import AsyncMock, patch
 
 from core.tools import ToolContext, ToolRegistry, tool_failure
-from core.tools.web_fetch import _FetchResult, register_web_fetch_tool
+from core.tools._public_http import PublicResponse
+from core.tools.web_fetch import register_web_fetch_tool
 
 
 def web_tolerance_cases() -> list[dict[str, Any]]:
@@ -75,15 +76,15 @@ async def web_case(adapter: Any, args: argparse.Namespace, case: dict[str, Any])
     calls = adapter.normalize_response(raw, model_id=args.model).get("tool_calls") or []
     html = '<html><body><p>Fixture article <a href="https://example.org/link">source</a>.</p></body></html>'
     fetch = AsyncMock(
-        return_value=_FetchResult(
+        return_value=PublicResponse(
             200, {"content-type": "text/html"}, html, "https://example.com/fixture", html.encode()
         )
     )
     results = []
     with (
         TemporaryDirectory(prefix="vbot-web-tolerance-") as temporary,
-        patch("core.tools.web_fetch._fetch_with_retry", fetch),
-        patch("core.tools.web_fetch._make_session", return_value=AsyncMock()),
+        patch("core.tools._public_http._fetch_with_retry", fetch),
+        patch("core.tools._public_http._make_session", return_value=AsyncMock()),
     ):
         root = Path(temporary)
         for call in calls:

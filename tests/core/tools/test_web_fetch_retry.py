@@ -9,10 +9,10 @@ import pytest
 from curl_cffi.requests.exceptions import CertificateVerifyError, ReadTimeout
 from curl_cffi.requests.exceptions import ConnectionError as CurlConnectionError
 
-import core.tools.web_fetch as web_fetch_module
+import core.tools._public_http as public_http
+from core.tools._public_http import PublicResponse
 from core.tools.tools import ToolRegistry
 from core.tools.web_fetch import (
-    _FetchResult,
     register_web_fetch_tool,
 )
 from core.utils.retry import MAX_RETRIES
@@ -62,7 +62,7 @@ async def test_web_fetch_handler_network_error(
     workspace.mkdir()
     url = "https://example.com/network-fail"
 
-    def responder(_url: str) -> _FetchResult:
+    def responder(_url: str) -> PublicResponse:
         raise CurlConnectionError(
             "Failed to perform, curl: (7) Failed to connect to example.com port 443: "
             "Connection refused. See https://curl.se/libcurl/c/libcurl-errors.html first "
@@ -74,9 +74,9 @@ async def test_web_fetch_handler_network_error(
     async def no_retry_sleep(attempt: int, retry_after: float | None = None) -> None:
         del attempt, retry_after
 
-    monkeypatch.setattr(web_fetch_module, "sleep_for_retry", no_retry_sleep)
+    monkeypatch.setattr(public_http, "sleep_for_retry", no_retry_sleep)
 
-    with caplog.at_level(logging.WARNING, logger="vbot.tools.web_fetch"):
+    with caplog.at_level(logging.WARNING, logger="vbot.tools.public_http"):
         result = await web_fetch_handler(make_context(workspace), web_fetch_arguments(url))
 
     error = assert_failure_envelope(result, "connection_failed")
@@ -86,7 +86,7 @@ async def test_web_fetch_handler_network_error(
         "later or use another source."
     )
     assert any(
-        record.levelno == logging.WARNING and "web_fetch request failed" in record.getMessage()
+        record.levelno == logging.WARNING and "Public fetch failed" in record.getMessage()
         for record in caplog.records
     )
 
@@ -102,11 +102,11 @@ async def test_web_fetch_handler_retries_retryable_statuses(
     async def no_retry_sleep(attempt: int, retry_after: float | None = None) -> None:
         del attempt, retry_after
 
-    monkeypatch.setattr(web_fetch_module, "sleep_for_retry", no_retry_sleep)
+    monkeypatch.setattr(public_http, "sleep_for_retry", no_retry_sleep)
 
     attempts = 0
 
-    def responder(_url: str) -> _FetchResult:
+    def responder(_url: str) -> PublicResponse:
         nonlocal attempts
         attempts += 1
         if attempts < 3:
@@ -137,11 +137,11 @@ async def test_web_fetch_handler_exhausted_retryable_status_signals_retryable(
     async def no_retry_sleep(attempt: int, retry_after: float | None = None) -> None:
         del attempt, retry_after
 
-    monkeypatch.setattr(web_fetch_module, "sleep_for_retry", no_retry_sleep)
+    monkeypatch.setattr(public_http, "sleep_for_retry", no_retry_sleep)
 
     calls = 0
 
-    def responder(_url: str) -> _FetchResult:
+    def responder(_url: str) -> PublicResponse:
         nonlocal calls
         calls += 1
         return make_result(status_code=503, text="busy")
@@ -171,11 +171,11 @@ async def test_web_fetch_handler_honors_retry_after_hint(
         del attempt
         observed_hints.append(retry_after)
 
-    monkeypatch.setattr(web_fetch_module, "sleep_for_retry", recording_sleep)
+    monkeypatch.setattr(public_http, "sleep_for_retry", recording_sleep)
 
     attempts = 0
 
-    def responder(_url: str) -> _FetchResult:
+    def responder(_url: str) -> PublicResponse:
         nonlocal attempts
         attempts += 1
         if attempts == 1:
@@ -226,7 +226,7 @@ async def test_web_fetch_handler_transport_error_retries_before_signalling_failu
 
     calls = 0
 
-    def responder(_url: str) -> _FetchResult:
+    def responder(_url: str) -> PublicResponse:
         nonlocal calls
         calls += 1
         raise CurlConnectionError("connection refused")
@@ -236,7 +236,7 @@ async def test_web_fetch_handler_transport_error_retries_before_signalling_failu
     async def no_retry_sleep(attempt: int, retry_after: float | None = None) -> None:
         del attempt, retry_after
 
-    monkeypatch.setattr(web_fetch_module, "sleep_for_retry", no_retry_sleep)
+    monkeypatch.setattr(public_http, "sleep_for_retry", no_retry_sleep)
 
     result = await web_fetch_handler(make_context(workspace), web_fetch_arguments(url))
 
@@ -284,7 +284,7 @@ async def test_web_fetch_limits_retries_of_timeouts_and_broken_tls(
 ) -> None:
     calls = 0
 
-    def responder(_url: str) -> _FetchResult:
+    def responder(_url: str) -> PublicResponse:
         nonlocal calls
         calls += 1
         raise error
@@ -294,7 +294,7 @@ async def test_web_fetch_limits_retries_of_timeouts_and_broken_tls(
     async def no_retry_sleep(attempt: int, retry_after: float | None = None) -> None:
         del attempt, retry_after
 
-    monkeypatch.setattr(web_fetch_module, "sleep_for_retry", no_retry_sleep)
+    monkeypatch.setattr(public_http, "sleep_for_retry", no_retry_sleep)
 
     result = await _registry().dispatch(make_context(tmp_path), {"url": "https://example.com/slow"})
 
@@ -348,7 +348,7 @@ async def test_web_fetch_limits_retries_of_timeouts_and_broken_tls(
             "request_rejected",
             False,
             "HTTP 422: example.com rejected the request for https://example.com/page. "
-            "web_fetch sends a plain GET request without custom headers, cookies or a body.",
+            "The request was a plain GET without custom headers, cookies or a body.",
         ),
     ],
 )
@@ -365,7 +365,7 @@ async def test_web_fetch_names_each_http_failure_and_its_next_step(
     async def no_retry_sleep(attempt: int, retry_after: float | None = None) -> None:
         del attempt, retry_after
 
-    monkeypatch.setattr(web_fetch_module, "sleep_for_retry", no_retry_sleep)
+    monkeypatch.setattr(public_http, "sleep_for_retry", no_retry_sleep)
 
     result = await _registry().dispatch(make_context(tmp_path), {"url": "https://example.com/page"})
 
@@ -390,7 +390,7 @@ async def test_web_fetch_handler_recovers_from_transient_transport_error(
     url = "https://example.com/recovered"
     calls = 0
 
-    def responder(_url: str) -> _FetchResult:
+    def responder(_url: str) -> PublicResponse:
         nonlocal calls
         calls += 1
         if calls == 1:
@@ -407,7 +407,7 @@ async def test_web_fetch_handler_recovers_from_transient_transport_error(
     async def no_retry_sleep(attempt: int, retry_after: float | None = None) -> None:
         del attempt, retry_after
 
-    monkeypatch.setattr(web_fetch_module, "sleep_for_retry", no_retry_sleep)
+    monkeypatch.setattr(public_http, "sleep_for_retry", no_retry_sleep)
 
     result = await web_fetch_handler(make_context(workspace), web_fetch_arguments(url))
 
@@ -427,7 +427,7 @@ async def test_web_fetch_handler_redirect_limit_signals_not_retryable(
     # URL instead trips the faster cycle guard covered by its own tests).
     calls = 0
 
-    def responder(request_url: str) -> _FetchResult:
+    def responder(request_url: str) -> PublicResponse:
         nonlocal calls
         calls += 1
         return make_result(
@@ -458,7 +458,7 @@ async def test_web_fetch_handler_redirect_cycle_fails_fast(
     calls = 0
 
     # A bot-deflection self-loop redirects to the identical URL forever.
-    def responder(request_url: str) -> _FetchResult:
+    def responder(request_url: str) -> PublicResponse:
         nonlocal calls
         calls += 1
         return make_result(
@@ -487,7 +487,7 @@ async def test_web_fetch_handler_alternating_redirect_cycle_fails_fast(
     second = "https://example.com/second"
     calls = 0
 
-    def responder(request_url: str) -> _FetchResult:
+    def responder(request_url: str) -> PublicResponse:
         nonlocal calls
         calls += 1
         other = second if request_url == first else first
