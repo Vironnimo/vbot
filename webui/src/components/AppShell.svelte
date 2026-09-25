@@ -9,6 +9,7 @@
     CONNECTION_STATUS_DISCONNECTED,
   } from '$lib/connectionState.js';
   import { createDesktopContextMenu } from './shell/menu.svelte.js';
+  import { voiceIndicator } from './voice/voiceLabels.js';
 
   let {
     items = [],
@@ -22,10 +23,11 @@
     canSwitchServer = false,
     onSwitchServer = () => {},
     desktopContextMenuEnabled = false,
-    wakewordStatus = { enabled: false, state: 'off' },
-    desktopCapabilities = null,
+    // Desktop Voice: whether this Desktop offers it, and its status snapshot.
+    voiceAvailable = false,
+    voiceStatus = null,
     onNavigateToVoiceSettings = () => {},
-    onStopWakewordRecording = () => {},
+    onStopVoiceRecording = () => {},
     onToast = () => {},
     sidebarFooter,
     children,
@@ -228,147 +230,18 @@
         : t('status.reconnecting', 'Reconnecting…'),
   );
 
-  // Wakeword indicator — lives in the sidebar footer so it is visible across
-  // every view, not just the Chat tab.  Only shown when the Desktop accessor
-  // advertises wakeword capability.
-  const micVisible = $derived(Boolean(desktopCapabilities?.wakeword));
-  const micIconClass = $derived(computeMicIconClass(wakewordStatus));
-  const micTooltip = $derived(computeMicTooltip(wakewordStatus));
-  const micStatusLabel = $derived(computeMicStatusLabel(wakewordStatus));
-  const micRecording = $derived(wakewordStatus?.state === 'recording');
+  // Voice indicator — lives in the sidebar footer so it is visible across
+  // every view, not just the Chat tab. Only shown when the Desktop accessor
+  // offers Desktop Voice.
+  const micIndicator = $derived(voiceIndicator(voiceStatus));
 
   const handleMicIndicatorClick = () => {
-    if (micRecording) {
-      onStopWakewordRecording();
+    if (micIndicator.recording) {
+      onStopVoiceRecording();
     } else {
       onNavigateToVoiceSettings();
     }
   };
-
-  function computeMicIconClass(status) {
-    if (status?.state === 'error') {
-      return 'mic-icon--error';
-    }
-    if (!status?.enabled) {
-      return 'mic-icon--off';
-    }
-    switch (status.state) {
-      case 'starting':
-        return 'mic-icon--processing';
-      case 'listening':
-      case 'wakeword_detected':
-        return 'mic-icon--listening';
-      case 'recording':
-        return 'mic-icon--recording';
-      case 'transcribing':
-      case 'sending':
-        return 'mic-icon--processing';
-      case 'sent':
-        return 'mic-icon--listening';
-      case 'cancelled':
-      case 'no_speech':
-      case 'transcription_failed':
-      case 'microphone_disconnected':
-        return 'mic-icon--warning';
-      case 'error':
-        return 'mic-icon--error';
-      case 'paused':
-      default:
-        return 'mic-icon--off';
-    }
-  }
-
-  function computeMicTooltip(status) {
-    if (status?.state === 'error') {
-      return t('voice.mic.tooltip.error', 'Voice error');
-    }
-    if (!status?.enabled) {
-      return t('voice.mic.tooltip.off', 'Wakeword disabled');
-    }
-    switch (status.state) {
-      case 'starting':
-        return t('voice.mic.tooltip.starting', 'Starting wakeword listening');
-      case 'listening':
-        return t('voice.mic.tooltip.listening', 'Listening for wakeword');
-      case 'wakeword_detected':
-        return t('voice.mic.tooltip.detected', 'Wakeword detected');
-      case 'recording':
-        return t(
-          'voice.mic.tooltip.recording',
-          'Recording — click to stop and send',
-        );
-      case 'transcribing':
-      case 'sending':
-        return t('voice.mic.tooltip.processing', 'Processing voice command');
-      case 'sent':
-        return t('voice.mic.tooltip.sent', 'Voice command sent');
-      case 'cancelled':
-        return t('voice.mic.tooltip.cancelled', 'Voice command cancelled');
-      case 'no_speech':
-        return t('voice.mic.tooltip.noSpeech', 'No speech heard');
-      case 'transcription_failed':
-        return t(
-          'voice.mic.tooltip.transcriptionFailed',
-          'Voice command was not understood',
-        );
-      case 'microphone_disconnected':
-        return t(
-          'voice.mic.tooltip.microphoneDisconnected',
-          'Microphone disconnected',
-        );
-      case 'paused':
-        return t(
-          'voice.mic.tooltip.paused',
-          'Wakeword paused during Live voice',
-        );
-      case 'error':
-        return t('voice.mic.tooltip.error', 'Voice error');
-      default:
-        return t('voice.mic.tooltip.off', 'Wakeword disabled');
-    }
-  }
-
-  function computeMicStatusLabel(status) {
-    if (status?.state === 'error') {
-      return t('voice.state.error', 'Voice error');
-    }
-    if (!status?.enabled) {
-      return t('voice.state.off', 'Disabled');
-    }
-    switch (status.state) {
-      case 'starting':
-        return t('voice.state.starting', 'Starting');
-      case 'listening':
-        return t('voice.state.listening', 'Listening');
-      case 'wakeword_detected':
-        return t('voice.state.wakewordDetected', 'Wakeword detected');
-      case 'recording':
-        return t('voice.state.recording', 'Recording');
-      case 'transcribing':
-        return t('voice.state.transcribing', 'Transcribing');
-      case 'sending':
-        return t('voice.state.sending', 'Sending');
-      case 'sent':
-        return t('voice.state.sent', 'Sent');
-      case 'cancelled':
-        return t('voice.state.cancelled', 'Cancelled');
-      case 'no_speech':
-        return t('voice.state.no_speech', 'No speech heard');
-      case 'transcription_failed':
-        return t('voice.state.transcription_failed', 'Not understood');
-      case 'microphone_disconnected':
-        return t(
-          'voice.state.microphone_disconnected',
-          'Microphone disconnected',
-        );
-      case 'paused':
-        return t('voice.state.paused', 'Paused during Live voice');
-      case 'error':
-        return t('voice.state.error', 'Voice error');
-      default:
-        return t('voice.state.off', 'Disabled');
-    }
-  }
 
   const serverRestored = $derived(serverNoticeState === 'restored');
 
@@ -608,17 +481,17 @@
 
     <div class="sidebar-footer app-shell__footer">
       {@render sidebarFooter?.()}
-      {#if micVisible}
+      {#if voiceAvailable}
         <div class="sidebar-footer__row">
           <button
             type="button"
             class="sidebar-footer__mic"
-            use:tooltip={micTooltip}
-            aria-label={micTooltip}
+            use:tooltip={micIndicator.tooltip}
+            aria-label={micIndicator.tooltip}
             onclick={handleMicIndicatorClick}
           >
             <svg
-              class="mic-icon {micIconClass}"
+              class="mic-icon mic-icon--{micIndicator.tone}"
               viewBox="0 0 16 16"
               aria-hidden="true"
             >
@@ -626,7 +499,7 @@
               <path d="M3.5 9.5a4.5 4.5 0 0 0 9 0" />
               <path d="M8 14v1.5" />
             </svg>
-            <span class="sidebar-footer__label">{micStatusLabel}</span>
+            <span class="sidebar-footer__label">{micIndicator.label}</span>
           </button>
         </div>
       {/if}
