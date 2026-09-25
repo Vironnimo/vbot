@@ -218,7 +218,6 @@ describe('sessionListView helpers', () => {
       session_id: 'source-session',
       project_id: null,
       forked_at: '2026-07-04T00:00:00+00:00',
-      message_count: 12,
     };
     const next = applySessionList(createSessionListState(), [
       { id: 'fork-session', fork_source: forkSource },

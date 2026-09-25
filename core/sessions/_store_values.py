@@ -321,7 +321,6 @@ def _derived_metadata_from_state(state: sqlite3.Row) -> JsonObject:
             "session_id": str(state["fork_parent_session_id"]),
             "project_id": str(state["fork_parent_project_id"]) or None,
             "forked_at": str(state["forked_at"]),
-            "message_count": int(state["fork_point_seq"]),
         }
     run_kinds = _json_value_from_payload(
         str(state["run_kinds_json"] or "[]"), "Session run kinds", list

@@ -103,7 +103,6 @@ def test_matching_forks_share_their_source_history(tmp_path: Path) -> None:
             "session_id": "branch",
             "project_id": None,
             "forked_at": canonical(20),
-            "message_count": 6,
         }
         search = manager.search_messages("zebra", project_id=None, agent_id="main")
         assert [(hit.address, hit.message_id) for hit in search.hits] == [(BASE, ids["question"])]
