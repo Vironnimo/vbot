@@ -5,11 +5,13 @@ from __future__ import annotations
 import os
 import re
 import threading
+import unicodedata
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, Literal, Protocol
 
-from core.utils.atomic import atomic_write_text
+from core.utils.atomic import atomic_write_bytes
 from core.utils.errors import VBotError
 
 if TYPE_CHECKING:
@@ -75,10 +77,10 @@ _MEMORY_GUIDANCE = (
     "request does not establish one. Stable environment or project facts belong in agent "
     "Memory; name the project when needed to avoid applying them elsewhere. Procedures "
     "belong in Skills. Skip routine knowledge, easily rediscovered facts, task progress, "
-    "completed-work logs, transient failures, guesses, and secrets. When the memory Tool is "
-    "available and a fact is worth saving, list the relevant scope first: the entries shown "
-    "here may be older than the current stored entries. Leave equivalent facts alone, "
-    "replace superseded facts, and consolidate overlap. Write declarative facts, not "
+    "completed-work logs, transient failures, guesses, and secrets. Leave equivalent facts "
+    "alone, replace superseded facts, and consolidate overlap; the memory Tool finds an entry "
+    "by a unique part of its text. The entries below may be older than the stored ones, and "
+    "a failed match returns the current entries. Write declarative facts, not "
     'instructions to yourself: "User prefers concise answers", not "Always answer '
     'concisely"; "Project uses pytest with xdist", not "Run tests with pytest -n 4". Save '
     "worthwhile changes in the same turn and check the Tool result before saying they were "
@@ -105,6 +107,58 @@ _MEMORY_BLOCK_TEMPLATE = "<memory>\n{guidance}\n\n{{generated:{producer}}}\n</me
 
 class MemoryError(VBotError, ValueError):
     """Raised when a memory operation cannot be completed."""
+
+
+class MemoryBudgetError(MemoryError):
+    """A growing mutation would push a scope past its character budget."""
+
+    def __init__(self, scope: MemoryScope, total: int, budget: int) -> None:
+        self.scope: MemoryScope = scope
+        self.total = total
+        self.budget = budget
+        super().__init__(
+            f"Memory '{scope}' scope would hold {total}/{budget} characters; free at least "
+            f"{total - budget} characters by removing or shortening entries first."
+        )
+
+
+class MemoryMatchError(MemoryError):
+    """Entry text identified no entry, or more than one, in one scope.
+
+    ``matches`` holds the matching entries of an ambiguous locator and is empty
+    when nothing matched; ``entries`` is the scope's current entry list so a caller
+    can show the Agent what it can address instead.
+    """
+
+    def __init__(
+        self,
+        scope: MemoryScope,
+        old_text: str,
+        *,
+        matches: Sequence[str],
+        entries: Sequence[str],
+    ) -> None:
+        self.scope: MemoryScope = scope
+        self.old_text = old_text
+        self.matches = tuple(matches)
+        self.entries = tuple(entries)
+        if self.matches:
+            message = (
+                f"old_text matches {len(self.matches)} entries in memory scope '{scope}'; "
+                "use a part that appears in only one entry."
+            )
+        else:
+            message = f"No entry in memory scope '{scope}' contains the old_text."
+        super().__init__(message)
+
+
+@dataclass(frozen=True)
+class MemoryTextChange:
+    """Outcome of one entry addressed by its text: previous text and new text or None."""
+
+    scope: MemoryScope
+    previous: str
+    current: str | None
 
 
 @dataclass(frozen=True)
@@ -195,6 +249,63 @@ class FilePinnedMemoryBackend:
             _write_entries(path, entries)
             return MemoryEntry(id=entry_id, scope=validated_scope, content=removed)
 
+    def find_matches(self, workspace: Path, scope: MemoryScope, old_text: str) -> list[str]:
+        """Return the entries of one scope that ``old_text`` identifies, changing nothing."""
+        validated_scope = validate_memory_scope(scope)
+        entries = _read_entries(self._path(workspace, validated_scope))
+        return [entries[index] for index in match_memory_entries(entries, old_text)]
+
+    def replace_matching(
+        self, workspace: Path, scope: MemoryScope, old_text: str, content: str
+    ) -> MemoryTextChange:
+        """Replace the single entry ``old_text`` identifies (see :func:`match_memory_entries`).
+
+        Matching happens under the file lock, so a concurrent change cannot redirect
+        the write. New text equal to another existing entry folds the replaced entry
+        into it instead of leaving two identical entries.
+        """
+        validated_scope = validate_memory_scope(scope)
+        path = self._path(workspace, validated_scope)
+        normalized = _normalize_entry_content(content)
+        with self._file_lock(path):
+            entries = _read_entries(path)
+            index = _single_match(validated_scope, entries, old_text)
+            previous = entries[index]
+            if normalized != previous:
+                previous_total = sum(len(entry) for entry in entries)
+                if normalized in entries:
+                    entries.pop(index)
+                else:
+                    entries[index] = normalized
+                _enforce_scope_budget(validated_scope, entries, previous_total)
+                _write_entries(path, entries)
+            return MemoryTextChange(validated_scope, previous, normalized)
+
+    def remove_matching(
+        self, workspace: Path, scope: MemoryScope, old_text: str
+    ) -> MemoryTextChange:
+        """Remove the single entry ``old_text`` identifies."""
+        validated_scope = validate_memory_scope(scope)
+        path = self._path(workspace, validated_scope)
+        with self._file_lock(path):
+            entries = _read_entries(path)
+            removed = entries.pop(_single_match(validated_scope, entries, old_text))
+            _write_entries(path, entries)
+            return MemoryTextChange(validated_scope, removed, None)
+
+    def scope_usage(self, workspace: Path, scope: MemoryScope) -> tuple[int, int]:
+        """Return a scope's used characters and its budget."""
+        validated_scope = validate_memory_scope(scope)
+        entries = _read_entries(self._path(workspace, validated_scope))
+        return sum(len(entry) for entry in entries), _MAX_SCOPE_BUDGET[validated_scope]
+
+    def render_scopes(self, workspace: Path, scopes: Sequence[MemoryScope]) -> str:
+        """Render scopes exactly as the memory block shows them: heading, usage, bullets."""
+        return "\n\n".join(
+            self._render_scope_block(Path(workspace), validate_memory_scope(scope))
+            for scope in scopes
+        )
+
     def read_prompt_files(self, workspace: Path, mode: MemoryPromptMode) -> str:
         """Return the rendered pinned-memory entries for a mode.
 
@@ -208,11 +319,7 @@ class FilePinnedMemoryBackend:
         placeholder, and an unreadable file raises :class:`MemoryError`.
         """
         validated_mode = validate_memory_prompt_mode(mode)
-        blocks = [
-            self._render_scope_block(Path(workspace), scope)
-            for scope in MEMORY_PROMPT_MODE_SCOPES[validated_mode]
-        ]
-        return "\n\n".join(blocks)
+        return self.render_scopes(workspace, MEMORY_PROMPT_MODE_SCOPES[validated_mode])
 
     def _render_scope_block(self, workspace: Path, scope: MemoryScope) -> str:
         """Render one scope's memory block: heading, character usage, and entries.
@@ -257,6 +364,25 @@ class MemoryService:
 
     def remove_entry(self, workspace: Path, scope: MemoryScope, entry_id: int) -> MemoryEntry:
         return self._backend.remove_entry(workspace, scope, entry_id)
+
+    def find_matches(self, workspace: Path, scope: MemoryScope, old_text: str) -> list[str]:
+        return self._backend.find_matches(workspace, scope, old_text)
+
+    def replace_matching(
+        self, workspace: Path, scope: MemoryScope, old_text: str, content: str
+    ) -> MemoryTextChange:
+        return self._backend.replace_matching(workspace, scope, old_text, content)
+
+    def remove_matching(
+        self, workspace: Path, scope: MemoryScope, old_text: str
+    ) -> MemoryTextChange:
+        return self._backend.remove_matching(workspace, scope, old_text)
+
+    def scope_usage(self, workspace: Path, scope: MemoryScope) -> tuple[int, int]:
+        return self._backend.scope_usage(workspace, scope)
+
+    def render_scopes(self, workspace: Path, scopes: Sequence[MemoryScope]) -> str:
+        return self._backend.render_scopes(workspace, scopes)
 
     def read_prompt_files(self, workspace: Path, mode: MemoryPromptMode) -> str:
         return self._backend.read_prompt_files(workspace, mode)
@@ -392,9 +518,10 @@ def _strip_entry_bullet(line: str) -> str:
 
 
 def _write_entries(path: Path, entries: list[str]) -> None:
+    # LF on every platform: the file is vBot-owned data, and reading accepts any line ending.
     text = _render_entries_file(entries)
     try:
-        atomic_write_text(path, text)
+        atomic_write_bytes(path, text.encode("utf-8"))
     except OSError as exc:
         raise MemoryError(f"failed to write memory file {path}: {exc}") from exc
 
@@ -436,10 +563,7 @@ def _enforce_scope_budget(scope: MemoryScope, entries: list[str], previous_total
     budget = _MAX_SCOPE_BUDGET[scope]
     total = sum(len(entry) for entry in entries)
     if total > budget and total > previous_total:
-        raise MemoryError(
-            f"Memory '{scope}' scope is full ({total}/{budget} characters). "
-            "Use the list operation, then remove or replace an entry before adding."
-        )
+        raise MemoryBudgetError(scope, total, budget)
 
 
 def _entry_index(entry_id: int, entries: list[str]) -> int:
@@ -448,6 +572,74 @@ def _entry_index(entry_id: int, entries: list[str]) -> int:
     if entry_id < 1 or entry_id > len(entries):
         raise MemoryError(f"entry_id must be between 1 and {len(entries)}")
     return entry_id - 1
+
+
+_TYPOGRAPHIC_EQUIVALENTS = str.maketrans(
+    {
+        "‘": "'",
+        "’": "'",
+        "‚": "'",
+        "‛": "'",
+        "′": "'",
+        "“": '"',
+        "”": '"',
+        "„": '"',
+        "‟": '"',
+        "″": '"',
+        "‐": "-",
+        "‑": "-",
+        "‒": "-",
+        "–": "-",
+        "—": "-",
+        "−": "-",
+    }
+)
+
+
+def match_memory_entries(entries: Sequence[str], old_text: str) -> list[int]:
+    """Return the indexes of the entries ``old_text`` identifies.
+
+    ``old_text`` is part of one entry's text as the Agent saw it. Whitespace runs
+    and a copied leading ``- `` bullet are ignored. An exact whole-entry match wins,
+    then exact containment. Only when neither exists are letter case, typographic
+    quotes and dashes, and Unicode compatibility forms ignored, again whole entry
+    first. More than one index means the text is ambiguous; none means no match.
+    """
+    locator = _WHITESPACE_PATTERN.sub(" ", old_text).strip()
+    locator = locator.removeprefix(_BULLET_PREFIX).strip()
+    if not locator:
+        raise MemoryError("old_text must contain part of an entry's text")
+    for key in (_exact_entry_key, _loose_entry_key):
+        needle = key(locator)
+        whole = [index for index, entry in enumerate(entries) if key(entry) == needle]
+        if whole:
+            identical = all(entries[index] == entries[whole[0]] for index in whole)
+            return whole[:1] if identical else whole
+        partial = [index for index, entry in enumerate(entries) if needle in key(entry)]
+        if partial:
+            return partial
+    return []
+
+
+def _exact_entry_key(text: str) -> str:
+    return text
+
+
+def _loose_entry_key(text: str) -> str:
+    folded = unicodedata.normalize("NFKC", text).translate(_TYPOGRAPHIC_EQUIVALENTS).casefold()
+    return _WHITESPACE_PATTERN.sub(" ", folded).strip()
+
+
+def _single_match(scope: MemoryScope, entries: list[str], old_text: str) -> int:
+    matches = match_memory_entries(entries, old_text)
+    if len(matches) != 1:
+        raise MemoryMatchError(
+            scope,
+            old_text,
+            matches=[entries[index] for index in matches],
+            entries=entries,
+        )
+    return matches[0]
 
 
 def _memory_entries(scope: MemoryScope, entries: list[str]) -> list[MemoryEntry]:
