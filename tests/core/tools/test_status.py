@@ -315,22 +315,186 @@ def test_status_tool_returns_failure_when_session_not_found(tmp_path: Path) -> N
     assert error["code"] == "session_not_found"
 
 
-def test_status_tool_rejects_agent_id_without_session_id(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("arguments", "message"),
+    [
+        (
+            {"session_id": "missing"},
+            "No Session missing exists for Agent coder. Omit session_id to check your current "
+            "Session. If that Session belongs to another Agent, such as a Sub-Agent, also pass "
+            "that Agent's agent_id.",
+        ),
+        (
+            {"agent_id": "worker", "session_id": "missing"},
+            "No Session missing exists for Agent worker. Omit session_id to check your current "
+            "Session.",
+        ),
+        # Nothing was named, so there is no other call to suggest.
+        ({"session_id": "current"}, "No Session session-one exists for Agent coder."),
+    ],
+)
+def test_status_tool_names_the_next_call_when_session_is_missing(
+    tmp_path: Path, arguments: dict[str, object], message: str
+) -> None:
     registry = ToolRegistry()
     register_status_tool(
         registry,
         cast(AgentResolver, _StubResolver(_make_agent())),
+        cast(ChatSessionManager, _NotFoundSessions()),
+        cast(ModelRegistry, _StubModels(_make_model())),
+        ChatRunManager(),
+        None,
+    )
+
+    result = asyncio.run(_dispatch(registry, tmp_path, arguments))
+
+    assert result["error"] == {"code": "session_not_found", "message": message}
+
+
+def test_status_tool_names_the_next_call_when_agent_is_missing(tmp_path: Path) -> None:
+    registry = ToolRegistry()
+    register_status_tool(
+        registry,
+        cast(AgentResolver, _RaisingResolver(ResolutionAgentNotFoundError("Agent not found"))),
         cast(ChatSessionManager, _StubSessions([])),
         cast(ModelRegistry, _StubModels(_make_model())),
         ChatRunManager(),
         None,
     )
 
+    result = asyncio.run(_dispatch(registry, tmp_path, {"agent_id": "gone", "session_id": "s"}))
+
+    assert result["error"] == {
+        "code": "agent_not_found",
+        "message": (
+            "Agent not found: gone. Omit agent_id and session_id to check your current Session."
+        ),
+    }
+
+
+def test_status_tool_rejects_agent_id_without_session_id(tmp_path: Path) -> None:
+    sessions = _StubSessions([])
+    registry = ToolRegistry()
+    register_status_tool(
+        registry,
+        cast(AgentResolver, _StubResolver(_make_agent())),
+        cast(ChatSessionManager, sessions),
+        cast(ModelRegistry, _StubModels(_make_model())),
+        ChatRunManager(),
+        None,
+    )
+
     result = asyncio.run(_dispatch(registry, tmp_path, {"agent_id": "other"}))
+    own = asyncio.run(_dispatch(registry, tmp_path, {"agent_id": "coder"}))
+
+    assert result["ok"] is False
+    assert result["error"] == {
+        "code": "invalid_arguments",
+        "message": (
+            "status needs session_id to inspect a Session of Agent other; nothing was checked. "
+            'Call {"agent_id": "other", "session_id": "<session id>"}, for example with the '
+            "session_id from a subagent result, or omit agent_id to check your current Session."
+        ),
+    }
+    # Naming yourself without a Session checks the current Session.
+    assert own["ok"] is True
+    assert sessions.calls == [("coder", "session-one", None)]
+
+
+@pytest.mark.parametrize(
+    ("arguments", "target"),
+    [
+        # Placeholders and words for "my current Session" mean omission.
+        ({"session_id": "", "agent_id": " "}, ("coder", "session-one")),
+        ({"session_id": "current", "agent_id": "null"}, ("coder", "session-one")),
+        ({"session_id": "this", "id": "."}, ("coder", "session-one")),
+        ({"session": "ses_abcdefghijkl"}, ("coder", "ses_abcdefghijkl")),
+        ({"agent": "worker", "sessionId": "ses_abcdefghijkl"}, ("worker", "ses_abcdefghijkl")),
+        # A Session id sent as "id" is read as session_id.
+        ({"id": "ses_abcdefghijkl"}, ("coder", "ses_abcdefghijkl")),
+        (
+            {"id": "ses_abcdefghijkl", "session_id": "ses_abcdefghijkl"},
+            ("coder", "ses_abcdefghijkl"),
+        ),
+        ({"id": "ses_abcdefghijkl", "agent_id": "worker"}, ("worker", "ses_abcdefghijkl")),
+    ],
+)
+def test_status_tool_reads_clear_targets_written_other_ways(
+    tmp_path: Path, arguments: dict[str, object], target: tuple[str, str]
+) -> None:
+    sessions = _StubSessions([])
+    registry = ToolRegistry()
+    register_status_tool(
+        registry,
+        cast(AgentResolver, _StubResolver(_make_agent())),
+        cast(ChatSessionManager, sessions),
+        cast(ModelRegistry, _StubModels(_make_model())),
+        ChatRunManager(),
+        None,
+    )
+
+    result = asyncio.run(_dispatch(registry, tmp_path, arguments))
+
+    assert result["ok"] is True, result
+    data = cast(dict[str, Any], result["data"])
+    assert (data["agent_id"], data["session_id"]) == target
+    assert sessions.calls == [(*target, None)]
+
+
+@pytest.mark.parametrize(
+    ("arguments", "message"),
+    [
+        (
+            {"id": "sub_abcdefghijkl"},
+            "status was not run: sub_abcdefghijkl is a Sub-Agent work id. For that work's "
+            'progress, call subagent with {"action": "status", "id": "sub_abcdefghijkl"}. '
+            "status reports a chat Session and takes session_id, with agent_id for another "
+            "Agent's Session.",
+        ),
+        (
+            {"work_id": "sub_abcdefghijkl", "agent_id": "worker"},
+            "status was not run: sub_abcdefghijkl is a Sub-Agent work id. For that work's "
+            'progress, call subagent with {"action": "status", "id": "sub_abcdefghijkl"}. '
+            "status reports a chat Session and takes session_id, with agent_id for another "
+            "Agent's Session.",
+        ),
+        (
+            {"id": "worker"},
+            'status was not run: it has no "id" parameter, so "worker" is ambiguous. Pass a '
+            'Session as "session_id", with "agent_id" for another Agent\'s Session, or omit '
+            "both to check your current Session.",
+        ),
+        (
+            {"id": "ses_abcdefghijkl", "session_id": "ses_zzzzzzzzzzzz"},
+            "Conflicting values for session_id; provide one intended value.",
+        ),
+        (
+            {"session_id": "ses_abcdefghijkl", "session": "ses_zzzzzzzzzzzz"},
+            "Conflicting values for session_id; provide one intended value.",
+        ),
+    ],
+)
+def test_status_tool_refuses_unclear_ids_before_lookup(
+    tmp_path: Path, arguments: dict[str, object], message: str
+) -> None:
+    sessions = _StubSessions([])
+    registry = ToolRegistry()
+    register_status_tool(
+        registry,
+        cast(AgentResolver, _StubResolver(_make_agent())),
+        cast(ChatSessionManager, sessions),
+        cast(ModelRegistry, _StubModels(_make_model())),
+        ChatRunManager(),
+        None,
+    )
+
+    result = asyncio.run(_dispatch(registry, tmp_path, arguments))
 
     assert result["ok"] is False
     error = cast(dict[str, str], result["error"])
     assert error["code"] == "invalid_arguments"
+    assert message in error["message"]
+    assert sessions.calls == []
 
 
 def test_status_tool_rejects_unknown_arguments(tmp_path: Path) -> None:
