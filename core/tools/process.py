@@ -8,7 +8,8 @@ from pathlib import Path
 from typing import Any
 
 from core.tools._argument_repair import normalize_call_arguments
-from core.tools._shell_arguments import SpellingAliases, resolve_timeout
+from core.tools._call_vocabulary import SpellingAliases, spelling
+from core.tools._shell_arguments import resolve_timeout
 from core.tools.arguments import optional_number, optional_string, required_string
 from core.tools.contracts import compile_tool_contract
 from core.tools.model_names import SHELL_MODEL_NAME
@@ -158,21 +159,17 @@ _INPUT_ACTIONS = frozenset({"write", "submit", "send", "input", "stdin", "sendke
 _OUTPUT_WINDOW_FIELDS = frozenset({"offset", "lines", "tail", "maxoutputtokens"})
 
 
-def _spelling(value: str) -> str:
-    return re.sub(r"[\s_-]+", "", value.casefold())
-
-
 def _action_value(value: Any) -> Any:
     if not isinstance(value, str):
         return value
-    spelling = _spelling(value)
-    if spelling in _INPUT_ACTIONS:
+    word = spelling(value)
+    if word in _INPUT_ACTIONS:
         raise ValueError(
             f"{PROCESS_TOOL_NAME} was not run: background commands take no input; their input "
             "is closed when they start. Run interactive programs with the terminal Tool if you "
             "have it, or give the command its input through a file or a pipeline."
         )
-    return _ACTION_VALUES.get(spelling, value)
+    return _ACTION_VALUES.get(word, value)
 
 
 def _process_contract():
@@ -210,7 +207,7 @@ def normalize_process_arguments(arguments: Any) -> Any:
         return normalized
     for key in list(normalized):
         value = normalized[key]
-        if _spelling(key) in _OUTPUT_WINDOW_FIELDS or (
+        if spelling(key) in _OUTPUT_WINDOW_FIELDS or (
             key in {*_LIST_FIELDS, "process_id", "pattern"}
             and (value in (None, 0) or (isinstance(value, str) and not value.strip()))
         ):
