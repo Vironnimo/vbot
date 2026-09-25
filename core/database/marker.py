@@ -35,6 +35,7 @@ from typing import Any
 
 from core.database._connections import readonly_sqlite_uri
 from core.database.errors import (
+    DatabaseConversionRequiredError,
     DatabaseCorruptError,
     DatabaseFormatError,
     DatabaseUnavailableError,
@@ -129,6 +130,19 @@ def read_marker(data_dir: Path) -> DataStoreMarker | None:
     except OSError as exc:
         raise DatabaseUnavailableError(f"data-store marker cannot be read: {path}") from exc
     return _parse_marker(raw, path)
+
+
+def missing_marker_error(data_dir: Path) -> DatabaseConversionRequiredError:
+    """The refusal of an existing data directory without a data-store marker.
+
+    Every data directory from before persistence Generation 1 looks like this,
+    so the error names the offline converter.
+    """
+    return DatabaseConversionRequiredError(
+        f"the data directory {data_dir} has no data-store marker ({MARKER_FILE_NAME}), so it "
+        "holds no current-format data store",
+        data_dir=data_dir,
+    )
 
 
 def _parse_marker(raw: str, path: Path) -> DataStoreMarker:

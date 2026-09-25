@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from types import SimpleNamespace
 from typing import Any
 
@@ -67,6 +68,13 @@ class _RecordingLoop:
                 "created_at": "2026-08-21T12:00:00+00:00",
             },
         )
+
+
+class _InlineSessionPool:
+    """Stands in for the Session database's pool: runs the unit inline."""
+
+    async def run_async(self, function: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+        return function(*args, **kwargs)
 
 
 class _NoCommandDispatcher:

@@ -70,6 +70,8 @@ from server.rpc.validation import (
 
 JsonObject = dict[str, Any]
 MAX_CHAT_HISTORY_LIMIT = 500
+# CPU and file work of Chat RPCs: History projection (file capabilities) and
+# ``@``-mention expansion. Session reads run on the Session database's pool.
 _CHAT_RPC_WORKERS = BoundedWorkerPool(name="chat-rpc", max_workers=4)
 _LOGGER = get_logger("server.rpc.chat")
 
@@ -85,13 +87,12 @@ class _ChatHistoryProjection:
 
 @dataclass(frozen=True)
 class _ChatHistoryRead:
-    """One `chat.history` read: the snapshot and what the response adds to it.
+    """One `chat.history` read: the snapshot and the Session facts the response adds.
 
-    An ``unchanged`` snapshot carries no projection, policy or reflection Runs.
+    An ``unchanged`` snapshot carries no policy or reflection Runs.
     """
 
     history: SessionChatHistorySnapshot
-    projection: _ChatHistoryProjection | None
     compaction_policy: JsonObject | None
     reflection_runs: list[JsonObject] | None
 
@@ -131,9 +132,10 @@ async def _chat_run_result(state: Any, params: JsonObject) -> JsonObject:
         }
 
     try:
-        return await _CHAT_RPC_WORKERS.run(read)
+        response: JsonObject = await state.runtime.chat_sessions.run_async(read)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
+    return response
 
 
 async def _chat_history(state: Any, params: JsonObject) -> JsonObject:
@@ -166,7 +168,9 @@ async def _chat_history(state: Any, params: JsonObject) -> JsonObject:
                     RPC_ERROR_INVALID_REQUEST,
                     "params.session_id is required for a project agent address",
                 )
-            session_id = await _CHAT_RPC_WORKERS.run(_current_session_id, state, agent_id)
+            session_id = await state.runtime.chat_sessions.run_async(
+                _current_session_id, state, agent_id
+            )
         address = SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
         chat_runs = _state_chat_runs(state)
         while True:
@@ -180,7 +184,7 @@ async def _chat_history(state: Any, params: JsonObject) -> JsonObject:
                 if before is None and after is None
                 else None
             )
-            read = await _CHAT_RPC_WORKERS.run(
+            read = await state.runtime.chat_sessions.run_async(
                 _read_chat_history,
                 state,
                 address,
@@ -205,10 +209,18 @@ async def _chat_history(state: Any, params: JsonObject) -> JsonObject:
             if active_run_object is not None
             else None
         )
+        history = read.history
+        projection = (
+            None
+            if history.unchanged
+            else await _CHAT_RPC_WORKERS.run(
+                _project_chat_history,
+                history,
+                file_delivery=getattr(state, "file_delivery", None),
+            )
+        )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
-    history = read.history
-    projection = read.projection
     response: JsonObject = {
         "agent_id": agent_id,
         "session_id": session_id,
@@ -257,7 +269,7 @@ def _read_chat_history(
     after: str | None,
     active_reviews: list[Run] | None,
 ) -> _ChatHistoryRead:
-    """Read and project one History page in a single worker hop."""
+    """Read one History page and the Session facts it carries in one Session-pool hop."""
     session = state.runtime.chat_sessions.get(address)
     history = session.read_chat_history_snapshot(
         limit=limit,
@@ -270,10 +282,9 @@ def _read_chat_history(
         skip_unchanged=True,
     )
     if history.unchanged:
-        return _ChatHistoryRead(history, None, None, None)
+        return _ChatHistoryRead(history, None, None)
     return _ChatHistoryRead(
         history,
-        _project_chat_history(history, file_delivery=getattr(state, "file_delivery", None)),
         _session_compaction_policy(state, address) if before is None else None,
         None if active_reviews is None else _read_reflection_runs(session, active_reviews),
     )
@@ -348,7 +359,7 @@ async def _chat_reflections(state: Any, params: JsonObject) -> JsonObject:
         return _read_reflection_runs(session, active_reviews)
 
     try:
-        return {"reflection_runs": await _CHAT_RPC_WORKERS.run(read)}
+        return {"reflection_runs": await state.runtime.chat_sessions.run_async(read)}
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 
@@ -501,14 +512,17 @@ async def _expand_content_file_mentions(
     """Snapshot ``@``-mentioned files into the outgoing content, if any.
 
     Runs before Run start *and* before busy-session enqueue, so a queued message
-    carries the files as they were when the user hit send. File I/O runs in a
-    worker thread to keep the event loop free.
+    carries the files as they were when the user hit send. The root resolution
+    reads the Agent (whose current-Session pointer it verifies) on the Session
+    database's pool; the file I/O runs on the Chat RPC pool.
     """
     if not file_mentions:
         return content
     runtime = state.runtime
     try:
-        root = resolve_mention_root(runtime, agent_id, project_id)
+        root = await runtime.chat_sessions.run_async(
+            resolve_mention_root, runtime, agent_id, project_id
+        )
         return await _CHAT_RPC_WORKERS.run(
             expand_file_mentions,
             content,
@@ -534,11 +548,14 @@ async def _mark_current_session(state: Any, agent_id: str, session_id: str) -> N
     every message would emit a redundant ``resource_changed(kind="agents")``
     signal that tears down the chat view in every connected window.
     """
-    agents = getattr(getattr(state, "runtime", None), "agents", None)
-    if agents is None:
+    runtime = getattr(state, "runtime", None)
+    agents = getattr(runtime, "agents", None)
+    if runtime is None or agents is None:
         return
+    # Agent reads verify, and updates validate, the pointer against Sessions.
+    chat_sessions = runtime.chat_sessions
     try:
-        agent = await _CHAT_RPC_WORKERS.run(agents.get, agent_id)
+        agent = await chat_sessions.run_async(agents.get, agent_id)
     except Exception as exc:
         _LOGGER.warning(
             "Failed to read agent for current-session mark (agent=%s): %s",
@@ -549,7 +566,7 @@ async def _mark_current_session(state: Any, agent_id: str, session_id: str) -> N
     if agent.current_session_id == session_id:
         return
     try:
-        await _CHAT_RPC_WORKERS.run(agents.update, agent_id, current_session_id=session_id)
+        await chat_sessions.run_async(agents.update, agent_id, current_session_id=session_id)
     except Exception as exc:
         _LOGGER.warning(
             "Failed to mark current session (agent=%s session=%s): %s",

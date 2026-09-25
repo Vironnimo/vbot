@@ -14,6 +14,7 @@ from core.runs import ChatRunManager
 from core.tools import ToolRegistry, tool_success
 from server.rpc.catalog_methods import _list_commands, _list_files, _list_tools
 from server.rpc.errors import RpcError
+from tests.server.rpc.chat_methods_test_support import _InlineSessionPool
 
 
 class _Skill:
@@ -445,6 +446,7 @@ def _files_state(
             )
         ),
         storage=SimpleNamespace(data_dir=data_dir),
+        chat_sessions=_InlineSessionPool(),
     )
     return SimpleNamespace(runtime=runtime)
 

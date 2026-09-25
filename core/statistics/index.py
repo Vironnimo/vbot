@@ -89,7 +89,6 @@ CREATE TABLE stat_sessions (
     last_message_id TEXT,
     min_instant INTEGER,
     max_instant INTEGER,
-    untimed_records INTEGER NOT NULL,
     UNIQUE (project_id, agent_id, session_id)
 );
 CREATE TABLE stat_records (
@@ -97,7 +96,7 @@ CREATE TABLE stat_records (
     seq INTEGER NOT NULL,
     role TEXT NOT NULL,
     timestamp TEXT NOT NULL,
-    instant INTEGER,
+    instant INTEGER NOT NULL,
     run_id TEXT,
     PRIMARY KEY (session_key, seq)
 ) WITHOUT ROWID;
@@ -108,8 +107,8 @@ CREATE TABLE stat_calls (
     session_key INTEGER NOT NULL,
     seq INTEGER NOT NULL,
     kind INTEGER NOT NULL,
-    instant INTEGER,
-    day INTEGER,
+    instant INTEGER NOT NULL,
+    day INTEGER NOT NULL,
     model_key TEXT NOT NULL,
     has_model INTEGER NOT NULL,
     visible INTEGER NOT NULL,
@@ -141,7 +140,7 @@ CREATE INDEX stat_calls_unpriced
 CREATE TABLE stat_tools (
     session_key INTEGER NOT NULL,
     seq INTEGER NOT NULL,
-    instant INTEGER,
+    instant INTEGER NOT NULL,
     name TEXT NOT NULL,
     outcome INTEGER,
     error_code TEXT,
@@ -151,15 +150,15 @@ CREATE TABLE stat_tools (
 CREATE TABLE stat_errors (
     session_key INTEGER NOT NULL,
     seq INTEGER NOT NULL,
-    instant INTEGER,
-    day INTEGER,
+    instant INTEGER NOT NULL,
+    day INTEGER NOT NULL,
     kind TEXT NOT NULL,
     PRIMARY KEY (session_key, seq)
 ) WITHOUT ROWID;
 CREATE TABLE stat_checkpoints (
     session_key INTEGER NOT NULL,
     seq INTEGER NOT NULL,
-    instant INTEGER,
+    instant INTEGER NOT NULL,
     strategy TEXT NOT NULL,
     context_before INTEGER,
     context_after INTEGER,
@@ -169,8 +168,8 @@ CREATE TABLE stat_checkpoints (
 CREATE TABLE stat_runs (
     session_key INTEGER NOT NULL,
     seq INTEGER NOT NULL,
-    instant INTEGER,
-    day INTEGER,
+    instant INTEGER NOT NULL,
+    day INTEGER NOT NULL,
     run_id TEXT,
     status TEXT NOT NULL,
     duration_ms INTEGER,
@@ -309,7 +308,6 @@ class _StoredSession:
     last_message_id: str | None
     min_instant: int | None
     max_instant: int | None
-    untimed_records: int
 
 
 class _SourceFailureError(Exception):
@@ -573,13 +571,11 @@ def _stored_sessions(connection: sqlite3.Connection) -> dict[tuple[str, str, str
             last_message_id=row[7],
             min_instant=row[8],
             max_instant=row[9],
-            untimed_records=int(row[10]),
         )
         for row in connection.execute(
             """
             SELECT project_id, agent_id, session_id, session_key, generation_id,
-                history_revision, next_seq, last_message_id, min_instant, max_instant,
-                untimed_records
+                history_revision, next_seq, last_message_id, min_instant, max_instant
             FROM stat_sessions
             """
         )
@@ -625,8 +621,8 @@ def _replace(
             """
             INSERT INTO stat_sessions (
                 project_id, agent_id, session_id, generation_id, history_revision,
-                next_seq, last_message_id, min_instant, max_instant, untimed_records
-            ) VALUES (?, ?, ?, '', 0, 0, NULL, NULL, NULL, 0)
+                next_seq, last_message_id, min_instant, max_instant
+            ) VALUES (?, ?, ?, '', 0, 0, NULL, NULL, NULL)
             """,
             key,
         )
@@ -642,7 +638,6 @@ def _replace(
         batch.cursor,
         min_instant=rows.min_instant,
         max_instant=rows.max_instant,
-        untimed_records=rows.untimed_records,
     )
     return IndexedSession(session_key, batch.cursor.generation_id, summary)
 
@@ -656,7 +651,6 @@ def _append(connection: sqlite3.Connection, row: _StoredSession, batch: SessionR
         batch.cursor,
         min_instant=_bound(min, row.min_instant, rows.min_instant),
         max_instant=_bound(max, row.max_instant, rows.max_instant),
-        untimed_records=row.untimed_records + rows.untimed_records,
     )
 
 
@@ -695,7 +689,6 @@ def _write_session_state(
     *,
     min_instant: int | None,
     max_instant: int | None,
-    untimed_records: int,
 ) -> None:
     connection.execute(
         """
@@ -705,8 +698,7 @@ def _write_session_state(
             next_seq = ?,
             last_message_id = ?,
             min_instant = ?,
-            max_instant = ?,
-            untimed_records = ?
+            max_instant = ?
         WHERE session_key = ?
         """,
         (
@@ -716,7 +708,6 @@ def _write_session_state(
             cursor.last_message_id,
             min_instant,
             max_instant,
-            untimed_records,
             session_key,
         ),
     )

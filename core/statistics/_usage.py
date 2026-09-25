@@ -131,8 +131,6 @@ class UsageAccumulator:
                 accumulator.cache_input_tokens += cache_input
                 accumulator.cache_read_tokens += cache_read
                 accumulator.cache_write_tokens += cache_write
-            if day is None:
-                continue
             daily = ledger.day(day)
             daily.measured_input_tokens += measured_input
             daily.estimated_input_tokens += estimated_input

@@ -20,6 +20,8 @@ from server.rpc.validation import _reject_unsupported
 
 JsonObject = dict[str, Any]
 _LOGGER = get_logger("server.rpc.extensions")
+# Projects an already-read temporary Session History snapshot (CPU and file
+# capability checks); the Session read itself runs on the Session database's pool.
 _HISTORY_WORKERS = BoundedWorkerPool(name="extension-history", max_workers=2)
 _FILE_URL_PATTERN = re.compile(r"/api/files/[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+")
 

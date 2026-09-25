@@ -31,6 +31,7 @@ from core.database.errors import (
     DatabaseUnavailableError,
     IncidentConflictError,
     UpdateRollbackRefusedError,
+    generation_1_conversion_hint,
 )
 from core.database.marker import (
     MAINTENANCE_GUARD_FILE_NAME,
@@ -128,6 +129,7 @@ __all__ = [
     "describe_missing_databases",
     "find_update_snapshot",
     "finish_maintenance",
+    "generation_1_conversion_hint",
     "has_live_connection",
     "is_extension_database_name",
     "is_wal_reset_vulnerable",

@@ -478,6 +478,35 @@ def test_projection_version_mismatch_discards_and_rebuilds_the_index(tmp_path: P
     assert _index_identity(tmp_path)["projection_version"] == "1"
 
 
+def test_an_index_with_nullable_instants_is_rebuilt_at_the_same_version(tmp_path: Path) -> None:
+    service, manager, _session = _service(tmp_path)
+    service.report()
+    service._index.close()
+    # The shape before stored timestamps became strictly canonical: nullable
+    # instants and an untimed-record counter.
+    with closing(sqlite3.connect(_index_path(tmp_path))) as connection, connection:
+        connection.execute("DROP TABLE stat_errors")
+        connection.execute(
+            "CREATE TABLE stat_errors (session_key INTEGER NOT NULL, seq INTEGER NOT NULL, "
+            "instant INTEGER, day INTEGER, kind TEXT NOT NULL, PRIMARY KEY (session_key, seq)) "
+            "WITHOUT ROWID"
+        )
+        connection.execute(
+            "ALTER TABLE stat_sessions ADD COLUMN untimed_records INTEGER NOT NULL DEFAULT 0"
+        )
+
+    restarted = StatisticsService(manager, cast(AgentDirectory, _FakeAgents(["main"])))
+    report = restarted.report()
+
+    assert report.usage.totals.measured_input_tokens == 10
+    assert _index_identity(tmp_path)["projection_version"] == "1"
+    with closing(sqlite3.connect(_index_path(tmp_path))) as connection:
+        columns = {row[1]: row[3] for row in connection.execute("PRAGMA table_info(stat_errors)")}
+        session_columns = {row[1] for row in connection.execute("PRAGMA table_info(stat_sessions)")}
+    assert columns["instant"] == 1
+    assert "untimed_records" not in session_columns
+
+
 def test_fork_history_counts_once_and_leaves_with_its_deleted_origin(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

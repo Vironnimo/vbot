@@ -77,8 +77,8 @@ async def test_status_and_incident_acknowledgement_are_operator_safe(tmp_path: P
             cause="test-corruption",
             quarantine_path=tmp_path / "quarantine" / "sessions" / "bundle",
             restored_snapshot_id="snapshot-1",
-            restored_snapshot_time="2026-08-31T10:00:00Z",
-            failure_detected_at="2026-08-31T10:05:00Z",
+            restored_snapshot_time="2026-08-31T10:00:00.000000Z",
+            failure_detected_at="2026-08-31T10:05:00.000000Z",
         )
         incident_status = await dispatch_rpc(state, {"method": "data_store.status", "params": {}})
         incident = incident_status["result"]["incidents"][0]

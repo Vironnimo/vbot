@@ -126,6 +126,22 @@ def test_snapshot_captures_every_registered_database_as_one_verified_member_each
     assert "open during the snapshot" not in json.dumps(summary)
 
 
+@pytest.mark.parametrize("observed_at", ["2026-09-01T10:00:00Z", None, 17])
+def test_a_health_record_with_a_non_canonical_time_is_malformed(
+    data_dir: Path, observed_at: object
+) -> None:
+    snapshot_with_notes(data_dir, "hello")
+    health_path = snapshot_root(data_dir) / snapshots_module.SNAPSHOT_HEALTH_FILE_NAME
+    payload = json.loads(health_path.read_text(encoding="utf-8"))
+    assert read_snapshot_health(data_dir) == payload
+    health_path.write_text(json.dumps({**payload, "observed_at": observed_at}), encoding="utf-8")
+
+    health = read_snapshot_health(data_dir)
+
+    assert health["state"] == "degraded"
+    assert health["observed_at"] is None
+
+
 def test_a_snapshot_copy_opens_as_a_standalone_database(data_dir: Path, tmp_path: Path) -> None:
     snapshot = snapshot_with_notes(data_dir, "hello")
     copy_dir = tmp_path / "copy"
@@ -252,10 +268,19 @@ def test_an_older_vbot_restores_from_a_manifest_with_fields_a_newer_one_added(
         lambda payload: payload.update(manifest_version=2),
         lambda payload: payload.pop("reason"),
         lambda payload: payload["members"]["notes"].pop("facts"),
+        # Valid ISO 8601, but a manifest is written canonical: anything else is damage.
+        lambda payload: payload.update(created_at="2026-09-01T10:00:00Z"),
+        lambda payload: payload.update(created_at="2026-09-01T12:00:00.000000+02:00"),
     ],
-    ids=["newer-version", "missing-field", "missing-member-field"],
+    ids=[
+        "newer-version",
+        "missing-field",
+        "missing-member-field",
+        "non-canonical-created-at",
+        "offset-created-at",
+    ],
 )
-def test_a_newer_or_incomplete_manifest_is_not_a_snapshot(
+def test_a_newer_damaged_or_incomplete_manifest_is_not_a_snapshot(
     data_dir: Path, change: Callable[[dict[str, Any]], None]
 ) -> None:
     snapshot = snapshot_with_notes(data_dir, "retained")
@@ -313,19 +338,16 @@ def test_a_snapshot_of_another_data_directory_is_excluded(data_dir: Path) -> Non
     )
 
 
-@pytest.mark.parametrize(
-    ("older_time", "newer_time"),
-    [
-        ("2026-09-01T10:00:00Z", "2026-09-01T10:00:00.100000Z"),
-        ("2026-09-01T12:00:00+03:00", "2026-09-01T10:00:00Z"),
-    ],
-)
-def test_snapshot_ordering_and_retention_use_timestamp_instants(
-    data_dir: Path, monkeypatch: pytest.MonkeyPatch, older_time: str, newer_time: str
+def test_snapshot_ordering_and_retention_use_the_manifest_creation_time(
+    data_dir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    older = snapshot_with_notes(data_dir, "one")
+    # Created later but stamped earlier: the manifest time decides the order.
     newer = snapshot_with_notes(data_dir, "two")
-    for snapshot, created_at in ((older, older_time), (newer, newer_time)):
+    older = snapshot_with_notes(data_dir, "one")
+    for snapshot, created_at in (
+        (older, "2026-09-01T10:00:00.000000Z"),
+        (newer, "2026-09-01T10:00:00.100000Z"),
+    ):
 
         def stamp(payload: dict[str, Any], value: str = created_at) -> None:
             payload["created_at"] = value
@@ -457,7 +479,9 @@ def test_retention_always_keeps_the_just_published_snapshot(
     data_dir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     first = snapshot_with_notes(data_dir, "hello")
-    _rewrite_manifest(first, lambda payload: payload.update(created_at="2099-01-01T00:00:00Z"))
+    _rewrite_manifest(
+        first, lambda payload: payload.update(created_at="2099-01-01T00:00:00.000000Z")
+    )
     monkeypatch.setattr(snapshots_module, "SNAPSHOT_KEEP_COUNT", 1)
 
     published = snapshot_with_notes(data_dir, "again")

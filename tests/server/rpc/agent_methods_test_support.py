@@ -23,6 +23,9 @@ class _FakeResolver:
         self.resolved.append((project_id, agent_id))
         return SimpleNamespace(id=agent_id)
 
+    async def resolve_agent_async(self, project_id: str | None, agent_id: str) -> Any:
+        return self.resolve_agent(project_id, agent_id)
+
 
 class _FakeSessions:
     def __init__(self) -> None:
@@ -67,6 +70,10 @@ class _FakeSessions:
         self.archive_error: Exception | None = None
         self.fork_error: Exception | None = None
 
+    async def run_async(self, function: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+        # Stands in for the Session database's worker pool.
+        return function(*args, **kwargs)
+
     def create(self, agent_id: str, *, session_id: Any = None, project_id: Any = None) -> Any:
         self.created.append(
             {"agent_id": agent_id, "session_id": session_id, "project_id": project_id}
@@ -78,6 +85,9 @@ class _FakeSessions:
         if address.session_id in self.missing:
             raise ChatSessionError(f"session does not exist: {address.session_id}")
         return SimpleNamespace(id=address.session_id)
+
+    async def get_async(self, address: Any) -> Any:
+        return self.get(address)
 
     async def archive(self, address: Any) -> Any:
         self.archived.append((address.agent_id, address.session_id, address.project_id))
@@ -123,6 +133,9 @@ class _FakeSessions:
         self.marked_read.append((address.agent_id, address.session_id, run_id, address.project_id))
         return dict(self.mark_read_result)
 
+    async def mark_terminal_run_read_async(self, address: Any, run_id: str) -> dict[str, Any]:
+        return self.mark_terminal_run_read(address, run_id)
+
     async def fork(
         self,
         source: Any,
@@ -165,6 +178,9 @@ class _FakeSessions:
         key = (address.agent_id, address.session_id, address.project_id)
         return self.saved_metadata.get(key, self._fork_metadata.get(key, {}))
 
+    async def get_metadata_async(self, address: Any) -> dict[str, Any]:
+        return self.get_metadata(address)
+
     def set_metadata(self, address: Any, metadata: dict[str, Any]) -> None:
         self.saved_metadata[(address.agent_id, address.session_id, address.project_id)] = dict(
             metadata
@@ -184,6 +200,9 @@ class _FakeSessions:
         # Mirror the real primitive's blank→None clear so the handler response is realistic.
         normalized = " ".join(title.split())
         return normalized or None
+
+    async def set_title_async(self, address: Any, title: str) -> str | None:
+        return self.set_title(address, title)
 
 
 class _FakeTerminalManager:

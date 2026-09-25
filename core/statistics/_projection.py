@@ -135,13 +135,12 @@ class ProjectedRows:
     skills: list[tuple[Any, ...]] = field(default_factory=list)
     min_instant: int | None = None
     max_instant: int | None = None
-    untimed_records: int = 0
 
     def add(self, seq: int, message: ChatMessage) -> None:
         """Project one canonical message at its Session sequence number."""
         key = self.session_key
         instant = timestamp_instant(message.timestamp)
-        day = None if instant is None else instant // MICROSECONDS_PER_DAY
+        day = instant // MICROSECONDS_PER_DAY
         self._observe_instant(instant)
         self.records.append((key, seq, message.role, message.timestamp, instant, message.run_id))
         role = message.role
@@ -168,16 +167,13 @@ class ProjectedRows:
         elif role == "run_summary":
             self._add_run(seq, instant, day, message)
 
-    def _observe_instant(self, instant: int | None) -> None:
-        if instant is None:
-            self.untimed_records += 1
-            return
+    def _observe_instant(self, instant: int) -> None:
         if self.min_instant is None or instant < self.min_instant:
             self.min_instant = instant
         if self.max_instant is None or instant > self.max_instant:
             self.max_instant = instant
 
-    def _add_tool(self, seq: int, instant: int | None, message: ChatMessage) -> None:
+    def _add_tool(self, seq: int, instant: int, message: ChatMessage) -> None:
         activation = skill_tool_activation_name(message)
         outcome: int | None
         error_code: str | None = None
@@ -206,9 +202,7 @@ class ProjectedRows:
             )
         )
 
-    def _add_checkpoint(
-        self, seq: int, instant: int | None, day: int | None, message: ChatMessage
-    ) -> None:
+    def _add_checkpoint(self, seq: int, instant: int, day: int, message: ChatMessage) -> None:
         usage = message.usage or {}
         self.checkpoints.append(
             (
@@ -233,9 +227,7 @@ class ProjectedRows:
                 visible=False,
             )
 
-    def _add_run(
-        self, seq: int, instant: int | None, day: int | None, message: ChatMessage
-    ) -> None:
+    def _add_run(self, seq: int, instant: int, day: int, message: ChatMessage) -> None:
         timing_started = _timing_field(message.timing, "started_at")
         timing_completed = _timing_field(message.timing, "completed_at")
         self.runs.append(
@@ -258,8 +250,8 @@ class ProjectedRows:
         self,
         seq: int,
         kind: int,
-        instant: int | None,
-        day: int | None,
+        instant: int,
+        day: int,
         model: Any,
         usage: Any,
         *,

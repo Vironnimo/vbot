@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 
 from core.config_validation import JsonDiagnostic, add_error
+from core.database import GENERATION_1_CONVERTER_COMMAND
 from core.json_documents import (
     DOCUMENTS_OUTSIDE_SNAPSHOTS,
     DURABLE_DOCUMENTS,
@@ -177,6 +178,13 @@ def test_validate_format_version_rejects_unusable_versions(
     assert validate_format_version(diagnostics, data, 1) is False
     assert [diagnostic.path for diagnostic in diagnostics] == ["$.format_version"]
     assert message in diagnostics[0].message
+
+
+def test_a_missing_format_version_names_the_generation_1_converter() -> None:
+    diagnostics: list[JsonDiagnostic] = []
+
+    assert validate_format_version(diagnostics, {}, 1) is False
+    assert f"`{GENERATION_1_CONVERTER_COMMAND} <data-dir>`" in diagnostics[0].message
 
 
 def test_validate_format_version_rejects_an_older_version() -> None:
