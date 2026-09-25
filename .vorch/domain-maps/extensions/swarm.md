@@ -116,8 +116,7 @@ Targeted edits run `_wiki_edit.py`, aligned with `apply_patch`: precise
 same edit without shared blank boundary lines, then already-applied detection, and
 only then similarity for the lines the edit keeps. Every line the edit replaces
 must still match precisely, and the page keeps its own wording in the kept lines,
-so similarity never overwrites a peer's text. This refines user decision A
-(originally every `old_text` line precise) under the Tool overhaul brief
+so similarity never overwrites a peer's text
 (`test_wiki_old_text_must_match_every_changed_line_precisely`). Ambiguity is
 terminal. Misses carry bounded line hints (closest passages, or the line holding
 most of a one-line fragment) in `SwarmStoreError.details`. With an older revision,
