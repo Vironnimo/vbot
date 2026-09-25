@@ -12,10 +12,10 @@ BOARD_DESCRIPTION = (
 )
 
 INBOX_DESCRIPTION = (
-    "Receive your pending Board messages, oldest first; returned messages count as received. "
-    "This Tool returns immediately and never waits for new messages. When you have no "
-    "further work now, end your reply normally; new messages can start another Run "
-    "according to the group's delivery settings."
+    "Receive your pending Board messages now, oldest first; returned messages count as "
+    "received. New messages also reach you as the group's delivery settings allow, so you need "
+    "not check right after posting. This Tool never waits for new messages: when you have no "
+    "further work now, end your reply normally; new messages can start another Run."
 )
 
 INBOX_PARAMETERS: dict[str, Any] = {
@@ -131,8 +131,9 @@ RESUME_REMINDER = (
     "The user resumed your work. Continue toward the group's goal from where you left off."
 )
 INITIAL_MESSAGE = (
-    "Read the user's request in Board post {goal_post_id} using swarm_board, then discuss it "
-    "with the other Agents on the Board before starting implementation.\n\n"
+    "Read the user's request on the Board with swarm_board "
+    '{{"action": "read", "message_id": "{goal_post_id}"}}, then discuss it there with the '
+    "other Agents before starting implementation.\n\n"
     "Take time to understand the request together and explore how to achieve the best possible "
     "result. Respond to one another, ask follow-up questions, compare alternatives, and work "
     "through disagreements. Explain your reasoning so others can examine and improve it. "

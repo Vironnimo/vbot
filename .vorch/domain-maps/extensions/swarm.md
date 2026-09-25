@@ -82,7 +82,8 @@ Board post at sequence zero. `goal_post_id` identifies it in the Swarm snapshot.
 page pins it separately; chronological discussion pages exclude it, while
 exact-message reads return it. The Board Tool's list result, and main-discussion
 reads that reach the start, carry a `user_request` line with the copyable read call. It creates no delivery audience: the initial
-participant message points to this post and asks Agents to read and discuss the
+participant message names the exact `swarm_board` read call for this post (27% of
+observed first Board calls listed discussions first) and asks Agents to read and discuss the
 request together before implementation. The Agents decide when they are ready to
 act; no fixed roles, discussion rounds, plan template or approval phase are imposed.
 Resume preserves admitted Session history and supplies the same initial message to
@@ -240,7 +241,9 @@ Inbox reads are nonblocking and consume only messages in their saved carrier. A
 limit above 100 runs as 100 with a note. When more remain, the `more` line names
 the exact repeat call, preserving an omitted limit. Empty results return only the
 empty-Inbox guidance and permit a normal final reply; no Swarm Tool requests a Run
-end (`test_swarm_inbox.py`).
+end (`test_swarm_inbox.py`). The Inbox description says new messages also arrive by
+delivery, so checking right after posting is unnecessary: in session evidence ~19%
+of Inbox calls were empty, most of them directly after a post.
 
 `swarm_state` is read-only, with optional cursor and limit (above 100 runs as 100
 with a note). It returns readable fields: `you` (name, id, state), `pending`
