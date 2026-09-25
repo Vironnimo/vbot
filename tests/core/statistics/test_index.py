@@ -39,7 +39,7 @@ def test_index_is_a_kernel_disposable_projection(tmp_path: Path) -> None:
     identity = _index_identity(tmp_path)
     assert identity["application_id"] == APPLICATION_IDS["statistics"]
     assert identity["database_name"] == "statistics"
-    assert identity["projection_version"] == "1"
+    assert identity["projection_version"] == "2"
 
 
 def test_discard_removes_rollback_journal(tmp_path: Path) -> None:
@@ -505,7 +505,7 @@ def test_projection_version_mismatch_discards_and_rebuilds_the_index(tmp_path: P
     report = restarted.report()
 
     assert report.usage.totals.measured_input_tokens == 10
-    assert _index_identity(tmp_path)["projection_version"] == "1"
+    assert _index_identity(tmp_path)["projection_version"] == "2"
 
 
 def test_an_index_with_nullable_instants_is_rebuilt_at_the_same_version(tmp_path: Path) -> None:
@@ -529,7 +529,7 @@ def test_an_index_with_nullable_instants_is_rebuilt_at_the_same_version(tmp_path
     report = restarted.report()
 
     assert report.usage.totals.measured_input_tokens == 10
-    assert _index_identity(tmp_path)["projection_version"] == "1"
+    assert _index_identity(tmp_path)["projection_version"] == "2"
     with closing(sqlite3.connect(_index_path(tmp_path))) as connection:
         columns = {row[1]: row[3] for row in connection.execute("PRAGMA table_info(stat_errors)")}
         session_columns = {row[1] for row in connection.execute("PRAGMA table_info(stat_sessions)")}

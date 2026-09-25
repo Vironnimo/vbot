@@ -24,6 +24,7 @@ APPLICATION_IDS: Mapping[str, int] = MappingProxyType(
         "decisions": 0x56424443,  # VBDC
         "channels": 0x56424348,  # VBCH
         "provider_usage": 0x56425055,  # VBPU
+        "model_usage": 0x56424D55,  # VBMU
         "extensions": 0x56424558,  # VBEX
         "statistics": 0x56425354,  # VBST
         "recall_index": 0x56425249,  # VBRI

@@ -95,6 +95,7 @@ if TYPE_CHECKING:
     from core.model_tasks.speech_local import LocalSpeechError, LocalSpeechExecutor
     from core.model_tasks.speech_providers import ProviderSpeechClient, audio_format_from
     from core.model_tasks.speech_types import SpeechSynthesisResult, SpeechTranscriptionResult
+    from core.model_tasks.task_execution import TaskUsageContext
     from core.model_tasks.video import (
         VideoConfigurationError,
         VideoError,
@@ -107,6 +108,7 @@ if TYPE_CHECKING:
 
 
 _EXPORT_MODULES = {
+    "TaskUsageContext": "core.model_tasks.task_execution",
     "SPEECH_TASK_TYPES": "core.model_tasks.constants",
     "SUPPORTED_TASK_TYPES": "core.model_tasks.constants",
     "TASK_IMAGE_GENERATION": "core.model_tasks.constants",
@@ -274,6 +276,7 @@ __all__ = [
     "TaskModelTarget",
     "TaskModelTargetRef",
     "TaskModelValidationError",
+    "TaskUsageContext",
     "VideoConfigurationError",
     "VideoError",
     "VideoExecutionError",

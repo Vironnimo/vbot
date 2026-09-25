@@ -99,6 +99,7 @@ def build_chat_loop(runtime: Any, **kwargs: Any) -> ChatLoop:
                 lambda _run, _session: False,
             )(run, session)
         ),
+        usage_recorder=getattr(runtime, "usage_recorder", None),
     )
     return ChatLoop(dependencies, **kwargs)
 
