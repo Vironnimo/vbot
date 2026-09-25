@@ -4,6 +4,8 @@
 Conformance scenarios prescribe arguments and do not establish usability.
 tool_first_use supplies natural tasks and competing production Tools, executes
 disposable effects, and retains full synthetic evidence in --first-use-report.
+live_tools runs the Live call backend model on voice-style requests against a
+scripted vBot and judges its first Tool call; transcripts go to --live-report.
 Credentials are never included in reports.
 
 Examples:
@@ -90,6 +92,7 @@ from scripts.provider_probe.transport import (  # noqa: E402
     _probe_stream,
 )
 from scripts.provider_probe.workflow_first_use import _probe_first_use  # noqa: E402
+from scripts.provider_probe.workflow_live import _probe_live_tools  # noqa: E402
 from scripts.provider_probe.workflow_mcp import _probe_mcp_workflow  # noqa: E402
 from scripts.provider_probe.workflow_patch import _probe_apply_patch  # noqa: E402
 from scripts.provider_probe.workflow_recall import _probe_recall_workflow  # noqa: E402
@@ -121,6 +124,14 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--swarm-case", default="all")
     parser.add_argument("--reflection-case", default="all")
     parser.add_argument("--recall-case", default="all")
+    parser.add_argument(
+        "--live-case", default="all", help="Live case ids, comma-separated, or all."
+    )
+    parser.add_argument(
+        "--live-report",
+        type=Path,
+        help="Write the Live probe trials with their Model transcripts for review.",
+    )
     parser.add_argument(
         "--recall-report",
         type=Path,
@@ -353,32 +364,39 @@ async def _run(args: argparse.Namespace) -> int:
         "swarm_tool",
         "reflection_workflow",
         "recall_workflow",
+        "live_tools",
     }:
         runtime = Runtime(Config(data_dir=args.data_dir))
         _start_probe_runtime(runtime)
         try:
             adapter = runtime.get_adapter(ConnectionRef(args.provider, args.connection))
             try:
-                probe = (
-                    _probe_first_use
-                    if args.scenario == "tool_first_use"
-                    else _probe_search_files
-                    if args.scenario == "search_files"
-                    else _probe_tool_tolerance
-                    if args.scenario == "tool_tolerance"
-                    else _probe_recall_workflow
-                    if args.scenario == "recall_workflow"
-                    else _probe_terminal
-                    if args.scenario == "terminal"
-                    else _probe_apply_patch
-                    if args.scenario == "apply_patch"
-                    else _probe_reflection_workflow
-                    if args.scenario == "reflection_workflow"
-                    else _probe_swarm_tool
-                    if args.scenario == "swarm_tool"
-                    else _probe_mcp_workflow
-                )
-                result = await probe(ModelFacingAdapter(adapter), args)
+                if args.scenario == "live_tools":
+                    # Live requests resolve the Model's recommended temperature like production.
+                    result = await _probe_live_tools(
+                        ModelFacingAdapter(adapter), args, models=runtime.models
+                    )
+                else:
+                    probe = (
+                        _probe_first_use
+                        if args.scenario == "tool_first_use"
+                        else _probe_search_files
+                        if args.scenario == "search_files"
+                        else _probe_tool_tolerance
+                        if args.scenario == "tool_tolerance"
+                        else _probe_recall_workflow
+                        if args.scenario == "recall_workflow"
+                        else _probe_terminal
+                        if args.scenario == "terminal"
+                        else _probe_apply_patch
+                        if args.scenario == "apply_patch"
+                        else _probe_reflection_workflow
+                        if args.scenario == "reflection_workflow"
+                        else _probe_swarm_tool
+                        if args.scenario == "swarm_tool"
+                        else _probe_mcp_workflow
+                    )
+                    result = await probe(ModelFacingAdapter(adapter), args)
             finally:
                 await adapter.aclose()
         finally:
