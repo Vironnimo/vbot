@@ -243,6 +243,9 @@ def _session_reads(address: SessionAddress, anchor: str) -> dict[str, Callable[[
         "active_user_count": lambda r: _store_history.active_user_message_count(
             r, address, limit=2
         ),
+        "tool_result_payload": lambda r: _store_history.tool_result_payload(
+            r, address, "res_x", "mcp"
+        ),
         "latest_note": lambda r: _store_history.latest_note(r, address, content_prefix="x"),
         "skill_activations": lambda r: _store_history.current_skill_activation_messages(r, address),
         "history_snapshot": lambda r: _store_history.history_snapshot(r, address),
@@ -443,3 +446,16 @@ def test_completion_activity_searches_each_scope_by_live_address_index(history) 
         re.match(r"SEARCH s USING INDEX \w+ \(project_id=\? AND agent_id=\?", p) for p in plans
     )
     assert not any(re.match(r"SCAN s\b", plan) for plan in plans)
+
+
+def test_payload_reads_start_from_the_payload_id(history) -> None:
+    address, _anchor, connection = history
+    recorder, statements = _recording(connection)
+
+    _store_history.tool_result_payload(recorder, address, "res_x", "mcp")
+
+    # The view only filters the candidates the id finds; it never drives the read.
+    plans = [
+        detail for detail in _plans(connection, statements) if "tool_result_payloads" in detail
+    ]
+    assert plans == ["SEARCH p USING INDEX tool_result_payloads_by_id (payload_id=?)"]
