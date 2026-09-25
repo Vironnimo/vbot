@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import AsyncIterator, Awaitable
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING
 
+from core.chat._boundaries import _finish_visible_boundary
 from core.chat._queued_input import persist_steering_input, rebuild_after_steering
 from core.chat._request_builder import _run_prompt_method
 from core.chat._run_state import _AssistantStep, _RequestState
@@ -485,6 +486,13 @@ class AgenticProgression:
                     int(request_context_usage["tokens"]),
                     self._dependencies.models.pricing_for(target.model_reference),
                 )
+                recorder = self._dependencies.usage_recorder
+                call_id = (assistant_message.usage or {}).get("usage_call_id")
+                if recorder is not None and isinstance(call_id, str):
+                    assistant_message = replace(
+                        assistant_message,
+                        usage=await recorder.update(call_id, assistant_message.usage),
+                    )
                 assistant_request_message = await _CHAT_TRANSFORM_WORKERS.run(
                     _assistant_continuation_dict,
                     assistant_message,
@@ -992,28 +1000,3 @@ class AgenticProgression:
                 # answer is already durable and remains the Run result; the Run
                 # manager sees ``cancel_requested`` and marks the Run cancelled.
         return assistant_message
-
-
-_BoundaryResult = TypeVar("_BoundaryResult")
-
-
-async def _finish_visible_boundary(
-    work: Awaitable[_BoundaryResult], run: Run, preserve_after_cancel: bool
-) -> _BoundaryResult:
-    """Finish already-visible output preparation/persistence before honoring Stop."""
-    if not preserve_after_cancel:
-        return await work
-    task = asyncio.ensure_future(work)
-    try:
-        while True:
-            try:
-                return await asyncio.shield(task)
-            except asyncio.CancelledError:
-                if task.done():
-                    return task.result()
-                if not run.cancel_requested:
-                    raise
-    finally:
-        if not task.done():
-            task.cancel()
-            await asyncio.gather(task, return_exceptions=True)

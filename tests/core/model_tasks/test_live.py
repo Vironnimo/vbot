@@ -27,13 +27,15 @@ from core.model_tasks._live_wire import (
     relay_media,
 )
 from core.model_tasks.live import LiveRunNotice, LiveStartRejected, LiveVoiceService
-from core.model_tasks.model_tasks import TaskModelError
+from core.model_tasks.model_tasks import TaskModelError, parse_task_model_target_id
+from core.model_tasks.task_execution import TaskUsage
 from core.providers.errors import (
     NetworkError,
     ProviderAuthError,
     ProviderOutcomeUnknownError,
     ProviderRateLimitError,
 )
+from core.usage import UsageRecorder
 from core.utils.errors import ConfigError
 
 OFFER = "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n"
@@ -200,6 +202,43 @@ async def test_call_goes_live_relays_captions_and_answers_delegations():
     assert host.of_type("closed") == [
         {"type": "closed", "reason": "client_request", "usage": {"audio_duration_ms": 900}}
     ]
+
+
+@pytest.mark.asyncio
+async def test_live_cumulative_usage_is_saved_once_and_survives_lost_control(
+    recorder: UsageRecorder,
+) -> None:
+    wire, host = FakeWire(), FakeHost()
+    accounting = TaskUsage(recorder, "live_voice", parse_task_model_target_id(XAI_TARGET))
+    call_id = await accounting.start()
+    call = _call(wire, None, host, usage_accounting=accounting, usage_call_id=call_id)
+    wire.push(
+        WireStarted(None),
+        WireUsage({"input_tokens": 4, "output_tokens": 2}),
+        WireUsage({"input_tokens": 7, "output_tokens": 5}),
+        WireClosed(reason=None, usage=None, confirmed=False),
+    )
+    await call.wait_closed()
+    _, records = recorder.read_since()
+    assert len(records) == 1
+    assert (records[0].kind, records[0].status) == ("live_voice", "failed")
+    assert records[0].usage["input_tokens"] == 7
+    assert records[0].usage["output_tokens"] == 5
+    assert len(host.of_type("closed")) == 1
+
+
+@pytest.mark.asyncio
+async def test_live_usage_failure_still_publishes_closed(caplog: Any) -> None:
+    from unittest.mock import AsyncMock
+
+    wire, host = FakeWire(), FakeHost()
+    accounting = SimpleNamespace(finish=AsyncMock(side_effect=RuntimeError("test disk failure")))
+    call = _call(wire, None, host, usage_accounting=accounting, usage_call_id="test-call")
+    wire.push(WireClosed(reason="client_request", usage=None, confirmed=True))
+    await call.wait_closed()
+    assert host.of_type("state")[-1]["phase"] == "closed"
+    assert len(host.of_type("closed")) == 1
+    assert any(record.exc_info for record in caplog.records)
 
 
 @pytest.mark.asyncio

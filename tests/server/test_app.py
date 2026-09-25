@@ -231,6 +231,7 @@ def _statistics_runtime(tmp_path: Path) -> SimpleNamespace:
     return SimpleNamespace(
         chat_sessions=ChatSessionManager(tmp_path),
         statistics_index=StatisticsIndex(tmp_path),
+        usage_recorder=None,
         agents=SimpleNamespace(list=lambda: []),
         models=SimpleNamespace(pricing_for=lambda _: None),
         projects=SimpleNamespace(list=lambda: [], session_owning_agents=lambda _project_id: []),

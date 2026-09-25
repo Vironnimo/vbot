@@ -38,6 +38,15 @@ MICROSECONDS_PER_HOUR = 3_600_000_000
 
 CALL_KIND_CHAT = 0
 CALL_KIND_COMPACTION = 1
+CALL_KIND_AUXILIARY = 2
+
+CALL_COLUMNS = (
+    "session_key, seq, kind, instant, day, model_key, has_model, visible, has_usage, "
+    "input_tokens, output_tokens, reasoning_tokens, cache_read_tokens, cache_write_tokens, "
+    "input_estimated, output_estimated, has_cache, reasoning_present, cache_read_present, "
+    "cache_write_present, price_estimated, reported_cost_usd, retrospective, priced, "
+    "cost_usd, cost_source, cost_json, purpose"
+)
 
 COST_UNPRICED = 0
 COST_PROVIDER = 1
@@ -251,6 +260,7 @@ class ProjectedRows:
         usage: Any,
         *,
         visible: bool,
+        purpose: str | None = None,
     ) -> None:
         model_key = _provider_model_key(model) if isinstance(model, str) else UNKNOWN_MODEL_KEY
         values: JsonObject = usage if isinstance(usage, dict) else {}
@@ -307,7 +317,32 @@ class ProjectedRows:
                 cost_amount,
                 cost_class,
                 serialized_cost,
+                purpose or ("compaction" if kind == CALL_KIND_COMPACTION else "chat"),
             )
+        )
+
+    def add_usage_call(
+        self,
+        seq: int,
+        *,
+        timestamp: str,
+        model: str,
+        kind: str,
+        usage: JsonObject,
+    ) -> None:
+        """Project a durable request without creating a Session record."""
+        instant = timestamp_instant(timestamp)
+        self._add_call(
+            seq,
+            {"chat": CALL_KIND_CHAT, "compaction": CALL_KIND_COMPACTION}.get(
+                kind, CALL_KIND_AUXILIARY
+            ),
+            instant,
+            instant // MICROSECONDS_PER_DAY,
+            model,
+            usage,
+            visible=False,
+            purpose=kind,
         )
 
 

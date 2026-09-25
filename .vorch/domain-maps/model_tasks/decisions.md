@@ -26,6 +26,8 @@ The Jev overview opens one experiment in a full-width workspace with Setup and R
 
 History pages contain up to 50 summaries with a sequence cursor. Full records are fetched separately. Controls retain the most recent 50 steps, trimming older steps to keep progress near 1 MB; completed step count remains cumulative. Cancel waits for command cleanup and records cancellation. Shutdown/restart records interruption, retains partial progress and never resumes/replays actions automatically. Deletion removes an experiment and its history only when inactive.
 
+Every Decision Provider attempt also writes canonical `decision` Usage independently of `decisions.db`: direct `evaluate` Tool calls, experiments and each control step all contribute. The Tool supplies its internal Run/Session/Project and Extension scope; standalone experiments do not invent one. Deleting an experiment or trimming control history never erases Model consumption, and optional Provider counters/cost remain unknown when absent. Coverage: `tests/core/model_tasks/test_task_usage.py`, `tests/core/tools/test_evaluate.py`.
+
 ## External application control
 
 An operator supplies a goal, observation command, named Actions, delay, maximum steps and command timeout. Commands contain literal `argv` plus an absolute `cwd` on the vBot host. The editor takes the executable separately and one literal argument per line. Scripts can contact another machine, but commands do not run on the browser device merely because it displays Jev.

@@ -11,6 +11,7 @@
     formatShare,
     formatTokens,
     groupModelsByProvider,
+    modelCallKindLabel,
   } from '$lib/statisticsView.js';
   import { statCard, agentName, tokenCell } from './ReportPrimitives.svelte';
   import TokenTrend from './TokenTrend.svelte';
@@ -60,7 +61,7 @@
           t('statistics.col.output', 'Output'),
           formatTokens(usage.totals.measured_output_tokens, locale),
         )}{@render statCard(
-          t('statistics.usage.measuredTurns', 'Measured Model steps'),
+          t('statistics.usage.measuredTurns', 'Measured Model calls'),
           formatInteger(usage.totals.measured_turns, locale),
         )}
       </div>
@@ -82,12 +83,49 @@
           t('statistics.col.output', 'Output'),
           formatTokens(usage.totals.estimated_output_tokens, locale),
         )}{@render statCard(
-          t('statistics.usage.estimatedTurns', 'Estimated Model steps'),
+          t('statistics.usage.estimatedTurns', 'Estimated Model calls'),
           formatInteger(usage.totals.estimated_turns, locale),
         )}
       </div>
     </div>
   </div>
+  {#if usage.kinds?.length}
+    <div class="stats-block">
+      <h3 class="stats-block__title">
+        {t('statistics.usage.byKind', 'Model calls by activity')}
+      </h3>
+      <div class="stats-table-wrap">
+        <table
+          class="stats-table"
+          aria-label={t('statistics.usage.byKind', 'Model calls by activity')}
+        >
+          <thead
+            ><tr>
+              <th>{t('statistics.col.activity', 'Activity')}</th>
+              <th class="num">{t('statistics.col.calls', 'Calls')}</th>
+              <th class="num"
+                >{t(
+                  'statistics.usage.incomplete',
+                  'Incomplete token usage',
+                )}</th
+              >
+            </tr></thead
+          >
+          <tbody>
+            {#each usage.kinds as row (row.kind)}
+              <tr>
+                <td>{modelCallKindLabel(row.kind, t)}</td>
+                <td class="num">{formatInteger(row.calls, locale)}</td>
+                <td class="num"
+                  >{formatInteger(row.unreported_calls, locale)}</td
+                >
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  {/if}
   <TokenTrend {report} bind:granularity {reportRange} />
   <div class="stats-block">
     <h3 class="stats-block__title">

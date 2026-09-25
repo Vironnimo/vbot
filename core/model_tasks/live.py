@@ -24,9 +24,10 @@ Relay audio for the accessor goes through :meth:`LiveCallHost.publish_audio`.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from core.model_tasks._live_brain import BrainTarget, LiveBrain
 from core.model_tasks._live_call import LiveCallSession
@@ -51,12 +52,13 @@ from core.model_tasks.options import (
     backend_thinking_efforts,
     live_backend_candidates,
 )
-from core.model_tasks.task_execution import TaskBindingResolver
+from core.model_tasks.task_execution import TaskBindingResolver, TaskUsage
 from core.providers.errors import (
     ProviderAuthError,
     ProviderOutcomeUnknownError,
     ProviderRateLimitError,
 )
+from core.usage import UsageRecorder
 from core.utils.errors import ConfigError, TaskError, VBotError
 from core.utils.logging import get_logger
 
@@ -257,9 +259,12 @@ class _CallPlan:
 class LiveVoiceService:
     """Start Live calls for the configured ``live_voice`` Task Model binding."""
 
-    def __init__(self, model_tasks: Any, runtime: LiveRuntime) -> None:
+    def __init__(
+        self, model_tasks: Any, runtime: LiveRuntime, *, usage_recorder: UsageRecorder | None = None
+    ) -> None:
         self._model_tasks = model_tasks
         self._runtime = runtime
+        self._usage_recorder = usage_recorder
 
     def status(self) -> JsonObject:
         """Return ``{"configured", "usable", "target", "media"}``.
@@ -304,8 +309,15 @@ class LiveVoiceService:
         setup = _WireSetup(
             offer_sdp=offer_sdp, voice=plan.voice, direct_tools=plan.brain_target is None
         )
+        accounting = TaskUsage(self._usage_recorder, TASK_LIVE_VOICE, target_ref)
+        usage_call_id = await accounting.start()
+        wire: LiveWire | None = None
+        status: Literal["failed", "cancelled"] = "failed"
         try:
             wire = await plan.wire.open(self._runtime, target_ref, setup)
+        except asyncio.CancelledError:
+            status = "cancelled"
+            raise
         except ControlJoinError as exc:
             _LOGGER.warning(
                 "Live call control join failed: target=%s call_id=%s", label, exc.call_id
@@ -322,6 +334,9 @@ class LiveVoiceService:
             raise LiveStartRejected(code, str(exc)) from exc
         except KeyError as exc:
             raise LiveStartRejected("not_configured", "Live voice Provider is unavailable") from exc
+        finally:
+            if wire is None:
+                await accounting.finish(usage_call_id, status=status)
         brain_target = plan.brain_target
         brain = (
             LiveBrain(
@@ -329,11 +344,19 @@ class LiveVoiceService:
                 brain_target,
                 host.execute_tool,
                 conversation_id=f"live:{wire.call_id}",
+                usage_recorder=self._usage_recorder,
             )
             if brain_target is not None
             else None
         )
-        call = LiveCallSession(wire=wire, brain=brain, host=host, target=label)
+        call = LiveCallSession(
+            wire=wire,
+            brain=brain,
+            host=host,
+            target=label,
+            usage_accounting=accounting,
+            usage_call_id=usage_call_id,
+        )
         call.start()
         _LOGGER.info(
             "Live call started: call_id=%s target=%s media=%s backend_model=%s backend_effort=%s",

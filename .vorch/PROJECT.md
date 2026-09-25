@@ -56,6 +56,7 @@ Read domain roots and task-relevant references under `.vorch/domain-maps/` as de
 | database.md | `core/database/` | Shared SQLite kernel, format-stability contract, data-store marker, data snapshots and recovery |
 | recall.md | `core/recall/` | Recall backends: canonical scan, FTS index, vector index |
 | statistics.md | `core/statistics/` | Disposable SQLite projection, report RPC |
+| usage.md | `core/usage/` | Durable Model request accounting, historical Usage import |
 | memory.md | `core/memory/` | Pinned memory service, workspace memory files |
 | settings.md | `core/settings/` | Settings schemas, validation, update sections |
 | prompts.md | `core/prompts/` | System Prompt assembly, fragments, variables |

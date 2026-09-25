@@ -670,11 +670,13 @@ class _ImageService:
         output_dir: Path,
         call_options: dict[str, object] | None = None,
         source_paths: tuple[Path, ...] | None = None,
+        usage_context: object = None,
     ) -> tuple[object, ...]:
         self.received_prompt = prompt
         self.received_output_dirs.append(output_dir)
         self.received_call_options = call_options
         self.received_source_paths = source_paths
+        self.received_usage_context = usage_context
         if self._generation_error is not None:
             raise self._generation_error
         return (

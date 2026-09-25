@@ -25,10 +25,11 @@ from core.model_tasks.image_types import (
     JsonObject,
 )
 from core.model_tasks.model_tasks import TaskModelTargetRef, model_supports_task
-from core.model_tasks.task_execution import TaskBindingResolver
+from core.model_tasks.task_execution import TaskBindingResolver, TaskUsage, TaskUsageContext
 from core.providers.accounts import ConnectionRef
 from core.providers.errors import ProviderOutcomeUnknownError
 from core.providers.task_client import TaskClientRuntime
+from core.usage import UsageRecorder
 from core.utils.errors import ConfigError, TaskError, VBotError
 from core.utils.ids import write_id_file
 from core.utils.logging import get_logger
@@ -160,11 +161,13 @@ class ImageService:
         runtime: ImageRuntime,
         *,
         max_input_bytes: int = DEFAULT_IMAGE_INPUT_MAX_BYTES,
+        usage_recorder: UsageRecorder | None = None,
     ) -> None:
         if max_input_bytes <= 0:
             raise ValueError("max_input_bytes must be greater than 0")
         self._model_tasks = model_tasks
         self._runtime = runtime
+        self._usage_recorder = usage_recorder
         self._image_converter = ImageConverter()
         self._max_input_bytes = max_input_bytes
         self._analysis_semaphore = asyncio.Semaphore(_IMAGE_ANALYSIS_CONCURRENCY_LIMIT)
@@ -222,6 +225,7 @@ class ImageService:
         *,
         call_options: Mapping[str, Any] | None = None,
         source_paths: Sequence[str | Path] | None = None,
+        usage_context: TaskUsageContext | None = None,
     ) -> ImageGenerationResult:
         """Generate or edit images using the configured binding.
 
@@ -269,7 +273,13 @@ class ImageService:
             max_size_bytes=self._max_input_bytes,
         )
 
-        provider_client = ProviderImageClient.from_runtime(self._runtime, target_ref)
+        provider_client = ProviderImageClient.from_runtime(
+            self._runtime,
+            target_ref,
+            usage_observer=TaskUsage(
+                self._usage_recorder, TASK_IMAGE_GENERATION, target_ref, context=usage_context
+            ),
+        )
         try:
             if input_images:
                 return await provider_client.generate(
@@ -414,25 +424,42 @@ class ImageService:
                 preparation_notes,
             )
             _set_analysis_debug_context(adapter, target_ref, run_context)
-            response = await adapter.send(
-                [
-                    {"role": "system", "content": IMAGE_UNDERSTANDING_SYSTEM_PROMPT},
-                    {"role": "user", "content": content},
-                ],
-                model_id=target_ref.model_id,
-                temperature=resolve_request_temperature(
-                    None,
-                    self._runtime.models,
-                    target_ref.provider_id,
-                    target_ref.model_id,
-                ),
-                tools=[],
+            accounting = TaskUsage(
+                self._usage_recorder,
+                TASK_IMAGE_UNDERSTANDING,
+                target_ref,
+                context=TaskUsageContext(
+                    agent_id=run_context.agent_id,
+                    session_id=run_context.session_id,
+                    run_id=run_context.run_id,
+                    project_id=run_context.project_id,
+                    owner_name=run_context.owner_name,
+                    group_id=run_context.group_id,
+                )
+                if run_context is not None
+                else None,
             )
-            normalized = adapter.normalize_response(response, model_id=target_ref.model_id)
-            analysis = normalized.get("content")
-            if not isinstance(analysis, str) or not analysis.strip():
-                raise ImageExecutionError("Image-understanding model returned no text analysis")
-            usage = normalized.get("usage")
+            async with accounting.attempt() as call_id:
+                response = await adapter.send(
+                    [
+                        {"role": "system", "content": IMAGE_UNDERSTANDING_SYSTEM_PROMPT},
+                        {"role": "user", "content": content},
+                    ],
+                    model_id=target_ref.model_id,
+                    temperature=resolve_request_temperature(
+                        None,
+                        self._runtime.models,
+                        target_ref.provider_id,
+                        target_ref.model_id,
+                    ),
+                    tools=[],
+                )
+                normalized = adapter.normalize_response(response, model_id=target_ref.model_id)
+                usage = normalized.get("usage")
+                await accounting.update(call_id, usage)
+                analysis = normalized.get("content")
+                if not isinstance(analysis, str) or not analysis.strip():
+                    raise ImageExecutionError("Image-understanding model returned no text analysis")
             return ImageUnderstandingResult(
                 content="\n".join([*preparation_notes, analysis.strip()]),
                 model=target_ref.model_id,
@@ -512,6 +539,7 @@ class ImageService:
         output_dir: str | Path,
         call_options: Mapping[str, Any] | None = None,
         source_paths: Sequence[str | Path] | None = None,
+        usage_context: TaskUsageContext | None = None,
     ) -> tuple[ImageArtifact, ...]:
         """Generate images and persist them in the caller-owned output directory."""
 
@@ -519,6 +547,7 @@ class ImageService:
             prompt,
             call_options=call_options,
             source_paths=source_paths,
+            usage_context=usage_context,
         )
         extension = _extension_for_media_type(result.media_type)
         return tuple(

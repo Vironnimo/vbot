@@ -84,6 +84,7 @@ if TYPE_CHECKING:
     from core.tools.file_state import FileReadState
     from core.tools.process_manager import ProcessManager
     from core.tools.tools import ToolRegistry
+    from core.usage import UsageRecorder
 
 
 @dataclass(frozen=True)
@@ -140,6 +141,7 @@ class ChatLoopDependencies:
     get_local_context_windows: Callable[[], Mapping[str, Any]]
     image_understanding_available: Callable[[], Awaitable[bool]]
     deliver_background_completions: Callable[[Run, ChatSession], bool]
+    usage_recorder: UsageRecorder | None = None
 
 
 @dataclass(frozen=True)
