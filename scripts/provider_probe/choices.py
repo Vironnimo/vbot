@@ -69,6 +69,7 @@ PROBE_SCENARIOS = (
     "search_files",
     "tool_tolerance",
     "recall_workflow",
+    "live_tools",
     "terminal",
     "apply_patch",
     "reflection_workflow",
