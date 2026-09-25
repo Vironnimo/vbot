@@ -107,14 +107,15 @@ async def test_channel_service_create_validates_agent_exists(tmp_path: Path) -> 
         await service.create_channel(make_config())
 
 
-def test_channel_service_update_validates_agent_exists(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_channel_service_update_validates_agent_exists(tmp_path: Path) -> None:
     storage = ChannelStorage(tmp_path)
     config = make_config(enabled=False)
     storage.save(config)
     service = make_service(tmp_path, known_agent_ids={"assistant"})
 
     with pytest.raises(ChannelConfigError):
-        service.update_channel(config.id, agent_id="missing-agent")
+        await service.update_channel(config.id, agent_id="missing-agent")
 
 
 def test_record_chat_id_migration_swaps_allowlist_and_persists(tmp_path: Path) -> None:
@@ -253,9 +254,9 @@ async def test_channel_create_and_delete_write_channels_db_off_the_event_loop(
         # channel.json is written before the registration; the Event Loop keeps
         # serving meanwhile and refuses other changes of this Channel.
         assert storage.get("tg-assistant").id == "tg-assistant"
-        with pytest.raises(ChannelError, match="finish being created or removed"):
-            service.update_channel("tg-assistant", enabled=True)
-        with pytest.raises(ChannelError, match="finish being created or removed"):
+        with pytest.raises(ChannelError, match="current change of this Channel"):
+            await service.update_channel("tg-assistant", enabled=True)
+        with pytest.raises(ChannelError, match="current change of this Channel"):
             await service.delete_channel("tg-assistant")
         release.set()
         await asyncio.wait_for(creating, timeout=5)
@@ -267,7 +268,7 @@ async def test_channel_create_and_delete_write_channels_db_off_the_event_loop(
         # channel.json goes first; the registration follows.
         with pytest.raises(ChannelNotFoundError):
             storage.get("tg-assistant")
-        with pytest.raises(ChannelError, match="finish being created or removed"):
+        with pytest.raises(ChannelError, match="current change of this Channel"):
             await service.create_channel(make_config(enabled=False))
         release.set()
         await asyncio.wait_for(deleting, timeout=5)
@@ -333,6 +334,106 @@ async def test_a_create_cancelled_during_registration_removes_config_and_registr
         assert service._pending_config_changes == set()
     finally:
         release.set()
+        service.close()
+
+
+@pytest.mark.asyncio
+async def test_config_changes_persist_off_the_event_loop_before_touching_the_adapter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    storage = ChannelStorage(tmp_path)
+    storage.save(make_config(enabled=False))
+    service = make_service(tmp_path)
+    adapter = BlockingAdapter()
+    loop_thread = threading.get_ident()
+    release = threading.Event()
+    saves: list[tuple[bool, bool]] = []
+    real_save = service._storage.save
+
+    def held_save(config: Any) -> None:
+        saves.append((config.enabled, threading.get_ident() != loop_thread))
+        assert release.wait(timeout=5)
+        real_save(config)
+
+    monkeypatch.setattr(service, "_create_adapter", lambda _config: adapter)
+    monkeypatch.setattr(service._storage, "save", held_save)
+    try:
+        enabling = asyncio.create_task(service.enable_channel("tg-assistant"))
+        await wait_until(lambda: saves == [(True, True)])
+        # The Event Loop keeps serving; the adapter waits for the write and
+        # every other change of this Channel is refused meanwhile.
+        assert not service.is_running("tg-assistant")
+        with pytest.raises(ChannelError, match="current change of this Channel"):
+            await service.disable_channel("tg-assistant")
+        with pytest.raises(ChannelError, match="current change of this Channel"):
+            await service.restart_channel("tg-assistant")
+        release.set()
+        await asyncio.wait_for(enabling, timeout=5)
+        await asyncio.wait_for(adapter.started.wait(), timeout=5)
+
+        release.clear()
+        disabling = asyncio.create_task(service.disable_channel("tg-assistant"))
+        await wait_until(lambda: saves[-1] == (False, True))
+        # Persist before disrupting the healthy adapter.
+        assert service.is_running("tg-assistant")
+        with pytest.raises(ChannelError, match="current change of this Channel"):
+            await service.update_channel("tg-assistant", observe_unaddressed=True)
+        release.set()
+        await asyncio.wait_for(disabling, timeout=5)
+        await asyncio.wait_for(adapter.stopped.wait(), timeout=5)
+        assert storage.get("tg-assistant").enabled is False
+        assert service._pending_config_changes == set()
+    finally:
+        release.set()
+        await service.aclose()
+        service.close()
+
+
+@pytest.mark.asyncio
+async def test_an_update_cancelled_during_its_write_keeps_config_and_adapter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    storage = ChannelStorage(tmp_path)
+    original = make_config(enabled=True)
+    storage.save(original)
+    service = make_service(tmp_path)
+    adapters: list[BlockingAdapter] = []
+    entered = threading.Event()
+    release = threading.Event()
+    real_save = service._storage.save
+
+    def create_adapter(_config: Any) -> BlockingAdapter:
+        adapters.append(BlockingAdapter())
+        return adapters[-1]
+
+    def held_save(config: Any) -> None:
+        entered.set()
+        assert release.wait(timeout=5)
+        real_save(config)
+
+    monkeypatch.setattr(service, "_create_adapter", create_adapter)
+    monkeypatch.setattr(service, "_preflight_adapter_start", lambda _config: None)
+    service.start()
+    try:
+        await asyncio.wait_for(adapters[0].started.wait(), timeout=1)
+        monkeypatch.setattr(service._storage, "save", held_save)
+        updating = asyncio.create_task(
+            service.update_channel(original.id, observe_unaddressed=True)
+        )
+        await wait_until(entered.is_set)
+        updating.cancel()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(updating, timeout=5)
+
+        # The completed write is undone; the healthy adapter was never disturbed.
+        assert storage.get(original.id).to_dict() == original.to_dict()
+        assert len(adapters) == 1
+        assert service.is_running(original.id)
+        assert service._pending_config_changes == set()
+    finally:
+        release.set()
+        await service.aclose()
         service.close()
 
 
@@ -446,11 +547,11 @@ async def test_channel_service_enable_disable_updates_runtime_and_hook(
     monkeypatch.setattr(service, "_create_adapter", lambda _config: adapter)
 
     # Act
-    service.enable_channel(config.id)
+    await service.enable_channel(config.id)
     await asyncio.wait_for(adapter.started.wait(), timeout=1)
     enabled_config = storage.get(config.id)
 
-    service.disable_channel(config.id)
+    await service.disable_channel(config.id)
     await asyncio.wait_for(adapter.stopped.wait(), timeout=1)
     disabled_config = storage.get(config.id)
     await asyncio.sleep(0)
