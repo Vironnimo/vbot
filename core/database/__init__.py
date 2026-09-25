@@ -44,13 +44,16 @@ from core.database.marker import (
 )
 from core.database.recovery import (
     SnapshotRestore,
+    UnregisteredDatabase,
     acknowledge_incident,
     active_incidents,
     read_incident,
     restore_data_snapshot,
+    unregister_database,
 )
 from core.database.snapshots import (
     create_data_snapshot,
+    describe_missing_databases,
     list_data_snapshots,
     read_snapshot_health,
     read_verified_manifest,
@@ -68,6 +71,7 @@ from core.database.spec import (
     Migration,
     SnapshotFacts,
     canonical_database_path,
+    is_extension_database_name,
 )
 from core.database.status import data_store_status
 from core.database.update_rollback import (
@@ -102,6 +106,7 @@ __all__ = [
     "Migration",
     "SnapshotFacts",
     "SnapshotRestore",
+    "UnregisteredDatabase",
     "UpdateRollbackRefusedError",
     "UpdateSnapshot",
     "acknowledge_incident",
@@ -112,9 +117,11 @@ __all__ = [
     "create_update_snapshot",
     "data_changed_since",
     "data_store_status",
+    "describe_missing_databases",
     "find_update_snapshot",
     "finish_maintenance",
     "has_live_connection",
+    "is_extension_database_name",
     "is_wal_reset_vulnerable",
     "list_data_snapshots",
     "maintenance",
@@ -131,6 +138,7 @@ __all__ = [
     "snapshot_root",
     "snapshot_summaries",
     "snapshot_summary",
+    "unregister_database",
     "write_bootstrap_marker",
     "write_marker_for_databases",
 ]

@@ -673,3 +673,20 @@ def _add_data_store_parsers(
         example="data-store incident acknowledge <incident-id>",
     )
     acknowledge_parser.add_argument("incident_id", metavar="<incident-id>")
+
+    unregister_parser = _add_command_parser(
+        commands,
+        "unregister",
+        DATA_STORE_HELP["unregister"],
+        example="data-store unregister ext.<extension>.<name> --yes",
+    )
+    unregister_parser.add_argument(
+        "name",
+        metavar="<name>",
+        help="Registered Extension database name, ext.<extension>.<name>",
+    )
+    unregister_parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="Confirm moving the database files to quarantine and dropping the registration",
+    )

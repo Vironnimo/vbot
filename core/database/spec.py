@@ -135,6 +135,11 @@ def validate_database_name(name: str) -> None:
         raise ValueError(f"invalid database name: {name!r}")
 
 
+def is_extension_database_name(name: str) -> bool:
+    """Whether ``name`` names an Extension database, ``ext.<extension>.<name>``."""
+    return isinstance(name, str) and _EXTENSION_NAME.fullmatch(name) is not None
+
+
 def canonical_relative_path(name: str) -> Path:
     """The fixed location of a canonical database inside its data directory.
 

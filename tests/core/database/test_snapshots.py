@@ -182,16 +182,35 @@ def test_file_snapshot_copies_committed_wal_content_and_checks_the_marker(
         assert writer.execute("SELECT COUNT(*) FROM notes").fetchone()[0] == 1
 
 
-def test_a_registered_database_that_is_missing_fails_the_snapshot(data_dir: Path) -> None:
-    snapshot_with_notes(data_dir, "first")
-    open_database(notes_spec(data_dir, name="tasks")).close()
-    notes_spec(data_dir, name="tasks").path.unlink()
+@pytest.mark.parametrize(
+    ("name", "next_step"),
+    [
+        ("tasks", "starting vBot restores it from the newest verified data snapshot"),
+        ("ext.demo.tasks", "`vbot data-store unregister ext.demo.tasks --yes` releases it"),
+    ],
+    ids=["core", "extension"],
+)
+def test_a_registered_database_that_is_missing_fails_the_snapshot_with_a_next_step(
+    data_dir: Path, monkeypatch: pytest.MonkeyPatch, name: str, next_step: str
+) -> None:
+    retained = snapshot_with_notes(data_dir, "first")
+    open_database(notes_spec(data_dir, name=name)).close()
+    notes_spec(data_dir, name=name).path.unlink()
+    # Retention would otherwise prune the retained copies of the missing database.
+    monkeypatch.setattr(snapshots_module, "SNAPSHOT_KEEP_COUNT", 1)
 
     assert create_data_snapshot(data_dir, reason="test") is None
     health = read_snapshot_health(data_dir)
     assert health["state"] == "degraded"
-    assert "tasks" in str(health["reason"])
+    assert f"the registered {'Extension ' if name.startswith('ext.') else ''}database {name}" in (
+        str(health["reason"])
+    )
+    assert next_step in str(health["reason"])
+    assert list_data_snapshots(data_dir) == [retained]
     assert not [path for path in snapshot_root(data_dir).iterdir() if path.name.startswith(".")]
+    status = data_store_status(data_dir)
+    assert status["state"] == "unavailable"
+    assert next_step in status["databases"][name]["reason"]
 
 
 @pytest.mark.parametrize("suffix", [b"\x1a", b"\r\n\x1a", b"\x00\xff"])

@@ -51,13 +51,19 @@ from core.database.errors import (
     DatabaseUnavailableError,
 )
 from core.database.marker import (
+    DataStoreMarker,
     acquire_operation_lock,
     read_marker,
     require_no_maintenance,
     utc_now,
     valid_database_id,
 )
-from core.database.spec import DatabaseSpec, canonical_database_path, validate_database_name
+from core.database.spec import (
+    DatabaseSpec,
+    canonical_database_path,
+    is_extension_database_name,
+    validate_database_name,
+)
 from core.json_documents import durable_document_paths
 from core.utils.atomic import atomic_write_text
 from core.utils.version import detect_vbot_version
@@ -752,6 +758,38 @@ def _shallow_manifest(data_dir: Path, snapshot_dir: Path) -> SnapshotManifest | 
 # ---------------------------------------------------------------------------
 
 
+def missing_database_reason(name: str) -> str:
+    """Why a registered database without its file blocks snapshots, and what resolves it.
+
+    A snapshot never skips a registered database: retention would eventually
+    prune the last copies of the missing one.
+    """
+    if is_extension_database_name(name):
+        return (
+            f"the registered Extension database {name} has no file; the next open by its "
+            "Extension (enabling or reloading it) restores it from the newest verified data "
+            "snapshot that holds it; if the Extension was removed, "
+            f"`vbot data-store unregister {name} --yes` releases it"
+        )
+    return (
+        f"the registered database {name} has no file; starting vBot restores it from the "
+        "newest verified data snapshot that holds it, or `vbot data-store snapshot restore "
+        f"<snapshot-id> --database {name} --yes` restores it explicitly"
+    )
+
+
+def describe_missing_databases(data_dir: Path, marker: DataStoreMarker) -> str | None:
+    """Explain every registered database whose file is missing, or ``None``."""
+    missing = sorted(
+        name for name in marker.databases if not canonical_database_path(data_dir, name).is_file()
+    )
+    if not missing:
+        return None
+    return "data snapshots need every registered database: " + "; ".join(
+        missing_database_reason(name) for name in missing
+    )
+
+
 def _document_bytes(data_dir: Path) -> int:
     """The current size of the JSON document set; a document removed meanwhile counts 0."""
     total = 0
@@ -778,7 +816,9 @@ def create_data_snapshot(
     another process meanwhile. Documents are copied after the databases, each
     read whole at one instant. ``specs`` add owner facts for members not open
     here. Returns ``None`` when there is nothing to capture, the attempt was
-    cancelled, or it failed; failures are recorded in the snapshot health.
+    cancelled, or it failed; failures are recorded in the snapshot health. A
+    registered database without its file fails the attempt with the operator's
+    next step (``describe_missing_databases``) instead of being skipped.
     Refuses with ``DatabaseFormatError`` while data maintenance is incomplete.
     """
     data_dir = Path(data_dir)
@@ -799,6 +839,14 @@ def create_data_snapshot(
     try:
         if cancelled is not None and cancelled():
             raise _SnapshotCancelledError
+        # Registrations may have changed while this attempt waited for the lock.
+        marker = read_marker(data_dir)
+        if marker is None or not marker.databases:
+            return None
+        missing = describe_missing_databases(data_dir, marker)
+        if missing is not None:
+            _record_snapshot_health(data_dir, "degraded", reason=missing)
+            return None
         try:
             root.mkdir(parents=True, exist_ok=True)
             needed = sum(
@@ -822,7 +870,7 @@ def create_data_snapshot(
             destination = partial / member_file_name(name)
             source_path = canonical_database_path(data_dir, name)
             if not source_path.is_file():
-                raise DatabaseUnavailableError(f"registered database {name} is missing")
+                raise DatabaseUnavailableError(missing_database_reason(name))
             handle = open_databases.get(name)
             if handle is not None:
                 copied = handle.backup(destination, cancelled=cancelled)
