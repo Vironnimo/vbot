@@ -14,6 +14,9 @@ from scripts.converters.persistence_generation_1._context import ConversionConte
 from scripts.converters.persistence_generation_1.json_documents import AREA, convert
 
 _TIMESTAMP = "2026-06-18T10:00:00Z"
+_MCP_CONNECTIONS = "extension-data/mcp/connections.json"
+# Documents whose Generation 1 location differs from their old one.
+_MOVED = {"mcp/connections.json": _MCP_CONNECTIONS}
 
 
 def _write(root: Path, relative: str, value: Any) -> None:
@@ -115,7 +118,8 @@ def test_converted_data_directory_passes_the_doctor_and_source_is_untouched(
         for path in context.staging.rglob("*")
         if path.is_file()
     }
-    assert staged == set(documents)
+    assert staged == {_MOVED.get(relative, relative) for relative in documents}
+    assert [path.as_posix() for path in context.retired] == list(_MOVED)
     reports = validate_data_dir_config(context.staging)
     assert len(reports) == len(documents)
     assert [
@@ -123,7 +127,7 @@ def test_converted_data_directory_passes_the_doctor_and_source_is_untouched(
         for report in reports
         for diagnostic in report.diagnostics
     ] == []
-    assert all(_staged(context, relative)["format_version"] == 1 for relative in documents)
+    assert all(_staged(context, relative)["format_version"] == 1 for relative in staged)
 
 
 def test_arrays_become_named_arrays_and_versions_move_to_format_version(tmp_path: Path) -> None:
@@ -138,7 +142,7 @@ def test_arrays_become_named_arrays_and_versions_move_to_format_version(tmp_path
     }
     assert _staged(context, "bootstrap/jobs.json") == {"format_version": 1, "jobs": []}
     assert _staged(context, "calendar/events.json") == {"format_version": 1, "events": []}
-    assert _staged(context, "mcp/connections.json")["connections"][0]["id"] == "example"
+    assert _staged(context, _MCP_CONNECTIONS)["connections"][0]["id"] == "example"
     assert _staged(context, "skills/policy.json") == {
         "format_version": 1,
         "disabled": ["deploy"],
@@ -256,8 +260,50 @@ def test_retired_mcp_agents_field_is_kept_and_reported(tmp_path: Path) -> None:
 
     convert(context)
 
-    assert _staged(context, "mcp/connections.json")["connections"] == [connection]
+    assert _staged(context, _MCP_CONNECTIONS)["connections"] == [connection]
     assert "agents field" in context.report.skipped[0].reason
+
+
+@pytest.mark.parametrize(
+    ("text", "count"),
+    [
+        ('{"format_version": 1, "connections": []}', "already_current"),
+        ('{"connections": []}', None),
+    ],
+)
+def test_mcp_connections_move_even_when_not_rewritten(
+    tmp_path: Path, text: str, count: str | None
+) -> None:
+    context = _context(tmp_path)
+    _write(context.source, "mcp/connections.json", text)
+
+    convert(context)
+
+    # vBot reads only the new location, so the document moves unchanged and
+    # the application reports a document it refuses there.
+    assert (context.staging / _MCP_CONNECTIONS).read_text(encoding="utf-8") == text
+    assert [path.as_posix() for path in context.retired] == ["mcp/connections.json"]
+    assert context.report.counts[AREA]["relocated"] == 1
+    if count is None:
+        assert "expected a JSON array" in context.report.skipped[0].reason
+    else:
+        assert context.report.counts[AREA][count] == 1
+
+
+def test_mcp_connections_stay_when_the_new_location_exists(tmp_path: Path) -> None:
+    context = _context(tmp_path)
+    _write(context.source, "mcp/connections.json", [])
+    _write(context.source, _MCP_CONNECTIONS, {"format_version": 1, "connections": []})
+
+    convert(context)
+
+    assert not (context.staging / _MCP_CONNECTIONS).exists()
+    assert context.retired == []
+    [skipped] = context.report.skipped
+    assert (skipped.item, skipped.reason) == (
+        "mcp/connections.json",
+        f"left in place: {_MCP_CONNECTIONS} already exists",
+    )
 
 
 @pytest.mark.parametrize(

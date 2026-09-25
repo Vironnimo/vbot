@@ -316,9 +316,10 @@ def test_durable_document_paths_lists_exactly_the_documents_in_scope(tmp_path: P
         "terminals/launch-history.json",
         "terminals/groups.json",
         "oauth/github-copilot-oauth.json",
-        "mcp/connections.json",
+        "extension-data/mcp/connections.json",
     ]
     others = [
+        "mcp/connections.json",
         "agents/main/memory.json",
         "agents/.staged/agent.json",
         "agents/main/.agent.json.tmp",

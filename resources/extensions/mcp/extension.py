@@ -88,8 +88,10 @@ class MCPService:
         self._startup_error: str | None = None
 
     async def start(self, host: ExtensionHost) -> None:
+        if host.state_dir is None:
+            raise RuntimeError("MCP requires an owner-bound Extension host")
         self.host = host
-        self.store = ConnectionStore(host.data_dir / "mcp")
+        self.store = ConnectionStore(host.state_dir)
         self.content = ContentStore(host, host.data_dir / "mcp" / "content")
         try:
             self.connections = await run_tool_worker(self.store.load)

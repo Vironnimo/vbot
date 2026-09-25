@@ -88,6 +88,8 @@ async def _probe_mcp_workflow(adapter: Any, args: argparse.Namespace) -> dict[st
         async def sample(*_: Any) -> dict[str, Any]:
             raise ValueError("Sampling is not part of this workflow fixture")
 
+        state_dir = root / "extension-data" / "mcp"
+        state_dir.mkdir(parents=True)
         host = ExtensionHost(
             data_dir=root,
             sample=sample,
@@ -96,6 +98,7 @@ async def _probe_mcp_workflow(adapter: Any, args: argparse.Namespace) -> dict[st
             store_attachment=lambda *_: None,
             resolve_credential=lambda _: "",
             set_credential=lambda *_: None,
+            state_dir=state_dir,
         )
         api = ExtensionAPI(
             "mcp", ExtensionDeclarations(), config={}, logger=logging.getLogger("probe")
