@@ -78,12 +78,41 @@ def _attachment_sidecar(**fields: Any) -> dict[str, Any]:
     }
 
 
+def _legacy_agent(agent_id: str = "main", **fields: Any) -> dict[str, Any]:
+    """An Agent as vBot wrote it before the fallback chain replaced ``fallback_model``."""
+    agent = {key: value for key, value in _agent(agent_id).items() if key != "fallback_models"}
+    return {**agent, "fallback_model": "", **fields}
+
+
+def _diagnostics(context: ConversionContext) -> list[tuple[str, str, str]]:
+    """``(document, path, message)`` of every diagnostic ``doctor config`` reports."""
+    return [
+        (
+            report.file_path.relative_to(context.staging).as_posix(),
+            diagnostic.path,
+            diagnostic.message,
+        )
+        for report in validate_data_dir_config(context.staging)
+        for diagnostic in report.diagnostics
+    ]
+
+
 def _legacy_data_dir(root: Path) -> dict[str, Any]:
     documents: dict[str, Any] = {
-        "settings.json": {"server_port": 8500},
-        "agents/main/agent.json": _agent(tool_access={"mode": "all"}),
+        "settings.json": {
+            "server_port": 8500,
+            "defaults": {"agent": {"fallback_model": "", "thinking_effort": "high"}},
+            "recall": {"backend": "jsonl_scan"},
+            "live_voice": {"enabled": True},
+            "reflection": {"enabled": True, "skill_tool_call_interval": 20},
+        },
+        "agents/main/agent.json": _legacy_agent(tool_access={"mode": "all"}),
         "agents/order.json": {"revision": 1, "agent_ids": ["main"]},
-        "agents/main/prompts/layout.json": [{"id": "core:soul", "enabled": True}],
+        "agents/main/prompts/layout.json": [
+            {"id": "core:soul", "enabled": True},
+            {"id": "core:runtime", "enabled": False, "source": "core"},
+            {"id": "core:project_files", "enabled": True, "source": "core"},
+        ],
         "prompts/layout.json": [{"id": "core:tools", "enabled": False, "source": "core"}],
         "projects/vbot/project.json": {
             "project_id": "vbot",
@@ -139,13 +168,9 @@ def test_converted_data_directory_passes_the_doctor_and_source_is_untouched(
     }
     assert staged == {_MOVED.get(relative, relative) for relative in documents}
     assert [path.as_posix() for path in context.retired] == list(_MOVED)
-    reports = validate_data_dir_config(context.staging)
-    assert len(reports) == len(documents)
-    assert [
-        (report.file_path.name, diagnostic.path, diagnostic.message)
-        for report in reports
-        for diagnostic in report.diagnostics
-    ] == []
+    assert len(validate_data_dir_config(context.staging)) == len(documents)
+    # Retired fields and values are normalized, so none is left as an unknown field.
+    assert _diagnostics(context) == []
     assert all(_staged(context, relative)["format_version"] == 1 for relative in staged)
 
 
@@ -395,6 +420,240 @@ def test_invalid_tool_access_is_carried_over_for_the_application_to_report(
 
     assert _staged(context, "agents/main/agent.json")["tool_access"] == policy
     assert context.report.skipped == []
+
+
+@pytest.mark.parametrize("empty", ["", "  ", None])
+def test_empty_retired_fallback_model_is_dropped(tmp_path: Path, empty: str | None) -> None:
+    context = _context(tmp_path)
+    _write(context.source, "agents/main/agent.json", _legacy_agent(fallback_model=empty))
+
+    convert(context)
+
+    agent = _staged(context, "agents/main/agent.json")
+    assert "fallback_model" not in agent
+    assert "fallback_models" not in agent
+    assert context.report.counts[AREA]["fallback_model_dropped"] == 1
+    assert context.report.skipped == []
+    assert _diagnostics(context) == []
+
+
+def test_retired_fallback_model_becomes_the_first_fallback_chain_entry(tmp_path: Path) -> None:
+    context = _context(tmp_path)
+    legacy = _legacy_agent(fallback_model=" openrouter/vendor/model::api-key ")
+    _write(context.source, "agents/main/agent.json", legacy)
+
+    convert(context)
+
+    agent = _staged(context, "agents/main/agent.json")
+    assert agent["fallback_models"] == ["openrouter/vendor/model::api-key"]
+    # The chain takes the retired field's place.
+    assert list(agent) == [
+        "format_version",
+        *("fallback_models" if key == "fallback_model" else key for key in legacy),
+    ]
+    assert context.report.counts[AREA]["fallback_model_converted"] == 1
+    assert context.report.skipped == []
+    assert _diagnostics(context) == []
+
+
+def test_retired_fallback_model_next_to_a_fallback_chain_is_dropped_and_reported(
+    tmp_path: Path,
+) -> None:
+    context = _context(tmp_path)
+    _write(
+        context.source,
+        "agents/main/agent.json",
+        _legacy_agent(fallback_model="provider/old", fallback_models=["provider/new"]),
+    )
+
+    convert(context)
+
+    agent = _staged(context, "agents/main/agent.json")
+    assert agent["fallback_models"] == ["provider/new"]
+    assert "fallback_model" not in agent
+    assert context.report.counts[AREA]["fallback_model_dropped"] == 1
+    assert [(item.item, item.reason) for item in context.report.skipped] == [
+        (
+            "agents/main/agent.json",
+            "retired fallback_model 'provider/old' dropped; the existing fallback_models applies",
+        )
+    ]
+
+
+def test_invalid_retired_fallback_model_stays_invalid_for_the_application_to_report(
+    tmp_path: Path,
+) -> None:
+    context = _context(tmp_path)
+    _write(context.source, "agents/main/agent.json", _legacy_agent(fallback_model=5))
+
+    convert(context)
+
+    assert _staged(context, "agents/main/agent.json")["fallback_models"] == [5]
+    assert [(item.item, item.reason) for item in context.report.skipped] == [
+        (
+            "agents/main/agent.json",
+            "invalid retired fallback_model 5 carried over into fallback_models "
+            "for the application to report",
+        )
+    ]
+    assert [(path, message) for _, path, message in _diagnostics(context)] == [
+        ("$.fallback_models", "must be a list of strings")
+    ]
+
+
+def test_retired_settings_are_normalized_and_reported(tmp_path: Path) -> None:
+    context = _context(tmp_path)
+    _write(
+        context.source,
+        "settings.json",
+        {
+            "defaults": {"agent": {"model": "provider/main", "fallback_model": "provider/backup"}},
+            "recall": {"backend": "canonical_scan"},
+            "live_voice": {"enabled": False},
+            "reflection": {
+                "enabled": True,
+                "skill_tool_call_interval": 20,
+                "skill_model_step_interval": 8,
+            },
+            "future": {"kept": True},
+        },
+    )
+
+    convert(context)
+
+    assert _staged(context, "settings.json") == {
+        "format_version": 1,
+        "defaults": {"agent": {"model": "provider/main", "fallback_models": ["provider/backup"]}},
+        "recall": {"backend": "sqlite_fts"},
+        "reflection": {"enabled": True, "skill_model_step_interval": 8},
+        "future": {"kept": True},
+    }
+    counts = context.report.counts[AREA]
+    assert counts["fallback_model_converted"] == 1
+    assert counts["recall_backend_replaced"] == 1
+    assert counts["live_voice_dropped"] == 1
+    assert counts["reflection_skill_tool_call_interval_dropped"] == 1
+    assert [(item.item, item.reason) for item in context.report.skipped] == [
+        (
+            "settings.json",
+            "recall.backend: retired canonical_scan replaced by sqlite_fts; "
+            "a scan backend is no longer selectable",
+        ),
+        (
+            "settings.json",
+            "retired live_voice dropped; the Live voice control is available "
+            "whenever the model_tasks.live_voice binding is set",
+        ),
+        (
+            "settings.json",
+            "retired reflection.skill_tool_call_interval dropped: Skill reviews now count "
+            "Model steps instead of Tool calls; the existing skill_model_step_interval applies",
+        ),
+    ]
+    assert [path for _, path, _ in _diagnostics(context)] == ["$.future"]
+
+
+def test_retired_settings_without_successors_report_the_default(tmp_path: Path) -> None:
+    context = _context(tmp_path)
+    _write(
+        context.source,
+        "settings.json",
+        {
+            "defaults": {"agent": {"fallback_model": ""}},
+            "recall": {"backend": "jsonl_scan"},
+            "reflection": {"skill_tool_call_interval": 20},
+        },
+    )
+
+    convert(context)
+
+    assert _staged(context, "settings.json") == {
+        "format_version": 1,
+        "defaults": {"agent": {}},
+        "recall": {"backend": "sqlite_fts"},
+        "reflection": {},
+    }
+    assert context.report.counts[AREA]["fallback_model_dropped"] == 1
+    assert [item.reason for item in context.report.skipped] == [
+        "recall.backend: retired jsonl_scan replaced by sqlite_fts; "
+        "a scan backend is no longer selectable",
+        "retired reflection.skill_tool_call_interval dropped: Skill reviews now count Model "
+        "steps instead of Tool calls; set reflection.skill_model_step_interval if its default "
+        "does not fit",
+    ]
+
+
+def test_current_settings_values_are_kept(tmp_path: Path) -> None:
+    context = _context(tmp_path)
+    settings = {
+        "defaults": {"agent": {"fallback_models": ["provider/backup"]}},
+        "recall": {"backend": "hybrid"},
+        "reflection": {"skill_model_step_interval": 8},
+    }
+    _write(context.source, "settings.json", settings)
+
+    convert(context)
+
+    assert _staged(context, "settings.json") == {"format_version": 1, **settings}
+    assert context.report.skipped == []
+
+
+def test_retired_project_files_block_becomes_working_project_after_identity_runtime(
+    tmp_path: Path,
+) -> None:
+    context = _context(tmp_path)
+    _write(
+        context.source,
+        "agents/tester/prompts/layout.json",
+        [
+            {"id": "core:soul", "enabled": False, "source": "core"},
+            {"id": "core:runtime", "enabled": False, "source": "core"},
+            {"id": "core:tools", "enabled": True, "source": "core"},
+            {"id": "core:project_files", "enabled": False, "source": "core", "future": 1},
+        ],
+    )
+    _write(
+        context.source,
+        "prompts/layout.json",
+        [
+            {"id": "core:runtime"},
+            {"id": "core:project_files", "enabled": True},
+            {"id": "core:working_project", "enabled": False},
+        ],
+    )
+
+    convert(context)
+
+    assert _staged(context, "agents/tester/prompts/layout.json")["entries"] == [
+        {"id": "core:soul", "enabled": False, "source": "core"},
+        {"id": "core:runtime", "enabled": False, "source": "core"},
+        {"id": "core:identity_runtime", "enabled": False, "source": "core"},
+        {"id": "core:tools", "enabled": True, "source": "core"},
+        {"id": "core:working_project", "enabled": False, "source": "core", "future": 1},
+    ]
+    # A layout already naming the successor keeps it; the retired entry goes.
+    assert _staged(context, "prompts/layout.json")["entries"] == [
+        {"id": "core:runtime"},
+        {"id": "core:identity_runtime", "enabled": True, "source": "core"},
+        {"id": "core:working_project", "enabled": False},
+    ]
+    counts = context.report.counts[AREA]
+    assert counts["prompt_project_files_converted"] == 2
+    assert counts["prompt_identity_runtime_added"] == 2
+    assert context.report.skipped == []
+
+
+def test_layout_without_the_retired_block_is_only_wrapped(tmp_path: Path) -> None:
+    context = _context(tmp_path)
+    # Without core:project_files nothing shows the layout predates the
+    # core:runtime split, so the missing core:identity_runtime is not guessed.
+    layout = [{"id": "core:runtime", "enabled": False}]
+    _write(context.source, "prompts/layout.json", layout)
+
+    convert(context)
+
+    assert _staged(context, "prompts/layout.json")["entries"] == layout
+    assert "prompt_identity_runtime_added" not in context.report.counts[AREA]
 
 
 def test_project_without_tool_whitelist_gets_the_pre_generation_1_default(
