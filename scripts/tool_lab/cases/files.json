@@ -1,0 +1,405 @@
+{
+ "files": {
+  "src/app.py": "import os\n\n\nclass Greeter:\n    def __init__(self, name):\n        self.name = name\n\n    def greet(self):\n        return f\"Hello, {self.name}!\"\n\n\ndef main():\n    g = Greeter(\"world\")\n    print(g.greet())\n",
+  "src/greeter.go": "package main\n\nimport \"fmt\"\n\nfunc greet(name string) string {\n\tif name == \"\" {\n\t\treturn \"Hello!\"\n\t}\n\treturn fmt.Sprintf(\"Hello, %s!\", name)\n}\n",
+  "src/notes.txt": "first line\r\nsecond line\r\nthird line\r\n",
+  "README.md": {
+   "repeat": "line {n}",
+   "count": 3000
+  }
+ },
+ "cases": [
+  {
+   "name": "read: canonical",
+   "tool": "read",
+   "arguments": {
+    "path": "src/app.py"
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "def main"
+    ]
+   }
+  },
+  {
+   "name": "read: file_path alias",
+   "tool": "read",
+   "arguments": {
+    "file_path": "src/app.py"
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "def main"
+    ]
+   }
+  },
+  {
+   "name": "read: start_line/end_line range",
+   "tool": "read",
+   "arguments": {
+    "path": "src/app.py",
+    "start_line": 8,
+    "end_line": 9
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "def greet"
+    ],
+    "absent": [
+     "import os"
+    ]
+   }
+  },
+  {
+   "name": "read: directory lists its entries",
+   "tool": "read",
+   "arguments": {
+    "path": "src"
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "app.py",
+     "greeter.go"
+    ]
+   }
+  },
+  {
+   "name": "read: missing file names the close match",
+   "tool": "read",
+   "arguments": {
+    "path": "src/ap.py"
+   },
+   "expect": {
+    "ok": false,
+    "contains": [
+     "app.py"
+    ]
+   }
+  },
+  {
+   "name": "read: continue a long file",
+   "tool": "read",
+   "arguments": {
+    "path": "README.md",
+    "offset": 2995
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "line 3000"
+    ]
+   }
+  },
+  {
+   "name": "read: CRLF file reads as plain lines",
+   "tool": "read",
+   "arguments": {
+    "path": "src/notes.txt"
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "second line"
+    ],
+    "absent": [
+     "\\r"
+    ]
+   }
+  },
+  {
+   "name": "patch: canonical update",
+   "tool": "apply_patch",
+   "arguments": {
+    "patch": "*** Begin Patch\n*** Update File: src/app.py\n@@\n def main():\n-    g = Greeter(\"world\")\n+    g = Greeter(\"mars\")\n*** End Patch"
+   },
+   "expect": {
+    "ok": true,
+    "files": {
+     "src/app.py": "import os\n\n\nclass Greeter:\n    def __init__(self, name):\n        self.name = name\n\n    def greet(self):\n        return f\"Hello, {self.name}!\"\n\n\ndef main():\n    g = Greeter(\"mars\")\n    print(g.greet())\n"
+    }
+   }
+  },
+  {
+   "name": "patch: spaces where the file uses tabs",
+   "tool": "apply_patch",
+   "arguments": {
+    "patch": "*** Begin Patch\n*** Update File: src/greeter.go\n@@\n     if name == \"\" {\n-        return \"Hello!\"\n+        return \"Hi!\"\n*** End Patch"
+   },
+   "expect": {
+    "ok": true,
+    "files": {
+     "src/greeter.go": "package main\n\nimport \"fmt\"\n\nfunc greet(name string) string {\n\tif name == \"\" {\n\t\treturn \"Hi!\"\n\t}\n\treturn fmt.Sprintf(\"Hello, %s!\", name)\n}\n"
+    }
+   }
+  },
+  {
+   "name": "patch: smart quotes in a removed line",
+   "tool": "apply_patch",
+   "arguments": {
+    "patch": "*** Begin Patch\n*** Update File: src/app.py\n@@\n def main():\n-    g = Greeter(“world”)\n+    g = Greeter(\"mars\")\n*** End Patch"
+   },
+   "expect": {
+    "ok": true,
+    "files": {
+     "src/app.py": "import os\n\n\nclass Greeter:\n    def __init__(self, name):\n        self.name = name\n\n    def greet(self):\n        return f\"Hello, {self.name}!\"\n\n\ndef main():\n    g = Greeter(\"mars\")\n    print(g.greet())\n"
+    }
+   }
+  },
+  {
+   "name": "patch: trailing whitespace differs",
+   "tool": "apply_patch",
+   "arguments": {
+    "patch": "*** Begin Patch\n*** Update File: src/app.py\n@@\n def main():   \n-    g = Greeter(\"world\")  \n+    g = Greeter(\"mars\")\n*** End Patch"
+   },
+   "expect": {
+    "ok": true,
+    "files": {
+     "src/app.py": "import os\n\n\nclass Greeter:\n    def __init__(self, name):\n        self.name = name\n\n    def greet(self):\n        return f\"Hello, {self.name}!\"\n\n\ndef main():\n    g = Greeter(\"mars\")\n    print(g.greet())\n"
+    }
+   }
+  },
+  {
+   "name": "patch: line-number prefixes copied from read",
+   "tool": "apply_patch",
+   "arguments": {
+    "patch": "*** Begin Patch\n*** Update File: src/app.py\n@@\n 12| def main():\n-13|     g = Greeter(\"world\")\n+13|     g = Greeter(\"mars\")\n*** End Patch"
+   },
+   "expect": {
+    "ok": true,
+    "files": {
+     "src/app.py": "import os\n\n\nclass Greeter:\n    def __init__(self, name):\n        self.name = name\n\n    def greet(self):\n        return f\"Hello, {self.name}!\"\n\n\ndef main():\n    g = Greeter(\"mars\")\n    print(g.greet())\n"
+    }
+   }
+  },
+  {
+   "name": "patch: missing Begin/End envelope",
+   "tool": "apply_patch",
+   "arguments": {
+    "patch": "*** Update File: src/app.py\n@@\n def main():\n-    g = Greeter(\"world\")\n+    g = Greeter(\"mars\")\n"
+   },
+   "expect": {
+    "ok": true,
+    "files": {
+     "src/app.py": "import os\n\n\nclass Greeter:\n    def __init__(self, name):\n        self.name = name\n\n    def greet(self):\n        return f\"Hello, {self.name}!\"\n\n\ndef main():\n    g = Greeter(\"mars\")\n    print(g.greet())\n"
+    }
+   }
+  },
+  {
+   "name": "patch: unified diff",
+   "tool": "apply_patch",
+   "arguments": {
+    "patch": "--- a/src/app.py\n+++ b/src/app.py\n@@ -12,3 +12,3 @@\n def main():\n-    g = Greeter(\"world\")\n+    g = Greeter(\"mars\")\n     print(g.greet())\n"
+   },
+   "expect": {
+    "ok": true,
+    "files": {
+     "src/app.py": "import os\n\n\nclass Greeter:\n    def __init__(self, name):\n        self.name = name\n\n    def greet(self):\n        return f\"Hello, {self.name}!\"\n\n\ndef main():\n    g = Greeter(\"mars\")\n    print(g.greet())\n"
+    }
+   }
+  },
+  {
+   "name": "patch: input instead of patch",
+   "tool": "apply_patch",
+   "arguments": {
+    "input": "*** Begin Patch\n*** Update File: src/app.py\n@@\n def main():\n-    g = Greeter(\"world\")\n+    g = Greeter(\"mars\")\n*** End Patch"
+   },
+   "expect": {
+    "ok": true,
+    "files": {
+     "src/app.py": "import os\n\n\nclass Greeter:\n    def __init__(self, name):\n        self.name = name\n\n    def greet(self):\n        return f\"Hello, {self.name}!\"\n\n\ndef main():\n    g = Greeter(\"mars\")\n    print(g.greet())\n"
+    }
+   }
+  },
+  {
+   "name": "patch: context line without its leading space",
+   "tool": "apply_patch",
+   "arguments": {
+    "patch": "*** Begin Patch\n*** Update File: src/app.py\n@@\ndef main():\n-    g = Greeter(\"world\")\n+    g = Greeter(\"mars\")\n*** End Patch"
+   },
+   "expect": {
+    "ok": true,
+    "files": {
+     "src/app.py": "import os\n\n\nclass Greeter:\n    def __init__(self, name):\n        self.name = name\n\n    def greet(self):\n        return f\"Hello, {self.name}!\"\n\n\ndef main():\n    g = Greeter(\"mars\")\n    print(g.greet())\n"
+    }
+   }
+  },
+  {
+   "name": "patch: @@ header names the enclosing line",
+   "tool": "apply_patch",
+   "arguments": {
+    "patch": "*** Begin Patch\n*** Update File: src/app.py\n@@ def main():\n-    g = Greeter(\"world\")\n+    g = Greeter(\"mars\")\n*** End Patch"
+   },
+   "expect": {
+    "ok": true,
+    "files": {
+     "src/app.py": "import os\n\n\nclass Greeter:\n    def __init__(self, name):\n        self.name = name\n\n    def greet(self):\n        return f\"Hello, {self.name}!\"\n\n\ndef main():\n    g = Greeter(\"mars\")\n    print(g.greet())\n"
+    }
+   }
+  },
+  {
+   "name": "patch: exact old/new strings",
+   "tool": "apply_patch",
+   "arguments": {
+    "path": "src/app.py",
+    "old_string": "g = Greeter(\"world\")",
+    "new_string": "g = Greeter(\"mars\")"
+   },
+   "expect": {
+    "ok": true,
+    "files": {
+     "src/app.py": "import os\n\n\nclass Greeter:\n    def __init__(self, name):\n        self.name = name\n\n    def greet(self):\n        return f\"Hello, {self.name}!\"\n\n\ndef main():\n    g = Greeter(\"mars\")\n    print(g.greet())\n"
+    }
+   }
+  },
+  {
+   "name": "patch: add a file",
+   "tool": "apply_patch",
+   "arguments": {
+    "patch": "*** Begin Patch\n*** Add File: src/new.txt\n+hello\n+world\n*** End Patch"
+   },
+   "expect": {
+    "ok": true,
+    "files": {
+     "src/new.txt": "hello\nworld\n"
+    }
+   }
+  },
+  {
+   "name": "patch: stale removed line shows the current text",
+   "tool": "apply_patch",
+   "arguments": {
+    "patch": "*** Begin Patch\n*** Update File: src/app.py\n@@\n def main():\n-    g = Greeter(\"earth\")\n+    g = Greeter(\"mars\")\n*** End Patch"
+   },
+   "expect": {
+    "ok": false,
+    "contains": [
+     "g = Greeter("
+    ],
+    "files": {
+     "src/app.py": "import os\n\n\nclass Greeter:\n    def __init__(self, name):\n        self.name = name\n\n    def greet(self):\n        return f\"Hello, {self.name}!\"\n\n\ndef main():\n    g = Greeter(\"world\")\n    print(g.greet())\n"
+    }
+   }
+  },
+  {
+   "name": "patch: file does not exist",
+   "tool": "apply_patch",
+   "arguments": {
+    "patch": "*** Begin Patch\n*** Update File: src/nope.py\n@@\n-a\n+b\n*** End Patch"
+   },
+   "expect": {
+    "ok": false,
+    "files": {
+     "src/nope.py": null
+    }
+   }
+  },
+  {
+   "name": "patch: CRLF file keeps CRLF",
+   "tool": "apply_patch",
+   "arguments": {
+    "patch": "*** Begin Patch\n*** Update File: src/notes.txt\n@@\n first line\n-second line\n+2nd line\n*** End Patch"
+   },
+   "expect": {
+    "ok": true,
+    "files": {
+     "src/notes.txt": "first line\r\n2nd line\r\nthird line\r\n"
+    }
+   }
+  },
+  {
+   "name": "search: rg args list",
+   "tool": "search_files",
+   "arguments": {
+    "args": [
+     "Greeter",
+     "src"
+    ]
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "app.py"
+    ]
+   }
+  },
+  {
+   "name": "search: rg args as one string",
+   "tool": "search_files",
+   "arguments": {
+    "args": "-F Greeter src"
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "app.py"
+    ]
+   }
+  },
+  {
+   "name": "search: pattern and path",
+   "tool": "search_files",
+   "arguments": {
+    "pattern": "Greeter",
+    "path": "src"
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "app.py"
+    ]
+   }
+  },
+  {
+   "name": "search: list files by glob",
+   "tool": "search_files",
+   "arguments": {
+    "args": [
+     "--files",
+     "-g",
+     "*.go"
+    ]
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "greeter.go"
+    ],
+    "absent": [
+     "app.py"
+    ]
+   }
+  },
+  {
+   "name": "search: pattern that is not a valid regex",
+   "tool": "search_files",
+   "arguments": {
+    "args": [
+     "greet(",
+     "src"
+    ]
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "app.py"
+    ]
+   }
+  },
+  {
+   "name": "search: no match",
+   "tool": "search_files",
+   "arguments": {
+    "args": [
+     "zzzqqq"
+    ]
+   },
+   "expect": {
+    "ok": true
+   }
+  }
+ ]
+}
