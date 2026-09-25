@@ -18,6 +18,7 @@ _HTML = re.compile(r"<(?:!doctype|html|head|body)\b", re.IGNORECASE)
 _TITLE = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
 _JSON_MESSAGE = re.compile(r'"(?:message|detail|error)"\s*:\s*"((?:[^"\\]|\\.)*)"')
 _LABEL = re.compile(r"^\([^)]*\)\s*:?\s*")
+_LEADING_STATUS = re.compile(r"([1-5]\d\d)\b[\s:-]*")
 
 
 def _cause(error: BaseException, kinds: tuple[type[BaseException], ...]) -> BaseException | None:
@@ -53,8 +54,10 @@ def provider_detail(error: BaseException) -> str:
         if text.startswith(prefix):
             text = text[len(prefix) :].strip()
             break
-    if status is not None and text.startswith(str(status)):
-        text = text[len(str(status)) :].strip(" :-")
+    leading = _LEADING_STATUS.match(text)
+    if leading is not None and (status is None or int(leading[1]) == status):
+        status = int(leading[1])
+        text = text[leading.end() :]
     text = _LABEL.sub("", text)
     if _HTML.search(text):
         title = _TITLE.search(text)

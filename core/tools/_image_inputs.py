@@ -1,4 +1,4 @@
-"""Argument dialects and local image paths for the image Tools."""
+"""Argument dialects and local image paths for the image and media generation Tools."""
 
 from __future__ import annotations
 
@@ -41,19 +41,39 @@ ANALYZE_FIELD_ALIASES = SpellingAliases(
     }
 )
 
+_SOURCE_IMAGE_ALIASES = (
+    "source_image",
+    "input_image",
+    "input_images",
+    "reference_image",
+    "reference_images",
+    "image_path",
+    "image_paths",
+)
+_OUTPUT_DIR_ALIASES = ("output_directory", "out_dir", "save_dir", "output_folder")
+
 # Names other image generators use for image_generation fields.
 GENERATION_FIELD_ALIASES = SpellingAliases(
     {
-        "source_images": (
-            "source_image",
-            "input_image",
-            "input_images",
-            "reference_image",
-            "reference_images",
-            "image_path",
-            "image_paths",
-        ),
-        "output_dir": ("output_directory", "out_dir", "save_dir", "output_folder"),
+        "source_images": _SOURCE_IMAGE_ALIASES,
+        "output_dir": _OUTPUT_DIR_ALIASES,
+    }
+)
+
+# Names other video generators use for generate_video fields.
+VIDEO_FIELD_ALIASES = SpellingAliases(
+    {
+        "first_frame": ("start_frame", "start_image", "first_frame_image"),
+        "last_frame": ("end_frame", "end_image", "last_frame_image"),
+        "output_dir": _OUTPUT_DIR_ALIASES,
+    }
+)
+
+# Names other music generators use for generate_music fields.
+MUSIC_FIELD_ALIASES = SpellingAliases(
+    {
+        "source_images": _SOURCE_IMAGE_ALIASES,
+        "output_dir": _OUTPUT_DIR_ALIASES,
     }
 )
 
@@ -130,6 +150,34 @@ def normalize_image_generation_arguments(contract: ToolContract, arguments: Any)
     )
 
 
+def normalize_generate_video_arguments(contract: ToolContract, arguments: Any) -> Any:
+    """Return canonical generate_video arguments for calls written in other dialects."""
+    return normalize_call_arguments(
+        contract,
+        arguments,
+        field_aliases=VIDEO_FIELD_ALIASES,
+        empty_as_omitted=(
+            "output_dir",
+            "first_frame",
+            "last_frame",
+            "resolution",
+            "aspect_ratio",
+            "size",
+        ),
+    )
+
+
+def normalize_generate_music_arguments(contract: ToolContract, arguments: Any) -> Any:
+    """Return canonical generate_music arguments for calls written in other dialects."""
+    return normalize_call_arguments(
+        contract,
+        arguments,
+        field_aliases=MUSIC_FIELD_ALIASES,
+        field_normalizers={"source_images": image_list},
+        empty_as_omitted=("output_dir",),
+    )
+
+
 def _local_path_text(text: str, field: str) -> str:
     """Turn a file: URL into a path; refuse web and data addresses with the reason."""
     lowered = text.casefold()
@@ -156,7 +204,14 @@ def _local_path_text(text: str, field: str) -> str:
     return path
 
 
-def _folder_problem(folder: Path, label: str, field: str, cwd: Path) -> UnusableImageError:
+def _call(field: str, paths: list[str], single: bool) -> str:
+    """Render the corrected argument as the Agent would write it."""
+    return json.dumps({field: paths[0] if single else paths}, ensure_ascii=False)
+
+
+def _folder_problem(
+    folder: Path, label: str, field: str, cwd: Path, single: bool
+) -> UnusableImageError:
     try:
         images = sorted(
             entry
@@ -169,12 +224,11 @@ def _folder_problem(folder: Path, label: str, field: str, cwd: Path) -> Unusable
         return UnusableImageError(
             "image_read_error", f"{label} is a folder with no image files, not an image."
         )
-    example = json.dumps(
-        {field: [display_search_path(image, cwd=cwd) for image in images]}, ensure_ascii=False
-    )
+    example = _call(field, [display_search_path(image, cwd=cwd) for image in images], single)
+    files = "an image file" if single else "image files"
     return UnusableImageError(
         "image_read_error",
-        f"{label} is a folder, not an image. Pass image files from it, for example {example}.",
+        f"{label} is a folder, not an image. Pass {files} from it, for example {example}.",
     )
 
 
@@ -189,7 +243,16 @@ def _similar_images(missing: Path, cwd: Path) -> list[Path]:
     ]
 
 
-def resolve_local_images(context: ToolContext, raw_paths: Any, field: str) -> list[Path]:
+def resolve_local_image(context: ToolContext, raw_path: Any, field: str) -> Path:
+    """Resolve one requested image, such as a video frame, like ``resolve_local_images``."""
+    if not isinstance(raw_path, str) or not raw_path.strip():
+        raise UnusableImageError("invalid_arguments", f"{field} must be a local image path.")
+    return resolve_local_images(context, [raw_path], field, single=True)[0]
+
+
+def resolve_local_images(
+    context: ToolContext, raw_paths: Any, field: str, *, single: bool = False
+) -> list[Path]:
     """Resolve requested images against the working directory.
 
     Missing files fail together, each with similar existing files and, when every
@@ -218,13 +281,13 @@ def resolve_local_images(context: ToolContext, raw_paths: Any, field: str) -> li
     missing: list[tuple[int, str, list[Path]]] = []
     for index, (raw, path) in enumerate(requested):
         if path.is_dir():
-            raise _folder_problem(path, raw, field, cwd)
+            raise _folder_problem(path, raw, field, cwd, single)
         if not path.exists():
             similar = _similar_images(path, cwd)
             missing.append((index, raw, similar))
     if missing:
         raise UnusableImageError(
-            "image_not_found", _missing_message(requested, missing, field, cwd)
+            "image_not_found", _missing_message(requested, missing, field, cwd, single)
         )
     return [path for _, path in requested]
 
@@ -234,6 +297,7 @@ def _missing_message(
     missing: list[tuple[int, str, list[Path]]],
     field: str,
     cwd: Path,
+    single: bool,
 ) -> str:
     lines = []
     for _, raw, similar in missing:
@@ -246,7 +310,7 @@ def _missing_message(
         corrected = [raw for raw, _ in requested]
         for index, _, similar in missing:
             corrected[index] = display_search_path(similar[0], cwd=cwd)
-        call = json.dumps({field: corrected}, ensure_ascii=False)
+        call = _call(field, corrected, single)
         meant = "that file" if len(missing) == 1 else "those files"
         lines.append(f"If you meant {meant}, pass {call}.")
     return "\n".join(lines)
