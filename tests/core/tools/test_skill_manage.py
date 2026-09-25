@@ -634,6 +634,27 @@ def test_recognizable_mistakes_write_real_empty_file(
     assert (harness.home("main") / "demo/assets/empty.txt").read_bytes() == b""
 
 
+@pytest.mark.parametrize(
+    ("file_path", "recorded"),
+    [
+        ('"assets\\empty.txt"', "assets/empty.txt"),
+        ("./demo/references/notes.md", "references/notes.md"),
+        ("other/references/notes.md", "other/references/notes.md"),
+    ],
+)
+def test_normalized_call_records_the_package_path_it_writes(
+    tmp_path: Path, file_path: str, recorded: str
+) -> None:
+    normalizer = _Harness(tmp_path).tools.get(SKILL_MANAGE_TOOL_NAME).argument_normalizer
+    assert normalizer is not None
+
+    normalized = normalizer(
+        {"action": "write_file", "name": "demo", "file_path": file_path, "content": "x"}
+    )
+
+    assert normalized["file_path"] == recorded
+
+
 # --- Patch tolerance --------------------------------------------------------
 
 _PATCH_BODY = (
