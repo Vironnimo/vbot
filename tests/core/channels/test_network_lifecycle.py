@@ -163,7 +163,7 @@ async def test_whatsapp_setup_is_idempotent_and_shutdown_cancels_install(
         with pytest.raises(ChannelError):
             await service.delete_channel("wa")
         with pytest.raises(ChannelError):
-            service.update_channel("wa", platform="telegram")
+            await service.update_channel("wa", platform="telegram")
     finally:
         await service.aclose()
     assert cancelled.is_set()
@@ -364,7 +364,7 @@ async def test_whatsapp_lifecycle_mutations_cannot_interrupt_owned_operation(
             pairing = asyncio.create_task(service.pair_whatsapp("wa"))
         await asyncio.wait_for(started.wait(), timeout=2)
         with pytest.raises(ChannelError):
-            getattr(service, action)("wa")
+            await getattr(service, action)("wa")
         assert not service.list_channels()[0].enabled
         start_adapter.assert_not_called()
         release.set()
@@ -388,7 +388,7 @@ async def test_whatsapp_setup_rejects_enabled_channel_awaiting_recovery(
         ChannelConfig(id="wa", platform="whatsapp", agent_id="assistant", enabled=False)
     )
     monkeypatch.setattr(service, "start_channel", Mock())
-    service.enable_channel("wa")
+    await service.enable_channel("wa")
     service._mark_channel_failed("wa", "waiting for recovery")
     install = AsyncMock()
     monkeypatch.setattr("core.channels._whatsapp_setup.install_bridge", install)
