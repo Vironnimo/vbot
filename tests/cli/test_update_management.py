@@ -10,6 +10,7 @@ import pytest
 
 import cli.update_management as update_management
 from cli import _update_assets
+from cli._update_types import _SnapshotStep
 from cli.install_state import (
     read_install_state,
 )
@@ -738,3 +739,45 @@ def test_stash_flag_does_not_restore_an_existing_stash_when_changes_disappear(
     assert not result.ok
     assert not runner.ran("git", "stash", "apply")
     assert not runner.ran("git", "stash", "pop")
+
+
+@pytest.mark.parametrize("restart_ok", [True, False])
+def test_a_failed_restart_names_the_unrestored_snapshot_and_the_previous_revision(
+    tmp_path: Path, restart_ok: bool
+) -> None:
+    (tmp_path / ".git").mkdir()
+    _write_state(tmp_path)
+    heads = iter(("oldrevision1", "newrevision2"))
+
+    def handler(command: list[str]) -> CommandRun:
+        if command[:2] == ["git", "symbolic-ref"]:
+            return _ok("main")
+        if command[:2] == ["git", "status"]:
+            return _ok("")
+        if command[:3] == ["git", "rev-parse", "HEAD"]:
+            return _ok(next(heads))
+        return _ok("")
+
+    def start(instance: ServerInstance) -> CommandResult:
+        return CommandResult(ok=restart_ok, message="start result", instance=instance)
+
+    _events, stop, _start = _recording_restart()
+    result = run_update(
+        _instance(),
+        runner=ScriptedRunner(handler),
+        root=tmp_path,
+        stop=stop,
+        start=start,
+        data_snapshot_fn=lambda _instance: _SnapshotStep(
+            True, "pre-update data snapshot: s-1", "s-1"
+        ),
+    )
+
+    assert result.ok is restart_ok
+    note = "pre-update data snapshot s-1 was not restored automatically"
+    if restart_ok:
+        assert note not in result.message
+    else:
+        assert note in result.message
+        assert "check out oldrevisi" in result.message
+        assert "`vbot data-store snapshot restore s-1 --all --yes`" in result.message

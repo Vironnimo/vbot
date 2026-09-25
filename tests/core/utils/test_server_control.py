@@ -15,6 +15,7 @@ from core.utils.server_control import (
     control_record_path,
     create_server_control,
     is_authorized_control_token,
+    live_server_ports,
     read_server_control,
     remove_server_control,
     server_control_claim,
@@ -98,6 +99,17 @@ def test_control_claim_prevents_replacing_current_authority(tmp_path: Path) -> N
         assert read_server_control(tmp_path, 8420) == original
 
 
+def test_live_server_ports_reports_only_held_claims(tmp_path: Path) -> None:
+    assert live_server_ports(tmp_path) == ()
+    with server_control_claim(tmp_path, 8420):
+        (tmp_path / "runtime" / "server-other.lock").write_bytes(b"\0")
+        assert live_server_ports(tmp_path) == (8420,)
+        with server_control_claim(tmp_path, 8421):
+            assert live_server_ports(tmp_path) == (8420, 8421)
+
+    assert live_server_ports(tmp_path) == ()
+
+
 def test_process_exit_releases_claim_without_replacing_record(tmp_path: Path) -> None:
     script = (
         "import sys, time; from core.utils.server_control import server_control_claim, "
@@ -118,6 +130,7 @@ def test_process_exit_releases_claim_without_replacing_record(tmp_path: Path) ->
         assert child.stdout is not None and child.stdout.readline().strip() == "ready"
         original = read_server_control(tmp_path, 8420)
         assert original is not None and original.token == "child"
+        assert live_server_ports(tmp_path) == (8420,)
         with (
             pytest.raises(RuntimeError, match="control authority"),
             server_control_claim(tmp_path, 8420),
