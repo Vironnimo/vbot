@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from typing import Any
 
 from core.chat import latest_session_context_usage
@@ -15,7 +14,7 @@ from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
 from server.rpc.event_bridge import publish_resource_changed
 from server.rpc.operations_methods import FILE_PREVIEW_WORKERS
-from server.rpc.payloads import remove_opaque_provider_metadata
+from server.rpc.payloads import projected_file_urls, remove_opaque_provider_metadata
 from server.rpc.validation import _reject_unsupported
 
 JsonObject = dict[str, Any]
@@ -23,7 +22,6 @@ _LOGGER = get_logger("server.rpc.extensions")
 # Projects an already-read temporary Session History snapshot (CPU and file
 # capability checks); the Session read itself runs on the Session database's pool.
 _HISTORY_WORKERS = BoundedWorkerPool(name="extension-history", max_workers=2)
-_FILE_URL_PATTERN = re.compile(r"/api/files/[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+")
 
 
 def _list_extensions(state: Any, params: JsonObject) -> JsonObject:
@@ -397,6 +395,7 @@ async def _extension_page_run(state: Any, params: JsonObject) -> JsonObject:
         replay = inspection.run.events
         return {
             "replay_through_sequence": replay[-1].sequence if replay else 0,
+            "participant_id": inspection.record.owner.participant_id,
             "stream": state.file_delivery.open_extension_run(
                 extension=name,
                 page=page["id"],
@@ -507,36 +506,11 @@ def _temporary_history_projection(snapshot: Any, delivery: Any) -> JsonObject:
         "has_newer": snapshot.has_newer,
         "session_usage": snapshot.session_usage,
         "context_usage": latest_session_context_usage(list(snapshot.context_messages)),
-        "file_urls": _projected_file_urls(messages, delivery),
+        "file_urls": projected_file_urls(messages, delivery),
     }
     if snapshot.page.before_cursor is not None:
         response["next_before"] = snapshot.page.before_cursor
     return response
-
-
-def _projected_file_urls(value: Any, delivery: Any) -> list[str]:
-    """List only file capabilities that survived the ordinary visible projection."""
-    if delivery is None:
-        return []
-    urls: list[str] = []
-    seen: set[str] = set()
-
-    def visit(item: Any) -> None:
-        if isinstance(item, dict):
-            for child in item.values():
-                visit(child)
-        elif isinstance(item, list):
-            for child in item:
-                visit(child)
-        elif isinstance(item, str):
-            for url in _FILE_URL_PATTERN.findall(item):
-                token = url.removeprefix("/api/files/")
-                if url not in seen and delivery.resolve_token(token) is not None:
-                    seen.add(url)
-                    urls.append(url)
-
-    visit(value)
-    return urls
 
 
 async def _validate_page_context(runtime: Any, registry: Any, name: str, page: Any) -> None:
