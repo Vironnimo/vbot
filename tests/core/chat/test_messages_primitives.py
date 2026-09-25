@@ -567,7 +567,12 @@ class TestChatMessageFactories:
         assert result["usage"] == expected_usage
 
     def test_assistant_usage_estimate_summary_round_trips_with_field_provenance(self):
-        usage = {"input_tokens": 150, "output_tokens": 12, "output_tokens_estimated": True, "estimated": True}
+        usage = {
+            "input_tokens": 150,
+            "output_tokens": 12,
+            "output_tokens_estimated": True,
+            "estimated": True,
+        }
         message = ChatMessage.assistant(model="openai/gpt-4.1", content="Hi", usage=usage)
 
         assert ChatMessage.from_dict(message.to_dict()).usage == usage
@@ -578,7 +583,12 @@ class TestChatMessageFactories:
             ({"input_tokens": 150, "output_tokens": 12, "estimated": True}, "usage.estimated"),
             ({"input_tokens": 150, "output_tokens": 12, "estimated": False}, "usage.estimated"),
             (
-                {"input_tokens": 150, "output_tokens": 12, "input_tokens_estimated": False, "estimated": True},
+                {
+                    "input_tokens": 150,
+                    "output_tokens": 12,
+                    "input_tokens_estimated": False,
+                    "estimated": True,
+                },
                 "usage.estimated",
             ),
             (

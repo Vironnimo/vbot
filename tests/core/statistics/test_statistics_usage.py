@@ -156,7 +156,13 @@ def test_cache_totals_split_per_provider_model_and_day(tmp_path: Path) -> None:
             _assistant(
                 model=cached_model,
                 at=BASE + timedelta(seconds=30),
-                usage={"input_tokens": 9, "output_tokens": 1, "input_tokens_estimated": True, "output_tokens_estimated": True, "estimated": True},
+                usage={
+                    "input_tokens": 9,
+                    "output_tokens": 1,
+                    "input_tokens_estimated": True,
+                    "output_tokens_estimated": True,
+                    "estimated": True,
+                },
             ),
         ],
     )
