@@ -30,7 +30,7 @@ from core.runtime.interfaces import (
     LoggerProtocol,
     ProviderCredentialResolverProtocol,
 )
-from core.sessions import ChatSessionManager
+from core.sessions import ChatSessionManager, SessionAddress
 from core.sessions.titles import SessionTitleService
 from core.skills.skills import SkillRegistry
 from core.statistics import StatisticsIndex, StatisticsService
@@ -44,7 +44,8 @@ from core.tools.availability import (
     SUBAGENT_ALLOWED_AGENTS_KEY,
     SUBAGENT_TOOL_SETTINGS_KEY,
 )
-from core.tools.tools import ToolRegistry
+from core.tools.tools import ToolContext, ToolRegistry
+from core.utils.ids import is_safe_id
 
 
 def _temporary_config_from_binding(binding: Any) -> TemporaryAgentConfig:
@@ -209,6 +210,23 @@ class ExtensionHostFactory:
             publish_change=lambda resource, ids, revision: self._publish_extension_change(
                 identity, resource, ids, revision
             ),
+            load_result_payload=lambda context, payload_id: self._load_result_payload(
+                identity, context, payload_id
+            ),
+        )
+
+    async def _load_result_payload(
+        self, identity: Any, context: ToolContext, payload_id: str
+    ) -> Any:
+        """Load one owned payload whose Tool Result the calling Session can see."""
+        if self._extensions is None or not self._extensions.is_registration_current(identity):
+            raise ValueError("Extension registration is no longer current")
+        # A call outside a Session (management, direct invocation) names no view.
+        if not context.result_payloads_available or not is_safe_id(payload_id):
+            return None
+        address = SessionAddress(context.project_id, context.agent_id, context.session_id)
+        return await self.chat_sessions.tool_result_payload_async(
+            address, payload_id, owner_name=identity.name
         )
 
     def _validate_temporary_admission(self, address: Any, admission: Any) -> None:

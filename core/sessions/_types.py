@@ -17,12 +17,26 @@ JsonObject = dict[str, Any]
 
 
 @dataclass(frozen=True)
+class ToolResultPayload:
+    """One JSON payload an Extension attached to its Tool call's result.
+
+    ``payload_id`` is an opaque safe token the Extension hands to the Agent;
+    ``owner_name`` names the Extension that alone may load the payload again.
+    """
+
+    payload_id: str
+    owner_name: str
+    payload_json: str
+
+
+@dataclass(frozen=True)
 class ToolResultFacts:
     """What Chat reports about one Tool Result when it persists it.
 
     ``status`` is the Tool call's terminal status (``completed``, ``failed`` or
     ``cancelled``); the other fields repeat the result envelope's outcome so
-    the store never parses Tool output.
+    the store never parses Tool output. ``payloads`` are stored with the result
+    in the same transaction.
     """
 
     status: str
@@ -30,6 +44,7 @@ class ToolResultFacts:
     error_code: str | None = None
     error_retryable: bool | None = None
     error_attempts: int | None = None
+    payloads: tuple[ToolResultPayload, ...] = ()
 
 
 @dataclass(frozen=True)

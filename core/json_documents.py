@@ -68,7 +68,7 @@ DURABLE_DOCUMENTS: Mapping[str, str] = MappingProxyType(
         "terminal_launch_history": "terminals/launch-history.json",
         "terminal_groups": "terminals/groups.json",
         "oauth_token": "oauth/*.json",
-        "mcp_connections": "mcp/connections.json",
+        "mcp_connections": "extension-data/mcp/connections.json",
     }
 )
 

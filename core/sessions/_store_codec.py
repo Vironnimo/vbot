@@ -16,8 +16,9 @@ from typing import TYPE_CHECKING, Any
 
 from core.chat.errors import ChatSessionError
 from core.sessions import _store_fts, _store_values
-from core.sessions._types import JsonObject, ToolResultFacts
+from core.sessions._types import JsonObject, ToolResultFacts, ToolResultPayload
 from core.sessions.errors import SessionStoreCorruptError
+from core.utils.ids import is_safe_id
 from core.utils.timestamps import utc_now_timestamp
 
 if TYPE_CHECKING:
@@ -143,8 +144,23 @@ def validate_tool_results(
             or (facts.error_code is not None and not isinstance(facts.error_code, str))
             or (facts.error_retryable is not None and not isinstance(facts.error_retryable, bool))
             or (facts.error_attempts is not None and not _is_non_negative_int(facts.error_attempts))
+            or not _valid_payloads(facts.payloads)
         ):
             raise ChatSessionError(f"Tool result facts are invalid: {call_id}")
+
+
+def _valid_payloads(payloads: Any) -> bool:
+    """Payloads are distinct safe ids, each with an owner and JSON text."""
+    if not isinstance(payloads, tuple) or not all(
+        isinstance(payload, ToolResultPayload)
+        and is_safe_id(payload.payload_id)
+        and isinstance(payload.owner_name, str)
+        and payload.owner_name
+        and isinstance(payload.payload_json, str)
+        for payload in payloads
+    ):
+        return False
+    return len({payload.payload_id for payload in payloads}) == len(payloads)
 
 
 def _text_row(message: ChatMessage) -> tuple[str | None, str | None, str | None] | None:
@@ -391,6 +407,16 @@ def link_tool_result(
             call_key,
         ),
     )
+    if facts is not None and facts.payloads:
+        created_at = _store_values._timestamp(message.timestamp, "Message timestamp")
+        connection.executemany(
+            "INSERT INTO tool_result_payloads (payload_id, call_key, owner_name, created_at, "
+            "payload_json) VALUES (?, ?, ?, ?, ?)",
+            [
+                (payload.payload_id, call_key, payload.owner_name, created_at, payload.payload_json)
+                for payload in facts.payloads
+            ],
+        )
 
 
 @dataclass

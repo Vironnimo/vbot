@@ -344,7 +344,7 @@ def validate_data_dir_config(data_dir: str | Path) -> tuple[JsonValidationReport
         validate_terminal_launch_history_file,
     )
 
-    # The bundled MCP Extension owns ``mcp/connections.json``; core has no
+    # The bundled MCP Extension owns ``extension-data/mcp/connections.json``; core has no
     # Extension hook for doctor checks yet, so this one import points outward.
     from resources.extensions.mcp.config import validate_connections_file
 

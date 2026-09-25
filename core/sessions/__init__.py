@@ -41,6 +41,7 @@ from core.sessions._types import (
     SessionStatusSnapshot,
     TemporarySessionBinding,
     ToolResultFacts,
+    ToolResultPayload,
     recall_visibilities,
 )
 from core.sessions.errors import (
@@ -117,6 +118,7 @@ __all__ = [
     "SessionStatusSnapshot",
     "TemporarySessionBinding",
     "ToolResultFacts",
+    "ToolResultPayload",
     "active_session_messages",
     "recall_visibilities",
     "is_channel_message_note",
