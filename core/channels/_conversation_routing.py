@@ -5,6 +5,10 @@ Run taps and platform chat-id migrations move the conversation to another
 Session by storing a pointer in the Channel state (the "Wegweiser"); without a
 pointer the anchor itself is the active Session. Session metadata carries only
 the Channel context of each Session.
+
+The async entry points take one worker hop per database: pointer work runs on
+the Channel state's own pool (``ConversationPointerStore.run_async``), Session
+work on the Session database's pool (``ChatSessionManager.run_async``).
 """
 
 from __future__ import annotations
@@ -19,13 +23,10 @@ from core.channels.adapter import (
     main_conversation_id,
 )
 from core.sessions import SessionAddress
-from core.utils.workers import BoundedWorkerPool
 
 if TYPE_CHECKING:
     from core.channels.config import ChannelConfig
     from core.sessions import ChatSessionManager
-
-_CHANNEL_SESSION_WORKERS = BoundedWorkerPool(name="channel-session", max_workers=4)
 
 
 def _session_address(agent_id: str, session_id: str) -> SessionAddress:
@@ -64,7 +65,16 @@ class ChannelSessionRouting:
         self,
         conversation: ConversationFacts,
     ) -> tuple[RouteFacts, ReplyPlanFacts]:
-        return await _CHANNEL_SESSION_WORKERS.run(self.prepare_inbound_route, conversation)
+        route = await self._pointers.run_async(self._route_facts, conversation)
+        reply_plan = self._reply_plan_for(conversation)
+        await self._chat_sessions.run_async(
+            self._update_session_metadata,
+            route,
+            conversation,
+            reply_plan,
+            create_missing=True,
+        )
+        return route, reply_plan
 
     def _reply_plan_for(self, conversation: ConversationFacts) -> ReplyPlanFacts:
         """Build a reply target without creating or changing a Session."""
@@ -124,37 +134,21 @@ class ChannelSessionRouting:
         target the live chat), and a note tells the model.
         Returns False when the old conversation has no session to bridge.
         """
-        prepared = await _CHANNEL_SESSION_WORKERS.run(
-            self._prepare_group_migration,
-            old_chat_id,
-            new_chat_id,
-        )
-        if prepared is None:
-            return False
-        agent_id, active_session_id = prepared
-        async with self._chat_sessions.write_lock(_session_address(agent_id, active_session_id)):
-            await _CHANNEL_SESSION_WORKERS.run(
-                self._append_session_note,
-                agent_id,
-                active_session_id,
-                f"This group chat was migrated by the platform to a new chat id "
-                f"(old: {old_chat_id}, new: {new_chat_id}). The conversation continues here.",
-            )
-        return True
-
-    def _prepare_group_migration(
-        self,
-        old_chat_id: str,
-        new_chat_id: str,
-    ) -> tuple[str, str] | None:
         agent_id = self._config.agent_id
-        old_anchor = self._group_conversation_key(old_chat_id)
-        active_session_id = self._resolve_active_session_id(old_anchor)
-        if not self._chat_sessions.exists(_session_address(agent_id, active_session_id)):
-            return None
+        active_session_id = await self._pointers.run_async(
+            self._resolve_active_session_id, self._group_conversation_key(old_chat_id)
+        )
+        address = _session_address(agent_id, active_session_id)
+        if not await self._chat_sessions.run_async(self._chat_sessions.exists, address):
+            return False
 
-        new_anchor = self._group_conversation_key(new_chat_id)
-        self._pointers.point_conversation(self._config.id, new_anchor, "group", active_session_id)
+        await self._pointers.run_async(
+            self._pointers.point_conversation,
+            self._config.id,
+            self._group_conversation_key(new_chat_id),
+            "group",
+            active_session_id,
+        )
         conversation = ConversationFacts(
             platform=self._config.platform,
             channel_id=self._config.id,
@@ -163,12 +157,21 @@ class ChannelSessionRouting:
             access_scope_id=new_chat_id,
             kind="group",
         )
-        self._update_session_metadata(
+        await self._chat_sessions.run_async(
+            self._update_session_metadata,
             RouteFacts(agent_id=agent_id, session_id=active_session_id),
             conversation,
             ReplyPlanFacts(channel_id=self._config.id, platform_target=new_chat_id),
         )
-        return agent_id, active_session_id
+        async with self._chat_sessions.write_lock(address):
+            await self._chat_sessions.run_async(
+                self._append_session_note,
+                agent_id,
+                active_session_id,
+                f"This group chat was migrated by the platform to a new chat id "
+                f"(old: {old_chat_id}, new: {new_chat_id}). The conversation continues here.",
+            )
+        return True
 
     def _append_session_note(self, agent_id: str, session_id: str, note: str) -> None:
         session = self._chat_sessions.get_or_create(_session_address(agent_id, session_id))
@@ -222,16 +225,22 @@ class ChannelSessionRouting:
 
         self._chat_sessions.ensure_metadata(address, update, create_missing=create_missing)
 
-    def _apply_continuation_navigation(
+    async def _apply_continuation_navigation_async(
         self,
         route: RouteFacts,
         conversation: ConversationFacts,
         reply_plan: ReplyPlanFacts,
         conversation_key: str,
     ) -> None:
-        self._update_session_metadata(route, conversation, reply_plan)
-        self._pointers.point_conversation(
-            self._config.id, conversation_key, conversation.kind, route.session_id
+        await self._chat_sessions.run_async(
+            self._update_session_metadata, route, conversation, reply_plan
+        )
+        await self._pointers.run_async(
+            self._pointers.point_conversation,
+            self._config.id,
+            conversation_key,
+            conversation.kind,
+            route.session_id,
         )
 
     def _point_conversation_at_session(

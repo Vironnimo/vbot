@@ -232,6 +232,30 @@ async def test_disabled_generation_keeps_local_title_without_adapter(tmp_path) -
 
 
 @pytest.mark.asyncio
+async def test_closed_session_database_skips_the_title_with_a_warning(
+    tmp_path, caplog: pytest.LogCaptureFixture
+) -> None:
+    runtime = StubRuntime(tmp_path, enabled=True, configured_model="openai/title::main")
+    _append_first_user(runtime, "Investigate login failures")
+    runtime.chat_sessions.close()
+    service = SessionTitleService(cast(Any, runtime))
+
+    with caplog.at_level(logging.WARNING, logger="vbot.sessions.titles"):
+        service.notify_user_message(
+            agent_id="coder",
+            session_id="session-one",
+            project_id=None,
+            agent=SimpleNamespace(model="openai/agent::main"),
+            content="Investigate login failures",
+            run_id="run-one",
+        )
+        await _wait_for_background(service)
+
+    assert "Session title initialization failed" in caplog.text
+    assert runtime.adapter_calls == []
+
+
+@pytest.mark.asyncio
 async def test_configured_title_model_replaces_local_title_with_bounded_request(tmp_path) -> None:
     adapter = StubAdapter('Title: "Review report".')
     runtime = StubRuntime(

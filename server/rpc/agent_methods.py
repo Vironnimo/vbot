@@ -1,11 +1,19 @@
-"""Agent methods."""
+"""Agent methods.
+
+Agent store operations read or write Sessions: reads verify an Identity Agent's
+current-Session pointer, and create, rename and delete create, retarget or
+archive its Sessions. Each operation therefore runs as one unit on the Session
+database's worker pool (``ChatSessionManager.run_async``); publication stays on
+the Event Loop.
+"""
 
 from __future__ import annotations
 
 import asyncio
 import inspect
+from collections.abc import Callable
 from contextlib import AsyncExitStack
-from typing import Any, cast
+from typing import Any, TypeVar, cast
 
 from core.memory import MEMORY_PROMPT_MODES
 from core.prompts import load_bundled_default_layout
@@ -32,7 +40,6 @@ from server.events import (
     RESOURCE_KIND_SESSIONS,
 )
 from server.rpc._mutations import MutationHandler, serialized_mutation
-from server.rpc._session_workers import _SESSION_RPC_WORKERS
 from server.rpc.agent_refs import (
     _agent_reference_ids,
     _agent_reference_lock,
@@ -59,6 +66,7 @@ from server.rpc.validation import (
 )
 
 JsonObject = dict[str, Any]
+_Result = TypeVar("_Result")
 
 _LOGGER = get_logger("server.rpc.agents")
 
@@ -68,13 +76,9 @@ __all__ = ["ALLOWED_THINKING_EFFORTS", "MAX_TEMPERATURE", "MIN_TEMPERATURE"]
 async def _list_agents(state: Any) -> JsonObject:
     def read() -> JsonObject:
         # Agent reads load agent.json and may repair a current Session pointer.
-        try:
-            listing = state.runtime.agents.list_with_order()
-        except Exception as exc:
-            raise _map_expected_error(exc) from exc
-        return _agent_list_response(state, listing)
+        return _agent_list_response(state, state.runtime.agents.list_with_order())
 
-    return await _SESSION_RPC_WORKERS.run(read)
+    return await _run_agent_operation(state, read)
 
 
 async def _reorder_agents(state: Any, params: JsonObject) -> JsonObject:
@@ -93,7 +97,9 @@ async def _reorder_agents(state: Any, params: JsonObject) -> JsonObject:
 
     try:
         async with _agent_reference_lock(state):
-            listing = state.runtime.agents.reorder(
+            # The roster read verifies every current-Session pointer.
+            listing = await state.runtime.chat_sessions.run_async(
+                state.runtime.agents.reorder,
                 agent_ids,
                 expected_revision=expected_revision,
             )
@@ -119,13 +125,9 @@ async def _get_agent(state: Any, params: JsonObject) -> JsonObject:
     agent_id = _required_string(params, "id")
 
     def read() -> JsonObject:
-        try:
-            agent = state.runtime.agents.get(agent_id)
-        except Exception as exc:
-            raise _map_expected_error(exc) from exc
-        return _agent_response(state, agent)
+        return _agent_response(state, state.runtime.agents.get(agent_id))
 
-    return await _SESSION_RPC_WORKERS.run(read)
+    return await _run_agent_operation(state, read)
 
 
 def _create_agent_record(state: Any, params: JsonObject) -> JsonObject:
@@ -185,6 +187,17 @@ def _update_agent_record(state: Any, params: JsonObject) -> tuple[JsonObject, li
     return response, changed_fields
 
 
+async def _run_agent_operation(
+    state: Any, operation: Callable[..., _Result], *arguments: Any
+) -> _Result:
+    """Run one Agent store operation on the Session database's pool, mapping its errors."""
+    try:
+        result: _Result = await state.runtime.chat_sessions.run_async(operation, *arguments)
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    return result
+
+
 def _guard_agent_lifecycle(handler: MutationHandler) -> MutationHandler:
     mutate = serialized_mutation(handler, lock_attribute="_agent_lifecycle_mutation_lock")
 
@@ -200,7 +213,7 @@ def _guard_agent_lifecycle(handler: MutationHandler) -> MutationHandler:
 @_guard_agent_lifecycle
 async def _create_agent(state: Any, params: JsonObject) -> JsonObject:
     # Agent and Session files are written on a worker; publication stays on the loop.
-    response = await _SESSION_RPC_WORKERS.run(_create_agent_record, state, params)
+    response = await _run_agent_operation(state, _create_agent_record, state, params)
     # Agent CRUD rides the generic reload-on-change channel ("one app system"):
     # the signal carries no agent data, open windows re-fetch agent.list.
     publish_resource_changed(state, RESOURCE_KIND_AGENTS)
@@ -210,7 +223,9 @@ async def _create_agent(state: Any, params: JsonObject) -> JsonObject:
 
 @_guard_agent_lifecycle
 async def _update_agent(state: Any, params: JsonObject) -> JsonObject:
-    response, changed_fields = await _SESSION_RPC_WORKERS.run(_update_agent_record, state, params)
+    response, changed_fields = await _run_agent_operation(
+        state, _update_agent_record, state, params
+    )
     publish_resource_changed(state, RESOURCE_KIND_AGENTS)
     if changed_fields:
         _LOGGER.info(
@@ -255,7 +270,7 @@ async def _rename_agent(state: Any, params: JsonObject) -> JsonObject:
                             f"Sub-Agent activity: {', '.join(busy_subagent_ids)}"
                         ),
                     )
-                result = await _SESSION_RPC_WORKERS.run(
+                result = await state.runtime.chat_sessions.run_async(
                     _rename_agent_and_retarget_references,
                     state,
                     agent_id,
@@ -353,9 +368,10 @@ def _seed_agent_custom_prompt(state: Any, agent_id: str) -> None:
 async def _delete_agent(state: Any, params: JsonObject) -> JsonObject:
     agent_id = _required_string(params, "id")
     try:
+        chat_sessions = state.runtime.chat_sessions
         remaining_agents = [
             agent
-            for agent in await _SESSION_RPC_WORKERS.run(state.runtime.agents.list)
+            for agent in await chat_sessions.run_async(state.runtime.agents.list)
             if agent.id != agent_id
         ]
         if not remaining_agents:
@@ -372,7 +388,7 @@ async def _delete_agent(state: Any, params: JsonObject) -> JsonObject:
                         (f"cannot delete agent referenced by {', '.join(references)}: {agent_id}"),
                     )
                 await state.runtime.terminal_manager.close_agent_scope(agent_id, None)
-                await _SESSION_RPC_WORKERS.run(state.runtime.agents.delete, agent_id)
+                await chat_sessions.run_async(state.runtime.agents.delete, agent_id)
                 state.runtime.invalidate_agent_skills(agent_id)
         except RunAdmissionBlockedError as exc:
             raise RpcError(

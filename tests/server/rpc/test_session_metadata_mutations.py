@@ -58,13 +58,15 @@ async def test_session_partial_mutation_preserves_concurrent_title(
         monkeypatch.setattr(sessions, "set_metadata", replace_after_title)
         monkeypatch.setattr(sessions, "mutate_metadata_with_previous", mutate_after_title)
         config = ChannelConfig(id="channel", platform="telegram", agent_id="assistant")
+
+        async def resolve_agent_async(*_args: object) -> SimpleNamespace:
+            return SimpleNamespace(compaction_policy=None)
+
         state = SimpleNamespace(
             runtime=SimpleNamespace(
                 chat_sessions=sessions,
                 channel_service=SimpleNamespace(list_channels=lambda: [config]),
-                agent_resolver=SimpleNamespace(
-                    resolve_agent=lambda *_args: SimpleNamespace(compaction_policy=None)
-                ),
+                agent_resolver=SimpleNamespace(resolve_agent_async=resolve_agent_async),
                 storage=SimpleNamespace(load_compaction_settings=lambda: _POLICY),
             ),
             event_bus=ServerEventBus(),

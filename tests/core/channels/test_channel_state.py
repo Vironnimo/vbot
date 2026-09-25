@@ -14,7 +14,7 @@ import core.channels.state as state_module
 from core.channels import ChannelConfigError, ChannelError, ChannelNotFoundError
 from core.channels.adapter import RunButtonBinding
 from core.channels.state import ChannelStateStore
-from core.database import APPLICATION_IDS, write_bootstrap_marker
+from core.database import APPLICATION_IDS, DatabaseUnavailableError, write_bootstrap_marker
 from core.runtime.databases import canonical_database_specs
 from core.utils.timestamps import utc_now_timestamp
 
@@ -305,6 +305,25 @@ async def test_role_checks_read_committed_access_without_storage(
     assert store.role_for("tg", "-100", "51") == "admin"
     assert store.role_for("tg", "-200", "51") == "member"
     assert store.role_for("tg", "-200", "50") == "admin"
+
+
+@pytest.mark.asyncio
+async def test_run_async_runs_state_work_on_the_channel_pool_until_closed(
+    tmp_path: Path,
+) -> None:
+    state = _open(tmp_path)
+    state.reset("tg", "telegram")
+
+    def point() -> str:
+        state.point_conversation("tg", "anchor", "direct", "active")
+        return threading.current_thread().name
+
+    assert (await state.run_async(point)).startswith("vbot-db-channels")
+    assert state.active_session_id("tg", "anchor") == "active"
+    state.close()
+
+    with pytest.raises(DatabaseUnavailableError):
+        await state.run_async(point)
 
 
 @pytest.mark.asyncio
