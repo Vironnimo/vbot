@@ -270,6 +270,32 @@ def tool_result_persisted(
     return row is not None
 
 
+def tool_result_payload(
+    connection: sqlite3.Connection, address: SessionAddress, payload_id: str, owner_name: str
+) -> str | None:
+    """Return the JSON text of one payload *owner_name* attached to a visible Tool Result.
+
+    The payload is visible while the Tool Result entry it was stored with is in
+    the Session's current view, own or inherited. A materialized copy keeps the
+    payload id, but one view never shows the original and a copy together.
+    """
+    _state, ranges = current_view(connection, address)
+    visible = " OR ".join(f"({_store_lineage.range_predicate('r')})" for _ in ranges)
+    params: list[Any] = [payload_id, owner_name]
+    for view_range in ranges:
+        params.extend(_store_lineage.range_params(view_range))
+    # CROSS JOIN fixes the order: the payload id index finds the few candidate
+    # rows, and only their result entries are tested against the view.
+    row = connection.execute(
+        "SELECT p.payload_json FROM tool_result_payloads AS p "
+        "CROSS JOIN tool_calls AS c ON c.call_key = p.call_key "
+        "CROSS JOIN entries AS r ON r.entry_key = c.result_entry_key "
+        f"WHERE p.payload_id = ? AND p.owner_name = ? AND ({visible}) LIMIT 1",
+        params,
+    ).fetchone()
+    return None if row is None else str(row[0])
+
+
 def latest_note(
     connection: sqlite3.Connection, address: SessionAddress, *, content_prefix: str
 ) -> Callable[[], ChatMessage | None]:
