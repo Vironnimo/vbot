@@ -54,10 +54,14 @@ from core.providers.reasoning import (
 from core.runs import Run, RunStatus
 from core.sessions import (
     ChatSession,
+    PromptEpoch,
+    SeenSkillsUpdate,
     SessionAddress,
+    SessionEditResult,
     SessionReadBatch,
     SessionReadCursor,
     TemporarySessionBinding,
+    ToolResultFacts,
     editable_session_message_index,
     latest_project_tool_context_id,
 )
@@ -256,9 +260,6 @@ class _SessionSnapshot:
         editable_session_message_index(self.active_lineage, message_id)
         self.pending_edit_message_id = message_id
 
-    def commit_edit(self) -> None:
-        self.pending_edit_message_id = None
-
     @classmethod
     async def load(cls, session: ChatSession) -> _SessionSnapshot:
         batch = await session.load_since_async()
@@ -279,36 +280,72 @@ class _SessionSnapshot:
         messages: list[ChatMessage],
         *,
         journal: JournalBoundary | None = None,
-        metadata_mutation: Callable[[JsonObject], None] | None = None,
+        seen_skills: SeenSkillsUpdate | None = None,
+        tool_results: Mapping[str, ToolResultFacts] | None = None,
     ) -> None:
         """Persist *messages* and advance past them in the same transaction.
 
-        *metadata_mutation* commits in that transaction too, so Session metadata
-        describing these Messages can never outlive a failed append.
+        *tool_results* reports how each appended Tool Result's call ended.
+        *seen_skills* commits in that transaction too, so a Skill is marked
+        seen exactly when the note announcing it persists.
         """
         if not messages:
             raise ValueError("a snapshot append requires Messages")
         await self.commit(
             session,
-            partial(session.append_many_async, messages, metadata_mutation=metadata_mutation),
+            partial(
+                session.append_many_async,
+                messages,
+                seen_skills=seen_skills,
+                tool_results=tool_results,
+            ),
             journal=journal,
         )
+
+    async def apply_edit(
+        self,
+        session: ChatSession,
+        messages: list[ChatMessage],
+        *,
+        journal: JournalBoundary | None = None,
+        seen_skills: SeenSkillsUpdate | None = None,
+    ) -> SessionEditResult:
+        """Commit the admitted edit with its replacement *messages* in one transaction.
+
+        The Continuation restarts from *journal*'s records. The snapshot is
+        replaced by the Session's state after the edit.
+        """
+        target = self.pending_edit_message_id
+        if target is None:
+            raise ValueError("no history edit was admitted")
+
+        async def write(records: list[JsonObject]) -> SessionEditResult:
+            return await session.apply_edit_async(
+                target, messages, seen_skills=seen_skills, continuation_records=records
+            )
+
+        result = await (write([]) if journal is None else journal.commit(write))
+        self.pending_edit_message_id = None
+        self.messages = list(result.batch.messages)
+        self.active_lineage = list(result.batch.active_messages)
+        self.cursor = result.batch.cursor
+        return result
 
     async def commit_checkpoint(
         self,
         session: ChatSession,
         checkpoint: ChatMessage,
         *,
-        metadata_mutation: Callable[[JsonObject], None] | None = None,
+        epoch: PromptEpoch,
     ) -> str | None:
-        """Persist a Compaction *checkpoint* only while this snapshot is current.
+        """Persist a Compaction *checkpoint* and its prompt *epoch* while this snapshot is current.
 
         Returns the rotated prompt-cache affinity id and advances past the
         checkpoint, or returns ``None`` without writing or advancing when
         another writer changed the Session since this snapshot's cursor.
         """
-        committed = await session.commit_compaction_checkpoint_async(
-            checkpoint, since=self.cursor, metadata_mutation=metadata_mutation
+        committed = await session.commit_compaction_async(
+            checkpoint, since=self.cursor, epoch=epoch
         )
         if committed is None:
             return None

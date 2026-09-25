@@ -15,6 +15,7 @@ from core.recall import (
 )
 from core.recall.canonical import SESSION_RECALL_DEFAULT_ROLES
 from core.recall.passages import build_session_passages
+from core.runs import RunKind
 from core.sessions import ChatSession, ChatSessionManager
 from core.tools.session_search import session_search_handler
 from scripts.provider_probe.recall_cases import FixtureEmbeddings
@@ -105,11 +106,11 @@ async def test_substring_matches_are_not_hidden_by_whole_word_hits(tmp_path: Pat
 async def test_visibility_filters_still_apply_to_search_and_context(tmp_path: Path) -> None:
     sessions = ChatSessionManager(tmp_path)
     for name, kinds in [
-        ("user", ["user"]),
-        ("calendar", ["calendar"]),
-        ("sub", ["subagent"]),
-        ("reflection", ["user", "skill_reflection"]),
-        ("system", ["system"]),
+        ("user", [RunKind.USER]),
+        ("calendar", [RunKind.CALENDAR]),
+        ("sub", [RunKind.SUBAGENT]),
+        ("reflection", [RunKind.USER, RunKind.SKILL_REFLECTION]),
+        ("system", [RunKind.SYSTEM]),
     ]:
         session = sessions.create("coder", session_id=name)
         session.append_many(
@@ -118,7 +119,8 @@ async def test_visibility_filters_still_apply_to_search_and_context(tmp_path: Pa
                 ChatMessage.assistant(model="test", content="answer"),
             ]
         )
-        sessions.set_metadata(session.address, {"run_kinds": kinds})
+        for kind in kinds:
+            sessions.record_run_kind(session.address, kind)
     backend = SqliteFtsRecallBackend(RecallBackendContext(tmp_path, sessions))
     normal = success(
         await session_search_handler(make_context(tmp_path), {"query": "needle"}, backend)
@@ -182,9 +184,8 @@ async def test_context_excludes_superseded_history(tmp_path: Path) -> None:
     obsolete = ChatMessage.assistant(model="test", content="Obsolete answer")
     question = ChatMessage.user("Question")
     replacement = ChatMessage.assistant(model="test", content="New answer")
-    session.append_many(
-        [old_question, obsolete, ChatMessage.history_edit(old_question.id), question, replacement]
-    )
+    session.append_many([old_question, obsolete])
+    session.apply_edit(old_question.id, [question, replacement])
     assert sessions.recall_context(session.address, obsolete.id) == []
     assert [
         item["message_id"] for item in sessions.recall_context(session.address, question.id)

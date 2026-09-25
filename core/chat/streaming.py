@@ -8,7 +8,6 @@ import time
 from collections import OrderedDict
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 from urllib.parse import urlparse
@@ -32,6 +31,7 @@ from core.runs import (
     RunInterruptedError,
 )
 from core.utils.errors import ProviderError, VBotError
+from core.utils.timestamps import utc_now_timestamp
 
 JsonObject = dict[str, Any]
 
@@ -592,9 +592,9 @@ class StreamingAccumulator:
         now_perf = time.monotonic()
         if self._reasoning_started_perf is None:
             self._reasoning_started_perf = now_perf
-            self._reasoning_started_at = datetime.now(UTC).isoformat()
+            self._reasoning_started_at = utc_now_timestamp()
         self._reasoning_ended_perf = now_perf
-        self._reasoning_completed_at = datetime.now(UTC).isoformat()
+        self._reasoning_completed_at = utc_now_timestamp()
 
     def _add_tool_call_delta(self, delta: JsonObject) -> StreamingVisibleDelta | None:
         stream_slot, synthetic_id_suffix = _tool_call_stream_slot(delta)

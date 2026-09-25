@@ -1,4 +1,11 @@
-"""Exact, bounded Message search within one supplied read transaction."""
+"""Exact, bounded Message search within one supplied read transaction.
+
+Search reads current entries only: an entry is eligible while the current view
+of some eligible Session contains it. A hit is reported for the Session that
+owns the entry when that Session is eligible and still shows it; otherwise for
+the newest eligible Session that inherits it. Each entry is one candidate, so a
+fork never duplicates its origin's hits.
+"""
 # ruff: noqa: E501
 
 from __future__ import annotations
@@ -9,31 +16,63 @@ import re
 import sqlite3
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from contextlib import closing
+from dataclasses import dataclass
 from typing import Any
 
-from core.sessions import (
-    _store_fts,
-    _store_values,
-)
+from core.sessions import _store_fts, _store_values
 from core.sessions._types import SessionSearchHit, SessionSearchOrder, SessionSearchResult
-from core.sessions.schema import (
-    FTS_TABLE,
-    FTS_TRIGRAM_TABLE,
-)
+from core.sessions.schema import FTS_TABLE, FTS_TRIGRAM_TABLE
+from core.utils.timestamps import canonical_timestamp
 
 # Candidates are checked in batches whose text is read by key; the first batch
 # is sized to the request so a typical page reads only the rows it returns.
 _MIN_FIRST_BATCH = 16
 _CHECK_BATCH = 256
-_PROJECTION_SQL = (
-    "SELECT m.message_key, s.project_id, s.agent_id, s.session_id, m.message_id, m.role, "
-    "m.timestamp, COALESCE(m.content, m.content_search) AS text, t.name AS tool_name "
-    "FROM history_records AS m JOIN sessions AS s ON s.session_key = m.session_key "
-    "LEFT JOIN tool_calls AS t ON t.result_key = m.message_key "
-    f"WHERE {_store_values._KEYED_RECORDS}"
-)
 
 _Batch = builtins.list[tuple[int, float]]
+
+# The entries current in an eligible Session's view: its own non-superseded
+# entries, and the ancestor entries its lineage segments admit.
+_OWN_CURRENT = (
+    "SELECT e.entry_key, e.created_at FROM entries AS e "
+    "WHERE e.session_key IN (SELECT session_key FROM eligible) AND e.superseded_at_seq IS NULL"
+)
+_INHERITED_CURRENT = (
+    "SELECT e.entry_key, e.created_at FROM session_lineage AS l "
+    "JOIN entries AS e ON e.session_key = l.ancestor_key "
+    "AND e.seq >= l.from_seq AND e.seq < l.upto_seq "
+    "WHERE l.session_key IN (SELECT session_key FROM eligible) "
+    "AND (e.superseded_at_seq IS NULL OR e.superseded_at_seq >= l.as_of_seq)"
+)
+# The Session a hit is reported for (see the module docstring).
+_REPORTED_SESSION = (
+    "COALESCE("
+    "CASE WHEN e.superseded_at_seq IS NULL "
+    "AND e.session_key IN (SELECT session_key FROM eligible) THEN e.session_key END, "
+    "(SELECT l.session_key FROM session_lineage AS l WHERE l.ancestor_key = e.session_key "
+    "AND e.seq >= l.from_seq AND e.seq < l.upto_seq "
+    "AND (e.superseded_at_seq IS NULL OR e.superseded_at_seq >= l.as_of_seq) "
+    "AND l.session_key IN (SELECT session_key FROM eligible) "
+    "ORDER BY l.session_key DESC LIMIT 1))"
+)
+
+
+@dataclass(frozen=True)
+class _Filter:
+    """The eligible Sessions (a ``WITH eligible`` clause) and the entry filter."""
+
+    eligible_sql: str
+    eligible_params: tuple[Any, ...]
+    entry_sql: str
+    entry_params: tuple[Any, ...]
+
+    def current_entries(self) -> tuple[str, list[Any]]:
+        """``SELECT entry_key, created_at`` of every eligible current entry, deduplicated."""
+        where = f" AND {self.entry_sql}" if self.entry_sql else ""
+        return (
+            f"{_OWN_CURRENT}{where} UNION {_INHERITED_CURRENT}{where}",
+            [*self.entry_params, *self.entry_params],
+        )
 
 
 def search(
@@ -54,7 +93,7 @@ def search(
     use_fts: bool = True,
     fallback_reason: str | None = None,
 ) -> SessionSearchResult:
-    """Return up to ``limit`` exactly matching active Messages in ``order``.
+    """Return up to ``limit`` exactly matching current Messages in ``order``.
 
     FTS or a scan only enumerates candidates in order; each candidate's
     conversation text is checked against the literal query before it counts,
@@ -83,7 +122,7 @@ def search(
             return any(term in haystack for term in folded_terms)
         return all(term in haystack for term in folded_terms)
 
-    where, params = _record_filter(
+    search_filter = _search_filter(
         project_id=project_id,
         agent_id=agent_id,
         session_id=session_id,
@@ -93,7 +132,7 @@ def search(
         excluded_session_ids=excluded_session_ids,
         include_subagents=include_subagents,
     )
-    check = _Check(connection, matches=matches, limit=limit)
+    check = _Check(connection, search_filter, matches=matches, limit=limit)
 
     if use_fts:
         if _store_fts._fts_health_from_connection(connection, verify_coverage=False).available:
@@ -105,7 +144,7 @@ def search(
             )
             hits, complete = check.run(
                 _fts_candidates(
-                    connection, table, _fts_expression(compact, match_mode), where, params, order
+                    connection, table, _fts_expression(compact, match_mode), search_filter, order
                 ),
                 ranked=order == "relevance",
             )
@@ -116,11 +155,11 @@ def search(
             fallback_reason = "tool_inclusive"
         else:
             fallback_reason = "fts_unavailable"
-    hits, complete = check.run(_scan_candidates(connection, where, params, order), ranked=False)
+    hits, complete = check.run(_scan_candidates(connection, search_filter, order), ranked=False)
     return SessionSearchResult(tuple(hits), complete, "scan", fallback_reason)
 
 
-def _record_filter(
+def _search_filter(
     *,
     project_id: str | None,
     agent_id: str | None,
@@ -130,41 +169,37 @@ def _record_filter(
     until: str | None,
     excluded_session_ids: Sequence[str],
     include_subagents: bool,
-) -> tuple[str, list[Any]]:
-    """Return the eligible ``history_records AS m`` filter and its parameters.
-
-    Every term refers only to view columns and uncorrelated subqueries, so SQLite
-    pushes the live Session scope into each view branch and its Session index.
-    The terms also avoid equality on view columns (``active <> 0``, a JSON role
-    list): an equality lets SQLite build an automatic index over the scoped view
-    rows when this filter runs inside an ``IN`` subquery.
-    """
-    scope = (
-        "SELECT session_key FROM sessions WHERE status = 'live' AND project_id = ? AND "
+) -> _Filter:
+    """Return the eligible live Sessions and the entry filter of one search."""
+    eligible = (
+        "eligible (session_key) AS MATERIALIZED (SELECT s.session_key FROM sessions AS s "
+        "WHERE s.state = 'live' AND s.project_id = ? AND "
         + _store_values._recall_visibility_sql(include_subagents=include_subagents)
     )
-    params: list[Any] = [project_id if project_id is not None else ""]
+    eligible_params: list[Any] = [project_id if project_id is not None else ""]
     if agent_id is not None:
-        scope += " AND agent_id = ?"
-        params.append(agent_id)
+        eligible += " AND s.agent_id = ?"
+        eligible_params.append(agent_id)
     if session_id is not None:
-        scope += " AND session_id = ?"
-        params.append(session_id)
+        eligible += " AND s.session_id = ?"
+        eligible_params.append(session_id)
     if excluded_session_ids:
-        placeholders = ", ".join("?" for _ in excluded_session_ids)
-        scope += f" AND session_id NOT IN ({placeholders})"
-        params.extend(excluded_session_ids)
-    where = f"m.session_key IN ({scope}) AND m.active <> 0"
+        eligible += " AND s.session_id NOT IN (SELECT value FROM json_each(?))"
+        eligible_params.append(_store_values._json_list(excluded_session_ids))
+    eligible += ")"
+    clauses: list[str] = []
+    entry_params: list[Any] = []
     if roles is not None:
-        where += " AND m.role IN (SELECT value FROM json_each(?))"
-        params.append(json.dumps(list(roles)))
+        clauses.append("e.role IN (SELECT value FROM json_each(?))")
+        entry_params.append(json.dumps(list(roles)))
+    # Stored times are canonical, so text order is time order and exact.
     if since is not None:
-        where += " AND julianday(m.timestamp) >= julianday(?)"
-        params.append(since)
+        clauses.append("e.created_at >= ?")
+        entry_params.append(canonical_timestamp(since))
     if until is not None:
-        where += " AND julianday(m.timestamp) <= julianday(?)"
-        params.append(until)
-    return where, params
+        clauses.append("e.created_at <= ?")
+        entry_params.append(canonical_timestamp(until))
+    return _Filter(eligible, tuple(eligible_params), " AND ".join(clauses), tuple(entry_params))
 
 
 def _trigram_supported(compact: str, match_mode: str) -> bool:
@@ -182,15 +217,14 @@ def _fts_expression(compact: str, match_mode: str) -> str:
         expression = (" OR " if match_mode == "any_term" else " AND ").join(
             '"' + term.replace('"', '""') + '"' for term in compact.split(" ") if term
         )
-    return "{content content_search} : (" + expression + ")"
+    return "{content search_text} : (" + expression + ")"
 
 
 def _fts_candidates(
     connection: sqlite3.Connection,
     fts_table: str,
     expression: str,
-    where: str,
-    params: Sequence[Any],
+    search_filter: _Filter,
     order: SessionSearchOrder,
 ) -> sqlite3.Cursor:
     """Enumerate eligible FTS hits by rank, or by Message time.
@@ -200,36 +234,40 @@ def _fts_candidates(
     the candidates are checked.
     """
     budget = _store_values._SEARCH_CANDIDATE_LIMIT + 1
+    current_sql, current_params = search_filter.current_entries()
     if order == "relevance":
         return connection.execute(
-            f"WITH eligible(k, rank) AS MATERIALIZED ("
-            f"SELECT rowid, bm25({fts_table}) FROM {fts_table} "
-            f"WHERE {fts_table} MATCH ? "
-            f"AND +rowid IN (SELECT m.message_key FROM history_records AS m WHERE {where})) "
-            "SELECT k, rank FROM eligible ORDER BY rank, k LIMIT ?",
-            (expression, *params, budget),
+            f"WITH {search_filter.eligible_sql}, "
+            f"ranked (k, rank) AS MATERIALIZED (SELECT rowid, bm25({fts_table}) FROM {fts_table} "
+            f"WHERE {fts_table} MATCH ? AND +rowid IN (SELECT entry_key FROM ({current_sql}))) "
+            "SELECT k, rank FROM ranked ORDER BY rank, k LIMIT ?",
+            (*search_filter.eligible_params, expression, *current_params, budget),
         )
     direction = "ASC" if order == "oldest" else "DESC"
     return connection.execute(
-        f"SELECT m.message_key, 0.0 FROM history_records AS m WHERE {where} "
-        f"AND m.message_key IN (SELECT rowid FROM {fts_table} WHERE {fts_table} MATCH ?) "
-        f"ORDER BY julianday(m.timestamp) {direction}, m.message_key {direction} LIMIT ?",
-        (*params, expression, budget),
+        f"WITH {search_filter.eligible_sql} "
+        f"SELECT c.entry_key, 0.0 FROM ({current_sql}) AS c "
+        f"WHERE c.entry_key IN (SELECT rowid FROM {fts_table} WHERE {fts_table} MATCH ?) "
+        f"ORDER BY c.created_at {direction}, c.entry_key {direction} LIMIT ?",
+        (*search_filter.eligible_params, *current_params, expression, budget),
     )
 
 
 def _scan_candidates(
-    connection: sqlite3.Connection,
-    where: str,
-    params: Sequence[Any],
-    order: SessionSearchOrder,
+    connection: sqlite3.Connection, search_filter: _Filter, order: SessionSearchOrder
 ) -> sqlite3.Cursor:
-    """Enumerate eligible records by Message time; relevance scans newest first."""
+    """Enumerate eligible entries by Message time; relevance scans newest first."""
     direction = "ASC" if order == "oldest" else "DESC"
+    current_sql, current_params = search_filter.current_entries()
     return connection.execute(
-        f"SELECT m.message_key, 0.0 FROM history_records AS m WHERE {where} "
-        f"ORDER BY julianday(m.timestamp) {direction}, m.message_key {direction} LIMIT ?",
-        (*params, _store_values._SEARCH_CANDIDATE_LIMIT + 1),
+        f"WITH {search_filter.eligible_sql} "
+        f"SELECT c.entry_key, 0.0 FROM ({current_sql}) AS c "
+        f"ORDER BY c.created_at {direction}, c.entry_key {direction} LIMIT ?",
+        (
+            *search_filter.eligible_params,
+            *current_params,
+            _store_values._SEARCH_CANDIDATE_LIMIT + 1,
+        ),
     )
 
 
@@ -237,7 +275,12 @@ class _Check:
     """Check ordered candidates against the literal query within the budget."""
 
     def __init__(
-        self, connection: sqlite3.Connection, *, matches: Callable[[str], bool], limit: int
+        self,
+        connection: sqlite3.Connection,
+        search_filter: _Filter,
+        *,
+        matches: Callable[[str], bool],
+        limit: int,
     ) -> None:
         from core.recall.canonical import (
             RECALL_TOOL_RESULT_NAMES,
@@ -245,6 +288,7 @@ class _Check:
         )
 
         self._connection = connection
+        self._filter = search_filter
         self._matches = matches
         self._limit = limit
         self._roles = frozenset(SESSION_RECALL_CONVERSATION_ROLES)
@@ -274,9 +318,9 @@ class _Check:
                     hits.append(
                         SessionSearchHit(
                             address=_store_values._address(row),
-                            message_id=str(row["message_id"]),
+                            message_id=str(row["entry_id"]),
                             role=str(row["role"]),
-                            timestamp=str(row["timestamp"] or ""),
+                            timestamp=str(row["created_at"]),
                             text=text,
                             rank=ranks[key],
                         )
@@ -286,13 +330,26 @@ class _Check:
         return hits, True
 
     def _rows(self, keys: Iterable[int]) -> dict[int, sqlite3.Row]:
+        """Read each candidate's text and the Session its hit is reported for."""
         return {
-            int(row["message_key"]): row
-            for row in self._connection.execute(_PROJECTION_SQL, (json.dumps(list(keys)),))
+            int(row["entry_key"]): row
+            for row in self._connection.execute(
+                f"WITH {self._filter.eligible_sql}, "
+                f"candidates (entry_key, reported_key) AS (SELECT e.entry_key, {_REPORTED_SESSION} "
+                "FROM entries AS e WHERE e.entry_key IN (SELECT value FROM json_each(?))) "
+                "SELECT e.entry_key, e.entry_id, e.role, e.created_at, "
+                "COALESCE(t.content, t.search_text) AS text, c.name AS tool_name, "
+                "s.project_id, s.agent_id, s.session_id "
+                "FROM candidates AS k JOIN entries AS e ON e.entry_key = k.entry_key "
+                "JOIN sessions AS s ON s.session_key = k.reported_key "
+                "LEFT JOIN entry_text AS t ON t.entry_key = e.entry_key "
+                "LEFT JOIN tool_calls AS c ON c.result_entry_key = e.entry_key",
+                (*self._filter.eligible_params, _store_values._key_list(list(keys))),
+            )
         }
 
     def _text(self, row: sqlite3.Row) -> str:
-        """Return a record's conversation text, or ``""`` when search ignores it.
+        """Return an entry's conversation text, or ``""`` when search ignores it.
 
         Search reads only conversation roles, never notes or Skill contexts,
         and never the persisted results of earlier Recall searches.
@@ -317,8 +374,8 @@ def _batches(rows: Iterable[Any], *, first: int, keep_ties: bool) -> Iterator[_B
 
 
 def _rank_order(ranks: dict[int, float], rows: dict[int, sqlite3.Row]) -> builtins.list[int]:
-    """Order keys like ``ORDER BY rank, timestamp DESC, message_key``."""
-    stamps = {key: rows[key]["timestamp"] if key in rows else None for key in ranks}
+    """Order keys like ``ORDER BY rank, created_at DESC, entry_key``."""
+    stamps = {key: rows[key]["created_at"] if key in rows else None for key in ranks}
     ordered = sorted(ranks)
     ordered.sort(key=lambda key: (stamps[key] is not None, stamps[key] or ""), reverse=True)
     ordered.sort(key=ranks.__getitem__)

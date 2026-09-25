@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+from typing import Any
+
 import pytest
 
-from core.chat import ChatSessionError
-from core.sessions import (
-    SESSION_FORK_ALWAYS_STRIP_META_KEYS,
-    SESSION_FORK_CROSS_AGENT_STRIP_META_KEYS,
-    SessionAddress,
-)
+from core.chat import ChatMessage, ChatSessionError
+from core.prompts.pinned_context import PINNED_SKILL_CATALOG_SLOT
+from core.sessions import FORK_SOURCE_META_KEY, SeenSkillsUpdate, SessionAddress
 from server.rpc.errors import RpcError
+from server.rpc.methods import dispatch_rpc
 from server.rpc.session_methods import (
     _fork_session,
 )
@@ -18,42 +19,65 @@ from tests.server.rpc.agent_methods_test_support import (
     _make_state,
     _sessions_resource_events,
 )
+from tests.server.rpc_test_support import StubAdapter, make_state
+
+
+async def _rpc_fork(state: Any, params: dict[str, Any]) -> dict[str, Any]:
+    response = await dispatch_rpc(state, {"method": "session.fork", "params": params})
+    assert response["ok"] is True, response
+    result: dict[str, Any] = response["result"]
+    return result
 
 
 @pytest.mark.asyncio
 async def test_fork_same_agent_returns_new_id_with_provenance() -> None:
     state, resolver, sessions = _make_state()
-    sessions.source_metadata = {"title": "Keep"}
 
     result = await _fork_session(state, {"agent_id": "builder", "session_id": "s1"})
 
     assert result["session"]["id"] == "fork-1"
     assert result["session"]["agent_id"] == "builder"
     assert result["session"]["fork_source"]["session_id"] == "s1"
-    # Same agent, so only the always-strip policy applies (catalog keys kept).
-    assert sessions.forked[0]["strip_meta_keys"] == SESSION_FORK_ALWAYS_STRIP_META_KEYS
+    # Without a target the fork stays in the source's scope; Sessions owns which
+    # bindings stay behind, so the RPC passes no label or policy of its own.
+    assert sessions.forked[0]["target_agent_id"] is None
+    assert sessions.forked[0]["target_project_id"] is None
+    assert sessions.forked[0]["title"] is None
+    assert sessions.forked[0]["run_kind"] is None
     assert resolver.resolved == [(None, "builder")]
 
 
 @pytest.mark.asyncio
-async def test_fork_strips_channel_and_subagent_bindings_but_keeps_title() -> None:
-    state, _resolver, sessions = _make_state()
-    sessions.source_metadata = {
-        "title": "Keep",
-        "source_channel_id": "chan",
-        "platform": "telegram",
-        "is_subagent_session": True,
-    }
-
-    result = await _fork_session(state, {"agent_id": "builder", "session_id": "s1"})
-
-    metadata = sessions.get_metadata(
-        SessionAddress(project_id=None, agent_id="builder", session_id=result["session"]["id"])
+async def test_fork_strips_channel_and_subagent_bindings_but_keeps_title(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    sessions = state.runtime.chat_sessions
+    source = sessions.create("coder", session_id="s1")
+    source.append(ChatMessage.user("hello"))
+    sessions.mutate_metadata(
+        source.address,
+        lambda metadata: metadata.update(
+            {
+                "title": "Keep",
+                "source_channel_id": "chan",
+                "platform": "telegram",
+                "platform_conv_id": "conversation",
+                "is_subagent_session": True,
+            }
+        ),
     )
+
+    result = await _rpc_fork(state, {"agent_id": "coder", "session_id": "s1"})
+
+    fork_address = SessionAddress(None, "coder", result["session"]["id"])
+    metadata = sessions.get_metadata(fork_address)
     assert metadata["title"] == "Keep"
     assert "source_channel_id" not in metadata
     assert "platform" not in metadata
+    assert "platform_conv_id" not in metadata
     assert "is_subagent_session" not in metadata
+    assert result["session"]["fork_source"] == metadata[FORK_SOURCE_META_KEY]
+    assert result["session"]["fork_source"]["session_id"] == "s1"
+    assert [message.content for message in sessions.get(fork_address).load_active()] == ["hello"]
 
 
 @pytest.mark.asyncio
@@ -67,11 +91,7 @@ async def test_fork_to_other_agent_strips_catalog_and_lands_under_target() -> No
 
     assert result["session"]["agent_id"] == "reviewer"
     assert sessions.forked[0]["target_agent_id"] == "reviewer"
-    # A cross-agent fork additionally strips the pinned-catalog keys.
-    assert (
-        sessions.forked[0]["strip_meta_keys"]
-        == SESSION_FORK_ALWAYS_STRIP_META_KEYS | SESSION_FORK_CROSS_AGENT_STRIP_META_KEYS
-    )
+    assert sessions.forked[0]["target_project_id"] is None
     # Both endpoints are resolved before any file work.
     assert resolver.resolved == [(None, "builder"), (None, "reviewer")]
     # The refresh event names the fork under the target agent.
@@ -81,6 +101,36 @@ async def test_fork_to_other_agent_strips_catalog_and_lands_under_target() -> No
             "scope": {"project_id": None, "agent_id": "reviewer", "session_id": "fork-1"},
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_fork_to_other_agent_leaves_the_pinned_skill_catalog_behind(
+    tmp_path: Path,
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.agents.create("reviewer")
+    sessions = state.runtime.chat_sessions
+    source = sessions.create("coder", session_id="s1")
+    source.append(ChatMessage.user("hello"))
+    catalog = {"skills": ["deploy"]}
+    sessions.ensure_prompt_pin(source.address, PINNED_SKILL_CATALOG_SLOT, catalog, lambda _: True)
+    sessions.record_seen_skills(source.address, SeenSkillsUpdate(("deploy",)))
+
+    same_agent = await _rpc_fork(state, {"agent_id": "coder", "session_id": "s1"})
+    other_agent = await _rpc_fork(
+        state, {"agent_id": "coder", "session_id": "s1", "target_agent_id": "reviewer"}
+    )
+
+    # A fork on the same Agent keeps the prompt-cache-warm catalog; a fork into
+    # another Agent leaves it (and the seen Skills) behind so the target pins its own.
+    kept = SessionAddress(None, "coder", same_agent["session"]["id"])
+    assert sessions.prompt_pin(kept, PINNED_SKILL_CATALOG_SLOT) == catalog
+    assert sessions.seen_skills(kept) == frozenset({"deploy"})
+    assert other_agent["session"]["agent_id"] == "reviewer"
+    moved = SessionAddress(None, "reviewer", other_agent["session"]["id"])
+    assert sessions.prompt_pin(moved, PINNED_SKILL_CATALOG_SLOT) is None
+    assert sessions.seen_skills(moved) is None
+    assert [message.content for message in sessions.get(moved).load_active()] == ["hello"]
 
 
 @pytest.mark.asyncio

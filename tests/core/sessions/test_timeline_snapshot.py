@@ -8,7 +8,7 @@ import pytest
 
 from core.chat import ChatMessage
 from core.chat.errors import ChatSessionError
-from tests.core.sessions.history_fixtures import append_tool_fixture
+from tests.core.sessions.history_fixtures import append_tool_fixture, complete_run
 from tests.core.sessions.sessions_test_support import manager as manager
 
 
@@ -39,12 +39,9 @@ def test_run_identity_survives_bounded_page_without_user_or_summary(manager):
     session = manager.create("coder")
     session = start(manager, session, "first")
     session.append_many(
-        [
-            ChatMessage.user("question"),
-            ChatMessage.assistant(content="answer", model="test"),
-            summary("first"),
-        ]
+        [ChatMessage.user("question"), ChatMessage.assistant(content="answer", model="test")]
     )
+    complete_run(session, summary("first"))
     session = start(manager, session, "automatic")
     session.append_many(
         [
@@ -56,7 +53,7 @@ def test_run_identity_survives_bounded_page_without_user_or_summary(manager):
     page = read(session, limit=1)
     assert page.page.record_sequences == (5,)
     assert page.page.record_run_ids == ("automatic",)
-    session.append(summary("automatic"))
+    complete_run(session, summary("automatic"))
     delta = read(session, after=page.after_cursor)
     assert delta.incremental
     assert delta.page.record_sequences == (6,)
@@ -76,7 +73,8 @@ def test_summary_does_not_assign_previous_failed_run_to_successor(manager):
     session = start(manager, session, "missing-summary")
     session.append(ChatMessage.assistant(content="partial", model="test"))
     session = start(manager, session, "successor")
-    session.append_many([ChatMessage.assistant(content="new", model="test"), summary("successor")])
+    session.append(ChatMessage.assistant(content="new", model="test"))
+    complete_run(session, summary("successor"))
     assert read(session).page.record_run_ids == ("missing-summary", "successor", "successor")
 
 
@@ -85,12 +83,9 @@ def test_historical_summary_segments_and_fork_keep_read_identity(manager):
     for run_id in ("one", "two"):
         session = session.start_run(run_id)
         session.append_many(
-            [
-                ChatMessage.user(run_id),
-                ChatMessage.assistant(content=run_id, model="test"),
-                summary(run_id),
-            ]
+            [ChatMessage.user(run_id), ChatMessage.assistant(content=run_id, model="test")]
         )
+        complete_run(session, summary(run_id))
     page = read(session)
     assert page.page.record_run_ids == ("one", "one", "one", "two", "two", "two")
     fork = asyncio.run(manager.fork(session.address))
@@ -101,7 +96,8 @@ def test_historical_summary_segments_and_fork_keep_read_identity(manager):
 def test_completed_run_does_not_claim_unrelated_later_records(manager):
     session = manager.create("coder")
     session = start(manager, session, "one")
-    session.append_many([ChatMessage.assistant(content="one", model="test"), summary("one")])
+    session.append(ChatMessage.assistant(content="one", model="test"))
+    complete_run(session, summary("one"))
     manager.get(session.address).append(ChatMessage.user("external"))
     assert read(session, limit=1).page.record_run_ids == (None,)
 
@@ -129,7 +125,7 @@ def test_edit_invalidates_append_cursor_and_excludes_old_lineage(manager):
     session.append_many([user, ChatMessage.assistant(content="old answer", model="test")])
     baseline = read(session)
     replacement = ChatMessage.user("replacement")
-    session.append_many([ChatMessage.history_edit(user.id), replacement])
+    session.apply_edit(user.id, [replacement])
     refreshed = read(session, after=baseline.after_cursor)
     assert not refreshed.incremental
     assert refreshed.page.messages == (replacement,)

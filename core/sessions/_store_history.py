@@ -1,83 +1,177 @@
-"""Bounded Message and history projections in a supplied snapshot."""
+"""History reads in a supplied snapshot, each against one explicit view.
+
+- **Current view**: the Session's own non-superseded entries plus the entries
+  it inherits through lineage (see ``_store_lineage``). Provider history, the
+  history Tool, Recall context, counts, notes and the Skill cache read it.
+- **Own audit**: every entry the Session wrote itself, superseded ones
+  included, from its fork point on. Materialized copies of inherited history
+  precede the fork point and are not the Session's own.
+- **Own spend**: the usage of the own audit's Assistant entries.
+"""
+# ruff: noqa: E501
 
 from __future__ import annotations
 
 import bisect
-import json
 import sqlite3
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from core.chat.errors import ChatSessionError
-from core.sessions import _store_codec, _store_timeline, _store_values
-from core.sessions._io import _encode_chat_history_cursor
+from core.sessions import _store_codec, _store_lineage, _store_values
 from core.sessions._types import (
     SKILL_CONTEXT_NOTE_PREFIX,
     SKILL_TOOL_MESSAGE_NAME,
     JsonObject,
-    SessionBackgroundRecord,
-    SessionChatHistorySnapshot,
-    SessionMessagePage,
     SessionReadBatch,
-)
-from core.sessions.errors import (
-    SessionPageCursorError,
-    SessionStoreCorruptError,
+    SessionReadCursor,
 )
 
 if TYPE_CHECKING:
     from core.chat.messages import ChatMessage
-    from core.sessions._types import SessionAddress, SessionReadCursor
+    from core.sessions._store_lineage import ViewRange
+    from core.sessions._types import SessionAddress
+
+# Entry predicates over ``entries AS e`` that read one side table each.
+HAS_TEXT = (
+    "EXISTS (SELECT 1 FROM entry_text AS t WHERE t.entry_key = e.entry_key "
+    "AND (NULLIF(t.content, '') IS NOT NULL "
+    "OR (t.blocks_json IS NOT NULL AND json_array_length(t.blocks_json) > 0)))"
+)
+TEXT_PREFIX = (
+    "EXISTS (SELECT 1 FROM entry_text AS t WHERE t.entry_key = e.entry_key "
+    "AND substr(t.content, 1, ?) = ?)"
+)
+RESULT_OF_TOOL = (
+    "EXISTS (SELECT 1 FROM tool_calls AS c WHERE c.result_entry_key = e.entry_key AND c.name = ?)"
+)
+_REFLECTION_KINDS = "('reflection', 'memory_reflection', 'skill_reflection')"
 
 
-def _session_usage_from_connection(
+def current_view(
+    connection: sqlite3.Connection, address: SessionAddress
+) -> tuple[sqlite3.Row, tuple[ViewRange, ...]]:
+    """Return one live Session's row and its current view."""
+    state = _store_values._require_live(connection, address)
+    return state, _store_lineage.view_ranges(connection, int(state["session_key"]))
+
+
+def own_floor(state: sqlite3.Row) -> int:
+    """The first seq of the Session's own history: its fork point, else 0."""
+    return int(state["fork_point_seq"] or 0)
+
+
+def view_batch(
     connection: sqlite3.Connection,
-    session_key: int,
-) -> tuple[JsonObject, int]:
-    input_estimated = (
-        "CASE WHEN a.input_tokens_estimated IS NOT NULL THEN a.input_tokens_estimated "
-        "WHEN a.output_tokens_estimated IS NOT NULL THEN 0 "
-        "ELSE COALESCE(a.usage_estimated, 0) END"
+    ranges: Sequence[ViewRange],
+    *,
+    where: str = "",
+    params: Sequence[Any] = (),
+    lower: int = 0,
+    upper: int = _store_lineage.MAX_SEQ,
+    descending: bool = False,
+    limit: int | None = None,
+) -> _store_codec.EntryBatch:
+    """Read current-view entries in seq order with their side rows."""
+    rows = _store_lineage.ordered_rows(
+        connection,
+        ranges,
+        columns=_store_codec.ENTRY_COLUMNS,
+        where=where,
+        params=params,
+        lower=lower,
+        upper=upper,
+        descending=descending,
+        limit=limit,
     )
-    output_estimated = (
-        "CASE WHEN a.output_tokens_estimated IS NOT NULL THEN a.output_tokens_estimated "
-        "WHEN a.input_tokens_estimated IS NOT NULL THEN 0 "
-        "ELSE COALESCE(a.usage_estimated, 0) END"
+    return _store_codec.select_batch(connection, rows)
+
+
+def view_seq(
+    connection: sqlite3.Connection,
+    ranges: Sequence[ViewRange],
+    *,
+    where: str,
+    params: Sequence[Any] = (),
+    lower: int = 0,
+    upper: int = _store_lineage.MAX_SEQ,
+    newest: bool = True,
+) -> int | None:
+    """Return the newest (or oldest) current-view seq matching *where*."""
+    rows = _store_lineage.ordered_rows(
+        connection,
+        ranges,
+        columns="e.seq",
+        where=where,
+        params=params,
+        lower=lower,
+        upper=upper,
+        descending=newest,
+        limit=1,
     )
-    row = connection.execute(
-        f"""
-        SELECT
-          COALESCE(SUM(CASE WHEN a.usage_present = 1
-            AND ({input_estimated}) = 0 AND ({output_estimated}) = 0 THEN 1 ELSE 0 END), 0)
-            AS measured_turns,
-          COALESCE(SUM(CASE WHEN a.usage_present = 1
-            AND (({input_estimated}) = 1 OR ({output_estimated}) = 1) THEN 1 ELSE 0 END), 0)
-            AS estimated_turns,
-          COALESCE(SUM(CASE WHEN a.usage_present = 1 AND ({input_estimated}) = 0
-            AND (a.cache_read_tokens IS NOT NULL OR a.cache_write_tokens IS NOT NULL)
-            THEN 1 ELSE 0 END), 0) AS cache_turns,
-          COALESCE(SUM(CASE WHEN a.usage_present = 1 AND ({output_estimated}) = 0
-            AND a.reasoning_tokens IS NOT NULL THEN 1 ELSE 0 END), 0) AS reasoning_turns,
-          COALESCE(SUM(CASE WHEN a.usage_present = 1 AND ({input_estimated}) = 0
-            THEN COALESCE(a.input_tokens, 0) ELSE 0 END), 0) AS input_tokens,
-          COALESCE(SUM(CASE WHEN a.usage_present = 1 AND ({output_estimated}) = 0
-            THEN COALESCE(a.output_tokens, 0) ELSE 0 END), 0) AS output_tokens,
-          COALESCE(SUM(CASE WHEN a.usage_present = 1 AND ({input_estimated}) = 0
-            THEN COALESCE(a.cache_read_tokens, 0) ELSE 0 END), 0) AS cache_read_tokens,
-          COALESCE(SUM(CASE WHEN a.usage_present = 1 AND ({input_estimated}) = 0
-            THEN COALESCE(a.cache_write_tokens, 0) ELSE 0 END), 0) AS cache_write_tokens,
-          COALESCE(SUM(CASE WHEN a.usage_present = 1 AND ({output_estimated}) = 0
-            THEN COALESCE(a.reasoning_tokens, 0) ELSE 0 END), 0) AS reasoning_tokens,
-          COALESCE(SUM(CASE WHEN a.usage_present = 1 AND ({input_estimated}) = 0
-            AND (a.cache_read_tokens IS NOT NULL OR a.cache_write_tokens IS NOT NULL)
-            THEN COALESCE(a.input_tokens, 0) ELSE 0 END), 0) AS cache_input_tokens
-        FROM history_records AS m
-        JOIN assistant_messages AS a ON a.message_key = m.source_key
-        WHERE m.session_key = ?
-        """,
-        (session_key,),
-    ).fetchone()
-    assert row is not None
+    return None if not rows else int(rows[0][0])
+
+
+def _own_audit(connection: sqlite3.Connection, state: sqlite3.Row, lower: int) -> list[sqlite3.Row]:
+    return connection.execute(
+        f"SELECT {_store_codec.ENTRY_COLUMNS} FROM entries AS e "
+        "WHERE e.session_key = ? AND e.seq >= ? ORDER BY e.seq",
+        (state["session_key"], max(lower, own_floor(state))),
+    ).fetchall()
+
+
+# -- Usage -------------------------------------------------------------------
+
+
+_INPUT_ESTIMATED = (
+    "CASE WHEN a.input_tokens_estimated IS NOT NULL THEN a.input_tokens_estimated "
+    "WHEN a.output_tokens_estimated IS NOT NULL THEN 0 "
+    "ELSE COALESCE(a.usage_estimated, 0) END"
+)
+_OUTPUT_ESTIMATED = (
+    "CASE WHEN a.output_tokens_estimated IS NOT NULL THEN a.output_tokens_estimated "
+    "WHEN a.input_tokens_estimated IS NOT NULL THEN 0 "
+    "ELSE COALESCE(a.usage_estimated, 0) END"
+)
+_USAGE_SQL = f"""
+SELECT
+  COALESCE(SUM(CASE WHEN a.usage_present = 1
+    AND ({_INPUT_ESTIMATED}) = 0 AND ({_OUTPUT_ESTIMATED}) = 0 THEN 1 ELSE 0 END), 0)
+    AS measured_turns,
+  COALESCE(SUM(CASE WHEN a.usage_present = 1
+    AND (({_INPUT_ESTIMATED}) = 1 OR ({_OUTPUT_ESTIMATED}) = 1) THEN 1 ELSE 0 END), 0)
+    AS estimated_turns,
+  COALESCE(SUM(CASE WHEN a.usage_present = 1 AND ({_INPUT_ESTIMATED}) = 0
+    AND (a.cache_read_tokens IS NOT NULL OR a.cache_write_tokens IS NOT NULL)
+    THEN 1 ELSE 0 END), 0) AS cache_turns,
+  COALESCE(SUM(CASE WHEN a.usage_present = 1 AND ({_OUTPUT_ESTIMATED}) = 0
+    AND a.reasoning_tokens IS NOT NULL THEN 1 ELSE 0 END), 0) AS reasoning_turns,
+  COALESCE(SUM(CASE WHEN a.usage_present = 1 AND ({_INPUT_ESTIMATED}) = 0
+    THEN COALESCE(a.input_tokens, 0) ELSE 0 END), 0) AS input_tokens,
+  COALESCE(SUM(CASE WHEN a.usage_present = 1 AND ({_OUTPUT_ESTIMATED}) = 0
+    THEN COALESCE(a.output_tokens, 0) ELSE 0 END), 0) AS output_tokens,
+  COALESCE(SUM(CASE WHEN a.usage_present = 1 AND ({_INPUT_ESTIMATED}) = 0
+    THEN COALESCE(a.cache_read_tokens, 0) ELSE 0 END), 0) AS cache_read_tokens,
+  COALESCE(SUM(CASE WHEN a.usage_present = 1 AND ({_INPUT_ESTIMATED}) = 0
+    THEN COALESCE(a.cache_write_tokens, 0) ELSE 0 END), 0) AS cache_write_tokens,
+  COALESCE(SUM(CASE WHEN a.usage_present = 1 AND ({_OUTPUT_ESTIMATED}) = 0
+    THEN COALESCE(a.reasoning_tokens, 0) ELSE 0 END), 0) AS reasoning_tokens,
+  COALESCE(SUM(CASE WHEN a.usage_present = 1 AND ({_INPUT_ESTIMATED}) = 0
+    AND (a.cache_read_tokens IS NOT NULL OR a.cache_write_tokens IS NOT NULL)
+    THEN COALESCE(a.input_tokens, 0) ELSE 0 END), 0) AS cache_input_tokens
+FROM entries AS e
+JOIN assistant_entries AS a ON a.entry_key = e.entry_key
+WHERE e.session_key = ? AND e.role = 'assistant' AND e.seq >= ?
+"""
+
+
+def session_usage(connection: sqlite3.Connection, state: sqlite3.Row) -> tuple[JsonObject, int]:
+    """Sum the Session's own spend: its Assistant usage, superseded turns included.
+
+    A fork's inherited prefix is the origin's spend and is not counted.
+    """
+    row = connection.execute(_USAGE_SQL, (state["session_key"], own_floor(state))).fetchone()
     usage: JsonObject = {
         "measured_turns": int(row["measured_turns"]),
         "estimated_turns": int(row["estimated_turns"]),
@@ -93,327 +187,84 @@ def _session_usage_from_connection(
     return usage, int(row["cache_input_tokens"])
 
 
-def _records_by_key(connection: sqlite3.Connection, keys: Sequence[int]) -> list[sqlite3.Row]:
-    """Read full records for keys already selected from one Session, by sequence."""
-    if not keys:
-        return []
-    return connection.execute(
-        _store_values._message_records_sql(
-            where=_store_values._KEYED_RECORDS, order_by="ORDER BY m.seq"
-        ),
-        (json.dumps(list(keys)),),
-    ).fetchall()
-
-
-def _active_message_page_from_connection(
-    connection: sqlite3.Connection,
-    state: sqlite3.Row,
-    *,
-    limit: int | None,
-    before_message_id: str | None,
-    before_sequence: int | None,
-    expected_generation_id: str | None,
-    excluded_roles: Sequence[str],
-    complete_run_segment: bool,
-) -> tuple[list[sqlite3.Row], bool, frozenset[str], int | None]:
-    session_key = int(state["session_key"])
-    excluded = tuple(dict.fromkeys(excluded_roles))
-    clauses = ["m.session_key = ?", "m.active = 1"]
-    params: list[Any] = [session_key]
-    if excluded:
-        placeholders = ", ".join("?" for _ in excluded)
-        clauses.append(f"m.role NOT IN ({placeholders})")
-        params.extend(excluded)
-    cutoff = int(state["message_count"])
-    if before_sequence is not None:
-        if str(state["generation_id"]) != expected_generation_id:
-            raise SessionPageCursorError("before cursor is invalid")
-        before_row = connection.execute(
-            "SELECT m.seq FROM history_records AS m WHERE "
-            + " AND ".join(clauses)
-            + " AND m.seq = ?",
-            (*params, before_sequence),
-        ).fetchone()
-        if before_row is None:
-            raise SessionPageCursorError("before cursor is invalid")
-        cutoff = int(before_row["seq"])
-    elif before_message_id is not None:
-        before_row = connection.execute(
-            "SELECT m.seq FROM history_records AS m WHERE "
-            + " AND ".join(clauses)
-            + " AND m.message_id = ? ORDER BY m.seq LIMIT 1",
-            (*params, before_message_id),
-        ).fetchone()
-        if before_row is None:
-            raise SessionPageCursorError("before must reference an active message id")
-        cutoff = int(before_row["seq"])
-
-    if limit is None:
-        rows = connection.execute(
-            _store_values._message_records_sql(
-                where=" AND ".join([*clauses, "m.seq < ?"]),
-                order_by="ORDER BY m.seq",
-            ),
-            (*params, cutoff),
-        ).fetchall()
-    else:
-        # Order and limit narrow keys first; only the page reads full records.
-        keys = connection.execute(
-            "SELECT m.seq, m.message_key, m.owner_run_id FROM history_records AS m WHERE "
-            + " AND ".join([*clauses, "m.seq < ?"])
-            + " ORDER BY m.seq DESC LIMIT ?",
-            (*params, cutoff, limit),
-        ).fetchall()
-        if keys and complete_run_segment and keys[-1]["owner_run_id"] is not None:
-            boundary = connection.execute(
-                "SELECT start_sequence FROM runs WHERE session_key=? AND run_id=?",
-                (session_key, keys[-1]["owner_run_id"]),
-            ).fetchone()
-            assert boundary is not None
-            if int(boundary[0]) < int(keys[-1]["seq"]):
-                keys = connection.execute(
-                    "SELECT m.message_key FROM history_records AS m WHERE "
-                    + " AND ".join([*clauses, "m.seq >= ?", "m.seq < ?"]),
-                    (*params, int(boundary[0]), cutoff),
-                ).fetchall()
-        rows = _records_by_key(connection, [int(row["message_key"]) for row in keys])
-    if not rows:
-        return [], False, frozenset(), None
-
-    page_floor = int(rows[0]["seq"])
-
-    has_more = (
-        connection.execute(
-            "SELECT 1 FROM history_records AS m WHERE "
-            + " AND ".join(clauses)
-            + " AND m.seq < ? LIMIT 1",
-            (*params, page_floor),
-        ).fetchone()
-        is not None
-    )
-    latest_takeover = connection.execute(
-        "SELECT MAX(seq) FROM history_records WHERE session_key = ? AND active = 1 "
-        "AND role = 'agent_takeover'",
-        (session_key,),
-    ).fetchone()[0]
-    takeover_seq = -1 if latest_takeover is None else int(latest_takeover)
-    editable_ids = frozenset(
-        str(row["message_id"])
-        for row in rows
-        if str(row["role"]) == "user"
-        and row["content"] is not None
-        and row["sender_id"] is None
-        and int(row["seq"]) > takeover_seq
-    )
-    return rows, has_more, editable_ids, page_floor
-
-
-def _background_records_from_connection(
-    connection: sqlite3.Connection,
-    state: sqlite3.Row,
-    *,
-    tool_names: Sequence[str],
-    note_marker: str | None,
-    lower_sequence: int,
-    upper_sequence: int,
-) -> list[SessionBackgroundRecord]:
-    """Read the active Tool Results of ``tool_names`` and Notes holding ``note_marker``.
-
-    Only the columns a status fold reads are selected, in sequence order within
-    ``[lower_sequence, upper_sequence)``.
-    """
-    selected_tool_names = tuple(dict.fromkeys(tool_names))
-    candidates: list[str] = []
-    params: list[Any] = [state["session_key"], lower_sequence, upper_sequence]
-    if note_marker:
-        candidates.append("(m.role = 'note' AND instr(m.content, ?) > 0)")
-        params.append(note_marker)
-    if selected_tool_names:
-        placeholders = ", ".join("?" for _ in selected_tool_names)
-        candidates.append(f"(m.role = 'tool' AND t.name IN ({placeholders}))")
-        params.extend(selected_tool_names)
-    if not candidates:
-        return []
-    rows = connection.execute(
-        "SELECT m.role, t.name, m.content FROM history_records AS m "
-        "LEFT JOIN tool_calls AS t ON t.result_key = m.message_key "
-        "WHERE m.session_key = ? AND m.active = 1 AND m.seq >= ? AND m.seq < ? "
-        f"AND m.role IN ('note', 'tool') AND ({' OR '.join(candidates)}) "
-        "ORDER BY m.seq",
-        params,
-    ).fetchall()
-    return [
-        SessionBackgroundRecord(
-            role=str(row["role"]),
-            name=None if row["name"] is None else str(row["name"]),
-            content=None if row["content"] is None else str(row["content"]),
+def status_snapshot(
+    connection: sqlite3.Connection, address: SessionAddress
+) -> Callable[[], tuple[str | None, int, JsonObject | None, JsonObject, int]]:
+    """Read the status facts: first entry time, User count, latest usage and spend."""
+    state, ranges = current_view(connection, address)
+    first = _store_lineage.ordered_rows(connection, ranges, columns="e.created_at", limit=1)
+    user_count = sum(
+        int(
+            connection.execute(
+                "SELECT COUNT(*) FROM entries AS e WHERE e.role = 'user' AND "
+                + _store_lineage.range_predicate(),
+                _store_lineage.range_params(view_range),
+            ).fetchone()[0]
         )
-        for row in rows
-    ]
-
-
-def _context_usage_rows_from_connection(
-    connection: sqlite3.Connection,
-    state: sqlite3.Row,
-) -> list[sqlite3.Row]:
-    anchor = connection.execute(
-        """
-        SELECT m.seq
-        FROM history_records AS m
-        LEFT JOIN assistant_messages AS a ON a.message_key = m.source_key
-        LEFT JOIN compaction_checkpoints AS c ON c.snapshot_key = m.message_key
-        WHERE m.session_key = ? AND m.active = 1
-          AND ((m.role = 'assistant' AND a.usage_present = 1)
-            OR (m.role = 'compaction_checkpoint' AND c.context_tokens_after IS NOT NULL))
-        ORDER BY m.seq DESC
-        LIMIT 1
-        """,
-        (state["session_key"],),
-    ).fetchone()
-    if anchor is None:
-        return []
-    return connection.execute(
-        _store_values._message_records_sql(
-            where="m.session_key = ? AND m.active = 1 AND m.seq >= ?",
-            order_by="ORDER BY m.seq",
+        for view_range in ranges
+    )
+    latest = view_batch(
+        connection,
+        ranges,
+        where=(
+            "e.role = 'assistant' AND EXISTS (SELECT 1 FROM assistant_entries AS a "
+            "WHERE a.entry_key = e.entry_key AND a.usage_present = 1)"
         ),
-        (state["session_key"], anchor["seq"]),
-    ).fetchall()
+        descending=True,
+        limit=1,
+    )
+    usage, cache_input_tokens = session_usage(connection, state)
+    return lambda: (
+        None if not first else str(first[0][0]),
+        user_count,
+        None if not latest.rows else latest.message(latest.rows[0]).usage,
+        usage,
+        cache_input_tokens,
+    )
 
 
-def current_skill_activation_messages(
+# -- Whole views -----------------------------------------------------------------
+
+
+def messages(
     connection: sqlite3.Connection, address: SessionAddress
 ) -> Callable[[], list[ChatMessage]]:
-    """Load the active Skill activation candidates the current context can still see.
-
-    Candidates are ``[skill-context]`` Notes and ``skill`` Tool Results after the
-    newest active Compaction checkpoint; the caller decides which of them carry
-    a valid activation. Rows a history edit deactivated never qualify.
-    """
+    """The own audit: every entry this Session wrote, superseded ones included."""
     state = _store_values._require_live(connection, address)
-    checkpoint = connection.execute(
-        "SELECT MAX(seq) FROM compaction_checkpoints WHERE session_key = ? AND active = 1",
-        (state["session_key"],),
-    ).fetchone()
-    floor = -1 if checkpoint is None or checkpoint[0] is None else int(checkpoint[0])
-    rows = connection.execute(
-        _store_values._message_records_sql(
-            where=(
-                "m.session_key = ? AND m.active = 1 AND m.seq > ? "
-                "AND m.role IN ('note', 'tool') "
-                "AND (m.role = 'tool' OR substr(m.content, 1, ?) = ?) "
-                "AND (m.role = 'note' OR t.name = ?)"
-            ),
-            order_by="ORDER BY m.seq",
-        ),
-        (
-            state["session_key"],
-            floor,
-            len(SKILL_CONTEXT_NOTE_PREFIX),
-            SKILL_CONTEXT_NOTE_PREFIX,
-            SKILL_TOOL_MESSAGE_NAME,
-        ),
-    ).fetchall()
-    return lambda: [_store_codec.message_from_row(row) for row in rows]
-
-
-def _history_record_filter(
-    roles: Sequence[str],
-    excluded_tool_name: str,
-) -> tuple[str, list[Any]]:
-    selected_roles = tuple(dict.fromkeys(roles))
-    if not selected_roles:
-        return "0", []
-    placeholders = ", ".join("?" for _ in selected_roles)
-    where = f"m.role IN ({placeholders})"
-    where += """
-      AND NOT (
-        m.role = 'tool'
-        AND (
-          t.name = ?
-          OR EXISTS (
-            SELECT 1 FROM tool_calls AS history_call
-            WHERE history_call.tool_call_key = t.tool_call_key
-              AND history_call.name = ?
-          )
-        )
-      )
-      AND NOT (
-        m.role = 'assistant'
-        AND NULLIF(m.content, '') IS NULL
-        AND (m.content_blocks_json IS NULL OR json_array_length(m.content_blocks_json) = 0)
-        AND NULLIF(a.reasoning, '') IS NULL
-        AND (
-          a.reasoning_meta_json IS NULL
-          OR NOT EXISTS (SELECT 1 FROM json_each(a.reasoning_meta_json))
-        )
-        AND NOT EXISTS (
-          SELECT 1 FROM tool_calls AS visible_call
-          WHERE visible_call.message_key = m.source_key
-            AND visible_call.name <> ?
-        )
-      )
-    """
-    return where, [*selected_roles, excluded_tool_name, excluded_tool_name, excluded_tool_name]
-
-
-def _history_snapshot_is_current(
-    connection: sqlite3.Connection,
-    state: sqlite3.Row,
-    *,
-    expected_generation_id: str,
-    snapshot_sequence: int,
-) -> bool:
-    if str(state["generation_id"]) != expected_generation_id:
-        return False
-    checkpoint = connection.execute(
-        "SELECT 1 FROM history_records WHERE session_key = ? AND active = 1 "
-        "AND role = 'compaction_checkpoint' AND seq = ?",
-        (state["session_key"], snapshot_sequence),
-    ).fetchone()
-    return checkpoint is not None
+    batch = _store_codec.select_batch(connection, _own_audit(connection, state, 0))
+    return batch.messages
 
 
 def active_messages(
     connection: sqlite3.Connection, address: SessionAddress
 ) -> Callable[[], list[ChatMessage]]:
-    """Load the relationally materialized active lineage only."""
-    state = _store_values._require_live(connection, address)
-    rows = connection.execute(
-        _store_values._message_records_sql(
-            where="m.session_key = ? AND m.active = 1",
-            order_by="ORDER BY m.seq",
-        ),
-        (state["session_key"],),
-    ).fetchall()
-    return lambda: [_store_codec.message_from_row(row) for row in rows]
+    """The current view, inherited history included."""
+    _state, ranges = current_view(connection, address)
+    return view_batch(connection, ranges).messages
 
 
 def active_user_message_count(
     connection: sqlite3.Connection, address: SessionAddress, *, limit: int
 ) -> int:
-    """Count at most ``limit`` active User Messages without loading their content."""
+    """Count at most ``limit`` current User entries without loading their content."""
     if limit <= 0:
         raise ChatSessionError("user Message count limit must be positive")
-    state = _store_values._require_live(connection, address)
-    row = connection.execute(
-        "SELECT COUNT(*) FROM (SELECT 1 FROM history_records WHERE session_key = ? "
-        "AND active = 1 AND role = 'user' LIMIT ?)",
-        (state["session_key"], limit),
-    ).fetchone()
-    assert row is not None
-    return int(row[0])
+    _state, ranges = current_view(connection, address)
+    return len(
+        _store_lineage.ordered_rows(
+            connection, ranges, columns="e.entry_key", where="e.role = 'user'", limit=limit
+        )
+    )
 
 
 def tool_result_persisted(
     connection: sqlite3.Connection, address: SessionAddress, tool_call_id: str
 ) -> bool:
-    """Report whether an Assistant Tool call of this Session has its durable result."""
+    """Report whether a Tool call this Session stored already has its result."""
     state = _store_values._require_live(connection, address)
     row = connection.execute(
-        "SELECT 1 FROM tool_calls t JOIN messages m ON m.message_key = t.message_key "
-        "WHERE t.tool_call_id = ? AND m.session_key = ? AND m.role = 'assistant' "
-        "AND t.result_id IS NOT NULL LIMIT 1",
+        "SELECT 1 FROM tool_calls AS c JOIN entries AS e ON e.entry_key = c.entry_key "
+        "WHERE c.call_id = ? AND e.session_key = ? AND c.result_entry_key IS NOT NULL LIMIT 1",
         (tool_call_id, state["session_key"]),
     ).fetchone()
     return row is not None
@@ -422,194 +273,382 @@ def tool_result_persisted(
 def latest_note(
     connection: sqlite3.Connection, address: SessionAddress, *, content_prefix: str
 ) -> Callable[[], ChatMessage | None]:
-    """Load the newest Note matching one canonical content prefix."""
+    """Load the newest current Note whose content starts with *content_prefix*."""
     if not content_prefix:
         raise ChatSessionError("note prefix must be non-empty")
+    _state, ranges = current_view(connection, address)
+    batch = view_batch(
+        connection,
+        ranges,
+        where=f"e.role = 'note' AND {TEXT_PREFIX}",
+        params=(len(content_prefix), content_prefix),
+        descending=True,
+        limit=1,
+    )
+    return lambda: None if not batch.rows else batch.message(batch.rows[0])
+
+
+def current_skill_activation_messages(
+    connection: sqlite3.Connection, address: SessionAddress
+) -> Callable[[], list[ChatMessage]]:
+    """Load the Skill activation candidates the current context can still see.
+
+    Candidates are ``[skill-context]`` Notes and ``skill`` Tool Results after the
+    newest current Compaction checkpoint; the caller decides which of them carry
+    a valid activation.
+    """
+    _state, ranges = current_view(connection, address)
+    checkpoint = view_seq(connection, ranges, where="e.role = 'compaction_checkpoint'")
+    batch = view_batch(
+        connection,
+        ranges,
+        where=(f"(e.role = 'note' AND {TEXT_PREFIX}) OR (e.role = 'tool' AND {RESULT_OF_TOOL})"),
+        params=(len(SKILL_CONTEXT_NOTE_PREFIX), SKILL_CONTEXT_NOTE_PREFIX, SKILL_TOOL_MESSAGE_NAME),
+        lower=0 if checkpoint is None else checkpoint + 1,
+    )
+    return batch.messages
+
+
+# -- Read cursors ------------------------------------------------------------
+
+
+def _cursor_of(state: sqlite3.Row) -> SessionReadCursor:
+    next_seq = int(state["next_seq"])
+    return SessionReadCursor(
+        str(state["generation_id"]),
+        int(state["history_revision"]),
+        next_seq,
+        state["last_entry_id"],
+    )
+
+
+def _cursor_continues(state: sqlite3.Row, cursor: SessionReadCursor) -> bool:
+    """An edit or takeover raises the floor, so no cursor before it continues."""
+    return (
+        cursor.generation_id == str(state["generation_id"])
+        and 0 <= cursor.next_seq <= int(state["next_seq"])
+        and cursor.next_seq >= int(state["cursor_floor_seq"])
+    )
+
+
+def cursor_is_current(
+    connection: sqlite3.Connection, address: SessionAddress, cursor: SessionReadCursor
+) -> bool:
+    """Whether *cursor* still names the Session's newest entry, without reading history."""
     state = _store_values._require_live(connection, address)
-    row = connection.execute(
-        _store_values._message_records_sql(
-            where=("m.session_key = ? AND m.role = 'note' AND substr(m.content, 1, ?) = ?"),
-            order_by="ORDER BY m.seq DESC LIMIT 1",
-        ),
-        (state["session_key"], len(content_prefix), content_prefix),
+    return (
+        _cursor_continues(state, cursor)
+        and cursor.next_seq == int(state["next_seq"])
+        and cursor.last_message_id == state["last_entry_id"]
+    )
+
+
+@dataclass
+class HistoryDelta:
+    """Entries selected after a cursor, decoded only after the transaction ends."""
+
+    batch: _store_codec.EntryBatch
+    audit_rows: list[sqlite3.Row]
+    view_rows: list[sqlite3.Row]
+    cursor: SessionReadCursor
+    inherited_count: int
+
+
+def message_rows_since(
+    connection: sqlite3.Connection, address: SessionAddress, cursor: SessionReadCursor | None
+) -> HistoryDelta | None:
+    """Select the own audit and the current view after *cursor*, or all of both.
+
+    ``None`` means the cursor cannot be continued: another generation, an edit
+    or takeover after it, or a different entry before it.
+    """
+    state, ranges = current_view(connection, address)
+    current = _cursor_of(state)
+    start = 0
+    if cursor is not None:
+        if not _cursor_continues(state, cursor):
+            return None
+        if (
+            cursor.next_seq == current.next_seq
+            and cursor.last_message_id == current.last_message_id
+        ):
+            # The Session row names its newest entry, so a current cursor needs no read.
+            return HistoryDelta(_store_codec.EntryBatch([]), [], [], current, 0)
+        start = cursor.next_seq
+        anchor = None if start == 0 else _store_lineage.entry_id_at(connection, ranges, start - 1)
+        if anchor != cursor.last_message_id:
+            return None
+    audit = _own_audit(connection, state, start)
+    view = _store_lineage.ordered_rows(
+        connection, ranges, columns=_store_codec.ENTRY_COLUMNS, lower=start
+    )
+    floor = own_floor(state)
+    unique = {int(row["entry_key"]): row for row in (*audit, *view)}
+    return HistoryDelta(
+        _store_codec.select_batch(connection, list(unique.values())),
+        audit,
+        view,
+        current,
+        sum(1 for row in view if int(row["seq"]) < floor),
+    )
+
+
+def read_batch(delta: HistoryDelta) -> SessionReadBatch:
+    """Decode a selected delta into Messages, each entry once."""
+    return SessionReadBatch(
+        tuple(delta.batch.message(row) for row in delta.audit_rows),
+        delta.cursor,
+        tuple(delta.batch.message(row) for row in delta.view_rows),
+        delta.inherited_count,
+    )
+
+
+# -- Runs ------------------------------------------------------------------------
+
+_RUN_COLUMNS = "r.run_key, r.run_id, r.work_id, r.start_seq, r.end_entry_key"
+
+
+def find_run(
+    connection: sqlite3.Connection,
+    state: sqlite3.Row,
+    ranges: Sequence[ViewRange],
+    *,
+    run_id: str | None = None,
+    work_id: str | None = None,
+    finished: bool = False,
+) -> sqlite3.Row | None:
+    """Find a Run by id or Work id: the Session's own first, then the ones it inherits.
+
+    An inherited Run counts when its summary entry is in the current view.
+    With several matches, the latest-started one wins.
+    """
+    field, value = ("r.run_id", run_id) if run_id is not None else ("r.work_id", work_id)
+    own = connection.execute(
+        f"SELECT {_RUN_COLUMNS} FROM runs AS r WHERE r.session_key = ? AND {field} = ? "
+        + ("AND r.end_entry_key IS NOT NULL " if finished else "")
+        + "ORDER BY r.start_seq DESC, r.run_key DESC LIMIT 1",
+        (state["session_key"], value),
     ).fetchone()
-    return lambda: None if row is None else _store_codec.message_from_row(row)
+    if own is not None:
+        return own  # type: ignore[no-any-return]
+    session_key = int(state["session_key"])
+    for view_range in reversed(ranges):
+        if view_range.source_key == session_key:
+            continue
+        row = connection.execute(
+            f"SELECT {_RUN_COLUMNS} FROM runs AS r JOIN entries AS e "
+            f"ON e.entry_key = r.end_entry_key WHERE {field} = ? AND "
+            + _store_lineage.range_predicate()
+            + " ORDER BY r.start_seq DESC, r.run_key DESC LIMIT 1",
+            (value, *_store_lineage.range_params(view_range)),
+        ).fetchone()
+        if row is not None:
+            return row  # type: ignore[no-any-return]
+    return None
 
 
-def chat_history_snapshot(
+def run_messages(
+    connection: sqlite3.Connection, address: SessionAddress, run_id: str
+) -> Callable[[], list[ChatMessage]]:
+    """Load the current entries one Run wrote."""
+    state, ranges = current_view(connection, address)
+    run = find_run(connection, state, ranges, run_id=run_id)
+    if run is None:
+        return list
+    return view_batch(connection, ranges, where="e.run_key = ?", params=(run["run_key"],)).messages
+
+
+def _summary_batch(connection: sqlite3.Connection, run: sqlite3.Row) -> _store_codec.EntryBatch:
+    return _store_codec.select_entries(connection, "e.entry_key = ?", (run["end_entry_key"],))
+
+
+def run_summary(
     connection: sqlite3.Connection,
     address: SessionAddress,
     *,
-    limit: int | None,
-    before_message_id: str | None,
-    before_sequence: int | None,
-    expected_generation_id: str | None,
-    excluded_roles: Sequence[str],
-    complete_run_segment: bool,
-    background_tool_names: Sequence[str] = (),
-    background_note_marker: str | None = None,
-    after: tuple[str, int] | None = None,
-    skip_unchanged: bool = False,
-) -> Callable[[], SessionChatHistorySnapshot]:
-    """Read one WebUI history projection from a single SQLite snapshot.
+    run_id: str | None = None,
+    work_id: str | None = None,
+) -> Callable[[], ChatMessage | None]:
+    if (run_id is None) == (work_id is None):
+        raise ChatSessionError("exactly one of run_id or work_id is required")
+    state, ranges = current_view(connection, address)
+    run = find_run(connection, state, ranges, run_id=run_id, work_id=work_id, finished=True)
+    if run is None:
+        return lambda: None
+    batch = _summary_batch(connection, run)
+    return lambda: batch.message(batch.rows[0])
 
-    With ``skip_unchanged``, an ``after`` cursor already at the Session's end
-    reads only the Session row and returns an empty ``unchanged`` snapshot.
-    """
-    if limit is not None and (not isinstance(limit, int) or isinstance(limit, bool) or limit <= 0):
-        raise ChatSessionError("message page limit must be a positive integer")
-    state = _store_values._require_live(connection, address)
-    incremental = _store_timeline.can_append(connection, state, after)
-    through = int(state["message_count"])
-    if skip_unchanged and incremental and after is not None and after[1] == through:
-        unchanged = _unchanged_history_snapshot(str(state["generation_id"]), through)
-        return lambda: unchanged
-    if incremental:
-        assert after is not None
-        page_rows, through = _store_timeline.appended_rows(
-            connection,
-            state,
-            sequence=after[1],
-            limit=limit or 500,
-            excluded_roles=excluded_roles,
-        )
-        has_more, page_floor = False, None
-        editable_ids = frozenset(
-            str(row["message_id"])
-            for row in page_rows
-            if row["role"] == "user" and row["content"] is not None and row["sender_id"] is None
-        )
+
+def run_result(
+    connection: sqlite3.Connection,
+    address: SessionAddress,
+    *,
+    run_id: str | None = None,
+    work_id: str | None = None,
+    require_latest: bool = False,
+) -> Callable[[], tuple[ChatMessage | None, ChatMessage, str | None] | None]:
+    """Project one finished Run: its last text answer, summary and latest Tool."""
+    if run_id is not None and work_id is not None:
+        raise ChatSessionError("run_id and work_id cannot be combined")
+    state, ranges = current_view(connection, address)
+    if run_id is None and work_id is None:
+        run = connection.execute(
+            f"SELECT {_RUN_COLUMNS} FROM runs AS r WHERE r.session_key = ? "
+            "AND r.end_entry_key IS NOT NULL ORDER BY r.start_seq DESC, r.run_key DESC LIMIT 1",
+            (state["session_key"],),
+        ).fetchone()
     else:
-        page_rows, has_more, editable_ids, page_floor = _active_message_page_from_connection(
-            connection,
-            state,
-            limit=limit,
-            before_message_id=before_message_id,
-            before_sequence=before_sequence,
-            expected_generation_id=expected_generation_id,
-            excluded_roles=excluded_roles,
-            complete_run_segment=complete_run_segment,
-        )
-    usage, _cache_input_tokens = _session_usage_from_connection(
-        connection, int(state["session_key"])
-    )
-    context_rows = _context_usage_rows_from_connection(connection, state)
-    background_records = _background_records_from_connection(
+        run = find_run(connection, state, ranges, run_id=run_id, work_id=work_id, finished=True)
+    if run is None:
+        return lambda: None
+    if require_latest:
+        latest = connection.execute(
+            "SELECT run_key FROM runs WHERE session_key = ? AND inherited = 0 "
+            "ORDER BY start_seq DESC, run_key DESC LIMIT 1",
+            (state["session_key"],),
+        ).fetchone()
+        if latest is None or int(latest[0]) != int(run["run_key"]):
+            return lambda: None
+    summary = _summary_batch(connection, run)
+    assistant = _store_codec.select_entries(
         connection,
-        state,
-        tool_names=background_tool_names,
-        note_marker=background_note_marker,
-        lower_sequence=after[1] if incremental and after is not None else 0,
-        upper_sequence=through,
+        f"e.run_key = ? AND e.role = 'assistant' AND {HAS_TEXT}",
+        (run["run_key"],),
+        tail="ORDER BY e.seq DESC LIMIT 1",
     )
-    generation = str(state["generation_id"])
-    has_newer = through < int(state["message_count"])
-    runs = _store_timeline.page_runs(
-        connection, state, page_rows, through=through, incremental=incremental
-    )
-
-    def decode() -> SessionChatHistorySnapshot:
-        return SessionChatHistorySnapshot(
-            page=SessionMessagePage(
-                messages=tuple(_store_codec.message_from_row(row) for row in page_rows),
-                has_more=has_more,
-                editable_message_ids=editable_ids,
-                before_cursor=(
-                    _encode_chat_history_cursor(generation, page_floor)
-                    if has_more and page_floor is not None
-                    else None
-                ),
-                record_sequences=tuple(int(row["seq"]) for row in page_rows),
-                record_run_ids=_store_timeline.record_run_ids(page_rows),
-            ),
-            session_usage=usage,
-            context_messages=tuple(_store_codec.message_from_row(row) for row in context_rows),
-            background_records=tuple(background_records),
-            generation_id=generation,
-            after_cursor=_encode_chat_history_cursor(generation, through),
-            incremental=incremental,
-            has_newer=has_newer,
-            runs=runs,
-        )
-
-    return decode
-
-
-def _unchanged_history_snapshot(generation: str, through: int) -> SessionChatHistorySnapshot:
-    return SessionChatHistorySnapshot(
-        page=SessionMessagePage(messages=(), has_more=False),
-        session_usage={},
-        context_messages=(),
-        background_records=(),
-        generation_id=generation,
-        after_cursor=_encode_chat_history_cursor(generation, through),
-        incremental=True,
-        unchanged=True,
-    )
-
-
-def status_snapshot(
-    connection: sqlite3.Connection, address: SessionAddress
-) -> Callable[[], tuple[str | None, int, JsonObject | None, JsonObject, int]]:
-    state = _store_values._require_live(connection, address)
-    session_key = int(state["session_key"])
-    facts = connection.execute(
-        "SELECT MIN(CASE WHEN seq = 0 THEN timestamp END) AS first_message_at, "
-        "SUM(CASE WHEN role = 'user' THEN 1 ELSE 0 END) AS user_count "
-        "FROM history_records WHERE session_key = ?",
-        (session_key,),
+    latest_tool = connection.execute(
+        "SELECT c.name FROM entries AS e JOIN tool_calls AS c ON c.entry_key = e.entry_key "
+        "WHERE e.run_key = ? ORDER BY e.seq DESC, c.ordinal DESC LIMIT 1",
+        (run["run_key"],),
     ).fetchone()
-    latest_row = connection.execute(
-        _store_values._message_records_sql(
-            where=("m.session_key = ? AND m.role = 'assistant' AND a.usage_present = 1"),
-            order_by="ORDER BY m.seq DESC LIMIT 1",
-        ),
-        (session_key,),
-    ).fetchone()
-    usage, cache_input_tokens = _session_usage_from_connection(connection, session_key)
     return lambda: (
-        None if facts["first_message_at"] is None else str(facts["first_message_at"]),
-        int(facts["user_count"] or 0),
-        None if latest_row is None else _store_codec.message_from_row(latest_row).usage,
-        usage,
-        cache_input_tokens,
+        None if not assistant.rows else assistant.message(assistant.rows[0]),
+        summary.message(summary.rows[0]),
+        None if latest_tool is None else str(latest_tool[0]),
+    )
+
+
+def reflection_runs(connection: sqlite3.Connection, address: SessionAddress) -> list[JsonObject]:
+    """Read the first finished own Run of each reflection fork of this Session."""
+    source = _store_values._require_live(connection, address)
+    rows = connection.execute(
+        f"""
+        SELECT s.session_id, r.run_id, r.status, r.started_at,
+          (SELECT k.run_kind FROM session_run_kinds AS k
+           WHERE k.session_key = s.session_key AND k.run_kind IN {_REFLECTION_KINDS}
+           ORDER BY k.run_kind LIMIT 1) AS run_kind
+        FROM sessions AS s
+        JOIN runs AS r ON r.run_key = (
+          SELECT run_key FROM runs
+          WHERE session_key = s.session_key AND status <> 'running' AND inherited = 0
+          ORDER BY start_seq, run_key LIMIT 1
+        )
+        WHERE s.fork_parent_key = ? AND s.state = 'live'
+          AND EXISTS (SELECT 1 FROM session_run_kinds AS k
+            WHERE k.session_key = s.session_key AND k.run_kind IN {_REFLECTION_KINDS})
+        ORDER BY r.started_at, r.run_id
+        """,
+        (source["session_key"],),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+# -- History Tool reads -----------------------------------------------------------
+
+
+def history_record_filter(roles: Sequence[str], excluded_tool_name: str) -> tuple[str, list[Any]]:
+    """Match entries of *roles*, minus results of *excluded_tool_name* and empty Assistant turns.
+
+    An Assistant turn is empty when it has no text, no reasoning and no Tool
+    call other than *excluded_tool_name*.
+    """
+    selected_roles = tuple(dict.fromkeys(roles))
+    if not selected_roles:
+        return "0", []
+    where = f"""e.role IN ({", ".join("?" for _ in selected_roles)})
+      AND NOT (e.role = 'tool' AND {RESULT_OF_TOOL})
+      AND NOT (
+        e.role = 'assistant'
+        AND NOT {HAS_TEXT}
+        AND NOT EXISTS (
+          SELECT 1 FROM assistant_reasoning AS r WHERE r.entry_key = e.entry_key
+          AND (NULLIF(r.reasoning, '') IS NOT NULL
+            OR (r.meta_json IS NOT NULL AND EXISTS (SELECT 1 FROM json_each(r.meta_json))))
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM tool_calls AS k WHERE k.entry_key = e.entry_key AND k.name <> ?
+        )
+      )"""
+    return where, [*selected_roles, excluded_tool_name, excluded_tool_name]
+
+
+def _checkpoints(
+    connection: sqlite3.Connection, ranges: Sequence[ViewRange], *, upper: int
+) -> list[sqlite3.Row]:
+    return _store_lineage.ordered_rows(
+        connection,
+        ranges,
+        columns=(
+            "e.seq, e.entry_id, e.created_at, "
+            "(SELECT COALESCE(t.content, '') FROM entry_text AS t "
+            "WHERE t.entry_key = e.entry_key) AS summary"
+        ),
+        where="e.role = 'compaction_checkpoint'",
+        upper=upper,
+    )
+
+
+def _snapshot_is_current(
+    connection: sqlite3.Connection,
+    state: sqlite3.Row,
+    ranges: Sequence[ViewRange],
+    *,
+    expected_generation_id: str,
+    snapshot_sequence: int,
+) -> bool:
+    if str(state["generation_id"]) != expected_generation_id:
+        return False
+    return (
+        view_seq(
+            connection,
+            ranges,
+            where="e.role = 'compaction_checkpoint'",
+            lower=snapshot_sequence,
+            upper=snapshot_sequence + 1,
+        )
+        is not None
     )
 
 
 def history_snapshot(
     connection: sqlite3.Connection, address: SessionAddress, *, snapshot_sequence: int | None = None
 ) -> tuple[str, list[tuple[int, str, str, str]]] | None:
-    """Resolve active Compaction checkpoints without reading history records."""
-    state = _store_values._require_live(connection, address)
-    session_key = int(state["session_key"])
+    """Resolve the current Compaction checkpoints up to one snapshot."""
+    state, ranges = current_view(connection, address)
     if snapshot_sequence is None:
-        upper = connection.execute(
-            "SELECT MAX(seq) FROM history_records WHERE session_key = ? AND active = 1 "
-            "AND role = 'compaction_checkpoint'",
-            (session_key,),
-        ).fetchone()[0]
-        if upper is None:
+        latest = view_seq(connection, ranges, where="e.role = 'compaction_checkpoint'")
+        if latest is None:
             return None
-        snapshot_sequence = int(upper)
-    elif not _history_snapshot_is_current(
+        snapshot_sequence = latest
+    elif not _snapshot_is_current(
         connection,
         state,
+        ranges,
         expected_generation_id=str(state["generation_id"]),
         snapshot_sequence=snapshot_sequence,
     ):
         return None
-    rows = connection.execute(
-        "SELECT seq, message_id, timestamp, COALESCE(content, '') AS summary "
-        "FROM history_records WHERE session_key = ? AND active = 1 "
-        "AND role = 'compaction_checkpoint' AND seq <= ? ORDER BY seq",
-        (session_key, snapshot_sequence),
-    ).fetchall()
+    rows = _checkpoints(connection, ranges, upper=snapshot_sequence + 1)
     if not rows:
         return None
     return str(state["generation_id"]), [
-        (int(row["seq"]), str(row["message_id"]), str(row["timestamp"]), str(row["summary"]))
+        (int(row["seq"]), str(row["entry_id"]), str(row["created_at"]), str(row["summary"] or ""))
         for row in rows
     ]
+
+
+def _records(batch: _store_codec.EntryBatch) -> Callable[[], list[tuple[int, ChatMessage]]]:
+    return lambda: [(int(row["seq"]), batch.message(row)) for row in batch.rows]
 
 
 def history_records(
@@ -626,49 +665,38 @@ def history_records(
     limit: int,
     excluded_tool_name: str,
 ) -> Callable[[], list[tuple[int, ChatMessage]] | None]:
-    """Read one bounded canonical history batch in sequence order."""
+    """Read one bounded batch of current entries strictly between two seqs."""
     if direction not in {"start", "end"}:
         raise ChatSessionError("history direction must be start or end")
     if limit <= 0:
         raise ChatSessionError("history record limit must be positive")
-    record_filter, filter_params = _history_record_filter(roles, excluded_tool_name)
-    state = _store_values._require_live(connection, address)
-    if not _history_snapshot_is_current(
+    record_filter, filter_params = history_record_filter(roles, excluded_tool_name)
+    state, ranges = current_view(connection, address)
+    if not _snapshot_is_current(
         connection,
         state,
+        ranges,
         expected_generation_id=expected_generation_id,
         snapshot_sequence=snapshot_sequence,
     ):
         return lambda: None
-    clauses = [
-        "m.session_key = ?",
-        "m.active = 1",
-        "m.seq > ?",
-        "m.seq < ?",
-        record_filter,
-    ]
-    params: list[Any] = [
-        state["session_key"],
-        lower_sequence,
-        upper_sequence,
-        *filter_params,
-    ]
+    lower, upper = lower_sequence + 1, upper_sequence
     if cursor_sequence is not None:
-        clauses.append("m.seq >= ?" if direction == "start" else "m.seq <= ?")
-        params.append(cursor_sequence)
-    params.append(limit)
-    rows = connection.execute(
-        _store_values._message_records_sql(
-            where=" AND ".join(clauses),
-            order_by=(
-                "ORDER BY m.seq ASC LIMIT ?"
-                if direction == "start"
-                else "ORDER BY m.seq DESC LIMIT ?"
-            ),
-        ),
-        params,
-    ).fetchall()
-    return lambda: [(int(row["seq"]), _store_codec.message_from_row(row)) for row in rows]
+        if direction == "start":
+            lower = max(lower, cursor_sequence)
+        else:
+            upper = min(upper, cursor_sequence + 1)
+    batch = view_batch(
+        connection,
+        ranges,
+        where=record_filter,
+        params=filter_params,
+        lower=lower,
+        upper=upper,
+        descending=direction == "end",
+        limit=limit,
+    )
+    return _records(batch)
 
 
 def history_section_stats(
@@ -681,32 +709,31 @@ def history_section_stats(
     excluded_tool_name: str,
 ) -> dict[int, tuple[int, str | None, str | None]] | None:
     """Aggregate default-role History overview facts for selected sections."""
-    record_filter, filter_params = _history_record_filter(
+    record_filter, filter_params = history_record_filter(
         ("user", "assistant", "error"), excluded_tool_name
     )
-    result: dict[int, tuple[int, str | None, str | None]] = {}
-    state = _store_values._require_live(connection, address)
-    if not _history_snapshot_is_current(
+    state, ranges = current_view(connection, address)
+    if not _snapshot_is_current(
         connection,
         state,
+        ranges,
         expected_generation_id=expected_generation_id,
         snapshot_sequence=snapshot_sequence,
     ):
         return None
+    result: dict[int, tuple[int, str | None, str | None]] = {}
     if not sections:
         return result
-    # One pass over the covering range; each section is a slice of its sequences.
-    rows = connection.execute(
-        "SELECT m.seq, m.timestamp FROM history_records AS m "
-        f"{_store_values._MESSAGE_RECORD_JOINS} WHERE m.session_key = ? AND m.active = 1 "
-        "AND m.seq > ? AND m.seq < ? AND " + record_filter + " ORDER BY m.seq",
-        (
-            state["session_key"],
-            min(lower for lower, _upper in sections),
-            max(upper for _lower, upper in sections),
-            *filter_params,
-        ),
-    ).fetchall()
+    # One pass over the covering range; each section is a slice of its seqs.
+    rows = _store_lineage.ordered_rows(
+        connection,
+        ranges,
+        columns="e.seq, e.created_at",
+        where=record_filter,
+        params=filter_params,
+        lower=min(lower for lower, _upper in sections) + 1,
+        upper=max(upper for _lower, upper in sections),
+    )
     sequences = [int(row["seq"]) for row in rows]
     for lower_sequence, upper_sequence in sections:
         start = bisect.bisect_right(sequences, lower_sequence)
@@ -714,11 +741,10 @@ def history_section_stats(
         if start >= end:
             result[upper_sequence] = (0, None, None)
             continue
-        first, last = rows[start]["timestamp"], rows[end - 1]["timestamp"]
         result[upper_sequence] = (
             end - start,
-            None if first is None else str(first),
-            None if last is None else str(last),
+            str(rows[start]["created_at"]),
+            str(rows[end - 1]["created_at"]),
         )
     return result
 
@@ -737,349 +763,120 @@ def history_around(
     after: int,
     excluded_tool_name: str,
 ) -> Callable[[], tuple[bool, list[tuple[int, ChatMessage]]] | None]:
-    """Read a bounded eligible neighborhood around the earliest matching public id."""
-    record_filter, filter_params = _history_record_filter(roles, excluded_tool_name)
-    state = _store_values._require_live(connection, address)
-    if not _history_snapshot_is_current(
+    """Read a bounded eligible neighborhood around the earliest matching entry id."""
+    record_filter, filter_params = history_record_filter(roles, excluded_tool_name)
+    state, ranges = current_view(connection, address)
+    if not _snapshot_is_current(
         connection,
         state,
+        ranges,
         expected_generation_id=expected_generation_id,
         snapshot_sequence=snapshot_sequence,
     ):
         return lambda: None
-    exists = (
-        connection.execute(
-            "SELECT 1 FROM history_records WHERE session_key = ? AND active = 1 "
-            "AND message_id = ? LIMIT 1",
-            (state["session_key"], message_id),
-        ).fetchone()
-        is not None
+    exists = view_seq(connection, ranges, where="e.entry_id = ?", params=(message_id,)) is not None
+    lower, upper = lower_sequence + 1, upper_sequence
+    anchor = view_seq(
+        connection,
+        ranges,
+        where=f"e.entry_id = ? AND {record_filter}",
+        params=(message_id, *filter_params),
+        lower=lower,
+        upper=upper,
+        newest=False,
     )
-    base_clauses = [
-        "m.session_key = ?",
-        "m.active = 1",
-        "m.seq > ?",
-        "m.seq < ?",
-        record_filter,
-    ]
-    base_params: list[Any] = [
-        state["session_key"],
-        lower_sequence,
-        upper_sequence,
-        *filter_params,
-    ]
-    anchor = connection.execute(
-        _store_values._message_records_sql(
-            where=" AND ".join([*base_clauses, "m.message_id = ?"]),
-            order_by="ORDER BY m.seq LIMIT 1",
-        ),
-        (*base_params, message_id),
-    ).fetchone()
     if anchor is None:
         return lambda: (exists, [])
-    anchor_sequence = int(anchor["seq"])
-    earlier_rows = connection.execute(
-        _store_values._message_records_sql(
-            where=" AND ".join([*base_clauses, "m.seq < ?"]),
-            order_by="ORDER BY m.seq DESC LIMIT ?",
-        ),
-        (*base_params, anchor_sequence, before),
-    ).fetchall()
-    later_rows = connection.execute(
-        _store_values._message_records_sql(
-            where=" AND ".join([*base_clauses, "m.seq > ?"]),
-            order_by="ORDER BY m.seq LIMIT ?",
-        ),
-        (*base_params, anchor_sequence, after),
-    ).fetchall()
-    rows = [*reversed(earlier_rows), anchor, *later_rows]
-    return lambda: (exists, [(int(row["seq"]), _store_codec.message_from_row(row)) for row in rows])
-
-
-def reflection_runs(connection: sqlite3.Connection, address: SessionAddress) -> list[JsonObject]:
-    """Read each review fork's own terminal Run, excluding inherited history."""
-    source = _store_values._require_live(connection, address)
-    rows = connection.execute(
-        """
-        SELECT s.session_id, r.run_id, r.status, r.started_at,
-          (SELECT value FROM json_each(s.run_kinds_json)
-           WHERE value IN ('reflection', 'memory_reflection', 'skill_reflection')
-           ORDER BY key LIMIT 1) AS run_kind
-        FROM sessions AS s
-        JOIN runs AS r ON r.run_key = (
-          SELECT run_key FROM runs
-          WHERE session_key=s.session_key AND status<>'running' AND origin_generation_id IS NULL
-          ORDER BY start_sequence,run_key LIMIT 1
-        )
-        WHERE s.status = 'live' AND s.project_id = ? AND s.agent_id = ?
-          AND json_extract(s.fork_source_json, '$.session_id') = ?
-          AND json_extract(s.fork_source_json, '$.agent_id') = ?
-          AND json_extract(s.fork_source_json, '$.project_id') IS ?
-          AND julianday(json_extract(s.fork_source_json, '$.forked_at'))
-            >= julianday(?)
-          AND EXISTS (SELECT 1 FROM json_each(s.run_kinds_json)
-            WHERE value IN ('reflection', 'memory_reflection', 'skill_reflection'))
-        ORDER BY r.started_at, r.run_id
-        """,
-        (
-            source["project_id"],
-            address.agent_id,
-            address.session_id,
-            address.agent_id,
-            address.project_id,
-            source["created_at"],
-        ),
-    ).fetchall()
-    return [dict(row) for row in rows]
-
-
-def run_messages(
-    connection: sqlite3.Connection, address: SessionAddress, run_id: str
-) -> Callable[[], list[ChatMessage]]:
-    state = _store_values._require_live(connection, address)
-    rows = connection.execute(
-        _store_values._message_records_sql(
-            where="m.session_key=? AND m.owner_run_id=? AND m.active=1",
-            order_by="ORDER BY m.seq",
-        ),
-        (state["session_key"], run_id),
-    ).fetchall()
-    return lambda: [_store_codec.message_from_row(row) for row in rows]
-
-
-def run_summary(
-    connection: sqlite3.Connection,
-    address: SessionAddress,
-    *,
-    run_id: str | None = None,
-    work_id: str | None = None,
-) -> Callable[[], ChatMessage | None]:
-    if (run_id is None) == (work_id is None):
-        raise ChatSessionError("exactly one of run_id or work_id is required")
-    state = _store_values._require_live(connection, address)
-    field, value = ("r.run_id", run_id) if run_id is not None else ("r.work_id", work_id)
-    row = connection.execute(
-        _store_values._message_records_sql(
-            where=f"m.session_key = ? AND m.role = 'run_summary' AND {field} = ?",
-            order_by="ORDER BY m.seq DESC LIMIT 1",
-        ),
-        (state["session_key"], value),
-    ).fetchone()
-    return lambda: None if row is None else _store_codec.message_from_row(row)
-
-
-def run_result(
-    connection: sqlite3.Connection,
-    address: SessionAddress,
-    *,
-    run_id: str | None = None,
-    work_id: str | None = None,
-    require_latest: bool = False,
-) -> Callable[[], tuple[ChatMessage | None, ChatMessage, str | None] | None]:
-    """Project one terminal Run without reconstructing its Tool/result payloads."""
-    if run_id is not None and work_id is not None:
-        raise ChatSessionError("run_id and work_id cannot be combined")
-    state = _store_values._require_live(connection, address)
-    params: list[Any] = [state["session_key"]]
-    where = "m.session_key = ? AND m.role = 'run_summary'"
-    if run_id is not None:
-        where += " AND r.run_id = ?"
-        params.append(run_id)
-    elif work_id is not None:
-        where += " AND r.work_id = ?"
-        params.append(work_id)
-    summary_row = connection.execute(
-        _store_values._message_records_sql(
-            where=where,
-            order_by="ORDER BY m.seq DESC LIMIT 1",
-        ),
-        params,
-    ).fetchone()
-    if summary_row is None:
-        return lambda: None
-    if require_latest:
-        latest = connection.execute(
-            "SELECT run_id FROM runs WHERE session_key=? ORDER BY run_key DESC LIMIT 1",
-            (state["session_key"],),
-        ).fetchone()
-        if latest is None or latest["run_id"] != summary_row["run_id"]:
-            return lambda: None
-    assistant_row = connection.execute(
-        _store_values._message_records_sql(
-            where=(
-                "m.session_key = ? AND m.owner_run_id = ? "
-                "AND m.role = 'assistant' AND (NULLIF(m.content, '') IS NOT NULL "
-                "OR (m.content_blocks_json IS NOT NULL "
-                "AND json_array_length(m.content_blocks_json) > 0))"
-            ),
-            order_by="ORDER BY m.seq DESC LIMIT 1",
-        ),
-        (state["session_key"], summary_row["run_id"]),
-    ).fetchone()
-    latest_tool = connection.execute(
-        "SELECT tc.name FROM history_records AS m "
-        "JOIN tool_calls AS tc ON tc.message_key = m.source_key "
-        "WHERE m.session_key = ? AND m.owner_run_id = ? "
-        "ORDER BY m.seq DESC, tc.ordinal DESC LIMIT 1",
-        (state["session_key"], summary_row["run_id"]),
-    ).fetchone()
-    return lambda: (
-        None if assistant_row is None else _store_codec.message_from_row(assistant_row),
-        _store_codec.message_from_row(summary_row),
-        None if latest_tool is None else str(latest_tool["name"]),
+    earlier = _store_lineage.ordered_rows(
+        connection,
+        ranges,
+        columns=_store_codec.ENTRY_COLUMNS,
+        where=record_filter,
+        params=filter_params,
+        lower=lower,
+        upper=anchor,
+        descending=True,
+        limit=before,
     )
-
-
-def message_rows_since(
-    connection: sqlite3.Connection, address: SessionAddress, cursor: SessionReadCursor | None
-) -> tuple[list[sqlite3.Row], SessionReadCursor] | None:
-    """Select the records after *cursor* without decoding them.
-
-    A writer can select inside its transaction and decode after commit, so
-    Message reconstruction never extends the write lock.
-    """
-    from core.sessions._types import SessionReadCursor
-
-    state = _store_values._require_live(connection, address)
-    count = int(state["message_count"])
-    revision = int(state["history_revision"])
-    generation_id = str(state["generation_id"])
-    last_id = state["last_message_id"]
-    current = SessionReadCursor(generation_id, revision, count, count, last_id)
-    if cursor is None:
-        start = 0
-    else:
-        if not _cursor_continues(state, cursor):
-            return None
-        if cursor.next_seq == count and cursor.last_message_id == last_id:
-            # The Session row names its newest record, so a current cursor needs no read.
-            return [], current
-        start = cursor.next_seq
-    # One read from the anchor record, which is the one before the cursor.
-    rows = connection.execute(
-        _store_values._message_records_sql(
-            where="m.session_key = ? AND m.seq >= ?",
-            order_by="ORDER BY m.seq",
-        ),
-        (state["session_key"], max(start - 1, 0)),
-    ).fetchall()
-    if cursor is not None:
-        anchor_id = None
-        if start > 0 and rows and int(rows[0]["seq"]) == start - 1:
-            anchor_id = rows.pop(0)["message_id"]
-        if anchor_id != cursor.last_message_id:
-            return None
-    return rows, current
-
-
-def cursor_is_current(
-    connection: sqlite3.Connection, address: SessionAddress, cursor: SessionReadCursor
-) -> bool:
-    """Whether *cursor* still names the Session's newest record, without reading history."""
-    state = _store_values._require_live(connection, address)
-    return (
-        _cursor_continues(state, cursor)
-        and cursor.next_seq == int(state["message_count"])
-        and cursor.last_message_id == state["last_message_id"]
+    rest = _store_lineage.ordered_rows(
+        connection,
+        ranges,
+        columns=_store_codec.ENTRY_COLUMNS,
+        where=record_filter,
+        params=filter_params,
+        lower=anchor,
+        upper=upper,
+        limit=after + 1,
     )
+    batch = _store_codec.select_batch(connection, [*reversed(earlier), *rest])
+    return lambda: (exists, _records(batch)())
 
 
-def _cursor_continues(state: sqlite3.Row, cursor: SessionReadCursor) -> bool:
-    """An edit rewrites an existing prefix, so no cursor before it can continue."""
-    return (
-        cursor.generation_id == str(state["generation_id"])
-        and 0 <= cursor.next_seq <= int(state["message_count"])
-        and cursor.next_seq >= int(state["history_reset_sequence"])
-    )
+# -- Recall ------------------------------------------------------------------------
 
-
-def read_batch(delta: tuple[list[sqlite3.Row], SessionReadCursor]) -> SessionReadBatch:
-    rows, cursor = delta
-    messages = tuple(_store_codec.message_from_row(row) for row in rows)
-    return SessionReadBatch(
-        messages,
-        cursor,
-        tuple(message for row, message in zip(rows, messages, strict=True) if row["active"]),
-    )
-
-
-def bookend_timestamps(
-    connection: sqlite3.Connection, address: SessionAddress
-) -> tuple[str, str] | None:
-    state = _store_values._require_live(connection, address)
-    if int(state["message_count"]) == 0:
-        return None
-    first = connection.execute(
-        "SELECT timestamp FROM history_records WHERE session_key = ? AND seq = 0",
-        (state["session_key"],),
-    ).fetchone()
-    if first is None or state["last_message_at"] is None:
-        raise SessionStoreCorruptError(f"invalid Session message summary: {address.session_id}")
-    return str(first["timestamp"]), str(state["last_message_at"])
-
-
-def messages(
-    connection: sqlite3.Connection, address: SessionAddress
-) -> Callable[[], list[ChatMessage]]:
-    state = _store_values._require_live(connection, address)
-    rows = connection.execute(
-        _store_values._message_records_sql(where="m.session_key = ?", order_by="ORDER BY m.seq"),
-        (state["session_key"],),
-    ).fetchall()
-    return lambda: [_store_codec.message_from_row(row) for row in rows]
+_RECALL_TEXT = (
+    "(SELECT substr(COALESCE(t.content, t.search_text, ''), 1, 801) FROM entry_text AS t "
+    "WHERE t.entry_key = e.entry_key)"
+)
+_RECALL_HAS_TEXT = (
+    "EXISTS (SELECT 1 FROM entry_text AS t WHERE t.entry_key = e.entry_key "
+    "AND length(COALESCE(t.content, t.search_text, '')) > 0)"
+)
 
 
 def recall_context(
     connection: sqlite3.Connection, address: SessionAddress, message_id: str
 ) -> list[JsonObject]:
-    """Read the enclosing question and final answer without loading a transcript.
+    """Read the enclosing question and final answer of one current hit.
 
-    Only active conversation text is projected. The caller already has the hit;
-    do not repeat it or hydrate Tool graphs. A deleted/edited-away anchor returns
-    no context rather than borrowing a different conversation block.
+    Only current conversation text is projected; the caller already has the
+    hit. An anchor an edit replaced returns no context.
     """
-    # The scalar Session key reaches every view branch; a join would not.
-    anchor = connection.execute(
-        "SELECT m.session_key, m.seq, m.role FROM history_records AS m "
-        "WHERE m.session_key = (SELECT session_key FROM sessions WHERE project_id = ? "
-        "AND agent_id = ? AND session_id = ? AND status = 'live') AND m.active = 1 "
-        "AND m.message_id = ? ORDER BY m.seq DESC LIMIT 1",
-        (*_store_values._scope(address), message_id),
-    ).fetchone()
-    if anchor is None or anchor["role"] not in {"user", "assistant"}:
+    state = _store_values._find_live(connection, address)
+    if state is None:
         return []
-    key, seq = int(anchor["session_key"]), int(anchor["seq"])
-    bounds = connection.execute(
-        "SELECT (SELECT MAX(seq) FROM history_records WHERE session_key = ? AND active = 1 "
-        "AND role = 'user' AND seq <= ?) AS first, "
-        "(SELECT MIN(seq) FROM history_records WHERE session_key = ? AND active = 1 "
-        "AND role = 'user' AND seq > ?) AS following",
-        (key, seq, key, seq),
-    ).fetchone()
-    first = bounds["first"]
+    ranges = _store_lineage.view_ranges(connection, int(state["session_key"]))
+    anchor = _store_lineage.ordered_rows(
+        connection,
+        ranges,
+        columns="e.seq, e.role",
+        where="e.entry_id = ?",
+        params=(message_id,),
+        descending=True,
+        limit=1,
+    )
+    if not anchor or anchor[0]["role"] not in {"user", "assistant"}:
+        return []
+    seq = int(anchor[0]["seq"])
+    first = view_seq(connection, ranges, where="e.role = 'user'", upper=seq + 1)
     if first is None:
         return []
-    following = bounds["following"]
-    answer = connection.execute(
-        "SELECT MAX(seq) FROM history_records WHERE session_key = ? AND active = 1 "
-        "AND role = 'assistant' AND seq > ? AND (? IS NULL OR seq < ?) "
-        "AND length(COALESCE(content, content_search, '')) > 0",
-        (key, first, following, following),
-    ).fetchone()[0]
-    # Two narrow row lookups; substr bounds the text before it leaves SQLite.
-    rows = connection.execute(
-        "SELECT seq, message_id, role, timestamp, "
-        "substr(COALESCE(content, content_search, ''), 1, 801) AS text "
-        "FROM history_records WHERE session_key = ? AND active = 1 AND seq != ? "
-        "AND seq IN (?, ?) ORDER BY seq",
-        (key, seq, first, answer),
-    ).fetchall()
+    following = view_seq(connection, ranges, where="e.role = 'user'", lower=seq + 1, newest=False)
+    answer = view_seq(
+        connection,
+        ranges,
+        where=f"e.role = 'assistant' AND {_RECALL_HAS_TEXT}",
+        lower=first + 1,
+        upper=_store_lineage.MAX_SEQ if following is None else following,
+    )
+    wanted = sorted({value for value in (first, answer) if value is not None and value != seq})
+    rows = [
+        row
+        for value in wanted
+        for row in _store_lineage.ordered_rows(
+            connection,
+            ranges,
+            columns=f"e.seq, e.entry_id, e.role, e.created_at, {_RECALL_TEXT} AS text",
+            lower=value,
+            upper=value + 1,
+        )
+    ]
     return [
         {
             "message_index": int(row["seq"]),
-            "message_id": str(row["message_id"]),
+            "message_id": str(row["entry_id"]),
             "role": str(row["role"]),
-            "timestamp": str(row["timestamp"]),
+            "timestamp": str(row["created_at"]),
             "text": str(row["text"])[:800],
             "truncated": len(str(row["text"])) > 800,
         }

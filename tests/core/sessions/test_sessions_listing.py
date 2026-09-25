@@ -5,18 +5,24 @@ from __future__ import annotations
 import json
 import sqlite3
 from dataclasses import replace
+from typing import Any
 
 import pytest
 
 import core.sessions._store_codec as session_store_module
 from core.chat import ChatMessage
 from core.chat.errors import ChatSessionError
-from core.runs import RunKind
+from core.prompts.pinned_context import PINNED_MEMORY_FILES_SLOT, PINNED_SKILL_CATALOG_SLOT
+from core.runs import Run, RunKind
 from core.sessions import (
-    SESSION_FORK_ALWAYS_STRIP_META_KEYS,
     SESSION_RUN_KINDS_META_KEY,
+    PromptEpoch,
+    SeenSkillsUpdate,
+    SessionAddress,
     SessionListFilters,
 )
+from core.utils.timestamps import canonical_timestamp
+from tests.core.sessions.history_fixtures import complete_run
 from tests.core.sessions.sessions_test_support import (
     _address,
     _continuation_start,
@@ -26,6 +32,42 @@ from tests.core.sessions.sessions_test_support import (
 )
 
 
+def _classify(manager, address: SessionAddress, metadata: Any) -> None:
+    """Write list metadata and Run kinds the way their owners do.
+
+    A Run kind this version does not know is written directly, as a newer vBot
+    sharing the database would.
+    """
+    metadata = dict(metadata)
+    run_kinds = metadata.pop("run_kinds", [])
+    if metadata:
+        manager.set_metadata(address, metadata)
+    known = {kind.value for kind in RunKind}
+    for run_kind in run_kinds:
+        if run_kind in known:
+            manager.record_run_kind(address, RunKind(run_kind))
+            continue
+        with sqlite3.connect(manager._store.path) as connection:
+            connection.execute(
+                "INSERT INTO session_run_kinds (session_key, run_kind) "
+                "SELECT session_key, ? FROM sessions WHERE project_id = ? AND agent_id = ? "
+                "AND session_id = ? AND state = 'live'",
+                (run_kind, address.project_id or "", address.agent_id, address.session_id),
+            )
+
+
+def _state_revision(manager, address: SessionAddress) -> int:
+    return int(
+        manager._store._read(
+            lambda connection: connection.execute(
+                "SELECT state_revision FROM sessions WHERE project_id = ? AND agent_id = ? "
+                "AND session_id = ? AND state = 'live'",
+                (address.project_id or "", address.agent_id, address.session_id),
+            ).fetchone()[0]
+        )
+    )
+
+
 def test_create_append_and_load_use_a_canonical_database(manager, tmp_path) -> None:
     session = manager.create("coder", session_id="session-one")
     messages = [ChatMessage.user("hello"), ChatMessage.assistant(model="test", content="hi")]
@@ -33,7 +75,7 @@ def test_create_append_and_load_use_a_canonical_database(manager, tmp_path) -> N
     session.append_many(messages)
 
     assert session.load() == messages
-    assert session.bookend_timestamps() == (messages[0].timestamp, messages[-1].timestamp)
+    assert session.load_active() == messages
     assert (tmp_path / "sessions.db").is_file()
     assert not list((tmp_path / "agents").glob("*/sessions/*.jsonl"))
 
@@ -60,6 +102,7 @@ def test_cursor_reads_only_messages_appended_after_the_snapshot(manager) -> None
 
 def test_append_returns_every_record_since_the_cursor_and_commits_its_journal(manager) -> None:
     session = manager.create("coder", session_id="session-one")
+    session.start_run("run-one")
     session.append(ChatMessage.user("first"))
     initial = session.load_since()
     assert initial is not None
@@ -79,22 +122,22 @@ def test_append_returns_every_record_since_the_cursor_and_commits_its_journal(ma
     assert session.load_continuation() is not None
 
 
-def test_an_append_commits_its_metadata_mutation_in_the_same_transaction(manager) -> None:
+def test_an_append_commits_its_seen_skills_in_the_same_transaction(manager) -> None:
     session = manager.create("coder", session_id="session-one")
+    session.start_run("run-one")
 
     session.append_many(
-        [ChatMessage.user("first")],
-        metadata_mutation=lambda metadata: metadata.__setitem__("marker", "kept"),
+        [ChatMessage.user("first")], seen_skills=SeenSkillsUpdate(baseline=("alpha",))
     )
-    with pytest.raises(RuntimeError, match="mutation failed"):
-
-        def failing(_metadata: dict) -> None:
-            raise RuntimeError("mutation failed")
-
-        session.append_many([ChatMessage.user("lost")], metadata_mutation=failing)
+    with pytest.raises(ChatSessionError):
+        session.append_many(
+            [ChatMessage.user("lost")],
+            seen_skills=SeenSkillsUpdate(baseline=(), added=("beta",)),
+            continuation_records=[{**_continuation_start(), "version": 2}],
+        )
 
     assert [message.content for message in session.load()] == ["first"]
-    assert manager.get_metadata(session.address)["marker"] == "kept"
+    assert manager.seen_skills(session.address) == frozenset({"alpha"})
 
 
 def test_compaction_checkpoint_commits_only_while_its_cursor_is_current(manager) -> None:
@@ -108,31 +151,28 @@ def test_compaction_checkpoint_commits_only_while_its_cursor_is_current(manager)
     )
     manager.get(session.address).append(ChatMessage.note("written by another accessor"))
 
-    stale = session.commit_compaction_checkpoint(
-        checkpoint,
-        since=snapshot.cursor,
-        metadata_mutation=lambda metadata: metadata.__setitem__("pins", "new"),
+    epoch = PromptEpoch(
+        pins={PINNED_SKILL_CATALOG_SLOT: {"catalog": "new"}}, seen_skills=("alpha",)
     )
+    stale = session.commit_compaction(checkpoint, since=snapshot.cursor, epoch=epoch)
 
     assert stale is None
     assert [message.role for message in session.load()] == ["user", "note"]
-    assert "pins" not in manager.get_metadata(session.address)
+    assert manager.prompt_pin(session.address, PINNED_SKILL_CATALOG_SLOT) is None
+    assert manager.seen_skills(session.address) is None
     assert manager.prompt_cache_affinity_id(session.address) == affinity
 
     current = session.load_since()
     assert current is not None
-    committed = session.commit_compaction_checkpoint(
-        checkpoint,
-        since=current.cursor,
-        metadata_mutation=lambda metadata: metadata.__setitem__("pins", "new"),
-    )
+    committed = session.commit_compaction(checkpoint, since=current.cursor, epoch=epoch)
 
     assert committed is not None
     delta, rotated = committed
     assert [message.id for message in delta.messages] == [checkpoint.id]
     latest = session.load_since()
     assert latest is not None and delta.cursor == latest.cursor
-    assert manager.get_metadata(session.address)["pins"] == "new"
+    assert manager.prompt_pin(session.address, PINNED_SKILL_CATALOG_SLOT) == {"catalog": "new"}
+    assert manager.seen_skills(session.address) == frozenset({"alpha"})
     assert manager.prompt_cache_affinity_id(session.address) == rotated != affinity
 
 
@@ -170,39 +210,41 @@ async def test_reflection_runs_restore_only_own_review_summaries(
             },
         )
 
-    source.start_run("inherited").append(summary("inherited", "completed"))
-    fork = await manager.fork(
-        source.address,
-        target_project_id=project_id,
-        strip_meta_keys=SESSION_FORK_ALWAYS_STRIP_META_KEYS,
-    )
+    async def run(session, run_id, run_kind, result):
+        admitted = Run(
+            run_id=run_id,
+            agent_id=session.address.agent_id,
+            session_id=session.id,
+            project_id=session.address.project_id,
+            run_kind=run_kind,
+        )
+        await manager.start_run(admitted)
+        complete_run(session.for_run(run_id), summary(run_id, result))
+        return admitted
+
+    await run(source, "inherited", RunKind.USER, "completed")
+    fork = await manager.fork(source.address, target_project_id=project_id)
     manager.record_run_kind(fork.address, RunKind.MEMORY_REFLECTION)
-    # An admitted fork with only copied summaries must not fabricate a result.
+    # A classified fork with only inherited summaries must not fabricate a result.
     assert source.reflection_runs() == []
-    fork.start_run("review").append(summary("review", status))
+    review = await run(fork, "review", RunKind.MEMORY_REFLECTION, status)
     # Later user work inside the review Session must not replace its review result.
-    manager.record_run_kind(fork.address, RunKind.USER)
-    fork.start_run("later-user").append(summary("later-user", "completed"))
+    await run(fork, "later-user", RunKind.USER, "completed")
     other = manager.create("coder", session_id="other", project_id=project_id)
-    other_fork = await manager.fork(
-        other.address,
-        target_project_id=project_id,
-        strip_meta_keys=SESSION_FORK_ALWAYS_STRIP_META_KEYS,
-    )
-    manager.record_run_kind(other_fork.address, RunKind.SKILL_REFLECTION)
-    other_fork.start_run("other-review").append(summary("other-review", "completed"))
+    other_fork = await manager.fork(other.address, target_project_id=project_id)
+    await run(other_fork, "other-review", RunKind.SKILL_REFLECTION, "completed")
     other_scope = manager.create("coder", session_id="source", project_id="different-project")
 
     def forbid_history(*args, **kwargs):
         raise AssertionError("Reflection recovery must not reconstruct chat content")
 
-    monkeypatch.setattr(session_store_module, "message_from_row", forbid_history)
+    monkeypatch.setattr(session_store_module, "select_batch", forbid_history)
     assert source.reflection_runs() == [
         {
             "session_id": fork.id,
             "run_id": "review",
             "status": status,
-            "started_at": "2026-09-05T10:00:00+00:00",
+            "started_at": canonical_timestamp(review.created_at),
             "run_kind": "memory_reflection",
         }
     ]
@@ -215,6 +257,9 @@ def test_metadata_activity_and_continuation_change_state_not_history(manager) ->
     address = _address("coder", "session-one")
     session = manager.create("coder", session_id=address.session_id)
     session.append(ChatMessage.user("hello"))
+    revision = manager.history_revision(address)
+
+    session.start_run("run-one")
     revision = manager.history_revision(address)
 
     manager.set_metadata(address, {"project": "vbot"})
@@ -235,29 +280,32 @@ def test_metadata_activity_and_continuation_change_state_not_history(manager) ->
 def test_unchanged_metadata_and_activity_mutations_write_nothing(manager) -> None:
     address = _address("coder", "unchanged-mutations")
     manager.create(address.agent_id, session_id=address.session_id)
-    manager.set_metadata(address, {"title": "Kept", "seen_skills": ["alpha"]})
+    manager.set_metadata(address, {"title": "Kept"})
+    manager.record_seen_skills(address, SeenSkillsUpdate(baseline=("alpha",)))
     manager.record_run_kind(address, RunKind.USER)
     manager.record_terminal_run(address, "run-1", "completed", "2026-08-29T12:00:00Z")
     assert manager.mark_terminal_run_read(address, "run-1")["marked_read"] is True
     writer = manager._store._writer
-    revision = manager._store.state(address)["state_revision"]
+    revision = _state_revision(manager, address)
     changes = writer.total_changes
 
     manager.record_run_kind(address, RunKind.USER)
     previous, updated = manager.mutate_metadata_with_previous(
-        address, lambda metadata: metadata.update(title="Kept", seen_skills=["alpha"])
+        address, lambda metadata: metadata.update(title="Kept")
     )
+    manager.record_seen_skills(address, SeenSkillsUpdate(baseline=(), added=("alpha",)))
     assert manager.mark_terminal_run_read(address, "run-1")["marked_read"] is False
 
     assert previous == updated
     assert writer.total_changes == changes
-    assert manager._store.state(address)["state_revision"] == revision
+    assert _state_revision(manager, address) == revision
 
     manager.record_run_kind(address, RunKind.CRON)
-    assert manager._store.state(address)["state_revision"] == revision + 1
+    assert _state_revision(manager, address) == revision + 1
+    # Run kinds form a set, reported in name order.
     assert manager.get_metadata(address)[SESSION_RUN_KINDS_META_KEY] == [
-        RunKind.USER.value,
         RunKind.CRON.value,
+        RunKind.USER.value,
     ]
 
 
@@ -271,28 +319,42 @@ def test_listable_metadata_is_normalized_out_of_open_ended_metadata(manager) -> 
         "platform": "telegram",
         "platform_conv_id": "chat-42",
         "is_subagent_session": True,
-        "subagent_parent": {"agent_id": "parent", "session_id": "root"},
-        "fork_source": {"agent_id": "coder", "session_id": "source"},
-        "run_kinds": ["subagent"],
+        "subagent_parent": {
+            "id": "work",
+            "agent_id": "parent",
+            "session_id": "root",
+            "run_id": "parent-run",
+            "tool_call_id": "call",
+            "tool_call_index": 1,
+            "project_id": None,
+        },
         "compaction_policy": {"enabled": False},
-        "pinned_working_project_context": "x" * 100_000,
+        "extension_state": "x" * 100_000,
     }
 
     manager.set_metadata(address, metadata)
+    manager.record_run_kind(address, RunKind.SUBAGENT)
 
-    assert manager.get_metadata(address) == metadata
+    assert manager.get_metadata(address) == {**metadata, "run_kinds": ["subagent"]}
     with sqlite3.connect(manager._store.path) as connection:
         connection.row_factory = sqlite3.Row
         row = connection.execute(
-            "SELECT * FROM sessions WHERE agent_id = ? AND session_id = ?",
+            "SELECT session_key, metadata_json, title, subagent_parent_session_id, "
+            "subagent_parent_tool_call_index, compaction_policy_json FROM sessions "
+            "WHERE agent_id = ? AND session_id = ?",
             (address.agent_id, address.session_id),
         ).fetchone()
-    assert row is not None
-    residual = json.loads(row["metadata_json"])
-    assert residual == {"pinned_working_project_context": "x" * 100_000}
+        assert row is not None
+        run_kinds = connection.execute(
+            "SELECT run_kind FROM session_run_kinds WHERE session_key = ?",
+            (row["session_key"],),
+        ).fetchall()
+    assert json.loads(row["metadata_json"]) == {"extension_state": "x" * 100_000}
     assert row["title"] == "Release planning"
-    assert json.loads(row["subagent_parent_json"])["session_id"] == "root"
-    assert json.loads(row["run_kinds_json"]) == ["subagent"]
+    assert row["subagent_parent_session_id"] == "root"
+    assert row["subagent_parent_tool_call_index"] == 1
+    assert json.loads(row["compaction_policy_json"]) == {"enabled": False}
+    assert [tuple(kind) for kind in run_kinds] == [("subagent",)]
 
 
 @pytest.mark.timeout(120)
@@ -303,18 +365,14 @@ def test_session_list_page_is_bounded_filtered_and_keeps_required_session(manage
         session_id = f"normal-{index:02d}"
         address = _address("coder", session_id)
         manager._store.create(address, created_at=f"2026-08-01T12:{index:02d}:00+00:00")
-        manager.set_metadata(
-            address,
-            {
-                "title": f"Normal {index}",
-                "run_kinds": ["user"],
-                "pinned_skill_catalog": "large" * 10_000,
-            },
+        _classify(manager, address, {"title": f"Normal {index}", "run_kinds": ["user"]})
+        manager.ensure_prompt_pin(
+            address, PINNED_SKILL_CATALOG_SLOT, {"catalog": "large" * 10_000}, lambda _pin: True
         )
         normal_ids.append(session_id)
     hidden = _address("coder", "cron-hidden")
     manager._store.create(hidden, created_at="2026-08-01T00:00:00+00:00")
-    manager.set_metadata(hidden, {"run_kinds": ["cron"]})
+    _classify(manager, hidden, {"run_kinds": ["cron"]})
 
     first = manager.list_summaries_page(
         [(None, "coder")],
@@ -333,7 +391,7 @@ def test_session_list_page_is_bounded_filtered_and_keeps_required_session(manage
     assert first.next_cursor is not None
     assert first.sessions[0]["id"] == "normal-39"
     assert first.sessions[-1]["id"] == hidden.session_id
-    assert all("pinned_skill_catalog" not in summary for summary in first.sessions)
+    assert all(PINNED_SKILL_CATALOG_SLOT not in summary for summary in first.sessions)
     assert all(
         set(summary)
         <= {
@@ -379,7 +437,9 @@ def test_completion_activity_reads_completed_sessions_for_many_scopes(manager) -
         manager.create(
             address.agent_id, session_id=address.session_id, project_id=address.project_id
         )
-    manager.set_metadata(unread, {"pinned_memory_files": "large" * 10_000})
+    manager.ensure_prompt_pin(
+        unread, PINNED_MEMORY_FILES_SLOT, {"files": "large" * 10_000}, lambda _pin: True
+    )
     manager.record_terminal_run(unread, "run-1", "failed", "2026-08-29T12:00:00Z")
     manager.record_terminal_run(read, "run-2", "completed", "2026-08-29T12:01:00Z")
     manager.mark_terminal_run_read(read, "run-2")
@@ -405,7 +465,7 @@ def test_completion_activity_reads_completed_sessions_for_many_scopes(manager) -
                 "has_unread_completion": True,
                 "unread_run_id": "run-1",
                 "unread_run_status": "failed",
-                "unread_run_at": "2026-08-29T12:00:00Z",
+                "unread_run_at": "2026-08-29T12:00:00.000000Z",
             },
         ],
         ("vbot", "coder"): [
@@ -415,7 +475,7 @@ def test_completion_activity_reads_completed_sessions_for_many_scopes(manager) -
                 "has_unread_completion": True,
                 "unread_run_id": "run-3",
                 "unread_run_status": "completed",
-                "unread_run_at": "2026-08-29T12:02:00Z",
+                "unread_run_at": "2026-08-29T12:02:00.000000Z",
             }
         ],
         (None, "unknown"): [],
@@ -513,7 +573,7 @@ def test_session_list_filters_execution_categories_in_sql(manager) -> None:
             address,
             created_at=f"2026-08-01T00:0{index}:00+00:00",
         )
-        manager.set_metadata(address, metadata)
+        _classify(manager, address, metadata)
 
     def listed(filters: SessionListFilters) -> set[str]:
         return {
@@ -582,7 +642,7 @@ RECALL_VISIBILITY_CASES = {
 def test_recall_visibility_is_classified_in_sql(manager) -> None:
     for session_id, (metadata, _expected) in RECALL_VISIBILITY_CASES.items():
         manager.create("coder", session_id=session_id)
-        manager.set_metadata(_address("coder", session_id), metadata)
+        _classify(manager, _address("coder", session_id), metadata)
     expected = {
         session_id: visibility
         for session_id, (_metadata, visibility) in RECALL_VISIBILITY_CASES.items()
@@ -605,7 +665,8 @@ def test_channel_filter_counts_pages_and_preserves_required_session(manager, inc
         address = _address("coder", session_id)
         manager._store.create(address, created_at=f"2026-09-01T00:0{index}:00+00:00")
         if session_id in {"telegram", "discord"}:
-            manager.set_metadata(
+            _classify(
+                manager,
                 address,
                 {"platform": session_id, "platform_conv_id": "chat-1", "run_kinds": ["cron"]},
             )

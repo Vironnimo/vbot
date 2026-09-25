@@ -10,19 +10,16 @@ import pytest
 from core.chat import (
     ChatMessage,
 )
-from core.chat._request_builder import (
-    SEEN_SKILLS_META_KEY,
-)
 from core.chat._run_state import (
     RequestBuildInputs,
     _RunRequest,
     create_run_execution_context,
 )
 from core.prompts.pinned_context import (
-    PINNED_MEMORY_FILES_META_KEY,
-    PINNED_SKILL_CATALOG_META_KEY,
-    PINNED_SOUL_CONTEXT_META_KEY,
-    PINNED_WORKING_PROJECT_CONTEXT_META_KEY,
+    PINNED_MEMORY_FILES_SLOT,
+    PINNED_SKILL_CATALOG_SLOT,
+    PINNED_SOUL_CONTEXT_SLOT,
+    PINNED_WORKING_PROJECT_CONTEXT_SLOT,
     pinned_memory_files,
     pinned_skill_catalog,
     pinned_soul_context,
@@ -96,17 +93,24 @@ async def test_compaction_refreshes_pinned_skill_catalog(tmp_path: Path) -> None
         [StubSkill("one", "One.", Path("a")), StubSkill("two", "Two.", Path("b"))]
     )
     calls_before = runtime.system_prompts.render_skill_catalog_calls
+    address = session_address("coder", "session-one")
+    affinity_before = runtime.chat_sessions.prompt_cache_affinity_id(address)
 
     messages = await loop._requests._build_request_messages(agent, session)
     await _maybe_auto_compact(
         loop, agent, adapter, "gpt-5.2", session, messages, usage={"input_tokens": 90}, run=run
     )
 
-    metadata = runtime.chat_sessions.get_metadata(session_address("coder", "session-one"))
+    # The checkpoint, the new epoch's pins and seen Skills, and a new prompt-cache
+    # affinity are committed together.
+    catalog_pin = runtime.chat_sessions.prompt_pin(address, PINNED_SKILL_CATALOG_SLOT)
+    assert persisted_roles(session.load())[-1] == "compaction_checkpoint"
     assert runtime.system_prompts.render_skill_catalog_calls == calls_before + 1
     assert runtime.refresh_skills_for_calls == [(None, "coder")]
-    assert metadata[PINNED_SKILL_CATALOG_META_KEY]["catalog_text"] == "catalog:2"
-    assert metadata[SEEN_SKILLS_META_KEY] == ["one", "two"]
+    assert catalog_pin is not None
+    assert catalog_pin["catalog_text"] == "catalog:2"
+    assert runtime.chat_sessions.seen_skills(address) == frozenset({"one", "two"})
+    assert runtime.chat_sessions.prompt_cache_affinity_id(address) != affinity_before
 
 
 @pytest.mark.asyncio
@@ -184,9 +188,11 @@ async def test_compaction_refreshes_pinned_soul_and_memory(tmp_path: Path) -> No
         == "NEW_MEMORY_SENTINEL"
     )
 
-    metadata = runtime.chat_sessions.get_metadata(session_address("coder", "session-one"))
-    assert metadata[PINNED_SOUL_CONTEXT_META_KEY] == {"text": "NEW_SOUL_SENTINEL"}
-    assert metadata[PINNED_MEMORY_FILES_META_KEY] == {
+    address = session_address("coder", "session-one")
+    assert runtime.chat_sessions.prompt_pin(address, PINNED_SOUL_CONTEXT_SLOT) == {
+        "text": "NEW_SOUL_SENTINEL"
+    }
+    assert runtime.chat_sessions.prompt_pin(address, PINNED_MEMORY_FILES_SLOT) == {
         "text": "NEW_MEMORY_SENTINEL",
         "mode": "agent_user",
     }
@@ -253,8 +259,11 @@ async def test_compaction_refresh_failure_keeps_previous_prompt_snapshot(
         run=run,
     )
 
-    metadata = runtime.chat_sessions.get_metadata(session_address("coder", "session-one"))
-    assert metadata[PINNED_SKILL_CATALOG_META_KEY]["catalog_text"] == "catalog:1"
+    catalog_pin = runtime.chat_sessions.prompt_pin(
+        session_address("coder", "session-one"), PINNED_SKILL_CATALOG_SLOT
+    )
+    assert catalog_pin is not None
+    assert catalog_pin["catalog_text"] == "catalog:1"
     assert persisted_roles(session.load())[-1] == "compaction_checkpoint"
     assert any(
         "Prompt context refresh failed after automatic Compaction" in record.message
@@ -337,14 +346,17 @@ async def test_compaction_refreshes_rooted_working_project_files_and_auto_load(
     )
 
     system_prompt = str(rebuilt.messages[0]["content"])
-    metadata = runtime.chat_sessions.get_metadata(session_address("coder", "session-one"))
+    project_pin = runtime.chat_sessions.prompt_pin(
+        session_address("coder", "session-one"), PINNED_WORKING_PROJECT_CONTEXT_SLOT
+    )
     assert "Updated rules" in system_prompt
     assert "New context" in system_prompt
     assert "Original rules" not in system_prompt
     assert runtime.refresh_skills_for_calls == [("proj", "coder")]
     assert len(runtime.system_prompts.render_working_project_context_calls) == 2
-    assert "Updated rules" in metadata[PINNED_WORKING_PROJECT_CONTEXT_META_KEY]["text"]
-    assert "New context" in metadata[PINNED_WORKING_PROJECT_CONTEXT_META_KEY]["text"]
+    assert project_pin is not None
+    assert "Updated rules" in project_pin["text"]
+    assert "New context" in project_pin["text"]
 
 
 @pytest.mark.asyncio
@@ -470,28 +482,26 @@ async def test_temporary_compaction_refreshes_epoch_without_identity_lookup(
     rebuilt = await loop._compaction_runs.maybe_auto_compact_state(
         context, context.primary_target, {"input_tokens": 90}
     )
-    metadata = runtime.chat_sessions.get_metadata(
-        session_address(run.agent_id, session.id, project_id)
-    )
+    address = session_address(run.agent_id, session.id, project_id)
+    prompt_pin = runtime.chat_sessions.prompt_pin
     assert persisted_roles(session.load())[-1] == "compaction_checkpoint"
-    assert metadata[PINNED_SKILL_CATALOG_META_KEY] == {
+    assert prompt_pin(address, PINNED_SKILL_CATALOG_SLOT) == {
         "catalog_text": "catalog:1",
         "working_project_id": project_id,
     }
-    assert metadata[SEEN_SKILLS_META_KEY] == ["new"]
+    assert runtime.chat_sessions.seen_skills(address) == frozenset({"new"})
     assert runtime.refresh_skills_for_calls == [(project_id, None)]
     assert runtime.agent_resolver.calls == []
     assert context.agent_body == "TEMP_BODY_SENTINEL"
     assert context.soul_context is None and context.memory_files_context is None
-    assert PINNED_SOUL_CONTEXT_META_KEY not in metadata
-    assert PINNED_MEMORY_FILES_META_KEY not in metadata
+    assert prompt_pin(address, PINNED_SOUL_CONTEXT_SLOT) is None
+    assert prompt_pin(address, PINNED_MEMORY_FILES_SLOT) is None
+    project_pin = prompt_pin(address, PINNED_WORKING_PROJECT_CONTEXT_SLOT)
     if project_id:
+        assert project_pin is not None
         assert "OLD_RULES_SENTINEL" in old_project_context
-        assert "NEW_RULES_SENTINEL" in metadata[PINNED_WORKING_PROJECT_CONTEXT_META_KEY]["text"]
-        assert metadata[PINNED_WORKING_PROJECT_CONTEXT_META_KEY]["working_project_id"] == project_id
+        assert "NEW_RULES_SENTINEL" in project_pin["text"]
+        assert project_pin["working_project_id"] == project_id
         assert "NEW_RULES_SENTINEL" in rebuilt.messages[0]["content"]
         assert runtime.file_read_state.check_stale(session.id, rules.resolve()) is None
-        assert (
-            context.working_project_context
-            == metadata[PINNED_WORKING_PROJECT_CONTEXT_META_KEY]["text"]
-        )
+        assert context.working_project_context == project_pin["text"]

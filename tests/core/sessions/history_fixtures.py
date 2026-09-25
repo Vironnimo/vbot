@@ -1,16 +1,42 @@
 """Build relational test data from compact, readable conversation fixtures.
 
-Fixture summaries declare complete Runs. Missing Tool declarations are supplied
-here so search/report tests can focus on the result they exercise. This builder
-is test-only; production writes must already identify their Run and invocation.
+Fixture summaries declare complete Runs: each one completes its admitted Run the
+way the Run manager does. Missing Tool declarations are supplied here so
+search/report tests can focus on the result they exercise, and Tool results
+carry the outcome facts Chat derives from their envelopes. This builder is
+test-only; production writes must already identify their Run and invocation.
 """
 
 from dataclasses import replace
 from datetime import datetime
 
+from core.chat._step_outcomes import tool_result_facts
 from core.chat.messages import ChatMessage, ToolCall
 from core.sessions import ChatSession
+from core.sessions._types import SessionRunCompletion
 from core.utils.ids import new_id
+
+
+def complete_run(session: ChatSession, summary: ChatMessage) -> ChatMessage:
+    """Complete *summary*'s admitted Run with its fields; return the stored summary.
+
+    The store writes the summary entry itself, so the returned Message carries
+    the stored id and canonical timing.
+    """
+    assert summary.role == "run_summary" and summary.run_id and summary.timing is not None
+    assert summary.status is not None
+    session._store.finish_run(
+        session.address,
+        SessionRunCompletion(
+            run_id=summary.run_id,
+            status=summary.status,
+            timing=summary.timing,
+            iteration_count=summary.iteration_count or 0,
+            work_id=summary.work_id,
+            change_stats=summary.change_stats,
+        ),
+    )
+    return session.load()[-1]
 
 
 def seed_history(session: ChatSession, messages: list[ChatMessage]) -> None:
@@ -58,9 +84,11 @@ def seed_history(session: ChatSession, messages: list[ChatMessage]) -> None:
                     writer.append(assistant)
                 writer.assistant_message_id = assistant.id
             if message.role == "run_summary":
-                assert message.timing is not None
-                message = replace(message, timestamp=message.timing["completed_at"])
-                messages[index] = message
+                messages[index] = complete_run(writer, message)
+                continue
+            if message.role == "tool":
+                writer.append_many([message], tool_results=tool_result_facts([message]))
+                continue
             writer.append(message)
         offset = end
 

@@ -45,9 +45,10 @@ async def test_agent_rename_retargets_live_references_and_publishes_mapping(
                 "run_id": "parent-run",
                 "project_id": None,
             },
-            "fork_source": {"agent_id": "coder", "session_id": "historical"},
         },
     )
+    historical = state.runtime.chat_sessions.create("coder", session_id="historical")
+    fork = await state.runtime.chat_sessions.fork(historical.address, target_agent_id="child")
     channels = [SimpleNamespace(id="telegram", agent_id="coder")]
     jobs = [
         SimpleNamespace(id="active", agent_id="coder", project_id=None, status="active"),
@@ -117,7 +118,11 @@ async def test_agent_rename_retargets_live_references_and_publishes_mapping(
         SessionAddress(project_id=None, agent_id="child", session_id="child-session")
     )
     assert child_metadata["subagent_parent"]["agent_id"] == "researcher"
-    assert child_metadata["fork_source"]["agent_id"] == "coder"
+    # Fork provenance is not a reference the rename rewrites (``session_links_updated``
+    # counts only the Sub-Agent parent): it names the source Session's own address,
+    # which this stub Agent store leaves in place.
+    fork_source = state.runtime.chat_sessions.get_metadata(fork.address)["fork_source"]
+    assert (fork_source["agent_id"], fork_source["session_id"]) == ("coder", "historical")
     events = [event["payload"] for event in state.event_bus.events]
     assert events == [
         {
@@ -194,18 +199,21 @@ async def test_agent_rename_rolls_back_all_changes_when_reference_update_fails(
         tools={"subagent": {"allowed_agents": ["coder"]}},
     )
     state.runtime.chat_sessions.create("child", session_id="child-session")
-    original_metadata = {
-        "subagent_parent": {
-            "agent_id": "coder",
-            "session_id": "parent-session",
-            "run_id": "parent-run",
-            "project_id": None,
-        }
-    }
+    child = SessionAddress(project_id=None, agent_id="child", session_id="child-session")
     state.runtime.chat_sessions.set_metadata(
-        SessionAddress(project_id=None, agent_id="child", session_id="child-session"),
-        original_metadata,
+        child,
+        {
+            "subagent_parent": {
+                "agent_id": "coder",
+                "session_id": "parent-session",
+                "run_id": "parent-run",
+                "project_id": None,
+            }
+        },
     )
+    # Compare against the stored (normalized) form of the parent reference.
+    original_metadata = state.runtime.chat_sessions.get_metadata(child)
+    assert original_metadata["subagent_parent"]["agent_id"] == "coder"
     channels = [
         SimpleNamespace(id="first", agent_id="coder"),
         SimpleNamespace(id="second", agent_id="coder"),
@@ -231,12 +239,7 @@ async def test_agent_rename_rolls_back_all_changes_when_reference_update_fails(
     assert state.runtime.agents.get("coder").id == "coder"
     assert all(channel.agent_id == "coder" for channel in channels)
     assert state.runtime.agents.get("manager").tools["subagent"]["allowed_agents"] == ["coder"]
-    assert (
-        state.runtime.chat_sessions.get_metadata(
-            SessionAddress(project_id=None, agent_id="child", session_id="child-session")
-        )
-        == original_metadata
-    )
+    assert state.runtime.chat_sessions.get_metadata(child) == original_metadata
     assert state.event_bus.events == []
 
 

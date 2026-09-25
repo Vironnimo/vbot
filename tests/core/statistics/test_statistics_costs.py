@@ -142,4 +142,4 @@ def test_recent_calls_use_time_order_and_are_bounded(tmp_path: Path):
     assert costs.totals.calls == 65
     assert len(costs.recent_calls) == 50
     assert costs.recent_calls_truncated
-    assert costs.recent_calls[0].timestamp == (BASE + timedelta(seconds=64)).isoformat()
+    assert costs.recent_calls[0].timestamp == "2026-06-01T12:01:04.000000Z"

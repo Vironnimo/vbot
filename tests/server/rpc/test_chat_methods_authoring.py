@@ -16,10 +16,7 @@ from core.chat import (
     ReplySurface,
 )
 from core.runs import RunKind
-from core.sessions import (
-    SESSION_FORK_ALWAYS_STRIP_META_KEYS,
-    SessionAddress,
-)
+from core.sessions import SessionAddress
 from server.rpc.chat_methods import (
     _send_chat,
 )
@@ -272,9 +269,22 @@ def _make_reflect_state(
     title_log = titles if titles is not None else []
     metadata_log = metadata_writes if metadata_writes is not None else []
 
-    async def fork(source: SessionAddress, *, title: str | None = None, **kwargs: Any) -> Any:
+    async def fork(
+        source: SessionAddress,
+        *,
+        target_agent_id: str | None = None,
+        target_project_id: str | None = None,
+        title: str | None = None,
+        run_kind: RunKind | None = None,
+    ) -> Any:
         forked.append(
-            {"source_agent_id": source.agent_id, "session_id": source.session_id, **kwargs}
+            {
+                "source_agent_id": source.agent_id,
+                "session_id": source.session_id,
+                "target_agent_id": target_agent_id,
+                "target_project_id": target_project_id,
+                "run_kind": run_kind,
+            }
         )
         if title is not None:
             title_log.append(("fork-1", title))
@@ -346,7 +356,11 @@ async def test_reflect_forks_and_runs_restricted_review(monkeypatch: pytest.Monk
     # The source session is forked once; the review run targets the NEW fork id.
     assert forked[0]["source_agent_id"] == "builder"
     assert forked[0]["session_id"] == "s1"
-    assert forked[0]["strip_meta_keys"] == SESSION_FORK_ALWAYS_STRIP_META_KEYS
+    # The fork stays in the source's scope (Sessions leaves bindings behind) and is
+    # classified as a reflection in the same write that creates it.
+    assert forked[0]["target_agent_id"] is None
+    assert forked[0]["target_project_id"] is None
+    assert forked[0]["run_kind"] is RunKind.REFLECTION
     assert len(captured) == 1
     assert captured[0]["session_id"] == "fork-1"
     assert captured[0]["session_id"] != "s1"

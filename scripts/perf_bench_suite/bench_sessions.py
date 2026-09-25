@@ -173,6 +173,8 @@ def _stream_flush_setup(context: BenchContext) -> Prepared:
     """Flush one Continuation stream delta into a step that already holds a long text."""
     session = session_store(context, "stream-store").create(AGENT_ID)
     run_id = "run-stream"
+    # Continuation records belong to a Run the Session admitted.
+    session.start_run(run_id)
     text = TextFactory(5)
     session.append_continuation_records(
         [

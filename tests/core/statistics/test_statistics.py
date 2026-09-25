@@ -19,7 +19,7 @@ from core.statistics import (
     StatisticsService,
 )
 from core.tools import tool_failure, tool_success
-from tests.core.sessions.history_fixtures import seed_history
+from tests.core.sessions.history_fixtures import complete_run, seed_history
 from tests.core.statistics.statistics_test_support import (
     BASE,
     _assistant,
@@ -166,7 +166,7 @@ def test_chat_messages_and_session_records_are_separate(tmp_path: Path) -> None:
     assert report.overview.agents[0].session_records == 4
 
 
-def test_fork_counts_only_activity_appended_after_copied_history(tmp_path: Path) -> None:
+def test_fork_counts_only_its_own_activity_never_inherited_history(tmp_path: Path) -> None:
     service, manager = _service(tmp_path, ["main"])
     model = "openrouter/anthropic/claude-sonnet-4"
     source = manager.create("main")
@@ -200,6 +200,11 @@ def test_fork_counts_only_activity_appended_after_copied_history(tmp_path: Path)
     fork = asyncio.run(
         manager.fork(SessionAddress(project_id=None, agent_id="main", session_id=source.id))
     )
+    # The fork inherits the source's history into its current view without
+    # writing any of it into its own audit.
+    assert fork.load() == []
+    assert fork.load_active() == source.load_active()
+    assert len(fork.load_active()) == len(source_messages)
     fork_messages = [
         ChatMessage.user("fork work", timestamp=BASE + timedelta(minutes=1)),
         _assistant(
@@ -226,10 +231,15 @@ def test_fork_counts_only_activity_appended_after_copied_history(tmp_path: Path)
         ),
     ]
     seed_history(fork, fork_messages)
+    assert len(fork.load_active()) == len(source_messages) + len(fork_messages)
 
     report = service.report()
 
     assert report.overview.total_sessions == 2
+    assert {(row.session_id, row.runs) for row in report.runs.top_sessions_by_runs} == {
+        (source.id, 1),
+        (fork.id, 1),
+    }
     assert report.overview.total_session_records == len(source_messages) + len(fork_messages)
     assert report.overview.total_chat_messages == 4
     assert report.runs.total_runs == 2
@@ -249,13 +259,14 @@ def test_interrupted_runs_have_distinct_count_rate_and_daily_bucket(tmp_path: Pa
     session = manager.create("main")
     session = session.start_run("interrupted-run")
     session.append(ChatMessage.user("work", timestamp=BASE))
-    session.append(
+    complete_run(
+        session,
         _run_summary(
             status="interrupted",
             at=BASE + timedelta(seconds=1),
             duration_ms=250,
             run_id="interrupted-run",
-        )
+        ),
     )
 
     report = service.report()
@@ -306,7 +317,7 @@ def test_compactions_report_distribution_reclaim_strategy_window_and_forks(
     report = service.report(since=day_two, until=day_three + timedelta(hours=2))
     compactions = report.compactions
 
-    # The fork's copied source checkpoint is historical context, not new activity.
+    # The fork's inherited source checkpoints are history, not the fork's own activity.
     assert compactions.total_compactions == 4
     assert compactions.sessions_with_compactions == 3
     assert compactions.average_per_compacted_session == pytest.approx(4 / 3)

@@ -31,7 +31,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from core.chat.content_blocks import ContentBlock, TextBlock
 from core.runs import RunKind
-from core.sessions import SESSION_FORK_ALWAYS_STRIP_META_KEYS, SessionAddress
+from core.sessions import SessionAddress
 from core.subagents.subagents import SUBAGENT_SESSION_METADATA_FLAG
 from core.tools.availability import MEMORY_TOOL_NAME, SKILL_MANAGE_TOOL_NAME, memory_tool_enabled
 from core.utils.logging import get_logger
@@ -388,7 +388,6 @@ class ReflectionService:
         fork = await sessions.fork(
             source_address,
             target_project_id=project_id,
-            strip_meta_keys=SESSION_FORK_ALWAYS_STRIP_META_KEYS,
             title=f"{agent.name}: {source_title}" if source_title else agent.name,
             run_kind=run_kind,
         )

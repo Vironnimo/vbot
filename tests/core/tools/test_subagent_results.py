@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import core.subagents._completion as subagent_completion
 import core.subagents._constants as subagent_constants
+from tests.core.sessions.history_fixtures import complete_run
 
 from .subagent_test_support import (
     BACKGROUND_TASK_SETTLE_TICKS,
@@ -154,13 +155,14 @@ async def test_subagent_result_preserves_interruption_details_from_jsonl(tmp_pat
             interruption_cause="timeout",
         )
     )
-    session.append(
+    complete_run(
+        session,
         ChatMessage.run_summary(
             run_id="missing-run",
             status="completed",
             timing=TERMINAL_TIMING,
             iteration_count=1,
-        )
+        ),
     )
     tracker = SubAgentBatchTracker(RecordingTriggerService())
     context = make_context(tool_name=SUBAGENT_TOOL_NAME)
@@ -199,13 +201,14 @@ async def test_subagent_result_falls_back_to_jsonl_when_run_is_missing(tmp_path:
             usage={"input_tokens": 3, "output_tokens": 5},
         )
     )
-    session.append(
+    complete_run(
+        session,
         ChatMessage.run_summary(
             run_id="missing-run",
             status="completed",
             timing=TERMINAL_TIMING,
             iteration_count=1,
-        )
+        ),
     )
     tracker = SubAgentBatchTracker(RecordingTriggerService())
     context = make_context(tool_name=SUBAGENT_TOOL_NAME)
@@ -477,13 +480,14 @@ async def test_subagent_result_falls_back_to_jsonl_when_live_run_has_no_output(
             usage={"input_tokens": 7, "output_tokens": 11},
         )
     )
-    session.append(
+    complete_run(
+        session,
         ChatMessage.run_summary(
             run_id="sub-run",
             status="completed",
             timing=TERMINAL_TIMING,
             iteration_count=1,
-        )
+        ),
     )
     sub_run = Run(run_id="sub-run", agent_id="worker", session_id="sub-session")
     sub_run.mark_completed(None)
@@ -529,13 +533,14 @@ async def test_subagent_result_failed_live_run_error_falls_back_to_jsonl_output(
     session = session.start_run("sub-run")
     session.append(ChatMessage.user("question"))
     session.append(ChatMessage.assistant(model="openai/gpt-5.2", content="jsonl answer"))
-    session.append(
+    complete_run(
+        session,
         ChatMessage.run_summary(
             run_id="sub-run",
             status="failed",
             timing=TERMINAL_TIMING,
             iteration_count=1,
-        )
+        ),
     )
     sub_run = Run(run_id="sub-run", agent_id="worker", session_id="sub-session")
     sub_run.mark_failed(RuntimeError("provider failed after persistence"))
@@ -592,13 +597,14 @@ async def test_subagent_result_polls_persisted_run_until_assistant_output_appear
         sleeps.append(delay_seconds)
         writer = session.start_run("sub-run")
         writer.append(ChatMessage.assistant(model="openai/gpt-5.2", content="late answer"))
-        writer.append(
+        complete_run(
+            writer,
             ChatMessage.run_summary(
                 run_id="sub-run",
                 status="failed",
                 timing=TERMINAL_TIMING,
                 iteration_count=1,
-            )
+            ),
         )
         await real_sleep(0)
 
@@ -663,13 +669,14 @@ async def test_subagent_result_ignores_prior_terminal_run_when_new_output_is_unf
     session = session.start_run("first-run")
     session.append(ChatMessage.user("first question"))
     session.append(ChatMessage.assistant(model="openai/gpt-5.2", content="First answer."))
-    session.append(
+    complete_run(
+        session,
         ChatMessage.run_summary(
             run_id="first-run",
             status="completed",
             timing=TERMINAL_TIMING,
             iteration_count=1,
-        )
+        ),
     )
     session = session.start_run("second-run")
     session.append(ChatMessage.user("continue"))

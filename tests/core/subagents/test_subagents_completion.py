@@ -23,6 +23,7 @@ from core.subagents.subagents import SubAgentCoordinator
 from core.subagents.subagents import _handle_subagent as _handle_subagent_impl
 from core.subagents.tracker import SubAgentBatchTracker
 from core.tools.tools import ToolContext
+from tests.core.sessions.history_fixtures import complete_run
 from tests.core.subagents.subagents_test_support import (
     FakeRunManager,
     JsonObject,
@@ -308,7 +309,8 @@ async def test_status_result_keeps_handle_and_child_unread_until_parent_persiste
     child = runtime.chat_sessions.create("worker", session_id="child-session")
     child = child.start_run("child-run")
     child.append(ChatMessage.assistant(model="openai/gpt-5.2", content="child output"))
-    child.append(
+    complete_run(
+        child,
         ChatMessage.run_summary(
             run_id="child-run",
             status="completed",
@@ -318,7 +320,7 @@ async def test_status_result_keeps_handle_and_child_unread_until_parent_persiste
                 "completed_at": "2026-07-22T10:00:01+00:00",
                 "duration_ms": 1000,
             },
-        )
+        ),
     )
     runtime.chat_sessions.record_terminal_run(
         _address("worker", "child-session"),
@@ -506,26 +508,28 @@ async def test_inspect_resolves_exact_completed_work_after_child_session_reuse(
     session = session.start_run("old-run")
     session.append(ChatMessage.user("old request"))
     session.append(ChatMessage.assistant(model="openai/gpt-5.2", content="old result"))
-    session.append(
+    complete_run(
+        session,
         ChatMessage.run_summary(
             run_id="old-run",
             work_id="sub_old",
             status="completed",
             timing=old_timing,
             iteration_count=1,
-        )
+        ),
     )
     session = session.start_run("new-run")
     session.append(ChatMessage.user("new request"))
     session.append(ChatMessage.assistant(model="openai/gpt-5.2", content="new result"))
-    session.append(
+    complete_run(
+        session,
         ChatMessage.run_summary(
             run_id="new-run",
             work_id="sub_new",
             status="completed",
             timing=new_timing,
             iteration_count=1,
-        )
+        ),
     )
 
     def fail_full_load(self: ChatSession) -> list[ChatMessage]:
@@ -554,7 +558,12 @@ async def test_inspect_resolves_exact_completed_work_after_child_session_reuse(
     assert result["run_id"] == "old-run"
     assert result["status"] == "completed"
     assert result["result"] == "old result"
-    assert result["timing"] == old_timing
+    # Stored timing values come back in canonical UTC form.
+    assert result["timing"] == {
+        "started_at": "2026-07-24T10:00:00.000000Z",
+        "completed_at": "2026-07-24T10:00:01.000000Z",
+        "duration_ms": 1000,
+    }
 
 
 async def test_inspect_prefers_matching_live_work_in_child_session(tmp_path: Path) -> None:
@@ -602,7 +611,8 @@ async def test_qualified_subagent_result_uses_target_project_for_persisted_fallb
     session = runtime.chat_sessions.create("worker", session_id="project-child", project_id="vbot")
     session = session.start_run("missing-run")
     session.append(ChatMessage.assistant(model="openai/gpt-5.2", content="project result"))
-    session.append(
+    complete_run(
+        session,
         ChatMessage.run_summary(
             run_id="missing-run",
             status="completed",
@@ -612,7 +622,7 @@ async def test_qualified_subagent_result_uses_target_project_for_persisted_fallb
                 "completed_at": "2026-07-24T10:00:01+00:00",
                 "duration_ms": 1000,
             },
-        )
+        ),
     )
     tracker.register(
         (context.agent_id, context.session_id, context.run_id),

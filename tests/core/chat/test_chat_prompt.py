@@ -185,8 +185,8 @@ async def test_project_session_puts_body_and_files_in_system_prompt(tmp_path: Pa
 @pytest.mark.asyncio
 async def test_soul_and_memory_pin_across_runs(tmp_path: Path) -> None:
     from core.prompts.pinned_context import (
-        PINNED_MEMORY_FILES_META_KEY,
-        PINNED_SOUL_CONTEXT_META_KEY,
+        PINNED_MEMORY_FILES_SLOT,
+        PINNED_SOUL_CONTEXT_SLOT,
     )
 
     agent = StubAgent(
@@ -212,9 +212,11 @@ async def test_soul_and_memory_pin_across_runs(tmp_path: Path) -> None:
     # The first Run snapshots and uses the pin itself; the second Run reuses it.
     assert runtime.system_prompts.render_soul_calls == 1
     assert runtime.system_prompts.render_memory_files_calls == 1
-    metadata = runtime.chat_sessions.get_metadata(session_address("coder", "s1"))
-    assert metadata[PINNED_SOUL_CONTEXT_META_KEY] == {"text": "Soul of coder"}
-    assert metadata[PINNED_MEMORY_FILES_META_KEY] == {
+    address = session_address("coder", "s1")
+    assert runtime.chat_sessions.prompt_pin(address, PINNED_SOUL_CONTEXT_SLOT) == {
+        "text": "Soul of coder"
+    }
+    assert runtime.chat_sessions.prompt_pin(address, PINNED_MEMORY_FILES_SLOT) == {
         "text": "Memory of coder",
         "mode": "agent_user",
     }
@@ -227,7 +229,7 @@ async def test_soul_and_memory_pin_across_runs(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_config_agent_session_pins_working_project_across_runs(tmp_path: Path) -> None:
-    from core.prompts.pinned_context import PINNED_WORKING_PROJECT_CONTEXT_META_KEY
+    from core.prompts.pinned_context import PINNED_WORKING_PROJECT_CONTEXT_SLOT
 
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -251,8 +253,11 @@ async def test_config_agent_session_pins_working_project_across_runs(tmp_path: P
     assert "Changed between runs" not in second_system
     assert "Original rules" in second_system
     assert len(runtime.system_prompts.render_working_project_context_calls) == 1
-    metadata = runtime.chat_sessions.get_metadata(session_address(AGENT_ID, "s1", PROJECT_ID))
-    assert metadata[PINNED_WORKING_PROJECT_CONTEXT_META_KEY]["text"] in second_system
+    project_pin = runtime.chat_sessions.prompt_pin(
+        session_address(AGENT_ID, "s1", PROJECT_ID), PINNED_WORKING_PROJECT_CONTEXT_SLOT
+    )
+    assert project_pin is not None
+    assert project_pin["text"] in second_system
 
 
 @pytest.mark.asyncio
@@ -260,8 +265,8 @@ async def test_config_agent_without_workspace_stores_no_soul_or_memory_pin(
     tmp_path: Path,
 ) -> None:
     from core.prompts.pinned_context import (
-        PINNED_MEMORY_FILES_META_KEY,
-        PINNED_SOUL_CONTEXT_META_KEY,
+        PINNED_MEMORY_FILES_SLOT,
+        PINNED_SOUL_CONTEXT_SLOT,
     )
 
     repo = tmp_path / "repo"
@@ -277,9 +282,9 @@ async def test_config_agent_without_workspace_stores_no_soul_or_memory_pin(
     pins = runtime.system_prompts.build_pin_calls[-1]
     assert pins["soul_context"] is None
     assert pins["memory_files_context"] is None
-    metadata = runtime.chat_sessions.get_metadata(session_address(AGENT_ID, "s1", PROJECT_ID))
-    assert PINNED_SOUL_CONTEXT_META_KEY not in metadata
-    assert PINNED_MEMORY_FILES_META_KEY not in metadata
+    address = session_address(AGENT_ID, "s1", PROJECT_ID)
+    assert runtime.chat_sessions.prompt_pin(address, PINNED_SOUL_CONTEXT_SLOT) is None
+    assert runtime.chat_sessions.prompt_pin(address, PINNED_MEMORY_FILES_SLOT) is None
 
 
 @pytest.mark.asyncio
@@ -387,7 +392,7 @@ async def test_rooted_identity_agent_puts_project_files_in_system_prompt(tmp_pat
 async def test_rooted_project_context_stays_pinned_across_project_tool_call(
     tmp_path: Path,
 ) -> None:
-    from core.prompts.pinned_context import PINNED_WORKING_PROJECT_CONTEXT_META_KEY
+    from core.prompts.pinned_context import PINNED_WORKING_PROJECT_CONTEXT_SLOT
 
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -459,8 +464,11 @@ async def test_rooted_project_context_stays_pinned_across_project_tool_call(
     assert "Changed during project Tool call" not in second_system
     assert first_system == second_system
     assert len(runtime.system_prompts.render_working_project_context_calls) == 1
-    metadata = runtime.chat_sessions.get_metadata(session_address("coder", "s1"))
-    assert metadata[PINNED_WORKING_PROJECT_CONTEXT_META_KEY]["text"] in first_system
+    project_pin = runtime.chat_sessions.prompt_pin(
+        session_address("coder", "s1"), PINNED_WORKING_PROJECT_CONTEXT_SLOT
+    )
+    assert project_pin is not None
+    assert project_pin["text"] in first_system
 
 
 @pytest.mark.asyncio
@@ -473,8 +481,8 @@ async def test_rerooting_replaces_project_dependent_pins(
     from dataclasses import replace
 
     from core.prompts.pinned_context import (
-        PINNED_SKILL_CATALOG_META_KEY,
-        PINNED_WORKING_PROJECT_CONTEXT_META_KEY,
+        PINNED_SKILL_CATALOG_SLOT,
+        PINNED_WORKING_PROJECT_CONTEXT_SLOT,
     )
 
     projects: dict[str, StubProject] = {}
@@ -501,8 +509,10 @@ async def test_rerooting_replaces_project_dependent_pins(
         await loop.send("coder", "Hi", session_id="s1")
 
         system = str(adapter.requests[index]["messages"][0]["content"])
-        metadata = runtime.chat_sessions.get_metadata(session_address("coder", "s1"))
-        assert metadata[PINNED_SKILL_CATALOG_META_KEY]["working_project_id"] == root
+        address = session_address("coder", "s1")
+        catalog_pin = runtime.chat_sessions.prompt_pin(address, PINNED_SKILL_CATALOG_SLOT)
+        assert catalog_pin is not None
+        assert catalog_pin["working_project_id"] == root
         if root is None:
             assert "## Working Project" not in system
             assert "rules" not in system
@@ -511,7 +521,9 @@ async def test_rerooting_replaces_project_dependent_pins(
         assert f"- Project ID: `{root}`" in system
         assert f"{root} rules" in system
         assert f"{other} rules" not in system
-        assert metadata[PINNED_WORKING_PROJECT_CONTEXT_META_KEY]["working_project_id"] == root
+        project_pin = runtime.chat_sessions.prompt_pin(address, PINNED_WORKING_PROJECT_CONTEXT_SLOT)
+        assert project_pin is not None
+        assert project_pin["working_project_id"] == root
 
     prompts = runtime.system_prompts
     assert prompts.render_skill_catalog_calls == len(roots)

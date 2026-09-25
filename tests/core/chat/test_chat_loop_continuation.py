@@ -11,7 +11,6 @@ from core.chat import (
     ChatMessage,
     ChatSessionError,
 )
-from core.chat._request_builder import SEEN_SKILLS_META_KEY
 from core.chat.content_blocks import ContentBlock, MediaBlock, TextBlock
 from core.chat.continuation import (
     ContinuationTracker,
@@ -156,7 +155,7 @@ async def test_input_append_is_the_only_write_between_admission_and_the_first_re
     assert journal.requests[-1] == "measure me"
     assert [message.role for message in history[-2:]] == ["note", "user"]
     assert "deploy: Ship the app." in cast(str, history[-2].content)
-    assert runtime.chat_sessions.metadata_value(address, SEEN_SKILLS_META_KEY) == ["deploy"]
+    assert runtime.chat_sessions.seen_skills(address) == frozenset({"deploy"})
 
 
 @pytest.mark.asyncio
@@ -177,6 +176,7 @@ async def test_internal_run_neither_consumes_nor_resolves_continuation(tmp_path:
     adapter = StubAdapter([{"content": "Background work complete", "tool_calls": None}])
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
     session = runtime.chat_sessions.create("coder", session_id="session-one")
+    session.start_run("interrupted-run")
     tracker = ContinuationTracker(session, run_id="interrupted-run", request="visible work")
     await tracker.interrupt("network")
     before = await recover_continuation(session)
@@ -425,6 +425,7 @@ async def test_interrupted_edit_run_keeps_its_own_checkpoint(tmp_path: Path, mon
     original = ChatMessage.user("old request")
     session.append_many([original, ChatMessage.assistant(model="openai/test", content="old")])
     # A stale checkpoint from an earlier Run must not survive the committed edit.
+    session.start_run("stale-run")
     await ContinuationTracker(session, run_id="stale-run", request="STALE-REQUEST").start()
     loop = build_chat_loop(runtime, streaming=True)
 
@@ -469,6 +470,7 @@ async def test_continuation_reminder_is_single_and_provider_policy_neutral(
         interruption_cause="provider",
     )
     session.append(interrupted)
+    session.start_run("run-one")
     tracker = ContinuationTracker(
         session,
         run_id="run-one",
