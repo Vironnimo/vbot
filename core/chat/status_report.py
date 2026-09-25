@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta, tzinfo
 from typing import TYPE_CHECKING, Any, Literal
 
-from core.chat.messages import ChatMessage
+from core.chat.messages import ChatMessage, usage_token_is_estimated
 from core.chat.usage import aggregate_session_usage
 from core.providers.providers import resolve_effective_context_window
 from core.providers.reasoning import (
@@ -502,10 +502,6 @@ def _strip_pinned_connection_suffix(model_string: str) -> str:
     return model_string
 
 
-def _context_usage_text(messages: list[ChatMessage], context_window: int | None) -> str:
-    return _context_usage_text_from_facts(status_session_facts(messages), context_window)
-
-
 def _context_usage_text_from_facts(facts: StatusSessionFacts, context_window: int | None) -> str:
     if context_window is None or context_window <= 0:
         return STATUS_PLACEHOLDER
@@ -517,13 +513,8 @@ def _context_usage_text_from_facts(facts: StatusSessionFacts, context_window: in
     input_tokens = _coerce_int(latest_usage.get("input_tokens"))
     if input_tokens is None:
         return STATUS_PLACEHOLDER
-    estimated = bool(latest_usage.get("estimated"))
-    prefix = "~" if estimated else ""
+    prefix = "~" if usage_token_is_estimated(latest_usage, "input_tokens") else ""
     return f"{prefix}{input_tokens} / {context_window}"
-
-
-def _turn_count_text(messages: list[ChatMessage]) -> str:
-    return _turn_count_text_from_facts(status_session_facts(messages))
 
 
 def _turn_count_text_from_facts(facts: StatusSessionFacts) -> str:
@@ -533,17 +524,21 @@ def _turn_count_text_from_facts(facts: StatusSessionFacts) -> str:
 
 
 def status_session_facts(messages: list[ChatMessage]) -> StatusSessionFacts:
-    """Build the status read model from an already available in-memory transcript."""
+    """Build the status read model from an already available in-memory transcript.
+
+    Cache figures describe the prompt, so only turns with measured input count
+    toward them, as in the persisted Session totals.
+    """
     cache_input_tokens = 0
     for message in messages:
         if message.role != "assistant" or not isinstance(message.usage, dict):
             continue
-        if message.usage.get("estimated") is True:
+        if usage_token_is_estimated(message.usage, "input_tokens"):
             continue
         cache_data = _cache_data_from_usage(message.usage)
         if cache_data is not None:
             cache_input_tokens += cache_data[0]
-    latest_usage = _latest_assistant_usage_object(messages)
+    latest_usage = _latest_assistant_usage(messages)
     return StatusSessionFacts(
         first_message_at=messages[0].timestamp if messages else None,
         user_message_count=sum(1 for message in messages if message.role == "user"),
@@ -553,47 +548,22 @@ def status_session_facts(messages: list[ChatMessage]) -> StatusSessionFacts:
     )
 
 
-def _latest_assistant_usage(messages: list[ChatMessage]) -> tuple[int, bool] | None:
-    usage = _latest_assistant_usage_object(messages, require_input=True)
-    if usage is None:
-        return None
-    input_tokens = _coerce_int(usage.get("input_tokens"))
-    if input_tokens is None:
-        return None
-    return input_tokens, bool(usage.get("estimated"))
-
-
-def _latest_assistant_usage_object(
-    messages: list[ChatMessage],
-    *,
-    require_input: bool = False,
-) -> dict[str, Any] | None:
+def _latest_assistant_usage(messages: list[ChatMessage]) -> dict[str, Any] | None:
     for message in reversed(messages):
-        if message.role != "assistant" or not isinstance(message.usage, dict):
-            continue
-        if require_input and _coerce_int(message.usage.get("input_tokens")) is None:
-            continue
-        return message.usage
+        if message.role == "assistant" and isinstance(message.usage, dict):
+            return message.usage
     return None
-
-
-def _last_request_cache_text(messages: list[ChatMessage]) -> str:
-    return _last_request_cache_text_from_facts(status_session_facts(messages))
 
 
 def _last_request_cache_text_from_facts(facts: StatusSessionFacts) -> str:
     usage = facts.latest_assistant_usage
-    if usage is None or usage.get("estimated") is True:
+    if usage is None or usage_token_is_estimated(usage, "input_tokens"):
         return STATUS_PLACEHOLDER
 
     cache_data = _cache_data_from_usage(usage)
     if cache_data is None:
         return STATUS_PLACEHOLDER
     return _format_cache_data(cache_data)
-
-
-def _session_cache_text(messages: list[ChatMessage]) -> str:
-    return _session_cache_text_from_facts(status_session_facts(messages))
 
 
 def _session_cache_text_from_facts(facts: StatusSessionFacts) -> str:
@@ -637,12 +607,6 @@ def _cache_hit_rate_text(cache_read_tokens: int, input_tokens: int) -> str:
         return STATUS_PLACEHOLDER
     hit_rate = cache_read_tokens / input_tokens * _CACHE_PERCENT_SCALE
     return f"{hit_rate:.{_CACHE_HIT_RATE_DECIMALS}f}%"
-
-
-def _session_started_text(
-    messages: list[ChatMessage], now_utc: datetime, timezone: tzinfo | None
-) -> str:
-    return _session_started_text_from_facts(status_session_facts(messages), now_utc, timezone)
 
 
 def _session_started_text_from_facts(
