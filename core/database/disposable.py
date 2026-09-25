@@ -113,6 +113,10 @@ class DisposableDatabase:
             self._release()
             _discard(self.spec)
 
+    async def discard_async(self) -> None:
+        """``discard`` for the Event Loop: closing and deleting run off the loop."""
+        await asyncio.to_thread(self.discard)
+
     def close(self) -> None:
         """Close the handle; later ``get`` calls fail as unavailable."""
         with self._lock:
