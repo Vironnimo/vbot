@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import sqlite3
 from pathlib import Path
 
@@ -20,7 +21,7 @@ from core.sessions import (
     SessionAddress,
     ToolResultFacts,
 )
-from tests.core.sessions.history_fixtures import complete_run
+from tests.core.sessions.history_fixtures import admit_run, complete_run, history_revision
 
 
 def _summary(run_id: str) -> ChatMessage:
@@ -91,13 +92,13 @@ async def test_a_fork_shares_history_until_its_ancestor_is_deleted(tmp_path: Pat
         source.apply_edit(question.id, [ChatMessage.user("rewritten")])
         inherited = source.load()[:5]
         assert child.load_active() == grandchild.load_active() == inherited
-        revisions = [manager.history_revision(fork.address) for fork in (child, grandchild)]
+        revisions = [history_revision(manager, fork.address) for fork in (child, grandchild)]
 
         manager.delete(source.address)
 
         assert child.load_active() == grandchild.load_active() == inherited
         assert child.load() == grandchild.load() == []
-        assert [manager.history_revision(fork.address) for fork in (child, grandchild)] == [
+        assert [history_revision(manager, fork.address) for fork in (child, grandchild)] == [
             revision + 1 for revision in revisions
         ]
         with sqlite3.connect(manager._store.path) as connection:
@@ -170,7 +171,7 @@ def _populate(manager: ChatSessionManager, session_id: str) -> ChatSession:
     session = manager.create("agent", session_id=session_id)
     address = session.address
     manager.set_metadata(address, {"title": session_id, "custom": {"kept": True}})
-    manager.record_run_kind(address, RunKind.CRON)
+    asyncio.run(admit_run(manager, address, RunKind.CRON))
     manager.record_seen_skills(address, SeenSkillsUpdate(baseline=("alpha",)))
     manager.ensure_prompt_pin(
         address, PINNED_SKILL_CATALOG_SLOT, {"catalog": "shared"}, lambda _pin: True

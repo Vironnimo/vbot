@@ -18,6 +18,7 @@ from core.sessions import (
     current_skill_activation_contents,
     editable_session_message_ids,
 )
+from tests.core.sessions.history_fixtures import admit_run
 from tests.core.sessions.sessions_test_support import (
     _address,
 )
@@ -26,17 +27,15 @@ from tests.core.sessions.sessions_test_support import (
 )
 
 
-def test_concurrent_metadata_mutations_do_not_overwrite_each_other(manager) -> None:
+@pytest.mark.asyncio
+async def test_concurrent_run_admissions_keep_every_run_kind(manager) -> None:
     address = _address("coder", "session-one")
     manager.create("coder", session_id=address.session_id)
 
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        futures = [
-            pool.submit(manager.record_run_kind, address, RunKind.USER),
-            pool.submit(manager.record_run_kind, address, RunKind.REFLECTION),
-        ]
-        for future in futures:
-            future.result()
+    await asyncio.gather(
+        admit_run(manager, address, RunKind.USER),
+        admit_run(manager, address, RunKind.REFLECTION),
+    )
 
     assert set(manager.get_metadata(address)[SESSION_RUN_KINDS_META_KEY]) == {
         RunKind.USER.value,

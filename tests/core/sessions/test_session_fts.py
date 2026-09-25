@@ -21,7 +21,7 @@ from core.sessions.schema import (
     FTS_STORAGE_VERSION_KEY,
     FTS_TARGET_HIGH_WATER_KEY,
 )
-from tests.core.sessions.history_fixtures import append_tool_fixture, seed_history
+from tests.core.sessions.history_fixtures import admit_run, append_tool_fixture, seed_history
 
 
 def test_empty_store_bootstrap_does_not_enter_resumable_fts_backfill(
@@ -641,7 +641,7 @@ def test_search_admits_only_recall_visible_sessions(
         session = sessions.create("agent", session_id=session_id)
         session.append(ChatMessage.user(f"visible needle {session_id}"))
         for run_kind in run_kinds:
-            sessions.record_run_kind(session.address, run_kind)
+            asyncio.run(admit_run(sessions, session.address, run_kind))
     try:
 
         def searched(**options: Any) -> set[str]:

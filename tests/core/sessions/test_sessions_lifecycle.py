@@ -13,6 +13,7 @@ from core.chat import ChatMessage, ChatSessionError
 from core.chat.usage import aggregate_session_usage
 from core.runs import RunKind
 from core.sessions import FORK_SOURCE_META_KEY
+from tests.core.sessions.history_fixtures import admit_run
 from tests.core.sessions.sessions_test_support import (
     _address,
 )
@@ -168,7 +169,7 @@ def test_fork_titles_and_classifies_the_copy_in_its_one_write(manager, monkeypat
     source = manager.create("coder", session_id="session-one")
     source.append(ChatMessage.user("hello"))
     manager.set_title(source.address, "Source title")
-    manager.record_run_kind(source.address, RunKind.USER)
+    asyncio.run(admit_run(manager, source.address))
     notified: list[object] = []
     manager.add_title_changed_callback(notified.append)
     writes: list[object] = []

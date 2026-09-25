@@ -12,9 +12,37 @@ from datetime import datetime
 
 from core.chat._step_outcomes import tool_result_facts
 from core.chat.messages import ChatMessage, ToolCall
-from core.sessions import ChatSession
+from core.runs import Run, RunKind
+from core.sessions import ChatSession, ChatSessionManager, SessionAddress
 from core.sessions._types import SessionRunCompletion
 from core.utils.ids import new_id
+
+
+async def admit_run(
+    manager: ChatSessionManager,
+    address: SessionAddress,
+    run_kind: RunKind = RunKind.USER,
+    *,
+    run_id: str | None = None,
+) -> Run:
+    """Admit a Run of *run_kind* the way the Run manager does; it stays running.
+
+    Admission is what records a Session's Run kind.
+    """
+    run = Run(
+        run_id=run_id or new_id("run"),
+        agent_id=address.agent_id,
+        session_id=address.session_id,
+        project_id=address.project_id,
+        run_kind=run_kind,
+    )
+    await manager.start_run(run)
+    return run
+
+
+def history_revision(manager: ChatSessionManager, address: SessionAddress) -> int:
+    """Return a live Session's history revision from the batched freshness lookup."""
+    return manager.list_history_versions([address])[address][1]
 
 
 def complete_run(session: ChatSession, summary: ChatMessage) -> ChatMessage:

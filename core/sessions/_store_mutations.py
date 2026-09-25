@@ -151,12 +151,6 @@ def record_run_kind_by_key(connection: sqlite3.Connection, session_key: int, run
         _store_values._touch_state(connection, session_key)
 
 
-def record_run_kind(connection: sqlite3.Connection, address: SessionAddress, run_kind: str) -> None:
-    """Classify a live Session by *run_kind* before its first Run of that kind."""
-    state = _store_values._require_live(connection, address)
-    record_run_kind_by_key(connection, int(state["session_key"]), run_kind)
-
-
 # -- History appends -----------------------------------------------------------
 
 
