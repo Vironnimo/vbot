@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Literal, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeVar
 
 from core.chat.content_blocks import ContentBlock, FileBlock, MediaBlock
 from core.chat.messages import GroupRole
@@ -18,6 +19,8 @@ if TYPE_CHECKING:
 # Denied inbound chats are kept for operator visibility only; the bound keeps the
 # in-memory log small under spam while still covering every realistic setup flow.
 DENIED_CHAT_LOG_LIMIT = 20
+
+_Result = TypeVar("_Result")
 
 BOUND_RUN_CALLBACK_VERSION = "v1"
 BOUND_RUN_CALLBACK_PREFIX = f"run:{BOUND_RUN_CALLBACK_VERSION}:"
@@ -48,7 +51,10 @@ class RunButtonClaim:
 
 
 class RunButtonBindingRegistry(Protocol):
-    """Persistence seam used by the engine without importing Channel storage."""
+    """Persistence seam used by the engine without importing Channel storage.
+
+    The methods block; async callers run them through :meth:`run_async`.
+    """
 
     def claim_run_button_binding(
         self,
@@ -60,6 +66,12 @@ class RunButtonBindingRegistry(Protocol):
     ) -> RunButtonClaim: ...
 
     def restore_run_button_binding(self, channel_id: str, binding_id: str) -> None: ...
+
+    async def run_async(
+        self, function: Callable[..., _Result], *arguments: Any, **keyword_arguments: Any
+    ) -> _Result:
+        """Run blocking registry work on the worker pool of the registry's database."""
+        ...
 
 
 # Telegram retains undelivered updates for 24 hours and may randomize update ids
@@ -120,8 +132,9 @@ class ConversationPointerStore(Protocol):
     """Durable routing pointers from a conversation anchor to its active Session.
 
     A conversation is identified by its derived anchor Session id. Without a
-    pointer the anchor itself is the active Session. The methods block and are
-    called from worker threads.
+    pointer the anchor itself is the active Session. The methods block: async
+    callers run them through :meth:`run_async`, synchronous callers are worker
+    threads.
     """
 
     def active_session_id(self, channel_id: str, conversation_id: str) -> str | None: ...
@@ -142,6 +155,12 @@ class ConversationPointerStore(Protocol):
         *,
         expected_session_id: str,
     ) -> None: ...
+
+    async def run_async(
+        self, function: Callable[..., _Result], *arguments: Any, **keyword_arguments: Any
+    ) -> _Result:
+        """Run blocking pointer work on the worker pool of the store's database."""
+        ...
 
 
 class ReceivedMessageStore(Protocol):

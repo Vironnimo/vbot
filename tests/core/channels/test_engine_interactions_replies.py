@@ -7,6 +7,7 @@ import threading
 
 import core.channels._conversation_content as content_module
 from core.channels.adapter import RunButtonBinding, bound_run_callback_data
+from core.database import DatabaseUnavailableError
 from core.sessions import SessionAddress
 from core.utils.timestamps import utc_now_timestamp
 
@@ -103,6 +104,47 @@ async def test_aborted_bound_tap_restores_unadmitted_state(tmp_path, monkeypatch
         trigger.assert_not_awaited()
     finally:
         release.set()
+        await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_bound_tap_on_a_closed_session_database_restores_the_binding(tmp_path):
+    storage = channel_state(tmp_path)
+    engine, sessions, trigger, _transport = make_engine(
+        tmp_path, run_button_binding_registry=storage
+    )
+    sessions.create("assistant", session_id="origin")
+    binding = RunButtonBinding(
+        id="closed-binding",
+        platform_target="12345",
+        thread_id=None,
+        origin_session_id="origin",
+        original_button_data=("run:done",),
+        created_at=utc_now_timestamp(),
+    )
+    storage.save_run_button_binding("tg-assistant", binding)
+    data = bound_run_callback_data(binding.id, 0)
+    event = InteractionEvent(
+        platform="telegram",
+        channel_id="tg-assistant",
+        chat_id="12345",
+        user_id="50",
+        message_id="777",
+        data=data,
+        buttons=((InteractionButton(label="Done", data=data),),),
+    )
+    sessions.close()
+    try:
+        with pytest.raises(DatabaseUnavailableError):
+            await engine.trigger_interaction_reply(make_conversation(), event)
+
+        # The claim was compensated on the Channel state's own pool.
+        claim = storage.claim_run_button_binding(
+            "tg-assistant", binding.id, platform_target="12345", thread_id=None
+        )
+        assert claim.status == "claimed"
+        trigger.assert_not_awaited()
+    finally:
         await engine.stop()
 
 

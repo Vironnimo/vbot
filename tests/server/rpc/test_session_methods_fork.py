@@ -85,9 +85,11 @@ async def test_fork_strips_channel_and_subagent_bindings_but_keeps_title(tmp_pat
 async def test_fork_of_a_project_session_stays_in_its_project(tmp_path: Path) -> None:
     state = make_state(tmp_path, StubAdapter())
     resolved: list[tuple[str | None, str]] = []
-    state.runtime.agent_resolver = SimpleNamespace(
-        resolve_agent=lambda project_id, agent_id: resolved.append((project_id, agent_id))
-    )
+
+    async def resolve_agent_async(project_id: str | None, agent_id: str) -> None:
+        resolved.append((project_id, agent_id))
+
+    state.runtime.agent_resolver = SimpleNamespace(resolve_agent_async=resolve_agent_async)
     sessions = state.runtime.chat_sessions
     source = sessions.create("coder", session_id="s1", project_id="proj")
     source.append(ChatMessage.user("hello"))

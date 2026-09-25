@@ -1,8 +1,13 @@
-"""Session methods."""
+"""Session methods.
+
+Blocking work that reads or writes Sessions, including Agent store reads that
+verify an Identity Agent's current-Session pointer, runs on the Session
+database's worker pool (``ChatSessionManager.run_async``). Standalone Agent
+resolution uses the resolver's own async API.
+"""
 
 from __future__ import annotations
 
-import inspect
 from typing import Any
 
 from core.channels import ChannelConfigError
@@ -27,7 +32,6 @@ from server.events import (
     RESOURCE_KIND_AGENTS,
     RESOURCE_KIND_SESSIONS,
 )
-from server.rpc._session_workers import _SESSION_RPC_WORKERS
 from server.rpc.agent_refs import _agent_reference_lock
 from server.rpc.channel_methods import _channel_config_by_id
 from server.rpc.dispatcher import RpcMethodHandler
@@ -68,36 +72,14 @@ def _session_address(
     return SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
 
 
-async def _session_io(
-    manager: Any,
-    async_name: str,
-    sync_name: str,
-    *arguments: Any,
-    **keyword_arguments: Any,
-) -> Any:
-    """Use the Sessions async API while retaining narrow legacy test doubles."""
-    async_method = getattr(manager, async_name, None)
-    if inspect.iscoroutinefunction(async_method):
-        return await async_method(*arguments, **keyword_arguments)
-    return await _SESSION_RPC_WORKERS.run(
-        getattr(manager, sync_name),
-        *arguments,
-        **keyword_arguments,
-    )
-
-
 async def _create_session(state: Any, params: JsonObject) -> JsonObject:
     agent_id, project_id = _required_agent_address(params, "agent_id")
     session_id = _optional_string(params, "session_id")
     make_current = _optional_bool(params, "make_current", default=False)
+    chat_sessions = state.runtime.chat_sessions
 
     def create_session() -> Any:
-        state.runtime.agent_resolver.resolve_agent(project_id, agent_id)
-        created = state.runtime.chat_sessions.create(
-            agent_id,
-            session_id=session_id,
-            project_id=project_id,
-        )
+        created = chat_sessions.create(agent_id, session_id=session_id, project_id=project_id)
         if make_current and project_id is None:
             state.runtime.agents.update(agent_id, current_session_id=created.id)
         return created
@@ -106,7 +88,8 @@ async def _create_session(state: Any, params: JsonObject) -> JsonObject:
         # One resolver seam validates both sources: identity agents through the
         # store, project agents through the team scan. The session is then created
         # under the matching anchor (identity dir vs. project anchor).
-        session = await _SESSION_RPC_WORKERS.run(create_session)
+        await state.runtime.agent_resolver.resolve_agent_async(project_id, agent_id)
+        session = await chat_sessions.run_async(create_session)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     # Session creation is the single emit point for the sessions channel: it also
@@ -138,11 +121,7 @@ async def _delete_session(state: Any, params: JsonObject) -> JsonObject:
     try:
         # One resolver seam validates both agent sources, exactly like
         # session.create, so an unknown agent fails before any file work.
-        await _SESSION_RPC_WORKERS.run(
-            state.runtime.agent_resolver.resolve_agent,
-            project_id,
-            agent_id,
-        )
+        await state.runtime.agent_resolver.resolve_agent_async(project_id, agent_id)
         chat_sessions = state.runtime.chat_sessions
         try:
             async with (
@@ -155,23 +134,18 @@ async def _delete_session(state: Any, params: JsonObject) -> JsonObject:
                 # Existence check under the guard: concurrent deletes cannot both
                 # cross the storage boundary, and a missing Session still maps to
                 # the ordinary domain error.
-                await _session_io(
-                    chat_sessions,
-                    "get_async",
-                    "get",
-                    _session_address(agent_id, session_id, project_id),
-                )
+                await chat_sessions.get_async(_session_address(agent_id, session_id, project_id))
                 # An identity agent tracks a current-session pointer; note when we
                 # are deleting it so the re-aim is broadcast below.
                 if project_id is None:
-                    deleting_current = await _SESSION_RPC_WORKERS.run(
+                    deleting_current = await chat_sessions.run_async(
                         lambda: state.runtime.agents.get(agent_id).current_session_id == session_id
                     )
                 await state.runtime.terminal_manager.close_scope(
                     TerminalOwner(project_id, agent_id, session_id)
                 )
                 await chat_sessions.archive(_session_address(agent_id, session_id, project_id))
-                next_session_id = await _SESSION_RPC_WORKERS.run(
+                next_session_id = await chat_sessions.run_async(
                     _resolve_post_delete_landing,
                     state,
                     agent_id,
@@ -388,7 +362,9 @@ async def _list_sessions(state: Any, params: JsonObject) -> JsonObject:
         return sessions, page.next_cursor, page.total_count
 
     try:
-        sessions, next_cursor, total_count = await _SESSION_RPC_WORKERS.run(load_sessions)
+        sessions, next_cursor, total_count = await state.runtime.chat_sessions.run_async(
+            load_sessions
+        )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     return {
@@ -410,9 +386,9 @@ async def _get_session(state: Any, params: JsonObject) -> JsonObject:
     agent_id, project_id = _required_agent_address(params, "agent_id")
     session_id = _required_string(params, "session_id")
     try:
-        summary = await _SESSION_RPC_WORKERS.run(
-            state.runtime.chat_sessions.summary,
-            _session_address(agent_id, session_id, project_id),
+        chat_sessions = state.runtime.chat_sessions
+        summary = await chat_sessions.run_async(
+            chat_sessions.summary, _session_address(agent_id, session_id, project_id)
         )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
@@ -497,9 +473,8 @@ async def _list_session_activity(state: Any, params: JsonObject) -> JsonObject:
         return {"agents": []}
 
     try:
-        activity = await _SESSION_RPC_WORKERS.run(
-            state.runtime.chat_sessions.list_completion_activity, scopes
-        )
+        chat_sessions = state.runtime.chat_sessions
+        activity = await chat_sessions.run_async(chat_sessions.list_completion_activity, scopes)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     return {
@@ -521,17 +496,9 @@ async def _mark_session_read(state: Any, params: JsonObject) -> JsonObject:
     session_id = _required_string(params, "session_id")
     run_id = _required_string(params, "run_id")
     try:
-        await _SESSION_RPC_WORKERS.run(
-            state.runtime.agent_resolver.resolve_agent,
-            project_id,
-            agent_id,
-        )
-        activity = await _session_io(
-            state.runtime.chat_sessions,
-            "mark_terminal_run_read_async",
-            "mark_terminal_run_read",
-            _session_address(agent_id, session_id, project_id),
-            run_id,
+        await state.runtime.agent_resolver.resolve_agent_async(project_id, agent_id)
+        activity = await state.runtime.chat_sessions.mark_terminal_run_read_async(
+            _session_address(agent_id, session_id, project_id), run_id
         )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
@@ -564,15 +531,13 @@ async def _fork_session(state: Any, params: JsonObject) -> JsonObject:
 
     re_homed = (target_agent_id, target_project_id) != (source_agent_id, source_project_id)
 
-    def resolve_endpoints() -> None:
-        state.runtime.agent_resolver.resolve_agent(source_project_id, source_agent_id)
-        if re_homed:
-            state.runtime.agent_resolver.resolve_agent(target_project_id, target_agent_id)
-
+    resolver = state.runtime.agent_resolver
     try:
         # Resolve both endpoints through the one seam so an unknown source or
         # target agent fails before any file work (mirrors session.create/delete).
-        await _SESSION_RPC_WORKERS.run(resolve_endpoints)
+        await resolver.resolve_agent_async(source_project_id, source_agent_id)
+        if re_homed:
+            await resolver.resolve_agent_async(target_project_id, target_agent_id)
         fork = await state.runtime.chat_sessions.fork(
             _session_address(source_agent_id, session_id, source_project_id),
             target_agent_id=target_agent_id if target_explicit else None,
@@ -580,11 +545,8 @@ async def _fork_session(state: Any, params: JsonObject) -> JsonObject:
             # Project Session is its Project.
             target_project_id=target_project_id,
         )
-        fork_metadata = await _session_io(
-            state.runtime.chat_sessions,
-            "get_metadata_async",
-            "get_metadata",
-            _session_address(target_agent_id, fork.id, target_project_id),
+        fork_metadata = await state.runtime.chat_sessions.get_metadata_async(
+            _session_address(target_agent_id, fork.id, target_project_id)
         )
         fork_source = fork_metadata.get(FORK_SOURCE_META_KEY)
     except Exception as exc:
@@ -657,8 +619,9 @@ async def _link_session_to_channel(state: Any, params: JsonObject) -> JsonObject
                 }
             )
 
-        previous, _updated = await _SESSION_RPC_WORKERS.run(
-            state.runtime.chat_sessions.mutate_metadata_with_previous,
+        chat_sessions = state.runtime.chat_sessions
+        previous, _updated = await chat_sessions.run_async(
+            chat_sessions.mutate_metadata_with_previous,
             _session_address(agent_id, session_id),
             link_channel,
         )
@@ -694,12 +657,8 @@ async def _rename_session(state: Any, params: JsonObject) -> JsonObject:
     session_id = _required_string(params, "session_id")
     title = _session_title_param(params)
     try:
-        stored_title = await _session_io(
-            state.runtime.chat_sessions,
-            "set_title_async",
-            "set_title",
-            _session_address(agent_id, session_id, project_id),
-            title,
+        stored_title = await state.runtime.chat_sessions.set_title_async(
+            _session_address(agent_id, session_id, project_id), title
         )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
@@ -721,17 +680,8 @@ async def _set_session_compaction_policy(state: Any, params: JsonObject) -> Json
         from core.settings.normalizers import normalize_compaction_policy
 
         normalized = normalize_compaction_policy(policy) if policy is not None else None
-        agent = await _SESSION_RPC_WORKERS.run(
-            state.runtime.agent_resolver.resolve_agent,
-            project_id,
-            agent_id,
-        )
-        effective = await _SESSION_RPC_WORKERS.run(
-            effective_compaction_policy,
-            normalized,
-            getattr(agent, "compaction_policy", None),
-            state.runtime.storage.load_compaction_settings,
-        )
+        agent = await state.runtime.agent_resolver.resolve_agent_async(project_id, agent_id)
+        chat_sessions = state.runtime.chat_sessions
 
         # The metadata mutation itself rejects a missing Session.
         def set_policy(metadata: JsonObject) -> None:
@@ -740,12 +690,20 @@ async def _set_session_compaction_policy(state: Any, params: JsonObject) -> Json
             else:
                 metadata[COMPACTION_POLICY_META_KEY] = normalized
 
-        previous, _updated = await _SESSION_RPC_WORKERS.run(
-            state.runtime.chat_sessions.mutate_metadata_with_previous,
-            _session_address(agent_id, session_id, project_id),
-            set_policy,
-        )
-        previous_override = previous.get(COMPACTION_POLICY_META_KEY)
+        def apply_policy() -> tuple[Any, JsonObject]:
+            # Resolve the effective Policy first: unreadable Compaction settings
+            # reject the request before the override is stored.
+            effective = effective_compaction_policy(
+                normalized,
+                getattr(agent, "compaction_policy", None),
+                state.runtime.storage.load_compaction_settings,
+            )
+            previous, _updated = chat_sessions.mutate_metadata_with_previous(
+                _session_address(agent_id, session_id, project_id), set_policy
+            )
+            return previous.get(COMPACTION_POLICY_META_KEY), effective
+
+        previous_override, effective = await chat_sessions.run_async(apply_policy)
     except StorageError as exc:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
     except Exception as exc:

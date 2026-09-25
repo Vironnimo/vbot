@@ -54,36 +54,42 @@ def test_derive_session_id(
 
 
 @pytest.mark.asyncio
-async def test_async_route_preparation_keeps_session_io_off_event_loop(
+async def test_async_route_preparation_runs_each_database_on_its_own_pool(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     engine, _sessions, _trigger, _transport = make_engine(tmp_path)
+    routing = engine._routing
     started = threading.Event()
     release = threading.Event()
-    worker_threads: list[int] = []
+    threads: dict[str, str] = {}
+    route_facts = routing._route_facts
+    update_session_metadata = routing._update_session_metadata
 
-    def blocking_prepare(conversation: Any):
-        worker_threads.append(threading.get_ident())
+    def blocking_route_facts(conversation: Any) -> RouteFacts:
+        threads["pointer"] = threading.current_thread().name
         started.set()
         assert release.wait(timeout=2)
-        return RouteFacts(
-            agent_id="assistant", session_id=SESSION_ID
-        ), engine._routing._reply_plan_for(conversation)
+        return route_facts(conversation)
 
-    monkeypatch.setattr(engine._routing, "prepare_inbound_route", blocking_prepare)
-    loop_thread = threading.get_ident()
-    route_task = asyncio.create_task(
-        engine._routing._prepare_inbound_route_async(make_conversation())
-    )
+    def recorded_update(*args: Any, **kwargs: Any) -> None:
+        threads["session"] = threading.current_thread().name
+        update_session_metadata(*args, **kwargs)
+
+    monkeypatch.setattr(routing, "_route_facts", blocking_route_facts)
+    monkeypatch.setattr(routing, "_update_session_metadata", recorded_update)
+    route_task = asyncio.create_task(routing._prepare_inbound_route_async(make_conversation()))
     assert await asyncio.to_thread(started.wait, 2)
     await asyncio.sleep(0)
 
-    assert worker_threads and worker_threads != [loop_thread]
     assert route_task.done() is False
     release.set()
     route, _reply_plan = await route_task
     assert route.session_id == SESSION_ID
+    # Pointer work on the Channel state's pool, Session work on the Session pool.
+    assert threads["pointer"].startswith("vbot-db-channels")
+    assert threads["session"].startswith("vbot-db-sessions")
+    await engine.stop()
 
 
 @pytest.mark.asyncio

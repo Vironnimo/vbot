@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +11,7 @@ import pytest
 from core.chat import ChatMessage
 from core.sessions import FORK_SOURCE_META_KEY, SessionAddress
 from core.utils.timestamps import canonical_timestamp
+from server.rpc.errors import RPC_ERROR_DOMAIN
 from server.rpc.methods import dispatch_rpc
 from tests.core.sessions.history_fixtures import settle_run
 from tests.server.rpc_test_support import StubAdapter, make_state
@@ -170,3 +172,36 @@ async def test_session_list_rejects_the_retired_active_sort_cursor(tmp_path: Pat
 
     assert response["ok"] is False
     assert response["error"]["code"] == "invalid_request"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method", "params"),
+    [
+        ("agent.list", {}),
+        ("agent.get", {"id": "coder"}),
+        ("agent.reorder", {"agent_ids": ["coder"], "expected_revision": 0}),
+        ("session.list", {"agent_id": "coder"}),
+        ("session.get", {"agent_id": "coder", "session_id": "s1"}),
+        ("session.activity_list", {"agent_ids": ["coder"]}),
+        ("session.rename", {"agent_id": "coder", "session_id": "s1", "title": "Renamed"}),
+        ("chat.history", {"agent_id": "coder", "session_id": "s1"}),
+        ("chat.run_result", {"agent_id": "coder", "session_id": "s1", "run_id": "run-one"}),
+    ],
+)
+async def test_session_work_on_a_closed_session_database_is_a_domain_error(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    method: str,
+    params: dict[str, Any],
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.chat_sessions.create("coder", session_id="s1")
+    state.runtime.chat_sessions.close()
+
+    with caplog.at_level(logging.ERROR):
+        response = await dispatch_rpc(state, {"method": method, "params": params})
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == RPC_ERROR_DOMAIN
+    assert "Unexpected RPC request failure" not in caplog.text

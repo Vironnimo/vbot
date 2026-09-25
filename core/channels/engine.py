@@ -72,7 +72,7 @@ from ._conversation_content import (
     _restore_bound_interaction_event,
     _sender_tag,
 )
-from ._conversation_routing import _CHANNEL_SESSION_WORKERS, ChannelSessionRouting, _session_address
+from ._conversation_routing import ChannelSessionRouting, _session_address
 from ._conversation_work import (
     ConversationTransport,
     _QueuedInboundMedia,
@@ -131,6 +131,7 @@ class ChannelConversationEngine:
         self._command_dispatcher = command_dispatcher
         self._run_button_binding_registry = run_button_binding_registry
         self._access = ChannelAccessPolicy(config, access_registry)
+        self._conversation_pointers = conversation_pointers
         self._routing = ChannelSessionRouting(config, chat_sessions, conversation_pointers)
         self._chat_queues: dict[str, asyncio.Queue[_QueuedWork]] = {}
         self._chat_workers: dict[str, asyncio.Task[None]] = {}
@@ -354,56 +355,62 @@ class ChannelConversationEngine:
             claim: RunButtonClaim | None = None
             pointed = False
             previous_session_id: str | None = None
-            restored_event: InteractionEvent | None = None
             terminal = False
             admitted = False
 
-            def prepare() -> InteractionTriggerStatus | None:
-                nonlocal claim, pointed, previous_session_id, restored_event, terminal
+            def claim_binding() -> None:
+                nonlocal claim
                 claim = registry.claim_run_button_binding(
                     self._config.id,
                     binding_id,
                     platform_target=conversation.chat_id,
                     thread_id=conversation.thread_id,
                 )
+
+            def point_at_origin(origin_session_id: str) -> None:
+                nonlocal pointed, previous_session_id
+                previous_session_id = self._routing._point_conversation_at_session(
+                    conversation, origin_session_id
+                )
+                pointed = True
+
+            async def rollback() -> None:
+                assert claim is not None and claim.binding is not None
+                binding = claim.binding
+                try:
+                    if pointed:
+                        await self._conversation_pointers.run_async(
+                            self._routing._restore_conversation_pointer,
+                            conversation,
+                            previous_session_id,
+                            expected_session_id=binding.origin_session_id,
+                        )
+                finally:
+                    await registry.run_async(
+                        registry.restore_run_button_binding, self._config.id, binding.id
+                    )
+
+            try:
+                # Each step runs on its own database's pool and keeps its
+                # compensation state inside the worker: cancellation waits for a
+                # started step to settle, but deliberately does not return its result.
+                await registry.run_async(claim_binding)
+                assert claim is not None
                 if claim.status == "consumed":
                     return "already_handled"
                 if claim.status != "claimed" or claim.binding is None:
                     return "unavailable"
-                binding = claim.binding
-                restored_event = _restore_bound_interaction_event(binding, event, button_index)
-                if restored_event is None or not self._chat_sessions.exists(
-                    _session_address(self._config.agent_id, binding.origin_session_id)
+                origin_session_id = claim.binding.origin_session_id
+                restored_event = _restore_bound_interaction_event(
+                    claim.binding, event, button_index
+                )
+                if restored_event is None or not await self._chat_sessions.run_async(
+                    self._chat_sessions.exists,
+                    _session_address(self._config.agent_id, origin_session_id),
                 ):
                     terminal = True
                     return "unavailable"
-                previous_session_id = self._routing._point_conversation_at_session(
-                    conversation, binding.origin_session_id
-                )
-                pointed = True
-                return None
-
-            def rollback() -> None:
-                assert claim is not None and claim.binding is not None
-                try:
-                    if pointed:
-                        self._routing._restore_conversation_pointer(
-                            conversation,
-                            previous_session_id,
-                            expected_session_id=claim.binding.origin_session_id,
-                        )
-                finally:
-                    registry.restore_run_button_binding(self._config.id, claim.binding.id)
-
-            try:
-                # Keep compensation state inside the worker: cancellation waits for
-                # it to settle, but deliberately does not return the worker's result.
-                status = await _CHANNEL_SESSION_WORKERS.run(prepare)
-                if status is not None:
-                    return status
-                assert (
-                    claim is not None and claim.binding is not None and restored_event is not None
-                )
+                await self._conversation_pointers.run_async(point_at_origin, origin_session_id)
                 admitted = self._enqueue_chat_work(
                     conversation.chat_id,
                     _QueuedInternalPrompt(
@@ -411,7 +418,7 @@ class ChannelConversationEngine:
                         prompt=_format_interaction_note(conversation, restored_event),
                         route=RouteFacts(
                             agent_id=self._config.agent_id,
-                            session_id=claim.binding.origin_session_id,
+                            session_id=origin_session_id,
                         ),
                     ),
                 )
@@ -424,7 +431,7 @@ class ChannelConversationEngine:
                     and claim is not None
                     and claim.status == "claimed"
                 ):
-                    cleanup = asyncio.create_task(_CHANNEL_SESSION_WORKERS.run(rollback))
+                    cleanup = asyncio.create_task(rollback())
                     cancelled = False
                     while not cleanup.done():
                         try:
@@ -544,14 +551,14 @@ class ChannelConversationEngine:
             else:
                 route = queued.route
                 reply_plan = self._routing._reply_plan_for(queued.conversation)
-                exists = await _CHANNEL_SESSION_WORKERS.run(
+                exists = await self._chat_sessions.run_async(
                     self._chat_sessions.exists,
                     _session_address(route.agent_id, route.session_id),
                 )
                 if not exists:
                     await self._send_reply(reply_plan, _FAILED_REPLY)
                     return
-                await _CHANNEL_SESSION_WORKERS.run(
+                await self._chat_sessions.run_async(
                     self._routing._update_session_metadata,
                     route,
                     queued.conversation,
@@ -576,7 +583,7 @@ class ChannelConversationEngine:
         async with self._chat_sessions.write_lock(
             _session_address(route.agent_id, route.session_id)
         ):
-            await _CHANNEL_SESSION_WORKERS.run(
+            await self._chat_sessions.run_async(
                 self._routing._append_session_note,
                 route.agent_id,
                 route.session_id,
@@ -936,8 +943,7 @@ class ChannelConversationEngine:
                     "Channel continuation navigation must stay on its configured Agent"
                 )
             route = RouteFacts(agent_id=navigation.agent_id, session_id=navigation.session_id)
-            await _CHANNEL_SESSION_WORKERS.run(
-                self._routing._apply_continuation_navigation,
+            await self._routing._apply_continuation_navigation_async(
                 route,
                 conversation,
                 reply_plan,

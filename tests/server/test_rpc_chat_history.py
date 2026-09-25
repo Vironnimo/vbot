@@ -406,8 +406,6 @@ async def test_chat_history_includes_tool_timing_and_run_summary(tmp_path: Path)
 
 @pytest.mark.asyncio
 async def test_history_completion_cannot_pair_earlier_page_with_idle_run(tmp_path, monkeypatch):
-    from server.rpc import chat_methods
-
     finish_during = "_read_chat_history"
 
     state = make_state(tmp_path, StubAdapter())
@@ -421,7 +419,8 @@ async def test_history_completion_cannot_pair_earlier_page_with_idle_run(tmp_pat
         return "done"
 
     run = await state.chat_runs.start(session.address, execute)
-    original = chat_methods._CHAT_RPC_WORKERS.run
+    chat_sessions = state.runtime.chat_sessions
+    original = chat_sessions.run_async
     injected = False
 
     async def intercepted(function, *args, **kwargs):
@@ -433,7 +432,7 @@ async def test_history_completion_cannot_pair_earlier_page_with_idle_run(tmp_pat
             await run.wait()
         return result
 
-    monkeypatch.setattr(chat_methods._CHAT_RPC_WORKERS, "run", intercepted)
+    monkeypatch.setattr(chat_sessions, "run_async", intercepted)
     try:
         response = await dispatch_rpc(
             state, {"method": "chat.history", "params": {"agent_id": "coder"}}
@@ -601,24 +600,34 @@ async def test_unchanged_after_read_returns_only_the_cursor_in_one_worker_hop(
     # Read but absent: an explicit null clears the caller's value.
     assert first["context_usage"] is None
 
-    hops: list[str] = []
-    original = chat_methods._CHAT_RPC_WORKERS.run
+    session_hops: list[str] = []
+    projection_hops: list[str] = []
+    chat_sessions = state.runtime.chat_sessions
+    session_pool = chat_sessions.run_async
+    projection_pool = chat_methods._CHAT_RPC_WORKERS.run
 
-    async def counted(function: Any, *args: Any, **kwargs: Any) -> Any:
-        hops.append(function.__name__)
-        return await original(function, *args, **kwargs)
+    async def session_hop(function: Any, *args: Any, **kwargs: Any) -> Any:
+        session_hops.append(function.__name__)
+        return await session_pool(function, *args, **kwargs)
+
+    async def projection_hop(function: Any, *args: Any, **kwargs: Any) -> Any:
+        projection_hops.append(function.__name__)
+        return await projection_pool(function, *args, **kwargs)
 
     def unexpected(*_args: Any, **_kwargs: Any) -> Any:
         raise AssertionError("an unchanged read must not recompute Session facts")
 
-    monkeypatch.setattr(chat_methods._CHAT_RPC_WORKERS, "run", counted)
+    monkeypatch.setattr(chat_sessions, "run_async", session_hop)
+    monkeypatch.setattr(chat_methods._CHAT_RPC_WORKERS, "run", projection_hop)
     monkeypatch.setattr(chat_methods, "_session_compaction_policy", unexpected)
     monkeypatch.setattr(chat_methods, "_read_reflection_runs", unexpected)
     monkeypatch.setattr(chat_methods, "background_bash_statuses", unexpected)
 
     unchanged = await history(after=first["next_after"])
 
-    assert hops == ["_read_chat_history"]
+    # One Session-pool read, no projection of an unchanged page.
+    assert session_hops == ["_read_chat_history"]
+    assert projection_hops == []
     assert unchanged == {
         "agent_id": "coder",
         "session_id": session.id,

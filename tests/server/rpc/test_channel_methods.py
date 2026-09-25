@@ -146,6 +146,15 @@ def _channel_service_mock() -> Mock:
     return service
 
 
+def _session_manager_mock() -> Mock:
+    """A Session manager double whose database pool runs each unit inline."""
+    chat_sessions = Mock()
+    chat_sessions.run_async = AsyncMock(
+        side_effect=lambda function, *args, **kwargs: function(*args, **kwargs)
+    )
+    return chat_sessions
+
+
 def _state(
     *,
     channel_service: object | None = None,
@@ -734,7 +743,7 @@ async def test_session_list_happy_path_returns_bounded_session_summaries() -> No
             "platform_conv_id": "12345",
         }
     ]
-    chat_sessions = Mock()
+    chat_sessions = _session_manager_mock()
     chat_sessions.list_summaries_page.return_value = SimpleNamespace(
         sessions=tuple(
             {**session, "agent_id": "assistant", "project_id": None} for session in sessions
@@ -782,7 +791,7 @@ async def test_session_link_channel_sets_metadata_without_writing_reminder() -> 
     channel_service = _channel_service_mock()
     channel_service.list_channels.return_value = [config]
 
-    chat_sessions = Mock()
+    chat_sessions = _session_manager_mock()
     metadata = {"persisted": "value"}
 
     def mutate_metadata(
@@ -833,7 +842,7 @@ async def test_session_link_channel_rejects_channel_from_other_agent() -> None:
     config = _channel_config()
     channel_service = _channel_service_mock()
     channel_service.list_channels.return_value = [config]
-    chat_sessions = Mock()
+    chat_sessions = _session_manager_mock()
     state = _state(channel_service=channel_service, chat_sessions=chat_sessions)
 
     response = await dispatch_rpc(
