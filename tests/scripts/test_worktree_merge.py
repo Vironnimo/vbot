@@ -7,6 +7,8 @@ import subprocess
 import threading
 import time
 
+import pytest
+
 from scripts import _worktree_lock as worktree_lock
 from tests.scripts.worktree_helpers import (
     _commit_file,
@@ -15,6 +17,7 @@ from tests.scripts.worktree_helpers import (
     _list_porcelain,
     _load_worktree_module,
     _patch_repo_globals,
+    _record_owned_data,
     real_repo,
 )
 
@@ -57,7 +60,8 @@ def test_parse_args_merge_and_repair_defaults():
     assert keeper_args.command == "keeper-hold"
 
 
-def test_cmd_merge_rejects_unsafe_name(tmp_path, monkeypatch):
+@pytest.mark.parametrize("name", ["../escape", "dev", "DEV", "dev."])
+def test_cmd_merge_rejects_unsafe_name(tmp_path, monkeypatch, name):
     module = _load_worktree_module()
     monkeypatch.setattr(module, "WORKTREES_DIR", tmp_path / ".worktrees")
 
@@ -69,7 +73,7 @@ def test_cmd_merge_rejects_unsafe_name(tmp_path, monkeypatch):
 
     monkeypatch.setattr(module, "_run_command", fake_run_command)
 
-    assert module.cmd_merge(argparse.Namespace(name="../escape", message=None, wait_timeout=1)) == 1
+    assert module.cmd_merge(argparse.Namespace(name=name, message=None, wait_timeout=1)) == 1
     assert commands == []
 
 
@@ -112,12 +116,18 @@ def test_cmd_merge_refuses_dirty_primary_checkout(real_repo, monkeypatch):
     assert (real_repo / ".worktrees" / "task-a").exists()
 
 
-def test_cmd_merge_merges_removes_worktree_and_branch(real_repo, monkeypatch):
+@pytest.mark.parametrize("owned", [False, True])
+def test_cmd_merge_merges_removes_worktree_and_branch(real_repo, monkeypatch, capsys, owned):
     module = _load_worktree_module()
     _patch_repo_globals(monkeypatch, module, real_repo)
     _commit_file(real_repo, "shared.txt", "base\n", "base file")
     worktree_a = _create_task_worktree(module, real_repo, "task-a")
     _commit_file(worktree_a, "feature-a.txt", "a\n", "add feature a")
+    data_dir = real_repo.parent / "home" / ".vbot-task-a"
+    data_dir.mkdir(parents=True)
+    (data_dir / "sentinel.txt").write_text("keep if unowned", encoding="utf-8")
+    if owned:
+        _record_owned_data(module, worktree_a, data_dir)
 
     result = module.cmd_merge(argparse.Namespace(name="task-a", message=None, wait_timeout=60))
 
@@ -132,6 +142,11 @@ def test_cmd_merge_merges_removes_worktree_and_branch(real_repo, monkeypatch):
         != 0
     )
     assert "merge: task-a" in _git_output(real_repo, "log", "--format=%s", "-1")
+    if owned:
+        assert not data_dir.exists()
+    else:
+        assert (data_dir / "sentinel.txt").read_text(encoding="utf-8") == "keep if unowned"
+        assert "data-status: preserved (ownership unverified)" in capsys.readouterr().out
 
 
 def test_cmd_merge_reports_conflict_and_keeps_main_intact(real_repo, monkeypatch):
