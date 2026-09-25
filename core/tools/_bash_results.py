@@ -265,7 +265,10 @@ def _handoff_note(
     )
     if requested_by_user:
         return note
-    return f"{note} Do not start another copy of the command or poll just to wait."
+    return (
+        f"{note} To wait here until it exits or prints an expected line, call process with "
+        'action "wait" and this process_id. Do not start another copy of the command.'
+    )
 
 
 def _shape_output_fields(

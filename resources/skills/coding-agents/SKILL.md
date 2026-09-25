@@ -25,7 +25,7 @@ CLI-specific syntax and saved-conversation resume:
 
 Tool results and activity notifications provide rendered terminal text. Use `status` for additional screen or history context. An attached terminal can notify across Runs; starting without `text` does not notify for the initial startup output.
 
-`wait` provides a short pause for activity. Pass a returned `attention_revision` as `after_revision` to wait beyond it. A timeout leaves the process running. Quiet output and the `ready` state describe terminal activity, not whether the coding task succeeded; assess the CLI's output and task results.
+`wait` pauses until new output settles or `timeout_ms` passes; `input` with `timeout_ms` sends and then waits the same way, returning the screen. A timeout leaves the process running. Quiet output and the `ready` state describe terminal activity, not whether the coding task succeeded; assess the CLI's output and task results.
 
 Use `input.text` with `key: "enter"` to submit instructions, named keys for menus, and `data` for control sequences. For input tied to a displayed prompt, pass its `screen_revision` as `expected_screen_revision`. A `stale_screen` error means the input was not sent: read the current screen and reconsider the response.
 

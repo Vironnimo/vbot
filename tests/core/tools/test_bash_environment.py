@@ -14,6 +14,7 @@ import pytest
 
 import core.tools._bash_environment as bash_environment
 import core.tools.bash as bash_module
+from core.tools._powershell import SETUP_STATEMENT
 from core.tools.bash import (
     bash_handler,
 )
@@ -39,9 +40,12 @@ def test_shell_detection_uses_native_shell(monkeypatch: pytest.MonkeyPatch) -> N
         "pwsh",
         "-NonInteractive",
         "-Command",
-        "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)\nWrite-Output hello\n"
+        f"{SETUP_STATEMENT}\nWrite-Output hello\n"
         "if ($?) { exit 0 }; if ($LASTEXITCODE) { exit $LASTEXITCODE }; exit 1",
     ]
+    assert SETUP_STATEMENT.startswith(
+        "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); "
+    )
 
     monkeypatch.setattr(bash_module.sys, "platform", "linux")
 
