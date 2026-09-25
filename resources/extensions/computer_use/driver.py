@@ -24,8 +24,8 @@ from mcp.types import jsonrpc_message_adapter
 MINIMUM_VERSION = (0, 23, 2)
 TIMEOUT = 45
 SESSION_EXPIRED = (
-    "The computer connection expired. Capture the target again before further input. "
-    "Do not repeat input that may already have taken effect."
+    "The desktop connection was renewed, so earlier screenshots no longer apply. No input "
+    "was sent. Capture the target again before further input."
 )
 SAFE_ENVIRONMENT_KEYS = {
     "APPDATA",
@@ -251,7 +251,7 @@ def unpack(result: dict[str, Any]) -> dict[str, Any]:
             "this session has ended; call start_session" in _error_text(result).lower()
         ):
             raise ComputerUseError(SESSION_EXPIRED, "computer_session_expired")
-        raise ComputerUseError(_error_text(result))
+        raise _driver_error(result)
     payload = result.get("structuredContent")
     if not isinstance(payload, dict):
         payload = None
@@ -266,7 +266,7 @@ def unpack(result: dict[str, Any]) -> dict[str, Any]:
                     break
         if payload is None:
             if "content" in result:
-                raise ComputerUseError(_error_text(result))
+                raise _driver_error(result)
             payload = result
     for key in ("result", "data"):
         if isinstance(payload.get(key), dict):
@@ -276,13 +276,17 @@ def unpack(result: dict[str, Any]) -> dict[str, Any]:
         or payload.get("effect") == "refused"
         or payload.get("isError")
     ):
-        raise ComputerUseError(_error_text(payload))
+        raise _driver_error(payload)
     output = dict(payload)
     for block in result.get("content", []):
         if block.get("type") == "image" and block.get("mimeType") == "image/png":
             output.setdefault("screenshot_png_b64", block.get("data"))
             break
     return output
+
+
+def _driver_error(result: dict[str, Any]) -> ComputerUseError:
+    return ComputerUseError(f"The desktop driver reported: {_error_text(result)}")
 
 
 def _error_text(result: dict[str, Any]) -> str:
@@ -514,8 +518,8 @@ class CuaDriver:
             resolved = self.desktop.resolve_window(arguments)
             if resolved["window_id"] != arguments["window_id"]:
                 raise ComputerUseError(
-                    "The window has an open dialog. Continue with the dialog target "
-                    "returned in the observation.",
+                    "The window has an open dialog that blocks input. No input was sent. "
+                    "Capture the window again; the capture shows the dialog.",
                     "target_blocked",
                 )
         if self.desktop is not None and background and "window_id" in arguments:
@@ -543,10 +547,16 @@ class CuaDriver:
             "modifiers" in arguments or ("duration_ms" in arguments and name != "drag")
         ):
             raise ComputerUseError(
-                "Invalid value for duration_ms or modifiers.", "invalid_arguments"
+                "Background input cannot hold keys: duration_ms (except for drag) and modifiers "
+                "need foreground=true. No input was sent.",
+                "invalid_arguments",
             )
         if "modifiers" in arguments and (self.desktop is None or "element_token" in arguments):
-            raise ComputerUseError("Invalid value for modifiers.", "invalid_arguments")
+            raise ComputerUseError(
+                "modifiers work only with foreground coordinate input on Windows, not with "
+                "element refs. No input was sent.",
+                "invalid_arguments",
+            )
         if self.desktop is not None and not background:
             if name == "list_monitors":
                 return {"monitors": self.desktop.monitors()}

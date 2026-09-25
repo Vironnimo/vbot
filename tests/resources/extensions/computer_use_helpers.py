@@ -147,7 +147,10 @@ def computer(tmp_path, monkeypatch):
         declaration.handler,
         requires_opt_in=True,
         open_input_schema=True,
+        unadvertised_parameters=declaration.unadvertised_parameters,
+        argument_normalizer=declaration.argument_normalizer,
     )
+    service.registry = registry
     api.operations.bind(registry)
     agent = SimpleNamespace(
         tool_access=ToolAccess(granted=("computer",)),
@@ -183,6 +186,28 @@ def capture(computer, **kwargs):
 def call(computer, action, **kwargs):
     service, context, _, _ = computer
     return service.handle(context, {"action": action, "pid": 1, "window_id": 2, **kwargs})
+
+
+def dispatch(computer, arguments, context=None):
+    """Run one call through production dispatch: dialect repair, validation, handler."""
+    from core.tools.contracts import ToolContractError
+    from core.tools.tools import tool_failure
+
+    service, default_context, _, _ = computer
+    context = context or default_context
+    try:
+        return asyncio.run(service.registry.dispatch(context, arguments, ["computer"]))
+    except ToolContractError as error:
+        return tool_failure("invalid_arguments", str(error), retryable=False)
+
+
+def model_text(result):
+    """Return the plain text the Model reads for a Tool Result."""
+    import json
+
+    from core.providers.adapter import tool_result_text
+
+    return tool_result_text(json.dumps(result))
 
 
 @pytest.fixture

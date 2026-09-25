@@ -2,24 +2,31 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 from resources.extensions.computer_use import extension as computer_use
 from tests.resources.extensions.computer_use_helpers import (
     computer as computer,
 )
+from tests.resources.extensions.computer_use_helpers import dispatch
 
 
 def test_complete_provider_matrix_runs_through_real_handler(computer):
     from scripts.probe_provider_tool_call import COMPUTER_CASE_ARGUMENTS
 
-    service, context, client, _ = computer
+    service, run_context, client, _ = computer
     for case, arguments in COMPUTER_CASE_ARGUMENTS.items():
+        # Each case runs in its own Run, so earlier captures never make a target ambiguous.
+        context = replace(run_context, run_id=f"run-{case}")
         args = dict(arguments)
         if case.startswith("invalid_"):
             before = len(client.calls)
-            result = service.handle(context, args)
-            assert result["error"]["code"] == "invalid_arguments", case
+            result = dispatch(computer, args, context)
+            assert (result["error"] or {}).get("code") in {
+                "invalid_arguments",
+                "capture_required",
+            }, case
             assert len(client.calls) == before, case
             continue
         target = {key: args[key] for key in ("pid", "window_id", "monitor") if key in args}
@@ -49,7 +56,7 @@ def test_complete_provider_matrix_runs_through_real_handler(computer):
             args["steps"] = [
                 {"action": "click", "element": observed["data"]["elements"][0]["element"]}
             ]
-        result = service.handle(context, args)
+        result = dispatch(computer, args, context)
         assert result["ok"], (case, result)
 
 

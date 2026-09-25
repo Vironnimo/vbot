@@ -363,8 +363,8 @@ class WindowsDesktop:
     def _check_capture_focus(self, args: dict[str, Any]) -> None:
         if "window_id" in args and self.foreground_window() != args["window_id"]:
             raise ComputerUseError(
-                "The target is not foreground. Capture it with foreground=false for "
-                "background control, or select it on the desktop before foreground control.",
+                "The target is not the active window. Capture it with foreground=false for "
+                "background input, or select it on the desktop before foreground input.",
                 "target_not_foreground",
             )
 
@@ -400,7 +400,10 @@ class WindowsDesktop:
             key = self.user.VkKeyScanExW(char, layout) if len(char) == 1 else -1
             if key == -1:
                 raise ComputerUseError(
-                    "Unsupported key name. Use a named key or type for text.", "invalid_arguments"
+                    f"Unknown key name {name!r}. No input was sent. Use names such as enter, "
+                    "escape, tab, backspace, delete, up, pageup, home, f5, ctrl, shift, alt or "
+                    "win, or single characters; use type for text.",
+                    "invalid_arguments",
                 )
             result.extend(vk for mask, vk in ((1, 0x10), (2, 0x11), (4, 0x12)) if (key >> 8) & mask)
             result.append(key & 0xFF)
