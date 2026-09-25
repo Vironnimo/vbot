@@ -780,8 +780,18 @@ def _normalize_skill_manage_arguments(arguments: Any) -> Any:
     if not isinstance(repaired, dict):
         return repaired
     _repair_name(repaired)
+    _repair_file_path(repaired)
     _resolve_text(repaired)
     return repaired
+
+
+def _repair_file_path(arguments: dict[str, Any]) -> None:
+    """Record the package-relative path the call writes, as the handler resolves it."""
+    path, name = arguments.get("file_path"), arguments.get("name")
+    if isinstance(path, str) and isinstance(name, str):
+        cleaned = _package_path(path, name)
+        if cleaned:
+            arguments["file_path"] = cleaned
 
 
 def _repair_name(arguments: dict[str, Any]) -> None:
