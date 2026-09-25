@@ -135,10 +135,14 @@ def _channel_config(
 
 
 def _channel_service_mock() -> Mock:
-    """A ChannelService double whose create and delete are awaitable like the real ones."""
+    """A ChannelService double whose config changes are awaitable like the real ones."""
     service = Mock()
     service.create_channel = AsyncMock()
+    service.update_channel = AsyncMock()
     service.delete_channel = AsyncMock()
+    service.enable_channel = AsyncMock()
+    service.disable_channel = AsyncMock()
+    service.restart_channel = AsyncMock()
     return service
 
 

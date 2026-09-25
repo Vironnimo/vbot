@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 
 from core.chat import ChatMessage
+from core.chat.messages import ToolCall
 from core.database import data_store_status
 from core.runs import RunKind
 from core.sessions import ChatSessionManager, SessionAddress
@@ -21,7 +22,7 @@ from core.sessions.schema import (
     FTS_STORAGE_VERSION_KEY,
     FTS_TARGET_HIGH_WATER_KEY,
 )
-from tests.core.sessions.history_fixtures import append_tool_fixture, seed_history
+from tests.core.sessions.history_fixtures import admit_run, append_tool_fixture, seed_history
 
 
 def test_empty_store_bootstrap_does_not_enter_resumable_fts_backfill(
@@ -214,6 +215,43 @@ def test_fts_projection_uses_canonical_message_key_and_recall_text_only(tmp_path
             ).hits
             == ()
         )
+    finally:
+        sessions.close()
+
+
+def test_only_conversation_text_is_indexed_and_an_older_index_rebuilds(tmp_path: Path) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    session = sessions.create("agent", session_id="narrow")
+    call = ToolCall(id="call-one", name="bash", arguments={"command": "echo argneedle"})
+    assistant = ChatMessage.assistant(
+        model="model", content=None, reasoning="reasonneedle", tool_calls=[call]
+    )
+    session.append_many([ChatMessage.user("visible question"), assistant])
+    sessions.close()
+    with sqlite3.connect(tmp_path / "sessions.db") as connection:
+        # An index written by an older storage version is rebuilt on the next open.
+        connection.execute(
+            "UPDATE store_meta SET value = '1' WHERE key = ?", (FTS_STORAGE_VERSION_KEY,)
+        )
+    sessions = ChatSessionManager(tmp_path)
+    try:
+        assert sessions.fts_health().state == "healthy"
+        with sqlite3.connect(tmp_path / "sessions.db") as connection:
+            columns = [row[1] for row in connection.execute("PRAGMA table_info(entries_fts)")]
+            stored = connection.execute(
+                "SELECT value FROM store_meta WHERE key = ?", (FTS_STORAGE_VERSION_KEY,)
+            ).fetchone()
+            searchable = connection.execute(
+                "SELECT role, searchable FROM entries ORDER BY seq"
+            ).fetchall()
+        assert columns == ["content", "search_text"]
+        assert stored == (str(FTS_STORAGE_VERSION),)
+        # Reasoning and Tool calls are not conversation text; the entry stays out.
+        assert searchable == [("user", 1), ("assistant", 0)]
+        for query in ("reasonneedle", "argneedle"):
+            assert sessions.search_messages(query, project_id=None, agent_id="agent").hits == ()
+        hits = sessions.search_messages("visible", project_id=None, agent_id="agent").hits
+        assert [hit.role for hit in hits] == ["user"]
     finally:
         sessions.close()
 
@@ -511,8 +549,8 @@ def test_fts_rebuild_reads_content_only_inside_current_batch(tmp_path: Path, mon
         connection.execute("DROP VIEW entries_fts_source")
         connection.execute(
             "CREATE VIEW entries_fts_source AS SELECT entry_key, "
-            "observe_content(entry_key, content) AS content, search_text, "
-            "reasoning, name, error_kind, tool_calls FROM unobserved_fts_source"
+            "observe_content(entry_key, content) AS content, search_text "
+            "FROM unobserved_fts_source"
         )
         connection.execute(
             "UPDATE store_meta SET value='0' WHERE key=?",
@@ -641,7 +679,7 @@ def test_search_admits_only_recall_visible_sessions(
         session = sessions.create("agent", session_id=session_id)
         session.append(ChatMessage.user(f"visible needle {session_id}"))
         for run_kind in run_kinds:
-            sessions.record_run_kind(session.address, run_kind)
+            asyncio.run(admit_run(sessions, session.address, run_kind))
     try:
 
         def searched(**options: Any) -> set[str]:

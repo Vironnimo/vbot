@@ -24,7 +24,7 @@ FTS_TARGET_HIGH_WATER_KEY = "fts_rebuild_target_high_water"
 FTS_COMPLETED_HIGH_WATER_KEY = "fts_rebuild_completed_high_water"
 FTS_DEGRADED_REASON_KEY = "fts_degraded_reason"
 FTS_STORAGE_VERSION_KEY = "fts_storage_version"
-FTS_STORAGE_VERSION = 1
+FTS_STORAGE_VERSION = 2
 # Entry roles whose text the trigram index covers: conversation text only.
 FTS_TRIGRAM_ROLES = ("user", "assistant", "compaction_checkpoint")
 
@@ -484,29 +484,18 @@ FTS_TRIGRAM_MEMBERSHIP_SQL = (
     "AND EXISTS (SELECT 1 FROM entry_text AS x WHERE x.entry_key = e.entry_key)"
 )
 
-# The standard index holds text, User block text, Assistant reasoning, the Tool
-# name of a result, the error kind and the Tool calls (name and arguments) of an
-# Assistant entry.
+# The standard index holds the entry text and the text of User Content Blocks,
+# the only columns search matches. Reasoning, Tool names and arguments and error
+# kinds are not indexed.
 _FTS_STANDARD_SQL = f"""
 CREATE VIEW IF NOT EXISTS entries_fts_source AS
-  SELECT e.entry_key, t.content, t.search_text, r.reasoning, c.name, x.error_kind,
-         (SELECT group_concat(k.name || ' ' || p.arguments_json, char(10))
-          FROM tool_calls AS k JOIN tool_call_payloads AS p ON p.call_key = k.call_key
-          WHERE k.entry_key = e.entry_key) AS tool_calls
-  FROM entries AS e
-  LEFT JOIN entry_text AS t ON t.entry_key = e.entry_key
-  LEFT JOIN assistant_reasoning AS r ON r.entry_key = e.entry_key
-  LEFT JOIN tool_calls AS c ON c.result_entry_key = e.entry_key
-  LEFT JOIN error_entries AS x ON x.entry_key = e.entry_key
+  SELECT e.entry_key, t.content, t.search_text
+  FROM entries AS e LEFT JOIN entry_text AS t ON t.entry_key = e.entry_key
   WHERE {FTS_MEMBERSHIP_SQL};
 
 CREATE VIRTUAL TABLE IF NOT EXISTS entries_fts USING fts5(
   content,
   search_text,
-  reasoning,
-  name,
-  error_kind,
-  tool_calls,
   content='entries_fts_source',
   content_rowid='entry_key',
   tokenize='unicode61'

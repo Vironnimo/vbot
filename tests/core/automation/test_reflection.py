@@ -22,6 +22,7 @@ from core.automation.reflection import (
 from core.chat import ChatMessage
 from core.runs import RunKind
 from core.sessions import ChatSessionManager, SessionAddress
+from tests.core.sessions.history_fixtures import admit_run
 
 REFLECT_BRIEFS = {
     "reflect-memory.md": "Review this Session for durable Memory updates.",
@@ -666,7 +667,7 @@ async def test_review_fork_leaves_source_bindings_and_run_kinds_behind(tmp_path:
             },
         }
         sessions.set_metadata(source.address, {"title": "Refactor plan", **bindings})
-        sessions.record_run_kind(source.address, RunKind.CHANNEL)
+        await admit_run(sessions, source.address, RunKind.CHANNEL)
 
         result = await service.run_review("main", "s1", review_scope="memory")
 

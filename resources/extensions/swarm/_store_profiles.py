@@ -10,6 +10,7 @@ import secrets
 import sqlite3
 
 from core.utils.ids import new_id
+from core.utils.timestamps import utc_now_timestamp
 
 from ._participant_names import (
     _PARTICIPANT_NAMES,
@@ -33,7 +34,6 @@ from ._store_values import (
     _dump,
     _hash,
     _load,
-    _now,
     _page,
 )
 
@@ -65,7 +65,7 @@ def _save_profile(
                 ).fetchone():
                     candidate, suffix = f"{base}-{suffix}", suffix + 1
                 profile["slug"] = candidate
-        now = _now()
+        now = utc_now_timestamp()
         try:
             connection.execute(
                 "INSERT INTO profiles(id, slug, name, revision, payload, created_at, updated_at) VALUES(?,?,?,?,?,?,?) "
@@ -160,7 +160,7 @@ def _create_swarm(
             raise SwarmStoreError("revision_conflict")
         profile_snapshot = _load(profile["payload"])
         swarm_id = new_id("swr")
-        now = _now()
+        now = utc_now_timestamp()
         connection.execute(
             "INSERT INTO swarms(id,prompt,profile_snapshot,effective_configuration,state,created_at) VALUES(?,?,?,?,?,?)",
             (swarm_id, prompt, _dump(profile_snapshot), _dump(effective), "preparing", now),
@@ -538,7 +538,15 @@ def _apply_delivery_settings(
                 )
         connection.execute(
             "INSERT INTO swarm_events(swarm_id,kind,actor,old_json,new_json,settings_revision,created_at) VALUES(?,?,?,?,?,?,?)",
-            (swarm_id, "settings", actor, _dump(old), _dump(delivery), revision, _now()),
+            (
+                swarm_id,
+                "settings",
+                actor,
+                _dump(old),
+                _dump(delivery),
+                revision,
+                utc_now_timestamp(),
+            ),
         )
         result = {
             "revision": revision,

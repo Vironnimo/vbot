@@ -14,11 +14,11 @@ from core.channels.adapter import (
     RunButtonBinding,
     bound_run_callback_data,
 )
-from core.channels.state import state_timestamp
 from core.chat.messages import ReplySurface
 from core.extensions import InteractionButton
 from core.sessions import SessionAddress
 from core.utils.logging import get_logger
+from core.utils.timestamps import utc_now_timestamp
 from core.utils.workers import BoundedWorkerPool
 
 if TYPE_CHECKING:
@@ -112,7 +112,7 @@ def _bind_outbound_run_buttons(
         thread_id=thread_id,
         origin_session_id=origin_session_id,
         original_button_data=tuple(original_data),
-        created_at=state_timestamp(),
+        created_at=utc_now_timestamp(),
     )
 
 

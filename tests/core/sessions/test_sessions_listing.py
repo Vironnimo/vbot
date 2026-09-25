@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import sqlite3
 from dataclasses import replace
@@ -22,7 +23,7 @@ from core.sessions import (
     SessionListFilters,
 )
 from core.utils.timestamps import canonical_timestamp
-from tests.core.sessions.history_fixtures import complete_run
+from tests.core.sessions.history_fixtures import admit_run, complete_run, history_revision
 from tests.core.sessions.sessions_test_support import (
     _address,
     _continuation_start,
@@ -45,7 +46,7 @@ def _classify(manager, address: SessionAddress, metadata: Any) -> None:
     known = {kind.value for kind in RunKind}
     for run_kind in run_kinds:
         if run_kind in known:
-            manager.record_run_kind(address, RunKind(run_kind))
+            asyncio.run(admit_run(manager, address, RunKind(run_kind)))
             continue
         with sqlite3.connect(manager._store.path) as connection:
             connection.execute(
@@ -223,8 +224,9 @@ async def test_reflection_runs_restore_only_own_review_summaries(
         return admitted
 
     await run(source, "inherited", RunKind.USER, "completed")
-    fork = await manager.fork(source.address, target_project_id=project_id)
-    manager.record_run_kind(fork.address, RunKind.MEMORY_REFLECTION)
+    fork = await manager.fork(
+        source.address, target_project_id=project_id, run_kind=RunKind.MEMORY_REFLECTION
+    )
     # A classified fork with only inherited summaries must not fabricate a result.
     assert source.reflection_runs() == []
     review = await run(fork, "review", RunKind.MEMORY_REFLECTION, status)
@@ -262,17 +264,14 @@ def test_metadata_activity_and_continuation_change_state_not_history(manager) ->
     address = _address("coder", "session-one")
     session = manager.create("coder", session_id=address.session_id)
     session.append(ChatMessage.user("hello"))
-    revision = manager.history_revision(address)
-
     session.start_run("run-one")
-    revision = manager.history_revision(address)
+    revision = history_revision(manager, address)
 
     manager.set_metadata(address, {"project": "vbot"})
-    manager.record_run_kind(address, RunKind.USER)
     manager.record_terminal_run(address, "run-1", "completed", "2026-08-29T12:00:00Z")
     session.append_continuation_records([_continuation_start()])
 
-    assert manager.history_revision(address) == revision
+    assert history_revision(manager, address) == revision
     assert manager.get_metadata(address)["project"] == "vbot"
     assert manager.get_metadata(address)[SESSION_RUN_KINDS_META_KEY] == [RunKind.USER.value]
     continuation = session.load_continuation()
@@ -287,14 +286,13 @@ def test_unchanged_metadata_and_activity_mutations_write_nothing(manager) -> Non
     manager.create(address.agent_id, session_id=address.session_id)
     manager.set_metadata(address, {"title": "Kept"})
     manager.record_seen_skills(address, SeenSkillsUpdate(baseline=("alpha",)))
-    manager.record_run_kind(address, RunKind.USER)
+    asyncio.run(admit_run(manager, address))
     manager.record_terminal_run(address, "run-1", "completed", "2026-08-29T12:00:00Z")
     assert manager.mark_terminal_run_read(address, "run-1")["marked_read"] is True
     writer = manager._store._writer
     revision = _state_revision(manager, address)
     changes = writer.total_changes
 
-    manager.record_run_kind(address, RunKind.USER)
     previous, updated = manager.mutate_metadata_with_previous(
         address, lambda metadata: metadata.update(title="Kept")
     )
@@ -305,8 +303,8 @@ def test_unchanged_metadata_and_activity_mutations_write_nothing(manager) -> Non
     assert writer.total_changes == changes
     assert _state_revision(manager, address) == revision
 
-    manager.record_run_kind(address, RunKind.CRON)
-    assert _state_revision(manager, address) == revision + 1
+    asyncio.run(admit_run(manager, address, RunKind.CRON))
+    assert _state_revision(manager, address) > revision
     # Run kinds form a set, reported in name order.
     assert manager.get_metadata(address)[SESSION_RUN_KINDS_META_KEY] == [
         RunKind.CRON.value,
@@ -338,7 +336,7 @@ def test_listable_metadata_is_normalized_out_of_open_ended_metadata(manager) -> 
     }
 
     manager.set_metadata(address, metadata)
-    manager.record_run_kind(address, RunKind.SUBAGENT)
+    asyncio.run(admit_run(manager, address, RunKind.SUBAGENT))
 
     assert manager.get_metadata(address) == {**metadata, "run_kinds": ["subagent"]}
     with sqlite3.connect(manager._store.path) as connection:
@@ -542,7 +540,7 @@ def test_newest_session_counts_every_run_kind_but_no_extension_session(manager) 
     for index, session_id in enumerate(("older", "reflection")):
         address = _address("coder", session_id)
         manager._store.create(address, created_at=f"2026-08-01T00:0{index}:00+00:00")
-    manager.record_run_kind(_address("coder", "reflection"), RunKind.MEMORY_REFLECTION)
+    asyncio.run(admit_run(manager, _address("coder", "reflection"), RunKind.MEMORY_REFLECTION))
     manager.create_bound_temporary_session(
         _address("coder", "participant"),
         owner_name="swarm",

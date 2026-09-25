@@ -8,6 +8,7 @@ from __future__ import annotations
 import sqlite3
 
 from core.sessions import TemporarySessionBinding
+from core.utils.timestamps import utc_now_timestamp
 
 from ._store_database import (
     SwarmDatabase,
@@ -28,7 +29,6 @@ from ._store_values import (
     _dump,
     _hash,
     _load,
-    _now,
 )
 
 
@@ -239,7 +239,7 @@ def _recover_interrupted(db: SwarmDatabase) -> list[Json]:
                     _dump({"state": row["state"]}),
                     _dump({"state": "interrupted"}),
                     None,
-                    _now(),
+                    utc_now_timestamp(),
                 ),
             )
             result.append({"swarm_id": swarm_id, "state": "interrupted"})

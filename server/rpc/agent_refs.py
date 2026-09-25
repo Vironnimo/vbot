@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import Any
 
@@ -100,8 +101,13 @@ def _rename_agent_and_retarget_references(
     state: Any,
     agent_id: str,
     new_agent_id: str,
+    loop: asyncio.AbstractEventLoop,
 ) -> AgentRenameCoordinationResult:
-    """Rename an Identity Agent and transactionally retarget live references."""
+    """Rename an Identity Agent and transactionally retarget live references.
+
+    Blocking; runs on a worker thread. Channel retargeting runs on ``loop``,
+    the Event Loop that owns the Channel adapters.
+    """
     runtime = state.runtime
     session_ids = tuple(
         address.session_id
@@ -164,7 +170,7 @@ def _rename_agent_and_retarget_references(
         )
         if channel_service is not None:
             for channel in channels:
-                channel_service.update_channel(channel.id, agent_id=new_agent_id)
+                _retarget_channel(loop, channel_service, channel.id, new_agent_id)
                 updated_channel_ids.append(channel.id)
         if cron_service is not None:
             for job in cron_jobs:
@@ -226,9 +232,11 @@ def _rename_agent_and_retarget_references(
             for channel_id in reversed(updated_channel_ids):
                 _attempt_rollback(
                     rollback_errors,
-                    channel_service.update_channel,
+                    _retarget_channel,
+                    loop,
+                    channel_service,
                     channel_id,
-                    agent_id=agent_id,
+                    agent_id,
                 )
         if rollback_errors:
             _LOGGER.error(
@@ -248,6 +256,18 @@ def _rename_agent_and_retarget_references(
         policy_agent_ids=policy_result.agent_ids,
         session_reference_count=len(session_updates),
     )
+
+
+def _retarget_channel(
+    loop: asyncio.AbstractEventLoop,
+    channel_service: Any,
+    channel_id: str,
+    agent_id: str,
+) -> None:
+    """Point one Channel at ``agent_id`` from a worker thread and wait for the result."""
+    asyncio.run_coroutine_threadsafe(
+        channel_service.update_channel(channel_id, agent_id=agent_id), loop
+    ).result()
 
 
 def _attempt_rollback(

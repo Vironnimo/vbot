@@ -24,7 +24,6 @@ import time
 import uuid
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +35,7 @@ from core.database.errors import (
 )
 from core.database.spec import canonical_database_path, validate_database_name
 from core.utils.atomic import atomic_write_text
+from core.utils.timestamps import utc_now_timestamp
 
 _LOGGER = logging.getLogger("vbot.database")
 
@@ -90,11 +90,6 @@ def new_database_id() -> str:
 
 def valid_database_id(value: object) -> bool:
     return isinstance(value, str) and _DATABASE_ID_PATTERN.fullmatch(value) is not None
-
-
-def utc_now() -> str:
-    """Canonical fixed-width UTC timestamp: ``YYYY-MM-DDTHH:MM:SS.ffffffZ``."""
-    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
 # ---------------------------------------------------------------------------
@@ -349,7 +344,7 @@ def begin_maintenance(
                 f"data maintenance is already incomplete ({current.operation}): "
                 f"{maintenance_guard_path(data_dir)}"
             )
-        record = MaintenanceOperation(uuid.uuid4().hex, operation, utc_now(), os.getpid())
+        record = MaintenanceOperation(uuid.uuid4().hex, operation, utc_now_timestamp(), os.getpid())
         payload = {
             "operation_id": record.operation_id,
             "operation": record.operation,

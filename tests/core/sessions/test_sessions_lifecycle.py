@@ -11,8 +11,15 @@ import pytest
 
 from core.chat import ChatMessage, ChatSessionError
 from core.chat.usage import aggregate_session_usage
+from core.prompts.pinned_context import (
+    PINNED_MEMORY_FILES_SLOT,
+    PINNED_SKILL_CATALOG_SLOT,
+    PINNED_SOUL_CONTEXT_SLOT,
+    PINNED_WORKING_PROJECT_CONTEXT_SLOT,
+)
 from core.runs import RunKind
 from core.sessions import FORK_SOURCE_META_KEY
+from tests.core.sessions.history_fixtures import admit_run
 from tests.core.sessions.sessions_test_support import (
     _address,
 )
@@ -33,6 +40,41 @@ def test_move_updates_the_composite_address_without_losing_history(manager) -> N
     assert manager.exists(target)
     assert moved.address == target
     assert moved.load() == [message]
+
+
+_AGENT_RENDERED_PINS = {
+    PINNED_SKILL_CATALOG_SLOT: {"catalog_text": "coder Skills"},
+    PINNED_SOUL_CONTEXT_SLOT: {"text": "coder SOUL"},
+    PINNED_MEMORY_FILES_SLOT: {"text": "coder memory", "mode": "full"},
+}
+
+
+@pytest.mark.parametrize("operation", ["same-agent fork", "cross-agent fork", "cross-agent move"])
+def test_agent_rendered_pins_never_reach_another_agent(manager, operation) -> None:
+    source = manager.create("coder", session_id="pinned")
+    source.append(ChatMessage.user("hello"))
+    project_pin = {"text": "Project context", "working_project_id": None}
+    pins = {**_AGENT_RENDERED_PINS, PINNED_WORKING_PROJECT_CONTEXT_SLOT: project_pin}
+    for slot, value in pins.items():
+        manager.ensure_prompt_pin(source.address, slot, value, lambda _pin: True)
+
+    if operation == "same-agent fork":
+        target = asyncio.run(manager.fork(source.address)).address
+    elif operation == "cross-agent fork":
+        target = asyncio.run(manager.fork(source.address, target_agent_id="reviewer")).address
+    else:
+        target = asyncio.run(manager.move(source.address, _address("reviewer", source.id))).address
+
+    carried = {slot: manager.prompt_pin(target, slot) for slot in pins}
+    if operation == "same-agent fork":
+        assert carried == pins
+    else:
+        # The reviewer renders its own Skill catalog, SOUL and memory; only
+        # Project-qualified state, which re-renders on its own, may carry over.
+        assert carried == {
+            **dict.fromkeys(_AGENT_RENDERED_PINS),
+            PINNED_WORKING_PROJECT_CONTEXT_SLOT: project_pin,
+        }
 
 
 @pytest.mark.parametrize("restoring", [False, True])
@@ -168,7 +210,7 @@ def test_fork_titles_and_classifies_the_copy_in_its_one_write(manager, monkeypat
     source = manager.create("coder", session_id="session-one")
     source.append(ChatMessage.user("hello"))
     manager.set_title(source.address, "Source title")
-    manager.record_run_kind(source.address, RunKind.USER)
+    asyncio.run(admit_run(manager, source.address))
     notified: list[object] = []
     manager.add_title_changed_callback(notified.append)
     writes: list[object] = []

@@ -177,14 +177,15 @@ async def test_channel_service_ignores_stale_adapter_task_done_callback(
         await current_task
 
 
-def test_channel_service_update_rejects_unknown_fields(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_channel_service_update_rejects_unknown_fields(tmp_path: Path) -> None:
     storage = ChannelStorage(tmp_path)
     config = make_config(enabled=False)
     storage.save(config)
     service = make_service(tmp_path)
 
     with pytest.raises(ChannelConfigError):
-        service.update_channel(config.id, unknown_field="value")
+        await service.update_channel(config.id, unknown_field="value")
 
 
 @pytest.mark.asyncio
@@ -218,9 +219,12 @@ async def test_channel_service_create_rolls_back_when_start_fails(
         assert connection.execute("SELECT COUNT(*) FROM channels").fetchone()[0] == 0
 
 
-def test_channel_service_update_rolls_back_when_restart_fails(
+@pytest.mark.asyncio
+@pytest.mark.parametrize("via_enable", [False, True], ids=["update", "enable"])
+async def test_channel_service_enabling_rolls_back_when_start_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    via_enable: bool,
 ) -> None:
     storage = ChannelStorage(tmp_path)
     original = make_config(enabled=False)
@@ -240,9 +244,64 @@ def test_channel_service_update_rolls_back_when_restart_fails(
     monkeypatch.setattr(service, "start_channel", fail_start_channel)
 
     with pytest.raises(ChannelConfigError, match="restart failed"):
-        service.update_channel(original.id, enabled=True)
+        if via_enable:
+            await service.enable_channel(original.id)
+        else:
+            await service.update_channel(original.id, enabled=True)
 
     assert storage.get(original.id).to_dict() == original.to_dict()
+    assert service._pending_config_changes == set()
+
+
+@pytest.mark.asyncio
+async def test_a_failed_adapter_rebuild_restores_the_previous_config_and_adapter(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage = ChannelStorage(tmp_path)
+    original = make_config(enabled=True)
+    storage.save(original)
+    service = make_service(tmp_path)
+    built_from: list[str] = []
+    adapters: list[BlockingAdapter] = []
+
+    def create_adapter(config: ChannelConfig) -> ChannelAdapter:
+        built_from.append(config.token_env_var)
+        adapters.append(BlockingAdapter())
+        return adapters[-1]
+
+    real_start_channel = service.start_channel
+
+    def start_channel(
+        channel_id: str,
+        *,
+        reset_backoff: bool = True,
+        config_override: ChannelConfig | None = None,
+    ) -> None:
+        if config_override is not None and config_override.token_env_var != original.token_env_var:
+            raise ChannelConfigError("start failed")
+        real_start_channel(channel_id, reset_backoff=reset_backoff, config_override=config_override)
+
+    monkeypatch.setattr(service, "_create_adapter", create_adapter)
+    monkeypatch.setattr(service, "_preflight_adapter_start", lambda _config: None)
+    service.start()
+    try:
+        await asyncio.wait_for(adapters[0].started.wait(), timeout=1)
+        monkeypatch.setattr(service, "start_channel", start_channel)
+
+        with pytest.raises(ChannelConfigError, match="start failed"):
+            await service.update_channel(original.id, token_env_var="TELEGRAM_BOT_TOKEN_OTHER")
+
+        # The disturbed adapter comes back with the previous config, which is on disk again.
+        await asyncio.wait_for(adapters[0].stopped.wait(), timeout=1)
+        await wait_until(lambda: len(adapters) == 2)
+        await asyncio.wait_for(adapters[1].started.wait(), timeout=1)
+        assert built_from == [original.token_env_var] * 2
+        assert storage.get(original.id).to_dict() == original.to_dict()
+        assert service.is_running(original.id)
+        assert service._pending_config_changes == set()
+    finally:
+        await service.aclose()
 
 
 @pytest.mark.asyncio
@@ -272,7 +331,7 @@ async def test_channel_service_update_waits_for_adapter_stop_before_restart(
     service.start()
     await asyncio.wait_for(created[0].started.wait(), timeout=1)
 
-    service.update_channel(config.id, token_env_var="TELEGRAM_BOT_TOKEN_OTHER")
+    await service.update_channel(config.id, token_env_var="TELEGRAM_BOT_TOKEN_OTHER")
     await wait_until(lambda: "stop:old:begin" in lifecycle_events)
 
     assert "start:new" not in lifecycle_events
@@ -309,7 +368,7 @@ async def test_channel_service_restart_rebuilds_only_after_adapter_stop(
     service.start()
     await asyncio.wait_for(created[0].started.wait(), timeout=1)
 
-    assert service.restart_channel(config.id) is True
+    assert await service.restart_channel(config.id) is True
     await wait_until(lambda: "stop:old:begin" in lifecycle_events)
     assert "start:new" not in lifecycle_events
 
@@ -568,7 +627,8 @@ async def test_channel_service_keeps_attempt_count_without_healthy_run(
     await asyncio.sleep(0)
 
 
-def test_configuration_save_failure_keeps_existing_adapter_running(tmp_path, monkeypatch):
+@pytest.mark.asyncio
+async def test_configuration_save_failure_keeps_existing_adapter_running(tmp_path, monkeypatch):
     storage = ChannelStorage(tmp_path)
     original = make_config(enabled=True)
     storage.save(original)
@@ -585,7 +645,7 @@ def test_configuration_save_failure_keeps_existing_adapter_running(tmp_path, mon
     monkeypatch.setattr(service, "stop_channel", forbidden_stop)
     monkeypatch.setattr(service._storage, "save", fail_save)
     with pytest.raises(OSError, match="disk full"):
-        service.update_channel(original.id, enabled=False)
+        await service.update_channel(original.id, enabled=False)
     assert storage.get(original.id).to_dict() == original.to_dict()
 
 
@@ -662,7 +722,7 @@ async def test_queued_construction_failure_recovers_after_old_adapter_stops(
     service.start()
     try:
         await old.started.wait()
-        service.restart_channel(config.id)
+        await service.restart_channel(config.id)
         await asyncio.wait_for(recovered.started.wait(), timeout=1)
         assert old.stopped.is_set()
         assert attempts == 3
@@ -685,7 +745,7 @@ async def test_disabling_channel_cancels_construction_failure_recovery(
     service.start()
     try:
         retry = service._adapter_restart_tasks[config.id]
-        service.disable_channel(config.id)
+        await service.disable_channel(config.id)
         await asyncio.gather(retry, return_exceptions=True)
         assert not service._adapter_restart_tasks
         assert not service.is_running(config.id)

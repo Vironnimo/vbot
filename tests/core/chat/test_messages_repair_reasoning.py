@@ -2,6 +2,7 @@
 
 from core.providers.reasoning import REASONING_REPLAY_CURRENT_RUN
 from tests.core.chat.chat_loop_support import build_chat_loop
+from tests.core.sessions.history_fixtures import history_revision
 
 from .messages_test_support import (
     ERROR_KIND_PROVIDER_ERROR,
@@ -296,7 +297,7 @@ class TestRepairDanglingToolCalls:
         # No tool result persisted; this is the dangling state.
 
         history_before = session.load()
-        history_revision_before = runtime.chat_sessions.history_revision(session.address)
+        history_revision_before = history_revision(runtime.chat_sessions, session.address)
 
         # Act: run the build path that synthesizes the missing tool result.
         request_messages = asyncio.run(
@@ -310,7 +311,7 @@ class TestRepairDanglingToolCalls:
         # Assert: persisted history is unchanged; no synthesized tool message
         # was appended by the request-only repair.
         assert history_after == history_before
-        assert runtime.chat_sessions.history_revision(session.address) == history_revision_before
+        assert history_revision(runtime.chat_sessions, session.address) == history_revision_before
         # And re-loading the session still shows the dangling assistant turn
         # (not a tool entry), confirming the repair is request-only.
         reloaded = session.load()
