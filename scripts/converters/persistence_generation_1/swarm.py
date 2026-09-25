@@ -15,8 +15,9 @@ reported.
 from __future__ import annotations
 
 import sqlite3
+from pathlib import Path
 
-from core.database import APPLICATION_IDS, open_offline_database
+from core.database import APPLICATION_IDS, DatabaseSpec, open_offline_database
 from core.extensions.databases import FORMAT_GENERATION, extension_database_spec
 from resources.extensions.swarm.store import DATABASE_NAME, SCHEMA_SQL
 from scripts.converters.persistence_generation_1._context import (
@@ -201,6 +202,19 @@ _TABLES = (
 _DROPPED_TABLES = ("decision_events", "decision_positions", "decision_questions")
 
 
+def database_spec(root: Path) -> DatabaseSpec:
+    """The Swarm Extension's database in data directory ``root``, as the Extension opens it."""
+    return extension_database_spec(root, OWNER, DATABASE_NAME, SCHEMA_SQL)
+
+
+def check_source(source: Path) -> None:
+    """Refuse a Swarm database this area cannot read, before anything is staged."""
+    source_path = source / DATABASE
+    if source_path.is_file():
+        with open_legacy(source_path) as connection:
+            _is_current(source_path, connection)
+
+
 def convert(context: ConversionContext) -> None:
     """Stage the Generation 1 Swarm database from the source database."""
     source_path = context.source_path(DATABASE)
@@ -208,19 +222,13 @@ def convert(context: ConversionContext) -> None:
         context.report.count(AREA, "source_missing")
         return
     with open_legacy(source_path) as source:
-        found = identity(source)
-        if found == (APPLICATION_IDS["extensions"], FORMAT_GENERATION):
+        if _is_current(source_path, source):
             context.report.count(AREA, "already_current")
             return
-        if found != LEGACY_IDENTITY:
-            raise ConversionError(
-                f"{source_path} is not a pre-Generation-1 Swarm database "
-                f"(application_id={found[0]}, user_version={found[1]})"
-            )
         tables = _copied_tables(context, source)
         _report_dropped(context, source)
 
-        spec = extension_database_spec(context.staging, OWNER, DATABASE_NAME, SCHEMA_SQL)
+        spec = database_spec(context.staging)
         target_path = context.staged(DATABASE)
         if spec.path != target_path:
             raise ConversionError(f"the Swarm database is expected at {spec.path}")
@@ -240,15 +248,30 @@ def convert(context: ConversionContext) -> None:
     retire_sidecars(context, DATABASE)
 
 
+def _is_current(source_path: Path, source: sqlite3.Connection) -> bool:
+    """Whether the source is already Generation 1; refuse a foreign database."""
+    found = identity(source)
+    if found == (APPLICATION_IDS["extensions"], FORMAT_GENERATION):
+        return True
+    if found != LEGACY_IDENTITY:
+        raise ConversionError(
+            f"{source_path} is not a pre-Generation-1 Swarm database "
+            f"(application_id={found[0]}, user_version={found[1]})"
+        )
+    for table in _TABLES:
+        present = table_columns(source, table.name)
+        if present is not None:
+            require_columns(source_path, table, present)
+    return False
+
+
 def _copied_tables(context: ConversionContext, source: sqlite3.Connection) -> list[LegacyTable]:
-    source_path = context.source_path(DATABASE)
     tables = []
     for table in _TABLES:
         present = table_columns(source, table.name)
         if present is None:
             context.report.skip(AREA, table.name, "table missing in the source; none copied")
             continue
-        require_columns(source_path, table, present)
         for column in present:
             if column not in table.columns:
                 context.report.skip(AREA, f"{table.name}.{column}", "unknown source column dropped")

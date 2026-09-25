@@ -234,8 +234,6 @@ def test_production_sources_do_not_join_legacy_data_root_paths() -> None:
 
     for source_root in PRODUCTION_SOURCE_ROOTS:
         for source_file in source_root.rglob("*.py"):
-            if source_file.parent == PROJECT_ROOT / "scripts" / "converters":
-                continue
             if LEGACY_DATA_ROOT_JOIN.search(source_file.read_text(encoding="utf-8")):
                 violations.append(str(source_file.relative_to(PROJECT_ROOT)))
 

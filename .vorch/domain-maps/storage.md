@@ -14,7 +14,7 @@ Data-directory bootstrap, temporary-file lifecycle, atomic settings and credenti
 
 Directory creation does not transfer ownership: Agents own their trees, Channels theirs, Cron/Bootstrap their job stores, Attachments/Speech their artifacts, Performance its Recordings (`performance.md`), Models the Model DB, Statistics its read model, Terminal Manager launch history. Layout changes belong in `layout.py`; format/retention changes stay with owning domains.
 
-The explicit `scripts/converters/data_dir_artifacts_layout.py` converter preflights all supported legacy files and collisions before moving them. Canonical destination ancestry below the chosen data root must contain no symbolic links, including when the destination directory already exists.
+Current code reads only the canonical paths; there is no dual-read of an older layout. Older data directories are converted once, offline, by the Generation 1 converter (`database/generation-1-conversion.md`), which stages inside the data directory as `generation-1-staging/` and keeps every replaced file under `pre-generation-1/`.
 
 Runtime creates `<data-dir>/extension-data/<owner>/` for a loaded Extension's persistent host state. It is separate from `extensions/`, which contains executable overrides, and is not temporary-file cleanup data. Databases an Extension opens through `host.open_database` live there as canonical kernel databases `<name>.db` (`database.md`, `extensions.md`). The Extension owns its format; canonical temporary Session bindings, delivery receipts and Run ownership remain in `sessions.db` (`extensions.md`, `sessions.md`).
 
