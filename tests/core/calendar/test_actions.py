@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from core.calendar import CalendarService, CalendarStorageError, CalendarValidationError
-from core.calendar.actions import parse_action_when
+from core.calendar.actions import parse_action_when, validate_calendar_actions_file
 from core.runs import RunKind, RunStatus
 
 
@@ -484,11 +484,11 @@ async def test_recurrences_each_request_a_fresh_session(tmp_path, monkeypatch):
         {"actions": [], "executions": {}},
         {"format_version": 2, "actions": [], "executions": {}},
         {"format_version": 1, "actions": {}, "executions": {}},
-        {"format_version": 1, "actions": [None], "executions": {}},
-        {"format_version": 1, "actions": [], "executions": {"x": {"id": "y"}}},
+        {"format_version": 1, "actions": []},
+        {"format_version": 1, "actions": [], "executions": []},
     ],
 )
-def test_malformed_action_rows_disable_store(tmp_path, payload):
+def test_unreadable_document_root_disables_store(tmp_path, payload):
     service = CalendarService(tmp_path, tz="UTC")
     path = tmp_path / "calendar" / "actions.json"
     path.parent.mkdir(exist_ok=True)
@@ -554,19 +554,80 @@ def test_short_action_ids_skip_collisions(tmp_path, monkeypatch):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("field", "value"), [("prompt", ""), ("when", "nonsense")])
-async def test_invalid_action_validation_keeps_runtime_and_calendar_available(
-    tmp_path, field, value
-):
-    service, event, _, _ = setup(tmp_path)
-    service.actions.add(event.id, when="start", prompt="prepare", target="main")
+async def test_invalid_action_is_skipped_kept_verbatim_and_reported(tmp_path, field, value):
+    service, event, trigger, now = setup(tmp_path)
+    broken = service.actions.add(event.id, when="start - 1h", prompt="prepare", target="main")
     path = tmp_path / "calendar" / "actions.json"
     payload = json.loads(path.read_text(encoding="utf-8"))
     payload["actions"][0][field] = value
-    original = json.dumps(payload)
-    path.write_text(original, encoding="utf-8")
-    reopened = CalendarService(tmp_path, tz="UTC")
-    reopened.actions.start()
-    assert reopened.actions.storage_error
-    assert reopened.get_event(event.id).title == "Meeting"
-    assert path.read_text(encoding="utf-8") == original
-    await reopened.actions.aclose()
+    invalid_entry = payload["actions"][0]
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    reopened = CalendarService(tmp_path, tz="Europe/Berlin")
+    reopened.actions.configure(trigger, Mock(), Mock(exists=Mock(return_value=True)))
+    assert reopened.actions.list_actions() == []
+    assert reopened.actions.storage_error is None
+    await reopened.actions.tick(now)
+    await drain(reopened)
+    added = reopened.actions.add(event.id, when="end", prompt="wrap up", target="main")
+
+    trigger.trigger_run.assert_not_awaited()
+    stored = json.loads(path.read_text(encoding="utf-8"))["actions"]
+    assert [entry["id"] for entry in stored] == [added["id"], broken["id"]]
+    assert stored[1] == invalid_entry
+    report = validate_calendar_actions_file(path)
+    assert [diagnostic.path for diagnostic in report.diagnostics] == ["$.actions[1]"]
+
+
+@pytest.mark.asyncio
+async def test_invalid_execution_row_blocks_its_occurrence_and_is_kept(tmp_path):
+    service, event, trigger, now = setup(tmp_path)
+    action = service.actions.add(event.id, when="start - 1h", prompt="prepare", target="main")
+    await service.actions.tick(now)
+    await drain(service)
+    assert trigger.trigger_run.await_count == 1
+    path = tmp_path / "calendar" / "actions.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    ((key, row),) = payload["executions"].items()
+    row["status"] = "archived-by-a-newer-vbot"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    reopened = CalendarService(tmp_path, tz="Europe/Berlin")
+    reopened.actions.configure(trigger, Mock(), Mock(exists=Mock(return_value=True)))
+    await reopened.actions.tick(now + timedelta(seconds=1))
+    await drain(reopened)
+    reopened.actions.update(action["id"], prompt="prepare slides")
+
+    # The row may record a consumed claim, so the occurrence never fires again.
+    assert trigger.trigger_run.await_count == 1
+    assert reopened.actions.project(window(reopened, now)) == []
+    assert json.loads(path.read_text(encoding="utf-8"))["executions"] == {key: row}
+    report = validate_calendar_actions_file(path)
+    assert [diagnostic.path for diagnostic in report.diagnostics] == [f"$.executions[{key!r}]"]
+
+
+@pytest.mark.asyncio
+async def test_history_of_unknown_actions_stays_while_invalid_actions_are_kept(tmp_path):
+    service, event, trigger, now = setup(tmp_path)
+    action = service.actions.add(event.id, when="start - 1h", prompt="prepare", target="main")
+    await service.actions.tick(now)
+    await drain(service)
+    path = tmp_path / "calendar" / "actions.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["actions"][0]["when"] = "start - 1w"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    reopened = CalendarService(tmp_path, tz="Europe/Berlin")
+    reopened.actions.configure(trigger, Mock(), Mock(exists=Mock(return_value=True)))
+    await reopened.actions.tick(now + timedelta(minutes=2))
+
+    # Repairing the action must not refire the occurrence it already consumed.
+    stored = json.loads(path.read_text(encoding="utf-8"))
+    assert [row["action_id"] for row in stored["executions"].values()] == [action["id"]]
+    payload["actions"][0]["when"] = "start - 1h"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    repaired = CalendarService(tmp_path, tz="Europe/Berlin")
+    repaired.actions.configure(trigger, Mock(), Mock(exists=Mock(return_value=True)))
+    await repaired.actions.tick(now + timedelta(minutes=3))
+    await drain(repaired)
+    assert trigger.trigger_run.await_count == 1

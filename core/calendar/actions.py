@@ -82,11 +82,13 @@ _EXECUTION_FIELDS = frozenset(
         "status",
     )
 )
+_ACTION_SHAPE = json_object(_ACTION_FIELDS)
+_EXECUTION_SHAPE = json_object(_EXECUTION_FIELDS)
 CALENDAR_ACTIONS_SHAPE = json_document(
     {"actions", "executions"},
     {
-        "actions": json_list(json_object(_ACTION_FIELDS), key="id"),
-        "executions": json_map(json_object(_EXECUTION_FIELDS)),
+        "actions": json_list(_ACTION_SHAPE, key="id"),
+        "executions": json_map(_EXECUTION_SHAPE),
     },
 )
 
@@ -117,24 +119,15 @@ def validate_calendar_actions_file(actions_path: str | Path) -> JsonValidationRe
 def validate_calendar_actions_data(data: Any) -> list[JsonDiagnostic]:
     """Validate a decoded raw ``calendar/actions.json`` document.
 
-    Actions and their execution history load as a whole: any error disables the
-    action store, and a document that fails to load is never overwritten.
+    Reports every invalid action and execution row. The store keeps such entries
+    verbatim and skips them (see :class:`CalendarActions`); only a document root
+    that cannot be read disables it, and such a document is never overwritten.
     """
     diagnostics: list[JsonDiagnostic] = []
-    if not isinstance(data, dict):
-        return [error_diagnostic("$", f"Expected a JSON object, got {type(data).__name__}")]
-    if not validate_format_version(diagnostics, data, CALENDAR_ACTIONS_FORMAT_VERSION):
+    if not _validate_calendar_actions_root_into(diagnostics, data):
         return diagnostics
-    warn_unknown_fields(
-        diagnostics, "$", data, CALENDAR_ACTIONS_SHAPE, label="calendar action field"
-    )
-    validate_required_fields(diagnostics, "$", data, frozenset(("actions", "executions")))
-    actions = data.get("actions", [])
-    if not isinstance(actions, list):
-        add_error(diagnostics, "$.actions", "must be an array")
-        actions = []
     action_ids: set[str] = set()
-    for index, action in enumerate(actions):
+    for index, action in enumerate(data["actions"]):
         path = f"$.actions[{index}]"
         try:
             _validate_action_record(action)
@@ -144,11 +137,7 @@ def validate_calendar_actions_data(data: Any) -> list[JsonDiagnostic]:
         if action["id"] in action_ids:
             add_error(diagnostics, f"{path}.id", f"duplicate action id: {action['id']}")
         action_ids.add(action["id"])
-    executions = data.get("executions", {})
-    if not isinstance(executions, dict):
-        add_error(diagnostics, "$.executions", "must be an object")
-        executions = {}
-    for key, row in executions.items():
+    for key, row in data["executions"].items():
         try:
             _validate_execution_record(key, row)
         except ValueError as error:
@@ -156,11 +145,42 @@ def validate_calendar_actions_data(data: Any) -> list[JsonDiagnostic]:
     return diagnostics
 
 
+def _validate_calendar_actions_root(data: Any) -> list[JsonDiagnostic]:
+    diagnostics: list[JsonDiagnostic] = []
+    _validate_calendar_actions_root_into(diagnostics, data)
+    return diagnostics
+
+
+def _validate_calendar_actions_root_into(diagnostics: list[JsonDiagnostic], data: Any) -> bool:
+    """Check the document root; return whether its entries can be read."""
+    if not isinstance(data, dict):
+        diagnostics.append(
+            error_diagnostic("$", f"Expected a JSON object, got {type(data).__name__}")
+        )
+        return False
+    if not validate_format_version(diagnostics, data, CALENDAR_ACTIONS_FORMAT_VERSION):
+        return False
+    warn_unknown_fields(
+        diagnostics, "$", data, CALENDAR_ACTIONS_SHAPE, label="calendar action field"
+    )
+    validate_required_fields(diagnostics, "$", data, frozenset(("actions", "executions")))
+    readable = "actions" in data and "executions" in data
+    if "actions" in data and not isinstance(data["actions"], list):
+        add_error(diagnostics, "$.actions", "must be an array")
+        readable = False
+    if "executions" in data and not isinstance(data["executions"], dict):
+        add_error(diagnostics, "$.executions", "must be an object")
+        readable = False
+    return readable
+
+
+# Invalid actions and execution rows are kept verbatim, so only a document root
+# that cannot be read refuses a write.
 CALENDAR_ACTIONS_FORMAT = JsonDocumentFormat(
     name="Calendar actions",
     version=CALENDAR_ACTIONS_FORMAT_VERSION,
     shape=CALENDAR_ACTIONS_SHAPE,
-    validate=validate_calendar_actions_data,
+    validate=_validate_calendar_actions_root,
 )
 
 
@@ -204,6 +224,11 @@ class CalendarActions:
 
     Claims persist before admission. An uncertain admission after process death is
     never retried. Pending work can be recomputed from current event definitions.
+
+    Invalid entries of the stored document are kept verbatim and written back. An
+    invalid action never runs, and while one is kept the history of actions this
+    store does not know stays. An invalid execution row blocks its occurrence: the
+    row may record a consumed claim, so that occurrence never fires until repaired.
     """
 
     def __init__(self, calendar: CalendarService, data_root: Path) -> None:
@@ -211,6 +236,8 @@ class CalendarActions:
         self._path = data_root / "calendar" / "actions.json"
         self._actions: dict[str, dict[str, Any]] = {}
         self._executions: dict[str, dict[str, Any]] = {}
+        self._invalid_actions: list[Any] = []
+        self._invalid_executions: dict[str, Any] = {}
         self._loaded = False
         self._storage_error: CalendarStorageError | None = None
         self._trigger: TriggerService | None = None
@@ -240,31 +267,59 @@ class CalendarActions:
         if not self._loaded:
             try:
                 data = load_validated_json_file(
-                    self._path, validate_calendar_actions_data, missing_ok=True
+                    self._path, _validate_calendar_actions_root, missing_ok=True
                 )
             except (OSError, JsonConfigValidationError) as error:
                 self._storage_error = CalendarStorageError(f"Cannot load calendar actions: {error}")
                 _LOGGER.error("Calendar action storage is unavailable: %s", error)
             else:
                 if data is not None:
-                    self._adopt(strip_unknown_fields(data, CALENDAR_ACTIONS_SHAPE))
+                    self._adopt(data)
             self._loaded = True
         if self._storage_error is not None:
             raise self._storage_error
 
     def _adopt(self, data: dict[str, Any]) -> None:
-        """Take over a validated document's modeled fields as the in-memory store."""
-        for action in data["actions"]:
-            self._actions[action["id"]] = action
+        """Take over a document's valid entries; keep the invalid ones verbatim."""
+        for index, action in enumerate(data["actions"]):
+            try:
+                _validate_action_record(action)
+            except (CalendarValidationError, ValueError) as error:
+                _LOGGER.warning(
+                    "Skipping invalid calendar action at $.actions[%d]: %s", index, error
+                )
+                self._invalid_actions.append(action)
+                continue
+            if action["id"] in self._actions:
+                _LOGGER.warning(
+                    "Skipping duplicate calendar action id at $.actions[%d]: %s",
+                    index,
+                    action["id"],
+                )
+                self._invalid_actions.append(action)
+                continue
+            self._actions[action["id"]] = strip_unknown_fields(action, _ACTION_SHAPE)
         for key, row in data["executions"].items():
+            try:
+                _validate_execution_record(key, row)
+            except ValueError as error:
+                _LOGGER.warning(
+                    "Holding calendar occurrence with invalid execution row %s: %s", key, error
+                )
+                self._invalid_executions[key] = row
+                continue
+            row = strip_unknown_fields(row, _EXECUTION_SHAPE)
             if row["status"] in {"claimed", "running"}:
                 row["status"] = "interrupted"
                 self._recovery_pending.add(key)
             self._executions[key] = row
 
     def _save(self) -> None:
-        """Write actions and history, keeping the unknown fields of the file on disk."""
-        payload = {"actions": list(self._actions.values()), "executions": self._executions}
+        """Write actions and history, keeping invalid entries and unknown fields on disk."""
+        payload = {
+            "actions": [*self._actions.values(), *self._invalid_actions],
+            "executions": {**self._executions, **self._invalid_executions},
+        }
         try:
             write_json_document(self._path, payload, CALENDAR_ACTIONS_FORMAT)
         except JsonDocumentWriteError as error:
@@ -313,7 +368,7 @@ class CalendarActions:
             )
         stamp = (now or datetime.now(UTC)).isoformat()
         action: dict[str, Any] = {
-            "id": new_id("act", claim=lambda candidate: candidate not in self._actions),
+            "id": new_id("act", claim=self._action_id_available),
             "event_id": event_id,
             "when": parse_action_when(when)[2],
             "prompt": prompt,
@@ -362,6 +417,12 @@ class CalendarActions:
             raise
         self._calendar._notify_changed()
         _LOGGER.info("Calendar action deleted (action=%s)", action_id)
+
+    def _action_id_available(self, candidate: str) -> bool:
+        return candidate not in self._actions and not any(
+            isinstance(entry, dict) and entry.get("id") == candidate
+            for entry in self._invalid_actions
+        )
 
     def _get(self, action_id: str) -> dict[str, Any]:
         if action_id not in self._actions:
@@ -416,6 +477,8 @@ class CalendarActions:
             for action in actions:
                 if action["event_id"] == event.id:
                     key, row = self._execution(action, event, occurrence)
+                    if key in self._invalid_executions:
+                        continue  # Its stored row cannot be read; the occurrence is held.
                     previous = self._executions.get(key)
                     if previous and self._consumed(previous, row):
                         row = previous
@@ -535,6 +598,9 @@ class CalendarActions:
                 for occurrence in occurrences:
                     key, row = self._execution(action, event, occurrence)
                     seen.add(key)
+                    if key in self._invalid_executions:
+                        # The unreadable row may record a consumed claim: never fire over it.
+                        continue
                     due, expires = _instant(row["scheduled_at"]), _instant(row["expires_at"])
                     if due > now:
                         self._sleep_seconds = min(
@@ -588,7 +654,9 @@ class CalendarActions:
         if row["status"] == "pending":
             return key not in desired
         if row["action_id"] not in self._actions:
-            return True  # Action ids are never reused, so its history cannot refire.
+            # Action ids are never reused, so its history cannot refire; while invalid
+            # actions are kept, this row may belong to one and stays as its history.
+            return not self._invalid_actions
         # The scan recomputes every occurrence it still reaches; retaining those rows
         # keeps them consumed. Expired rows it no longer reaches can never become due.
         return (
