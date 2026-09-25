@@ -54,8 +54,8 @@ async def channel_case(
     adapter: Any, args: argparse.Namespace, case: dict[str, Any]
 ) -> dict[str, Any]:
     class FixtureContext(ToolContext):
-        def resolve_path(self, path: str | Path) -> Path:
-            target = super().resolve_path(path)
+        def resolve_path(self, path: str | Path, *, follow_final_link: bool = True) -> Path:
+            target = super().resolve_path(path, follow_final_link=follow_final_link)
             if not target.is_relative_to(self.workspace):
                 raise ValueError("Only the disposable fixture directory is in scope")
             return target
