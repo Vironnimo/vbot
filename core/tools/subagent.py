@@ -7,8 +7,11 @@ from typing import Any
 
 from core.settings import ALLOWED_THINKING_EFFORTS
 from core.subagents import SubAgentCoordinator, SubAgentPromptTarget
-from core.tools._argument_repair import normalize_call_arguments
-from core.tools.contracts import compile_tool_contract
+from core.tools._subagent_arguments import (
+    UNADVERTISED_PARAMETERS,
+    normalize_subagent_arguments,
+)
+from core.tools.contracts import ToolContract, compile_tool_contract
 from core.tools.tools import (
     JsonObject,
     ToolDisplay,
@@ -20,100 +23,41 @@ from core.tools.tools import (
 SUBAGENT_TOOL_NAME = "subagent"
 
 SUBAGENT_TOOL_DESCRIPTION = (
-    "Delegate a task to a Sub-Agent, or inspect/cancel owned work. Top-level delegation "
-    "returns immediately with automatic result delivery; delegation by a Sub-Agent "
-    "waits for completion."
+    "Delegate a task to a Sub-Agent: a copy of yourself, or an Agent listed under Sub-Agents "
+    "in the System Prompt. It works in its own Session, and its final answer comes back to "
+    "you."
 )
 
 SUBAGENT_PROMPT_BLOCK_TEMPLATE = (
     "## Sub-Agents\n\n"
-    "A Sub-Agent runs a delegated task in its own persisted Session, using your Agent "
-    "configuration unless you select an additional Agent below. You remain "
-    "responsible for deciding what to delegate, integrating the results, and "
-    "verifying the final outcome.\n\n"
-    "The following additional Agents are available. Use each Agent id exactly as "
-    "shown:\n\n"
-    "{subagent_list}\n\n"
-    "Use `subagent` for a bounded task that another Agent can perform independently. "
-    "When starting a new Session, send a self-contained task containing the goal, "
-    "relevant context, scope, constraints, and expected result. A continuation message "
-    "may rely on that Sub-Agent Session's existing history; include the follow-up "
-    "instruction and any new context. When several Sub-Agents may edit shared files, "
-    "give them non-overlapping ownership; do not run conflicting edits in parallel.\n\n"
-    "Project Agents may be listed with a qualified `agent@project` id. Use every "
-    "Agent id exactly as listed above.\n\n"
-    "{execution_guidance}\n\n"
-    "Issue independent sibling `subagent` calls in the same turn so they can run "
-    "concurrently.\n\n"
-    "`status` is a non-blocking snapshot; `cancel` waits until that exact owned "
-    "work is cancelled and cannot target another Parent Session's work."
+    "{target_choices}\n\n"
+    "Delegate bounded work that another Agent can finish independently. Start independent "
+    "Sub-Agents with sibling calls in the same turn so they run concurrently, and give "
+    "Sub-Agents that edit files non-overlapping ownership. You remain responsible for "
+    "integrating and verifying their results.\n\n"
+    "{execution_guidance}"
 )
 
-NO_ADDITIONAL_SUBAGENTS_TEXT = "**No additional Agents are available.**"
+TARGET_CHOICES_TEMPLATE = (
+    "In `subagent`, omit `agent_id` to delegate to a copy of yourself, or use one of these "
+    "Agent ids exactly:\n\n{subagent_list}"
+)
+NO_ADDITIONAL_SUBAGENTS_TEXT = (
+    "In `subagent`, omit `agent_id` to delegate to a copy of yourself; no other Agents are "
+    "available."
+)
 TOP_LEVEL_EXECUTION_GUIDANCE = (
-    "You are the top-level Agent. Every `run` action starts in the background and "
-    "returns immediately; vBot monitors it and notifies you with the result once the "
-    "Sub-Agent finishes. Continue other work, or finish your turn to wait for a result."
+    "Each `run` starts in the background and returns a work id at once. vBot delivers each "
+    "Sub-Agent's final answer to you automatically: during your current turn if you are "
+    "still working, otherwise in a new turn right after yours ends. Continue other work, or "
+    "end your turn to wait; do not poll `status` for completion."
 )
 NESTED_EXECUTION_GUIDANCE_TEMPLATE = (
-    "You are a Sub-Agent. Every `run` action executes in the foreground and the Tool "
-    "Call returns when that work finishes, or after {timeout}, including any time spent "
-    "queued; vBot then cancels the work and returns a timeout failure. Sibling calls "
-    "issued together still run concurrently."
+    "You are a Sub-Agent, so each `run` waits and returns the Sub-Agent's final answer. vBot "
+    "cancels work that takes longer than {timeout}, including time spent waiting for a busy "
+    "Session, and returns a timeout failure. Sibling calls issued together still run "
+    "concurrently."
 )
-
-_SUBAGENT_ID_PARAMETER: JsonObject = {
-    "type": "string",
-    "minLength": 1,
-    "description": (
-        "Sub-Agent work id returned by run. Required for cancel; omit for run. "
-        "Omit for status to inspect all Sub-Agent work still tracked for this Session."
-    ),
-}
-_SUBAGENT_CONTENT_PARAMETER: JsonObject = {
-    "type": "string",
-    "minLength": 1,
-    "description": (
-        "Task or continuation message. Required for run; omit for status and cancel. "
-        "Make it self-contained unless continuing session_id."
-    ),
-}
-_SUBAGENT_DESCRIPTION_PARAMETER: JsonObject = {
-    "type": "string",
-    "description": ("Short title for run. Omit to use the beginning of content."),
-}
-_SUBAGENT_AGENT_ID_PARAMETER: JsonObject = {
-    "type": "string",
-    "minLength": 1,
-    "description": (
-        "Target Agent for run. Omit for a copy of yourself when starting a new Session; required "
-        "with session_id."
-    ),
-}
-_SUBAGENT_MODEL_PARAMETER: JsonObject = {
-    "type": "string",
-    "minLength": 1,
-    "description": (
-        "Model override for run as <provider>/<model-id>. Omit to inherit the target Agent; "
-        "applies only to this Run."
-    ),
-}
-_SUBAGENT_THINKING_PARAMETER: JsonObject = {
-    "type": "string",
-    "enum": sorted(e for e in ALLOWED_THINKING_EFFORTS if e),
-    "description": (
-        "Thinking effort for run. Omit to inherit the target Agent. Applies only to this Run."
-    ),
-}
-_SUBAGENT_SESSION_ID_PARAMETER: JsonObject = {
-    "type": "string",
-    "minLength": 1,
-    "description": (
-        "Sub-Agent Session id from an earlier subagent result to continue. Used by run "
-        "only. Omit to start a new Session; requires agent_id."
-    ),
-}
-
 
 SUBAGENT_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
@@ -122,23 +66,60 @@ SUBAGENT_TOOL_PARAMETERS: JsonObject = {
             "type": "string",
             "enum": ["run", "status", "cancel"],
             "description": (
-                "run delegates content (default); status inspects owned work; cancel stops it."
+                "run (default) delegates content; status reports on delegated work; cancel "
+                "stops it."
             ),
         },
-        "content": _SUBAGENT_CONTENT_PARAMETER,
-        "description": _SUBAGENT_DESCRIPTION_PARAMETER,
-        "agent_id": _SUBAGENT_AGENT_ID_PARAMETER,
-        "session_id": _SUBAGENT_SESSION_ID_PARAMETER,
-        "model": _SUBAGENT_MODEL_PARAMETER,
-        "thinking_effort": _SUBAGENT_THINKING_PARAMETER,
-        "id": _SUBAGENT_ID_PARAMETER,
+        "content": {
+            "type": "string",
+            "description": (
+                "The task: goal, relevant context, scope, constraints and expected result. "
+                "Self-contained unless it continues a Session. Required for run."
+            ),
+        },
+        "description": {
+            "type": "string",
+            "description": "Short title for the work. Omit to use the start of content.",
+        },
+        "agent_id": {
+            "type": "string",
+            "description": (
+                "Agent to delegate to, exactly as listed under Sub-Agents. Omit for a copy of "
+                "yourself."
+            ),
+        },
+        "session_id": {
+            "type": "string",
+            "description": (
+                "Continues an earlier Sub-Agent Session: the session_id from its subagent "
+                "result, sent with that result's agent_id. Omit to start a new Session."
+            ),
+        },
+        "model": {
+            "type": "string",
+            "description": (
+                "Model for this run only, as <provider>/<model-id>. Omit to use the Agent's model."
+            ),
+        },
+        "thinking_effort": {
+            "type": "string",
+            "enum": sorted(e for e in ALLOWED_THINKING_EFFORTS if e),
+            "description": "Thinking effort for this run only. Omit to use the Agent's setting.",
+        },
+        "id": {
+            "type": "string",
+            "description": (
+                "Work id from a run result. Required for cancel; omit with status to list all "
+                "tracked work."
+            ),
+        },
     },
     "required": [],
 }
 
 
 @cache
-def _repair_contract():
+def _repair_contract() -> ToolContract:
     return compile_tool_contract(
         name=SUBAGENT_TOOL_NAME,
         input_schema=SUBAGENT_TOOL_PARAMETERS,
@@ -147,12 +128,7 @@ def _repair_contract():
 
 
 def _normalize_subagent_arguments(arguments: Any) -> Any:
-    return normalize_call_arguments(
-        _repair_contract(),
-        arguments,
-        enum_fields=("action", "thinking_effort"),
-        empty_as_omitted=("model", "thinking_effort"),
-    )
+    return normalize_subagent_arguments(_repair_contract(), arguments)
 
 
 def register_subagent_tools(
@@ -169,6 +145,7 @@ def register_subagent_tools(
         execution_slot_required=False,
         open_input_schema=True,
         argument_normalizer=_normalize_subagent_arguments,
+        unadvertised_parameters=UNADVERTISED_PARAMETERS,
         result_schema={"type": "object"},
         display=ToolDisplay(
             parts_builder=_subagent_display_parts,
@@ -182,7 +159,14 @@ def register_subagent_tools(
         )
 
 
-def _subagent_display_parts(arguments: JsonObject) -> tuple[ToolDisplayPart, ...]:
+def _subagent_display_parts(raw_arguments: JsonObject) -> tuple[ToolDisplayPart, ...]:
+    # Persisted calls keep the Model's own spelling; label what the call meant.
+    try:
+        arguments = _normalize_subagent_arguments(raw_arguments)
+    except ValueError:
+        arguments = raw_arguments
+    if not isinstance(arguments, dict):
+        return ()
     action = arguments.get("action", "run")
     if action not in {"run", "status", "cancel"}:
         return ()
@@ -218,7 +202,7 @@ def _render_subagent_prompt_block(context: Any, coordinator: SubAgentCoordinator
         execution_guidance = NESTED_EXECUTION_GUIDANCE_TEMPLATE.replace("{timeout}", timeout)
     else:
         execution_guidance = TOP_LEVEL_EXECUTION_GUIDANCE
-    return SUBAGENT_PROMPT_BLOCK_TEMPLATE.replace("{subagent_list}", rendered_targets).replace(
+    return SUBAGENT_PROMPT_BLOCK_TEMPLATE.replace("{target_choices}", rendered_targets).replace(
         "{execution_guidance}", execution_guidance
     )
 
@@ -234,7 +218,7 @@ def _format_subagent_targets(targets: list[SubAgentPromptTarget]) -> str:
         if description:
             suffix = f"{suffix} — {description}"
         lines.append(f"- `{target.agent_id}`{suffix}")
-    return "\n".join(lines)
+    return TARGET_CHOICES_TEMPLATE.replace("{subagent_list}", "\n".join(lines))
 
 
 def _single_line(value: str) -> str:

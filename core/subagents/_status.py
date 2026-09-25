@@ -24,11 +24,18 @@ from core.subagents._completion import (
 )
 from core.subagents._constants import (
     PARENT_AGENT_CANCEL_REASON,
+    SUBAGENT_CANCEL_NOTHING_TRACKED_MESSAGE,
+    SUBAGENT_CANCEL_WITHOUT_ID_MESSAGE_TEMPLATE,
+    SUBAGENT_NOT_FOUND_CANCEL_MESSAGE_TEMPLATE,
+    SUBAGENT_NOT_FOUND_STATUS_MESSAGE_TEMPLATE,
+    SUBAGENT_NOT_FOUND_TRACKED_MESSAGE_TEMPLATE,
     SUBAGENT_STATUS_CHANGED_EVENT,
+    SUBAGENT_STATUS_LIST_NOTE,
     SUBAGENT_STATUS_QUEUED,
     SUBAGENT_STATUS_QUEUED_NOTE,
     SUBAGENT_STATUS_RUNNING_NOTE,
 )
+from core.subagents._interpretation import call_text, owned_work, tracked_work_text
 from core.subagents.tracker import (
     ParentKey,
     SubAgentBatchTracker,
@@ -173,6 +180,8 @@ async def _handle_subagent_cancel(
     batch_tracker: SubAgentBatchTracker,
 ) -> JsonObject:
     """Cancel one exact owned child through its stable public work id."""
+    if "id" not in arguments:
+        return _cancel_without_id_failure(context, batch_tracker)
     try:
         work_id = required_string(arguments.get("id"), field_name="id")
     except ToolArgumentError as error:
@@ -185,7 +194,7 @@ async def _handle_subagent_cancel(
         work_id,
     )
     if owned is None:
-        return _subagent_not_found_failure(work_id)
+        return _subagent_not_found_failure(work_id, context, batch_tracker, action="cancel")
     parent_key, entry = owned
     if entry.complete:
         return tool_failure(
@@ -340,13 +349,42 @@ def _cancelled_subagent_descriptor(
     return data
 
 
-def _subagent_not_found_failure(work_id: str) -> JsonObject:
-    """Explain an untracked id without revealing whether another Session owns it."""
+def _subagent_not_found_failure(
+    work_id: str,
+    context: ToolContext,
+    batch_tracker: SubAgentBatchTracker,
+    *,
+    action: str,
+) -> JsonObject:
+    """Explain an untracked id and list the caller's own tracked work.
+
+    Never reveals whether another Session owns the id: only the caller's
+    tracked work is listed.
+    """
+    tracked = tracked_work_text(batch_tracker, context)
+    if tracked:
+        message = SUBAGENT_NOT_FOUND_TRACKED_MESSAGE_TEMPLATE.format(
+            work_id=work_id, tracked=tracked
+        ).rstrip()
+    elif action == "cancel":
+        message = SUBAGENT_NOT_FOUND_CANCEL_MESSAGE_TEMPLATE.format(work_id=work_id)
+    else:
+        message = SUBAGENT_NOT_FOUND_STATUS_MESSAGE_TEMPLATE.format(work_id=work_id)
+    return tool_failure("subagent_not_found", message)
+
+
+def _cancel_without_id_failure(
+    context: ToolContext, batch_tracker: SubAgentBatchTracker
+) -> JsonObject:
+    unfinished = owned_work(batch_tracker, context, unfinished_only=True)
+    if not unfinished:
+        return tool_failure("invalid_arguments", SUBAGENT_CANCEL_NOTHING_TRACKED_MESSAGE)
     return tool_failure(
-        "subagent_not_found",
-        f"No Sub-Agent work with id {work_id} is tracked for this Session. Work stops being "
-        "tracked after its result was delivered to you or vBot restarted; use that "
-        "delivered result, or call status without id to list tracked work.",
+        "invalid_arguments",
+        SUBAGENT_CANCEL_WITHOUT_ID_MESSAGE_TEMPLATE.format(
+            tracked=tracked_work_text(batch_tracker, context, unfinished_only=True),
+            call=call_text({"action": "cancel", "id": unfinished[0].work_id}),
+        ),
     )
 
 
@@ -371,7 +409,16 @@ async def _handle_subagent_status(
                 if snapshot["ok"]
                 else {"id": entry.work_id, "error": snapshot["error"]}
             )
-        return tool_success({"subagents": snapshots})
+        # One list-level note replaces the identical per-entry waiting notes.
+        unfinished = False
+        for snapshot_data in snapshots:
+            if snapshot_data.get("note") in _WAITING_NOTES:
+                del snapshot_data["note"]
+                unfinished = True
+        listing: JsonObject = {"subagents": snapshots}
+        if unfinished:
+            listing["note"] = SUBAGENT_STATUS_LIST_NOTE
+        return tool_success(listing)
 
     try:
         work_id = required_string(arguments.get("id"), field_name="id")
@@ -385,7 +432,7 @@ async def _handle_subagent_status(
         work_id,
     )
     if owned is None:
-        return _subagent_not_found_failure(work_id)
+        return _subagent_not_found_failure(work_id, context, batch_tracker, action="status")
     parent_key, entry = owned
     return await _subagent_status_snapshot(
         context, parent_key, entry, runtime=runtime, batch_tracker=batch_tracker
@@ -524,6 +571,9 @@ async def _emit_subagent_status_changed(
             "data": dict(data),
         },
     )
+
+
+_WAITING_NOTES = frozenset({SUBAGENT_STATUS_RUNNING_NOTE, SUBAGENT_STATUS_QUEUED_NOTE})
 
 
 def _run_matches_target(

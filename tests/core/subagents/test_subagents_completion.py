@@ -18,6 +18,11 @@ from core.runs import (
 )
 from core.sessions import ChatSession, SessionAddress
 from core.subagents._completion import _track_subagent_completion
+from core.subagents._constants import (
+    SUBAGENT_STATUS_LIST_NOTE,
+    SUBAGENT_STATUS_QUEUED_NOTE,
+    SUBAGENT_STATUS_RUNNING_NOTE,
+)
 from core.subagents._status import _handle_subagent_status
 from core.subagents.subagents import SubAgentCoordinator
 from core.subagents.subagents import _handle_subagent as _handle_subagent_impl
@@ -405,10 +410,16 @@ async def test_status_all_is_scoped_across_parent_runs(
     snapshots = result["data"]["subagents"]
     assert [item["id"] for item in snapshots] == ["sub_running", "sub_queued"]
     assert [item["status"] for item in snapshots] == ["running", "queued"]
+    assert result["data"]["note"] == SUBAGENT_STATUS_LIST_NOTE
     for item in snapshots:
         single = await _handle_subagent_result(
             context, {"id": item["id"]}, runtime=runtime, batch_tracker=tracker
         )
+        # A single snapshot carries its own waiting note; the list states it once.
+        assert single["data"].pop("note") in {
+            SUBAGENT_STATUS_RUNNING_NOTE,
+            SUBAGENT_STATUS_QUEUED_NOTE,
+        }
         assert item == single["data"]
         assert "run_id" not in item and "queue_item_id" not in item
     child_run.mark_completed({})
@@ -444,9 +455,6 @@ async def test_status_all_keeps_other_snapshots_when_one_lookup_fails(tmp_path: 
         {"action": "status", "id": None},
         {"action": "status", "id": 1},
         {"action": "status", "id": " "},
-        {"action": "status", "agent_id": "worker"},
-        {"action": "status", "content": "invalid"},
-        {"action": "status", "ids": []},
     ],
 )
 async def test_status_all_does_not_widen_invalid_calls(
