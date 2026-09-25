@@ -118,13 +118,16 @@ class RunAccumulator:
             models = _json_models(models_json)
             if len(models) >= 2:
                 self.derived_fallback += 1
+            providers: set[str] = set()
             for model_key in models:
                 model = ledger.model(model_key)
                 model.runs += 1
-                ledger.provider(model.provider).runs += 1
+                providers.add(model.provider)
                 if duration is not None:
                     model.run_duration_total_ms += duration
                     model.run_duration_count += 1
+            for provider in providers:
+                ledger.provider(provider).runs += 1
             tool_calls = tool_calls or 0
             self.model_steps += model_steps or 0
             self.agent_messages += agent_messages or 0
@@ -244,7 +247,8 @@ def load_run_activity(
     summary timestamp; a Run without a parseable span never overlaps. Runs are
     ordered by that start text, newest first, ties in processing order, and
     only the returned Runs read their groups: every earlier record of the same
-    unit with the Run id, regardless of the interval.
+    unit with the Run id, regardless of the interval. Usage and Model identity
+    include both Assistant steps and committed Compaction Model calls.
     """
     scan = UnitScan(connection, units)
     params = {"since": datetime_instant(since), "until": datetime_instant(until), "limit": limit}
@@ -296,7 +300,6 @@ def load_run_activity(
                 ON r.session_key = m.session_key AND r.run_id = m.run_id AND r.seq < m.seq
             LEFT JOIN stat_calls c
                 ON c.session_key = r.session_key AND c.seq = r.seq
-                AND r.role = 'assistant' AND c.kind = 0
             WHERE r.run_id IS NOT NULL AND r.run_id <> '' AND r.role <> 'run_summary'
             GROUP BY m.unit, m.seq
         )

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
@@ -71,6 +72,22 @@ def test_agent_with_no_sessions_counts_agent_only(tmp_path: Path) -> None:
 
 def test_run_activity_returns_overlapping_runs_with_local_usage(tmp_path: Path) -> None:
     service, manager = _service(tmp_path, ["main"])
+    checkpoint = _compaction(at=BASE + timedelta(minutes=3), before=2000, after=400)
+    checkpoint = replace(
+        checkpoint,
+        usage={
+            **(checkpoint.usage or {}),
+            "model_call": {
+                "model": "summary/m",
+                "usage": {
+                    "input_tokens": 1000,
+                    "output_tokens": 30,
+                    "output_tokens_estimated": True,
+                    "estimated": True,
+                },
+            },
+        },
+    )
     session_id = _write_session(
         manager,
         "main",
@@ -97,6 +114,7 @@ def test_run_activity_returns_overlapping_runs_with_local_usage(tmp_path: Path) 
                 envelope=tool_success({"text": "ok"}),
                 duration_ms=20,
             ),
+            checkpoint,
             _run_summary(
                 status="completed",
                 at=BASE,
@@ -127,12 +145,46 @@ def test_run_activity_returns_overlapping_runs_with_local_usage(tmp_path: Path) 
     run = report.runs[0]
     assert run.session_id == session_id
     assert run.run_id == "r1"
-    assert run.models == ["openai/gpt-5"]
+    assert run.models == ["openai/gpt-5", "summary/m"]
     assert run.tool_calls == 1
-    assert run.measured_input_tokens == 100
+    assert run.measured_input_tokens == 1100
     assert run.measured_output_tokens == 20
     assert run.estimated_input_tokens == 10
-    assert run.estimated_output_tokens == 3
+    assert run.estimated_output_tokens == 33
+
+
+def test_run_activity_counts_compaction_without_chat_steps(tmp_path: Path) -> None:
+    service, manager = _service(tmp_path, ["main"])
+    checkpoint = _compaction(at=BASE, before=1000, after=200)
+    checkpoint = replace(
+        checkpoint,
+        usage={
+            **(checkpoint.usage or {}),
+            "model_call": {
+                "model": "summary/m",
+                "usage": {"input_tokens": 900, "output_tokens": 100},
+            },
+        },
+    )
+    _write_session(
+        manager,
+        "main",
+        [
+            checkpoint,
+            _run_summary(status="completed", at=BASE, duration_ms=1000, run_id="compact"),
+        ],
+    )
+
+    activity = service.run_activity(since=BASE, until=BASE + timedelta(seconds=1))
+    [run] = activity.runs
+    totals = service.report().usage.totals
+    assert activity.total_runs == 1
+    assert run.models == ["summary/m"]
+    assert run.measured_input_tokens == totals.measured_input_tokens == 900
+    assert run.measured_output_tokens == totals.measured_output_tokens == 100
+    assert run.tool_calls == 0
+    assert totals.assistant_messages == 0
+    assert totals.model_calls == 1
 
 
 def test_chat_messages_and_session_records_are_separate(tmp_path: Path) -> None:
@@ -453,6 +505,7 @@ def test_derived_fallback_detects_mid_run_model_switch(tmp_path: Path) -> None:
         [
             _assistant(model="openrouter/anthropic/claude-sonnet-4", at=BASE),
             _assistant(model="openai/gpt-5", at=BASE + timedelta(seconds=1)),
+            _assistant(model="openai/gpt-4.1", at=BASE + timedelta(milliseconds=1500)),
             _run_summary(
                 status="completed", at=BASE + timedelta(seconds=2), duration_ms=1000, run_id="r1"
             ),
@@ -468,6 +521,15 @@ def test_derived_fallback_detects_mid_run_model_switch(tmp_path: Path) -> None:
 
     assert report.runs.derived_fallback_runs == 1
     assert report.runs.total_runs == 2
+    assert {provider.provider: provider.runs for provider in report.usage.providers} == {
+        "openrouter": 1,
+        "openai": 2,
+    }
+    assert {model.model: model.runs for model in report.usage.models} == {
+        "openrouter/anthropic/claude-sonnet-4": 1,
+        "openai/gpt-5": 2,
+        "openai/gpt-4.1": 1,
+    }
 
 
 def test_tool_success_failure_envelopes_and_p95(tmp_path: Path) -> None:
