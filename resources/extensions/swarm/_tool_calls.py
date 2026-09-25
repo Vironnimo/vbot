@@ -137,6 +137,8 @@ _WIKI_ACTIONS = SpellingAliases(
             "pages",
             "list_pages",
             "search_pages",
+            "search_wiki",
+            "search_files",
             "find_pages",
             "browse",
             "index",
@@ -243,8 +245,7 @@ def normalize_board(contract: ToolContract, arguments: Any) -> Any:
 def normalize_wiki(contract: ToolContract, arguments: Any) -> Any:
     """Repair a swarm_wiki call and infer an action that its fields imply."""
 
-    # swarm_wiki mutations still take the Agent's request_id.
-    value = _prepare(arguments, derived=frozenset())
+    value = _prepare(arguments)
     if not isinstance(value, dict):
         return value
     normalized = _normalize(
@@ -316,7 +317,7 @@ def normalize_state(contract: ToolContract, arguments: Any) -> Any:
     )
 
 
-def _prepare(arguments: Any, *, derived: frozenset[str] = _DERIVED) -> Any:
+def _prepare(arguments: Any) -> Any:
     """Rename wrapper objects to the unwrapped spelling and drop derived keys."""
 
     if not isinstance(arguments, dict):
@@ -324,10 +325,10 @@ def _prepare(arguments: Any, *, derived: frozenset[str] = _DERIVED) -> Any:
     value: Json = {}
     for key, item in arguments.items():
         name = spelling(key) if isinstance(key, str) else key
-        if name in derived:
+        if name in _DERIVED:
             continue
         if name in _WRAPPERS and isinstance(item, dict):
-            nested = _prepare(item, derived=derived)
+            nested = _prepare(item)
             for inner, inner_value in nested.items():
                 if inner in value and value[inner] != inner_value:
                     raise ToolContractError(

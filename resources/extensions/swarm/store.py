@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from core.extensions.databases import Database
 from core.sessions import TemporarySessionBinding
@@ -592,6 +592,20 @@ class SwarmStore:
         from ._store_wiki import wiki
 
         return await self._run(wiki, swarm_id, actor_id, arguments, expected_epoch)
+
+    async def wiki_pages(self, swarm_id: str) -> list[Json]:
+        """Return every Wiki page's ID, current title and deletion state."""
+        from ._store_wiki import wiki_pages
+
+        return cast(list[Json], await self._run(wiki_pages, swarm_id))
+
+    async def wiki_contents(
+        self, swarm_id: str, page_id: str, revisions: list[int]
+    ) -> dict[int, str]:
+        """Return the complete content of existing revisions of one Wiki page."""
+        from ._store_wiki import wiki_contents
+
+        return cast(dict[int, str], await self._run(wiki_contents, swarm_id, page_id, revisions))
 
     async def _run(self, function: Callable[..., Any], *arguments: Any) -> Any:
         return await self._database.run(function, *arguments)

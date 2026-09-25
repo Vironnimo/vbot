@@ -60,6 +60,7 @@ from ._registration import session_tool_catalog
 from ._store_values import _validate_profile
 from ._store_wiki import MUTATIONS
 from ._tool_calls import normalize_board, normalize_inbox, normalize_state, normalize_wiki
+from ._wiki_tool import WikiCall
 from .agent_text import (
     BOARD_PARAMETERS,
     DEFAULT_INSTRUCTIONS,
@@ -332,17 +333,22 @@ class SwarmExtension:
             binding, swarm, arguments = await self._bound_arguments(
                 context, "swarm_wiki", arguments
             )
-            data = await self._store().wiki(
-                binding.group_id, binding.participant_id, arguments, expected_epoch=swarm["epoch"]
+            notes: list[str] = []
+            call = WikiCall(
+                self._store(),
+                context,
+                binding.group_id,
+                binding.participant_id,
+                swarm["epoch"],
+                notes,
             )
-            if arguments["action"] in MUTATIONS and not data.get("replayed"):
+            data, changed = await call.run(arguments)
+            if changed:
                 self._changed(binding.group_id, swarm["settings_revision"])
-            return tool_success(data)
+            return tool_success(with_notes(data, notes))
+        except AgentCallError as error:
+            return tool_failure(error.code, error.message)
         except SwarmStoreError as error:
-            from core.tools import tool_failure
-
-            if error.code in WIKI_ERRORS:
-                return tool_failure(error.code, WIKI_ERRORS[error.code])
             return _failure(error, arguments, WIKI_PARAMETERS)
 
     async def _wiki_operation(self, arguments: Json) -> Json:
@@ -354,7 +360,7 @@ class SwarmExtension:
             if error.code in WIKI_ERRORS:
                 raise ValueError(WIKI_ERRORS[error.code]) from error
             raise
-        if values["action"] in MUTATIONS and not data.get("replayed"):
+        if values["action"] in MUTATIONS and not data.get("replayed") and not data.get("unchanged"):
             swarm = await self._store().get_swarm(sid)
             self._changed(sid, swarm["settings_revision"])
         return data

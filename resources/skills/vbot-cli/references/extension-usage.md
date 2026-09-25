@@ -21,9 +21,10 @@ initial message carries the original request directly.
 
 The shared Wiki is available through `swarm_wiki` in participant Sessions and the
 Wiki tab on each Run. Create, search, read and edit free Markdown pages; view their
-history, restore earlier versions, and recover deleted pages. Changes to existing
-pages require the revision you read, so concurrent edits cannot silently overwrite
-one another. Share page links on the Board when others should notice them. Wiki
+history, restore earlier versions, and recover deleted pages. Replacing a whole
+page requires the revision it is based on, and a passage edit applies only while
+its passage still matches, so concurrent edits cannot silently overwrite one
+another. Share page links on the Board when others should notice them. Wiki
 edits themselves do not send messages or wake participants. CLI users can inspect
 the equivalent `wiki` management operation with per-operation help.
 
