@@ -155,6 +155,22 @@ class SupportsSessionRemoval(Protocol):
         """Remove all index entries for one session in the given project scope."""
 
 
+@runtime_checkable
+class SupportsClose(Protocol):
+    """Optional backend capability: release the resources a backend holds.
+
+    Backends with a derived index hold its database open and may run
+    background indexing. The runtime closes a backend it replaces or shuts
+    down; a closed backend fails later searches.
+    """
+
+    async def aclose(self) -> None:
+        """Stop background work, wait for it, and release held resources."""
+
+    def close(self) -> None:
+        """Release held resources without waiting; background work is cancelled."""
+
+
 RecallBackendFactory = Callable[[RecallBackendContext], RecallBackend]
 
 

@@ -14,7 +14,7 @@ from core.recall.canonical import (
 )
 from core.sessions import is_skill_context_note
 
-PASSAGE_POLICY_VERSION = 2
+PASSAGE_POLICY_VERSION = 1
 PASSAGE_TARGET_CHARS = 1500
 PASSAGE_OVERLAP_CHARS = 200
 

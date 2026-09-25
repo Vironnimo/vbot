@@ -393,12 +393,18 @@ class SessionDescriptorSource:
 
 @dataclass(frozen=True)
 class SessionHistoryRevision:
-    """Canonical history version and Recall visibility of one live Session."""
+    """Canonical history version and Recall visibility of one live Session.
+
+    ``creation_order`` increases with every created Session generation, so the
+    larger value is the newer Session; projections use it to report inherited
+    history for the newest Session that shows it, as store search does.
+    """
 
     address: SessionAddress
     generation_id: str
     history_revision: int
     recall_visibility: SessionRecallVisibility
+    creation_order: int
 
 
 SessionSearchOrder = Literal["relevance", "newest", "oldest"]

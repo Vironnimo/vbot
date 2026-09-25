@@ -25,6 +25,7 @@ from tests.core.recall.vector_helpers import (
     _passage_rows,
     _StubEmbeddings,
     backend,
+    forbid_database_calls_on_loop,
     forbid_event_loop_calls,
     request,
     timestamp,
@@ -147,7 +148,7 @@ async def test_vector_backend_drops_indexed_session_when_canonical_file_removed(
     data = await recall.search_page(request(query="carrot", limit=2))
 
     assert "carrots" not in [match.session_id for match in data.hits]
-    assert set(recall.store.list_indexed_sessions("coder")) == {"fruit"}
+    assert set(await recall.store.list_indexed_sessions("coder")) == {"fruit"}
 
 
 async def test_vector_backend_filtered_search_prunes_deleted_sessions_of_whole_scope(
@@ -166,7 +167,7 @@ async def test_vector_backend_filtered_search_prunes_deleted_sessions_of_whole_s
     sessions.delete(SessionAddress(project_id=None, agent_id="coder", session_id="carrots"))
     await recall.search_page(dataclasses.replace(request(query="fruit"), session_id="fruit"))
 
-    assert set(recall.store.list_indexed_sessions("coder")) == {"fruit"}
+    assert set(await recall.store.list_indexed_sessions("coder")) == {"fruit"}
     assert _passage_rows(recall.store.path, "coder", "carrots") == {}
 
 
@@ -205,8 +206,10 @@ async def test_vector_backend_history_edit_replaces_changed_and_vanished_passage
     assert len(embedded) < len(new_passages)
 
 
-async def test_vector_backend_fork_reuses_stored_vectors(tmp_path: Path) -> None:
-    """A forked Session repeats indexed Passage texts, so no document is embedded again."""
+async def test_vector_backend_fork_shares_stored_passages_and_reports_them_once(
+    tmp_path: Path,
+) -> None:
+    """A fork shows its origin's stored Passages: nothing is embedded or returned twice."""
 
     sessions = ChatSessionManager(tmp_path)
     source = sessions.create("coder", session_id="source")
@@ -214,17 +217,61 @@ async def test_vector_backend_fork_reuses_stored_vectors(tmp_path: Path) -> None
         source.append(ChatMessage.user(f"fruit story {day} " * 120, timestamp=timestamp(day)))
     embeddings = _StubEmbeddings()
     recall = backend(tmp_path, sessions, embeddings=embeddings)
-    await recall.search_page(request(query="fruit"))
+    first = await recall.search_page(request(query="fruit", limit=20))
     documents_before = len(embeddings.document_inputs)
 
     fork = await sessions.fork(source.address)
     page = await recall.search_page(request(query="fruit", limit=20))
 
     assert embeddings.document_inputs[documents_before:] == []
-    assert sorted(_passage_rows(recall.store.path, "coder", fork.id).values()) == sorted(
-        _passage_rows(recall.store.path, "coder", "source").values()
+    assert _passage_rows(recall.store.path, "coder", fork.id) == _passage_rows(
+        recall.store.path, "coder", "source"
     )
-    assert fork.id in {hit.session_id for hit in page.hits}
+    # The origin owns the shared history and is eligible, so it keeps every hit.
+    assert [(hit.session_id, hit.passage_id) for hit in page.hits] == [
+        (hit.session_id, hit.passage_id) for hit in first.hits
+    ]
+    assert {hit.session_id for hit in page.hits} == {"source"}
+
+
+async def test_vector_backend_attributes_shared_history_to_the_newest_eligible_fork(
+    tmp_path: Path,
+) -> None:
+    """Shared history an ineligible or deleted origin cannot report goes to one fork."""
+
+    sessions = ChatSessionManager(tmp_path)
+    source = sessions.create("coder", session_id="source")
+    for day in range(1, 4):
+        source.append(ChatMessage.user(f"fruit story {day} " * 120, timestamp=timestamp(day)))
+    older = await sessions.fork(source.address)
+    newer = await sessions.fork(source.address)
+    recall = backend(tmp_path, sessions, embeddings=_StubEmbeddings())
+    complete = await recall.search_page(request(query="fruit", limit=20))
+
+    excluding = dataclasses.replace(
+        request(query="fruit", limit=20), excluded_session_ids=("source",)
+    )
+    page = await recall.search_page(excluding)
+
+    assert {hit.session_id for hit in complete.hits} == {"source"}
+    assert {hit.session_id for hit in page.hits} == {newer.id}
+    assert [hit.passage_id for hit in page.hits] == [hit.passage_id for hit in complete.hits]
+
+    # Deleting the origin copies its history into the forks and bumps their
+    # history revision; the forks are reindexed and still report it once.
+    await asyncio.to_thread(sessions.delete, source.address)
+    after_delete = await recall.search_page(request(query="fruit", limit=20))
+
+    revisions = await asyncio.to_thread(sessions.list_history_revisions, "coder")
+    assert await recall.store.list_indexed_sessions("coder") == {
+        revision.address.session_id: (revision.generation_id, revision.history_revision)
+        for revision in revisions
+    }
+    assert {hit.session_id for hit in after_delete.hits} == {newer.id}
+    assert [hit.passage_id for hit in after_delete.hits] == [
+        hit.passage_id for hit in complete.hits
+    ]
+    assert older.id not in {hit.session_id for hit in (*page.hits, *after_delete.hits)}
 
 
 async def test_vector_backend_reconciles_excluded_session_once_it_is_included(
@@ -247,13 +294,13 @@ async def test_vector_backend_reconciles_excluded_session_once_it_is_included(
     documents_before = len(embeddings.document_inputs)
     second = await recall.search_page(excluding)
 
-    assert set(recall.store.list_indexed_sessions("coder")) == {"other"}
+    assert set(await recall.store.list_indexed_sessions("coder")) == {"other"}
     assert embeddings.document_inputs[documents_before:] == []
     assert "current" not in {hit.session_id for hit in (*first.hits, *second.hits)}
 
     included = await recall.search_page(request(query="fruit"))
 
-    assert set(recall.store.list_indexed_sessions("coder")) == {"current", "other"}
+    assert set(await recall.store.list_indexed_sessions("coder")) == {"current", "other"}
     assert included.hits[0].session_id == "current"
     assert "more fruit talk" in included.hits[0].text
 
@@ -274,14 +321,14 @@ async def test_vector_backend_does_not_reread_session_without_passages(
         builds.append(len(messages))
         return []
 
-    monkeypatch.setattr("core.recall.vector.build_session_passages", no_passages)
+    monkeypatch.setattr("core.recall._passage_catalog.build_session_passages", no_passages)
     recall = backend(tmp_path, sessions, embeddings=_StubEmbeddings())
 
     await recall.search_page(request(query="carrot"))
     await recall.search_page(request(query="carrot"))
 
     assert builds == [1]
-    assert set(recall.store.list_indexed_sessions("coder")) == {"inert"}
+    assert set(await recall.store.list_indexed_sessions("coder")) == {"inert"}
 
 
 async def test_vector_search_keeps_session_and_store_reads_off_the_event_loop(
@@ -292,7 +339,8 @@ async def test_vector_search_keeps_session_and_store_reads_off_the_event_loop(
     session = sessions.create("coder", session_id="fruit")
     session.append(ChatMessage.user("I love bananas and fruit", timestamp=timestamp(1)))
     recall = backend(tmp_path, sessions, embeddings=_StubEmbeddings())
-    calls = forbid_event_loop_calls(monkeypatch, sessions._store, recall.store)
+    calls = forbid_event_loop_calls(monkeypatch, sessions._store)
+    database_calls = forbid_database_calls_on_loop(monkeypatch)
 
     await recall.search_page(request(query="fruit"))
     await asyncio.to_thread(session.append, ChatMessage.user("more fruit", timestamp=timestamp(2)))
@@ -300,7 +348,7 @@ async def test_vector_search_keeps_session_and_store_reads_off_the_event_loop(
 
     assert page.hits
     assert "list_history_revisions" in calls
-    assert "knn_search" in calls
+    assert {"recall_vectors.read", "recall_vectors.write"} <= set(database_calls)
 
 
 async def test_vector_backend_reports_unavailable_when_no_embedding_binding(
@@ -360,7 +408,7 @@ async def test_vector_backend_rebuilds_index_when_embedding_model_changes(
 
     recall = backend(tmp_path, sessions, embeddings=embeddings_a)
     await recall.search_page(request(query="carrot", limit=2))
-    header_a = recall.store.read_header()
+    header_a = await recall.store.read_header()
     assert header_a is not None
     assert header_a.model_id == "model-a"
 
@@ -376,7 +424,7 @@ async def test_vector_backend_rebuilds_index_when_embedding_model_changes(
     )
     await new_recall.search_page(request(query="carrot", limit=2))
 
-    header = new_recall.store.read_header()
+    header = await new_recall.store.read_header()
     assert header is not None
     assert header.model_id == "model-b"
 

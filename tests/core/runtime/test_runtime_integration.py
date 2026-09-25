@@ -1005,3 +1005,26 @@ def test_runtime_reload_recall_backend_recreates_sqlite_fts(
         assert isinstance(runtime.recall_backend, SqliteFtsRecallBackend)
     finally:
         runtime.stop()
+
+
+def test_runtime_closes_replaced_and_stopped_recall_backends(
+    monkeypatch: pytest.MonkeyPatch,
+    config: Config,
+) -> None:
+    """A reload releases the replaced backend's index; stopping releases the active one."""
+
+    closed: list[object] = []
+    monkeypatch.setattr(SqliteFtsRecallBackend, "close", lambda self: closed.append(self))
+    _write_settings(config, {"recall": {"backend": "sqlite_fts"}})
+
+    runtime = Runtime(config)
+    runtime.start()
+    try:
+        replaced = runtime.recall_backend
+        runtime.reload_recall_backend()
+        assert closed == [replaced]
+        active = runtime.recall_backend
+        assert active is not replaced
+    finally:
+        runtime.stop()
+    assert closed == [replaced, active]

@@ -25,7 +25,10 @@ from core.recall.hybrid import (
     HybridRecallBackend,
 )
 from core.sessions import ChatSessionManager
-from tests.core.recall.vector_helpers import forbid_event_loop_calls
+from tests.core.recall.vector_helpers import (
+    forbid_database_calls_on_loop,
+    forbid_event_loop_calls,
+)
 
 pytestmark = pytest.mark.asyncio
 
@@ -247,12 +250,12 @@ async def test_hybrid_depth_growth_prepares_each_arm_once(
         return list_history_revisions(agent_id, project_id)
 
     syncs = 0
-    sync_passage_index = recall._fts._sync_passage_index
+    refresh_passage_index = recall._fts._catalog.refresh
 
-    def counting_sync(*args: Any) -> None:
+    async def counting_sync(*args: Any) -> None:
         nonlocal syncs
         syncs += 1
-        sync_passage_index(*args)
+        await refresh_passage_index(*args)
 
     def reject_listing(*_args: object, **_kwargs: object) -> None:
         raise AssertionError("the scope read is the only Session listing of a search")
@@ -261,7 +264,7 @@ async def test_hybrid_depth_growth_prepares_each_arm_once(
     monkeypatch.setattr(sessions, "list_history_revisions", counting_revisions)
     monkeypatch.setattr(sessions, "list_summaries", reject_listing)
     monkeypatch.setattr(sessions, "list_history_versions", reject_listing)
-    monkeypatch.setattr(recall._fts, "_sync_passage_index", counting_sync)
+    monkeypatch.setattr(recall._fts._catalog, "refresh", counting_sync)
 
     page = await recall.search_page(search_request("driving"))
 
@@ -281,7 +284,8 @@ async def test_hybrid_search_keeps_session_and_store_reads_off_the_event_loop(
         ChatMessage.user("I was driving today", timestamp=timestamp(1))
     )
     recall = backend(tmp_path, sessions, embeddings=_StubEmbeddings())
-    calls = forbid_event_loop_calls(monkeypatch, sessions._store, recall._vector.store)
+    calls = forbid_event_loop_calls(monkeypatch, sessions._store)
+    database_calls = forbid_database_calls_on_loop(monkeypatch)
 
     page = await recall.search_page(search_request("driving"))
 
@@ -289,7 +293,7 @@ async def test_hybrid_search_keeps_session_and_store_reads_off_the_event_loop(
     assert page.degraded is False
     assert page.hits[0].sources == ("literal", "semantic")
     assert "list_history_revisions" in calls
-    assert "knn_search" in calls
+    assert {"recall_index.read", "recall_vectors.read"} <= set(database_calls)
 
 
 async def test_hybrid_short_query_retains_literal_and_semantic_sources(tmp_path: Path) -> None:
