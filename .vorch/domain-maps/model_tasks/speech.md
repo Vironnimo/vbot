@@ -202,9 +202,9 @@ Executable TTS targets send JSON to `/audio/speech` and return raw audio bytes. 
 
 ## Artifacts
 
-TTS tool output is stored under `<data_dir>/artifacts/speech/` through the shared `TaskArtifactStore` (`core/model_tasks/artifacts.py`): one audio file and one sidecar JSON metadata file per artifact. New artifact IDs use `aud_` plus 12 lowercase base32 characters, filenames are `<artifact_id>.<extension>`, and sidecars contain `id`, `filename`, `media_type`, and `size_bytes`. Speech artifacts are not normal attachments and are not persisted as chat messages by default.
+TTS tool output is stored under `<data_dir>/artifacts/speech/` through the shared `TaskArtifactStore` (`core/model_tasks/artifacts.py`): one audio file and one sidecar JSON metadata file per artifact. New artifact IDs use `aud_` plus 12 lowercase base32 characters, filenames are `<artifact_id>.<extension>`, and sidecars contain `format_version` 1, `id`, `filename`, `media_type`, and `size_bytes`. Speech artifacts are not normal attachments and are not persisted as chat messages by default.
 
-The store validates sidecar shape and exact artifact identity before using metadata. Filenames must belong to that id inside the artifact directory; sidecars cannot redirect reads to other files or symlinks. Malformed JSON/UTF-8 and missing or unreadable blobs raise the ordinary Speech configuration error at this owner boundary (`test_artifacts.py`).
+A sidecar is a durable JSON document under the Generation 1 contract (`settings.md` -> JSON Document Contract; registry kind `speech_artifact_metadata`, validated by `validate_task_artifact_metadata_file` for `doctor config`), written once and never rewritten. It is not a data-snapshot member: a snapshot holds no blobs. The store validates the sidecar (a missing, older or newer `format_version` or an invalid field is refused; unknown fields are ignored) and exact artifact identity before using metadata. Filenames must belong to that id inside the artifact directory; sidecars cannot redirect reads to other files or symlinks. Malformed JSON/UTF-8, invalid metadata and missing or unreadable blobs raise the ordinary Speech configuration error at this owner boundary with a generic message (`test_artifacts.py`).
 
 ## Errors
 

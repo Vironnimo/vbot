@@ -66,6 +66,19 @@ def _cron_job(job_id: str = "job-1", **fields: Any) -> dict[str, Any]:
     }
 
 
+def _attachment_sidecar(**fields: Any) -> dict[str, Any]:
+    return {
+        "id": "att_000000000001",
+        "filename": "notes.txt",
+        "media_type": "text/plain",
+        "size_bytes": 5,
+        "stored_at": _TIMESTAMP,
+        "file_path": "C:/Users/someone/.vbot/artifacts/attachments/att_000000000001.txt",
+        "transcription": None,
+        **fields,
+    }
+
+
 def _legacy_data_dir(root: Path) -> dict[str, Any]:
     documents: dict[str, Any] = {
         "settings.json": {"server_port": 8500},
@@ -97,6 +110,13 @@ def _legacy_data_dir(root: Path) -> dict[str, Any]:
         "terminals/groups.json": {"version": 1, "groups": []},
         "oauth/github-copilot-oauth.json": {"access_token": "token"},
         "mcp/connections.json": [{"id": "example", "transport": "stdio", "command": "unused"}],
+        "artifacts/attachments/att_000000000001.json": _attachment_sidecar(),
+        "artifacts/speech/aud_000000000001.json": {
+            "id": "aud_000000000001",
+            "filename": "aud_000000000001.mp3",
+            "media_type": "audio/mpeg",
+            "size_bytes": 3,
+        },
     }
     for relative, value in documents.items():
         _write(root, relative, value)
@@ -362,6 +382,46 @@ def test_retired_mcp_agents_field_is_kept_and_reported(tmp_path: Path) -> None:
 
     assert _staged(context, _MCP_CONNECTIONS)["connections"] == [connection]
     assert "agents field" in context.report.skipped[0].reason
+
+
+def test_attachment_sidecars_lose_the_stored_path_and_the_retired_text_cache(
+    tmp_path: Path,
+) -> None:
+    context = _context(tmp_path)
+    _write(
+        context.source,
+        "artifacts/attachments/att_000000000001.json",
+        _attachment_sidecar(text_content="hello", future={"kept": True}),
+    )
+    _write(
+        context.source,
+        "artifacts/attachments/att_000000000002.json",
+        {**_attachment_sidecar(id="att_000000000002"), "transcription": "hi"},
+    )
+    # An interrupted store leaves an empty reservation; vBot never reads it.
+    _write(context.source, "artifacts/attachments/att_000000000003.json", "")
+
+    convert(context)
+
+    first = _staged(context, "artifacts/attachments/att_000000000001.json")
+    assert first == {
+        "format_version": 1,
+        "id": "att_000000000001",
+        "filename": "notes.txt",
+        "media_type": "text/plain",
+        "size_bytes": 5,
+        "stored_at": _TIMESTAMP,
+        "transcription": None,
+        "future": {"kept": True},
+    }
+    assert _staged(context, "artifacts/attachments/att_000000000002.json")["transcription"] == "hi"
+    counts = context.report.counts[AREA]
+    assert counts["attachment_metadata"] == 2
+    assert counts["attachment_file_path_dropped"] == 2
+    assert counts["attachment_text_content_dropped"] == 1
+    [skipped] = context.report.skipped
+    assert skipped.item == "artifacts/attachments/att_000000000003.json"
+    assert "unreadable JSON" in skipped.reason
 
 
 @pytest.mark.parametrize(

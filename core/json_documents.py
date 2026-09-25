@@ -3,8 +3,9 @@
 Every in-scope document is a JSON object with a top-level ``format_version``. Its
 owner describes the object levels it models with a :class:`JsonShape` and keeps
 validating the content itself (see :mod:`core.config_validation`). This module
-owns the list of in-scope documents (:data:`DURABLE_DOCUMENTS`) and only the
-contract mechanics every owner shares:
+owns the list of in-scope documents (:data:`DURABLE_DOCUMENTS`), the part of it
+data snapshots capture (:data:`SNAPSHOT_DOCUMENTS`), and only the contract
+mechanics every owner shares:
 
 - :func:`validate_format_version` refuses a missing, malformed, older, or newer
   version. A newer version comes from a newer vBot and is never overwritten.
@@ -49,8 +50,9 @@ CONVERTER_HINT = "scripts/converters/persistence_generation_1"
 
 #: Every durable JSON document under this contract: a stable kind name and the
 #: document's data-dir relative location, where ``*`` matches within one path
-#: segment. ``vbot doctor config`` validates each kind through its owner and data
-#: snapshots capture every matching file as one set. A new document joins here.
+#: segment. ``vbot doctor config`` validates each kind through its owner. A new
+#: document joins here, and with it the data snapshot set unless it is listed in
+#: :data:`DOCUMENTS_OUTSIDE_SNAPSHOTS`.
 DURABLE_DOCUMENTS: Mapping[str, str] = MappingProxyType(
     {
         "settings": "settings.json",
@@ -69,6 +71,24 @@ DURABLE_DOCUMENTS: Mapping[str, str] = MappingProxyType(
         "terminal_groups": "terminals/groups.json",
         "oauth_token": "oauth/*.json",
         "mcp_connections": "extension-data/mcp/connections.json",
+        "attachment_metadata": "artifacts/attachments/*.json",
+        "speech_artifact_metadata": "artifacts/speech/*.json",
+    }
+)
+
+#: Kinds that data snapshots leave out. Each is the sidecar of a blob stored beside
+#: it: a snapshot holds no blobs, and restoring its document set would delete every
+#: sidecar created after the snapshot while its blob stays.
+DOCUMENTS_OUTSIDE_SNAPSHOTS: frozenset[str] = frozenset(
+    {"attachment_metadata", "speech_artifact_metadata"}
+)
+
+#: The JSON document set of a data snapshot: every other durable document.
+SNAPSHOT_DOCUMENTS: Mapping[str, str] = MappingProxyType(
+    {
+        kind: pattern
+        for kind, pattern in DURABLE_DOCUMENTS.items()
+        if kind not in DOCUMENTS_OUTSIDE_SNAPSHOTS
     }
 )
 
@@ -389,8 +409,8 @@ def render_json_document(
     return json.dumps(document, ensure_ascii=False, indent=2) + "\n"
 
 
-def durable_document_paths(data_dir: Path) -> tuple[str, ...]:
-    """Every existing durable JSON document in ``data_dir`` as a relative POSIX path.
+def snapshot_document_paths(data_dir: Path) -> tuple[str, ...]:
+    """Every existing snapshot document in ``data_dir`` as a relative POSIX path.
 
     Only regular files reached through real directories count. Symbolic links,
     Windows junctions and names starting with ``.`` (staging files) never match, so
@@ -400,13 +420,13 @@ def durable_document_paths(data_dir: Path) -> tuple[str, ...]:
 
     root = Path(data_dir)
     found: set[str] = set()
-    for pattern in DURABLE_DOCUMENTS.values():
+    for pattern in SNAPSHOT_DOCUMENTS.values():
         found.update(_matching_documents(root, tuple(pattern.split("/")), ()))
     return tuple(sorted(found))
 
 
-def is_durable_document_path(path: str) -> bool:
-    """Whether ``path`` is a relative POSIX path the document set may contain."""
+def is_snapshot_document_path(path: str) -> bool:
+    """Whether ``path`` is a relative POSIX path the snapshot document set may contain."""
 
     if not isinstance(path, str) or not path or any(char in path for char in "\\:\0"):
         return False
@@ -415,7 +435,7 @@ def is_durable_document_path(path: str) -> bool:
         return False
     return any(
         len(parts) == len(pattern) and all(map(_segment_matches, parts, pattern))
-        for pattern in (tuple(value.split("/")) for value in DURABLE_DOCUMENTS.values())
+        for pattern in (tuple(value.split("/")) for value in SNAPSHOT_DOCUMENTS.values())
     )
 
 

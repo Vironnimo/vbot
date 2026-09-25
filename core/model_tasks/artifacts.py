@@ -9,15 +9,56 @@ and preserve each task's own error type.
 
 from __future__ import annotations
 
-import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from core.config_validation import (
+    JsonConfigValidationError,
+    JsonDiagnostic,
+    JsonValidationReport,
+    add_error,
+    error_diagnostic,
+    load_validated_json_file,
+    validate_json_file,
+    validate_non_empty_string,
+    warn_unknown_keys,
+)
+from core.json_documents import (
+    json_document,
+    render_json_document,
+    strip_unknown_fields,
+    validate_format_version,
+)
+from core.utils.atomic import atomic_write_text
 from core.utils.errors import TaskError
 from core.utils.ids import is_safe_id, new_id, write_id_file
 
-JsonObject = dict[str, Any]
+TASK_ARTIFACT_FORMAT_VERSION = 1
+TASK_ARTIFACT_SHAPE = json_document({"id", "filename", "media_type", "size_bytes"})
+
+
+def validate_task_artifact_metadata_data(data: Any) -> list[JsonDiagnostic]:
+    """Validate one decoded artifact sidecar (``artifacts/speech/<id>.json``)."""
+
+    if not isinstance(data, dict):
+        return [error_diagnostic("$", f"Expected a JSON object, got {type(data).__name__}")]
+    diagnostics: list[JsonDiagnostic] = []
+    if not validate_format_version(diagnostics, data, TASK_ARTIFACT_FORMAT_VERSION):
+        return diagnostics
+    warn_unknown_keys(diagnostics, "$", data, TASK_ARTIFACT_SHAPE.fields, "artifact metadata field")
+    for name in ("id", "filename", "media_type"):
+        validate_non_empty_string(diagnostics, f"$.{name}", data.get(name), required=True)
+    size_bytes = data.get("size_bytes")
+    if isinstance(size_bytes, bool) or not isinstance(size_bytes, int) or size_bytes < 0:
+        add_error(diagnostics, "$.size_bytes", "must be a non-negative integer")
+    return diagnostics
+
+
+def validate_task_artifact_metadata_file(path: str | Path) -> JsonValidationReport:
+    """Validate one artifact sidecar without reading its blob."""
+
+    return validate_json_file(path, validate_task_artifact_metadata_data, missing_ok=False)
 
 
 @dataclass(frozen=True)
@@ -29,7 +70,6 @@ class StoredArtifact:
     media_type: str
     size_bytes: int
     file_path: Path
-    metadata: JsonObject = field(default_factory=dict)
 
 
 class TaskArtifactStore:
@@ -45,19 +85,13 @@ class TaskArtifactStore:
         self._kind = kind
         self._error = error
 
-    def write(
-        self,
-        payload: bytes,
-        *,
-        extension: str,
-        media_type: str,
-        extra_metadata: JsonObject | None = None,
-    ) -> StoredArtifact:
+    def write(self, payload: bytes, *, extension: str, media_type: str) -> StoredArtifact:
         """Persist one blob and its sidecar; returns the stored artifact.
 
         Reserves the sidecar name, then writes the blob and complete metadata.
         Interrupted writes can leave invalid metadata or an orphaned blob;
-        those names stay occupied and reads fail closed.
+        those names stay occupied and reads fail closed. A sidecar is written
+        once and never rewritten.
         """
         self._artifact_dir.mkdir(parents=True, exist_ok=True)
 
@@ -78,22 +112,22 @@ class TaskArtifactStore:
         file_path = self._artifact_dir / filename
         metadata_path = self._artifact_dir / f"{artifact_id}.json"
         file_path.write_bytes(payload)
-        metadata: JsonObject = {
+        metadata = {
             "id": artifact_id,
             "filename": filename,
             "media_type": media_type,
             "size_bytes": len(payload),
         }
-        if extra_metadata:
-            metadata.update(extra_metadata)
-        metadata_path.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n")
+        atomic_write_text(
+            metadata_path,
+            render_json_document(metadata, version=TASK_ARTIFACT_FORMAT_VERSION, sort_keys=True),
+        )
         return StoredArtifact(
             id=artifact_id,
             filename=filename,
             media_type=media_type,
             size_bytes=len(payload),
             file_path=file_path,
-            metadata=metadata,
         )
 
     def read(self, artifact_id: str) -> StoredArtifact:
@@ -105,23 +139,21 @@ class TaskArtifactStore:
         if not metadata_path.is_file() or metadata_path.is_symlink():
             raise self._error(f"{label} artifact not found")
         try:
-            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            data = load_validated_json_file(
+                metadata_path, validate_task_artifact_metadata_data, missing_ok=False
+            )
+        except (OSError, JsonConfigValidationError) as exc:
+            # The cause names the file and its diagnostics; the message stays generic.
             raise self._error(f"{label} artifact metadata is unreadable") from exc
 
-        if not isinstance(metadata, dict) or metadata.get("id") != artifact_id:
-            raise self._error(f"{label} artifact metadata is invalid")
-        filename = metadata.get("filename")
-        media_type = metadata.get("media_type")
-        size_bytes = metadata.get("size_bytes")
+        metadata = strip_unknown_fields(data, TASK_ARTIFACT_SHAPE)
+        filename = metadata["filename"]
         prefix = f"{artifact_id}."
         if (
-            not isinstance(filename, str)
+            metadata["id"] != artifact_id
             or not filename.startswith(prefix)
             or not is_safe_id(filename[len(prefix) :])
             or filename == metadata_path.name
-            or not isinstance(media_type, str)
-            or not media_type.strip()
         ):
             raise self._error(f"{label} artifact metadata is invalid")
         file_path = self._artifact_dir / filename
@@ -132,22 +164,14 @@ class TaskArtifactStore:
                 or not file_path.is_file()
             ):
                 raise self._error(f"{label} artifact file not found")
-            actual_size = file_path.stat().st_size
         except OSError as exc:
             raise self._error(f"{label} artifact file is unreadable") from exc
         return StoredArtifact(
             id=artifact_id,
             filename=filename,
-            media_type=media_type,
-            size_bytes=(
-                size_bytes
-                if isinstance(size_bytes, int)
-                and not isinstance(size_bytes, bool)
-                and size_bytes >= 0
-                else actual_size
-            ),
+            media_type=metadata["media_type"],
+            size_bytes=metadata["size_bytes"],
             file_path=file_path,
-            metadata=metadata,
         )
 
 
