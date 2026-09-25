@@ -301,8 +301,8 @@ function withTimeout(promise, timeoutMs) {
  * asking the Desktop to pause wakeword listening, or a Live voice notice code
  * when it cannot: `desktop_restart_required` when this server is not a secure
  * context because it was added after the Desktop app started. Bridge failures
- * are logged and never block Live voice. `release()` resumes wakeword
- * listening.
+ * are logged and never block Live voice. Pair every successful acquisition
+ * with one `release()`; wakeword resumes after the last holder releases.
  */
 export function createDesktopLiveVoiceLease({
   timeoutMs = LIVE_VOICE_LEASE_TIMEOUT_MS,
@@ -319,6 +319,7 @@ export function createDesktopLiveVoiceLease({
 
   // Whether this lease asked the Desktop to pause, so release resumes it.
   let paused = false;
+  let holders = 0;
 
   return {
     async acquire() {
@@ -331,6 +332,9 @@ export function createDesktopLiveVoiceLease({
           'Desktop marked this server secure, but the page is not a secure context',
         );
       }
+      // A cancelled start can finish acquiring after a newer call has started.
+      // Its release must not resume wakeword while that call holds the lease.
+      holders += 1;
       if (!caps?.liveWakeword) return null;
       paused = true;
       try {
@@ -341,6 +345,9 @@ export function createDesktopLiveVoiceLease({
       return null;
     },
     release() {
+      if (holders === 0) return;
+      holders -= 1;
+      if (holders > 0) return;
       if (!paused) return;
       paused = false;
       setDesktopLiveVoiceActive(false).catch((error) => {

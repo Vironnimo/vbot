@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createLiveVoice, createLiveVoiceState } from '../liveVoice.js';
+import { createDesktopLiveVoiceLease } from '../desktopBridge.js';
 
 class Events {
   constructor() {
@@ -1125,6 +1126,58 @@ describe('Live voice microphone lease', () => {
     expect(f.mediaDevices.getUserMedia).not.toHaveBeenCalled();
     expect(f.lease.release).toHaveBeenCalledOnce();
     expect(f.onNotice).not.toHaveBeenCalled();
+  });
+
+  it('keeps Desktop wakeword paused when an old start acquires after its successor is live', async () => {
+    const oldCapabilities = deferred();
+    const capabilities = { liveWakeword: true };
+    let desktopPaused = false;
+    const setLiveVoiceActive = vi.fn(async (active) => {
+      desktopPaused = active;
+      return { active };
+    });
+    vi.stubGlobal('window', {
+      location: {
+        search: '?accessor=desktop',
+        origin: 'http://localhost:8420',
+      },
+      isSecureContext: true,
+      pywebview: {
+        api: {
+          getDesktopCapabilities: vi
+            .fn()
+            .mockReturnValueOnce(oldCapabilities.promise)
+            .mockResolvedValue(capabilities),
+          setLiveVoiceActive,
+        },
+      },
+    });
+    const f = liveFixture({ microphoneLease: createDesktopLiveVoiceLease() });
+    try {
+      const oldStart = f.controller.start();
+      await flush();
+      f.controller.stop();
+      await f.goLive();
+      expect(desktopPaused).toBe(true);
+
+      oldCapabilities.resolve(capabilities);
+      await oldStart;
+      await flush();
+
+      expect(f.state.phase).toBe('live');
+      expect(desktopPaused).toBe(true);
+      expect(setLiveVoiceActive.mock.calls).toEqual([[true]]);
+      expect(f.mediaDevices.getUserMedia).toHaveBeenCalledOnce();
+      f.controller.stop();
+      await flush();
+      expect(desktopPaused).toBe(false);
+      expect(setLiveVoiceActive.mock.calls).toEqual([[true], [false]]);
+    } finally {
+      oldCapabilities.resolve(capabilities);
+      f.controller.destroy();
+      await flush();
+      vi.unstubAllGlobals();
+    }
   });
 
   it('holds the lease the same way for relayed audio', async () => {
