@@ -12,9 +12,9 @@ data Generation 1 no longer tolerates is normalized:
   pre-Generation-1 application applied to it, frozen here.
 - An Identity Agent's retired ``allowed_tools`` becomes ``tool_access``, or is
   dropped when ``tool_access`` already exists.
-- The retired ``grep`` and ``glob`` Tools become ``search_files`` in Agent Tool
-  access, Project Tool whitelists and Project Agent overrides, without widening
-  any policy (see ``_tool_access``).
+- Retired Tool names are replaced by their successors, or dropped, in Agent
+  Tool access, Project Tool whitelists and Project Agent overrides, without
+  widening any policy (see ``_tool_access``).
 - A Channel's retired ``owner_user_ids`` is dropped.
 - Attachment sidecars (``artifacts/attachments/<id>.json``) lose the stored
   ``file_path``, which vBot derives from the data directory, and the retired
@@ -44,9 +44,9 @@ from core.json_documents import FORMAT_VERSION_FIELD, render_json_document
 from scripts.converters.persistence_generation_1._context import ConversionContext
 from scripts.converters.persistence_generation_1._tool_access import (
     ToolAccessConversionError,
-    consolidate_search_ceiling,
-    consolidate_search_policy,
     convert_legacy_allowed_tools,
+    convert_policy,
+    convert_whitelist,
 )
 
 AREA = "json_documents"
@@ -102,6 +102,12 @@ class _Notes:
 
     def approximate(self, reason: str) -> None:
         self.context.report.skip(AREA, self.relative, reason)
+
+    def retired_tools(self, field: str, changes: list[str]) -> None:
+        """Report the retired Tool names replaced or dropped in one field."""
+        if changes:
+            self.count("retired_tool_names_converted")
+            self.approximate(f"{field}: {'; '.join(changes)}")
 
 
 def convert(context: ConversionContext) -> None:
@@ -204,7 +210,8 @@ def _agent(value: Any, notes: _Notes) -> dict[str, Any]:
             agent["tool_access"] = policy.to_dict()
             notes.count("agent_allowed_tools_converted")
     if "tool_access" in agent:
-        agent["tool_access"] = _search_policy(agent["tool_access"], "tool_access", notes)
+        agent["tool_access"], changes = convert_policy(agent["tool_access"])
+        notes.retired_tools("tool_access", changes)
     return agent
 
 
@@ -214,12 +221,8 @@ def _project(value: Any, notes: _Notes) -> dict[str, Any]:
         project["allowed_tools"] = list(_LEGACY_PROJECT_ALLOWED_TOOLS)
         notes.count("project_allowed_tools_filled")
     elif isinstance(project["allowed_tools"], list):
-        ceiling, narrowed = consolidate_search_ceiling(project["allowed_tools"])
-        if ceiling != project["allowed_tools"]:
-            project["allowed_tools"] = ceiling
-            notes.count("search_tools_consolidated")
-        if narrowed is not None:
-            notes.approximate(f"allowed_tools: {narrowed}")
+        project["allowed_tools"], changes = convert_whitelist(project["allowed_tools"])
+        notes.retired_tools("allowed_tools", changes)
     overrides = project.get("overrides")
     if isinstance(overrides, dict):
         project["overrides"] = {
@@ -232,24 +235,9 @@ def _project(value: Any, notes: _Notes) -> dict[str, Any]:
 def _override(agent_id: str, override: Any, notes: _Notes) -> Any:
     if not isinstance(override, dict) or "tool_access" not in override:
         return override
-    policy = _search_policy(override["tool_access"], f"overrides.{agent_id}.tool_access", notes)
+    policy, changes = convert_policy(override["tool_access"])
+    notes.retired_tools(f"overrides.{agent_id}.tool_access", changes)
     return {**override, "tool_access": policy}
-
-
-def _search_policy(policy: Any, field: str, notes: _Notes) -> Any:
-    """Consolidate the retired search Tools of one policy; an invalid one stays as it is."""
-    if not isinstance(policy, dict):
-        return policy
-    try:
-        converted, narrowed = consolidate_search_policy(policy)
-    except ValueError:
-        # The application reports the invalid policy; nothing here can repair it.
-        return policy
-    if converted != policy:
-        notes.count("search_tools_consolidated")
-    if narrowed is not None:
-        notes.approximate(f"{field}: {narrowed}")
-    return converted
 
 
 def _channel(value: Any, notes: _Notes) -> dict[str, Any]:

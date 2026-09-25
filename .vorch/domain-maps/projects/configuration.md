@@ -15,13 +15,12 @@ Read this reference when changing the persisted Project shape, Project Anchor li
 - Skill ceiling: `skills_bundled_enabled`, `skills_global_enabled`, and `skills_project_disabled`.
 - Per-Agent overrides: an `overrides` object keyed by Project Agent id. Supported override fields are exactly `model`, `temperature`, `thinking_effort`, `compaction_policy`, and `tool_access`. Tool access uses the same strict policy shape as Identity Agents; an override's `allowed` and explicit `granted` names must be subsets of the Project Tool Whitelist.
 
-The default Tool ceiling uses `apply_patch` instead of the archived `edit`. Explicit
-persisted ceilings remain unchanged; an unavailable `edit` entry remains removable
-and does not automatically grant `apply_patch`.
-
-The default search capability is `search_files`. The Generation 1 converter
-consolidates retired grep/glob ceilings and override policies into `search_files`
-without widening access (`database/generation-1-conversion.md`).
+The default Tool ceiling uses `apply_patch` instead of the archived `edit`, and
+`search_files` as its search capability. The application never rewrites explicit
+persisted ceilings; an unavailable retired entry remains removable and grants
+nothing. The Generation 1 converter replaces retired Tool names in ceilings and
+override policies with their successors without widening access
+(`database/generation-1-conversion.md` -> Retired Tool names).
 
 Project defaults are fallback inputs shared by its Agents. Overrides target one current Team member and take precedence during resolution; they are not edits to the repository Agent file.
 

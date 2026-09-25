@@ -882,6 +882,48 @@ def test_owner_managed_rows_keep_their_order(tmp_path: Path) -> None:
     ]
 
 
+def test_retired_tool_names_in_a_binding_are_replaced_and_reported(tmp_path: Path) -> None:
+    context = _context(tmp_path)
+    tool_access = {"mode": "selected", "allowed": ["write", "edit", "glob", "grep", "read"]}
+    with _legacy(context) as legacy:
+        key = legacy.session("member")
+        legacy.bind(
+            key,
+            owner="swarm",
+            group="g1",
+            participant="p1",
+            config={"model": "m", "tool_access": tool_access},
+        )
+        current = legacy.session("current")
+        legacy.bind(
+            current,
+            owner="swarm",
+            group="g1",
+            participant="p2",
+            config={"tool_access": {"mode": "selected", "allowed": ["read"]}},
+        )
+
+    convert(context)
+
+    with _opened(context) as manager:
+        binding = manager.temporary_binding(
+            SessionAddress(project_id=None, agent_id="main", session_id="member")
+        )
+        assert binding is not None
+        assert binding.config == {
+            "model": "m",
+            "tool_access": {"mode": "selected", "allowed": ["apply_patch", "search_files", "read"]},
+        }
+    assert context.report.counts[AREA]["retired_tool_names_converted"] == 1
+    assert _skips(context) == [
+        (
+            "temporary Session binding swarm/g1/p1",
+            "tool_access: write and edit replaced by apply_patch; "
+            "glob and grep replaced by search_files",
+        )
+    ]
+
+
 def test_search_finds_converted_messages(tmp_path: Path) -> None:
     context = _context(tmp_path)
     with _legacy(context) as legacy:

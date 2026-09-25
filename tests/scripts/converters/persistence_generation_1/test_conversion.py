@@ -183,8 +183,15 @@ def test_dry_run_verifies_everything_and_leaves_the_data_directory_unchanged(
     assert len(verification["sessions"]["loaded_through_the_application"]) == 2
     assert verification["json_documents"]["documents_with_errors"] == 0
     assert "sessions.db-wal" in report["install"]["moved_aside"]
-    # The Telegram polling watermark names no bot and is dropped.
-    assert report["skipped_by_area"] == {"provider_usage": 1, "mcp": 1, "channels": 1}
+    # The Telegram polling watermark names no bot and is dropped; the retired
+    # grep and glob of the Agent are replaced.
+    assert report["skipped_by_area"] == {
+        "json_documents": 1,
+        "provider_usage": 1,
+        "mcp": 1,
+        "channels": 1,
+    }
+    assert report["areas"]["json_documents"]["retired_tool_names_converted"] == 1
     assert report["sizes"]["installed_bytes"] > 0
     assert read_maintenance(data_dir) is None
 

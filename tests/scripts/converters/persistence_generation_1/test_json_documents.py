@@ -247,91 +247,141 @@ def test_agent_with_unconvertible_allowed_tools_is_left_unconverted(tmp_path: Pa
     assert skipped.reason.startswith("left unconverted: allowed_tools mixes '*'")
 
 
-@pytest.mark.parametrize(
-    ("policy", "converted", "narrowed"),
-    [
-        (
-            {"mode": "selected", "allowed": ["read", "grep", "glob"]},
-            {"mode": "selected", "allowed": ["read", "search_files"]},
-            False,
-        ),
-        (
-            {"mode": "all", "denied": ["grep", "glob"]},
-            {"mode": "all", "denied": ["search_files"]},
-            False,
-        ),
-        (
-            {"mode": "selected", "allowed": ["read", "grep"]},
-            {"mode": "selected", "allowed": ["read"]},
-            True,
-        ),
-        ({"mode": "all", "denied": ["glob"]}, {"mode": "all", "denied": ["search_files"]}, True),
-        (
-            {"mode": "selected", "allowed": ["grep", "search_files"]},
-            {"mode": "selected", "allowed": ["search_files"]},
-            False,
-        ),
-    ],
-)
-def test_agent_search_tools_are_consolidated_without_widening(
-    tmp_path: Path, policy: dict[str, Any], converted: dict[str, Any], narrowed: bool
+def test_retired_tool_names_in_agent_tool_access_are_replaced_and_reported(
+    tmp_path: Path,
 ) -> None:
     context = _context(tmp_path)
+    policy = {
+        "mode": "selected",
+        "allowed": ["bash", "edit", "grep", "write", "glob", "subagent", "subagent_result"],
+    }
     _write(context.source, "agents/main/agent.json", _agent(tool_access=policy))
-
-    convert(context)
-
-    assert _staged(context, "agents/main/agent.json")["tool_access"] == converted
-    assert context.report.counts[AREA]["search_tools_consolidated"] == 1
-    assert bool(context.report.skipped) == narrowed
-
-
-def test_legacy_allowed_tools_with_both_search_tools_grant_search_files(tmp_path: Path) -> None:
-    context = _context(tmp_path)
-    _write(context.source, "agents/main/agent.json", _agent(allowed_tools=["glob", "grep"]))
+    _write(
+        context.source,
+        "agents/other/agent.json",
+        _agent("other", tool_access={"mode": "all", "denied": ["edit", "browser"]}),
+    )
+    _write(
+        context.source,
+        "agents/current/agent.json",
+        _agent("current", tool_access={"mode": "selected", "allowed": ["search_files"]}),
+    )
 
     convert(context)
 
     assert _staged(context, "agents/main/agent.json")["tool_access"] == {
         "mode": "selected",
-        "allowed": ["search_files"],
+        "allowed": ["bash", "apply_patch", "search_files", "subagent"],
     }
+    assert _staged(context, "agents/other/agent.json")["tool_access"] == {"mode": "all"}
+    assert context.report.counts[AREA]["retired_tool_names_converted"] == 2
+    assert [(item.item, item.reason) for item in context.report.skipped] == [
+        (
+            "agents/main/agent.json",
+            "tool_access: edit and write replaced by apply_patch; "
+            "grep and glob replaced by search_files; "
+            "subagent_result dropped: subagent includes its status lookup",
+        ),
+        (
+            "agents/other/agent.json",
+            "tool_access: edit dropped (apply_patch stays allowed); "
+            "browser dropped: browser automation moved to the playwright-cli Skill",
+        ),
+    ]
 
 
-def test_project_search_tools_are_consolidated_in_whitelist_and_overrides(tmp_path: Path) -> None:
+def test_retired_tool_names_that_do_not_cover_the_successor_report_the_narrowing(
+    tmp_path: Path,
+) -> None:
+    context = _context(tmp_path)
+    policy = {"mode": "selected", "allowed": ["read", "edit"]}
+    _write(context.source, "agents/main/agent.json", _agent(tool_access=policy))
+
+    convert(context)
+
+    assert _staged(context, "agents/main/agent.json")["tool_access"] == {
+        "mode": "selected",
+        "allowed": ["read"],
+    }
+    [skipped] = context.report.skipped
+    assert skipped.reason == (
+        "tool_access: edit dropped (apply_patch not granted): apply_patch needs write, "
+        "so the access of edit is not carried over; enable apply_patch explicitly if wanted"
+    )
+
+
+def test_legacy_allowed_tools_with_retired_names_grant_their_successors(tmp_path: Path) -> None:
+    context = _context(tmp_path)
+    _write(
+        context.source,
+        "agents/main/agent.json",
+        _agent(allowed_tools=["glob", "grep", "write", "terminal_beta"]),
+    )
+
+    convert(context)
+
+    assert _staged(context, "agents/main/agent.json")["tool_access"] == {
+        "mode": "selected",
+        "allowed": ["search_files", "apply_patch", "terminal"],
+    }
+    assert context.report.counts[AREA]["agent_allowed_tools_converted"] == 1
+    assert context.report.counts[AREA]["retired_tool_names_converted"] == 1
+
+
+def test_retired_tool_names_are_replaced_in_project_whitelists_and_overrides(
+    tmp_path: Path,
+) -> None:
     context = _context(tmp_path)
     project = {
         "project_id": "a",
         "display_name": "A",
         "cwd": "/srv/a",
-        "allowed_tools": ["read", "grep", "glob"],
+        "allowed_tools": ["read", "write", "edit", "grep", "glob", "terminal_beta", "bash"],
         "overrides": {
             "worker": {
                 "model": "m",
-                "tool_access": {"mode": "selected", "allowed": ["glob", "grep"]},
+                "tool_access": {"mode": "selected", "allowed": ["glob", "grep", "write"]},
             },
+            "reviewer": {"tool_access": {"mode": "all", "denied": ["bash", "edit", "write"]}},
             "reader": {"tool_access": {"mode": "selected", "allowed": ["grep"]}},
         },
     }
     _write(context.source, "projects/a/project.json", project)
     _write(
-        context.source, "projects/b/project.json", {**project, "allowed_tools": ["read", "glob"]}
+        context.source,
+        "projects/b/project.json",
+        {**project, "allowed_tools": ["read", "apply_patch", "write", "glob"], "overrides": {}},
     )
 
     convert(context)
 
     converted = _staged(context, "projects/a/project.json")
-    assert converted["allowed_tools"] == ["read", "search_files"]
+    assert converted["allowed_tools"] == ["read", "apply_patch", "search_files", "terminal", "bash"]
     assert converted["overrides"] == {
-        "worker": {"model": "m", "tool_access": {"mode": "selected", "allowed": ["search_files"]}},
+        "worker": {
+            "model": "m",
+            "tool_access": {"mode": "selected", "allowed": ["search_files", "apply_patch"]},
+        },
+        "reviewer": {"tool_access": {"mode": "all", "denied": ["bash", "apply_patch"]}},
         "reader": {"tool_access": {"mode": "selected", "allowed": []}},
     }
-    assert _staged(context, "projects/b/project.json")["allowed_tools"] == ["read"]
-    assert sorted(item.reason.split(":")[0] for item in context.report.skipped) == [
-        "allowed_tools",
-        "overrides.reader.tool_access",
-        "overrides.reader.tool_access",
+    assert _staged(context, "projects/b/project.json")["allowed_tools"] == ["read", "apply_patch"]
+    assert context.report.counts[AREA]["retired_tool_names_converted"] == 5
+    assert [(item.item, item.reason.split(":")[0]) for item in context.report.skipped] == [
+        ("projects/a/project.json", "allowed_tools"),
+        ("projects/a/project.json", "overrides.worker.tool_access"),
+        ("projects/a/project.json", "overrides.reviewer.tool_access"),
+        ("projects/a/project.json", "overrides.reader.tool_access"),
+        ("projects/b/project.json", "allowed_tools"),
     ]
+    assert context.report.skipped[2].reason == (
+        "overrides.reviewer.tool_access: edit and write replaced by a denial of apply_patch"
+    )
+    assert context.report.skipped[4].reason == (
+        "allowed_tools: write dropped (apply_patch already allowed); glob dropped "
+        "(search_files not granted): search_files needs both grep and glob, so the access "
+        "of glob is not carried over; enable search_files explicitly if wanted"
+    )
 
 
 def test_invalid_tool_access_is_carried_over_for_the_application_to_report(
