@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from contextlib import suppress
 from pathlib import Path
 from types import SimpleNamespace
@@ -82,6 +83,19 @@ pytestmark = pytest.mark.asyncio
 
 JsonObject = dict[str, Any]
 BACKGROUND_TASK_SETTLE_TICKS = 5
+
+
+async def wait_until(condition: Callable[[], bool]) -> None:
+    """Yield to the loop until ``condition`` holds.
+
+    A spawn opens its child Session on the Session database's pool, so the
+    child Run starts or queues a few loop turns after the spawn begins.
+    """
+    for _ in range(500):
+        if condition():
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError("condition not reached")
 
 
 def activity_path_from_note(note: str) -> str:
