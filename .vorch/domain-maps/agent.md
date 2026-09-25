@@ -48,7 +48,7 @@ Chains: identity agents keep model -> global -> empty. Config agents resolve ove
 
 - Agent IDs: filesystem-safe slugs, letter/digit start, letters/digits/hyphen/underscore, max 64 chars. Lookups are exact on every platform: `get`/`get_raw`/`exists`/update/rename/delete/current-Session repair require a directory entry with exactly the requested spelling (`_stored_agent_path`), so a case variant is `AgentNotFoundError` (RPC `agent_not_found`, also when it arrives through Agent resolution; `projects/resolution.md`) even where the filesystem would open the stored tree, while a persisted id disagreeing with its directory stays a plain `AgentError` (`test_agents.py`). A store-local reentrant lock serializes complete lifecycle read-modify-write operations, current-Session repairs, and roster revisions across worker threads. Writes use temp-file atomic replace; relative persisted Workspaces resolve only against the active data directory, never cwd.
 - The only seeded template is `SOUL.md`; USER.md/MEMORY.md belong to the memory system and create lazily on first write - a memory-off agent has neither, and deletion does not resurrect them.
-- `scripts/converters/agent_tool_access.py` converts the retired root allowed_tools shape (the Generation 1 converter reuses its `convert_legacy_allowed_tools`); the loader contains none. Its explicit retired-Tool removal filters allow, deny, and grant lists while preserving unrelated opt-ins.
+- The Generation 1 converter turns the retired root `allowed_tools` shape into `tool_access` (`scripts/converters/persistence_generation_1/_tool_access.py`, `database/generation-1-conversion.md`); the loader contains none.
 - Mutable-field validation lives server/core-side: effort vocabulary `null|""|none|minimal|low|medium|high|xhigh|max` (null inherits, "" = provider default), temperature null or 0.0-2.0 (0.0 real), strict policy shape, shell-portable env names. Enabling custom prompts seeds the agent prompt directory once; re-enabling preserves existing files.
 - Run-local model fallback never mutates persisted model/fallback fields. The `::connection[:account]` suffix stores the provider-local slug, reconstructed to full runtime form at resolution; Account semantics in `providers/connections.md`.
 
@@ -62,7 +62,7 @@ Chains: identity agents keep model -> global -> empty. Config agents resolve ove
 - `lifecycle_guard` lets another domain hold the store's existing mutation lock across private-home lookup, writes and invalidation. Runtime injects it into the registered Skill authoring Tool to protect shared-owner trees from concurrent rename/archive. Guarded work runs in a worker and must not call back into the Event Loop; Agent deletion also offloads its roster read and archive (`tests/core/runtime/test_runtime_skill_lifecycle.py`).
 - `update_with_metadata` owns transactional Workspace relocation with copied/backed-up metadata; `agents_rooted_in`/`restore_update` support Project removal compensation.
 
-Manual search permission consolidation is owned by `scripts/converters/search_files_access.py`; both old capabilities must permit consolidation, otherwise an explicit choice is required. See `tools/search_files.md`.
+The Generation 1 converter consolidates retired `grep`/`glob` policy entries into `search_files` without widening access; see `tools/search_files.md`.
 
 ## Constraints & Gotchas
 
