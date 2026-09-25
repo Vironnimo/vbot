@@ -44,7 +44,7 @@ from core.tools._bash_update_handoff import (
     UpdateHandoffGrant,
     UpdateHandoffs,
 )
-from core.tools._powershell import with_utf8_output
+from core.tools._powershell import powershell_command
 from core.tools.arguments import optional_number, optional_string
 from core.tools.availability import bash_allowed_env_keys, normalize_env_keys
 from core.tools.bash_hints import annotate_failure
@@ -769,8 +769,9 @@ def _shell_argv(command: str) -> list[str]:
     if sys.platform == "win32":
         # Keep PowerShell host prompts unavailable even when a command attempts
         # to use the host instead of the closed standard input stream. Process
-        # output is decoded as UTF-8, so the console must also emit UTF-8.
-        return ["pwsh", "-NonInteractive", "-Command", with_utf8_output(command)]
+        # output is decoded as UTF-8, so the console must also emit UTF-8, and
+        # the exit status must be the last native program's, as with bash.
+        return ["pwsh", "-NonInteractive", "-Command", powershell_command(command)]
     return ["bash", "-c", command]
 
 

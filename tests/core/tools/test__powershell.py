@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import pytest
 
-from core.tools._powershell import UTF8_OUTPUT_STATEMENT, with_utf8_output
+from core.tools._powershell import (
+    EXIT_STATUS_STATEMENT,
+    UTF8_OUTPUT_STATEMENT,
+    powershell_command,
+    with_utf8_output,
+)
 
 SETUP = UTF8_OUTPUT_STATEMENT
 
@@ -57,3 +62,19 @@ def test_unterminated_leading_construct_keeps_setup_before_it() -> None:
     # PowerShell reports the original syntax error; the setup adds no new one.
     assert with_utf8_output("param('unterminated") == f"{SETUP}\nparam('unterminated"
     assert with_utf8_output("using namespace A\nparam(") == f"using namespace A\n{SETUP}\nparam("
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["python -c 'raise SystemExit(5)'", "param($x) $x", "using namespace System.Text\n1"],
+)
+def test_command_ends_with_the_exit_status_statement(command: str) -> None:
+    wrapped = powershell_command(command)
+
+    assert wrapped == f"{with_utf8_output(command)}\n{EXIT_STATUS_STATEMENT}"
+
+
+@pytest.mark.parametrize("command", ["begin { 'b' } end { 'e' }", "param($x) process { $x }"])
+def test_named_block_script_keeps_powershell_exit_status(command: str) -> None:
+    # A script of named blocks admits no statement after its blocks.
+    assert powershell_command(command) == with_utf8_output(command)
