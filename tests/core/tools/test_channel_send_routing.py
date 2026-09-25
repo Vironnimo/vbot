@@ -24,6 +24,7 @@ from tests.core.tools.channel_send_helpers import (
     dispatch,
     make_channel_config,
     make_chat_sessions,
+    make_context,
 )
 
 
@@ -270,6 +271,74 @@ def test_channel_send_resolves_platform_target_from_unique_allowed_chat_id(tmp_p
         thread_id=None,
         buttons=None,
     )
+
+
+@pytest.mark.usefixtures("current_format_data_directory")
+@pytest.mark.parametrize("target_source", ["configured_default", "project_metadata"])
+@pytest.mark.asyncio
+async def test_project_session_resolves_its_own_implicit_channel_target(
+    tmp_path: Path, target_source: str
+) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    project_address = SessionAddress(
+        project_id="project-one", agent_id="agent-1", session_id="session-1"
+    )
+    sessions.create("agent-1", session_id="session-1", project_id="project-one")
+    expected_target = "12345"
+    if target_source == "project_metadata":
+        expected_target = "23456"
+        sessions.set_metadata(
+            project_address,
+            {
+                "last_reply_target": {
+                    "channel_id": "tg-assistant",
+                    "platform_target": expected_target,
+                }
+            },
+        )
+        # An identically named Identity Session must never choose the Project
+        # Session's destination, even when its Channel id also matches.
+        identity = sessions.create("agent-1", session_id="session-1")
+        sessions.set_metadata(
+            identity.address,
+            {
+                "last_reply_target": {
+                    "channel_id": "tg-assistant",
+                    "platform_target": "99999",
+                }
+            },
+        )
+    channel_service = Mock()
+    channel_service.send = AsyncMock()
+    channel_service.list_channels.return_value = [make_channel_config(allowed_chat_ids=[12345])]
+    channel_service.ensure_outbound_session = AsyncMock(
+        return_value=RouteFacts(agent_id="agent-1", session_id="outbound-session")
+    )
+    registry = ToolRegistry()
+    register_channel_send_tool(
+        registry,
+        channel_service,
+        sessions,
+        max_attachment_size_bytes=_TEST_MAX_ATTACHMENT_SIZE_BYTES,
+    )
+    try:
+        result = await registry.dispatch(
+            make_context(tmp_path, project_id="project-one"),
+            {"channel_id": "tg-assistant", "message": "Project result"},
+            ["channel_send"],
+        )
+
+        assert assert_success_envelope(result)["platform_target"] == expected_target
+        channel_service.send.assert_awaited_once_with(
+            "tg-assistant",
+            "Project result",
+            expected_target,
+            files=None,
+            thread_id=None,
+            buttons=None,
+        )
+    finally:
+        sessions.close()
 
 
 def test_channel_send_passes_explicit_thread_id(tmp_path: Path) -> None:
