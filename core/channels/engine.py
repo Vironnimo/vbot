@@ -320,8 +320,9 @@ class ChannelConversationEngine:
 
         A ``channel_send``-bound tap atomically claims its durable origin, points
         the Channel conversation at that Session, then enters the same per-chat
-        FIFO as following messages. Legacy unbound ``run:<payload>`` buttons keep
-        routing to the Channel's current active Session.
+        FIFO as following messages. Unbound ``run:<payload>`` buttons, sent without
+        a Run origin (for example from a Project Session), route to the Channel's
+        current active Session.
         """
         conversation = await self._access._snapshot_group_sender(conversation)
         if not self._access._command_sender_authorized(conversation):
