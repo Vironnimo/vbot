@@ -4,7 +4,7 @@ One Live call is active per server; starting another ends it. The accessor that
 started a call owns its media and display: it attaches one owner socket at
 ``/ws/live/{call_id}`` and answers UI requests through ``live.ui_result``. The
 registry buffers call updates until the owner attaches, ends a call whose owner
-never attaches or does not return, runs the call's app Tools, and feeds vBot
+never attaches or does not return, runs the call's Live Tools, and feeds vBot
 Runs that finish during the call to it.
 
 Owner socket frames, server to accessor:
@@ -44,14 +44,9 @@ from typing import Any, Protocol
 
 from core.model_tasks.live import LiveCall, LiveCallHost
 from core.utils.ids import new_id
+from server._live_context import UI_TIMEOUT, UI_UNAVAILABLE, LiveUiError, RpcInvoker
 from server._live_feed import LiveRunFeed
-from server._live_tools import (
-    UI_TIMEOUT,
-    UI_UNAVAILABLE,
-    LiveToolExecutor,
-    LiveUiError,
-    RpcInvoker,
-)
+from server._live_tools import LiveToolExecutor
 from server.events import ServerEventBus
 
 JsonObject = dict[str, Any]
@@ -194,7 +189,9 @@ class _LiveCallEntry:
         self._malformed_audio_logged = False
         self._ui_requests: dict[str, asyncio.Future[JsonObject]] = {}
         self._tool_lock = asyncio.Lock()
-        self._executor = LiveToolExecutor(rpc=rpc, ui=self.ui_request, is_active=self._is_active)
+        self._executor = LiveToolExecutor(
+            rpc=rpc, ui=self.ui_request, is_active=self._is_active, started_at=started_at
+        )
         self._feed: LiveRunFeed | None = None
         self._timer: asyncio.Task[None] | None = None
         self._watcher: asyncio.Task[None] | None = None
@@ -214,7 +211,7 @@ class _LiveCallEntry:
     # -- LiveCallHost -----------------------------------------------------
 
     async def execute_tool(self, name: str, arguments: JsonObject) -> JsonObject:
-        """Run one app operation; executions of one call never overlap."""
+        """Run one prepared Live Tool call; executions of one call never overlap."""
         async with self._tool_lock:
             return await self._executor.execute(name, arguments)
 
@@ -247,6 +244,7 @@ class _LiveCallEntry:
             events=self._events,
             rpc=self._rpc,
             announce=call.announce_run,
+            describe_session=self._executor.session_ref,
             report_failure=self._report_notification_failure,
             started_at=self._started_at,
             after_sequence=self._after_sequence,

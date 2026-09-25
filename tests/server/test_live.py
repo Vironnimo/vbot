@@ -134,9 +134,13 @@ class FakeRpc:
             await gate.wait()
         if self.error is not None:
             raise self.error
-        if method == "chat.run_result":
-            return {"content": "Done.", "truncated": False}
-        return {"sessions": []}
+        answers: dict[str, JsonObject] = {
+            "chat.run_result": {"content": "Done.", "truncated": False},
+            "agent.list": {"agents": [{"id": "joel", "name": "Joel"}]},
+            "project.list": {"projects": []},
+            "terminal.list": {"terminals": [], "groups": []},
+        }
+        return answers.get(method, {"sessions": []})
 
 
 class OwnerReader:
@@ -464,15 +468,20 @@ async def test_a_call_ending_without_a_closed_update_gets_one(live: Harness) -> 
 async def test_ui_requests_round_trip_through_the_owner(live: Harness) -> None:
     call = await live.start()
     reader = live.attach(call)
-    task = asyncio.create_task(call.host.execute_tool("vbot_app", {"action": "context"}))
+    task = asyncio.create_task(call.host.execute_tool("open", {"view": "terminals"}))
     await settle(lambda: len(reader.frames) == 1)
     request = reader.frames[0]
     assert request["type"] == "ui_request"
-    assert request["action"] == "context"
-    assert request["args"] == {}
+    assert request["action"] == "open"
+    assert request["args"] == {"view": "terminals"}
     request_id = request["request_id"]
-    assert live.registry.resolve_ui_request(call.id, request_id, result={"view": "chat"})
-    assert await task == {"view": "chat"}
+    assert live.registry.resolve_ui_request(call.id, request_id, result={"applied": True})
+    assert await task == {
+        "ok": True,
+        "error": None,
+        "data": {"content": "Opened the terminals view."},
+        "artifacts": [],
+    }
     assert live.registry.resolve_ui_request(call.id, request_id, result={}) is False
 
 
@@ -480,20 +489,13 @@ async def test_ui_requests_round_trip_through_the_owner(live: Harness) -> None:
 async def test_an_owner_error_code_fails_the_operation(live: Harness) -> None:
     call = await live.start()
     reader = live.attach(call)
-    task = asyncio.create_task(
-        call.host.execute_tool("vbot_app", {"action": "open", "view": "terminals"})
-    )
+    task = asyncio.create_task(call.host.execute_tool("open", {"view": "terminals"}))
     await settle(lambda: len(reader.frames) == 1)
-    assert reader.frames[0]["args"] == {"view": "terminals"}
     live.registry.resolve_ui_request(call.id, reader.frames[0]["request_id"], error="unknown_view")
-    assert await task == {
-        "ok": False,
-        "error": {
-            "code": "unknown_view",
-            "message": "The app could not apply this.",
-            "delivery_uncertain": False,
-        },
-    }
+    result = await task
+    assert result["ok"] is False
+    assert result["error"]["code"] == "unknown_view"
+    assert result["error"]["message"] == "The app could not do this (unknown_view)."
 
 
 @pytest.mark.asyncio
@@ -502,9 +504,9 @@ async def test_an_unanswered_ui_request_times_out_as_uncertain() -> None:
     try:
         call = await harness.start()
         harness.attach(call)
-        result = await call.host.execute_tool("vbot_app", {"action": "context"})
+        result = await call.host.execute_tool("open", {"view": "terminals"})
         assert result["error"]["code"] == "ui_timeout"
-        assert result["error"]["delivery_uncertain"] is True
+        assert "may or may not show the change" in result["error"]["message"]
     finally:
         await harness.close()
 
@@ -512,10 +514,10 @@ async def test_an_unanswered_ui_request_times_out_as_uncertain() -> None:
 @pytest.mark.asyncio
 async def test_ui_requests_fail_without_an_owner_or_once_the_call_ended(live: Harness) -> None:
     call = await live.start()
-    unattached = await call.host.execute_tool("vbot_app", {"action": "context"})
+    unattached = await call.host.execute_tool("open", {"view": "terminals"})
     assert unattached["error"]["code"] == "ui_unavailable"
     reader = live.attach(call)
-    task = asyncio.create_task(call.host.execute_tool("vbot_app", {"action": "context"}))
+    task = asyncio.create_task(call.host.execute_tool("open", {"view": "terminals"}))
     await settle(lambda: len(reader.frames) == 1)
     await call.abort()
     ended = await task
@@ -527,18 +529,16 @@ async def test_tool_executions_of_one_call_never_overlap(live: Harness) -> None:
     call = await live.start()
     gate = asyncio.Event()
     live.rpc.gate = gate
-    first = asyncio.create_task(
-        call.host.execute_tool("vbot_app", {"action": "sessions", "agent_id": "joel"})
-    )
-    second = asyncio.create_task(
-        call.host.execute_tool("vbot_app", {"action": "sessions", "agent_id": "anna"})
-    )
+    first = asyncio.create_task(call.host.execute_tool("overview", {}))
+    second = asyncio.create_task(call.host.execute_tool("overview", {}))
     await drain()
-    assert [params["agent_id"] for _method, params in live.rpc.calls] == ["joel"]
+    assert [method for method, _params in live.rpc.calls] == ["agent.list"]
     gate.set()
-    assert await first == {"sessions": []}
-    assert await second == {"sessions": []}
-    assert [params["agent_id"] for _method, params in live.rpc.calls] == ["joel", "anna"]
+    assert (await first)["data"]["content"].startswith("Agents: Joel.")
+    assert (await second)["ok"] is True
+    methods = [method for method, _params in live.rpc.calls]
+    half = len(methods) // 2
+    assert methods[:half] == methods[half:]
 
 
 @pytest.mark.asyncio
@@ -546,7 +546,7 @@ async def test_tools_report_voice_stopped_once_the_call_is_stopping(live: Harnes
     call = await live.start()
     call.close_mode = "hang"
     live.registry.stop(call.id)
-    result = await call.host.execute_tool("vbot_app", {"action": "sessions", "agent_id": "joel"})
+    result = await call.host.execute_tool("overview", {})
     assert result["error"]["code"] == "voice_stopped"
     assert live.rpc.calls == []
 
@@ -579,6 +579,7 @@ async def test_hands_runs_finishing_during_the_call_to_it(live: Harness) -> None
         session_id="s1",
         excerpt="Done.",
         truncated=False,
+        session_ref="s1",
     )
 
 
@@ -716,7 +717,7 @@ def test_socket_carries_ui_requests_answered_through_rpc(tmp_path: Path) -> None
         call = service.calls[0]
         with client.websocket_connect("/ws/live/call-1") as websocket:
             operation = portal(client).start_task_soon(
-                call.host.execute_tool, "vbot_app", {"action": "open", "view": "terminals"}
+                call.host.execute_tool, "open", {"view": "terminals"}
             )
             request = websocket.receive_json()
             assert request == {
@@ -728,7 +729,7 @@ def test_socket_carries_ui_requests_answered_through_rpc(tmp_path: Path) -> None
             answer = {"call_id": "call-1", "request_id": request["request_id"]}
             accepted = rpc(client, "live.ui_result", {**answer, "result": {"applied": True}})
             assert accepted["result"] == {"accepted": True}
-            assert operation.result(timeout=5) == {"view": "terminals"}
+            assert operation.result(timeout=5)["data"] == {"content": "Opened the terminals view."}
             repeated = rpc(client, "live.ui_result", {**answer, "error": "late"})
             assert repeated["result"] == {"accepted": False}
 

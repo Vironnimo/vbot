@@ -14,7 +14,7 @@ from typing import Any
 from core.model_tasks.live import LiveRunNotice
 from core.projects import format_agent_address
 from core.runs import RUN_AGENT_ACTIVITY_FIELD
-from server._live_tools import RpcInvoker
+from server._live_context import RpcInvoker
 from server.events import (
     RUN_COMPLETED_SERVER_EVENT,
     RUN_FAILED_SERVER_EVENT,
@@ -63,6 +63,7 @@ class LiveRunFeed:
     finished before the call and Runs that do not contribute to Agent
     activity, and loads each excerpt through the canonical ``chat.run_result``
     RPC so newer replies in the same Session never replace it.
+    ``describe_session`` gives each announced Session the call's ref for it.
     """
 
     def __init__(
@@ -71,6 +72,7 @@ class LiveRunFeed:
         events: ServerEventBus,
         rpc: RpcInvoker,
         announce: Callable[[LiveRunNotice], None],
+        describe_session: Callable[[str, str], str],
         report_failure: Callable[[], None],
         started_at: datetime,
         after_sequence: int,
@@ -78,6 +80,7 @@ class LiveRunFeed:
         self._events = events
         self._rpc = rpc
         self._announce = announce
+        self._describe_session = describe_session
         self._report_failure = report_failure
         self._started_at = started_at
         self._after_sequence = after_sequence
@@ -180,6 +183,7 @@ class LiveRunFeed:
                 run_id=pending.run_id,
                 agent_id=pending.agent_id,
                 session_id=pending.session_id,
+                session_ref=self._describe_session(pending.agent_id, pending.session_id),
                 excerpt=str(result.get("content") or ""),
                 truncated=bool(result.get("truncated")),
             )

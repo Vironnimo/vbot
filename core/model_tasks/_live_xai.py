@@ -6,7 +6,8 @@ PCM from the accessor is appended to the input buffer, and assistant audio
 returns as :class:`WireAudio` (PCM16 mono 24 kHz both ways). Server VAD takes
 turns and cancels a response the user talks over. The voice model gets one
 function Tool: ``vbot_request`` (delegation to the backend model), or the Live
-app Tools themselves in direct Tools mode.
+Tools themselves in direct Tools mode, where every function call goes to the
+call, which prepares it (other names and argument spellings included).
 
 Wire facts verified live (2026-09-25): ``session.updated`` answers the
 ``session.update`` sent right after connect; audio arrives faster than real
@@ -43,9 +44,9 @@ from websockets.asyncio.client import connect as websocket_connect
 from websockets.exceptions import ConnectionClosed, InvalidStatus, InvalidURI, WebSocketException
 
 from core.model_tasks._live_tools import (
-    LIVE_TOOL_NAMES,
     LIVE_TOOL_REQUEST,
-    live_tool_error,
+    live_failure,
+    live_result_text,
     live_tools,
     request_tool,
 )
@@ -72,6 +73,7 @@ from core.providers.errors import NetworkError, ProviderError
 from core.providers.task_client import ProviderTaskClient
 from core.providers.token_getter import OAuthRequestRecovery
 from core.providers.tool_schema import render_tool_definitions
+from core.tools import called_tool_name
 from core.utils.ids import new_id
 from core.utils.tls import shared_ssl_context
 
@@ -814,10 +816,11 @@ class _XaiSession:
             step.commands.append(
                 _call_output(
                     call.call_id,
-                    json.dumps(
-                        live_tool_error(
+                    live_result_text(
+                        live_failure(
                             "interrupted",
-                            "The call was interrupted before it started; nothing was done.",
+                            "The call was interrupted before it started; nothing was done. "
+                            "Call it again if the user still wants it.",
                         )
                     ),
                 )
@@ -828,13 +831,14 @@ class _XaiSession:
             return
         self._handled_calls.put(call.call_id)
         arguments = _decoded_arguments(call.arguments)
-        if self._direct_tools and call.name in LIVE_TOOL_NAMES:
+        if self._direct_tools:
+            # The call prepares every name and argument spelling itself.
             self._awaiting[call.call_id] = _KIND_TOOL
             step.events.append(
                 WireToolCall(call_id=call.call_id, name=call.name, arguments=arguments)
             )
             return
-        if not self._direct_tools and call.name == LIVE_TOOL_REQUEST:
+        if called_tool_name(call.name, {LIVE_TOOL_REQUEST}) == LIVE_TOOL_REQUEST:
             request = arguments.get("request") if isinstance(arguments, dict) else None
             if isinstance(request, str) and request.strip():
                 self._awaiting[call.call_id] = _KIND_DELEGATION
@@ -842,10 +846,18 @@ class _XaiSession:
                     WireDelegation(delegation_id=call.call_id, request=request.strip())
                 )
                 return
-            error = live_tool_error("invalid_arguments", "request must be a non-empty string.")
+            error = live_failure(
+                "invalid_arguments",
+                f"request must be the user's request as text. Call {LIVE_TOOL_REQUEST} again "
+                'with {"request": "<the user\'s request>"}.',
+            )
         else:
-            error = live_tool_error("unknown_tool", f"Unknown Tool: {call.name}")
-        step.commands.append(_call_output(call.call_id, json.dumps(error)))
+            error = live_failure(
+                "unknown_tool",
+                f'There is no Tool called "{call.name}". Call {LIVE_TOOL_REQUEST} with the '
+                "user's request.",
+            )
+        step.commands.append(_call_output(call.call_id, live_result_text(error)))
         self._added += 1
 
     # -- helpers ----------------------------------------------------------
@@ -948,12 +960,13 @@ def _carrier_matches(carriers: _Recent, item_id: str, kind: str) -> bool:
 
 
 def _decoded_arguments(arguments: Any) -> Any:
+    """Decode JSON argument text; text that is not JSON stays as it is."""
     if not isinstance(arguments, str):
         return arguments
     try:
         return json.loads(arguments) if arguments.strip() else {}
     except ValueError:
-        return None
+        return arguments
 
 
 def _text(value: Any) -> str:

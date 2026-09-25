@@ -57,11 +57,13 @@ class Harness:
         self.notices: list[LiveRunNotice] = []
         self.failures = 0
         self.announce_error: Exception | None = None
+        self.refs: dict[tuple[str, str], str] = {}
         self.feed = LiveRunFeed(
             events=self.bus,
             rpc=self.rpc,
             announce=self._announce,
             report_failure=self._report_failure,
+            describe_session=self._describe_session,
             started_at=STARTED_AT,
             after_sequence=self.bus.last_sequence,
         )
@@ -71,6 +73,9 @@ class Harness:
             error, self.announce_error = self.announce_error, None
             raise error
         self.notices.append(notice)
+
+    def _describe_session(self, agent_id: str, session_id: str) -> str:
+        return self.refs.setdefault((agent_id, session_id), f"s{len(self.refs) + 1}")
 
     def _report_failure(self) -> None:
         self.failures += 1
@@ -119,6 +124,7 @@ async def test_announces_finished_runs_with_their_outcome_and_exact_address(
         session_id="s1",
         excerpt="reply r1",
         truncated=True,
+        session_ref="s1",
     )
     assert [(notice.kind, notice.agent_id) for notice in harness.notices[1:]] == [
         ("failed", "joel"),
