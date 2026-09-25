@@ -97,9 +97,7 @@ def test_read_settings_returns_defaults_for_invalid_utf8(tmp_path: Path) -> None
     settings_file.write_bytes(b'{"wakeword": "\xff"}')
 
     assert desktop_settings.read_settings(settings_file) == {}
-    assert desktop_settings.read_wakeword_settings(settings_file) == (
-        desktop_settings.DEFAULT_WAKEWORD_SETTINGS
-    )
+    assert desktop_settings.read_section(desktop_settings.WAKEWORD_KEY, settings_file) == {}
 
 
 @pytest.mark.parametrize("settings_text", ["[]", '"not an object"', "42"])
@@ -429,254 +427,6 @@ def test_write_window_size_rejects_invalid_dimensions(
         desktop_settings.write_window_size(width, height, tmp_path / "settings.json")  # type: ignore[arg-type]
 
 
-# -- Wakeword block ----------------------------------------------------------
-
-
-def test_read_wakeword_settings_returns_defaults_when_file_missing(tmp_path: Path) -> None:
-    config = desktop_settings.read_wakeword_settings(tmp_path / "settings.json")
-
-    assert config == desktop_settings.DEFAULT_WAKEWORD_SETTINGS
-
-
-def test_wakeword_defaults_return_independent_server_profile_maps(tmp_path: Path) -> None:
-    first = desktop_settings.read_wakeword_settings(tmp_path / "missing.json")
-    second = desktop_settings.read_wakeword_settings(tmp_path / "missing.json")
-
-    first["server_profiles"]["http://a.lan:8420"] = {"target_agent_id": "main"}
-
-    assert second["server_profiles"] == {}
-
-
-def test_read_wakeword_settings_merges_with_defaults(tmp_path: Path) -> None:
-    settings_file = tmp_path / "settings.json"
-    settings_file.write_text(
-        json.dumps(
-            {
-                "servers": [{"host": "127.0.0.1", "port": 8420}],
-                "wakeword": {"enabled": True},
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    config = desktop_settings.read_wakeword_settings(settings_file)
-
-    assert config["enabled"] is True
-    assert config["active_model_ids"] == list(desktop_settings.DEFAULT_WAKEWORD_MODEL_IDS)
-    assert config["model_sensitivities"] == {}
-
-
-@pytest.mark.parametrize(
-    "active_model_ids",
-    [None, [], ["one", "one"], ["one", "two", "three"], [1]],
-)
-def test_read_wakeword_settings_normalizes_invalid_active_models(
-    tmp_path: Path, active_model_ids: object
-) -> None:
-    settings_file = tmp_path / "settings.json"
-    settings_file.write_text(
-        json.dumps(
-            {
-                "wakeword": {
-                    "model_id": "builtin/legacy",
-                    "unknown": "ignored",
-                    "active_model_ids": active_model_ids,
-                    "model_sensitivities": [],
-                }
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    config = desktop_settings.read_wakeword_settings(settings_file)
-
-    assert config["active_model_ids"] == list(desktop_settings.DEFAULT_WAKEWORD_MODEL_IDS)
-    assert config["model_sensitivities"] == {}
-    assert "model_id" not in config
-    assert "unknown" not in config
-
-
-def test_read_wakeword_settings_trims_active_model_ids(tmp_path: Path) -> None:
-    settings_file = tmp_path / "settings.json"
-    settings_file.write_text(
-        json.dumps({"wakeword": {"active_model_ids": [" builtin/okay_nabu "]}}),
-        encoding="utf-8",
-    )
-
-    config = desktop_settings.read_wakeword_settings(settings_file)
-
-    assert config["active_model_ids"] == ["builtin/okay_nabu"]
-
-
-def test_read_wakeword_settings_normalizes_persisted_voice_fields(tmp_path: Path) -> None:
-    settings_file = tmp_path / "settings.json"
-    settings_file.write_text(
-        json.dumps(
-            {
-                "wakeword": {
-                    "enabled": "yes",
-                    "microphone": 4,
-                    "model_sensitivities": {
-                        " builtin/okay_nabu ": 0.7,
-                        "bad-high": 1.2,
-                        "bad-bool": True,
-                    },
-                    "server_profiles": {
-                        " http://127.0.0.1:8420 ": {
-                            "target_agent_id": " main ",
-                            "session_behavior": "new",
-                        },
-                        "bad": {"target_agent_id": 7},
-                    },
-                }
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    config = desktop_settings.read_wakeword_settings(settings_file)
-
-    assert config["enabled"] is False
-    assert config["microphone"] is None
-    assert config["model_sensitivities"] == {"builtin/okay_nabu": 0.7}
-    assert config["server_profiles"] == {
-        "http://127.0.0.1:8420": {
-            "target_agent_id": "main",
-            "session_behavior": "new",
-        }
-    }
-
-
-def test_read_wakeword_settings_preserves_stable_microphone_identity(tmp_path: Path) -> None:
-    settings_file = tmp_path / "settings.json"
-    microphone = {"index": 4, "name": "Studio mic", "host_api": "WASAPI"}
-    settings_file.write_text(
-        json.dumps({"wakeword": {"microphone": microphone}}),
-        encoding="utf-8",
-    )
-
-    config = desktop_settings.read_wakeword_settings(settings_file)
-
-    assert config["microphone"] == microphone
-
-
-@pytest.mark.parametrize("session_behavior", [[], {}, ["active"], None, True, 1])
-def test_read_wakeword_settings_drops_invalid_server_profiles(
-    tmp_path: Path, session_behavior: object
-) -> None:
-    settings_file = tmp_path / "settings.json"
-    valid_profile = {"target_agent_id": "main", "session_behavior": "new"}
-    desktop_settings.write_settings(
-        {
-            "wakeword": {
-                "server_profiles": {
-                    "http://bad.lan:8420": {"session_behavior": session_behavior},
-                    "http://good.lan:8420": valid_profile,
-                }
-            }
-        },
-        settings_file,
-    )
-
-    config = desktop_settings.read_wakeword_settings(settings_file)
-
-    assert config["server_profiles"] == {"http://good.lan:8420": valid_profile}
-
-
-def test_read_wakeword_settings_drops_out_of_range_large_sensitivity(tmp_path: Path) -> None:
-    settings_file = tmp_path / "settings.json"
-    desktop_settings.write_settings(
-        {"wakeword": {"model_sensitivities": {"invalid": 10**400, "valid": 0.7}}},
-        settings_file,
-    )
-
-    config = desktop_settings.read_wakeword_settings(settings_file)
-
-    assert config["model_sensitivities"] == {"valid": 0.7}
-
-
-def test_read_wakeword_settings_falls_back_for_missing_wakeword_key(tmp_path: Path) -> None:
-    settings_file = tmp_path / "settings.json"
-    settings_file.write_text(
-        json.dumps({"servers": [{"host": "127.0.0.1", "port": 8420}]}),
-        encoding="utf-8",
-    )
-
-    config = desktop_settings.read_wakeword_settings(settings_file)
-
-    assert config == desktop_settings.DEFAULT_WAKEWORD_SETTINGS
-
-
-def test_read_wakeword_settings_falls_back_for_non_dict_wakeword(tmp_path: Path) -> None:
-    settings_file = tmp_path / "settings.json"
-    settings_file.write_text(
-        json.dumps({"servers": [], "wakeword": "invalid"}),
-        encoding="utf-8",
-    )
-
-    config = desktop_settings.read_wakeword_settings(settings_file)
-
-    assert config == desktop_settings.DEFAULT_WAKEWORD_SETTINGS
-
-
-def test_read_wakeword_settings_handles_corrupt_file(tmp_path: Path) -> None:
-    settings_file = tmp_path / "settings.json"
-    settings_file.write_text("not valid json", encoding="utf-8")
-
-    config = desktop_settings.read_wakeword_settings(settings_file)
-
-    assert config == desktop_settings.DEFAULT_WAKEWORD_SETTINGS
-
-
-def test_write_wakeword_settings_preserves_servers_and_last_used(tmp_path: Path) -> None:
-    settings_file = tmp_path / "settings.json"
-    servers = [{"host": "10.0.0.1", "port": 9000}]
-    last_used = {"host": "10.0.0.1", "port": 9000}
-    settings_file.write_text(
-        json.dumps({"servers": servers, "last_used": last_used}),
-        encoding="utf-8",
-    )
-
-    wakeword_config = {
-        "enabled": True,
-        "microphone": None,
-        "active_model_ids": ["builtin/okay_nabu", "builtin/hey_nabu"],
-        "model_sensitivities": {"builtin/hey_nabu": 0.8},
-        "server_profiles": {
-            "http://127.0.0.1:8420": {
-                "target_agent_id": "test-agent",
-                "session_behavior": "new",
-            }
-        },
-    }
-    desktop_settings.write_wakeword_settings(wakeword_config, settings_file)
-
-    stored = json.loads(settings_file.read_text(encoding="utf-8"))
-    assert stored["servers"] == servers
-    assert stored["last_used"] == last_used
-    assert stored["wakeword"] == wakeword_config
-
-
-def test_write_wakeword_settings_overwrites_existing_wakeword(tmp_path: Path) -> None:
-    settings_file = tmp_path / "settings.json"
-    settings_file.write_text(
-        json.dumps({"servers": [], "wakeword": {"enabled": True}}),
-        encoding="utf-8",
-    )
-
-    desktop_settings.write_wakeword_settings(
-        {
-            "enabled": False,
-            "model_sensitivities": {"builtin/okay_nabu": 0.3},
-        },
-        settings_file,
-    )
-
-    stored = json.loads(settings_file.read_text(encoding="utf-8"))
-    assert stored["wakeword"]["enabled"] is False
-    assert stored["wakeword"]["model_sensitivities"] == {"builtin/okay_nabu": 0.3}
-
-
 def test_parallel_section_writes_share_one_transaction_lock(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -712,7 +462,11 @@ def test_parallel_section_writes_share_one_transaction_lock(
     )
 
     def write_wakeword() -> None:
-        desktop_settings.write_wakeword_settings({"enabled": True}, settings_file)
+        desktop_settings.update_section(
+            desktop_settings.WAKEWORD_KEY,
+            lambda section: {**section, "enabled": True},
+            settings_file,
+        )
         wakeword_write_finished.set()
 
     wakeword_thread = threading.Thread(target=write_wakeword)
@@ -732,43 +486,6 @@ def test_parallel_section_writes_share_one_transaction_lock(
     stored = json.loads(settings_file.read_text(encoding="utf-8"))
     assert stored["servers"] == [{"host": "new.lan", "port": 9000}]
     assert stored["wakeword"] == {"enabled": True}
-
-
-def test_read_wakeword_settings_keeps_only_valid_model_actions(tmp_path: Path) -> None:
-    settings_file = tmp_path / "settings.json"
-    settings_file.write_text(
-        json.dumps(
-            {
-                "wakeword": {
-                    "model_actions": {
-                        " builtin/hey_nabu ": "live_voice",
-                        "builtin/okay_nabu": "command",
-                        "bad-action": "record",
-                        "": "live_voice",
-                        "bad-type": 1,
-                    }
-                }
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    config = desktop_settings.read_wakeword_settings(settings_file)
-
-    assert config["model_actions"] == {
-        "builtin/hey_nabu": "live_voice",
-        "builtin/okay_nabu": "command",
-    }
-
-
-def test_read_wakeword_settings_defaults_malformed_model_actions(tmp_path: Path) -> None:
-    settings_file = tmp_path / "settings.json"
-    settings_file.write_text(
-        json.dumps({"wakeword": {"model_actions": ["live_voice"]}}),
-        encoding="utf-8",
-    )
-
-    assert desktop_settings.read_wakeword_settings(settings_file)["model_actions"] == {}
 
 
 # -- Live voice hotkey ---------------------------------------------------------

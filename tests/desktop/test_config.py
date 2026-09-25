@@ -23,6 +23,7 @@ from desktop.wakeword.config import (
     apply_voice_changes,
     canonical_profile_key,
     config_status,
+    forget_model,
     parse_voice_config,
     set_enabled,
     voice_limits,
@@ -510,6 +511,39 @@ def test_set_enabled_is_strict_and_drops_the_retired_actions() -> None:
         set_enabled(raw, "true")
     assert raised.value.field == "enabled"
     assert raw == {"enabled": False, "model_actions": {"x": "command"}, "unknown": 1}
+
+
+def test_forget_model_drops_its_sensitivity_and_actions_in_every_profile() -> None:
+    raw = {
+        "active_model_ids": ["builtin/okay_nabu"],
+        "model_sensitivities": {"custom/1": 0.4, "builtin/okay_nabu": 0.6},
+        "model_actions": {"custom/1": "command"},
+        "server_profiles": {
+            SERVER: {
+                "target_agent_id": "main",
+                "phrase_actions": {"custom/1": {"type": "live_voice", "mode": "start"}},
+            },
+            "http://10.0.0.2:8420": {"phrase_actions": {"custom/1": {"type": "command"}}},
+            "http://10.0.0.3:8420": "malformed",
+        },
+        "unknown": 1,
+    }
+    before = copy.deepcopy(raw)
+
+    section = forget_model(raw, "custom/1")
+
+    assert section == {
+        "active_model_ids": ["builtin/okay_nabu"],
+        "model_sensitivities": {"builtin/okay_nabu": 0.6},
+        "server_profiles": {
+            SERVER: {"target_agent_id": "main", "phrase_actions": {}},
+            "http://10.0.0.2:8420": {"phrase_actions": {}},
+            "http://10.0.0.3:8420": "malformed",
+        },
+        "unknown": 1,
+    }
+    assert raw == before
+    assert forget_model("malformed", "custom/1") == {}
 
 
 def test_changes_compose_with_the_settings_section_transaction(tmp_path: Path) -> None:

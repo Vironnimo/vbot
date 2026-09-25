@@ -215,6 +215,7 @@ def test_active_session_falls_back_to_the_newest_conversation(
                 "include_memory_reflections": False,
                 "include_skill_reflections": False,
                 "include_cron": False,
+                "include_channels": False,
             },
         ),
     ]
