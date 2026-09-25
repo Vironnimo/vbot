@@ -3,13 +3,17 @@
 A data snapshot is ``<data-dir>/snapshots/<snapshot-id>/`` holding one
 ``<name>.db`` copy per canonical database registered in the marker, the JSON
 document set under ``documents/`` (see ``core.database._documents``), and a
-strict ``manifest.json``. Each database member records its identity, format
+``manifest.json``. Each database member records its identity, format
 generation, applied migrations, size, hash, integrity checks and owner facts;
-each document records its relative path, size and hash. Verification works per
-database member: a restore candidate for one database needs only that member to
-verify. A snapshot as a whole verifies only when every database member and
-every document does. Snapshots are published atomically; retention prunes only
-after a verified snapshot was published.
+each document records its relative path, size and hash. A reader requires every
+field it knows, ignores fields and documents it does not know (a newer vBot may
+add them), and refuses another ``manifest_version``, so snapshots taken by a
+newer vBot of the same manifest version stay usable for automatic restore and
+update rollback of an older one. Verification works per database member: a
+restore candidate for one database needs only that member to verify. A snapshot
+as a whole verifies only when every database member and every document does.
+Snapshots are published atomically; retention prunes only after a verified
+snapshot was published.
 """
 
 from __future__ import annotations
@@ -65,7 +69,7 @@ from core.database.spec import (
 )
 from core.json_documents import durable_document_paths
 from core.utils.atomic import atomic_write_text
-from core.utils.timestamps import utc_now_timestamp
+from core.utils.timestamps import parse_timestamp, utc_now_timestamp
 from core.utils.version import detect_vbot_version
 
 if TYPE_CHECKING:
@@ -91,11 +95,10 @@ _MANIFEST_KEYS = frozenset(
         "sqlite_version",
         "sqlite_source_id",
         "members",
+        "documents",
         "complete",
     }
 )
-#: Absent in manifests written before the JSON document set was captured.
-_OPTIONAL_MANIFEST_KEYS = frozenset({"documents"})
 _MEMBER_KEYS = frozenset(
     {
         "file",
@@ -129,7 +132,7 @@ class SnapshotMember:
 
 @dataclass(frozen=True)
 class SnapshotManifest:
-    """Strict metadata describing one complete data snapshot."""
+    """Validated metadata describing one complete data snapshot."""
 
     snapshot_id: str
     reason: str
@@ -138,18 +141,18 @@ class SnapshotManifest:
     sqlite_version: str
     sqlite_source_id: str
     members: Mapping[str, SnapshotMember]
-    #: The JSON document set by relative path; ``None`` when not captured.
-    documents: Mapping[str, DocumentMember] | None = None
+    #: The JSON document set by relative path, limited to the documents this
+    #: vBot knows.
+    documents: Mapping[str, DocumentMember]
 
     @property
     def total_size(self) -> int:
-        documents = self.documents or {}
         return sum(member.file_size for member in self.members.values()) + sum(
-            document.file_size for document in documents.values()
+            document.file_size for document in self.documents.values()
         )
 
     def created_instant(self) -> datetime:
-        return _parse_instant(self.created_at)
+        return parse_timestamp(self.created_at)
 
 
 @dataclass(frozen=True)
@@ -182,13 +185,6 @@ def member_file_name(name: str) -> str:
 
 def _new_snapshot_id() -> str:
     return f"{datetime.now(UTC).strftime('%Y%m%dT%H%M%S')}Z-{uuid.uuid4().hex[:8]}"
-
-
-def _parse_instant(value: str) -> datetime:
-    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    if parsed.tzinfo is None:
-        raise ValueError("timestamp is not timezone-aware")
-    return parsed
 
 
 # ---------------------------------------------------------------------------
@@ -260,7 +256,7 @@ def _parse_member(name: str, payload: object) -> SnapshotMember:
         validate_database_name(name)
     except ValueError as exc:
         raise DatabaseCorruptError("snapshot manifest lists an invalid database name") from exc
-    if not isinstance(payload, dict) or set(payload) != _MEMBER_KEYS:
+    if not isinstance(payload, dict) or not set(payload) >= _MEMBER_KEYS:
         raise DatabaseCorruptError(f"snapshot manifest member {name} has an unexpected shape")
     for field in ("application_id", "format_generation", "file_size"):
         if not _is_count(payload[field]):
@@ -298,9 +294,7 @@ def _parse_member(name: str, payload: object) -> SnapshotMember:
 
 
 def _parse_manifest(payload: object, *, child_name: str) -> SnapshotManifest:
-    if not isinstance(payload, dict) or not (
-        _MANIFEST_KEYS <= set(payload) <= _MANIFEST_KEYS | _OPTIONAL_MANIFEST_KEYS
-    ):
+    if not isinstance(payload, dict) or not set(payload) >= _MANIFEST_KEYS:
         raise DatabaseCorruptError("snapshot manifest has an unexpected shape")
     if payload["manifest_version"] != MANIFEST_VERSION or isinstance(
         payload["manifest_version"], bool
@@ -321,7 +315,7 @@ def _parse_manifest(payload: object, *, child_name: str) -> SnapshotManifest:
     try:
         if not isinstance(created_at, str):
             raise ValueError("created_at is not text")
-        _parse_instant(created_at)
+        parse_timestamp(created_at)
     except ValueError as exc:
         raise DatabaseCorruptError("snapshot manifest has an invalid created_at") from exc
     if payload["complete"] is not True:
@@ -337,7 +331,7 @@ def _parse_manifest(payload: object, *, child_name: str) -> SnapshotManifest:
         sqlite_version=str(payload["sqlite_version"]),
         sqlite_source_id=str(payload["sqlite_source_id"]),
         members={name: _parse_member(name, member) for name, member in members.items()},
-        documents=parse_documents(payload["documents"]) if "documents" in payload else None,
+        documents=parse_documents(payload["documents"]),
     )
 
 
@@ -366,11 +360,7 @@ def _manifest_payload(manifest: SnapshotManifest) -> dict[str, Any]:
             }
             for name, member in sorted(manifest.members.items())
         },
-        **(
-            {"documents": documents_payload(manifest.documents)}
-            if manifest.documents is not None
-            else {}
-        ),
+        "documents": documents_payload(manifest.documents),
     }
 
 
@@ -405,7 +395,7 @@ def member_path(snapshot_dir: Path, member: SnapshotMember) -> Path | None:
 
 
 def read_manifest(data_dir: Path, snapshot_dir: Path) -> SnapshotManifest | None:
-    """Strictly parse one published manifest; ``None`` for anything malformed or unsafe.
+    """Parse one published manifest; ``None`` for anything malformed, unsafe or newer.
 
     Operational read failures raise ``DatabaseUnavailableError``, so a transient
     problem is never mistaken for a bad snapshot.
@@ -625,8 +615,7 @@ def read_verified_manifest(
     try:
         for name, member in manifest.members.items():
             verify_member(snapshot_dir, member, spec=(specs or {}).get(name))
-        if manifest.documents is not None:
-            verify_documents(snapshot_dir, manifest.documents)
+        verify_documents(snapshot_dir, manifest.documents)
     except UNUSABLE_COPY_ERRORS:
         return None
     return manifest
@@ -674,9 +663,7 @@ def snapshot_summary(manifest: SnapshotManifest) -> dict[str, Any]:
             }
             for name, member in sorted(manifest.members.items())
         },
-        "documents": None
-        if manifest.documents is None
-        else {
+        "documents": {
             "count": len(manifest.documents),
             "file_size": sum(document.file_size for document in manifest.documents.values()),
         },
@@ -744,9 +731,7 @@ def _shallow_manifest(data_dir: Path, snapshot_dir: Path) -> SnapshotManifest | 
             path = member_path(snapshot_dir, member)
             if path is None or path.stat().st_size != member.file_size:
                 return None
-        if manifest.documents is not None and not documents_present(
-            snapshot_dir, manifest.documents
-        ):
+        if not documents_present(snapshot_dir, manifest.documents):
             return None
     except (OSError, DatabaseUnavailableError):
         return None

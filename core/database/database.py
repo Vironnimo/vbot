@@ -49,6 +49,7 @@ from core.database._schema import (
     schema_changes,
 )
 from core.database.errors import (
+    DatabaseConversionRequiredError,
     DatabaseCorruptError,
     DatabaseError,
     DatabaseFormatError,
@@ -56,6 +57,7 @@ from core.database.errors import (
     DatabaseUnavailableError,
 )
 from core.database.marker import (
+    MARKER_FILE_NAME,
     MarkerEntry,
     new_database_id,
     operation_lock,
@@ -258,14 +260,15 @@ def _open_canonical(spec: DatabaseSpec) -> Database:
     require_no_maintenance(data_dir)
     marker = read_marker(data_dir)
     if marker is None:
-        raise DatabaseFormatError(
-            f"the data directory does not authorize a current-format data store: {data_dir}; "
-            "initialize the data directory or install converted databases first"
+        raise DatabaseConversionRequiredError(
+            f"the data directory {data_dir} has no data-store marker ({MARKER_FILE_NAME}), so it "
+            "holds no current-format data store",
+            data_dir=data_dir,
         )
     entry = marker.databases.get(spec.name)
     if entry is None:
         return _bootstrap_canonical(spec, data_dir)
-    _require_generation(spec, entry)
+    _require_generation(spec, entry, data_dir)
     if pending_restore(data_dir, spec.name):
         auto_restore_if_needed(data_dir, spec, entry.database_id)
     if not spec.path.exists() and not auto_restore_if_needed(data_dir, spec, entry.database_id):
@@ -283,16 +286,18 @@ def _open_canonical(spec: DatabaseSpec) -> Database:
         raise
 
 
-def _require_generation(spec: DatabaseSpec, entry: MarkerEntry) -> None:
+def _require_generation(spec: DatabaseSpec, entry: MarkerEntry, data_dir: Path) -> None:
     if entry.format_generation > spec.format_generation:
         raise DatabaseFormatError(
             f"the {spec.name} database is format generation {entry.format_generation}, "
             f"newer than this vBot supports ({spec.format_generation})"
         )
     if entry.format_generation != spec.format_generation:
-        raise DatabaseFormatError(
+        raise DatabaseConversionRequiredError(
             f"the {spec.name} database is format generation {entry.format_generation}; "
-            f"this vBot needs generation {spec.format_generation}. Run the converter first"
+            f"this vBot needs generation {spec.format_generation}",
+            data_dir=data_dir,
+            database=spec.name,
         )
 
 
@@ -457,7 +462,7 @@ def _open_existing(
     identity: dict[str, str] = {}
 
     def verify(connection: sqlite3.Connection) -> None:
-        identity.update(_verify_identity(connection, spec, expected_database_id))
+        identity.update(_verify_identity(connection, spec, expected_database_id, data_dir))
 
     try:
         writer = runtime.open_writer(verify)
@@ -486,7 +491,10 @@ def _open_existing(
 
 
 def _verify_identity(
-    connection: sqlite3.Connection, spec: DatabaseSpec, expected_database_id: str | None
+    connection: sqlite3.Connection,
+    spec: DatabaseSpec,
+    expected_database_id: str | None,
+    data_dir: Path | None,
 ) -> dict[str, str]:
     """Check identity, generation, projection version and the ledger, read-only."""
     application_id = int(connection.execute("PRAGMA application_id").fetchone()[0])
@@ -499,10 +507,13 @@ def _verify_identity(
             f"({spec.format_generation})"
         )
     if generation != spec.format_generation:
-        raise DatabaseFormatError(
+        problem = (
             f"{spec.path} is format generation {generation}; this vBot needs generation "
-            f"{spec.format_generation}. Run the converter first"
+            f"{spec.format_generation}"
         )
+        if spec.profile == CANONICAL:
+            raise DatabaseConversionRequiredError(problem, data_dir=data_dir, database=spec.name)
+        raise DatabaseFormatError(problem)
     try:
         rows = connection.execute("SELECT key, value FROM kernel_meta").fetchall()
         ledger = connection.execute("SELECT name, breaks_older FROM kernel_migrations").fetchall()

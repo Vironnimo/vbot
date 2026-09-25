@@ -19,6 +19,7 @@ from core.database import (
     data_store_status,
     list_data_snapshots,
     open_database,
+    read_incident,
     read_marker,
     read_snapshot_health,
     required_journal_mode,
@@ -40,6 +41,7 @@ from tests.core.database.database_test_support import (
     add_note,
     notes_spec,
     snapshot_with_notes,
+    stored_bodies,
 )
 
 
@@ -224,9 +226,40 @@ def test_snapshot_fsync_preserves_binary_file(tmp_path: Path, suffix: bytes) -> 
     assert path.read_bytes() == original
 
 
-def test_an_unexpected_manifest_key_is_not_a_snapshot(data_dir: Path) -> None:
+def test_an_older_vbot_restores_from_a_manifest_with_fields_a_newer_one_added(
+    data_dir: Path,
+) -> None:
     snapshot = snapshot_with_notes(data_dir, "retained")
-    _rewrite_manifest(snapshot, lambda payload: payload.update(unexpected=True))
+
+    def newer(payload: dict[str, Any]) -> None:
+        payload["compression"] = {"algorithm": "none", "levels": [0]}
+        payload["members"]["notes"]["page_size"] = 4096
+
+    _rewrite_manifest(snapshot, newer)
+
+    assert list_data_snapshots(data_dir, specs=_specs(data_dir)) == [snapshot]
+    assert [summary["snapshot_id"] for summary in snapshot_inventory(data_dir)] == [snapshot.name]
+    notes_spec(data_dir).path.write_bytes(b"damaged")
+    assert stored_bodies(notes_spec(data_dir)) == ["retained"]
+    incident = read_incident(data_dir, "notes")
+    assert incident is not None
+    assert incident["restored_snapshot_id"] == snapshot.name
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        lambda payload: payload.update(manifest_version=2),
+        lambda payload: payload.pop("reason"),
+        lambda payload: payload["members"]["notes"].pop("facts"),
+    ],
+    ids=["newer-version", "missing-field", "missing-member-field"],
+)
+def test_a_newer_or_incomplete_manifest_is_not_a_snapshot(
+    data_dir: Path, change: Callable[[dict[str, Any]], None]
+) -> None:
+    snapshot = snapshot_with_notes(data_dir, "retained")
+    _rewrite_manifest(snapshot, change)
 
     assert list_data_snapshots(data_dir) == []
     assert snapshot_inventory(data_dir) == []

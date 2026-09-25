@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import threading
 from contextlib import ExitStack
 from pathlib import Path
@@ -20,6 +21,7 @@ from cli.application.state import (
 from core.database import (
     DatabaseUnavailableError,
     begin_maintenance,
+    canonical_database_path,
     create_update_snapshot,
     find_update_snapshot,
     open_database,
@@ -27,7 +29,8 @@ from core.database import (
     read_maintenance,
     write_bootstrap_marker,
 )
-from core.database.snapshots import snapshot_root
+from core.database.snapshots import SNAPSHOT_MANIFEST_NAME, snapshot_root
+from core.model_tasks.decision_store import decision_database_spec
 from core.utils.server_control import server_control_claim
 from tests.core.database.database_test_support import add_note, notes_spec, stored_bodies
 
@@ -431,6 +434,43 @@ def test_a_snapshot_that_no_longer_verifies_is_not_restored(
     monkeypatch.setattr(worker.processes, "start", start)
     worker.execute(install, operation)
 
+    assert operation.phase == "rolled_back"
+    assert "was not restored automatically" in operation.message
+    assert "written by the candidate" in stored_bodies(notes_spec(data_dir))
+    assert read_maintenance(data_dir) is None
+
+
+def test_the_update_snapshot_records_and_verifies_core_owner_facts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    install = _install(tmp_path)
+    data_dir = _server_data(install)
+    open_database(decision_database_spec(canonical_database_path(data_dir, "decisions"))).close()
+    operation = Operation(
+        id="upd_facts", previous_version="rel_old", package="release.zip", local_package=True
+    )
+    _patch_server_update(monkeypatch, install)
+    recorded: dict[str, int] = {}
+
+    def start(_install, *, version_id=None, verification=False, breakaway=True):
+        if version_id == "rel_new":
+            _candidate_writes(data_dir)
+            snapshot_id = find_update_snapshot(data_dir, "upd_facts")
+            assert snapshot_id is not None
+            manifest_path = snapshot_root(data_dir) / snapshot_id / SNAPSHOT_MANIFEST_NAME
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            facts = manifest["members"]["decisions"]["facts"]
+            recorded.update(facts)
+            # A recorded fact the copy disagrees with is caught only by the declaration.
+            facts["experiment_count"] += 1
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            return SimpleNamespace(ok=False, message="candidate failed")
+        return _ok()
+
+    monkeypatch.setattr(worker.processes, "start", start)
+    worker.execute(install, operation)
+
+    assert recorded == {"evaluation_count": 0, "experiment_count": 0}
     assert operation.phase == "rolled_back"
     assert "was not restored automatically" in operation.message
     assert "written by the candidate" in stored_bodies(notes_spec(data_dir))
