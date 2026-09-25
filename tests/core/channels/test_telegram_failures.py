@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
-import time
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -13,8 +12,10 @@ from unittest.mock import AsyncMock
 import pytest
 
 from core.channels.adapter import ReplyPlanFacts
+from core.channels.state import ChannelStateStore, state_timestamp
 from core.channels.telegram import TELEGRAM_MESSAGE_LIMIT
 from core.chat.commands import CommandFeedback, CommandOutcome
+from tests.core.channels.engine_test_support import channel_state
 from tests.core.channels.telegram_test_support import (
     drain_chat_queue,
     make_adapter,
@@ -68,9 +69,7 @@ async def test_multipart_reply_retries_only_failed_chunk(
 async def test_offset_saves_cannot_regress_when_threads_finish_out_of_order(tmp_path):
     import threading
 
-    from core.channels import ChannelStorage
-
-    storage = ChannelStorage(tmp_path)
+    storage = channel_state(tmp_path)
     higher_saved = threading.Event()
 
     def save_lower():
@@ -84,7 +83,7 @@ async def test_offset_saves_cannot_regress_when_threads_finish_out_of_order(tmp_
             higher_saved.set()
 
     await asyncio.gather(asyncio.to_thread(save_lower), asyncio.to_thread(save_higher))
-    assert ChannelStorage(tmp_path).load_update_offset("tg-assistant") == 8
+    assert storage.load_update_offset("tg-assistant") == 8
 
 
 @pytest.mark.asyncio
@@ -92,9 +91,7 @@ async def test_offset_saves_cannot_regress_when_threads_finish_out_of_order(tmp_
 async def test_stop_drains_slow_offset_save_before_restart(tmp_path, monkeypatch, cancel_stop):
     import threading
 
-    from core.channels import ChannelStorage
-
-    storage = ChannelStorage(tmp_path)
+    storage = channel_state(tmp_path)
     entered = threading.Event()
     release = threading.Event()
 
@@ -130,13 +127,15 @@ async def test_stop_drains_slow_offset_save_before_restart(tmp_path, monkeypatch
 
 @pytest.mark.parametrize("age_hours", [24, 47, 48, 168])
 def test_polling_watermark_expires_before_telegram_randomizes_ids(tmp_path, age_hours):
-    from core.channels import ChannelStorage
-
-    storage = ChannelStorage(tmp_path)
+    storage = channel_state(tmp_path)
     storage.save_update_offset("tg-assistant", 100)
-    state_path = tmp_path / "channels" / "tg-assistant" / "polling.json"
-    previous_write = time.time() - age_hours * 60 * 60
-    os.utime(state_path, (previous_write, previous_write))
+    previous_write = state_timestamp(datetime.now(UTC) - timedelta(hours=age_hours))
+    storage.database.write(
+        lambda connection: connection.execute(
+            "UPDATE channel_polling SET updated_at = ? WHERE channel_id = ?",
+            (previous_write, "tg-assistant"),
+        )
+    )
 
     assert storage.load_update_offset("tg-assistant") == (100 if age_hours < 48 else 0)
     storage.save_update_offset("tg-assistant", 5)
@@ -272,9 +271,7 @@ async def test_redelivered_update_is_skipped_via_persisted_watermark(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Telegram redelivers unconfirmed updates after a restart; only new ids run."""
-    from core.channels import ChannelStorage
-
-    storage = ChannelStorage(tmp_path)
+    storage = channel_state(tmp_path)
     storage.save_update_offset("tg-assistant", 7)
 
     session_id = "ch-tg-assistant-12345"
@@ -335,19 +332,11 @@ async def test_duplicate_update_inside_one_session_is_claimed_once(
     await adapter.stop()
 
 
-def test_polling_state_survives_storage_reload_and_degrades_on_corruption(
-    tmp_path: Path,
-) -> None:
-    from core.channels import ChannelStorage
-
-    storage = ChannelStorage(tmp_path)
+def test_polling_state_survives_storage_reload(tmp_path: Path) -> None:
+    storage = channel_state(tmp_path)
     storage.save_update_offset("tg-assistant", 42)
-    reloaded = ChannelStorage(tmp_path)
-    assert reloaded.load_update_offset("tg-assistant") == 42
-
-    state_path = tmp_path / "channels" / "tg-assistant" / "polling.json"
-    state_path.write_text("{not json", encoding="utf-8")
-    assert reloaded.load_update_offset("tg-assistant") == 0
-
-    state_path.write_text('{"version": 99, "last_update_id": 1}', encoding="utf-8")
-    assert reloaded.load_update_offset("tg-assistant") == 0
+    reloaded = ChannelStateStore.open(tmp_path)
+    try:
+        assert reloaded.load_update_offset("tg-assistant") == 42
+    finally:
+        reloaded.close()

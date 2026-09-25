@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import json
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -22,10 +21,12 @@ from core.channels.adapter import (
     ChannelAccessRegistry,
     ChannelAdapter,
     ConversationFacts,
+    ConversationPointerStore,
     DeniedChatFacts,
     DeniedChatLog,
     FileData,
     QuotedMessageFacts,
+    ReceivedMessageStore,
     ReplyPlanFacts,
     RouteFacts,
     content_blocks_for_attachment,
@@ -33,7 +34,6 @@ from core.channels.adapter import (
 from core.channels.config import ChannelConfig, ChannelConfigError, ChannelError
 from core.channels.engine import ChannelConversationEngine
 from core.chat.content_blocks import ContentBlock, TextBlock
-from core.utils.atomic import atomic_write_text
 from core.utils.retry import retry_async
 from core.utils.tls import shared_ssl_context
 from core.utils.workers import BoundedWorkerPool
@@ -61,6 +61,8 @@ class NetworkChannelAdapter(ChannelAdapter):
         attachment_store: AttachmentStore | None = None,
         *,
         command_dispatcher: Any,
+        conversation_pointers: ConversationPointerStore,
+        received_messages: ReceivedMessageStore,
         access_registry: ChannelAccessRegistry | None = None,
         state_dir: Path,
     ) -> None:
@@ -68,12 +70,14 @@ class NetworkChannelAdapter(ChannelAdapter):
         self._attachment_store = attachment_store
         self._credential_resolver = credential_resolver
         self._state_dir = state_dir
+        self._received = received_messages
         self._engine = ChannelConversationEngine(
             config,
             trigger_service,
             chat_sessions,
             self,
             command_dispatcher=command_dispatcher,
+            conversation_pointers=conversation_pointers,
             access_registry=access_registry,
         )
         self._http_client: httpx.AsyncClient | None = None
@@ -82,7 +86,6 @@ class NetworkChannelAdapter(ChannelAdapter):
         self._bot_id = ""
         self._denied = DeniedChatLog()
         self._conversations: OrderedDict[str, ConversationFacts] = OrderedDict()
-        self._seen: OrderedDict[str, None] = OrderedDict()
         self._ingress_lock = asyncio.Lock()
 
     @property
@@ -98,7 +101,6 @@ class NetworkChannelAdapter(ChannelAdapter):
 
     async def start(self) -> None:
         try:
-            await self.load_seen()
             await self._listen()
             raise ChannelError(f"{self.platform_display_name} connection closed", retryable=True)
         except ChannelError as error:
@@ -164,25 +166,6 @@ class NetworkChannelAdapter(ChannelAdapter):
             raise ChannelError("Send to the target before recording outbound context")
         return self._engine.ensure_channel_session(facts)
 
-    async def load_seen(self) -> None:
-        def read() -> list[str]:
-            path = self._state_dir / "received.json"
-            if not path.exists():
-                return []
-            try:
-                data = json.loads(path.read_text(encoding="utf-8"))
-                if (
-                    not isinstance(data, list)
-                    or len(data) > 4096
-                    or any(not isinstance(item, str) for item in data)
-                ):
-                    raise ValueError("invalid receipt list")
-                return data
-            except (OSError, ValueError) as error:
-                raise ChannelError("Cannot read Channel receipt state") from error
-
-        self._seen = OrderedDict.fromkeys(await channel_io(read))
-
     async def receive(self, facts: ConversationFacts, raw: dict[str, Any]) -> None:
         if facts.chat_id not in self._config.allowed_chat_ids:
             self._denied.record(
@@ -190,8 +173,12 @@ class NetworkChannelAdapter(ChannelAdapter):
             )
             return
         async with self._ingress_lock:
+            # Platforms redeliver recent events after a reconnect; a receipt is
+            # recorded only after the conversation accepted the message.
             receipt = f"{facts.chat_id}:{facts.message_id}"
-            if facts.message_id is None or receipt in self._seen:
+            if facts.message_id is None or await self._received.has_received(
+                self._config.id, receipt
+            ):
                 return
             self.remember(facts)
             if raw.get("files"):
@@ -204,12 +191,7 @@ class NetworkChannelAdapter(ChannelAdapter):
                 await self._engine.handle_inbound_text(facts, raw["text"], raw_message=raw)
             else:
                 return
-            self._seen[receipt] = None
-            while len(self._seen) > 4096:
-                self._seen.popitem(last=False)
-            await channel_io(
-                atomic_write_text, self._state_dir / "received.json", json.dumps(list(self._seen))
-            )
+            await self._received.record_received(self._config.id, receipt)
 
     def caption_text(self, raw_message: Any) -> str | None:
         return raw_message.get("text") or None

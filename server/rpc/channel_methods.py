@@ -366,21 +366,21 @@ def _channel_status(state: Any, params: JsonObject) -> JsonObject:
     }
 
 
-def _channel_access_get(state: Any, params: JsonObject) -> JsonObject:
+async def _channel_access_get(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, {"id"}, "channel.access.get")
     channel_id = _required_string(params, "id")
     try:
-        return cast(JsonObject, state.runtime.channel_service.channel_access(channel_id))
+        return cast(JsonObject, await state.runtime.channel_service.channel_access(channel_id))
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 
 
-def _channel_identity_set(state: Any, params: JsonObject) -> JsonObject:
+async def _channel_identity_set(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, {"id", "user_id"}, "channel.identity.set")
     channel_id = _required_string(params, "id")
     user_id = _required_string(params, "user_id")
     try:
-        result = state.runtime.channel_service.set_channel_self_user_id(channel_id, user_id)
+        result = await state.runtime.channel_service.set_channel_self_user_id(channel_id, user_id)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     publish_resource_changed(state, RESOURCE_KIND_CHANNELS)
@@ -388,7 +388,7 @@ def _channel_identity_set(state: Any, params: JsonObject) -> JsonObject:
     return cast(JsonObject, result)
 
 
-def _channel_admin_grant(state: Any, params: JsonObject) -> JsonObject:
+async def _channel_admin_grant(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(
         params,
         {"id", "access_scope_id", "user_id"},
@@ -398,7 +398,7 @@ def _channel_admin_grant(state: Any, params: JsonObject) -> JsonObject:
     access_scope_id = _required_string(params, "access_scope_id")
     user_id = _required_string(params, "user_id")
     try:
-        result = state.runtime.channel_service.grant_channel_group_admin(
+        result = await state.runtime.channel_service.grant_channel_group_admin(
             channel_id,
             access_scope_id,
             user_id,
@@ -415,7 +415,7 @@ def _channel_admin_grant(state: Any, params: JsonObject) -> JsonObject:
     return cast(JsonObject, result)
 
 
-def _channel_admin_revoke(state: Any, params: JsonObject) -> JsonObject:
+async def _channel_admin_revoke(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(
         params,
         {"id", "access_scope_id", "user_id"},
@@ -425,7 +425,7 @@ def _channel_admin_revoke(state: Any, params: JsonObject) -> JsonObject:
     access_scope_id = _required_string(params, "access_scope_id")
     user_id = _required_string(params, "user_id")
     try:
-        result = state.runtime.channel_service.revoke_channel_group_admin(
+        result = await state.runtime.channel_service.revoke_channel_group_admin(
             channel_id,
             access_scope_id,
             user_id,

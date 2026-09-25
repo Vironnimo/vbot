@@ -17,6 +17,7 @@ from core.channels.adapter import (
     ChannelAccessRegistry,
     ChannelAdapter,
     ConversationFacts,
+    ConversationPointerStore,
     DeniedChatFacts,
     DeniedChatLog,
     FileData,
@@ -67,6 +68,7 @@ class DiscordChannelAdapter(ChannelAdapter):
         attachment_store: AttachmentStore | None = None,
         *,
         command_dispatcher: CommandDispatcher,
+        conversation_pointers: ConversationPointerStore,
         access_registry: ChannelAccessRegistry | None = None,
     ) -> None:
         self._config = config
@@ -78,6 +80,7 @@ class DiscordChannelAdapter(ChannelAdapter):
             chat_sessions,
             self,
             command_dispatcher=command_dispatcher,
+            conversation_pointers=conversation_pointers,
             access_registry=access_registry,
         )
 

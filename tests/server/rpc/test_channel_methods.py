@@ -233,13 +233,13 @@ async def test_channel_access_methods_return_saved_state_without_runtime_reload(
         ],
     }
     channel_service = Mock()
-    getattr(channel_service, service_method).return_value = saved
+    setattr(channel_service, service_method, AsyncMock(return_value=saved))
     state = _state(channel_service=channel_service)
 
     response = await dispatch_rpc(state, {"method": method, "params": params})
 
     assert response == {"ok": True, "result": saved}
-    getattr(channel_service, service_method).assert_called_once_with(*service_args)
+    getattr(channel_service, service_method).assert_awaited_once_with(*service_args)
     state.runtime.reload_channel_tool.assert_not_called()
 
 
