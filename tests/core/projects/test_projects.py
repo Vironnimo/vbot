@@ -247,9 +247,11 @@ def test_build_project_rejects_non_dict_override_value(tmp_path: Path) -> None:
         build_project("vbot", "vBot", tmp_path, overrides={"builder": "openai/gpt-5"})  # type: ignore[dict-item]
 
 
-def test_build_project_rejects_empty_override_object(tmp_path: Path) -> None:
-    with pytest.raises(ProjectError):
-        build_project("vbot", "vBot", tmp_path, overrides={"builder": {}})
+def test_build_project_keeps_an_empty_override_object(tmp_path: Path) -> None:
+    # An entry holding only fields this vBot does not model loads as ``{}``.
+    project = build_project("vbot", "vBot", tmp_path, overrides={"builder": {}})
+
+    assert project.overrides == {"builder": {}}
 
 
 def test_build_project_rejects_unknown_override_field(tmp_path: Path) -> None:
