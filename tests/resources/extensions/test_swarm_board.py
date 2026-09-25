@@ -23,9 +23,10 @@ from core.extensions import (
 from core.extensions.databases import ExtensionDatabases
 from core.extensions.extensions import ExtensionDeclarations
 from core.extensions.operations import ExtensionHost
+from core.providers._tool_result_text import tool_result_text
 from core.runs import ChatRunManager, RunExecutionOwner
 from core.sessions import ChatSessionManager, SessionAddress
-from core.tools import ToolContext, ToolContractError, ToolRegistry
+from core.tools import ToolContext, ToolContractError, ToolRegistry, tool_failure
 from core.tools.availability import ToolAccess
 from core.utils.ids import new_id
 from resources.extensions.swarm.extension import register
@@ -172,6 +173,44 @@ async def call(board, arguments, peer=0, *, tool_call_id=None):
     return result, context
 
 
+async def dispatch(board, arguments, peer=0, *, name="swarm_board", tool_call_id=None):
+    """Run a call through production dispatch, as the Model's Tool Call would."""
+
+    context = replace(
+        board.contexts[peer],
+        tool_name=name,
+        tool_call_id=tool_call_id or new_id("call"),
+        session_tool_grants=(name,),
+    )
+    try:
+        result = await board.tools.dispatch(context, arguments, allowed_tools=[name])
+    except ToolContractError as error:
+        result = tool_failure("invalid_arguments", str(error))
+    return result, context
+
+
+def visible(result):
+    """Return the Tool Result text the Model reads."""
+
+    return tool_result_text(json.dumps(result))
+
+
+def continuation(line):
+    """Return the argument object of a result line ending in a copyable call."""
+
+    return json.loads(line[line.index("{") :])
+
+
+async def board_posts(board, peer=0, **query):
+    return list(
+        (
+            await board.store.read_posts(
+                board.swarm["id"], board.bindings[peer].participant_id, **query
+            )
+        ).entries
+    )
+
+
 @pytest.mark.asyncio
 async def test_editor_catalog_delivers_default_without_replacing_saved_instructions(board):
     from resources.extensions.swarm.agent_text import DEFAULT_INSTRUCTIONS
@@ -240,23 +279,30 @@ async def test_swarm_get_projects_canonical_run_activity(board, monkeypatch):
 @pytest.mark.asyncio
 async def test_registered_board_public_posts_pages_and_durable_read_receipt(board):
     result, _ = await call(board, {"action": "list"})
-    main = result["data"]["main_discussion_id"]
-    assert result["data"]["entries"][0]["id"] == main
+    main = board.swarm["main_discussion_id"]
+    goal = board.swarm["goal_post_id"]
+    assert f'- {main} "Main": main discussion, joined' in result["data"]["content"]
+    assert continuation(result["data"]["user_request"]) == {"action": "read", "message_id": goal}
     peer = board.bindings[1].participant_id
     posted, posted_context = await call(
         board,
         {"action": "post", "text": "full text", "recipients": [peer, peer]},
     )
     assert posted["ok"]
+    assert posted["data"]["delivery"] == "Queued for 2 participants (1 pinged)."
     replay, _ = await call(
         board,
         {"action": "post", "text": "full text", "recipients": [peer, peer]},
         tool_call_id=posted_context.tool_call_id,
     )
-    assert replay["data"]["replayed"]
+    assert replay["data"]["post_id"] == posted["data"]["post_id"]
+    assert "nothing was duplicated" in replay["data"]["replayed"]
     read, context = await call(board, {"action": "read"}, peer=1)
-    assert len(read["data"]["entries"]) == 1
-    assert read["data"]["entries"][0]["text"] == "full text"
+    author = board.swarm["participants"][0]["display_name"]
+    assert read["data"]["content"] == (
+        f"[{posted['data']['post_id']}] {author} (pinged you):\nfull text"
+    )
+    assert "(1 shown)" in read["data"]["page"]
     assert len(context._delivery_receipts) == 1
     receipt_id, content_hash, effect = context._delivery_receipts[0]
     assert not await board.store.reconcile_delivery(receipt_id)
@@ -283,30 +329,57 @@ async def test_registered_board_public_posts_pages_and_durable_read_receipt(boar
 async def test_board_discussion_join_leave_reply_and_exact_pagination(board):
     created, _ = await call(board, {"action": "create", "title": "Topic", "text": "opening"})
     discussion = created["data"]["discussion_id"]
+    opening = created["data"]["opening_post_id"]
     first, _ = await call(board, {"action": "list", "limit": 1})
-    next_page, _ = await call(board, first["data"]["next_call"]["arguments"])
-    assert next_page["data"]["entries"][0]["id"] == discussion
+    next_page, _ = await call(board, continuation(first["data"]["more"]))
+    assert f'- {discussion} "Topic": joined, members: 1' in next_page["data"]["content"]
     joined, _ = await call(board, {"action": "join", "discussion_id": discussion}, peer=1)
-    opening = joined["data"]["recent"]["entries"][0]
+    assert joined["data"]["status"] == "Joined. New posts in this discussion now reach you."
+    assert f"[{opening}]" in joined["data"]["content"]
+    again, _ = await call(board, {"action": "join", "discussion_id": discussion}, peer=1)
+    assert again["data"]["status"] == "You had already joined; nothing changed."
     response, _ = await call(
         board,
         {
             "action": "post",
             "discussion_id": discussion,
             "text": "answer",
-            "reply_to": opening["id"],
+            "reply_to": opening,
         },
         peer=1,
     )
     assert response["ok"]
     newest, _ = await call(board, {"action": "read", "discussion_id": discussion, "limit": 1})
-    assert newest["data"]["entries"][0]["text"] == "answer"
-    older, _ = await call(board, newest["data"]["next_call"]["arguments"])
-    assert older["data"]["entries"] == [opening]
-    one, _ = await call(board, {"action": "read", "message_id": opening["id"]})
-    assert one["data"]["entries"] == [opening]
+    assert newest["data"]["content"].endswith(f"(reply to {opening}):\nanswer")
+    older_call = continuation(newest["data"]["older"])
+    assert older_call == {
+        "action": "read",
+        "discussion_id": discussion,
+        "before": response["data"]["post_id"],
+        "limit": 1,
+    }
+    older, _ = await call(board, older_call)
+    assert older["data"]["content"].endswith(f"[{opening}] {_name(board, 0)}:\nopening")
+    assert "older" not in older["data"]
+    one, _ = await call(board, {"action": "read", "message_id": opening})
+    assert one["data"]["content"] == (
+        f'[{opening}] {_name(board, 0)} (in "Topic" {discussion}):\nopening'
+    )
     left, _ = await call(board, {"action": "leave", "discussion_id": discussion}, peer=1)
-    assert left["data"]["joined"] is False
+    assert left["data"]["status"].startswith("Left.")
+    assert not next(
+        row
+        for row in (
+            await board.store.list_discussions(board.swarm["id"], board.bindings[1].participant_id)
+        ).entries
+        if row["id"] == discussion
+    )["joined"]
+    again, _ = await call(board, {"action": "leave", "discussion_id": discussion}, peer=1)
+    assert again["data"]["status"] == "You were not a member; nothing changed."
+
+
+def _name(board, peer):
+    return board.swarm["participants"][peer]["display_name"]
 
 
 @pytest.mark.asyncio
@@ -317,7 +390,6 @@ async def test_board_discussion_join_leave_reply_and_exact_pagination(board):
         {"action": "other"},
         {"action": "list", "limit": True},
         {"action": "list", "limit": 0},
-        {"action": "list", "limit": 101},
         {"action": "list", "swarm_id": "foreign"},
         {"action": "read", "message_id": "foreign", "limit": 20},
         {"action": "read", "text": "wrong"},
@@ -425,15 +497,19 @@ async def test_create_pings_opening_atomically_without_joining_recipients(board)
     assert created["ok"]
     data = created["data"]
     inbox = await board.store.prepare_inbox_delivery(board.swarm["id"], peer)
-    assert [entry["id"] for entry in inbox["entries"]] == [
-        data["opening_post_id"],
-        data["main_announcement_id"],
-    ]
+    assert [entry["id"] for entry in inbox["entries"]][:1] == [data["opening_post_id"]]
+    announcement = inbox["entries"][1]
+    assert announcement["discussion_id"] == board.swarm["main_discussion_id"]
+    assert announcement["text"] == (
+        f'{_name(board, 0)} opened the discussion "Review" ({data["discussion_id"]}) with post '
+        f"{data['opening_post_id']}. Read or join it with swarm_board and this discussion_id."
+    )
     discussions = await board.store.list_discussions(board.swarm["id"], peer)
     assert not next(row for row in discussions.entries if row["id"] == data["discussion_id"])[
         "joined"
     ]
     replay, _ = await call(board, arguments, tool_call_id=created_context.tool_call_id)
+    assert replay["data"]["discussion_id"] == data["discussion_id"]
     assert replay["data"]["replayed"]
     conflict, _ = await call(
         board, {**arguments, "recipients": []}, tool_call_id=created_context.tool_call_id
@@ -459,7 +535,7 @@ async def test_reply_uses_owned_message_discussion_and_rejects_contradiction(boa
         "reply_to": topic["opening_post_id"],
     }
     reply, reply_context = await call(board, arguments, peer=1)
-    assert reply["data"]["discussion_id"] == topic["discussion_id"]
+    assert reply["data"]["discussion"] == f'discussion "Topic" ({topic["discussion_id"]})'
     replay, _ = await call(
         board,
         {**arguments, "discussion_id": topic["discussion_id"]},
@@ -473,8 +549,19 @@ async def test_reply_uses_owned_message_discussion_and_rejects_contradiction(boa
         peer=1,
     )
     assert mismatch["error"]["code"] == "reply_discussion_mismatch"
+    assert mismatch["error"]["message"] == (
+        f'reply_to {topic["opening_post_id"]} belongs to discussion "Topic" '
+        f"({topic['discussion_id']}), but discussion_id names the main discussion "
+        f"({board.swarm['main_discussion_id']}). Omit discussion_id to reply in discussion "
+        f'"Topic" ({topic["discussion_id"]}), or omit reply_to to post a new message in the '
+        f"main discussion ({board.swarm['main_discussion_id']}). Nothing was saved."
+    )
     missing, _ = await call(board, {**arguments, "reply_to": "foreign"}, peer=1)
     assert missing["error"]["code"] == "message_not_found"
+    assert missing["error"]["message"] == (
+        'reply_to "foreign" is not a post ID in your group. Find the post ID with '
+        '{"action": "read"}, or omit reply_to for a new message. Nothing was saved.'
+    )
     assert (
         len(
             (
@@ -490,34 +577,25 @@ async def test_reply_uses_owned_message_discussion_and_rejects_contradiction(boa
 
 
 @pytest.mark.asyncio
-async def test_board_validation_identifies_the_field_before_any_effect(board):
-    from resources.extensions.swarm._extension_values import (
-        _validate_board,
-    )
-    from resources.extensions.swarm.store import SwarmStoreError
-
-    unknown = {"action": "list", "unavailable_feature": 1}
-    for arguments, field in [
-        ({"action": "post"}, "text"),
-        ({"action": "list", "text": "inapplicable"}, "text"),
-        ({"action": "join"}, "discussion_id"),
-        (unknown, "unavailable_feature"),
+async def test_board_validation_names_the_missing_or_misplaced_field_before_any_effect(board):
+    for arguments, message in [
+        ({"action": "post"}, "post needs text, the message body."),
+        (
+            {"action": "list", "text": "inapplicable"},
+            "list does not use text, so the call may mean another action. Repeat it without "
+            "text, or use an action that takes text: post or create.",
+        ),
+        ({"action": "join"}, 'join needs discussion_id. Use {"action": "list"}'),
+        ({"action": "create", "text": "opening"}, "create needs title"),
     ]:
-        with pytest.raises(SwarmStoreError) as error:
-            _validate_board(arguments)
-        assert error.value.field == field
-        context = replace(board.contexts[0], session_tool_grants=("swarm_board",))
-        if arguments is unknown:
-            # Dispatch rejects a name that is not a parameter before the handler.
-            with pytest.raises(ToolContractError, match='"unavailable_feature" is not a parameter'):
-                await board.tools.dispatch(context, arguments, allowed_tools=["swarm_board"])
-        else:
-            result = await board.tools.dispatch(context, arguments, allowed_tools=["swarm_board"])
-            assert result["error"]["code"] == "invalid_arguments"
+        result, context = await dispatch(board, arguments)
+        assert result["error"]["code"] == "invalid_arguments"
+        assert message in result["error"]["message"]
         assert context._delivery_receipts == []
-    assert not (
-        await board.store.read_posts(board.swarm["id"], board.bindings[0].participant_id)
-    ).entries
+    # Dispatch rejects a name that is not a parameter before the handler.
+    rejected, _ = await dispatch(board, {"action": "list", "unavailable_feature": 1})
+    assert '"unavailable_feature" is not a parameter' in rejected["error"]["message"]
+    assert not await board_posts(board)
 
 
 @pytest.mark.asyncio
@@ -833,3 +911,226 @@ async def test_post_survives_resume_preparation_failure(board, monkeypatch):
     assert result["resume_failed"] is True
     entries = await board.store.read_human_posts(sid, message_id=result["post_id"])
     assert entries.entries[0]["text"] == "retained followup"
+
+
+def _ids(board):
+    return [participant["id"] for participant in board.swarm["participants"]]
+
+
+@pytest.mark.asyncio
+async def test_board_runs_clear_intent_after_repairing_the_call_shape(board):
+    posted, _ = await dispatch(board, {"text": "inferred post", "request_id": "agent-chosen"})
+    assert posted["ok"], posted
+    first = posted["data"]["post_id"]
+    reply, _ = await dispatch(
+        board,
+        {"arguments": {"action": "respond", "body": "answer", "in_reply_to": first}},
+        peer=1,
+    )
+    assert reply["ok"], reply
+    created, _ = await dispatch(board, {"subject": "Plan", "message": "opening"})
+    assert created["data"]["status"] == "You joined it, and the main discussion announces it."
+    read, _ = await dispatch(board, {"action": "history", "post_id": first}, peer=2)
+    assert read["data"]["content"] == (
+        f"[{first}] {_name(board, 0)} (in the main discussion "
+        f"{board.swarm['main_discussion_id']}):\ninferred post"
+    )
+    posts = await board_posts(board)
+    assert [(post["text"], post["reply_to"]) for post in posts[:2]] == [
+        ("inferred post", None),
+        ("answer", first),
+    ]
+    topic = await board_posts(board, discussion_id=created["data"]["discussion_id"])
+    assert [post["text"] for post in topic] == ["opening"]
+    # The same repairs never pick one of two differing instructions.
+    for arguments, message in [
+        ({"text": "one", "body": "two"}, "text"),
+        ({"action": "post", "arguments": {"action": "read"}}, "action"),
+        ({"action": "status"}, "Use swarm_state to see participants"),
+        ({"action": "check_inbox"}, "Use swarm_inbox to receive"),
+    ]:
+        result, _ = await dispatch(board, arguments)
+        assert result["error"]["code"] == "invalid_arguments", result
+        assert message in result["error"]["message"]
+    assert len(await board_posts(board)) == len(posts)
+
+
+@pytest.mark.asyncio
+async def test_board_pings_named_participants_and_never_guesses_one(board):
+    ids = _ids(board)
+    named, _ = await dispatch(board, {"text": "to one", "recipients": [f"@{_name(board, 1)}"]})
+    assert named["data"]["delivery"] == "Queued for 2 participants (1 pinged)."
+    everyone, _ = await dispatch(board, {"text": "to all", "to": "all"})
+    assert everyone["data"]["delivery"] == "Queued for 2 participants (2 pinged)."
+    user, _ = await dispatch(board, {"text": "to user", "recipients": ["the user"]})
+    assert user["data"]["note"] == (
+        "The user is not a participant and sees every Board post, so no ping was needed for the "
+        "user."
+    )
+    assert "pinged" not in user["data"]["delivery"]
+    listed, _ = await dispatch(
+        board,
+        {"text": "listed", "recipients": [f"{_name(board, 1)}; prt_{_name(board, 2).lower()}"]},
+    )
+    assert listed["data"]["delivery"] == "Queued for 2 participants (2 pinged)."
+    saved = {post["text"]: sorted(post["recipients"]) for post in await board_posts(board)}
+    assert saved == {
+        "to one": [ids[1]],
+        "to all": sorted(ids[1:]),
+        "to user": [],
+        "listed": sorted(ids[1:]),
+    }
+    read, _ = await dispatch(board, {"action": "read"}, peer=1)
+    assert (
+        f"{_name(board, 0)} (pinged you and {_name(board, 2)}):\nto all" in read["data"]["content"]
+    )
+
+    near = ids[1][:-1] + ("x" if ids[1][-1] != "x" else "y")
+    corrected, _ = await dispatch(board, {"text": "typo", "recipients": [near, _name(board, 2)]})
+    assert corrected["error"]["code"] == "invalid_recipient"
+    assert (
+        f'Did you mean {_name(board, 1)} ({ids[1]}) for "{near}"?'
+        in (corrected["error"]["message"])
+    )
+    assert corrected["error"]["message"].endswith(
+        f'Repeat the call with recipients ["{ids[1]}", "{_name(board, 2)}"]. Names also work, '
+        'and "all" pings every other participant. Nothing was saved.'
+    )
+    unknown, _ = await dispatch(board, {"text": "typo", "recipients": ["Nobody"]})
+    assert unknown["error"]["code"] == "invalid_recipient"
+    assert f"{_name(board, 0)} ({ids[0]}, you)" in unknown["error"]["message"]
+    assert (
+        "Repeat the call with recipients chosen from these participants"
+        in (unknown["error"]["message"])
+    )
+    assert "typo" not in {post["text"] for post in await board_posts(board)}
+
+
+@pytest.mark.asyncio
+async def test_board_corrects_read_references_but_never_write_targets(board):
+    main = board.swarm["main_discussion_id"]
+    created, _ = await dispatch(board, {"title": "Topic", "text": "opening"})
+    topic = created["data"]["discussion_id"]
+    posted, _ = await dispatch(board, {"text": "first main post"})
+    first = posted["data"]["post_id"]
+    number = next(post for post in await board_posts(board) if post["id"] == first)["sequence"]
+
+    by_number, _ = await dispatch(board, {"action": "read", "message_id": f"pst_{number}"})
+    assert by_number["data"]["content"].endswith(":\nfirst main post")
+    assert by_number["data"]["note"] == (
+        f'message_id "pst_{number}" is not a post ID; this uses post {first}, which has that '
+        "number."
+    )
+    reply, _ = await dispatch(board, {"text": "answer", "reply_to": f"pst_{number}"})
+    assert reply["error"]["code"] == "message_not_found"
+    assert reply["error"]["message"].startswith(f'reply_to "pst_{number}" is not a post ID')
+    assert reply["error"]["message"].endswith(
+        f'Repeat the call with reply_to "{first}". Nothing was saved.'
+    )
+
+    near = topic[:-1] + ("x" if topic[-1] != "x" else "y")
+    close_read, _ = await dispatch(board, {"action": "read", "discussion_id": near})
+    assert close_read["data"]["content"].endswith(":\nopening")
+    assert close_read["data"]["note"] == (
+        f'discussion_id "{near}" does not exist; this shows discussion "Topic" ({topic}), its '
+        "only close match."
+    )
+    close_post, _ = await dispatch(board, {"text": "misaddressed", "discussion_id": near})
+    assert close_post["error"]["code"] == "discussion_not_found"
+    assert f'Repeat the call with discussion_id "{topic}".' in close_post["error"]["message"]
+
+    older, _ = await dispatch(board, {"action": "read", "cursor": first})
+    assert (
+        older["data"]["note"] == f"cursor {first} is a post ID, so this shows the posts before it."
+    )
+    assert older["data"]["page"].startswith(f"Posts before {first} in the main discussion ({main})")
+    conflict, _ = await dispatch(board, {"action": "read", "discussion_id": topic, "before": first})
+    assert conflict["error"]["message"].startswith(
+        f"before {first} belongs to the main discussion ({main}), but discussion_id names "
+        f'discussion "Topic" ({topic}).'
+    )
+    texts = [post["text"] for post in await board_posts(board)]
+    assert "answer" not in texts
+    assert "misaddressed" not in texts
+
+
+@pytest.mark.asyncio
+async def test_board_extra_targets_run_only_when_they_change_nothing(board):
+    main = board.swarm["main_discussion_id"]
+    first, _ = await dispatch(board, {"title": "First", "text": "opening"})
+    existing = first["data"]["discussion_id"]
+    inside, _ = await dispatch(
+        board, {"action": "create", "discussion_id": existing, "title": "Second", "text": "x"}
+    )
+    assert inside["error"]["message"].startswith(
+        "create opens a new discussion, but discussion_id names the existing discussion "
+        f"{existing}."
+    )
+    in_main, _ = await dispatch(
+        board, {"action": "create", "discussion_id": main, "title": "Second", "text": "x"}
+    )
+    assert in_main["ok"] and "note" not in in_main["data"]
+    unknown, _ = await dispatch(
+        board, {"action": "create", "discussion_id": "new-topic", "title": "Third", "text": "x"}
+    )
+    assert unknown["data"]["note"] == (
+        'discussion_id "new-topic" names no discussion and was ignored; the new discussion has '
+        "its own ID."
+    )
+    listed = await board.store.list_discussions(board.swarm["id"], board.bindings[0].participant_id)
+    assert sorted(row["title"] for row in listed.entries) == ["First", "Main", "Second", "Third"]
+
+    target = first["data"]["opening_post_id"]
+    only_message, _ = await dispatch(
+        board, {"action": "post", "message_id": target, "text": "answer"}
+    )
+    assert only_message["error"]["message"].startswith(
+        f"message_id selects a post to read. To answer post {target}, repeat the call with "
+        f'reply_to "{target}"'
+    )
+    differing, _ = await dispatch(
+        board, {"action": "post", "message_id": main, "reply_to": target, "text": "answer"}
+    )
+    assert "it differs from reply_to" in differing["error"]["message"]
+    same, _ = await dispatch(
+        board, {"action": "post", "message_id": target, "reply_to": target, "text": "answer"}
+    )
+    assert same["ok"], same
+    replies = [
+        post for post in await board_posts(board, discussion_id=existing) if post["reply_to"]
+    ]
+    assert [(post["text"], post["reply_to"]) for post in replies] == [("answer", target)]
+
+
+@pytest.mark.asyncio
+async def test_board_clamps_page_size_and_drops_paging_fields_it_cannot_use(board):
+    for index in range(3):
+        await dispatch(board, {"text": f"post {index}"})
+    clamped, _ = await dispatch(board, {"action": "read", "limit": 500})
+    assert clamped["data"]["note"] == "limit 500 is above the maximum of 100; used 100."
+    assert "(3 shown)" in clamped["data"]["page"]
+    ignored, _ = await dispatch(board, {"action": "post", "text": "paged", "limit": 5})
+    assert ignored["data"]["note"] == "limit is not used by post and was ignored."
+    assert "paged" in {post["text"] for post in await board_posts(board)}
+    rejected, _ = await dispatch(board, {"action": "list", "limit": 0})
+    assert rejected["error"]["code"] == "invalid_arguments"
+
+
+@pytest.mark.asyncio
+async def test_board_results_read_as_plain_text(board):
+    main = board.swarm["main_discussion_id"]
+    posted, _ = await dispatch(board, {"text": "line one\nline two", "recipients": ["all"]})
+    first = posted["data"]["post_id"]
+    assert visible(posted) == (
+        f"post_id: {first}\ndiscussion: the main discussion ({main})\n"
+        "delivery: Queued for 2 participants (2 pinged)."
+    )
+    await dispatch(board, {"text": "second"}, peer=1)
+    read, _ = await dispatch(board, {"action": "read", "limit": 1}, peer=2)
+    second = (await board_posts(board))[-1]["id"]
+    assert visible(read) == (
+        f"page: Newest posts of the main discussion ({main}), oldest first (1 shown).\n"
+        "older: Older posts exist. Continue with "
+        f'{{"action": "read", "discussion_id": "{main}", "before": "{second}", "limit": 1}}\n\n'
+        f"[{second}] {_name(board, 1)}:\nsecond"
+    )

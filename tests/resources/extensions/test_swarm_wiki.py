@@ -560,11 +560,19 @@ async def test_goal_is_pinned_user_post_without_automatic_delivery(board):
     goal = await board.service.board(
         board.contexts[0], {"action": "read", "message_id": board.swarm["goal_post_id"]}
     )
-    assert goal["data"]["entries"][0]["text"] == "fixture-goal"
-    assert goal["data"]["entries"][0]["author"]["kind"] == "user"
+    goal_id, main = board.swarm["goal_post_id"], board.swarm["main_discussion_id"]
+    assert goal["data"]["content"] == (
+        f"[{goal_id}] User (in the main discussion {main}):\nfixture-goal"
+    )
     assert all(item["pending_count"] == 0 for item in board.swarm["participants"])
     board_read = await board.service.board(board.contexts[0], {"action": "read"})
-    assert board_read["data"]["goal_post_id"] == board.swarm["goal_post_id"]
+    assert board_read["data"]["page"] == f"No posts in the main discussion ({main}) yet."
+    assert board_read["data"]["user_request"] == (
+        f"Post {goal_id} holds the user's request. Read it with "
+        f'{{"action": "read", "message_id": "{goal_id}"}}'
+    )
+    listed = await board.service.board(board.contexts[0], {"action": "list"})
+    assert listed["data"]["user_request"].startswith(f"Post {goal_id} holds the user's request.")
 
 
 @pytest.mark.asyncio

@@ -7,10 +7,11 @@ from pathlib import Path
 from typing import Any
 
 from core.agents.temporary import TemporaryAgentConfig
-from core.tools import tool_failure
+from core.tools import ToolContext, tool_failure
 from core.tools.availability import normalize_tool_access
 from core.tools.tools import run_tool_worker
 
+from ._store_values import _hash
 from .agent_text import (
     ERRORS,
     REMINDER_TEXTS,
@@ -20,14 +21,21 @@ from .store import Page, SwarmStoreError
 Json = dict[str, Any]
 
 
-def _board_page(page: Page, arguments: Json) -> Json:
-    result: Json = {"entries": list(page.entries), "has_more": page.has_more}
-    if page.has_more:
-        result["next_call"] = {
-            "tool": "swarm_board",
-            "arguments": {**arguments, "cursor": page.cursor},
-        }
-    return result
+class AgentCallError(Exception):
+    """A Session Tool call that failed before any effect, with its Agent-facing explanation."""
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
+def _call_request_id(context: ToolContext) -> str:
+    """Derive a mutation's idempotency key from the Tool Call that requested it."""
+
+    return _hash(
+        [context.session_id, context.run_id, context.iteration_number, context.tool_call_id]
+    )
 
 
 def _management_page(page: Page) -> Json:
@@ -228,51 +236,6 @@ def _failure(
         else:
             guidance = f"{field}: {ERRORS['invalid_value']}"
     return tool_failure(code, guidance)
-
-
-def _validate_board(arguments: Json) -> str:
-    fields = {
-        "list": {"cursor", "limit"},
-        "read": {"discussion_id", "message_id", "cursor", "limit"},
-        "post": {"discussion_id", "text", "reply_to", "recipients"},
-        "create": {"title", "text", "recipients"},
-        "join": {"discussion_id"},
-        "leave": {"discussion_id"},
-    }
-    action = arguments.get("action")
-    if not isinstance(action, str) or action not in fields:
-        raise SwarmStoreError("invalid_arguments", field="action")
-    unexpected = sorted(set(arguments) - {"action", *fields[action]})
-    if unexpected:
-        raise SwarmStoreError("inapplicable_field", field=unexpected[0])
-    required = {
-        "post": {"text"},
-        "create": {"title", "text"},
-        "join": {"discussion_id"},
-        "leave": {"discussion_id"},
-    }
-    for key in required.get(action, set()):
-        if key not in arguments:
-            raise SwarmStoreError("invalid_arguments", field=key)
-    for key, value in arguments.items():
-        if key == "limit":
-            valid = type(value) is int and 1 <= value <= 100
-        elif key == "recipients":
-            valid = isinstance(value, list) and all(
-                isinstance(item, str) and item for item in value
-            )
-        else:
-            maximum = {"text": 16000, "title": 120}.get(key)
-            valid = (
-                isinstance(value, str)
-                and bool(value.strip())
-                and (maximum is None or len(value) <= maximum)
-            )
-        if not valid:
-            raise SwarmStoreError("invalid_arguments", field=key)
-    if "message_id" in arguments and {"discussion_id", "cursor", "limit"} & arguments.keys():
-        raise SwarmStoreError("exact_message_arguments")
-    return action
 
 
 def _validate_state(arguments: Json) -> None:

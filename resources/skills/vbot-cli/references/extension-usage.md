@@ -28,7 +28,8 @@ edits themselves do not send messages or wake participants. CLI users can inspec
 the equivalent `wiki` management operation with per-operation help.
 
 Participants use separate durable Sessions and coordinate as peers on a public
-Board. Pings are public posts addressed to participant ids. Delivery mode and
+Board. Their pings are public posts addressed to participants by name or id, or
+to "all" other participants. Delivery mode and
 permission to wake idle participants are independent profile settings. Every
 automatic wake carries actual Board messages, including in pull mode; Inbox
 remains available for manual reads and batch overflow. Participants keep their

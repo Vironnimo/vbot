@@ -19,15 +19,16 @@ from core.extensions import (
 from core.extensions.operations import ExtensionHost
 from core.runs import RunAdmission
 from core.sessions import SessionAddress, TemporarySessionBinding
-from core.tools import ToolContext, tool_success
-from core.tools._argument_repair import normalize_call_arguments
+from core.tools import ToolContext, tool_failure, tool_success
 from core.tools.contracts import compile_tool_contract
 from core.utils.ids import new_id
 from core.utils.logging import get_logger
 
+from ._board_tool import BoardCall, prepare_board_call
+from ._board_view import resolve_recipients, unknown_recipients_message, with_notes
 from ._extension_values import (
+    AgentCallError,
     Json,
-    _board_page,
     _exact,
     _failure,
     _initial_message,
@@ -41,14 +42,14 @@ from ._extension_values import (
     _string,
     _swarm_command_argument,
     _swarm_projection,
-    _validate_board,
     _validate_profile_catalog,
     _validate_state,
 )
 from ._registration import register as register
 from ._registration import session_tool_catalog
-from ._store_values import _hash, _validate_profile
+from ._store_values import _validate_profile
 from ._store_wiki import MUTATIONS
+from ._tool_calls import normalize_board, normalize_inbox, normalize_state, normalize_wiki
 from .agent_text import (
     BOARD_PARAMETERS,
     DEFAULT_INSTRUCTIONS,
@@ -56,9 +57,7 @@ from .agent_text import (
     DEFAULT_REMINDERS,
     EMPTY_INBOX,
     INBOX_PARAMETERS,
-    POST_SAVED,
     REMINDER_TEXTS,
-    REPLAYED,
     STATE_PARAMETERS,
 )
 from .store import DATABASE_NAME, SCHEMA_SQL, SwarmStore, SwarmStoreError
@@ -97,13 +96,16 @@ _RUNTIME_CONTRACTS = {
 }
 
 
+_NORMALIZERS = {
+    "swarm_board": normalize_board,
+    "swarm_inbox": normalize_inbox,
+    "swarm_state": normalize_state,
+    "swarm_wiki": normalize_wiki,
+}
+
+
 def _normalize_arguments(name: str, arguments: Json) -> Any:
-    return normalize_call_arguments(
-        _RUNTIME_CONTRACTS[name],
-        arguments,
-        enum_fields=("action",),
-        field_aliases={"limti": "limit"},
-    )
+    return _NORMALIZERS[name](_RUNTIME_CONTRACTS[name], arguments)
 
 
 class SwarmExtension:
@@ -196,9 +198,9 @@ class SwarmExtension:
         return binding, swarm
 
     async def _bound_arguments(
-        self, context: ToolContext, arguments: Json
+        self, context: ToolContext, tool: str, arguments: Json
     ) -> tuple[TemporarySessionBinding, Json, Json]:
-        arguments = _normalize_arguments(context.tool_name, arguments)
+        arguments = _normalize_arguments(tool, arguments)
         binding, swarm = await self._participant(context)
         identities = {
             "swarm_id": binding.group_id,
@@ -212,76 +214,30 @@ class SwarmExtension:
 
     async def board(self, context: ToolContext, arguments: Json) -> Json:
         try:
-            binding, swarm, arguments = await self._bound_arguments(context, arguments)
-            action = _validate_board(arguments)
-            store = self._store()
-            sid, pid = binding.group_id, binding.participant_id
-            if action in {"post", "create"}:
-                request_id = _hash(
-                    [
-                        context.session_id,
-                        context.run_id,
-                        context.iteration_number,
-                        context.tool_call_id,
-                    ]
-                )
-            if action == "list":
-                page = await store.list_discussions(
-                    sid, pid, cursor=arguments.get("cursor"), limit=arguments.get("limit", 20)
-                )
-                data = _board_page(page, arguments)
-                data["main_discussion_id"] = swarm["main_discussion_id"]
-            elif action == "read":
-                page = await store.read_posts(
-                    sid, pid, **{key: value for key, value in arguments.items() if key != "action"}
-                )
-                data = _board_page(page, arguments)
-                await self._record_read(context, binding, page.entries)
-            elif action == "post":
-                data = await store.post(
-                    sid,
-                    pid,
-                    request_id=request_id,
-                    expected_epoch=swarm["epoch"],
-                    **{key: value for key, value in arguments.items() if key != "action"},
-                )
-                data["guidance"] = REPLAYED if data.get("replayed") else POST_SAVED
-            elif action == "create":
-                data = await store.create_discussion(
-                    sid,
-                    pid,
-                    request_id=request_id,
-                    expected_epoch=swarm["epoch"],
-                    **{key: value for key, value in arguments.items() if key != "action"},
-                )
-                if data.get("replayed"):
-                    data["guidance"] = REPLAYED
-            elif action == "join":
-                data = await store.join_discussion(
-                    sid, pid, arguments["discussion_id"], expected_epoch=swarm["epoch"]
-                )
-                recent = data["recent"]
-                cursor = recent.pop("cursor", None)
-                if recent["has_more"]:
-                    recent["next_call"] = {
-                        "tool": "swarm_board",
-                        "arguments": {
-                            "action": "read",
-                            "discussion_id": arguments["discussion_id"],
-                            "cursor": cursor,
-                        },
-                    }
-                await self._record_read(context, binding, recent["entries"])
-            else:
-                data = await store.leave_discussion(
-                    sid, pid, arguments["discussion_id"], expected_epoch=swarm["epoch"]
-                )
+            binding, swarm, arguments = await self._bound_arguments(
+                context, "swarm_board", arguments
+            )
+            action, notes = prepare_board_call(arguments)
+            call = BoardCall(self, context, binding, swarm, notes)
+            if action in {"post", "create"} and "recipients" in arguments:
+                recipients = resolve_recipients(arguments["recipients"], call.roster)
+                if recipients.unknown:
+                    raise AgentCallError(
+                        "invalid_recipient",
+                        unknown_recipients_message(
+                            arguments["recipients"], recipients, call.roster
+                        ),
+                    )
+                arguments["recipients"] = recipients.ids
+                notes.extend(recipients.notes)
+            data = await getattr(call, action)(arguments)
             if action in {"post", "create", "join", "leave"}:
-                self._changed(sid, swarm["settings_revision"])
+                self._changed(binding.group_id, swarm["settings_revision"])
             if action in {"post", "create"}:
-                self._enqueue_wakes(sid)
-            data["goal_post_id"] = swarm["goal_post_id"]
-            return tool_success(data)
+                self._enqueue_wakes(binding.group_id)
+            return tool_success(with_notes(data, notes))
+        except AgentCallError as error:
+            return tool_failure(error.code, error.message)
         except SwarmStoreError as error:
             return _failure(error, arguments, BOARD_PARAMETERS)
 
@@ -298,7 +254,9 @@ class SwarmExtension:
 
     async def inbox(self, context: ToolContext, arguments: Json) -> Json:
         try:
-            binding, _swarm, arguments = await self._bound_arguments(context, arguments)
+            binding, _swarm, arguments = await self._bound_arguments(
+                context, "swarm_inbox", arguments
+            )
             if arguments.get("action") == "receive":
                 arguments.pop("action")
             unexpected = sorted(set(arguments) - {"limit"})
@@ -328,7 +286,7 @@ class SwarmExtension:
 
     async def state(self, context: ToolContext, arguments: Json) -> Json:
         try:
-            binding, _, arguments = await self._bound_arguments(context, arguments)
+            binding, _, arguments = await self._bound_arguments(context, "swarm_state", arguments)
             if arguments.get("action") == "status":
                 arguments.pop("action")
             _validate_state(arguments)
@@ -352,7 +310,9 @@ class SwarmExtension:
 
     async def wiki(self, context: ToolContext, arguments: Json) -> Json:
         try:
-            binding, swarm, arguments = await self._bound_arguments(context, arguments)
+            binding, swarm, arguments = await self._bound_arguments(
+                context, "swarm_wiki", arguments
+            )
             data = await self._store().wiki(
                 binding.group_id, binding.participant_id, arguments, expected_epoch=swarm["epoch"]
             )

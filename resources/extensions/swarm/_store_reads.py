@@ -5,7 +5,9 @@
 
 from __future__ import annotations
 
+import re
 import sqlite3
+from difflib import get_close_matches
 
 from ._store_database import (
     ALIASED_DISCUSSION_COLUMNS,
@@ -23,6 +25,7 @@ from ._store_records import (
     _post_high_water,
 )
 from ._store_values import (
+    Json,
     Page,
     SwarmStoreError,
     _load,
@@ -114,6 +117,7 @@ def _read_posts(
     message_id: str | None,
     cursor: str | None,
     limit: int,
+    before: str | None = None,
 ) -> Page:
     with db._read() as connection:
         _participant(connection, swarm_id, participant_id)
@@ -126,11 +130,71 @@ def _read_posts(
                 (participant_id, message_id, swarm_id),
             ).fetchone()
             if row is None:
-                raise SwarmStoreError("message_not_found")
+                raise SwarmStoreError("message_not_found", field="message_id")
             return Page((_post(row),), False, None)
+        before_sequence = None
+        if before is not None:
+            anchor = connection.execute(
+                "SELECT discussion_id,sequence FROM posts WHERE id=? AND swarm_id=?",
+                (before, swarm_id),
+            ).fetchone()
+            if anchor is None:
+                raise SwarmStoreError("message_not_found", field="before")
+            if discussion_id is not None and discussion_id != anchor["discussion_id"]:
+                _discussion(connection, swarm_id, discussion_id)
+                raise SwarmStoreError("before_discussion_mismatch", field="before")
+            discussion_id, before_sequence = anchor["discussion_id"], int(anchor["sequence"])
         discussion_id = discussion_id or _main(connection, swarm_id)
         _discussion(connection, swarm_id, discussion_id)
-        return _post_page(db, connection, swarm_id, participant_id, discussion_id, cursor, limit)
+        return _post_page(
+            db,
+            connection,
+            swarm_id,
+            participant_id,
+            discussion_id,
+            cursor,
+            limit,
+            before_sequence=before_sequence,
+        )
+
+
+def _post_suggestions(db: SwarmDatabase, swarm_id: str, value: str) -> list[Json]:
+    """Return posts a mistyped post reference may mean; callers decide whether to use them.
+
+    A number, "#number", or "pst_number" names the post with that Board sequence
+    number. Otherwise post IDs close to the value qualify.
+    """
+
+    with db._read() as connection:
+        number = re.fullmatch(r"(?:pst_)?#?(\d+)", value.strip())
+        parameters: list[int | str]
+        if number is not None:
+            where, parameters = "p.sequence=?", [int(number.group(1))]
+        else:
+            ids = [
+                str(row[0])
+                for row in connection.execute("SELECT id FROM posts WHERE swarm_id=?", (swarm_id,))
+            ]
+            close = get_close_matches(value.strip(), ids, n=3, cutoff=0.85)
+            if not close:
+                return []
+            where, parameters = f"p.id IN ({','.join('?' * len(close))})", list(close)
+        rows = connection.execute(
+            "SELECT p.id,p.sequence,p.discussion_id,p.author_name,p.text,d.title AS discussion_title "
+            f"FROM posts p JOIN discussions d ON d.id=p.discussion_id WHERE p.swarm_id=? AND {where}",
+            (swarm_id, *parameters),
+        ).fetchall()
+        return [
+            {
+                "id": row["id"],
+                "by_number": number is not None,
+                "discussion_id": row["discussion_id"],
+                "discussion_title": row["discussion_title"],
+                "author_name": row["author_name"],
+                "text": row["text"],
+            }
+            for row in rows
+        ]
 
 
 def _read_human_posts(
@@ -165,10 +229,15 @@ def _post_page(
     discussion_id: str,
     cursor: str | None,
     limit: int,
+    *,
+    before_sequence: int | None = None,
 ) -> Page:
     high_water = _post_high_water(connection, swarm_id, discussion_id)
     scope = f"{swarm_id}:{participant_id}:{discussion_id}"
-    if cursor:
+    if before_sequence is not None:
+        # The page ends just before a known post; its cursor continues from there.
+        offset, high_water = 0, min(high_water, before_sequence - 1)
+    elif cursor:
         offset, frozen_high_water = db._cursor(cursor, "posts", scope, high_water)
         if frozen_high_water is None:
             raise SwarmStoreError("invalid_cursor")
