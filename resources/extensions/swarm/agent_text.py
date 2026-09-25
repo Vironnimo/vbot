@@ -164,9 +164,8 @@ ERRORS = {
     "change was applied.",
     "invalid_cursor": "This cursor only continues the call that returned it, with the same "
     "other arguments. Omit cursor to start from the first page.",
-    "request_conflict": "This request_id was already used with different arguments. "
-    "Reuse the original arguments to retrieve its result, or use a "
-    "new request_id for a different change.",
+    "request_conflict": "This Tool Call was already applied with different arguments, so "
+    "nothing changed. Make the change in a new Tool Call.",
     "discussion_not_found": "This discussion does not exist in your group. Call swarm_board "
     'with {"action": "list"} to see the current discussions.',
     "message_not_found": "This post is unavailable in your group. Read its discussion "

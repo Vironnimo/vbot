@@ -102,20 +102,46 @@ carry no custom SQL functions.
 
 Create, update, delete and restore preserve full versions with author and timestamp.
 Update supports title/content replacement or one unique `old_text`/`new_text` edit.
-Writes require payload-bound request ids; changes to existing pages also require
-`expected_revision`. Targeted edits reuse `core.tools.fuzzy_match.replace_fuzzy`
-with only its precise strategies (`precise_only=True`): typography, newline,
-whitespace and indentation differences are tolerated, but every `old_text` line
-must match, so similarity never selects a different passage at any revision
-(user decision A, `test_wiki_old_text_must_match_every_line_precisely`). With an
-older revision, only a targeted edit without a title change may proceed.
-Missing/ambiguous matches fail atomically. Full
-replacement, title changes, delete, restore and future revisions retain strict
-revision checks. Recovery reads the current page and reconciles the edit. Delete retains history,
-and restore creates a new live revision from the chosen historical content.
+Store writes require payload-bound request ids. `swarm_wiki` callers do not supply
+them: like the Board, the handler derives the key from Session, Run, iteration and
+Tool Call identity, and drops an Agent-sent `request_id`; management keeps its own.
+`expected_revision` is required only for whole-content replacement, so a newer
+peer revision is never silently discarded; when present on other changes it is
+checked strictly. A change the page already holds (same title, content and
+deletion state, an identical live page on create, an `old_text` edit already
+applied) saves no revision and reports `unchanged`, before any stale check.
+Targeted edits run `_wiki_edit.py`, aligned with `apply_patch`: precise
+`replace_fuzzy` strategies (typography, newline, whitespace, indentation), then the
+same edit without shared blank boundary lines, then already-applied detection, and
+only then similarity for the lines the edit keeps. Every line the edit replaces
+must still match precisely, and the page keeps its own wording in the kept lines,
+so similarity never overwrites a peer's text. This refines user decision A
+(originally every `old_text` line precise) under the Tool overhaul brief
+(`test_wiki_old_text_must_match_every_changed_line_precisely`). Ambiguity is
+terminal. Misses carry bounded line hints (closest passages, or the line holding
+most of a one-line fragment) in `SwarmStoreError.details`. With an older revision,
+only a targeted edit without a title change may proceed. Title changes, delete,
+restore and future revisions otherwise keep strict revision checks. Delete retains
+history, and restore creates a new live revision from the chosen historical content.
 Wiki edits invalidate the human page but create no Board messages or participant
 wakes. Agents share page links on the Board when they want attention.
-Evidence: `_store_wiki.py`, `test_swarm_wiki.py`, `swarm_wiki_cases.py`.
+Evidence: `_store_wiki.py`, `_wiki_edit.py`, `test_swarm_wiki.py`, `swarm_wiki_cases.py`.
+
+`_wiki_tool.py` (`WikiCall`) owns the Agent side; the Store and the management
+operation keep returning raw data (`next_call`, `current_revision`, excerpts) for
+`WikiPanel.svelte`. Agents read plain text: read shows the revision as a sentence,
+a `shown` range and a `more` continuation before the verbatim content; list and
+history render one line per entry; mutations report a `status` sentence (delete
+names the copyable restore call). Repairs that cannot change the effect run with a
+note: `read` without `page_id` lists pages, a pasted link or quoted ID yields its
+`wpg_` ID, read-only calls resolve a page title or a unique close ID, create
+ignores an unknown `page_id` and takes a missing title from the first Markdown
+heading, `limit` above the action maximum is lowered, `expected_revision` is
+dropped on read-only actions. Writes never resolve a guessed page; they fail with
+the suggested ID. Failures name the next call: conflicts show the current revision
+(content conflicts add a bounded diff since the base revision), deleted pages the
+restore call, and a content update without `expected_revision` the current one.
+Failed changes say "Nothing changed." in their first line.
 
 Board posts are immutable and public within one Swarm. `swarm_board` can ping
 participants on a discussion's opening message without joining those recipients;
