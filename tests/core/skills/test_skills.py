@@ -16,6 +16,7 @@ from core.skills.skills import (
     SkillRegistry,
     _logged_skill_warnings,
     _scan_skill_resources,
+    format_skill_catalog_entries,
     project_skill_origin,
     skill_origin_sort_key,
 )
@@ -681,6 +682,23 @@ class TestSkillOrigin:
             "agent",
             None,
         ]
+
+    def test_catalog_entries_group_by_origin_on_one_line_each(self) -> None:
+        from types import SimpleNamespace
+
+        skills = [
+            SimpleNamespace(name="own", description="Mine.", origin="agent"),
+            SimpleNamespace(
+                name="deploy", description="Ship it.\n  Then verify.", origin="bundled"
+            ),
+            SimpleNamespace(name="loose", description="No origin.", origin=None),
+        ]
+
+        assert format_skill_catalog_entries(skills) == (
+            "Bundled skills:\n- deploy: Ship it. Then verify.\n"
+            "Your own skills:\n- own: Mine.\n"
+            "Skills:\n- loose: No origin."
+        )
 
 
 class TestProjectSkillLocations:

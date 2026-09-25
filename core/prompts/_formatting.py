@@ -3,20 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from html import escape
 from typing import Any
 
 from core.prompts._types import (
     ChannelPromptMetadata,
     SkillPromptMetadata,
 )
-from core.skills.skills import (
-    SKILL_ORIGIN_AGENT,
-    SKILL_ORIGIN_BUNDLED,
-    SKILL_ORIGIN_GLOBAL,
-    SKILL_ORIGIN_PROJECT_PREFIX,
-    skill_origin_sort_key,
-)
+from core.skills.skills import format_skill_catalog_entries
 from core.tools.model_names import model_tool_name
 
 
@@ -43,36 +36,7 @@ def _format_channel_list(channels: list[ChannelPromptMetadata]) -> str:
 
 
 def _format_skill_catalog(skills: Sequence[SkillPromptMetadata]) -> str:
-    grouped: dict[str | None, list[SkillPromptMetadata]] = {}
-    for skill in skills:
-        grouped.setdefault(skill.origin, []).append(skill)
-
-    lines = ["<available_skills>"]
-    for origin in sorted(grouped, key=skill_origin_sort_key):
-        label = escape(_skill_origin_label(origin), quote=True)
-        lines.append(f'  <skill_group label="{label}">')
-        for skill in grouped[origin]:
-            lines.extend(
-                [
-                    "    <skill>",
-                    f"      <name>{escape(skill.name)}</name>",
-                    f"      <description>{escape(skill.description)}</description>",
-                    "    </skill>",
-                ]
-            )
-        lines.append("  </skill_group>")
-    lines.append("</available_skills>")
-    return "\n".join(lines)
-
-
-def _skill_origin_label(origin: str | None) -> str:
-    """Human header for a skill origin group (path-free, English — a prompt string)."""
-    if origin == SKILL_ORIGIN_BUNDLED:
-        return "Bundled skills"
-    if origin == SKILL_ORIGIN_GLOBAL:
-        return "Your global skills"
-    if origin is not None and origin.startswith(SKILL_ORIGIN_PROJECT_PREFIX):
-        return f"Skills from project '{origin[len(SKILL_ORIGIN_PROJECT_PREFIX) :]}'"
-    if origin == SKILL_ORIGIN_AGENT:
-        return "Your own skills"
-    return "Skills"
+    # The same origin headings and "- name: description" lines as the skill Tool's list.
+    entries = format_skill_catalog_entries(skills)
+    body = f"{entries}\n" if entries else ""
+    return f"<available_skills>\n{body}</available_skills>"

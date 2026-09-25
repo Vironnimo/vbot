@@ -78,9 +78,8 @@ _MEMORY_GUIDANCE = (
     "Memory; name the project when needed to avoid applying them elsewhere. Procedures "
     "belong in Skills. Skip routine knowledge, easily rediscovered facts, task progress, "
     "completed-work logs, transient failures, guesses, and secrets. Leave equivalent facts "
-    "alone, replace superseded facts, and consolidate overlap; the memory Tool finds an entry "
-    "by a unique part of its text. The entries below may be older than the stored ones, and "
-    "a failed match returns the current entries. Write declarative facts, not "
+    "alone, replace superseded facts, and consolidate overlap; the entries below may be "
+    "older than the stored ones. Write declarative facts, not "
     'instructions to yourself: "User prefers concise answers", not "Always answer '
     'concisely"; "Project uses pytest with xdist", not "Run tests with pytest -n 4". Save '
     "worthwhile changes in the same turn and check the Tool result before saying they were "

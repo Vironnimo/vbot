@@ -82,19 +82,18 @@ The bundled `vbot-cli` Skill owns Extension authoring guidance in `references/ex
 
 ## Prompt Catalog
 
-Prompt-facing metadata is XML in the agentskills.io-compatible shape:
+Prompt-facing metadata is origin headings with one `- name: description` line per Skill inside an `<available_skills>` boundary, rendered by `core/skills/skills.py::format_skill_catalog_entries` - the same text as the `skill` Tool's no-argument list and the shape of the new-Skill System Reminder:
 
-```xml
+```text
 <available_skills>
-  <skill_group label="Bundled skills">
-    <skill><name>weather</name><description>Get weather forecasts.</description></skill>
-  </skill_group>
+Bundled skills:
+- weather: Get weather forecasts.
 </available_skills>
 ```
 
-- Skills group by **origin** (order: Bundled / Your global skills / Skills from project '<name>' / Your own skills; origin tags land at load from each scan root, project tags carry the display name). Originless registries render one untitled group.
-- Each `skill` element holds only `name` and `description` - the catalog stays **path-free** as a prompt-economy presentation preference, not a hard routing rule. The explicit `project` Tool returns the loaded Project's Skills in its ordinary Result; afterwards the `skill` Tool resolves against that Project-aware registry while the pinned epoch catalog stays unchanged (see `tools/project.md`).
-- Values XML-escape into the block. The bundled prompt explains that `/skill-name` and `$skill-name` are activation hints once matching `<skill_content>` is injected, that listed script paths are absolute (directly executable via `bash`), and reference/asset paths relative (readable via `skill(name, file_path)`).
+- Skills group by **origin** (order: Bundled / Your global skills / Skills from project '<name>' / Your own skills; origin tags land at load from each scan root, project tags carry the display name). Originless registries render one "Skills" group.
+- Each line holds only name and description (a multi-line description folds onto its line) - the catalog stays **path-free** as a prompt-economy presentation preference, not a hard routing rule. The explicit `project` Tool returns the loaded Project's Skills in its ordinary Result; afterwards the `skill` Tool resolves against that Project-aware registry while the pinned epoch catalog stays unchanged (see `tools/project.md`).
+- Values are not escaped. The bundled prompt asks the Model to load any matching or partly relevant Skill and explains that `/skill-name` and `$skill-name` are followed from the injected `<skill_content>` without reloading; how to run scripts and read other package files is taught by each loaded Skill's `resource_files.guidance`, not by the block.
 - The catalog includes only available+allowed Skills filtered against the same working-Project/private registry as live activation; `chat.commands` and `prompt.preview` resolve a bare Identity Agent's `root_project_id` (qualified Config Agents get no private layer), failing closed while preserving the saved reference. `chat.commands`, requested whenever a Chat changes Agent address or the command catalog changes, resolves the Agent through `resolve_agent_async` and filters Skills on the catalog pool, never on the Event Loop (availability probes `PATH` for binary requirements).
 
 ## Interfaces

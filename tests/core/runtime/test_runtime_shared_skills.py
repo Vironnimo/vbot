@@ -221,11 +221,11 @@ def test_receiver_catalog_renders_shared_among_own_skills(config: Config, tmp_pa
 
         # No new group and no provenance hint: the shared skill renders inside the
         # ordinary "Your own skills" group beside the bundled pool.
-        labels = re.findall(r'<skill_group label="([^"]+)">', catalog.catalog_text)
+        labels = re.findall(r"^(\S[^\n]*):$", catalog.catalog_text, re.MULTILINE)
         assert set(labels) <= {"Bundled skills", "Your global skills", "Your own skills"}
-        own_group = catalog.catalog_text.split('label="Your own skills"', 1)[1]
-        own_group = own_group.split("</skill_group>", 1)[0]
-        assert "<name>deploy</name>" in own_group
+        own_group = catalog.catalog_text.split("Your own skills:\n", 1)[1]
+        own_group = own_group.split("</available_skills>", 1)[0]
+        assert "- deploy: Shared playbook." in own_group
     finally:
         runtime.stop()
 
