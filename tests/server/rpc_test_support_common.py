@@ -136,6 +136,10 @@ class StubAgents:
     def get(self, agent_id: str) -> StubAgent:
         return self._apply_defaults(self._get_raw(agent_id))
 
+    async def get_async(self, agent_id: str) -> StubAgent:
+        # Like the real store: the read runs off the Event Loop.
+        return await asyncio.to_thread(self.get, agent_id)
+
     def get_raw(self, agent_id: str) -> StubAgent:
         return self._get_raw(agent_id)
 

@@ -32,7 +32,7 @@ Pinned memory contributes the declared `memory:guidance` block (owner `memory`, 
 ## Interfaces
 
 - `MemoryService` (list/add/replace/remove/read_prompt_files) delegates to the file backend; `Runtime.memory` exposes the same instance the Tool uses. `read_memory_files(workspace, mode, *, provider)` is the thin module-level renderer the prompts producer wraps; `memory_prompt_file_paths(workspace, mode)` reports existing on-disk paths so Chat stamps them read-before-write (uncreated scopes deliberately omitted - nothing to stamp). The block definition imports prompts lazily to avoid an import cycle.
-- `memory.list/add/replace/remove` are Identity-Agent RPCs resolving Workspace server-side, returning both scope projections after every operation. They deliberately ignore mode and Tool policy for CRUD - mode controls visibility/activation, policy controls callability. Mutations publish `resource_changed(kind="memories")` without content.
+- `memory.list/add/replace/remove` are Identity-Agent RPCs resolving Workspace server-side, returning both scope projections after every operation. They deliberately ignore mode and Tool policy for CRUD - mode controls visibility/activation, policy controls callability. Mutations publish `resource_changed(kind="memories")` without content. The handlers resolve the Agent with `AgentStore.get_async` and do all memory file work on the `memory-rpc` worker pool, never on the Event Loop; the invalidation is published from the loop after the write returns.
 
 ## Cross-Domain Rules
 
