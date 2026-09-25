@@ -62,7 +62,7 @@ Chains: identity agents keep model -> global -> empty. Config agents resolve ove
 - `lifecycle_guard` lets another domain hold the store's existing mutation lock across private-home lookup, writes and invalidation. Runtime injects it into the registered Skill authoring Tool to protect shared-owner trees from concurrent rename/archive. Guarded work runs in a worker and must not call back into the Event Loop; Agent deletion also offloads its roster read and archive (`tests/core/runtime/test_runtime_skill_lifecycle.py`).
 - `update_with_metadata` owns transactional Workspace relocation with copied/backed-up metadata; `agents_rooted_in`/`restore_update` support Project removal compensation.
 
-The Generation 1 converter consolidates retired `grep`/`glob` policy entries into `search_files` without widening access; see `tools/search_files.md`.
+The Generation 1 converter replaces retired Tool names in `tool_access` with their successors without widening access; see `database/generation-1-conversion.md` -> Retired Tool names.
 
 ## Constraints & Gotchas
 

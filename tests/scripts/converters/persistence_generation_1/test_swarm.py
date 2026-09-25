@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import sqlite3
 from contextlib import closing
@@ -226,6 +227,58 @@ def test_rows_the_new_database_refuses_are_dropped_and_reported(tmp_path: Path) 
     reasons = {item.item: item.reason for item in context.report.skipped}
     assert reasons["swarm_settings swr_missing"].startswith("row dropped: FOREIGN KEY")
     assert reasons["swarm_events 5"].startswith("created_at 'soon' kept")
+
+
+@pytest.mark.asyncio
+async def test_retired_tool_names_in_profiles_and_snapshots_are_replaced(tmp_path: Path) -> None:
+    context = _context(tmp_path)
+    retired = {"mode": "selected", "allowed": ["write", "edit", "glob", "grep", "read"]}
+    profile = json.dumps({"id": "prf_1", "name": "Review", "tool_access": retired})
+    current = '{"tool_access": {"mode": "selected", "allowed": ["read"]}, "id": "prf_2"}'
+    snapshot = json.dumps({"id": "prf_1", "tool_access": {"mode": "all", "denied": ["write"]}})
+    at = "2026-09-01T10:00:00+00:00"
+    _legacy_source(
+        context,
+        f"INSERT INTO profiles VALUES('prf_1','review','Review',1,'{profile}','{at}','{at}')",
+        f"INSERT INTO profiles VALUES('prf_2','read','Read',1,'{current}','{at}','{at}')",
+        f"INSERT INTO swarms VALUES('swr_1','Goal','{snapshot}','{{}}','idle','{at}')",
+    )
+
+    convert(context)
+
+    staged = _staged(context)
+    try:
+        store = SwarmStore(staged)
+        await store.open()
+        try:
+            assert (await store.get_profile("prf_1"))["tool_access"] == {
+                "mode": "selected",
+                "allowed": ["apply_patch", "search_files", "read"],
+            }
+        finally:
+            await store.close()
+        with staged.read() as connection:
+            payloads = dict(connection.execute("SELECT id, payload FROM profiles").fetchall())
+            [stored] = connection.execute("SELECT profile_snapshot FROM swarms").fetchone()
+    finally:
+        staged.close()
+    assert payloads["prf_2"] == current
+    assert json.loads(stored)["tool_access"] == {"mode": "all", "denied": ["apply_patch"]}
+    assert stored == json.dumps(json.loads(stored), sort_keys=True, separators=(",", ":"))
+    assert context.report.counts[AREA]["retired_tool_names_converted"] == 2
+    assert [(item.item, item.reason) for item in context.report.skipped] == [
+        (
+            "profiles prf_1",
+            "payload.tool_access: write and edit replaced by apply_patch; "
+            "glob and grep replaced by search_files",
+        ),
+        (
+            "swarms swr_1",
+            "profile_snapshot.tool_access: write replaced by a denial of apply_patch: "
+            "apply_patch needs write, so the access of edit is not carried over; "
+            "enable apply_patch explicitly if wanted",
+        ),
+    ]
 
 
 def test_missing_and_unknown_tables_and_columns_are_reported(tmp_path: Path) -> None:

@@ -43,9 +43,34 @@ Going back (loses everything written since the install): stop vBot, delete the p
 
 - `sessions.db`: application id 0, `VBOT` or `VBSS` with the frozen legacy tables and columns (`sessions.py`); an older incomplete shape asks to start the last release before Generation 1 once. A leftover `session-store-maintenance.json` refuses. Assistant Messages from before field-level Usage provenance, output-file spans and stored Context snapshots are normalized (rules in `sessions.md` -> Storage Contract; report counts `usage_provenance_derived`, `output_file_spans_derived` and `context_snapshots_derived`, each dropped reference and each Usage left without a snapshot a skipped item). A file already in the Generation 1 shape stays in place and is adopted on the first open.
 - `decisions.db` and `extension-data/swarm/swarm.db`: application id 0 and `user_version` 0 with the frozen legacy columns, or already Generation 1; any other identity refuses.
-- JSON documents, Channel state files, `statistics/provider-usage/*.jsonl` and the MCP Extension's `mcp/connections.json` and `mcp/content/`: the per-area rules in `settings.md`, `channels.md`, `providers/usage.md` and `extensions/mcp.md` (`scripts/converters/persistence_generation_1/mcp.py`). Agent, Project and Project-override Tool access replaces `grep`/`glob` with `search_files` without widening access (`_tool_access.py`; a narrowing is reported).
+- JSON documents, Channel state files, `statistics/provider-usage/*.jsonl` and the MCP Extension's `mcp/connections.json` and `mcp/content/`: the per-area rules in `settings.md`, `channels.md`, `providers/usage.md` and `extensions/mcp.md` (`scripts/converters/persistence_generation_1/mcp.py`). Retired Tool names in persisted Tool access: see Retired Tool names below.
 
 Files no area reads (for example old `*.before-*.db` copies) stay in place untouched.
+
+## Retired Tool names
+
+The application knows only current Tool names: a retired name in an Agent or override policy grants and denies nothing, and temporary Session bindings and Swarm profiles refuse it. `_tool_access.py` therefore rewrites every persisted Tool-name list the converter stages: Agent `tool_access` (also the one converted from a legacy root `allowed_tools`), Project `allowed_tools` whitelists, Project Agent override `tool_access` (`json_documents.py`), `tool_access` in temporary Session binding configs (`sessions.py`), and the Swarm Extension's saved profiles (`profiles.payload`) and started Swarms' `swarms.profile_snapshot` (`swarm.py`). Archived Agents and Projects under `archive/` are not read by the application and are not converted.
+
+| Retired | Successor | Successor granted when the retired Tools available covered it | Retired in |
+|---|---|---|---|
+| `grep`, `glob` | `search_files` | both | `dd1315abe` |
+| `write`, `edit` | `apply_patch` | `write` (a full-file write could create, replace and change any file; `edit` alone could not create one) | `0849f39f0` (write), `07d9e6cb0` (edit) |
+| `terminal_beta` | `terminal` | always (rename) | `0f43fae2c` |
+| `read2`, `read_new` | `read` | either | `bfa62986e` |
+| `subagent_result` | none, dropped (`subagent` includes the status lookup) | - | `dc1459480` |
+| `skill_list` | none, dropped (`skill` includes the catalog) | - | `001cb4e1d` |
+| `session_read` | none, dropped (deep reads moved to the vbot-cli Skill) | - | `b8db7699f` |
+| `browser` | none, dropped (moved to the playwright-cli Skill) | - | `5d25cdb26` |
+| `swarm_decisions` | none, dropped (Swarm decisions removed) | - | `0019b72a0` |
+
+Rules, none of which widens a policy:
+
+- Allow lists (`selected` policies, Project whitelists): the successor takes the place of the first retired name it replaces when the allowed retired Tools cover it and the policy does not deny it; a list that already names it keeps it where it is. Otherwise the retired names are only removed and the narrowing is reported ("enable ... explicitly if wanted"). So `write` alone grants `apply_patch`; `edit` alone does not.
+- Deny lists: the successor is denied when the retired Tools still available no longer cover it and the policy denied one of them or allowed every Tool, unless the policy explicitly allows the successor. Denying `edit` alone in a mode-`all` policy therefore keeps `apply_patch` available, as full-file writes were; denying `write` (with or without `edit`) denies `apply_patch`. A denial that removes remaining access (for example `grep` still available after denying `glob`) is reported.
+- Retired names in `granted` are removed without granting the successor. Dropped names are removed from every list.
+- Invalid policies stay as they are for the application to report. Converting a converted policy changes nothing.
+
+Report: count `retired_tool_names_converted` per area (`json_documents`, `sessions`, `swarm`) and one skipped-or-approximated item per converted field, naming each replacement, drop and narrowing (for example `tool_access: edit and write replaced by apply_patch; grep and glob replaced by search_files`).
 
 ## Tests
 
