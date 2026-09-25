@@ -47,6 +47,7 @@ from core.database._documents import (
 from core.database._files import fsync_dir, fsync_file
 from core.database.errors import (
     DatabaseCorruptError,
+    DatabaseSchemaMismatchError,
     DatabaseUnavailableError,
 )
 from core.database.marker import (
@@ -156,6 +157,12 @@ class _MemberVerification:
 
 class _SnapshotCancelledError(Exception):
     """Internal cooperative stop signal for an unpublished snapshot."""
+
+
+#: Failures that make a database copy unusable as a restore source without
+#: being operational: the copy is damaged or foreign, or this vBot's schema or
+#: owner facts cannot be applied to it.
+UNUSABLE_COPY_ERRORS = (DatabaseCorruptError, DatabaseSchemaMismatchError)
 
 
 def snapshot_root(data_dir: Path) -> Path:
@@ -433,14 +440,20 @@ def verify_database_file(
     name: str,
     spec: DatabaseSpec | None = None,
     expected_database_id: str | None = None,
+    fact_names: Iterable[str] | None = None,
     cancelled: Callable[[], bool] | None = None,
 ) -> _MemberVerification:
     """Verify one standalone database copy and read the facts a manifest records.
 
     Checks the kernel identity against ``name`` (and ``expected_database_id``),
     ``quick_check`` and ``foreign_key_check``. With a ``spec``, also its
-    application id and the owner facts it declares.
+    application id and the owner facts it declares, limited to ``fact_names``
+    when given: a member recorded by an older vBot is checked only against the
+    facts it recorded. Damage and identity failures raise
+    ``DatabaseCorruptError``; a fact query this copy's schema cannot answer
+    raises ``DatabaseSchemaMismatchError``.
     """
+    selected_facts = None if fact_names is None else frozenset(fact_names)
     connection: sqlite3.Connection | None = None
     try:
         connection = sqlite3.connect(readonly_sqlite_uri(path), uri=True)
@@ -474,8 +487,9 @@ def verify_database_file(
         facts: dict[str, int] = {}
         if spec is not None and spec.snapshot_facts is not None:
             for fact, query in spec.snapshot_facts.queries.items():
-                row = connection.execute(query).fetchone()
-                facts[fact] = int(row[0]) if row is not None and row[0] is not None else 0
+                if selected_facts is not None and fact not in selected_facts:
+                    continue
+                facts[fact] = _fact_value(connection, name, fact, query)
         return _MemberVerification(
             database_id=str(database_id),
             application_id=application_id,
@@ -493,6 +507,18 @@ def verify_database_file(
         if connection is not None:
             with suppress(BaseException):
                 connection.close()
+
+
+def _fact_value(connection: sqlite3.Connection, name: str, fact: str, query: str) -> int:
+    try:
+        row = connection.execute(query).fetchone()
+    except sqlite3.DatabaseError as exc:
+        if classify_unavailable(exc) or classify_write_error(exc) != "other":
+            raise
+        raise DatabaseSchemaMismatchError(
+            name, f"snapshot fact {fact}", f"cannot be computed ({exc})"
+        ) from exc
+    return int(row[0]) if row is not None and row[0] is not None else 0
 
 
 def verify_member(
@@ -516,7 +542,11 @@ def verify_member(
         if _sha256(target) != member.sha256:
             raise DatabaseCorruptError(f"snapshot member {member.name} hash mismatch")
         verification = verify_database_file(
-            target, name=member.name, spec=spec, expected_database_id=member.database_id
+            target,
+            name=member.name,
+            spec=spec,
+            expected_database_id=member.database_id,
+            fact_names=member.facts,
         )
     except FileNotFoundError as exc:
         raise DatabaseCorruptError(f"snapshot member {member.name} is missing") from exc
@@ -529,7 +559,7 @@ def verify_member(
     ):
         raise DatabaseCorruptError(f"snapshot member {member.name} disagrees with its manifest")
     for fact, value in verification.facts.items():
-        if fact in member.facts and member.facts[fact] != value:
+        if member.facts[fact] != value:
             raise DatabaseCorruptError(f"snapshot member {member.name} fact {fact} mismatch")
 
 
@@ -591,7 +621,7 @@ def read_verified_manifest(
             verify_member(snapshot_dir, member, spec=(specs or {}).get(name))
         if manifest.documents is not None:
             verify_documents(snapshot_dir, manifest.documents)
-    except DatabaseCorruptError:
+    except UNUSABLE_COPY_ERRORS:
         return None
     return manifest
 
@@ -612,7 +642,7 @@ def member_restore_candidates(
             continue
         try:
             verify_member(child, member, spec=spec)
-        except DatabaseCorruptError:
+        except UNUSABLE_COPY_ERRORS:
             continue
         candidates.append((manifest.created_instant(), child, manifest, member))
     candidates.sort(key=lambda item: item[0], reverse=True)
@@ -849,7 +879,7 @@ def create_data_snapshot(
         return final
     except _SnapshotCancelledError:
         return None
-    except (OSError, sqlite3.Error, DatabaseCorruptError, DatabaseUnavailableError) as exc:
+    except (OSError, sqlite3.Error, DatabaseUnavailableError, *UNUSABLE_COPY_ERRORS) as exc:
         _record_snapshot_health(data_dir, "degraded", reason=f"{type(exc).__name__}: {exc}")
         return None
     finally:

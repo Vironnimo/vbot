@@ -8,8 +8,9 @@ first as ``pending`` before anything is replaced, then as ``ok`` once the
 restored file verified. A crash between the two resumes on the next open.
 
 Automatic restore runs only when opening a registered database finds it
-missing, damaged or with another identity; never for a busy or locked file and
-never over a database a newer vBot changed. An operator restore of a data
+missing, damaged or with another identity; never for a busy or locked file,
+never over a database a newer vBot changed, and never over an intact database
+whose schema differs from this vBot's declaration. An operator restore of a data
 snapshot (selected databases, the JSON document set, or the complete snapshot)
 holds the maintenance guard, so Runtime refuses a half-restored data
 directory. A complete restore also retires databases registered after the
@@ -49,6 +50,7 @@ from core.database._schema import KERNEL_SCHEMA_SQL, declared_schema, schema_cha
 from core.database.errors import (
     DatabaseCorruptError,
     DatabaseFormatError,
+    DatabaseSchemaMismatchError,
     DatabaseUnavailableError,
     IncidentConflictError,
 )
@@ -61,6 +63,7 @@ from core.database.marker import (
     valid_database_id,
 )
 from core.database.snapshots import (
+    UNUSABLE_COPY_ERRORS,
     SnapshotManifest,
     SnapshotMember,
     member_path,
@@ -403,9 +406,10 @@ def _schema_compatible(connection: sqlite3.Connection, spec: DatabaseSpec) -> bo
         schema_changes(
             connection,
             declared_schema(KERNEL_SCHEMA_SQL + spec.schema_sql),
+            database=spec.name,
             retired_indexes=spec.retired_indexes,
         )
-    except DatabaseCorruptError:
+    except DatabaseSchemaMismatchError:
         return False
     return True
 
@@ -471,7 +475,9 @@ def _probe(spec: DatabaseSpec, expected_database_id: str) -> _Probe:
             if connection.execute("PRAGMA foreign_key_check").fetchone() is not None:
                 return damaged(f"{name} database foreign-key failure")
             if not _schema_compatible(connection, spec):
-                return damaged(f"{name} database table schema mismatch")
+                # An intact file this vBot cannot reconcile is a compatibility
+                # problem; an older snapshot would silently lose its newer data.
+                return untouchable(f"{name} database schema differs from the declaration")
         return _Probe(True, False, "", detected_at)
     except sqlite3.Error as exc:
         translated = classified_error(exc, "")
@@ -519,9 +525,15 @@ def _install_member(
             raise DatabaseUnavailableError(quarantine.reason or f"{name} quarantine failed")
         os.replace(temporary, target)
         fsync_dir(target.parent)
-        verify_database_file(target, name=name, spec=spec, expected_database_id=member.database_id)
+        verify_database_file(
+            target,
+            name=name,
+            spec=spec,
+            expected_database_id=member.database_id,
+            fact_names=member.facts,
+        )
         return quarantine.path
-    except (OSError, sqlite3.Error, DatabaseCorruptError) as exc:
+    except (OSError, sqlite3.Error, *UNUSABLE_COPY_ERRORS) as exc:
         raise DatabaseUnavailableError(
             f"the {name} snapshot member could not be installed"
         ) from exc
@@ -550,7 +562,7 @@ def _restore_member_locked(
         return False
     try:
         verify_member(snapshot_dir, member, spec=spec)
-    except DatabaseCorruptError:
+    except UNUSABLE_COPY_ERRORS:
         return False
     pending = read_incident(data_dir, name)
     if pending is not None and (
@@ -612,7 +624,7 @@ def _confirm_pending(data_dir: Path, spec: DatabaseSpec) -> None:
         return
     try:
         verify_member(snapshot_dir, member, spec=spec, path=spec.path)
-    except DatabaseCorruptError:
+    except UNUSABLE_COPY_ERRORS:
         # An interruption before quarantine left the original usable. It is
         # not evidence that the requested snapshot was restored.
         return

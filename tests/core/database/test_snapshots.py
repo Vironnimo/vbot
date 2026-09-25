@@ -12,7 +12,9 @@ from typing import Any
 import pytest
 
 from core.database import (
+    DatabaseSchemaMismatchError,
     DatabaseUnavailableError,
+    SnapshotFacts,
     create_data_snapshot,
     data_store_status,
     list_data_snapshots,
@@ -28,9 +30,13 @@ from core.database.marker import MarkerEntry, _write_marker
 from core.database.snapshots import (
     SNAPSHOT_MANIFEST_NAME,
     member_restore_candidates,
+    read_manifest,
     snapshot_inventory,
+    verify_member,
 )
 from tests.core.database.database_test_support import (
+    NOTES_FACTS,
+    NOTES_SCHEMA_SQL,
     add_note,
     notes_spec,
     snapshot_with_notes,
@@ -465,3 +471,42 @@ def test_restore_candidates_are_per_member_and_newest_first(data_dir: Path) -> N
         )
     ] == [newer, older]
     assert list_data_snapshots(data_dir) == [older]
+
+
+def test_an_older_member_is_verified_only_against_the_facts_it_recorded(data_dir: Path) -> None:
+    snapshot = snapshot_with_notes(data_dir, "saved")
+    marker = read_marker(data_dir)
+    assert marker is not None
+    database_id = marker.databases["notes"].database_id
+    # A later vBot adds a table and a fact over it; the older member lacks both.
+    grown = notes_spec(
+        data_dir,
+        schema_sql=NOTES_SCHEMA_SQL + "\nCREATE TABLE labels (label TEXT PRIMARY KEY) STRICT;",
+        snapshot_facts=SnapshotFacts(
+            {**NOTES_FACTS.queries, "label_count": "SELECT COUNT(*) FROM labels"}
+        ),
+    )
+
+    assert [
+        path
+        for path, _manifest, _member in member_restore_candidates(
+            data_dir, "notes", database_id=database_id, spec=grown
+        )
+    ] == [snapshot]
+
+
+def test_a_recorded_fact_this_vbot_cannot_compute_is_a_schema_mismatch(data_dir: Path) -> None:
+    snapshot = snapshot_with_notes(data_dir, "saved")
+    marker = read_marker(data_dir)
+    assert marker is not None
+    database_id = marker.databases["notes"].database_id
+    changed = notes_spec(
+        data_dir, snapshot_facts=SnapshotFacts({"note_count": "SELECT COUNT(*) FROM missing"})
+    )
+    manifest = read_manifest(data_dir, snapshot)
+    assert manifest is not None
+
+    with pytest.raises(DatabaseSchemaMismatchError, match="snapshot fact note_count"):
+        verify_member(snapshot, manifest.members["notes"], spec=changed)
+    assert member_restore_candidates(data_dir, "notes", database_id=database_id, spec=changed) == []
+    assert list_data_snapshots(data_dir, specs={"notes": changed}) == []
