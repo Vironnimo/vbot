@@ -29,8 +29,9 @@ from tests.core.tools.channel_send_helpers import (
 
 
 def test_channel_send_agent_guidance_requires_tool_for_channel_files() -> None:
-    assert CHANNEL_SEND_TOOL_DESCRIPTION
-    assert CHANNEL_SEND_TOOL_PARAMETERS["required"] == ["channel_id"]
+    assert "final reply already reaches the chat you are answering" in CHANNEL_SEND_TOOL_DESCRIPTION
+    # One Channel is enough to know where to send; the handler asks when there are several.
+    assert "required" not in CHANNEL_SEND_TOOL_PARAMETERS
     assert "request" not in CHANNEL_SEND_TOOL_PARAMETERS["properties"]
     assert "action" not in CHANNEL_SEND_TOOL_PARAMETERS["properties"]
     properties = CHANNEL_SEND_TOOL_PARAMETERS["properties"]

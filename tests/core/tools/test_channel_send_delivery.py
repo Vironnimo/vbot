@@ -378,6 +378,8 @@ def test_channel_send_rejects_telegram_only_fields_for_discord(
 
     assert result == tool_failure(
         "invalid_arguments",
-        f"{field_name} not supported by discord Channel discord-primary",
+        f"channel_send was not run: {field_name} does not work on the Discord Channel "
+        "discord-primary. The call below sends without it; send it only if that is meant. "
+        'Send: {"channel_id":"discord-primary","platform_target":"12345","message":"Hello"}',
     )
     channel_service.send.assert_not_awaited()
