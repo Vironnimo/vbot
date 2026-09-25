@@ -137,7 +137,9 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
 - `@@ context` hints select successive unique whole lines at the hunk's section.
   The final hint may also appear as the first context/removal line. Multiple
   hints can narrow a section. Numeric unified-diff headers are advisory;
-  content remains authoritative. `*** End of File` restricts matching to EOF.
+  content remains authoritative. `*** End of File` restricts matching to EOF;
+  when a hunk with context or removed lines fails there, it is retried without
+  the marker and, if that places it, applied with a warning naming the marker.
   Addition-only hunks insert after a hint or append without a hint; exact
   adjacent content at a hint makes repeated nonblank insertions no-ops.
   Unanchored appends always append because an existing suffix cannot distinguish
@@ -146,7 +148,8 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   (`The closest text in the file, lines A-B:`); touching or overlapping excerpts
   merge. Missing targets use similarity-ranked diagnostics plus `First difference,
   line N: the file has '...' where the patch has '...'`, and note when the new
-  text already occurs (a change made earlier); without candidates the text names
+  text already occurs (a change made earlier; not when `old_string` contains
+  `new_string`, as after a deletion); without candidates the text names
   the `read` call. Ambiguity reports the winning match's actual locations
   (including section offsets) under `Where it occurs:`, not guessed alternatives.
   An `expected_replacements` mismatch fails with `occurrence_mismatch`. These
@@ -178,20 +181,33 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   a difference is an identifier (underscore, digit, or inner capital: another
   function or variable). Exactly copied first and last lines (3+ lines, 2+ words
   each) also place a passage around similar lines (SequenceMatcher ratio >= 0.5,
-  or 0.7 when the anchor pair repeats). A misspelling is a word of 4+
-  characters within one edit (two from 8 characters, case-insensitive, adjacent
-  swaps count once) of the file's word, with the same digits, that occurs nowhere
-  in the file. Passages copied up to misspellings and kept-line gaps win over
-  looser ones; more than one passage at the winning level is `ambiguous_match`
-  (`ambiguous_copy` wording for `old_string`). What (merge): the change from old
-  to new text is applied to the file's text; kept text stays as the file has it,
-  the new text takes the file's spelling of misspelled words, the 3 words or
-  signs on each side of each change must match up to misspellings, and within a
-  change other differences need 4 correct words each (a rewrite may differ; `3`
-  to `4` where the file says `5` may not). When the winning passage cannot take
-  the change, nothing is applied elsewhere and the hunk fails `text_not_found`.
-  Warnings name each replaced line that differed with its old text and each
-  respelled word (`copy_warnings`). Tests: `test_copy_match.py`, plus the
+  or 0.7 when the anchor pair repeats). Each line keeps its place: a kept line
+  must be mostly right (other differences <= correct words), and extra words
+  that continue the line above or below mark a copy joined across a line break
+  (a left-out blank line or wrapped line); such a passage refuses the edit
+  instead of taking it one line off (Session replay 2026-09-26: a block landed
+  after its heading, a new list item was indented). A misspelling is a word of
+  4+ characters within one edit (two from 8 characters, case-insensitive,
+  adjacent swaps count once) of the file's word, with the same digits, that
+  occurs nowhere in the file. Passages copied up to misspellings and kept-line
+  gaps win over looser ones; overlapping candidates are one passage, placed by
+  the fewest differences (a tie between different spans stays ambiguous); more
+  than one passage at the winning level is `ambiguous_match` (`ambiguous_copy`
+  wording for `old_string`). What (merge): the change from old to new text is
+  applied to the file's text. A line the edit writes comes out as the caller's
+  new text up to the file's spelling of misspelled words: kept text in it must
+  match the file up to misspellings and spacing, since a difference there may
+  be wording the caller meant to write (replay: an intended change inside the
+  old text was dropped). Lines the edit keeps stay as the file has them. The 3
+  words or signs on each side of each change must match up to misspellings, and
+  within a change other differences need 4 correct words each (a rewrite may
+  differ; `3` to `4` where the file says `5` may not); changes separated only by
+  spacing count as one. When the winning passage cannot take the change,
+  nothing is applied elsewhere and the hunk fails `text_not_found`. Warnings
+  name each replaced line and each kept line that differed (`... was edited
+  anyway; it read:` / `... was left as it reads:`, long lines from just before
+  the first difference) and each respelled word (`copy_warnings`). Tests:
+  `test_copy_match.py`, plus the
   patch, field, Skill and Wiki suites.
 - Only changed lines are emitted from the replacement; context lines keep their
   actual original bytes.
