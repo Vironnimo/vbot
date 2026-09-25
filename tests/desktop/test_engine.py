@@ -545,6 +545,35 @@ def test_engine_does_not_count_gated_chunks_toward_confirmation(
     assert engine.detect(b"audio") is not None
 
 
+def test_engine_rearms_on_raw_scores_so_a_gated_pause_cannot_fire_twice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # One utterance whose score stays high across a short pause that closes the
+    # speech gate, then a second utterance after the score dropped (gated too).
+    raw_scores = [0.9, 0.9, 0.9, 0.9, 0.1, 0.9]
+    speech = [True, True, False, True, False, True]
+    observed_scores: list[dict[str, float]] = []
+    engine = _scripted_engine(
+        tmp_path,
+        monkeypatch,
+        [[score] for score in raw_scores],
+        score_listener=observed_scores.append,
+    )
+
+    matches = [engine.detect(b"audio", speech_present=present) for present in speech]
+
+    match = WakewordMatch(DEFAULT_MODEL_IDS[0], 0.9, 0.5)
+    assert matches == [match, None, None, None, None, match]
+    assert [scores[DEFAULT_MODEL_IDS[0]] for scores in observed_scores] == [
+        0.9,
+        0.9,
+        0.0,
+        0.9,
+        0.0,
+        0.9,
+    ]
+
+
 def test_custom_model_validation_closes_a_loadable_detector(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
