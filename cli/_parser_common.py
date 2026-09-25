@@ -178,8 +178,8 @@ DATA_STORE_HELP = {
 DATA_STORE_SNAPSHOT_HELP = {
     "list": "List verified data snapshots",
     "create": "Create a verified data snapshot through the running server",
-    "verify": "Verify every database in one data snapshot",
-    "restore": "Restore databases from one verified data snapshot",
+    "verify": "Verify every database and JSON document in one data snapshot",
+    "restore": "Restore databases or JSON documents from one verified data snapshot",
 }
 
 

@@ -206,6 +206,26 @@ def register_database(data_dir: Path, name: str, entry: MarkerEntry) -> DataStor
         return _write_marker(data_dir, {**marker.databases, name: entry})
 
 
+def unregister_databases_locked(data_dir: Path, names: Iterable[str]) -> DataStoreMarker:
+    """Remove registrations whose files a restore already moved to quarantine.
+
+    The caller holds the operation lock and the maintenance guard; a repeated
+    call after an interruption is harmless.
+    """
+    marker = read_marker(data_dir)
+    if marker is None:
+        raise DatabaseFormatError(
+            f"the data directory does not authorize a current-format data store: {data_dir}"
+        )
+    retired = set(names)
+    if not retired & set(marker.databases):
+        return marker
+    return _write_marker(
+        data_dir,
+        {name: entry for name, entry in marker.databases.items() if name not in retired},
+    )
+
+
 def write_marker_for_databases(data_dir: Path, paths: Iterable[Path]) -> DataStoreMarker:
     """Write ``data-store.json`` listing exactly the given canonical database files.
 
