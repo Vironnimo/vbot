@@ -46,6 +46,7 @@ from core.model_tasks.live import LiveCall, LiveCallHost
 from core.utils.ids import new_id
 from server._live_context import UI_TIMEOUT, UI_UNAVAILABLE, LiveUiError, RpcInvoker
 from server._live_feed import LiveRunFeed
+from server._live_record import LiveCallRecorder
 from server._live_tools import LiveToolExecutor
 from server.events import ServerEventBus
 
@@ -170,8 +171,10 @@ class _LiveCallEntry:
         on_finalized: Callable[[_LiveCallEntry], None],
         started_at: datetime,
         after_sequence: int,
+        recorder: LiveCallRecorder | None = None,
     ) -> None:
         self._limits = limits
+        self._recorder = recorder
         self._rpc = rpc
         self._events = events
         self._on_finalized = on_finalized
@@ -226,6 +229,11 @@ class _LiveCallEntry:
         self._deliver(update)
         if self._closed_published and self._owner is not None:
             self._owner.end(LIVE_SOCKET_CLOSE_ENDED)
+
+    def record(self, event: JsonObject) -> None:
+        """Keep one Tool call or delegation record locally for measurement."""
+        if self._recorder is not None:
+            self._recorder.record(self.call_id, event)
 
     def publish_audio(self, pcm: bytes) -> None:
         """Send assistant audio to the attached owner; dropped while none is attached."""
@@ -456,6 +464,7 @@ class LiveCallRegistry:
 
     ``rpc`` dispatches one registered RPC method in-process; the call's Tools
     and Run announcements go through it so they behave like any accessor call.
+    ``recorder`` keeps the calls' Tool call and delegation records locally.
     """
 
     def __init__(
@@ -465,9 +474,11 @@ class LiveCallRegistry:
         rpc: RpcInvoker,
         limits: LiveCallLimits | None = None,
         clock: Callable[[], datetime] = _utc_now,
+        recorder: LiveCallRecorder | None = None,
     ) -> None:
         self._events = events
         self._rpc = rpc
+        self._recorder = recorder
         self._limits = limits or LiveCallLimits()
         self._clock = clock
         self._start_lock = asyncio.Lock()
@@ -503,6 +514,7 @@ class LiveCallRegistry:
                 on_finalized=self._entry_finalized,
                 started_at=self._clock(),
                 after_sequence=self._events.last_sequence,
+                recorder=self._recorder,
             )
             call = await service.start_call(media=media, offer_sdp=offer_sdp, host=entry)
             if self._closed:
@@ -560,6 +572,8 @@ class LiveCallRegistry:
             handle.cancel()
         self._linger.clear()
         self._entries.clear()
+        if self._recorder is not None:
+            await self._recorder.drain()
 
     def _entry_finalized(self, entry: _LiveCallEntry) -> None:
         if self._active is entry:

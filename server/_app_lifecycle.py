@@ -10,9 +10,11 @@ from typing import TYPE_CHECKING, Any
 
 from core.runs import ChatRunManager
 from core.statistics import StatisticsIndex
+from core.storage.layout import DataDirectoryLayout
 from core.utils.log_viewer import LogViewer
 from server._bind import ServerBindState
 from server._http_dependencies import FastAPIType, HTTPException
+from server._live_record import LiveCallRecorder
 from server.clients import ClientRegistry
 from server.events import (
     RESOURCE_KIND_CALENDAR,
@@ -91,16 +93,18 @@ def _initialize_app_state(
     app.state.log_viewer = LogViewer(runtime.storage.data_dir)
     app.state.agent_delete_lock = asyncio.Lock()
     app.state.server_bind = dict(server_bind)
-    app.state.live_calls = _build_live_call_registry(app.state)
+    app.state.live_calls = _build_live_call_registry(
+        app.state, LiveCallRecorder(DataDirectoryLayout(runtime.storage.data_dir).live_calls)
+    )
 
 
-def _build_live_call_registry(state: Any) -> LiveCallRegistry:
-    """Live calls run their app Tools through the canonical RPC handlers."""
+def _build_live_call_registry(state: Any, recorder: LiveCallRecorder) -> LiveCallRegistry:
+    """Live calls run their Tools through the canonical RPC handlers."""
 
     async def dispatch(method: str, params: JsonObject) -> JsonObject:
         return await dispatch_method(state, method, params, METHODS)
 
-    return LiveCallRegistry(events=state.event_bus, rpc=dispatch)
+    return LiveCallRegistry(events=state.event_bus, rpc=dispatch, recorder=recorder)
 
 
 async def _shutdown_live_calls(state: Any, logger: logging.Logger) -> None:

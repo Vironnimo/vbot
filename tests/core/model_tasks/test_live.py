@@ -112,6 +112,7 @@ class FakeHost:
         self.updates: list[dict[str, Any]] = []
         self.audio: list[bytes] = []
         self.executed: list[tuple[str, dict[str, Any]]] = []
+        self.records: list[dict[str, Any]] = []
         self.tool_result: Any = {"ok": True}
         self.tool_release = asyncio.Event()
         self.tool_release.set()
@@ -128,6 +129,9 @@ class FakeHost:
 
     def publish_audio(self, pcm: bytes) -> None:
         self.audio.append(pcm)
+
+    def record(self, event: dict[str, Any]) -> None:
+        self.records.append(event)
 
     def of_type(self, kind: str) -> list[dict[str, Any]]:
         return [update for update in self.updates if update["type"] == kind]
@@ -694,6 +698,19 @@ async def test_direct_tool_calls_in_other_spellings_run_as_the_live_tool_they_me
     await call.close()
 
     assert host.executed == [("open", {"target": "t1"})]
+    # The record keeps the call as the Model wrote it and as it ran.
+    [record] = host.records
+    assert record == {
+        "type": "tool",
+        "mode": "direct",
+        "called": "functions.show",
+        "tool": "open",
+        "arguments": '{"terminal": "t1"}',
+        "run_arguments": {"target": "t1"},
+        "ok": True,
+        "result": "Showing t1.",
+        "duration_ms": record["duration_ms"],
+    }
 
 
 @pytest.mark.asyncio
@@ -717,6 +734,7 @@ async def test_direct_tool_calls_that_must_not_run_are_refused(event: WireToolCa
 
     assert host.executed == []
     assert next(s for s in wire.sent if s[0] == "result")[2].startswith(f"Error ({code}): ")
+    assert [(record["tool"], record["ok"]) for record in host.records] == [(None, False)]
 
 
 @pytest.mark.asyncio

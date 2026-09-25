@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import AsyncIterator, Callable
 from contextlib import aclosing, suppress
 from datetime import UTC, datetime, timedelta
@@ -15,6 +16,7 @@ from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 from starlette.websockets import WebSocketDisconnect  # type: ignore[import-not-found]
 
 from core.model_tasks.live import LiveCallHost, LiveRunNotice, LiveStartRejected
+from server._live_record import LiveCallRecorder
 from server.app import create_app
 from server.events import ServerEventBus
 from server.live import (
@@ -549,6 +551,30 @@ async def test_tools_report_voice_stopped_once_the_call_is_stopping(live: Harnes
     result = await call.host.execute_tool("overview", {})
     assert result["error"]["code"] == "voice_stopped"
     assert live.rpc.calls == []
+
+
+@pytest.mark.asyncio
+async def test_records_are_kept_locally_with_the_call_id(tmp_path: Path) -> None:
+    harness = Harness()
+    harness.registry = LiveCallRegistry(
+        events=harness.bus,
+        rpc=harness.rpc,
+        limits=FAST,
+        clock=lambda: STARTED_AT,
+        recorder=LiveCallRecorder(tmp_path, clock=lambda: STARTED_AT),
+    )
+    call = await harness.start()
+    call.host.record({"type": "tool", "tool": "overview", "ok": True})
+    # Shutdown writes every record handed off before it.
+    await harness.close()
+    [line] = (tmp_path / "2026-09-24.jsonl").read_text(encoding="utf-8").splitlines()
+    assert json.loads(line) == {
+        "at": "2026-09-24T12:00:00+00:00",
+        "call_id": "call-1",
+        "type": "tool",
+        "tool": "overview",
+        "ok": True,
+    }
 
 
 # -- Run announcements ----------------------------------------------------------
