@@ -154,7 +154,8 @@ not ready with an installation-repair hint; Tool invocation never provisions it.
 Server packaging includes the executable and notices; desktop-client excludes it.
 
 Only `search_files` is registered. New Project ceilings include it; startup never
-migrates persisted selections. A retired grep/glob denial vetoes the union Tool.
+migrates persisted selections, and a `grep`/`glob` name left in a policy is an
+ordinary unknown Tool name without special meaning.
 Claude/OpenCode scanner denials for either capability map to search_files.
 The Generation 1 converter consolidates Agent, Project ceiling and Project override
 policies (`scripts/converters/persistence_generation_1/_tool_access.py`): `search_files`
