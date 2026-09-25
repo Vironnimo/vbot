@@ -9,9 +9,12 @@ restored file verified. A crash between the two resumes on the next open.
 
 Automatic restore runs only when opening a registered database finds it
 missing, damaged or with another identity; never for a busy or locked file and
-never over a database a newer vBot changed. An operator restore of a whole data
-snapshot also holds the maintenance guard, so Runtime refuses a half-restored
-data directory.
+never over a database a newer vBot changed. An operator restore of a data
+snapshot (selected databases, the JSON document set, or the complete snapshot)
+holds the maintenance guard, so Runtime refuses a half-restored data
+directory. A complete restore also retires databases registered after the
+snapshot: their bundles move to quarantine and their registrations are
+removed, so the data directory matches the snapshot again.
 """
 
 from __future__ import annotations
@@ -34,6 +37,14 @@ from core.database._connections import (
     has_live_connection,
     readonly_sqlite_uri,
 )
+from core.database._documents import (
+    DOCUMENT_QUARANTINE_NAME,
+    DocumentRestore,
+    plan_document_restore,
+    restore_documents,
+    verify_documents,
+)
+from core.database._files import fsync_dir, fsync_file
 from core.database._schema import KERNEL_SCHEMA_SQL, declared_schema, schema_changes
 from core.database.errors import (
     DatabaseCorruptError,
@@ -45,14 +56,13 @@ from core.database.marker import (
     acquire_operation_lock,
     maintenance,
     read_marker,
+    unregister_databases_locked,
     utc_now,
     valid_database_id,
 )
 from core.database.snapshots import (
     SnapshotManifest,
     SnapshotMember,
-    fsync_dir,
-    fsync_file,
     member_path,
     member_restore_candidates,
     read_manifest,
@@ -100,6 +110,21 @@ class QuarantineResult:
     @property
     def had_bundle(self) -> bool:
         return self.status != "no_bundle"
+
+
+@dataclass(frozen=True)
+class SnapshotRestore:
+    """What one data-snapshot restore changed, or would change with ``check_only``.
+
+    ``documents`` is ``None`` when the JSON document set was not selected.
+    ``retired`` names databases registered after the snapshot that a complete
+    restore moved to quarantine and unregistered.
+    """
+
+    snapshot_id: str
+    databases: tuple[str, ...] = ()
+    documents: DocumentRestore | None = None
+    retired: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -651,18 +676,24 @@ def restore_data_snapshot(
     *,
     specs: Iterable[DatabaseSpec] = (),
     names: Iterable[str] | None = None,
+    documents: bool = False,
+    retire_unlisted: bool = False,
     cause: str = "manual operator restore",
     check_only: bool = False,
-) -> list[str]:
-    """Restore members of one verified data snapshot while Runtime is stopped.
+) -> SnapshotRestore:
+    """Restore parts of one verified data snapshot while Runtime is stopped.
 
-    ``names`` selects members; by default every member is restored. Every
-    selected member must verify and match the database registered in the
-    marker before anything changes; ``check_only`` stops after that check.
-    The maintenance guard covers the whole restore, so an interrupted restore
-    keeps Runtime from starting until the restore is repeated. ``specs`` add
-    compatibility and owner-fact checks for the members they describe.
-    Returns the selected member names.
+    ``names`` selects database members; ``None`` selects every member.
+    ``documents`` also restores the JSON document set as one unit (see
+    ``core.database._documents``). ``retire_unlisted`` (only with every
+    member selected) moves databases the marker registers but the snapshot
+    does not hold to quarantine and unregisters them. Everything selected
+    must verify, and every database member must match the database registered
+    in the marker, before anything changes; ``check_only`` stops after that
+    and returns the plan. The maintenance guard covers the whole restore, so
+    an interrupted restore keeps Runtime from starting until it is repeated.
+    ``specs`` add compatibility and owner-fact checks for the members they
+    describe.
     """
     data_dir = Path(data_dir)
     marker = read_marker(data_dir)
@@ -673,8 +704,10 @@ def restore_data_snapshot(
     manifest = read_manifest(data_dir, snapshot_dir)
     if manifest is None:
         raise DatabaseCorruptError(f"snapshot is missing or malformed: {Path(snapshot_dir).name}")
-    selected = sorted(manifest.members) if names is None else sorted(set(names))
-    if not selected:
+    if retire_unlisted and names is not None:
+        raise ValueError("retiring unlisted databases requires restoring every member")
+    selected = tuple(sorted(manifest.members) if names is None else sorted(set(names)))
+    if not selected and not documents:
         raise ValueError("no snapshot member selected")
     known_specs = {spec.name: spec for spec in specs}
     for name in selected:
@@ -690,9 +723,24 @@ def restore_data_snapshot(
         source = member_path(snapshot_dir, member)
         if source is None or not _member_compatible(source, known_specs.get(name)):
             raise DatabaseFormatError(f"snapshot member {name} cannot be opened by this vBot")
+    document_members = manifest.documents if documents else None
+    document_plan: DocumentRestore | None = None
+    if documents:
+        if document_members is None:
+            raise DatabaseFormatError(f"snapshot {manifest.snapshot_id} holds no JSON document set")
+        verify_documents(snapshot_dir, document_members)
+        document_plan = plan_document_restore(data_dir, document_members)
+    retired = (
+        tuple(sorted(name for name in marker.databases if name not in manifest.members))
+        if retire_unlisted
+        else ()
+    )
+    for name in retired:
+        if has_live_connection(canonical_database_path(data_dir, name)):
+            raise DatabaseUnavailableError(f"the {name} database is open; it cannot be retired")
     if check_only:
-        return selected
-    restored: list[str] = []
+        return SnapshotRestore(manifest.snapshot_id, selected, document_plan, retired)
+    document_result: DocumentRestore | None = None
     with maintenance(data_dir, RESTORE_OPERATION, resume=True):
         lock = acquire_operation_lock(data_dir)
         if lock is None:
@@ -713,14 +761,35 @@ def restore_data_snapshot(
                     raise DatabaseUnavailableError(
                         f"the {name} member could not be restored; it is open or changed"
                     )
-                restored.append(name)
+            _retire_databases_locked(data_dir, retired)
+            if document_members is not None:
+                document_result = restore_documents(
+                    data_dir,
+                    snapshot_dir,
+                    document_members,
+                    quarantine_batch=_new_quarantine_path(data_dir, DOCUMENT_QUARANTINE_NAME),
+                )
         finally:
             lock.release()
-    return restored
+    return SnapshotRestore(manifest.snapshot_id, selected, document_result, retired)
+
+
+def _retire_databases_locked(data_dir: Path, names: Iterable[str]) -> None:
+    """Quarantine each bundle, then drop the registrations; repeatable after a crash."""
+    names = tuple(names)
+    for name in names:
+        result = _quarantine_bundle(data_dir, name, canonical_database_path(data_dir, name))
+        if result.had_bundle and not result.succeeded:
+            raise DatabaseUnavailableError(
+                result.reason or f"the {name} database could not be moved to quarantine"
+            )
+    if names:
+        unregister_databases_locked(data_dir, names)
 
 
 __all__ = [
     "QuarantineResult",
+    "SnapshotRestore",
     "acknowledge_incident",
     "active_incidents",
     "auto_restore_if_needed",

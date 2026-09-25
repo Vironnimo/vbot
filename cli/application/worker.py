@@ -1,4 +1,14 @@
-"""Restartable update transaction. Never a child owned by the vBot Runtime."""
+"""Restartable update transaction. Never a child owned by the vBot Runtime.
+
+Data safety: after the previous server stopped, the worker takes the
+pre-update data snapshot offline and keeps it in memory, bound to this
+operation. If the candidate then fails its verification start, the snapshot is
+restored automatically only when the kernel proves nothing but the candidate
+wrote since (``core.database.update_rollback``) and no other server runs on the
+data directory. Otherwise nothing is restored and the outcome says so. A
+snapshot is never restored after the candidate verified, nor while recovering
+an interrupted operation.
+"""
 
 from __future__ import annotations
 
@@ -29,10 +39,21 @@ from cli.application.state import (
 )
 from cli.rpc_client import rpc_call
 from cli.server_management import probe_health
-from cli.update_management import _ensure_update_data_snapshot
-from core.utils.server_control import read_server_control
+from core.database import (
+    DatabaseError,
+    UpdateRollbackRefusedError,
+    UpdateSnapshot,
+    create_update_snapshot,
+    data_changed_since,
+    find_update_snapshot,
+    read_maintenance,
+    restore_update_snapshot,
+)
+from core.utils.server_control import live_server_ports, read_server_control
 
 _LOGGER = logging.getLogger("vbot.application.update")
+#: How long a just-stopped server's lifetime claim may take to disappear.
+_CLAIM_SETTLE_SECONDS = 10.0
 
 
 def control(install: Installation, method: str, operation: Operation, **extra):
@@ -95,10 +116,150 @@ def require_ok(result) -> None:
         raise ApplicationError(result.message)
 
 
+def _data_dir(install: Installation) -> Path:
+    return Path(processes.target(install).data_dir)
+
+
+def _live_servers(data_dir: Path) -> str | None:
+    """Describe servers still claiming ``data_dir`` once a just-stopped one let go.
+
+    Windows may release the lifetime claim of an exited process with a short
+    delay, so a held claim is re-checked for ``_CLAIM_SETTLE_SECONDS``. A
+    check that fails counts as a running server.
+    """
+    deadline = time.monotonic() + _CLAIM_SETTLE_SECONDS
+    while True:
+        try:
+            ports = live_server_ports(data_dir)
+        except OSError as exc:
+            return f"the servers running on the data directory could not be checked ({exc})"
+        if not ports:
+            return None
+        if time.monotonic() >= deadline:
+            return (
+                "a vBot server is running on the data directory (port "
+                + ", ".join(str(port) for port in ports)
+                + ")"
+            )
+        time.sleep(0.25)
+
+
+def take_update_snapshot(install: Installation, operation: Operation) -> UpdateSnapshot | None:
+    """Snapshot the stopped server's data for this operation, or raise ``ApplicationError``."""
+    data_dir = _data_dir(install)
+    running = _live_servers(data_dir)
+    if running is not None:
+        raise ApplicationError(f"The data snapshot needs a stopped server, but {running}")
+    try:
+        return create_update_snapshot(data_dir, operation_id=operation.id)
+    except (DatabaseError, OSError, ValueError) as exc:
+        raise ApplicationError(f"The pre-update data snapshot failed: {exc}") from exc
+
+
+def data_fence(install: Installation, snapshot: UpdateSnapshot | None) -> str | None:
+    """Why the candidate must not start on this data, or ``None``."""
+    data_dir = _data_dir(install)
+    running = _live_servers(data_dir)
+    if running is not None:
+        return running
+    if snapshot is None:
+        return None
+    try:
+        change = data_changed_since(data_dir, snapshot)
+    except DatabaseError as exc:
+        return f"the data could not be compared with the pre-update snapshot: {exc}"
+    return None if change is None else f"the data changed after the pre-update snapshot: {change}"
+
+
+def keep_previous(install: Installation, operation: Operation, reason: str) -> None:
+    """End an update whose candidate never started; the previous version stays active."""
+    operation.error = reason
+    if install.owns_server and operation.server_was_running:
+        require_ok(processes.start(install, version_id=operation.previous_version, breakaway=False))
+    operation.transition(
+        install,
+        "failed",
+        f"{reason[:1].upper()}{reason[1:]}. The update was not activated; "
+        "the previous version is still active",
+    )
+
+
+def roll_back_data(
+    install: Installation, operation: Operation, snapshot: UpdateSnapshot | None
+) -> str:
+    """Restore the pre-update data after a failed candidate when that is provably safe.
+
+    Returns a sentence for the operation message. Raises ``ApplicationError``
+    when a restore started but did not complete; the maintenance guard then
+    keeps every version from opening the half-restored data.
+    """
+    if snapshot is None:
+        return "No database was registered, so no data snapshot was restored."
+    snapshot_id = snapshot.snapshot_id
+    not_restored = (
+        f"The data snapshot {snapshot_id} was not restored automatically: {{reason}}; "
+        "the data may still hold changes made by the new version."
+    )
+    data_dir = _data_dir(install)
+    running = _live_servers(data_dir)
+    if running is not None:
+        return not_restored.format(reason=running)
+    try:
+        change = data_changed_since(data_dir, snapshot)
+    except DatabaseError:
+        change = "the data could not be compared"
+    if change is None:
+        return f"The new version left the data unchanged; snapshot {snapshot_id} was not needed."
+    try:
+        restore_update_snapshot(data_dir, snapshot)
+    except UpdateRollbackRefusedError as exc:
+        return not_restored.format(reason=str(exc))
+    except (DatabaseError, OSError, ValueError) as exc:
+        raise ApplicationError(
+            f"The new version failed its startup check ({operation.error}), and restoring "
+            f"the data snapshot {snapshot_id} did not complete: {exc}. Run "
+            f"`vbot data-store snapshot restore {snapshot_id} --all --yes` before starting vBot"
+        ) from exc
+    return f"The data was restored from snapshot {snapshot_id}, taken before the update."
+
+
+def _interrupted_restore(install: Installation, operation: Operation) -> str | None:
+    """Describe a data restore this operation left incomplete, if any."""
+    if not install.owns_server:
+        return None
+    data_dir = _data_dir(install)
+    try:
+        guard = read_maintenance(data_dir)
+    except DatabaseError as exc:
+        return f"The data maintenance guard cannot be read: {exc}"
+    if guard is None:
+        return None
+    message = (
+        f"Data maintenance ({guard.operation}) is incomplete, so no version can open the data. "
+        "Inspect it with `vbot data-store status`"
+    )
+    snapshot_id = find_update_snapshot(data_dir, operation.id)
+    if guard.operation == "restore" and snapshot_id is not None:
+        message += (
+            "; if this update's automatic data rollback was interrupted, finish it with "
+            f"`vbot data-store snapshot restore {snapshot_id} --all --yes`"
+        )
+    return message
+
+
 def recover_interrupted(install: Installation, operation: Operation) -> bool:
-    """Never blindly replay activation after losing the worker mid-transaction."""
+    """Never blindly replay activation after losing the worker mid-transaction.
+
+    Never restores a data snapshot: after a lost worker, nothing proves the
+    data was written only by the candidate.
+    """
     if operation.phase not in {"stopping", "activating", "verifying"}:
         return False
+    if operation.phase in {"stopping", "activating"}:
+        interrupted = _interrupted_restore(install, operation)
+        if interrupted is not None:
+            operation.transition(install, "needs_attention", interrupted)
+            return True
     active = install.version().name
     candidate = operation.candidate_version
     if operation.phase == "verifying":
@@ -220,6 +381,7 @@ def execute(install: Installation, operation: Operation) -> None:
             install, "prepared", "New version prepared; the active version has not changed"
         )
         return
+    update_snapshot: UpdateSnapshot | None = None
     if install.owns_server:
         current_health = probe_health(processes.target(install))
         operation.server_was_running = processes.running_server_matches(
@@ -232,18 +394,25 @@ def execute(install: Installation, operation: Operation) -> None:
         operation.save(install)
         if operation.server_was_running:
             quiesce(install, operation)
-        operation.transition(install, "waiting_for_idle", "Saving a recovery snapshot of the data")
-        snapshot = _ensure_update_data_snapshot(processes.target(install))
-        if not snapshot.ok:
-            raise ApplicationError(snapshot.message)
         operation.transition(
             install, "stopping", "Stopping the current server after draining accepted work"
         )
         require_ok(processes.stop(install))
+        # Taken only now: no server can write between this snapshot and a rollback.
+        operation.transition(install, "stopping", "Saving a recovery snapshot of the data")
+        try:
+            update_snapshot = take_update_snapshot(install, operation)
+        except ApplicationError as exc:
+            keep_previous(install, operation, str(exc))
+            return
     operation.transition(install, "activating", "Checking the prepared version before activation")
     if install.owns_server:
-        # No producer/user admission in verification mode. Candidate uses same data,
-        # but failure never authorizes overwriting it with a stale snapshot.
+        fence = data_fence(install, update_snapshot)
+        if fence is not None:
+            keep_previous(install, operation, f"The new version was not started: {fence}")
+            return
+        # No producer/user admission in verification mode. The candidate is the
+        # only writer until it stops, so its failure may restore the snapshot.
         # Dispatch already detached this worker from vBot's lifetime Job. It
         # owns no Job itself, so server children outlive it without requesting
         # a second breakaway from an unrelated ambient Windows Job.
@@ -251,10 +420,12 @@ def execute(install: Installation, operation: Operation) -> None:
             install, version_id=candidate, verification=True, breakaway=False
         )
         if verified.ok:
+            # From here on the snapshot is stale: it is never restored automatically.
             require_ok(processes.stop(install))
         else:
-            # Old code is not run against potentially changed state without a probe.
             operation.error = verified.message
+            data_note = roll_back_data(install, operation, update_snapshot)
+            # Old code is not run against the data without a probe.
             previous = operation.previous_version
             old_check = processes.start(
                 install, version_id=previous, verification=True, breakaway=False
@@ -266,12 +437,13 @@ def execute(install: Installation, operation: Operation) -> None:
                 operation.transition(
                     install,
                     "rolled_back",
-                    "Candidate startup failed; previous version startup was verified and restored",
+                    f"Candidate startup failed. {data_note} "
+                    "The previous version startup was verified and kept",
                 )
                 return
             raise ApplicationError(
-                "Candidate and previous version could not open the preserved data; "
-                "recovery needs attention"
+                f"Candidate and previous version could not open the data. {data_note} "
+                "Recovery needs attention"
             )
     install.activate(candidate)
     operation.transition(install, "verifying", "Verifying the active application version")

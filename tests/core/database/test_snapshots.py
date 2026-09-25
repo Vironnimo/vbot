@@ -88,8 +88,10 @@ def test_snapshot_captures_every_registered_database_as_one_verified_member_each
         "sqlite_version",
         "sqlite_source_id",
         "members",
+        "documents",
         "complete",
     }
+    assert payload["documents"] == {}
     assert set(payload["members"]) == {"notes", "tasks"}
     member = payload["members"]["notes"]
     assert set(member) == {

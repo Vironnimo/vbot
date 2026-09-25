@@ -204,7 +204,7 @@ def test_failed_quarantine_keeps_the_original_and_the_guard_until_repeated(
         open_database(notes_spec(data_dir))
 
     monkeypatch.setattr(recovery_module.os, "replace", real_replace)
-    assert restore_data_snapshot(data_dir, snapshot) == ["notes"]
+    assert restore_data_snapshot(data_dir, snapshot).databases == ("notes",)
     assert read_maintenance(data_dir) is None
     assert stored_bodies(notes_spec(data_dir)) == ["saved"]
 
@@ -530,7 +530,7 @@ def test_operator_restore_replaces_only_the_selected_members(data_dir: Path) -> 
         notes.close()
         tasks.close()
 
-    assert restore_data_snapshot(data_dir, snapshot, names=["notes"]) == ["notes"]
+    assert restore_data_snapshot(data_dir, snapshot, names=["notes"]).databases == ("notes",)
 
     assert stored_bodies(notes_spec(data_dir)) == ["saved note"]
     assert stored_bodies(notes_spec(data_dir, name="tasks")) == ["saved task", "later task"]
@@ -549,7 +549,7 @@ def test_operator_restore_checks_every_selected_member_first(data_dir: Path) -> 
     path = notes_spec(data_dir).path
     original = path.read_bytes()
 
-    assert restore_data_snapshot(data_dir, snapshot, check_only=True) == ["notes"]
+    assert restore_data_snapshot(data_dir, snapshot, check_only=True).databases == ("notes",)
     with pytest.raises(DatabaseFormatError, match="has no tasks member"):
         restore_data_snapshot(data_dir, snapshot, names=["notes", "tasks"])
     _write_marker(data_dir, {"notes": MarkerEntry("f" * 32, 1)})

@@ -21,6 +21,7 @@ from cli.server_management import (
 )
 from core.database import (
     DatabaseError,
+    SnapshotRestore,
     open_database,
     read_marker,
     read_verified_manifest,
@@ -92,7 +93,7 @@ def data_store_snapshot_list(instance: ServerInstance) -> CommandResult:
 
 
 def data_store_snapshot_verify(instance: ServerInstance, snapshot_id: str) -> CommandResult:
-    """Verify every member of one data snapshot against this data directory."""
+    """Verify every database member and JSON document of one data snapshot."""
     if instance.host not in _LOOPBACK_HOSTS:
         return CommandResult(ok=False, message=_LOCAL_ONLY_MESSAGE, instance=instance)
     try:
@@ -119,28 +120,53 @@ def data_store_snapshot_restore(
     snapshot_id: str,
     confirm: bool,
     databases: Iterable[str] = (),
+    *,
+    documents: bool = False,
+    complete: bool = False,
 ) -> CommandResult:
-    """Restore members of one verified data snapshot while the exact target is stopped.
+    """Restore parts of one verified data snapshot while the exact target is stopped.
 
-    Every member is restored unless ``databases`` names some. A server that
+    Every database is restored unless ``databases`` names some or only
+    ``documents`` is selected. ``documents`` restores the JSON document set as
+    one unit. ``complete`` restores every database and the documents and
+    moves databases registered after the snapshot to quarantine. A server that
     was running is stopped first and started again afterwards.
     """
     if instance.host not in _LOOPBACK_HOSTS:
         return CommandResult(ok=False, message=_LOCAL_ONLY_MESSAGE, instance=instance)
+    selected_databases = sorted(set(databases))
+    if complete and (selected_databases or documents):
+        return CommandResult(
+            ok=False,
+            message="--all restores the complete snapshot; do not combine it with "
+            "--database or --documents",
+            instance=instance,
+        )
     if not confirm:
         return CommandResult(
             ok=False,
             message="refusing data-store restore without confirmation; re-run with --yes",
             instance=instance,
         )
-    names = sorted(set(databases)) or None
+    # No selector restores every database; --documents alone restores no database.
+    names = selected_databases if selected_databases or documents else None
     specs = _specs_by_name(instance.data_dir)
+
+    def restore(snapshot: Path, *, check_only: bool) -> SnapshotRestore:
+        return restore_data_snapshot(
+            instance.data_dir,
+            snapshot,
+            specs=specs.values(),
+            names=names,
+            documents=documents or complete,
+            retire_unlisted=complete,
+            check_only=check_only,
+        )
+
     try:
         snapshot = _snapshot_path(instance, snapshot_id)
         # Check before stopping the server: nothing changes yet.
-        restore_data_snapshot(
-            instance.data_dir, snapshot, specs=specs.values(), names=names, check_only=True
-        )
+        restore(snapshot, check_only=True)
     except (OSError, ValueError, DatabaseError) as exc:
         return CommandResult(
             ok=False,
@@ -175,10 +201,8 @@ def data_store_snapshot_restore(
             health=stopped.health,
         )
     try:
-        restored = restore_data_snapshot(
-            instance.data_dir, snapshot, specs=specs.values(), names=names
-        )
-        _verify_restored(restored, specs)
+        restored = restore(snapshot, check_only=False)
+        _verify_restored(restored.databases, specs)
     except (OSError, ValueError, DatabaseError) as exc:
         return CommandResult(
             ok=False,
@@ -206,12 +230,29 @@ def data_store_snapshot_restore(
     return CommandResult(
         ok=True,
         message=(
-            f"restored data snapshot {snapshot_id} ({', '.join(restored)})"
+            f"restored data snapshot {snapshot_id} ({_describe_restore(restored)})"
             + (" and restarted the server" if restarted is not None else "")
         ),
         instance=instance,
         health=health,
     )
+
+
+def _describe_restore(restored: SnapshotRestore) -> str:
+    parts = list(restored.databases)
+    if restored.documents is not None:
+        documents = restored.documents
+        described = (
+            f"JSON documents: {len(documents.restored)} restored, {len(documents.removed)} removed"
+            if documents.changed
+            else "JSON documents: unchanged"
+        )
+        if documents.quarantine is not None:
+            described += f"; replaced documents kept at {documents.quarantine}"
+        parts.append(described)
+    if restored.retired:
+        parts.append("moved to quarantine: " + ", ".join(restored.retired))
+    return "; ".join(parts)
 
 
 def _verify_restored(restored: Iterable[str], specs: dict[str, DatabaseSpec]) -> None:

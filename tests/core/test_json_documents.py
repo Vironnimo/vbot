@@ -12,6 +12,8 @@ from core.json_documents import (
     OPAQUE,
     JsonDocumentFormat,
     JsonDocumentWriteError,
+    durable_document_paths,
+    is_durable_document_path,
     json_document,
     json_list,
     json_map,
@@ -295,3 +297,59 @@ def test_render_json_document_sorts_nested_keys_after_the_version() -> None:
     assert list(json.loads(text)) == [FORMAT_VERSION_FIELD, "a", "b"]
     assert text.index('"x"') < text.index('"y"')
     assert text.index('"a": [') < text.index('"z"')
+
+
+def test_durable_document_paths_lists_exactly_the_documents_in_scope(tmp_path: Path) -> None:
+    documents = [
+        "settings.json",
+        "agents/main/agent.json",
+        "agents/order.json",
+        "agents/main/prompts/layout.json",
+        "prompts/layout.json",
+        "channels/telegram/channel.json",
+        "projects/site/project.json",
+        "cron/jobs.json",
+        "bootstrap/jobs.json",
+        "calendar/events.json",
+        "calendar/actions.json",
+        "skills/policy.json",
+        "terminals/launch-history.json",
+        "terminals/groups.json",
+        "oauth/github-copilot-oauth.json",
+        "mcp/connections.json",
+    ]
+    others = [
+        "agents/main/memory.json",
+        "agents/.staged/agent.json",
+        "agents/main/.agent.json.tmp",
+        "oauth/nested/token.json",
+        "workspaces/main/settings.json",
+        "channels/telegram/state.json",
+    ]
+    for relative in documents + others:
+        path = tmp_path.joinpath(*relative.split("/"))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{}", encoding="utf-8")
+    (tmp_path / "cron" / "jobs.json.d").mkdir()
+
+    assert durable_document_paths(tmp_path) == tuple(sorted(documents))
+    assert durable_document_paths(tmp_path / "missing") == ()
+    assert all(is_durable_document_path(relative) for relative in documents)
+    assert not any(is_durable_document_path(relative) for relative in others)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "",
+        "/settings.json",
+        "../settings.json",
+        "agents//agent.json",
+        "agents\\main\\agent.json",
+        "C:settings.json",
+        "agents/./agent.json",
+        "SETTINGS.JSON",
+    ],
+)
+def test_is_durable_document_path_rejects_unsafe_or_foreign_paths(path: str) -> None:
+    assert not is_durable_document_path(path)
