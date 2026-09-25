@@ -89,3 +89,28 @@ def test_unchanged_settings_do_not_refresh_live_services(
         timezone.assert_not_called()
     finally:
         runtime.stop()
+
+
+def test_session_search_periods_follow_the_current_timezone_setting(tmp_path: Path) -> None:
+    from tests.core.tools.session_search_helpers import make_context, success
+
+    config = Config(data_dir=tmp_path / "data")
+    _write_settings(config.data_dir, {"timezone": "Asia/Tokyo"})
+    runtime = Runtime(config, safe_startup_mode="test")
+    runtime.start()
+    try:
+        context = make_context(tmp_path, agent_id="main")
+        arguments = {"query": "needle", "period": "2026-07-01T09:00/2026-07-01T10:00"}
+
+        before = success(asyncio.run(runtime.tools.dispatch(context, dict(arguments))))
+        runtime.storage.update_settings_sections({"server": {"timezone": "America/New_York"}})
+        after = success(asyncio.run(runtime.tools.dispatch(context, dict(arguments))))
+
+        assert before["period"] == (
+            "2026-07-01T09:00:00+09:00/2026-07-01T10:00:00+09:00 (Asia/Tokyo)"
+        )
+        assert after["period"] == (
+            "2026-07-01T09:00:00-04:00/2026-07-01T10:00:00-04:00 (America/New_York)"
+        )
+    finally:
+        runtime.stop()

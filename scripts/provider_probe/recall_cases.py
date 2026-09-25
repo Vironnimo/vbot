@@ -43,7 +43,7 @@ def recall_cases() -> list[dict[str, Any]]:
         {
             "id": "unsupported_option_recovery",
             "task": "Welche Aufbewahrungsdauer haben wir fuer Aurora beschlossen?",
-            "seed": {"query": "Aurora", "limit": 20},
+            "seed": {"query": "Aurora", "page": 2},
             "contains": ["30"],
         },
         {
