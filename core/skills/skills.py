@@ -155,14 +155,19 @@ class SkillCatalogEntry(Protocol):
 
 
 def format_skill_catalog_entries(skills: Iterable[SkillCatalogEntry]) -> str:
-    """Render ``- name: description`` lines under origin headings in catalog order."""
+    """Render ``- name: description`` lines under origin headings in catalog order.
+
+    A multi-line description folds onto its one line.
+    """
     grouped: dict[str | None, list[SkillCatalogEntry]] = {}
     for skill in skills:
         grouped.setdefault(skill.origin, []).append(skill)
     lines: list[str] = []
     for origin in sorted(grouped, key=skill_origin_sort_key):
         lines.append(f"{skill_origin_label(origin)}:")
-        lines.extend(f"- {skill.name}: {skill.description}" for skill in grouped[origin])
+        lines.extend(
+            f"- {skill.name}: {' '.join(skill.description.split())}" for skill in grouped[origin]
+        )
     return "\n".join(lines)
 
 
