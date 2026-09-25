@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -78,6 +79,27 @@ async def test_fork_strips_channel_and_subagent_bindings_but_keeps_title(tmp_pat
     assert result["session"]["fork_source"] == metadata[FORK_SOURCE_META_KEY]
     assert result["session"]["fork_source"]["session_id"] == "s1"
     assert [message.content for message in sessions.get(fork_address).load_active()] == ["hello"]
+
+
+@pytest.mark.asyncio
+async def test_fork_of_a_project_session_stays_in_its_project(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    resolved: list[tuple[str | None, str]] = []
+    state.runtime.agent_resolver = SimpleNamespace(
+        resolve_agent=lambda project_id, agent_id: resolved.append((project_id, agent_id))
+    )
+    sessions = state.runtime.chat_sessions
+    source = sessions.create("coder", session_id="s1", project_id="proj")
+    source.append(ChatMessage.user("hello"))
+
+    result = await _rpc_fork(state, {"agent_id": "coder@proj", "session_id": "s1"})
+
+    fork_address = SessionAddress("proj", "coder", result["session"]["id"])
+    assert [message.content for message in sessions.get(fork_address).load_active()] == ["hello"]
+    assert result["session"]["fork_source"]["session_id"] == "s1"
+    assert resolved == [("proj", "coder")]
+    # Nothing landed outside the Project.
+    assert sessions.list_addresses(None, agent_id="coder") == []
 
 
 @pytest.mark.asyncio
