@@ -780,3 +780,71 @@ async def test_job_paused_during_the_fire_save_does_not_fire(
     assert await asyncio.wait_for(firing, timeout=5) is False
     trigger_service.trigger_run.assert_not_awaited()
     assert service.get_job(job.id).status == "paused"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["reschedule", "pause", "shutdown"])
+async def test_unadmitted_once_claim_is_withdrawn_before_restart(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change: str
+) -> None:
+    service, trigger = make_service(tmp_path)
+    job = service.create_job(
+        agent_id="agent-one",
+        prompt="Work at the selected time",
+        schedule_type="once",
+        run_at=(datetime.now(UTC) + timedelta(minutes=1)).isoformat(),
+    )
+    sleeps = 0
+
+    async def reach_first_fire(*args: Any, **kwargs: Any) -> bool:
+        nonlocal sleeps
+        sleeps += 1
+        if sleeps > 1:
+            await asyncio.Future()
+        return True
+
+    entered = threading.Event()
+    release = threading.Event()
+    write = cron_claims.write
+
+    def hold_written_claim(*args: Any, **kwargs: Any) -> None:
+        write(*args, **kwargs)
+        entered.set()
+        assert release.wait(timeout=_ASYNC_COORDINATION_TIMEOUT_SECONDS)
+
+    monkeypatch.setattr(cron_timing, "_sleep_until_utc", reach_first_fire)
+    monkeypatch.setattr(cron_claims, "write", hold_written_claim)
+    service.start()
+    expected_run_at = job.run_at
+    try:
+        assert await asyncio.to_thread(entered.wait, _ASYNC_COORDINATION_TIMEOUT_SECONDS)
+        firing = service._job_tasks[job.id]
+        # Edits save synchronously behind the claim. Release the writer while
+        # keeping the Event Loop in this turn until the public edit has landed.
+        release.set()
+        if change == "reschedule":
+            updated = service.update_job(
+                job.id, run_at=(datetime.now(UTC) + timedelta(days=1)).isoformat()
+            )
+            expected_run_at = updated.run_at
+        elif change == "pause":
+            service.disable_job(job.id)
+        if change != "shutdown":
+            await asyncio.wait_for(firing, timeout=_ASYNC_COORDINATION_TIMEOUT_SECONDS)
+        await asyncio.wait_for(service.aclose(), timeout=_ASYNC_COORDINATION_TIMEOUT_SECONDS)
+        trigger.trigger_run.assert_not_awaited()
+        assert not cron_claims.path_for(service._once_fire_claims_dir, job.id).exists()
+    finally:
+        release.set()
+        await service.aclose()
+
+    restarted, restarted_trigger = make_service(tmp_path)
+    restarted.start()
+    try:
+        restored = restarted.get_job(job.id)
+        assert restored.status == ("paused" if change == "pause" else "active")
+        assert restored.run_at == expected_run_at
+        assert restored.last_outcome is None
+        restarted_trigger.trigger_run.assert_not_awaited()
+    finally:
+        await restarted.aclose()
