@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, cast
 
 import pytest
@@ -398,6 +400,93 @@ def test_build_status_text_reports_latest_and_session_cache() -> None:
     assert "Context usage: 500 / 200000" in text
     assert "Last request cache: read 200 / 500 (40.0% hit), write 0" in text
     assert "Session cache: read 1000 / 1500 (66.7% hit), write 100, turns 2" in text
+
+
+def _output_estimated_session() -> list[ChatMessage]:
+    """One fully measured turn, then one whose Provider omitted only the output."""
+    session_started = datetime(2026, 5, 18, 10, 0, tzinfo=UTC)
+    return [
+        ChatMessage.user("Status check", timestamp=session_started),
+        ChatMessage.assistant(
+            model="openai/gpt-5.2",
+            content="First answer.",
+            usage={
+                "input_tokens": 1000,
+                "output_tokens": 12,
+                "cache_read_tokens": 800,
+                "cache_write_tokens": 100,
+            },
+            timestamp=session_started,
+        ),
+        ChatMessage.assistant(
+            model="openai/gpt-5.2",
+            content="Second answer.",
+            usage={
+                "input_tokens": 500,
+                "output_tokens": 8,
+                "output_tokens_estimated": True,
+                "estimated": True,
+                "cache_read_tokens": 200,
+            },
+            timestamp=session_started,
+        ),
+    ]
+
+
+def test_build_status_text_keeps_measured_input_when_only_output_is_estimated() -> None:
+    text = build_status_text(
+        _make_agent(),
+        _output_estimated_session(),
+        context_window=200_000,
+        started_at=datetime(2026, 5, 18, 9, 0, tzinfo=UTC),
+    )
+
+    assert "Context usage: 500 / 200000" in text
+    assert "Last request cache: read 200 / 500 (40.0% hit), write 0" in text
+    assert "Session cache: read 1000 / 1500 (66.7% hit), write 100, turns 2" in text
+
+
+def test_build_status_text_excludes_estimated_input_from_cache_figures() -> None:
+    messages = _output_estimated_session()
+    latest = messages[-1]
+    assert latest.usage is not None
+    messages[-1] = replace(
+        latest,
+        usage={
+            "input_tokens": 500,
+            "input_tokens_estimated": True,
+            "output_tokens": 8,
+            "estimated": True,
+            "cache_read_tokens": 200,
+        },
+    )
+
+    text = build_status_text(
+        _make_agent(),
+        messages,
+        context_window=200_000,
+        started_at=datetime(2026, 5, 18, 9, 0, tzinfo=UTC),
+    )
+
+    assert "Context usage: ~500 / 200000" in text
+    assert f"Last request cache: {STATUS_PLACEHOLDER}" in text
+    assert "Session cache: read 800 / 1000 (80.0% hit), write 100, turns 1" in text
+
+
+@pytest.mark.usefixtures("current_format_data_directory")
+def test_status_session_facts_match_the_persisted_status_snapshot(tmp_path: Path) -> None:
+    messages = _output_estimated_session()
+    sessions = ChatSessionManager(tmp_path)
+    session = sessions.create("agent", session_id="session-one")
+    session.append_many(messages)
+
+    persisted = session.status_snapshot()
+    in_memory = status_session_facts(messages)
+    sessions.close()
+
+    assert persisted.cache_input_tokens == in_memory.cache_input_tokens == 1500
+    assert persisted.session_usage == in_memory.session_usage
+    assert persisted.latest_assistant_usage == in_memory.latest_assistant_usage
 
 
 def test_build_status_text_handles_unresolved_nullable_defaults() -> None:
