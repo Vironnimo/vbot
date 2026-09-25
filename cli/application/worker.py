@@ -2,9 +2,11 @@
 
 Data safety: after the previous server stopped, the worker takes the
 pre-update data snapshot offline and keeps it in memory, bound to this
-operation. If the candidate then fails its verification start, the snapshot is
-restored automatically only when the kernel proves nothing but the candidate
-wrote since (``core.database.update_rollback``) and no other server runs on the
+operation. The worker runs the previous version's code, which wrote the data,
+so its canonical database declarations record and verify owner facts. If the
+candidate then fails its verification start, the snapshot is restored
+automatically only when the kernel proves nothing but the candidate wrote
+since (``core.database.update_rollback``) and no other server runs on the
 data directory. Otherwise nothing is restored and the outcome says so. A
 snapshot is never restored after the candidate verified, nor while recovering
 an interrupted operation.
@@ -41,6 +43,7 @@ from cli.rpc_client import rpc_call
 from cli.server_management import probe_health
 from core.database import (
     DatabaseError,
+    DatabaseSpec,
     UpdateRollbackRefusedError,
     UpdateSnapshot,
     create_update_snapshot,
@@ -144,6 +147,17 @@ def _live_servers(data_dir: Path) -> str | None:
         time.sleep(0.25)
 
 
+def _database_specs(data_dir: Path) -> tuple[DatabaseSpec, ...]:
+    """The canonical database declarations of this version, for owner facts.
+
+    Extension databases have none here (declaring them would run Extension
+    code); the snapshot verifies them by kernel identity and integrity only.
+    """
+    from core.runtime.databases import canonical_database_specs
+
+    return canonical_database_specs(data_dir)
+
+
 def take_update_snapshot(install: Installation, operation: Operation) -> UpdateSnapshot | None:
     """Snapshot the stopped server's data for this operation, or raise ``ApplicationError``."""
     data_dir = _data_dir(install)
@@ -151,7 +165,9 @@ def take_update_snapshot(install: Installation, operation: Operation) -> UpdateS
     if running is not None:
         raise ApplicationError(f"The data snapshot needs a stopped server, but {running}")
     try:
-        return create_update_snapshot(data_dir, operation_id=operation.id)
+        return create_update_snapshot(
+            data_dir, operation_id=operation.id, specs=_database_specs(data_dir)
+        )
     except (DatabaseError, OSError, ValueError) as exc:
         raise ApplicationError(f"The pre-update data snapshot failed: {exc}") from exc
 
@@ -211,7 +227,7 @@ def roll_back_data(
     if change is None:
         return f"The new version left the data unchanged; snapshot {snapshot_id} was not needed."
     try:
-        restore_update_snapshot(data_dir, snapshot)
+        restore_update_snapshot(data_dir, snapshot, specs=_database_specs(data_dir))
     except UpdateRollbackRefusedError as exc:
         return not_restored.format(reason=str(exc))
     except (DatabaseError, OSError, ValueError) as exc:
