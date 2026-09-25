@@ -11,7 +11,7 @@ from typing import Any
 
 from core.attachments import AttachmentError, sniff_media_type
 from core.model_tasks import SpeechError
-from core.tools._path_suggestions import corrected_paths
+from core.tools._path_suggestions import missing_file_message
 from core.tools._read_arguments import READ_HIDDEN_PARAMETERS, normalize_read_arguments
 from core.tools._read_text import (
     DEFAULT_LINE_LIMIT,
@@ -119,19 +119,6 @@ def _call_cwd(context: ToolContext) -> Path:
         return context.effective_cwd
 
 
-def _missing_file_message(resolved: Path, cwd: Path) -> str:
-    """Build a not-found error that names paths the next call can use."""
-    label = _path_label(resolved, cwd)
-    suggestions = corrected_paths(resolved, cwd)
-    if suggestions:
-        similar = ", ".join(_path_label(candidate, cwd) for candidate in suggestions)
-        return f"File not found: {label} (similar: {similar})."
-    parent = resolved.parent
-    if parent.is_dir():
-        return f"File not found: {label}. Read {_path_label(parent, cwd)} to list that directory."
-    return f"File not found: {label}. Its directory {_path_label(parent, cwd)} does not exist."
-
-
 def _read_file_bytes_with_limit(resolved: Path, max_bytes: int) -> bytes:
     """Read at most one byte beyond a full-file consumer's input ceiling."""
     with resolved.open("rb") as handle:
@@ -193,7 +180,7 @@ def make_read_handler(
         label = _path_label(resolved, cwd)
 
         if not resolved.exists():
-            return tool_failure("file_not_found", _missing_file_message(resolved, cwd))
+            return tool_failure("file_not_found", missing_file_message(resolved, cwd))
         if resolved.is_dir():
             if arguments.get("pattern") is not None:
                 return tool_failure(
