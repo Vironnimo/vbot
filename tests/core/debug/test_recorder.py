@@ -9,11 +9,13 @@ the full aggregate body (streaming or not) under ``response.body`` and no
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 from urllib.parse import unquote
 
 import pytest
 
+from core.debug import store as store_module
 from core.debug.recorder import DebugContext, ProviderDebugRecorder
 from core.debug.store import DebugTraceStore
 
@@ -245,6 +247,51 @@ class TestLifecycle:
     def test_no_capture_persists_nothing(self, recorder, store):
         recorder.set_context(_make_context())
         assert store.get_traces() == []
+
+    def test_finalize_returns_before_the_durable_write(self, recorder, store, monkeypatch):
+        """The Provider call hands the capture off; it never waits for the durable write."""
+        entered = threading.Event()
+        release = threading.Event()
+        write = store_module.atomic_write_text
+
+        def slow_write(path, text):
+            entered.set()
+            release.wait(timeout=5)
+            write(path, text)
+
+        monkeypatch.setattr(store_module, "atomic_write_text", slow_write)
+        recorder.set_context(_make_context())
+        capture = recorder.begin_capture(
+            method="POST", url="https://api.example.com/v1/chat", headers={}, body=b"{}"
+        )
+        capture.record_response_head(200, {})
+        capture.feed_body(b"first")
+        try:
+            capture.finalize()
+            assert entered.wait(timeout=5)
+            assert not release.is_set()
+            # Bytes arriving after finalize never change the handed-off trace.
+            capture.feed_body(b"late")
+        finally:
+            release.set()
+
+        trace = _latest_trace(store)
+        assert trace["response"]["body"] == "first"
+
+    def test_full_backlog_drops_the_trace_with_a_warning(
+        self, recorder, store, monkeypatch, caplog
+    ):
+        monkeypatch.setattr(store, "save_trace_in_background", lambda *_args: False)
+        caplog.set_level("WARNING", logger="vbot.debug")
+        recorder.set_context(_make_context())
+        capture = recorder.begin_capture(
+            method="POST", url="https://api.example.com/v1/chat", headers={}, body=None
+        )
+
+        capture.finalize()
+
+        assert store.get_traces() == []
+        assert [record.name for record in caplog.records] == ["vbot.debug"]
 
     def test_capture_uses_context_at_begin_time(self, recorder, store):
         """A trace reflects whichever context was active when capture began."""

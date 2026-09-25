@@ -22,6 +22,7 @@ from core.calendar import CalendarService
 from core.channels import ChannelService
 from core.chat import ChatLoop, CommandDispatcher
 from core.database import Database, UnregisteredDatabase
+from core.debug import drain_debug_traces
 from core.extensions import (
     ExtensionRegistry,
     InteractionEvent,
@@ -468,6 +469,8 @@ class Runtime:
             await self._speech.aclose()
         if self._provider_usage is not None:
             await self._provider_usage.aclose()
+        # Every Provider call has ended; persist the Debug traces they handed off.
+        await drain_debug_traces()
         if self._performance is not None:
             await self._performance.aclose()
         if self._process_manager is not None:
