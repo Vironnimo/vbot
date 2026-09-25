@@ -5,9 +5,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -246,10 +248,10 @@ async def test_persistent_save_failure_does_not_hang_the_firing_task(
         cron_expression="0 9 * * *",
     )
 
-    def broken_save() -> None:
+    def broken_write(_jobs: list[object]) -> None:
         raise CronStorageError("disk full")
 
-    monkeypatch.setattr(service, "_save_jobs", broken_save)
+    monkeypatch.setattr(service, "_write_jobs", broken_write)
 
     with caplog.at_level(logging.ERROR, logger="vbot.automation.cron"):
         succeeded = await asyncio.wait_for(service._trigger_job_run(job), timeout=5)
@@ -395,7 +397,8 @@ async def test_run_once_job_abandons_after_attempt_limit_with_backoff(
     assert not cron_claims.path_for(service._once_fire_claims_dir, job.id).exists()
 
 
-def test_failed_once_job_can_be_re_enabled(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_failed_once_job_can_be_re_enabled(tmp_path: Path) -> None:
     # Arrange: a once job abandoned as failed (distinct from a completed fire).
     service, _trigger_service = make_service(tmp_path)
     job = service.create_job(
@@ -404,7 +407,7 @@ def test_failed_once_job_can_be_re_enabled(tmp_path: Path) -> None:
         schedule_type="once",
         run_at=(datetime.now(UTC) + timedelta(minutes=5)).isoformat(),
     )
-    service._abandon_once_job(job.id, cron_module._ONCE_MAX_FIRE_ATTEMPTS)
+    await service._abandon_once_job(job.id, cron_module._ONCE_MAX_FIRE_ATTEMPTS)
     assert service.get_job(job.id).status == "failed"
 
     # Act: unlike a completed job, a failed job can be re-enabled to retry.
@@ -475,16 +478,16 @@ async def test_run_once_job_retries_completed_save_without_refiring(
     monkeypatch.setattr(cron_timing, "_sleep", AsyncMock())
     save_attempts = 0
 
-    original_save_jobs = service._save_jobs
+    original_write_jobs = service._write_jobs
 
-    def fail_first_save_after_fire() -> None:
+    def fail_first_save_after_fire(jobs: list[object]) -> None:
         nonlocal save_attempts
         save_attempts += 1
         if save_attempts == 1:
             raise CronStorageError("disk full")
-        original_save_jobs()
+        original_write_jobs(jobs)
 
-    monkeypatch.setattr(service, "_save_jobs", fail_first_save_after_fire)
+    monkeypatch.setattr(service, "_write_jobs", fail_first_save_after_fire)
 
     # Act
     await service._run_once_job(job)
@@ -695,3 +698,85 @@ async def test_rescheduling_keeps_live_run_waiter_and_global_slot(tmp_path, monk
         assert trigger.trigger_run.await_count == 1
     finally:
         await service.aclose()
+
+
+class _BlockedJobWrites:
+    """Holds every jobs.json write on the writer thread until released."""
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self.entered = threading.Event()
+        self.release = threading.Event()
+        write = cron_module.write_json_document
+
+        def blocked_write(*args: Any, **kwargs: Any) -> None:
+            self.entered.set()
+            self.release.wait(timeout=5)
+            write(*args, **kwargs)
+
+        monkeypatch.setattr(cron_module, "write_json_document", blocked_write)
+
+
+@pytest.mark.asyncio
+async def test_fire_saves_off_the_loop_and_an_edit_lands_after_them(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, trigger_service = make_service(tmp_path)
+    trigger_service.trigger_run.return_value = SimpleNamespace(
+        id="run-one", wait=AsyncMock(return_value=None)
+    )
+    job = service.create_job(
+        agent_id="agent-one",
+        prompt="Health check",
+        schedule_type="cron",
+        cron_expression="0 9 * * *",
+    )
+    writes = _BlockedJobWrites(monkeypatch)
+
+    firing = asyncio.create_task(service._trigger_job_run(job))
+    try:
+        assert await asyncio.to_thread(writes.entered.wait, 5)
+        loop = asyncio.get_running_loop()
+        ticked_at = loop.time()
+        for _ in range(5):
+            await asyncio.sleep(0.01)
+        assert loop.time() - ticked_at < 1
+        assert not firing.done()
+        releaser = threading.Timer(0.1, writes.release.set)
+        releaser.start()
+        # The blocking edit save queues behind the fire's older snapshot.
+        service.update_job(job.id, name="Renamed")
+    finally:
+        writes.release.set()
+
+    assert await asyncio.wait_for(firing, timeout=5) is True
+    stored = json.loads((tmp_path / "cron" / "jobs.json").read_text(encoding="utf-8"))
+    assert [(item["name"], item["last_outcome"]) for item in stored["jobs"]] == [
+        ("Renamed", "success")
+    ]
+
+
+@pytest.mark.asyncio
+async def test_job_paused_during_the_fire_save_does_not_fire(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, trigger_service = make_service(tmp_path)
+    job = service.create_job(
+        agent_id="agent-one",
+        prompt="Health check",
+        schedule_type="cron",
+        cron_expression="0 9 * * *",
+    )
+    writes = _BlockedJobWrites(monkeypatch)
+
+    firing = asyncio.create_task(service._trigger_job_run(job))
+    try:
+        assert await asyncio.to_thread(writes.entered.wait, 5)
+        releaser = threading.Timer(0.1, writes.release.set)
+        releaser.start()
+        service.update_job(job.id, status="paused")
+    finally:
+        writes.release.set()
+
+    assert await asyncio.wait_for(firing, timeout=5) is False
+    trigger_service.trigger_run.assert_not_awaited()
+    assert service.get_job(job.id).status == "paused"

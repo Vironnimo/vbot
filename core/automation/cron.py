@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 from datetime import datetime
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 from zoneinfo import ZoneInfo
@@ -17,6 +18,7 @@ from core.runs import RunCancelledError, RunKind
 from core.sessions import SessionAddress
 from core.utils.ids import new_id
 from core.utils.logging import get_logger
+from core.utils.workers import OrderedWorker
 
 if TYPE_CHECKING:
     from core.automation.automation import TriggerService
@@ -108,9 +110,18 @@ _ONCE_FIRE_CLAIMS_DIR_NAME = "once-fire-claims"
 
 _LOGGER = get_logger("automation.cron")
 
+# Every jobs.json and fire-claim write runs here in submission order: job fires
+# await their writes off the Event Loop, and a job edit's blocking save still
+# lands after them.
+_CRON_WRITER = OrderedWorker(name="cron")
+
 
 class CronService:
-    """Manage cron jobs, persistence, and per-job scheduling tasks."""
+    """Manage cron jobs, persistence, and per-job scheduling tasks.
+
+    Job tasks run on the Event Loop and await their writes on the ``cron``
+    ordered writer; job edits save through the same writer and wait for it.
+    """
 
     def __init__(
         self,
@@ -395,7 +406,7 @@ class CronService:
             self._jobs[job_id] = removed
             raise
         self._notify_changed()
-        _claims.remove(self._once_fire_claims_dir, job_id)
+        _CRON_WRITER.call(partial(_claims.remove, self._once_fire_claims_dir, job_id))
         self._cancel_job_task(job_id)
         _LOGGER.info("Cron job deleted (job=%s)", job_id)
 
@@ -554,15 +565,25 @@ class CronService:
         return jobs
 
     def _save_jobs(self) -> None:
-        """Persist cron jobs to <data_root>/cron/jobs.json using atomic replace.
+        """Persist the jobs, blocking until this and every earlier write landed."""
+        _CRON_WRITER.call(partial(self._write_jobs, self._jobs_snapshot()))
+
+    async def _save_jobs_async(self) -> None:
+        """Event-Loop-safe :meth:`_save_jobs`; the snapshot is taken before the first await."""
+        await _CRON_WRITER.call_async(partial(self._write_jobs, self._jobs_snapshot()))
+
+    def _jobs_snapshot(self) -> list[Any]:
+        return [
+            job.to_dict() for job in sorted(self._jobs.values(), key=lambda item: item.created_at)
+        ] + list(self._invalid_job_entries)
+
+    def _write_jobs(self, jobs: list[Any]) -> None:
+        """Write one snapshot to <data_root>/cron/jobs.json using atomic replace.
 
         Invalid entries are written back verbatim and unknown fields of the file
         on disk are kept; a file that no longer loads is never overwritten.
         """
         self._ensure_storage_exists()
-        jobs = [
-            job.to_dict() for job in sorted(self._jobs.values(), key=lambda item: item.created_at)
-        ] + list(self._invalid_job_entries)
         try:
             write_json_document(self._jobs_path, {"jobs": jobs}, CRON_JOBS_FORMAT)
         except JsonDocumentWriteError as error:
@@ -691,7 +712,9 @@ class CronService:
 
             claimed_at = _timing._utc_now_iso()
             try:
-                _claims.write(self._once_fire_claims_dir, latest, claimed_at)
+                await _CRON_WRITER.call_async(
+                    partial(_claims.write, self._once_fire_claims_dir, latest, claimed_at)
+                )
             except CronStorageError as error:
                 _LOGGER.error(
                     "Cron once job fire claim failed for job=%s: %s",
@@ -706,10 +729,10 @@ class CronService:
 
             succeeded = await self._trigger_job_run(latest)
             if job.id in self._pending_restarts:
-                _claims.remove(self._once_fire_claims_dir, job.id)
+                await self._remove_claim(job.id)
                 return
             if not succeeded:
-                _claims.remove(self._once_fire_claims_dir, latest.id)
+                await self._remove_claim(latest.id)
                 current_after_failure = self._jobs.get(latest.id)
                 if (
                     current_after_failure is None
@@ -730,8 +753,11 @@ class CronService:
                 latest.status = "completed"
                 self._jobs[latest.id] = latest
                 await self._persist_after_fire(latest.id)
-            _claims.remove(self._once_fire_claims_dir, latest.id)
+            await self._remove_claim(latest.id)
             return
+
+    async def _remove_claim(self, job_id: str) -> None:
+        await _CRON_WRITER.call_async(partial(_claims.remove, self._once_fire_claims_dir, job_id))
 
     async def _back_off_or_abandon_once_job(self, job_id: str, attempts: int) -> bool:
         """Wait out the backoff for a failed once fire, or abandon after the cap.
@@ -741,13 +767,13 @@ class CronService:
         can retry the fire.
         """
         if attempts >= _ONCE_MAX_FIRE_ATTEMPTS:
-            self._abandon_once_job(job_id, attempts)
+            await self._abandon_once_job(job_id, attempts)
             return True
 
         await _timing._sleep(_timing._once_retry_delay(attempts))
         return False
 
-    def _abandon_once_job(self, job_id: str, attempts: int) -> None:
+    async def _abandon_once_job(self, job_id: str, attempts: int) -> None:
         """Mark a permanently failing once job failed so it stops retrying.
 
         The terminal ``failed`` status keeps the never-fired job visible and
@@ -765,8 +791,8 @@ class CronService:
         )
         job.status = "failed"
         self._jobs[job_id] = job
-        self._save_jobs_after_fire(job_id)
-        _claims.remove(self._once_fire_claims_dir, job_id)
+        await self._save_jobs_after_fire(job_id)
+        await self._remove_claim(job_id)
 
     async def _trigger_job_run(self, job: CronJob) -> bool:
         self._executing_jobs.add(job.id)
@@ -779,7 +805,11 @@ class CronService:
                 latest.last_attempt_at = _timing._utc_now_iso()
                 latest.last_error = None
                 self._jobs[latest.id] = latest
-                self._save_jobs_after_fire(latest.id)
+                await self._save_jobs_after_fire(latest.id)
+                # An edit may have replaced or paused the job during that write.
+                latest = self._jobs.get(job.id)
+                if latest is None or latest.status != "active":
+                    return False
                 _LOGGER.info(
                     "Cron job fired (job=%s agent=%s session=%s%s)",
                     latest.id,
@@ -818,14 +848,14 @@ class CronService:
                     raise
                 except RunCancelledError as error:
                     if run is not None:
-                        self._record_run_failure(job.id, error)
-                        self._finalize_exhausted_job(job.id)
+                        await self._record_run_failure(job.id, error)
+                        await self._finalize_exhausted_job(job.id)
                     else:
-                        self._record_trigger_failure(job.id, error)
+                        await self._record_trigger_failure(job.id, error)
                         latest = self._jobs.get(job.id)
                         if latest is not None and latest.schedule_type == "once":
                             latest.status = "failed"
-                            self._save_jobs_after_fire(latest.id)
+                            await self._save_jobs_after_fire(latest.id)
                     return False
                 except Exception as error:
                     if run is None:
@@ -833,7 +863,7 @@ class CronService:
                         # or a shutdown window must not burn a recurring job's
                         # five-strike execution-failure budget; once jobs keep their
                         # own fire-claim retry via the False return either way.
-                        self._record_trigger_failure(job.id, error)
+                        await self._record_trigger_failure(job.id, error)
                         _LOGGER.error(
                             "Cron job trigger failed before admission for job=%s: %s",
                             job.id,
@@ -841,8 +871,8 @@ class CronService:
                             exc_info=(type(error), error, error.__traceback__),
                         )
                         return False
-                    self._record_run_failure(job.id, error)
-                    self._finalize_exhausted_job(job.id)
+                    await self._record_run_failure(job.id, error)
+                    await self._finalize_exhausted_job(job.id)
                     _LOGGER.error(
                         "Cron job Run failed for job=%s: %s",
                         job.id,
@@ -859,16 +889,21 @@ class CronService:
                 latest.last_error = None
                 latest.consecutive_failures = 0
                 self._jobs[latest.id] = latest
-                self._save_jobs_after_fire(latest.id)
-                self._finalize_exhausted_job(latest.id)
+                await self._save_jobs_after_fire(latest.id)
+                await self._finalize_exhausted_job(latest.id)
                 return True
         finally:
             self._executing_jobs.discard(job.id)
 
-    def _record_run_failure(self, job_id: str, error: BaseException) -> None:
+    async def _record_run_failure(self, job_id: str, error: BaseException) -> None:
+        if self._note_run_failure(job_id, error):
+            await self._save_jobs_after_fire(job_id)
+
+    def _note_run_failure(self, job_id: str, error: BaseException) -> bool:
+        """Account one failed execution in memory; ``False`` when the job is gone."""
         job = self._jobs.get(job_id)
         if job is None:
-            return
+            return False
         job.last_completed_at = _timing._utc_now_iso()
         job.last_outcome = "cancelled" if type(error).__name__ == "RunCancelledError" else "failed"
         job.last_error = _truncate_error(str(error) or type(error).__name__)
@@ -878,9 +913,9 @@ class CronService:
         ):
             job.status = "failed"
         self._jobs[job_id] = job
-        self._save_jobs_after_fire(job_id)
+        return True
 
-    def _record_trigger_failure(self, job_id: str, error: BaseException) -> None:
+    async def _record_trigger_failure(self, job_id: str, error: BaseException) -> None:
         """Record a pre-admission trigger failure without execution accounting.
 
         The Run never started, so ``consecutive_failures`` must not advance and a
@@ -893,15 +928,15 @@ class CronService:
         job.last_outcome = "failed"
         job.last_error = _truncate_error(str(error) or type(error).__name__)
         self._jobs[job_id] = job
-        self._save_jobs_after_fire(job_id)
+        await self._save_jobs_after_fire(job_id)
 
-    def _finalize_exhausted_job(self, job_id: str) -> None:
+    async def _finalize_exhausted_job(self, job_id: str) -> None:
         job = self._jobs.get(job_id)
         if job is None or job.status != "active" or job.remaining_runs != 0:
             return
         job.status = "completed" if job.last_outcome == "success" else "failed"
         self._jobs[job_id] = job
-        self._save_jobs_after_fire(job_id)
+        await self._save_jobs_after_fire(job_id)
 
     async def _persist_after_fire(self, job_id: str) -> None:
         """Persist job state after a fire, giving up after bounded retries.
@@ -913,7 +948,7 @@ class CronService:
         the next successful save anywhere re-syncs the file.
         """
         for _attempt in range(_POST_FIRE_SAVE_MAX_ATTEMPTS):
-            if self._save_jobs_after_fire(job_id):
+            if await self._save_jobs_after_fire(job_id):
                 return
             await _timing._sleep(_POST_FIRE_SAVE_RETRY_SECONDS)
         _LOGGER.error(
@@ -923,16 +958,11 @@ class CronService:
             job_id,
         )
 
-    def _save_jobs_after_fire(self, job_id: str) -> bool:
+    async def _save_jobs_after_fire(self, job_id: str) -> bool:
         try:
-            self._save_jobs()
+            await self._save_jobs_async()
         except CronStorageError as error:
-            _LOGGER.error(
-                "Cron job state save failed after firing job=%s: %s",
-                job_id,
-                error,
-                exc_info=(type(error), error, error.__traceback__),
-            )
+            _log_fire_save_failure(job_id, error)
             return False
 
         self._notify_changed()
@@ -1018,7 +1048,14 @@ class CronService:
         if job is not None and job.status == "active" and job.schedule_type == "once":
             job.status = "failed"
             self._jobs[job_id] = job
-        self._record_run_failure(job_id, error)
+        if self._note_run_failure(job_id, error):
+            # A crashed job task leaves only this callback: a blocking save, like an edit.
+            try:
+                self._save_jobs()
+            except CronStorageError as save_error:
+                _log_fire_save_failure(job_id, save_error)
+            else:
+                self._notify_changed()
 
         job = self._jobs.get(job_id)
         if self._started and job is not None and job.status == "active":
@@ -1086,3 +1123,12 @@ class CronService:
     @staticmethod
     def _clone_job(job: CronJob) -> CronJob:
         return CronJob.from_dict(job.to_dict())
+
+
+def _log_fire_save_failure(job_id: str, error: CronStorageError) -> None:
+    _LOGGER.error(
+        "Cron job state save failed after firing job=%s: %s",
+        job_id,
+        error,
+        exc_info=(type(error), error, error.__traceback__),
+    )
