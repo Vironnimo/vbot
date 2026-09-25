@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
+import threading
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -196,3 +199,56 @@ async def test_memory_unknown_agent_is_agent_not_found(
     assert response["ok"] is False
     assert response["error"]["code"] == "agent_not_found"
     assert state.event_bus.events == []
+
+
+@pytest.mark.asyncio
+async def test_memory_rpc_keeps_the_event_loop_responsive_during_file_work(
+    tmp_path: Path,
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.agents.update("coder", workspace=str(tmp_path / "workspace"))
+    memory = state.runtime.memory
+    entered = threading.Event()
+    release = threading.Event()
+    loop_thread = threading.get_ident()
+    threads: list[int] = []
+    add_entry = memory.add_entry
+
+    def blocked_add_entry(*args: Any, **kwargs: Any) -> Any:
+        threads.append(threading.get_ident())
+        entered.set()
+        release.wait(timeout=5)
+        return add_entry(*args, **kwargs)
+
+    memory.add_entry = blocked_add_entry
+    adding = asyncio.create_task(
+        dispatch_rpc(
+            state,
+            {
+                "method": "memory.add",
+                "params": {"agent_id": "coder", "scope": "agent", "content": "Stay async."},
+            },
+        )
+    )
+    try:
+        assert await asyncio.to_thread(entered.wait, 5)
+        loop = asyncio.get_running_loop()
+        ticked_at = loop.time()
+        for _ in range(5):
+            await asyncio.sleep(0.01)
+        assert loop.time() - ticked_at < 1
+        assert not adding.done()
+        assert state.event_bus.events == []
+    finally:
+        release.set()
+
+    response = await asyncio.wait_for(adding, timeout=5)
+    assert response["ok"] is True
+    assert response["result"]["scopes"]["agent"] == [
+        {"id": 1, "scope": "agent", "content": "Stay async."}
+    ]
+    assert threads and loop_thread not in threads
+    assert state.event_bus.events[-1]["payload"] == {
+        "kind": "memories",
+        "scope": {"agent_id": "coder"},
+    }

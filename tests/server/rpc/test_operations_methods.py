@@ -517,6 +517,37 @@ async def test_preview_includes_extension_block(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_preview_validates_an_agent_scope_off_the_event_loop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import threading
+
+    agent = StubAgent(
+        id="coder", name="Coder", workspace=str(tmp_path / "ws"), custom_system_prompt_enabled=True
+    )
+    manager = _manager(tmp_path, agents=[agent])
+    runtime_extra = {
+        "agent_resolver": SimpleNamespace(resolve_agent=lambda _project, _id: agent),
+        "projects": SimpleNamespace(find_by_cwd=lambda _cwd: None),
+        "skills_for": lambda _project, _agent=None: StubSkills(),
+    }
+    state = _state(manager, runtime_extra=runtime_extra)
+    validate_scope = manager.validate_scope
+    threads: list[int] = []
+
+    def recording_validate_scope(scope: Any = None) -> Any:
+        threads.append(threading.get_ident())
+        return validate_scope(scope)
+
+    monkeypatch.setattr(manager, "validate_scope", recording_validate_scope)
+
+    result = await _preview_prompt(state, {"scope": {"type": "agent", "agent_id": "coder"}})
+
+    assert isinstance(result["text"], str)
+    assert threads and threading.get_ident() not in threads
+
+
+@pytest.mark.asyncio
 async def test_preview_resolves_rooted_identity_skill_pool(tmp_path: Path) -> None:
     # A Rooted Identity Agent previews against its explicitly selected Project's
     # skill pool, matching live Run scope rather than the bare global registry.

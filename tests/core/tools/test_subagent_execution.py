@@ -27,6 +27,7 @@ from .subagent_test_support import (
     make_runtime,
     pytest,
     subagent_module,
+    wait_until,
 )
 
 pytestmark = pytest.mark.asyncio
@@ -362,7 +363,7 @@ async def test_subagent_tool_propagates_parent_cancellation_for_foreground(tmp_p
             batch_tracker=tracker,
         )
     )
-    await asyncio.sleep(0)
+    await wait_until(lambda: bool(manager.started))
     sub_run = manager.started[0][3]
     manager.parent_run.request_cancel(reason="user")
     sub_run.mark_cancelled()
@@ -644,7 +645,7 @@ async def test_subagent_tool_foreground_user_cancelled_result_includes_cancelled
             batch_tracker=tracker,
         )
     )
-    await asyncio.sleep(0)
+    await wait_until(lambda: bool(manager.started))
     sub_run = manager.started[0][3]
     manager.parent_run.request_cancel(reason="user")
     sub_run.mark_cancelled()

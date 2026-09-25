@@ -86,6 +86,7 @@ from core.tools.tools import (
 if TYPE_CHECKING:
     from core.chat import ChatLoop
     from core.runtime.interfaces import RuntimeServices
+    from core.sessions.session import ChatSession
 
 
 def _should_register_parent_cascade(background: bool) -> bool:
@@ -313,27 +314,19 @@ async def _handle_subagent(
         if context.is_cancelled():
             return tool_failure("run_cancelled", "Parent run was cancelled before sub-agent spawn")
 
-        if session_id is None:
-            session = runtime.chat_sessions.create(target_agent_id, project_id=target_project_id)
-            runtime.chat_sessions.set_auto_title(
-                SessionAddress(
-                    project_id=target_project_id,
-                    agent_id=target_agent_id,
-                    session_id=session.id,
-                ),
+        try:
+            session = await runtime.chat_sessions.run_async(
+                _open_subagent_session,
+                runtime,
+                target_agent_id,
+                target_project_id,
+                session_id,
                 _subagent_session_title(description, content),
+                work_id,
+                context,
             )
-        else:
-            try:
-                session = runtime.chat_sessions.get(
-                    SessionAddress(
-                        project_id=target_project_id,
-                        agent_id=target_agent_id,
-                        session_id=session_id,
-                    )
-                )
-            except ChatSessionError:
-                return tool_failure("session_not_found", f"session does not exist: {session_id}")
+        except ChatSessionError:
+            return tool_failure("session_not_found", f"session does not exist: {session_id}")
 
         activity = SubAgentActivity.create(
             runtime.storage.temporary_files,
@@ -341,14 +334,6 @@ async def _handle_subagent(
             session_id=session.id,
         )
         activity_file = _activity_file(activity)
-        _mark_subagent_session(
-            runtime,
-            target_agent_id,
-            target_project_id,
-            session.id,
-            work_id,
-            context,
-        )
         await _emit_subagent_session_started(
             context,
             work_id,
@@ -858,6 +843,36 @@ async def _validate_target_agent(
     except ModelConfigurationError as error:
         return tool_failure("invalid_arguments", str(error))
     return None
+
+
+def _open_subagent_session(
+    runtime: RuntimeServices,
+    agent_id: str,
+    project_id: str | None,
+    session_id: str | None,
+    title: str,
+    work_id: str,
+    context: ToolContext,
+) -> ChatSession:
+    """Create or load the child Session and link it to its Parent. Blocking.
+
+    One unit of Session work on the Session database's pool, so a cancelled
+    Parent never leaves a created child Session without its Parent link.
+    """
+    sessions = runtime.chat_sessions
+    if session_id is None:
+        session = sessions.create(agent_id, project_id=project_id)
+        sessions.set_auto_title(
+            SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session.id),
+            title,
+        )
+    else:
+        # Raises ChatSessionError for an unknown Session; nothing is linked then.
+        session = sessions.get(
+            SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
+        )
+    _mark_subagent_session(runtime, agent_id, project_id, session.id, work_id, context)
+    return session
 
 
 def _mark_subagent_session(

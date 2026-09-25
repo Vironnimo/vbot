@@ -587,6 +587,29 @@ async def test_project_run_resolves_skills_without_identity_agent_layer(tmp_path
 
 
 @pytest.mark.asyncio
+async def test_project_run_reads_its_working_project_off_the_event_loop(tmp_path: Path) -> None:
+    import threading
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    runtime, _adapter = _project_runtime(tmp_path, repo, [], body="Body.")
+    runtime.chat_sessions.create(AGENT_ID, session_id="s1", project_id=PROJECT_ID)
+    get_project = runtime.projects.get
+    threads: list[int] = []
+
+    def recording_get(project_id: str) -> Any:
+        threads.append(threading.get_ident())
+        return get_project(project_id)
+
+    runtime.projects.get = recording_get
+
+    await build_chat_loop(runtime).send(AGENT_ID, "Hi", session_id="s1", project_id=PROJECT_ID)
+
+    assert threads
+    assert threading.get_ident() not in threads
+
+
+@pytest.mark.asyncio
 async def test_identity_agent_workspace_not_a_project_stays_unchanged(tmp_path: Path) -> None:
     # An identity agent whose workspace is its own home (not any registered repo)
     # gets no project context — the prompt is the unchanged identity prompt.

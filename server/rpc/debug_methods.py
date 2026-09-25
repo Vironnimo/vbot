@@ -60,7 +60,7 @@ def _make_debug_store(runtime: Any) -> DebugTraceStore:
     return DebugTraceStore(runtime.storage.data_dir, trace_limit=trace_limit)
 
 
-def _save_model_probe_trace(
+async def _save_model_probe_trace(
     runtime: Any,
     trace_id: str,
     url: str,
@@ -79,7 +79,7 @@ def _save_model_probe_trace(
     """
     try:
         store = _make_debug_store(runtime)
-        store.save_trace(
+        await store.save_trace_async(
             trace_id,
             {
                 "trace_id": trace_id,
@@ -161,7 +161,7 @@ def _extract_model_list(payload: Any) -> list[Any]:
 # ---------------------------------------------------------------------------
 
 
-def _debug_status(state: Any, params: JsonObject) -> JsonObject:
+async def _debug_status(state: Any, params: JsonObject) -> JsonObject:
     """Return current debug-mode state.
 
     Always available — does not gate on ``debug.enabled`` so the
@@ -175,7 +175,7 @@ def _debug_status(state: Any, params: JsonObject) -> JsonObject:
         enabled = debug_settings.get("enabled", False)
         trace_limit = debug_settings.get("trace_limit", 50)
         store = _make_debug_store(runtime)
-        trace_count = len(store.get_traces())
+        trace_count = len(await store.get_traces_async())
         return {
             "enabled": enabled,
             "trace_limit": trace_limit,
@@ -186,7 +186,7 @@ def _debug_status(state: Any, params: JsonObject) -> JsonObject:
         raise _map_expected_error(exc) from exc
 
 
-def _debug_trace_list(state: Any, params: JsonObject) -> JsonObject:
+async def _debug_trace_list(state: Any, params: JsonObject) -> JsonObject:
     """Return metadata for all stored debug traces (newest first).
 
     Requires ``debug.enabled`` to be ``true``.
@@ -197,13 +197,13 @@ def _debug_trace_list(state: Any, params: JsonObject) -> JsonObject:
         runtime = state.runtime
         _ensure_debug_enabled(runtime)
         store = _make_debug_store(runtime)
-        traces = store.get_traces()
+        traces = await store.get_traces_async()
         return {"traces": traces}
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 
 
-def _debug_trace_get(state: Any, params: JsonObject) -> JsonObject:
+async def _debug_trace_get(state: Any, params: JsonObject) -> JsonObject:
     """Return the full sanitized trace for *trace_id*.
 
     Requires ``debug.enabled`` to be ``true``.
@@ -214,7 +214,7 @@ def _debug_trace_get(state: Any, params: JsonObject) -> JsonObject:
         runtime = state.runtime
         _ensure_debug_enabled(runtime)
         store = _make_debug_store(runtime)
-        trace = store.get_trace(trace_id)
+        trace = await store.get_trace_async(trace_id)
         return {"trace": trace}
     except InvalidTraceIdError as exc:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
@@ -224,7 +224,7 @@ def _debug_trace_get(state: Any, params: JsonObject) -> JsonObject:
         raise _map_expected_error(exc) from exc
 
 
-def _debug_trace_clear(state: Any, params: JsonObject) -> JsonObject:
+async def _debug_trace_clear(state: Any, params: JsonObject) -> JsonObject:
     """Delete all debug trace files and the metadata index.
 
     **Always allowed** — does not gate on ``debug.enabled``.
@@ -234,7 +234,7 @@ def _debug_trace_clear(state: Any, params: JsonObject) -> JsonObject:
     try:
         runtime = state.runtime
         store = _make_debug_store(runtime)
-        store.clear_all()
+        await store.clear_all_async()
         publish_resource_changed(state, RESOURCE_KIND_DEBUG_TRACES)
         return {"cleared": True}
     except Exception as exc:
@@ -303,7 +303,7 @@ async def _debug_model_probe(state: Any, params: JsonObject) -> JsonObject:
         ) from exc
 
     duration_ms = int((time.monotonic() - start_time) * 1000)
-    _save_model_probe_trace(
+    await _save_model_probe_trace(
         runtime,
         trace_id,
         url,

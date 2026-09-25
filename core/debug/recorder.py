@@ -18,6 +18,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from functools import partial
 from typing import Any
 from uuid import uuid4
 
@@ -144,18 +145,28 @@ class _TraceCapture:
         self._error = {"type": type(error).__name__, "message": str(error)}
 
     def finalize(self) -> None:
-        """Build the canonical trace and persist it. Runs at most once.
+        """Hand the canonical trace to the store without waiting. Runs at most once.
 
-        Best-effort: any failure is logged and swallowed so the provider
-        call is never affected.
+        Duration, timestamp and received body are fixed here; building and
+        writing the trace happen on the store's trace thread, so the Provider
+        call never waits for the durable write. Best-effort: any failure, or
+        a full trace backlog, is logged and swallowed.
         """
         if self._finalized:
             return
         self._finalized = True
 
         try:
-            trace = self._build_trace()
-            self._store.save_trace(trace["trace_id"], trace)
+            build_trace = partial(
+                self._build_trace,
+                duration_ms=int((time.monotonic() - self._start) * 1000),
+                timestamp=datetime.now(UTC).isoformat(),
+                response=self._response,
+                error=self._error,
+                body_chunks=tuple(self._body_chunks),
+            )
+            if not self._store.save_trace_in_background(self._trace_id, build_trace):
+                _logger.warning("Debug trace dropped: earlier traces are still being written")
         except Exception:
             _logger.warning("Failed to persist debug trace", exc_info=True)
 
@@ -163,32 +174,39 @@ class _TraceCapture:
     # Internal
     # ------------------------------------------------------------------
 
-    def _build_trace(self) -> dict[str, Any]:
-        duration_ms = int((time.monotonic() - self._start) * 1000)
-        body_text = _decode_body(b"".join(self._body_chunks)) if self._body_chunks else None
+    def _build_trace(
+        self,
+        *,
+        duration_ms: int,
+        timestamp: str,
+        response: dict[str, Any] | None,
+        error: dict[str, str] | None,
+        body_chunks: tuple[bytes, ...],
+    ) -> dict[str, Any]:
+        body_text = _decode_body(b"".join(body_chunks)) if body_chunks else None
 
         # The complete raw aggregate body — including every byte of an SSE
         # stream — lives in response.body. We never split it into per-frame
         # metadata; the canonical trace is one request and one response. When
         # no response head was recorded, the whole response stays None.
-        response: dict[str, Any] | None = None
-        if self._response is not None:
-            response = {**self._response, "body": body_text}
+        trace_response: dict[str, Any] | None = None
+        if response is not None:
+            trace_response = {**response, "body": body_text}
 
         trace: dict[str, Any] = {
             "trace_id": self._trace_id,
             "type": _TRACE_TYPE_PROVIDER_REQUEST,
-            "timestamp": datetime.now(UTC).isoformat(),
+            "timestamp": timestamp,
             "duration_ms": duration_ms,
             "context": self._context_dict(),
             "provider_id": self._context.provider_id if self._context else "",
             "model_id": self._context.model_id if self._context else "",
             "request": self._request,
-            "response": response,
+            "response": trace_response,
         }
 
-        if self._error is not None:
-            trace["error"] = self._error
+        if error is not None:
+            trace["error"] = error
 
         return trace
 

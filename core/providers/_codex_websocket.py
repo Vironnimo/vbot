@@ -26,6 +26,7 @@ from core.providers.github_copilot_responses import (
     ResponsesStreamState,
     normalize_responses_stream_event,
 )
+from core.utils.tls import shared_ssl_context
 
 if TYPE_CHECKING:
     from core.debug import ProviderDebugRecorder
@@ -257,11 +258,14 @@ class CodexWebSocket:
         if self._codex_websocket is not None and self._codex_websocket_route == route:
             return self._codex_websocket
         await self.aclose()
+        url = self._codex_websocket_url()
         connection = self._codex_websocket_connect(
-            self._codex_websocket_url(),
+            url,
             additional_headers=headers,
             open_timeout=_CODEX_WEBSOCKET_CONNECT_TIMEOUT_SECONDS,
             max_size=None,
+            # Without a context, websockets parses the CA bundle per connection.
+            ssl=shared_ssl_context() if url.startswith("wss://") else None,
         )
         websocket = await connection if inspect.isawaitable(connection) else connection
         self._codex_websocket = websocket

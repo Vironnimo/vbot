@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
 import io
 import json
+import threading
 import zipfile
 from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
 
+from core.attachments import attachments as attachments_module
 from core.attachments.attachments import (
     _MAX_OOXML_CONTENT_TYPES_BYTES,
     AttachmentError,
@@ -156,6 +159,37 @@ def test_store_happy_path_persists_blob_and_sidecar(
 
     loaded = store.get(record.id)
     assert loaded == record
+
+
+@pytest.mark.asyncio
+async def test_store_async_keeps_the_event_loop_responsive_during_the_blob_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = AttachmentStore(tmp_path)
+    entered = threading.Event()
+    release = threading.Event()
+    write_blob = attachments_module.atomic_write_bytes
+
+    def slow_write_blob(path: Path, data: bytes) -> None:
+        entered.set()
+        release.wait(timeout=5)
+        write_blob(path, data)
+
+    monkeypatch.setattr(attachments_module, "atomic_write_bytes", slow_write_blob)
+    storing = asyncio.create_task(store.store_async("photo.jpg", b"\xff\xd8\xff\x00\x10"))
+    try:
+        assert await asyncio.to_thread(entered.wait, 5)
+        loop = asyncio.get_running_loop()
+        ticked_at = loop.time()
+        for _ in range(5):
+            await asyncio.sleep(0.01)
+        assert loop.time() - ticked_at < 1
+        assert not storing.done()
+    finally:
+        release.set()
+    record = await storing
+
+    assert store.get(record.id).media_type == "image/jpeg"
 
 
 @pytest.mark.parametrize(

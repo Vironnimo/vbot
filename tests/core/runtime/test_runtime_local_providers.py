@@ -1,5 +1,8 @@
 """Tests for runtime local providers."""
 
+import asyncio
+import threading
+from typing import Any
 from unittest.mock import Mock
 
 import pytest
@@ -10,6 +13,17 @@ from core.storage.layout import DataDirectoryLayout
 from tests.core.runtime.runtime_providers_test_support import (
     runtime as runtime,
 )
+
+
+def _record_reloads(runtime: Runtime, monkeypatch: pytest.MonkeyPatch) -> list[object]:
+    """Replace the live registry swap; return the list of recorded reloads."""
+    reloads: list[object] = []
+
+    async def reload_async(resources_dir: Any, **kwargs: Any) -> None:
+        reloads.append(1)
+
+    monkeypatch.setattr(runtime.models, "reload_async", reload_async)
+    return reloads
 
 
 def test_local_context_resolver_enforces_effective_window(
@@ -129,8 +143,7 @@ async def test_maybe_refresh_local_catalogs_throttles_within_ttl(
         return {"provider_id": provider.id, "model_count": 0}
 
     monkeypatch.setattr(discovery_module, "refresh_models", _fake_refresh)
-    reloads: list[object] = []
-    monkeypatch.setattr(runtime.models, "reload", lambda resources_dir, **kwargs: reloads.append(1))
+    reloads = _record_reloads(runtime, monkeypatch)
 
     # Act
     await runtime.maybe_refresh_local_catalogs()
@@ -156,7 +169,7 @@ async def test_maybe_refresh_local_catalogs_refreshes_again_after_ttl(
         return {"provider_id": provider.id, "model_count": 0}
 
     monkeypatch.setattr(discovery_module, "refresh_models", _fake_refresh)
-    monkeypatch.setattr(runtime.models, "reload", lambda resources_dir, **kwargs: None)
+    _record_reloads(runtime, monkeypatch)
 
     # Act — expire the throttle between the calls.
     await runtime.maybe_refresh_local_catalogs()
@@ -184,8 +197,7 @@ async def test_maybe_refresh_local_catalogs_degrades_when_server_down(
         raise ModelDiscoveryError("connection refused")
 
     monkeypatch.setattr(discovery_module, "refresh_models", _fake_refresh)
-    reloads: list[object] = []
-    monkeypatch.setattr(runtime.models, "reload", lambda resources_dir, **kwargs: reloads.append(1))
+    reloads = _record_reloads(runtime, monkeypatch)
 
     # Act — must not raise.
     await runtime.maybe_refresh_local_catalogs()
@@ -215,8 +227,7 @@ async def test_maybe_refresh_local_catalogs_degrades_when_staged_db_is_invalid(
 
     monkeypatch.setattr(discovery_module, "refresh_models", _fake_refresh)
     monkeypatch.setattr(ModelRegistry, "load", classmethod(_fail_validation))
-    reloads: list[object] = []
-    monkeypatch.setattr(runtime.models, "reload", lambda resources_dir, **kwargs: reloads.append(1))
+    reloads = _record_reloads(runtime, monkeypatch)
 
     await runtime.maybe_refresh_local_catalogs()
 
@@ -240,7 +251,7 @@ async def test_maybe_refresh_records_reachability_on_success(
         return {"provider_id": provider.id, "model_count": 1}
 
     monkeypatch.setattr(discovery_module, "refresh_models", _fake_refresh)
-    monkeypatch.setattr(runtime.models, "reload", lambda resources_dir, **kwargs: None)
+    _record_reloads(runtime, monkeypatch)
 
     # Act
     await runtime.maybe_refresh_local_catalogs()
@@ -271,7 +282,7 @@ async def test_local_provider_health_logs_only_transitions(
         return {"provider_id": provider.id, "model_count": 1}
 
     monkeypatch.setattr(discovery_module, "refresh_models", _fake_refresh)
-    monkeypatch.setattr(runtime.models, "reload", lambda resources_dir, **kwargs: None)
+    _record_reloads(runtime, monkeypatch)
     logger = Mock()
     runtime.logger = logger
 
@@ -300,7 +311,7 @@ async def test_maybe_refresh_force_bypasses_throttle(
         return {"provider_id": provider.id, "model_count": 0}
 
     monkeypatch.setattr(discovery_module, "refresh_models", _fake_refresh)
-    monkeypatch.setattr(runtime.models, "reload", lambda resources_dir, **kwargs: None)
+    _record_reloads(runtime, monkeypatch)
 
     # Act
     await runtime.maybe_refresh_local_catalogs()
@@ -308,3 +319,52 @@ async def test_maybe_refresh_force_bypasses_throttle(
 
     # Assert
     assert calls == ["ollama", "ollama"]
+
+
+@pytest.mark.asyncio
+async def test_maybe_refresh_stages_the_model_db_off_the_event_loop(
+    runtime: Runtime, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import core.models.discovery as discovery_module
+    import core.providers.runtime as provider_runtime_module
+
+    runtime.storage.set_provider_connection_enabled("ollama:local", True)
+
+    async def _fake_refresh(provider, credential, resources_dir, **kwargs):
+        return {"provider_id": provider.id, "model_count": 1}
+
+    monkeypatch.setattr(discovery_module, "refresh_models", _fake_refresh)
+    reloads = _record_reloads(runtime, monkeypatch)
+    begin = provider_runtime_module.begin_runtime_model_database_refresh
+    entered = threading.Event()
+    release = threading.Event()
+    threads: list[int] = []
+    staging_dirs: list[Any] = []
+
+    def blocked_begin(*args: Any, **kwargs: Any) -> Any:
+        threads.append(threading.get_ident())
+        entered.set()
+        release.wait(timeout=5)
+        refresh = begin(*args, **kwargs)
+        staging_dirs.append(refresh.resources_dir)
+        return refresh
+
+    monkeypatch.setattr(
+        provider_runtime_module, "begin_runtime_model_database_refresh", blocked_begin
+    )
+    refreshing = asyncio.create_task(runtime.maybe_refresh_local_catalogs())
+    try:
+        assert await asyncio.to_thread(entered.wait, 5)
+        loop = asyncio.get_running_loop()
+        ticked_at = loop.time()
+        for _ in range(5):
+            await asyncio.sleep(0.01)
+        assert loop.time() - ticked_at < 1
+        assert not refreshing.done()
+    finally:
+        release.set()
+    await asyncio.wait_for(refreshing, timeout=10)
+
+    assert threads and threading.get_ident() not in threads
+    assert reloads == [1]
+    assert staging_dirs and not staging_dirs[0].exists()

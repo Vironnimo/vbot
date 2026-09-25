@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import io
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -379,6 +380,67 @@ def test_text_file_block_resolves_through_the_read_renderer(
         },
         {"type": "text", "text": render_text_file(source)},
     ]
+
+
+@pytest.mark.asyncio
+async def test_attachment_reads_run_off_the_event_loop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Earlier turns and the current turn read attachment metadata and blobs on
+    # worker threads; the loop keeps running while a read is blocked.
+    store = AttachmentStore(tmp_path)
+    notes_text = b"line one\n"
+    notes = store.store("notes.txt", notes_text)
+    report = store.store("report.pdf", b"%PDF-1.4 test-owned")
+    resolver = ContentBlockResolver(store)
+    get_record = store.get
+    entered = threading.Event()
+    release = threading.Event()
+    threads: list[int] = []
+
+    def blocked_get(attachment_id: str) -> Any:
+        threads.append(threading.get_ident())
+        entered.set()
+        release.wait(timeout=5)
+        return get_record(attachment_id)
+
+    monkeypatch.setattr(store, "get", blocked_get)
+
+    def file_block(record: Any) -> dict:
+        return {
+            "type": "file",
+            "attachment_id": record.id,
+            "filename": record.filename,
+            "media_type": record.media_type,
+        }
+
+    messages = [
+        {"id": "user-earlier", "role": "user", "content": [file_block(notes)]},
+        {"id": "user-current", "role": "user", "content": [file_block(report)]},
+    ]
+    resolving = asyncio.create_task(
+        resolver.resolve_messages(
+            messages,
+            current_user_message_id="user-current",
+            input_modalities=frozenset({"text", "pdf"}),
+            wire_media_types=frozenset({"application/pdf"}),
+        )
+    )
+    try:
+        assert await asyncio.to_thread(entered.wait, 5)
+        loop = asyncio.get_running_loop()
+        ticked_at = loop.time()
+        for _ in range(5):
+            await asyncio.sleep(0.01)
+        assert loop.time() - ticked_at < 1
+        assert not resolving.done()
+    finally:
+        release.set()
+    resolved = await asyncio.wait_for(resolving, timeout=5)
+
+    assert threads and threading.get_ident() not in threads
+    assert resolved[0]["content"][1] == {"type": "text", "text": render_text_file(notes_text)}
+    assert resolved[1]["content"][0]["type"] == "document"
 
 
 def test_full_text_previously_persisted_beside_an_attachment_is_suppressed(tmp_path: Path) -> None:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -28,8 +29,11 @@ class _Registry:
 
     def __init__(self, names: list[str]) -> None:
         self._skills = {name: _Skill(name) for name in names}
+        self.filter_threads: list[threading.Thread] = []
 
     def filter_allowed(self, allowed_skills: list[str]) -> list[_Skill]:
+        # Real availability checks probe PATH for binary requirements.
+        self.filter_threads.append(threading.current_thread())
         if "*" in allowed_skills:
             return list(self._skills.values())
         return [skill for name, skill in self._skills.items() if name in allowed_skills]
@@ -57,7 +61,7 @@ def _state(
         root_project_id=rooted_project_id,
     )
 
-    def resolve_agent(project_id: str | None, agent_id: str) -> object:
+    async def resolve_agent_async(project_id: str | None, agent_id: str) -> object:
         if not resolvable:
             from core.projects import AgentResolutionError
 
@@ -76,7 +80,7 @@ def _state(
     runtime = SimpleNamespace(
         skills=global_registry,
         skills_for=skills_for,
-        agent_resolver=SimpleNamespace(resolve_agent=resolve_agent),
+        agent_resolver=SimpleNamespace(resolve_agent_async=resolve_agent_async),
         projects=projects,
     )
     return SimpleNamespace(
@@ -89,25 +93,28 @@ def _skill_names(result: dict[str, Any]) -> list[str]:
     return [item["name"] for item in result["items"] if item["type"] == "skill"]
 
 
-def test_no_agent_address_returns_global_skills() -> None:
+@pytest.mark.asyncio
+async def test_no_agent_address_returns_global_skills() -> None:
     state = _state(global_names=["debugging", "frontend-design"])
 
-    result = _list_commands(state, {})
+    result = await _list_commands(state, {})
 
     assert _skill_names(result) == ["debugging", "frontend-design"]
 
 
-def test_identity_agent_address_filters_by_agent_allowed_skills() -> None:
+@pytest.mark.asyncio
+async def test_identity_agent_address_filters_by_agent_allowed_skills() -> None:
     # A bare id resolves the identity agent against the global registry, narrowed by
     # the agent's own allowed_skills.
     state = _state(global_names=["debugging", "frontend-design"], agent_allowed=["debugging"])
 
-    result = _list_commands(state, {"agent_id": "main"})
+    result = await _list_commands(state, {"agent_id": "main"})
 
     assert _skill_names(result) == ["debugging"]
 
 
-def test_project_agent_address_uses_project_registry() -> None:
+@pytest.mark.asyncio
+async def test_project_agent_address_uses_project_registry() -> None:
     # An ``agent@projekt`` address resolves against the project's own registry, so
     # the suggestions are the project skills (not the global pool).
     state = _state(
@@ -116,12 +123,13 @@ def test_project_agent_address_uses_project_registry() -> None:
         agent_allowed=["*"],
     )
 
-    result = _list_commands(state, {"agent_id": "builder@vbot"})
+    result = await _list_commands(state, {"agent_id": "builder@vbot"})
 
     assert _skill_names(result) == ["proj-a", "proj-b"]
 
 
-def test_rooted_identity_agent_suggests_home_project_skills() -> None:
+@pytest.mark.asyncio
+async def test_rooted_identity_agent_suggests_home_project_skills() -> None:
     # A bare Rooted Identity Agent autocompletes against its explicitly selected
     # Project pool, not the bare global registry.
     state = _state(
@@ -132,12 +140,13 @@ def test_rooted_identity_agent_suggests_home_project_skills() -> None:
         rooted_project_id="vbot",
     )
 
-    result = _list_commands(state, {"agent_id": "main"})
+    result = await _list_commands(state, {"agent_id": "main"})
 
     assert _skill_names(result) == ["home-skill"]
 
 
-def test_rooted_identity_missing_project_cwd_maps_error_without_global_fallback(
+@pytest.mark.asyncio
+async def test_rooted_identity_missing_project_cwd_maps_error_without_global_fallback(
     tmp_path: Path,
 ) -> None:
     state = _state(
@@ -148,14 +157,29 @@ def test_rooted_identity_missing_project_cwd_maps_error_without_global_fallback(
     )
 
     with pytest.raises(RpcError) as exc_info:
-        _list_commands(state, {"agent_id": "main"})
+        await _list_commands(state, {"agent_id": "main"})
     assert exc_info.value.code == "domain_error"
 
 
-def test_commands_are_always_present() -> None:
+@pytest.mark.asyncio
+async def test_skill_suggestions_are_computed_off_the_event_loop() -> None:
+    state = _state(global_names=["debugging"], project_names=["proj-a"])
+
+    await _list_commands(state, {})
+    await _list_commands(state, {"agent_id": "builder@vbot"})
+
+    loop_thread = threading.current_thread()
+    registries = (state.runtime.skills, state.runtime.skills_for("vbot"))
+    filter_threads = [thread for registry in registries for thread in registry.filter_threads]
+    assert len(filter_threads) == 2
+    assert loop_thread not in filter_threads
+
+
+@pytest.mark.asyncio
+async def test_commands_are_always_present() -> None:
     state = _state(global_names=[])
 
-    result = _list_commands(state, {})
+    result = await _list_commands(state, {})
 
     command_names = [item["name"] for item in result["items"] if item["type"] == "command"]
     assert command_names == [
@@ -173,7 +197,8 @@ def test_commands_are_always_present() -> None:
     ]
 
 
-def test_extension_commands_come_from_live_dispatcher_catalog() -> None:
+@pytest.mark.asyncio
+async def test_extension_commands_come_from_live_dispatcher_catalog() -> None:
     dispatcher = CommandDispatcher(ChatRunManager())
     dispatcher.register_extension_command(
         "workflow_ext",
@@ -183,7 +208,7 @@ def test_extension_commands_come_from_live_dispatcher_catalog() -> None:
     )
     state = _state(global_names=[], command_dispatcher=dispatcher)
 
-    result = _list_commands(state, {})
+    result = await _list_commands(state, {})
 
     command_items = [item for item in result["items"] if item["type"] == "command"]
     assert command_items[-1] == {
@@ -195,25 +220,28 @@ def test_extension_commands_come_from_live_dispatcher_catalog() -> None:
     }
 
 
-def test_unsupported_field_is_rejected() -> None:
+@pytest.mark.asyncio
+async def test_unsupported_field_is_rejected() -> None:
     state = _state(global_names=[])
 
     with pytest.raises(RpcError):
-        _list_commands(state, {"session_id": "s1"})
+        await _list_commands(state, {"session_id": "s1"})
 
 
-def test_empty_agent_id_is_rejected() -> None:
+@pytest.mark.asyncio
+async def test_empty_agent_id_is_rejected() -> None:
     state = _state(global_names=[])
 
     with pytest.raises(RpcError):
-        _list_commands(state, {"agent_id": ""})
+        await _list_commands(state, {"agent_id": ""})
 
 
-def test_unresolvable_agent_maps_to_rpc_error() -> None:
+@pytest.mark.asyncio
+async def test_unresolvable_agent_maps_to_rpc_error() -> None:
     state = _state(global_names=["debugging"], resolvable=False)
 
     with pytest.raises(RpcError):
-        _list_commands(state, {"agent_id": "ghost@vbot"})
+        await _list_commands(state, {"agent_id": "ghost@vbot"})
 
 
 def _tool_stub(

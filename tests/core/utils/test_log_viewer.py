@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 from contextlib import aclosing, suppress
 from pathlib import Path
 
@@ -142,7 +143,8 @@ def test_parse_log_entries_filters_routine_websocket_noise_but_keeps_real_transp
     ]
 
 
-def test_list_files_returns_newest_first_with_default_selection(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_list_files_returns_newest_first_with_default_selection(tmp_path: Path) -> None:
     logs_dir = tmp_path / "logs"
     logs_dir.mkdir()
     (logs_dir / "2026-05-09").write_text("", encoding="utf-8")
@@ -152,13 +154,14 @@ def test_list_files_returns_newest_first_with_default_selection(tmp_path: Path) 
 
     viewer = LogViewer(tmp_path)
 
-    assert viewer.list_files() == {
+    assert await viewer.list_files() == {
         "files": ["2026-05-11", "2026-05-10", "2026-05-09"],
         "default_file": "2026-05-11",
     }
 
 
-def test_read_file_returns_structured_entries(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_read_file_returns_structured_entries(tmp_path: Path) -> None:
     logs_dir = tmp_path / "logs"
     logs_dir.mkdir()
     (logs_dir / "2026-05-11").write_text(
@@ -174,7 +177,7 @@ def test_read_file_returns_structured_entries(tmp_path: Path) -> None:
 
     viewer = LogViewer(tmp_path)
 
-    result = viewer.read_file("2026-05-11")
+    result = await viewer.read_file("2026-05-11")
 
     assert result["file"] == "2026-05-11"
     assert result["entries"] == [
@@ -199,7 +202,8 @@ def test_read_file_returns_structured_entries(tmp_path: Path) -> None:
     assert result["cursor"]
 
 
-def test_read_file_filters_persisted_websocket_noise(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_read_file_filters_persisted_websocket_noise(tmp_path: Path) -> None:
     logs_dir = tmp_path / "logs"
     logs_dir.mkdir()
     (logs_dir / "2026-05-11").write_text(
@@ -220,7 +224,7 @@ def test_read_file_filters_persisted_websocket_noise(tmp_path: Path) -> None:
 
     viewer = LogViewer(tmp_path)
 
-    result = viewer.read_file("2026-05-11")
+    result = await viewer.read_file("2026-05-11")
 
     assert result["entries"] == [
         {
@@ -242,7 +246,8 @@ def test_read_file_filters_persisted_websocket_noise(tmp_path: Path) -> None:
     ]
 
 
-def test_read_file_caps_unconsumed_handoff_snapshots(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_read_file_caps_unconsumed_handoff_snapshots(tmp_path: Path) -> None:
     logs_dir = tmp_path / "logs"
     logs_dir.mkdir()
     viewer = LogViewer(tmp_path)
@@ -254,7 +259,7 @@ def test_read_file_caps_unconsumed_handoff_snapshots(tmp_path: Path) -> None:
             f"2026-05-{index + 1:02d} 09:00:00 [INFO] vbot.core - Ready\n",
             encoding="utf-8",
         )
-        result = viewer.read_file(file_name)
+        result = await viewer.read_file(file_name)
         if index == 0:
             first_cursor = str(result["cursor"])
 
@@ -267,7 +272,44 @@ def test_read_file_caps_unconsumed_handoff_snapshots(tmp_path: Path) -> None:
             await stream.__anext__()
 
     with pytest.raises(ValueError):
-        asyncio.run(consume_pruned_cursor())
+        await consume_pruned_cursor()
+
+
+@pytest.mark.asyncio
+async def test_read_file_parses_the_log_off_the_event_loop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    (logs_dir / "2026-05-11").write_text(
+        "2026-05-11 09:00:00 [INFO] vbot.core - Ready\n",
+        encoding="utf-8",
+    )
+    viewer = LogViewer(tmp_path)
+    entered = threading.Event()
+    release = threading.Event()
+    parse = log_viewer_module.parse_log_entries
+
+    def slow_parse(text: str) -> list[dict[str, object]]:
+        entered.set()
+        release.wait(timeout=5)
+        return parse(text)
+
+    monkeypatch.setattr(log_viewer_module, "parse_log_entries", slow_parse)
+    reading = asyncio.create_task(viewer.read_file("2026-05-11"))
+    try:
+        assert await asyncio.to_thread(entered.wait, 5)
+        loop = asyncio.get_running_loop()
+        ticked_at = loop.time()
+        for _ in range(5):
+            await asyncio.sleep(0.01)
+        assert loop.time() - ticked_at < 1
+        assert not reading.done()
+    finally:
+        release.set()
+    result = await reading
+
+    assert [entry["message"] for entry in result["entries"]] == ["Ready"]
 
 
 @pytest.mark.asyncio
@@ -281,7 +323,7 @@ async def test_subscribe_replays_entries_appended_after_read_handoff(tmp_path: P
     )
 
     viewer = LogViewer(tmp_path)
-    initial = viewer.read_file("2026-05-11")
+    initial = await viewer.read_file("2026-05-11")
     cursor = initial["cursor"]
 
     log_file.write_text(
@@ -327,7 +369,7 @@ async def test_subscribe_filters_routine_websocket_noise_from_handoff_append(
     )
 
     viewer = LogViewer(tmp_path)
-    initial = viewer.read_file("2026-05-11")
+    initial = await viewer.read_file("2026-05-11")
     cursor = initial["cursor"]
 
     log_file.write_text(
@@ -422,13 +464,15 @@ async def test_watch_file_skips_unchanged_timeouts_and_reconciles_metadata_chang
     )
     snapshot_reads = 0
     catalog_reads = 0
+    read_threads: list[threading.Thread] = []
     original_read_snapshot = viewer._read_snapshot
-    original_list_files = viewer.list_files
+    original_list_files = viewer._list_files
     awatch_kwargs: dict[str, object] = {}
 
     def count_snapshot_reads(file_path: Path) -> _LogSnapshot:
         nonlocal snapshot_reads
         snapshot_reads += 1
+        read_threads.append(threading.current_thread())
         return original_read_snapshot(file_path)
 
     def count_catalog_reads() -> dict[str, object]:
@@ -451,7 +495,7 @@ async def test_watch_file_skips_unchanged_timeouts_and_reconciles_metadata_chang
         yield set()
 
     monkeypatch.setattr(viewer, "_read_snapshot", count_snapshot_reads)
-    monkeypatch.setattr(viewer, "list_files", count_catalog_reads)
+    monkeypatch.setattr(viewer, "_list_files", count_catalog_reads)
     monkeypatch.setattr(log_viewer_module, "awatch", fake_awatch)
 
     await viewer._watch_file(watcher)
@@ -459,6 +503,8 @@ async def test_watch_file_skips_unchanged_timeouts_and_reconciles_metadata_chang
     assert awatch_kwargs["yield_on_timeout"] is True
     assert snapshot_reads == 1
     assert catalog_reads == 0
+    # The watched log is re-read on every change: never on the Event Loop.
+    assert threading.current_thread() not in read_threads
     assert subscriber.get_nowait() == {
         "type": "append",
         "file": selected_file.name,
@@ -653,11 +699,12 @@ async def test_ensure_watcher_attaches_crash_logging_done_callback(
     assert len(crash_records) == 1
 
 
-def test_read_file_rejects_invalid_name(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_read_file_rejects_invalid_name(tmp_path: Path) -> None:
     viewer = LogViewer(tmp_path)
 
     with pytest.raises(ValueError):
-        viewer.read_file("../2026-05-11")
+        await viewer.read_file("../2026-05-11")
 
 
 def test_build_snapshot_event_appends_only_new_entries() -> None:

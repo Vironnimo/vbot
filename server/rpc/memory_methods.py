@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from functools import partial
 from pathlib import Path
 from typing import Any, cast
 
 from core.memory import MemoryEntry, MemoryScope
 from core.utils.logging import get_logger
+from core.utils.workers import BoundedWorkerPool
 from server.events import RESOURCE_KIND_MEMORIES
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
@@ -17,75 +20,102 @@ from server.rpc.validation import _reject_unsupported, _required_string
 JsonObject = dict[str, Any]
 _LOGGER = get_logger("server.rpc.memory")
 _MEMORY_SCOPES: tuple[MemoryScope, ...] = ("agent", "user")
+# Memory files are read and rewritten here, never on the Event Loop.
+_MEMORY_RPC_WORKERS = BoundedWorkerPool(name="memory-rpc", max_workers=2)
 
 
-def _list_memories(state: Any, params: JsonObject) -> JsonObject:
+async def _list_memories(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, {"agent_id"}, "memory.list")
-    agent_id, workspace = _agent_workspace(state, params)
-    return _memory_response(state, agent_id, workspace)
+    agent_id, workspace = await _agent_workspace(state, params)
+    return await _MEMORY_RPC_WORKERS.run(_memory_response, state, agent_id, workspace)
 
 
-def _add_memory(state: Any, params: JsonObject) -> JsonObject:
+async def _add_memory(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, {"agent_id", "scope", "content"}, "memory.add")
-    agent_id, workspace = _agent_workspace(state, params)
+    agent_id, workspace = await _agent_workspace(state, params)
     scope = _memory_scope(params)
     content = _required_string(params, "content")
-    try:
-        entry = state.runtime.memory.add_entry(workspace, scope, content)
-        response = _memory_response(state, agent_id, workspace, entry=entry)
-    except Exception as exc:
-        raise _map_expected_error(exc) from exc
-    _publish_memory_changed(state, agent_id)
+    response = await _mutate_memory(
+        state,
+        agent_id,
+        workspace,
+        partial(state.runtime.memory.add_entry, workspace, scope, content),
+    )
     _LOGGER.info("Memory entry added (agent=%s scope=%s)", agent_id, scope)
     return response
 
 
-def _replace_memory(state: Any, params: JsonObject) -> JsonObject:
+async def _replace_memory(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(
         params,
         {"agent_id", "scope", "entry_id", "content"},
         "memory.replace",
     )
-    agent_id, workspace = _agent_workspace(state, params)
+    agent_id, workspace = await _agent_workspace(state, params)
     scope = _memory_scope(params)
     entry_id = _positive_entry_id(params)
     content = _required_string(params, "content")
-    try:
-        entry = state.runtime.memory.replace_entry(workspace, scope, entry_id, content)
-        response = _memory_response(state, agent_id, workspace, entry=entry)
-    except Exception as exc:
-        raise _map_expected_error(exc) from exc
-    _publish_memory_changed(state, agent_id)
+    response = await _mutate_memory(
+        state,
+        agent_id,
+        workspace,
+        partial(state.runtime.memory.replace_entry, workspace, scope, entry_id, content),
+    )
     _LOGGER.info("Memory entry replaced (agent=%s scope=%s)", agent_id, scope)
     return response
 
 
-def _remove_memory(state: Any, params: JsonObject) -> JsonObject:
+async def _remove_memory(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(
         params,
         {"agent_id", "scope", "entry_id"},
         "memory.remove",
     )
-    agent_id, workspace = _agent_workspace(state, params)
+    agent_id, workspace = await _agent_workspace(state, params)
     scope = _memory_scope(params)
     entry_id = _positive_entry_id(params)
-    try:
-        entry = state.runtime.memory.remove_entry(workspace, scope, entry_id)
-        response = _memory_response(state, agent_id, workspace, entry=entry)
-    except Exception as exc:
-        raise _map_expected_error(exc) from exc
-    _publish_memory_changed(state, agent_id)
+    response = await _mutate_memory(
+        state,
+        agent_id,
+        workspace,
+        partial(state.runtime.memory.remove_entry, workspace, scope, entry_id),
+    )
     _LOGGER.info("Memory entry removed (agent=%s scope=%s)", agent_id, scope)
     return response
 
 
-def _agent_workspace(state: Any, params: JsonObject) -> tuple[str, Path]:
+async def _agent_workspace(state: Any, params: JsonObject) -> tuple[str, Path]:
     agent_id = _required_string(params, "agent_id")
     try:
-        agent = state.runtime.agents.get(agent_id)
+        agent = await state.runtime.agents.get_async(agent_id)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     return agent_id, Path(agent.workspace)
+
+
+async def _mutate_memory(
+    state: Any,
+    agent_id: str,
+    workspace: Path,
+    mutation: Callable[[], MemoryEntry],
+) -> JsonObject:
+    """Apply one memory file mutation off the Event Loop, then announce it."""
+    response = await _MEMORY_RPC_WORKERS.run(_apply_mutation, state, agent_id, workspace, mutation)
+    _publish_memory_changed(state, agent_id)
+    return response
+
+
+def _apply_mutation(
+    state: Any,
+    agent_id: str,
+    workspace: Path,
+    mutation: Callable[[], MemoryEntry],
+) -> JsonObject:
+    try:
+        entry = mutation()
+        return _memory_response(state, agent_id, workspace, entry=entry)
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
 
 
 def _memory_scope(params: JsonObject) -> MemoryScope:

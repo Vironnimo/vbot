@@ -1,4 +1,10 @@
-"""Read-only daily log access and live update watching."""
+"""Read-only daily log access and live update watching.
+
+Every log-directory scan, stat, file read and parse runs on the ``log-viewer``
+worker pool: a watched daily log is re-read and re-parsed on each change, up to
+ten times a second while the server logs, and must never stall the Event Loop.
+Cursor handoffs and watcher state stay on the Event Loop.
+"""
 
 from __future__ import annotations
 
@@ -18,6 +24,7 @@ from core.utils.logging import (
     get_logger,
     is_routine_websocket_lifecycle_message,
 )
+from core.utils.workers import BoundedWorkerPool
 
 JsonObject = dict[str, Any]
 
@@ -31,6 +38,7 @@ UNKNOWN_LOGGER_NAME = ""
 UNKNOWN_TIMESTAMP = ""
 MAX_READ_HANDOFFS = 32
 WATCHER_SHUTDOWN_TIMEOUT_SECONDS = 1.0
+_LOG_WORKERS = BoundedWorkerPool(name="log-viewer", max_workers=2)
 
 LOG_LINE_PATTERN = re.compile(
     r"^(?P<timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) "
@@ -62,6 +70,15 @@ class _WatcherState:
 class _ReadHandoff:
     file_name: str
     snapshot: _LogSnapshot
+
+
+@dataclass(slots=True)
+class _WatchRefresh:
+    """What one worker read found for a watched file; ``None`` means not read."""
+
+    catalog: JsonObject | None = None
+    directory_modified_ns: int | None = None
+    snapshot: _LogSnapshot | None = None
 
 
 def parse_log_entries(text: str) -> list[JsonObject]:
@@ -157,16 +174,11 @@ class LogViewer:
         self._watchers: dict[str, _WatcherState] = {}
         self._watch_lock = asyncio.Lock()
 
-    def list_files(self) -> JsonObject:
-        files = sorted(
-            (path.name for path in self._iter_log_files()),
-            reverse=True,
-        )
-        return {"files": files, "default_file": files[0] if files else None}
+    async def list_files(self) -> JsonObject:
+        return await _LOG_WORKERS.run(self._list_files)
 
-    def read_file(self, file_name: str) -> JsonObject:
-        file_path = self._resolve_existing_file(file_name)
-        snapshot = self._read_snapshot(file_path)
+    async def read_file(self, file_name: str) -> JsonObject:
+        file_path, snapshot = await _LOG_WORKERS.run(self._read_existing_file, file_name)
         return {
             "file": file_path.name,
             "entries": snapshot.entries,
@@ -179,7 +191,7 @@ class LogViewer:
         *,
         cursor: str | None = None,
     ) -> AsyncGenerator[JsonObject, None]:
-        file_path = self._resolve_existing_file(file_name)
+        file_path = await _LOG_WORKERS.run(self._resolve_existing_file, file_name)
         handoff_snapshot = self._take_read_handoff(file_path.name, cursor)
         watcher = await self._ensure_watcher(file_path.name)
         queue: asyncio.Queue[JsonObject] = asyncio.Queue()
@@ -188,7 +200,7 @@ class LogViewer:
         catch_up_subscribers: list[asyncio.Queue[JsonObject]] = []
 
         async with self._watch_lock:
-            next_snapshot = self._read_snapshot(file_path)
+            next_snapshot = await _LOG_WORKERS.run(self._read_snapshot, file_path)
             previous_snapshot = watcher.snapshot
             catch_up_event = _build_snapshot_event(file_path.name, previous_snapshot, next_snapshot)
             if catch_up_event is not None:
@@ -249,12 +261,13 @@ class LogViewer:
             if watcher is not None:
                 return watcher
 
-            file_path = self._logs_dir / file_name
-            directory_modified_ns = _path_modified_ns(self._logs_dir)
+            directory_modified_ns, catalog, snapshot = await _LOG_WORKERS.run(
+                self._read_watch_start, self._logs_dir / file_name
+            )
             watcher = _WatcherState(
                 file_name=file_name,
-                snapshot=self._read_snapshot(file_path),
-                catalog=tuple(self.list_files()["files"]),
+                snapshot=snapshot,
+                catalog=catalog,
                 directory_modified_ns=directory_modified_ns,
             )
             watcher.task = asyncio.create_task(self._watch_file(watcher))
@@ -313,10 +326,10 @@ class LogViewer:
                 should_refresh_catalog = bool(changes)
                 should_read_snapshot = _includes_path(changes, watched_path_str)
                 if not changes:
-                    should_refresh_catalog = (
-                        _path_modified_ns(self._logs_dir) != watcher.directory_modified_ns
-                    )
-                    should_read_snapshot = _snapshot_metadata_changed(
+                    should_refresh_catalog, should_read_snapshot = await _LOG_WORKERS.run(
+                        _metadata_changes,
+                        self._logs_dir,
+                        watcher.directory_modified_ns,
                         watched_path,
                         watcher.snapshot,
                     )
@@ -324,29 +337,32 @@ class LogViewer:
                     continue
 
                 async with self._watch_lock:
+                    refresh = await _LOG_WORKERS.run(
+                        self._read_refresh,
+                        watched_path,
+                        catalog=should_refresh_catalog,
+                        snapshot=should_read_snapshot,
+                    )
                     catalog_event = None
-                    if should_refresh_catalog:
-                        directory_modified_ns = _path_modified_ns(self._logs_dir)
-                        catalog = self.list_files()
-                        next_catalog = tuple(catalog["files"])
-                        watcher.directory_modified_ns = directory_modified_ns
+                    if refresh.catalog is not None:
+                        next_catalog = tuple(refresh.catalog["files"])
+                        watcher.directory_modified_ns = refresh.directory_modified_ns
                         if next_catalog != watcher.catalog:
                             watcher.catalog = next_catalog
                             catalog_event = {
                                 "type": CATALOG_EVENT,
                                 "file": watcher.file_name,
-                                **catalog,
+                                **refresh.catalog,
                             }
 
                     event = None
-                    if should_read_snapshot:
-                        next_snapshot = self._read_snapshot(watched_path)
+                    if refresh.snapshot is not None:
                         event = _build_snapshot_event(
                             watcher.file_name,
                             watcher.snapshot,
-                            next_snapshot,
+                            refresh.snapshot,
                         )
-                        watcher.snapshot = next_snapshot
+                        watcher.snapshot = refresh.snapshot
                     subscribers = list(watcher.subscribers)
 
                 for subscriber in subscribers:
@@ -360,6 +376,38 @@ class LogViewer:
             if watcher.stop_event.is_set():
                 return
             raise
+
+    # Worker-pool operations: they touch the filesystem and never watcher state.
+
+    def _list_files(self) -> JsonObject:
+        files = sorted(
+            (path.name for path in self._iter_log_files()),
+            reverse=True,
+        )
+        return {"files": files, "default_file": files[0] if files else None}
+
+    def _read_existing_file(self, file_name: str) -> tuple[Path, _LogSnapshot]:
+        file_path = self._resolve_existing_file(file_name)
+        return file_path, self._read_snapshot(file_path)
+
+    # The directory stamp is always taken before listing, so a file added in
+    # between still counts as a change on the next metadata check.
+
+    def _read_watch_start(
+        self, file_path: Path
+    ) -> tuple[int | None, tuple[str, ...], _LogSnapshot]:
+        directory_modified_ns = _path_modified_ns(self._logs_dir)
+        catalog = tuple(self._list_files()["files"])
+        return directory_modified_ns, catalog, self._read_snapshot(file_path)
+
+    def _read_refresh(self, file_path: Path, *, catalog: bool, snapshot: bool) -> _WatchRefresh:
+        refresh = _WatchRefresh()
+        if catalog:
+            refresh.directory_modified_ns = _path_modified_ns(self._logs_dir)
+            refresh.catalog = self._list_files()
+        if snapshot:
+            refresh.snapshot = self._read_snapshot(file_path)
+        return refresh
 
     def _iter_log_files(self) -> Iterable[Path]:
         if not self._logs_dir.exists():
@@ -483,6 +531,19 @@ def _log_watcher_crash_if_already_dead(task: asyncio.Task[None]) -> bool:
         exc_info=(type(error), error, error.__traceback__),
     )
     return True
+
+
+def _metadata_changes(
+    logs_dir: Path,
+    directory_modified_ns: int | None,
+    file_path: Path,
+    snapshot: _LogSnapshot,
+) -> tuple[bool, bool]:
+    """Return whether the catalog and the watched file's snapshot need a re-read."""
+    return (
+        _path_modified_ns(logs_dir) != directory_modified_ns,
+        _snapshot_metadata_changed(file_path, snapshot),
+    )
 
 
 def _includes_path(changes: set[tuple[Any, str]], watched_path: str) -> bool:

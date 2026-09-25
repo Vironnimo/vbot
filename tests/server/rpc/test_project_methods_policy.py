@@ -146,12 +146,15 @@ def test_set_preserves_existing_unavailable_tool_while_editing_known_tools(tmp_p
     ]
 
 
-def test_show_reports_persisted_unavailable_tool_without_rejecting_project(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_show_reports_persisted_unavailable_tool_without_rejecting_project(
+    tmp_path: Path,
+) -> None:
     state = _make_state(tmp_path)
     _add_project(state, {"cwd": str(_make_repo(tmp_path, "vbot")), "display_name": "vBot"})
     state.runtime.projects.update("vbot", allowed_tools=["read", "disabled_extension_tool"])
 
-    result = _show_project(state, {"project_id": "vbot"})
+    result = await _show_project(state, {"project_id": "vbot"})
 
     assert result["project"]["allowed_tools"] == ["read", "disabled_extension_tool"]
     assert result["scan"]["report"] == {
@@ -171,7 +174,8 @@ def test_show_reports_persisted_unavailable_tool_without_rejecting_project(tmp_p
     }
 
 
-def test_scan_preview_includes_project_skill_pool(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_scan_preview_includes_project_skill_pool(tmp_path: Path) -> None:
     # The scan response carries the editor's skill pool: the project's own skills,
     # plus the bundled and global opt-in pools with name collisions removed (project
     # wins) and global-home skills split out from bundled by origin.
@@ -193,7 +197,7 @@ def test_scan_preview_includes_project_skill_pool(tmp_path: Path) -> None:
         ]
     )
 
-    result = _show_project(state, {"project_id": "vbot"})
+    result = await _show_project(state, {"project_id": "vbot"})
 
     # Each pool entry carries name + description so the editor's chips can show the
     # description on hover, like the tool pool.
@@ -210,21 +214,27 @@ def test_scan_preview_includes_project_skill_pool(tmp_path: Path) -> None:
     }
 
 
-def test_show_project_reloads_global_skills_from_disk(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_show_project_reloads_global_skills_from_disk(tmp_path: Path) -> None:
     # A show reloads the global skill registry so a skill hand-dropped into the global
     # skills folder surfaces in the editor pool without a server restart.
     state = _make_state(tmp_path)
     repo = _make_repo(tmp_path, "vbot", "builder.md")
     _add_project(state, {"cwd": str(repo), "display_name": "vBot"})
     reload_calls: list[bool] = []
-    state.runtime.reload_skills = lambda: reload_calls.append(True)
 
-    _show_project(state, {"project_id": "vbot"})
+    async def reload_skills_async() -> None:
+        reload_calls.append(True)
+
+    state.runtime.reload_skills_async = reload_skills_async
+
+    await _show_project(state, {"project_id": "vbot"})
 
     assert reload_calls == [True]
 
 
-def test_team_member_reports_denied_tools(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_team_member_reports_denied_tools(tmp_path: Path) -> None:
     # An OpenCode agent denying task → the team response surfaces the mapped vBot
     # tool it turns off, so the editor can show it uses less than the ceiling.
     state = _make_state(tmp_path)
@@ -233,13 +243,14 @@ def test_team_member_reports_denied_tools(tmp_path: Path) -> None:
     _write_agent(repo, "explorer.md", permission={"task": "deny", "edit": "deny"})
     _add_project(state, {"cwd": str(repo), "display_name": "vBot"})
 
-    result = _show_project(state, {"project_id": "vbot"})
+    result = await _show_project(state, {"project_id": "vbot"})
 
     member = next(m for m in result["scan"]["team"] if m["agent_id"] == "explorer")
     assert member["denied_tools"] == ["apply_patch", "subagent"]
 
 
-def test_team_member_reports_effective_repo_owned_agent_targets(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_team_member_reports_effective_repo_owned_agent_targets(tmp_path: Path) -> None:
     state = _make_state(tmp_path)
     repo = tmp_path / "repos" / "vbot"
     agents_dir = repo.joinpath(*OPENCODE_AGENTS_SUBPATH)
@@ -255,7 +266,7 @@ def test_team_member_reports_effective_repo_owned_agent_targets(tmp_path: Path) 
     )
     _add_project(state, {"cwd": str(repo), "display_name": "vBot"})
 
-    result = _show_project(state, {"project_id": "vbot"})
+    result = await _show_project(state, {"project_id": "vbot"})
 
     members = {member["agent_id"]: member for member in result["scan"]["team"]}
     assert members["orchestrator"]["tools"] == {"subagent": {"allowed_agents": ["reviewer"]}}

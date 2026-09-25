@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import sys
+import threading
 import time
 import tomllib
 from pathlib import Path
@@ -16,6 +17,8 @@ import pytest
 
 from core.agents.agents import AgentStore
 from core.chat import ChatMessage
+from core.debug import DebugTraceStore
+from core.debug import store as debug_store
 from core.prompts import SystemPromptManager
 from core.providers.credentials import ProviderCredentialResolver
 from core.runs import Run, RunStatus
@@ -632,6 +635,42 @@ async def test_runtime_aclose_reaps_tracked_processes(config: Config) -> None:
     assert temporary_files._sweeper_task is None
     with pytest.raises(RuntimeError):
         _ = runtime.process_manager
+
+
+@pytest.mark.asyncio
+async def test_runtime_aclose_waits_for_handed_off_debug_traces(
+    config: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    logging.getLogger("vbot").handlers = []
+    runtime = Runtime(config)
+    runtime.start()
+    store = DebugTraceStore(runtime.storage.data_dir, trace_limit=10)
+    trace_id = "00000000000040008000000000000001"
+    entered = threading.Event()
+    release = threading.Event()
+    write = debug_store.atomic_write_text
+
+    def slow_write(path: Path, text: str) -> None:
+        if not release.is_set():
+            entered.set()
+            release.wait(timeout=10)
+        write(path, text)
+
+    monkeypatch.setattr(debug_store, "atomic_write_text", slow_write)
+    try:
+        assert store.save_trace_in_background(
+            trace_id,
+            lambda: {"trace_id": trace_id, "type": "provider_request", "timestamp": "t"},
+        )
+        assert await asyncio.to_thread(entered.wait, 5)
+        closing = asyncio.create_task(runtime.aclose())
+        done, _pending = await asyncio.wait({closing}, timeout=1)
+        assert not done
+    finally:
+        release.set()
+    await closing
+
+    assert (store.get_data_dir() / "traces" / f"{trace_id}.json").is_file()
 
 
 @pytest.mark.asyncio

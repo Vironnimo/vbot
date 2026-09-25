@@ -400,7 +400,7 @@ def create_app(
                 max_size_bytes=attachment_store.max_size_bytes,
                 upload_kind="Attachment",
             )
-            record = attachment_store.store(filename, data)
+            record = await attachment_store.store_async(filename, data)
         except AttachmentTooLargeError as exc:
             raise HTTPException(status_code=413, detail=str(exc)) from exc
         except AttachmentTypeNotAllowedError as exc:

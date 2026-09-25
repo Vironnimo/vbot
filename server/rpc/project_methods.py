@@ -54,6 +54,7 @@ from core.settings import (
 from core.skills import SKILL_ORIGIN_GLOBAL
 from core.tools.availability import normalize_tool_access
 from core.utils.logging import get_logger
+from core.utils.workers import BoundedWorkerPool
 from server.events import RESOURCE_KIND_AGENTS, RESOURCE_KIND_PROJECTS
 from server.rpc.agent_refs import _agent_reference_lock
 from server.rpc.dispatcher import RpcMethodHandler
@@ -76,6 +77,9 @@ from server.rpc.validation import (
 JsonObject = dict[str, Any]
 _LOGGER = get_logger("server.rpc.projects")
 _MISSING = object()
+# project.list/show read Project anchors and re-scan repos here, never on the
+# Event Loop: pickers open one show per Project.
+_PROJECT_READ_WORKERS = BoundedWorkerPool(name="project-read", max_workers=2)
 
 # A bare cwd is a valid Project (GLOSSARY → Project; plan: "Minimal-Projekt = nur
 # eine cwd"): the chosen format location's presence is surfaced in the scan
@@ -190,10 +194,13 @@ def _add_project(state: Any, params: JsonObject) -> JsonObject:
     return {"project": _project_response(project), "scan": scan}
 
 
-def _list_projects(state: Any, params: JsonObject) -> JsonObject:
+async def _list_projects(state: Any, params: JsonObject) -> JsonObject:
     if params:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "project.list does not accept params")
+    return await _PROJECT_READ_WORKERS.run(_project_list_response, state)
 
+
+def _project_list_response(state: Any) -> JsonObject:
     try:
         projects = _projects(state).list()
     except Exception as exc:
@@ -201,12 +208,12 @@ def _list_projects(state: Any, params: JsonObject) -> JsonObject:
     return {"projects": [_project_response(project) for project in projects]}
 
 
-def _show_project(state: Any, params: JsonObject) -> JsonObject:
+async def _show_project(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, {"project_id"}, "project.show")
 
     project_id = _required_string(params, "project_id")
     try:
-        project = _projects(state).get(project_id)
+        project = await _PROJECT_READ_WORKERS.run(_projects(state).get, project_id)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 
@@ -219,10 +226,14 @@ def _show_project(state: Any, params: JsonObject) -> JsonObject:
     # registry is loaded once at startup with no filesystem watcher, so reload it
     # from disk here — otherwise a skill dropped into the global skills folder never
     # appears in the editor's opt-in pool. Guarded so a minimal runtime degrades.
-    reload_skills = getattr(state.runtime, "reload_skills", None)
+    reload_skills = getattr(state.runtime, "reload_skills_async", None)
     if callable(reload_skills):
-        reload_skills()
+        await reload_skills()
     _invalidate_project_caches(state, project_id)
+    return await _PROJECT_READ_WORKERS.run(_project_show_response, state, project)
+
+
+def _project_show_response(state: Any, project: Project) -> JsonObject:
     scan = _scan_preview(state, project)
     return {"project": _project_response(project), "scan": scan}
 

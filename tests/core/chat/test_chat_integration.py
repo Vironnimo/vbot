@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 from typing import Any, cast
 
@@ -244,8 +245,21 @@ async def test_change_stats_stream_after_each_tool_round_and_match_terminal(
             model="fake-provider/fake-model-v1",
         )
         workspace = Path(agent.workspace)
+        tracker = runtime.change_tracker
+        peek_run_stats = tracker.peek_run_stats
+        peek_threads: list[int] = []
+
+        def recording_peek(session_id: str) -> dict[str, object] | None:
+            peek_threads.append(threading.get_ident())
+            return peek_run_stats(session_id)
+
+        monkeypatch.setattr(tracker, "peek_run_stats", recording_peek)
 
         await build_chat_loop(runtime).send("coder", "Write files", session_id="session-one")
+        # Both per-round line diffs run off the Event Loop; only the Run-end
+        # finalization peeks on it.
+        assert len(peek_threads) == 3
+        assert peek_threads.count(threading.get_ident()) == 1
 
         messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
         run = runtime.chat_run_manager.get(str(messages[-1].run_id))

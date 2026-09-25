@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
+import threading
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from uuid import uuid4
 
 import pytest
 
-from core.debug.store import DebugTraceStore, InvalidTraceIdError
+from core.debug import store as store_module
+from core.debug.store import DebugTraceStore, InvalidTraceIdError, drain_debug_traces
 from core.storage.layout import DataDirectoryLayout
 
 TRACE_ID_1 = "00000000000040008000000000000001"
@@ -49,6 +53,40 @@ def _make_trace_data(
             "body": {"choices": [{"message": {"content": "hi"}}]},
         },
     }
+
+
+class _BlockedTraceWrites:
+    """Blocks the process-wide trace thread inside its next trace-file write."""
+
+    def __init__(self) -> None:
+        self.entered = threading.Event()
+        self.release = threading.Event()
+
+    async def wait_until_blocked(self) -> None:
+        for _ in range(500):
+            if self.entered.is_set():
+                return
+            await asyncio.sleep(0.01)
+        raise AssertionError("trace thread never reached the blocked write")
+
+
+@pytest.fixture
+def blocked_trace_writes(monkeypatch: pytest.MonkeyPatch) -> Iterator[_BlockedTraceWrites]:
+    blocked = _BlockedTraceWrites()
+    write = store_module.atomic_write_text
+
+    def slow_write(path: Path, text: str) -> None:
+        if not blocked.release.is_set():
+            blocked.entered.set()
+            blocked.release.wait(timeout=5)
+        write(path, text)
+
+    monkeypatch.setattr(store_module, "atomic_write_text", slow_write)
+    try:
+        yield blocked
+    finally:
+        # The trace thread is process-wide: never leave it blocked for later tests.
+        blocked.release.set()
 
 
 # ---------------------------------------------------------------------------
@@ -347,6 +385,128 @@ class TestClearAll:
         """Calling clear_all() on a store with no traces does not raise."""
         store = DebugTraceStore(tmp_path, trace_limit=10)
         store.clear_all()
+
+
+# ---------------------------------------------------------------------------
+# Trace thread: Event Loop safety, ordering, backlog, drain
+# ---------------------------------------------------------------------------
+
+
+class TestTraceThread:
+    @pytest.mark.asyncio
+    async def test_async_save_keeps_the_event_loop_responsive(
+        self, tmp_path: Path, blocked_trace_writes: _BlockedTraceWrites
+    ) -> None:
+        store = DebugTraceStore(tmp_path, trace_limit=10)
+        saving = asyncio.create_task(
+            store.save_trace_async(TRACE_ID_1, _make_trace_data(TRACE_ID_1, "2025-01-01T00:00:00Z"))
+        )
+        await blocked_trace_writes.wait_until_blocked()
+
+        loop = asyncio.get_running_loop()
+        ticked_at = loop.time()
+        for _ in range(5):
+            await asyncio.sleep(0.01)
+        assert loop.time() - ticked_at < 1
+        assert not saving.done()
+
+        blocked_trace_writes.release.set()
+        await saving
+        assert [entry["trace_id"] for entry in await store.get_traces_async()] == [TRACE_ID_1]
+
+    @pytest.mark.asyncio
+    async def test_hand_off_returns_before_the_write_and_reads_follow_it(
+        self, tmp_path: Path, blocked_trace_writes: _BlockedTraceWrites
+    ) -> None:
+        store = DebugTraceStore(tmp_path, trace_limit=10)
+        trace = _make_trace_data(TRACE_ID_1, "2025-01-01T00:00:00Z")
+
+        assert store.save_trace_in_background(TRACE_ID_1, lambda: trace) is True
+        await blocked_trace_writes.wait_until_blocked()
+        listing = asyncio.create_task(store.get_traces_async())
+        await asyncio.sleep(0.05)
+        assert not listing.done()
+
+        blocked_trace_writes.release.set()
+        assert [entry["trace_id"] for entry in await listing] == [TRACE_ID_1]
+
+    @pytest.mark.asyncio
+    async def test_clear_runs_after_earlier_hand_offs(
+        self, tmp_path: Path, blocked_trace_writes: _BlockedTraceWrites
+    ) -> None:
+        store = DebugTraceStore(tmp_path, trace_limit=10)
+        trace = _make_trace_data(TRACE_ID_1, "2025-01-01T00:00:00Z")
+        store.save_trace_in_background(TRACE_ID_1, lambda: trace)
+        await blocked_trace_writes.wait_until_blocked()
+        clearing = asyncio.create_task(store.clear_all_async())
+
+        blocked_trace_writes.release.set()
+        await clearing
+
+        assert await store.get_traces_async() == []
+        assert not (store.get_data_dir() / "traces").exists()
+
+    @pytest.mark.asyncio
+    async def test_hand_off_backlog_is_bounded(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        blocked_trace_writes: _BlockedTraceWrites,
+    ) -> None:
+        monkeypatch.setattr(store_module, "MAX_PENDING_CAPTURES", 2)
+        store = DebugTraceStore(tmp_path, trace_limit=10)
+        traces = {
+            trace_id: _make_trace_data(trace_id, f"2025-01-0{index}T00:00:00Z")
+            for index, trace_id in enumerate((TRACE_ID_1, TRACE_ID_2, TRACE_ID_3), start=1)
+        }
+
+        assert store.save_trace_in_background(TRACE_ID_1, lambda: traces[TRACE_ID_1])
+        await blocked_trace_writes.wait_until_blocked()
+        assert store.save_trace_in_background(TRACE_ID_2, lambda: traces[TRACE_ID_2])
+        assert not store.save_trace_in_background(TRACE_ID_3, lambda: traces[TRACE_ID_3])
+
+        blocked_trace_writes.release.set()
+        await drain_debug_traces()
+        assert {entry["trace_id"] for entry in await store.get_traces_async()} == {
+            TRACE_ID_1,
+            TRACE_ID_2,
+        }
+        # Settled captures free their backlog slots.
+        assert store.save_trace_in_background(TRACE_ID_3, lambda: traces[TRACE_ID_3])
+        await drain_debug_traces()
+
+    @pytest.mark.asyncio
+    async def test_drain_waits_for_handed_off_captures(
+        self, tmp_path: Path, blocked_trace_writes: _BlockedTraceWrites
+    ) -> None:
+        store = DebugTraceStore(tmp_path, trace_limit=10)
+        trace = _make_trace_data(TRACE_ID_1, "2025-01-01T00:00:00Z")
+        store.save_trace_in_background(TRACE_ID_1, lambda: trace)
+        await blocked_trace_writes.wait_until_blocked()
+        draining = asyncio.create_task(drain_debug_traces())
+        await asyncio.sleep(0.05)
+        assert not draining.done()
+
+        blocked_trace_writes.release.set()
+        await draining
+
+        assert (store.get_data_dir() / "traces" / f"{TRACE_ID_1}.json").is_file()
+
+    @pytest.mark.asyncio
+    async def test_background_failure_is_logged_not_raised(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        store = DebugTraceStore(tmp_path, trace_limit=10)
+
+        def broken_build() -> dict:
+            raise RuntimeError("capture broke")
+
+        caplog.set_level("WARNING", logger="vbot.debug")
+        assert store.save_trace_in_background(TRACE_ID_1, broken_build)
+        await drain_debug_traces()
+
+        assert await store.get_traces_async() == []
+        assert any(record.exc_info for record in caplog.records if record.name == "vbot.debug")
 
 
 # ---------------------------------------------------------------------------
