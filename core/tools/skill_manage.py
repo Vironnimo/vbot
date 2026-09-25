@@ -30,6 +30,7 @@ from core.skills.skills import (
     scan_skill_names,
 )
 from core.tools._argument_repair import normalize_call_arguments
+from core.tools._call_vocabulary import spelling
 from core.tools.availability import SKILL_MANAGE_TOOL_NAME
 from core.tools.contracts import ToolContractError, compile_tool_contract
 from core.tools.fuzzy_match import (
@@ -464,7 +465,7 @@ def _text(arguments: JsonObject, key: str) -> str | None:
 def _check_scope(scope: object) -> None:
     if scope is None:
         return
-    if isinstance(scope, str) and _spelling(scope) in _OWN_SCOPES:
+    if isinstance(scope, str) and spelling(scope) in _OWN_SCOPES:
         return
     raise _RefusalError(
         "invalid_arguments",
@@ -759,10 +760,6 @@ def _json_unescaped(text: str) -> str:
     return _JSON_ESCAPE.sub(lambda match: _JSON_ESCAPES[match.group(1)], text)
 
 
-def _spelling(value: str) -> str:
-    return re.sub(r"[^0-9a-z]+", "", value.casefold())
-
-
 def _normalize_skill_manage_arguments(arguments: Any) -> Any:
     """Repair call syntax and resolve which field carries the action's text."""
     repaired = normalize_call_arguments(
@@ -772,7 +769,7 @@ def _normalize_skill_manage_arguments(arguments: Any) -> Any:
         field_aliases=_FIELD_ALIASES,
         field_normalizers={
             "action": lambda value: (
-                _ACTION_SYNONYMS.get(_spelling(value), value) if isinstance(value, str) else value
+                _ACTION_SYNONYMS.get(spelling(value), value) if isinstance(value, str) else value
             )
         },
         empty_as_omitted=("name", "file_path", "old_string", "scope", "category", "description"),

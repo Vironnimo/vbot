@@ -16,6 +16,7 @@ from core.memory import (
     MemoryService,
 )
 from core.tools._argument_repair import normalize_call_arguments
+from core.tools._call_vocabulary import spelling
 from core.tools.availability import MEMORY_TOOL_NAME
 from core.tools.contracts import compile_tool_contract
 from core.tools.tools import (
@@ -456,9 +457,9 @@ def _memory_scope(scope: str) -> MemoryScope:
 def _synonym(value: Any, table: dict[str, tuple[str, ...]]) -> Any:
     if not isinstance(value, str):
         return value
-    spelling = "".join(character for character in value.casefold() if character.isalnum())
+    key = spelling(value)
     for canonical, spellings in table.items():
-        if spelling in spellings:
+        if key in spellings:
             return canonical
     return value
 
