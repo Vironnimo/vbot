@@ -236,11 +236,20 @@ def test_context_usage_preserves_provider_output_with_estimated_input() -> None:
     }
 
 
-def test_latest_session_context_usage_restores_provider_anchor_plus_new_messages() -> None:
+def test_latest_session_context_usage_restores_saved_snapshot_plus_new_messages() -> None:
     assistant = ChatMessage.assistant(
         model="openai/gpt-5.6-luna",
         content=None,
-        usage={"input_tokens": 10_000, "output_tokens": 100},
+        usage={
+            "input_tokens": 10_000,
+            "output_tokens": 100,
+            "context_usage": {
+                "tokens": 10_100,
+                "estimated": True,
+                "provider_input_tokens": 10_000,
+                "provider_output_tokens": 100,
+            },
+        },
         tool_calls=[],
     )
     tool_result = ChatMessage.tool(
@@ -268,6 +277,14 @@ def test_latest_session_context_usage_restores_provider_anchor_plus_new_messages
         "provider_output_tokens": 100,
         "estimated_delta_tokens": delta_tokens,
     }
+
+
+def test_latest_session_context_usage_has_no_projection_without_a_snapshot() -> None:
+    # Every Assistant step the Agentic Loop persists carries a snapshot; the
+    # counters alone are not reinterpreted as a Context size.
+    assistant = _assistant({"input_tokens": 10_000, "output_tokens": 100})
+
+    assert latest_session_context_usage([assistant, ChatMessage.user("next")]) is None
 
 
 def test_latest_session_context_usage_prefers_newer_compaction_checkpoint() -> None:

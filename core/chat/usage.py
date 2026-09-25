@@ -192,11 +192,13 @@ def build_model_step_context_usage(
 def latest_session_context_usage(messages: list[ChatMessage]) -> JsonObject | None:
     """Return the newest durable server projection of a Session's Context.
 
-    An Assistant turn with canonical Usage anchors the projection until a newer
-    Compaction checkpoint replaces it. Each token field retains its own measured
-    or estimated provenance, and only provider-visible messages appended after
-    that anchor need a new estimate. This lets ``chat.history`` restore the same
-    semantic value used by live Run events without summing the whole transcript.
+    The newest Assistant turn with Usage anchors the projection through the
+    ``context_usage`` snapshot the Agentic Loop stores on every Assistant step,
+    until a newer Compaction checkpoint replaces it. Only provider-visible
+    messages appended after that anchor need a new estimate. This lets
+    ``chat.history`` restore the same semantic value used by live Run events
+    without summing the whole transcript. An anchor without a snapshot has no
+    Context projection.
     """
 
     assistant_index = _latest_usage_assistant_index(messages)
@@ -216,40 +218,20 @@ def latest_session_context_usage(messages: list[ChatMessage]) -> JsonObject | No
         return {"tokens": context_after + delta_tokens, "estimated": True}
 
     assert assistant_index is not None
-    assistant_usage = messages[assistant_index].usage or {}
-    saved_projection = assistant_usage.get("context_usage")
+    saved_projection = (messages[assistant_index].usage or {}).get("context_usage")
     if (
-        isinstance(saved_projection, dict)
-        and _optional_non_negative_int(saved_projection.get("tokens")) is not None
+        not isinstance(saved_projection, dict)
+        or _optional_non_negative_int(saved_projection.get("tokens")) is None
     ):
-        saved = dict(saved_projection)
-        delta_messages = _provider_visible_delta(messages[assistant_index + 1 :])
-        if delta_messages:
-            delta_tokens, _ = estimate_request_input_tokens(delta_messages)
-            saved["tokens"] += delta_tokens
-            saved["estimated"] = True
-            saved["estimated_delta_tokens"] = saved.get("estimated_delta_tokens", 0) + delta_tokens
-        return saved
-    input_tokens = _optional_non_negative_int(assistant_usage.get("input_tokens"))
-    if input_tokens is None:
         return None
-    output_tokens = _optional_non_negative_int(assistant_usage.get("output_tokens")) or 0
+    saved = dict(saved_projection)
     delta_messages = _provider_visible_delta(messages[assistant_index + 1 :])
-    delta_tokens, _ = estimate_request_input_tokens(delta_messages)
-    input_estimated = usage_token_is_estimated(assistant_usage, "input_tokens")
-    output_estimated = usage_token_is_estimated(assistant_usage, "output_tokens")
-    estimated = input_estimated or output_estimated or bool(output_tokens) or bool(delta_messages)
-    projected: JsonObject = {
-        "tokens": input_tokens + output_tokens + delta_tokens,
-        "estimated": estimated,
-    }
-    if not input_estimated:
-        projected["provider_input_tokens"] = input_tokens
-    if not output_estimated:
-        projected["provider_output_tokens"] = output_tokens
     if delta_messages:
-        projected["estimated_delta_tokens"] = delta_tokens
-    return projected
+        delta_tokens, _ = estimate_request_input_tokens(delta_messages)
+        saved["tokens"] += delta_tokens
+        saved["estimated"] = True
+        saved["estimated_delta_tokens"] = saved.get("estimated_delta_tokens", 0) + delta_tokens
+    return saved
 
 
 def checkpoint_context_usage(checkpoint: ChatMessage) -> JsonObject | None:
