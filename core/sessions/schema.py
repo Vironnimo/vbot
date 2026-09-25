@@ -7,6 +7,8 @@ snapshots it; this module only declares what it contains.
 
 from __future__ import annotations
 
+from core.sessions._store_lineage import own_current, segment_admits
+
 DATABASE_NAME = "sessions"
 APPLICATION_ID = 0x56425353  # "VBSS"
 # The physical format generation, not a counter for additive changes: those
@@ -470,12 +472,11 @@ CREATE INDEX run_execution_owners_group_run
 
 # An entry belongs to the search indexes while it is searchable and current in
 # some Session's view: its owner's, or a fork's that still inherits it after
-# the owner superseded it. Both indexes and their coverage checks share it.
+# the owner superseded it. Both indexes and their coverage checks share it; the
+# visibility itself is the lineage predicate.
 FTS_MEMBERSHIP_SQL = (
-    "e.searchable = 1 AND (e.superseded_at_seq IS NULL OR EXISTS ("
-    "SELECT 1 FROM session_lineage AS l WHERE l.ancestor_key = e.session_key "
-    "AND e.seq >= l.from_seq AND e.seq < l.upto_seq "
-    "AND e.superseded_at_seq >= l.as_of_seq))"
+    f"e.searchable = 1 AND ({own_current('e')} OR EXISTS ("
+    f"SELECT 1 FROM session_lineage AS l WHERE {segment_admits('e', 'l')}))"
 )
 FTS_TRIGRAM_MEMBERSHIP_SQL = (
     f"{FTS_MEMBERSHIP_SQL} AND e.role IN ({', '.join(repr(role) for role in FTS_TRIGRAM_ROLES)}) "

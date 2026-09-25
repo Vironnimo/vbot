@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from core.chat.errors import ChatSessionError
-from core.sessions import _store_fts, _store_values
+from core.sessions import _store_fts, _store_lineage, _store_values
 from core.sessions._types import JsonObject, ToolResultFacts, ToolResultPayload
 from core.sessions.errors import SessionStoreCorruptError
 from core.utils.ids import is_safe_id
@@ -815,13 +815,9 @@ _ENTRY_SIDE_TABLES = (
 
 
 def copy_entries(
-    connection: sqlite3.Connection,
-    *,
-    source_key: int,
-    target_key: int,
-    view_range: ViewRange,
+    connection: sqlite3.Connection, *, target_key: int, view_range: ViewRange
 ) -> list[int]:
-    """Give *target_key* its own copy of the entries *view_range* admits from *source_key*.
+    """Give *target_key* its own copy of the entries *view_range* admits from its source.
 
     Copies keep their seq and id, get new keys and are current. Their side
     rows, Tool calls with their payloads and referenced Runs come along; copied
@@ -830,10 +826,9 @@ def copy_entries(
     """
     now = utc_now_timestamp()
     rows = connection.execute(
-        "SELECT entry_key, seq, role, entry_id, created_at, run_key, model, searchable "
-        "FROM entries AS e WHERE e.session_key = ? AND e.seq >= ? AND e.seq < ? "
-        "AND (e.superseded_at_seq IS NULL OR e.superseded_at_seq >= ?) ORDER BY e.seq",
-        (source_key, view_range.from_seq, view_range.upto_seq, view_range.as_of_seq),
+        "SELECT e.entry_key, e.seq, e.role, e.entry_id, e.created_at, e.run_key, e.model, "
+        f"e.searchable FROM entries AS e WHERE {_store_lineage.range_predicate()} ORDER BY e.seq",
+        _store_lineage.range_params(view_range),
     ).fetchall()
     run_map = {
         run_key: _copy_run(connection, run_key, target_key, now)

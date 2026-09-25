@@ -4,12 +4,15 @@ A Session's *current view* is a sorted list of disjoint seq ranges covering
 ``[0, MAX_SEQ)``. Each range reads one source Session: a lineage segment reads
 an ancestor as of the ancestor's history at fork time, and every seq no segment
 covers reads the Session's own non-superseded entries. One predicate decides
-visibility for every range, so every current read shares one definition:
+visibility for every range (:func:`admits`), so every current read, the search
+indexes and the search candidates share one definition:
 
     session_key = source AND from_seq <= seq < upto_seq
     AND (superseded_at_seq IS NULL OR superseded_at_seq >= as_of_seq)
 
-Own ranges use ``as_of_seq = MAX_SEQ``, which admits only non-superseded rows.
+Own ranges use ``as_of_seq = MAX_SEQ``, which admits only non-superseded rows
+(:func:`own_current`). This module has no store dependencies, so the schema's
+search views can build on it.
 """
 # ruff: noqa: E501
 
@@ -20,10 +23,41 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from core.sessions import _store_codec, _store_fts
-
 # The exclusive upper bound of every view; larger than any stored seq.
 MAX_SEQ = (1 << 63) - 1
+
+
+def admits(entry: str, source: str, from_seq: str, upto_seq: str, as_of_seq: str) -> str:
+    """The visibility predicate: whether a range admits the entry aliased *entry*.
+
+    The other arguments are SQL expressions for the range's source Session key,
+    its seq bounds ``[from_seq, upto_seq)`` and the source's ``next_seq`` it is
+    frozen at. Every variant of the predicate is built from this fragment.
+    """
+    return (
+        f"{entry}.session_key = {source} AND {entry}.seq >= {from_seq} AND {entry}.seq < {upto_seq} "
+        f"AND ({entry}.superseded_at_seq IS NULL OR {entry}.superseded_at_seq >= {as_of_seq})"
+    )
+
+
+def own_current(entry: str = "e") -> str:
+    """The supersession part of :func:`admits` for an own range (``as_of_seq = MAX_SEQ``).
+
+    A Session's own entries never lie in a seq its lineage covers, so this
+    alone decides whether an own entry is in its owner's current view.
+    """
+    return f"{entry}.superseded_at_seq IS NULL"
+
+
+def segment_admits(entry: str = "e", segment: str = "l") -> str:
+    """:func:`admits` for the ``session_lineage`` row aliased *segment*."""
+    return admits(
+        entry,
+        f"{segment}.ancestor_key",
+        f"{segment}.from_seq",
+        f"{segment}.upto_seq",
+        f"{segment}.as_of_seq",
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,11 +71,8 @@ class ViewRange:
 
 
 def range_predicate(alias: str = "e") -> str:
-    """The visibility predicate of one range, with four ``?`` parameters."""
-    return (
-        f"{alias}.session_key = ? AND {alias}.seq >= ? AND {alias}.seq < ? "
-        f"AND ({alias}.superseded_at_seq IS NULL OR {alias}.superseded_at_seq >= ?)"
-    )
+    """:func:`admits` for one range, with four ``?`` parameters (:func:`range_params`)."""
+    return admits(alias, "?", "?", "?", "?")
 
 
 def range_params(view_range: ViewRange, lower: int = 0, upper: int = MAX_SEQ) -> tuple[int, ...]:
@@ -55,10 +86,7 @@ def range_params(view_range: ViewRange, lower: int = 0, upper: int = MAX_SEQ) ->
 
 
 # Joins a ``view_sources`` CTE (see :func:`view_query`) to the entries it admits.
-VIEW_MATCH = (
-    "e.session_key = v.source_key AND e.seq >= v.from_seq AND e.seq < v.upto_seq "
-    "AND (e.superseded_at_seq IS NULL OR e.superseded_at_seq >= v.as_of_seq)"
-)
+VIEW_MATCH = admits("e", "v.source_key", "v.from_seq", "v.upto_seq", "v.as_of_seq")
 
 
 def view_ranges(connection: sqlite3.Connection, session_key: int) -> tuple[ViewRange, ...]:
@@ -232,51 +260,3 @@ def truncate(connection: sqlite3.Connection, session_key: int, target_seq: int) 
 def superseded_candidates(ranges: Sequence[ViewRange]) -> tuple[str, list[Any]]:
     """Select superseded entries *ranges* admit: their search membership may hang on them."""
     return view_query(ranges, "e.entry_key", where="e.superseded_at_seq IS NOT NULL")
-
-
-def detach_session(connection: sqlite3.Connection, session_key: int) -> None:
-    """Prepare deleting one Session: descendants stop depending on it.
-
-    Every descendant receives its own copy of what it inherits from the
-    Session, and the Session's search rows go before its entries do. Search
-    membership that only this Session's lineage kept alive is recomputed.
-    Deleting the ``sessions`` row afterwards cascades the rest.
-    """
-    # Search rows are forgotten while their membership is still readable.
-    _store_fts.fts_forget(
-        connection, "SELECT entry_key FROM entries WHERE session_key = ?", (session_key,)
-    )
-    inherited = tuple(
-        view_range
-        for view_range in view_ranges(connection, session_key)
-        if view_range.source_key != session_key
-    )
-    candidates: list[int] = []
-    if inherited:
-        sql, params = superseded_candidates(inherited)
-        candidates = [int(row[0]) for row in connection.execute(sql, params)]
-        _store_fts.fts_forget_keys(connection, candidates)
-    for segment in connection.execute(
-        "SELECT session_key, from_seq, upto_seq, as_of_seq FROM session_lineage "
-        "WHERE ancestor_key = ? ORDER BY session_key, from_seq",
-        (session_key,),
-    ).fetchall():
-        descendant_key, from_seq, upto_seq, as_of_seq = (int(value) for value in segment)
-        copies = _store_codec.copy_entries(
-            connection,
-            source_key=session_key,
-            target_key=descendant_key,
-            view_range=ViewRange(session_key, from_seq, upto_seq, as_of_seq),
-        )
-        connection.execute(
-            "DELETE FROM session_lineage WHERE session_key = ? AND from_seq = ?",
-            (descendant_key, from_seq),
-        )
-        _store_fts.fts_index_keys(connection, copies)
-        connection.execute(
-            "UPDATE sessions SET history_revision = history_revision + 1, "
-            "state_revision = state_revision + 1 WHERE session_key = ?",
-            (descendant_key,),
-        )
-    connection.execute("DELETE FROM session_lineage WHERE session_key = ?", (session_key,))
-    _store_fts.fts_index_keys(connection, candidates)

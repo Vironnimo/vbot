@@ -14,14 +14,14 @@ The public `core.sessions` package routes stable imports to the Session service 
 
 `store.py` opens the Session database through the shared kernel (`database.md`) and keeps read/write admission, the Session write budgets and FTS error recovery. Private `_store_*` modules receive its connection:
 - `codec` - per-role entry rows and side tables, set-wise decoding, Tool-result linking, materialized copies.
-- `lineage` - view ranges, fork lineage, edit truncation and delete-time detachment; every current-view read goes through `view_ranges` plus `ordered_rows` (one index range scan per range) or `view_query` (one set-wise query over a `VALUES` CTE of the ranges).
+- `lineage` - the lineage visibility predicate (`admits`, the one fragment every view read, the search candidates and the FTS membership views are built from), view ranges, fork lineage and edit truncation; every current-view read goes through `view_ranges` plus `ordered_rows` (one index range scan per range) or `view_query` (one set-wise query over a `VALUES` CTE of the ranges). It imports no other store module, so `schema.py` builds on it.
 - `history` - bounded reads over one explicit view (current view, own audit, own spend), cursors and deltas, Run lookups, History Tool batches.
 - `timeline` - the WebUI Chat History snapshot and edit eligibility (`_editable`, `latest_takeover`).
 - `operations` - compound transactions: the Compaction commit and the history edit.
 - `prompts` - prompt pins, seen Skills and the prompt-cache affinity id.
 - `runs` - admission, completion, restart recovery and completion activity.
 - `continuation` - folds Continuation records into current state.
-- `mutations` - lifecycle (create, archive, move, fork, restore, delete), metadata writes and plain appends.
+- `mutations` - lifecycle (create, archive, move, fork, restore, delete with delete-time detachment), metadata writes and plain appends.
 - `queries` - catalog, Session-list summaries, descriptors and revisions.
 - `owned` - temporary bindings, delivery receipts and owned Runs.
 - `values` - Session row columns, the metadata facade, scope and value validation.
