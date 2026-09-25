@@ -9,6 +9,7 @@ import pytest
 from core.utils.timestamps import (
     canonical_timestamp,
     format_canonical_timestamp,
+    is_canonical_timestamp,
     parse_canonical_timestamp,
     parse_timestamp,
     utc_now_timestamp,
@@ -76,3 +77,10 @@ def test_stored_values_parse_only_in_the_canonical_form() -> None:
 def test_a_stored_value_in_any_other_form_is_bad_data(value: str) -> None:
     with pytest.raises(ValueError):
         parse_canonical_timestamp(value)
+    assert is_canonical_timestamp(value) is False
+
+
+def test_only_canonical_text_is_a_canonical_timestamp() -> None:
+    assert is_canonical_timestamp("2026-07-01T12:00:00.250000Z") is True
+    assert is_canonical_timestamp(None) is False
+    assert is_canonical_timestamp(1_780_000_000) is False
