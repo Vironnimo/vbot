@@ -32,12 +32,15 @@ from core.models.database import (
     select_model_database_dir,
 )
 from core.models.pricing import TokenPricing
+from core.utils.workers import BoundedWorkerPool
 
 if TYPE_CHECKING:
     from core.models.query import ModelQuery
 
 _LOGGER = logging.getLogger("vbot.models")
 _MODEL_DATA_ERRORS = (AttributeError, KeyError, OSError, TypeError, UnicodeError, ValueError)
+# ``reload_async`` reads and assembles the catalog files here, off the Event Loop.
+_RELOAD_WORKERS = BoundedWorkerPool(name="model-registry", max_workers=1)
 
 # Provider-layer files under ``models/`` are ``<provider>.json``; these siblings
 # are never provider files and are excluded from the provider-file glob loop.
@@ -349,6 +352,16 @@ class Model:
         return self.connection_context_windows.get(connection_id, self.context_window)
 
 
+@dataclass(frozen=True)
+class _AssembledCatalog:
+    """One reload's assembled contents, ready to swap into a registry."""
+
+    models: dict[tuple[str, str], Model]
+    provider_reasoning_replay: dict[str, str]
+    models_dir: Path
+    cache_key: tuple[Path, Path | None] | None
+
+
 class ModelRegistry:
     """Registry of model data, indexed by (provider_id, model_id).
 
@@ -453,17 +466,58 @@ class ModelRegistry:
         (now-updated) instance, so a later ``load`` returns it too.
         """
 
+        self._adopt(self._assemble_reload(resources_dir, runtime_models_dir, custom_providers))
+
+    async def reload_async(
+        self,
+        resources_dir: Path,
+        *,
+        runtime_models_dir: Path | None = None,
+        custom_providers: Mapping[str, Mapping[str, Any]] | None = None,
+    ) -> None:
+        """Event-Loop-safe :meth:`reload`.
+
+        The catalog files are read and assembled on a worker thread; the swap
+        then happens on the calling Event Loop, so a reader there never sees a
+        half-replaced registry.
+        """
+
+        assembled = await _RELOAD_WORKERS.run(
+            self._assemble_reload,
+            resources_dir,
+            runtime_models_dir,
+            custom_providers,
+        )
+        self._adopt(assembled)
+
+    @classmethod
+    def _assemble_reload(
+        cls,
+        resources_dir: Path,
+        runtime_models_dir: Path | None,
+        custom_providers: Mapping[str, Mapping[str, Any]] | None,
+    ) -> _AssembledCatalog:
         resolved = resources_dir.resolve()
         resolved_runtime = runtime_models_dir.resolve() if runtime_models_dir is not None else None
         models_dir = select_model_database_dir(resolved, resolved_runtime)
-        self._models, self._provider_reasoning_replay = self._assemble_models(
+        models, provider_reasoning_replay = cls._assemble_models(
             models_dir,
             resolved / "models",
             custom_providers or {},
         )
-        self._active_models_dir = models_dir
-        if custom_providers is None:
-            type(self)._cache[(resolved, resolved_runtime)] = self
+        return _AssembledCatalog(
+            models=models,
+            provider_reasoning_replay=provider_reasoning_replay,
+            models_dir=models_dir,
+            cache_key=(resolved, resolved_runtime) if custom_providers is None else None,
+        )
+
+    def _adopt(self, assembled: _AssembledCatalog) -> None:
+        self._models = assembled.models
+        self._provider_reasoning_replay = assembled.provider_reasoning_replay
+        self._active_models_dir = assembled.models_dir
+        if assembled.cache_key is not None:
+            type(self)._cache[assembled.cache_key] = self
 
     @classmethod
     def _assemble_models(
