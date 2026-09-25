@@ -118,6 +118,12 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   excerpts; similar candidates failing this rule are discarded before the
   ambiguity check (`replace_fuzzy(required_lines=...)`). Only changed lines are
   emitted from the replacement; context lines keep their actual original bytes.
+- Changed lines matched with different indentation are written in the file's
+  indentation style: each indent the matched lines show maps to its file
+  indent, and other indents (new deeper lines) convert level by level between
+  the model's and the file's unit (tabs or N spaces, learned from the whole
+  file), including a dropped outer level. Mixed tab/space output from a
+  spaces-for-tabs model is a defect.
 - Read-output gutters recover after raw matching misses, including single lines,
   mixed raw/numbered locators, and stale line numbers. Their stripped contents
   must identify a unique whole-line target; line numbers never resolve ambiguity.
