@@ -127,7 +127,15 @@ _HARNESS_NAMES = {
         "web_search",
     ),
     **dict.fromkeys(
-        ("task", "agent", "delegate", "delegatetask", "spawnagent", "spawnsubagent"),
+        (
+            "task",
+            "agent",
+            "delegate",
+            "delegatetask",
+            "spawnagent",
+            "spawnsubagent",
+            "sessionsspawn",
+        ),
         "subagent",
     ),
     **dict.fromkeys(("loadskill", "useskill", "skillview", "readskill"), "skill"),
