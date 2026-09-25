@@ -490,7 +490,7 @@ async def _resolve_send_target(
         return prepared.requested_platform_target, requested_thread_id
 
     address = SessionAddress(
-        project_id=None, agent_id=context.agent_id, session_id=context.session_id
+        project_id=context.project_id, agent_id=context.agent_id, session_id=context.session_id
     )
     metadata = await chat_sessions.get_metadata_async(address)
     metadata_target = _send_target_from_session_metadata(metadata, prepared.channel_id)
