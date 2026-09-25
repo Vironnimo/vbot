@@ -13,9 +13,10 @@ import pytest
 import core.channels.state as state_module
 from core.channels import ChannelConfigError, ChannelError, ChannelNotFoundError
 from core.channels.adapter import RunButtonBinding
-from core.channels.state import ChannelStateStore, state_timestamp
+from core.channels.state import ChannelStateStore
 from core.database import APPLICATION_IDS, write_bootstrap_marker
 from core.runtime.databases import canonical_database_specs
+from core.utils.timestamps import utc_now_timestamp
 
 _STATE_TABLES = (
     "channel_admins",
@@ -50,7 +51,7 @@ def _binding(binding_id: str = "binding", *, thread_id: str | None = None) -> Ru
         thread_id=thread_id,
         origin_session_id="origin",
         original_button_data=("run:yes", "run:no"),
-        created_at=state_timestamp(),
+        created_at=utc_now_timestamp(),
     )
 
 

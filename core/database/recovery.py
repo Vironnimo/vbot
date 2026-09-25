@@ -69,7 +69,6 @@ from core.database.marker import (
     register_database_locked,
     require_no_maintenance,
     unregister_databases_locked,
-    utc_now,
     valid_database_id,
 )
 from core.database.snapshots import (
@@ -89,6 +88,7 @@ from core.database.spec import (
     is_extension_database_name,
     validate_database_name,
 )
+from core.utils.timestamps import utc_now_timestamp
 
 _LOGGER = logging.getLogger("vbot.database")
 
@@ -270,7 +270,7 @@ def write_incident(
     recovered_at: str | None = None,
 ) -> dict[str, Any]:
     """Publish the durable recovery incident of one database, or raise."""
-    detected_at = failure_detected_at or utc_now()
+    detected_at = failure_detected_at or utc_now_timestamp()
     payload: dict[str, Any] = {
         "incident_id": incident_id or uuid.uuid4().hex,
         "database": name,
@@ -278,7 +278,9 @@ def write_incident(
         "quarantine": str(quarantine_path) if quarantine_path else None,
         "restored_snapshot_id": restored_snapshot_id,
         "restored_snapshot_time": restored_snapshot_time,
-        "recovered_at": None if verification == "pending" else (recovered_at or utc_now()),
+        "recovered_at": None
+        if verification == "pending"
+        else (recovered_at or utc_now_timestamp()),
         "verification": verification,
         "possible_loss_interval": {"start": restored_snapshot_time, "end": detected_at},
         "acknowledged": False,
@@ -466,7 +468,7 @@ def _member_compatible(path: Path, spec: DatabaseSpec | None) -> bool:
 
 def _probe(spec: DatabaseSpec, expected_database_id: str) -> _Probe:
     """Decide whether the canonical file is usable, restorable, or must be left alone."""
-    detected_at = utc_now()
+    detected_at = utc_now_timestamp()
     name = spec.name
 
     def damaged(cause: str) -> _Probe:
@@ -797,7 +799,7 @@ def restore_data_snapshot(
         if lock is None:
             raise DatabaseUnavailableError("the data-store operation lock is busy")
         try:
-            detected_at = utc_now()
+            detected_at = utc_now_timestamp()
             for name in selected:
                 if not _restore_member_locked(
                     data_dir,

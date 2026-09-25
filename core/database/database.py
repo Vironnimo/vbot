@@ -62,7 +62,6 @@ from core.database.marker import (
     read_marker,
     register_database,
     require_no_maintenance,
-    utc_now,
     valid_database_id,
 )
 from core.database.spec import (
@@ -72,6 +71,7 @@ from core.database.spec import (
     DatabaseSpec,
     canonical_data_dir,
 )
+from core.utils.timestamps import utc_now_timestamp
 from core.utils.version import detect_vbot_version
 from core.utils.workers import BoundedWorkerPool
 
@@ -384,7 +384,7 @@ def _create_database_file(spec: DatabaseSpec) -> None:
     path = spec.path
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.creating")
-    now = utc_now()
+    now = utc_now_timestamp()
     version = detect_vbot_version()
     meta = {
         "database_id": new_database_id(),
@@ -579,7 +579,7 @@ def _evolve(writer: sqlite3.Connection, spec: DatabaseSpec, declared: DeclaredSc
         _refuse_unknown_breaking_migrations(spec, ledger)
         recorded = {str(row[0]) for row in ledger}
         pending = [migration for migration in spec.migrations if migration.name not in recorded]
-        now = utc_now()
+        now = utc_now_timestamp()
         version = detect_vbot_version() if pending else ""
         for migration in pending:
             if migration.apply is not None:

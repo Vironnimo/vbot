@@ -8,6 +8,7 @@ from __future__ import annotations
 import sqlite3
 
 from core.utils.ids import new_id
+from core.utils.timestamps import utc_now_timestamp
 
 from ._store_database import (
     SwarmDatabase,
@@ -29,7 +30,6 @@ from ._store_values import (
     _dump,
     _hash,
     _load,
-    _now,
 )
 from .agent_text import DISCUSSION_ANNOUNCEMENT
 
@@ -134,7 +134,7 @@ def _post_message(
                 text,
                 reply_to,
                 _dump(list(recipients)),
-                _now(),
+                utc_now_timestamp(),
             ),
         )
         for recipient, route in audience.items():
@@ -205,7 +205,7 @@ def _create_discussion(
         discussion_id = new_id("dsc")
         connection.execute(
             "INSERT INTO discussions(id,swarm_id,title,sequence,is_main,created_at) VALUES(?,?,?,?,0,?)",
-            (discussion_id, swarm_id, title, sequence, _now()),
+            (discussion_id, swarm_id, title, sequence, utc_now_timestamp()),
         )
         connection.execute(
             "INSERT INTO memberships(discussion_id,participant_id) VALUES(?,?)",
@@ -287,7 +287,7 @@ def _insert_post(
             text,
             reply_to,
             _dump(list(recipients)),
-            _now(),
+            utc_now_timestamp(),
         ),
     )
     audience = {

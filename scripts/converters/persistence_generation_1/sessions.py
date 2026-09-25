@@ -69,7 +69,7 @@ from core.sessions._store_schema import session_database_spec
 from core.sessions._types import SESSION_TERMINAL_RUN_STATUSES
 from core.sessions.errors import SessionStoreCorruptError
 from core.sessions.schema import APPLICATION_ID, FTS_STALE_KEY
-from core.utils.timestamps import format_canonical_timestamp
+from core.utils.timestamps import format_canonical_timestamp, utc_now_timestamp
 from scripts.converters.persistence_generation_1._context import (
     ConversionContext,
     ConversionError,
@@ -381,10 +381,6 @@ def _group(rows: Sequence[sqlite3.Row], key: str) -> dict[int, list[sqlite3.Row]
     return grouped
 
 
-def _utc_now() -> str:
-    return format_canonical_timestamp(datetime.now(UTC))
-
-
 # -- Plan values -----------------------------------------------------------------------
 
 
@@ -561,7 +557,7 @@ class _Conversion:
             label = self.label(row)
             forked_at, problem = _normalize_timestamp(source.get("forked_at"))
             if forked_at is None:
-                forked_at = _normalize_timestamp(row["created_at"])[0] or _utc_now()
+                forked_at = _normalize_timestamp(row["created_at"])[0] or utc_now_timestamp()
                 self.issues.add(label, f"fork time {problem}; the Session creation time is used")
             elif problem is not None:
                 self.issues.add(label, f"fork time {problem}")
@@ -796,7 +792,7 @@ class _SessionConversion:
         self.generation_id = str(row["generation_id"])
         self.label = conversion.label(row)
         self.archived = row["status"] == "archived"
-        self.created_at = self._time(row["created_at"], "creation time", _utc_now())
+        self.created_at = self._time(row["created_at"], "creation time", utc_now_timestamp())
         self.last_activity = (
             self.created_at
             if row["last_message_at"] is None

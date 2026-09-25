@@ -14,9 +14,9 @@ import sqlite3
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
 from pathlib import Path
 
+from core.utils import timestamps
 from scripts.converters.persistence_generation_1._context import (
     ConversionContext,
     ConversionError,
@@ -127,12 +127,9 @@ def canonical_timestamp(value: object) -> str | None:
     if not isinstance(value, str):
         return None
     try:
-        parsed = datetime.fromisoformat(value)
+        return timestamps.canonical_timestamp(value)
     except ValueError:
         return None
-    if parsed.tzinfo is None:
-        return None
-    return parsed.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
 def copy_table(
