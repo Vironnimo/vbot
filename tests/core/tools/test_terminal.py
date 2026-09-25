@@ -49,19 +49,23 @@ def test_schema_matches_flat_action_tool_conventions(tmp_path: Path) -> None:
     assert "default" not in properties["columns"]
     assert "default" not in properties["rows"]
     assert properties["lines"]["default"] == 30
-    assert properties["timeout_ms"]["default"] == TERMINAL_DEFAULT_WAIT_MS
+    assert "default" not in properties["timeout_ms"]
+    assert "maximum" not in properties["timeout_ms"]
+    assert str(TERMINAL_DEFAULT_WAIT_MS) in properties["timeout_ms"]["description"]
+    assert "after_revision" not in properties
     assert "default" not in properties["command"]
     assert properties["name"]["maxLength"] == 80
     assert "enter" not in properties
-    assert "enter" in properties["key"]["enum"]
+    assert "enum" not in properties["key"]
+    assert "enter" in properties["key"]["description"]
     assert all(
         isinstance(property_schema.get("description"), str) and property_schema["description"]
         for property_schema in properties.values()
     )
     assert properties["data"]["maxLength"] == 65_536
     assert properties["text"]["maxLength"] == 65_536
-    assert "f12" in properties["key"]["enum"]
-    assert "ctrl_z" in properties["key"]["enum"]
+    assert "f1-f12" in properties["key"]["description"]
+    assert "ctrl_a-ctrl_z" in properties["key"]["description"]
     assert TERMINAL_TOOL_DESCRIPTION
 
     registry = ToolRegistry()
