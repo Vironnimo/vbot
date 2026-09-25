@@ -343,11 +343,12 @@ class CalendarService:
         max_results: int = FIND_FREE_MAX_RESULTS,
         now_utc: datetime | None = None,
     ) -> list[FreeSlot]:
-        """Find the earliest free spans of the requested duration in the window.
+        """Find the earliest free spans at least ``duration_minutes`` long in the window.
 
-        Timed events block their span; all-day events block their whole local
-        days. Slots start no earlier than the current time and align to
-        five-minute boundaries.
+        Each slot is a whole gap between busy times, so callers see how much
+        time is free rather than one duration-sized piece of it. Timed events
+        block their span; all-day events block their whole local days. Slots
+        start no earlier than the current time and on five-minute boundaries.
         """
         if (
             isinstance(duration_minutes, bool)
@@ -396,12 +397,12 @@ class CalendarService:
         for busy_start, busy_end in merged:
             gap_end = min(busy_start, window_end)
             if cursor + duration <= gap_end and len(slots) < max_results:
-                slots.append(FreeSlot(start_utc=cursor, end_utc=cursor + duration))
+                slots.append(FreeSlot(start_utc=cursor, end_utc=gap_end))
             cursor = _round_up_to_minutes(max(cursor, busy_end), FIND_FREE_ROUNDING_MINUTES)
             if cursor >= window_end or len(slots) >= max_results:
                 break
         if len(slots) < max_results and cursor + duration <= window_end:
-            slots.append(FreeSlot(start_utc=cursor, end_utc=cursor + duration))
+            slots.append(FreeSlot(start_utc=cursor, end_utc=window_end))
         return slots
 
     def _event_occurrences(
