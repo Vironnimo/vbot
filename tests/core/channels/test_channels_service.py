@@ -481,7 +481,7 @@ async def test_ensure_outbound_session_delegates_to_active_adapter(
     service.start()
     await asyncio.wait_for(adapter.started.wait(), timeout=1)
 
-    route = service.ensure_outbound_session("tg-enabled", "12345")
+    route = await service.ensure_outbound_session("tg-enabled", "12345")
     assert route == RouteFacts(agent_id="assistant", session_id="ch-blocking-12345")
 
     service.stop()
@@ -489,11 +489,12 @@ async def test_ensure_outbound_session_delegates_to_active_adapter(
     await asyncio.sleep(0)
 
 
-def test_ensure_outbound_session_raises_for_inactive_channel(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_ensure_outbound_session_raises_for_inactive_channel(tmp_path: Path) -> None:
     service = make_service(tmp_path)
 
     with pytest.raises(ChannelNotFoundError):
-        service.ensure_outbound_session("tg-enabled", "12345")
+        await service.ensure_outbound_session("tg-enabled", "12345")
 
 
 @pytest.mark.asyncio

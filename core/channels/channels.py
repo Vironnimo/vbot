@@ -330,13 +330,18 @@ class ChannelService:
         """Relay a background completion Run to its Session's latest Channel target."""
         await _delivery.relay_completion_run(self, run, reply_surface)
 
-    def ensure_outbound_session(self, channel_id: str, platform_target: str) -> RouteFacts:
-        """Ensure the Session mirroring an outbound target chat exists and return its route."""
+    async def ensure_outbound_session(self, channel_id: str, platform_target: str) -> RouteFacts:
+        """Ensure the Session mirroring an outbound target chat exists and return its route.
+
+        The adapter resolves the conversation on the Event Loop; its pointer read
+        runs on the Channel state's pool and the Session work on the Session
+        database's pool.
+        """
         normalized_id = _normalize_channel_id(channel_id)
         if not isinstance(platform_target, str) or not platform_target:
             raise ChannelConfigError("platform_target must be a non-empty string")
         adapter = self._active_adapter(normalized_id)
-        return adapter.ensure_outbound_session(platform_target)
+        return await adapter.ensure_outbound_session(platform_target)
 
     def list_channels(self) -> list[ChannelConfig]:
         """Return all persisted channels, enabled and disabled."""

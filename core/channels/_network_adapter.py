@@ -160,11 +160,11 @@ class NetworkChannelAdapter(ChannelAdapter):
         while len(self._conversations) > 1024:
             self._conversations.popitem(last=False)
 
-    def ensure_outbound_session(self, platform_target: str) -> RouteFacts:
+    async def ensure_outbound_session(self, platform_target: str) -> RouteFacts:
         facts = self._conversations.get(platform_target)
         if facts is None:
             raise ChannelError("Send to the target before recording outbound context")
-        return self._engine.ensure_channel_session(facts)
+        return await self._engine.ensure_channel_session(facts)
 
     async def receive(self, facts: ConversationFacts, raw: dict[str, Any]) -> None:
         if facts.chat_id not in self._config.allowed_chat_ids:

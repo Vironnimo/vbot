@@ -15,7 +15,7 @@ Recognizable `request.operation: send`, `send: {...}`, and redundant `action: se
 
 ## Conventions
 
-- Argument normalization, Channel/config lookup, target resolution, file stat/read/MIME work, and best-effort outbound-note storage run through the bounded Tool worker pool. The actual async `ChannelService.send`/Adapter delivery remains on the Event Loop, while its durable Run-button binding preparation uses the Channel I/O pool.
+- Argument normalization, Channel/config lookup and file stat/read/MIME work run through the bounded Tool worker pool. Database work runs on the owning database's pool instead: the calling Session's last Reply Target is read, only when no `platform_target` was given, on the Session database's pool (`get_metadata_async`), and the best-effort outbound note resolves the target conversation through `ChannelService.ensure_outbound_session` (pointer on the `channels.db` pool, Session creation on the Session pool) and appends under the Session write lock in one Session-pool hop. The actual async `ChannelService.send`/Adapter delivery remains on the Event Loop; its Run-button binding work splits per database the same way (`channels.md` -> Interfaces). Tests: `tests/core/tools/test_channel_send_routing.py`.
 
 - The tool handles proactive outbound messages and every channel file delivery, including files sent while replying to a channel-originated turn. Final text-only replies remain automatic through channel adapters subscribing to Runs.
 - `platform_target` resolution order: explicit argument -> the current Session's last Reply Target (only when its `channel_id` matches the requested Channel) -> the Channel config's sole `allowed_chat_ids` entry -> otherwise `invalid_arguments`.

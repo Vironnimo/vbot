@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import Mock
+from typing import Any
+from unittest.mock import AsyncMock, Mock
 
 from core.tools.channel import (
     CHANNEL_SEND_TOOL_NAME,
@@ -29,9 +30,21 @@ class _NullAsyncContext:
 
 
 def make_chat_sessions() -> Mock:
-    """Return a mock ``ChatSessionManager`` whose ``write_lock`` is async-usable."""
+    """Return a mock ``ChatSessionManager`` whose ``write_lock`` and async API are usable.
+
+    ``run_async`` runs its function inline and ``get_metadata_async`` delegates to
+    ``get_metadata``, so tests configure and assert the synchronous mocks.
+    """
     chat_sessions = Mock()
     chat_sessions.write_lock.return_value = _NullAsyncContext()
+
+    def run_inline(function: Any, *arguments: Any, **keyword_arguments: Any) -> Any:
+        return function(*arguments, **keyword_arguments)
+
+    chat_sessions.run_async = AsyncMock(side_effect=run_inline)
+    chat_sessions.get_metadata_async = AsyncMock(
+        side_effect=lambda address: chat_sessions.get_metadata(address)
+    )
     return chat_sessions
 
 

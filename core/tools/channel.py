@@ -59,11 +59,12 @@ _INTERACTION_BUTTON_ARGUMENTS = frozenset(("label", "data"))
 @dataclass(frozen=True)
 class _PreparedChannelSend:
     channel_id: str
+    channel_config: ChannelConfig
     message: str | None
     files: list[FileData]
     buttons: list[list[InteractionButton]] | None
-    platform_target: str
-    thread_id: str | None
+    requested_platform_target: str | None
+    requested_thread_id: str | None
 
 
 CHANNEL_SEND_TOOL_PARAMETERS: JsonObject = {
@@ -326,14 +327,14 @@ async def _handle_channel_send_tool(
         prepared = await run_tool_worker(
             _prepare_channel_send,
             channel_service,
-            chat_sessions,
             context=context,
             arguments=arguments,
             max_size_bytes=max_attachment_size_bytes,
         )
+        platform_target, thread_id = await _resolve_send_target(chat_sessions, context, prepared)
         send_options: dict[str, Any] = {
             "files": prepared.files or None,
-            "thread_id": prepared.thread_id,
+            "thread_id": thread_id,
             "buttons": prepared.buttons,
         }
         # Channels route Identity Sessions. A Project Session keeps the legacy raw
@@ -346,7 +347,7 @@ async def _handle_channel_send_tool(
         await channel_service.send(
             prepared.channel_id,
             prepared.message,
-            prepared.platform_target,
+            platform_target,
             **send_options,
         )
     except ValueError as error:
@@ -362,23 +363,22 @@ async def _handle_channel_send_tool(
         channel_service,
         chat_sessions,
         prepared.channel_id,
-        prepared.platform_target,
+        platform_target,
         sender_agent_id=context.agent_id,
         message=prepared.message,
         files=prepared.files,
     )
     result: JsonObject = {
         "channel_id": prepared.channel_id,
-        "platform_target": prepared.platform_target,
+        "platform_target": platform_target,
     }
-    if prepared.thread_id is not None:
-        result["thread_id"] = prepared.thread_id
+    if thread_id is not None:
+        result["thread_id"] = thread_id
     return tool_success(result)
 
 
 def _prepare_channel_send(
     channel_service: ChannelService,
-    chat_sessions: ChatSessionManager,
     *,
     context: ToolContext,
     arguments: JsonObject,
@@ -399,20 +399,18 @@ def _prepare_channel_send(
 
     channel_config = _channel_config_for_agent(channel_service, channel_id, context.agent_id)
     _validate_platform_arguments(arguments, channel_config)
-    platform_target, thread_id = _send_target_from_arguments_or_context(
-        arguments,
-        chat_sessions,
-        context,
-        channel_id,
-        channel_config,
+    requested_thread_id = optional_string(arguments.get("thread_id"), field_name="thread_id")
+    requested_platform_target = optional_string(
+        arguments.get("platform_target"), field_name="platform_target"
     )
     return _PreparedChannelSend(
         channel_id=channel_id,
+        channel_config=channel_config,
         message=message,
         files=files,
         buttons=buttons,
-        platform_target=platform_target,
-        thread_id=thread_id,
+        requested_platform_target=requested_platform_target,
+        requested_thread_id=requested_thread_id,
     )
 
 
@@ -443,23 +441,16 @@ async def _record_outbound_message_note(
     files: list[FileData],
 ) -> None:
     try:
-        route = await run_tool_worker(
-            channel_service.ensure_outbound_session,
-            channel_id,
-            platform_target,
-        )
+        route = await channel_service.ensure_outbound_session(channel_id, platform_target)
         # Serialize the outbound-context note against an open tool cycle on the
         # target session. The lock is task-reentrant, so this is safe even when
         # the sending Run targets its own session.
         target = SessionAddress(
             project_id=None, agent_id=route.agent_id, session_id=route.session_id
         )
+        note = _outbound_message_note(sender_agent_id, message, files)
         async with chat_sessions.write_lock(target):
-            session = await run_tool_worker(chat_sessions.get_or_create, target)
-            await run_tool_worker(
-                session.add_note,
-                _outbound_message_note(sender_agent_id, message, files),
-            )
+            await chat_sessions.run_async(_append_session_note, chat_sessions, target, note)
     except Exception as error:
         # The outbound message already went out; failing to record context into the target
         # Session must not turn a successful send into a tool failure.
@@ -470,6 +461,12 @@ async def _record_outbound_message_note(
             error,
             exc_info=(type(error), error, error.__traceback__),
         )
+
+
+def _append_session_note(
+    chat_sessions: ChatSessionManager, target: SessionAddress, note: str
+) -> None:
+    chat_sessions.get_or_create(target).add_note(note)
 
 
 def _outbound_message_note(
@@ -488,36 +485,36 @@ def _outbound_message_note(
     return "\n\n".join(parts)
 
 
-def _send_target_from_arguments_or_context(
-    arguments: JsonObject,
+async def _resolve_send_target(
     chat_sessions: ChatSessionManager,
     context: ToolContext,
-    channel_id: str,
-    channel_config: ChannelConfig,
+    prepared: _PreparedChannelSend,
 ) -> tuple[str, str | None]:
     """Resolve the (platform_target, thread_id) pair for one send.
 
     An explicit ``thread_id`` argument always wins. The metadata thread is adopted
-    only together with the metadata target — an explicitly targeted send must not
-    inherit another conversation's topic.
+    only together with the metadata target: an explicitly targeted send must not
+    inherit another conversation's topic. The calling Session's metadata is read,
+    on the Session database's pool, only when no target was requested.
     """
-    explicit_thread_id = optional_string(arguments.get("thread_id"), field_name="thread_id")
-    platform_target_value = optional_string(
-        arguments.get("platform_target"), field_name="platform_target"
-    )
-    if platform_target_value is not None:
-        return platform_target_value, explicit_thread_id
+    requested_thread_id = prepared.requested_thread_id
+    if prepared.requested_platform_target is not None:
+        return prepared.requested_platform_target, requested_thread_id
 
-    metadata_target = _send_target_from_session_metadata(chat_sessions, context, channel_id)
+    address = SessionAddress(
+        project_id=None, agent_id=context.agent_id, session_id=context.session_id
+    )
+    metadata = await chat_sessions.get_metadata_async(address)
+    metadata_target = _send_target_from_session_metadata(metadata, prepared.channel_id)
     if metadata_target is not None:
         metadata_platform_target, metadata_thread_id = metadata_target
         return metadata_platform_target, (
-            explicit_thread_id if explicit_thread_id is not None else metadata_thread_id
+            requested_thread_id if requested_thread_id is not None else metadata_thread_id
         )
 
-    config_platform_target = _platform_target_from_channel_config(channel_config)
+    config_platform_target = _platform_target_from_channel_config(prepared.channel_config)
     if config_platform_target is not None:
-        return config_platform_target, explicit_thread_id
+        return config_platform_target, requested_thread_id
 
     raise ValueError(
         "platform_target is required when session metadata has no "
@@ -526,14 +523,9 @@ def _send_target_from_arguments_or_context(
 
 
 def _send_target_from_session_metadata(
-    chat_sessions: ChatSessionManager,
-    context: ToolContext,
+    metadata: JsonObject,
     channel_id: str,
 ) -> tuple[str, str | None] | None:
-    address = SessionAddress(
-        project_id=None, agent_id=context.agent_id, session_id=context.session_id
-    )
-    metadata = chat_sessions.get_metadata(address)
     last_reply_target = metadata.get("last_reply_target")
     if not isinstance(last_reply_target, dict):
         return None

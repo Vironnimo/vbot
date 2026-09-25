@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock, Mock
 
+import pytest
+
 from core.channels.adapter import RouteFacts
-from core.sessions import SessionAddress
+from core.sessions import ChatSessionManager, SessionAddress
 from core.tools.channel import (
     register_channel_send_tool,
 )
@@ -27,8 +31,8 @@ def test_channel_send_records_outbound_note_in_target_session(tmp_path: Path) ->
     channel_service = Mock()
     channel_service.send = AsyncMock()
     channel_service.list_channels.return_value = [make_channel_config()]
-    channel_service.ensure_outbound_session.return_value = RouteFacts(
-        agent_id="agent-1", session_id="ch-tg-assistant-12345"
+    channel_service.ensure_outbound_session = AsyncMock(
+        return_value=RouteFacts(agent_id="agent-1", session_id="ch-tg-assistant-12345")
     )
     chat_sessions = make_chat_sessions()
     session = Mock()
@@ -54,7 +58,7 @@ def test_channel_send_records_outbound_note_in_target_session(tmp_path: Path) ->
     )
 
     assert_success_envelope(result)
-    channel_service.ensure_outbound_session.assert_called_once_with("tg-assistant", "12345")
+    channel_service.ensure_outbound_session.assert_awaited_once_with("tg-assistant", "12345")
     chat_sessions.get_or_create.assert_called_once_with(
         SessionAddress(project_id=None, agent_id="agent-1", session_id="ch-tg-assistant-12345")
     )
@@ -72,8 +76,8 @@ def test_channel_send_outbound_note_lists_attached_file_names(tmp_path: Path) ->
     channel_service = Mock()
     channel_service.send = AsyncMock()
     channel_service.list_channels.return_value = [make_channel_config()]
-    channel_service.ensure_outbound_session.return_value = RouteFacts(
-        agent_id="agent-1", session_id="ch-tg-assistant-12345"
+    channel_service.ensure_outbound_session = AsyncMock(
+        return_value=RouteFacts(agent_id="agent-1", session_id="ch-tg-assistant-12345")
     )
     chat_sessions = make_chat_sessions()
     session = Mock()
@@ -108,7 +112,7 @@ def test_channel_send_succeeds_even_when_note_recording_fails(tmp_path: Path) ->
     channel_service = Mock()
     channel_service.send = AsyncMock()
     channel_service.list_channels.return_value = [make_channel_config()]
-    channel_service.ensure_outbound_session.side_effect = RuntimeError("boom")
+    channel_service.ensure_outbound_session = AsyncMock(side_effect=RuntimeError("boom"))
     chat_sessions = make_chat_sessions()
     registry = ToolRegistry()
     register_channel_send_tool(
@@ -348,3 +352,57 @@ def test_channel_send_adopts_thread_from_session_metadata(tmp_path: Path) -> Non
         thread_id="42",
         buttons=None,
     )
+
+
+@pytest.mark.usefixtures("current_format_data_directory")
+def test_channel_send_session_reads_and_note_run_on_the_session_pool(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    chat_sessions = ChatSessionManager(tmp_path)
+    caller = SessionAddress(project_id=None, agent_id="agent-1", session_id="session-1")
+    target = SessionAddress(project_id=None, agent_id="agent-1", session_id="ch-tg-assistant-12345")
+    chat_sessions.create("agent-1", session_id="session-1")
+    chat_sessions.set_metadata(
+        caller,
+        {"last_reply_target": {"channel_id": "tg-assistant", "platform_target": "12345"}},
+    )
+    channel_service = Mock()
+    channel_service.send = AsyncMock()
+    channel_service.list_channels.return_value = [make_channel_config()]
+    channel_service.ensure_outbound_session = AsyncMock(
+        return_value=RouteFacts(agent_id="agent-1", session_id=target.session_id)
+    )
+    threads: dict[str, str] = {}
+    get_metadata = chat_sessions.get_metadata
+    get_or_create = chat_sessions.get_or_create
+
+    def recorded_metadata(address: SessionAddress) -> Any:
+        threads["target"] = threading.current_thread().name
+        return get_metadata(address)
+
+    def recorded_get_or_create(address: SessionAddress) -> Any:
+        threads["note"] = threading.current_thread().name
+        return get_or_create(address)
+
+    monkeypatch.setattr(chat_sessions, "get_metadata", recorded_metadata)
+    monkeypatch.setattr(chat_sessions, "get_or_create", recorded_get_or_create)
+    registry = ToolRegistry()
+    register_channel_send_tool(
+        registry,
+        channel_service,
+        chat_sessions,
+        max_attachment_size_bytes=_TEST_MAX_ATTACHMENT_SIZE_BYTES,
+    )
+    try:
+        result = asyncio.run(
+            dispatch(registry, tmp_path, {"channel_id": "tg-assistant", "message": "Done"})
+        )
+
+        assert assert_success_envelope(result)["platform_target"] == "12345"
+        notes = [entry for entry in chat_sessions.get(target).load() if entry.role == "note"]
+        assert len(notes) == 1
+        # The metadata target and the outbound note use the Session database's pool.
+        assert threads["target"].startswith("vbot-db-sessions")
+        assert threads["note"].startswith("vbot-db-sessions")
+    finally:
+        chat_sessions.close()
