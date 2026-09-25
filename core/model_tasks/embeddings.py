@@ -34,7 +34,7 @@ from core.utils.logging import get_logger
 
 JsonObject = dict[str, Any]
 _LOGGER = get_logger("embeddings")
-_EMBEDDING_SPACE_CONTRACT_VERSION = 2
+_EMBEDDING_SPACE_CONTRACT_VERSION = 1
 
 EmbeddingPurpose = Literal["query", "document"]
 _EMBEDDING_PURPOSES = frozenset({"query", "document"})
