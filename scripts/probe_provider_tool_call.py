@@ -69,7 +69,11 @@ from scripts.provider_probe.choices import (  # noqa: E402
     WEB_SEARCH_CASES,
     WORD_COUNT_CASES,
 )
-from scripts.provider_probe.common import ProbeScenario, _start_probe_runtime  # noqa: E402
+from scripts.provider_probe.common import (  # noqa: E402
+    ModelFacingAdapter,
+    ProbeScenario,
+    _start_probe_runtime,
+)
 from scripts.provider_probe.computer_cases import COMPUTER_CASE_ARGUMENTS  # noqa: E402
 from scripts.provider_probe.measurements import _compile_probe_contracts  # noqa: E402
 from scripts.provider_probe.scenarios import _scenario  # noqa: E402
@@ -374,7 +378,7 @@ async def _run(args: argparse.Namespace) -> int:
                     if args.scenario == "swarm_tool"
                     else _probe_mcp_workflow
                 )
-                result = await probe(adapter, args)
+                result = await probe(ModelFacingAdapter(adapter), args)
             finally:
                 await adapter.aclose()
         finally:
@@ -419,6 +423,7 @@ async def _run(args: argparse.Namespace) -> int:
             request_adapter = getattr(adapter, "_messages", None)
             if request_adapter is None:
                 raise ValueError("selected Provider adapter has no Anthropic Messages route")
+        request_adapter = ModelFacingAdapter(request_adapter)
         if args.mode == "stream":
             result = await _probe_stream(
                 request_adapter,

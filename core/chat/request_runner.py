@@ -39,7 +39,7 @@ from core.chat.streaming import (
     is_local_provider_base_url,
     iter_with_chunk_timeout,
 )
-from core.chat.wire_shaping import _assistant_message_from_response
+from core.chat.wire_shaping import _assistant_message_from_response, model_facing_request
 from core.performance import record_span, session_track
 from core.providers.accounts import ConnectionRef
 from core.providers.adapter import (
@@ -295,6 +295,7 @@ class WireRequestRunner:
         ``public_model`` is the user-facing Model string of the answering route:
         the Agent's primary Model, or the fallback candidate serving this Run.
         """
+        messages, tools = model_facing_request(messages, tools)
         request_context = _resolve_request_context_kwargs(
             adapter,
             run,

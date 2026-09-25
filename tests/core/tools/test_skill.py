@@ -18,6 +18,7 @@ from core.tools import (
     register_skill_tool,
     tool_failure,
 )
+from core.tools.model_names import SHELL_MODEL_NAME
 from core.tools.skill import SKILL_TOOL_PARAMETERS, load_skill_content
 
 
@@ -123,7 +124,7 @@ Call the provider API.
     assert "Loading this Skill makes these additional environment credentials" in guidance
     assert "- `OPENAI_API_KEY`" in guidance
     assert "- `OPENROUTER_API_KEY`" in guidance
-    assert "`env_keys` array of every `bash` call" in guidance
+    assert f"`env_keys` array of every `{SHELL_MODEL_NAME}` call" in guidance
     assert "<environment_access>" not in guidance
 
 

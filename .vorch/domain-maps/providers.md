@@ -87,7 +87,7 @@ Core terms Provider, Model, and Reasoning live in `.vorch/GLOSSARY.md`; Model-DB
 
 Provider test suites under `tests/core/providers/` separate configuration/catalog, request construction, completed responses, streaming, and authentication/lifecycle behavior. Shared fixtures and captured wire payloads remain in the existing `*_test_support.py` and focused `*_helpers.py` modules.
 
-The Tool-contract probe keeps its CLI in `scripts/probe_provider_tool_call.py`; scenarios, workflows and measurement helpers live under `scripts/provider_probe/`. The exact Reasoning probe CLI keeps orchestration in `scripts/probe_reasoning_replay_exact.py`, with connection preparation in `_reasoning_probe_connection.py` and wire/evidence helpers in `_reasoning_probe_wire.py`.
+The Tool-contract probe keeps its CLI in `scripts/probe_provider_tool_call.py`; scenarios, workflows and measurement helpers live under `scripts/provider_probe/`. Probes call adapters directly, so `common.ModelFacingAdapter` applies Chat's host-specific Tool names to their requests (`tools.md` -> Model Tool names); probe code and captured traces use registry names. The exact Reasoning probe CLI keeps orchestration in `scripts/probe_reasoning_replay_exact.py`, with connection preparation in `_reasoning_probe_connection.py` and wire/evidence helpers in `_reasoning_probe_wire.py`.
 
 ## References
 
