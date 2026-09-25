@@ -255,6 +255,8 @@ def _process_scenario(case_name: str) -> ProbeScenario:
         "status_list": {"action": "status"},
         "status_one": {"action": "status", "process_id": process_id},
         "kill": {"action": "kill", "process_id": process_id},
+        "wait": {"action": "wait", "process_id": process_id, "timeout": 120},
+        "wait_pattern": {"action": "wait", "process_id": process_id, "pattern": "ready"},
         "running": {"action": "status", "filter": "running"},
         "finished": {"action": "status", "filter": "finished"},
         "all": {"action": "status", "filter": "all"},

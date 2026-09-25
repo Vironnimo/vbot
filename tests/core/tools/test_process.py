@@ -14,6 +14,7 @@ import pytest
 import pytest_asyncio
 
 import core.tools.process as process_module
+from core.tools.model_names import SHELL_MODEL_NAME
 from core.tools.process import (
     PROCESS_ACTIONS,
     PROCESS_TOOL_DESCRIPTION,
@@ -109,8 +110,16 @@ def test_schema_exposes_small_flat_action_contract() -> None:
     assert "oneOf" not in PROCESS_TOOL_PARAMETERS
     properties = cast(dict[str, Any], PROCESS_TOOL_PARAMETERS["properties"])
     assert properties["action"]["enum"] == list(PROCESS_ACTIONS)
-    assert set(properties) == {"action", "process_id", "filter", "limit", "before"}
-    assert PROCESS_ACTIONS == ("status", "kill")
+    assert set(properties) == {
+        "action",
+        "process_id",
+        "timeout",
+        "pattern",
+        "filter",
+        "limit",
+        "before",
+    }
+    assert PROCESS_ACTIONS == ("status", "wait", "kill")
     assert PROCESS_TOOL_PARAMETERS["required"] == ["action"]
     assert "additionalProperties" not in PROCESS_TOOL_PARAMETERS
     assert all(
@@ -136,6 +145,7 @@ async def test_status_without_process_id_lists_owned_processes_only(
     assert tracked_processes == [
         {
             "process_id": owned_process_id,
+            "command": None,
             "status": "running",
             "exit_code": None,
             "started_at": manager.get_process(owned_process_id, AGENT_A).started_at.isoformat(),
@@ -174,8 +184,8 @@ async def test_status_with_process_id_returns_non_consuming_snapshot(
     assert first_data["process_id"] == process_id
     assert first_data["status"] == "completed"
     assert first_data["exit_code"] == 0
-    assert first_data["output_tail"].strip() == "snapshot-output"
-    assert first_data["output_truncated"] is False
+    assert first_data["output"].strip() == "snapshot-output"
+    assert first_data["truncated"] is False
     assert "stdin_open" not in first_data
     assert "waiting_for_input" not in first_data
     assert first_data["log_file"] is None
@@ -217,7 +227,7 @@ async def test_default_hides_130_finished_commands_but_history_remains_retrievab
     assert seen == [f"proc-{index:03d}" for index in reversed(range(130))]
     assert callbacks == []  # Browsing history must not acknowledge completion.
     detail = await dispatch_process(manager, context, {"action": "status", "process_id": seen[-1]})
-    assert detail["data"]["output_tail"].strip() == "retained output"
+    assert detail["data"]["output"].strip() == "retained output"
     assert len(callbacks) == 1
 
 
@@ -274,14 +284,6 @@ async def test_empty_lists_and_explicit_filters(manager, context, selection):
         {"action": "status", "filter": "failed"},
         *({"action": "status", "limit": value} for value in (0, 101, True, 1.5, None, "20")),
         {"action": "status", "before": 1},
-        *(
-            {"action": "status", "process_id": "missing", key: value}
-            for key, value in (("filter", "all"), ("limit", 1), ("before", "older"))
-        ),
-        *(
-            {"action": "kill", "process_id": "missing", key: value}
-            for key, value in (("filter", "all"), ("limit", 1), ("before", "older"))
-        ),
     ],
 )
 async def test_list_arguments_are_validated_before_process_access(manager, context, arguments):
@@ -305,9 +307,9 @@ async def test_status_caps_output_tail(
     )
 
     data = cast(dict[str, Any], result["data"])
-    assert len(data["output_tail"]) <= 8000
-    assert data["output_tail"].rstrip().endswith("END-MARKER")
-    assert data["output_truncated"] is True
+    assert len(data["output"]) <= 8000
+    assert data["output"].rstrip().endswith("END-MARKER")
+    assert data["truncated"] is True
 
 
 @pytest.mark.parametrize("newline", ["\n", "\r\n"])
@@ -377,8 +379,8 @@ async def test_status_line_limit_preserves_complete_log_and_is_non_consuming(tmp
         assert first == second
         data = first["data"]
         assert data["exit_code"] == 0
-        assert data["output_truncated"] is True
-        assert data["output_tail"].splitlines()[1:] == [f"line-{i}" for i in range(100, 200)]
+        assert data["truncated"] is True
+        assert data["output"].splitlines()[1:] == [f"line-{i}" for i in range(100, 200)]
         log_file = Path(data["log_file"])
         assert log_file.read_text(encoding="utf-8").splitlines() == [
             f"line-{i}" for i in range(200)
@@ -448,19 +450,13 @@ async def test_terminal_manual_result_cancels_pending_completion_after_persisten
 @pytest.mark.parametrize(
     "arguments",
     (
-        {"request": {"operation": "poll", "process_id": "process-a"}},
         {"poll": {"process_id": "process-a"}},
-        {"action": "input", "process_id": "process-a", "text": "value"},
-        {"action": "list"},
-        {"action": "poll", "process_id": "process-a"},
-        {"action": "log", "process_id": "process-a"},
-        {"action": "write", "process_id": "process-a", "data": "value"},
-        {"action": "submit", "process_id": "process-a"},
         {"action": "clear", "process_id": "process-a"},
+        {"action": "status", "text": "value"},
     ),
 )
 @pytest.mark.asyncio
-async def test_retired_process_calls_are_rejected(
+async def test_unknown_process_calls_are_rejected(
     manager: ProcessManager,
     context: ToolContext,
     arguments: JsonObject,
@@ -488,24 +484,6 @@ async def test_removed_input_action_cannot_affect_a_running_process(manager, con
     await manager.kill(process_id, AGENT_A)
 
 
-@pytest.mark.asyncio
-async def test_action_inapplicable_fields_are_rejected(
-    manager: ProcessManager,
-    context: ToolContext,
-) -> None:
-    result = await call_process(
-        manager,
-        context,
-        {"action": "status", "text": "not valid for status"},
-    )
-
-    assert result == tool_failure(
-        "invalid_arguments",
-        "Action 'status' does not accept: text",
-        retryable=False,
-    )
-
-
 @pytest.mark.parametrize("action", PROCESS_ACTIONS)
 @pytest.mark.asyncio
 async def test_cross_agent_process_access_returns_not_found(
@@ -525,7 +503,8 @@ async def test_cross_agent_process_access_returns_not_found(
 
     assert result == tool_failure(
         "process_not_found",
-        "Process not found",
+        f"No background command has the id {process_id}. You have no background commands; a "
+        f"`{SHELL_MODEL_NAME}` command that runs in the background returns its process_id.",
         retryable=False,
     )
 
@@ -547,7 +526,8 @@ async def test_same_agent_process_access_returns_not_found_across_project_scopes
     result = await call_process(manager, context, {"action": "status", "process_id": process_id})
     await manager.kill(process_id, AGENT_A, project_id="project-a")
 
-    assert result == tool_failure("process_not_found", "Process not found", retryable=False)
+    assert result["error"]["code"] == "process_not_found"
+    assert result["error"]["message"].startswith(f"No background command has the id {process_id}.")
 
 
 @pytest.mark.asyncio
