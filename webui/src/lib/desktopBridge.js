@@ -546,7 +546,9 @@ function withTimeout(promise, timeoutMs) {
  *
  * Resolves null when it may, or `desktop_restart_required` when the server
  * is not a secure context because it was added after the Desktop app started.
- * Bridge failures are logged and never block Live voice.
+ * A secure page never asks the bridge. On an insecure page a bridge failure is
+ * logged and also resolves `desktop_restart_required`: without a secure
+ * context the page cannot open the microphone anyway.
  */
 export async function desktopMicrophoneAccess({
   timeoutMs = MICROPHONE_ACCESS_TIMEOUT_MS,
