@@ -146,7 +146,6 @@ def _validate_core_fields(message: _records.ChatMessage) -> None:
     if message.role != "compaction_checkpoint":
         _reject_fields(
             message,
-            "tail_boundary_id",
             "projection",
             "compaction_policy",
             "compaction_strategy",
@@ -437,29 +436,17 @@ def _validate_compaction_checkpoint_message(message: _records.ChatMessage) -> No
     if not isinstance(message.content, str):
         raise ChatMessageValidationError("compaction checkpoints content must be a string")
     if message.projection is None:
-        if not message.tail_boundary_id:
+        raise ChatMessageValidationError("compaction checkpoints require a projection")
+    if not message.compaction_policy:
+        raise ChatMessageValidationError("compaction checkpoints require compaction_policy")
+    if not message.compaction_strategy:
+        raise ChatMessageValidationError("compaction checkpoints require compaction_strategy")
+    for entry in message.projection:
+        projected = _records.ChatMessage.from_dict(entry)
+        if projected.role == "compaction_checkpoint":
             raise ChatMessageValidationError(
-                "legacy compaction checkpoints require tail_boundary_id"
+                "compaction checkpoint projections cannot contain checkpoints"
             )
-        if message.compaction_policy or message.compaction_strategy:
-            raise ChatMessageValidationError(
-                "legacy compaction checkpoints cannot include Policy provenance"
-            )
-    else:
-        if message.tail_boundary_id is not None:
-            raise ChatMessageValidationError(
-                "projected compaction checkpoints cannot include tail_boundary_id"
-            )
-        if not message.compaction_policy:
-            raise ChatMessageValidationError("compaction checkpoints require compaction_policy")
-        if not message.compaction_strategy:
-            raise ChatMessageValidationError("compaction checkpoints require compaction_strategy")
-        for entry in message.projection:
-            projected = _records.ChatMessage.from_dict(entry)
-            if projected.role == "compaction_checkpoint":
-                raise ChatMessageValidationError(
-                    "compaction checkpoint projections cannot contain checkpoints"
-                )
 
     if message.usage is not None:
         compacted_count = message.usage.get("compacted_token_count")
