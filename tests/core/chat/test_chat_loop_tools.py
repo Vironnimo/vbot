@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any, cast
 
@@ -201,6 +202,39 @@ async def test_tool_called_by_another_harness_name_runs_and_is_stored_under_its_
         for message in follow_up["messages"]
         for call in message.get("tool_calls") or []
     ] == ["web_fetch", "TodoWrite"]
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_tool_spelling_never_dispatches_a_harness_alias(tmp_path: Path) -> None:
+    dispatched: list[str] = []
+
+    def probe(context: ToolContext, _arguments: JsonObject) -> JsonObject:
+        dispatched.append(context.tool_name)
+        return tool_success({"id": context.tool_call_id})
+
+    tools = ToolRegistry()
+    offered = ["read", "read_file", "readfile"]
+    for name in offered:
+        tools.register(name, "Read a resource.", {"type": "object"}, probe)
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=offered)
+    adapter = StubAdapter(
+        [
+            {
+                "content": None,
+                "tool_calls": [{"id": "ambiguous", "name": "ReadFile", "arguments": {}}],
+            },
+            {"content": "done", "tool_calls": None},
+        ]
+    )
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
+
+    await build_chat_loop(runtime).send("coder", "read", session_id="session-one")
+
+    assert dispatched == []
+    persisted = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
+    assert [call.name for message in persisted for call in message.tool_calls or []] == ["ReadFile"]
+    result = next(message for message in persisted if message.role == "tool")
+    assert json.loads(cast(str, result.content))["error"]["code"] == "tool_not_found"
 
 
 @pytest.mark.asyncio

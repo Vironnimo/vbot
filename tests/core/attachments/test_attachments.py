@@ -299,8 +299,17 @@ def test_set_transcription_keeps_the_unknown_fields_of_the_sidecar(tmp_path: Pat
         {"format_version": None},
         {"size_bytes": -1},
         {"media_type": "application/x-unknown"},
+        {"media_type": []},
+        {"media_type": {}},
     ],
-    ids=["newer-version", "no-version", "negative-size", "unstored-type"],
+    ids=[
+        "newer-version",
+        "no-version",
+        "negative-size",
+        "unstored-type",
+        "array-media-type",
+        "object-media-type",
+    ],
 )
 def test_sidecar_that_fails_to_load_is_unavailable_and_never_rewritten(
     tmp_path: Path, change: dict[str, object]
@@ -319,7 +328,12 @@ def test_sidecar_that_fails_to_load_is_unavailable_and_never_rewritten(
         store.set_transcription(record.id, "hello world")
 
     assert sidecar_path.read_text(encoding="utf-8") == original
-    assert not validate_attachment_metadata_file(sidecar_path).ok
+    report = validate_attachment_metadata_file(sidecar_path)
+    assert not report.ok
+    if "media_type" in change:
+        assert [(item.severity, item.path) for item in report.diagnostics] == [
+            ("error", "$.media_type")
+        ]
 
 
 def test_set_transcription_rejects_empty_text(tmp_path: Path) -> None:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any, cast
 
@@ -234,8 +235,13 @@ def test_get_attachment_returns_not_found_for_unknown_id(tmp_path: Path) -> None
     assert response.status_code == 404
 
 
+@pytest.mark.parametrize(
+    "metadata_change",
+    [None, {"media_type": []}, {"media_type": {}}],
+    ids=["invalid-json", "array-media-type", "object-media-type"],
+)
 def test_get_attachment_with_corrupt_metadata_is_unavailable_not_internal_error(
-    tmp_path: Path,
+    tmp_path: Path, metadata_change: dict[str, object] | None
 ) -> None:
     with _create_client(tmp_path) as client:
         upload_response = client.post(
@@ -244,7 +250,13 @@ def test_get_attachment_with_corrupt_metadata_is_unavailable_not_internal_error(
         )
         attachment_id = upload_response.json()["attachment_id"]
         store = AttachmentStore(tmp_path / "data", max_size_bytes=MAX_ATTACHMENT_SIZE_BYTES)
-        store._sidecar_path(attachment_id).write_text("{not json", encoding="utf-8")  # noqa: SLF001
+        path = store._sidecar_path(attachment_id)  # noqa: SLF001
+        text = (
+            "{not json"
+            if metadata_change is None
+            else json.dumps({**json.loads(path.read_text(encoding="utf-8")), **metadata_change})
+        )
+        path.write_text(text, encoding="utf-8")
         response = client.get(f"/api/attachments/{attachment_id}")
 
     assert response.status_code == 404

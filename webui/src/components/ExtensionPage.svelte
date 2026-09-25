@@ -344,6 +344,10 @@
         if (frameContext !== context) return;
         const url = opened?.stream?.url;
         if (typeof url === 'string' && url.startsWith('/api/extension-runs/')) {
+          const runScope =
+            typeof opened.participant_id === 'string'
+              ? JSON.stringify([data.params.group_id, opened.participant_id])
+              : null;
           const subscription = createExtensionRunStream({
             opened,
             afterSequence: data.params.after_sequence ?? 0,
@@ -371,6 +375,17 @@
                 frameContext === context &&
                 valid(event, MAX_HOST_MESSAGE_BYTES)
               ) {
+                if (
+                  runScope !== null &&
+                  (context.historyScope == null ||
+                    context.historyScope === runScope)
+                )
+                  context.allowedUrls = [
+                    ...new Set([
+                      ...context.allowedUrls,
+                      ...projectedFileUrls(event),
+                    ]),
+                  ];
                 post(context, {
                   type: 'vbot.extension.stream',
                   version: BRIDGE_VERSION,

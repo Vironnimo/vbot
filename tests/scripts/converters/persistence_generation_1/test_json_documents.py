@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import stat
 from pathlib import Path
 from typing import Any
 
@@ -172,6 +174,60 @@ def test_converted_data_directory_passes_the_doctor_and_source_is_untouched(
     # Retired fields and values are normalized, so none is left as an unknown field.
     assert _diagnostics(context) == []
     assert all(_staged(context, relative)["format_version"] == 1 for relative in staged)
+
+
+@pytest.mark.parametrize("mode", [0o600, 0o640, 0o400])
+@pytest.mark.parametrize(
+    ("relative", "content"),
+    [
+        ("oauth/github-copilot-oauth.json", {"access_token": "secret-token"}),
+        ("settings.json", {}),
+        ("mcp/connections.json", []),
+        ("mcp/connections.json", {"format_version": 1, "connections": []}),
+        ("mcp/connections.json", "invalid JSON kept when relocated"),
+    ],
+)
+def test_staged_json_keeps_source_permissions(
+    tmp_path: Path, mode: int, relative: str, content: Any
+) -> None:
+    context = _context(tmp_path)
+    _write(context.source, relative, content)
+    source = context.source / relative
+    source.chmod(mode)
+    source_mode = stat.S_IMODE(source.stat().st_mode)
+    original = source.read_bytes()
+
+    convert(context)
+
+    staged = context.staging / _MOVED.get(relative, relative)
+    assert stat.S_IMODE(staged.stat().st_mode) == source_mode
+    assert source.read_bytes() == original
+    assert stat.S_IMODE(source.stat().st_mode) == source_mode
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX permission bits and umask")
+def test_oauth_staging_is_private_before_secret_bytes_are_written(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    context = _context(tmp_path)
+    _write(context.source, "oauth/token.json", {"access_token": "secret-token"})
+    (context.source / "oauth/token.json").chmod(0o600)
+    actual_fdopen = os.fdopen
+    observed_modes = []
+
+    def observe_fdopen(descriptor: int, *args: Any, **kwargs: Any) -> Any:
+        observed_modes.append(stat.S_IMODE(os.fstat(descriptor).st_mode))
+        return actual_fdopen(descriptor, *args, **kwargs)
+
+    monkeypatch.setattr(os, "fdopen", observe_fdopen)
+    original_umask = os.umask(0o022)
+    try:
+        convert(context)
+    finally:
+        os.umask(original_umask)
+
+    assert observed_modes == [0o600]
+    assert _staged(context, "oauth/token.json")["access_token"] == "secret-token"
 
 
 def test_arrays_become_named_arrays_and_versions_move_to_format_version(tmp_path: Path) -> None:

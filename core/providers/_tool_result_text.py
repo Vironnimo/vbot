@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import json
 import textwrap
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 _ENVELOPE_KEYS = frozenset({"ok", "error", "data", "artifacts"})
@@ -51,18 +51,21 @@ def tool_result_envelope(content: Any) -> Mapping[str, Any] | None:
     return value
 
 
-def tool_result_text(content: Any) -> Any:
+def tool_result_text(content: Any, *, content_blocks: Sequence[Mapping[str, Any]] = ()) -> Any:
     """Return what the Model reads for canonical Tool message content.
 
-    An envelope becomes plain text; any other content is returned unchanged,
-    which also makes the projection idempotent.
+    Render exactly once at the final wire boundary: a literal body may itself
+    look like an envelope. Supplemental text follows the rendered body.
     """
 
     envelope = tool_result_envelope(content)
-    return content if envelope is None else render_tool_result_envelope(envelope)
+    text = content if envelope is None else render_tool_result_envelope(envelope)
+    return _append_text(text, _supplemental_text(content_blocks))
 
 
-def tool_result_function_response(content: Any) -> dict[str, Any]:
+def tool_result_function_response(
+    content: Any, *, content_blocks: Sequence[Mapping[str, Any]] = ()
+) -> dict[str, Any]:
     """Return a function-response object for wires that require JSON objects.
 
     Envelopes render to ``{"output": text}`` or, for a failure, ``{"error": text}``.
@@ -70,9 +73,12 @@ def tool_result_function_response(content: Any) -> dict[str, Any]:
     """
 
     envelope = tool_result_envelope(content)
+    supplemental_text = _supplemental_text(content_blocks)
     if envelope is not None:
         key = "output" if envelope["ok"] else "error"
-        return {key: render_tool_result_envelope(envelope)}
+        return {key: _append_text(render_tool_result_envelope(envelope), supplemental_text)}
+    if supplemental_text:
+        return {"output": _append_text(content, supplemental_text)}
     if isinstance(content, str):
         try:
             parsed = json.loads(content)
@@ -81,6 +87,21 @@ def tool_result_function_response(content: Any) -> dict[str, Any]:
     else:
         parsed = content
     return dict(parsed) if isinstance(parsed, Mapping) else {"output": parsed}
+
+
+def _supplemental_text(content_blocks: Sequence[Mapping[str, Any]]) -> list[str]:
+    return [
+        text
+        for block in content_blocks
+        if block.get("type") == "text" and isinstance(text := block.get("text"), str) and text
+    ]
+
+
+def _append_text(content: Any, supplemental_text: Sequence[str]) -> Any:
+    if not supplemental_text:
+        return content
+    base_text = content if isinstance(content, str) else ""
+    return "\n\n".join(part for part in (base_text, *supplemental_text) if part)
 
 
 def render_tool_result_envelope(envelope: Mapping[str, Any]) -> str:

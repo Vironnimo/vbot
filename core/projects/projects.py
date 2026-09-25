@@ -602,12 +602,6 @@ def _validate_project_id(project_id: Any) -> str:
     return cast("str", project_id)
 
 
-def _validate_non_empty_string(field_name: str, value: Any) -> str:
-    if not isinstance(value, str) or not value.strip():
-        raise ProjectError(f"{field_name} must be a non-empty string")
-    return value
-
-
 def _validate_optional_string(field_name: str, value: Any) -> str:
     if value is None:
         return ""

@@ -17,6 +17,7 @@ import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager, suppress
 from pathlib import Path
+from uuid import uuid4
 
 # Direct execution loads helper modules from this checkout.
 _checkout_root = Path(__file__).resolve().parents[1]
@@ -42,6 +43,8 @@ from scripts._worktree_ports import (  # noqa: E402
 )
 from scripts._worktree_records import (  # noqa: E402
     DATA_DIR_KEY,
+    DATA_OWNER_FILE_NAME,
+    DATA_OWNER_KEY,
     MANAGED_BRANCH_KEY,
     SERVER_PORT_KEY,
     UNKNOWN_VALUE,
@@ -124,12 +127,14 @@ def print_error(reason: str) -> None:
 
 def validate_worktree_name(name: str) -> str | None:
     """Return an error message when a worktree name is unsafe."""
-    if VALID_WORKTREE_NAME_PATTERN.fullmatch(name):
+    if name.rstrip(".").casefold() == "dev":
+        return "worktree name 'dev' is reserved for the primary checkout's data directory"
+    if VALID_WORKTREE_NAME_PATTERN.fullmatch(name) and not name.endswith("."):
         return None
 
     return (
         "worktree name must start with a letter or number and contain only "
-        "letters, numbers, dots, underscores, and hyphens"
+        "letters, numbers, dots, underscores, and hyphens; it must not end with a dot"
     )
 
 
@@ -152,24 +157,58 @@ def initialize_data_dir(data_dir: Path) -> None:
         run_name="vbot_data_directory_layout",
     )
     initializer = layout_module["initialize_data_directory"]
-    initializer(data_dir, resources_dir=checkout_root / "resources")
+    initializer(data_dir, resources_dir=checkout_root / "resources", require_new=True)
 
 
-def _resolve_remove_data_dir(name: str, marker_data: dict[str, object] | None) -> Path:
-    """Resolve the data dir to remove with strict safety checks."""
-    expected = _expected_data_dir(name)
+def _canonical_path(path: Path) -> str:
+    """Return a stable identity for a repository or worktree path."""
+    return os.path.normcase(str(path.resolve()))
+
+
+def _data_owner_record(worktree_path: Path, token: str) -> dict[str, object]:
+    """Bind a newly created data directory to its repository and checkout."""
+    return {
+        "format_version": 1,
+        DATA_OWNER_KEY: token,
+        "repository": _canonical_path(PROJECT_ROOT),
+        "worktree": _canonical_path(worktree_path),
+    }
+
+
+def _owns_data_dir(
+    worktree_path: Path, data_dir: Path, marker_data: dict[str, object] | None
+) -> bool:
+    """Require matching ownership records before stopping services or deleting data.
+
+    Legacy markers prove only which directory a checkout uses, not who created
+    it. A renamed, redirected or replaced directory must not inherit ownership.
+    """
     if marker_data is None:
-        return expected
-
+        return False
+    token = marker_data.get(DATA_OWNER_KEY)
     raw_data_dir = marker_data.get(DATA_DIR_KEY)
-    if not isinstance(raw_data_dir, str) or not raw_data_dir:
-        return expected
-
-    candidate = Path(raw_data_dir).expanduser()
-    if candidate == expected:
-        return candidate
-
-    return expected
+    if not isinstance(token, str) or not token or not isinstance(raw_data_dir, str):
+        return False
+    try:
+        candidate = Path(raw_data_dir).expanduser()
+        if os.path.normcase(os.path.abspath(candidate)) != os.path.normcase(
+            os.path.abspath(data_dir)
+        ):
+            return False
+        if not data_dir.is_dir():
+            return False
+        # resolve() also detects Windows junctions; is_symlink() covers dangling links.
+        for path in (data_dir, worktree_path):
+            if path.is_symlink() or _canonical_path(path) != os.path.normcase(
+                str(path.parent.resolve() / path.name)
+            ):
+                return False
+        owner_path = data_dir / DATA_OWNER_FILE_NAME
+        if owner_path.is_symlink():
+            return False
+        return _read_worktree_marker(owner_path) == _data_owner_record(worktree_path, token)
+    except (OSError, RuntimeError, ValueError):
+        return False
 
 
 def _clear_readonly_and_retry(func: Callable[[str], object], path: str, _excinfo: object) -> None:
@@ -419,7 +458,7 @@ def cleanup_failed_create(
     data_dir: Path,
     *,
     managed_branch: bool,
-    remove_data_dir: bool,
+    marker_data: dict[str, object] | None,
 ) -> None:
     """Remove artifacts created before a failed create operation."""
     return_code, _ = _run_command(["git", "worktree", "remove", "--force", str(worktree_path)])
@@ -431,7 +470,7 @@ def cleanup_failed_create(
             _move_to_trash(worktree_path)
         _run_command(["git", "worktree", "prune"])
 
-    if remove_data_dir:
+    if _owns_data_dir(worktree_path, data_dir, marker_data):
         shutil.rmtree(data_dir, ignore_errors=True)
 
     if managed_branch:
@@ -484,12 +523,17 @@ def cmd_create(args: argparse.Namespace) -> int:
         return 1
 
     worktree_path = WORKTREES_DIR / name
+    data_dir = _expected_data_dir(name)
     managed_branch = args.from_branch is None
 
     sweep_trash_directories(WORKTREES_DIR)
 
     if worktree_path.exists():
         print_error(f"worktree '{name}' already exists")
+        return 1
+
+    if os.path.lexists(data_dir):
+        print_error(f"data directory already exists; choose another worktree name: {data_dir}")
         return 1
 
     if args.from_branch:
@@ -507,23 +551,25 @@ def cmd_create(args: argparse.Namespace) -> int:
         return 1
 
     data_dir_tilde = f"~/.vbot-{name}"
-    data_dir = Path.home() / f".vbot-{name}"
-    data_dir_preexisting = data_dir.exists()
+    marker_data: dict[str, object] | None = None
     try:
         with _port_allocation_lock():
+            if os.path.lexists(data_dir):
+                raise FileExistsError(f"data directory already exists: {data_dir}")
             port = find_free_port(WORKTREES_DIR)
             initialize_data_dir(data_dir)
+            token = uuid4().hex
+            marker_data = {
+                DATA_DIR_KEY: data_dir_tilde,
+                MANAGED_BRANCH_KEY: managed_branch,
+                DATA_OWNER_KEY: token,
+            }
+            with (data_dir / DATA_OWNER_FILE_NAME).open("x", encoding="utf-8") as owner:
+                owner.write(json.dumps(_data_owner_record(worktree_path, token), indent=2) + "\n")
             seed_worktree_settings(data_dir / "settings.json", server_port=port)
             marker = worktree_path / WORKTREE_FILE_NAME
             marker.write_text(
-                json.dumps(
-                    {
-                        DATA_DIR_KEY: data_dir_tilde,
-                        MANAGED_BRANCH_KEY: managed_branch,
-                    },
-                    indent=2,
-                )
-                + "\n",
+                json.dumps(marker_data, indent=2) + "\n",
                 encoding="utf-8",
             )
     except (OSError, ValueError, json.JSONDecodeError) as exc:
@@ -532,7 +578,7 @@ def cmd_create(args: argparse.Namespace) -> int:
             worktree_path,
             data_dir,
             managed_branch=managed_branch,
-            remove_data_dir=not data_dir_preexisting,
+            marker_data=marker_data,
         )
         print_error(str(exc))
         return 1
@@ -548,7 +594,7 @@ def cmd_create(args: argparse.Namespace) -> int:
             worktree_path,
             data_dir,
             managed_branch=managed_branch,
-            remove_data_dir=not data_dir_preexisting,
+            marker_data=marker_data,
         )
         print_error(f"search engine installation failed: {stderr}")
         return 1
@@ -563,7 +609,7 @@ def cmd_create(args: argparse.Namespace) -> int:
             worktree_path,
             data_dir,
             managed_branch=managed_branch,
-            remove_data_dir=not data_dir_preexisting,
+            marker_data=marker_data,
         )
         print_error(f"npm install failed: {stderr}" if stderr else "npm install failed")
         return 1
@@ -576,7 +622,7 @@ def cmd_create(args: argparse.Namespace) -> int:
             worktree_path,
             data_dir,
             managed_branch=managed_branch,
-            remove_data_dir=not data_dir_preexisting,
+            marker_data=marker_data,
         )
         print_error(f"npm run build failed: {stderr}" if stderr else "npm run build failed")
         return 1
@@ -622,18 +668,20 @@ def cmd_delete(args: argparse.Namespace) -> int:
 
     marker = worktree_path / WORKTREE_FILE_NAME
     marker_data = _read_worktree_marker(marker)
-    data_dir = _resolve_remove_data_dir(name, marker_data)
+    data_dir = _expected_data_dir(name)
 
-    stop_error = _stop_worktree_services(worktree_path, data_dir)
-    if stop_error is not None:
-        print_error(f"worktree services could not be stopped: {stop_error}")
-        return 1
+    data_owned = _owns_data_dir(worktree_path, data_dir, marker_data)
+    if data_owned:
+        stop_error = _stop_worktree_services(worktree_path, data_dir)
+        if stop_error is not None:
+            print_error(f"worktree services could not be stopped: {stop_error}")
+            return 1
 
     marker_text: str | None = None
     if marker.exists():
         try:
             marker_text = marker.read_text(encoding="utf-8")
-        except OSError:
+        except (OSError, UnicodeError):
             marker_text = None
     if marker.exists() and checkout_present and not args.force:
         # Remove only the script-managed marker so legacy branches without the
@@ -693,10 +741,13 @@ def cmd_delete(args: argparse.Namespace) -> int:
                     return 1
         _run_command(["git", "worktree", "prune"])
 
-    data_removal_error = _remove_directory_tree(data_dir) if data_dir.exists() else None
-    if data_removal_error is not None and data_dir.exists():
-        print_error(f"data directory could not be removed: {data_removal_error}")
-        return 1
+    data_preserved = os.path.lexists(data_dir)
+    if data_owned and _owns_data_dir(worktree_path, data_dir, marker_data):
+        data_removal_error = _remove_directory_tree(data_dir)
+        if data_removal_error is not None and data_dir.exists():
+            print_error(f"data directory could not be removed: {data_removal_error}")
+            return 1
+        data_preserved = False
 
     if delete_branch:
         branch_delete_flag = "-D" if args.force else "-d"
@@ -716,6 +767,8 @@ def cmd_delete(args: argparse.Namespace) -> int:
         "data-dir": data_dir,
         "status": "deleted",
     }
+    if data_preserved:
+        fields["data-status"] = "preserved (ownership unverified)"
     if leftover_path is not None:
         # Still held by an external process (e.g. an editor); swept later.
         fields["leftover"] = leftover_path

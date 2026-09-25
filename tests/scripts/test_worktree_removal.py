@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -16,6 +18,7 @@ from tests.scripts.worktree_helpers import (
     _git_output,
     _load_worktree_module,
     _patch_repo_globals,
+    _record_owned_data,
     real_repo,
 )
 
@@ -37,7 +40,8 @@ def test_parse_args_accepts_create_delete_and_list():
     assert module.parse_args(["list"]).command == "list"
 
 
-def test_cmd_delete_rejects_unsafe_name(tmp_path, monkeypatch):
+@pytest.mark.parametrize("name", ["nested/task", "dev", "DEV", "dev."])
+def test_cmd_delete_rejects_unsafe_name(tmp_path, monkeypatch, name):
     module = _load_worktree_module()
     monkeypatch.setattr(module, "WORKTREES_DIR", tmp_path / ".worktrees")
 
@@ -49,13 +53,13 @@ def test_cmd_delete_rejects_unsafe_name(tmp_path, monkeypatch):
 
     monkeypatch.setattr(module, "_run_command", fake_run_command)
 
-    result = module.cmd_delete(argparse.Namespace(name="nested/task", force=False))
+    result = module.cmd_delete(argparse.Namespace(name=name, force=False))
 
     assert result == 1
     assert commands == []
 
 
-def test_cmd_delete_uses_expected_data_dir_when_marker_is_tampered(tmp_path, monkeypatch):
+def test_cmd_delete_preserves_both_data_dirs_when_marker_is_tampered(tmp_path, monkeypatch):
     module = _load_worktree_module()
     monkeypatch.setattr(module, "WORKTREES_DIR", tmp_path / ".worktrees")
     monkeypatch.setattr(module.Path, "home", staticmethod(lambda: tmp_path / "home"))
@@ -85,7 +89,7 @@ def test_cmd_delete_uses_expected_data_dir_when_marker_is_tampered(tmp_path, mon
     result = module.cmd_delete(argparse.Namespace(name=name, force=False))
 
     assert result == 0
-    assert not expected_data_dir.exists()
+    assert expected_data_dir.exists()
     assert malicious_target.exists()
     assert commands == [
         ["git", "-C", str(worktree_path), "clean", "-f", "--", module.WORKTREE_FILE_NAME],
@@ -112,6 +116,8 @@ def test_cmd_delete_stops_managed_services_before_removing_worktree(tmp_path, mo
     monkeypatch.setattr(module, "WORKTREES_DIR", tmp_path / ".worktrees")
     monkeypatch.setattr(module.Path, "home", staticmethod(lambda: tmp_path / "home"))
     monkeypatch.setattr(module, "_read_worktree_branch_name", lambda _path: name)
+
+    _record_owned_data(module, worktree_path, data_dir)
 
     def fake_run_command(command, *, cwd=None):
         calls.append((command, cwd))
@@ -154,6 +160,8 @@ def test_cmd_delete_reports_stop_failure_without_removing_anything(tmp_path, mon
     monkeypatch.setattr(module.Path, "home", staticmethod(lambda: tmp_path / "home"))
     monkeypatch.setattr(module, "_read_worktree_branch_name", lambda _path: name)
 
+    _record_owned_data(module, worktree_path, data_dir)
+
     def fake_run_command(command, *, cwd=None):
         calls.append(command)
         return 1, "still running"
@@ -180,9 +188,98 @@ def test_cmd_delete_reports_data_directory_removal_failure(tmp_path, monkeypatch
     monkeypatch.setattr(module, "_read_worktree_branch_name", lambda _path: name)
     monkeypatch.setattr(module, "_run_command", lambda _command, *, cwd=None: (0, ""))
     monkeypatch.setattr(module, "_remove_directory_tree", lambda _path: "locked")
+    _record_owned_data(module, worktree_path, data_dir)
 
     assert module.cmd_delete(argparse.Namespace(name=name, force=True)) == 1
     assert data_dir.exists()
+
+
+@pytest.mark.parametrize("ownership", ["legacy", "different-token", "different-repository"])
+@pytest.mark.parametrize("force", [False, True])
+def test_cmd_delete_preserves_unowned_data_without_stopping_services(
+    real_repo, monkeypatch, capsys, ownership, force
+):
+    module = _load_worktree_module()
+    _patch_repo_globals(monkeypatch, module, real_repo)
+    name = "unowned"
+    worktree_path = _create_task_worktree(module, real_repo, name)
+    data_dir = real_repo.parent / "home" / f".vbot-{name}"
+    data_dir.mkdir(parents=True)
+    sentinel = data_dir / "settings.json"
+    sentinel.write_text('{"server_port": 8421}', encoding="utf-8")
+    if ownership != "legacy":
+        _record_owned_data(module, worktree_path, data_dir)
+        owner_path = data_dir / module.DATA_OWNER_FILE_NAME
+        owner = json.loads(owner_path.read_text(encoding="utf-8"))
+        field = "data_owner" if ownership == "different-token" else "repository"
+        owner[field] = "somewhere-else"
+        owner_path.write_text(json.dumps(owner), encoding="utf-8")
+    stop_calls = []
+    monkeypatch.setattr(module, "_stop_worktree_services", lambda *args: stop_calls.append(args))
+
+    assert module.cmd_delete(argparse.Namespace(name=name, force=force)) == 0
+
+    assert not worktree_path.exists()
+    assert sentinel.read_text(encoding="utf-8") == '{"server_port": 8421}'
+    assert stop_calls == []
+    assert "data-status: preserved (ownership unverified)" in capsys.readouterr().out
+
+
+def test_cmd_delete_preserves_redirected_data_root_even_with_matching_records(
+    real_repo, monkeypatch, capsys
+):
+    module = _load_worktree_module()
+    _patch_repo_globals(monkeypatch, module, real_repo)
+    name = "redirected"
+    worktree_path = _create_task_worktree(module, real_repo, name)
+    data_dir = real_repo.parent / "home" / f".vbot-{name}"
+    data_dir.mkdir(parents=True)
+    _record_owned_data(module, worktree_path, data_dir)
+    (data_dir / "sentinel.txt").write_text("keep", encoding="utf-8")
+    foreign_root = data_dir.with_name(".vbot-dev")
+    data_dir.rename(foreign_root)
+    if os.name == "nt":
+        subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(data_dir), str(foreign_root)],
+            check=True,
+            capture_output=True,
+        )
+    else:
+        data_dir.symlink_to(foreign_root, target_is_directory=True)
+    stop_calls = []
+    monkeypatch.setattr(module, "_stop_worktree_services", lambda *args: stop_calls.append(args))
+
+    assert module.cmd_delete(argparse.Namespace(name=name, force=True)) == 0
+
+    assert (foreign_root / "sentinel.txt").read_text(encoding="utf-8") == "keep"
+    assert data_dir.exists()
+    assert stop_calls == []
+    assert "data-status: preserved (ownership unverified)" in capsys.readouterr().out
+
+
+def test_cmd_delete_rechecks_ownership_after_git_removal(real_repo, monkeypatch, capsys):
+    module = _load_worktree_module()
+    _patch_repo_globals(monkeypatch, module, real_repo)
+    name = "replaced-root"
+    worktree_path = _create_task_worktree(module, real_repo, name)
+    data_dir = real_repo.parent / "home" / f".vbot-{name}"
+    data_dir.mkdir(parents=True)
+    _record_owned_data(module, worktree_path, data_dir)
+    real_run_command = module._run_command
+
+    def run_command(command, *, cwd=None):
+        result = real_run_command(command, cwd=cwd)
+        if command[:3] == ["git", "worktree", "remove"]:
+            (data_dir / module.DATA_OWNER_FILE_NAME).unlink()
+            (data_dir / "foreign.txt").write_text("replacement", encoding="utf-8")
+        return result
+
+    monkeypatch.setattr(module, "_run_command", run_command)
+
+    assert module.cmd_delete(argparse.Namespace(name=name, force=True)) == 0
+
+    assert (data_dir / "foreign.txt").read_text(encoding="utf-8") == "replacement"
+    assert "data-status: preserved (ownership unverified)" in capsys.readouterr().out
 
 
 def test_cmd_delete_missing_marker_same_name_branch_skips_branch_delete(tmp_path, monkeypatch):
@@ -659,6 +756,7 @@ def test_cmd_delete_finishes_marker_only_leftover(real_repo, monkeypatch, capsys
     _git(real_repo, "merge", "--no-ff", name, "-m", f"merge: {name}")
     _strip_to_marker_only(module, worktree_path)
     data_dir = _seed_leftover_data_dir(real_repo, name, 8433)
+    _record_owned_data(module, worktree_path, data_dir)
     stop_calls = _intercept_service_stop(module, monkeypatch)
     # The enclosing repository is on main; the leftover must not resolve to it.
     assert module._read_worktree_branch_name(worktree_path) is None

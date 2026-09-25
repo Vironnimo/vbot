@@ -57,6 +57,7 @@ from ._store_profiles import (
     _list_events,
     _list_profiles,
     _list_swarms,
+    _replay_start,
     _save_profile,
 )
 from ._store_reads import (
@@ -150,6 +151,28 @@ class SwarmStore:
             _json_object(effective_configuration),
             request_id,
             expected_profile_revision,
+        )
+
+    async def replay_start(
+        self,
+        profile_id: str,
+        prompt: str,
+        *,
+        request_id: str,
+        expected_profile_revision: int | None = None,
+        working_directory: str | None = None,
+    ) -> Json | None:
+        """Replay an admitted Start against its retained configuration snapshot."""
+        _request_id(request_id)
+        if expected_profile_revision is not None:
+            _revision(expected_profile_revision, "expected_profile_revision")
+        return await self._run(
+            _replay_start,
+            profile_id,
+            prompt,
+            request_id,
+            expected_profile_revision,
+            working_directory,
         )
 
     async def begin_delete(self, swarm_id: str) -> bool:

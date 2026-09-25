@@ -312,6 +312,18 @@ class SkillRegistry:
         if skill is None:
             return SkillAvailability("invalid", (f"skill '{name}' is not loadable",), ())
 
+        return self.availability_for_package(skill, allowed_skills)
+
+    def availability_for_package(
+        self,
+        skill: SkillMetadata,
+        allowed_skills: Sequence[str] | None = None,
+    ) -> SkillAvailability:
+        """Evaluate this package with the registry's environment and dependency pool.
+
+        Inventory may supply a same-named package shadowed in the merged pool;
+        its own requirements must still determine its displayed availability.
+        """
         allowed_names = self._allowed_names(allowed_skills)
         return self._availability_for_skill(skill, allowed_names, stack=())
 

@@ -712,9 +712,7 @@ class CronService:
 
             claimed_at = _timing._utc_now_iso()
             try:
-                await _CRON_WRITER.call_async(
-                    partial(_claims.write, self._once_fire_claims_dir, latest, claimed_at)
-                )
+                await self._claim_once_fire(latest, claimed_at)
             except CronStorageError as error:
                 _LOGGER.error(
                     "Cron once job fire claim failed for job=%s: %s",
@@ -722,11 +720,16 @@ class CronService:
                     error,
                     exc_info=(type(error), error, error.__traceback__),
                 )
+                if job.id in self._pending_restarts:
+                    return
                 failed_fire_attempts += 1
                 if await self._back_off_or_abandon_once_job(job.id, failed_fire_attempts):
                     return
                 continue
 
+            if job.id in self._pending_restarts:
+                await self._remove_claim(job.id)
+                return
             succeeded = await self._trigger_job_run(latest)
             if job.id in self._pending_restarts:
                 await self._remove_claim(job.id)
@@ -755,6 +758,21 @@ class CronService:
                 await self._persist_after_fire(latest.id)
             await self._remove_claim(latest.id)
             return
+
+    async def _claim_once_fire(self, job: CronJob, claimed_at: str) -> None:
+        # A reschedule must wait for this claim to settle before replacing its
+        # task; otherwise the old task could leave or remove the new fire's claim.
+        self._executing_jobs.add(job.id)
+        try:
+            await _CRON_WRITER.call_async(
+                partial(_claims.write, self._once_fire_claims_dir, job, claimed_at)
+            )
+        except asyncio.CancelledError:
+            # The ordered writer has settled, and admission has not started.
+            await self._remove_claim(job.id)
+            raise
+        finally:
+            self._executing_jobs.discard(job.id)
 
     async def _remove_claim(self, job_id: str) -> None:
         await _CRON_WRITER.call_async(partial(_claims.remove, self._once_fire_claims_dir, job_id))

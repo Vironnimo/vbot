@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import asyncio
 import threading
+from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from core.channels.adapter import RouteFacts
+from core.channels.adapter import ConversationFacts, RouteFacts
+from core.channels.telegram import TelegramChannelAdapter
 from core.sessions import ChatSessionManager, SessionAddress
 from core.tools.channel import (
     register_channel_send_tool,
@@ -18,12 +21,19 @@ from core.tools.channel import (
 from core.tools.tools import (
     ToolRegistry,
 )
+from tests.core.channels.channels_helpers import (
+    make_config as make_real_channel_config,
+)
+from tests.core.channels.channels_helpers import (
+    make_service as make_channel_service,
+)
 from tests.core.tools.channel_send_helpers import (
     _TEST_MAX_ATTACHMENT_SIZE_BYTES,
     assert_success_envelope,
     dispatch,
     make_channel_config,
     make_chat_sessions,
+    make_context,
 )
 
 
@@ -58,7 +68,9 @@ def test_channel_send_records_outbound_note_in_target_session(tmp_path: Path) ->
     )
 
     assert_success_envelope(result)
-    channel_service.ensure_outbound_session.assert_awaited_once_with("tg-assistant", "12345")
+    channel_service.ensure_outbound_session.assert_awaited_once_with(
+        "tg-assistant", "12345", thread_id=None
+    )
     chat_sessions.get_or_create.assert_called_once_with(
         SessionAddress(project_id=None, agent_id="agent-1", session_id="ch-tg-assistant-12345")
     )
@@ -270,6 +282,169 @@ def test_channel_send_resolves_platform_target_from_unique_allowed_chat_id(tmp_p
         thread_id=None,
         buttons=None,
     )
+
+
+@pytest.mark.usefixtures("current_format_data_directory")
+@pytest.mark.parametrize("target_source", ["configured_default", "project_metadata"])
+@pytest.mark.asyncio
+async def test_project_session_resolves_its_own_implicit_channel_target(
+    tmp_path: Path, target_source: str
+) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    project_address = SessionAddress(
+        project_id="project-one", agent_id="agent-1", session_id="session-1"
+    )
+    sessions.create("agent-1", session_id="session-1", project_id="project-one")
+    expected_target = "12345"
+    if target_source == "project_metadata":
+        expected_target = "23456"
+        sessions.set_metadata(
+            project_address,
+            {
+                "last_reply_target": {
+                    "channel_id": "tg-assistant",
+                    "platform_target": expected_target,
+                }
+            },
+        )
+        # An identically named Identity Session must never choose the Project
+        # Session's destination, even when its Channel id also matches.
+        identity = sessions.create("agent-1", session_id="session-1")
+        sessions.set_metadata(
+            identity.address,
+            {
+                "last_reply_target": {
+                    "channel_id": "tg-assistant",
+                    "platform_target": "99999",
+                }
+            },
+        )
+    channel_service = Mock()
+    channel_service.send = AsyncMock()
+    channel_service.list_channels.return_value = [make_channel_config(allowed_chat_ids=[12345])]
+    channel_service.ensure_outbound_session = AsyncMock(
+        return_value=RouteFacts(agent_id="agent-1", session_id="outbound-session")
+    )
+    registry = ToolRegistry()
+    register_channel_send_tool(
+        registry,
+        channel_service,
+        sessions,
+        max_attachment_size_bytes=_TEST_MAX_ATTACHMENT_SIZE_BYTES,
+    )
+    try:
+        result = await registry.dispatch(
+            make_context(tmp_path, project_id="project-one"),
+            {"channel_id": "tg-assistant", "message": "Project result"},
+            ["channel_send"],
+        )
+
+        assert assert_success_envelope(result)["platform_target"] == expected_target
+        channel_service.send.assert_awaited_once_with(
+            "tg-assistant",
+            "Project result",
+            expected_target,
+            files=None,
+            thread_id=None,
+            buttons=None,
+        )
+    finally:
+        sessions.close()
+
+
+@pytest.mark.usefixtures("current_format_data_directory")
+@pytest.mark.parametrize("first_target", ["inbound_topic", "explicit_topic"])
+@pytest.mark.asyncio
+async def test_channel_file_deliveries_keep_the_actual_topic_for_followup_sends(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, first_target: str
+) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    service = make_channel_service(tmp_path, chat_sessions=sessions)
+    config = make_real_channel_config(allowed_chat_ids=[-10001])
+    adapter = TelegramChannelAdapter(
+        config,
+        service._trigger_service,
+        sessions,
+        lambda _key: "test-token",
+        command_dispatcher=service._command_dispatcher,
+        conversation_pointers=service._state,
+    )
+    bot = SimpleNamespace(send_document=AsyncMock())
+    adapter._application = SimpleNamespace(
+        bot=bot, updater=None, stop=AsyncMock(), shutdown=AsyncMock()
+    )
+    started = asyncio.Event()
+
+    async def hold_network_listener() -> None:
+        started.set()
+        await asyncio.Future()
+
+    monkeypatch.setattr(adapter, "start", hold_network_listener)
+    monkeypatch.setattr(service, "_create_adapter", lambda _config: adapter)
+    document = tmp_path / "report.pdf"
+    document.write_bytes(b"%PDF-1.7\n")
+    registry = ToolRegistry()
+    register_channel_send_tool(
+        registry, service, sessions, max_attachment_size_bytes=_TEST_MAX_ATTACHMENT_SIZE_BYTES
+    )
+    try:
+        await service.create_channel(config)
+        await asyncio.wait_for(started.wait(), timeout=5)
+        route, _ = await adapter._engine._routing._prepare_inbound_route_async(
+            ConversationFacts(
+                platform="telegram",
+                channel_id=config.id,
+                chat_id="-10001",
+                user_id="1",
+                access_scope_id="-10001",
+                kind="group",
+                thread_id="42",
+            )
+        )
+        caller = replace(make_context(tmp_path), agent_id="assistant", session_id=route.session_id)
+        address = SessionAddress(
+            project_id=None, agent_id=caller.agent_id, session_id=caller.session_id
+        )
+        expected_topic = "73" if first_target == "explicit_topic" else "42"
+        for index in range(2):
+            arguments: dict[str, Any] = {
+                "channel_id": config.id,
+                "file_paths": [str(document)],
+            }
+            if index == 0 and first_target == "explicit_topic":
+                arguments.update(platform_target="-10001", thread_id=expected_topic)
+            result = await registry.dispatch(caller, arguments, ["channel_send"])
+            assert assert_success_envelope(result, with_thread=True)["thread_id"] == expected_topic
+
+        assert [call.kwargs["message_thread_id"] for call in bot.send_document.await_args_list] == [
+            int(expected_topic),
+            int(expected_topic),
+        ]
+        assert sessions.get_metadata(address)["last_reply_target"] == {
+            "channel_id": config.id,
+            "platform_target": "-10001",
+            "thread_id": expected_topic,
+        }
+        assert len([entry for entry in sessions.get(address).load() if entry.role == "note"]) == 2
+
+        # An explicit chat target without a topic is a new unthreaded delivery;
+        # it must clear the previous topic instead of silently inheriting it.
+        result = await registry.dispatch(
+            caller,
+            {
+                "channel_id": config.id,
+                "platform_target": "-10001",
+                "file_paths": [str(document)],
+            },
+            ["channel_send"],
+        )
+        assert_success_envelope(result)
+        assert "message_thread_id" not in bot.send_document.await_args.kwargs
+        assert "thread_id" not in sessions.get_metadata(address)["last_reply_target"]
+    finally:
+        await service.aclose()
+        service.close()
+        sessions.close()
 
 
 def test_channel_send_passes_explicit_thread_id(tmp_path: Path) -> None:

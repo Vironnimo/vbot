@@ -31,6 +31,8 @@ def _patch_create_environment(monkeypatch, module, tmp_path: Path) -> None:
     monkeypatch.setattr(module, "find_free_port", lambda _worktrees_dir: 8422)
     monkeypatch.setattr(module.shutil, "which", lambda _name: "npm")
     monkeypatch.setattr(module.Path, "home", staticmethod(lambda: tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
 
 
 def test_worktree_source_uses_canonical_initializer_without_local_template() -> None:
@@ -131,7 +133,8 @@ def test_run_command_defaults_to_project_root(monkeypatch):
     ]
 
 
-def test_cmd_create_rejects_unsafe_name(tmp_path, monkeypatch):
+@pytest.mark.parametrize("name", ["../outside", "dev", "DEV", "dEv.", "task."])
+def test_cmd_create_rejects_unsafe_name(tmp_path, monkeypatch, name):
     module = _load_worktree_module()
     monkeypatch.setattr(module, "WORKTREES_DIR", tmp_path / ".worktrees")
 
@@ -143,7 +146,7 @@ def test_cmd_create_rejects_unsafe_name(tmp_path, monkeypatch):
 
     monkeypatch.setattr(module, "_run_command", fake_run_command)
 
-    result = module.cmd_create(argparse.Namespace(name="../outside", from_branch=None))
+    result = module.cmd_create(argparse.Namespace(name=name, from_branch=None))
 
     assert result == 1
     assert commands == []
@@ -253,6 +256,14 @@ def test_cmd_create_initializes_canonical_data_dir_without_agent(tmp_path, monke
     assert ready_marker.databases["sessions"].format_generation == 1
     assert all((data_dir / path).is_dir() for path in DATA_DIRECTORY_RELATIVE_PATHS)
     assert not (data_dir / "agents" / "main").exists()
+    marker = json.loads((worktree_path / module.WORKTREE_FILE_NAME).read_text(encoding="utf-8"))
+    assert module._owns_data_dir(worktree_path, data_dir, marker)
+
+    # Successful creation claims precisely this root, so ordinary cleanup removes it.
+    monkeypatch.setattr(module, "_stop_worktree_services", lambda *_args: None)
+    monkeypatch.setattr(module, "_terminate_worktree_processes", lambda _path: [])
+    assert module.cmd_delete(argparse.Namespace(name=name, force=True)) == 0
+    assert not data_dir.exists()
 
 
 def test_cmd_create_holds_port_lock_until_marker_and_settings_are_durable(tmp_path, monkeypatch):
@@ -424,15 +435,16 @@ def test_cmd_create_cleans_up_worktree_data_dir_and_branch_after_build_failure(
     assert removed_paths == [(data_dir, True)]
 
 
-def test_cmd_create_preserves_preexisting_data_dir_after_build_failure(tmp_path, monkeypatch):
+def test_cmd_create_refuses_preexisting_data_dir_before_creating_worktree(tmp_path, monkeypatch):
     module = _load_worktree_module()
 
     name = "preexisting-data"
     worktrees_dir = tmp_path / ".worktrees"
     worktree_path = worktrees_dir / name
-    webui_path = worktree_path / "webui"
     data_dir = tmp_path / "home" / f".vbot-{name}"
     data_dir.mkdir(parents=True)
+    settings = data_dir / "settings.json"
+    settings.write_text('{"server_port": 8421}', encoding="utf-8")
 
     _patch_create_environment(monkeypatch, module, tmp_path)
 
@@ -440,13 +452,6 @@ def test_cmd_create_preserves_preexisting_data_dir_after_build_failure(tmp_path,
 
     def fake_run_command(command, *, cwd=None):
         commands.append((command, cwd))
-        if command[:3] == ["git", "rev-parse", "--verify"]:
-            return 1, ""
-        if command[:3] == ["git", "worktree", "add"]:
-            webui_path.mkdir(parents=True, exist_ok=True)
-            return 0, ""
-        if command == ["npm", "run", "build"]:
-            return 1, "build failed"
         return 0, ""
 
     removed_paths = []
@@ -460,8 +465,11 @@ def test_cmd_create_preserves_preexisting_data_dir_after_build_failure(tmp_path,
     result = module.cmd_create(argparse.Namespace(name=name, from_branch=None))
 
     assert result == 1
-    assert (["git", "worktree", "remove", "--force", str(worktree_path)], None) in commands
+    assert commands == []
     assert removed_paths == []
+    assert not worktree_path.exists()
+    assert list(data_dir.iterdir()) == [settings]
+    assert settings.read_text(encoding="utf-8") == '{"server_port": 8421}'
 
 
 def test_iter_worktree_entries_lists_marker_backed_worktrees(tmp_path, monkeypatch):

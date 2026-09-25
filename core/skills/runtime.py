@@ -348,11 +348,11 @@ class SkillRuntime:
         disabled Skill stays visible and manageable here. Every scanned package
         is listed per source — a same-name Skill in two sources appears once per
         origin — annotated with its origin, owner (private homes only), share and
-        disable state, availability, and warnings. Availability is resolved
-        against one merged registry so cross-source Skill dependencies answer
-        exactly like runtime activation does. Stale policy entries (an unknown
-        owner or a vanished package) are reported for cleanup, not silently
-        dropped.
+        disable state, availability, and warnings. Availability evaluates each
+        package's own requirements against one merged dependency registry, even
+        when another package with the same name takes precedence there. Stale
+        policy entries (an unknown owner or a vanished package) are reported for
+        cleanup, not silently dropped.
         """
         environment = self._skill_environment(self._storage.load_environment())
         policy = self._policy.load()
@@ -390,7 +390,7 @@ class SkillRuntime:
         skills: list[dict[str, Any]] = []
         for skill, origin, owner_id, warnings, loadable, root in raw_entries:
             if loadable:
-                availability = merged.availability_for(skill.name)
+                availability = merged.availability_for_package(skill)
                 missing = list(availability.missing)
                 optional_missing = list(availability.optional_missing)
                 status = "available" if availability.state == "available" else "unavailable"

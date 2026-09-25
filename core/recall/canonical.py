@@ -6,7 +6,6 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from typing import Any
 
 from core.chat.content_blocks import FileBlock, FileMentionBlock, MediaBlock, TextBlock
@@ -350,24 +349,5 @@ def query_terms(query: str) -> list[str]:
     return [term.casefold() for term in compact_text(query).split(" ") if term]
 
 
-def parse_persisted_timestamp(value: object) -> datetime | None:
-    if not isinstance(value, str):
-        return None
-    try:
-        normalized = value.removesuffix("Z") + "+00:00" if value.endswith("Z") else value
-        parsed = datetime.fromisoformat(normalized)
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=UTC)
-    return parsed.astimezone(UTC)
-
-
 def compact_text(text: str) -> str:
     return _WHITESPACE_PATTERN.sub(" ", text).strip()
-
-
-def trim_text(text: str, limit: int) -> str:
-    if len(text) <= limit:
-        return text
-    return f"{text[: max(limit - 3, 0)]}..."

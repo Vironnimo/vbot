@@ -98,6 +98,11 @@ Prompt-facing metadata is XML in the agentskills.io-compatible shape:
 
 Scoped Project/Agent scans publish only if no invalidation or credential refresh occurred during I/O; cache access and publication are synchronized without holding the lock during scans (`test_runtime_skill_cache_races.py`). Global and scoped scans share the same global root ordering and origin rules.
 
+Manager availability evaluates each source package's own requirements, including
+same-name packages shadowed in the merged dependency pool. Cross-source Skill
+dependencies use that merged pool; required and optional missing diagnostics stay
+specific to the displayed package (`test_runtime_shared_skills.py`).
+
 - `core.skills` exports the registry/policy/authoring surfaces (`SkillRegistry`, `SkillPolicyService`, `SkillAuthoringService`), the origin vocabulary, scan helpers, and dataclasses - signatures live in code. `core/skills/runtime.py::SkillRuntime` owns global scan-layer construction, Project/Agent/shared resolution, manager inventory, and scoped registry caches; `Runtime` exposes stable delegates and performs only Tool/Prompt composition after a registry replacement.
 - Non-obvious `SkillRegistry.load` behaviors: a scan root whose own path contains `SKILL.md` is a **package root** contributing exactly that package (how shared layers insert without scanning an owner's home); missing roots contribute nothing and one root's enumeration failure degrades to diagnostics without blocking startup; `environment` snapshots requirement-check inputs (defaults `os.environ`); `excluded_names` moves disabled names into a separate bucket readable via `excluded_skills()` - runtime passes them, editor loads omit them.
 - `Runtime.refresh_skills_for(project_id, identity_agent_id=None)` is the explicit Compaction refresh seam: full pool reload plus cache invalidation returning the fresh scope; normal consumers use cached `skills_for(...)` and must not imitate rescans.

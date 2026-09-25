@@ -43,7 +43,9 @@ location.
 from __future__ import annotations
 
 import json
+import os
 import re
+import stat
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -151,15 +153,30 @@ def _convert_file(context: ConversionContext, document: _Document, path: Path) -
         return
     body = _converted(context, document, path, relative)
     if body is not None:
-        context.staged(target).write_text(
-            render_json_document(body, version=FORMAT_VERSION), encoding="utf-8"
+        _write_staged_document(
+            path,
+            context.staged(target),
+            render_json_document(body, version=FORMAT_VERSION).encode("utf-8"),
         )
         context.report.count(AREA, document.kind)
     elif moved:
-        context.staged(target).write_bytes(path.read_bytes())
+        _write_staged_document(path, context.staged(target), path.read_bytes())
     if moved:
         context.retire(relative)
         context.report.count(AREA, "relocated")
+
+
+def _write_staged_document(source: Path, staged: Path, data: bytes) -> None:
+    """Preserve file permissions from the first staged write through installation."""
+    mode = stat.S_IMODE(source.stat().st_mode)
+    descriptor = os.open(
+        staged, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0), mode
+    )
+    # Keep the creation handle: reopening a source-mode read-only file for writing
+    # would fail. Creation permissions also protect OAuth secrets before chmod.
+    with os.fdopen(descriptor, "wb") as stream:
+        stream.write(data)
+    os.chmod(staged, mode)
 
 
 def _converted(
