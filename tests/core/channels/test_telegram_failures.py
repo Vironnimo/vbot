@@ -26,6 +26,8 @@ from tests.core.channels.telegram_test_support import (
     make_update,
 )
 
+_BOT = 7001
+
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("reply_to", [None, "42"])
@@ -75,16 +77,16 @@ async def test_offset_saves_cannot_regress_when_threads_finish_out_of_order(tmp_
 
     def save_lower():
         assert higher_saved.wait(timeout=5)
-        storage.save_update_offset("tg-assistant", 7)
+        storage.save_update_offset("tg-assistant", _BOT, 7)
 
     def save_higher():
         try:
-            storage.save_update_offset("tg-assistant", 8)
+            storage.save_update_offset("tg-assistant", _BOT, 8)
         finally:
             higher_saved.set()
 
     await asyncio.gather(asyncio.to_thread(save_lower), asyncio.to_thread(save_higher))
-    assert storage.load_update_offset("tg-assistant") == 8
+    assert storage.load_update_offset("tg-assistant", _BOT) == 8
 
 
 @pytest.mark.asyncio
@@ -96,14 +98,15 @@ async def test_stop_drains_slow_offset_save_before_restart(tmp_path, monkeypatch
     entered = threading.Event()
     release = threading.Event()
 
-    def save(channel_id, update_id):
+    def save(channel_id, bot_id, update_id):
         entered.set()
         assert release.wait(timeout=15)
-        storage.save_update_offset(channel_id, update_id)
+        storage.save_update_offset(channel_id, bot_id, update_id)
 
     adapter, _, _, _ = make_adapter(
         tmp_path,
         monkeypatch,
+        bot_id=_BOT,
         update_offset_store=SimpleNamespace(save_update_offset=save),
     )
     application = adapter._application
@@ -122,14 +125,14 @@ async def test_stop_drains_slow_offset_save_before_restart(tmp_path, monkeypatch
         release.set()
         await asyncio.gather(stop, return_exceptions=True)
         await adapter._await_offset_saves()
-    assert storage.load_update_offset("tg-assistant") == 7
+    assert storage.load_update_offset("tg-assistant", _BOT) == 7
     application.shutdown.assert_awaited_once()
 
 
 @pytest.mark.parametrize("age_hours", [24, 47, 48, 168])
 def test_polling_watermark_expires_before_telegram_randomizes_ids(tmp_path, age_hours):
     storage = channel_state(tmp_path)
-    storage.save_update_offset("tg-assistant", 100)
+    storage.save_update_offset("tg-assistant", _BOT, 100)
     previous_write = format_canonical_timestamp(datetime.now(UTC) - timedelta(hours=age_hours))
     storage.database.write(
         lambda connection: connection.execute(
@@ -138,9 +141,9 @@ def test_polling_watermark_expires_before_telegram_randomizes_ids(tmp_path, age_
         )
     )
 
-    assert storage.load_update_offset("tg-assistant") == (100 if age_hours < 48 else 0)
-    storage.save_update_offset("tg-assistant", 5)
-    assert storage.load_update_offset("tg-assistant") == (100 if age_hours < 48 else 5)
+    assert storage.load_update_offset("tg-assistant", _BOT) == (100 if age_hours < 48 else 0)
+    storage.save_update_offset("tg-assistant", _BOT, 5)
+    assert storage.load_update_offset("tg-assistant", _BOT) == (100 if age_hours < 48 else 5)
 
 
 @pytest.mark.asyncio
@@ -273,7 +276,7 @@ async def test_redelivered_update_is_skipped_via_persisted_watermark(
 ) -> None:
     """Telegram redelivers unconfirmed updates after a restart; only new ids run."""
     storage = channel_state(tmp_path)
-    storage.save_update_offset("tg-assistant", 7)
+    storage.save_update_offset("tg-assistant", _BOT, 7)
 
     session_id = "ch-tg-assistant-12345"
     trigger_mock = AsyncMock(
@@ -284,6 +287,7 @@ async def test_redelivered_update_is_skipped_via_persisted_watermark(
         monkeypatch,
         allowed_chat_ids=[12345],
         trigger_run=trigger_mock,
+        bot_id=_BOT,
         update_offset_store=storage,
     )
     # What start() does before polling begins.
@@ -302,7 +306,58 @@ async def test_redelivered_update_is_skipped_via_persisted_watermark(
     trigger_mock.assert_awaited_once()
 
     await adapter._await_offset_saves()
-    assert storage.load_update_offset("tg-assistant") == 8
+    assert storage.load_update_offset("tg-assistant", _BOT) == 8
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_a_new_bot_does_not_inherit_the_previous_bot_watermark(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A token for another bot starts a new update-id sequence below the old watermark."""
+    storage = channel_state(tmp_path)
+    storage.save_update_offset("tg-assistant", _BOT, 900_000)
+    trigger_mock = AsyncMock(
+        return_value=make_completed_run(session_id="ch-tg-assistant-12345", output_text="ok")
+    )
+    adapter, _chat_sessions, _trigger, _bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[12345],
+        trigger_run=trigger_mock,
+        bot_id=_BOT + 1,
+        update_offset_store=storage,
+    )
+    adapter._last_update_id = adapter._load_update_offset()
+
+    update = make_update(chat_id=12345, user_id=50, text="hello")
+    update.update_id = 5
+    await adapter._handle_inbound_message(update, SimpleNamespace())
+    await drain_chat_queue(adapter, 12345)
+
+    trigger_mock.assert_awaited_once()
+    await adapter._await_offset_saves()
+    assert storage.load_update_offset("tg-assistant", _BOT + 1) == 5
+    assert storage.load_update_offset("tg-assistant", _BOT) == 0
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_an_unknown_bot_identity_neither_loads_nor_saves_a_watermark(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage = channel_state(tmp_path)
+    storage.save_update_offset("tg-assistant", _BOT, 7)
+    adapter, _chat_sessions, _trigger, _bot = make_adapter(
+        tmp_path, monkeypatch, update_offset_store=storage
+    )
+
+    assert adapter._load_update_offset() == -1
+    assert adapter._claim_update(SimpleNamespace(update_id=3))
+    assert not adapter._offset_save_tasks
+    assert storage.load_update_offset("tg-assistant", _BOT) == 7
     await adapter.stop()
 
 
@@ -335,9 +390,9 @@ async def test_duplicate_update_inside_one_session_is_claimed_once(
 
 def test_polling_state_survives_storage_reload(tmp_path: Path) -> None:
     storage = channel_state(tmp_path)
-    storage.save_update_offset("tg-assistant", 42)
+    storage.save_update_offset("tg-assistant", _BOT, 42)
     reloaded = ChannelStateStore.open(tmp_path)
     try:
-        assert reloaded.load_update_offset("tg-assistant") == 42
+        assert reloaded.load_update_offset("tg-assistant", _BOT) == 42
     finally:
         reloaded.close()

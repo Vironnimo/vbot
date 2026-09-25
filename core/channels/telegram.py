@@ -294,11 +294,14 @@ class TelegramChannelAdapter(ChannelAdapter):
     # -- Inbound handlers -----------------------------------------------------------------
 
     def _load_update_offset(self) -> int:
+        # The watermark counts the update ids of one bot; without the bot's
+        # identity no stored watermark can be matched to it.
         store = self._update_offset_store
-        if store is None:
+        bot_id = self._bot_id
+        if store is None or bot_id is None:
             return -1
         try:
-            return store.load_update_offset(self._config.id)
+            return store.load_update_offset(self._config.id, bot_id)
         except Exception as error:
             _LOGGER.warning(
                 "Cannot load Telegram polling offset (channel=%s), starting empty: %s",
@@ -337,10 +340,11 @@ class TelegramChannelAdapter(ChannelAdapter):
 
     def _schedule_offset_save(self, update_id: int) -> None:
         store = self._update_offset_store
-        if store is None:
+        bot_id = self._bot_id
+        if store is None or bot_id is None:
             return
         task = asyncio.create_task(
-            _STATE_IO_POOL.run(store.save_update_offset, self._config.id, update_id)
+            _STATE_IO_POOL.run(store.save_update_offset, self._config.id, bot_id, update_id)
         )
         self._offset_save_tasks.add(task)
         task.add_done_callback(self._on_offset_saved)

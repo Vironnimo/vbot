@@ -171,27 +171,28 @@ async def test_converts_every_state_file_of_a_channel_and_retires_it(tmp_path: P
         )
         assert used.status == "consumed"
 
-        assert store.load_update_offset("tg-assistant") == 42
         assert await store.has_received("tg-assistant", "-100:1")
         with store.database.read() as connection:
             used_row = connection.execute(
                 "SELECT created_at, consumed_at FROM channel_run_buttons WHERE binding_id = 'used'"
             ).fetchone()
-            polling_row = connection.execute(
-                "SELECT updated_at FROM channel_polling WHERE channel_id = 'tg-assistant'"
-            ).fetchone()
+            registry = connection.execute("SELECT channel_id, platform FROM channels").fetchall()
+            polling_rows = connection.execute("SELECT COUNT(*) FROM channel_polling").fetchone()
             receipts = [
                 tuple(row)
                 for row in connection.execute(
                     "SELECT message_ref, received_at FROM channel_received ORDER BY received_at"
                 )
             ]
-    # A consumed binding and the watermark take the time the file was last written.
+    # A consumed binding takes the time the file was last written.
     assert tuple(used_row) == (
         "2026-06-18T09:00:00.000000Z",
         format_canonical_timestamp(_FILE_TIME),
     )
-    assert tuple(polling_row) == (format_canonical_timestamp(_FILE_TIME),)
+    # The registry records the platform whose ids the state holds.
+    assert [tuple(row) for row in registry] == [("tg-assistant", "telegram")]
+    # The watermark named no bot, so no bot could use it.
+    assert polling_rows[0] == 0
     # Receipts keep their order and end at the time the file was last written.
     assert [message_ref for message_ref, _received_at in receipts] == ["-100:1", "-100:2"]
     assert receipts[-1][1] == format_canonical_timestamp(_FILE_TIME)
@@ -207,9 +208,12 @@ async def test_converts_every_state_file_of_a_channel_and_retires_it(tmp_path: P
         "conversations": 0,
         "run_buttons": 2,
         "received": 2,
-        "polling": 1,
     }
-    assert _skipped(context) == {}
+    assert _skipped(context) == {
+        "channels/tg-assistant/polling.json": (
+            "polling watermark dropped: it does not name its Telegram bot"
+        ),
+    }
 
 
 def test_every_configured_channel_is_registered_without_state(tmp_path: Path) -> None:
@@ -220,10 +224,28 @@ def test_every_configured_channel_is_registered_without_state(tmp_path: Path) ->
 
     with _staged_store(context) as store:
         # A registered Channel accepts state writes.
-        store.save_update_offset("dc-assistant", 1)
-        assert store.load_update_offset("dc-assistant") == 1
+        store.save_update_offset("dc-assistant", 7001, 1)
+        assert store.load_update_offset("dc-assistant", 7001) == 1
     assert context.retired == []
     assert context.report.counts[AREA]["channels"] == 1
+
+
+def test_the_registry_records_only_a_readable_platform(tmp_path: Path) -> None:
+    context = _context(tmp_path)
+    _channel(context.source, "tg-assistant")
+    _write(
+        context.source,
+        "channels/odd/channel.json",
+        {"id": "odd", "platform": "icq", "agent_id": "assistant"},
+    )
+    _write(context.source, "channels/broken/channel.json", "{not json")
+
+    convert(context)
+
+    with _staged_store(context) as store, store.database.read() as connection:
+        platforms = dict(connection.execute("SELECT channel_id, platform FROM channels"))
+    # Without a platform, the first readable config names it and keeps the state.
+    assert platforms == {"broken": None, "odd": None, "tg-assistant": "telegram"}
 
 
 def test_routing_pointers_move_from_anchor_metadata_of_the_current_agent(
@@ -346,7 +368,6 @@ async def test_invalid_state_is_dropped_and_reported_without_failing(tmp_path: P
         assert claim.status == "claimed"
         assert claim.binding is not None
         assert claim.binding.created_at == format_canonical_timestamp(_FILE_TIME)
-        assert store.load_update_offset("tg-assistant") == 0
         assert await store.has_received("tg-assistant", "-100:1")
     skipped = _skipped(context)
     assert skipped.keys() == {
@@ -384,12 +405,12 @@ async def test_receipts_keep_the_newest_window_in_order(
 def test_a_repeated_run_replaces_the_staged_database(tmp_path: Path) -> None:
     first = _context(tmp_path)
     _channel(first.source, "tg-assistant")
-    _write(first.source, "channels/tg-assistant/polling.json", {"version": 1, "last_update_id": 5})
+    _write(first.source, "channels/tg-assistant/received.json", ["-100:1"])
     convert(first)
 
     second = ConversionContext(source=first.source, staging=first.staging)
     convert(second)
 
-    with _staged_store(second) as store:
-        assert store.load_update_offset("tg-assistant") == 5
-    assert second.report.counts[AREA]["polling"] == 1
+    with _staged_store(second) as store, store.database.read() as connection:
+        assert connection.execute("SELECT COUNT(*) FROM channel_received").fetchone()[0] == 1
+    assert second.report.counts[AREA]["received"] == 1

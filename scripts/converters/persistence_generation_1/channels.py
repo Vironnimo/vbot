@@ -9,8 +9,8 @@ Before Generation 1 every Channel kept its state in files beside
 - ``run-button-bindings.json``: ``{"version": 1, "bindings": {id:
   {"platform_target", "thread_id", "origin_session_id", "original_button_data",
   "created_at", "consumed"}}}``;
-- ``polling.json``: ``{"version": 1, "last_update_id"}``, whose file time was
-  the watermark's age;
+- ``polling.json``: ``{"version": 1, "last_update_id"}``, the Telegram polling
+  watermark, which did not name the bot whose update ids it counted;
 - ``received.json``: the newest inbound receipts of a socket platform, oldest
   first.
 
@@ -18,15 +18,18 @@ A conversation moved by ``/new``, a bound Run tap or a chat migration kept its
 routing pointer as ``active_session_id`` in the metadata of its anchor Session
 in ``sessions.db``, next to the ``conversation_kind`` of every Channel Session.
 
-This area registers every Channel directory that holds a ``channel.json``,
-stages its state and the routing pointers of its current Agent in a new
-``channels.db``, and retires every state file. Old timestamps become canonical
-UTC; a consumed binding takes its file time as ``consumed_at``, the polling
-watermark takes its file time as ``updated_at``, and receipts get increasing
+This area registers every Channel directory that holds a ``channel.json``
+with the platform that config names (none when it cannot be read), stages its
+state and the routing pointers of its current Agent in a new ``channels.db``,
+and retires every state file. Old timestamps become canonical UTC; a consumed
+binding takes its file time as ``consumed_at``, and receipts get increasing
 times that end at their file time. Invalid entries are skipped and reported,
 and so are pointers of an anchor Session that belongs to another Agent than the
-one the Channel routes to. Session metadata itself is converted by the Session
-area, which drops the retired routing keys.
+one the Channel routes to. A polling watermark is dropped and reported: the
+watermark in ``channels.db`` applies only to the bot it names, so the first
+start of the Channel may see Telegram redeliver updates it never confirmed.
+Session metadata itself is converted by the Session area, which drops the
+retired routing keys.
 """
 
 from __future__ import annotations
@@ -41,7 +44,11 @@ from pathlib import Path
 from typing import Any
 
 from core.channels import channel_database_spec
-from core.channels.config import ChannelConfigError, _normalize_channel_id
+from core.channels.config import (
+    ALLOWED_CHANNEL_PLATFORMS,
+    ChannelConfigError,
+    _normalize_channel_id,
+)
 from core.channels.state import RECEIVED_MESSAGE_WINDOW
 from core.database import open_offline_database
 from core.utils.timestamps import (
@@ -74,6 +81,8 @@ class _UnreadableError(Exception):
 class _Rows:
     """Everything staged into ``channels.db``, in insertion order."""
 
+    # Channel id to the platform its config names.
+    platforms: dict[str, str | None] = field(default_factory=dict)
     # Channel id to its own platform identity.
     channels: dict[str, str | None] = field(default_factory=dict)
     admins: list[tuple[str, str, str]] = field(default_factory=list)
@@ -83,7 +92,6 @@ class _Rows:
         default_factory=list
     )
     received: list[tuple[str, str, str]] = field(default_factory=list)
-    polling: list[tuple[str, int, str]] = field(default_factory=list)
 
 
 def convert(context: ConversionContext) -> None:
@@ -93,7 +101,7 @@ def convert(context: ConversionContext) -> None:
     for directory in _channel_directories(context):
         channel_id = _registered_channel_id(context, directory)
         if channel_id is not None:
-            agents[channel_id] = _channel_agent_id(context, directory)
+            agents[channel_id], rows.platforms[channel_id] = _channel_config(context, directory)
             _convert_channel_state(context, rows, channel_id, directory)
         for name in _STATE_FILES:
             if (directory / name).is_file():
@@ -116,7 +124,6 @@ def convert(context: ConversionContext) -> None:
         ("conversations", len(rows.conversations)),
         ("run_buttons", len(rows.run_buttons)),
         ("received", len(rows.received)),
-        ("polling", len(rows.polling)),
     ):
         context.report.count(AREA, key, amount)
 
@@ -142,31 +149,45 @@ def _registered_channel_id(context: ConversionContext, directory: Path) -> str |
         return None
 
 
-def _channel_agent_id(context: ConversionContext, directory: Path) -> str | None:
+def _channel_config(context: ConversionContext, directory: Path) -> tuple[str | None, str | None]:
+    """Return the Agent id and the platform a Channel's config names, where readable."""
     path = directory / _CONFIG_FILE
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, ValueError):
         payload = None
-    agent_id = payload.get("agent_id") if isinstance(payload, dict) else None
+    if not isinstance(payload, dict):
+        payload = {}
+    platform = payload.get("platform")
+    agent_id = payload.get("agent_id")
     if isinstance(agent_id, str) and agent_id.strip():
-        return agent_id.strip()
-    context.report.skip(
-        AREA,
-        _relative(context, path),
-        "no readable agent_id; the Channel's routing pointers are dropped",
-    )
-    return None
+        agent_id = agent_id.strip()
+    else:
+        context.report.skip(
+            AREA,
+            _relative(context, path),
+            "no readable agent_id; the Channel's routing pointers are dropped",
+        )
+        agent_id = None
+    if not isinstance(platform, str) or platform not in ALLOWED_CHANNEL_PLATFORMS:
+        platform = None
+    return agent_id, platform
 
 
 def _convert_channel_state(
     context: ConversionContext, rows: _Rows, channel_id: str, directory: Path
 ) -> None:
     rows.channels[channel_id] = None
+    polling = directory / _POLLING_FILE
+    if polling.is_file():
+        context.report.skip(
+            AREA,
+            _relative(context, polling),
+            "polling watermark dropped: it does not name its Telegram bot",
+        )
     for name, reader in (
         (_ACCESS_FILE, _read_access),
         (_BINDINGS_FILE, _read_run_buttons),
-        (_POLLING_FILE, _read_polling),
         (_RECEIVED_FILE, _read_received),
     ):
         path = directory / name
@@ -293,21 +314,6 @@ def _validate_binding(binding: Any) -> None:
         raise _UnreadableError("invalid consumed state")
 
 
-def _read_polling(
-    context: ConversionContext,
-    rows: _Rows,
-    channel_id: str,
-    relative: str,
-    payload: Any,
-    file_time: datetime,
-) -> None:
-    del context, relative
-    update_id = _versioned_object(payload).get("last_update_id")
-    if not isinstance(update_id, int) or isinstance(update_id, bool) or update_id < 0:
-        raise _UnreadableError("last_update_id must be a non-negative integer")
-    rows.polling.append((channel_id, update_id, format_canonical_timestamp(file_time)))
-
-
 def _read_received(
     context: ConversionContext,
     rows: _Rows,
@@ -407,8 +413,11 @@ def _conversation_kind(metadata: dict[str, Any]) -> str | None:
 def _insert(connection: sqlite3.Connection, rows: _Rows) -> None:
     statements: Iterable[tuple[str, list[Any]]] = (
         (
-            "INSERT INTO channels (channel_id, self_user_id) VALUES (?, ?)",
-            list(rows.channels.items()),
+            "INSERT INTO channels (channel_id, platform, self_user_id) VALUES (?, ?, ?)",
+            [
+                (channel_id, rows.platforms.get(channel_id), self_user_id)
+                for channel_id, self_user_id in rows.channels.items()
+            ],
         ),
         (
             "INSERT INTO channel_admins (channel_id, access_scope_id, user_id) VALUES (?, ?, ?)",
@@ -435,10 +444,6 @@ def _insert(connection: sqlite3.Connection, rows: _Rows) -> None:
         (
             "INSERT INTO channel_received (channel_id, message_ref, received_at) VALUES (?, ?, ?)",
             rows.received,
-        ),
-        (
-            "INSERT INTO channel_polling (channel_id, last_update_id, updated_at) VALUES (?, ?, ?)",
-            rows.polling,
         ),
     )
     for statement, values in statements:
