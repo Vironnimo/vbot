@@ -672,6 +672,7 @@ class LegacySessionStore:
         tool_calls: Sequence[dict[str, Any]] | None = None,
         model: str = "test-model",
         reasoning: str | None = None,
+        reasoning_meta: dict[str, Any] | None = None,
         reasoning_timing: dict[str, Any] | None = None,
         usage: dict[str, Any] | None = None,
         output_files: Sequence[dict[str, Any]] = (),
@@ -701,15 +702,16 @@ class LegacySessionStore:
             reasoning_timing, ("started_at", "completed_at", "duration_ms")
         )
         self.connection.execute(
-            "INSERT INTO assistant_messages (message_key, reasoning, reasoning_started_at, "
-            "reasoning_completed_at, reasoning_duration_ms, reasoning_timing_extra_json, "
-            "input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, reasoning_tokens, "
-            "usage_estimated, input_tokens_estimated, output_tokens_estimated, "
-            "usage_present, usage_extra_json, tool_calls_present, interrupted) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO assistant_messages (message_key, reasoning, reasoning_meta_json, "
+            "reasoning_started_at, reasoning_completed_at, reasoning_duration_ms, "
+            "reasoning_timing_extra_json, input_tokens, output_tokens, cache_read_tokens, "
+            "cache_write_tokens, reasoning_tokens, usage_estimated, input_tokens_estimated, "
+            "output_tokens_estimated, usage_present, usage_extra_json, tool_calls_present, "
+            "interrupted) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 message_key,
                 reasoning,
+                _json(reasoning_meta),
                 timing.get("started_at"),
                 timing.get("completed_at"),
                 timing.get("duration_ms"),

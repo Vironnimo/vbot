@@ -11,7 +11,10 @@ Tool (no API read them) and the request receipts of that Tool. A row the new
 database refuses, such as one that references a missing Swarm, is dropped and
 reported. Retired Tool names in the ``tool_access`` of saved profiles and of
 each Swarm's profile snapshot are replaced as in every other Tool access policy
-(``_tool_access``), so a profile keeps starting and a Swarm keeps resuming.
+(``_tool_access``), so a profile keeps starting and a Swarm keeps resuming. The
+stored outcomes of Board posts and new discussions lose the retired
+``inactive_recipients`` list: Swarm activity is derived now, and a replayed
+request returns its stored outcome.
 """
 
 from __future__ import annotations
@@ -47,6 +50,10 @@ OWNER = "swarm"
 DATABASE = f"extension-data/{OWNER}/{DATABASE_NAME}.db"
 
 _DECISION_REQUEST_SCOPE = "decisions:"
+# Request scopes of Board posts and new discussions, whose stored outcomes once
+# listed the recipients that were not active.
+_BOARD_REQUEST_SCOPES = ("post:", "create:")
+_RETIRED_OUTCOME_FIELD = "inactive_recipients"
 
 # The pre-Generation-1 Swarm tables, in foreign-key order, frozen with the
 # columns the converter copies.
@@ -248,6 +255,7 @@ def convert(context: ConversionContext) -> None:
                 for table in tables:
                     copy_table(source, connection, table, tally)
                 _convert_retired_tool_names(connection, tally)
+                _drop_retired_outcome_fields(connection, tally)
                 return tally
 
             database.write(operation).publish(context, AREA)
@@ -275,6 +283,33 @@ def _convert_retired_tool_names(connection: sqlite3.Connection, tally: Tally) ->
             )
             tally.count("retired_tool_names_converted")
             tally.skip(f"{table} {row_id}", f"{column}.tool_access: {'; '.join(changes)}")
+
+
+def _drop_retired_outcome_fields(connection: sqlite3.Connection, tally: Tally) -> None:
+    """Drop the retired recipient list from the staged Board request outcomes."""
+    rows = connection.execute(
+        "SELECT scope, request_id, outcome FROM requests ORDER BY scope, request_id"
+    ).fetchall()
+    for scope, request_id, text in rows:
+        if not str(scope).startswith(_BOARD_REQUEST_SCOPES):
+            continue
+        try:
+            outcome = json.loads(text)
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(outcome, dict) or _RETIRED_OUTCOME_FIELD not in outcome:
+            continue
+        del outcome[_RETIRED_OUTCOME_FIELD]
+        connection.execute(
+            "UPDATE requests SET outcome=? WHERE scope=? AND request_id=?",
+            (_swarm_json(outcome), scope, request_id),
+        )
+        tally.count("request_inactive_recipients_dropped")
+        tally.skip(
+            f"requests {scope} {request_id}",
+            f"retired outcome.{_RETIRED_OUTCOME_FIELD} dropped: Swarm activity is derived "
+            "now, and a replay of the request returns only the current outcome fields",
+        )
 
 
 def _swarm_json(value: object) -> str:

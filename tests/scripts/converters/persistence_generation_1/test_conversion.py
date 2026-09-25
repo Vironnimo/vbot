@@ -48,10 +48,17 @@ from tests.scripts.converters.persistence_generation_1.legacy_sessions_support i
 
 BASE = SessionAddress(project_id=None, agent_id="main", session_id="base")
 BRANCH = SessionAddress(project_id=None, agent_id="main", session_id="branch")
+COUNTERS = SessionAddress(project_id=None, agent_id="main", session_id="counters")
 _TIMESTAMP = "2026-06-18T10:00:00Z"
 _LOCK_FILE = "data-store.lock"
 # A saved MCP result that no Tool Result returned: dropped and reported.
 _MCP_RESULT = "mcp/content/results/res_000000000001.json"
+_RENAMED_COUNTERS = {
+    "turns_since_memory_review": 1,
+    "model_steps_since_skill_review": 3,
+    "generation": 0,
+}
+_DROPPED_COUNTERS = {"turns_since_memory_review": 2, "tool_calls_since_skill_review": 5}
 
 
 def _write(root: Path, relative: str, value: Any) -> None:
@@ -116,6 +123,12 @@ def _legacy_data_dir(root: Path) -> dict[str, list[str]]:
         history.append(legacy.finish_run(base, "run_1", minute=3))
         branch = legacy.fork(base, "branch", minute=4)
         branch_history = [*history, legacy.user(branch, "a follow-up", minute=5)]
+        # Retired Reflection counters: one renamed, and one dropped and reported in a
+        # Session without history, whose report item explains no history difference.
+        legacy.mutate_metadata(
+            base, lambda metadata: metadata.update(reflection_counters=_RENAMED_COUNTERS)
+        )
+        legacy.session("counters", minute=8, metadata={"reflection_counters": _DROPPED_COUNTERS})
         # The source goes on after the fork; the fork keeps its view.
         history.append(legacy.user(base, "later", minute=6))
         history.append(legacy.note(base, "a note", minute=7))
@@ -167,9 +180,11 @@ def test_dry_run_verifies_everything_and_leaves_the_data_directory_unchanged(
     after.pop(_LOCK_FILE, None)
     assert after == before
     assert report["result"] == "verified"
-    assert report["areas"]["sessions"]["sessions"] == 2
+    assert report["areas"]["sessions"]["sessions"] == 3
     assert report["areas"]["sessions"]["usage_provenance_derived"] == 1
     assert report["areas"]["sessions"]["output_file_spans_derived"] == 1
+    assert report["areas"]["sessions"]["reflection_counter_renamed"] == 1
+    assert report["areas"]["sessions"]["reflection_counter_dropped"] == 1
     verification = report["verification"]
     assert set(verification["databases"]) == {
         "sessions",
@@ -178,18 +193,20 @@ def test_dry_run_verifies_everything_and_leaves_the_data_directory_unchanged(
         "channels",
         "ext.swarm.swarm",
     }
-    assert verification["sessions"]["sessions_compared"] == 2
+    assert verification["sessions"]["sessions_compared"] == 3
     assert verification["sessions"]["explained_differences"] == 0
     assert len(verification["sessions"]["loaded_through_the_application"]) == 2
     assert verification["json_documents"]["documents_with_errors"] == 0
     assert "sessions.db-wal" in report["install"]["moved_aside"]
     # The Telegram polling watermark names no bot and is dropped; the retired
-    # grep and glob of the Agent are replaced.
+    # grep and glob of the Agent are replaced; the retired Tool-call counter is
+    # dropped.
     assert report["skipped_by_area"] == {
         "json_documents": 1,
         "provider_usage": 1,
         "mcp": 1,
         "channels": 1,
+        "sessions": 1,
     }
     assert report["areas"]["json_documents"]["retired_tool_names_converted"] == 1
     assert report["sizes"]["installed_bytes"] > 0
@@ -244,6 +261,14 @@ def test_install_registers_every_database_and_moves_replaced_files_aside(
     with _sessions(data_dir) as manager:
         assert _ids(manager, BASE) == histories["base"]
         assert _ids(manager, BRANCH) == histories["branch"]
+        assert manager.get_metadata(BASE)["reflection_counters"] == {
+            "turns_since_memory_review": 1,
+            "iterations_since_skill_review": 3,
+            "generation": 0,
+        }
+        assert manager.get_metadata(COUNTERS)["reflection_counters"] == {
+            "turns_since_memory_review": 2
+        }
     assert all(report.ok for report in validate_data_dir_config(data_dir))
     agent = json.loads((data_dir / "agents/main/agent.json").read_text(encoding="utf-8"))
     assert agent["tool_access"]["allowed"] == ["read", "search_files"]
