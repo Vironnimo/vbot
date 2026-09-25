@@ -36,6 +36,7 @@ const VOICE_STATES = new Set([
 const VOICE_MODES = new Set(['real', 'mock', 'unavailable']);
 const ECHO_CANCELLATION_STATES = new Set([
   'off',
+  'starting',
   'active',
   'no_reference',
   'unavailable',
@@ -46,6 +47,7 @@ const CALIBRATION_PHASES = new Set(['noise', 'phrases', 'ready']);
 // Event kinds a newer Desktop adds still advance the sequence; consumers
 // ignore kinds they do not know.
 const VOICE_EVENT_KIND_PATTERN = /^[a-z][a-z0-9_]{0,63}$/;
+const DESKTOP_ERROR_CODE_PATTERN = /^[a-z][a-z0-9_]*$/;
 
 let cachedCapabilities = null;
 let cachedBridgeApi = null;
@@ -105,6 +107,20 @@ export function waitForDesktopBridge(timeoutMs = BRIDGE_READY_TIMEOUT_MS) {
     window.addEventListener(BRIDGE_READY_EVENT, finish, { once: true });
     timeoutId = setTimeout(finish, timeoutMs);
   });
+}
+
+/**
+ * The stable error code of a rejected Desktop bridge call, or null.
+ *
+ * The Desktop rejects a known, user-actionable failure with an Error whose
+ * message is exactly its code (for example `voice_config_invalid`); any other
+ * failure carries a human-readable message instead.
+ */
+export function desktopErrorCode(error) {
+  const message = error?.message;
+  return typeof message === 'string' && DESKTOP_ERROR_CODE_PATTERN.test(message)
+    ? message
+    : null;
 }
 
 /** Call a bridge method by name, returning a Promise of the result. */

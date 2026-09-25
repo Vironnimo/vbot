@@ -159,6 +159,7 @@ export default Object.freeze({
     'Wake phrases are not heard until the microphone is back. The Desktop keeps trying to reconnect it.',
   'voice.toast.errorMessage':
     'Open Voice settings for details. The failure was written to the Desktop log.',
+  'voice.toast.stopRecordingFailedTitle': 'The recording could not be stopped',
   'onboarding.title': 'Set up vBot',
   'onboarding.dismiss': 'Explore first',
   'onboarding.progress': 'Setup progress',

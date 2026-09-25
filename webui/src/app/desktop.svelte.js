@@ -15,6 +15,7 @@ import {
 import { t } from '$lib/i18n.js';
 import { onMount } from 'svelte';
 import {
+  bridgeErrorMessage,
   commandFailureMessage,
   errorMessage,
 } from '../components/voice/voiceLabels.js';
@@ -217,9 +218,18 @@ export function createAppDesktop(context) {
   };
 
   const handleStopVoiceRecording = () => {
-    // Fire-and-forget: status pushes reconcile the indicator, and a failed
-    // bridge call leaves the recording running rather than losing it.
-    void stopVoiceRecording().catch(() => {});
+    // Status pushes reconcile the indicator; a failed bridge call leaves the
+    // recording running rather than losing it.
+    void stopVoiceRecording().catch((error) => {
+      showToast({
+        title: t(
+          'voice.toast.stopRecordingFailedTitle',
+          'The recording could not be stopped',
+        ),
+        message: bridgeErrorMessage(error),
+        variant: 'error',
+      });
+    });
   };
 
   const showVoiceErrorToast = (errorCode) => {

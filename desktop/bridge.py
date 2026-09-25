@@ -3,7 +3,11 @@
 pywebview exposes the public methods of :class:`DesktopBridge` to JavaScript as
 ``window.pywebview.api.<method>()``; every call runs on its own thread and
 returns plain JSON values. A raised exception rejects the JavaScript Promise
-with the exception's message.
+with an ``Error`` carrying the exception's message. Error contract: a known,
+user-actionable failure (an exception with a stable ``error_code`` attribute)
+rejects with a :class:`BridgeError` whose message is exactly that code, so the
+page can explain it; any other failure keeps its own message, which never
+looks like a code, and is logged with its traceback.
 
 The same instance stays the window's ``js_api`` across navigation, so it
 serves both the shell connection screen (server selection) and the remote
@@ -17,8 +21,13 @@ from __future__ import annotations
 
 import base64
 import binascii
+import functools
+import inspect
+import logging
+import re
 import threading
-from typing import TYPE_CHECKING, Any, Protocol, cast
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any, Protocol, TypeVar, cast
 
 from desktop.system_actions import DesktopSystemActions
 from desktop.wakeword.engine import MAX_CUSTOM_WAKEWORD_MODEL_BYTES, WakewordModelError
@@ -28,10 +37,60 @@ if TYPE_CHECKING:
     from desktop.hotkey import LiveHotkeyController
     from desktop.wakeword.controller import VoiceController
 
+logger = logging.getLogger("vbot.desktop.bridge")
+
 VOICE_API_VERSION = 2
 """Version of the Voice bridge methods; the WebUI enables Voice only for this version."""
 
 _MAX_MODEL_BASE64_CHARS = 4 * ((MAX_CUSTOM_WAKEWORD_MODEL_BYTES + 2) // 3)
+_ERROR_CODE = re.compile(r"[a-z][a-z0-9_]*")
+
+_BridgeClass = TypeVar("_BridgeClass", bound=type)
+
+
+class BridgeError(Exception):
+    """A known, user-actionable bridge failure whose message is exactly its ``error_code``."""
+
+    def __init__(self, error_code: str) -> None:
+        super().__init__(error_code)
+        self.error_code = error_code
+
+
+def _reject_with_error_codes(cls: _BridgeClass) -> _BridgeClass:
+    """Apply the module's error contract to every public method of ``cls``."""
+    for name, member in list(vars(cls).items()):
+        if not name.startswith("_") and inspect.isfunction(member):
+            setattr(cls, name, _bridge_method(member))
+    return cls
+
+
+def _bridge_method(method: Callable[..., Any]) -> Callable[..., Any]:
+    name = method.__name__
+
+    @functools.wraps(method)
+    def call(*args: Any, **kwargs: Any) -> Any:
+        try:
+            return method(*args, **kwargs)
+        except Exception as exc:
+            error_code = getattr(exc, "error_code", None)
+            if isinstance(error_code, str) and _ERROR_CODE.fullmatch(error_code):
+                field = getattr(exc, "field", None)
+                logger.warning(
+                    "Desktop bridge %s failed (error_code=%s%s): %s",
+                    name,
+                    error_code,
+                    f", field={field}" if field else "",
+                    exc,
+                )
+                raise BridgeError(error_code) from exc
+            logger.exception("Desktop bridge %s failed unexpectedly", name)
+            if _ERROR_CODE.fullmatch(str(exc)):
+                raise RuntimeError(f"The Desktop could not complete {name}") from exc
+            raise
+
+    # pywebview reads the JavaScript parameter names from the signature.
+    call.__signature__ = inspect.signature(method)  # type: ignore[attr-defined]
+    return call
 
 
 class ConnectionDelegate(Protocol):
@@ -53,6 +112,7 @@ class ConnectionDelegate(Protocol):
         """Return the base URL of the window's current server, if any."""
 
 
+@_reject_with_error_codes
 class DesktopBridge:
     """Bridge API exposed to the WebUI and the connection screen via pywebview ``js_api``."""
 

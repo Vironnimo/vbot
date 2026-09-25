@@ -1,4 +1,5 @@
 import { t } from '$lib/i18n.js';
+import { desktopErrorCode } from '$lib/desktopBridge.js';
 
 /**
  * Presentation of one Voice status snapshot, shared by the sidebar indicator
@@ -77,6 +78,28 @@ function indicator(tone, label, tooltip) {
  * generic text) for codes without their own explanation.
  */
 export function errorMessage(code, fallback = null) {
+  return (
+    knownErrorMessage(code) ||
+    fallback ||
+    t(
+      'settings.voice.error.unknown',
+      'Voice stopped unexpectedly. Retry listening or restart the Desktop app.',
+    )
+  );
+}
+
+/**
+ * Toast message of a rejected Desktop bridge call: the explanation of its
+ * error code, else its own message. A code without an explanation leaves the
+ * toast with its generic title only.
+ */
+export function bridgeErrorMessage(error) {
+  const code = desktopErrorCode(error);
+  if (code === null) return error?.message || '';
+  return knownErrorMessage(code) ?? '';
+}
+
+function knownErrorMessage(code) {
   const messages = {
     no_server: t(
       'settings.voice.error.noServer',
@@ -118,6 +141,18 @@ export function errorMessage(code, fallback = null) {
       'settings.voice.error.modelInvalid',
       'The wakeword model is not a compatible pyopen-wakeword TFLite model.',
     ),
+    wakeword_model_active: t(
+      'settings.voice.error.modelActive',
+      'This wake phrase is active. Deactivate it before removing its model.',
+    ),
+    calibration_unavailable: t(
+      'settings.voice.error.calibrationUnavailable',
+      'Calibration needs Voice listening with this wake phrase active. Wait until Voice is listening, then try again.',
+    ),
+    calibration_inactive: t(
+      'settings.voice.error.calibrationInactive',
+      'No calibration is running anymore. Start the calibration again.',
+    ),
     microphone_unavailable: t(
       'settings.voice.error.microphone',
       'No compatible microphone is available. Connect a microphone or choose another input device, then retry.',
@@ -151,14 +186,7 @@ export function errorMessage(code, fallback = null) {
       'The Desktop Voice components are unavailable. Install the desktop Voice dependencies and restart vBot.',
     ),
   };
-  return (
-    messages[code] ||
-    fallback ||
-    t(
-      'settings.voice.error.unknown',
-      'Voice stopped unexpectedly. Retry listening or restart the Desktop app.',
-    )
-  );
+  return Object.hasOwn(messages, code) ? messages[code] : null;
 }
 
 /** Explanation of a failed voice command, by its `command_failed` code. */
