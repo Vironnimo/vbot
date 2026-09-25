@@ -56,7 +56,7 @@ def test_the_session_database_is_a_canonical_generation_one_database(tmp_path: P
     assert spec.profile == CANONICAL
     assert spec.application_id == APPLICATION_ID == APPLICATION_IDS["sessions"]
     assert spec.format_generation == FORMAT_GENERATION == 1
-    assert FTS_STORAGE_VERSION == 2
+    assert FTS_STORAGE_VERSION == 1
     assert spec.snapshot_facts is not None
     assert set(spec.snapshot_facts.queries) == {
         "session_count",
