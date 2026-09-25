@@ -312,17 +312,39 @@ def test_project_update_keeps_unknown_fields_on_disk(data_dir: Path, repo: Path)
     loaded = store.get("vbot")
     store.set_override("vbot", "builder", "temperature", 0.5)
 
-    assert loaded.overrides == {"builder": {"model": "openai/gpt-5"}}
+    # An override with no known field overrides nothing but stays an entry.
+    assert loaded.overrides == {"builder": {"model": "openai/gpt-5"}, "future_only": {}}
     rewritten = json.loads(config_path.read_text("utf-8"))
     assert rewritten["format_version"] == 1
     assert rewritten["future_field"] == [1, 2]
-    assert rewritten["overrides"]["builder"] == {
-        "model": "openai/gpt-5",
-        "temperature": 0.5,
-        "future_override": True,
+    assert rewritten["overrides"] == {
+        "builder": {
+            "model": "openai/gpt-5",
+            "temperature": 0.5,
+            "future_override": True,
+        },
+        "future_only": {"future": 1},
     }
-    # An override with no known field is not modeled, so an update drops it.
-    assert "future_only" not in rewritten["overrides"]
+
+
+def test_clearing_the_last_known_override_field_keeps_unknown_fields(
+    data_dir: Path, repo: Path
+) -> None:
+    store = ProjectStore(data_dir)
+    store.create("vbot", "vBot", repo)
+    store.set_override("vbot", "plain", "model", "openai/gpt-5")
+    config_path = data_dir / "projects" / "vbot" / "project.json"
+    payload = json.loads(config_path.read_text("utf-8"))
+    payload["overrides"]["builder"] = {"model": "openai/gpt-5", "future_override": True}
+    config_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    store.clear_override("vbot", "builder", "model")
+    store.clear_override("vbot", "plain", "model")
+
+    rewritten = json.loads(config_path.read_text("utf-8"))
+    # The entry with an unknown field survives; the one left with no field is removed.
+    assert rewritten["overrides"] == {"builder": {"future_override": True}}
+    assert store.get("vbot").overrides == {"builder": {}}
 
 
 def test_project_written_by_a_newer_vbot_is_never_overwritten(data_dir: Path, repo: Path) -> None:

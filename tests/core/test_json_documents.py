@@ -259,6 +259,39 @@ def test_write_json_document_round_trips_unknown_fields(tmp_path: Path) -> None:
     }
 
 
+def test_write_json_document_keeps_unmodeled_map_entries_of_drop_empty_maps(
+    tmp_path: Path,
+) -> None:
+    shape = json_document(
+        {"overrides"}, {"overrides": json_map(json_object({"model"}), drop_empty=True)}
+    )
+    fmt = JsonDocumentFormat(name="test document", version=1, shape=shape, validate=_validate)
+    path = tmp_path / "doc.json"
+    path.write_text(
+        json.dumps(
+            {
+                "format_version": 1,
+                "overrides": {
+                    "future_only": {"future": 1},
+                    "cleared": {"model": "a"},
+                    "mixed": {"model": "b", "future": 2},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    loaded = strip_unknown_fields(_read(path), shape)
+    assert loaded["overrides"]["future_only"] == {}
+    loaded["overrides"]["cleared"] = {}
+    loaded["overrides"]["mixed"] = {}
+    loaded["overrides"]["new"] = {}
+
+    write_json_document(path, loaded, fmt)
+
+    # An entry disappears only once it holds no field at all, known or unknown.
+    assert _read(path)["overrides"] == {"future_only": {"future": 1}, "mixed": {"future": 2}}
+
+
 @pytest.mark.parametrize(
     "content",
     [

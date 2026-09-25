@@ -77,10 +77,10 @@ DEFAULT_DEFAULT_MODEL = ""
 DEFAULT_DEFAULT_TEMPERATURE: float | None = None
 DEFAULT_DEFAULT_THINKING_EFFORT: str | None = None
 
-# The project Tool Whitelist ceiling a new project starts with and the fallback an
-# old ``project.json`` missing the field loads at (decision 2 / decision 10). This
-# is the SINGLE source for the creation seed, the missing-field fallback, and the
-# UI "reset to defaults" — change the base list here and all three move together.
+# The project Tool Whitelist ceiling a new project starts with (decision 2 /
+# decision 10). This is the SINGLE source for the creation seed and the UI "reset
+# to defaults" — change the base list here and both move together. A persisted
+# ``project.json`` always carries ``allowed_tools``; there is no missing-field fallback.
 # The default-off-but-UI-toggleable Tools (``session_search``, ``image_generation``,
 # ``text_to_speech``, ``cron``, ``channel_send``, the Home-Assistant tools) are
 # deliberately absent. Automatic and Identity-only Tools are never directly
@@ -156,6 +156,9 @@ def project_shape() -> JsonShape:
     return json_document(
         _PROJECT_CONFIG_FIELDS,
         {
+            # An override holding only fields this vBot does not model loads as an
+            # empty entry and keeps those fields on write; an entry left with no
+            # field at all is not written.
             "overrides": json_map(
                 json_object(
                     OVERRIDE_FIELDS,
@@ -163,7 +166,8 @@ def project_shape() -> JsonShape:
                         "compaction_policy": COMPACTION_POLICY_SHAPE,
                         "tool_access": json_object(TOOL_ACCESS_FIELDS),
                     },
-                )
+                ),
+                drop_empty=True,
             )
         },
     )
@@ -439,7 +443,8 @@ class Project:
     # **top** tier of the matching config-agent chain, so an override wins over the
     # repo-declared value. Empty by default. Set/cleared per field through the store
     # (``set_override`` / ``clear_override``), not the generic ``project.set`` field
-    # surface.
+    # surface. An empty override object is an entry holding only fields this vBot does
+    # not model: it overrides nothing, and the writer keeps those fields on disk.
     overrides: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -694,7 +699,9 @@ def _validate_overrides(value: dict[str, dict[str, Any]] | None) -> dict[str, di
     ``temperature`` and ``thinking_effort`` reuse the canonical agent field validators,
     so their ranges and effort ladder can never drift from an agent's;
     ``thinking_effort = ""`` is a real value meaning "force provider default". An empty
-    override object (no fields) is rejected — an override with no field carries nothing.
+    override object stands for an entry whose fields this vBot does not model (or whose
+    last modeled field was cleared): it overrides nothing, keeps the entry's unknown
+    fields on write, and is not written once it holds no field at all.
     """
     if value is None:
         return {}
@@ -715,8 +722,6 @@ def _validate_override(agent_id: str, override: Any) -> dict[str, Any]:
     unknown = sorted(set(override) - OVERRIDE_FIELDS)
     if unknown:
         raise ProjectError(f"overrides[{agent_id!r}] has unknown fields: {', '.join(unknown)}")
-    if not override:
-        raise ProjectError(f"overrides[{agent_id!r}] must set at least one field")
     validated: dict[str, Any] = {}
     if "model" in override:
         model = override["model"]
@@ -797,14 +802,15 @@ def _overrides_from_data(value: Any) -> dict[str, dict[str, Any]]:
     The Projects-owned schema validator runs before this, so a malformed value is
     already rejected; this only copies each override object. A missing field defaults
     to an empty map. An override that set only fields this vBot does not know is
-    empty after loading and is left out.
+    empty after loading and stays in the map, so the Project writer keeps its
+    fields on disk.
     """
     if not isinstance(value, dict):
         return {}
     return {
         agent_id: dict(cast("dict[str, Any]", override))
         for agent_id, override in value.items()
-        if isinstance(override, dict) and override
+        if isinstance(override, dict)
     }
 
 

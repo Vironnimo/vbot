@@ -326,9 +326,10 @@ class ProjectStore:
 
         The config agent's matching chain then falls back to its repo-declared value
         (or the project/global default). Clearing the agent's **last** overridden field
-        removes the agent's entry entirely. When the agent has no such overridden field,
-        the project is returned unchanged without a write; otherwise exactly that one
-        field is dropped and every other override and field is preserved.
+        removes the agent's entry from ``project.json`` unless it still holds fields this
+        vBot does not model, which stay on disk. When the agent has no such overridden
+        field, the project is returned unchanged without a write; otherwise exactly that
+        one field is dropped and every other override and field is preserved.
         """
         with self._write_lock:
             project = self.get(project_id)
@@ -338,10 +339,8 @@ class ProjectStore:
             overrides = _copy_overrides(project.overrides)
             updated_override = dict(overrides[agent_id])
             del updated_override[field]
-            if updated_override:
-                overrides[agent_id] = updated_override
-            else:
-                del overrides[agent_id]
+            # An empty entry keeps its unknown fields on write, or is left out.
+            overrides[agent_id] = updated_override
             return self._rewrite_with_overrides(project, overrides)
 
     def _rewrite_with_overrides(
@@ -352,7 +351,8 @@ class ProjectStore:
         Carries every other field unchanged through ``build_project`` (the single
         validation path), refreshes ``updated_at``, and writes via the atomic
         replace. The cwd re-normalization is idempotent on an already-stored project,
-        exactly as in :meth:`update`.
+        exactly as in :meth:`update`. Returns the project as persisted: an emptied
+        override entry remains only while it holds fields this vBot does not model.
         """
         rebuilt = build_project(
             project.project_id,
@@ -373,7 +373,7 @@ class ProjectStore:
         )
         updated = replace(rebuilt, updated_at=_utc_now())
         self._write_project(updated)
-        return updated
+        return self._read_project(self._config_path(project.project_id))
 
     def delete(self, project_id: str) -> Path:
         """Archive the Project Anchor and its live Sessions, preserving the repo.

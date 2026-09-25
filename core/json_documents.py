@@ -83,7 +83,10 @@ class JsonShape:
     - ``object``: ``fields`` are the declared keys; every other key is unknown.
       ``nested`` gives the shape of declared keys whose values are modeled too.
     - ``map``: every key is data. ``values`` is the shape of each value;
-      ``known`` overrides it for specific keys.
+      ``known`` overrides it for specific keys. With ``drop_empty`` an entry
+      whose value is an empty object once the unknown fields are merged back is
+      not written: the owner keeps such an entry (``{}``) when this vBot models
+      none of its fields, and it disappears only when it holds no field at all.
     - ``list``: an array of ``items``; entries are matched across versions by
       their ``key`` field.
     - ``opaque``: the owner writes the whole value; nothing inside is preserved.
@@ -96,6 +99,7 @@ class JsonShape:
     known: Mapping[str, JsonShape] = field(default_factory=dict)
     items: JsonShape | None = None
     key: str | None = None
+    drop_empty: bool = False
 
 
 OPAQUE = JsonShape("opaque")
@@ -119,10 +123,14 @@ def json_map(
     values: JsonShape = OPAQUE,
     *,
     known: Mapping[str, JsonShape] | None = None,
+    drop_empty: bool = False,
 ) -> JsonShape:
-    """Return the shape of an object whose keys are data rather than fields."""
+    """Return the shape of an object whose keys are data rather than fields.
 
-    return JsonShape("map", values=values, known=dict(known or {}))
+    ``drop_empty`` leaves out entries that are empty objects after the merge.
+    """
+
+    return JsonShape("map", values=values, known=dict(known or {}), drop_empty=drop_empty)
 
 
 def json_list(items: JsonShape, *, key: str) -> JsonShape:
@@ -348,7 +356,8 @@ def write_json_document(
     """Atomically write one document, preserving the unknown fields on disk.
 
     ``body`` holds the owner's modeled fields; ``format_version`` is set here.
-    ``reset=True`` replaces the file without the load guard or preservation, for
+    Entries of ``drop_empty`` maps that are still empty objects after the merge
+    are left out. ``reset=True`` replaces the file without the load guard or preservation, for
     an explicit user reset. Raises :class:`JsonDocumentWriteError` when the file
     on disk failed to load, ``TypeError``/``ValueError`` for an unserializable
     body, and ``OSError`` for write failures.
@@ -360,6 +369,7 @@ def write_json_document(
         if previous is not None:
             payload = preserve_unknown_fields(previous, payload, fmt.shape)
             payload.pop(FORMAT_VERSION_FIELD, None)
+    payload = _drop_empty_entries(payload, fmt.shape)
     text = render_json_document(payload, version=fmt.version, sort_keys=fmt.sort_keys)
     path.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_text(path, text, data_dir=data_dir, mode=mode)
@@ -454,6 +464,28 @@ def _refusal_message(path: Path, fmt: JsonDocumentFormat, report: JsonValidation
         f"Refusing to overwrite {fmt.name} {path}: the file failed to load ({details}). "
         "Repair it or reset it explicitly."
     )
+
+
+def _drop_empty_entries(value: Any, shape: JsonShape | None) -> Any:
+    """Leave out the empty entries of every ``drop_empty`` map within ``value``."""
+
+    if shape is None:
+        return value
+    if shape.kind == "object" and isinstance(value, dict):
+        return {
+            key: _drop_empty_entries(item, shape.nested.get(key)) for key, item in value.items()
+        }
+    if shape.kind == "map" and isinstance(value, dict):
+        entries = {
+            key: _drop_empty_entries(item, _map_value_shape(shape, key))
+            for key, item in value.items()
+        }
+        if shape.drop_empty:
+            return {key: item for key, item in entries.items() if item != {}}
+        return entries
+    if shape.kind == "list" and isinstance(value, list):
+        return [_drop_empty_entries(item, shape.items) for item in value]
+    return value
 
 
 def _map_value_shape(shape: JsonShape, key: Any) -> JsonShape | None:
