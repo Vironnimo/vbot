@@ -19,6 +19,7 @@ from tests.core.tools.web_search_helpers import (
     assert_failure_envelope,
     assert_success_envelope,
     make_context,
+    result_urls,
 )
 
 
@@ -65,20 +66,7 @@ async def test_web_search_handler_brave_success(tmp_path: Path) -> None:
     assert request.url.params["count"] == "5"
 
     data = assert_success_envelope(result)
-    assert data["provider"] == "brave"
-    assert "query" not in data
-    assert "count_requested" not in data
-    assert len(data["results"]) == 1
-    assert "content_trust" not in data
-    results = data["results"]
-    assert isinstance(results, list)
-    assert len(results) == 1
-    first = results[0]
-    assert first["rank"] == 1
-    assert first["title"] == "vBot docs"
-    assert first["url"] == "https://example.com/vbot"
-    assert first["description"] == "vBot documentation"
-    assert "content_trust" not in first
+    assert data == {"content": "1. vBot docs\nhttps://example.com/vbot\nvBot documentation"}
 
 
 @respx.mock
@@ -106,7 +94,9 @@ async def test_web_search_rejects_declared_oversize_before_reading_body(
 
     error = assert_failure_envelope(result, "response_too_large")
     assert error["retryable"] is False
-    assert "5 MB" in error["message"]
+    assert error["message"] == (
+        "The search provider's response exceeds the 5 MB limit. Try again with a lower count."
+    )
 
 
 @respx.mock
@@ -159,7 +149,7 @@ async def test_web_search_accepts_response_at_exact_limit(
     )
 
     data = assert_success_envelope(result)
-    assert len(data["results"]) == 0
+    assert data == {"content": "No results found. Try other or fewer search words."}
 
 
 @respx.mock
@@ -210,10 +200,8 @@ async def test_web_search_handler_brave_applies_and_enforces_domains(tmp_path: P
     )
 
     data = assert_success_envelope(result)
-    assert "query" not in data
-    assert data["applied_domains"] == ["example.com", "docs.example.com"]
-    assert len(data["results"]) == 2
-    assert [entry["url"] for entry in data["results"]] == [
+    assert data["domains"] == "example.com, docs.example.com"
+    assert result_urls(data) == [
         "https://example.com/docs",
         "https://docs.example.com/vbot",
     ]
@@ -257,8 +245,8 @@ async def test_web_search_handler_specific_subdomain_narrows_scope(tmp_path: Pat
     )
 
     data = assert_success_envelope(result)
-    assert data["applied_domains"] == ["www.example.com"]
-    assert [entry["url"] for entry in data["results"]] == ["https://www.example.com/vbot"]
+    assert data["domains"] == "www.example.com"
+    assert result_urls(data) == ["https://www.example.com/vbot"]
     assert route.calls[0].request.url.params["q"] == "vbot site:www.example.com"
 
 
@@ -292,8 +280,8 @@ async def test_web_search_handler_normalizes_internationalized_domain(tmp_path: 
     )
 
     data = assert_success_envelope(result)
-    assert data["applied_domains"] == ["xn--fa-hia.example"]
-    assert len(data["results"]) == 1
+    assert data["domains"] == "xn--fa-hia.example"
+    assert result_urls(data) == ["https://faß.example/vbot"]
     assert route.calls[0].request.url.params["q"] == "vbot site:xn--fa-hia.example"
 
 
@@ -308,7 +296,7 @@ async def test_web_search_handler_passes_query_operators_through_unchanged(
     route = respx.get(_BRAVE_ENDPOINT).mock(
         return_value=httpx.Response(200, json={"web": {"results": []}})
     )
-    query = 'site:example.com vbot "agent loop" filetype:pdf'
+    query = 'vbot "agent loop" -draft filetype:pdf site:example.com/docs'
 
     result = await web_search_handler(
         make_context(workspace),
@@ -317,8 +305,7 @@ async def test_web_search_handler_passes_query_operators_through_unchanged(
     )
 
     data = assert_success_envelope(result)
-    assert "query" not in data
-    assert "applied_domains" not in data
+    assert "domains" not in data
     assert route.calls[0].request.url.params["q"] == query
 
 
@@ -326,7 +313,7 @@ async def test_web_search_handler_passes_query_operators_through_unchanged(
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("recency", "provider_value"),
-    [("day", "pd"), ("month", "pm"), ("year", "py")],
+    [("day", "pd"), ("week", "pw"), ("month", "pm"), ("year", "py")],
 )
 async def test_web_search_handler_brave_maps_canonical_recency(
     tmp_path: Path,
@@ -347,9 +334,11 @@ async def test_web_search_handler_brave_maps_canonical_recency(
     )
 
     data = assert_success_envelope(result)
-    assert len(data["results"]) == 0
-    assert data["recency"] == recency
-    assert "filters" not in data
+    tip = "no recency limit" if recency == "year" else "a longer recency window"
+    assert data == {
+        "recency": recency,
+        "content": f"No results found. Try other or fewer search words, or {tip}.",
+    }
     request = route.calls[0].request
     assert request.url.params["freshness"] == provider_value
 
@@ -370,9 +359,7 @@ async def test_web_search_handler_brave_default_count_and_no_offset(tmp_path: Pa
         _fake_credential_resolver,
     )
 
-    data = assert_success_envelope(result)
-    assert "count_requested" not in data
-    assert "page" not in data
+    assert_success_envelope(result)
     request = route.calls[0].request
     assert request.url.params["count"] == "12"
     assert request.url.params["text_decorations"] == "false"
@@ -396,8 +383,7 @@ async def test_web_search_handler_uses_configured_default_count(tmp_path: Path) 
         lambda: {"provider": "brave", "default_count": 7},
     )
 
-    data = assert_success_envelope(result)
-    assert "count_requested" not in data
+    assert_success_envelope(result)
     assert route.calls[0].request.url.params["count"] == "7"
 
 
@@ -416,7 +402,10 @@ async def test_web_search_handler_rejects_invalid_configured_default_count(
     )
 
     error = assert_failure_envelope(result, "configuration_error")
-    assert "default_count" in error["message"]
+    assert error["message"] == (
+        "Web search settings are invalid (web_search.default_count must be an integer "
+        "between 1 and 20). Tell the user to check Settings under Web search."
+    )
 
 
 @respx.mock
@@ -435,8 +424,7 @@ async def test_web_search_handler_brave_page_maps_to_offset(tmp_path: Path) -> N
         _fake_credential_resolver,
     )
 
-    data = assert_success_envelope(result)
-    assert "page" not in data
+    assert_success_envelope(result)
     assert route.calls[0].request.url.params["offset"] == "2"
 
 
@@ -452,7 +440,7 @@ async def test_web_search_handler_page_out_of_range(tmp_path: Path, page: int) -
         _fake_credential_resolver,
     )
 
-    assert_failure_envelope(result, "validation_error")
+    assert_failure_envelope(result, "invalid_arguments")
 
 
 @respx.mock
@@ -493,11 +481,10 @@ async def test_web_search_handler_brave_strips_markup_and_keeps_page_age(
     )
 
     data = assert_success_envelope(result)
-    first, second = data["results"]
-    assert first["title"] == "vBot docs"
-    assert first["description"] == "The vBot docs & guides"
-    assert first["page_age"] == "2026-05-01T00:00:00"
-    assert "page_age" not in second
+    assert data["content"] == (
+        "1. vBot docs\nhttps://example.com/vbot\n2026-05-01 - The vBot docs & guides\n\n"
+        "2. vBot news\nhttps://example.com/news\nNo date on this one"
+    )
 
 
 @respx.mock
@@ -505,7 +492,7 @@ async def test_web_search_handler_brave_strips_markup_and_keeps_page_age(
 async def test_web_search_handler_brave_domain_filter_suppresses_more_results(
     tmp_path: Path,
 ) -> None:
-    """more_results_available must be suppressed with domain filters (B2)."""
+    """Brave's more_results_available counts unfiltered results, so site filters hide it."""
     workspace = tmp_path / "workspace"
     workspace.mkdir()
 
@@ -534,17 +521,17 @@ async def test_web_search_handler_brave_domain_filter_suppresses_more_results(
     )
 
     data = assert_success_envelope(result)
-    assert "more_results_available" not in data
-    warnings = data.get("warnings", [])
-    assert any("more_results_available" in w for w in warnings), (
-        f"expected a domain-paging warning, got {warnings}"
-    )
+    assert data == {
+        "domains": "example.com",
+        "content": "1. Example result\nhttps://example.com/vbot\nMatching",
+    }
 
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_web_search_handler_brave_without_domains_keeps_more_results(tmp_path: Path) -> None:
-    """more_results_available is preserved when no domain filter is applied."""
+async def test_web_search_handler_brave_without_domains_names_the_next_page(
+    tmp_path: Path,
+) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
 
@@ -552,7 +539,7 @@ async def test_web_search_handler_brave_without_domains_keeps_more_results(tmp_p
         return_value=httpx.Response(
             200,
             json={
-                "web": {"results": []},
+                "web": {"results": [{"title": "A", "url": "https://a.example/"}]},
                 "query": {"more_results_available": True},
             },
         )
@@ -560,13 +547,15 @@ async def test_web_search_handler_brave_without_domains_keeps_more_results(tmp_p
 
     result = await web_search_handler(
         make_context(workspace),
-        {"query": "vbot"},
+        {"query": "vbot", "page": 2},
         _fake_credential_resolver,
     )
 
     data = assert_success_envelope(result)
-    assert data["more_results_available"] is True
-    assert "warnings" not in data
+    assert data == {
+        "more": "More results are available with page 3.",
+        "content": "1. A\nhttps://a.example/",
+    }
 
 
 @respx.mock
@@ -591,6 +580,5 @@ async def test_brave_preserves_plain_comparisons_in_decorated_snippets(tmp_path:
         {"query": "vbot"},
         _fake_credential_resolver,
     )
-    row = assert_success_envelope(result)["results"][0]
-    assert row["title"] == "A title"
-    assert row["description"] == "x < y and z > w & more"
+    data = assert_success_envelope(result)
+    assert data["content"] == "1. A title\nhttps://example.com\nx < y and z > w & more"

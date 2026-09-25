@@ -19,6 +19,7 @@ from tests.core.tools.web_search_helpers import (
     assert_failure_envelope,
     assert_success_envelope,
     make_context,
+    result_urls,
 )
 
 
@@ -59,14 +60,12 @@ async def test_web_search_handler_firecrawl_success_maps_results(tmp_path: Path)
     )
 
     data = assert_success_envelope(result)
-    assert data["provider"] == "firecrawl"
-    assert len(data["results"]) == 2
-    assert "recency" not in data
-    assert "warnings" not in data
-    first, second = data["results"]
-    assert (first["rank"], second["rank"]) == (1, 2)
-    assert first["description"] == "vBot documentation"
-    assert "page_age" not in first
+    assert data == {
+        "content": (
+            "1. vBot docs\nhttps://example.com/vbot\nvBot documentation\n\n"
+            "2. vBot project\nhttps://example.com/project\nProject page"
+        )
+    }
 
     request = route.calls[0].request
     assert request.headers["authorization"] == "Bearer test-brave-api-key"
@@ -81,7 +80,8 @@ async def test_web_search_handler_firecrawl_success_maps_results(tmp_path: Path)
 @respx.mock
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("recency", "tbs"), [("day", "qdr:d"), ("month", "qdr:m"), ("year", "qdr:y")]
+    ("recency", "tbs"),
+    [("day", "qdr:d"), ("week", "qdr:w"), ("month", "qdr:m"), ("year", "qdr:y")],
 )
 async def test_web_search_handler_firecrawl_recency_and_domains(
     tmp_path: Path, recency: str, tbs: str
@@ -121,8 +121,7 @@ async def test_web_search_handler_firecrawl_recency_and_domains(
 
     data = assert_success_envelope(result)
     assert data["recency"] == recency
-    assert len(data["results"]) == 1
-    assert data["results"][0]["url"] == "https://example.com/vbot"
+    assert result_urls(data) == ["https://example.com/vbot"]
 
     body = _read_json_body(route.calls[0].request)
     assert body["tbs"] == tbs
@@ -150,10 +149,8 @@ async def test_web_search_handler_firecrawl_page_warns_without_paging(
     )
 
     data = assert_success_envelope(result)
-    assert "page" not in data
-    warnings = data.get("warnings", [])
-    assert any("paging" in warning for warning in warnings), (
-        f"expected a pagination warning, got {warnings}"
+    assert data["note"] == (
+        "Firecrawl cannot page results; these are the first results again, not page 2."
     )
     assert len(route.calls) == 1
 
@@ -284,8 +281,7 @@ async def test_web_search_handler_firecrawl_accepts_alternate_envelopes(
     )
 
     data = assert_success_envelope(result)
-    assert len(data["results"]) == 1
-    assert data["results"][0]["url"] == "https://example.com/vbot"
+    assert result_urls(data) == ["https://example.com/vbot"]
 
 
 @respx.mock
@@ -323,12 +319,9 @@ async def test_web_search_handler_firecrawl_maps_fallback_item_fields(
     )
 
     data = assert_success_envelope(result)
-    assert len(data["results"]) == 1
-    (entry,) = data["results"]
-    assert entry["title"] == "vBot docs"
-    assert entry["url"] == "https://example.com/vbot"
-    assert entry["description"] == "vBot documentation"
-    assert entry["page_age"] == "2026-08-20"
+    assert data["content"] == (
+        "1. vBot docs\nhttps://example.com/vbot\n2026-08-20 - vBot documentation"
+    )
 
 
 @respx.mock

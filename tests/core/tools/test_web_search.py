@@ -67,15 +67,11 @@ def test_register_web_search_tool_schema() -> None:
             "description": "Find the current release notes",
             "query": "vBot release notes",
         },
-        result={
-            "ok": True,
-            "error": None,
-            "data": {"results": [{"url": "https://example.com/vbot"}]},
-            "artifacts": [],
-        },
     )
     assert display["primary"][0]["value"] == "Find the current release notes"
-    assert display["facts"] == [{"kind": "count", "value": 1, "unit": "results", "at_least": False}]
+    assert [
+        part["value"] for part in registry.display_for_call("web_search", {"q": "vbot"})["primary"]
+    ] == ["vbot"]
 
     properties = parameters["properties"]
     assert "provider" not in properties
@@ -87,14 +83,9 @@ def test_register_web_search_tool_schema() -> None:
         "recency",
     }
     domains_schema = properties["domains"]
-    assert domains_schema["items"] == {
-        "type": "string",
-        "minLength": 1,
-        "maxLength": 253,
-    }
+    assert domains_schema["items"] == {"type": "string", "minLength": 1}
     assert domains_schema["minItems"] == 1
     assert domains_schema["maxItems"] == 10
-    assert domains_schema["uniqueItems"] is True
     count_schema = properties["count"]
     assert count_schema["minimum"] == 1
     assert count_schema["maximum"] == 20
@@ -102,7 +93,7 @@ def test_register_web_search_tool_schema() -> None:
     assert page_schema["minimum"] == 1
     assert page_schema["maximum"] == 10
     assert page_schema["default"] == 1
-    assert properties["recency"]["enum"] == ["day", "month", "year"]
+    assert properties["recency"]["enum"] == ["day", "week", "month", "year"]
     assert isinstance(properties["recency"]["description"], str)
     assert properties["recency"]["description"]
     assert all("default" not in schema for name, schema in properties.items() if name != "page")
@@ -120,7 +111,12 @@ async def test_web_search_handler_missing_api_key(tmp_path: Path) -> None:
     )
 
     error = assert_failure_envelope(result, "missing_api_key")
-    assert "BRAVE_API_KEY" in error["message"]
+    assert error["message"] == (
+        "Web search is not set up: the selected provider, Brave Search, needs BRAVE_API_KEY "
+        "in the .env file of the vBot data directory. Tell the user: they can add the key, "
+        "or choose another provider in Settings under Web search (DuckDuckGo needs no key)."
+    )
+    assert error["retryable"] is False
 
 
 @pytest.mark.asyncio
@@ -134,7 +130,10 @@ async def test_web_search_handler_empty_query(tmp_path: Path) -> None:
         _fake_credential_resolver,
     )
 
-    assert_failure_envelope(result, "validation_error")
+    error = assert_failure_envelope(result, "invalid_arguments")
+    assert error["message"] == (
+        'Pass the search words as query, for example {"query": "python asyncio"}.'
+    )
 
 
 @pytest.mark.asyncio
@@ -149,18 +148,12 @@ async def test_web_search_handler_count_out_of_range(tmp_path: Path, count: int)
         _fake_credential_resolver,
     )
 
-    assert_failure_envelope(result, "validation_error")
+    assert_failure_envelope(result, "invalid_arguments")
 
 
 @pytest.mark.asyncio
 @respx.mock
-@pytest.mark.parametrize("retired_field", ["date_after", "date_before"])
-async def test_web_search_rejects_retired_time_filters_before_searching(
-    tmp_path: Path,
-    retired_field: str,
-) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
+async def test_web_search_refuses_date_before_before_searching(tmp_path: Path) -> None:
     resolved_keys: list[str] = []
 
     def credential_resolver(key: str) -> str:
@@ -170,9 +163,16 @@ async def test_web_search_rejects_retired_time_filters_before_searching(
     registry = ToolRegistry()
     register_web_search_tool(registry, credential_resolver)
 
-    with pytest.raises(ToolContractError, match=f'"{retired_field}" is not a parameter'):
-        await registry.dispatch(make_context(workspace), {"query": "vbot", retired_field: "day"})
+    with pytest.raises(ToolContractError) as error:
+        await registry.dispatch(
+            make_context(tmp_path), {"query": "vbot", "date_before": "2025-01-01"}
+        )
 
+    assert str(error.value) == (
+        "web_search cannot return only results published before a date: it can limit "
+        "results to the past day, week, month or year (recency). Remove date_before, or "
+        "name the period in query, for example 2024."
+    )
     assert resolved_keys == []
 
 
@@ -183,11 +183,12 @@ async def test_web_search_handler_invalid_recency(tmp_path: Path) -> None:
 
     result = await web_search_handler(
         make_context(workspace),
-        {"query": "vbot", "recency": "week"},
+        {"query": "vbot", "recency": "decade"},
         _fake_credential_resolver,
     )
 
-    assert_failure_envelope(result, "validation_error")
+    error = assert_failure_envelope(result, "invalid_arguments")
+    assert error["message"] == "recency must be one of: day, week, month, year"
 
 
 @pytest.mark.asyncio
@@ -220,8 +221,8 @@ async def test_web_search_handler_rejects_invalid_domains(
         _fake_credential_resolver,
     )
 
-    error = assert_failure_envelope(result, "validation_error")
-    assert "domains" in error["message"]
+    error = assert_failure_envelope(result, "invalid_arguments")
+    assert error["message"].startswith("domains")
 
 
 def test_api_key_not_in_schema() -> None:

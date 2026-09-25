@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
@@ -24,9 +25,11 @@ def search_tolerance_cases() -> list[dict[str, Any]]:
     ]
     for value, expected in (
         ("DAY", "day"),
+        ("week", "week"),
         ("month", "month"),
         ("year", "year"),
         ("pd", "day"),
+        ("pw", "week"),
         ("pm", "month"),
         ("py", "year"),
     ):
@@ -50,7 +53,7 @@ def search_tolerance_cases() -> list[dict[str, Any]]:
             },
             {
                 "id": "unsupported",
-                "arguments": {"query": "fixture", "freshness": "week"},
+                "arguments": {"query": "fixture", "freshness": "decade"},
                 "success": False,
             },
         ]
@@ -137,10 +140,11 @@ async def search_case(
         checks["page"] = int(params.get("offset", "0")) == request.get("page", 1) - 1
         checks["age"] = (
             params.get("freshness", "")
-            == {"day": "pd", "month": "pm", "year": "py", "": ""}[expected_age]
+            == {"day": "pd", "week": "pw", "month": "pm", "year": "py", "": ""}[expected_age]
         )
         data = results[0].get("data") or {} if results else {}
-        checks["results"] = len(data.get("results", [])) == expected_count
+        numbered = re.findall(r"^\d+\. ", str(data.get("content", "")), re.MULTILINE)
+        checks["results"] = len(numbered) == expected_count
         checks["returned_age"] = data.get("recency", "") == expected_age
     else:
         checks["rejected_without_fetch"] = bool(results) and not results[0]["ok"] and not received
