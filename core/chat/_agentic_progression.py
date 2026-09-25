@@ -910,10 +910,10 @@ class AgenticProgression:
             # so the UI shows the same real totals during the Run that the
             # terminal payload will carry instead of summing per-call estimates.
             # Emitted only when the totals changed; best-effort like every
-            # transient projection.
+            # transient projection. The line diffs run off the Event Loop.
             if self._dependencies.change_tracker is not None:
-                current_change_stats = self._dependencies.change_tracker.peek_run_stats(
-                    run.session_id
+                current_change_stats = await _CHAT_TRANSFORM_WORKERS.run(
+                    self._dependencies.change_tracker.peek_run_stats, run.session_id
                 )
                 if current_change_stats != emitted_change_stats:
                     emitted_change_stats = current_change_stats
