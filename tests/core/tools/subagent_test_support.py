@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
-from contextlib import suppress
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -250,6 +250,9 @@ class FakeAgents:
         if agent_id not in self._agent_ids:
             raise AgentNotFoundError(f"Agent not found: {agent_id}")
         return SimpleNamespace(id=agent_id)
+
+    def list(self) -> list[SimpleNamespace]:
+        return [SimpleNamespace(id=agent_id, name=agent_id) for agent_id in sorted(self._agent_ids)]
 
 
 class FakeAgentResolver:
@@ -507,8 +510,36 @@ def make_runtime(
     return SimpleNamespace(
         agents=agents,
         agent_resolver=FakeAgentResolver(agents),
+        projects=SimpleNamespace(list=list),
         chat_sessions=ChatSessionManager(tmp_path),
         chat_run_manager=manager,
         storage=FakeStorage(tmp_path, settings),
         streaming_chat_loop=FakeChatLoop(None, streaming=True),
     )
+
+
+@asynccontextmanager
+async def dispatch_harness(tmp_path: Path) -> AsyncIterator[SimpleNamespace]:
+    """Register the real ``subagent`` Tool over runtime doubles for dispatch tests."""
+    manager = FakeRunManager()
+    runtime = make_runtime(tmp_path, manager)
+    triggers = RecordingTriggerService()
+    coordinator = SubAgentCoordinator(runtime, triggers, sessions=runtime.chat_sessions)
+    registry = ToolRegistry()
+    register_subagent_tools(registry, coordinator)
+    try:
+        yield SimpleNamespace(
+            manager=manager,
+            runtime=runtime,
+            registry=registry,
+            triggers=triggers,
+            context=make_context(),
+        )
+    finally:
+        for _, _, _, run in manager.started:
+            run.mark_completed(ChatMessage.assistant(model="fixture", content="done"))
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        for delivery in triggers.deliveries.values():
+            delivery.cancel()
+        runtime.chat_sessions.close()

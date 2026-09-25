@@ -41,12 +41,28 @@ def build_subagent_prompt_targets(
     Identity Agent sees allowed Identity Agents as bare ids and Project Agents as
     qualified ``agent@project`` ids.
     """
-    from core.tools.availability import agent_tool_settings, subagent_allowed_agents
+    from core.tools.availability import agent_tool_settings
 
-    allowed = subagent_allowed_agents(agent_tool_settings(agent.tools))
+    return subagent_targets(runtime, agent.id, project_id, agent_tool_settings(agent.tools))
+
+
+def subagent_targets(
+    runtime: RuntimeServices,
+    caller_agent_id: str,
+    project_id: str | None,
+    tool_settings: Any,
+) -> list[SubAgentPromptTarget]:
+    """Return the additional targets a caller with these Tool settings may select.
+
+    The same catalog the System Prompt block shows, so an error can name the
+    exact choices without revealing Agents the caller cannot use.
+    """
+    from core.tools.availability import subagent_allowed_agents
+
+    allowed = subagent_allowed_agents(tool_settings)
     if project_id is not None:
-        return _project_targets(runtime, agent.id, project_id, allowed)
-    return _identity_targets(runtime, agent.id, allowed)
+        return _project_targets(runtime, caller_agent_id, project_id, allowed)
+    return _identity_targets(runtime, caller_agent_id, allowed)
 
 
 def _project_targets(
@@ -160,4 +176,4 @@ def _project_member(runtime: RuntimeServices, project_id: str, agent_id: str) ->
     return next((member for member in team if member.agent_id == agent_id), None)
 
 
-__all__ = ["SubAgentPromptTarget", "build_subagent_prompt_targets"]
+__all__ = ["SubAgentPromptTarget", "build_subagent_prompt_targets", "subagent_targets"]

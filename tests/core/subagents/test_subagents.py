@@ -340,24 +340,25 @@ async def test_subagent_actions_reject_unknown_arguments(tmp_path: Path, action:
 
 
 @pytest.mark.parametrize(
-    ("arguments", "message"),
+    ("arguments", "code", "message"),
     [
-        (
-            {"action": "status", "content": "spawn"},
-            'Action "status" takes only "id"; remove "content".',
-        ),
+        # Unused fields are ignored: status lists, cancel looks up the id.
+        ({"action": "status", "content": "spawn"}, None, None),
         (
             {"action": "cancel", "id": "sub_test", "agent_id": "worker"},
-            'Action "cancel" takes only "id"; remove "agent_id".',
+            "subagent_not_found",
+            "No Sub-Agent work is tracked for this Session, so id sub_test was not found",
         ),
+        # A work id sent with run could mean continuing that work or new work.
         (
             {"action": "run", "content": "spawn", "id": "sub_test"},
-            'Action "run" does not take "id"; remove it.',
+            "invalid_arguments",
+            'subagent was not run: "id" names Sub-Agent work sub_test',
         ),
     ],
 )
-async def test_subagent_actions_reject_fields_they_would_ignore(
-    tmp_path: Path, arguments: JsonObject, message: str
+async def test_subagent_actions_ignore_fields_they_do_not_use(
+    tmp_path: Path, arguments: JsonObject, code: str | None, message: str | None
 ) -> None:
     manager = FakeRunManager()
     runtime = make_runtime(tmp_path, manager)
@@ -372,8 +373,11 @@ async def test_subagent_actions_reject_fields_they_would_ignore(
 
     result = await registry.dispatch(make_context(), arguments)
 
-    assert result["error"]["code"] == "invalid_arguments"
-    assert result["error"]["message"].startswith(message)
+    if code is None:
+        assert result["data"] == {"subagents": []}
+    else:
+        assert result["error"]["code"] == code
+        assert result["error"]["message"].startswith(message)
     assert manager.started == []
 
 
