@@ -87,7 +87,7 @@ def _build_read_hint(
     if byte_limited:
         message += " Output truncated at 50 KB."
     if continuation_offset is not None:
-        message += f" Use offset={continuation_offset} to continue."
+        message += f' Use offset="{continuation_offset}" to continue.'
     elif total_lines is None or shown_end < total_lines:
         message += f" Use offset={shown_end + 1} to continue."
     return message + "]"
@@ -124,7 +124,7 @@ def render_text_file(raw: bytes, offset: object = None, limit: object = None) ->
     and continuation behavior as an explicit ``read`` call.
     """
     position = parse_read_position(offset)
-    max_lines = optional_int(limit, field_name="limit", minimum=1) or DEFAULT_LINE_LIMIT
+    max_lines = optional_int(limit, field_name="limit", minimum=1)
 
     if raw.startswith(UTF8_BOM_BYTES):
         raw = raw[len(UTF8_BOM_BYTES) :]
@@ -136,6 +136,31 @@ def render_text_file(raw: bytes, offset: object = None, limit: object = None) ->
         number=True,
         start_character=position.character,
     )
+
+
+def read_position(arguments: JsonObject) -> ReadPosition:
+    """Return where a read call starts: its ``offset`` line and optional ``character``."""
+    position = parse_read_position(arguments.get("offset"))
+    character = optional_int(arguments.get("character"), field_name="character", minimum=1)
+    return ReadPosition(position.line, character) if character else position
+
+
+def _past_line_end(position: ReadPosition, limit: int | None) -> tuple[str, int, int] | str:
+    """Read "A:B" as lines A-B when line A has no character B, or say why nothing shows.
+
+    Models write ``offset: "100:120"`` for a line range, where a continued long
+    line would have a character 120. An explicit ``limit`` keeps its line count.
+    """
+    line, character = position.line, position.character
+    missing = f'Line {line} has no character {character}, so offset "{line}:{character}"'
+    if limit is None and character < line:
+        return (
+            f"[{missing} showed nothing. offset takes a line number: offset={line} reads "
+            f"from line {line}.]"
+        )
+    count = limit if limit is not None else character - line + 1
+    read_as = f"offset={line}" if limit is not None else f"offset={line}, limit={count}"
+    return f"[{missing} was read as {read_as}.]\n", line, count
 
 
 def parse_read_position(offset: object) -> ReadPosition:
@@ -179,7 +204,7 @@ def _start_line(line: int, total_lines: int) -> int:
 def render_text(
     text: str,
     start_line: int,
-    max_lines: int,
+    limit: int | None,
     *,
     number: bool,
     start_character: int = 1,
@@ -189,7 +214,9 @@ def render_text(
     Shared by the literal-file path (``number=True`` adds the ``N| `` gutter) and
     the extracted-document path (``number=False`` — a rendering of an Office or
     notebook file is not editable source, so the gutter would only mislead).
+    ``limit`` is the caller's line count; without one, the default bound applies.
     """
+    max_lines = limit or DEFAULT_LINE_LIMIT
     all_lines = split_text_lines(text, keepends=True)
     total_lines = len(all_lines)
 
@@ -204,10 +231,11 @@ def render_text(
         )
     source_line = all_lines[start_index]
     if start_character > len(source_line):
-        return (
-            f"[Character offset {start_character} is beyond end of line {start_line}. "
-            "Nothing to show.]"
-        )
+        fallback = _past_line_end(ReadPosition(start_line, start_character), limit)
+        if isinstance(fallback, str):
+            return fallback
+        note, line, count = fallback
+        return note + render_text(text, line, count, number=number)
 
     selected_lines = [
         plain_line_end(line) for line in all_lines[start_index : start_index + max_lines]
@@ -320,10 +348,9 @@ def _split_stream_fragments(
 
 def render_text_path(resolved: Path, arguments: JsonObject) -> str:
     """Render a local text file with bounded memory and early truncation."""
-    position = parse_read_position(arguments.get("offset"))
-    max_lines = (
-        optional_int(arguments.get("limit"), field_name="limit", minimum=1) or DEFAULT_LINE_LIMIT
-    )
+    position = read_position(arguments)
+    limit = optional_int(arguments.get("limit"), field_name="limit", minimum=1)
+    max_lines = limit or DEFAULT_LINE_LIMIT
     known_total: int | None = None
     if position.line < 0:
         known_total = count_lines(resolved)
@@ -441,10 +468,11 @@ def render_text_path(resolved: Path, arguments: JsonObject) -> str:
             process_fragment(held_carriage_return, ends_line=True)
 
     if character_offset_beyond_end or (target_line_seen and not target_character_reached):
-        return (
-            f"[Character offset {position.character} is beyond end of line {position.line}. "
-            "Nothing to show.]"
-        )
+        fallback = _past_line_end(position, limit)
+        if isinstance(fallback, str):
+            return fallback
+        note, line, count = fallback
+        return note + render_text_path(resolved, {"offset": line, "limit": count})
 
     reached_eof = not (line_limited or byte_limited or character_offset_beyond_end)
     total_lines = (
@@ -553,8 +581,8 @@ def render_matching_lines(lines: Iterable[str], arguments: JsonObject, label: st
         if len(text) > _MATCH_LINE_CHARACTERS:
             continuation = f"{number}:{_MATCH_LINE_CHARACTERS + 1}"
             text = (
-                f"{text[:_MATCH_LINE_CHARACTERS]} [line continues; read offset="
-                f"{continuation} for the rest]"
+                f"{text[:_MATCH_LINE_CHARACTERS]} [line continues; read "
+                f'offset="{continuation}" for the rest]'
             )
         rendered = f"{_line_gutter(number)}{text}\n"
         if last_shown and number > last_shown + 1:
@@ -603,9 +631,12 @@ def render_directory_listing(names: list[str], arguments: JsonObject, label: str
     total = len(names)
     if not total:
         return f"{directory} is an empty directory."
-    position = parse_read_position(arguments.get("offset"))
+    position = read_position(arguments)
     if position.character != 1:
-        raise ValueError("a directory lists entries; offset takes an entry number")
+        raise ValueError(
+            f"{directory} is a directory: offset counts its entries, so send "
+            f"offset={position.line} without a character."
+        )
     start = _start_line(position.line, total)
     if start > total:
         return f"[Offset {start} is beyond the {total} entries of {directory}. Nothing to show.]"

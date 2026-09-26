@@ -32,6 +32,14 @@ from core.tools import (
     register_read_tool,
 )
 from core.tools.file_state import StaleReason
+from core.tools.model_names import SHELL_MODEL_NAME
+
+
+def _binary_notice(label: str) -> str:
+    return (
+        f"[{label} is a binary file, so it is not shown as text. If {SHELL_MODEL_NAME} is "
+        "available, a command for this file type can inspect it.]"
+    )
 
 
 @dataclass(frozen=True)
@@ -181,10 +189,7 @@ def test_register_read_tool_exposes_provider_schema_without_description_property
     assert parameters["required"] == ["path"]
     assert "additionalProperties" not in parameters
     assert set(parameters["properties"]) == {"path", "offset", "limit"}
-    assert parameters["properties"]["offset"]["oneOf"] == [
-        {"type": "integer"},
-        {"type": "string", "pattern": r"^[1-9][0-9]*:[1-9][0-9]*$"},
-    ]
+    assert parameters["properties"]["offset"]["type"] == "integer"
     assert all(
         isinstance(property_schema.get("description"), str) and property_schema["description"]
         for property_schema in parameters["properties"].values()
@@ -427,7 +432,7 @@ async def test_read_returns_failure_envelope_for_read_time_filesystem_error(
     result = await make_handler()(make_context(workspace), {"path": "notes.txt"})
 
     error = assert_failure_envelope(result, "file_read_error")
-    assert error["message"] == "Failed to read notes.txt: access denied while reading"
+    assert error["message"] == "Could not read notes.txt: access denied while reading."
 
 
 @pytest.mark.asyncio
@@ -529,7 +534,7 @@ async def test_read_emits_and_accepts_in_line_continuation_after_byte_truncation
     first = await handler(make_context(workspace), {"path": "minified.txt"})
     first_content = assert_success_envelope(first)["content"]
     assert isinstance(first_content, str)
-    match = re.search(r"Use offset=(1:\d+) to continue", first_content)
+    match = re.search(r'Use offset="(1:\d+)" to continue', first_content)
     assert match is not None
     continuation_offset = match.group(1)
     continuation_character = int(continuation_offset.split(":", maxsplit=1)[1])
@@ -774,7 +779,7 @@ async def test_read_returns_binary_notice_for_nul_bytes(tmp_path: Path) -> None:
     data = assert_success_envelope(result)
     content = data["content"]
     assert isinstance(content, str)
-    assert content == "[data.bin is a binary file; it is not shown as text.]"
+    assert content == _binary_notice("data.bin")
 
 
 @pytest.mark.asyncio
@@ -808,7 +813,7 @@ async def test_read_text_binary_and_video_paths_never_use_full_file_reader(
 
 
 @pytest.mark.asyncio
-async def test_read_empty_file_returns_empty_content(tmp_path: Path) -> None:
+async def test_read_empty_file_says_it_is_empty(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     workspace.joinpath("empty.txt").write_text("", encoding="utf-8")
@@ -816,7 +821,7 @@ async def test_read_empty_file_returns_empty_content(tmp_path: Path) -> None:
     result = await make_handler()(make_context(workspace), {"path": "empty.txt"})
 
     data = assert_success_envelope(result)
-    assert data["content"] == ""
+    assert data["content"] == "[empty.txt is empty.]"
 
 
 @pytest.mark.asyncio
@@ -1008,7 +1013,7 @@ async def test_read_malformed_docx_falls_back_to_binary_notice(tmp_path: Path) -
     data = assert_success_envelope(result)
     content = data["content"]
     assert isinstance(content, str)
-    assert content == "[broken.docx is a binary file; it is not shown as text.]"
+    assert content == _binary_notice("broken.docx")
 
 
 def _minimal_pdf(lines: list[str]) -> bytes:
@@ -1084,7 +1089,7 @@ async def test_read_malformed_pdf_falls_back_to_binary_notice(tmp_path: Path) ->
     data = assert_success_envelope(result)
     content = data["content"]
     assert isinstance(content, str)
-    assert content == "[broken.pdf is a binary file; it is not shown as text.]"
+    assert content == _binary_notice("broken.pdf")
 
 
 @pytest.mark.asyncio
