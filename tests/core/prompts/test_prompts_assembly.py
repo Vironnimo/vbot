@@ -457,7 +457,7 @@ def test_working_project_context_uses_exact_rooted_agent_frame(tmp_path: Path) -
         "## Working Project\n\n"
         "- Project: `Second Brain`\n"
         "- Project ID: `second-brain`\n"
-        f"- Your Project Workspace: `{model_path(repo)}`\n\n"
+        f"- Your Project Workspace (your working directory): `{model_path(repo)}`\n\n"
         "### Project Context\n\n"
         "Follow the instructions in any files included below and use their contents as "
         "context for all work in this Project Workspace.\n\n"
