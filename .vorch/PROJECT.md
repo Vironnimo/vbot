@@ -56,6 +56,7 @@ Read domain roots and task-relevant references under `.vorch/domain-maps/` as de
 | database.md | `core/database/` | Shared SQLite kernel, format-stability contract, data-store marker, data snapshots and recovery |
 | recall.md | `core/recall/` | Recall backends: canonical scan, FTS index, vector index |
 | statistics.md | `core/statistics/` | Disposable SQLite projection, report RPC |
+| usage.md | `core/usage/` | Durable Model request accounting, historical Usage import |
 | memory.md | `core/memory/` | Pinned memory service, workspace memory files |
 | settings.md | `core/settings/` | Settings schemas, validation, update sections |
 | prompts.md | `core/prompts/` | System Prompt assembly, fragments, variables |
@@ -73,7 +74,7 @@ Read domain roots and task-relevant references under `.vorch/domain-maps/` as de
 | model-communication.md | cross-cutting | Sanctioned kernel-to-Model channels; never invent one |
 | server.md | `server/` | Transport/RPC boundary, events, source routing |
 | cli.md | `cli/` | Server lifecycle commands, targeting, output contract |
-| desktop.md | `desktop/` | pywebview shell contract, voice bridge |
+| desktop.md | `desktop/` | pywebview shell contract, bridge, Desktop Voice, Live voice support |
 | webui.md | `webui/` | Frontend accessor boundary, shared invariants |
 | logs.md | log viewer subsystem | Log parsing, RPC/socket contract, Logs tab |
 | debug.md | `core/debug/` | Debug Mode, traces, redaction, recorder |
@@ -109,7 +110,7 @@ The development extra includes the native tray dependency on Windows so fresh lo
 
 **Worktrees:** `python scripts/worktree.py create|list|merge|delete <task-name>`; also `repair-start|repair-finish`. `create` reports path, ports, data dir, URL; it reserves `dev` and refuses an existing data root. Cleanup stops services and removes data only with matching ownership records; older worktrees keep their unverified data, reported in the output. Non-force `delete` fails closed on Git removal errors unless `git worktree list` confirms deregistration; a leftover directory without `.git` holds no work, so both modes finish it (branch read from Git's registration). `delete --force` discards uncommitted work. `merge` lands the task branch on `main` and removes the worktree, with a merge lock and protected conflict-repair window. The agent must pass quality gates before merging; this tool never runs them. On failure/unexpected behavior, read `scripts/README-worktree.md`.
 
-**Dependencies:** `pyproject.toml` groups include `server`, `cli`, `windows-app`, `desktop`, `local-speech`, `local-tts`, and `dev`; frontend: `webui/package.json`. `core/model_tasks/speech_setup.py` owns optional speech setup. Packaged Windows STT/TTS use managed user-data environments and child workers; source-checkout STT retains its server-interpreter recipe. No optional setup mutates a packaged release. `psutil` provides verified process-tree cleanup and server restart support. `sniffio` is a direct dependency although vBot never imports it: httpcore probes it on every connection and stream, and without it each probe pays a failed import and `sys.path` scan (~0.4 ms of GIL time). See `model_tasks/speech.md` and `USAGE.md` -> Local speech recognition / synthesis.
+**Dependencies:** `pyproject.toml` groups include `server`, `cli`, `windows-app`, `desktop`, `local-speech`, `local-tts`, and `dev`; frontend: `webui/package.json`. `desktop` carries the pywebview shell and the on-device Voice stack, including echo cancellation (`livekit`, Windows-only `PyAudioWPatch`); see `desktop.md` -> External Dependencies. A change to the base dependencies or the `server`, `cli`, `windows-app`, or `desktop` extras also regenerates the hashed Windows runtime locks (`scripts/windows/requirements.md`). `core/model_tasks/speech_setup.py` owns optional speech setup. Packaged Windows STT/TTS use managed user-data environments and child workers; source-checkout STT retains its server-interpreter recipe. No optional setup mutates a packaged release. `psutil` provides verified process-tree cleanup and server restart support. `sniffio` is a direct dependency although vBot never imports it: httpcore probes it on every connection and stream, and without it each probe pays a failed import and `sys.path` scan (~0.4 ms of GIL time). See `model_tasks/speech.md` and `USAGE.md` -> Local speech recognition / synthesis.
 
 **Run:**
 ```bash

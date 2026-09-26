@@ -62,11 +62,15 @@ def test_missing_observation_returns_executable_recovery_without_input_replay(
     )
     data = json.loads(json.dumps(result))["data"]
     assert result["ok"] and data["applied"] and client.inputs == 1
-    assert data["target"] == {"pid": 1, "window_id": 2}
-    assert data["foreground"] is foreground
     recovery = data["recovery"]
-    assert recovery["action"] == "capture" and "view_id" not in recovery
-    assert recovery["resolution"] == "original"
+    # The next call names the same target, delivery and resolution, never the stale view.
+    assert {key: recovery[key] for key in ("action", "pid", "window_id", "foreground")} == {
+        "action": "capture",
+        "pid": 1,
+        "window_id": 2,
+        "foreground": foreground,
+    }
+    assert recovery["resolution"] == "original" and "view_id" not in recovery
     assert "test-owned-private-text" not in json.dumps(result)
     stale = service.handle(
         context, {"action": "click", "view_id": first["view_id"], "coordinate": [10, 10]}
@@ -74,7 +78,7 @@ def test_missing_observation_returns_executable_recovery_without_input_replay(
     assert stale["error"]["code"] == "stale_view" and client.inputs == 1
     client.fail_capture_after_input = False
     observed = service.handle(context, recovery)
-    assert observed["ok"] and observed["data"]["mode"] == mode
+    assert observed["ok"] and observed["data"].get("mode", "vision") == mode
     assert observed["data"]["foreground"] is foreground and client.inputs == 1
     if mode != "vision":
         assert recovery["query"] == "Draft" and recovery["limit"] == 12
@@ -86,17 +90,19 @@ def test_failed_read_keeps_target_without_using_stale_pixels(computer, target):
     first = service.handle(context, {"action": "capture", **target})["data"]
     client.fail = "resolve_window" if "window_id" in target else "get_desktop_state"
     failed = service.handle(context, {"action": "capture", "view_id": first["view_id"]})
-    assert not failed["ok"]
-    recovery = failed["artifacts"][0]
-    assert recovery["target"] == target and "observation" not in recovery
+    assert not failed["ok"] and not failed["artifacts"]
     stale = service.handle(
         context, {"action": "wait", "view_id": first["view_id"], "duration_ms": 0}
     )
-    assert stale["error"]["code"] == "stale_view"
-    assert stale["artifacts"][0]["recovery"] == recovery["recovery"]
+    # The replaced view names the read-only capture of its own target, without old pixels.
+    assert stale["error"]["code"] == "stale_view" and not stale["artifacts"]
+    next_call = {"action": "capture", **target}
+    if "pid" in target:
+        next_call["foreground"] = False
+    assert json.dumps(next_call, separators=(",", ":")) in stale["error"]["message"]
     client.fail = None
-    observed = service.handle(context, recovery["recovery"])
-    assert observed["ok"] and observed["data"]["target"] == target
+    observed = service.handle(context, next_call)
+    assert observed["ok"] and observed["data"].get("target", {}) == target
     assert client.inputs == 0
 
 
@@ -124,7 +130,6 @@ def test_recovery_routes_closed_or_inactive_window_to_read_only_discovery(comput
     assert result["ok"] and result["data"]["applied"] and client.inputs == 1
     data = result["data"]
     assert data["observation_error"]["code"] == code
-    assert data["target"] == {"pid": 1, "window_id": 2} and data["foreground"] is True
     assert data["recovery"] == {"action": action}
     client.hook = None
     # Discovery in the fixture must remain read-only too.
@@ -214,11 +219,18 @@ def test_retired_reference_recovery_preserves_explicit_delivery_and_owner(comput
         "resolution": "original",
     }
     result = service.handle(context, args)
-    assert not result["ok"] and result["artifacts"][0]["recovery"]["foreground"] is True
-    assert result["artifacts"][0]["recovery"]["resolution"] == "original"
+    # The capture call keeps the explicit foreground request for the view's own window.
+    assert result["error"]["code"] == "stale_view" and not result["artifacts"]
+    assert (
+        '{"action":"capture","pid":1,"window_id":2,"foreground":true}'
+        in (result["error"]["message"])
+    )
     other = replace(context, run_id="other")
-    assert not service.handle(other, args)["artifacts"]
-    assert not service.handle(context, {**args, "pid": 1, "window_id": 3})["artifacts"]
+    foreign = service.handle(other, args)
+    assert "not a screenshot from this Run" in foreign["error"]["message"]
+    assert "window_id" not in foreign["error"]["message"].split("Run.")[0]
+    mismatched = service.handle(context, {**args, "pid": 1, "window_id": 3})
+    assert not mismatched["ok"] and '"window_id":3' not in mismatched["error"]["message"]
     assert client.inputs == 1
 
 
@@ -248,10 +260,14 @@ def test_unexpected_capture_error_keeps_read_only_recovery(computer):
 
     client.hook = fail
     result = service.handle(context, {"action": "capture", "view_id": first["view_id"]})
-    assert result["error"]["code"] == "computer_use_failed"
-    recovery = result["artifacts"][0]["recovery"]
+    message = result["error"]["message"]
+    assert result["error"]["code"] == "computer_use_failed" and not result["artifacts"]
+    # A read changes nothing, so the message says one more try is safe and names no input.
+    assert "RuntimeError" in message and "one more try is safe" in message
+    assert "test-owned unexpected failure" not in message
     client.hook = None
-    assert service.handle(context, recovery)["ok"] and client.inputs == 0
+    assert service.handle(context, {"action": "capture", "pid": 1, "window_id": 2})["ok"]
+    assert client.inputs == 0
 
 
 def test_retired_monitor_reference_does_not_redirect_recovery(computer):
@@ -269,7 +285,10 @@ def test_retired_monitor_reference_does_not_redirect_recovery(computer):
     result = service.handle(
         context, {"action": "capture", "view_id": first["view_id"], "monitor": 3}
     )
+    # The retired view of monitor 2 is named, but never redirected to monitor 3.
     assert result["error"]["code"] == "stale_view" and not result["artifacts"]
+    assert '{"action":"capture","monitor":2}' in result["error"]["message"]
+    assert "monitor 3" not in result["error"]["message"]
     assert client.inputs == 1
 
 
@@ -383,9 +402,12 @@ def test_blocked_input_returns_a_usable_dialog_observation_without_extra_capture
         else call(computer, "type", text="draft")
     )
     assert not result["ok"] and result["error"]["code"] == "target_blocked"
-    recovery = result["artifacts"][0]
-    assert recovery["applied"] is False and client.inputs == 0
-    observed = recovery["observation"]
+    assert client.inputs == 0
+    # The message names the one capture that shows the dialog instead of a hidden image.
+    next_call = '{"action":"capture","pid":1,"window_id":2,"foreground":false}'
+    assert next_call in result["error"]["message"]
+    assert "No input was sent" in result["error"]["message"]
+    observed = service.handle(context, json.loads(next_call))["data"]
     assert observed["target"] == {"pid": 1, "window_id": 3}
     assert observed["requested_target"] == {"pid": 1, "window_id": 2}
     blocked[0] = False

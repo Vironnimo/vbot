@@ -13,13 +13,12 @@ vi.mock(
   async () =>
     import('../../../node_modules/svelte/src/reactivity/index-client.js'),
 );
-const { status, factory, desktop, lease } = vi.hoisted(() => ({
+const { status, factory, desktop } = vi.hoisted(() => ({
   status: vi.fn(),
   factory: vi.fn(),
-  lease: { acquire: async () => null, release: () => {} },
   desktop: {
     isDesktopAccessor: () => false,
-    createDesktopLiveVoiceLease: () => null,
+    desktopMicrophoneAccess: async () => null,
     onDesktopLiveRequest: () => () => {},
   },
 }));
@@ -63,6 +62,9 @@ function renderReactive(initial) {
       get onToast() {
         return props.get('onToast');
       },
+      get voiceStatus() {
+        return props.get('voiceStatus') ?? null;
+      },
     },
   });
   flushSync();
@@ -71,12 +73,14 @@ function renderReactive(initial) {
 
 function simulateController() {
   factory.mockImplementation(
-    ({ state, onNotice, uiActions, microphoneLease }) => {
+    ({ state, onNotice, uiActions, checkMicrophoneAccess, wakePhrases }) => {
+      const holds = new Set();
       fake = {
         state,
         onNotice,
         uiActions,
-        microphoneLease,
+        checkMicrophoneAccess,
+        wakePhrases,
         start: vi.fn(async () => {
           state.phase = 'connecting';
         }),
@@ -86,6 +90,16 @@ function simulateController() {
         mute: vi.fn(() => {
           state.muted = !state.muted;
         }),
+        hold: vi.fn((reason) => {
+          holds.add(reason);
+          state.held = true;
+          return true;
+        }),
+        release: vi.fn((reason) => {
+          holds.delete(reason);
+          state.held = holds.size > 0;
+        }),
+        held: (reason) => holds.has(reason),
         active: () => state.phase === 'live',
         destroy: vi.fn(),
         handleFrame: vi.fn(),
@@ -113,7 +127,7 @@ beforeEach(() => {
   factory.mockReset();
   status.mockReset();
   desktop.isDesktopAccessor = vi.fn(() => false);
-  desktop.createDesktopLiveVoiceLease = vi.fn(() => lease);
+  desktop.desktopMicrophoneAccess = vi.fn(async () => null);
   desktop.onDesktopLiveRequest = vi.fn((handler) => {
     desktopRequest = handler;
     return stopDesktopRequests;
@@ -264,15 +278,21 @@ describe('Live voice in the Desktop app', () => {
   it('stays browser-only outside the Desktop accessor', () => {
     simulateController();
     render();
-    expect(fake.microphoneLease).toBeNull();
+    expect(fake.checkMicrophoneAccess).toBeNull();
+    expect(fake.wakePhrases()).toEqual([]);
     expect(desktop.onDesktopLiveRequest).not.toHaveBeenCalled();
   });
 
-  it('shares the microphone with wakeword listening through the Desktop lease', async () => {
+  it('checks Desktop microphone access and takes Desktop requests', async () => {
     simulateController();
     desktop.isDesktopAccessor.mockReturnValue(true);
+    desktop.desktopMicrophoneAccess.mockResolvedValue(
+      'desktop_restart_required',
+    );
     render();
-    expect(fake.microphoneLease).toBe(lease);
+    await expect(fake.checkMicrophoneAccess()).resolves.toBe(
+      'desktop_restart_required',
+    );
     expect(desktop.onDesktopLiveRequest).toHaveBeenCalledOnce();
 
     await unmount(component);
@@ -341,6 +361,118 @@ describe('Live voice in the Desktop app', () => {
     expect(desktopRequest({ action: 'toggle', source: 'hotkey' })).toBe(false);
     expect(fake.start).not.toHaveBeenCalled();
     expect(onToast).not.toHaveBeenCalled();
+  });
+});
+
+describe('Live voice with Desktop Voice', () => {
+  const COMMAND = {
+    type: 'command',
+    agent_id: 'main',
+    session_behavior: 'active',
+  };
+
+  function voiceStatus(overrides = {}) {
+    return {
+      enabled: true,
+      state: 'listening',
+      sequence: 3,
+      phrases: [
+        {
+          model_id: 'builtin/okay_nabu',
+          label: 'Okay Nabu',
+          effective: COMMAND,
+        },
+        {
+          model_id: 'builtin/hey_jarvis',
+          label: 'Hey Jarvis',
+          effective: { type: 'live_voice', mode: 'toggle' },
+        },
+      ],
+      recording: null,
+      ...overrides,
+    };
+  }
+  const RECORDING = { command_id: 'c-1', model_id: 'builtin/okay_nabu' };
+
+  it('names the command wake phrases of the current status to the call', () => {
+    simulateController();
+    const props = renderReactive({ configured: true, voiceStatus: null });
+    expect(fake.wakePhrases()).toEqual([]);
+
+    props.set('voiceStatus', voiceStatus());
+    expect(fake.wakePhrases()).toEqual(['Okay Nabu']);
+
+    props.set('voiceStatus', voiceStatus({ state: 'microphone_disconnected' }));
+    expect(fake.wakePhrases()).toEqual(['Okay Nabu']);
+
+    props.set('voiceStatus', voiceStatus({ enabled: false }));
+    expect(fake.wakePhrases()).toEqual([]);
+  });
+
+  it('holds a running call while a command is recorded', async () => {
+    simulateController();
+    const props = renderReactive({
+      configured: true,
+      voiceStatus: voiceStatus(),
+    });
+    toggle().click();
+    await settle();
+    fake.state.phase = 'live';
+    fake.state.captions = [{ role: 'assistant', text: 'Hello', final: true }];
+    flushSync();
+
+    props.set(
+      'voiceStatus',
+      voiceStatus({ sequence: 4, recording: RECORDING }),
+    );
+    flushSync();
+    expect(fake.hold).toHaveBeenCalledExactlyOnceWith('wakeword');
+    expect(caption().textContent).toBe('Paused for a voice command');
+    expect(caption().dataset.role).toBe('status');
+
+    // A newer snapshot of the same recording keeps the one hold.
+    props.set(
+      'voiceStatus',
+      voiceStatus({ sequence: 5, recording: RECORDING }),
+    );
+    flushSync();
+    expect(fake.hold).toHaveBeenCalledOnce();
+
+    // The mute stays the user's own choice.
+    muteButton().click();
+    flushSync();
+    expect(muteButton().getAttribute('aria-pressed')).toBe('true');
+
+    props.set('voiceStatus', voiceStatus({ sequence: 6, recording: null }));
+    flushSync();
+    expect(fake.release).toHaveBeenCalledExactlyOnceWith('wakeword');
+    expect(caption().textContent).toBe('Hello');
+    expect(muteButton().getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('releases the hold when Desktop Voice goes away', async () => {
+    simulateController();
+    const props = renderReactive({
+      configured: true,
+      voiceStatus: voiceStatus({ recording: RECORDING }),
+    });
+    toggle().click();
+    await settle();
+    // A call that starts during a recording is held at once.
+    expect(fake.hold).toHaveBeenCalledExactlyOnceWith('wakeword');
+
+    props.set('voiceStatus', null);
+    flushSync();
+    expect(fake.release).toHaveBeenCalledExactlyOnceWith('wakeword');
+    expect(fake.state.held).toBe(false);
+  });
+
+  it('holds nothing without a call', () => {
+    simulateController();
+    const props = renderReactive({ configured: true, voiceStatus: null });
+    props.set('voiceStatus', voiceStatus({ recording: RECORDING }));
+    flushSync();
+    expect(fake.hold).not.toHaveBeenCalled();
   });
 });
 

@@ -252,11 +252,13 @@ class _VideoService:
         output_dir: Path,
         call_options: dict[str, object],
         frame_paths: dict[str, Path],
+        usage_context: object = None,
     ) -> object:
         if self.error is not None:
             raise self.error
         self.call_options = call_options
         self.frame_paths = frame_paths
+        self.usage_context = usage_context
         self.output_dir = output_dir
         return SimpleNamespace(
             file_path=self.file_path,
@@ -282,10 +284,12 @@ class _MusicService:
         *,
         output_dir: Path,
         source_paths: tuple[Path, ...],
+        usage_context: object = None,
     ) -> object:
         if self.error is not None:
             raise self.error
         self.source_paths = source_paths
+        self.usage_context = usage_context
         self.output_dir = output_dir
         return SimpleNamespace(
             file_path=self.file_path,

@@ -23,6 +23,7 @@ from core.sessions import (
     _store_runs,
     _store_search,
     _store_timeline,
+    _store_usage,
     _store_values,
 )
 from core.sessions._store_schema import session_database_spec
@@ -145,6 +146,11 @@ class SessionStore:
     def verify_read_write(self) -> None:
         """Exercise the opened read/write path without changing canonical rows."""
         self._database.verify_read_write()
+
+    def usage_history(self, after_entry_key: int, *, limit: int) -> tuple[JsonObject, ...]:
+        return self._read_decoded(
+            lambda connection: _store_usage.usage_history(connection, after_entry_key, limit=limit)
+        )
 
     # -- Session lifecycle -------------------------------------------------------
 

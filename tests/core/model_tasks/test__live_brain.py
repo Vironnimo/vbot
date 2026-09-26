@@ -13,6 +13,7 @@ from core.model_tasks._live_brain import BrainTarget, DelegationInput, LiveBrain
 from core.model_tasks._live_tools import DELEGATION_INSTRUCTIONS, LIVE_TOOL_NAMES
 from core.providers.accounts import ConnectionRef
 from core.providers.errors import ProviderError
+from core.usage import UsageRecorder
 
 TARGET = BrainTarget(
     provider_id="openai",
@@ -47,7 +48,12 @@ class FakeAdapter:
 
 class Harness:
     def __init__(
-        self, responses: list[Any], *, max_steps: int = 8, target: BrainTarget = TARGET
+        self,
+        responses: list[Any],
+        *,
+        max_steps: int = 8,
+        target: BrainTarget = TARGET,
+        usage_recorder: UsageRecorder | None = None,
     ) -> None:
         self.adapter = FakeAdapter(responses)
         self.connections: list[ConnectionRef] = []
@@ -66,6 +72,7 @@ class Harness:
             sleep=self._sleep,
             record=self.records.append,
             clock=self._clock,
+            usage_recorder=usage_recorder,
         )
 
     def _get_adapter(self, connection: ConnectionRef) -> FakeAdapter:
@@ -104,6 +111,28 @@ DELEGATION = DelegationInput(
     conversation="User: Start a Codex terminal please",
     updates="",
 )
+
+
+@pytest.mark.asyncio
+async def test_backend_usage_counts_each_retry_and_model_step(recorder: UsageRecorder) -> None:
+    harness = Harness(
+        [
+            ProviderError("test temporary failure", retryable=True),
+            {
+                **_tool_turn(("vbot_app", {"action": "context"})),
+                "usage": {"input_tokens": 4, "output_tokens": 2},
+            },
+            {**_answer("Done"), "usage": {"input_tokens": 8, "output_tokens": 3}},
+        ],
+        usage_recorder=recorder,
+    )
+    assert await harness.brain.answer(DELEGATION) == "Done"
+    _, records = recorder.read_since()
+    assert len(records) == 3
+    assert [record.status for record in records] == ["failed", "completed", "completed"]
+    assert all(record.kind == "live_voice_backend" for record in records)
+    assert "input_tokens" not in records[0].usage
+    assert [record.usage["input_tokens"] for record in records[1:]] == [4, 8]
 
 
 @pytest.mark.asyncio

@@ -18,8 +18,15 @@ from core.model_tasks._live_tools import (
     live_success,
     live_tools,
     request_tool,
+    voice_instructions,
 )
 from core.providers.tool_schema import render_tool_definitions
+
+MODES = pytest.mark.parametrize(
+    ("direct_tools", "constant"),
+    [(False, VOICE_INSTRUCTIONS), (True, DIRECT_VOICE_INSTRUCTIONS)],
+    ids=["delegate", "direct-tools"],
+)
 
 
 def validator(name: str) -> Draft202012Validator:
@@ -85,3 +92,32 @@ def test_results_render_as_plain_text() -> None:
     assert live_result_text(live_failure("unknown_ref", "There is no s7 in this call.")) == (
         "Error (unknown_ref): There is no s7 in this call."
     )
+
+
+@MODES
+def test_voice_instructions_without_wake_phrases_are_the_mode_text(
+    direct_tools: bool, constant: str
+) -> None:
+    assert voice_instructions(direct_tools=direct_tools) == constant
+    assert voice_instructions(direct_tools=direct_tools, wake_phrases=[]) == constant
+
+
+@MODES
+def test_wake_phrases_add_one_policy_block_that_quotes_each_phrase(
+    direct_tools: bool, constant: str
+) -> None:
+    base = constant.split("\n\n")
+    blocks = voice_instructions(
+        direct_tools=direct_tools, wake_phrases=("Hey Nabu", "Hey Jarvis")
+    ).split("\n\n")
+
+    added = [block for block in blocks if block not in base]
+    assert len(added) == 1
+    assert [block for block in blocks if block != added[0]] == base
+    # Same place in both modes: right before the closing backchannel policy.
+    assert blocks[-2] == added[0]
+    assert '"Hey Nabu", "Hey Jarvis"' in added[0]
+
+    single = voice_instructions(direct_tools=direct_tools, wake_phrases=["Okay Nabu"])
+    assert '"Okay Nabu"' in single
+    assert '"Okay Nabu",' not in single

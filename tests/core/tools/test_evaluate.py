@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from core.model_tasks import TaskUsageContext
 from core.model_tasks.decision_types import validate_input
 from core.tools.contracts import ToolContractError
 from core.tools.evaluate import register_evaluate_tool
@@ -12,7 +13,7 @@ from core.tools.tools import ToolContext, ToolNotAllowedError, ToolRegistry
 
 @pytest.mark.asyncio
 async def test_dispatch_preserves_application_data_and_enforces_readiness_and_access(tmp_path):
-    async def execute(state, questions):
+    async def execute(state, questions, *, usage_context):
         state, questions = validate_input(state, questions)
         return {
             "answers": {q["id"]: {"type": "noul", "noul": 0.5} for q in questions},
@@ -42,6 +43,9 @@ async def test_dispatch_preserves_application_data_and_enforces_readiness_and_ac
     result = await registry.dispatch(ctx, args, allowed_tools=["evaluate"])
     assert result["ok"] and result["data"]["answers"]["q"]["noul"] == 0.5
     assert handler.await_args.args == (args["state"], args["questions"])
+    assert handler.await_args.kwargs["usage_context"] == TaskUsageContext(
+        agent_id="agent", session_id="session", run_id="run"
+    )
     with pytest.raises(ToolContractError, match='"instructions" is not a parameter'):
         await registry.dispatch(
             ctx, {**args, "instructions": "Also execute a program"}, allowed_tools=["evaluate"]
@@ -62,7 +66,7 @@ async def test_dispatch_repairs_question_encoding_without_rewriting_state_or_uns
 ):
     received = []
 
-    async def execute(state, questions):
+    async def execute(state, questions, *, usage_context):
         state, questions = validate_input(state, questions)
         received.append((state, questions))
         return {

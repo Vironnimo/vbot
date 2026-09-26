@@ -147,7 +147,7 @@ async def open_xai_live_wire(
 ) -> XaiLiveWire:
     """Join the realtime socket and configure the session.
 
-    *direct_tools* registers the Live app Tools instead of ``vbot_request``.
+    *direct_tools* registers the Live Tools instead of ``vbot_request``.
     Handshake failures raise Provider errors (HTTP 401/403 as
     :class:`~core.providers.errors.ProviderAuthError`, 429 as a rate limit);
     transport failures raise :class:`~core.providers.errors.NetworkError`.

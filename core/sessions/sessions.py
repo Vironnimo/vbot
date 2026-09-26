@@ -81,6 +81,12 @@ class ChatSessionManager:
         """The Session database handle, for data snapshots and data-store status."""
         return self._store.database
 
+    def usage_history(
+        self, after_entry_key: int = 0, *, limit: int = 1000
+    ) -> tuple[JsonObject, ...]:
+        """Accounting-only own audit across live and archived Session generations."""
+        return self._store.usage_history(after_entry_key, limit=limit)
+
     async def run_async(
         self, function: Callable[..., _Result], *arguments: Any, **keyword_arguments: Any
     ) -> _Result:

@@ -11,8 +11,10 @@ from core.model_tasks import (
     SpeechConfigurationError,
     SpeechExecutionError,
     SpeechOutcomeUnknownError,
+    TaskUsageContext,
 )
 from core.providers.errors import ProviderAuthError
+from core.runs.run import RunExecutionOwner
 from core.tools.contracts import ToolContractError
 from core.tools.speech import (
     TEXT_TO_SPEECH_TOOL_NAME,
@@ -27,7 +29,8 @@ from core.utils.paths import model_path
 async def test_text_to_speech_tool_returns_artifact_payload(tmp_path: Path) -> None:
     audio_path = tmp_path / "artifact-1.mp3"
     registry = ToolRegistry()
-    register_text_to_speech_tool(registry, _SpeechService(audio_path))
+    service = _SpeechService(audio_path)
+    register_text_to_speech_tool(registry, service)
     tool = registry.get(TEXT_TO_SPEECH_TOOL_NAME)
     assert tool.parameters == TEXT_TO_SPEECH_TOOL_PARAMETERS
     assert tool.open_input_schema is True
@@ -42,11 +45,23 @@ async def test_text_to_speech_tool_returns_artifact_payload(tmp_path: Path) -> N
         workspace=tmp_path,
         vbot_root=tmp_path,
         data_root=tmp_path,
+        project_id="project",
+        execution_owner=RunExecutionOwner(
+            "extension", "group", "participant", "generation", "epoch"
+        ),
     )
 
     result = await registry.dispatch(context, {"text": "hello"})
 
     assert result["ok"] is True
+    assert service.usage_context == TaskUsageContext(
+        agent_id="agent",
+        project_id="project",
+        session_id="session",
+        run_id="run",
+        owner_name="extension",
+        group_id="group",
+    )
     # The UI-facing artifacts payload stays path-free; the WebUI renders from url.
     assert result["artifacts"] == [_ARTIFACT_PAYLOAD]
     data = result["data"]
@@ -197,7 +212,8 @@ class _SpeechService:
         self._error = error
         self.spoken: str | None = None
 
-    async def synthesize_artifact(self, text: str) -> object:
+    async def synthesize_artifact(self, text: str, *, usage_context: TaskUsageContext) -> object:
+        self.usage_context = usage_context
         self.spoken = text
         if self._error is not None:
             raise self._error

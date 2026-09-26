@@ -117,8 +117,12 @@ def test_mcp_workflow_probe_dispatches_discovered_targets_through_real_mcp():
                 arguments = {"action": "search"}
             elif self.step == 2:
                 result = json.loads(messages[-1]["content"])
+                # Search lists one "kind:name:fingerprint: description" line per match.
                 self.targets = {
-                    item["name"]: item["target"] for item in result["data"]["preview"]["matches"]
+                    target.split(":")[1]: target
+                    for line in result["data"]["content"].splitlines()
+                    if line.startswith("tool:")
+                    for target in [line.split(": ", 1)[0]]
                 }
                 arguments = {"action": "describe", "target": self.targets["get_scene_info"]}
             elif self.step == 3:

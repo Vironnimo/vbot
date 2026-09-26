@@ -26,8 +26,11 @@ from core.model_tasks._live_tools import (
     live_result_text,
     live_tools,
 )
+from core.model_tasks.model_tasks import TaskModelTargetRef
+from core.model_tasks.task_execution import TaskUsage
 from core.providers.accounts import ConnectionRef
 from core.providers.errors import ProviderAuthError, ProviderRateLimitError
+from core.usage import UsageRecorder
 from core.utils.errors import VBotError
 from core.utils.logging import get_logger
 
@@ -88,6 +91,7 @@ class LiveBrain:
         max_steps: int = MAX_MODEL_STEPS,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         clock: Callable[[], float] = time.monotonic,
+        usage_recorder: UsageRecorder | None = None,
     ) -> None:
         self._runtime = runtime
         self._target = target
@@ -97,6 +101,7 @@ class LiveBrain:
         self._conversation_id = conversation_id
         self._max_steps = max_steps
         self._sleep = sleep
+        self._usage_recorder = usage_recorder
         self._history: deque[tuple[str, str]] = deque(maxlen=HISTORY_PAIRS)
 
     async def answer(self, delegation: DelegationInput) -> str:
@@ -139,8 +144,7 @@ class LiveBrain:
             request_context = _request_context(adapter, self._conversation_id)
             for _step in range(self._max_steps):
                 progress.steps += 1
-                response = await self._send(adapter, messages, request_context)
-                normalized = adapter.normalize_response(response, model_id=self._target.model_id)
+                normalized = await self._send(adapter, messages, request_context)
                 tool_calls = normalized.get("tool_calls") or []
                 content = normalized.get("content")
                 if not tool_calls:
@@ -172,7 +176,20 @@ class LiveBrain:
         self, adapter: Any, messages: list[JsonObject], request_context: JsonObject
     ) -> JsonObject:
         delays = iter(_MODEL_RETRY_DELAYS_SECONDS)
+        target = self._target
+        usage = TaskUsage(
+            self._usage_recorder,
+            "live_voice_backend",
+            TaskModelTargetRef(
+                kind="provider",
+                target=f"{target.provider_id}/{target.model_id}",
+                provider_id=target.provider_id,
+                model_id=target.model_id,
+                connection_id=target.connection_id,
+            ),
+        )
         while True:
+            call_id = await usage.start()
             try:
                 response: JsonObject = await adapter.send(
                     messages,
@@ -187,12 +204,25 @@ class LiveBrain:
                     tools=live_tools(),
                     **request_context,
                 )
-                return response
-            except VBotError as exc:
-                delay = next(delays, None)
-                if delay is None or not getattr(exc, "retryable", False):
-                    raise
-                await self._sleep(delay)
+            except BaseException as exc:
+                await usage.finish(
+                    call_id,
+                    status="cancelled" if isinstance(exc, asyncio.CancelledError) else "failed",
+                )
+                delay = next(delays, None) if isinstance(exc, VBotError) else None
+                if delay is not None and getattr(exc, "retryable", False):
+                    await self._sleep(delay)
+                    continue
+                raise
+            try:
+                normalized: JsonObject = adapter.normalize_response(
+                    response, model_id=target.model_id
+                )
+            except BaseException:
+                await usage.finish(call_id, status="failed")
+                raise
+            await usage.finish(call_id, result=normalized)
+            return normalized
 
     async def _execute(self, tool_call: JsonObject, progress: _Progress) -> JsonObject:
         """Prepare one Tool call, run it once when it is valid, and record it."""

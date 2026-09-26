@@ -824,8 +824,6 @@ export default Object.freeze({
   'settings.appearance.saveSuccess': 'Appearance updated.',
   'settings.language.en': 'English',
   'settings.voice.title': 'Voice',
-  'settings.voice.subtitle':
-    'Live voice, transcription audio, and wakeword command settings.',
   'settings.voice.transcriptionProfile': 'Transcription audio',
   'settings.voice.transcriptionProfileDescription':
     'The audio sent to the Speech-to-text Model from both the Chat microphone and a command recorded after a wake phrase. Local wakeword detection keeps its optimized 16 kHz stream.',
@@ -843,20 +841,84 @@ export default Object.freeze({
     '16 kHz is the speech-focused default. Higher rates retain more source detail but create larger uploads.',
   'settings.voice.transcriptionSampleRate16': '16 kHz (recommended for speech)',
   'settings.voice.enabled': 'Wakeword listening',
-  'settings.voice.model': 'Wakeword model',
-  'settings.voice.models': 'Wakeword phrases',
+  'settings.voice.enabledDescription':
+    'Listen on this device for wake phrases that send a spoken command to an Agent or start Live voice.',
+  'settings.voice.desktopUpdateRequired':
+    'Update the vBot Desktop app to use Voice with this server.',
+  'settings.voice.phraseLimit': '{count} of {max} phrases active',
+  'settings.voice.phraseNotReady': 'Not ready',
+  'settings.voice.phraseUnavailable': 'Not installed',
+  'settings.voice.deactivatePhrase': 'Stop listening',
+  'settings.voice.deactivatePhraseAria': 'Stop listening for {name}',
+  'settings.voice.overlapWarning':
+    '“{name}” can also be heard as {others}, which does something else. Give them the same action or keep only one of them active.',
+  'settings.voice.actionCommand': 'Send a command',
+  'settings.voice.actionLiveToggle': 'Start or end Live voice',
+  'settings.voice.actionLiveStart': 'Start Live voice',
+  'settings.voice.phraseAgent': 'Agent',
+  'settings.voice.phraseAgentAria': 'Agent for {name}',
+  'settings.voice.agentDefault': 'Default Agent',
+  'settings.voice.agentUnavailable': 'Not on this server',
+  'settings.voice.phraseSession': 'Session',
+  'settings.voice.phraseSessionAria': 'Session for {name}',
+  'settings.voice.sessionDefault': 'Default Session behavior',
+  'settings.voice.calibrate': 'Calibrate',
+  'settings.voice.calibrateAria': 'Calibrate {name}',
+  'settings.voice.defaultAgent': 'Default Agent',
+  'settings.voice.defaultAgentDescription':
+    'Receives the spoken commands of phrases without their own Agent. Applies to the server this Desktop app is connected to.',
+  'settings.voice.noDefaultAgent': 'None',
+  'settings.voice.defaultSession': 'Default Session behavior',
+  'settings.voice.defaultSessionDescription':
+    'Whether commands continue the Agent’s active Session or start a new one, unless a phrase chooses otherwise.',
+  'settings.voice.echoCancellation': 'Echo cancellation',
+  'settings.voice.echoCancellationDescription':
+    'Removes speaker output such as Live voice or read-aloud replies from the microphone signal.',
+  'settings.voice.echoCancellationAria': 'Use echo cancellation',
+  'settings.voice.echoOff': 'Off',
+  'settings.voice.echoOffDetail':
+    'Speaker output can trigger wake phrases and end up in command recordings.',
+  'settings.voice.echoStarting': 'Starting',
+  'settings.voice.echoStartingDetail':
+    'Echo cancellation is still loading. Until it is ready, the microphone signal is used unprocessed.',
+  'settings.voice.echoActive': 'Active',
+  'settings.voice.echoActiveDetail':
+    'Speaker output is removed from the microphone signal before phrases are detected and commands are recorded.',
+  'settings.voice.echoNoReference': 'No speaker signal',
+  'settings.voice.echoNoReferenceDetail':
+    'The Desktop cannot capture the speaker output, so the microphone signal is used unprocessed.',
+  'settings.voice.echoUnavailable': 'Unavailable',
+  'settings.voice.echoUnavailableDetail':
+    'Echo cancellation is not installed in this Desktop app, so the microphone signal is used unprocessed.',
+  'settings.voice.calibrationHeading': 'Calibrating “{name}”',
+  'settings.voice.error.missingTarget':
+    'Choose an Agent for this phrase or a default Agent for this server.',
+  'settings.voice.error.targetUnavailable':
+    'The chosen Agent no longer exists on this server. Choose another Agent.',
+  'settings.voice.error.session':
+    'vBot could not open the target Agent Session. Check the server connection and retry.',
+  'settings.voice.error.configInvalid':
+    'The Desktop rejected this Voice setting. Reload Voice settings and try again.',
+  'settings.voice.error.modelActive':
+    'This wake phrase is active. Deactivate it before removing its model.',
+  'settings.voice.error.modelDeleteFailed':
+    'The Desktop could not remove this wakeword model. Check the Desktop log and try again.',
+  'settings.voice.error.calibrationUnavailable':
+    'Calibration needs Voice listening with this wake phrase active. Wait until Voice is listening, then try again.',
+  'settings.voice.error.calibrationInactive':
+    'No calibration is running anymore. Start the calibration again.',
+  'settings.voice.models': 'Wake phrases',
   'settings.voice.modelDescription':
-    'Choose one or two phrases to listen for at the same time. Each model keeps its own sensitivity.',
+    'Choose the phrases to listen for. Each active phrase has its own sensitivity and action; Calibrate measures the room and your voice to set its sensitivity while listening is on.',
   'settings.voice.modelBuiltIn': 'Built-in',
   'settings.voice.modelImported': 'Imported TFLite',
   'settings.voice.modelToggleAria': 'Listen for {name}',
-  'settings.voice.modelLimit': '{count} of 2 wakeword models active',
   'settings.voice.importModel': 'Import TFLite model',
   'settings.voice.removeModel': 'Remove imported model',
   'settings.voice.importSuccessActive':
     'Wakeword model imported and activated.',
   'settings.voice.importSuccessInactive':
-    'Wakeword model imported. Deactivate another model to use it.',
+    'Wakeword model imported. Activate it to listen for it.',
   'settings.voice.importTooLargeTitle': 'Wakeword model is too large.',
   'settings.voice.importTooLargeMessage':
     'Choose a TFLite model no larger than 20 MiB.',
@@ -868,45 +930,29 @@ export default Object.freeze({
   'settings.voice.sensitivity': 'Sensitivity',
   'settings.voice.modelAction': 'When heard',
   'settings.voice.modelActionAria': 'When {name} is heard',
-  'settings.voice.modelActionCommand': 'Send command',
-  'settings.voice.modelActionLiveVoice': 'Start Live voice',
-  'settings.voice.targetAgent': 'Personal Agent',
-  'settings.voice.targetAgentDescription':
-    'The Personal Agent that receives spoken commands on this server. Project Agents and other servers use separate routing.',
-  'settings.voice.sessionBehavior': 'Session',
-  'settings.voice.sessionBehaviorActive': 'Use active session',
-  'settings.voice.sessionBehaviorNew': 'New session each time',
+  'settings.voice.sessionBehaviorActive': 'Use active Session',
+  'settings.voice.sessionBehaviorNew': 'New Session each time',
   'settings.voice.state': 'Status',
   'settings.voice.privacyNote':
     'While listening is enabled, microphone audio is analyzed continuously on this device. Nothing is sent unless a wake phrase matches. After a match, the command recording—including up to 320 ms of locally buffered audio immediately before detection—is sent to your configured vBot speech backend for transcription.',
-  'settings.voice.saveSuccess': 'Voice settings updated.',
-  'settings.voice.systemDefaultMic': 'System default',
   'settings.voice.systemAutomaticMic': 'Automatic selection',
   'settings.voice.compatibleMic': 'Compatible',
   'settings.voice.incompatibleMic': 'Unsupported format',
   'settings.voice.configuredMicUnavailable': 'Configured device unavailable',
-  'settings.voice.noAgent': '— (none)',
   'settings.voice.lessSensitive': 'Less sensitive',
   'settings.voice.moreSensitive': 'More sensitive',
-  'settings.voice.calibrationTitle': 'Wakeword calibration',
-  'settings.voice.calibrationDescription':
-    'Measure room noise and five natural repetitions per phrase to calculate a reliable sensitivity automatically.',
-  'settings.voice.calibrationAnalyzer': 'Guided calibration',
   'settings.voice.calibrationNoiseInstruction':
     'Stay quiet for {seconds} seconds while vBot measures the room.',
   'settings.voice.calibrationPhraseInstruction':
     'Say “{name}” naturally — {count} of {required} repetitions captured. Pause briefly between repetitions.',
   'settings.voice.calibrationReviewInstruction':
-    'Measurement complete. Review the automatically calculated sensitivities, then apply them.',
+    'Measurement complete. Review the calculated sensitivity, then apply it.',
   'settings.voice.calibrationListening': 'Commands paused',
-  'settings.voice.calibrationStopped':
-    'Calibration stopped before a result was ready.',
   'settings.voice.calibrationReadyToApply': 'Ready to apply',
   'settings.voice.calibrationProgressAria': 'Calibration progress',
   'settings.voice.calibrationStepNoise': 'Room noise',
   'settings.voice.calibrationStepPhrases': 'Wakeword samples',
   'settings.voice.calibrationStepReview': 'Review',
-  'settings.voice.calibrationSayNow': 'Say this now',
   'settings.voice.calibrationScore': 'Score',
   'settings.voice.calibrationNoise': 'Noise',
   'settings.voice.calibrationPeak': 'Peak',
@@ -916,17 +962,11 @@ export default Object.freeze({
     'Recommended sensitivity {value}%',
   'settings.voice.calibrationMeterAria': '{name} detector score',
   'settings.voice.calibrationReset': 'Restart calibration',
-  'settings.voice.calibrationRetryModel': 'Retry this phrase',
   'settings.voice.calibrationDiscard': 'Discard and stop',
   'settings.voice.calibrationDiscardConfirmTitle': 'Discard calibration?',
   'settings.voice.calibrationDiscardConfirm':
-    'All measurements will be discarded. You will need to start calibration again from the beginning.',
-  'settings.voice.calibrationApply': 'Apply calibrated values',
-  'settings.voice.calibrationReady':
-    'Calibration takes about 30–60 seconds. Wakeword commands are paused while it runs.',
-  'settings.voice.calibrationEnableFirst':
-    'Enable wakeword listening before starting calibration.',
-  'settings.voice.calibrationStart': 'Start calibration',
+    'All measurements will be discarded and the sensitivity stays unchanged.',
+  'settings.voice.calibrationApply': 'Apply calibrated value',
   'settings.voice.calibrationStartFailed': 'Calibration could not start.',
   'settings.voice.calibrationResetFailed': 'Calibration could not restart.',
   'settings.voice.calibrationStopFailed': 'Calibration could not stop.',
@@ -935,10 +975,6 @@ export default Object.freeze({
   'settings.voice.calibrationNoiseHighWarning':
     'Room noise is high ({level}). Consider moving to a quieter environment or reducing background noise for better results.',
   'settings.voice.calibrationCurrentSensitivity': 'Current',
-  'settings.voice.calibrationSensitivityTooltip':
-    'Higher sensitivity detects quieter speech but may cause false triggers. Lower sensitivity reduces false triggers but requires clearer speech.',
-  'settings.voice.calibrationOverallProgress': 'Model {index} of {total}',
-  'settings.voice.calibrationRetryModelFailed': 'Could not retry this phrase.',
   'settings.voice.desktopOnly':
     'Wakeword listening is configured in the vBot Desktop app. The transcription audio settings above are server-wide.',
   'settings.voice.statusUnavailableTitle': 'Desktop Voice status unavailable',
@@ -951,12 +987,14 @@ export default Object.freeze({
   'settings.voice.error.serverUnreachable':
     'Voice could not reach the active server. Check the Desktop connection and try again.',
   'settings.voice.error.speechToTextUnconfigured':
-    'Configure a Speech-to-text Model under Settings → Models before enabling wakeword listening.',
+    'Configure a Speech-to-text Model under Settings → Voice to send voice commands.',
   'settings.voice.error.speechToTextUnavailable':
-    'The configured Speech-to-text Model is not currently usable. Check its Provider connection or choose another Model under Settings → Models.',
+    'The configured Speech-to-text Model is not currently usable. Check its Provider connection or choose another Model under Settings → Voice.',
   'settings.voice.error.speechToTextReadiness':
     'Voice could not verify the Speech-to-text configuration. Check the Desktop log and try again.',
   'settings.voice.error.pipeline':
     'The Voice pipeline stopped unexpectedly. Retry listening or restart the Desktop app.',
+  'settings.voice.error.recordingInterrupted':
+    'The recording was interrupted. Say the wake phrase again.',
   'settings.voice.microphoneDisconnectedTitle': 'Microphone disconnected',
 });

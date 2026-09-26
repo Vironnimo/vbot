@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from core.extensions.databases import Database
 from core.sessions import TemporarySessionBinding
@@ -63,6 +63,7 @@ from ._store_profiles import (
 from ._store_reads import (
     _list_discussions,
     _list_human_discussions,
+    _post_suggestions,
     _read_human_posts,
     _read_posts,
 )
@@ -445,11 +446,14 @@ class SwarmStore:
         message_id: str | None = None,
         cursor: str | None = None,
         limit: int = 20,
+        before: str | None = None,
     ) -> Page:
         if message_id is not None and (
-            discussion_id is not None or cursor is not None or limit != 20
+            discussion_id is not None or cursor is not None or limit != 20 or before is not None
         ):
             raise SwarmStoreError("invalid_arguments", field="message_id")
+        if before is not None and cursor is not None:
+            raise SwarmStoreError("invalid_arguments", field="before")
         return await self._run(
             _read_posts,
             swarm_id,
@@ -458,7 +462,12 @@ class SwarmStore:
             message_id,
             cursor,
             _limit(limit),
+            before,
         )
+
+    async def post_suggestions(self, swarm_id: str, value: str) -> list[Json]:
+        """Return posts that a post reference which matched nothing may mean."""
+        return await self._run(_post_suggestions, swarm_id, value)
 
     async def read_human_posts(
         self,
@@ -606,6 +615,20 @@ class SwarmStore:
         from ._store_wiki import wiki
 
         return await self._run(wiki, swarm_id, actor_id, arguments, expected_epoch)
+
+    async def wiki_pages(self, swarm_id: str) -> list[Json]:
+        """Return every Wiki page's ID, current title and deletion state."""
+        from ._store_wiki import wiki_pages
+
+        return cast(list[Json], await self._run(wiki_pages, swarm_id))
+
+    async def wiki_contents(
+        self, swarm_id: str, page_id: str, revisions: list[int]
+    ) -> dict[int, str]:
+        """Return the complete content of existing revisions of one Wiki page."""
+        from ._store_wiki import wiki_contents
+
+        return cast(dict[int, str], await self._run(wiki_contents, swarm_id, page_id, revisions))
 
     async def _run(self, function: Callable[..., Any], *arguments: Any) -> Any:
         return await self._database.run(function, *arguments)

@@ -50,6 +50,20 @@ def _address(context: ToolContext) -> tuple[str | None, str, str]:
     return (context.project_id, context.agent_id, context.session_id)
 
 
+def model_text(result: dict[str, Any]) -> str:
+    """Return the plain text the Model reads for a Tool Result."""
+    from core.providers.adapter import tool_result_text
+
+    return str(tool_result_text(json.dumps(result)))
+
+
+def targets(result: dict[str, Any]) -> list[str]:
+    """Return the targets a search result lists, in order."""
+    lines = str(result["data"].get("content", "")).splitlines()
+    kinds = ("tool:", "resource:", "template:", "prompt:", "operation:", "connection:")
+    return [line.split(": ", 1)[0] for line in lines if line.startswith(kinds)]
+
+
 @pytest.fixture
 def host(tmp_path):
     async def sample(context, request):

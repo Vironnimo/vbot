@@ -459,6 +459,11 @@ class StreamingAccumulator:
         return self._finish_reason
 
     @property
+    def usage(self) -> JsonObject | None:
+        """Return reported counters even when the attempt has no usable output."""
+        return dict(self._usage) if self._usage is not None else None
+
+    @property
     def partial_reasoning(self) -> str | None:
         """Return accumulated reasoning text so far, or None if empty."""
         return _joined_or_none(self._reasoning_parts)
