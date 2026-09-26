@@ -44,7 +44,10 @@ _REPLACE_RETRY_DELAYS = (0.02, 0.05, 0.1, 0.2, 0.4, 0.8)
 
 class _ReplaceRetriesExhaustedError(OSError):
     def __init__(self, error: OSError, attempts_made: int):
-        super().__init__(str(error))
+        # Keep the cause's codes so ``os_error_reason`` can describe it.
+        super().__init__(
+            error.errno, error.strerror, error.filename, getattr(error, "winerror", None)
+        )
         self.attempts_made = attempts_made
 
 
@@ -232,6 +235,38 @@ def atomic_write_bytes(
         raise
 
 
+# Reasons for file-system errors, in English: Windows reports its own messages in
+# the system language, and ``str(error)`` includes the absolute path.
+_WINDOWS_REASONS = {
+    32: "another program is using it",
+    33: "another program has locked part of it",
+    123: "the path contains characters that are not allowed in file names",
+}
+_ERRNO_REASONS = {
+    errno.EACCES: "permission denied",
+    errno.EPERM: "the operation is not permitted",
+    errno.ENOENT: "it does not exist",
+    errno.EEXIST: "it already exists",
+    errno.EISDIR: "it is a directory",
+    errno.ENOTDIR: "a part of the path is a file, not a directory",
+    errno.ENOSPC: "the disk is full",
+    errno.EROFS: "the file system is read-only",
+    errno.ENAMETOOLONG: "the path is too long",
+    errno.ELOOP: "the path has too many symbolic links",
+    errno.EBUSY: "the file is busy",
+}
+
+
+def os_error_reason(error: OSError) -> str:
+    """Say why a file operation failed, in English and without the absolute path."""
+    if isinstance(error, ReadOnlyFileError):
+        return "the file is read-only"
+    reason = _WINDOWS_REASONS.get(getattr(error, "winerror", None) or 0)
+    if reason is None and error.errno is not None:
+        reason = _ERRNO_REASONS.get(error.errno) or os.strerror(error.errno).lower()
+    return reason or error.strerror or str(error) or type(error).__name__
+
+
 def _existing_mode(resolved: Path) -> int | None:
     try:
         return stat.S_IMODE(resolved.stat().st_mode)
@@ -277,4 +312,5 @@ __all__ = [
     "ReadOnlyFileError",
     "StaleReason",
     "atomic_write_bytes",
+    "os_error_reason",
 ]
