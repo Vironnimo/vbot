@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, date, datetime, time, timedelta, tzinfo
+from datetime import UTC, date, datetime, time, timedelta
 from functools import cache
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
 from core.calendar.errors import (
@@ -15,27 +15,41 @@ from core.calendar.errors import (
     CalendarValidationError,
 )
 from core.calendar.service import FIND_FREE_MAX_RESULTS
-from core.calendar.when import parse_when
-from core.projects.address import format_agent_address
+from core.tools._calendar_actions import (
+    action_lines,
+    find_action,
+    handle_add_action,
+    handle_delete_action,
+    handle_update_action,
+)
 from core.tools._calendar_arguments import (
-    END_FIELD,
     LOCATION_FIELD,
     OMIT,
     QUERY_FIELD,
+    STAND_INS,
     TIMEZONE_FIELD,
     UNADVERTISED_PARAMETERS,
     WHEN_STAND_IN,
     CalendarCallRefusedError,
     choice,
     is_date,
-    is_time_of_day,
-    minutes_text,
     normalize_calendar_arguments,
     parse_local,
     refusal,
     render_call,
 )
-from core.tools._named_zones import named_zone, offset, same_zone, server_shifts, server_text
+from core.tools._calendar_times import (
+    apply_end,
+    apply_timezone,
+    length_text,
+    local_text,
+    minute_text,
+    read_window,
+    server_zone,
+    unknown_zone,
+    window_text,
+)
+from core.tools._named_zones import named_zone
 from core.tools.contracts import ToolContract, compile_tool_contract
 from core.tools.tools import (
     JsonObject,
@@ -167,26 +181,11 @@ CALENDAR_TOOL_PARAMETERS: JsonObject = {
 
 _EVENT_ID_ACTIONS = frozenset({"update", "delete", "add_action"})
 _ACTION_ID_ACTIONS = frozenset({"update_action", "delete_action"})
-_CURRENT_SESSION_WORDS = frozenset({"current", "this", "here", "same", "thissession"})
-_FREE_WINDOW_DAYS = 7
 _DEFAULT_FREE_MINUTES = 60
-_UPCOMING_DAYS = 400
 _NEARBY = timedelta(days=7)
-_ACTION_REACH = timedelta(days=32)
 _LISTED_OCCURRENCES = 8
-_LISTED_RUNS = 3
 _TITLE_MATCHES = 5
 _WEEKDAY_ORDER = ("mo", "tu", "we", "th", "fr", "sa", "su")
-_STAND_INS = {
-    "title": "<title>",
-    "start": "<2030-01-10 or 2030-01-10T15:00>",
-    "duration": "<minutes, or days for all-day>",
-    "rrule": '<rule such as {"freq":"weekly"}>',
-    "notes": "<notes>",
-    "when": WHEN_STAND_IN,
-    "prompt": "<instruction>",
-    "target": "<agent or agent@project>",
-}
 _FIELD_WORDS = {
     "title": "title",
     "start": "start",
@@ -266,10 +265,10 @@ def _handle_calendar_tool(
         if action == "delete":
             return _handle_delete(calendar_service, arguments)
         if action == "add_action":
-            return _handle_add_action(calendar_service, arguments, context)
+            return handle_add_action(calendar_service, arguments, context)
         if action == "update_action":
-            return _handle_update_action(calendar_service, arguments, context)
-        return _handle_delete_action(calendar_service, arguments)
+            return handle_update_action(calendar_service, arguments, context)
+        return handle_delete_action(calendar_service, arguments)
     except CalendarCallRefusedError as error:
         return tool_failure("invalid_arguments", str(error))
     except CalendarEventNotFoundError as error:
@@ -363,7 +362,7 @@ def _check_id_kind(calendar_service: CalendarService, action: str, arguments: Js
         raise CalendarCallRefusedError(choice(f"{text}, which has several actions:", calls))
     if action in _EVENT_ID_ACTIONS and item_id.startswith("act_"):
         # delete and update of an action id were already read as delete_action/update_action.
-        current = _action(calendar_service, item_id)
+        current = find_action(calendar_service, item_id)
         event = calendar_service.get_event(current["event_id"])
         raise CalendarCallRefusedError(
             refusal(
@@ -384,8 +383,8 @@ def _brief(text: str) -> str:
 
 
 def _handle_list(calendar_service: CalendarService, arguments: JsonObject) -> JsonObject:
-    zone = _server_zone(calendar_service)
-    window_start, window_end, note = _window(calendar_service, arguments, "this month")
+    zone = server_zone(calendar_service)
+    window_start, window_end, note = read_window(arguments, zone, "this month")
     events = {event.id: event for event in calendar_service.list_events()}
     by_event: dict[str, list[EventOccurrence]] = {}
     item_id = arguments.get("id")
@@ -416,7 +415,7 @@ def _handle_list(calendar_service: CalendarService, arguments: JsonObject) -> Js
     data: JsonObject = {
         "events": len(by_event),
         "occurrences": len(listed),
-        "window": _window_text(window_start, window_end, zone),
+        "window": window_text(window_start, window_end, zone),
         "timezone": calendar_service.system_timezone_name(),
     }
     if isinstance(query, str):
@@ -442,68 +441,35 @@ def _event_for_id(calendar_service: CalendarService, item_id: str) -> CalendarEv
 
 
 def _handle_find_free(calendar_service: CalendarService, arguments: JsonObject) -> JsonObject:
-    zone = _server_zone(calendar_service)
+    zone = server_zone(calendar_service)
     duration = arguments.get("duration", _DEFAULT_FREE_MINUTES)
-    window_start, window_end, note = _window(calendar_service, arguments, None)
+    window_start, window_end, note = read_window(arguments, zone, None)
     slots = calendar_service.find_free_slots(
         window_start, window_end, duration, max_results=FIND_FREE_MAX_RESULTS + 1
     )
     shown = slots[:FIND_FREE_MAX_RESULTS]
     data: JsonObject = {
         "free": len(shown),
-        "window": _window_text(window_start, window_end, zone),
+        "window": window_text(window_start, window_end, zone),
         "timezone": calendar_service.system_timezone_name(),
     }
     notes = [note] if note else []
     if not shown:
-        notes.append(f"No free span of {_length_text(duration)} or more in this window.")
+        notes.append(f"No free span of {length_text(duration)} or more in this window.")
     elif len(slots) > len(shown):
         notes.append(
-            f"More free time follows after {_local_text(shown[-1].end_utc, zone)}; a later "
+            f"More free time follows after {local_text(shown[-1].end_utc, zone)}; a later "
             "when shows it."
         )
     if notes:
         data["note"] = " ".join(notes)
     if shown:
         data["content"] = "\n".join(
-            f"{_local_text(slot.start_utc, zone)} to {_local_text(slot.end_utc, zone)} "
-            f"({_length_text(int((slot.end_utc - slot.start_utc).total_seconds() // 60))})"
+            f"{local_text(slot.start_utc, zone)} to {local_text(slot.end_utc, zone)} "
+            f"({length_text(int((slot.end_utc - slot.start_utc).total_seconds() // 60))})"
             for slot in shown
         )
     return tool_success(data)
-
-
-def _window(
-    calendar_service: CalendarService, arguments: JsonObject, default: str | None
-) -> tuple[datetime, datetime, str | None]:
-    """Resolve the list or find_free window, read in the call's time zone when it names one."""
-    server = _server_zone(calendar_service)
-    now = datetime.now(UTC)
-    zone: tzinfo = server
-    name = arguments.get(TIMEZONE_FIELD)
-    if isinstance(name, str):
-        found = named_zone(name)
-        if found is None:
-            raise CalendarCallRefusedError(_unknown_zone(name, server, arguments))
-        if not same_zone(found, server, now):
-            zone = found
-    # parse_when only attaches and converts the zone, which works for any tzinfo.
-    reading_zone = cast("ZoneInfo", zone)
-    when = arguments.get("when")
-    if isinstance(when, str):
-        window = parse_when(when, now_utc=now, tz=reading_zone)
-    elif default is not None:
-        window = parse_when(default, now_utc=now, tz=reading_zone)
-    else:
-        today, _ = parse_when("today", now_utc=now, tz=reading_zone)
-        window = (today, today + timedelta(days=_FREE_WINDOW_DAYS))
-    note = None
-    if zone is not server:
-        note = (
-            f"Read the window in {name}: {_window_text(*window, server)} in the server time "
-            f"zone {server}."
-        )
-    return window[0], window[1], note
 
 
 def _event_block(
@@ -513,7 +479,7 @@ def _event_block(
     actions: list[dict[str, Any]],
     runs: dict[str, list[dict[str, Any]]],
 ) -> str:
-    zone = _server_zone(calendar_service)
+    zone = server_zone(calendar_service)
     fields = _event_fields(calendar_service, event)
     fields.pop("actions", None)
     notes = fields.pop("notes", None)
@@ -523,41 +489,17 @@ def _event_block(
     if notes:
         lines.append("notes: " + "\n  ".join(str(notes).splitlines()))
     for item in actions:
-        lines.extend(_action_lines(item, runs.get(item["id"], []), zone))
+        lines.extend(action_lines(item, runs.get(item["id"], []), zone))
     return "\n".join(lines)
 
 
 def _occurrence_line(occurrences: list[EventOccurrence]) -> str:
-    starts = [_minute_text(item.occurrence_start) for item in occurrences]
+    starts = [minute_text(item.occurrence_start) for item in occurrences]
     if not starts:
         return "occurrences: none in this window"
     if len(starts) <= _LISTED_OCCURRENCES:
         return "occurrences: " + ", ".join(starts)
     return f"occurrences: {len(starts)} in this window, {', '.join(starts[:3])}, ..., {starts[-1]}"
-
-
-def _action_lines(action: dict[str, Any], rows: list[dict[str, Any]], zone: ZoneInfo) -> list[str]:
-    session = action.get("session")
-    where = f"in Session {session}" if session else "in a fresh Session"
-    lines = [f"action {action['id']}: {action['when']}, runs {action['target']} {where}"]
-    lines.append("  prompt: " + "\n    ".join(str(action["prompt"]).splitlines()))
-    now = datetime.now(UTC)
-    done: list[str] = []
-    upcoming = None
-    for row in sorted(rows, key=lambda item: _instant(item["scheduled_at"])):
-        due = _local_text(_instant(row["scheduled_at"]), zone)
-        if row["status"] == "pending":
-            if upcoming is None and _instant(row["expires_at"]) > now:
-                upcoming = due
-            continue
-        detail = f", Session {row['session']}" if row.get("session") else ""
-        done.append(f"  {due} {row['status']}{detail}")
-    if len(done) > _LISTED_RUNS:
-        lines.append(f"  {len(done) - _LISTED_RUNS} earlier runs in this window")
-    lines.extend(done[-_LISTED_RUNS:])
-    if upcoming:
-        lines.append(f"  next: {upcoming}")
-    return lines
 
 
 # -- changing events ----------------------------------------------------------------------
@@ -574,7 +516,7 @@ def _handle_create(calendar_service: CalendarService, arguments: JsonObject) -> 
             refusal(
                 "create needs " + " and ".join(texts[name] for name in missing) + ".",
                 arguments,
-                **{name: _STAND_INS[name] for name in missing},
+                **{name: STAND_INS[name] for name in missing},
             )
         )
     if arguments.get("rrule", 0) is None:
@@ -585,9 +527,7 @@ def _handle_create(calendar_service: CalendarService, arguments: JsonObject) -> 
                 rrule=OMIT,
             )
         )
-    arguments, note = _apply_timezone(calendar_service, arguments, None)
-    arguments = _apply_end(calendar_service, arguments, None)
-    arguments = _apply_location(arguments, None)
+    arguments, note = _event_times(calendar_service, arguments, None)
     start = str(arguments["start"])
     all_day = is_date(start)
     duration = arguments.get("duration")
@@ -604,9 +544,7 @@ def _handle_create(calendar_service: CalendarService, arguments: JsonObject) -> 
 
 def _handle_update(calendar_service: CalendarService, arguments: JsonObject) -> JsonObject:
     event = calendar_service.get_event(str(arguments["id"]))
-    arguments, note = _apply_timezone(calendar_service, arguments, event)
-    arguments = _apply_end(calendar_service, arguments, event)
-    arguments = _apply_location(arguments, event)
+    arguments, note = _event_times(calendar_service, arguments, event)
     updates: JsonObject = {}
     for name in ("title", "notes"):
         if name in arguments:
@@ -625,7 +563,7 @@ def _handle_update(calendar_service: CalendarService, arguments: JsonObject) -> 
             refusal(
                 "update needs a field to change: title, start, duration, rrule or notes.",
                 arguments,
-                start=_STAND_INS["start"],
+                start=STAND_INS["start"],
             )
         )
     updated = calendar_service.update_event(event.id, **updates)
@@ -650,7 +588,7 @@ def _handle_delete(calendar_service: CalendarService, arguments: JsonObject) -> 
         {
             "id": event.id,
             "title": event.title,
-            "removed_occurrence": _minute_text(occurrence),
+            "removed_occurrence": minute_text(occurrence),
             "status": "occurrence removed; the rest of the series stays",
         }
     )
@@ -669,7 +607,7 @@ def _occurrence_start(
     calendar_service: CalendarService, event: CalendarEvent, start: str, arguments: JsonObject
 ) -> str:
     """Return the stored form of the occurrence start a delete names, or refuse."""
-    server = _server_zone(calendar_service)
+    server = server_zone(calendar_service)
     # Occurrence starts are written in the event's own wall-clock zone.
     own = ZoneInfo(event.tz_name) if event.tz_name else server
     text = start.strip()
@@ -699,7 +637,7 @@ def _occurrence_start(
         if isinstance(name, str) and parsed.tzinfo is None:
             zone = named_zone(name)
             if zone is None:
-                raise CalendarCallRefusedError(_unknown_zone(name, server, arguments))
+                raise CalendarCallRefusedError(unknown_zone(name, server, arguments))
             parsed = parsed.replace(tzinfo=zone)
         if parsed.tzinfo is not None:
             parsed = parsed.astimezone(own).replace(tzinfo=None)
@@ -736,7 +674,7 @@ def _occurrence_start(
         )
     closest = sorted(starts, key=lambda item: abs(_seconds(item) - _seconds(wanted)))[:3]
     calls = [
-        render_call(arguments, start=_minute_text(item), **corrected) for item in sorted(closest)
+        render_call(arguments, start=minute_text(item), **corrected) for item in sorted(closest)
     ]
     raise CalendarCallRefusedError(
         choice(f'"{start}" is not an occurrence of this event. Nearby occurrences:', calls)
@@ -747,215 +685,20 @@ def _seconds(value: str) -> float:
     return (datetime.fromisoformat(value) - datetime(2000, 1, 1)).total_seconds()
 
 
-def _apply_timezone(
+def _event_times(
     calendar_service: CalendarService, arguments: JsonObject, event: CalendarEvent | None
 ) -> tuple[JsonObject, str | None]:
-    """Rewrite start and end written in another zone as server time, when that is exact."""
-    result = dict(arguments)
-    name = result.pop(TIMEZONE_FIELD, None)
-    if not isinstance(name, str):
-        return result, None
-    start, end = result.get("start"), result.get(END_FIELD)
-    if isinstance(start, str) and isinstance(end, str) and is_time_of_day(end):
-        begin = parse_local(start)
-        if begin is not None:
-            # "16:00" is on the start's day in the named zone, like the start.
-            result[END_FIELD] = f"{begin.date().isoformat()}T{end.strip()}"
-    fields = [
-        field
-        for field in ("start", END_FIELD)
-        if isinstance(result.get(field), str) and parse_local(str(result[field])) is not None
-    ]
-    if not fields:
-        # Dates of all-day events are the same in every zone.
-        return result, None
-    server = _server_zone(calendar_service)
-    now = datetime.now(UTC)
-    zone = named_zone(name)
-    if zone is None:
-        raise CalendarCallRefusedError(_unknown_zone(name, server, result))
-    if same_zone(zone, server, now):
-        return result, None
+    """Read a call's zone, end and location into the fields the calendar stores."""
+    server = server_zone(calendar_service)
     recurring = (
-        result["rrule"] is not None
-        if "rrule" in result
+        arguments["rrule"] is not None
+        if "rrule" in arguments
         else event is not None and event.rrule is not None
     )
-    written, shown = [], []
-    for field in fields:
-        written.append(f'"{result[field]}"')
-        result[field] = _in_server_time(
-            str(result[field]), field, name, zone, server, recurring, result
-        )
-        converted = datetime.fromisoformat(result[field]).replace(tzinfo=None)
-        shown.append(converted.isoformat(timespec="minutes"))
-    return result, (
-        f"Read {' and '.join(written)} as {name} time: {' and '.join(shown)} in the server "
-        f"time zone {server}."
-    )
-
-
-def _in_server_time(
-    text: str,
-    field: str,
-    name: str,
-    zone: tzinfo,
-    server: ZoneInfo,
-    recurring: bool,
-    arguments: JsonObject,
-) -> str:
-    parsed = parse_local(text)
-    assert parsed is not None
-    if parsed.tzinfo is not None:
-        if parsed.replace(tzinfo=zone).utcoffset() != parsed.utcoffset():
-            wall = parsed.replace(tzinfo=None)
-            as_written = render_call(arguments, **{field: text})
-            zoned = render_call(
-                arguments, **{field: server_text(wall.replace(tzinfo=zone), server)}
-            )
-            raise CalendarCallRefusedError(
-                choice(
-                    f'"{text}" carries an offset that is not {name} time. Send the one that is '
-                    "meant:",
-                    [
-                        f"{as_written} (the time as written)",
-                        f"{zoned} ({wall.isoformat(timespec='minutes')} in {name})",
-                    ],
-                )
-            )
-        parsed = parsed.replace(tzinfo=None)
-    moment = parsed.replace(tzinfo=zone)
-    if not recurring:
-        return server_text(moment, server)
-    # A repeating event keeps its server wall-clock time on every occurrence.
-    converted = parsed + offset(server, moment) - offset(zone, moment)
-    constant = len(server_shifts(zone, server, datetime.now(UTC))) == 1
-    if constant and converted.date() == parsed.date():
-        return converted.isoformat(timespec="minutes")
-    reason = (
-        "falls on another day there"
-        if converted.date() != parsed.date()
-        else f"differs from {name} by an offset that changes during the year"
-    )
-    raise CalendarCallRefusedError(
-        refusal(
-            f"a repeating event keeps the same wall-clock time in the server time zone {server}, "
-            f"which {reason}, so no server time matches {name} time on every occurrence. This "
-            f"call uses the server time of {text} {name} time at the first occurrence.",
-            arguments,
-            **{field: converted.isoformat(timespec="minutes")},
-        )
-    )
-
-
-def _apply_end(
-    calendar_service: CalendarService, arguments: JsonObject, event: CalendarEvent | None
-) -> JsonObject:
-    """Turn an end into a duration: minutes for timed events, days for all-day ones."""
-    result = dict(arguments)
-    end = result.pop(END_FIELD, None)
-    if not isinstance(end, str):
-        return result
-    start = result.get("start")
-    if not isinstance(start, str) and event is not None:
-        start = str(_event_fields(calendar_service, event)["start"])
-    if not isinstance(start, str):
-        raise CalendarCallRefusedError(
-            refusal('"end" needs a start to measure from.', result, start=_STAND_INS["start"])
-        )
-    recurring = (
-        result["rrule"] is not None
-        if "rrule" in result
-        else event is not None and event.rrule is not None
-    )
-    duration = _duration_between(calendar_service, start, end.strip(), recurring, result)
-    if "duration" in result and result["duration"] != duration:
-        raise CalendarCallRefusedError(
-            choice(
-                f'"end" gives a duration of {duration}, but "duration" is {result["duration"]}. '
-                "Send the one that is meant:",
-                [
-                    render_call(result, duration=duration),
-                    render_call(result, duration=result["duration"]),
-                ],
-            )
-        )
-    result["duration"] = duration
-    return result
-
-
-def _duration_between(
-    calendar_service: CalendarService,
-    start: str,
-    end: str,
-    recurring: bool,
-    arguments: JsonObject,
-) -> int:
-    if is_date(start):
-        if not is_date(end):
-            raise CalendarCallRefusedError(
-                refusal(
-                    "an all-day event ends on a date; send its length in days as duration.",
-                    arguments,
-                    duration=_STAND_INS["duration"],
-                )
-            )
-        days = (date.fromisoformat(end) - date.fromisoformat(start)).days
-        if days < 0:
-            raise CalendarCallRefusedError(
-                refusal('"end" is before "start".', arguments, duration=_STAND_INS["duration"])
-            )
-        if days == 0:
-            return 1
-        raise CalendarCallRefusedError(
-            choice(
-                f'"end" {end} can be the last day or the day after the event. Send the one that '
-                "is meant:",
-                [
-                    render_call(arguments, duration=days + 1) + f" (through {end})",
-                    render_call(arguments, duration=days) + f" (ending before {end})",
-                ],
-            )
-        )
-    begin = parse_local(start)
-    if begin is None:
-        # The service explains a malformed start.
-        return 60
-    if is_time_of_day(end):
-        finish = datetime.combine(begin.date(), time.fromisoformat(end), begin.tzinfo)
-        if finish <= begin:
-            # An end time before the start time can only be on the next day.
-            finish += timedelta(days=1)
-    else:
-        parsed_end = parse_local(end)
-        if parsed_end is None:
-            raise CalendarCallRefusedError(
-                refusal(
-                    f'"end" {end} must be a local time such as 2030-01-10T16:00 for a timed event.',
-                    arguments,
-                    duration=_STAND_INS["duration"],
-                )
-            )
-        finish = parsed_end
-    server = _server_zone(calendar_service)
-    if recurring:
-        # Repeating events keep wall-clock lengths.
-        first = begin.astimezone(server).replace(tzinfo=None) if begin.tzinfo else begin
-        last = finish.astimezone(server).replace(tzinfo=None) if finish.tzinfo else finish
-        seconds = (last - first).total_seconds()
-    else:
-        first_moment = begin if begin.tzinfo else begin.replace(tzinfo=server)
-        last_moment = finish if finish.tzinfo else finish.replace(tzinfo=server)
-        seconds = (last_moment - first_moment).total_seconds()
-    if seconds <= 0 or seconds % 60:
-        raise CalendarCallRefusedError(
-            refusal(
-                f'"end" {end} must come after "start" by whole minutes.',
-                arguments,
-                duration=_STAND_INS["duration"],
-            )
-        )
-    return int(seconds // 60)
+    arguments, note = apply_timezone(arguments, server, recurring=recurring)
+    stored_start = _event_start(calendar_service, event) if event is not None else None
+    arguments = apply_end(arguments, server, stored_start=stored_start, recurring=recurring)
+    return _apply_location(arguments, event), note
 
 
 def _apply_location(arguments: JsonObject, event: CalendarEvent | None) -> JsonObject:
@@ -981,17 +724,16 @@ def _event_success(
 
 def _event_fields(calendar_service: CalendarService, event: CalendarEvent) -> JsonObject:
     """One event in the Agent-facing shape: server-local times, repetition as sent."""
-    data: JsonObject = {"id": event.id, "title": event.title}
+    data: JsonObject = {
+        "id": event.id,
+        "title": event.title,
+        "start": _event_start(calendar_service, event),
+    }
     if event.all_day:
-        data["start"] = event.start_date
         data["days"] = event.duration_days or 1
     else:
-        zone = ZoneInfo(event.tz_name) if event.tz_name else _server_zone(calendar_service)
-        start_utc, end_utc = calendar_service.event_span(event)
-        data["start"] = (
-            _minute_text(event.start_local) if event.start_local else _local_text(start_utc, zone)
-        )
-        data["end"] = _local_text(end_utc, zone)
+        zone = ZoneInfo(event.tz_name) if event.tz_name else server_zone(calendar_service)
+        data["end"] = local_text(calendar_service.event_span(event)[1], zone)
     if event.rrule is not None:
         # The rule as the Agent would send it: no nulls, no default interval.
         rule = {
@@ -1003,7 +745,7 @@ def _event_fields(calendar_service: CalendarService, event: CalendarEvent) -> Js
             rule["by_weekday"] = sorted(rule["by_weekday"], key=_WEEKDAY_ORDER.index)
         data["repeats"] = json.dumps(rule, separators=(",", ":"))
         if event.exdates:
-            data["removed_occurrences"] = ", ".join(_minute_text(item) for item in event.exdates)
+            data["removed_occurrences"] = ", ".join(minute_text(item) for item in event.exdates)
     if event.notes:
         data["notes"] = event.notes
     actions = len(calendar_service.actions.list_actions(event.id))
@@ -1012,217 +754,14 @@ def _event_fields(calendar_service: CalendarService, event: CalendarEvent) -> Js
     return data
 
 
-# -- actions -------------------------------------------------------------------------------
-
-
-def _handle_add_action(
-    calendar_service: CalendarService, arguments: JsonObject, context: ToolContext | None
-) -> JsonObject:
-    event = calendar_service.get_event(str(arguments["id"]))
-    missing = [name for name in ("when", "prompt") if name not in arguments]
-    if missing:
-        texts = {
-            "when": '"when", relative to the event such as "start - 1h"',
-            "prompt": '"prompt", the instruction the action\'s Run carries out',
-        }
-        raise CalendarCallRefusedError(
-            refusal(
-                "add_action needs " + " and ".join(texts[name] for name in missing) + ".",
-                arguments,
-                **{name: _STAND_INS[name] for name in missing},
-            )
-        )
-    when, note = _relative_when(calendar_service, event, arguments)
-    target = arguments.get("target")
-    if not isinstance(target, str) and context is not None:
-        target = format_agent_address(context.agent_id, context.project_id)
-    target = str(target)
-    action = calendar_service.actions.add(
-        event.id,
-        when=when,
-        prompt=str(arguments["prompt"]),
-        target=target,
-        session=_session(arguments, context, target),
-    )
-    return _action_success(calendar_service, action, event, note)
-
-
-def _handle_update_action(
-    calendar_service: CalendarService, arguments: JsonObject, context: ToolContext | None
-) -> JsonObject:
-    action_id = str(arguments["id"])
-    current = _action(calendar_service, action_id)
-    event = calendar_service.get_event(current["event_id"])
-    fields: dict[str, Any] = {}
-    note = None
-    if "when" in arguments:
-        fields["when"], note = _relative_when(calendar_service, event, arguments)
-    if "prompt" in arguments:
-        fields["prompt"] = arguments["prompt"]
-    if "target" in arguments:
-        fields["target"] = arguments["target"]
-    if "session" in arguments:
-        target = str(fields.get("target", current["target"]))
-        fields["session"] = _session(arguments, context, target)
-    if not fields:
-        raise CalendarCallRefusedError(
-            refusal(
-                "update_action needs a field to change: when, prompt, target or session.",
-                arguments,
-                when=_STAND_INS["when"],
-            )
-        )
-    action = calendar_service.actions.update(action_id, **fields)
-    return _action_success(calendar_service, action, event, note)
-
-
-def _handle_delete_action(calendar_service: CalendarService, arguments: JsonObject) -> JsonObject:
-    action_id = str(arguments["id"])
-    current = _action(calendar_service, action_id)
-    calendar_service.actions.delete(action_id)
-    event = calendar_service.get_event(current["event_id"])
-    return tool_success(
-        {"id": action_id, "event": f"{event.title} ({event.id})", "status": "deleted"}
-    )
-
-
-def _action(calendar_service: CalendarService, action_id: str) -> dict[str, Any]:
-    for item in calendar_service.actions.list_actions():
-        if item["id"] == action_id:
-            return item
-    raise CalendarEventNotFoundError(f"Calendar action not found: {action_id}")
-
-
-def _relative_when(
-    calendar_service: CalendarService, event: CalendarEvent, arguments: JsonObject
-) -> tuple[str, str | None]:
-    """Keep a relative when; turn a clock time for a single event into one."""
-    when = str(arguments["when"])
-    moment = parse_local(when)
-    if moment is None and not is_date(when):
-        return when, None
-    server = _server_zone(calendar_service)
-    zone: tzinfo = server
-    name = arguments.get(TIMEZONE_FIELD)
-    if isinstance(name, str):
-        found = named_zone(name)
-        if found is None:
-            raise CalendarCallRefusedError(_unknown_zone(name, server, arguments))
-        zone = found
-    if moment is None:
-        moment = datetime.combine(date.fromisoformat(when), time.min)
-    if moment.tzinfo is None:
-        moment = moment.replace(tzinfo=zone)
-    start = _occurrence_start_near(calendar_service, event, moment)
-    minutes = round((moment - start).total_seconds() / 60)
-    if minutes == 0:
-        relative = "start"
-    else:
-        relative = f"start {'-' if minutes < 0 else '+'} {minutes_text(abs(minutes))}"
-    if event.rrule is not None:
-        raise CalendarCallRefusedError(
-            refusal(
-                f'"{when}" is a clock time, but an action repeats with every occurrence of this '
-                f'event, so its when counts from the event. At the nearest occurrence, "{when}" '
-                f'is "{relative}".',
-                arguments,
-                when=relative,
-                timezone=OMIT,
-            )
-        )
-    return relative, f'Read "{when}" as "{relative}".'
-
-
-def _occurrence_start_near(
-    calendar_service: CalendarService, event: CalendarEvent, near: datetime
-) -> datetime:
-    """The start of the occurrence closest to ``near``, as an aware moment."""
-    server = _server_zone(calendar_service)
-    occurrences = calendar_service.event_occurrences(
-        event, (near - _ACTION_REACH).astimezone(UTC), (near + _ACTION_REACH).astimezone(UTC)
-    )
-    starts = [
-        item.start_utc
-        if item.start_utc is not None
-        else datetime.combine(item.start_date or date.min, time.min, server)
-        for item in occurrences
-    ]
-    if starts:
-        return min(starts, key=lambda item: abs((item - near).total_seconds()))
-    if event.all_day and event.start_date:
-        return datetime.combine(date.fromisoformat(event.start_date), time.min, server)
-    return calendar_service.event_span(event)[0]
-
-
-def _session(arguments: JsonObject, context: ToolContext | None, target: str) -> str | None:
-    session = arguments.get("session")
-    if not isinstance(session, str):
-        return None
-    if session.strip().casefold().replace(" ", "") not in _CURRENT_SESSION_WORDS:
-        return session
-    if context is None:
-        return None
-    own = format_agent_address(context.agent_id, context.project_id)
-    if target != own:
-        raise CalendarCallRefusedError(
-            refusal(
-                f"the current Session belongs to {own}, not to the target {target}. Omit "
-                "session for a fresh Session each time.",
-                arguments,
-                session=OMIT,
-            )
-        )
-    return context.session_id
-
-
-def _action_success(
-    calendar_service: CalendarService,
-    action: dict[str, Any],
-    event: CalendarEvent,
-    note: str | None,
-) -> JsonObject:
-    zone = _server_zone(calendar_service)
-    data: JsonObject = {
-        "id": action["id"],
-        "event": f"{event.title} ({event.id})",
-        "when": action["when"],
-        "target": action["target"],
-        "session": action.get("session") or "a fresh Session each time",
-    }
-    notes = [note] if note else []
-    due = _next_due(calendar_service, action, event)
-    if due is None:
-        notes.append("No occurrence of the event lies ahead, so the action will not run.")
-    else:
-        data["next_due"] = _local_text(due, zone)
-    if notes:
-        data["note"] = " ".join(notes)
-    return tool_success(data)
-
-
-def _next_due(
-    calendar_service: CalendarService, action: dict[str, Any], event: CalendarEvent
-) -> datetime | None:
-    now = datetime.now(UTC)
-    if event.all_day and event.start_date:
-        first = datetime.combine(
-            date.fromisoformat(event.start_date), time.min, _server_zone(calendar_service)
-        )
-    else:
-        first = calendar_service.event_span(event)[0]
-    # From now, or from the first occurrence of an event that lies further ahead.
-    begin = max(now - _ACTION_REACH, first.astimezone(UTC) - timedelta(days=1))
-    occurrences = calendar_service.event_occurrences(
-        event, begin, begin + timedelta(days=_UPCOMING_DAYS)
-    )
-    dues = [
-        _instant(row["scheduled_at"])
-        for row in calendar_service.actions.project(occurrences)
-        if row["action_id"] == action["id"]
-        and row["status"] == "pending"
-        and _instant(row["expires_at"]) > now
-    ]
-    return min(dues) if dues else None
+def _event_start(calendar_service: CalendarService, event: CalendarEvent) -> str:
+    """The event's start as the Agent sees and sends it: a date, or a server-local time."""
+    if event.all_day:
+        return event.start_date or ""
+    if event.start_local:
+        return minute_text(event.start_local)
+    zone = ZoneInfo(event.tz_name) if event.tz_name else server_zone(calendar_service)
+    return local_text(calendar_service.event_span(event)[0], zone)
 
 
 # -- rendering -------------------------------------------------------------------------------
@@ -1231,7 +770,7 @@ def _next_due(
 def _validation_message(arguments: JsonObject, error: CalendarValidationError) -> str:
     detail = str(error).rstrip(". ")
     if "target does not identify" in detail:
-        return refusal(f"{detail}. {_TARGET_GUIDANCE}", arguments, target=_STAND_INS["target"])
+        return refusal(f"{detail}. {_TARGET_GUIDANCE}", arguments, target=STAND_INS["target"])
     if "session does not exist" in detail:
         return refusal(
             f"{detail}. Omit session for a fresh Session each time.", arguments, session=OMIT
@@ -1243,53 +782,10 @@ def _validation_message(arguments: JsonObject, error: CalendarValidationError) -
         stand_in = (
             "this week"
             if field == "when" and arguments.get("action") in {"list", "find_free"}
-            else _STAND_INS[field]
+            else STAND_INS[field]
         )
         return refusal(f"{detail}.", arguments, **{field: stand_in})
     return f"calendar was not run: {detail}."
-
-
-def _unknown_zone(name: str, server: ZoneInfo, arguments: JsonObject) -> str:
-    return refusal(
-        f'"timezone" "{name}" is not a known time zone. Use an IANA name such as '
-        f'"Europe/Berlin", or omit it for the server time zone {server}.',
-        arguments,
-        timezone=OMIT,
-    )
-
-
-def _window_text(start: datetime, end: datetime, zone: ZoneInfo) -> str:
-    first, last = start.astimezone(zone), end.astimezone(zone)
-    if first.time() == time.min and last.time() == time.min:
-        final = (last - timedelta(days=1)).date()
-        if final == first.date():
-            return first.date().isoformat()
-        return f"{first.date().isoformat()} to {final.isoformat()}"
-    return f"{_local_text(start, zone)} to {_local_text(end, zone)}"
-
-
-def _local_text(value: datetime, zone: ZoneInfo) -> str:
-    return value.astimezone(zone).replace(tzinfo=None).isoformat(timespec="minutes")
-
-
-def _minute_text(value: str) -> str:
-    """Drop zero seconds from a naive ISO time: 2030-01-10T15:00:00 -> 2030-01-10T15:00."""
-    return value[:-3] if len(value) == 19 and value.endswith(":00") else value
-
-
-def _length_text(minutes: int) -> str:
-    days, rest = divmod(minutes, 1440)
-    hours, mins = divmod(rest, 60)
-    parts = [f"{days}d" if days else "", f"{hours}h" if hours else "", f"{mins}m" if mins else ""]
-    return " ".join(part for part in parts if part) or "0m"
-
-
-def _instant(value: str) -> datetime:
-    return datetime.fromisoformat(value[:-1] + "+00:00" if value.endswith("Z") else value)
-
-
-def _server_zone(calendar_service: CalendarService) -> ZoneInfo:
-    return ZoneInfo(calendar_service.system_timezone_name())
 
 
 def _calendar_display_parts(raw_arguments: JsonObject) -> tuple[ToolDisplayPart, ...]:

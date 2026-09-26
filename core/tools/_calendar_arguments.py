@@ -49,6 +49,17 @@ _EVENT_ACTIONS = frozenset({"create", "update"})
 _ACTION_ACTIONS = frozenset({"add_action", "update_action", "delete_action"})
 _ACTION_ID_PREFIX = "act_"
 WHEN_STAND_IN = "<e.g. start - 1h>"
+STAND_INS = {
+    "title": "<title>",
+    "start": "<2030-01-10 or 2030-01-10T15:00>",
+    "duration": "<minutes, or days for all-day>",
+    "rrule": '<rule such as {"freq":"weekly"}>',
+    "notes": "<notes>",
+    "when": WHEN_STAND_IN,
+    "prompt": "<instruction>",
+    "target": "<agent or agent@project>",
+}
+"""Values only the Agent can supply, shown in a corrected call in their field's place."""
 _EVENT_ID_PREFIX = "evt_"
 
 
@@ -1259,6 +1270,7 @@ __all__ = [
     "LOCATION_FIELD",
     "OMIT",
     "QUERY_FIELD",
+    "STAND_INS",
     "TIMEZONE_FIELD",
     "UNADVERTISED_PARAMETERS",
     "WHEN_STAND_IN",
