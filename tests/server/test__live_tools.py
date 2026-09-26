@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -198,6 +199,12 @@ class FakeApp:
         expected = params.get("expected_screen_revision")
         self.inputs.append((params["terminal_id"], params["data"], expected))
         terminal["screen_revision"] += 1
+        data = params["data"]
+        if data.startswith("\x1b[200~"):
+            # The program echoes pasted text on its input line.
+            text = data.removeprefix("\x1b[200~").removesuffix("\x1b[201~")
+            script = self.screens.setdefault(params["terminal_id"], [CODEX_READY])
+            script[:] = [re.sub(r"^([›❯])[ \xa0].*$", rf"\1 {text}", script[-1], flags=re.M)]
         return {"terminal": terminal}
 
     def _terminal_kill(self, params: JsonObject) -> JsonObject:

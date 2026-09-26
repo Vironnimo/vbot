@@ -39,6 +39,8 @@ from core.model_tasks._live_programs import (
     program_input_visible,
     program_prompt,
     program_ready,
+    program_text_pending,
+    selected_answer,
     shell_prompt_visible,
 )
 from core.model_tasks._live_tools import (
@@ -116,6 +118,8 @@ __all__ = [
     "program_input_visible",
     "program_prompt",
     "program_ready",
+    "program_text_pending",
+    "selected_answer",
     "shell_prompt_visible",
 ]
 

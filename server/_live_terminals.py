@@ -6,9 +6,12 @@ programs often resolve to ``.cmd`` shims, where quotes, ``&`` or ``%`` in free
 text can escape into the shell. Live waits until the program shows its own
 input line, types the task through guarded Terminal input (bracketed paste when
 the program enabled it, control characters rejected, the screen revision
-checked), and sends Enter separately once the text arrived. It never types while
-the screen shows the shell or a startup question, where the text would run as
-shell commands or answer the question.
+checked), and sends Enter separately once the input line shows the text. Every
+write, a key included, names the program, so the Terminal manager refuses it
+once the program no longer runs and the shell would receive it. Live never
+types while the screen shows the shell, a menu or a startup question, and
+confirms a startup question with Enter only while the answer its guidance
+names is selected.
 """
 
 from __future__ import annotations
@@ -33,7 +36,8 @@ from core.model_tasks.live import (
     program_input_visible,
     program_prompt,
     program_ready,
-    shell_prompt_visible,
+    program_text_pending,
+    selected_answer,
 )
 from core.tools._call_vocabulary import spelling
 from server._live_context import (
@@ -54,7 +58,7 @@ from server._live_targets import (
     resolve_target,
     terminal_label,
 )
-from server.rpc.errors import RpcError
+from server.rpc.errors import RPC_ERROR_TERMINAL_PROGRAM_NOT_RUNNING, RpcError
 
 _LOGGER = logging.getLogger("vbot.server.live")
 
@@ -380,7 +384,7 @@ class LiveTerminals:
     async def interrupt(self, terminal: JsonObject) -> JsonObject:
         """Press the program's interrupt key."""
         ref, program = self._coding(terminal, "stop")
-        return await self._press(terminal, ref, program.interrupt_key, tool="stop")
+        return await self._press(terminal, ref, program, program.interrupt_key, tool="stop")
 
     # -- terminal -----------------------------------------------------------
 
@@ -436,8 +440,8 @@ class LiveTerminals:
                 f"key must be one of {', '.join(KEY_SEQUENCES)}. Call terminal again with "
                 f'{{"action": "key", "target": "{ref}", "key": "enter"}}.',
             )
-        ref, _program = self._coding(terminal, "terminal")
-        return await self._press(terminal, ref, key, tool="terminal")
+        ref, program = self._coding(terminal, "terminal")
+        return await self._press(terminal, ref, program, key, tool="terminal")
 
     async def _create_group(self, name: str) -> JsonObject:
         if not name or len(name) > MAX_LIVE_NAME_CHARS:
@@ -588,7 +592,9 @@ class LiveTerminals:
             )
         return ref, program
 
-    async def _press(self, terminal: JsonObject, ref: str, key: str, *, tool: str) -> JsonObject:
+    async def _press(
+        self, terminal: JsonObject, ref: str, program: CodingProgram, key: str, *, tool: str
+    ) -> JsonObject:
         terminal_id = str(terminal["terminal_id"])
         label = _KEY_LABELS[key]
         for _ in range(_INPUT_ATTEMPTS):
@@ -596,11 +602,19 @@ class LiveTerminals:
             snapshot = await self._read(terminal_id)
             if snapshot.finished:
                 raise LiveToolError("terminal_exited", f"{ref} has exited; no key was pressed.")
+            if key == "enter" and (refusal := _unconfirmed_answer(program, ref, snapshot.screen)):
+                return refusal
             try:
-                await self._input(terminal_id, KEY_SEQUENCES[key], snapshot.revision)
+                await self._input(terminal_id, KEY_SEQUENCES[key], snapshot.revision, program)
             except RpcError as exc:
                 if _STALE_SCREEN in exc.message:
                     continue
+                if exc.code == RPC_ERROR_TERMINAL_PROGRAM_NOT_RUNNING:
+                    return live_failure(
+                        "program_not_running",
+                        f"{label} was not pressed: {program.label} no longer runs in {ref}, so the "
+                        f"key would reach its shell. Call read with {ref} to see its screen.",
+                    )
                 return live_failure(
                     "key_failed", f"{label} was not pressed in {ref}: {exc.message}"
                 )
@@ -618,7 +632,7 @@ class LiveTerminals:
         )
 
     async def _type(self, terminal_id: str, program: CodingProgram, text: str) -> _Outcome:
-        """Type *text* at the program's input line, then send Enter separately."""
+        """Type *text* at the program's input line, then send Enter once the line shows it."""
         for _ in range(_INPUT_ATTEMPTS):
             self._ctx.ensure_active()
             snapshot = await self._read(terminal_id)
@@ -632,8 +646,10 @@ class LiveTerminals:
                 # Without paste mode each line break would send a line on its own.
                 data = re.sub(r"[\r\n]+", " ", text)
             try:
-                await self._input(terminal_id, data, snapshot.revision)
+                await self._input(terminal_id, data, snapshot.revision, program)
             except RpcError as exc:
+                if exc.code == RPC_ERROR_TERMINAL_PROGRAM_NOT_RUNNING:
+                    return _Outcome("not_running")
                 if _STALE_SCREEN not in exc.message:
                     raise
                 continue
@@ -645,16 +661,21 @@ class LiveTerminals:
             await self._sleep(self._timings.enter_delay_seconds)
             self._ctx.ensure_active()
             snapshot = await self._read(terminal_id)
-            if snapshot.finished or shell_prompt_visible(snapshot.screen):
-                return _Outcome("typed_not_sent", detail="The program ended.")
+            if snapshot.finished:
+                return _Outcome("typed_program_ended")
+            if not program_text_pending(program, snapshot.screen, text):
+                # The echo may still be on its way; a menu that appeared never matches.
+                continue
             try:
-                await self._input(terminal_id, KEY_SEQUENCES["enter"], snapshot.revision)
+                await self._input(terminal_id, KEY_SEQUENCES["enter"], snapshot.revision, program)
             except RpcError as exc:
+                if exc.code == RPC_ERROR_TERMINAL_PROGRAM_NOT_RUNNING:
+                    return _Outcome("typed_program_ended")
                 if _STALE_SCREEN in exc.message:
                     continue
                 return _Outcome("typed_not_sent", detail=exc.message)
             return _Outcome("sent")
-        return _Outcome("typed_not_sent", detail="Its screen kept changing.")
+        return _Outcome("typed_unconfirmed")
 
     async def _read(self, terminal_id: str) -> _Snapshot:
         snapshot = await self._ctx.call("terminal.read", {"terminal_id": terminal_id})
@@ -670,8 +691,15 @@ class LiveTerminals:
             finished=summary.get("state") in _FINISHED_STATES,
         )
 
-    async def _input(self, terminal_id: str, data: str, revision: int | None) -> None:
-        params: JsonObject = {"terminal_id": terminal_id, "data": data}
+    async def _input(
+        self, terminal_id: str, data: str, revision: int | None, program: CodingProgram
+    ) -> None:
+        # The manager writes only while the program runs, never into its shell.
+        params: JsonObject = {
+            "terminal_id": terminal_id,
+            "data": data,
+            "expected_program": program.command,
+        }
         if revision is not None:
             # The manager rejects the input if the screen changed since this read.
             params["expected_screen_revision"] = revision
@@ -694,6 +722,28 @@ class LiveTerminals:
         if await self._show_quietly("refresh"):
             return text
         return f"{text} The app window did not update its Terminals view."
+
+
+def _unconfirmed_answer(program: CodingProgram, ref: str, screen: str) -> JsonObject | None:
+    """Why Enter must not confirm the startup question on screen, or ``None``.
+
+    Live's guidance selects one answer by keys; Enter confirms it only while it
+    is the selected one, never an answer that moved there by position.
+    """
+    prompt = program_prompt(program, screen)
+    if prompt is None:
+        return None
+    answer = selected_answer(program, screen)
+    if answer is not None and answer.startswith(prompt.choice):
+        return None
+    selected = f'"{answer}" selected' if answer else "no visible answer selected"
+    return live_failure(
+        "answer_not_selected",
+        f'{program.label} in {ref} has {selected}, not "{prompt.choice}", so Enter was not '
+        f'pressed. To answer "{prompt.choice}", press up or down with terminal until read with '
+        f"{ref} shows it selected, then press Enter. Other answers are for the user to choose in "
+        "the app.",
+    )
 
 
 def _outcome(item: _Outcome | BaseException) -> _Outcome:
@@ -753,16 +803,28 @@ def _task_sentence(
         )
     if status == "exited":
         return f"{who} ended before {program.label} was ready; the task was not typed."
+    if status == "not_running":
+        return (
+            f"{program.label} no longer runs in {who}, so the task was not typed. Call read with "
+            f"{first} to see why."
+        )
     if status in {"not_at_input", "busy"}:
         return (
             f"{who} did not show {program.label}'s input line, so the task was not typed. Call "
             f"read with {first}, then {later}.{others}"
         )
+    if status == "typed_program_ended":
+        return f"{program.label} ended in {who} after the task was typed; it was not sent."
+    if status == "typed_unconfirmed":
+        return (
+            f"The task was typed into {who}, but {program.label}'s input line does not show it, "
+            f"so it was not sent. Call read with {first} to see the screen.{others}"
+        )
     if status == "typed_not_sent":
         return (
             f"The task was typed into {who} but not sent ({detail or 'Enter failed'}). Call "
-            f'terminal with {{"action": "key", "target": "{first}", "key": "enter"}} to send '
-            f"it.{others}"
+            f"read with {first}; if its input line shows the task, call terminal with "
+            f'{{"action": "key", "target": "{first}", "key": "enter"}} to send it.{others}'
         )
     if status == "stopped":
         return f"The voice call ended before the task was typed into {who}."
@@ -801,14 +863,27 @@ def _message_problem(ref: str, program: CodingProgram, outcome: _Outcome) -> str
             f"{program.label} in {ref} is asking a startup question, so nothing was sent. Call "
             f"read with {ref} and ask the user how to answer."
         )
+    if outcome.status == "not_running":
+        return (
+            f"{program.label} no longer runs in {ref}, so nothing was sent. Call read with {ref} "
+            "to see its screen."
+        )
     if outcome.status in {"not_at_input", "busy"}:
         return (
             f"{ref} does not show {program.label}'s input line right now (it may be showing a "
             f"menu or question), so nothing was sent. Call read with {ref} to see its screen."
         )
+    if outcome.status == "typed_program_ended":
+        return f"{program.label} ended in {ref} after the message was typed; nothing was sent."
+    if outcome.status == "typed_unconfirmed":
+        return (
+            f"The message was typed into {ref}, but {program.label}'s input line does not show "
+            f"it, so it was not sent. Call read with {ref} to see the screen."
+        )
     return (
         f"The message was typed into {ref} but not sent ({outcome.detail or 'Enter failed'}). "
-        f'Call terminal with {{"action": "key", "target": "{ref}", "key": "enter"}} to send it.'
+        f"Call read with {ref}; if its input line shows the message, call terminal with "
+        f'{{"action": "key", "target": "{ref}", "key": "enter"}} to send it.'
     )
 
 
