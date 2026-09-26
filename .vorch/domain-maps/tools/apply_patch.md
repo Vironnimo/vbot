@@ -147,7 +147,8 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
 - Match errors show bounded candidate excerpts with `read`-style gutters
   (`The closest text in the file, lines A-B:`); touching or overlapping excerpts
   merge. Missing targets use similarity-ranked diagnostics plus `First difference,
-  line N: the file has '...' where the patch has '...'`, and note when the new
+  line N: the file has '...' where the patch has '...'` (`where old_string
+  has` for `old_string` edits), and note when the new
   text already occurs (a change made earlier; not when `old_string` contains
   `new_string`, as after a deletion); without candidates the text names
   the `read` call. Ambiguity reports the winning match's actual locations

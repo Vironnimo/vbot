@@ -15,6 +15,7 @@ from __future__ import annotations
 import re
 from dataclasses import replace
 from os.path import commonprefix
+from typing import Literal
 
 from core.tools._patch_syntax import _Hunk, _PatchError
 from core.tools.arguments import (
@@ -83,8 +84,11 @@ def _loose(text: str) -> str:
     return " ".join(text.split())
 
 
-def _not_found(content: str, old: str) -> JsonObject:
-    """Return the closest current text and the first line where it differs."""
+def _not_found(content: str, old: str, *, source: Literal["patch", "old_string"]) -> JsonObject:
+    """Return the closest current text and the first line where it differs.
+
+    ``source`` names the argument that holds ``old``, so the report can name it.
+    """
     details = _candidates(content, old)
     if details["candidates"]:
         start = details["candidates"][0]["line"]
@@ -98,7 +102,8 @@ def _not_found(content: str, old: str) -> JsonObject:
                 details["difference"] = {
                     "line": number,
                     "file": actual[:240],
-                    "patch": wanted[:240],
+                    "copy": wanted[:240],
+                    "source": source,
                 }
                 break
     return details
@@ -310,7 +315,7 @@ def _apply_replacement(content: str, hunk: _Hunk, path: object) -> tuple[str, li
                 expected=replacement.expected,
             )
         return found.new_content, [note] if note else []
-    details = _not_found(content, replacement.old)
+    details = _not_found(content, replacement.old, source="old_string")
     present = None
     if replacement.new.strip() and replacement.new != replacement.old:
         present = replace_fuzzy(
@@ -518,7 +523,10 @@ def _apply_hunk(content: str, hunk: _Hunk, path: object) -> tuple[str, list[str]
                 details=_candidates(content, old),
             )
         raise _PatchError(
-            "text_not_found", path=path, label=hunk.label, details=_not_found(content, old)
+            "text_not_found",
+            path=path,
+            label=hunk.label,
+            details=_not_found(content, old, source="patch"),
         )
     if [t for p, t in hunk.lines if p in " -"] == [t for p, t in hunk.lines if p in " +"]:
         return content, warnings
@@ -530,7 +538,10 @@ def _apply_hunk(content: str, hunk: _Hunk, path: object) -> tuple[str, list[str]
         for token in ('\\"', "\\'", "\\\\")
     ):
         raise _PatchError(
-            "text_not_found", path=path, label=hunk.label, details=_not_found(content, old)
+            "text_not_found",
+            path=path,
+            label=hunk.label,
+            details=_not_found(content, old, source="patch"),
         )
     prepared = _line_parts(found.new_content[after_start:after_end])
     # Line splitting omits the final empty line; the hunk still gives it a position.
@@ -542,7 +553,10 @@ def _apply_hunk(content: str, hunk: _Hunk, path: object) -> tuple[str, list[str]
         prepared.append(("", ""))
     if len(actual) != old_count or len(prepared) != new_count:
         raise _PatchError(
-            "text_not_found", path=path, label=hunk.label, details=_not_found(content, old)
+            "text_not_found",
+            path=path,
+            label=hunk.label,
+            details=_not_found(content, old, source="patch"),
         )
     trailing = _BREAK.match(window, end)
     final_ending = trailing.group() if trailing else ""
