@@ -16,7 +16,7 @@ from core.tools._read_arguments import READ_HIDDEN_PARAMETERS, normalize_read_ar
 from core.tools._read_text import (
     DEFAULT_LINE_LIMIT,
     MAX_FILE_BYTES,
-    parse_read_position,
+    read_position,
     render_directory_listing,
     render_matching_lines,
     render_text,
@@ -26,7 +26,8 @@ from core.tools._read_text import (
 )
 from core.tools.arguments import optional_int, split_text_lines
 from core.tools.contracts import ToolContractError
-from core.tools.file_state import FileReadState
+from core.tools.file_state import FileReadState, os_error_reason
+from core.tools.model_names import SHELL_MODEL_NAME
 from core.tools.read_extract import (
     ExtractionError,
     ExtractionLimitExceededError,
@@ -79,19 +80,16 @@ READ_TOOL_PARAMETERS: JsonObject = {
             "description": "File or directory, relative to the working directory or absolute.",
         },
         "offset": {
-            "oneOf": [
-                {"type": "integer"},
-                {"type": "string", "pattern": r"^[1-9][0-9]*:[1-9][0-9]*$"},
-            ],
+            "type": "integer",
             "description": (
                 "Line to start at, counting from 1. A negative number counts back from "
-                "the end: -50 shows the last 50 lines."
+                "the end: -50 shows the last 50 lines. Omit to read from the start."
             ),
         },
         "limit": {
             "type": "integer",
             "minimum": 1,
-            "description": "Maximum number of lines to show. Default 2000.",
+            "description": "Maximum number of lines to show. Omit to show up to 2000 lines.",
         },
     },
     "required": ["path"],
@@ -206,7 +204,9 @@ def make_read_handler(
         context: ToolContext, arguments: JsonObject, resolved: Path, label: str
     ) -> JsonObject | _PreparedAudio:
         def read_error(error: OSError) -> JsonObject:
-            return tool_failure("file_read_error", f"Failed to read {label}: {error}")
+            return tool_failure(
+                "file_read_error", f"Could not read {label}: {os_error_reason(error)}."
+            )
 
         try:
             file_size = resolved.stat().st_size
@@ -293,7 +293,7 @@ def make_read_handler(
                 with resolved.open("r", encoding="utf-8", errors="replace", newline="") as text:
                     content = render_matching_lines(without_bom(text), arguments, label)
             else:
-                content = render_text_path(resolved, arguments)
+                content = render_text_path(resolved, arguments) or f"[{label} is empty.]"
         except ValueError as error:
             return tool_failure("invalid_arguments", str(error))
         except OSError as error:
@@ -342,18 +342,15 @@ def _read_extracted_document(
             return tool_success(
                 {"content": f"{header}\n{render_matching_lines(lines, arguments, label)}"}
             )
-        position = parse_read_position(arguments.get("offset"))
-        max_lines = (
-            optional_int(arguments.get("limit"), field_name="limit", minimum=1)
-            or DEFAULT_LINE_LIMIT
-        )
+        position = read_position(arguments)
+        limit = optional_int(arguments.get("limit"), field_name="limit", minimum=1)
     except ValueError as error:
         return tool_failure("invalid_arguments", str(error))
 
     body = render_text(
         extracted,
         position.line,
-        max_lines,
+        limit,
         number=False,
         start_character=position.character,
     )
@@ -421,7 +418,14 @@ def _looks_binary(raw: bytes) -> bool:
 
 def _read_binary_notice(label: str) -> JsonObject:
     """Return a short notice for a binary file instead of decoding it to garbage."""
-    return tool_success({"content": f"[{label} is a binary file; it is not shown as text.]"})
+    return tool_success(
+        {
+            "content": (
+                f"[{label} is a binary file, so it is not shown as text. If "
+                f"{SHELL_MODEL_NAME} is available, a command for this file type can inspect it.]"
+            )
+        }
+    )
 
 
 def _read_video(label: str, media_type: str) -> JsonObject:
@@ -443,7 +447,7 @@ def _list_directory(resolved: Path, arguments: JsonObject, label: str) -> JsonOb
                     is_directory = False
                 names.append(entry.name + ("/" if is_directory else ""))
     except OSError as error:
-        return tool_failure("file_read_error", f"Failed to list {label}: {error}")
+        return tool_failure("file_read_error", f"Could not list {label}: {os_error_reason(error)}.")
     names.sort(key=lambda name: (name.casefold(), name))
     try:
         return tool_success({"content": render_directory_listing(names, arguments, label)})

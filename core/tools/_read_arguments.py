@@ -25,11 +25,13 @@ from core.tools.model_names import model_tool_name
 READ_TOOL_NAME = "read"
 
 # Accepted but not advertised: a line filter for calls that send search fields
-# to read.
+# to read, and the character of an ``offset`` such as "12:241", which continues
+# a long line where a result cut it.
 READ_HIDDEN_PARAMETERS: dict[str, Any] = {
     "pattern": {"type": "string", "minLength": 1},
     "ignore_case": {"type": "boolean"},
     "context": {"type": "integer", "minimum": 0},
+    "character": {"type": "integer", "minimum": 1},
 }
 
 # Fields that exist only while a call is translated; none reaches the handler.
@@ -240,10 +242,17 @@ def _translate_line_window(arguments: dict[str, Any]) -> dict[str, Any]:
                     f"offset {offset.strip()} is not a line:character position; lines and "
                     "characters count from 1."
                 )
-            result["offset"] = f"{int(position[1])}:{int(position[2])}"
+            result["offset"] = int(position[1])
+            if int(position[2]) > 1:
+                _set(result, "character", int(position[2]), "character")
         elif _RANGE.fullmatch(offset):
             _set(result, "lines", offset, "offset")
             del result["offset"]
+        else:
+            raise ValueError(
+                f"offset takes a line number, not {_literal(offset)}: offset=10 starts at "
+                "line 10, and offset=-10 shows the last 10 lines."
+            )
 
     window = _line_range(result.pop("lines")) if "lines" in result else None
     end_line = _line_number(result.pop("end_line", None), "end_line")

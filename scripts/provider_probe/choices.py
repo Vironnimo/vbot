@@ -309,10 +309,8 @@ PROCESS_CASES = (
 READ_CASES = (
     "path_only",
     "offset_line",
-    "offset_character",
     "limit_only",
     "offset_line_limit",
-    "offset_character_limit",
 )
 
 
