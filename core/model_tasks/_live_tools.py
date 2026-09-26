@@ -67,20 +67,6 @@ _ROLE = (
     "Agents in Chat Sessions and with coding agents (Codex, Claude Code) in Terminals. Speak "
     "the user's language, briefly and naturally."
 )
-_TOOL_GUIDE = "\n".join(
-    (
-        "Your Tools:",
-        "- overview: what is running, finished, or waiting, plus the Agents, Projects, and "
-        "Terminals.",
-        "- start_agent_session: start new Sessions at an Agent with a task; count starts several.",
-        "- start_coding_terminal: start Codex or Claude Code with a task.",
-        "- send_message: send a message or answer to a Session or coding Terminal.",
-        "- read: read a Session's messages or a Terminal's screen.",
-        "- stop: stop a Session's or Terminal's current work.",
-        "- open: show a Session, Terminal, Agent, Project, or view in the app.",
-        "- terminal: arrange, key into, or close Terminals.",
-    )
-)
 _RULES = "\n".join(
     (
         "Rules:",
@@ -142,7 +128,6 @@ _DIRECT_VOICE_BLOCKS = (
     "talking with the user and take new requests. Never say something worked before its result "
     "confirms it. Speak results as a few short facts without ids or refs, including partial "
     "results and open questions.",
-    _TOOL_GUIDE,
     _RULES,
     _UPDATES + " When an update has no result_excerpt, do not guess the result; read that "
     "Session when the user asks about it.",
@@ -188,7 +173,6 @@ DELEGATION_INSTRUCTIONS = "\n\n".join(
         "If the request is missing or incomplete, take it from the latest user speech; if it "
         "stays unclear, say what is needed instead of guessing.",
         "vBot runs AI Agents in Chat Sessions and coding agents (Codex, Claude Code) in Terminals.",
-        _TOOL_GUIDE,
         _RULES,
         "Answer in the user's language in a few short sentences for speech: no markdown, no ids "
         "or refs; include partial results and open questions.",
@@ -232,7 +216,7 @@ def request_tool() -> JsonObject:
 
 
 def live_tools() -> list[JsonObject]:
-    """Fresh canonical definitions of the Live Tools, in guide order."""
+    """Fresh canonical definitions of the Live Tools, in ``LIVE_TOOL_NAMES`` order."""
 
     return [
         {

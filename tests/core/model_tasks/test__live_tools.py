@@ -78,13 +78,15 @@ def test_tool_definitions_render_as_non_strict_provider_tools() -> None:
     assert all(tool["strict"] is False for tool in rendered)
 
 
-def test_instructions_name_exactly_the_tools_each_model_gets() -> None:
-    guide = re.compile(r"^- (\w+):", re.MULTILINE)
+def test_instructions_leave_each_models_tools_to_their_definitions() -> None:
+    """No instructions list Tools, and none names a Tool its model does not get."""
+    listed_tool = re.compile(r"^- \w+:", re.MULTILINE)
+    for instructions in (VOICE_INSTRUCTIONS, DIRECT_VOICE_INSTRUCTIONS, DELEGATION_INSTRUCTIONS):
+        assert not listed_tool.search(instructions)
     for instructions in (DIRECT_VOICE_INSTRUCTIONS, DELEGATION_INSTRUCTIONS):
-        tools_block = instructions.split("Your Tools:\n", 1)[1].split("\n\n", 1)[0]
-        assert guide.findall(tools_block) == list(LIVE_TOOL_NAMES)
+        assert LIVE_TOOL_REQUEST not in instructions
     assert LIVE_TOOL_REQUEST in VOICE_INSTRUCTIONS
-    assert not any(f"{name}:" in VOICE_INSTRUCTIONS for name in LIVE_TOOL_NAMES)
+    assert not any(name in VOICE_INSTRUCTIONS for name in LIVE_TOOL_NAMES if "_" in name)
 
 
 def test_results_render_as_plain_text() -> None:
