@@ -202,10 +202,11 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   zero-width characters beside it; zero-width characters the caller writes at
   the edge of a change, other than its copy's there, refuse. A backslash
   difference means the copy escapes differently: the text the edit writes may
-  then hold no backslash, nor, on a line where the file escapes a sign the copy
-  does not, that sign (other lines may: replay, a new list item under a line
-  with a stray escaped quote); a backslash only the file holds must not border
-  a change (it would escape the new text). A read-gutter leftover (`||` for
+  then hold neither a backslash nor a sign the file escapes where the copy does
+  not, on any line of the passage (a copy that drops the file's escapes comes
+  with new text that drops them too, so a new line would lack them); a
+  backslash only the file holds must not border a change (it would escape the
+  new text). A read-gutter leftover (`||` for
   `|`) is not such a difference: new text would repeat it. Passages copied up
   to misspellings and kept-line gaps win over looser ones; overlapping
   candidates are one passage, placed by the fewest differences (a tie between
