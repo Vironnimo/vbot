@@ -6,7 +6,7 @@ Local-first calendar: a persisted event store with iCalendar (RFC 5545) semantic
 
 `core/calendar/` owns calendar events end to end: storage, recurrence expansion, single-occurrence exclusion, free-slot search, and event-relative Agent actions. `core/automation` projects cron jobs into windows on the fly (nothing persisted, never written anywhere else). The WebUI tab and the `calendar` tool are consumers of the same service; the server publishes invalidation events so every accessor refreshes when anything mutates the store.
 
-Automation owns independent Cron schedules and shared Run admission; Calendar owns event-relative scheduling. Settings owns application timezone configuration. External calendar sync is absent: CalDAV is a future Extension (user decision 2026-08-27); the store's standard iCalendar semantics exist so that extension becomes a thin adapter. The advertised agent surface has no `location` or timezone parameter (user decision); the Tool reads such fields from other calendar conventions into notes and server time (`tools/calendar.md`), and events always anchor in the configured application timezone.
+Automation owns independent Cron schedules and shared Run admission; Calendar owns event-relative scheduling. Settings owns application timezone configuration. External calendar sync is absent: CalDAV is a future Extension (user decision 2026-08-27); the store's standard iCalendar semantics exist so that extension becomes a thin adapter. The user explicitly removed `location` and any timezone parameter from the agent surface - events anchor in the configured application timezone. Current behavior (open user decision): the Tool still reads such fields sent anyway into notes and server time (`tools/calendar.md`).
 
 ## Terms
 
