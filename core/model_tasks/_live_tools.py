@@ -228,7 +228,12 @@ def live_tools() -> list[JsonObject]:
                 "such as s1 or t1; use it to name that Session or Terminal in other calls."
             ),
             "parameters": _object(
-                {"agent": _text("Show only this Agent's Sessions: its name as listed.")}
+                {
+                    "agent": _text(
+                        "Show only this Agent's Sessions: its name as listed. Leave it out for "
+                        "the full overview."
+                    )
+                }
             ),
         },
         {
@@ -249,8 +254,8 @@ def live_tools() -> list[JsonObject]:
                     ),
                     "count": _count("How many Sessions to start with this task."),
                     "project": _text(
-                        "The Project whose Agent this is, when the Agent belongs to a Project's "
-                        "team."
+                        "For an Agent of a Project's team that overview does not list: that "
+                        "Project's name. Leave it out for the Agents overview lists."
                     ),
                 },
                 required=["agent", "task"],
@@ -277,7 +282,11 @@ def live_tools() -> list[JsonObject]:
                         "selected Project's folder is used."
                     ),
                     "count": _count("How many Terminals to start with this task."),
-                    "name": _text("A name for the new Terminals.", maxLength=MAX_LIVE_NAME_CHARS),
+                    "name": _text(
+                        "A name for the new Terminals when the user gives one; leave it out "
+                        "otherwise.",
+                        maxLength=MAX_LIVE_NAME_CHARS,
+                    ),
                 },
                 required=["program"],
             ),
@@ -359,9 +368,16 @@ def live_tools() -> list[JsonObject]:
                 {
                     "action": _text("What to do.", enum=list(LIVE_TERMINAL_ACTIONS)),
                     "target": _text(
-                        "The Terminal ref (such as t1) or, for group actions, the group name."
+                        "For maximize, key and close: the Terminal ref (such as t1). For "
+                        "rename_group and delete_group: the group name. For reorder: the group "
+                        "name, needed only when the Terminals are in different groups. Leave it "
+                        "out for restore and create_group."
                     ),
-                    "key": _text("The key to press.", enum=list(LIVE_KEYS)),
+                    "key": _text(
+                        "For key, where it is required: the key to press. Leave it out for other "
+                        "actions.",
+                        enum=list(LIVE_KEYS),
+                    ),
                     "name": _text(
                         "The new group name for create_group or rename_group.",
                         maxLength=MAX_LIVE_NAME_CHARS,
