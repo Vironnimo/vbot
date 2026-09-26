@@ -9,6 +9,7 @@ import hashlib
 import json
 import re
 import uuid
+from collections import defaultdict
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -119,6 +120,7 @@ class MCPService:
         self.inputs = InputRequests()
         self.jobs: dict[str, asyncio.Task[dict[str, Any]]] = {}
         self._lock = asyncio.Lock()
+        self._runner_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
         self._closed = False
         self._startup_error: str | None = None
 
@@ -217,18 +219,21 @@ class MCPService:
         self, connection: str, remote: str | None = None, schema: dict[str, Any] | None = None
     ) -> Any:
         async def invoke(context: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
-            config = self._connection(connection)
-            if not config["enabled"]:
-                return tool_failure(
-                    "mcp_access_denied",
-                    MCP_MESSAGES["disabled"].format(connection=connection),
-                    retryable=False,
-                )
-            try:
-                self._authorize(context)
-            except ValueError:
-                return tool_failure("mcp_access_denied", MCP_MESSAGES["access_denied"])
-            runner = self._runner(config)
+            # Select a runner only after an admitted configuration change has
+            # finished closing the previous one and publishing its replacement.
+            async with self._runner_locks[connection]:
+                config = self._connection(connection)
+                if not config["enabled"]:
+                    return tool_failure(
+                        "mcp_access_denied",
+                        MCP_MESSAGES["disabled"].format(connection=connection),
+                        retryable=False,
+                    )
+                try:
+                    self._authorize(context)
+                except ValueError:
+                    return tool_failure("mcp_access_denied", MCP_MESSAGES["access_denied"])
+                runner = self._runner(config)
             if remote is None:
                 try:
                     return await self._browse(runner, context, arguments)
@@ -869,36 +874,38 @@ class MCPService:
             }
         if operation in {"enable", "disable", "remove"}:
             return await self._mutate(operation, config)
-        if operation == "credential":
-            sources = set(config.get("credential_environment", {}).values()) | set(
-                config.get("credential_headers", {}).values()
-            )
-            if arguments["key"] not in sources:
-                raise ValueError("Credential must be referenced by this MCP connection")
-            self._host().set_credential(arguments["key"], arguments["value"])
-            await self._stop(identifier)
-            self._runner(config)
-            return {
-                "id": identifier,
-                "credential": arguments["key"],
-                "set": bool(arguments["value"]),
-            }
-        if operation == "disconnect":
-            await self._stop(identifier)
-            self._runner(config)
-            return self._status(identifier)
-        if not config["enabled"]:
-            raise ValueError("MCP connection is disabled")
-        runner = self._runner(config)
-        if operation == "connect":
-            runner.start()
-            return self._status(identifier)
-        if operation == "events":
-            return runner.events(arguments.get("after", 0))
-        if operation == "test":
-            return self._start_job(self._test(runner))
-        if operation in {"invoke", "explore"}:
-            return self._start_job(self._invoke_for_agent(runner, arguments))
+        async with self._runner_locks[identifier]:
+            config = self._connection(identifier)
+            if operation == "credential":
+                sources = set(config.get("credential_environment", {}).values()) | set(
+                    config.get("credential_headers", {}).values()
+                )
+                if arguments["key"] not in sources:
+                    raise ValueError("Credential must be referenced by this MCP connection")
+                self._host().set_credential(arguments["key"], arguments["value"])
+                await self._stop(identifier)
+                self._runner(config)
+                return {
+                    "id": identifier,
+                    "credential": arguments["key"],
+                    "set": bool(arguments["value"]),
+                }
+            if operation == "disconnect":
+                await self._stop(identifier)
+                self._runner(config)
+                return self._status(identifier)
+            if not config["enabled"]:
+                raise ValueError("MCP connection is disabled")
+            runner = self._runner(config)
+            if operation == "connect":
+                runner.start()
+                return self._status(identifier)
+            if operation == "events":
+                return runner.events(arguments.get("after", 0))
+            if operation == "test":
+                return self._start_job(self._test(runner))
+            if operation in {"invoke", "explore"}:
+                return self._start_job(self._invoke_for_agent(runner, arguments))
         raise ValueError(f"Unknown MCP management operation: {operation}")
 
     def _status(self, identifier: str) -> dict[str, Any]:
@@ -919,7 +926,7 @@ class MCPService:
 
     async def _save(self, value: dict[str, Any]) -> dict[str, Any]:
         config = validate_connection(value)
-        async with self._lock:
+        async with self._lock, self._runner_locks[config["id"]]:
             records = {**self.connections, config["id"]: config}
             if self.store is None:
                 raise RuntimeError("MCP store was not initialized")
@@ -933,7 +940,7 @@ class MCPService:
 
     async def _mutate(self, operation: str, original: dict[str, Any]) -> dict[str, Any]:
         identifier = original["id"]
-        async with self._lock:
+        async with self._lock, self._runner_locks[identifier]:
             config = copy.deepcopy(self._connection(identifier))
             records = dict(self.connections)
             if operation == "remove":
