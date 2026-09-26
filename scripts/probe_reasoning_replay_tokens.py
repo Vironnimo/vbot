@@ -116,15 +116,6 @@ def _load_api_key(env_name: str, data_dir: Path) -> str:
     raise SystemExit(f"no {env_name} entry in {env_path}")
 
 
-def _detect_carrier(message: dict[str, Any]) -> tuple[str, str]:
-    """Return (field, text) of the first non-empty reasoning carrier."""
-    for field in CARRIER_FIELDS:
-        value = message.get(field)
-        if isinstance(value, str) and value:
-            return field, value
-    return "", ""
-
-
 async def _send_stream(
     base_url: str,
     api_key: str,

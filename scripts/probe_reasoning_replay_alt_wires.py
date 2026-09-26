@@ -83,26 +83,6 @@ def _load_api_key(env_name: str, data_dir: Path) -> str:
     raise SystemExit(f"no {env_name} entry in {env_path}")
 
 
-def _tool_use_blocks(tool_calls: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Convert /v1-style tool_calls into Anthropic tool_use content blocks."""
-    blocks: list[dict[str, Any]] = []
-    for call in tool_calls:
-        function = call.get("function") or {}
-        try:
-            arguments = json.loads(function.get("arguments") or "{}")
-        except json.JSONDecodeError:
-            arguments = {}
-        blocks.append(
-            {
-                "type": "tool_use",
-                "id": call.get("id", "toolu_0"),
-                "name": function.get("name", "get_weather"),
-                "input": arguments,
-            }
-        )
-    return blocks
-
-
 async def _send_native_real(
     base_url: str,
     api_key: str,
