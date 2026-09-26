@@ -460,7 +460,9 @@ async def test_wiki_results_read_as_text(board):
     author = board.swarm["participants"][0]["display_name"]
     assert visible(created) == (
         f"page_id: {page_id}\ntitle: Plan\nrevision: 1\nlink: [Plan](#wiki/{page_id})\n"
-        'status: Created.\nnote: create needs a title; used the first heading, "Plan".'
+        "status: Created.\n"
+        "shown: Saved page content at revision 1, from line 1: characters 0 to 16 of 16.\n"
+        'note: create needs a title; used the first heading, "Plan".\n\n# Plan\n\nStep one'
     )
     assert visible(await invoke(board, {"action": "read", "page_id": page_id})) == (
         f"page_id: {page_id}\ntitle: Plan\nrevision: 1 (current), saved by {author}\n"

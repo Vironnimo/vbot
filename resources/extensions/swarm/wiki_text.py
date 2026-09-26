@@ -99,6 +99,11 @@ WIKI_ERRORS = {
 }
 
 # Results.
+WIKI_EMPHASIS_COPY = (
+    "Line {line} differed only in Markdown emphasis markers; existing emphasis was preserved "
+    "in unchanged text. Earlier content{clipped}: {content}"
+)
+WIKI_EMPHASIS_CLIPPED = " (excerpt)"
 WIKI_STATUS = {
     "created": "Created.",
     "passage": "Replaced the passage at line {line}.",
@@ -117,6 +122,10 @@ WIKI_READ_SHOWN = "Characters {start} to {end} of {total}."
 WIKI_READ_EMPTY = "This revision has no content."
 WIKI_READ_PAST_END = "Nothing to show after character {offset}; the page has {total} characters."
 WIKI_READ_MORE = "Continue with {call}"
+WIKI_SAVED_SHOWN = (
+    "Saved page content at revision {revision}, from line {line}: "
+    "characters {start} to {end} of {total}."
+)
 WIKI_LIST_PAGES = "Pages, most recently changed first ({count} shown)."
 WIKI_LIST_MATCHES = 'Pages containing "{query}", most recently changed first ({count} shown).'
 WIKI_LIST_NONE = "The Wiki has no pages yet."

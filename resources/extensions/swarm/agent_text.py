@@ -148,7 +148,10 @@ DEFAULT_INSTRUCTIONS = (
     "Every Agent can overlook requirements or make confident but unsupported claims. Examine "
     "important claims against evidence, develop one another's ideas, and work through "
     "disagreements. Agreement alone does not make a claim correct. Keep the user's request "
-    "as your common reference as your work develops."
+    "as your common reference as your work develops.\n\n"
+    "Post when you add new information, answer a question, report a result, or request "
+    "action. Do not acknowledge acknowledgments or post that you have nothing new to add. "
+    "If no useful work remains now, end your reply normally; no closing Board post is needed."
 )
 DEFAULT_PROMPT_BLOCKS = ["core:tools", "core:skills"]
 DEFAULT_REMINDERS = {"delivery": True, "resume": True}
