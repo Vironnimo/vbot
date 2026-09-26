@@ -438,8 +438,10 @@ class ConnectionRuntime:
             self._close_reader(connection)
 
     def is_closed(self) -> bool:
-        with self._lock:
-            return self._closed
+        # This monotonic flag is only an observation, not a connection lease.
+        # Async admission must not wait on a writer transaction on the Event Loop;
+        # actual connection access and close still check it under the lock.
+        return self._closed
 
     def wal_active(self) -> bool:
         with self._lock:

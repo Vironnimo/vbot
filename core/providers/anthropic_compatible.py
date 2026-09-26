@@ -547,10 +547,12 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
             request_kwargs.pop("max_tokens", None)
             explicit = None
         tool_definitions = tools if isinstance(tools, list) else None
-        estimated_input = self.estimate_request_input_tokens(
-            messages, model_id=model_id, tools=tool_definitions
+        estimated_input = resolve_request_input_budget(
+            model_id,
+            lambda: self.estimate_request_input_tokens(
+                messages, model_id=model_id, tools=tool_definitions
+            ),
         )
-        estimated_input = resolve_request_input_budget(model_id, estimated_input)
         default = self._config.defaults.get("max_tokens") if self._config.defaults else None
         return resolve_request_output_limit(
             explicit_limit=explicit,

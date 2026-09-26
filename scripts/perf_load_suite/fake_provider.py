@@ -31,6 +31,7 @@ from collections.abc import AsyncIterator, Callable
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
+from core.tools.model_names import model_tool_name
 from scripts.perf_load_suite.directive import DirectiveError, PerfDirective, find_directive
 from scripts.perf_load_suite.fixture import (
     BASH_COMMAND,
@@ -242,11 +243,12 @@ def _scripted_call(
     call_id: str,
 ) -> ScriptedToolCall:
     slot = round_index * directive.calls + call_index
-    name = directive.tools[slot % len(directive.tools)]
+    registry_name = directive.tools[slot % len(directive.tools)]
+    name = model_tool_name(registry_name)
     if name not in schemas:
         offered = ", ".join(sorted(schemas))
         raise PlanError(f"Tool {name!r} is not offered in this request (offered: {offered})")
-    arguments = scripted_arguments(name, tag=directive.tag, slot=slot)
+    arguments = scripted_arguments(registry_name, tag=directive.tag, slot=slot)
     check_arguments(name, arguments, schemas[name])
     return ScriptedToolCall(call_id=call_id, name=name, arguments=arguments)
 

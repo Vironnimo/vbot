@@ -11,10 +11,10 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Literal, TextIO
+from typing import Any, Literal
 
 from core.runs import RunExecutionOwner
-from core.storage.temp_files import TemporaryFileLease, TemporaryFileManager
+from core.storage.temp_files import TemporaryFileManager
 from core.utils.errors import VBotError
 from core.utils.ids import new_id
 from core.utils.logging import get_logger
@@ -27,6 +27,7 @@ from core.utils.processes import (
 )
 
 from ._process_output import ProcessOutputDecoder
+from ._process_spool import ProcessOutputSpool
 
 _LOGGER = get_logger("tools.process_manager")
 
@@ -103,11 +104,10 @@ class TrackedProcess:
     buffer_start_offset: int = 0
     poll_offset: int = 0
     log_file: Path | None = None
-    log_handle: TextIO | None = field(default=None, repr=False)
+    spool: ProcessOutputSpool | None = field(default=None, repr=False)
     output_decoders: dict[OutputStreamName, ProcessOutputDecoder] = field(
         default_factory=dict, repr=False
     )
-    log_lease: TemporaryFileLease | None = field(default=None, repr=False)
     output_chunks: list[OutputChunk] = field(default_factory=list)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
     kill_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
@@ -153,6 +153,7 @@ class ProcessManager:
         self._closed = False
         self._closed_scopes: set[str] = set()
         self._pending_spawns: dict[asyncio.Task[str], tuple[str, RunExecutionOwner | None]] = {}
+        self._pending_process_ids: set[str] = set()
 
     def add_terminal_callback(
         self, callback: Callable[[dict[str, Any]], None]
@@ -326,7 +327,13 @@ class ProcessManager:
             start_new_session=start_new_session,
             pass_fds=pass_fds,
         )
-        process_id = new_id("proc", claim=lambda candidate: candidate not in self._processes)
+        process_id = new_id(
+            "proc",
+            claim=lambda candidate: (
+                candidate not in self._processes and candidate not in self._pending_process_ids
+            ),
+        )
+        self._pending_process_ids.add(process_id)
         tracked = TrackedProcess(
             process_id=process_id,
             agent_id=agent_id,
@@ -347,7 +354,10 @@ class ProcessManager:
             execution_owner=execution_owner,
             command=command,
         )
-        self._open_log_file(tracked)
+        try:
+            await self._open_log_file(tracked)
+        finally:
+            self._pending_process_ids.discard(process_id)
         self._processes[process_id] = tracked
         tracked.stdout_task = asyncio.create_task(
             self._read_stream(tracked, "stdout"),
@@ -594,7 +604,7 @@ class ProcessManager:
         for process_id in expired_ids:
             self._processes.pop(process_id, None)
 
-    def _open_log_file(self, tracked: TrackedProcess) -> None:
+    async def _open_log_file(self, tracked: TrackedProcess) -> None:
         """Attach an incremental spool file so the full output survives buffer caps.
 
         The in-memory buffer keeps only the newest ``buffer_cap_bytes``; the log
@@ -605,51 +615,14 @@ class ProcessManager:
         if self._temporary_files is None:
             return
 
-        lease: TemporaryFileLease | None = None
-        try:
-            lease = self._temporary_files.create("bash", ".log")
-            # newline="" keeps the process's own line endings byte-faithful.
-            tracked.log_handle = lease.path.open("w", encoding="utf-8", newline="")
-        except OSError as error:
-            if lease is not None:
-                lease.finish()
-            _LOGGER.warning(
-                "Process log file unavailable for process=%s: %s",
-                tracked.process_id,
-                error,
-            )
-            return
+        tracked.spool = ProcessOutputSpool(tracked.process_id, self._temporary_files)
+        await tracked.spool.open()
+        tracked.log_file = tracked.spool.path
 
-        tracked.log_file = lease.path
-        tracked.log_lease = lease
-
-    def _spill_to_log_file(self, tracked: TrackedProcess, chunk: bytes) -> None:
-        if tracked.log_handle is None:
-            return
-
-        try:
-            text = chunk.decode("utf-8")
-            if text:
-                tracked.log_handle.write(text)
-                # Flush per chunk so the file is greppable while the process runs.
-                tracked.log_handle.flush()
-        except OSError as error:
-            _LOGGER.warning(
-                "Process log file write failed for process=%s, disabling: %s",
-                tracked.process_id,
-                error,
-            )
-            self._close_log_file(tracked)
-            tracked.log_file = None
-
-    def _close_log_file(self, tracked: TrackedProcess) -> None:
-        if tracked.log_handle is not None:
-            with contextlib.suppress(OSError):
-                tracked.log_handle.close()
-        tracked.log_handle = None
-        if tracked.log_lease is not None:
-            tracked.log_lease.finish()
-            tracked.log_lease = None
+    async def _close_log_file(self, tracked: TrackedProcess) -> None:
+        if tracked.spool is not None:
+            await tracked.spool.close()
+            tracked.log_file = tracked.spool.path
 
     async def _poll_once(self, tracked: TrackedProcess) -> dict[str, object]:
         async with tracked.lock:
@@ -687,13 +660,28 @@ class ProcessManager:
                 chunk = await stream.read(4096)
                 if not chunk:
                     return
-                async with tracked.lock:
-                    self._append_output(tracked, stream_name, chunk)
-                tracked.output_event.set()
+                await self._capture_output(tracked, stream_name, chunk)
         finally:
-            async with tracked.lock:
-                self._append_output(tracked, stream_name, b"", final=True)
-            tracked.output_event.set()
+            await self._capture_output(tracked, stream_name, b"", final=True)
+
+    async def _capture_output(
+        self,
+        tracked: TrackedProcess,
+        stream_name: OutputStreamName,
+        chunk: bytes,
+        *,
+        final: bool = False,
+    ) -> None:
+        async with tracked.lock:
+            normalized = self._append_output(tracked, stream_name, chunk, final=final)
+        tracked.output_event.set()
+        # Do not hold the snapshot lock over file I/O. Both readers await each
+        # chunk, bounding pending output and applying ordinary pipe backpressure.
+        if normalized and tracked.spool is not None:
+            try:
+                await tracked.spool.append(normalized)
+            finally:
+                tracked.log_file = tracked.spool.path
 
     async def _watch_process(self, tracked: TrackedProcess) -> None:
         # Process.wait() may wait for pipe EOF even after OS exit. A descendant
@@ -704,6 +692,7 @@ class ProcessManager:
         return_code = tracked.proc.returncode
         await self._await_reader_tasks(tracked)
         self._release_process_pipe_references(tracked)
+        await self._close_log_file(tracked)
         async with tracked.kill_lock, tracked.lock:
             tracked.exit_code = return_code
             if tracked.termination_failed:
@@ -711,7 +700,6 @@ class ProcessManager:
             if tracked.status == "running":
                 tracked.status = "completed" if return_code == 0 else "failed"
             tracked.finished_at = _utc_now()
-            self._close_log_file(tracked)
         tracked.output_event.set()
         self._notify_terminal(tracked)
 
@@ -761,9 +749,14 @@ class ProcessManager:
                 for descriptor in (1, 2):
                     pipe = transport.get_pipe_transport(descriptor) if transport else None
                     if pipe is not None:
+                        # Windows may hold one already-read chunk in the paused
+                        # transport, outside StreamReader. Resume schedules its
+                        # delivery before close schedules connection_lost/EOF.
+                        pipe.resume_reading()
                         pipe.close()
-                for task in pending:
-                    task.cancel()
+                # Closing the transports stops inherited writers and delivers
+                # EOF after their finite buffered bytes. Cancelling readers here
+                # would discard buffered output when a spool write is slow.
             await asyncio.gather(*tasks, return_exceptions=True)
 
     def _append_output(
@@ -773,18 +766,17 @@ class ProcessManager:
         chunk: bytes,
         *,
         final: bool = False,
-    ) -> None:
+    ) -> bytes:
         decoder = tracked.output_decoders.get(stream_name)
         if decoder is None:
             decoder = tracked.output_decoders[stream_name] = ProcessOutputDecoder()
         chunk = decoder.decode(chunk, final=final)
         if not chunk:
-            return
+            return b""
         start_offset = tracked.buffer_start_offset + len(tracked.combined_buffer)
         tracked.combined_buffer.extend(chunk)
         end_offset = start_offset + len(chunk)
         tracked.output_chunks.append(OutputChunk(stream_name, chunk, start_offset, end_offset))
-        self._spill_to_log_file(tracked, chunk)
         if tracked.foreground_capture_open:
             target = tracked.stdout_lines if stream_name == "stdout" else tracked.stderr_lines
             target.append(chunk)
@@ -794,6 +786,7 @@ class ProcessManager:
                 tracked.foreground_stderr_bytes += len(chunk)
             self._enforce_foreground_capture_cap(tracked, stream_name)
         self._enforce_buffer_cap(tracked)
+        return chunk
 
     def _enforce_foreground_capture_cap(
         self,
@@ -885,8 +878,8 @@ class ProcessManager:
         if tracked.wait_task is not None:
             await asyncio.shield(asyncio.gather(tracked.wait_task, return_exceptions=True))
         if tracked.status == "killed" and tracked.finished_at is None:
+            await self._close_log_file(tracked)
             tracked.finished_at = _utc_now()
-            self._close_log_file(tracked)
             self._notify_terminal(tracked)
 
     def _kill_process_now(
@@ -917,7 +910,7 @@ class ProcessManager:
             and tracked.wait_task.done()
         ):
             tracked.finished_at = _utc_now()
-            self._close_log_file(tracked)
+            # A settled manager finalizer has already drained and closed its spool.
             self._notify_terminal(tracked)
 
     def _begin_kill(self, tracked: TrackedProcess, *, cancelled_by_user: bool) -> None:

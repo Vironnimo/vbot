@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import sqlite3
 import threading
+from concurrent.futures import Future
 from contextlib import closing
 from pathlib import Path
 
@@ -386,6 +388,145 @@ async def test_async_work_on_a_closed_database_is_unavailable(data_dir: Path) ->
 
     with pytest.raises(DatabaseUnavailableError):
         await database.read_async(lambda connection: connection.execute("SELECT 1").fetchone())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["run", "read", "write"])
+async def test_async_admission_keeps_the_loop_running_during_a_write(
+    data_dir: Path, operation: str
+) -> None:
+    database = _open(data_dir)
+    started: Future[None] = Future()
+    release = threading.Event()
+
+    def hold_write(connection: sqlite3.Connection) -> None:
+        connection.execute("INSERT INTO notes (body) VALUES ('held')")
+        started.set_result(None)
+        assert release.wait(timeout=10), "the Event Loop could not release the transaction"
+
+    writer = asyncio.create_task(database.write_async(hold_write))
+    try:
+        await asyncio.wait_for(asyncio.wrap_future(started), timeout=10)
+        # No clock threshold: the callback can run only once admission yields.
+        # A regression blocks the loop until the writer's bounded wait fails.
+        asyncio.get_running_loop().call_soon(release.set)
+        if operation == "run":
+            assert await database.run_async(lambda: "ready") == "ready"
+        elif operation == "read":
+            assert (
+                await database.read_async(
+                    lambda connection: connection.execute("SELECT body FROM notes").fetchone()[0]
+                )
+                == "held"
+            )
+        else:
+            await database.write_async(
+                lambda connection: connection.execute("INSERT INTO notes (body) VALUES ('next')")
+            )
+        await writer
+        with database.read() as connection:
+            bodies = [
+                row[0] for row in connection.execute("SELECT body FROM notes ORDER BY note_id")
+            ]
+        assert bodies == (["held", "next"] if operation == "write" else ["held"])
+    finally:
+        release.set()
+        await asyncio.gather(writer, return_exceptions=True)
+        database.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("interruption", ["close", "cancel"])
+async def test_async_admission_interrupted_before_dispatch_never_starts_work(
+    data_dir: Path, monkeypatch, interruption: str
+) -> None:
+    monkeypatch.setattr("core.database.database.IO_WORKERS", 1)
+    database = _open(data_dir)
+    started: Future[None] = Future()
+    release = threading.Event()
+    late_work_ran = threading.Event()
+
+    def hold_worker() -> None:
+        started.set_result(None)
+        assert release.wait(timeout=10)
+
+    first = asyncio.create_task(database.run_async(hold_worker))
+    queued: asyncio.Task[None] | None = None
+    try:
+        await asyncio.wait_for(asyncio.wrap_future(started), timeout=10)
+        queued = asyncio.create_task(database.run_async(late_work_ran.set))
+        await asyncio.sleep(0)  # The second call reaches the occupied pool's admission wait.
+        assert not queued.done()
+
+        if interruption == "close":
+            database.close()
+        else:
+            queued.cancel()
+        release.set()
+        await first
+        expected_error = (
+            DatabaseUnavailableError if interruption == "close" else asyncio.CancelledError
+        )
+        with pytest.raises(expected_error):
+            await queued
+        assert not late_work_ran.is_set()
+    finally:
+        release.set()
+        await asyncio.gather(
+            first, *([queued] if queued is not None else []), return_exceptions=True
+        )
+        database.close()
+
+
+@pytest.mark.asyncio
+async def test_async_callable_runtime_error_is_preserved_while_open(data_dir: Path) -> None:
+    database = _open(data_dir)
+    failure = RuntimeError("operation failure")
+
+    def fail() -> None:
+        raise failure
+
+    try:
+        with pytest.raises(RuntimeError) as raised:
+            await database.run_async(fail)
+        assert raised.value is failure
+    finally:
+        database.close()
+
+
+@pytest.mark.asyncio
+async def test_cancelling_async_write_waits_for_its_transaction(data_dir: Path) -> None:
+    database = _open(data_dir)
+    started: Future[None] = Future()
+    release = threading.Event()
+
+    def hold_write(connection: sqlite3.Connection) -> None:
+        connection.execute("INSERT INTO notes (body) VALUES ('committed')")
+        started.set_result(None)
+        assert release.wait(timeout=10)
+
+    writer = asyncio.create_task(database.write_async(hold_write))
+    try:
+        await asyncio.wait_for(asyncio.wrap_future(started), timeout=10)
+        writer.cancel()
+        await asyncio.sleep(0)
+        writer.cancel()
+        await asyncio.sleep(0)
+        assert not writer.done()
+
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await writer
+        assert (
+            await database.read_async(
+                lambda connection: connection.execute("SELECT body FROM notes").fetchone()[0]
+            )
+            == "committed"
+        )
+    finally:
+        release.set()
+        await asyncio.gather(writer, return_exceptions=True)
+        database.close()
 
 
 def _filled_database(path: Path) -> None:

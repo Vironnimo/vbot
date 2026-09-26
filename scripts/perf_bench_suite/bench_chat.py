@@ -9,8 +9,10 @@ against an ``openai_compatible`` Model:
   ``limit_request_images``).
 * ``chat.request_wire`` - request messages plus Tool definitions to the
   provider payload, as ``OpenAICompatibleAdapter.stream()`` builds it on the
-  Event Loop (``_build_payload`` including its full-request token estimate,
-  then ``_prepare_stream_payload``).
+  Event Loop without a prepared Context budget (``_build_payload`` including
+  its full-request token estimate, then ``_prepare_stream_payload``).
+* ``chat.request_wire_scoped`` - the same payload construction with Chat's
+  already-prepared Context budget, as ordinary Agentic requests send it.
 * ``chat.request_encode`` - that payload to the HTTP request body with httpx,
   the same encoding the client performs before sending.
 * ``chat.estimate_tokens`` - the Adapter's request token estimate alone, with
@@ -39,6 +41,7 @@ from core.chat.streaming import (
     StreamingVisibleDelta,
 )
 from core.chat.wire_shaping import limit_request_images
+from core.providers.adapter import request_input_budget
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.runs import ASSISTANT_OUTPUT_DELTA_EVENT
 from scripts.perf_bench_suite.fixtures import (
@@ -143,6 +146,28 @@ def _wire_setup(shape: HistoryShape) -> Callable[[BenchContext], Prepared]:
         inputs = _request_inputs(context, shape)
         inputs.build_payload()
         return Prepared(inputs.build_payload, params=inputs.params())
+
+    return setup
+
+
+def _scoped_wire_setup(shape: HistoryShape) -> Callable[[BenchContext], Prepared]:
+    def setup(context: BenchContext) -> Prepared:
+        inputs = _request_inputs(context, shape)
+        tokens = inputs.adapter.estimate_request_input_tokens(
+            inputs.request_messages, model_id=MODEL_ID, tools=inputs.tools
+        )
+        standalone_payload = inputs.build_payload()
+
+        def build_with_budget() -> dict[str, Any]:
+            with request_input_budget(MODEL_ID, tokens):
+                return inputs.build_payload()
+
+        if build_with_budget() != standalone_payload:
+            raise AssertionError("A prepared Context budget must preserve the request payload")
+        return Prepared(
+            build_with_budget,
+            params={**inputs.params(), "input_budget_tokens": tokens},
+        )
 
     return setup
 
@@ -289,6 +314,17 @@ BENCHMARKS = (
                 "_prepare_stream_payload."
             ),
             setup=_wire_setup(shape),
+        )
+        for shape in HISTORY_SHAPES
+    ),
+    *(
+        Benchmark(
+            name=f"chat.request_wire_scoped[{shape.label}]",
+            description=(
+                "OpenAI-compatible stream payload with Chat's already-prepared Context "
+                "budget; the full estimate is prepared outside the timed operation."
+            ),
+            setup=_scoped_wire_setup(shape),
         )
         for shape in HISTORY_SHAPES
     ),
