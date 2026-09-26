@@ -7,12 +7,14 @@ the Model reads, next to a nearby input that means something else and one that c
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from tests.core.tools.calendar_tool_support import CalendarTool, calendar_tool
+from tests.core.tools.tools_helpers import clock_at
 
 DENTIST_START = "2030-01-10T15:00"
 WEEKLY_MONDAY = {"freq": "weekly", "by_weekday": ["mo"]}
@@ -468,6 +470,23 @@ class TestTimeZones:
 
         assert tool.only_event().start_local == "2030-01-13T01:00:00"
 
+    def test_repeating_event_from_a_skipped_time_keeps_its_wall_clock_time(
+        self, tool: CalendarTool
+    ) -> None:
+        # London and Berlin change their clocks at the same instants, one hour apart all year.
+        # The first 01:30 falls in London's spring gap; the following Sundays keep 01:30.
+        tool.call(
+            {
+                "action": "create",
+                "title": "W",
+                "start": "2030-03-31T01:30",
+                "rrule": "weekly",
+                "timezone": "Europe/London",
+            }
+        )
+
+        assert tool.only_event().start_local == "2030-03-31T02:30:00"
+
     def test_repeating_event_that_moves_to_another_day_is_refused(self, tmp_path: Path) -> None:
         tool = calendar_tool(tmp_path, tz="UTC")
 
@@ -498,8 +517,113 @@ class TestTimeZones:
         )
 
         assert tool.events() == []
-        assert '"start":"2030-01-10T15:00+05:00"} (the time as written) or ' in text
-        assert '"start":"2030-01-10T21:00:00+01:00"} (2030-01-10T15:00 in America/New_York)' in text
+        assert text.endswith(
+            'Send the one that is meant: {"action":"create","title":"C",'
+            '"start":"2030-01-10T05:00-05:00","timezone":"America/New_York"} '
+            '(2030-01-10T15:00+05:00 as written) or {"action":"create","title":"C",'
+            '"start":"2030-01-10T15:00-05:00","timezone":"America/New_York"} '
+            "(2030-01-10T15:00 in America/New_York)"
+        )
+
+        tool.call(
+            {
+                "action": "create",
+                "title": "C",
+                "start": "2030-01-10T05:00-05:00",
+                "timezone": "America/New_York",
+            }
+        )
+
+        assert tool.only_event().start_utc == "2030-01-10T10:00:00+00:00"
+
+    def test_repeating_event_across_offsets_that_differ_for_days_is_refused(
+        self, tool: CalendarTool, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Jerusalem moves its clocks two days before Berlin in March and two hours before it in
+        # October; from this Monday a weekly look at the offsets sees neither.
+        monkeypatch.setattr(
+            "core.tools._calendar_times.datetime", clock_at(datetime(2026, 9, 28, 12, tzinfo=UTC))
+        )
+
+        _, text = tool.call(
+            {
+                "action": "create",
+                "title": "W",
+                "start": "2026-10-05T09:00",
+                "rrule": "weekly",
+                "timezone": "Asia/Jerusalem",
+            }
+        )
+
+        assert tool.events() == []
+        assert "offset that changes during the year" in text
+        assert text.endswith(
+            'Send: {"action":"create","title":"W","start":"2026-10-05T08:00",'
+            '"rrule":{"freq":"weekly"}}'
+        )
+
+    @pytest.mark.parametrize(
+        ("start", "reason", "meant"),
+        [
+            (
+                "2030-03-31T01:30",
+                "does not exist in Europe/London: the clocks jump over it that day.",
+                ["2030-03-31T00:30+00:00", "2030-03-31T02:30+01:00"],
+            ),
+            (
+                "2030-10-27T01:30",
+                "happens twice in Europe/London: the clocks go back over it that day.",
+                ["2030-10-27T01:30+01:00", "2030-10-27T01:30+00:00"],
+            ),
+        ],
+    )
+    def test_local_time_the_zone_skips_or_repeats_is_refused_with_each_instant(
+        self, tool: CalendarTool, start: str, reason: str, meant: list[str]
+    ) -> None:
+        call = {
+            "action": "create",
+            "title": "C",
+            "start": start,
+            "duration": 90,
+            "timezone": "Europe/London",
+        }
+
+        _, text = tool.call(call)
+
+        assert tool.events() == []
+        sends = " or ".join(
+            f'{{"action":"create","title":"C","start":"{moment}","duration":90,'
+            f'"timezone":"Europe/London"}} ({moment} in Europe/London)'
+            for moment in meant
+        )
+        assert text == (
+            f'Error (invalid_arguments): calendar was not run: "{start}" {reason} '
+            f"Send the one that is meant: {sends}"
+        )
+
+        tool.call({**call, "start": meant[1]})
+
+        event = tool.only_event()
+        expected = datetime.fromisoformat(meant[1]).astimezone(UTC).isoformat()
+        assert (event.start_utc, event.duration_minutes) == (expected, 90)
+
+    def test_end_in_the_repeated_hour_is_refused_with_each_instant(
+        self, tool: CalendarTool
+    ) -> None:
+        _, text = tool.call(
+            {
+                "action": "create",
+                "title": "C",
+                "start": "2030-10-27T00:30",
+                "end": "2030-10-27T01:30",
+                "timezone": "Europe/London",
+            }
+        )
+
+        assert tool.events() == []
+        assert '"2030-10-27T01:30" happens twice in Europe/London' in text
+        assert '"end":"2030-10-27T01:30+01:00"' in text
+        assert '"end":"2030-10-27T01:30+00:00"' in text
 
     def test_all_day_event_ignores_the_zone(self, tool: CalendarTool) -> None:
         tool.call(
@@ -598,6 +722,39 @@ class TestActionTimes:
         )
 
         assert [action["when"] for action in tool.actions()] == ["start - 1h"]
+
+    def test_clock_time_the_named_zone_skips_is_refused_with_each_instant(
+        self, tool: CalendarTool
+    ) -> None:
+        event_id = tool.service.create_event(title="Late", start="2030-03-31T05:00").id
+
+        _, text = tool.call(
+            {
+                "action": "add_action",
+                "id": event_id,
+                "when": "2030-03-31T01:30",
+                "timezone": "Europe/London",
+                "prompt": "p",
+            }
+        )
+
+        assert tool.actions() == []
+        assert '"2030-03-31T01:30" does not exist in Europe/London' in text
+        assert '"when":"2030-03-31T00:30+00:00"' in text
+        assert '"when":"2030-03-31T02:30+01:00"' in text
+
+        tool.call(
+            {
+                "action": "add_action",
+                "id": event_id,
+                "when": "2030-03-31T02:30+01:00",
+                "timezone": "Europe/London",
+                "prompt": "p",
+            }
+        )
+
+        # 02:30 in London is 03:30 in Berlin, 90 minutes before the 05:00 start.
+        assert [action["when"] for action in tool.actions()] == ["start - 90m"]
 
     def test_clock_time_for_a_repeating_event_is_refused_with_a_relative_one(
         self, tool: CalendarTool

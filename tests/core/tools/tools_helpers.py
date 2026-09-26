@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from datetime import datetime, tzinfo
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from core.tools import (
     Tool,
@@ -69,3 +70,14 @@ def register_read_file(registry: ToolRegistry) -> Tool:
         parameters=READ_FILE_SCHEMA,
         handler=read_file_handler,
     )
+
+
+def clock_at(moment: datetime) -> type[datetime]:
+    """A ``datetime`` whose ``now`` is ``moment``, to patch into a module that reads the clock."""
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz: tzinfo | None = None) -> Clock:
+            return cast(Clock, moment.astimezone(tz))
+
+    return Clock

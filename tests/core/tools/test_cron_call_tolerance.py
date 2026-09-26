@@ -9,6 +9,7 @@ any job changes, with the corrected call.
 from __future__ import annotations
 
 import re
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,7 @@ import pytest
 from core.tools.cron import CRON_TOOL_NAME
 
 from .cron_tool_support import CronTool, cron_tool
+from .tools_helpers import clock_at
 
 PROMPT = "Lint the wiki and report broken links."
 
@@ -49,6 +51,29 @@ def existing(tool: CronTool, **fields: Any) -> str:
         {"action": "create", "prompt": PROMPT, "schedule": "every 2h", **fields}
     )
     return str(envelope["data"]["id"])
+
+
+# The weeks around the 2030 clock changes in Europe and North America.
+_CLOCK_CHANGE_WINDOWS = (
+    (datetime(2030, 3, 3, tzinfo=UTC), datetime(2030, 4, 7, tzinfo=UTC)),
+    (datetime(2030, 10, 20, tzinfo=UTC), datetime(2030, 11, 10, tzinfo=UTC)),
+)
+
+
+def fires(tool: CronTool) -> list[datetime]:
+    """The instants the scheduler fires the Tool's jobs around the clock changes."""
+    return [
+        occurrence.fire_at_utc
+        for start, end in _CLOCK_CHANGE_WINDOWS
+        for occurrence in tool.service.project_occurrences(start, end, max_per_job=10_000)
+    ]
+
+
+def fires_in(tmp_path: Path, zone: str, schedule: str) -> list[datetime]:
+    """The instants ``schedule`` means in ``zone``: the scheduler running in that zone."""
+    reference = cron_tool(tmp_path, tz=zone)
+    created(reference, {"action": "create", "prompt": PROMPT, "schedule": schedule})
+    return fires(reference)
 
 
 # -- vBot's earlier schemas (anonymized shapes from Session history) -----------------------
@@ -684,43 +709,55 @@ def test_cron_in_a_zone_with_a_constant_offset_converts(tool: CronTool) -> None:
     assert 'note: Read "0 9 * * 1-5" as Europe/London time: "0 10 * * 1-5"' in text
 
 
-def test_cron_across_midnight_converts_when_every_day_matches(tmp_path: Path) -> None:
-    tool = cron_tool(tmp_path, tz="UTC")
+@pytest.mark.parametrize(
+    ("server", "zone", "schedule", "converted"),
+    [
+        ("UTC", "Asia/Tokyo", "30 3,9-17 * * *", "30 18,0-8 * * *"),
+        ("UTC", "Asia/Tokyo", "0 3 * * 1", "0 18 * * 0"),
+        ("UTC", "Asia/Tokyo", "0 1-2 * * mon-fri", "0 16-17 * * 0-4"),
+        ("UTC", "Pacific/Kiritimati", "0 9 * * 0,3", "0 19 * * 2,6"),
+        ("UTC", "Asia/Kolkata", "0 9 * * *", "30 3 * * *"),
+        ("UTC", "Asia/Kolkata", "0 * * * *", "30 * * * *"),
+        ("Europe/Berlin", "Europe/London", "*/15 1-3 * * *", "*/15 2-4 * * *"),
+        ("Europe/Berlin", "Europe/London", "*/15 * * * *", "*/15 * * * *"),
+    ],
+)
+def test_cron_under_a_constant_offset_fires_at_the_moments_the_zone_means(
+    tmp_path: Path, server: str, zone: str, schedule: str, converted: str
+) -> None:
+    tool = cron_tool(tmp_path / "server", tz=server)
 
-    job, _text = created(
-        tool,
-        {
-            "action": "create",
-            "prompt": PROMPT,
-            "schedule": "30 3,9-17 * * *",
-            "timezone": "Asia/Tokyo",
-        },
+    job, text = created(
+        tool, {"action": "create", "prompt": PROMPT, "schedule": schedule, "timezone": zone}
     )
 
-    assert job.cron_expression == "30 18,0-8 * * *"
+    assert job.cron_expression == converted
+    assert ("note:" in text) is (converted != schedule)
+    assert fires(tool) == fires_in(tmp_path / "zone", zone, schedule)
 
 
-def test_cron_with_a_half_hour_offset_converts(tmp_path: Path) -> None:
-    tool = cron_tool(tmp_path, tz="UTC")
-
-    job, _text = created(
-        tool,
-        {"action": "create", "prompt": PROMPT, "schedule": "0 9 * * *", "timezone": "Asia/Kolkata"},
-    )
-
-    assert job.cron_expression == "30 3 * * *"
-
-
-def test_cron_that_moves_across_a_weekday_is_refused(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "schedule",
+    [
+        "0 1,12 * * 1",  # 01:00 moves to Sunday, 12:00 stays on Monday
+        "0 3 1 * *",  # the day before the 1st is no fixed day of the month
+        "0 3 * 1 *",  # 03:00 on January 1st is December 31st in UTC
+        "0 * * * 1",  # Monday's hours start on Sunday in UTC
+    ],
+)
+def test_cron_whose_fires_cannot_follow_the_zone_is_refused(tmp_path: Path, schedule: str) -> None:
     tool = cron_tool(tmp_path, tz="UTC")
 
     message = refused(
         tool,
-        {"action": "create", "prompt": PROMPT, "schedule": "0 3 * * 1", "timezone": "Asia/Tokyo"},
+        {"action": "create", "prompt": PROMPT, "schedule": schedule, "timezone": "Asia/Tokyo"},
     )
 
     assert "Convert the fields to server time and omit timezone." in message
-    assert '"schedule":"<five cron fields in server time>"' in message
+    assert message.endswith(
+        f'Send: {{"action":"create","prompt":"{PROMPT}",'
+        '"schedule":"<five cron fields in server time>"}'
+    )
 
 
 def test_cron_in_a_zone_with_a_changing_offset_is_refused(tool: CronTool) -> None:
@@ -741,19 +778,107 @@ def test_cron_in_a_zone_with_a_changing_offset_is_refused(tool: CronTool) -> Non
     )
 
 
-def test_hourly_cron_is_the_same_in_every_whole_hour_zone(tool: CronTool) -> None:
-    job, text = created(
+def test_offsets_that_differ_for_less_than_a_week_are_refused(
+    tool: CronTool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Jerusalem moves its clocks two days before Berlin in March and two hours before it in
+    # October; from this Monday a weekly look at the offsets sees neither.
+    monkeypatch.setattr("core.tools.cron.datetime", clock_at(datetime(2026, 9, 28, 12, tzinfo=UTC)))
+
+    message = refused(
         tool,
         {
             "action": "create",
             "prompt": PROMPT,
-            "schedule": "*/15 * * * *",
+            "schedule": "0 9 * * *",
+            "timezone": "Asia/Jerusalem",
+        },
+    )
+
+    assert "changes during the year" in message
+    assert message.endswith(
+        f'Send: {{"action":"create","prompt":"{PROMPT}","schedule":"0 8 * * *"}}'
+    )
+
+
+def test_hourly_cron_across_zones_changing_clocks_on_other_dates_is_refused(
+    tmp_path: Path,
+) -> None:
+    tool = cron_tool(tmp_path / "server")
+    schedule = "*/15 * * * *"
+
+    message = refused(
+        tool,
+        {
+            "action": "create",
+            "prompt": PROMPT,
+            "schedule": schedule,
             "timezone": "America/New_York",
         },
     )
 
-    assert job.cron_expression == "*/15 * * * *"
-    assert "note" not in text
+    assert "change their clocks on different dates" in message
+    assert message.endswith(
+        f'Send: {{"action":"create","prompt":"{PROMPT}","schedule":"{schedule}"}}'
+    )
+    # Sent as offered, the job fires in server time, which differs around the changes.
+    created(tool, {"action": "create", "prompt": PROMPT, "schedule": schedule})
+    assert fires(tool) != fires_in(tmp_path / "zone", "America/New_York", schedule)
+
+
+@pytest.mark.parametrize(
+    ("schedule", "reason", "meant"),
+    [
+        (
+            "2030-03-31T01:30",
+            "does not exist in Europe/London: the clocks jump over it that day.",
+            [
+                ("2030-03-31T01:30:00+01:00", "2030-03-31T00:30+00:00 in Europe/London"),
+                ("2030-03-31T03:30:00+02:00", "2030-03-31T02:30+01:00 in Europe/London"),
+            ],
+        ),
+        (
+            "2030-10-27T01:30",
+            "happens twice in Europe/London: the clocks go back over it that day.",
+            [
+                ("2030-10-27T02:30:00+02:00", "2030-10-27T01:30+01:00 in Europe/London"),
+                ("2030-10-27T02:30:00+01:00", "2030-10-27T01:30+00:00 in Europe/London"),
+            ],
+        ),
+    ],
+)
+def test_local_time_the_zone_skips_or_repeats_is_refused_with_each_instant(
+    tool: CronTool, schedule: str, reason: str, meant: list[tuple[str, str]]
+) -> None:
+    message = refused(
+        tool,
+        {"action": "create", "prompt": PROMPT, "schedule": schedule, "timezone": "Europe/London"},
+    )
+
+    calls = " or ".join(
+        f'{{"action":"create","prompt":"{PROMPT}","schedule":"{server}"}} ({label})'
+        for server, label in meant
+    )
+    assert message == (
+        f'cron was not run: "{schedule}" {reason} Send the one that is meant: {calls}.'
+    )
+    # Each offered call is valid as sent and fires at its own instant.
+    job, _text = created(tool, {"action": "create", "prompt": PROMPT, "schedule": meant[1][0]})
+    assert datetime.fromisoformat(job.run_at or "") == datetime.fromisoformat(meant[1][0])
+
+
+def test_offset_of_the_repeated_hour_names_its_instant(tool: CronTool) -> None:
+    job, _text = created(
+        tool,
+        {
+            "action": "create",
+            "prompt": PROMPT,
+            "schedule": "2030-10-27T01:30:00+00:00",
+            "timezone": "Europe/London",
+        },
+    )
+
+    assert job.run_at == "2030-10-27T01:30:00+00:00"
 
 
 def test_unknown_zone_for_a_wall_clock_schedule_is_refused(tool: CronTool) -> None:

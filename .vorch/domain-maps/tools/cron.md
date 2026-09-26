@@ -32,12 +32,12 @@ Manages persisted time-based automation jobs through `CronService`.
 
 ## Time zones
 
-Jobs store no zone of their own (a per-job zone would change the persisted format). `_cron_timezone.zoned_schedule` reads a named zone against the server zone and executes when the reading is exact:
+Jobs store no zone of their own (a per-job zone would change the persisted format). `_cron_timezone.zoned_schedule` reads a named zone against the server zone and executes only when every fire lands on the instant the named zone means. `_named_zones` finds the exact instants at which each zone changes its UTC offset over the coming year (hourly scan, bisected to the second, cached per zone and day); the difference between server and named time is read now and just after each such change, never sampled. The scheduler steps server wall-clock time (a skipped fire moves past the gap, a repeated hour fires once), so a conversion is exact only when that difference is constant all year: then both zones skip and repeat at the same instants.
 
-- the server zone (by key or identical offsets over the next year), or a relative schedule: dropped;
-- an offset-free timestamp: converted to the server-local instant, with a result note naming both times;
-- a timestamp with an offset: executed when the offset is that zone's, else refused with both readings;
-- cron fields: shifted when every offset of the coming year yields the same fields (for example Europe/London against Europe/Berlin, or `*/15 * * * *` anywhere with whole-hour offsets), with a note. A shift that changes during the year is refused with today's conversion and the warning that it drifts; one that moves across a restricted day or weekday is refused with a server-time stand-in;
+- the server zone (by key, or a difference of zero all year), or a relative schedule: dropped;
+- an offset-free timestamp that names one instant in that zone: converted to the server-local instant, with a result note naming both times. A time the zone skips or repeats is refused with one server-time call per instant (`does not exist in <zone>` / `happens twice in <zone>`);
+- a timestamp with an offset: an absolute instant, executed when the offset is one that zone has at that local time; otherwise refused with the time as written and each reading in that zone;
+- cron fields: shifted, with a note, only when the difference is constant all year and the shifted fields fire at the same instants: every fire keeps its day, or every fire moves by the same day while only weekdays are restricted (the weekday field moves with it). Examples that execute: UTC server, Asia/Tokyo `0 3 * * 1` -> `0 18 * * 0`; Europe/Berlin server, Europe/London `*/15 1-3 * * *` -> `*/15 2-4 * * *`. Fields that cannot follow the shift (hour `*` or an hour range crossing midnight with restricted days, a restricted day of month or month that would move, a partial-hour shift of a non-literal minute) are refused with a server-time stand-in. A difference that changes during the year is never exact, even for `*`-hour fields: refused with today's conversion (or the same fields, when they do not change) as the Send, naming why it drifts around the clock changes;
 - an unknown zone with a wall-clock schedule, or a zone alone on update: refused.
 
 ## Constraints & Gotchas
