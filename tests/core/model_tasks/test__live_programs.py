@@ -14,6 +14,8 @@ from core.model_tasks.live import (
     program_input_visible,
     program_prompt,
     program_ready,
+    program_text_pending,
+    selected_answer,
     shell_prompt_visible,
 )
 
@@ -158,3 +160,106 @@ def test_an_earlier_program_screen_does_not_count_for_the_current_one() -> None:
     screen = CODEX_TRUST + "\nPS C:\\work\\new> codex\n" + CODEX_HEADER.format(model="loading")
     assert program_prompt(CODEX, screen) is None
     assert not program_ready(CODEX, screen)
+
+
+CLAUDE_EDIT_MENU = (
+    CLAUDE_READY.rsplit("\n", 4)[0] + "\n\n"
+    " Do you want to make this edit to app.py?\n"
+    " ❯ 1. Yes\n"
+    "   2. Yes, allow all edits during this session (shift+tab)\n"
+    "   3. No\n"
+)
+CODEX_APPROVAL = (
+    CODEX_READY.rsplit("\n", 3)[0] + "\n\n"
+    "  Would you like to run the following command?\n\n"
+    "  $ git push\n\n"
+    "› 1. Yes, proceed (y)\n"
+    "  2. No, and tell Codex what to do differently (esc)\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("program", "screen"), [(CODEX, CODEX_APPROVAL), (CLAUDE, CLAUDE_EDIT_MENU)]
+)
+def test_numbered_menus_are_not_input_lines(program: CodingProgram, screen: str) -> None:
+    assert not program_input_visible(program, screen)
+    assert selected_answer(program, screen) in {"Yes, proceed (y)", "Yes"}
+
+
+PROMPTS_AFTER_EXIT = {
+    "powershell": "PS C:\\work\\app>",
+    "cmd": "C:\\work\\app>",
+    "bash": "dev@box:~/app$",
+    "zsh": "dev@box ~/app %",
+    "fish": "dev@box ~/app>",
+    "starship": "~/app on  main\n❯",
+    "oh-my-posh on PowerShell": "  C:\\work\\app   main ❯",
+}
+
+
+@pytest.mark.parametrize("program", [CODEX, CLAUDE], ids=["codex", "claude"])
+@pytest.mark.parametrize("prompt", PROMPTS_AFTER_EXIT.values(), ids=PROMPTS_AFTER_EXIT.keys())
+def test_a_shell_prompt_below_an_exited_program_is_the_shell(
+    program: CodingProgram, prompt: str
+) -> None:
+    screen = (CODEX_READY if program is CODEX else CLAUDE_READY) + "\n" + prompt
+    assert shell_prompt_visible(screen)
+    assert not program_input_visible(program, screen)
+
+
+def test_the_selected_answer_of_a_startup_question() -> None:
+    assert selected_answer(CLAUDE, CLAUDE_TRUST) == "No, exit"
+    moved = CLAUDE_TRUST.replace(" ❯ No, exit\n   Yes,", "   No, exit\n ❯ Yes,")
+    assert selected_answer(CLAUDE, moved) == "Yes, I trust this folder"
+    assert selected_answer(CODEX, CODEX_TRUST) == "Yes, continue"
+    assert (
+        selected_answer(CODEX, CODEX_UPDATE) == "Update now (runs `npm install -g @openai/codex`)"
+    )
+
+
+@pytest.mark.parametrize(
+    ("program", "screen", "text", "pending"),
+    [
+        (
+            CODEX,
+            CODEX_READY.replace("Ask Codex to do anything", "Fix the login bug"),
+            "Fix the login bug",
+            True,
+        ),
+        (
+            CLAUDE,
+            CLAUDE_READY.replace('Try "refactor <filepath>"', "line one"),
+            "line one\nline two",
+            True,
+        ),
+        # A large paste shows as a placeholder.
+        (
+            CLAUDE,
+            CLAUDE_READY.replace('Try "refactor <filepath>"', "[Pasted text #1 +40 lines]"),
+            "x\n" * 41,
+            True,
+        ),
+        # A numbered list the user dictated is still their text.
+        (
+            CODEX,
+            CODEX_READY.replace("Ask Codex to do anything", "1. Add tests 2. Commit"),
+            "1. Add tests 2. Commit",
+            True,
+        ),
+        # Not echoed yet, text left over from before, or a menu instead of the text.
+        (CODEX, CODEX_READY, "Fix the login bug", False),
+        (
+            CODEX,
+            CODEX_READY.replace("Ask Codex to do anything", "oldFix the login bug"),
+            "Fix the login bug",
+            False,
+        ),
+        (CODEX, CODEX_APPROVAL, "Yes", False),
+        (CLAUDE, CLAUDE_EDIT_MENU, "Yes", False),
+        (CODEX, CODEX_READY + "\nPS C:\\work\\app>", "Ask Codex", False),
+    ],
+)
+def test_enter_follows_only_text_the_input_line_holds(
+    program: CodingProgram, screen: str, text: str, pending: bool
+) -> None:
+    assert program_text_pending(program, screen, text) is pending
