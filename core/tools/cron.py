@@ -59,6 +59,9 @@ _SCHEDULE_FORMS = (
     'Use five cron fields in server time such as "0 9 * * 1-5" (weekdays at 09:00), '
     '"every 2h", "in 30m", or a local time such as "2030-01-01T09:00".'
 )
+# Values only the Agent can choose; a call that sends one back unchanged changes nothing.
+_SCHEDULE_STAND_IN = "<when>"
+_FUTURE_STAND_IN = "<future time>"
 _TARGET_ADDRESS_RECOMMENDATION = (
     'Set "target" to an existing Agent id, or to agent@project for a member of a Project Team'
 )
@@ -304,7 +307,7 @@ def _handle_update(cron_service: CronService, arguments: JsonObject) -> JsonObje
                 "update needs a field to change: name, prompt, schedule, repeat, or target. To "
                 "pause or resume the job, use disable or enable.",
                 arguments,
-                schedule="every 4h",
+                schedule=_SCHEDULE_STAND_IN,
             )
         )
     updates: dict[str, Any] = {}
@@ -362,7 +365,7 @@ def _parse_schedule(cron_service: CronService, arguments: JsonObject) -> Any:
 
 
 def _missing_create_fields(missing: list[str], arguments: JsonObject) -> str:
-    stand_ins = {"prompt": "<instruction>", "schedule": "<when>"}
+    stand_ins = {"prompt": "<instruction>", "schedule": _SCHEDULE_STAND_IN}
     texts = []
     if "prompt" in missing:
         texts.append('"prompt", the complete instruction the Agent runs at each fire')
@@ -381,9 +384,9 @@ def _past_message(action: str, arguments: JsonObject, error: CronJobInPastError)
         return refusal(
             f"{detail}. Give the job a future time first, then enable it.",
             {"action": "update", "id": arguments.get("id")},
-            schedule="in 30m",
+            schedule=_FUTURE_STAND_IN,
         )
-    return refusal(f"{detail}.", arguments, schedule="in 30m")
+    return refusal(f"{detail}.", arguments, schedule=_FUTURE_STAND_IN)
 
 
 def _validation_message(action: str, arguments: JsonObject, error: CronJobValidationError) -> str:
