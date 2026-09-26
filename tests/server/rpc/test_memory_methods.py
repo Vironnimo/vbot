@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import threading
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import pytest
 
@@ -252,3 +252,119 @@ async def test_memory_rpc_keeps_the_event_loop_responsive_during_file_work(
         "kind": "memories",
         "scope": {"agent_id": "coder"},
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["rename", "relocate"])
+@pytest.mark.parametrize("cancel_write", [False, True])
+async def test_memory_write_finishes_before_agent_workspace_moves(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operation: str, cancel_write: bool
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    agents = AgentStore(tmp_path, sessions=state.runtime.chat_sessions)
+    state.runtime.agents = agents
+    monkeypatch.setattr(state.runtime.agent_resolver, "_agents", agents)
+    original = agents.create("coder")
+    entered = asyncio.Event()
+    attempted = asyncio.Event()
+    release = threading.Event()
+    loop = asyncio.get_running_loop()
+    memory = state.runtime.memory
+    add_entry = memory.add_entry
+
+    class ObservedLock(asyncio.Lock):
+        async def acquire(self) -> Literal[True]:
+            attempted.set()
+            return await super().acquire()
+
+    state.agent_delete_lock = ObservedLock()
+
+    def blocked_add_entry(*args: Any, **kwargs: Any) -> Any:
+        loop.call_soon_threadsafe(entered.set)
+        assert release.wait(10)
+        return add_entry(*args, **kwargs)
+
+    monkeypatch.setattr(memory, "add_entry", blocked_add_entry)
+    adding = asyncio.create_task(
+        dispatch_rpc(
+            state,
+            {
+                "method": "memory.add",
+                "params": {"agent_id": "coder", "scope": "agent", "content": "Durable fact."},
+            },
+        )
+    )
+    tasks: list[asyncio.Task[Any]] = [adding]
+    try:
+        await asyncio.wait_for(entered.wait(), 10)
+        assert state.agent_delete_lock.locked()
+        if cancel_write:
+            adding.cancel()
+        attempted.clear()
+        change_request = (
+            {"method": "agent.rename", "params": {"id": "coder", "new_id": "renamed"}}
+            if operation == "rename"
+            else {
+                "method": "agent.update",
+                "params": {
+                    "id": "coder",
+                    "workspace": str(tmp_path / "relocated"),
+                    "copy_workspace_identity_files": True,
+                },
+            }
+        )
+        changing = asyncio.create_task(dispatch_rpc(state, change_request))
+        tasks.append(changing)
+        await asyncio.wait_for(attempted.wait(), 10)
+        assert state.agent_delete_lock.locked()
+        assert not changing.done()
+        assert not adding.done()
+        assert state.event_bus.events == []
+        release.set()
+        if cancel_write:
+            with pytest.raises(asyncio.CancelledError):
+                await adding
+        else:
+            assert (await adding)["ok"] is True
+        response = await changing
+        assert response["ok"] is True
+        destination = agents.get("renamed" if operation == "rename" else "coder")
+        assert [
+            entry.content for entry in memory.list_entries(Path(destination.workspace), "agent")
+        ] == ["Durable fact."]
+        if operation == "rename":
+            assert not Path(original.workspace).exists()
+        memory_event = state.event_bus.events[0]
+        assert memory_event["payload"] == {"kind": "memories", "scope": {"agent_id": "coder"}}
+    finally:
+        release.set()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        agents.close()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_memory_write_waiting_for_agent_reference_lock_never_writes(
+    tmp_path: Path,
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    workspace = tmp_path / "workspace"
+    state.runtime.agents.update("coder", workspace=str(workspace))
+    await state.agent_delete_lock.acquire()
+    adding = asyncio.create_task(
+        dispatch_rpc(
+            state,
+            {
+                "method": "memory.add",
+                "params": {"agent_id": "coder", "scope": "agent", "content": "Never stored."},
+            },
+        )
+    )
+    try:
+        await asyncio.sleep(0)
+        adding.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await adding
+    finally:
+        state.agent_delete_lock.release()
+    assert state.runtime.memory.list_entries(workspace, "agent") == []
+    assert state.event_bus.events == []

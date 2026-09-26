@@ -11,6 +11,8 @@ from core.memory import MemoryEntry, MemoryScope
 from core.utils.logging import get_logger
 from core.utils.workers import BoundedWorkerPool
 from server.events import RESOURCE_KIND_MEMORIES
+from server.rpc._mutations import MutationHandler, serialized_mutation
+from server.rpc.agent_refs import _agent_reference_lock
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
@@ -24,12 +26,26 @@ _MEMORY_SCOPES: tuple[MemoryScope, ...] = ("agent", "user")
 _MEMORY_RPC_WORKERS = BoundedWorkerPool(name="memory-rpc", max_workers=2)
 
 
+def _guard_memory_mutation(handler: MutationHandler) -> MutationHandler:
+    mutate = serialized_mutation(handler, lock_attribute="_memory_mutation_lock")
+
+    async def guarded(state: Any, params: JsonObject) -> JsonObject:
+        # Resolve the Workspace only after admission, and keep it attached to
+        # its Agent through the write and publication even if the caller cancels.
+        async with _agent_reference_lock(state):
+            return await mutate(state, params)
+
+    return guarded
+
+
 async def _list_memories(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, {"agent_id"}, "memory.list")
-    agent_id, workspace = await _agent_workspace(state, params)
-    return await _MEMORY_RPC_WORKERS.run(_memory_response, state, agent_id, workspace)
+    async with _agent_reference_lock(state):
+        agent_id, workspace = await _agent_workspace(state, params)
+        return await _MEMORY_RPC_WORKERS.run(_memory_response, state, agent_id, workspace)
 
 
+@_guard_memory_mutation
 async def _add_memory(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, {"agent_id", "scope", "content"}, "memory.add")
     agent_id, workspace = await _agent_workspace(state, params)
@@ -45,6 +61,7 @@ async def _add_memory(state: Any, params: JsonObject) -> JsonObject:
     return response
 
 
+@_guard_memory_mutation
 async def _replace_memory(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(
         params,
@@ -65,6 +82,7 @@ async def _replace_memory(state: Any, params: JsonObject) -> JsonObject:
     return response
 
 
+@_guard_memory_mutation
 async def _remove_memory(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(
         params,
