@@ -631,7 +631,11 @@ async def _list_targets(
         )
     owned = _owned_channels(channel_service, context.agent_id)
     metadata = await chat_sessions.get_metadata_async(
-        SessionAddress(project_id=None, agent_id=context.agent_id, session_id=context.session_id)
+        SessionAddress(
+            project_id=context.project_id,
+            agent_id=context.agent_id,
+            session_id=context.session_id,
+        )
     )
     blocks: list[str] = []
     for config in owned:
