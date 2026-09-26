@@ -504,6 +504,7 @@ BY_NAME = {name: option for option in OPTIONS for name in option.names}
 @dataclass
 class SearchOptions:
     entries: list[tuple[Option, str]] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
 
     def get(self, key: str, default: str = "") -> str:
         result = default
@@ -633,6 +634,19 @@ def parse_options(tokens: list[str], *, action: str, kind: str) -> SearchOptions
     ):
         raise ValueError(
             "File type and size filters require --files; they cannot select directories."
+        )
+    if (
+        any(result.context)
+        and result.get("output") in {"lines", "counts"}
+        and not result.enabled("quiet")
+    ):
+        result.entries = [
+            (option, value)
+            for option, value in result.entries
+            if option.key not in {"context", "before", "after"}
+        ]
+        result.notes.append(
+            "Context was ignored because count output contains no surrounding lines."
         )
     if any(result.context) and (
         result.get("output") or result.enabled("only") or result.enabled("quiet")

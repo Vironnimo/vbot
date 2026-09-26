@@ -60,6 +60,8 @@ symlinks, depth/size/filesystem limits, ordering, encoding, CRLF/NUL, binary
 handling, and diagnostics. Unknown flags, missing operands, or incompatible
 effects reject with a correction. Plain source coordinates and
 formatting are fixed; formatting flags already satisfied by output are accepted.
+Context combined with count output is ignored with an interpretation note, after
+resolving option precedence; a later file/quiet selector still rejects context.
 
 Common scalar/container encodings and known call wrappers use shared repair.
 The owner normalizer also accepts field names from other search Tools and
@@ -117,8 +119,13 @@ negative `-g`/`--iglob` filters apply to roots independently; negatives can excl
 directory descendants. File type/size filters on path searches require `--files`.
 Overlapping roots deduplicate lexical paths; following symlinks remains opt-in
 except an explicit root, preserves its spelling, and detects ancestor loops.
-Windows junctions count as links (`is_link_entry`), like ripgrep's own walker
+Windows junctions count as links, like ripgrep's own walker
 (`test_junctions_are_followed_only_on_request_or_as_explicit_roots`).
+Selection prunes subtrees only when no positive root-relative glob can match a
+descendant; basename globs cannot prune, and final ordered filters and ignores
+remain authoritative. Traversal reuses `DirEntry` metadata, but Windows directory
+identities and `--one-file-system` checks require full stat results because
+`DirEntry.stat()` omits device/inode identities there.
 
 Default content ordering is path ascending; path discovery uses newest modification
 first, with path tie-breaks. Explicit sorts cover path, modified, accessed, created,
@@ -157,14 +164,19 @@ context omission is explicit and never prevents continuation progress.
 The shared 30-second SearchBudget polls traversal and native output, including
 silent children. User cancellation kills the child and returns cancelled_by_user;
 timeouts, Run cancellation, and unreadable entries make results incomplete with
-bounded warnings. Regex errors fail even when selection is empty: the native content
+bounded warnings. After a timed-out directory search, `narrow_call` lists its
+immediate subdirectories so the Agent can repeat the search under a narrower path;
+the note explains that lowering `limit` does not reduce traversal.
+Regex errors fail even when selection is empty: the native content
 run reports pattern and option errors itself, and a separate native check against an
 empty file runs only when no candidate file was selected. Native exit 1
 means no match; native diagnostics cannot become a successful empty search.
 A rejected regex is retried once, only when nothing was observed and the intent is
 evident (`_search_execution.py` -> `pattern_retry`): look-around or backreferences
 rerun with PCRE2, and an unmatched parenthesis or a repetition operator with nothing
-to repeat is escaped while the rest keeps its regex meaning. The result's `note`
+to repeat is escaped while the rest keeps its regex meaning. Unnecessary escapes
+before non-ASCII Unicode punctuation are removed; valid escaped backslashes and
+literal searches retain their meaning. The result's `note`
 names the change and `-F`. Anything else, such as an unclosed character class,
 fails with the native diagnostic plus the `-F` correction. A child that exits before
 process monitoring attaches still has its output, diagnostics and exit code drained
@@ -210,6 +222,8 @@ Primary tests: `tests/core/tools/test_search_files*.py` (encoded-list,
 literal-payload, conflict, regex-repair, and empty-scope regressions in
 `test_search_files_recovery.py`; named fields, other interfaces' spellings, grep
 habits, command-line strings, and path suggestions in `test_search_files_fields.py`),
+with deterministic traversal-pruning and timeout-recovery checks in
+`test_search_files_selection.py`,
 `tests/cli/test_search_runtime.py`, `tests/scripts/converters/persistence_generation_1/test_json_documents.py`,
 `tests/scripts/test_probe_search_files.py`, plus runtime, scanner, Chat, packaging,
 and Tool row integration tests. Tests execute the private native engine.
