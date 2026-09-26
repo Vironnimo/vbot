@@ -68,6 +68,48 @@ def test_install_accepts_inno_registration_files_and_persists_actual_public_key(
     assert install.version().name == "v1_test"
 
 
+@pytest.mark.parametrize("relationship", ["same", "parent", "child", "normalized_child"])
+def test_install_rejects_overlapping_payload_before_mutations(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, relationship: str
+) -> None:
+    payload = _payload(tmp_path)
+    root = {
+        "same": payload,
+        "parent": tmp_path,
+        "child": payload / "application",
+        "normalized_child": payload / ".." / "payload" / "application",
+    }[relationship]
+    original_files = {
+        path.relative_to(tmp_path): path.read_bytes()
+        for path in tmp_path.rglob("*")
+        if path.is_file()
+    }
+
+    def unexpected_mutation(*args: object, **kwargs: object) -> None:
+        pytest.fail("Overlapping paths reached installation mutation")
+
+    monkeypatch.setattr("cli.application.install.shutil.copytree", unexpected_mutation)
+    monkeypatch.setattr(
+        "cli.application.integration.prepare_checkout_transition", unexpected_mutation
+    )
+
+    with pytest.raises(ApplicationError):
+        install_payload(
+            root,
+            payload,
+            shape="server",
+            data_dir=tmp_path / "data",
+            from_checkout=tmp_path / "checkout",
+        )
+
+    assert {
+        path.relative_to(tmp_path): path.read_bytes()
+        for path in tmp_path.rglob("*")
+        if path.is_file()
+    } == original_files
+    assert not (root / "application.json").exists()
+
+
 def test_checkout_transition_preserves_recorded_shape_and_target(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
