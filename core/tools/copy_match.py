@@ -10,11 +10,12 @@ be exact up to spacing. From 3, it may misspell one word per 3 correct words, an
 line the edit keeps may lack or add words the file's line has (a stale or
 misremembered context line), one word or sign per 2 correct words. From 12, it may
 also differ in other ways, with at least 4 correct words for each difference, but
-never where one side has an identifier (a word with an underscore, a digit or an
-inner capital) and the other another word: that names something else, such as a
-sibling function in another file. A passage of 3 or more lines is placed as
+never by substituting or dropping a name: identifiers (an underscore, a digit or
+an inner capital) and names evidenced by call, declaration or member syntax name
+something else, such as a sibling function. A passage of 3 or more lines is placed as
 well by exactly copied first and last lines of at least 2 words each around similar
-lines. Each line keeps its place: a kept line must hold at least half of its file
+lines, unless it contradicts a copied name the file actually holds. Each line keeps
+its place: a kept line must hold at least half of its file
 line's words, and of its words and signs together (a blank file line holds none),
 and a copy whose extra words continue the line above or below joined lines across a
 line break (the copy left out or added a line), so the passage does not take the
@@ -325,6 +326,52 @@ def _identifier(key: str) -> bool:
     )
 
 
+def _code_names(text: _Text) -> set[int]:
+    """Recognize locator names by their spelling or code syntax.
+
+    This is evidence in a copied locator, not a language parser. Calls,
+    declarations and member/namespace access identify names that cannot simply
+    substitute for one another. Plain prose keeps its existing tolerance.
+    """
+    tokens = text.tokens
+    indices = [index for index, token in enumerate(tokens) if not _is_space(token.key)]
+    names = {index for index in indices if _identifier(tokens[index].key)}
+    declarations = {"def", "fn", "func", "function", "class", "struct", "enum", "trait"}
+    modifiers = {"pub", "public", "private", "protected", "static", "async", "export", "abstract"}
+    for position, index in enumerate(indices):
+        token = tokens[index]
+        if not _is_word(token.key) or token.key.isdigit():
+            continue
+        if position + 1 < len(indices):
+            following = tokens[indices[position + 1]]
+            if following.key == "(" and token.end == following.start:
+                names.add(index)
+            if (
+                position
+                and tokens[indices[position - 1]].key in declarations
+                and all(tokens[item].key in modifiers for item in indices[: position - 1])
+                and following.key in {"(", ":", "{", "<"}
+            ):
+                names.add(index)
+        for width, separators in ((1, ["."]), (2, [":", ":"]), (2, ["-", ">"])):
+            end = position + width + 1
+            if end >= len(indices):
+                continue
+            between = [tokens[item].key for item in indices[position + 1 : end]]
+            other = tokens[indices[end]]
+            if between != separators or not _is_word(other.key):
+                continue
+            # A full stop in prose is not member access. Namespace and arrow
+            # separators are already distinctive; spaces around those are fine.
+            if separators == ["."] and (
+                token.end != tokens[indices[position + 1]].start
+                or tokens[indices[position + 1]].end != other.start
+            ):
+                continue
+            names.update((index, indices[end]))
+    return names
+
+
 def _line_key(text: str) -> str:
     return " ".join(text.translate(_FOLD).split())
 
@@ -389,8 +436,10 @@ class _Alignment:
     ``before`` and ``after`` map a copy boundary to the file boundary before and
     after tokens only the file holds there (``extra``: their content count).
     ``gaps`` counts the ``other`` differences that are tokens only one side holds;
-    ``foreign`` the other differences where either side is an identifier; ``alike``
-    the differences that never matter. ``escapes`` holds the copy boundaries where
+    ``foreign`` the other differences where either side names a target;
+    ``named_conflict`` a copied name present elsewhere in the file, which even
+    exact outer anchors cannot excuse. ``alike`` counts differences that never
+    matter. ``escapes`` holds the copy boundaries where
     only the file holds a lone backslash, and ``unwritable`` the characters text the
     edit writes must not hold, since the copy escapes differently from the file.
     """
@@ -406,6 +455,7 @@ class _Alignment:
     other: int = 0
     gaps: int = 0
     foreign: int = 0
+    named_conflict: bool = False
     alike: int = 0
 
 
@@ -418,6 +468,17 @@ def _align(copy: _Text, actual: _Text, speller: _Speller) -> _Alignment:
         alignment.correct = sum(_is_word(key) for key in copied)
         return alignment
     alignment = _Alignment([_OTHER] * len(copied))
+    copy_names, actual_names = _code_names(copy), _code_names(actual)
+
+    def different_names(i1: int, i2: int, j1: int, j2: int) -> None:
+        copied_names = {copied[index] for index in copy_names if i1 <= index < i2}
+        held_names = {held[index] for index in actual_names if j1 <= index < j2}
+        alignment.foreign += bool(copied_names or held_names)
+        # Even exact surrounding lines cannot make a known name refer to a
+        # different target. A misspelling (handled separately below) occurs
+        # nowhere in the file; a known name is an independent locator.
+        alignment.named_conflict |= bool((copied_names - held_names) & speller.words)
+
     # Align by content: a moved line break must not pull words out of line.
     flat_copied = [" " if _is_space(key) else key for key in copied]
     flat_held = [" " if _is_space(key) else key for key in held]
@@ -434,6 +495,8 @@ def _align(copy: _Text, actual: _Text, speller: _Speller) -> _Alignment:
             alignment.extra[i1] = _content(held[j1:j2])
             alignment.other += alignment.extra[i1]
             alignment.gaps += alignment.extra[i1]
+            if actual_names.intersection(range(j1, j2)):
+                different_names(i1, i2, j1, j2)
             continue
         alignment.after[i1] = j1
         if tag == "delete":
@@ -443,13 +506,15 @@ def _align(copy: _Text, actual: _Text, speller: _Speller) -> _Alignment:
                 continue
             alignment.other += _content(copied[i1:i2])
             alignment.gaps += _content(copied[i1:i2])
+            if copy_names.intersection(range(i1, i2)):
+                different_names(i1, i2, j1, j2)
             continue
         if i2 - i1 != j2 - j1:
             if _dash_pair(copied[i1:i2], held[j1:j2]):
                 _mark_alike(alignment, copied, i1, i2)
                 continue
             alignment.other += max(_content(copied[i1:i2]), _content(held[j1:j2]))
-            alignment.foreign += any(map(_identifier, [*copied[i1:i2], *held[j1:j2]]))
+            different_names(i1, i2, j1, j2)
             continue
         for offset in range(i2 - i1):
             index, wrong, right = i1 + offset, copied[i1 + offset], held[j1 + offset]
@@ -467,7 +532,7 @@ def _align(copy: _Text, actual: _Text, speller: _Speller) -> _Alignment:
                 alignment.misspelled += 1
             else:
                 alignment.other += 1
-                alignment.foreign += _identifier(wrong) or _identifier(right)
+                different_names(index, index + 1, j1 + offset, j1 + offset + 1)
     alignment.before.setdefault(len(copied), len(held))
     alignment.after.setdefault(len(copied), len(held))
     return alignment
@@ -635,12 +700,13 @@ def _level(alignment: _Alignment, gaps: int = 0) -> int | None:
     0: copied up to misspellings and ``gaps``, the ``other`` differences kept lines
     lack or add. 1: copied with other differences.
     """
+    if alignment.named_conflict or alignment.foreign:
+        return None
     correct, misspelled, other = alignment.correct, alignment.misspelled, alignment.other
     if other == gaps and _tolerated(correct, misspelled, gaps):
         return 0
     if (
-        not alignment.foreign
-        and correct >= _DIFFERENCES_MIN_WORDS
+        correct >= _DIFFERENCES_MIN_WORDS
         and (misspelled + other) * _WORDS_PER_DIFFERENCE <= correct
     ):
         return 1
@@ -982,6 +1048,8 @@ def _place_lines(
         total.misspelled += alignment.misspelled
         total.other += alignment.other
         total.foreign += alignment.foreign
+        if alignment.named_conflict:
+            return None
         total.alike += alignment.alike
         total.unwritable |= alignment.unwritable
         gaps += alignment.gaps if segment.kept else 0
