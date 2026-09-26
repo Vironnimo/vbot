@@ -183,32 +183,6 @@ def _assistant_wire_carriers(payload: dict[str, Any]) -> list[str]:
     return sorted(carriers)
 
 
-def _shape_history(
-    messages: list[ChatMessage],
-    *,
-    replay_policy: str,
-    agent_model: str,
-) -> list[dict[str, Any]]:
-    """Shape persisted history exactly like the chat loop (``_assemble_request_history``)."""
-    return _assemble_request_history(
-        messages,
-        replay_policy=replay_policy,  # type: ignore[arg-type]
-        agent_model=agent_model,
-    )
-
-
-def _shape_live_turn(
-    message: ChatMessage,
-    *,
-    replay_policy: str,
-) -> dict[str, Any]:
-    """Shape the live current-run assistant turn (``_assistant_continuation_dict``)."""
-    return _assistant_continuation_dict(
-        message,
-        replay_policy=replay_policy,  # type: ignore[arg-type]
-    )
-
-
 def _responses_output_items(message: dict[str, Any]) -> list[dict[str, Any]]:
     reasoning_meta = message.get("reasoning_meta")
     if not isinstance(reasoning_meta, dict):
