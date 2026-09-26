@@ -108,13 +108,15 @@ async def test_automatic_handoff_includes_capped_output_and_usable_process(
         assert "process_note" not in data
         process_id = data["process_id"]
         assert isinstance(process_id, str) and process_id
-        assert data["truncated"] is True
+        # Handoff can beat child startup or stdout collection. Its snapshot is
+        # bounded even when the command has not produced its output yet.
+        assert isinstance(data["truncated"], bool)
         assert len(data["output"]) <= 4000
-        assert data["output"].replace("\r\n", "\n").endswith("HANDOFF-END\n")
-        assert "[earlier output truncated" in data["output"]
+        if "HANDOFF-END" in data["output"]:
+            assert data["truncated"] is True
+            assert "[earlier output truncated" in data["output"]
         log_file = Path(data["log_file"])
         assert log_file.exists()
-        assert "x" * 5000 + "HANDOFF-END" in log_file.read_text(encoding="utf-8")
 
         process_context = ToolContext(
             agent_id=AGENT_ID,
@@ -130,14 +132,23 @@ async def test_automatic_handoff_includes_capped_output_and_usable_process(
         process_result = await make_process_handler(spool_manager)(
             process_context,
             {
-                "action": "status",
+                "action": "wait",
                 "process_id": process_id,
+                "pattern": "HANDOFF-END",
+                "timeout": 10,
             },
         )
 
         assert process_result["ok"] is True
-        assert process_result["data"]["process_id"] == process_id
-        assert process_result["data"]["status"] == "running"
+        process_data = process_result["data"]
+        assert process_data["process_id"] == process_id
+        assert process_data["status"] == "running"
+        assert "matched" in process_data
+        assert process_data["truncated"] is True
+        assert len(process_data["output"]) <= 4000
+        assert process_data["output"].replace("\r\n", "\n").endswith("HANDOFF-END\n")
+        assert "[earlier output truncated" in process_data["output"]
+        assert "x" * 5000 + "HANDOFF-END" in log_file.read_text(encoding="utf-8")
     finally:
         tracked_processes = spool_manager.list_processes(AGENT_ID)
         for tracked in tracked_processes:
