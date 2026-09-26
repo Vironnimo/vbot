@@ -282,7 +282,13 @@ def test_update_needs_a_change(tmp_path: Path) -> None:
 
     message = _error(envelope)["message"]
     assert message.startswith("cron was not run: update needs a field to change")
-    assert f'{{"action":"update","id":"{job_id}","schedule":"every 4h"}}' in message
+    assert message.endswith(f'Send: {{"action":"update","id":"{job_id}","schedule":"<when>"}}')
+    before = tool.only_job().to_dict()
+
+    resent, _text = tool.call({"action": "update", "id": job_id, "schedule": "<when>"})
+
+    assert resent["ok"] is False
+    assert tool.only_job().to_dict() == before
 
 
 def test_delete_enable_disable_and_paused_update(tmp_path: Path) -> None:
@@ -347,7 +353,9 @@ def test_past_one_time_schedule_asks_for_a_future_time(tmp_path: Path) -> None:
     for envelope in (created, updated):
         message = _error(envelope)["message"]
         assert "Choose a future time" in message
-        assert '"schedule":"in 30m"' in message
+        assert message.endswith('"schedule":"<future time>"}')
+    resent, _ = tool.call({"action": "create", "prompt": "Remind me", "schedule": "<future time>"})
+    assert resent["ok"] is False
     assert [stored.id for stored in tool.jobs()] == [job_id]
     tool.trigger.trigger_run.assert_not_called()
 

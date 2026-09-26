@@ -43,6 +43,6 @@ Jobs store no zone of their own (a per-job zone would change the persisted forma
 ## Constraints & Gotchas
 
 - Target failures use the codes shared with the Status and Sub-Agent Tools: `agent_not_found`, `project_not_found`, `agent_unavailable` (keeps the resolver's reason), and `invalid_arguments` for a malformed address. They carry target guidance instead of call shapes. An unknown id is `job_not_found` and points to `{"action":"list"}`.
-- A one-time time already past on create, update, or enable fails with the past local time, the current time, and a corrected `in 30m` call (for enable, an update call). A completed or missed job is immutable; the error suggests a new job or the delete call.
+- A one-time time already past on create, update, or enable fails with the past local time, the current time, and the corrected call with the `<future time>` stand-in (for enable, an update call); an update with no change shows `schedule` as the `<when>` stand-in. Refusals never invent a schedule the Agent did not send. A completed or missed job is immutable; the error suggests a new job or the delete call.
 - A repeat is consumed when `TriggerService` admits or queues the Run. Missed one-time jobs do not catch up after restart; list reports them as `missed`. Five consecutive recurring failures stop a job as `failed`; enable restarts it and resets the streak.
 - The Tool cannot fire a job on demand, carry a per-job time zone, or deliver a reply; these are refused rather than approximated.
