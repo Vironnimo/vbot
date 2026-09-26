@@ -7,6 +7,7 @@ import time
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Literal, cast
 
+from core.chat._boundaries import _finish_visible_boundary
 from core.chat._message_history import (
     _append_input_origin_note,
     _append_reply_surface_note,
@@ -511,6 +512,23 @@ class RunExecution:
             raise
         finally:
             run.accepts_steering = False
+            # Detach and compute final statistics once, off the Event Loop. Run
+            # cancellation must not skip worker admission or lose the result:
+            # reverted edits still need their explicit zero terminal totals.
+            try:
+                change_stats = await _finish_visible_boundary(
+                    _CHAT_TRANSFORM_WORKERS.run(
+                        self._dependencies.change_tracker.take_run_stats, (session_address, run.id)
+                    ),
+                    run,
+                    True,
+                )
+                if change_stats is not None:
+                    run.terminal_payload_extras["change_stats"] = change_stats
+            except Exception:
+                _LOGGER.warning(
+                    "Failed to compute change statistics for run %s", run.id, exc_info=True
+                )
             outcome: Literal["success", "error", "cancelled"]
             if run.cancel_requested:
                 outcome = "cancelled"
@@ -537,21 +555,6 @@ class RunExecution:
                 run.input_token_total,
                 run.output_token_total,
             )
-            # Git-style change statistics for this run, computed from the
-            # session-scoped content tracker (real before/after line diffs).
-            # Peek first so an all-zero outcome persists explicitly and matches
-            # the totals the live stream last showed; take consumes the deltas.
-            # Best-effort: untracked files (too large, non-UTF-8) simply mean
-            # the UI falls back to its per-tool-call counts.
-            try:
-                change_stats = self._dependencies.change_tracker.peek_run_stats(run.session_id)
-                if change_stats is not None:
-                    run.terminal_payload_extras["change_stats"] = change_stats
-                self._dependencies.change_tracker.take_run_stats(run.session_id)
-            except Exception:
-                _LOGGER.warning(
-                    "Failed to compute change statistics for run %s", run.id, exc_info=True
-                )
             if context.continuation_tracker is not None:
                 answered = completed_assistant is not None and not completed_assistant.interrupted
                 try:

@@ -928,7 +928,7 @@ class AgenticProgression:
             # transient projection. The line diffs run off the Event Loop.
             if self._dependencies.change_tracker is not None:
                 current_change_stats = await _CHAT_TRANSFORM_WORKERS.run(
-                    self._dependencies.change_tracker.peek_run_stats, run.session_id
+                    self._dependencies.change_tracker.peek_run_stats, (session_address, run.id)
                 )
                 if current_change_stats != emitted_change_stats:
                     emitted_change_stats = current_change_stats

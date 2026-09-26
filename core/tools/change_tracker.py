@@ -1,6 +1,6 @@
-"""Session-scoped file-content tracking for git-style change statistics.
+"""Run-scoped file-content tracking for git-style change statistics.
 
-Tracks, per session, one real content delta per mutated file so the chat loop
+Tracks, per Run, one real content delta per mutated file so the chat loop
 can compute git-style before/after line diffs — streamed live after each
 dispatched Tool round via ``peek_run_stats`` and consumed once at Run end via
 ``take_run_stats``. Every mutation is recorded against the file's actual
@@ -23,10 +23,14 @@ from __future__ import annotations
 import difflib
 import threading
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from core.tools.arguments import split_text_lines
 
-# Cap on tracked ``(session, path)`` content entries so a long-lived server
+if TYPE_CHECKING:
+    from core.sessions import SessionAddress
+
+# Cap on tracked ``(Run, path)`` content entries so a long-lived server
 # process does not grow the map without bound; oldest insertions are evicted
 # first. A rarely evicted entry only costs a harmless fallback to the
 # per-tool-call counts.
@@ -43,22 +47,24 @@ _MAX_REPORTED_PATHS = 200
 
 
 class ChangeTracker:
-    """Process-wide registry of per-session run deltas."""
+    """Process-wide registry of per-Run deltas."""
 
     def __init__(self) -> None:
-        # Insertion-ordered ``(session, path)`` entries, so the oldest is evicted first.
-        self._run_changes: dict[tuple[str, str], tuple[str, str]] = {}
-        # Sessions that lost an entry report no statistics until their Run ends,
+        # Insertion-ordered ``(Run, path)`` entries, so the oldest is evicted first.
+        self._run_changes: dict[tuple[tuple[SessionAddress, str], str], tuple[str, str]] = {}
+        # Runs that lost an entry report no statistics until their statistics are taken,
         # so the accessor falls back to per-call counts instead of an undercount.
-        self._incomplete_sessions: set[str] = set()
+        self._incomplete_runs: set[tuple[SessionAddress, str]] = set()
         self._run_changes_lock = threading.Lock()
 
-    def record_write(self, session_id: str, resolved: Path, before: str, after: str) -> None:
+    def record_write(
+        self, run_key: tuple[SessionAddress, str], resolved: Path, before: str, after: str
+    ) -> None:
         """Record one file mutation for the current run's change statistics.
 
         ``before`` is the file's actual on-disk content immediately before the
         mutation; ``after`` is the new content. The delta is stored per
-        ``(session, path)`` so repeated edits of the same file in one run diff
+        ``(Run, path)`` so repeated edits of the same file in one run diff
         against the run's first pre-mutation state rather than summing
         per-call counts.
         """
@@ -70,7 +76,7 @@ class ChangeTracker:
             > MAX_TRACKED_BYTES
         ):
             return
-        key = (session_id, str(resolved))
+        key = (run_key, str(resolved))
         with self._run_changes_lock:
             existing = self._run_changes.get(key)
             if existing is not None:
@@ -78,11 +84,11 @@ class ChangeTracker:
                 return
             self._run_changes[key] = (before, after)
             while len(self._run_changes) > _MAX_TRACKED_FILES:
-                evicted_session, _path = next(iter(self._run_changes))
-                del self._run_changes[evicted_session, _path]
-                self._incomplete_sessions.add(evicted_session)
+                evicted_run, _path = next(iter(self._run_changes))
+                del self._run_changes[evicted_run, _path]
+                self._incomplete_runs.add(evicted_run)
 
-    def peek_run_stats(self, session_id: str) -> dict[str, object] | None:
+    def peek_run_stats(self, run_key: tuple[SessionAddress, str]) -> dict[str, object] | None:
         """Return current git-style change statistics WITHOUT consuming them.
 
         Same computation as :meth:`take_run_stats`, but the per-run deltas stay
@@ -93,45 +99,41 @@ class ChangeTracker:
         total instead of leaving it stale.
         """
         with self._run_changes_lock:
-            if session_id in self._incomplete_sessions:
+            if run_key in self._incomplete_runs:
                 return None
-            snapshot = self._session_changes(session_id)
+            snapshot = self._changes_for_run(run_key)
         if not snapshot:
             return None
-        stats = _stats_from_changes(snapshot)
-        if stats is not None:
-            return stats
-        return {"files": 0, "added": 0, "removed": 0, "paths": []}
+        return _stats_from_changes(snapshot)
 
-    def take_run_stats(self, session_id: str) -> dict[str, object] | None:
-        """Return git-style change statistics for the session's current run.
+    def take_run_stats(self, run_key: tuple[SessionAddress, str]) -> dict[str, object] | None:
+        """Return git-style change statistics for the Run.
 
         Computes one real line diff per changed file against the run's first
         pre-mutation state, sums the added/removed lines, and returns
         ``{files, added, removed, paths}`` — or ``None`` when the run changed
-        no tracked files. The per-run deltas are consumed and cleared.
+        no tracked files. Reverted deltas return explicit zero totals. Entries
+        detach under the lock before the expensive diff, even if it fails.
         """
         with self._run_changes_lock:
-            run_changes = self._session_changes(session_id)
+            run_changes = self._changes_for_run(run_key)
             for path in run_changes:
-                del self._run_changes[session_id, path]
-            if session_id in self._incomplete_sessions:
-                self._incomplete_sessions.discard(session_id)
+                del self._run_changes[run_key, path]
+            if run_key in self._incomplete_runs:
+                self._incomplete_runs.discard(run_key)
                 return None
         if not run_changes:
             return None
         return _stats_from_changes(run_changes)
 
-    def _session_changes(self, session_id: str) -> dict[str, tuple[str, str]]:
-        """Return one Session's deltas by path; the caller holds the lock."""
+    def _changes_for_run(self, run_key: tuple[SessionAddress, str]) -> dict[str, tuple[str, str]]:
+        """Return one Run's deltas by path; the caller holds the lock."""
         return {
-            path: change
-            for (owner, path), change in self._run_changes.items()
-            if owner == session_id
+            path: change for (owner, path), change in self._run_changes.items() if owner == run_key
         }
 
 
-def _stats_from_changes(run_changes: dict[str, tuple[str, str]]) -> dict[str, object] | None:
+def _stats_from_changes(run_changes: dict[str, tuple[str, str]]) -> dict[str, object]:
     """Aggregate one real line diff per changed file into run statistics."""
     paths: list[str] = []
     added = 0
@@ -144,8 +146,6 @@ def _stats_from_changes(run_changes: dict[str, tuple[str, str]]) -> dict[str, ob
         added += diff_added
         removed += diff_removed
 
-    if not paths:
-        return None
     paths.sort()
     return {
         "files": len(paths),

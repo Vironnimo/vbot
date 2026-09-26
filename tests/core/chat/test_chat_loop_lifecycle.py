@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import threading
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+import core.tools.change_tracker as change_tracker_module
 from core.chat.continuation import ContinuationTracker
 from core.providers.errors import ProviderTimeoutError
-from core.runs import RunAdmission, RunExecutionOwner, RunStatus
+from core.runs import RunAdmission, RunCancelledError, RunExecutionOwner, RunStatus
+from core.tools.change_tracker import ChangeTracker
 from core.utils.retry import retry_async
 from tests.core.chat.chat_loop_support import (
     RecordingReflection,
@@ -414,3 +418,61 @@ async def test_preparation_failure_reaches_summary_and_completion_observers(tmp_
     assert reflection.calls[0]["outcome"] == "error"
     assert run.status is RunStatus.FAILED
     assert run.iteration_count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancel", [False, True])
+async def test_final_change_stats_allow_loop_progress_and_survive_cancel(
+    tmp_path, monkeypatch, cancel
+):
+    agent = StubAgent(id="coder", model="openai/test")
+    runtime = StubRuntime(
+        data_dir=tmp_path, agent=agent, adapter=StubAdapter([{"content": "Done"}])
+    )
+    tracker = ChangeTracker()
+    runtime.change_tracker = tracker
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    entered = asyncio.Event()
+    release = threading.Event()
+    event_loop = asyncio.get_running_loop()
+    event_loop_thread = threading.get_ident()
+    diff_threads = []
+    original_diff = change_tracker_module._line_diff_counts
+
+    def slow_diff(before, after):
+        diff_threads.append(threading.get_ident())
+        event_loop.call_soon_threadsafe(entered.set)
+        assert release.wait(5), "Event Loop did not progress while final statistics were computed"
+        return original_diff(before, after)
+
+    monkeypatch.setattr(change_tracker_module, "_line_diff_counts", slow_diff)
+    run = await build_chat_loop(runtime).start_run("coder", "Work", session_id=session.id)
+    key = (session.address, run.id)
+    tracker.record_write(key, tmp_path / "file.txt", "before\n", "after\n")
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        # The work detached its input before the diff and cannot leak it to another Run.
+        assert tracker.peek_run_stats(key) is None
+        assert run.status == RunStatus.RUNNING
+        if cancel:
+            run.request_cancel(reason="user")
+        release.set()
+        if cancel:
+            with pytest.raises(RunCancelledError):
+                await run.wait()
+        else:
+            await run.wait()
+        assert diff_threads and all(thread != event_loop_thread for thread in diff_threads)
+        assert len(diff_threads) == 1
+        assert run.terminal_payload_extras["change_stats"] == {
+            "files": 1,
+            "added": 1,
+            "removed": 1,
+            "paths": [str(tmp_path / "file.txt")],
+        }
+        messages = session.load()
+        assert messages[-1].change_stats == run.terminal_payload_extras["change_stats"]
+        assert session.load_continuation() is None
+    finally:
+        release.set()
+        await runtime.chat_runs.aclose()
