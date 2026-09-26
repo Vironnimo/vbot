@@ -420,8 +420,8 @@ def _url_parts(url: str) -> tuple[str, str | None, int]:
 def _retries_allowed(error: RequestException) -> int:
     """How often a transport failure is worth repeating.
 
-    A broken certificate or TLS setup fails the same way every time, and one
-    more try is enough for a total timeout that already waited the full limit.
+    A broken certificate or TLS setup fails the same way every time. A timeout
+    during connection or response transfer gets one more bounded attempt.
     """
     if isinstance(error, (SSLError, CertificateVerifyError, DNSError)):
         return 0
@@ -596,8 +596,8 @@ def _transport_error(url: str, error: RequestException, attempts: int) -> Public
     if isinstance(error, Timeout):
         return PublicFetchError(
             "timeout",
-            f"{host} did not respond within {int(_TOTAL_TIMEOUT_SECONDS)} seconds. The site "
-            "may be slow or down; try again later or use another source.",
+            f"Fetching from {host} timed out. The site may be slow or unreachable; "
+            "try again later or use another source.",
             retryable=True,
             attempts_made=attempts,
             recoverable=True,
