@@ -222,6 +222,7 @@
           bridgeClient={model.client}
           onSave={model.saveProfile}
           onCancel={model.newSwarm}
+          onDelete={model.confirmProfileDelete}
         />
       {/key}
     {:else}
@@ -723,7 +724,8 @@
                 ariaLabel={t('common.delete', 'Delete')}
                 tooltip={t('swarm.delete.title', 'Delete Swarm')}
                 disabled={!model.selectedProfile}
-                onClick={() => (model.deleteCandidate = model.selectedProfile)}
+                onClick={() =>
+                  model.confirmProfileDelete(model.selectedProfile)}
                 >{@render actionIcon('trash')}</Button
               >
             </div>
@@ -854,6 +856,7 @@
   >{/if}
 {#if model.deleteCandidate}<Modal
     title={t('swarm.delete.title', 'Delete Swarm')}
+    closeDisabled={model.pending === 'delete'}
     onClose={() => (model.deleteCandidate = null)}
     >{#snippet body()}<div class="modal-copy swarm-page-modal-copy">
         <p>
@@ -863,12 +866,18 @@
             { name: model.deleteCandidate.name },
           )}
         </p>
+        {#if model.deleteError}<Banner variant="error"
+            >{model.deleteError}</Banner
+          >{/if}
       </div>{/snippet}{#snippet footer()}<Button
         variant="secondary"
+        disabled={model.pending === 'delete'}
         onClick={() => (model.deleteCandidate = null)}
         >{t('common.cancel', 'Cancel')}</Button
-      ><Button variant="danger" onClick={model.deleteProfile}
-        >{t('common.delete', 'Delete')}</Button
+      ><Button
+        variant="danger"
+        loading={model.pending === 'delete'}
+        onClick={model.deleteProfile}>{t('common.delete', 'Delete')}</Button
       >{/snippet}</Modal
   >{/if}
 {#if model.settingsOpen}<Modal

@@ -42,6 +42,7 @@
     bridgeClient,
     onSave,
     onCancel,
+    onDelete,
   } = $props();
   const preview = createProfilePromptPreview({
     get snapshot() {
@@ -421,24 +422,51 @@
         )}
       </p>
     </div>
-    <Button
-      variant="tertiary"
-      icon
-      disabled={busy}
-      ariaLabel={t('common.close', 'Close')}
-      tooltip={t('common.close', 'Close')}
-      onClick={onCancel}
-    >
-      <svg
-        width="18"
-        height="18"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        stroke-width="1.7"
-        aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg
+    <div class="view-header__actions">
+      {#if profile}
+        <!-- Waits for an in-flight autosave so the dialog confirms the
+             saved revision. -->
+        <Button
+          variant="tertiary"
+          icon
+          disabled={saving}
+          ariaLabel={t('swarm.delete.title', 'Delete Swarm')}
+          tooltip={t('swarm.delete.title', 'Delete Swarm')}
+          onClick={() => onDelete(savedProfile)}
+        >
+          <svg
+            width="18"
+            height="18"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.7"
+            aria-hidden="true"
+            ><path
+              d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 10v7M14 10v7"
+            /></svg
+          >
+        </Button>
+      {/if}
+      <Button
+        variant="tertiary"
+        icon
+        disabled={busy}
+        ariaLabel={t('common.close', 'Close')}
+        tooltip={t('common.close', 'Close')}
+        onClick={onCancel}
       >
-    </Button>
+        <svg
+          width="18"
+          height="18"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.7"
+          aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg
+        >
+      </Button>
+    </div>
   </header>
   <TabList
     items={tabs}

@@ -462,6 +462,13 @@ The profile and other Swarms remain. Start/Stop/Resume/Delete are serialized; th
 deletion marker blocks Resume, including request replay, and survives restart so
 a failed deletion can be retried. Tests: `test_swarm_board.py`, `SwarmPage.test.js`.
 
+A saved Swarm profile is deleted through `profiles.delete` from its editor header or
+beside the goal form's Swarm selector, after the same kind of confirmation (failures
+stay in the dialog for retry). Existing Runs keep their profile snapshots. Deletion
+sends the latest saved revision and closes the editor without the navigation flush,
+so an unsaved draft of the deleted profile is discarded, not saved again
+(`SwarmPage.test.profiles.test.js`).
+
 Management operation descriptions state each action and its continuation or revision requirements. The CLI lists compact descriptions first and exposes the complete argument schema through per-operation help. Profile save/preview help includes a validator-checked creation example, optional fields, and revision guidance. Source: `_registration.py` registration and `cli/extensions_management.py`; tests: `tests/resources/extensions/test_mcp.py` and `tests/cli/test_extensions_operations.py`.
 
 Private UI routing: `ui/SwarmPage.svelte` composes the page; `pageModel.svelte.js` retains its management state, request generations, Board/Usage loading, mutations, and bridge lifetime, while `pageActivity.svelte.js` owns participant History/replay subscriptions and context projection. `pagePresentation.js` holds display-only count/avatar helpers. `ProfileEditor.svelte` retains profile drafts, validation, and autosave; `profilePromptPreview.svelte.js` owns preview request ordering and freshness. Adjacent `swarmPage.css` and `profileEditor.css` scope styles to their page/editor surfaces, including portaled dialogs.

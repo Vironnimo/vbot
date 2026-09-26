@@ -634,3 +634,90 @@ it('shows and saves each private Swarm Tool independently', async () => {
     ),
   );
 });
+
+describe('Swarm deletion', () => {
+  const confirm = () =>
+    [...document.querySelectorAll('[role="dialog"] button')].find(
+      (node) => node.textContent.trim() === 'Delete',
+    );
+
+  it('deletes the open Swarm from its editor without saving the discarded draft', async () => {
+    const { bridge, operation } = createBridge();
+    const original = operation.getMockImplementation();
+    let deleted = false;
+    operation.mockImplementation((name, args) => {
+      if (name === 'profiles.delete') {
+        deleted = true;
+        return Promise.resolve({ profile_id: args.profile_id, deleted: true });
+      }
+      if (name === 'profiles.list' && deleted)
+        return Promise.resolve({ entries: [], has_more: false });
+      return original(name, args);
+    });
+    await render(bridge);
+    button('Research').click();
+    await tick();
+    flushSync();
+    fill('swarm-profile-name', 'Saved rename');
+    await tick();
+    saveButton().click();
+    await vi.waitFor(() =>
+      expect(operation).toHaveBeenCalledWith(
+        'profiles.save',
+        expect.objectContaining({ expected_revision: 1 }),
+      ),
+    );
+    await vi.waitFor(() => expect(button('Delete Swarm').disabled).toBe(false));
+    fill('swarm-profile-name', 'Discarded draft');
+    await tick();
+    button('Delete Swarm').click();
+    await tick();
+    expect(document.querySelector('[role="dialog"]').textContent).toContain(
+      'Existing Runs remain available',
+    );
+    confirm().click();
+    await vi.waitFor(() =>
+      expect(document.querySelector('.swarm-profile-editor')).toBeNull(),
+    );
+    expect(operation).toHaveBeenCalledWith('profiles.delete', {
+      profile_id: 'prf-a',
+      expected_revision: 2,
+    });
+    const calls = operation.mock.calls.map(([name]) => name);
+    expect(calls.lastIndexOf('profiles.save')).toBeLessThan(
+      calls.indexOf('profiles.delete'),
+    );
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(button('Saved rename')).toBeUndefined();
+    expect(button('Investigate')).toBeDefined();
+  });
+
+  it('retains the confirmation and allows retry after a failed deletion', async () => {
+    const { bridge, operation } = createBridge();
+    const original = operation.getMockImplementation();
+    let attempts = 0;
+    operation.mockImplementation((name, args) => {
+      if (name === 'profiles.delete') {
+        attempts += 1;
+        return Promise.reject(new Error('Storage unavailable'));
+      }
+      return original(name, args);
+    });
+    await render(bridge);
+    button('Research').click();
+    await tick();
+    flushSync();
+    button('Delete Swarm').click();
+    await tick();
+    confirm().click();
+    await vi.waitFor(() =>
+      expect(document.querySelector('[role="dialog"]').textContent).toContain(
+        'Storage unavailable',
+      ),
+    );
+    expect(confirm().disabled).toBe(false);
+    confirm().click();
+    await vi.waitFor(() => expect(attempts).toBe(2));
+    expect(document.querySelector('.swarm-profile-editor')).not.toBeNull();
+  });
+});
