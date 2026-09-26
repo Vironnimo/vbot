@@ -1178,3 +1178,94 @@ class TestConflicts:
             f'{{"action":"add_action","id":"{event_id}","when":"start - 1h",'
             '"prompt":"<instruction>"}'
         )
+
+    def test_add_action_names_event_fields_it_does_not_apply(self, tool: CalendarTool) -> None:
+        event_id = _dentist(tool)
+
+        _, text = tool.call(
+            {
+                "action": "add_action",
+                "id": event_id,
+                "title": "Dentist appointment",
+                "notes": "Bring the card.",
+                "when": "start - 1h",
+                "prompt": "Remind me.",
+            }
+        )
+
+        event = tool.only_event()
+        assert (event.title, event.notes) == ("Dentist", None)
+        assert [item["when"] for item in tool.actions()] == ["start - 1h"]
+        assert (
+            "title, notes were not applied: add_action works on the action, not on its event. "
+            f'To change the event, send {{"action":"update","id":"{event_id}",'
+            '"title":"Dentist appointment","notes":"Bring the card."}.'
+        ) in text
+
+    def test_title_that_names_the_event_needs_no_note(self, tool: CalendarTool) -> None:
+        event_id = _dentist(tool)
+
+        _, text = tool.call(
+            {
+                "action": "add_action",
+                "id": event_id,
+                "title": "dentist",
+                "when": "start - 1h",
+                "prompt": "Remind me.",
+            }
+        )
+
+        assert len(tool.actions()) == 1
+        assert "not applied" not in text
+
+    def test_update_action_with_only_event_fields_names_the_event_update(
+        self, tool: CalendarTool
+    ) -> None:
+        event_id = _dentist(tool)
+        tool.call({"action": "add_action", "id": event_id, "when": "start", "prompt": "Go."})
+        [action] = tool.actions()
+
+        _, text = tool.call(
+            {
+                "action": "update_action",
+                "id": action["id"],
+                "start": "2030-01-10T16:00",
+                "when": "start - 1h",
+                "timezone": "Europe/London",
+            }
+        )
+        _, only_event = tool.call(
+            {"action": "update_action", "id": action["id"], "notes": "Bring the card."}
+        )
+
+        assert tool.only_event().start_utc == "2030-01-10T14:00:00+00:00"
+        assert [item["when"] for item in tool.actions()] == ["start - 1h"]
+        assert (
+            f'To change the event, send {{"action":"update","id":"{event_id}",'
+            '"start":"2030-01-10T16:00","timezone":"Europe/London"}.'
+        ) in text
+        assert _refused(only_event)
+        assert only_event.endswith(
+            f'To change the event: Send: {{"action":"update","id":"{event_id}",'
+            '"notes":"Bring the card."}'
+        )
+        assert tool.only_event().notes is None
+
+    def test_delete_action_with_changes_offers_delete_or_update(self, tool: CalendarTool) -> None:
+        event_id = _dentist(tool)
+        tool.call({"action": "add_action", "id": event_id, "when": "start", "prompt": "Go."})
+        [action] = tool.actions()
+
+        _, changed = tool.call(
+            {"action": "delete_action", "id": action["id"], "when": "start - 1h"}
+        )
+        _, deleted = tool.call({"action": "delete_action", "id": action["id"], "notes": "Moved."})
+
+        assert _refused(changed)
+        assert changed.endswith(
+            f'{{"action":"delete_action","id":"{action["id"]}"}} or '
+            f'{{"action":"update_action","id":"{action["id"]}","when":"start - 1h"}}'
+        )
+        assert tool.actions() == []
+        assert tool.only_event().notes is None
+        assert "notes was not applied: delete_action works on the action" in deleted

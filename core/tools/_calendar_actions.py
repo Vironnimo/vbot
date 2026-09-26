@@ -14,6 +14,8 @@ from zoneinfo import ZoneInfo
 from core.calendar.errors import CalendarEventNotFoundError
 from core.projects.address import format_agent_address
 from core.tools._calendar_arguments import (
+    END_FIELD,
+    EVENT_CHANGE_FIELDS,
     OMIT,
     STAND_INS,
     TIMEZONE_FIELD,
@@ -22,6 +24,7 @@ from core.tools._calendar_arguments import (
     minutes_text,
     parse_local,
     refusal,
+    render_call,
 )
 from core.tools._calendar_times import local_text, named_instant, server_zone, unknown_zone
 from core.tools._named_zones import named_zone
@@ -65,7 +68,8 @@ def handle_add_action(
         target=target,
         session=_session(arguments, context, target),
     )
-    return _action_success(calendar_service, action, event, note)
+    notes = [note, _unapplied_note("add_action", arguments, event)]
+    return _action_success(calendar_service, action, event, " ".join(filter(None, notes)))
 
 
 def handle_update_action(
@@ -86,6 +90,16 @@ def handle_update_action(
         target = str(fields.get("target", current["target"]))
         fields["session"] = _session(arguments, context, target)
     if not fields:
+        event_call = _event_update(arguments, event)
+        if event_call is not None:
+            raise CalendarCallRefusedError(
+                refusal(
+                    "update_action changes an action's when, prompt, target or session; the "
+                    f"other fields belong to its event {event.title} ({event.id}). To change "
+                    "the event:",
+                    event_call,
+                )
+            )
         raise CalendarCallRefusedError(
             refusal(
                 "update_action needs a field to change: when, prompt, target or session.",
@@ -94,7 +108,8 @@ def handle_update_action(
             )
         )
     action = calendar_service.actions.update(action_id, **fields)
-    return _action_success(calendar_service, action, event, note)
+    notes = [note, _unapplied_note("update_action", arguments, event)]
+    return _action_success(calendar_service, action, event, " ".join(filter(None, notes)))
 
 
 def handle_delete_action(calendar_service: CalendarService, arguments: JsonObject) -> JsonObject:
@@ -102,9 +117,54 @@ def handle_delete_action(calendar_service: CalendarService, arguments: JsonObjec
     current = find_action(calendar_service, action_id)
     calendar_service.actions.delete(action_id)
     event = calendar_service.get_event(current["event_id"])
-    return tool_success(
-        {"id": action_id, "event": f"{event.title} ({event.id})", "status": "deleted"}
+    data: JsonObject = {
+        "id": action_id,
+        "event": f"{event.title} ({event.id})",
+        "status": "deleted",
+    }
+    unapplied = _unapplied_note("delete_action", arguments, event)
+    if unapplied:
+        data["note"] = unapplied
+    return tool_success(data)
+
+
+def _event_update(arguments: JsonObject, event: CalendarEvent) -> JsonObject | None:
+    """The update call for the event fields an action call carried, or None if there are none.
+
+    A title that finds the event by its title only names it, so it asks for no change.
+    """
+    names = [
+        name
+        for name in EVENT_CHANGE_FIELDS
+        if name in arguments and not (name == "title" and _names_event(arguments[name], event))
+    ]
+    if not names:
+        return None
+    call: JsonObject = {"action": "update", "id": event.id}
+    call.update({name: arguments[name] for name in names})
+    if TIMEZONE_FIELD in arguments and ("start" in names or END_FIELD in names):
+        # Those times were written in the named zone.
+        call[TIMEZONE_FIELD] = arguments[TIMEZONE_FIELD]
+    return call
+
+
+def _unapplied_note(action: str, arguments: JsonObject, event: CalendarEvent) -> str | None:
+    """Name the event fields an action call carried but did not apply, with the call that does."""
+    call = _event_update(arguments, event)
+    if call is None:
+        return None
+    names = [name for name in call if name not in {"action", "id", TIMEZONE_FIELD}]
+    verb = "was" if len(names) == 1 else "were"
+    return (
+        f"{', '.join(names)} {verb} not applied: {action} works on the action, not on its "
+        f"event. To change the event, send {render_call(call)}."
     )
+
+
+def _names_event(title: Any, event: CalendarEvent) -> bool:
+    """Whether ``title`` is how a call finds this event by its title."""
+    wanted = str(title).strip().casefold()
+    return bool(wanted) and wanted in event.title.casefold()
 
 
 def find_action(calendar_service: CalendarService, action_id: str) -> dict[str, Any]:

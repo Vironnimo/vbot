@@ -52,7 +52,7 @@ ACTION_FIELDS = ("when", "prompt", "target", "session")
 LENGTH_FIELDS = ("duration", DURATION_MINUTES_FIELD, DURATION_DAYS_FIELD)
 _EXTRA_EVENT_FIELDS = (END_FIELD, LOCATION_FIELD, TIMEZONE_FIELD)
 # Fields that describe an event, including unadvertised spellings of its length and end.
-_EVENT_CHANGE_FIELDS = (*EVENT_FIELDS, *LENGTH_FIELDS[1:], END_FIELD, LOCATION_FIELD)
+EVENT_CHANGE_FIELDS = (*EVENT_FIELDS, *LENGTH_FIELDS[1:], END_FIELD, LOCATION_FIELD)
 _WINDOW_ACTIONS = frozenset({"list", "find_free"})
 _EVENT_ACTIONS = frozenset({"create", "update"})
 _ACTION_ACTIONS = frozenset({"add_action", "update_action", "delete_action"})
@@ -753,7 +753,7 @@ def _read_action(arguments: dict[str, Any], problems: _Problems) -> None:
     action = arguments.get("action")
     item_id = arguments.get("id")
     action_id = isinstance(item_id, str) and item_id.startswith(_ACTION_ID_PREFIX)
-    has_event_fields = any(name in arguments for name in _EVENT_CHANGE_FIELDS)
+    has_event_fields = any(name in arguments for name in EVENT_CHANGE_FIELDS)
     has_action_fields = "prompt" in arguments or "session" in arguments
     if action is None:
         arguments["action"] = _inferred_action(arguments, action_id, has_event_fields)
@@ -1254,7 +1254,7 @@ def _check_fields(arguments: dict[str, Any], problems: _Problems) -> None:
         return
     if action == "delete":
         # A start on delete names the occurrence to remove, not a change.
-        changes = [name for name in _EVENT_CHANGE_FIELDS if name != "start" and name in arguments]
+        changes = [name for name in EVENT_CHANGE_FIELDS if name != "start" and name in arguments]
         for name in ACTION_FIELDS:
             arguments.pop(name, None)
         if "start" not in arguments:
@@ -1272,20 +1272,28 @@ def _check_fields(arguments: dict[str, Any], problems: _Problems) -> None:
         start = arguments.get("start")
         if isinstance(start, str):
             # A due time sent as start; the handler relates it to the event.
-            arguments["when"] = start
+            arguments["when"] = arguments.pop("start")
     if action in _ACTION_ACTIONS:
+        # Event fields stay: the handler names the ones it does not apply, and a title
+        # without an id finds the event.
         when = arguments.get("when")
         clock_time = isinstance(when, str) and (is_date(when) or parse_local(when) is not None)
-        for name in _EVENT_CHANGE_FIELDS:
-            if name == "title" and "id" not in arguments and action == "add_action":
-                continue  # The handler finds the event by its title and names the id.
-            arguments.pop(name, None)
-        if action == "delete_action" or not clock_time:
-            # A zone only matters for a clock-time when, which the handler relates to the event.
+        event_times = "start" in arguments or END_FIELD in arguments
+        if (action == "delete_action" or not clock_time) and not event_times:
+            # A zone matters for a clock-time when, which the handler relates to the event,
+            # and for event times, which the handler names with their zone.
             arguments.pop(TIMEZONE_FIELD, None)
-        if action == "delete_action":
-            for name in ACTION_FIELDS:
-                arguments.pop(name, None)
+        sent = [name for name in ACTION_FIELDS if name in arguments]
+        if action == "delete_action" and sent:
+            verb = "change" if len(sent) > 1 else "changes"
+            problems.choose(
+                f"delete_action removes the action, but the call also sends {', '.join(sent)}, "
+                f"which {verb} it. Either delete it or change it:",
+                [
+                    dict.fromkeys(sent, OMIT),
+                    {"action": "update_action"},
+                ],
+            )
 
 
 def _number(value: Any) -> float | None:
@@ -1305,6 +1313,7 @@ __all__ = [
     "DURATION_DAYS_FIELD",
     "DURATION_MINUTES_FIELD",
     "END_FIELD",
+    "EVENT_CHANGE_FIELDS",
     "LENGTH_FIELDS",
     "LOCATION_FIELD",
     "OMIT",
