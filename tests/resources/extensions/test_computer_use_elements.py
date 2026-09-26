@@ -143,7 +143,9 @@ def test_observation_continuation_inherits_view_target_and_delivery(computer, ac
         },
     )
     assert stale["error"]["code"] == "stale_view"
-    assert stale["artifacts"][0]["observation"]["view_id"] == current["view_id"]
+    # The error names the current view instead of repeating the retained observation.
+    assert f'"view_id":"{current["view_id"]}"' in stale["error"]["message"]
+    assert "No input was sent" in stale["error"]["message"] and not stale["artifacts"]
 
 
 def test_target_delivery_persists_across_capture_and_skipped_observation(computer):
@@ -195,15 +197,11 @@ def test_element_errors_distinguish_stale_from_invented_without_recapture(comput
     current = capture(computer)["data"]
     before = len(client.calls)
     stale = service.handle(context, {"action": "click", "element": old["elements"][0]["element"]})
-    assert stale["error"]["code"] == "stale_element"
-    assert stale["artifacts"][0]["observation"] == {
-        key: value for key, value in current.items() if key != "action"
-    }
+    assert stale["error"]["code"] == "stale_element" and not stale["artifacts"]
     invented = call(
         computer, "click", element=current["elements"][0]["element"].split(":")[0] + ":999"
     )
-    assert invented["error"]["code"] == "unknown_element"
-    assert invented["artifacts"][0]["observation"] == stale["artifacts"][0]["observation"]
+    assert invented["error"]["code"] == "unknown_element" and not invented["artifacts"]
     assert len(client.calls) == before and client.inputs == 0
     assert service.handle(
         context, {"action": "click", "element": current["elements"][0]["element"]}

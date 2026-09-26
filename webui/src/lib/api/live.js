@@ -14,6 +14,8 @@ import { isPlainObject } from '../values.js';
 // receives call updates there and answers UI requests.
 const LIVE_WEBSOCKET_ENDPOINT = '/ws/live';
 const LIVE_MEDIA_KINDS = new Set(['webrtc', 'relay']);
+// `live.start` accepts at most this many wake phrases.
+const LIVE_WAKE_PHRASES_MAX = 8;
 // Server close codes of the owner socket, named by what the caller should do:
 // `lagged` and any other close (`lost`) may reattach; the rest end the call.
 const LIVE_SOCKET_CLOSE_OUTCOMES = new Map([
@@ -30,8 +32,13 @@ export function getLiveVoiceStatus(options = {}) {
 }
 
 // `media` is the kind the page prepared: `webrtc` with its SDP offer, or
-// `relay` (audio over the owner socket, no offer).
-export function startLiveCall({ media, sdp } = {}, options = {}) {
+// `relay` (audio over the owner socket, no offer). `wakePhrases` name the
+// Desktop wake phrases that address other Agents during the call; none are
+// sent when the list is empty.
+export function startLiveCall(
+  { media, sdp, wakePhrases = [] } = {},
+  options = {},
+) {
   if (!LIVE_MEDIA_KINDS.has(media)) {
     throw new ApiClientError(
       RPC_ERROR_INVALID_CLIENT_REQUEST,
@@ -39,13 +46,28 @@ export function startLiveCall({ media, sdp } = {}, options = {}) {
       { method: 'live.start' },
     );
   }
-  if (media === 'relay') return rpc('live.start', { media }, options);
-  requireNonEmptyString(
-    sdp,
-    'SDP offer must be a non-empty string',
-    'live.start',
-  );
-  return rpc('live.start', { media, sdp }, options);
+  if (
+    !Array.isArray(wakePhrases) ||
+    wakePhrases.length > LIVE_WAKE_PHRASES_MAX ||
+    !wakePhrases.every(isNonEmptyString)
+  ) {
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      `Live wake phrases must be at most ${LIVE_WAKE_PHRASES_MAX} non-empty strings`,
+      { method: 'live.start' },
+    );
+  }
+  const params = { media };
+  if (media === 'webrtc') {
+    requireNonEmptyString(
+      sdp,
+      'SDP offer must be a non-empty string',
+      'live.start',
+    );
+    params.sdp = sdp;
+  }
+  if (wakePhrases.length > 0) params.wake_phrases = [...wakePhrases];
+  return rpc('live.start', params, options);
 }
 
 export function stopLiveCall(callId, options = {}) {

@@ -61,6 +61,45 @@ describe('Live voice RPC wrappers', () => {
     });
   });
 
+  it('names the wake phrases of Desktop Voice commands for either media', async () => {
+    const wakePhrases = ['Okay Nabu', 'Hey Jarvis'];
+    const started = rpcFetch({ call_id: 'call-1', media: { type: 'relay' } });
+    await startLiveCall({ media: 'relay', wakePhrases }, { fetch: started });
+    expect(sentEnvelope(started).params).toEqual({
+      media: 'relay',
+      wake_phrases: ['Okay Nabu', 'Hey Jarvis'],
+    });
+
+    const offered = rpcFetch({ call_id: 'call-2', media: { type: 'webrtc' } });
+    await startLiveCall(
+      { media: 'webrtc', sdp: 'offer', wakePhrases },
+      { fetch: offered },
+    );
+    expect(sentEnvelope(offered).params).toEqual({
+      media: 'webrtc',
+      sdp: 'offer',
+      wake_phrases: ['Okay Nabu', 'Hey Jarvis'],
+    });
+
+    // Without wake phrases the field is left out entirely.
+    const plain = rpcFetch({ call_id: 'call-3', media: { type: 'relay' } });
+    await startLiveCall({ media: 'relay', wakePhrases: [] }, { fetch: plain });
+    expect(sentEnvelope(plain).params).toEqual({ media: 'relay' });
+  });
+
+  it('rejects wake phrases the server would refuse before sending', () => {
+    for (const wakePhrases of [
+      'Okay Nabu',
+      [''],
+      ['Okay Nabu', 3],
+      Array.from({ length: 9 }, (_, index) => `Phrase ${index}`),
+    ]) {
+      expect(() => startLiveCall({ media: 'relay', wakePhrases })).toThrow(
+        expect.objectContaining({ code: RPC_ERROR_INVALID_CLIENT_REQUEST }),
+      );
+    }
+  });
+
   it('sends exactly one UI request outcome', async () => {
     const withResult = rpcFetch({ accepted: true });
     await sendLiveUiResult(

@@ -8,6 +8,8 @@ import json
 from collections.abc import Mapping
 from typing import Any
 
+import httpx
+
 from core.model_tasks.image_types import ImageGenerationResult, ImageInput, JsonObject
 from core.providers._http_shared import parse_sse_json_data, split_stream_lines
 from core.providers.errors import ProviderAuthError, ProviderError
@@ -268,6 +270,30 @@ class ProviderImageClient(ProviderTaskClient):
             headers=self._openai_codex_headers,
             retry_policy=NON_IDEMPOTENT_TASK_REQUEST_RETRY_POLICY,
         )
+
+    async def _observe_response_usage(self, response: httpx.Response) -> Mapping[str, Any] | None:
+        if self._connection.mode != CODEX_RESPONSES_MODE:
+            return await super()._observe_response_usage(response)
+        completed: Mapping[str, Any] | None = None
+        for data in _iter_sse_data_from_text(response.text):
+            if data.strip() == "[DONE]":
+                continue
+            try:
+                event = parse_sse_json_data(data, context="OpenAI Codex image accounting")
+            except ProviderError:
+                # The ordinary parser owns malformed-content errors. Earlier
+                # reported Usage is still valid even when later data is broken.
+                continue
+            if isinstance(event, Mapping) and event.get("type") == "response.completed":
+                candidate = event.get("response")
+                if isinstance(candidate, Mapping):
+                    completed = candidate
+        usage = _openai_codex_usage(completed) or {}
+        carrier = usage.get("response")
+        if self._usage_observer is not None and isinstance(carrier, Mapping):
+            await self._usage_observer.related(_OPENAI_CODEX_IMAGE_CARRIER_MODEL, carrier)
+        primary = usage.get("image_gen")
+        return primary if isinstance(primary, Mapping) else None
 
     async def _openai_codex_headers(self) -> dict[str, str]:
         credential = await self._credential_value()

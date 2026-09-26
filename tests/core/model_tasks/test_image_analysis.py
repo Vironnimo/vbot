@@ -40,6 +40,7 @@ from core.model_tasks.image import (
 )
 from core.providers.accounts import ConnectionRef
 from core.providers.errors import ProviderError
+from core.usage import UsageRecorder
 from core.utils.errors import ConfigError
 from tests.core.model_tasks.image_test_support import (
     _MissingModelTasks,
@@ -205,6 +206,50 @@ def _png(path: Path, suffix: bytes = b"pixels") -> Path:
     Image.new("RGB", (12, 8), "blue").save(stream, format="PNG")
     path.write_bytes(stream.getvalue() + suffix)
     return path
+
+
+@pytest.mark.asyncio
+async def test_empty_analysis_preserves_billed_usage_and_caller_scope(
+    recorder: UsageRecorder,
+    tmp_path: Path,
+) -> None:
+    adapter = _UnderstandingAdapter(
+        {"content": "", "usage": {"input_tokens": 9, "output_tokens": 1}}
+    )
+    service = ImageService(
+        _UnderstandingModelTasks(),
+        cast(Any, _UnderstandingRuntime(adapter)),
+        usage_recorder=recorder,
+    )
+    with pytest.raises(ImageExecutionError):
+        await service.analyze(
+            "Describe",
+            image_paths=[_png(tmp_path / "test.png")],
+            run_context=ImageUnderstandingRunContext(
+                agent_id="agent",
+                project_id="project",
+                session_id="session",
+                run_id="run",
+                iteration_number=1,
+                owner_name="extension",
+                group_id="group",
+            ),
+        )
+    _, records = recorder.read_since()
+    assert len(records) == 1
+    record = records[0]
+    assert (record.kind, record.status, record.usage["input_tokens"]) == (
+        "image_understanding",
+        "failed",
+        9,
+    )
+    assert (record.agent_id, record.project_id, record.session_id, record.run_id) == (
+        "agent",
+        "project",
+        "session",
+        "run",
+    )
+    assert (record.owner_name, record.group_id) == ("extension", "group")
 
 
 @pytest.mark.asyncio

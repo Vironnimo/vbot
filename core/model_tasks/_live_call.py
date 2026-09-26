@@ -43,6 +43,7 @@ from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from core.model_tasks.live import LiveCallHost, LiveRunNotice
+    from core.model_tasks.task_execution import TaskUsage
 
 _LOGGER = get_logger(__name__)
 
@@ -86,6 +87,8 @@ class LiveCallSession:
         user_quiet: float = USER_QUIET_SECONDS,
         user_quiet_max_wait: float = USER_QUIET_MAX_WAIT_SECONDS,
         clock: Callable[[], float] = time.monotonic,
+        usage_accounting: TaskUsage | None = None,
+        usage_call_id: str = "",
     ) -> None:
         self._wire = wire
         self._brain = brain
@@ -97,6 +100,9 @@ class LiveCallSession:
         self._user_quiet = user_quiet
         self._user_quiet_max_wait = user_quiet_max_wait
         self._clock = clock
+        self._usage_accounting = usage_accounting
+        self._usage_call_id = usage_call_id
+        self._finishing = False
         self._phase = "connecting"
         self._closing = False
         self._abort_reason: str | None = None
@@ -205,6 +211,8 @@ class LiveCallSession:
                 if isinstance(event, WireClosed):
                     closed = event
                     break
+                if isinstance(event, WireUsage) and self._usage_accounting is not None:
+                    await self._usage_accounting.update(self._usage_call_id, event.usage)
                 self._handle(event)
         except Exception as exc:
             _LOGGER.warning(
@@ -213,7 +221,7 @@ class LiveCallSession:
                 type(exc).__name__,
             )
         finally:
-            self._finish(closed)
+            await self._finish(closed)
 
     def _handle(self, event: WireEvent) -> None:
         if isinstance(event, WireStarted):
@@ -409,11 +417,12 @@ class LiveCallSession:
             _LOGGER.warning(
                 "Live call teardown failed: call_id=%s error_type=%s", self.id, type(exc).__name__
             )
-        self._finish(None)
+        await self._finish(None)
 
-    def _finish(self, closed: WireClosed | None) -> None:
-        if self._done.is_set():
+    async def _finish(self, closed: WireClosed | None) -> None:
+        if self._done.is_set() or self._finishing:
             return
+        self._finishing = True
         for task in list(self._tasks):
             task.cancel()
         watchdog = self._watchdog
@@ -430,16 +439,27 @@ class LiveCallSession:
             reason = "connection_lost"
         usage = (closed.usage if closed is not None else None) or self._usage
         failed = reason in {"connection_lost", "start_timeout"}
-        self._set_phase("failed" if failed else "closed")
-        self._publish({"type": "closed", "reason": reason, "usage": usage})
-        _LOGGER.info(
-            "Live call ended: call_id=%s target=%s reason=%s duration_s=%.1f",
-            self.id,
-            self._target,
-            reason,
-            self._clock() - self._started_at,
-        )
-        self._done.set()
+        try:
+            if self._usage_accounting is not None:
+                await self._usage_accounting.finish(
+                    self._usage_call_id,
+                    usage=usage,
+                    status="failed" if failed else "completed",
+                )
+        except Exception:
+            _LOGGER.error("Live call Usage could not be saved: call_id=%s", self.id, exc_info=True)
+            raise
+        finally:
+            self._set_phase("failed" if failed else "closed")
+            self._publish({"type": "closed", "reason": reason, "usage": usage})
+            _LOGGER.info(
+                "Live call ended: call_id=%s target=%s reason=%s duration_s=%.1f",
+                self.id,
+                self._target,
+                reason,
+                self._clock() - self._started_at,
+            )
+            self._done.set()
 
     async def _send_command(self, send: Callable[[], Awaitable[None]]) -> bool:
         if self._done.is_set():

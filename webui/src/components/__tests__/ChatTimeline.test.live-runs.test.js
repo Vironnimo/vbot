@@ -21,6 +21,90 @@ import { appendReportedLiveRunEvents } from './ChatTimeline.support.js';
 describe('ChatTimeline', () => {
   const suite = setupTimelineRunSuite();
 
+  it.each(['live', 'mixed', 'history'])(
+    'gives steered User messages the same appearance as ordinary messages in %s',
+    (mode) => {
+      const stylesheet = document.createElement('style');
+      const stylesheetPath = '../../styles/app.css';
+      stylesheet.textContent = readStyleSheet(
+        fileURLToPath(new URL(stylesheetPath, import.meta.url)),
+      );
+      document.body.append(stylesheet);
+      const sessionState = ensureSessionState(
+        createChatState(),
+        'alpha',
+        'session-steering-appearance',
+      );
+      const user = {
+        id: 'original',
+        role: 'user',
+        content: 'Please inspect the layout.',
+        history_run_id: 'run-steering',
+      };
+      const assistant = {
+        id: 'before-steering',
+        role: 'assistant',
+        content: 'Inspecting the layout.',
+        history_run_id: 'run-steering',
+      };
+      const corrections = [
+        { ...user, id: 'steered-text', content: 'Stop the current task.' },
+        {
+          ...user,
+          id: 'steered-blocks',
+          content: [{ type: 'text', text: 'Inspect this instead.' }],
+        },
+      ];
+      const messages = [user, assistant, ...corrections];
+      if (mode !== 'history') {
+        startRun(sessionState, { run_id: 'run-steering' });
+        messages.forEach((message, index) => {
+          appendRunEvent(sessionState, {
+            run_id: 'run-steering',
+            sequence: index + 1,
+            type:
+              message.role === 'user'
+                ? 'user_message_persisted'
+                : 'assistant_output',
+            payload: { message },
+          });
+        });
+      }
+      if (mode !== 'live') loadHistory(sessionState, messages);
+      suite.mountedComponent = mount(ChatTimeline, {
+        target: document.body,
+        props: { sessionState, agentName: 'Alpha' },
+      });
+      flushSync();
+
+      const users = [...document.querySelectorAll('.msg.user')];
+      expect(users).toHaveLength(3);
+      const [ordinary, ...steered] = users;
+      const appearance = (message) =>
+        Object.fromEntries(
+          ['.msg-body-text', '.msg-avatar', '.msg-author'].map((selector) => {
+            const style = getComputedStyle(message.querySelector(selector));
+            return [
+              selector,
+              {
+                padding: style.padding,
+                color: style.color,
+                backgroundColor: style.backgroundColor,
+                border: style.border,
+                maxWidth: style.maxWidth,
+                lineHeight: style.lineHeight,
+              },
+            ];
+          }),
+        );
+      expect(appearance(ordinary)['.msg-body-text'].padding).toBe('10px 16px');
+      for (const correction of steered) {
+        expect(correction.closest('.assistant-run')).toBeTruthy();
+        expect(appearance(correction)).toEqual(appearance(ordinary));
+      }
+    },
+  );
+
   it.each([false, true])(
     'renders a persisted Run error once with a User anchor: %s',
     (withUser) => {

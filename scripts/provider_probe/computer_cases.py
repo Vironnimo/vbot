@@ -27,7 +27,6 @@ COMPUTER_CASE_ARGUMENTS: dict[str, dict[str, Any]] = {
         "pid": 101,
         "window_id": 202,
         "element": "s00000001:1",
-        "apply": True,
     },
     "click_coordinates": {
         "action": "click",
@@ -35,7 +34,6 @@ COMPUTER_CASE_ARGUMENTS: dict[str, dict[str, Any]] = {
         "window_id": 202,
         "view_id": "vtest",
         "coordinate": [20, 30],
-        "apply": True,
     },
     "click_right_double": {
         "action": "click",
@@ -45,7 +43,6 @@ COMPUTER_CASE_ARGUMENTS: dict[str, dict[str, Any]] = {
         "coordinate": [20, 30],
         "button": "right",
         "count": 2,
-        "apply": True,
         "foreground": False,
     },
     "click_middle": {
@@ -63,7 +60,6 @@ COMPUTER_CASE_ARGUMENTS: dict[str, dict[str, Any]] = {
         "pid": 101,
         "window_id": 202,
         "text": "test-owned draft",
-        "apply": True,
     },
     "type_element": {
         "action": "type",
@@ -71,21 +67,18 @@ COMPUTER_CASE_ARGUMENTS: dict[str, dict[str, Any]] = {
         "window_id": 202,
         "element": "1",
         "text": "test-owned draft",
-        "apply": True,
     },
     "key_single": {
         "action": "key",
         "pid": 101,
         "window_id": 202,
-        "shortcut": "enter",
-        "apply": True,
+        "text": "enter",
     },
     "key_foreground": {
         "action": "key",
         "pid": 101,
         "window_id": 202,
-        "shortcut": "ctrl+a",
-        "apply": True,
+        "text": "ctrl+a",
         "foreground": True,
     },
     **{
@@ -94,7 +87,6 @@ COMPUTER_CASE_ARGUMENTS: dict[str, dict[str, Any]] = {
             "pid": 101,
             "window_id": 202,
             "direction": direction,
-            "apply": True,
         }
         for direction in ("up", "down", "left", "right")
     },
@@ -105,10 +97,9 @@ COMPUTER_CASE_ARGUMENTS: dict[str, dict[str, Any]] = {
         "direction": "down",
         "element": "1",
         "amount": 5,
-        "apply": True,
     },
     "invalid_target": {"action": "capture", "pid": 101},
-    "invalid_field": {"action": "windows", "pid": 101},
+    "invalid_field": {"action": "click", "pid": 101, "window_id": 202, "element": "1", "text": "x"},
 }
 
 
@@ -133,37 +124,32 @@ COMPUTER_CASE_ARGUMENTS.update(
             "view_id": "vtest",
             "coordinate": [10, 10],
             "to_coordinate": [100, 100],
-            "apply": True,
         },
         "set_value": {
             "action": "set_value",
             **_COMPUTER_WINDOW,
             "element": "1",
             "text": "draft",
-            "apply": True,
         },
         "set_value_empty": {
             "action": "set_value",
             **_COMPUTER_WINDOW,
             "element": "1",
             "text": "",
-            "apply": True,
         },
         "menu": {
             "action": "menu",
             **_COMPUTER_WINDOW,
             "menu_path": ["File", "Save"],
-            "apply": True,
         },
         "resize": {
             "action": "resize",
             **_COMPUTER_WINDOW,
             "coordinate": [-100, 0],
             "size": [900, 700],
-            "apply": True,
         },
         "launch_preview": {"action": "launch", "app": "Notepad", "apply": False},
-        "launch": {"action": "launch", "app": "Notepad", "apply": True},
+        "launch": {"action": "launch", "app": "Notepad"},
         "verify_window": {
             "action": "verify",
             **_COMPUTER_WINDOW,
@@ -189,19 +175,19 @@ COMPUTER_CASE_ARGUMENTS.update(
         "sequence": {
             "action": "sequence",
             **_COMPUTER_WINDOW,
-            "apply": True,
             "steps": [
                 {"action": "click", "element": "1"},
-                {"action": "key", "shortcut": "ctrl+a"},
+                {"action": "key", "text": "ctrl+a"},
                 {"action": "type", "text": "draft"},
             ],
         },
         "invalid_sequence": {
             "action": "sequence",
             **_COMPUTER_WINDOW,
-            "steps": [{"action": "key", "shortcut": "enter"}, {"action": "click", "element": "1"}],
+            "steps": [{"action": "key", "text": "enter"}, {"action": "click", "element": "1"}],
         },
-        "invalid_view": {"action": "click", **_COMPUTER_WINDOW, "coordinate": [1, 1]},
+        # A window without any capture: coordinates cannot be measured in a screenshot.
+        "invalid_view": {"action": "click", "pid": 303, "window_id": 404, "coordinate": [1, 1]},
     }
 )
 
@@ -215,34 +201,30 @@ COMPUTER_CASE_ARGUMENTS.update(
             **_COMPUTER_WINDOW,
             "view_id": "vtest",
             "coordinate": [20, 30],
-            "apply": True,
         },
         "hold_key": {
             "action": "key",
             **_COMPUTER_WINDOW,
-            "shortcut": "shift",
+            "text": "shift",
             "duration_ms": 100,
-            "apply": True,
             "foreground": True,
         },
-        "invalid_duration": {"action": "key", "shortcut": "shift", "duration_ms": 3000},
+        "invalid_duration": {"action": "key", "text": "shift", "duration_ms": 3000},
         "wait_default": {"action": "wait"},
         "wait_explicit": {"action": "wait", "duration_ms": 0},
         "wait_window": {"action": "wait", **_COMPUTER_WINDOW, "duration_ms": 10},
         "type_no_capture": {
             "action": "type",
             "text": "draft",
-            "apply": True,
             "capture_after": False,
         },
-        "type_capture": {"action": "type", "text": "draft", "apply": True, "capture_after": True},
+        "type_capture": {"action": "type", "text": "draft", "capture_after": True},
         **{
             f"modifier_{modifier}": {
                 "action": "click",
                 "coordinate": [20, 30],
                 "view_id": "vtest",
                 "modifiers": [modifier],
-                "apply": True,
             }
             for modifier in ("ctrl", "shift", "alt", "win")
         },
@@ -252,7 +234,6 @@ COMPUTER_CASE_ARGUMENTS.update(
             "to_coordinate": [40, 50],
             "view_id": "vtest",
             "modifiers": ["ctrl", "shift"],
-            "apply": True,
         },
         "scroll_modifiers": {
             "action": "scroll",
@@ -260,11 +241,9 @@ COMPUTER_CASE_ARGUMENTS.update(
             "view_id": "vtest",
             "direction": "down",
             "modifiers": ["ctrl"],
-            "apply": True,
         },
         "sequence_wait_no_capture": {
             "action": "sequence",
-            "apply": True,
             "capture_after": False,
             "steps": [{"action": "wait", "duration_ms": 0}, {"action": "type", "text": "draft"}],
         },
@@ -299,7 +278,6 @@ COMPUTER_CASE_ARGUMENTS.update(
             "element": "1",
             "text": "draft",
             "foreground": False,
-            "apply": True,
         },
         "background_drag_duration": {
             "action": "drag",
@@ -313,7 +291,7 @@ COMPUTER_CASE_ARGUMENTS.update(
         "invalid_background_hold": {
             "action": "key",
             **_COMPUTER_WINDOW,
-            "shortcut": "shift",
+            "text": "shift",
             "duration_ms": 100,
             "foreground": False,
         },
@@ -357,7 +335,7 @@ COMPUTER_CASE_ARGUMENTS.update(
             "query": "Draft",
         },
         "type_view": {"action": "type", "view_id": "vtest", "text": "draft"},
-        "key_view": {"action": "key", "view_id": "vtest", "shortcut": "enter"},
+        "key_view": {"action": "key", "view_id": "vtest", "text": "enter"},
         "type_unicode": {
             "action": "type",
             **_COMPUTER_WINDOW,
@@ -384,9 +362,9 @@ COMPUTER_CASE_ARGUMENTS.update(
             "foreground": True,
             "steps": [
                 {"action": "click", "coordinate": [10, 10]},
-                {"action": "key", "shortcut": "g"},
+                {"action": "key", "text": "g"},
                 {"action": "type", "text": "0.45", "text_mode": "keyboard"},
-                {"action": "key", "shortcut": "enter"},
+                {"action": "key", "text": "enter"},
             ],
         },
         "invalid_keyboard_background": {

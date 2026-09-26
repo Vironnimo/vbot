@@ -13,9 +13,10 @@ from core.model_tasks.image import load_image_inputs
 from core.model_tasks.model_tasks import TaskModelTargetRef, model_supports_task
 from core.model_tasks.music_providers import ProviderMusicClient
 from core.model_tasks.music_types import MusicGenerationResult
-from core.model_tasks.task_execution import TaskBindingResolver
+from core.model_tasks.task_execution import TaskBindingResolver, TaskUsage, TaskUsageContext
 from core.providers.errors import ProviderOutcomeUnknownError
 from core.providers.task_client import TaskClientRuntime
+from core.usage import UsageRecorder
 from core.utils.errors import TaskError, VBotError
 
 
@@ -45,9 +46,16 @@ class MusicOutcomeUnknownError(MusicExecutionError):
 class MusicService:
     """Execute ``music_generation`` through its configured Task Model."""
 
-    def __init__(self, model_tasks: Any, runtime: TaskClientRuntime) -> None:
+    def __init__(
+        self,
+        model_tasks: Any,
+        runtime: TaskClientRuntime,
+        *,
+        usage_recorder: UsageRecorder | None = None,
+    ) -> None:
         self._model_tasks = model_tasks
         self._runtime = runtime
+        self._usage_recorder = usage_recorder
         self._resolver = TaskBindingResolver(
             model_tasks,
             configuration_error=MusicConfigurationError,
@@ -65,6 +73,7 @@ class MusicService:
         prompt: str,
         *,
         source_paths: Sequence[str | Path] = (),
+        usage_context: TaskUsageContext | None = None,
     ) -> MusicGenerationResult:
         normalized_prompt = prompt.strip() if isinstance(prompt, str) else ""
         if not normalized_prompt:
@@ -84,7 +93,13 @@ class MusicService:
             )
         images = await asyncio.to_thread(load_image_inputs, source_paths)
 
-        client = ProviderMusicClient.from_runtime(self._runtime, target_ref)
+        client = ProviderMusicClient.from_runtime(
+            self._runtime,
+            target_ref,
+            usage_observer=TaskUsage(
+                self._usage_recorder, TASK_MUSIC_GENERATION, target_ref, context=usage_context
+            ),
+        )
         try:
             return await client.generate(
                 normalized_prompt,
@@ -106,10 +121,11 @@ class MusicService:
         *,
         output_dir: str | Path,
         source_paths: Sequence[str | Path] = (),
+        usage_context: TaskUsageContext | None = None,
     ) -> GeneratedMediaArtifact:
         """Generate Music and persist it in the caller-owned directory."""
 
-        result = await self.generate(prompt, source_paths=source_paths)
+        result = await self.generate(prompt, source_paths=source_paths, usage_context=usage_context)
         return write_generated_media_artifact(
             result.data,
             output_dir=output_dir,

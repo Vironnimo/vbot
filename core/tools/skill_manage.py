@@ -33,6 +33,7 @@ from core.tools._argument_repair import normalize_call_arguments
 from core.tools._call_vocabulary import spelling
 from core.tools.availability import SKILL_MANAGE_TOOL_NAME
 from core.tools.contracts import ToolContractError, compile_tool_contract
+from core.tools.copy_match import copy_warnings, replace_copied
 from core.tools.fuzzy_match import (
     AmbiguousFuzzyMatch,
     FuzzyReplacement,
@@ -625,6 +626,7 @@ def _replace(current: str, call: _Call, file_path: str) -> tuple[FuzzyReplacemen
     old = _lf(call.old_string or "")
     new = _lf(call.new_string or "")
     notes: list[str] = []
+    copied = False
     found = _find(current, old, new, call.replace_all)
     if found is None:
         decoded_old, decoded_new = _json_unescaped(old), _json_unescaped(new)
@@ -636,17 +638,30 @@ def _replace(current: str, call: _Call, file_path: str) -> tuple[FuzzyReplacemen
                     "old_string and new_string arrived with an extra level of JSON escaping "
                     '(such as \\n or \\"); they were applied unescaped.'
                 )
+    if found is None and not call.replace_all:
+        # Old text copied with errors; not when new text shows the edit already made.
+        present = new.strip() and new != old and _find(current, new, new, True) is not None
+        found = None if present else replace_copied(current, old, new)
+        if isinstance(found, FuzzyReplacement):
+            notes.extend(copy_warnings(found))
+            return found, notes
+        copied = True
     if found is None:
         raise _RefusalError(
             "text_not_found", _not_found_message(current, old, call.name, file_path)
         )
     if isinstance(found, AmbiguousFuzzyMatch):
         lines = ", ".join(str(line) for line in dict.fromkeys(found.line_numbers))
+        where = f"{file_path} of Skill '{call.name}' (lines {lines}); nothing changed."
         raise _RefusalError(
             "ambiguous_match",
-            f"old_string matches {found.occurrences} places in {file_path} of Skill "
-            f"'{call.name}' (lines {lines}); nothing changed. Include more surrounding text so "
-            "it matches once, or set replace_all to true to change every occurrence.",
+            f"old_string does not match exactly and resembles {found.occurrences} places in "
+            f"{where} Copy the current text of the one to change into old_string, with enough "
+            "surrounding text to tell it apart."
+            if copied
+            else f"old_string matches {found.occurrences} places in {where} Include more "
+            "surrounding text so it matches once, or set replace_all to true to change every "
+            "occurrence.",
         )
     if found.strategy != "exact":
         adjusted = _matching_typography(current, found, old, new)
@@ -660,9 +675,7 @@ def _replace(current: str, call: _Call, file_path: str) -> tuple[FuzzyReplacemen
 def _find(
     current: str, old: str, new: str, replace_all: bool
 ) -> FuzzyReplacement | AmbiguousFuzzyMatch | None:
-    return replace_fuzzy(
-        current, old, new, replace_all=replace_all, precise_only=True, typographic=True
-    )
+    return replace_fuzzy(current, old, new, replace_all=replace_all, typographic=True)
 
 
 def _matching_typography(current: str, found: FuzzyReplacement, old: str, new: str) -> str:

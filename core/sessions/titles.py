@@ -36,6 +36,7 @@ from core.utils.workers import BoundedWorkerPool
 
 if TYPE_CHECKING:
     from core.runtime.interfaces import RuntimeServices
+    from core.usage import UsageRecorder
 
 _LOGGER = get_logger("sessions.titles")
 
@@ -118,8 +119,11 @@ class _InvalidGeneratedTitleError(ValueError):
 class SessionTitleService:
     """Set a local title immediately and optionally improve it in the background."""
 
-    def __init__(self, runtime: RuntimeServices) -> None:
+    def __init__(
+        self, runtime: RuntimeServices, *, usage_recorder: UsageRecorder | None = None
+    ) -> None:
         self._runtime = runtime
+        self._usage_recorder = usage_recorder
         self._background_tasks: set[asyncio.Task[None]] = set()
         self._closed = False
 
@@ -265,6 +269,7 @@ class SessionTitleService:
                 session_id=session_id,
                 project_id=project_id,
                 debug_run_id=f"title-{run_id}",
+                run_id=run_id,
             )
             chat_sessions = self._runtime.chat_sessions
             await chat_sessions.run_async(
@@ -338,6 +343,8 @@ class SessionTitleService:
                 session_id=address.session_id,
                 project_id=address.project_id,
                 debug_run_id=f"title-{group_id}",
+                owner_name=owner_name,
+                group_id=group_id,
             )
         except _InvalidGeneratedTitleError as exc:
             _LOGGER.warning(
@@ -378,11 +385,25 @@ class SessionTitleService:
         session_id: str,
         project_id: str | None,
         debug_run_id: str,
+        run_id: str | None = None,
+        owner_name: str | None = None,
+        group_id: str | None = None,
     ) -> str:
         adapter: Any | None = None
         try:
             provider_id, model_id, connection_id = _resolve_model_target(self._runtime, model)
             adapter = self._runtime.get_adapter(ConnectionRef(provider_id, connection_id))
+            usage_context = {
+                "model": f"{provider_id}/{model_id}",
+                "kind": "group_title" if group_id is not None else "session_title",
+                "agent_id": agent_id,
+                "session_id": session_id,
+                "project_id": project_id,
+                "run_id": run_id,
+                "connection_id": connection_id,
+                "owner_name": owner_name,
+                "group_id": group_id,
+            }
             request_context = (
                 dict(
                     adapter.request_context_kwargs(
@@ -415,6 +436,7 @@ class SessionTitleService:
                     title_input,
                     thinking_effort="none",
                     request_context=request_context,
+                    usage_context=usage_context,
                 )
             except ProviderError:
                 # Some reasoning-mandatory endpoints reject an explicit disable
@@ -427,12 +449,11 @@ class SessionTitleService:
                     title_input,
                     thinking_effort="",
                     request_context=request_context,
+                    usage_context=usage_context,
                 )
             return await _SESSION_TITLE_WORKERS.run(
-                _normalize_generated_title,
-                adapter,
+                _generated_title,
                 response,
-                model_id,
             )
         finally:
             if adapter is not None:
@@ -450,32 +471,39 @@ class SessionTitleService:
         *,
         thinking_effort: str,
         request_context: dict[str, Any],
+        usage_context: dict[str, Any],
     ) -> dict[str, Any]:
-        response: dict[str, Any] = await adapter.send(
-            [
-                {"role": "system", "content": TITLE_SYSTEM_PROMPT},
-                {"role": "user", "content": title_input},
-            ],
-            model_id=model_id,
-            temperature=resolve_request_temperature(
-                None,
-                self._runtime.models,
-                provider_id,
-                model_id,
-            ),
-            thinking_effort=thinking_effort,
-            **request_context,
-        )
-        return response
-
-
-def _normalize_generated_title(
-    adapter: Any,
-    response: dict[str, Any],
-    model_id: str,
-) -> str:
-    normalized = adapter.normalize_response(response, model_id=model_id)
-    return _generated_title(normalized)
+        recorder = self._usage_recorder
+        call_id = await recorder.start(**usage_context) if recorder is not None else None
+        try:
+            response: dict[str, Any] = await adapter.send(
+                [
+                    {"role": "system", "content": TITLE_SYSTEM_PROMPT},
+                    {"role": "user", "content": title_input},
+                ],
+                model_id=model_id,
+                temperature=resolve_request_temperature(
+                    None,
+                    self._runtime.models,
+                    provider_id,
+                    model_id,
+                ),
+                thinking_effort=thinking_effort,
+                **request_context,
+            )
+            normalized: dict[str, Any] = await _SESSION_TITLE_WORKERS.run(
+                adapter.normalize_response, response, model_id=model_id
+            )
+        except BaseException as exc:
+            if recorder is not None and call_id is not None:
+                await recorder.finish(
+                    call_id,
+                    status="cancelled" if isinstance(exc, asyncio.CancelledError) else "failed",
+                )
+            raise
+        if recorder is not None and call_id is not None:
+            normalized["usage"] = await recorder.finish(call_id, normalized.get("usage"))
+        return normalized
 
 
 def _approximate_call_price(pricing: TokenPricing | None) -> float | None:

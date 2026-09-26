@@ -28,13 +28,13 @@ from core.compaction import (
     CompactionSettings,
     is_compacted_tool_result_content,
 )
+from core.compaction._model_request import _send_streaming_model_request
 from core.compaction.compaction import (
     COMPACTION_REFERENCE_PREFIX,
     COMPACTION_SUMMARY_END_MARKER,
     COMPACTION_USER_QUOTE_PREFIX,
     CompactionPlan,
     _reference_summary,
-    _send_streaming_model_request,
 )
 from core.providers.anthropic import AnthropicAdapter
 from core.providers.ollama import OllamaAdapter
@@ -918,7 +918,7 @@ async def test_compaction_stalled_stream_is_bounded_and_closed(monkeypatch, hear
     # heartbeat source that advances it past the progress window must report a
     # progress timeout, independent of how fast workers are scheduled.
     monkeypatch.setattr("core.chat.streaming.time", SimpleNamespace(monotonic=lambda: clock))
-    monkeypatch.setattr("core.compaction.compaction.iter_with_chunk_timeout", bounded)
+    monkeypatch.setattr("core.compaction._model_request.iter_with_chunk_timeout", bounded)
     expected = StreamingProgressTimeoutError if heartbeats else StreamingChunkTimeoutError
     with pytest.raises(expected):
         await asyncio.wait_for(_send_streaming_model_request(StalledAdapter(), [], {}), 2)

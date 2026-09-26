@@ -17,10 +17,12 @@ The on-disk schema is::
 
 ``servers`` is the list of remembered targets, ``last_used`` points at the
 target to auto-connect on launch (a ``{host, port}`` reference, not an index, so
-it survives list reordering), ``wakeword`` holds the local voice pipeline
-configuration, and ``live_voice`` holds the Desktop-only Live voice start
-preferences (the global hotkey). Reads tolerate a malformed file by returning defaults; writes
-preserve unrelated top-level keys so one concern never clobbers another.
+it survives list reordering), ``wakeword`` holds the Voice configuration (its
+owner, :mod:`desktop.wakeword.config`, reads and writes it through
+:func:`read_section` / :func:`update_section`), and ``live_voice`` holds the
+Desktop-only Live voice start preferences (the global hotkey). Reads tolerate a
+malformed file by returning defaults; writes preserve unrelated top-level keys
+so one concern never clobbers another.
 """
 
 from __future__ import annotations
@@ -32,7 +34,7 @@ import os
 import tempfile
 import threading
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from contextlib import suppress
 from pathlib import Path, PurePath, PurePosixPath, PureWindowsPath
 from typing import Any, TypeGuard
@@ -46,18 +48,10 @@ LAST_USED_KEY = "last_used"
 WINDOW_KEY = "window"
 WAKEWORD_KEY = "wakeword"
 LIVE_VOICE_KEY = "live_voice"
-DEFAULT_WAKEWORD_MODEL_IDS = ("builtin/okay_nabu", "builtin/hey_nabu")
-# What a detection of one wakeword model does. A missing per-model entry means
-# the default: record and send a spoken command.
-WAKEWORD_ACTION_COMMAND = "command"
-WAKEWORD_ACTION_LIVE_VOICE = "live_voice"
-WAKEWORD_MODEL_ACTIONS = (WAKEWORD_ACTION_COMMAND, WAKEWORD_ACTION_LIVE_VOICE)
 # Read and write both retry a few times on transient I/O errors (e.g. a
 # Windows file lock from antivirus or another accessor) before giving up.
 _IO_RETRY_ATTEMPTS = 3
 _IO_RETRY_BASE_DELAY_SECONDS = 0.05
-_MIN_WAKEWORD_SENSITIVITY = 0.05
-_MAX_WAKEWORD_SENSITIVITY = 0.95
 
 # pywebview may dispatch bridge calls on different threads. All sections share
 # one JSON document, so each section update must hold the same per-file lock for
@@ -65,22 +59,6 @@ _MAX_WAKEWORD_SENSITIVITY = 0.95
 # callers that independently resolve the default settings path.
 _SETTINGS_LOCKS_GUARD = threading.Lock()
 _SETTINGS_LOCKS: dict[str, threading.RLock] = {}
-
-DEFAULT_WAKEWORD_SETTINGS: dict[str, Any] = {
-    "enabled": False,
-    "microphone": None,
-    "active_model_ids": list(DEFAULT_WAKEWORD_MODEL_IDS),
-    # Sensitivity is calibrated and preserved independently per installed model.
-    "model_sensitivities": {},
-    # Per-model detection action; only non-default (``live_voice``) entries
-    # matter, a missing entry means ``command``.
-    "model_actions": {},
-    # Agent/session routing is server-specific. A Desktop can switch between
-    # unrelated vBot servers, where the same bare agent id may name a different
-    # identity. Keeping the target beside the server URL prevents commands from
-    # silently crossing that boundary after a switch.
-    "server_profiles": {},
-}
 
 # The global Live voice hotkey is stored as the browser ``KeyboardEvent.code``
 # plus modifier flags, so the WebUI can capture and show it without a platform
@@ -298,42 +276,6 @@ def write_window_size(width: int, height: int, path: Path | None = None) -> None
     _write_section(WINDOW_KEY, {"width": width, "height": height}, path)
 
 
-def read_wakeword_settings(path: Path | None = None) -> dict[str, Any]:
-    """Read wakeword config from Desktop settings, merged with defaults.
-
-    A missing or non-dict ``wakeword`` key falls back to the defaults.
-    """
-
-    full = read_settings(path)
-    wakeword_data = full.get(WAKEWORD_KEY)
-    if not isinstance(wakeword_data, dict):
-        wakeword_data = {}
-    merged = copy.deepcopy(DEFAULT_WAKEWORD_SETTINGS)
-    for key in DEFAULT_WAKEWORD_SETTINGS:
-        if key in wakeword_data:
-            merged[key] = copy.deepcopy(wakeword_data[key])
-    if not isinstance(merged.get("enabled"), bool):
-        merged["enabled"] = False
-    merged["microphone"] = _normalize_microphone_descriptor(merged.get("microphone"))
-    active_model_ids = merged.get("active_model_ids")
-    if _valid_active_model_ids(active_model_ids) and isinstance(active_model_ids, list):
-        merged["active_model_ids"] = [model_id.strip() for model_id in active_model_ids]
-    else:
-        merged["active_model_ids"] = list(DEFAULT_WAKEWORD_MODEL_IDS)
-    merged["model_sensitivities"] = _normalize_model_sensitivities(
-        merged.get("model_sensitivities")
-    )
-    merged["model_actions"] = _normalize_model_actions(merged.get("model_actions"))
-    merged["server_profiles"] = _normalize_server_profiles(merged.get("server_profiles"))
-    return merged
-
-
-def write_wakeword_settings(wakeword_config: dict[str, Any], path: Path | None = None) -> None:
-    """Merge wakeword config into full Desktop settings and persist atomically."""
-
-    _write_section(WAKEWORD_KEY, wakeword_config, path)
-
-
 def read_live_hotkey_settings(path: Path | None = None) -> dict[str, Any]:
     """Return the stored Live voice hotkey preference merged with defaults.
 
@@ -367,6 +309,47 @@ def write_live_hotkey_settings(hotkey: dict[str, Any], path: Path | None = None)
         section["hotkey"] = dict(hotkey)
         full[LIVE_VOICE_KEY] = section
         _write_settings_unlocked(full, resolved_path)
+
+
+def read_section(key: str, path: Path | None = None) -> dict[str, Any]:
+    """Return an isolated copy of one raw top-level settings object.
+
+    A missing, non-object, or unreadable section yields an empty dict; the
+    section's owner interprets and validates its fields.
+    """
+
+    section = read_settings(path).get(key)
+    if not isinstance(section, dict):
+        return {}
+    return copy.deepcopy(section)
+
+
+def update_section(
+    key: str,
+    mutate: Callable[[dict[str, Any]], dict[str, Any]],
+    path: Path | None = None,
+) -> dict[str, Any]:
+    """Apply ``mutate`` to one top-level section as a serialized transaction.
+
+    ``mutate`` receives an isolated copy of the stored section (``{}`` when it
+    is missing or not an object) and returns the complete new section. Other
+    settings keys are preserved, an unchanged section is not rewritten, and an
+    exception from ``mutate`` or an unreadable settings file leaves the file
+    untouched. Returns an isolated copy of the stored section.
+    """
+
+    resolved_path = _resolve_settings_path(path)
+    with _settings_lock(resolved_path):
+        full = _read_settings_unlocked(resolved_path)
+        stored = full.get(key)
+        current = copy.deepcopy(stored) if isinstance(stored, dict) else {}
+        updated = mutate(copy.deepcopy(current))
+        if not isinstance(updated, dict):
+            raise TypeError(f"Settings section {key!r} must be an object")
+        if updated != current:
+            full[key] = copy.deepcopy(updated)
+            _write_settings_unlocked(full, resolved_path)
+        return copy.deepcopy(updated)
 
 
 def _write_section(key: str, value: Any, path: Path | None) -> None:
@@ -429,101 +412,3 @@ def _valid_window_dimension(value: Any) -> TypeGuard[int]:
     """Return whether a persisted window dimension has the supported shape."""
 
     return isinstance(value, int) and not isinstance(value, bool) and value > 0
-
-
-def _valid_active_model_ids(value: Any) -> bool:
-    """Return whether persisted active model IDs have the supported shape."""
-    if not isinstance(value, list) or not 1 <= len(value) <= 2:
-        return False
-    if any(not isinstance(model_id, str) or not model_id.strip() for model_id in value):
-        return False
-    return len({model_id.strip() for model_id in value}) == len(value)
-
-
-def _normalize_microphone_descriptor(value: Any) -> dict[str, Any] | None:
-    """Return the supported stable microphone identity, never a stale index."""
-    if not isinstance(value, dict):
-        return None
-    index = value.get("index")
-    name = value.get("name")
-    host_api = value.get("host_api")
-    if (
-        not isinstance(index, int)
-        or isinstance(index, bool)
-        or index < 0
-        or not isinstance(name, str)
-        or not name.strip()
-        or not isinstance(host_api, str)
-    ):
-        return None
-    return {"index": index, "name": name.strip(), "host_api": host_api.strip()}
-
-
-def _normalize_model_sensitivities(value: Any) -> dict[str, float]:
-    """Drop malformed persisted model sensitivity entries."""
-    if not isinstance(value, dict):
-        return {}
-    normalized: dict[str, float] = {}
-    for model_id, sensitivity in value.items():
-        if (
-            not isinstance(model_id, str)
-            or not model_id.strip()
-            or isinstance(sensitivity, bool)
-            or not isinstance(sensitivity, (int, float))
-        ):
-            continue
-        if _MIN_WAKEWORD_SENSITIVITY <= sensitivity <= _MAX_WAKEWORD_SENSITIVITY:
-            normalized[model_id.strip()] = float(sensitivity)
-    return normalized
-
-
-def _normalize_model_actions(value: Any) -> dict[str, str]:
-    """Drop malformed persisted per-model wakeword action entries."""
-    if not isinstance(value, dict):
-        return {}
-    normalized: dict[str, str] = {}
-    for model_id, action in value.items():
-        if (
-            isinstance(model_id, str)
-            and model_id.strip()
-            and isinstance(action, str)
-            and action in WAKEWORD_MODEL_ACTIONS
-        ):
-            normalized[model_id.strip()] = action
-    return normalized
-
-
-def _normalize_server_profiles(value: Any) -> dict[str, dict[str, Any]]:
-    """Keep only valid server-scoped Voice routing fields."""
-    if not isinstance(value, dict):
-        return {}
-    normalized: dict[str, dict[str, Any]] = {}
-    for server_url, profile in value.items():
-        if (
-            not isinstance(server_url, str)
-            or not server_url.strip()
-            or not isinstance(profile, dict)
-        ):
-            continue
-        target_agent_id = profile.get("target_agent_id")
-        session_behavior = profile.get("session_behavior")
-        if (
-            "target_agent_id" in profile
-            and target_agent_id is not None
-            and (not isinstance(target_agent_id, str) or not target_agent_id.strip())
-        ):
-            continue
-        if "session_behavior" in profile and (
-            not isinstance(session_behavior, str) or session_behavior not in {"active", "new"}
-        ):
-            continue
-        normalized_profile: dict[str, Any] = {}
-        if "target_agent_id" in profile:
-            normalized_profile["target_agent_id"] = (
-                target_agent_id.strip() if isinstance(target_agent_id, str) else None
-            )
-        if "session_behavior" in profile:
-            normalized_profile["session_behavior"] = session_behavior
-        if normalized_profile:
-            normalized[server_url.strip()] = normalized_profile
-    return normalized

@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from 'vitest';
+import { t } from '../../lib/i18n.js';
 import {
   flushSync,
   mount,
@@ -289,6 +290,58 @@ describe('StatisticsView', () => {
         (node) => node.textContent,
       ),
     ).toEqual(['1,000', '200', '5', '30', '5', '1']);
+  });
+
+  it('shows task call coverage and preserves unknown standalone usage', async () => {
+    const report = makeReport();
+    report.usage.kinds = [
+      { kind: 'image_generation', calls: 3, unreported_calls: 3 },
+      { kind: 'chat', calls: 2, unreported_calls: 0 },
+    ];
+    report.costs.recent_calls = [
+      {
+        ...report.costs.recent_calls[0],
+        kind: 'image_generation',
+        status: 'failed',
+        model: 'image/model',
+        agent_id: '',
+        session_id: '',
+        session_title: null,
+        input_tokens: null,
+        output_tokens: null,
+        cost: { amount_usd: null, source: 'unknown' },
+      },
+    ];
+    rpcMock.mockResolvedValue(report);
+    suite.mountedComponent = mount(StatisticsView, { target: document.body });
+    await waitForOverview();
+    buttonNamed('statistics.subview.usage').click();
+    flushSync();
+
+    const table = [...document.querySelectorAll('table')].find(
+      (node) =>
+        node.getAttribute('aria-label') === t('statistics.usage.byKind'),
+    );
+    expect(
+      [...table.querySelectorAll('tbody tr')].map((row) =>
+        [...row.querySelectorAll('td.num')].map((cell) =>
+          cell.textContent.trim(),
+        ),
+      ),
+    ).toEqual([
+      ['3', '3'],
+      ['2', '0'],
+    ]);
+    const call = document.querySelector('.stats-call');
+    expect(call.textContent).toContain(t('statistics.kind.image_generation'));
+    expect(call.textContent).toContain(t('statistics.requestStatus.failed'));
+    expect(call.textContent).toContain(t('statistics.cost.withoutSession'));
+    expect(call.querySelector('.stats-agent')).toBeNull();
+    expect(
+      [...call.querySelectorAll('.stats-card__value')]
+        .slice(0, 3)
+        .map((cell) => cell.textContent.trim()),
+    ).toEqual(['—', '—', '—']);
   });
 
   it('renders cache hit rate, worst sessions and suspected breaks in the usage sub-view', async () => {

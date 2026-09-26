@@ -17,6 +17,8 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 
 from core.statistics._accumulators import ReportLedger
+from core.statistics._cache import load_cache_facts
+from core.statistics._call_scan import AccountingScan, account_model_runs, retained_run_durations
 from core.statistics._compactions import CompactionAccumulator
 from core.statistics._costs import (
     CostAccumulator,
@@ -41,6 +43,7 @@ from core.statistics._usage import (
     ESTIMATED_OUTPUT_SQL,
     MEASURED_INPUT_SQL,
     MEASURED_OUTPUT_SQL,
+    TOP_CACHE_BREAK_INCIDENTS,
     UsageAccumulator,
 )
 from core.statistics.report import (
@@ -169,28 +172,60 @@ class ReportBuilder:
 
     # -- aggregation -------------------------------------------------------
 
-    def aggregate(self, connection: sqlite3.Connection) -> None:
+    def aggregate(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        durable_usage: bool = False,
+        group_usage: bool = False,
+    ) -> None:
         """Aggregate every registered unit from the reconciled index."""
         ledger = self._ledger
         scan = UnitScan(connection, ledger.units, since=self._since, until=self._until)
         titles = [unit.title for unit in ledger.units]
         self._load_records(scan)
-        self._load_visible_calls(scan)
-        self._usage.load(scan, ledger)
+        self._load_visible_calls(scan, durable_usage=durable_usage)
         self._errors.load(scan, ledger)
         self._tools.load(scan, ledger)
         self._runs.load(scan, ledger)
         self._compactions.load(scan, titles)
         self._load_slice_activity(scan)
+        if self._include_skills:
+            self._load_skills(scan)
+        slices = [None if value is None else value.costs for value in ledger.slices]
+        durations = retained_run_durations(scan) if durable_usage else {}
+        if durable_usage:
+            # Cache diagnostics describe the retained conversational request
+            # sequence, never auxiliary requests or failed retry attempts.
+            self._usage.cache = load_cache_facts(scan, top_incidents=TOP_CACHE_BREAK_INCIDENTS)
+            accounting = AccountingScan(
+                connection,
+                ledger.units,
+                since=self._since,
+                until=self._until,
+                group=group_usage,
+            )
+            self._load_accounting_slices(accounting)
+            scan = accounting
+            titles = [unit.title for unit in scan.units]
+            slices = [
+                None if position is None else slices[position]
+                for position in accounting.live_positions
+            ]
+        self._usage.load(
+            scan, ledger, include_cache=not durable_usage, count_assistant=not durable_usage
+        )
+        if isinstance(scan, AccountingScan):
+            account_model_runs(scan, ledger, durations)
         if self._include_costs:
-            refresh_retrospective_costs(connection, self._pricing_lookup)
+            refresh_retrospective_costs(
+                connection, self._pricing_lookup, table=scan.table("stat_calls")
+            )
             self._costs.load(
                 scan,
                 titles=titles,
-                slices=[None if value is None else value.costs for value in ledger.slices],
+                slices=slices,
             )
-        if self._include_skills:
-            self._load_skills(scan)
 
     def _load_records(self, scan: UnitScan) -> None:
         role_columns = ", ".join(f"SUM(r.role = '{role}')" for role in SESSION_RECORD_ROLES)
@@ -217,11 +252,12 @@ class ReportBuilder:
             if unit_slice is not None:
                 unit_slice.records += total
 
-    def _load_visible_calls(self, scan: UnitScan) -> None:
+    def _load_visible_calls(self, scan: UnitScan, *, durable_usage: bool) -> None:
         """Count visible Assistant messages per unit and fill Extension slice call totals."""
         for (
             unit,
             visible,
+            assistant,
             calls,
             measured_input,
             estimated_input,
@@ -229,7 +265,7 @@ class ReportBuilder:
             estimated_output,
         ) in scan.execute(
             f"""
-            SELECT u.unit, SUM(c.kind = 0 AND c.visible = 1), COUNT(*),
+            SELECT u.unit, SUM(c.kind = 0 AND c.visible = 1), SUM(c.kind = 0), COUNT(*),
                 {MEASURED_INPUT_SQL}, {ESTIMATED_INPUT_SQL},
                 {MEASURED_OUTPUT_SQL}, {ESTIMATED_OUTPUT_SQL}
             FROM {scan.source("stat_calls", "c")}
@@ -239,13 +275,46 @@ class ReportBuilder:
         ):
             self._chat_message_role_counts["assistant"] += visible
             self._ledger.unit_agent(unit).chat_messages += visible
+            if durable_usage:
+                self._usage.assistant_messages += assistant
             unit_slice = self._ledger.slices[unit]
+            if unit_slice is not None and not durable_usage:
+                unit_slice.model_calls += calls
+                unit_slice.measured_input_tokens += measured_input
+                unit_slice.estimated_input_tokens += estimated_input
+                unit_slice.measured_output_tokens += measured_output
+                unit_slice.estimated_output_tokens += estimated_output
+
+    def _load_accounting_slices(self, scan: AccountingScan) -> None:
+        """Fill live Extension slices from the same durable calls as global usage."""
+        for (
+            unit,
+            calls,
+            measured_input,
+            estimated_input,
+            measured_output,
+            estimated_output,
+            timestamp,
+        ) in scan.execute(
+            f"""
+            SELECT u.unit, COUNT(*), {MEASURED_INPUT_SQL}, {ESTIMATED_INPUT_SQL},
+                {MEASURED_OUTPUT_SQL}, {ESTIMATED_OUTPUT_SQL}, MAX(r.timestamp)
+            FROM {scan.source("stat_calls", "c")}
+            JOIN {scan.table("stat_records")} r
+                ON r.session_key = c.session_key AND r.seq = c.seq
+            WHERE {scan.where("c")}
+            GROUP BY u.unit
+            """
+        ):
+            position = scan.live_positions[unit]
+            unit_slice = self._ledger.slices[position] if position is not None else None
             if unit_slice is not None:
                 unit_slice.model_calls += calls
                 unit_slice.measured_input_tokens += measured_input
                 unit_slice.estimated_input_tokens += estimated_input
                 unit_slice.measured_output_tokens += measured_output
                 unit_slice.estimated_output_tokens += estimated_output
+                unit_slice.last_activity = _max_timestamp(unit_slice.last_activity, timestamp)
 
     def _load_slice_activity(self, scan: UnitScan) -> None:
         slices = self._ledger.slices

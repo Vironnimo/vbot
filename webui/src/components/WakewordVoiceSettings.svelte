@@ -1,15 +1,15 @@
 <script>
   import {
-    liveStateText,
-    liveStateDotColor,
+    bridgeErrorMessage,
     errorMessage,
+    voiceIndicator,
   } from './voice/voiceLabels.js';
   import './voice/voice.css';
   import { t } from '$lib/i18n.js';
   import Toggle from './ui/Toggle.svelte';
   import Banner from './ui/Banner.svelte';
   import Button from './ui/Button.svelte';
-  import Badge from './ui/Badge.svelte';
+  import StatusChip from './ui/StatusChip.svelte';
   import Dropdown from './Dropdown.svelte';
   import ConfirmDialog from './ui/ConfirmDialog.svelte';
   import { onDestroy, untrack } from 'svelte';
@@ -18,96 +18,150 @@
     useAutosaveContext,
   } from '$lib/autosave.js';
   import {
-    getWakewordStatus,
-    setWakewordEnabled,
-    setWakewordConfig,
+    deleteWakewordModel,
+    importWakewordModel,
+    isDesktopAccessor,
     listMicrophones,
     listWakewordModels,
-    importWakewordModel,
-    deleteWakewordModel,
-    onWakewordStatusChange,
-    retryWakeword,
-    stopWakewordCalibration,
-    isDesktop,
+    retryVoice,
+    setVoiceEnabled,
+    startVoiceCalibration,
+    stopVoiceCalibration,
+    updateVoiceConfig,
   } from '$lib/desktopBridge.js';
   import {
-    createVoiceSettingsState,
-    applyWakewordStatus,
-    applyRuntimeStatus,
-    buildVoiceSettingsPayload,
-    voiceSettingsDirty,
-    snapshotVoiceSettings,
+    buildVoiceConfigChanges,
+    cloneVoiceConfig,
+    overlappingPhraseConflicts,
+    rebaseVoiceConfig,
+    voiceConfigFromStatus,
   } from '$lib/wakewordSettings.js';
   import TranscriptionAudioSettings from './voice/TranscriptionAudioSettings.svelte';
+  import VoicePhraseCard from './voice/VoicePhraseCard.svelte';
+  import VoiceUnavailablePhraseCard from './voice/VoiceUnavailablePhraseCard.svelte';
   import WakewordCalibration from './voice/WakewordCalibration.svelte';
 
   const MAX_CUSTOM_WAKEWORD_MODEL_BYTES = 20 * 1024 * 1024;
-  const VOICE_STATUS_RETRY_MS = 3000;
+  const VOICE_LIST_RETRY_MS = 3000;
   const UNAVAILABLE_MICROPHONE_VALUE = '__configured_unavailable__';
-  const MODEL_ACTION_OPTIONS = Object.freeze([
-    {
-      value: 'command',
-      label: t('settings.voice.modelActionCommand', 'Send command'),
-    },
-    {
-      value: 'live_voice',
-      label: t('settings.voice.modelActionLiveVoice', 'Start Live voice'),
-    },
-  ]);
   const SESSION_BEHAVIOR_OPTIONS = Object.freeze([
     {
       value: 'active',
-      label: t('settings.voice.sessionBehaviorActive', 'Use active session'),
+      label: t('settings.voice.sessionBehaviorActive', 'Use active Session'),
     },
     {
       value: 'new',
-      label: t('settings.voice.sessionBehaviorNew', 'New session each time'),
+      label: t('settings.voice.sessionBehaviorNew', 'New Session each time'),
     },
   ]);
 
   let {
     agents = [],
     settings = null,
-    wakewordAvailable = true,
-    liveWakewordAvailable = false,
+    // The Desktop advertises wakeword support (any Voice bridge version).
+    wakewordAvailable = false,
+    // The app-level Desktop Voice owner: `{available, status, adopt,
+    // refresh}`; null outside the Desktop app.
+    desktopVoice = null,
     onCommit = () => {},
     onToast = () => {},
     onError = () => {},
   } = $props();
 
-  let voiceState = $state(createVoiceSettingsState());
-  let lastSaved = $state(null);
-  let loaded = $state(false);
-  let cleanupStatusPoll = null;
-  let destroyed = false;
-  let voiceRuntimeInitialized = false;
-  let voiceLoadInFlight = false;
-  let voiceLoadRetryTimer = null;
-  let previousDesktopMode = null;
-  let runtimeLoadError = $state(false);
+  // The Desktop status is authoritative. `baseline` is the configuration of
+  // the last applied snapshot, `draft` the edited one; `appliedSequence`
+  // keeps an older snapshot from replacing a newer one.
+  let draft = $state(null);
+  let baseline = $state(null);
+  let appliedSequence = -1;
   let microphones = $state([]);
   let wakewordModels = $state([]);
+  let listsLoaded = $state(false);
+  let listsError = $state(false);
+  let listsLoading = false;
+  let listsRetryTimer = null;
+  let destroyed = false;
   let saveState = $state('idle');
+  let transcriptionSaveStatus = $state('idle');
   let modelFileInput = $state();
   let modelActionState = $state('idle');
-  let enableActionState = $state('idle');
+  let enablePending = $state(null);
+  let enableError = $state(null);
+  let calibrationStarting = $state(null);
   let deleteConfirmModel = $state(null);
-  let calibrationBaselineSensitivities = $state(null);
-  let calibrationActionState = $state('idle');
 
-  let desktopMode = $derived(isDesktop() && wakewordAvailable);
-
+  let voiceReady = $derived(
+    isDesktopAccessor() && desktopVoice?.available === true,
+  );
+  let updateRequired = $derived(
+    !voiceReady && isDesktopAccessor() && wakewordAvailable,
+  );
+  let status = $derived(voiceReady ? desktopVoice.status : null);
+  let loaded = $derived(status !== null && draft !== null && listsLoaded);
+  let limits = $derived(status?.limits ?? null);
+  let maxActivePhrases = $derived(limits?.max_active_phrases ?? null);
+  let calibration = $derived(status?.calibration ?? null);
+  let calibrating = $derived(calibration !== null);
+  let modelActionBusy = $derived(modelActionState !== 'idle');
+  let enableBusy = $derived(enablePending !== null);
+  let enabled = $derived(enablePending ?? status?.enabled ?? false);
+  let indicator = $derived(voiceIndicator(status));
+  let savedActiveIds = $derived(
+    new Set((status?.phrases ?? []).map((phrase) => phrase.model_id)),
+  );
+  let phraseProblems = $derived(
+    new Map(
+      (status?.phrases ?? []).map((phrase) => [
+        phrase.model_id,
+        phrase.problem,
+      ]),
+    ),
+  );
+  let modelLabels = $derived(
+    new Map(wakewordModels.map((model) => [model.id, model.label])),
+  );
+  // Active phrases whose model is not in the catalog (its file was removed
+  // or no longer loads): they cannot be tuned, only deactivated.
+  let unavailablePhrases = $derived.by(() => {
+    if (!listsLoaded || !draft) return [];
+    const statusLabels = new Map(
+      (status?.phrases ?? []).map((phrase) => [phrase.model_id, phrase.label]),
+    );
+    return draft.active_model_ids
+      .filter((modelId) => !modelLabels.has(modelId))
+      .map((modelId) => ({ modelId, label: statusLabels.get(modelId) ?? '' }));
+  });
+  let conflicts = $derived(
+    draft ? overlappingPhraseConflicts(draft, wakewordModels) : new Map(),
+  );
   let agentOptions = $derived(
     agents.map((agent) => ({
       value: agent.id,
       label: agent.name || agent.id,
     })),
   );
-  let selectedAgentValue = $derived(voiceState.target_agent_id || '');
+  let defaultAgentOptions = $derived([
+    { value: '', label: t('settings.voice.noDefaultAgent', 'None') },
+    ...agentOptions,
+    ...(draft?.default_agent_id &&
+    !agentOptions.some((option) => option.value === draft.default_agent_id)
+      ? [
+          {
+            value: draft.default_agent_id,
+            label: draft.default_agent_id,
+            secondaryLabel: t(
+              'settings.voice.agentUnavailable',
+              'Not on this server',
+            ),
+            disabled: true,
+          },
+        ]
+      : []),
+  ]);
   let configuredMicrophoneDevice = $derived(
-    voiceState.microphone
+    draft?.microphone
       ? microphones.find((device) =>
-          sameMicrophoneIdentity(device, voiceState.microphone),
+          sameMicrophoneIdentity(device, draft.microphone),
         ) || null
       : null,
   );
@@ -115,13 +169,13 @@
     {
       value: '',
       label: t('settings.voice.systemAutomaticMic', 'Automatic selection'),
-      secondaryLabel: voiceState.activeMicrophone?.name || '',
+      secondaryLabel: status?.active_microphone?.name || '',
     },
-    ...(voiceState.microphone && !configuredMicrophoneDevice
+    ...(draft?.microphone && !configuredMicrophoneDevice
       ? [
           {
             value: UNAVAILABLE_MICROPHONE_VALUE,
-            label: voiceState.microphone.name,
+            label: draft.microphone.name,
             secondaryLabel: t(
               'settings.voice.configuredMicUnavailable',
               'Configured device unavailable',
@@ -142,25 +196,88 @@
   let selectedMicrophoneValue = $derived(
     configuredMicrophoneDevice
       ? String(configuredMicrophoneDevice.index)
-      : voiceState.microphone
+      : draft?.microphone
         ? UNAVAILABLE_MICROPHONE_VALUE
         : '',
   );
-  let modelActionBusy = $derived(modelActionState !== 'idle');
-  let enableActionBusy = $derived(enableActionState !== 'idle');
-  let calibrationSessionActive = $derived(
-    calibrationBaselineSensitivities !== null,
-  );
-
-  let calibrationActionBusy = $derived(calibrationActionState !== 'idle');
-
-  let liveStateLabel = $derived(liveStateText(voiceState.liveState));
-  let liveStateDotClass = $derived(liveStateDotColor(voiceState.liveState));
+  let attention = $derived.by(() => {
+    if (!status) return null;
+    if (status.mode === 'unavailable')
+      return { warn: false, code: 'voice_stack_unavailable', retry: false };
+    if (status.state === 'error')
+      return { warn: false, code: status.error_code, retry: true };
+    if (status.state === 'microphone_disconnected')
+      return {
+        warn: true,
+        code: status.error_code ?? 'microphone_unavailable',
+        retry: true,
+      };
+    // A refused enable stays visible until the next toggle or until Voice
+    // is enabled.
+    if (enableError && !status.enabled)
+      return { warn: false, code: enableError, retry: false };
+    return null;
+  });
+  let echo = $derived.by(() => {
+    if (!draft || !status) return null;
+    if (!draft.echo_cancellation)
+      return {
+        variant: 'neutral',
+        label: t('settings.voice.echoOff', 'Off'),
+        detail: t(
+          'settings.voice.echoOffDetail',
+          'Speaker output can trigger wake phrases and end up in command recordings.',
+        ),
+      };
+    // The saved setting is on; the state describes the running capture.
+    if (!status.echo_cancellation.enabled) return null;
+    switch (status.echo_cancellation.state) {
+      case 'starting':
+        return {
+          variant: 'neutral',
+          label: t('settings.voice.echoStarting', 'Starting'),
+          detail: t(
+            'settings.voice.echoStartingDetail',
+            'Echo cancellation is still loading. Until it is ready, the microphone signal is used unprocessed.',
+          ),
+        };
+      case 'active':
+        return {
+          variant: 'success',
+          label: t('settings.voice.echoActive', 'Active'),
+          detail: t(
+            'settings.voice.echoActiveDetail',
+            'Speaker output is removed from the microphone signal before phrases are detected and commands are recorded.',
+          ),
+        };
+      case 'no_reference':
+        return {
+          variant: 'warn',
+          label: t('settings.voice.echoNoReference', 'No speaker signal'),
+          detail: t(
+            'settings.voice.echoNoReferenceDetail',
+            'The Desktop cannot capture the speaker output, so the microphone signal is used unprocessed.',
+          ),
+        };
+      case 'unavailable':
+        return {
+          variant: 'warn',
+          label: t('settings.voice.echoUnavailable', 'Unavailable'),
+          detail: t(
+            'settings.voice.echoUnavailableDetail',
+            'Echo cancellation is not installed in this Desktop app, so the microphone signal is used unprocessed.',
+          ),
+        };
+      default:
+        return null;
+    }
+  });
 
   let dirty = $derived(
-    !calibrationSessionActive && voiceSettingsDirty(voiceState, lastSaved),
+    draft !== null &&
+      baseline !== null &&
+      Object.keys(buildVoiceConfigChanges(draft, baseline)).length > 0,
   );
-  let transcriptionSaveStatus = $state('idle');
   let wakewordSaveStatus = $derived(
     saveState === 'saved' && dirty ? 'idle' : saveState,
   );
@@ -173,160 +290,146 @@
     }
     return 'idle';
   });
-  let enableToggleDisabled = $derived(
-    !loaded ||
-      enableActionBusy ||
-      modelActionBusy ||
-      calibrationSessionActive ||
-      (!voiceState.enabled &&
-        (!voiceState.target_agent_id || voiceState.mode === 'unavailable')),
+  // Changes that restart listening wait while a calibration or a model
+  // action runs.
+  let captureLocked = $derived(
+    !loaded || calibrating || modelActionBusy || enableBusy,
   );
+  let routingLocked = $derived(!loaded || modelActionBusy);
+
   const autosaveContext = useAutosaveContext();
   const voiceAutosave = createAutosaveParticipant({
-    getSnapshot: () => snapshotVoiceSettings(voiceState),
-    hasChanges: voiceConfigHasChanges,
-    save: persistCurrentConfig,
+    getSnapshot: () => (draft ? cloneVoiceConfig(draft) : null),
+    hasChanges: () => voiceReady && dirty,
+    save: persistDraft,
   });
-
   const unregisterVoiceAutosave = autosaveContext.register(voiceAutosave);
 
   function sameMicrophoneIdentity(left, right) {
     return left?.name === right?.name && left?.host_api === right?.host_api;
   }
 
-  onDestroy(() => {
-    destroyed = true;
-    unregisterVoiceAutosave();
-
-    if (voiceLoadRetryTimer !== null) {
-      clearTimeout(voiceLoadRetryTimer);
-      voiceLoadRetryTimer = null;
-    }
-    if (cleanupStatusPoll) {
-      cleanupStatusPoll();
-      cleanupStatusPoll = null;
-    }
-    if (voiceState.calibration?.active) {
-      void stopWakewordCalibration().catch(() => {});
-    }
-  });
-
-  function scheduleVoiceStatusRetry() {
-    if (destroyed || !desktopMode || voiceLoadRetryTimer !== null) return;
-    voiceLoadRetryTimer = setTimeout(() => {
-      voiceLoadRetryTimer = null;
-      void loadStatus();
-    }, VOICE_STATUS_RETRY_MS);
+  // Apply a status snapshot to the draft: unedited values follow it, edits
+  // stay. Idempotent per sequence.
+  function syncFromStatus(snapshot) {
+    if (!snapshot || (baseline && snapshot.sequence <= appliedSequence)) return;
+    const next = voiceConfigFromStatus(snapshot);
+    draft =
+      draft && baseline
+        ? rebaseVoiceConfig(draft, baseline, next)
+        : cloneVoiceConfig(next);
+    baseline = next;
+    appliedSequence = snapshot.sequence;
   }
 
-  async function loadStatus() {
-    if (
-      destroyed ||
-      !desktopMode ||
-      voiceLoadInFlight ||
-      voiceRuntimeInitialized
-    ) {
-      return;
-    }
-    voiceLoadInFlight = true;
-    try {
-      const [status, availableMicrophones, availableModels] = await Promise.all(
-        [getWakewordStatus(), listMicrophones(), listWakewordModels()],
-      );
-      if (destroyed || !desktopMode) {
-        return;
-      }
-      voiceState = applyWakewordStatus(voiceState, status);
-      if (status?.calibration?.active) {
-        calibrationBaselineSensitivities = {
-          ...voiceState.model_sensitivities,
-        };
-      }
-      microphones = availableMicrophones;
-      wakewordModels = availableModels;
-      lastSaved = snapshotVoiceSettings(voiceState);
-      runtimeLoadError = false;
-      voiceRuntimeInitialized = true;
-      loaded = true;
-      // The poll only carries observed runtime fields (live state, mock flag)
-      // into state — never editable config — so a poll firing during autosave
-      // cannot revert an unsaved edit.
-      cleanupStatusPoll = onWakewordStatusChange((nextStatus) => {
-        const wasCalibrating = Boolean(voiceState.calibration?.active);
-        voiceState = applyRuntimeStatus(voiceState, nextStatus);
-        if (
-          calibrationBaselineSensitivities &&
-          wasCalibrating &&
-          !voiceState.calibration.active &&
-          calibrationActionState === 'idle'
-        ) {
-          restoreCalibrationDraft();
-        }
-      });
-    } catch {
-      if (!destroyed && desktopMode) {
-        runtimeLoadError = true;
-        scheduleVoiceStatusRetry();
-      }
-    } finally {
-      voiceLoadInFlight = false;
-    }
+  // A snapshot a bridge call returned: hand it to the app-level owner, which
+  // keeps the newest one, and apply whatever is current.
+  function adoptStatus(snapshot) {
+    desktopVoice?.adopt(snapshot);
+    syncFromStatus(desktopVoice?.status ?? snapshot);
   }
 
   $effect(() => {
-    const active = desktopMode;
+    const snapshot = status;
+    untrack(() => syncFromStatus(snapshot));
+  });
+
+  $effect(() => {
+    if (!voiceReady) return;
     untrack(() => {
-      if (active === previousDesktopMode) return;
-      previousDesktopMode = active;
-      if (active) {
-        loaded = false;
-        runtimeLoadError = false;
-        voiceRuntimeInitialized = false;
-        void loadStatus();
-        return;
-      }
-      if (voiceLoadRetryTimer !== null) {
-        clearTimeout(voiceLoadRetryTimer);
-        voiceLoadRetryTimer = null;
-      }
-      if (cleanupStatusPoll) {
-        cleanupStatusPoll();
-        cleanupStatusPoll = null;
-      }
-      voiceRuntimeInitialized = false;
-      runtimeLoadError = false;
-      loaded = true;
+      if (!listsLoaded) void loadLists();
     });
   });
 
-  async function handleEnabledChange() {
-    if (enableActionBusy) return;
-    const enabled = !voiceState.enabled;
-    enableActionState = enabled ? 'enabling' : 'disabling';
-    voiceState = { ...voiceState, enabled };
+  onDestroy(() => {
+    destroyed = true;
+    unregisterVoiceAutosave();
+    if (listsRetryTimer !== null) {
+      clearTimeout(listsRetryTimer);
+      listsRetryTimer = null;
+    }
+    // Commands stay paused while a calibration runs; leaving the panel ends it.
+    if (untrack(() => calibrating)) void stopVoiceCalibration().catch(() => {});
+  });
+
+  async function loadLists() {
+    if (destroyed || listsLoading) return;
+    listsLoading = true;
     try {
-      const result = await setWakewordEnabled(enabled);
-      const acceptedEnabled =
-        typeof result?.enabled === 'boolean' ? result.enabled : enabled;
-      const errorCode =
-        typeof result?.error_code === 'string' ? result.error_code : null;
-      voiceState = applyWakewordStatus(voiceState, {
-        enabled: acceptedEnabled,
-        state: errorCode ? 'error' : acceptedEnabled ? 'starting' : 'off',
-        error_code: errorCode,
-      });
-      lastSaved = lastSaved
-        ? { ...lastSaved, enabled: acceptedEnabled }
-        : snapshotVoiceSettings(voiceState);
-    } catch (error) {
-      voiceState = { ...voiceState, enabled: !enabled };
-      onToast({
-        title: t('errors.generic', 'Something went wrong. Try again.'),
-        message: error?.message || '',
-        variant: 'error',
-      });
+      const [availableMicrophones, availableModels] = await Promise.all([
+        listMicrophones(),
+        listWakewordModels(),
+      ]);
+      if (destroyed) return;
+      microphones = availableMicrophones;
+      wakewordModels = availableModels;
+      listsLoaded = true;
+      listsError = false;
+    } catch {
+      if (destroyed) return;
+      listsError = true;
+      if (listsRetryTimer === null) {
+        listsRetryTimer = setTimeout(() => {
+          listsRetryTimer = null;
+          void loadLists();
+        }, VOICE_LIST_RETRY_MS);
+      }
     } finally {
-      enableActionState = 'idle';
+      listsLoading = false;
+    }
+  }
+
+  function errorToast(error, title = null) {
+    onToast({
+      title: title ?? t('errors.generic', 'Something went wrong. Try again.'),
+      message: bridgeErrorMessage(error),
+      variant: 'error',
+    });
+  }
+
+  async function handleEnabledChange() {
+    if (enableBusy || !status) return;
+    const next = !enabled;
+    enablePending = next;
+    enableError = null;
+    try {
+      const result = await setVoiceEnabled(next);
+      enableError = result.error_code;
+      await desktopVoice?.refresh();
+    } catch (error) {
+      errorToast(error);
+    } finally {
+      enablePending = null;
+    }
+  }
+
+  async function persistDraft() {
+    if (!draft || !baseline) return true;
+    const changes = buildVoiceConfigChanges(draft, baseline);
+    if (Object.keys(changes).length === 0) return true;
+    const submitted = cloneVoiceConfig(draft);
+    saveState = 'saving';
+    try {
+      const snapshot = await updateVoiceConfig(changes);
+      if (destroyed) return true;
+      desktopVoice?.adopt(snapshot);
+      const current = desktopVoice?.status;
+      const latest =
+        current && current.sequence >= snapshot.sequence ? current : snapshot;
+      // Everything submitted is saved as the Desktop reports it; edits made
+      // while the save ran stay in the draft.
+      const saved = voiceConfigFromStatus(latest);
+      draft = rebaseVoiceConfig(draft, submitted, saved);
+      baseline = saved;
+      appliedSequence = latest.sequence;
+      saveState = 'saved';
+      return true;
+    } catch (error) {
+      if (!destroyed) {
+        saveState = 'error';
+        errorToast(error);
+      }
+      return false;
     }
   }
 
@@ -334,44 +437,39 @@
     return voiceAutosave.runSave('manual', { force: true });
   }
 
-  function voiceConfigHasChanges() {
-    if (!desktopMode || calibrationSessionActive) {
-      return false;
-    }
-    return (
-      Object.keys(buildVoiceSettingsPayload(voiceState, lastSaved)).length > 0
-    );
-  }
-
-  async function persistCurrentConfig() {
-    const payload = buildVoiceSettingsPayload(voiceState, lastSaved);
-    if (Object.keys(payload).length === 0) return true;
-    const savedSnapshot = snapshotVoiceSettings(voiceState);
-    saveState = 'saving';
-    try {
-      await setWakewordConfig(payload);
-      lastSaved = savedSnapshot;
-      saveState = 'saved';
-      return true;
-    } catch (error) {
-      saveState = 'error';
-      onToast({
-        title: t('errors.generic', 'Something went wrong. Try again.'),
-        message: error?.message || '',
-        variant: 'error',
-      });
-      return false;
-    }
-  }
-
-  function handleAgentChange(value) {
-    voiceState = { ...voiceState, target_agent_id: value || null };
+  function editDraft(changes) {
+    draft = { ...draft, ...changes };
     void saveConfig();
   }
 
-  function handleSessionBehaviorChange(value) {
-    voiceState = { ...voiceState, session_behavior: value };
-    void saveConfig();
+  function handlePhraseToggle(modelId, checked) {
+    const ids = draft.active_model_ids;
+    const isActive = ids.includes(modelId);
+    if (checked === isActive) return;
+    if (
+      checked &&
+      (maxActivePhrases === null || ids.length >= maxActivePhrases)
+    )
+      return;
+    if (!checked && ids.length <= 1) return;
+    editDraft({
+      active_model_ids: checked
+        ? [...ids, modelId]
+        : ids.filter((activeId) => activeId !== modelId),
+    });
+  }
+
+  function handleSensitivityInput(modelId, value) {
+    draft = {
+      ...draft,
+      model_sensitivities: { ...draft.model_sensitivities, [modelId]: value },
+    };
+  }
+
+  function handlePhraseActionChange(modelId, action) {
+    editDraft({
+      phrase_actions: { ...draft.phrase_actions, [modelId]: action },
+    });
   }
 
   function handleMicrophoneChange(value) {
@@ -379,8 +477,7 @@
     const device = Number.isInteger(parsed)
       ? microphones.find((candidate) => candidate.index === parsed)
       : null;
-    voiceState = {
-      ...voiceState,
+    editDraft({
       microphone: device
         ? {
             index: device.index,
@@ -388,24 +485,55 @@
             host_api: device.host_api || '',
           }
         : null,
-    };
-    void saveConfig();
+    });
   }
 
-  async function handleWakewordModelToggle(model, checked) {
-    const isActive = voiceState.active_model_ids.includes(model.id);
-    if (checked === isActive) return;
-    if (checked && voiceState.active_model_ids.length >= 2) return;
-    if (!checked && voiceState.active_model_ids.length <= 1) return;
-    voiceState = {
-      ...voiceState,
-      active_model_ids: checked
-        ? [...voiceState.active_model_ids, model.id]
-        : voiceState.active_model_ids.filter((modelId) => modelId !== model.id),
+  async function handleCalibrate(modelId) {
+    if (calibrationStarting) return;
+    calibrationStarting = modelId;
+    try {
+      if (!(await voiceAutosave.flush())) return;
+      adoptStatus(await startVoiceCalibration(modelId));
+    } catch (error) {
+      errorToast(
+        error,
+        t(
+          'settings.voice.calibrationStartFailed',
+          'Calibration could not start.',
+        ),
+      );
+    } finally {
+      calibrationStarting = null;
+    }
+  }
+
+  // Calibration stops first: a new sensitivity may restart listening.
+  async function applyCalibration(modelId, value) {
+    adoptStatus(await stopVoiceCalibration());
+    draft = {
+      ...draft,
+      model_sensitivities: { ...draft.model_sensitivities, [modelId]: value },
     };
-    await saveConfig();
-    if (saveState !== 'saved') return;
-    await refreshEditableStatus();
+    return saveConfig();
+  }
+
+  function calibrateDisabled(modelId) {
+    if (!savedActiveIds.has(modelId)) return null;
+    return (
+      !loaded ||
+      calibrating ||
+      calibrationStarting !== null ||
+      modelActionBusy ||
+      enableBusy ||
+      status.mode !== 'real' ||
+      !status.enabled ||
+      status.state !== 'listening'
+    );
+  }
+
+  async function refreshAfterModelChange() {
+    wakewordModels = await listWakewordModels();
+    syncFromStatus(await desktopVoice?.refresh());
   }
 
   function chooseWakewordModelFile() {
@@ -438,35 +566,24 @@
       if (!(await voiceAutosave.flush())) return;
       const contentBase64 = await readFileAsBase64(file);
       const imported = await importWakewordModel(file.name, contentBase64);
-      wakewordModels = await listWakewordModels();
-      await refreshEditableStatus();
+      await refreshAfterModelChange();
       onToast({
-        title: imported.activated
+        title: imported?.activated
           ? t(
               'settings.voice.importSuccessActive',
               'Wakeword model imported and activated.',
             )
           : t(
               'settings.voice.importSuccessInactive',
-              'Wakeword model imported. Deactivate another model to use it.',
+              'Wakeword model imported. Activate it to listen for it.',
             ),
         variant: 'success',
       });
     } catch (error) {
-      onToast({
-        title: t('errors.generic', 'Something went wrong. Try again.'),
-        message: error?.message || '',
-        variant: 'error',
-      });
+      errorToast(error);
     } finally {
       modelActionState = 'idle';
     }
-  }
-
-  async function refreshEditableStatus() {
-    const status = await getWakewordStatus();
-    voiceState = applyWakewordStatus(voiceState, status);
-    lastSaved = snapshotVoiceSettings(voiceState);
   }
 
   async function confirmDeleteWakewordModel() {
@@ -478,20 +595,14 @@
     try {
       if (!(await voiceAutosave.flush())) return;
       await deleteWakewordModel(model.id);
-      wakewordModels = await listWakewordModels();
-      await refreshEditableStatus();
+      await refreshAfterModelChange();
       onToast({
         title: t('settings.voice.deleteSuccess', 'Wakeword model removed.'),
         variant: 'success',
       });
     } catch (error) {
-      wakewordModels = await listWakewordModels();
-      await refreshEditableStatus();
-      onToast({
-        title: t('errors.generic', 'Something went wrong. Try again.'),
-        message: error?.message || '',
-        variant: 'error',
-      });
+      errorToast(error);
+      await refreshAfterModelChange().catch(() => {});
     } finally {
       modelActionState = 'idle';
     }
@@ -517,55 +628,16 @@
     });
   }
 
-  function handleSensitivityInput(modelId, event) {
-    const value = parseFloat(event.target.value);
-    if (Number.isFinite(value)) {
-      voiceState = {
-        ...voiceState,
-        model_sensitivities: {
-          ...voiceState.model_sensitivities,
-          [modelId]: value,
-        },
-      };
-    }
-  }
-
-  function handleModelActionChange(modelId, action) {
-    voiceState = {
-      ...voiceState,
-      model_actions: { ...voiceState.model_actions, [modelId]: action },
-    };
-    void saveConfig();
-  }
-
-  function handleSensitivityChange() {
-    if (!calibrationSessionActive) {
-      void saveConfig();
-    }
-  }
-
-  function restoreCalibrationDraft() {
-    if (!calibrationBaselineSensitivities) return;
-    voiceState = {
-      ...voiceState,
-      model_sensitivities: {
-        ...calibrationBaselineSensitivities,
-      },
-    };
-    calibrationBaselineSensitivities = null;
-  }
-
   async function handleRetry() {
     try {
-      voiceState = { ...voiceState, liveState: 'starting', errorCode: null };
-      await retryWakeword();
+      await retryVoice();
       microphones = await listMicrophones();
+      await desktopVoice?.refresh();
     } catch (error) {
-      onToast({
-        title: t('settings.voice.retryFailed', 'Voice could not restart.'),
-        message: error?.message || '',
-        variant: 'error',
-      });
+      errorToast(
+        error,
+        t('settings.voice.retryFailed', 'Voice could not restart.'),
+      );
     }
   }
 </script>
@@ -575,10 +647,10 @@
     {settings}
     {onCommit}
     {onError}
-    onSaveStatusChange={(status) => (transcriptionSaveStatus = status)}
+    onSaveStatusChange={(next) => (transcriptionSaveStatus = next)}
   />
 
-  {#if !desktopMode}
+  {#if !voiceReady}
     <div class="s-group">
       <div class="s-row">
         <div class="s-row-info">
@@ -586,16 +658,21 @@
             {t('settings.voice.enabled', 'Wakeword listening')}
           </div>
           <div class="s-row-desc">
-            {t(
-              'settings.voice.desktopOnly',
-              'Wakeword listening is configured in the vBot Desktop app. The transcription audio settings above are server-wide.',
-            )}
+            {updateRequired
+              ? t(
+                  'settings.voice.desktopUpdateRequired',
+                  'Update the vBot Desktop app to use Voice with this server.',
+                )
+              : t(
+                  'settings.voice.desktopOnly',
+                  'Wakeword listening is configured in the vBot Desktop app. The transcription audio settings above are server-wide.',
+                )}
           </div>
         </div>
       </div>
     </div>
   {:else}
-    {#if runtimeLoadError && !loaded}
+    {#if status === null || listsError}
       <Banner variant="error" class="voice-attention-banner" role="alert">
         <div class="voice-attention-copy">
           <strong>
@@ -614,8 +691,8 @@
       </Banner>
     {/if}
 
-    <!-- Wakeword listening: detection, the phrases it listens for, and where
-         a recognised command goes. -->
+    <!-- Wakeword listening: the phrases, what each one does, and the
+         microphone they are heard through. -->
     <div class="s-group">
       <div class="s-row s-row--compact">
         <div class="s-row-info">
@@ -624,16 +701,20 @@
           </div>
           <div class="s-row-desc">
             {t(
-              'settings.voice.subtitle',
-              'Wakeword detection and voice command settings.',
+              'settings.voice.enabledDescription',
+              'Listen on this device for wake phrases that send a spoken command to an Agent or start Live voice.',
             )}
           </div>
         </div>
         <div class="s-row-control">
           <Toggle
-            checked={voiceState.enabled}
+            checked={enabled}
             onChange={handleEnabledChange}
-            disabled={enableToggleDisabled}
+            disabled={!status ||
+              enableBusy ||
+              modelActionBusy ||
+              calibrating ||
+              (!status.enabled && status.mode === 'unavailable')}
             ariaLabel={t(
               'settings.voice.enabledAria',
               'Enable wakeword listening',
@@ -642,7 +723,7 @@
         </div>
       </div>
 
-      {#if voiceState.mock}
+      {#if status?.mode === 'mock'}
         <div class="s-group__block s-group__block--attached">
           <div class="voice-mock-warning" role="alert">
             {t(
@@ -661,40 +742,34 @@
         </div>
         <div class="s-row-control">
           <span class="voice-state" aria-live="polite">
-            <span class="voice-state-dot {liveStateDotClass}" aria-hidden="true"
+            <span
+              class="voice-state-dot voice-dot--{indicator.tone}"
+              aria-hidden="true"
             ></span>
-            <span class="voice-state-label">{liveStateLabel}</span>
+            <span class="voice-state-label">{indicator.label}</span>
           </span>
         </div>
       </div>
 
-      {#if voiceState.liveState === 'error' || voiceState.liveState === 'microphone_disconnected' || voiceState.mode === 'unavailable'}
-        {@const microphoneDisconnected =
-          voiceState.liveState === 'microphone_disconnected'}
+      {#if attention}
         <div class="s-group__block s-group__block--attached">
           <Banner
-            variant={microphoneDisconnected ? 'warn' : 'error'}
+            variant={attention.warn ? 'warn' : 'error'}
             class="voice-attention-banner"
-            role={microphoneDisconnected ? 'status' : 'alert'}
+            role={attention.warn ? 'status' : 'alert'}
           >
             <div class="voice-attention-copy">
               <strong>
-                {microphoneDisconnected
+                {attention.warn
                   ? t(
                       'settings.voice.microphoneDisconnectedTitle',
                       'Microphone disconnected',
                     )
                   : t('settings.voice.errorTitle', 'Voice needs attention')}
               </strong>
-              <p>
-                {errorMessage(
-                  voiceState.mode === 'unavailable'
-                    ? 'voice_stack_unavailable'
-                    : voiceState.errorCode,
-                )}
-              </p>
+              <p>{errorMessage(attention.code)}</p>
             </div>
-            {#if voiceState.errorCode !== 'missing_target_agent' && voiceState.errorCode !== 'target_agent_unavailable' && voiceState.errorCode !== 'speech_to_text_unconfigured' && voiceState.mode !== 'unavailable'}
+            {#if attention.retry}
               <Button
                 variant="secondary"
                 class="voice-retry"
@@ -707,145 +782,93 @@
         </div>
       {/if}
 
-      <!-- Active wakeword models and local model management -->
+      <!-- The phrase catalog: activation, sensitivity, action, calibration,
+           and imported model management. -->
       <div class="s-row s-row--stacked">
         <div class="s-row-info">
           <div class="s-row-label">
-            {t('settings.voice.models', 'Wakeword phrases')}
+            {t('settings.voice.models', 'Wake phrases')}
           </div>
           <div class="s-row-desc">
             {t(
               'settings.voice.modelDescription',
-              'Choose one or two phrases to listen for at the same time. Each model keeps its own sensitivity.',
+              'Choose the phrases to listen for. Each active phrase has its own sensitivity and action; Calibrate measures the room and your voice to set its sensitivity while listening is on.',
             )}
           </div>
         </div>
         <div class="s-row-control voice-model-control">
           <div class="voice-model-list">
+            {#each unavailablePhrases as phrase (phrase.modelId)}
+              <VoiceUnavailablePhraseCard
+                modelId={phrase.modelId}
+                label={phrase.label}
+                deactivateDisabled={captureLocked ||
+                  draft.active_model_ids.length <= 1}
+                onDeactivate={() => handlePhraseToggle(phrase.modelId, false)}
+              />
+            {/each}
             {#each wakewordModels as model (model.id)}
-              {@const active = voiceState.active_model_ids.includes(model.id)}
-              {@const sensitivity =
-                voiceState.model_sensitivities[model.id] ?? 0.5}
-              <div
-                class:voice-model-card--active={active}
-                class="voice-model-card"
-              >
-                <div class="voice-model-card__header">
-                  <div class="voice-model-card__identity">
-                    <span class="voice-model-card__name">{model.label}</span>
-                    <Badge
-                      variant={model.source === 'built_in' ? 'info' : 'neutral'}
-                    >
-                      {model.source === 'built_in'
-                        ? t('settings.voice.modelBuiltIn', 'Built-in')
-                        : t('settings.voice.modelImported', 'Imported TFLite')}
-                    </Badge>
-                  </div>
-                  <Toggle
-                    size="sm"
-                    checked={active}
-                    onChange={(checked) =>
-                      handleWakewordModelToggle(model, checked)}
-                    disabled={!loaded ||
-                      modelActionBusy ||
-                      enableActionBusy ||
-                      calibrationSessionActive ||
-                      (active && voiceState.active_model_ids.length === 1) ||
-                      (!active && voiceState.active_model_ids.length === 2)}
-                    ariaLabel={t(
-                      'settings.voice.modelToggleAria',
-                      'Listen for {name}',
-                      { name: model.label },
-                    )}
-                  />
-                </div>
-                {#if active}
-                  <div class="voice-model-card__tuning">
-                    <div class="voice-model-card__sensitivity">
-                      <label for={`voice-sensitivity-${model.id}`}>
-                        {t('settings.voice.sensitivity', 'Sensitivity')}
-                      </label>
-                      <span>{Math.round(sensitivity * 100)}%</span>
-                    </div>
-                    <input
-                      id={`voice-sensitivity-${model.id}`}
-                      type="range"
-                      min="0.05"
-                      max="0.95"
-                      step="0.05"
-                      value={sensitivity}
-                      oninput={(event) =>
-                        handleSensitivityInput(model.id, event)}
-                      onchange={handleSensitivityChange}
-                      disabled={!loaded ||
-                        modelActionBusy ||
-                        enableActionBusy ||
-                        calibrationActionBusy ||
-                        calibrationSessionActive}
-                    />
-                    <div class="voice-slider-labels">
-                      <span
-                        >{t(
-                          'settings.voice.lessSensitive',
-                          'Less sensitive',
-                        )}</span
-                      >
-                      <span
-                        >{t(
-                          'settings.voice.moreSensitive',
-                          'More sensitive',
-                        )}</span
-                      >
-                    </div>
-                    {#if liveWakewordAvailable}
-                      <div class="voice-model-card__action">
-                        <span aria-hidden="true">
-                          {t('settings.voice.modelAction', 'When heard')}
-                        </span>
-                        <Dropdown
-                          value={voiceState.model_actions[model.id] ??
-                            'command'}
-                          options={MODEL_ACTION_OPTIONS}
-                          ariaLabel={t(
-                            'settings.voice.modelActionAria',
-                            'When {name} is heard',
-                            { name: model.label },
-                          )}
-                          onValueChange={(value) =>
-                            handleModelActionChange(model.id, value)}
-                          disabled={!loaded ||
-                            modelActionBusy ||
-                            enableActionBusy ||
-                            calibrationSessionActive}
-                        />
-                      </div>
-                    {/if}
-                  </div>
-                {/if}
-                {#if model.removable && !active}
-                  <div class="voice-model-card__actions">
-                    <Button
-                      variant="tertiary"
-                      disabled={!loaded ||
-                        modelActionBusy ||
-                        enableActionBusy ||
-                        calibrationSessionActive}
-                      onClick={() => (deleteConfirmModel = model)}
-                    >
-                      {t('settings.voice.removeModel', 'Remove imported model')}
-                    </Button>
-                  </div>
-                {/if}
-              </div>
+              {@const active =
+                draft?.active_model_ids.includes(model.id) ?? false}
+              {@const phraseCalibration =
+                calibration?.model_id === model.id ? calibration : null}
+              <VoicePhraseCard
+                {model}
+                {active}
+                sensitivity={draft?.model_sensitivities[model.id] ?? null}
+                {limits}
+                action={draft?.phrase_actions[model.id] ?? null}
+                {agentOptions}
+                problem={savedActiveIds.has(model.id)
+                  ? (phraseProblems.get(model.id) ?? null)
+                  : null}
+                conflicts={(conflicts.get(model.id) ?? []).map(
+                  (modelId) => modelLabels.get(modelId) ?? modelId,
+                )}
+                toggleDisabled={captureLocked ||
+                  (active && draft.active_model_ids.length <= 1) ||
+                  (!active &&
+                    (maxActivePhrases === null ||
+                      draft.active_model_ids.length >= maxActivePhrases))}
+                sensitivityDisabled={captureLocked}
+                routingDisabled={routingLocked}
+                calibrateDisabled={calibrateDisabled(model.id)}
+                removeDisabled={captureLocked}
+                onToggle={(checked) => handlePhraseToggle(model.id, checked)}
+                onSensitivityInput={(value) =>
+                  handleSensitivityInput(model.id, value)}
+                onSensitivityCommit={() => void saveConfig()}
+                onActionChange={(action) =>
+                  handlePhraseActionChange(model.id, action)}
+                onCalibrate={() => handleCalibrate(model.id)}
+                onRemove={() => (deleteConfirmModel = model)}
+                calibration={phraseCalibration ? calibrationPanel : null}
+              />
+              {#snippet calibrationPanel()}
+                <WakewordCalibration
+                  calibration={phraseCalibration}
+                  label={model.label}
+                  currentSensitivity={baseline?.model_sensitivities[model.id] ??
+                    null}
+                  onStatus={adoptStatus}
+                  onApply={(value) => applyCalibration(model.id, value)}
+                  {onToast}
+                />
+              {/snippet}
             {/each}
           </div>
           <div class="voice-model-actions">
             <span class="voice-model-limit">
-              {t(
-                'settings.voice.modelLimit',
-                '{count} of 2 wakeword models active',
-                { count: voiceState.active_model_ids.length },
-              )}
+              {#if maxActivePhrases !== null}
+                {t(
+                  'settings.voice.phraseLimit',
+                  '{count} of {max} phrases active',
+                  {
+                    count: draft?.active_model_ids.length ?? 0,
+                    max: maxActivePhrases,
+                  },
+                )}
+              {/if}
             </span>
             <input
               bind:this={modelFileInput}
@@ -857,10 +880,7 @@
             <Button
               variant="secondary"
               loading={modelActionState === 'importing'}
-              disabled={!loaded ||
-                modelActionBusy ||
-                enableActionBusy ||
-                calibrationSessionActive}
+              disabled={captureLocked}
               onClick={chooseWakewordModelFile}
             >
               {t('settings.voice.importModel', 'Import TFLite model')}
@@ -869,70 +889,58 @@
         </div>
       </div>
 
-      <WakewordCalibration
-        {onToast}
-        bind:voiceState
-        {loaded}
-        {wakewordModels}
-        {modelActionBusy}
-        {enableActionBusy}
-        bind:calibrationBaselineSensitivities
-        bind:calibrationActionState
-        {calibrationActionBusy}
-        {calibrationSessionActive}
-        {voiceConfigHasChanges}
-        {saveConfig}
-        {restoreCalibrationDraft}
-      />
-
-      <!-- Target Agent dropdown -->
+      <!-- Where commands go when a phrase names no Agent of its own. -->
       <div class="s-row">
         <div class="s-row-info">
           <div class="s-row-label">
-            {t('settings.voice.targetAgent', 'Personal Agent')}
+            {t('settings.voice.defaultAgent', 'Default Agent')}
           </div>
           <div class="s-row-desc">
             {t(
-              'settings.voice.targetAgentDescription',
-              'The Personal Agent that receives spoken commands on this server. Project Agents and other servers use separate routing.',
+              'settings.voice.defaultAgentDescription',
+              'Receives the spoken commands of phrases without their own Agent. Applies to the server this Desktop app is connected to.',
             )}
           </div>
         </div>
         <div class="s-row-control">
           <Dropdown
-            value={selectedAgentValue}
-            options={[
-              { value: '', label: t('settings.voice.noAgent', '— (none)') },
-              ...agentOptions,
-            ]}
-            placeholder={t('settings.voice.noAgent', '— (none)')}
-            onValueChange={handleAgentChange}
-            disabled={!loaded ||
-              agentOptions.length === 0 ||
-              enableActionBusy ||
-              calibrationSessionActive}
+            value={draft?.default_agent_id ?? ''}
+            options={defaultAgentOptions}
+            ariaLabel={t('settings.voice.defaultAgent', 'Default Agent')}
+            onValueChange={(value) =>
+              editDraft({ default_agent_id: value || null })}
+            disabled={routingLocked}
           />
         </div>
       </div>
 
-      <!-- Session behavior -->
       <div class="s-row">
         <div class="s-row-info">
           <div class="s-row-label">
-            {t('settings.voice.sessionBehavior', 'Session')}
+            {t('settings.voice.defaultSession', 'Default Session behavior')}
+          </div>
+          <div class="s-row-desc">
+            {t(
+              'settings.voice.defaultSessionDescription',
+              'Whether commands continue the Agent’s active Session or start a new one, unless a phrase chooses otherwise.',
+            )}
           </div>
         </div>
         <div class="s-row-control">
           <Dropdown
-            value={voiceState.session_behavior}
+            value={draft?.default_session_behavior ?? 'active'}
             options={SESSION_BEHAVIOR_OPTIONS}
-            onValueChange={handleSessionBehaviorChange}
-            disabled={!loaded || enableActionBusy || calibrationSessionActive}
+            ariaLabel={t(
+              'settings.voice.defaultSession',
+              'Default Session behavior',
+            )}
+            onValueChange={(value) =>
+              editDraft({ default_session_behavior: value })}
+            disabled={routingLocked}
           />
         </div>
       </div>
 
-      <!-- Microphone picker -->
       <div class="s-row">
         <div class="s-row-info">
           <div class="s-row-label">
@@ -946,15 +954,40 @@
             ariaLabel={t('settings.voice.microphone', 'Microphone')}
             triggerClass="voice-microphone-dropdown"
             onValueChange={handleMicrophoneChange}
-            disabled={!loaded ||
-              microphones.length === 0 ||
-              enableActionBusy ||
-              calibrationSessionActive}
+            disabled={captureLocked || microphones.length === 0}
           />
         </div>
       </div>
 
-      <!-- Privacy note -->
+      <div class="s-row">
+        <div class="s-row-info">
+          <div class="s-row-label">
+            {t('settings.voice.echoCancellation', 'Echo cancellation')}
+          </div>
+          <div class="s-row-desc">
+            {echo?.detail ??
+              t(
+                'settings.voice.echoCancellationDescription',
+                'Removes speaker output such as Live voice or read-aloud replies from the microphone signal.',
+              )}
+          </div>
+        </div>
+        <div class="s-row-control voice-echo-control">
+          {#if echo}
+            <StatusChip variant={echo.variant}>{echo.label}</StatusChip>
+          {/if}
+          <Toggle
+            checked={draft?.echo_cancellation ?? true}
+            onChange={(checked) => editDraft({ echo_cancellation: checked })}
+            disabled={captureLocked}
+            ariaLabel={t(
+              'settings.voice.echoCancellationAria',
+              'Use echo cancellation',
+            )}
+          />
+        </div>
+      </div>
+
       <div class="s-group__block s-group__note">
         <p>
           {t(
@@ -974,7 +1007,7 @@
 </div>
 
 <!-- One save state for the whole section: transcription audio and the
-     Desktop wakeword configuration both save as they change. -->
+     Desktop Voice configuration both save as they change. -->
 <div class="s-footer voice-save-state" aria-live="polite">
   {#if voiceSaveStatus === 'saving'}
     {t('common.saving', 'Saving…')}
