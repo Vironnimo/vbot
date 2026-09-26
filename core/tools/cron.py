@@ -21,6 +21,7 @@ from core.automation.cron import (
 from core.projects import InvalidAgentAddressError, format_agent_address, parse_agent_address
 from core.tools._cron_arguments import (
     ENABLED_FIELD,
+    SELF_TARGET,
     UNADVERTISED_PARAMETERS,
     CronCallRefusedError,
     normalize_cron_arguments,
@@ -194,7 +195,7 @@ def _handle_cron_tool(
         if action == "list":
             return _handle_list(cron_service, arguments)
         if action == "update":
-            return _handle_update(cron_service, arguments)
+            return _handle_update(cron_service, context, arguments)
         if action == "delete":
             return _handle_delete(cron_service, arguments)
         if action == "enable":
@@ -250,10 +251,7 @@ def _handle_create(
                 arguments, _note = _server_time(cron_service, arguments)
         raise CronCallRefusedError(_missing_create_fields(missing, arguments))
     arguments, note = _server_time(cron_service, arguments)
-    if "target" in arguments:
-        agent_id, project_id = parse_agent_address(arguments["target"])
-    else:
-        agent_id, project_id = context.agent_id, context.project_id
+    agent_id, project_id = _target_agent(context, arguments.get("target", SELF_TARGET))
     parsed = _parse_schedule(cron_service, arguments)
     repeat = arguments.get("repeat")
     if parsed.schedule_type == "once" and "repeat" in arguments and repeat != 1:
@@ -297,7 +295,9 @@ def _handle_list(cron_service: CronService, arguments: JsonObject) -> JsonObject
     return tool_success(data)
 
 
-def _handle_update(cron_service: CronService, arguments: JsonObject) -> JsonObject:
+def _handle_update(
+    cron_service: CronService, context: ToolContext, arguments: JsonObject
+) -> JsonObject:
     job_id = arguments["id"]
     # A time zone alone cannot change a job: another zone is refused here, the server's drops.
     arguments, note = _server_time(cron_service, arguments)
@@ -312,7 +312,7 @@ def _handle_update(cron_service: CronService, arguments: JsonObject) -> JsonObje
         )
     updates: dict[str, Any] = {}
     if "target" in arguments:
-        updates["agent_id"], updates["project_id"] = parse_agent_address(arguments["target"])
+        updates["agent_id"], updates["project_id"] = _target_agent(context, arguments["target"])
     for name in ("name", "prompt"):
         if name in arguments:
             updates[name] = arguments[name]
@@ -338,6 +338,13 @@ def _handle_update(cron_service: CronService, arguments: JsonObject) -> JsonObje
         updates["status"] = "active" if arguments[ENABLED_FIELD] else "paused"
     job = cron_service.update_job(job_id, **updates)
     return _job_success(cron_service, job, [note] if note else [])
+
+
+def _target_agent(context: ToolContext, target: str) -> tuple[str, str | None]:
+    """The Agent and Project a target names; "self" is the calling Agent."""
+    if target == SELF_TARGET:
+        return context.agent_id, context.project_id
+    return parse_agent_address(target)
 
 
 def _handle_delete(cron_service: CronService, arguments: JsonObject) -> JsonObject:

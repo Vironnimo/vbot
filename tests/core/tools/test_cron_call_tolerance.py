@@ -790,6 +790,27 @@ def test_placeholder_fields_are_omitted(tool: CronTool) -> None:
     assert (job.agent_id, job.name) == ("agent-one", PROMPT)
 
 
+@pytest.mark.parametrize("word", ["self", "me", "current"])
+def test_self_target_on_update_moves_the_job_to_the_calling_agent(
+    tool: CronTool, word: str
+) -> None:
+    job_id = existing(tool, target="builder@vbot")
+
+    alone, _ = tool.call({"action": "update", "id": job_id, "target": word})
+    assert alone["ok"] is True
+    assert (tool.only_job().agent_id, tool.only_job().project_id) == ("agent-one", None)
+
+    tool.call({"action": "update", "id": job_id, "target": "builder@vbot"})
+    with_schedule, text = tool.call(
+        {"action": "update", "id": job_id, "target": word, "schedule": "every 3h"}
+    )
+
+    job = tool.only_job()
+    assert with_schedule["ok"] is True
+    assert (job.agent_id, job.interval_seconds) == ("agent-one", 3 * 3600)
+    assert "target: agent-one" in text
+
+
 def test_repeat_words_and_invalid_counts(tool: CronTool) -> None:
     job_id = existing(tool, repeat=3)
 

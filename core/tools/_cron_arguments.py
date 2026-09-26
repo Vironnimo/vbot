@@ -214,7 +214,9 @@ _DESCRIPTION_KEYS = frozenset({"description", "desc", "summary", "details"})
 # Accepted without effect: vBot jobs always persist, and list always shows every job.
 _IGNORED_KEYS = frozenset({"durable", "persist", "persistent", "includedisabled", "reason"})
 _LIST_ONLY_KEYS = frozenset({"limit", "offset", "all", "showall"})
-_TARGET_PLACEHOLDERS = PLACEHOLDER_WORDS | {"self", "current", "default", "this"}
+SELF_TARGET = "self"
+"""The target that names the calling Agent; the handler resolves it."""
+_SELF_WORDS = frozenset({"self", "current", "default", "this", "me", "myself", "currentagent"})
 _REPEAT_UNLIMITED_WORDS = frozenset({"unlimited", "infinite", "infinity", "forever", "always"})
 _BOOLEAN_WORDS = {"true": True, "yes": True, "1": True, "false": False, "no": False, "0": False}
 
@@ -917,7 +919,11 @@ def _omit_placeholders(arguments: dict[str, Any], problems: _Problems) -> None:
     for name in ("id", "name", "prompt", "schedule"):
         if name in arguments and _is_stand_in(arguments[name], PLACEHOLDER_WORDS):
             del arguments[name]
-    if "target" in arguments and _is_stand_in(arguments["target"], _TARGET_PLACEHOLDERS):
+    target = arguments.get("target")
+    if isinstance(target, str) and spelling(target) in _SELF_WORDS:
+        # On update this moves the job to the calling Agent, so it is kept, not dropped.
+        arguments["target"] = SELF_TARGET
+    elif "target" in arguments and _is_stand_in(target, PLACEHOLDER_WORDS):
         del arguments["target"]
     if TIMEZONE_FIELD in arguments and _is_stand_in(arguments[TIMEZONE_FIELD], PLACEHOLDER_WORDS):
         del arguments[TIMEZONE_FIELD]
@@ -1086,6 +1092,7 @@ def _boolean(value: Any) -> Any:
 __all__ = [
     "CLOCK_SCHEDULE",
     "ENABLED_FIELD",
+    "SELF_TARGET",
     "CronCallRefusedError",
     "OMIT",
     "TIMEZONE_FIELD",
