@@ -465,6 +465,20 @@ def test_mid_file_no_newline_marker_rejects_without_joining_lines(tmp_path):
     assert path.read_bytes() == b"old\ntail\n"
 
 
+def test_end_of_file_marker_on_lines_elsewhere_is_ignored_and_named(tmp_path):
+    path = tmp_path / "file.txt"
+    path.write_bytes(b"first\nold\ntail\n")
+
+    result = apply(tmp_path, update("@@\n first\n-old\n+new\n*** End of File"))
+
+    assert result["ok"], result
+    assert path.read_bytes() == b"first\nnew\ntail\n"
+    assert (
+        "The lines before *** End of File are not at the end of the file; the hunk was "
+        "applied where they are." in text(result)
+    )
+
+
 @pytest.mark.parametrize(
     ("marker", "code"),
     [("*** End of File", "text_not_found"), ("\\ No newline at end of file", "invalid_patch")],
