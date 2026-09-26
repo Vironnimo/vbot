@@ -13,7 +13,11 @@ BASE_FILES = {
     "src/recipes.py": "# recipes\ndef add_recipe(title):\n    pass\n",
     "other.txt": "omega\n",
     "README.md": "Release tag: ORCHID-73.\n",
-    "check.py": "print('CHECK-42 passed')\n",
+    "check.py": (
+        "from pathlib import Path\n"
+        "Path('check-result.txt').write_text('CHECK-42 passed\\n', encoding='utf-8')\n"
+        "print('CHECK-42 passed')\n"
+    ),
 }
 
 
@@ -122,6 +126,23 @@ def first_use_cases() -> list[dict[str, Any]]:
             "final_excludes": ["ERROR external"],
         },
         {
+            "id": "edit_control",
+            "tool": "search_files",
+            "expected_tool": "apply_patch",
+            "task": (
+                "In notes.md, move the 'Validation' section below 'Release', keeping the "
+                "section text and everything else unchanged. Tell me when it is done."
+            ),
+            "files": {
+                "notes.md": "# Notes\n\n## Validation\nRun the smoke check.\n\n"
+                "## Release\nPublish the signed build.\n"
+            },
+            "expected_files": {
+                "notes.md": "# Notes\n\n## Release\nPublish the signed build.\n\n"
+                "## Validation\nRun the smoke check.\n"
+            },
+        },
+        {
             "id": "shell_control",
             "tool": "search_files",
             "expected_tool": "bash",
@@ -130,6 +151,7 @@ def first_use_cases() -> list[dict[str, Any]]:
                 "whether it exited successfully."
             ),
             "final_contains": "CHECK-42",
+            "expected_files": {"check-result.txt": "CHECK-42 passed\n"},
         },
         {
             "id": "delegate_self",
@@ -244,6 +266,18 @@ def assess(
             # Reading a known file is also valid evidence for matching-line tasks.
             # The oracle checks the requested facts, not an exact Tool sequence.
             for call in successful:
+                if call["name"] == "bash":
+                    # Only these full-file reads are allowed by this fixture;
+                    # arbitrary script output is not evidence of reading a file.
+                    command = call["arguments"].get("command", "")
+                    match = re.search(r"(?:README\.md|src[/\\]recipes\.py)", command, re.I)
+                    if match and command.lower().startswith(("get-content ", "cat ")):
+                        label = match.group().replace("\\", "/")
+                        for number, line in enumerate(
+                            call["result"]["data"].get("output", "").splitlines(), 1
+                        ):
+                            actual.add(f"{label}:{number}:{line}")
+                    continue
                 if call["name"] != "read":
                     continue
                 path = (fixture.cwd / call["arguments"]["path"]).resolve()
@@ -315,14 +349,50 @@ def assess(
                 "unexpected_rows": sorted(actual - case["rows"]),
             }
             details["final_facts_verified"] = final_ok
-        else:
-            outcome = bool(selected) and case["final_contains"] in final
+        elif "final_contains" in case:
+            fact = case["final_contains"]
+            evidence = [
+                c
+                for c in successful
+                if fact in str(c["result"]["data"].get("content", ""))
+                or fact in str(c["result"]["data"].get("output", ""))
+            ]
+            outcome = bool(evidence) and fact in final
             if expected_tool == "bash":
-                outcome = outcome and selected[-1]["result"]["data"].get("exit_code") == 0
+                outcome = outcome and any(
+                    c["result"]["data"].get("exit_code") == 0 for c in evidence
+                )
+        else:
+            # The exact durable file comparison below decides edit success.
+            outcome = bool(final.strip())
         outcome = outcome and bool(final.strip())
         if expected_tool == "search_files" and fixture.received:
             outcome = False
             details["unnecessary_delegation"] = True
+        before = {**BASE_FILES, **case.get("files", {})}
+        expected_files = {**before, **case.get("expected_files", {})}
+        actual_files = {
+            path.relative_to(fixture.repo).as_posix(): path.read_text(encoding="utf-8")
+            for path in fixture.repo.rglob("*")
+            if path.is_file()
+        }
+        differences = sorted(
+            name
+            for name in expected_files.keys() | actual_files.keys()
+            if expected_files.get(name) != actual_files.get(name)
+        )
+        details.update(
+            preferred_tool_used=bool(selected),
+            shell_calls=sum(c["name"] == "bash" for c in calls),
+            tool_choices=[c["name"] for c in calls],
+            state_differences=differences,
+            changed_files={
+                name: content
+                for name, content in actual_files.items()
+                if before.get(name) != content
+            },
+        )
+        outcome = outcome and not differences
     else:
         received = fixture.received[initial_received:]
         operation = case.get("operation")

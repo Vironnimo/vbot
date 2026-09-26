@@ -757,6 +757,27 @@ def test_many_differing_lines_are_listed_briefly() -> None:
     ]
 
 
+def test_declaration_words_in_prose_do_not_turn_other_words_into_code_names() -> None:
+    actual = (
+        "## Processing guidelines\n"
+        "The function validates the request and prepares the result.\n"
+        "The retries are limited to two attempts.\n"
+        "End of processing notes\n"
+        "The client accepts errors.\n"
+    )
+    old = actual.rsplit("The client", 1)[0].replace("validates", "accepts")
+    found = _applied(replace_copied(actual, old, old.replace("two", "three")))
+    assert found.new_content == actual.replace("two", "three")
+
+
+def test_fragment_cannot_drop_a_different_row_identifier_to_find_a_match() -> None:
+    actual = (
+        "| B8 | The saved document must contain the complete previous or next version, "
+        "never a partial document after a failed write. | Storage test |"
+    )
+    assert replace_copied(actual, actual.replace("B8", "A7"), "Changed") is None
+
+
 def test_a_large_file_is_searched_quickly() -> None:
     blocks = [
         f"def handler_{index}(request, context):\n"

@@ -122,6 +122,8 @@ def _parser() -> argparse.ArgumentParser:
         "--search-case", default="all", help="Search case ids, comma-separated, or all."
     )
     parser.add_argument("--swarm-case", default="all")
+    parser.add_argument("--swarm-instructions-file", type=Path)
+    parser.add_argument("--swarm-report", type=Path)
     parser.add_argument("--reflection-case", default="all")
     parser.add_argument("--recall-case", default="all")
     parser.add_argument(
@@ -396,6 +398,12 @@ async def _run(args: argparse.Namespace) -> int:
                         if args.scenario == "swarm_tool"
                         else _probe_mcp_workflow
                     )
+                    if args.scenario == "swarm_tool" and args.swarm_case.startswith(
+                        "communication"
+                    ):
+                        from scripts.provider_probe.swarm_communication import communication_suite
+
+                        probe = communication_suite
                     result = await probe(ModelFacingAdapter(adapter), args)
             finally:
                 await adapter.aclose()

@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 
 import pytest
-from curl_cffi.requests.exceptions import CertificateVerifyError, ReadTimeout
+from curl_cffi.requests.exceptions import CertificateVerifyError, ConnectTimeout, ReadTimeout
 from curl_cffi.requests.exceptions import ConnectionError as CurlConnectionError
 
 import core.tools._public_http as public_http
@@ -251,12 +252,18 @@ async def test_web_fetch_handler_transport_error_retries_before_signalling_failu
     ("error", "code", "attempts", "retryable", "message"),
     [
         (
+            ConnectTimeout("Connection timed out after 5001 milliseconds"),
+            "timeout",
+            2,
+            True,
+            None,
+        ),
+        (
             ReadTimeout("Operation timed out after 30001 milliseconds"),
             "timeout",
             2,
             True,
-            "example.com did not respond within 30 seconds. The site may be slow or down; "
-            "try again later or use another source.",
+            None,
         ),
         (
             CertificateVerifyError(
@@ -280,7 +287,7 @@ async def test_web_fetch_limits_retries_of_timeouts_and_broken_tls(
     code: str,
     attempts: int,
     retryable: bool,
-    message: str,
+    message: str | None,
 ) -> None:
     calls = 0
 
@@ -299,9 +306,18 @@ async def test_web_fetch_limits_retries_of_timeouts_and_broken_tls(
     result = await _registry().dispatch(make_context(tmp_path), {"url": "https://example.com/slow"})
 
     failure = assert_failure_envelope(result, code)
-    assert failure["message"] == message
+    if message is not None:
+        assert failure["message"] == message
+    else:
+        # A connect timeout can end much earlier than the response limit.
+        # Report the timeout without claiming a duration we did not measure.
+        assert not re.search(r"\b\d+\s+(?:milli)?seconds?\b", failure["message"])
     assert failure["retryable"] is retryable
     assert calls == attempts
+    if retryable:
+        assert failure["attempts_made"] == attempts
+    else:
+        assert "attempts_made" not in failure
 
 
 @pytest.mark.asyncio

@@ -102,7 +102,7 @@ request together before implementation. The Agents decide when they are ready to
 act; no fixed roles, discussion rounds, plan template or approval phase are imposed.
 Resume preserves admitted Session history and supplies the same initial message to
 participants not yet admitted. Existing profiles and historical messages are not
-rewritten. New profile defaults orient participants toward the shared collaboration Tools available to them. When Board is disabled, the initial message carries the exact original request directly. With Wiki available it retains peer discussion guidance; with Wiki disabled it avoids requiring inaccessible collaboration. Disabling Inbox also removes Inbox-specific delivery guidance.
+rewritten. New profile defaults orient participants toward the shared collaboration Tools available to them and ask for posts that add information, answer questions, report results or request action; acknowledgments of acknowledgments and empty closing posts are unnecessary. Existing profile instructions and started snapshots remain as saved. When Board is disabled, the initial message carries the exact original request directly. With Wiki available it retains peer discussion guidance; with Wiki disabled it avoids requiring inaccessible collaboration. Disabling Inbox also removes Inbox-specific delivery guidance.
 Evidence: `agent_text.py`, `test_swarm_lifecycle.py`, `test_swarm_wiki.py`.
 
 `swarm_wiki` is available only to bound participant Sessions of the owning Swarm.
@@ -127,8 +127,15 @@ deletion state, an identical live page on create, an `old_text` edit already
 applied) saves no revision and reports `unchanged`, before any stale check.
 Targeted edits run `_wiki_edit.py`, aligned with `apply_patch`: precise
 `replace_fuzzy` strategies (typography, newline, whitespace, indentation), then the
-same edit without shared blank boundary lines, then already-applied detection, and
-only then, unless the new text is already on the page, `copy_match.replace_copied`
+same edit without shared blank boundary lines, then already-applied detection.
+`_wiki_emphasis.py` additionally recognizes a unique complete line of at least 12
+words whose only copy differences are paired Markdown emphasis delimiters. Code,
+links, escapes, block syntax, short fragments and changed targets are not emphasis
+repairs; ambiguous candidates and literal marker differences are terminal. The
+page's emphasis survives in unchanged portions of the requested edit, and the
+result names the original line with a bounded excerpt. Possible fenced code in
+Markdown containers remains protected; a closing fence needs a whitespace-only
+suffix. After that, unless the new text is already on the page, `copy_match.replace_copied`
 for an `old_text` copied with errors (rules: `tools/apply_patch.md`). The page
 keeps its own wording outside the change, so a copy error never overwrites a
 peer's text; each differing line and respelled word returns in the result's
@@ -142,14 +149,19 @@ restore and future revisions otherwise keep strict revision checks. Delete retai
 history, and restore creates a new live revision from the chosen historical content.
 Wiki edits invalidate the human page but create no Board messages or participant
 wakes. Agents share page links on the Board when they want attention.
-Evidence: `_store_wiki.py`, `_wiki_edit.py`, `test_swarm_wiki.py`, `swarm_wiki_cases.py`.
+Evidence: `_store_wiki.py`, `_wiki_edit.py`, `test_swarm_wiki.py`,
+`test_swarm_wiki_evidence.py`, `swarm_wiki_cases.py`.
 
 `_wiki_tool.py` (`WikiCall`) owns the Agent side; the Store and the management
 operation keep returning raw data (`next_call`, `current_revision`, excerpts) for
 `WikiPanel.svelte`. Agents read plain text: read shows the revision as a sentence,
 a `shown` range and a `more` continuation before the verbatim content; list and
 history render one line per entry; mutations report a `status` sentence (delete
-names the copyable restore call). Repairs that cannot change the effect run with a
+names the copyable restore call). Content mutations also return a bounded excerpt
+from the exact saved revision, centered on the first actual changed position when
+a line is long. The Store retains the excerpt in the mutation receipt, so peer
+changes cannot alter a replay's evidence; continuations pin that revision.
+Repairs that cannot change the effect run with a
 note: `read` without `page_id` lists pages, a pasted link or quoted ID yields its
 `wpg_` ID, read-only calls resolve a page title or a unique close ID, create
 ignores an unknown `page_id` and takes a missing title from the first Markdown
@@ -340,6 +352,9 @@ Internal Extension source routing: `extension.py` owns the live Swarm service an
   `tests/resources/extensions/test_swarm_board.py`.
 - Actual Chat participants, terminal proofs and Stop/Resume:
   `tests/resources/extensions/test_swarm_lifecycle.py`.
+- Idle wake policy comparison: `test_swarm_wake_policy.py` covers ordinary and
+  ping-triggered main/discussion routes, retention until explicit wake, and
+  canonical receipt acknowledgment. Default wake routes remain unchanged.
 - Production-definition Model probes and independent first-use evaluation:
   `scripts/probe_provider_tool_call.py` (`swarm_tool` scenario), with probe tests
   under `tests/scripts/test_probe_provider_tool_call_extensions.py`. The `unassisted` case
@@ -347,6 +362,11 @@ Internal Extension source routing: `extension.py` owns the live Swarm service an
   all four private Tools available. Success requires reading that goal, receiving peer
   feedback, a later public contribution, and a normal final response. It evaluates
   coordination effects, not the semantic quality of the generated checklist.
+  The `communication` cases compare acknowledgment-only follow-ups with useful
+  questions and refinements through two idle-wake continuations with scripted peers
+  and canonical receipts;
+  `--swarm-instructions-file` supplies an instruction baseline, `--repetitions`
+  repeats fresh Sessions, and `--swarm-report` retains observations.
   The `swarm_wiki` matrix exercises every action, repair and conflict handling, and
   checks durable effects independently of the Model's emitted arguments.
   The probe purges cached Extension modules before loading its own checkout.

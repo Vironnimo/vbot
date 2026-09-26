@@ -148,7 +148,12 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   (`The closest text in the file, lines A-B:`); touching or overlapping excerpts
   merge. Missing targets use similarity-ranked diagnostics plus `First difference,
   line N: the file has '...' where the patch has '...'` (`where old_string
-  has` for `old_string` edits), and note when the new
+  has` for `old_string` edits). Long differing lines show <=240-character windows
+  centered on the first substantive mismatch, with 1-based file/copied-line
+  character coordinates and explicit truncation. Truncated candidate excerpts
+  name a callable `read(path=..., offset="line:character", limit=...)` continuation;
+  positions count Unicode characters and preserve LF/CRLF/CR line semantics.
+  Diagnostics also note when the new
   text already occurs (a change made earlier; not when `old_string` contains
   `new_string`, as after a deletion); without candidates the text names
   the `read` call. Ambiguity reports the winning match's actual locations
@@ -179,10 +184,15 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   may misspell one word per 3 correct words, and a kept (context) line may lack
   or add words or signs, one per 2 correct words; from 12 it may also differ
   otherwise, one difference per 4 correct words, but never where either side of
-  a difference is an identifier (underscore, digit, or inner capital: another
-  function or variable). Exactly copied first and last lines (3+ lines, 2+ words
+  a difference names another target: lexical identifiers (underscore, digit, or
+  inner capital), plus names evidenced by calls, declarations and member/namespace
+  access even when they are plain lowercase words. This evidence covers omitted
+  names too, so substring recovery cannot drop a row ID to find another row.
+  Misspellings still qualify under the rules below. Exactly copied first and last lines (3+ lines, 2+ words
   each) also place a passage around similar lines (SequenceMatcher ratio >= 0.5,
-  or 0.7 when the anchor pair repeats). Each line keeps its place: a kept line
+  or 0.7 when the anchor pair repeats), but cannot override a copied name that
+  exists elsewhere in the file. Plain prose does not acquire code-name meaning
+  merely by mentioning a function or class. Each line keeps its place: a kept line
   must hold at least half of its file line's words, and half of its words and
   signs together (a blank file line holds none; counting words keeps shared
   markup such as `##` from making another heading look right), and extra words
@@ -321,6 +331,12 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   text-editor commands, Hermes mode, SEARCH/REPLACE, unified/git diffs) through
   production dispatch, including empty-text edits, the read guard and conflicts.
   `scripts/tool_lab/cases/files.json` holds the Model-visible result cases.
+- `test_apply_patch_code_targets.py` exercises production-dispatch code-target
+  refusal, partial success, corrected continuation, typo recovery and formatting
+  tolerance. `test_apply_patch_diagnostics.py` verifies long mismatch evidence and
+  failure -> displayed read continuation -> successful correction, including
+  Unicode and LF/CRLF/CR. `test_copy_match.py` covers shared prose/identifier
+  distinctions and target IDs in substring recovery.
 - Existing fuzzy-match, file-state, Runtime and Provider-schema
   tests cover the shared boundaries.
   `tests/core/providers/test_ollama.py` verifies intact patch arguments through

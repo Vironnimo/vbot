@@ -12,6 +12,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
 
+from core.chat.wire_shaping import model_facing_request
+from core.providers.adapter import terminal_outcome_from_response
 from core.tools.tools import tool_failure
 from scripts.provider_probe.first_use_cases import BASE_FILES, assess, first_use_cases
 from scripts.provider_probe.first_use_fixture import FirstUseFixture, FixtureBoundaryError
@@ -78,6 +80,7 @@ async def first_use_trial(
             )
             definitions = fixture.registry.provider_definitions()
             record["definitions"] = definitions
+            _, record["model_definitions"] = model_facing_request([], definitions)
             record["definition_sha256"] = hashlib.sha256(
                 json.dumps(definitions, sort_keys=True).encode()
             ).hexdigest()
@@ -114,13 +117,11 @@ async def first_use_trial(
                     calls = response.get("tool_calls") or []
                     if not calls:
                         final = str(response.get("content") or "")
-                        record["finished"] = True
+                        record["finished"] = terminal_outcome_from_response(response) == "stop"
                         break
                     for call in calls:
                         try:
-                            result = await fixture.dispatch(
-                                call, shell_task=case.get("expected_tool") == "bash"
-                            )
+                            result = await fixture.dispatch(call)
                         except FixtureBoundaryError as error:
                             result = tool_failure("fixture_boundary", str(error))
                             boundary_failure = True
@@ -162,6 +163,7 @@ async def first_use_trial(
                         child = await item.future
                         await child.wait()
             outcome, detail = assess(case, fixture, record["calls"], final, initial_received)
+            outcome = outcome and record.get("finished", False)
             record.update(detail)
             record.update(
                 final=final,
@@ -211,10 +213,11 @@ async def _probe_first_use(adapter: Any, args: argparse.Namespace) -> dict:
             "passed": len(results) == len(cases) * args.repetitions
             and all(r["first_attempt_success"] for r in results),
             "fixture_limits": (
-                "Real search/read/safe-shell dispatch and Sub-Agent lifecycle. Child Model "
+                "Real search/read/edit/safe-shell dispatch and Sub-Agent lifecycle. Child Model "
                 "work is a deterministic receiver; unexpected shell commands are recorded "
                 "and stopped, never substituted. Final-answer semantics beyond fixture "
-                "facts require review of retained responses."
+                "facts require review of retained responses. Tool choice and shell bypasses "
+                "are measurements separate from task outcome."
             ),
             "results": results,
         }

@@ -12,7 +12,6 @@ from pathlib import Path
 
 from core.tools._search_ignores import IgnoreRules
 from core.tools._search_options import SearchOptions, size_bytes
-from core.tools._tool_context import is_link_entry
 from core.tools.search import SearchBudget, _expand_brace_alternations
 
 
@@ -37,7 +36,11 @@ class Glob:
         self.sensitive = sensitive
         self.basename = basename and "/" not in pattern.rstrip("/")
         self.alternatives = [
-            tuple(p for p in alternative.split("/") if p not in {"", "."})
+            tuple(
+                p if sensitive else p.casefold()
+                for p in alternative.split("/")
+                if p not in {"", "."}
+            )
             for alternative in _expand_brace_alternations(pattern)
         ]
 
@@ -49,8 +52,7 @@ class Glob:
             parts = parts[-1:]
         if not self.sensitive:
             parts = tuple(p.casefold() for p in parts)
-        for alternative in self.alternatives:
-            pattern = alternative if self.sensitive else tuple(p.casefold() for p in alternative)
+        for pattern in self.alternatives:
 
             @lru_cache(maxsize=4096)
             def match(i: int, j: int, pattern=pattern) -> bool:
@@ -65,6 +67,35 @@ class Glob:
                 )
 
             if match(0, 0):
+                return True
+        return False
+
+    def can_match_descendant(self, relative: str) -> bool:
+        """Whether a positive glob could select anything below this directory.
+
+        Basename filters can match at any depth. Root-relative filters consume
+        the directory's components, keeping both branches of every globstar;
+        no filesystem or ignore-rule assumption is involved.
+        """
+        if self.basename:
+            return True
+        parts = tuple(relative.split("/")) if relative else ()
+        if not self.sensitive:
+            parts = tuple(part.casefold() for part in parts)
+        for pattern in self.alternatives:
+            positions = {0}
+            for part in parts:
+                following: set[int] = set()
+                for position in positions:
+                    while position < len(pattern) and pattern[position] == "**":
+                        following.add(position)
+                        position += 1
+                    if position < len(pattern) and fnmatch.fnmatchcase(part, pattern[position]):
+                        following.add(position + 1)
+                positions = following
+                if not positions:
+                    break
+            if any(position < len(pattern) for position in positions):
                 return True
         return False
 
@@ -137,9 +168,10 @@ class FileSelection:
             name: [Glob(p, sensitive=sensitive, basename=True) for p in values]
             for name, values in types.items()
         }
+        positive_filters = [pattern for positive, pattern in filters if positive]
         for root in self.roots:
             ignores = IgnoreRules(root, self.cwd, options, self.warnings)
-            for path, directory, metadata, relative in self._walk(root, ignores):
+            for path, directory, metadata, relative in self._walk(root, ignores, positive_filters):
                 if not self.budget.keep_going():
                     self.complete = False
                     return
@@ -217,30 +249,49 @@ class FileSelection:
             self.warnings.append(message)
 
     def _walk(
-        self, root: Path, ignores: IgnoreRules
+        self, root: Path, ignores: IgnoreRules, positive_filters: list[Glob]
     ) -> Iterator[tuple[Path, bool, os.stat_result, str]]:
         options = self.options
         follow = options.enabled("follow")
         depth_limit = int(options.get("depth", "2147483647"))
         root_stat = root.stat()
-        root_is_directory = root.is_dir()
+        root_is_directory = stat.S_ISDIR(root_stat.st_mode)
         ancestors: set[tuple[int, int]] = set()
+        if any((part.casefold() if os.name == "nt" else part) == ".git" for part in root.parts):
+            return
 
-        def visit(path: Path, depth: int) -> Iterator[tuple[Path, bool, os.stat_result, str]]:
+        def visit(
+            path: Path, depth: int, relative: str, entry: os.DirEntry[str] | None = None
+        ) -> Iterator[tuple[Path, bool, os.stat_result, str]]:
             if not self.budget.keep_going():
                 self.complete = False
                 return
-            if any((part.casefold() if os.name == "nt" else part) == ".git" for part in path.parts):
+            if (path.name.casefold() if os.name == "nt" else path.name) == ".git":
                 return
             try:
-                # Junctions are directory links too, although is_symlink() misses them.
-                link = is_link_entry(path)
-                if link and depth and not follow:
-                    return
-                metadata = path.stat()
+                metadata = root_stat if entry is None else entry.stat(follow_symlinks=False)
+                # Reuse scandir's metadata, including Windows junction tags.
+                # Cloud-file reparse points remain ordinary entries.
+                link = (
+                    stat.S_ISLNK(metadata.st_mode)
+                    or getattr(metadata, "st_reparse_tag", 0) == stat.IO_REPARSE_TAG_MOUNT_POINT
+                )
+                if entry is not None and link:
+                    if not follow:
+                        return
+                    metadata = entry.stat()
                 directory = stat.S_ISDIR(metadata.st_mode)
                 if not directory and not stat.S_ISREG(metadata.st_mode):
                     return
+                # Windows DirEntry.stat omits inode/device identities. Directories
+                # need real identities for loop detection; --one-file-system
+                # needs them for every entry. Ordinary files need no extra stat.
+                if (
+                    entry is not None
+                    and os.name == "nt"
+                    and (directory or options.enabled("one_fs"))
+                ):
+                    metadata = path.stat()
                 if depth and options.enabled("one_fs") and metadata.st_dev != root_stat.st_dev:
                     return
                 if (
@@ -253,10 +304,13 @@ class FileSelection:
                     return
                 if depth and ignores.is_ignored(path, directory):
                     return
-                relative = path.relative_to(root).as_posix() if root_is_directory else path.name
                 if depth or not directory or depth_limit == 0:
                     yield path, directory, metadata, relative
                 if directory and depth < depth_limit:
+                    if positive_filters and not any(
+                        pattern.can_match_descendant(relative) for pattern in positive_filters
+                    ):
+                        return
                     identity = metadata.st_dev, metadata.st_ino
                     if identity in ancestors:
                         self._warn(f"Skipped symbolic-link loop: {path}")
@@ -265,13 +319,16 @@ class FileSelection:
                     try:
                         with os.scandir(path) as entries:
                             for entry in entries:
-                                yield from visit(Path(entry.path), depth + 1)
+                                child_relative = (
+                                    relative + "/" + entry.name if relative else entry.name
+                                )
+                                yield from visit(Path(entry.path), depth + 1, child_relative, entry)
                     finally:
                         ancestors.remove(identity)
             except (OSError, RecursionError) as error:
                 self._warn(f"Cannot inspect {path}: {error}")
 
-        yield from visit(root, 0)
+        yield from visit(root, 0, "" if root_is_directory else root.name)
 
     def entries(self, *, action: str) -> Iterator[tuple[Path, bool]]:
         order, reverse = self.options.ordering or (
