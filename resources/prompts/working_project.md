@@ -2,7 +2,7 @@
 
 - Project: `{project_name}`
 - Project ID: `{project_id}`
-- Your Project Workspace: `{project_workspace}`
+- Your Project Workspace (your working directory): `{project_workspace}`
 
 ### Project Context
 

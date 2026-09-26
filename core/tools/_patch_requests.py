@@ -151,17 +151,20 @@ def normalize_patch_arguments(arguments: Any) -> Any:
         arguments,
         field_aliases=_FIELD_ALIASES,
         empty_as_omitted=("path", "replace_all", "expected_replacements", "insert_line"),
+        placeholder_as_omitted=("patch",),
     )
     if not isinstance(normalized, dict):
         return normalized
     result = {key: value for key, value in normalized.items() if spelling(key) not in _REMARKS}
     _drop_off_switches(result)
     if "code_edit" in result:
+        path = result.get("path")
+        target = path if isinstance(path, str) else "<path>"
         raise ValueError(
             "code_edit cannot be applied: it marks unchanged code with placeholder "
             "comments, so the exact change is unknown. Send the exact lines instead: "
-            'patch="*** Begin Patch\\n*** Update File: <path>\\n@@\\n-old line\\n+new line\\n'
-            '*** End Patch".'
+            f'patch="*** Begin Patch\\n*** Update File: {target}'
+            '\\n@@\\n-old line\\n+new line\\n*** End Patch".'
         )
     _translate_command(result)
     if isinstance(result.get("edits"), list):

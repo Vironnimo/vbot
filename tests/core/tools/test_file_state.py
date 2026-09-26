@@ -12,8 +12,10 @@ import pytest
 import core.tools.file_state as file_state_module
 from core.tools.file_state import (
     FileReadState,
+    ReadOnlyFileError,
     StaleReason,
     atomic_write_bytes,
+    os_error_reason,
 )
 
 
@@ -283,3 +285,27 @@ def test_atomic_replace_recovers_from_a_real_reader_without_delete_sharing(tmp_p
     assert len(releases) == 1 and checks == [b"before", b"before"]
     assert target.read_bytes() == b"after"
     assert list(tmp_path.iterdir()) == [target]
+
+
+@pytest.mark.parametrize(
+    ("error", "reason"),
+    [
+        # Windows reports its messages in the system language and names the absolute path.
+        (PermissionError(13, "Zugriff verweigert", "C:/abs/a.txt"), "permission denied"),
+        (OSError(28, "Nicht genug Speicher", "C:/abs/a.txt"), "the disk is full"),
+        (ReadOnlyFileError(), "the file is read-only"),
+        (OSError("the call was cancelled"), "the call was cancelled"),
+    ],
+)
+def test_os_error_reason_is_english_and_names_no_absolute_path(error: OSError, reason: str) -> None:
+    assert os_error_reason(error) == reason
+
+
+def test_os_error_reason_names_a_file_another_program_uses() -> None:
+    busy = OSError(13, "Der Prozess kann nicht zugreifen", "C:/abs/a.txt")
+    busy.winerror = 32  # type: ignore[attr-defined]
+    exhausted = file_state_module._ReplaceRetriesExhaustedError(busy, 7)
+
+    assert os_error_reason(busy) == "another program is using it"
+    assert os_error_reason(exhausted) == "another program is using it"
+    assert exhausted.attempts_made == 7

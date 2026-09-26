@@ -381,7 +381,7 @@ class StubPrompts:
             "## Working Project\n\n"
             f"- Project: `{project_context.project_name}`\n"
             f"- Project ID: `{project_context.project_id}`\n"
-            f"- Your Project Workspace: `{cwd}`\n\n"
+            f"- Your Project Workspace (your working directory): `{cwd}`\n\n"
             "### Project Context\n\n"
             "Follow the instructions in any files included below and use their contents as "
             "context for all work in this Project Workspace.\n\n"

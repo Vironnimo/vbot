@@ -146,7 +146,7 @@ Never expose `request.operation`, operation-key objects (`{"create": {...}}`), s
 - Use stable ids returned by earlier results for follow-up mutations; say when ids can shift.
 - One vocabulary: `action` for behavior, `mode` only for a genuine execution contract (foreground/background), domain names for arguments.
 - When discovery and exact retrieval share authority and lifecycle, keep one configurable capability and derive the reader as a companion; the search result returns the reader's callable argument shape.
-- `oneOf` only when a single parameter genuinely accepts several representations and removing one would lose capability (`read.offset` is the reference case); never for actions, targets, optionality or cursor continuation. Branches carry no duplicated descriptions or constraints.
+- `oneOf` only when a single parameter genuinely accepts several representations and removing one would lose capability; never for actions, targets, optionality or cursor continuation. Branches carry no duplicated descriptions or constraints. No current Tool needs one: `read.offset` dropped its advertised `line:character` string branch because Models read it as a line range (`"1:300"`); results still hand out that form, and the handler still accepts it.
 - No root parameter-object description unless it states conditional rules that cannot live on the affected properties.
 
 ### Parameter descriptions and defaults

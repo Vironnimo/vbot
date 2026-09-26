@@ -14,9 +14,13 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   arguments fail before the handler.
 - The owner-selected argument repair (`normalize_patch_arguments`) accepts patch-text
   aliases (`input`, `patch_text`, `diff`, ...), ordinary field formatting and shared
-  call wrappers. Equal aliases coalesce; conflicting aliases (including placeholder
-  text) and unsupported fields fail before mutation. Patch contents remain literal.
-  The advertised schema stays `patch` only.
+  call wrappers. Equal aliases coalesce; a placeholder alias (`""`, `null`, `...`)
+  beside a real patch is ignored (`placeholder_as_omitted`). Conflicting aliases
+  fail before mutation, naming both keys and values (`Conflicting values for patch:
+  patch is "..." and input is "...". Send only the intended one.`; shared
+  `normalize_call_arguments` wording). Unsupported fields fail as well. Patch
+  contents remain literal. Normalizer refusals end with `No file was changed.`
+  (`_normalize_call`). The advertised schema stays `patch` only.
 - Other harnesses' shapes run when they name one exact change. Unadvertised root
   fields (`PATCH_HIDDEN_PARAMETERS`: `path`, `old_string`, `new_string`,
   `replace_all`, `expected_replacements`, `edits`, `content`, `insert_line`) are
@@ -36,7 +40,8 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   `ReplacementContent`/`AllowMultiple`) run as `edits`.
   Two kinds of change in one call, a `path` that
   contradicts the patch's file, incomplete old/new pairs and Cursor `code_edit`
-  (placeholder comments leave the change open) fail before any effect.
+  (placeholder comments leave the change open; the error shows a patch skeleton
+  with the call's real path) fail before any effect.
   `old_string` replacements match precisely, else as a copy with errors
   (`copy_match`, below; never with `replace_all` or an expected count); an empty
   `old_string` creates a file or fills an empty one and fails with `file_exists`
@@ -45,9 +50,11 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
 - The description says one call can change several places in several files, in
   order, and that successful changes stay applied when another fails. The `patch`
   parameter carries one example (Update with an `@@` hint, Add, Delete, Move File)
-  and the rules for `-`/`+`/space lines, `@@` text, insertion-only blocks and EOF
-  appends, Add File replacement and path resolution. Other harnesses' fields are
-  never described. Detailed continuation guidance belongs in results; matching
+  and the rules for `-`/`+`/space lines (each a whole line), `@@` text,
+  insertion-only blocks and EOF appends, Add File replacement and path
+  resolution; `## Agent-facing text` records why each sentence is there.
+  `test_the_example_in_the_patch_description_applies` runs the example. Other
+  harnesses' fields are never described. Detailed continuation guidance belongs in results; matching
   errors distinguish missing/ambiguous context hints from hunk text.
 - Add, Update, Delete, standalone `Move File: source -> destination`, and
   Update plus `Move to: destination` are supported. Paths use ordinary
@@ -70,8 +77,9 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   creates or fully replaces files. Existing targets require a current Session read
   stamp; missing/stale stamps fail with `file_not_read`/`file_modified_since_read`.
   When the file is text of at most 16 KB and 400 lines and unchanged since the
-  snapshot, that failure shows its whole numbered content and stamps it, so the
-  same call succeeds when sent again; otherwise it names the `read` call.
+  snapshot, that failure shows its whole numbered content (CRLF/CR shown as plain
+  line breaks) and stamps it, so the same call succeeds when sent again;
+  otherwise it names the `read` call.
   An identical Add is a verified no-op and does not require a prior read; an
   existing file that is empty or whitespace-only (after a BOM) needs no read.
   Empty Add bodies produce empty files; `\ No newline at end of file` suppresses
@@ -160,6 +168,23 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   (including section offsets) under `Where it occurs:`, not guessed alternatives.
   An `expected_replacements` mismatch fails with `occurrence_mismatch`. These
   excerpts never authorize a write.
+- A patch line that occurs only inside longer file lines (a fragment copied as a
+  line) is named before similarity candidates when it sits in at most 3 lines:
+  `The patch line '...' is only part of line(s) N. Each patch line is a whole
+  line, so copy all of line N:` plus those lines (`part_of`, `_part_of_lines`).
+  Otherwise the closest-text candidates show, and `No similar text` only when
+  neither applies. `old_string` text is compared by its first difference instead.
+- A hunk that is exactly one `-` line and one `+` line, whose `-` text is not a
+  whole line but occurs exactly once inside one line of the matched window
+  (overlaps count), is replaced within that line, with `Note: The - line is part
+  of line N; only that part of the line was replaced.` (`_replace_within_line`,
+  after the post-state check and before `copy_match`). Context lines, deletions
+  without `+`, EOF markers or several occurrences keep whole-line semantics and
+  fail.
+- A match failure (`text_not_found`, `context_not_found`, `ambiguous_match`,
+  `ambiguous_context`) on a file changed after this Session's last read appends
+  `X changed after this Session last read it; read it again before resending.`
+  (`_STALE_FAILURE`); the patch was likely written against old content.
 - After any text-entry failure on a path, remaining hunks and `old_string` edits
   on that path allow only unique precise matches (no `copy_match`), preventing
   tolerance from silently satisfying a failed earlier precondition. Other files
@@ -305,12 +330,31 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   failure after writing also retains the completed effect in a partial result.
   No rollback is claimed. Locks cannot exclude unrelated external writers;
   checks plus atomic replace are not a portable filesystem compare-and-swap.
+  Filesystem failures name their reason in English without the absolute path
+  (`file_state.os_error_reason`, e.g. `another program is using it`), not the
+  localized Windows message.
 - Successful surviving files, including verified no-ops, receive Session read
   stamps. Metadata drift can produce a post-success warning. Text mutations
   feed the existing ChangeTracker with actual before/after contents and publish
   presentation-only line/file counts. Updates reuse syntax-delta warnings; Add uses full-file syntax warnings.
 - The handler uses the shared cancellation-shielded Tool worker boundary so
   an in-flight mutation settles before cancellation returns.
+
+## Agent-facing text
+
+| Text | Reason |
+|---|---|
+| `Edit, create, delete or move files with a patch.` | Names all four effects, so deletes and renames do not go through the shell, which bypasses read stamps and change tracking (F1). |
+| `One call can change several places in several files; the changes apply in order, and changes that succeed stay applied if another one fails.` | Invites batching instead of one call per place (F6), and states the partial semantics, so an Agent resends only failed changes instead of replaying applied ones (F3, F5). |
+| `patch`: the example (Update with `@@` hint, Add, Delete, Move File) | The V4A format is not universal; one example shows every header form once (F2). `test_the_example_in_the_patch_description_applies` keeps it valid. |
+| `patch`: `Under Update File, - lines are removed, + lines are added, and lines starting with a space are unchanged lines that locate the change.` | Defines the three prefixes; context-only patches (`no_changes`) come from reading space lines as the new text (F2). |
+| `patch`: `Each is a whole line; copy - and unchanged lines exactly from the file.` | Models sent a fragment of a long line as a `-` line (Sessions, 2026-09) (F2). Exact copies avoid relying on `copy_match`. |
+| `patch`: `Every @@ block needs a - or + line.` | A block without changes fails with `no_changes` (F2). |
+| `patch`: `Text after @@ is optional and names an earlier line, such as the enclosing function.` | Optional, so an Agent does not invent a hint; the example shows what a hint names. |
+| `patch`: `Start another @@ block for another place in the same file.` | Avoids repeated Update headers and long context spanning distant places (F6). |
+| `patch`: `A block of only + lines goes after the @@ line, or at the end of the file after a bare @@.` | Without it, where pure insertions land is a guess (F3). |
+| `patch`: `Add File creates a file or replaces all of its content.` | Add File replacement is a vBot extension that replaces the former write Tool; without it, Agents delete and re-add or write through the shell (F1). |
+| `patch`: `Paths are relative to the working directory or absolute.` | States both accepted forms; the System Prompt names the working directory. |
 
 ## Verification
 
@@ -335,7 +379,8 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   refusal, partial success, corrected continuation, typo recovery and formatting
   tolerance. `test_apply_patch_diagnostics.py` verifies long mismatch evidence and
   failure -> displayed read continuation -> successful correction, including
-  Unicode and LF/CRLF/CR. `test_copy_match.py` covers shared prose/identifier
+  Unicode and LF/CRLF/CR, plus within-line replacement and `part_of`
+  diagnostics. `test_copy_match.py` covers shared prose/identifier
   distinctions and target IDs in substring recovery.
 - Existing fuzzy-match, file-state, Runtime and Provider-schema
   tests cover the shared boundaries.

@@ -8,7 +8,10 @@
    "count": 3000
   },
   "src/buffer.rs": "fn undo(&mut self) -> bool {\n    let ok = self.history.undo(&mut self.text, &mut self.cursor);\n    if ok {\n        if self.track_revision {\n            self.revision += 1;\n        }\n        self.shadow = Some(self.text.clone());\n        self.shadow_cursor = self.cursor;\n    }\n    ok\n}\n\nfn redo(&mut self) -> bool {\n    let ok = self.history.redo(&mut self.text, &mut self.cursor);\n    if ok {\n        self.revision += 1;\n        self.shadow = Some(self.text.clone());\n        self.shadow_cursor = self.cursor;\n    }\n    ok\n}\n",
-  "docs/long.txt": "Retain the original text here. Retain the original text here. Retain the original text here. Retain the original text here. Retain the original text here. Retain the original text here. Retain the original text here. Retain the original text here. Retain the original text here. Retain the original text here. Retain the original text here. Retain the original text here. targetV2\n"
+  "docs/long.txt": "Retain the original text here. Retain the original text here. Retain the original text here. Retain the original text here. Retain the original text here. Retain the original text here. Retain the original text here. Retain the original text here. Retain the original text here. Retain the original text here. Retain the original text here. Retain the original text here. targetV2\n",
+  "empty.txt": "",
+  "blob.bin": "abc\u0000def",
+  "docs/story.md": "# Title\n\nThe quick brown fox jumps over the lazy dog, and then the fox keeps running through the forest until it reaches the river where it stops to drink some cold water before continuing on its long journey home to its den.\n\nSecond paragraph.\n"
  },
  "cases": [
   {
@@ -992,6 +995,127 @@
     "files": {
      "docs/long.txt": "Retain the original text here. Retain the original text here. Retain the original text here. Retain the original text here. Retain the original text here. Retain the original text here. Retain the original text here. Retain the original text here. Retain the original text here. Retain the original text here. Retain the original text here. Retain the original text here. targetV2\n"
     }
+   }
+  },
+  {
+   "name": "read: an empty file says it is empty",
+   "tool": "read",
+   "arguments": {
+    "path": "empty.txt"
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "[empty.txt is empty.]"
+    ]
+   }
+  },
+  {
+   "name": "read: a line pair past the line end reads as a line range",
+   "tool": "read",
+   "arguments": {
+    "path": "README.md",
+    "offset": "100:120"
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "was read as offset=100, limit=21",
+     "120| line 120"
+    ],
+    "absent": [
+     "121| line 121"
+    ]
+   }
+  },
+  {
+   "name": "read: offset text that is no line names the line calls",
+   "tool": "read",
+   "arguments": {
+    "path": "README.md",
+    "offset": "max-10"
+   },
+   "expect": {
+    "ok": false,
+    "error_code": "invalid_arguments",
+    "contains": [
+     "offset=-10 shows the last 10 lines"
+    ]
+   }
+  },
+  {
+   "name": "read: a binary file names a way to inspect it",
+   "tool": "read",
+   "arguments": {
+    "path": "blob.bin"
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "is a binary file",
+     "can inspect it"
+    ]
+   }
+  },
+  {
+   "name": "patch: placeholder input beside the patch asks for nothing",
+   "tool": "apply_patch",
+   "arguments": {
+    "input": "placeholder",
+    "patch": "*** Begin Patch\n*** Update File: src/app.py\n@@\n-    g = Greeter(\"world\")\n+    g = Greeter(\"mars\")\n*** End Patch"
+   },
+   "expect": {
+    "ok": true,
+    "files": {
+     "src/app.py": "import os\n\n\nclass Greeter:\n    def __init__(self, name):\n        self.name = name\n\n    def greet(self):\n        return f\"Hello, {self.name}!\"\n\n\ndef main():\n    g = Greeter(\"mars\")\n    print(g.greet())\n"
+    }
+   }
+  },
+  {
+   "name": "patch: one - line inside a longer line is replaced within it",
+   "tool": "apply_patch",
+   "arguments": {
+    "patch": "*** Begin Patch\n*** Update File: docs/story.md\n@@\n-The quick brown fox jumps over the lazy dog\n+The quick red fox jumps over the lazy dog\n*** End Patch"
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "only that part of the line was replaced"
+    ],
+    "files": {
+     "docs/story.md": "# Title\n\nThe quick red fox jumps over the lazy dog, and then the fox keeps running through the forest until it reaches the river where it stops to drink some cold water before continuing on its long journey home to its den.\n\nSecond paragraph.\n"
+    }
+   }
+  },
+  {
+   "name": "patch: a patch line inside a longer line names that line",
+   "tool": "apply_patch",
+   "arguments": {
+    "patch": "*** Begin Patch\n*** Update File: docs/story.md\n@@\n # Title\n \n-The quick brown fox jumps over the lazy dog\n+The quick red fox jumps over the lazy dog\n*** End Patch"
+   },
+   "expect": {
+    "ok": false,
+    "error_code": "text_not_found",
+    "contains": [
+     "is only part of line 3",
+     "copy all of line 3"
+    ]
+   }
+  },
+  {
+   "name": "patch: code_edit refusal names the given path",
+   "tool": "apply_patch",
+   "arguments": {
+    "target_file": "src/app.py",
+    "code_edit": "// ... existing code ...\n    g = Greeter(\"mars\")"
+   },
+   "expect": {
+    "ok": false,
+    "error_code": "invalid_arguments",
+    "contains": [
+     "*** Update File: src/app.py",
+     "No file was changed."
+    ]
    }
   }
  ]

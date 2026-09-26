@@ -222,6 +222,23 @@ def test_current_content_stamps_stats_and_syntax_warnings(tmp_path):
     assert path.read_bytes() == b"external = True\nvalue = (\n"
 
 
+def test_failed_change_to_a_file_changed_since_its_read_says_so(tmp_path):
+    path = tmp_path / "file.py"
+    path.write_bytes(b"value = 1\n")
+    state = FileReadState()
+    state.record_read("session-test", path)
+    path.write_bytes(b"total = 22\n")
+
+    result = apply(tmp_path, update("@@\n-value = 1\n+value = 3", "file.py"), state=state)
+
+    assert result["error"]["code"] == "text_not_found"
+    assert (
+        "file.py changed after this Session last read it; read it again before resending."
+        in text(result)
+    )
+    assert path.read_bytes() == b"total = 22\n"
+
+
 def test_paths_cwd_absolute_aliases_and_parent_overlap(tmp_path):
     root = tmp_path / "repo"
     root.mkdir()
