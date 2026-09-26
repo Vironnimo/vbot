@@ -178,7 +178,7 @@ async def test_missing_old_string_shows_closest_text_and_existing_new_text(run):
     assert result["error"]["message"] == (
         "a.py: old_string was not found.\nThe closest text in the file, lines 1-2:\n"
         "1| def f():\n2|     return 1\nFirst difference, line 2: the file has '    return 1' "
-        "where the patch has '    return 2'.\nNo file was changed."
+        "where old_string has '    return 2'.\nNo file was changed."
     )
     done = await run(
         {"file_path": "b.py", "old_string": "x = 1", "new_string": "x = 3"}, **{"b.py": "x = 3\n"}
