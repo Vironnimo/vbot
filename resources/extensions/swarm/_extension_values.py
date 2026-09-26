@@ -145,6 +145,8 @@ def _participant_config(profile: Json, participant: Json, cwd: Path) -> Temporar
         fallback_models=formation.get("fallback_models", []),
         instructions=profile["instructions"],
         prompt_blocks=["core:agent_body", *profile["prompt_blocks"]],
+        # Profiles and snapshots saved before the optional field inherit.
+        compaction_policy=profile.get("compaction_policy"),
     )
 
 

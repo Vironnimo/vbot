@@ -288,6 +288,7 @@ class AgentResolver:
             prompt_blocks=config.prompt_blocks,
             temperature=config.temperature,
             thinking_effort=config.thinking_effort,
+            compaction_policy=config.compaction_policy,
         )
         return self._apply_temporary_project(agent, project_id)
 

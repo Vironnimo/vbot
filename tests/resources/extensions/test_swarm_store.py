@@ -54,6 +54,44 @@ async def test_prompt_selection_and_reminders_are_snapshotted(store):
 
 
 @pytest.mark.asyncio
+async def test_compaction_policy_is_optional_normalized_and_snapshotted(store):
+    inheriting = await store.save_profile(_profile(slug="inherit"), expected_revision=None)
+    assert inheriting["compaction_policy"] is None
+
+    saved = await store.save_profile(
+        {
+            **_profile(),
+            "compaction_policy": {
+                "enabled": True,
+                "trigger": {"type": "context_ratio", "threshold": 1, "tokens": 90_000},
+                "strategy": {"type": "summary_tail", "tail_tokens": 8_000},
+            },
+        },
+        expected_revision=None,
+    )
+    policy = {
+        "enabled": True,
+        "trigger": {"type": "context_ratio", "threshold": 1.0, "tokens": 90_000},
+        "strategy": {"type": "summary_tail", "tail_tokens": 8_000, "summary_model": None},
+    }
+    assert saved["compaction_policy"] == policy
+    started = await store.create_swarm(
+        saved["id"],
+        "goal",
+        {"cwd": "C:/work"},
+        request_id="start",
+        expected_profile_revision=saved["revision"],
+    )
+    # Save replaces the complete profile: null returns participants to inheritance.
+    updated = await store.save_profile(
+        {**saved, "compaction_policy": None}, expected_revision=saved["revision"]
+    )
+    assert updated["compaction_policy"] is None
+    snapshot = (await store.get_swarm(started["swarm_id"]))["profile_snapshot"]
+    assert snapshot["compaction_policy"] == policy
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "fields",
     [
@@ -196,6 +234,16 @@ async def test_profile_defaults_and_strict_nested_validation(store: SwarmStore) 
         {
             **_profile(slug="bad-fallback"),
             "participants": [{"model": "model-a", "count": 1, "fallback_models": ["a", "a"]}],
+        },
+        {**_profile(slug="bad-compaction-shape"), "compaction_policy": "summary_tail"},
+        {**_profile(slug="bad-compaction-partial"), "compaction_policy": {"enabled": False}},
+        {
+            **_profile(slug="bad-compaction-trigger"),
+            "compaction_policy": {
+                "enabled": True,
+                "trigger": {"type": "input_tokens", "tokens": 0},
+                "strategy": {"type": "continuation"},
+            },
         },
     ]
     for invalid in invalid_profiles:

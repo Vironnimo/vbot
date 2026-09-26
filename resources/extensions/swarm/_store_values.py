@@ -15,12 +15,14 @@ from typing import Any
 
 from core.sessions import DeliveryReceipt, SessionAddress
 from core.settings.agent_defaults import validate_fallback_chain
+from core.settings.normalizers import normalize_compaction_policy
 from core.settings.settings import (
     SettingsValidationError,
     validate_temperature,
     validate_thinking_effort,
 )
 from core.tools.availability import normalize_tool_access
+from core.utils.errors import StorageError
 from core.utils.ids import new_id
 
 Json = dict[str, Any]
@@ -101,6 +103,7 @@ def _validate_profile(value: Mapping[str, Any]) -> Json:
         "prompt_blocks",
         "reminders",
         "delivery",
+        "compaction_policy",
     }
     if set(profile) - allowed:
         raise SwarmStoreError("invalid_arguments")
@@ -171,6 +174,7 @@ def _validate_profile(value: Mapping[str, Any]) -> Json:
     profile["prompt_blocks"] = list(prompt_blocks)
     profile["reminders"] = dict(reminders)
     profile["delivery"] = _delivery(profile.get("delivery", {}))
+    profile["compaction_policy"] = _compaction_policy(profile.get("compaction_policy"))
     profile.setdefault("tools", {})
     profile.setdefault("allowed_skills", ["*"])
     profile.setdefault("instructions", "")
@@ -212,6 +216,16 @@ def _formation(value: object) -> Json:
         except ValueError as error:
             raise SwarmStoreError("invalid_arguments", field="participants") from error
     return formation
+
+
+def _compaction_policy(value: object) -> Json | None:
+    """Return ``None`` (participants inherit) or one complete normalized Policy."""
+    if value is None:
+        return None
+    try:
+        return normalize_compaction_policy(value)
+    except StorageError as error:
+        raise SwarmStoreError("invalid_arguments", field="compaction_policy") from error
 
 
 def _delivery(value: object) -> Json:
