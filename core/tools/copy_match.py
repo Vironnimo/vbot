@@ -14,9 +14,12 @@ never where one side has an identifier (a word with an underscore, a digit or an
 inner capital) and the other another word: that names something else, such as a
 sibling function in another file. A passage of 3 or more lines is placed as
 well by exactly copied first and last lines of at least 2 words each around similar
-lines. Each line keeps its place: a kept line must be mostly right, and a copy
-whose extra words continue the line above or below joined lines across a line
-break (the copy left out or added a line), so the passage does not take the edit.
+lines. Each line keeps its place: a kept line must hold at least half of its file
+line's words, and of its words and signs together (a blank file line holds none),
+and a copy whose extra words continue the line above or below joined lines across a
+line break (the copy left out or added a line), so the passage does not take the
+edit. Words moved across a line break between a kept line and another line of the
+passage are the exception, since the kept line stays as the file has it.
 Passages copied up to misspellings and kept-line gaps are preferred, like the
 precise strategies before them; candidates that overlap are one passage, placed by
 the fewest differences; exactly one passage may qualify at the first level that has
@@ -39,6 +42,16 @@ A misspelling is a word of at least 4 characters that differs from the file's wo
 at its place only in letter case or one added, dropped, changed or swapped letter
 (two from 8 characters), keeps its digits, and occurs nowhere in the file: a word
 the file holds is a real other word there, not a copy error.
+
+Some differences never matter: a hyphen (or two) for an em dash, a lone backslash
+only one side holds (an escaped quote), and zero-width characters. They are neither
+correct words nor differences, and text the caller keeps comes out as the file has
+it, with the file's zero-width characters beside it; so zero-width characters the
+caller writes at the edge of a change, other than its copy's there, do not fit. A
+backslash only one side holds shows that the two escape differently, so the
+text the edit writes may hold no backslash, nor, on a line where the file escapes a
+character the copy does not, that character; and a backslash only the file holds
+must not border a change: it would escape the new text.
 """
 
 from __future__ import annotations
@@ -100,9 +113,16 @@ _TOKEN = re.compile(r"\w+|\s+|[^\w\s]")
 _WORD = re.compile(r"\w+")
 _INNER_CAPITAL = re.compile(r"[^\W\d_A-Z][A-Z]")
 _DIGITS = re.compile(r"\d+")
-_FOLD = str.maketrans(_TYPOGRAPHIC_NORMALIZATION)
+# Zero-width space, non-joiner, joiner, word joiner and byte order mark: invisible,
+# so a copy cannot show where the file holds them.
+_INVISIBLE = "\u200b\u200c\u200d\u2060\ufeff"
+_FOLD = str.maketrans({**_TYPOGRAPHIC_NORMALIZATION, **dict.fromkeys(_INVISIBLE, "")})
+_EM_DASH = _TYPOGRAPHIC_NORMALIZATION["\u2014"]
+_HYPHENS = (["-"], ["-", "-"])
+_BACKSLASH = "\\"
 # ``moved``: spacing that differs in line breaks, which a change must not rest on.
-_SAME, _MISSPELLED, _MOVED, _OTHER = "same", "misspelled", "moved", "other"
+# ``alike``: a hyphen for an em dash, or a lone backslash only the copy holds.
+_SAME, _MISSPELLED, _MOVED, _ALIKE, _OTHER = "same", "misspelled", "moved", "alike", "other"
 
 
 def replace_copied(
@@ -233,12 +253,32 @@ class _Text:
             return ""
         return self.source[self.tokens[first].start : self.tokens[last - 1].end]
 
+    def gap(self, index: int) -> tuple[int, int]:
+        """Offsets of the invisible characters between tokens ``index - 1`` and ``index``."""
+        if not self.tokens:
+            return 0, 0
+        if index <= 0:
+            return self.tokens[0].start, self.tokens[0].start
+        if index >= len(self.tokens):
+            return self.tokens[-1].end, self.tokens[-1].end
+        return self.tokens[index - 1].end, self.tokens[index].start
+
+    def gap_text(self, index: int) -> str:
+        begin, end = self.gap(index)
+        return self.source[begin:end]
+
     def window(self, first: int, last: int) -> _Text:
         return _Text(self.source, self.tokens[first:last], "", "")
 
 
 def _read(source: str) -> _Text:
     folded, spans = _normalize_with_spans(source, typographic=True)
+    if any(character in _INVISIBLE for character in folded):
+        # Invisible characters get no key: a token's span holds those within it, and
+        # those between tokens lie in the gap there.
+        visible = [index for index, character in enumerate(folded) if character not in _INVISIBLE]
+        folded = "".join(folded[index] for index in visible)
+        spans = [spans[index] for index in visible]
     tokens: list[_Token] = []
     for match in _TOKEN.finditer(folded):
         key = match.group()
@@ -348,18 +388,25 @@ class _Alignment:
     ``before`` and ``after`` map a copy boundary to the file boundary before and
     after tokens only the file holds there (``extra``: their content count).
     ``gaps`` counts the ``other`` differences that are tokens only one side holds;
-    ``foreign`` the other differences where either side is an identifier.
+    ``foreign`` the other differences where either side is an identifier; ``alike``
+    the differences that never matter. ``escapes`` maps the copy boundaries where
+    only the file holds a lone backslash to the sign it escapes ("" for none), and
+    ``unwritable`` holds the characters text the edit writes must not hold, since the
+    copy escapes differently from the file.
     """
 
     states: list[str]
     before: dict[int, int] = field(default_factory=dict)
     after: dict[int, int] = field(default_factory=dict)
     extra: dict[int, int] = field(default_factory=dict)
+    escapes: dict[int, str] = field(default_factory=dict)
+    unwritable: set[str] = field(default_factory=set)
     correct: int = 0
     misspelled: int = 0
     other: int = 0
     gaps: int = 0
     foreign: int = 0
+    alike: int = 0
 
 
 def _align(copy: _Text, actual: _Text, speller: _Speller) -> _Alignment:
@@ -379,16 +426,28 @@ def _align(copy: _Text, actual: _Text, speller: _Speller) -> _Alignment:
         alignment.before.setdefault(i1, j1)
         if tag == "insert":
             alignment.after[i1] = j2
+            if _lone_backslash(held[j1:j2]):
+                alignment.escapes[i1] = _escaped(held, j2)
+                alignment.unwritable.add(_BACKSLASH)
+                alignment.alike += 1
+                continue
             alignment.extra[i1] = _content(held[j1:j2])
             alignment.other += alignment.extra[i1]
             alignment.gaps += alignment.extra[i1]
             continue
         alignment.after[i1] = j1
         if tag == "delete":
+            if _lone_backslash(copied[i1:i2]):
+                _mark_alike(alignment, copied, i1, i2)
+                alignment.unwritable.add(_BACKSLASH)
+                continue
             alignment.other += _content(copied[i1:i2])
             alignment.gaps += _content(copied[i1:i2])
             continue
         if i2 - i1 != j2 - j1:
+            if _dash_pair(copied[i1:i2], held[j1:j2]):
+                _mark_alike(alignment, copied, i1, i2)
+                continue
             alignment.other += max(_content(copied[i1:i2]), _content(held[j1:j2]))
             alignment.foreign += any(map(_identifier, [*copied[i1:i2], *held[j1:j2]]))
             continue
@@ -401,6 +460,8 @@ def _align(copy: _Text, actual: _Text, speller: _Speller) -> _Alignment:
                 alignment.correct += _is_word(wrong)
             elif _is_space(wrong) and _is_space(right):
                 alignment.states[index] = _MOVED
+            elif _dash_pair([wrong], [right]):
+                _mark_alike(alignment, copied, index, index + 1)
             elif speller.misspelled(wrong, right):
                 alignment.states[index] = _MISSPELLED
                 alignment.misspelled += 1
@@ -412,6 +473,57 @@ def _align(copy: _Text, actual: _Text, speller: _Speller) -> _Alignment:
     return alignment
 
 
+def _lone_backslash(keys: Sequence[str]) -> bool:
+    return [key for key in keys if not _is_space(key)] == [_BACKSLASH]
+
+
+def _escaped(held: Sequence[str], index: int) -> str:
+    """The sign a backslash only the file holds escapes, or "" when a sign does not follow."""
+    following = held[index][:1] if index < len(held) else ""
+    if following and not (following.isalnum() or following.isspace()):
+        return following
+    return ""
+
+
+def _writes_escaped(
+    alignment: _Alignment, keys: Sequence[str], first: int, last: int, written: str
+) -> bool:
+    """Whether ``written`` holds a sign the file escapes on the line it goes into.
+
+    A change that covers such a backslash is checked in all its text; one beside it
+    only in the text it writes on that line.
+    """
+    lines = TEXT_LINE_BREAK.split(written.translate(_FOLD))
+    for boundary, sign in alignment.escapes.items():
+        if not sign:
+            continue
+        if boundary < first:
+            part = None if any("\n" in key for key in keys[boundary:first]) else lines[0]
+        elif boundary > last:
+            part = None if any("\n" in key for key in keys[last:boundary]) else lines[-1]
+        else:
+            part = "\n".join(lines)
+        if part is not None and sign in part:
+            return True
+    return False
+
+
+def _dash_pair(copied: Sequence[str], held: Sequence[str]) -> bool:
+    """Whether one side holds a hyphen (or two) where the other holds an em dash."""
+    first = [key for key in copied if not _is_space(key)]
+    second = [key for key in held if not _is_space(key)]
+    return (first == [_EM_DASH] and second in _HYPHENS) or (
+        second == [_EM_DASH] and first in _HYPHENS
+    )
+
+
+def _mark_alike(alignment: _Alignment, copied: Sequence[str], first: int, last: int) -> None:
+    for index in range(first, last):
+        if not _is_space(copied[index]):
+            alignment.states[index] = _ALIKE
+    alignment.alike += 1
+
+
 def _differs(state: str, key: str) -> bool:
     """Whether a copy token next to a change differs from the file beyond spacing."""
     return state == _MOVED or (state == _OTHER and not _is_space(key))
@@ -421,8 +533,11 @@ def _change_fits(alignment: _Alignment, keys: list[str], first: int, last: int) 
     """Whether the copy holds the file's text where the caller changes ``first:last``.
 
     In the words and signs next to the change the copy must match up to misspellings;
-    within it, other differences need at least 4 correct words each.
+    within it, other differences need at least 4 correct words each. A backslash only
+    the file holds must not border the change.
     """
+    if first in alignment.escapes or last in alignment.escapes:
+        return False
     low, seen = first, 0
     while low > 0 and seen < _CHANGE_NEIGHBORS:
         low -= 1
@@ -449,22 +564,41 @@ def _change_fits(alignment: _Alignment, keys: list[str], first: int, last: int) 
 
 
 def _merge(
-    copy: _Text, actual: _Text, new: _Text, alignment: _Alignment, speller: _Speller
+    copy: _Text,
+    actual: _Text,
+    new: _Text,
+    alignment: _Alignment,
+    speller: _Speller,
+    unwritable: set[str],
 ) -> str | None:
     """Apply the change from ``copy`` to ``new`` onto ``actual``, or None if it does not fit.
 
     The result is the caller's new text up to the file's spelling: text the caller
     keeps must match the file up to misspellings, since a difference there may be
-    wording the caller meant to write.
+    wording the caller meant to write. The text written must not hold ``unwritable``
+    characters, nor a sign the file escapes on the line it goes into. Kept text holds
+    the file's invisible characters beside it, so ones the caller writes at the edge
+    of a change, other than its copy's there, do not fit.
     """
     copied = copy.keys
     opcodes = _changes(tuple(copied), tuple(new.keys))
     pieces = []
+    held = -1  # the file gap the kept text before already holds
     for tag, i1, i2, j1, j2 in opcodes:
         if tag != "equal":
             if not _change_fits(alignment, copied, i1, i2):
                 return None
-            pieces.append(speller.respell(new.span(j1, j2)))
+            if new.gap_text(j1) not in ("", copy.gap_text(i1)) or new.gap_text(j2) not in (
+                "",
+                copy.gap_text(i2),
+            ):
+                return None
+            written = speller.respell(new.span(j1, j2))
+            if unwritable and not unwritable.isdisjoint(written.translate(_FOLD)):
+                return None
+            if _writes_escaped(alignment, copied, i1, i2, written):
+                return None
+            pieces.append(written)
             continue
         if any(
             alignment.states[index] == _OTHER and not _is_space(copied[index])
@@ -477,7 +611,10 @@ def _merge(
         breaks = sum(key.count("\n") for key in actual.keys[first:last])
         if breaks != sum(key.count("\n") for key in copied[i1:i2]):
             return None
-        pieces.append(actual.span(first, last))
+        # The kept text takes the file's invisible characters on both sides.
+        begin = actual.gap(first)[1] if first == held else actual.gap(first)[0]
+        pieces.append(actual.source[begin : actual.gap(last)[1]])
+        held = last
     kept_first = bool(opcodes) and opcodes[0][0] == "equal"
     kept_last = bool(opcodes) and opcodes[-1][0] == "equal"
     lead = actual.lead if kept_first else new.lead
@@ -602,14 +739,25 @@ class _File:
 
 
 def _misplaced(
-    file: _File, copy: _Text, alignment: _Alignment, first: int, count: int, *, kept: bool
+    file: _File,
+    copy: _Text,
+    alignment: _Alignment,
+    first: int,
+    count: int,
+    *,
+    kept: bool,
+    passage: tuple[int, int],
 ) -> bool:
     """Whether the copy of lines ``first`` to ``first + count - 1`` belongs elsewhere.
 
-    A kept line must be mostly right. Words the copy has beyond these lines that
-    continue the line above or below show a copy joined across a line break.
+    A kept line must hold at least half of its file line's words, and of its words and
+    signs together; a blank file line holds none. Words the copy has beyond these
+    lines that continue the line above or below show a copy joined across a line
+    break. For a kept line only a neighbor outside the ``passage`` lines counts: the
+    words moved within the passage, and the kept line stays as the file has it. A
+    written line might write them again.
     """
-    if kept and alignment.other > alignment.correct:
+    if kept and _mostly_wrong(file.line(first), copy, alignment):
         return True
     keys = copy.keys
     content = [index for index, key in enumerate(keys) if not _is_space(key)]
@@ -625,15 +773,37 @@ def _misplaced(
         trail.insert(0, keys[index])
     lead_words = [key for key in lead if _is_word(key)]
     trail_words = [key for key in trail if _is_word(key)]
-    if lead_words and first > 0:
+    begin, end = passage
+    if lead_words and first > 0 and not (kept and first > begin):
         above = file.line_words[first - 1]
         if len(lead_words) <= len(above) and above[-len(lead_words) :] == lead_words:
             return True
-    if trail_words and first + count < len(file.texts):
+    if trail_words and first + count < len(file.texts) and not (kept and first + count < end):
         below = file.line_words[first + count]
         if below[: len(trail_words)] == trail_words:
             return True
     return False
+
+
+def _mostly_wrong(held: _Text, copy: _Text, alignment: _Alignment) -> bool:
+    """Whether a kept line's copy holds less than half of the file line's words or signs.
+
+    Signs count with words, so that lines without words (a closing tag, a table
+    rule) are judged too; words count alone, so that shared markup ("##", "-") does
+    not make another line look right.
+    """
+    signs = _content(held.keys) - len(alignment.escapes)
+    if signs <= 0:
+        return True
+    words = sum(_is_word(key) for key in held.keys)
+    matched = [
+        key
+        for key, state in zip(copy.keys, alignment.states, strict=True)
+        if state in (_SAME, _MISSPELLED) or (state == _ALIKE and key != _BACKSLASH)
+        if not _is_space(key)
+    ]
+    matched_words = sum(_is_word(key) for key in matched)
+    return len(matched) * 2 < signs or matched_words * 2 < words
 
 
 def _anchor_words(file: _File, lines: Sequence[str]) -> list[tuple[str, list[int]]]:
@@ -709,7 +879,7 @@ class _Placed:
     differed: tuple[tuple[int, str], ...]
     respelled: tuple[tuple[str, str], ...]
     level: int
-    cost: int  # misspellings and other differences
+    cost: int  # misspellings, other differences and ones that never matter
     kept_differed: tuple[tuple[int, str], ...] = ()
 
 
@@ -838,6 +1008,8 @@ def _place_lines(
         total.misspelled += alignment.misspelled
         total.other += alignment.other
         total.foreign += alignment.foreign
+        total.alike += alignment.alike
+        total.unwritable |= alignment.unwritable
         gaps += alignment.gaps if segment.kept else 0
         remaining -= words.total()
         if not anchored and not _reachable(total, gaps, remaining, best):
@@ -856,12 +1028,21 @@ def _place_lines(
     differed = []
     kept_differed = []
     fits = True
+    passage = (start, start + len(old))
     for segment, copy, actual, alignment in aligned:
         first = start + segment.old
         if (
             segment.removed
             and alignment.other
-            and _misplaced(file, copy, alignment, first, segment.removed, kept=segment.kept)
+            and _misplaced(
+                file,
+                copy,
+                alignment,
+                first,
+                segment.removed,
+                kept=segment.kept,
+                passage=passage,
+            )
         ):
             fits = False
             break
@@ -871,7 +1052,8 @@ def _place_lines(
                 kept_differed.append((first + 1, old[segment.old]))
             continue
         wanted = _read(file.ending.join(new[segment.new : segment.new + segment.added]))
-        merged = _merge(copy, actual, wanted, alignment, speller)
+        # A backslash the copy and the file hold differently anywhere bars written ones.
+        merged = _merge(copy, actual, wanted, alignment, speller, total.unwritable)
         if merged is None or (
             segment.added and len(TEXT_LINE_BREAK.findall(merged)) != segment.added - 1
         ):
@@ -896,7 +1078,7 @@ def _place_lines(
         tuple(differed),
         _respelled(speller, hunk.new),
         level,
-        total.misspelled + total.other,
+        total.misspelled + total.other + total.alike,
         tuple(kept_differed),
     )
 
@@ -935,12 +1117,12 @@ def _match_fragment(
             level = _level(alignment)
             if level is None:
                 continue
-            merged = _merge(copy, window, wanted, alignment, speller)
+            merged = _merge(copy, window, wanted, alignment, speller, alignment.unwritable)
             begin = file.starts[number] + line.tokens[first].start
             end = file.starts[number] + line.tokens[last - 1].end
             differed = () if window.keys == copy.keys else ((number + 1, old),)
             respelled = _respelled(speller, new)
-            cost = alignment.misspelled + alignment.other
+            cost = alignment.misspelled + alignment.other + alignment.alike
             placed.append(_Placed(begin, end, merged, differed, respelled, level, cost))
     return _result(file, placed)
 
