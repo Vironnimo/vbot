@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import sqlite3
 import threading
+from concurrent.futures import Future
 from contextlib import closing
 from pathlib import Path
 from typing import Any
@@ -236,6 +238,33 @@ async def test_work_on_a_closed_disposable_database_is_unavailable(tmp_path: Pat
     ):
         with pytest.raises(DatabaseUnavailableError):
             await work()
+
+
+@pytest.mark.asyncio
+async def test_cached_disposable_handle_does_not_block_the_loop_during_a_write(
+    tmp_path: Path,
+) -> None:
+    projection = DisposableDatabase(projection_spec(tmp_path / "index.db"))
+    database = await projection.get_async()
+    started: Future[None] = Future()
+    release = threading.Event()
+
+    def hold_write(connection: sqlite3.Connection) -> None:
+        connection.execute("INSERT INTO notes (body) VALUES ('derived')")
+        started.set_result(None)
+        assert release.wait(timeout=10), "the Event Loop could not release the transaction"
+
+    writer = asyncio.create_task(database.write_async(hold_write))
+    try:
+        await asyncio.wait_for(asyncio.wrap_future(started), timeout=10)
+        asyncio.get_running_loop().call_soon(release.set)
+        assert await projection.get_async() is database
+        await writer
+        assert note_bodies(database) == ["derived"]
+    finally:
+        release.set()
+        await asyncio.gather(writer, return_exceptions=True)
+        projection.close()
 
 
 def test_a_disposable_database_open_in_another_handle_is_never_discarded(
