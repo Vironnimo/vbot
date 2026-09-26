@@ -57,7 +57,12 @@ from core.storage.prompt_blocks import PromptBlockStore
 from core.storage.prompt_fragments import PromptFragmentStore
 from core.storage.temp_files import TemporaryFileManager
 from core.utils.atomic import atomic_write_text
-from core.utils.config import build_environment_snapshot, read_env_file
+from core.utils.config import (
+    build_environment_snapshot,
+    format_env_value,
+    read_env_file,
+    split_env_lines,
+)
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -162,12 +167,14 @@ class StorageManager:
             env_path = self.data_dir / ".env"
             try:
                 lines = (
-                    env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []
+                    split_env_lines(env_path.read_text(encoding="utf-8"))
+                    if env_path.exists()
+                    else []
                 )
             except OSError as exc:
                 raise StorageError(f"Cannot read {env_path}: {exc}") from exc
 
-            new_line = f"{key}={value}"
+            new_line = f"{key}={format_env_value(value)}"
             updated_lines: list[str] = []
             replaced = False
             for line in lines:
@@ -209,7 +216,7 @@ class StorageManager:
             if not env_path.exists():
                 return False
             try:
-                lines = env_path.read_text(encoding="utf-8").splitlines()
+                lines = split_env_lines(env_path.read_text(encoding="utf-8"))
             except OSError as exc:
                 raise StorageError(f"Cannot read {env_path}: {exc}") from exc
 
