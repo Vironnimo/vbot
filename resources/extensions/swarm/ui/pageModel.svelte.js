@@ -529,19 +529,37 @@ export function createSwarmPageModel(host) {
     }
   }
 
+  function confirmProfileDelete(profile) {
+    deleteError = '';
+    deleteCandidate = profile;
+  }
+
   async function deleteProfile() {
-    const profile = deleteCandidate;
-    if (!profile) return;
+    const candidate = deleteCandidate;
+    if (!candidate || pending) return;
+    pending = 'delete';
+    deleteError = '';
+    // An autosave may have advanced the revision while the dialog was open.
+    const current =
+      profiles.find((item) => item.id === candidate.id) ?? candidate;
     try {
       await call('profiles.delete', {
-        profile_id: profile.id,
-        expected_revision: profile.revision,
+        profile_id: candidate.id,
+        expected_revision: current.revision,
       });
-      if (selectedProfile?.id === profile.id) selectedProfile = null;
+      if (editor?.id === candidate.id) {
+        // Close without the navigation flush: the draft belongs to the
+        // deleted Swarm and must not be saved again.
+        selectionRequest += 1;
+        editor = null;
+      }
+      if (selectedProfile?.id === candidate.id) void selectRunProfile(null);
       deleteCandidate = null;
       await refresh();
     } catch (cause) {
-      error = cause.message;
+      deleteError = cause.message;
+    } finally {
+      pending = '';
     }
   }
 
@@ -964,6 +982,7 @@ export function createSwarmPageModel(host) {
     openDiscussion,
     saveProfile,
     openProfile,
+    confirmProfileDelete,
     deleteProfile,
     deleteSwarm,
     startSwarm,
