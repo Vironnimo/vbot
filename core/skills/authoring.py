@@ -9,7 +9,7 @@ write atomically. It never resolves scopes or writes Project Skills.
 from __future__ import annotations
 
 import shutil
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from threading import RLock
@@ -34,7 +34,7 @@ from core.skills.skill_validator import (
     split_skill_document,
 )
 from core.skills.skills import RESOURCE_DIRECTORIES, SKILL_FILENAME
-from core.utils.atomic import atomic_write_bytes, atomic_write_text
+from core.utils.atomic import atomic_write_bytes
 from core.utils.errors import VBotError
 
 PROVENANCE_AUTHOR_KEY = "author"
@@ -94,7 +94,7 @@ class SkillAuthoringService:
             )
             skill_dir.mkdir(parents=True, exist_ok=False)
             try:
-                atomic_write_text(skill_file, document)
+                _atomic_write_styled(skill_file, document, "\n")
             except OSError:
                 shutil.rmtree(skill_dir, ignore_errors=True)
                 raise
@@ -162,75 +162,64 @@ class SkillAuthoringService:
                 warnings=validation.warnings,
             )
 
-    def patch(
+    def read_text(self, target_root: Path, skill_name: str, relative_path: str) -> str:
+        """Return ``SKILL.md`` or one UTF-8 support file with LF line endings."""
+        target, normalized = self._existing_text_file(target_root, skill_name, relative_path)
+        return _normalize_newlines(_read_text_file(target, normalized))
+
+    def rewrite(
         self,
         target_root: Path,
         skill_name: str,
-        old_string: str,
-        new_string: str,
+        relative_path: str,
+        edit: Callable[[str], str],
         *,
         author: SkillAuthor,
         source: str | None = None,
-        relative_path: str = SKILL_FILENAME,
-        replace_all: bool = False,
     ) -> SkillWriteResult:
-        """Replace exact text in ``SKILL.md`` or one UTF-8 support file."""
-        if old_string == new_string:
-            raise SkillAuthoringError("patch match and content must differ.")
+        """Rewrite ``SKILL.md`` or one UTF-8 support file through ``edit``.
+
+        ``edit`` receives the current text with LF line endings while the write
+        lock is held and returns the new text; raising aborts without writing.
+        A rewritten ``SKILL.md`` is validated and stamped like ``edit``. The file
+        keeps its line-ending style.
+        """
         with self._write_lock:
-            skill_dir = self._existing_skill_dir(target_root, skill_name)
-            normalized = normalize_skill_file_path(relative_path)
-            is_skill_document = normalized == SKILL_FILENAME
-            target = (
-                self._existing_skill_file(target_root, skill_name)
-                if is_skill_document
-                else self._resource_path(skill_dir, normalized)
-            )
-            if not target.is_file():
-                raise SkillAuthoringError(f"Skill file not found: {normalized}")
-            try:
-                current = _read_raw_text(target)
-            except UnicodeDecodeError as error:
-                raise SkillAuthoringError(
-                    f"Cannot patch non-UTF-8 Skill file: {normalized}"
-                ) from error
+            target, normalized = self._existing_text_file(target_root, skill_name, relative_path)
+            current = _read_text_file(target, normalized)
             file_ending = _detect_line_ending(current)
-            normalized_current = _normalize_newlines(current)
-            normalized_old = _normalize_newlines(old_string)
-            occurrences = normalized_current.count(normalized_old)
-            if occurrences == 0:
-                hint = (
-                    " If you meant a support file, pass file_path (e.g. references/notes.md)."
-                    if is_skill_document
-                    else ""
-                )
-                raise SkillAuthoringError(f"patch match not found in {normalized}.{hint}")
-            if occurrences > 1 and not replace_all:
-                lines = ", ".join(
-                    str(line) for line in _occurrence_lines(normalized_current, normalized_old)
-                )
-                raise SkillAuthoringError(
-                    f"patch match is not unique in {normalized} ({occurrences} matches "
-                    f"at line(s) {lines}); read the target and retry with a larger unique passage."
-                )
-            patched = normalized_current.replace(normalized_old, _normalize_newlines(new_string))
+            updated = _normalize_newlines(edit(_normalize_newlines(current)))
             warnings: list[str] = []
-            if is_skill_document:
-                patched, validation = self._prepare_document(
-                    _normalize_newlines(patched),
+            if normalized == SKILL_FILENAME:
+                updated, validation = self._prepare_document(
+                    updated,
                     skill_name=skill_name,
                     skill_file=target,
                     author=author,
                     source=source,
                 )
                 warnings = validation.warnings
-            _atomic_write_styled(target, patched, file_ending)
+            _atomic_write_styled(target, updated, file_ending)
             return SkillWriteResult(
                 name=skill_name,
-                operation="patch",
+                operation="rewrite",
                 path=target,
                 warnings=warnings,
             )
+
+    def _existing_text_file(
+        self, target_root: Path, skill_name: str, relative_path: str
+    ) -> tuple[Path, str]:
+        skill_dir = self._existing_skill_dir(target_root, skill_name)
+        normalized = normalize_skill_file_path(relative_path)
+        target = (
+            skill_dir / SKILL_FILENAME
+            if normalized == SKILL_FILENAME
+            else self._resource_path(skill_dir, normalized)
+        )
+        if not target.is_file():
+            raise SkillAuthoringError(f"Skill file not found: {normalized}")
+        return target, normalized
 
     def delete(self, target_root: Path, skill_name: str) -> SkillWriteResult:
         """Delete a Skill directory and all support files."""
@@ -444,16 +433,11 @@ def _to_line_ending(text: str, ending: str) -> str:
     return text.replace("\n", ending)
 
 
-def _occurrence_lines(text: str, needle: str) -> list[int]:
-    """1-based line numbers where each ``needle`` occurrence starts in ``text``."""
-    lines: list[int] = []
-    start = 0
-    while True:
-        index = text.find(needle, start)
-        if index == -1:
-            return lines
-        lines.append(text.count("\n", 0, index) + 1)
-        start = index + max(1, len(needle))
+def _read_text_file(path: Path, relative_path: str) -> str:
+    try:
+        return _read_raw_text(path)
+    except UnicodeDecodeError as error:
+        raise SkillAuthoringError(f"Skill file is not UTF-8 text: {relative_path}") from error
 
 
 def _atomic_write_styled(target_path: Path, text: str, file_ending: str) -> None:

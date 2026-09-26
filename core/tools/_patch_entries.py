@@ -17,7 +17,6 @@ from pathlib import Path
 from core.tools._patch_syntax import _PatchError
 from core.tools._tool_context import is_link_entry
 from core.tools.tools import ToolContext
-from core.utils.paths import model_path
 
 
 @dataclass(frozen=True)
@@ -42,7 +41,7 @@ def _snapshot(path: Path) -> _Snapshot:
     if is_link_entry(path):
         return _Snapshot(None, link=os.readlink(path))
     if not stat.S_ISREG(info.st_mode):
-        raise _PatchError("not_a_file", path=model_path(path))
+        raise _PatchError("not_a_file", path=path)
     return _Snapshot(path.read_bytes(), stat.S_IMODE(info.st_mode))
 
 
@@ -82,17 +81,17 @@ def _rename_entry(source: Path, destination: Path, before: dict[Path, _Snapshot]
     """
     snapshot = before[source]
     if not snapshot.exists:
-        raise _PatchError("file_not_found", path=model_path(source))
+        raise _PatchError("file_not_found", path=source)
     if destination != source:
         if before[destination].exists:
-            raise _PatchError("destination_exists", path=model_path(destination))
+            raise _PatchError("destination_exists", path=destination)
     elif os.path.lexists(destination) and not os.path.samestat(
         os.lstat(source), os.lstat(destination)
     ):
         # A case-sensitive directory can hold both spellings as distinct files.
-        raise _PatchError("destination_exists", path=model_path(destination))
+        raise _PatchError("destination_exists", path=destination)
     if _snapshot(source) != snapshot:
-        raise _PatchError("file_changed", path=model_path(source))
+        raise _PatchError("file_changed", path=source)
     destination.parent.mkdir(parents=True, exist_ok=True)
     os.rename(source, destination)
 
@@ -101,5 +100,5 @@ def _observe_renamed(destination: Path, expected: _Snapshot) -> _Snapshot:
     """Verify a completed rename: same entry, now listed under the new spelling."""
     actual = _snapshot(destination)
     if actual != expected or destination.name not in os.listdir(destination.parent):
-        raise _PatchError("file_changed", path=model_path(destination))
+        raise _PatchError("file_changed", path=destination)
     return actual

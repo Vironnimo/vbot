@@ -17,8 +17,10 @@ from core.model_tasks.decision_providers import ProviderDecisionClient
 from core.model_tasks.decision_store import DecisionStore
 from core.model_tasks.decision_types import DecisionError, text, validate_input
 from core.model_tasks.model_tasks import TaskModelService, parse_task_model_target_id
+from core.model_tasks.task_execution import TaskUsage, TaskUsageContext
 from core.providers.errors import NetworkError, ProviderError, ProviderOutcomeUnknownError
 from core.providers.task_client import TaskClientRuntime
+from core.usage import UsageRecorder
 from core.utils.logging import get_logger
 from core.utils.tls import shared_ssl_context
 
@@ -30,10 +32,16 @@ class DecisionService:
     """One executor for Tools, experiments, and future internal consumers."""
 
     def __init__(
-        self, model_tasks: TaskModelService, runtime: TaskClientRuntime, store_path: Path
+        self,
+        model_tasks: TaskModelService,
+        runtime: TaskClientRuntime,
+        store_path: Path,
+        *,
+        usage_recorder: UsageRecorder | None = None,
     ) -> None:
         self._model_tasks = model_tasks
         self._runtime = runtime
+        self._usage_recorder = usage_recorder
         self._store = DecisionStore(store_path)
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._starts: set[asyncio.Task[dict[str, Any]]] = set()
@@ -68,9 +76,11 @@ class DecisionService:
             )
         return self._model_tasks.binding_for("decision").target
 
-    async def evaluate(self, state: Any, questions: Any) -> dict[str, Any]:
+    async def evaluate(
+        self, state: Any, questions: Any, *, usage_context: TaskUsageContext | None = None
+    ) -> dict[str, Any]:
         state, questions = validate_input(state, questions)
-        return await self._evaluate(self._target(), state, questions)
+        return await self._evaluate(self._target(), state, questions, usage_context=usage_context)
 
     async def _evaluate(
         self,
@@ -79,11 +89,18 @@ class DecisionService:
         questions: list[dict[str, Any]],
         *,
         http_client: httpx.AsyncClient | None = None,
+        usage_context: TaskUsageContext | None = None,
     ) -> dict[str, Any]:
         started = monotonic()
         ref = parse_task_model_target_id(target)
         try:
-            client = ProviderDecisionClient.from_runtime(self._runtime, ref)
+            client = ProviderDecisionClient.from_runtime(
+                self._runtime,
+                ref,
+                usage_observer=TaskUsage(
+                    self._usage_recorder, "decision", ref, context=usage_context
+                ),
+            )
             result = await client.evaluate(state, questions, http_client=http_client)
         except ProviderOutcomeUnknownError as exc:
             raise DecisionError(

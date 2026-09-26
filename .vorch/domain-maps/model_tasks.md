@@ -35,6 +35,8 @@ Provider target IDs use `<provider>/<model>::<connection-local-id>[:<account-id>
 
 Artifact identity is owned by `artifacts.py` and the image writer: `img_`, `aud_`, `vid_`, and `mus_` plus 12 lowercase base32 characters. Workspace files are claimed exclusively through `core/utils/ids.py`; sidecar-backed artifacts reserve the shared metadata basename before writing so collisions across extensions cannot replace metadata. Readers accept bounded safe opaque ids, preserving stored references. Collision and round-trip coverage: `tests/core/model_tasks/test_artifacts.py`, `test_image.py`.
 
+Runtime injects the canonical `UsageRecorder` into every task execution service. `TaskUsage` in `task_execution.py` owns task identity and projection of existing response Usage: each task-client POST attempt, local speech execution, image-understanding Adapter send, Live voice call, and delegated Live backend send records consumption independently of retained artifacts, experiment history, or Sessions. Reported counters and costs survive unusable results and subsequent artifact failures; missing telemetry remains unknown. `TaskUsageContext` carries available Agent, Project, Session, Run, Extension and group identity from Tool callers without entering Model inputs. Standalone work, including Recall embedding batches, remains globally attributable to its Model without an invented Session. The durable store and Statistics projection are owned by `usage.md` and `statistics.md`.
+
 ## Conventions
 
 - Option schemas are backend-owned render hints over Model-DB facts, never a hardcoded capability matrix. Accessors render field types generically (`text`, `textarea`, `select`, `number`, `boolean`, `json`) without provider-specific rules.
@@ -46,6 +48,7 @@ Artifact identity is owned by `artifacts.py` and the image writer: `img_`, `aud_
 
 ## Constraints & Gotchas
 
+- Task request accounting observes the execution boundaries above. Adapter-internal HTTP/OAuth/protocol repairs are not separately exposed as task attempts. Unknown media units are not converted into token counts or guessed costs, and past Task Model consumption without retained evidence cannot be reconstructed. Regression coverage: `tests/core/model_tasks/test_task_usage.py`, `test_live.py`, `test__live_brain.py`, `test_image_analysis.py`, `test_image_codex_provider.py`.
 - The binding/discovery layer never calls media APIs or shapes wires; execution modules resolve bindings only through `TaskModelService`, never reading `settings.json`.
 - Missing targets usually mean missing credentials or stale catalogs - refresh the Model DB after configuring keys instead of hand-editing generated files.
 - Video/Music currently require OpenRouter (details in their child maps). Runtime registers STT `local/qwen3-asr` / `local/parakeet` and TTS `local/qwen3-tts` / `local/chatterbox` from the optional speech executor's catalog. Descriptors require a live availability callback for `usable`; registration alone does not imply an executable target. Imports and preflight never load ML runtimes or weights. Covered by `test_model_tasks.py` and `test_speech_local.py`.

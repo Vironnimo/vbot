@@ -1,319 +1,449 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  createVoiceSettingsState,
-  applyWakewordStatus,
-  applyRuntimeStatus,
-  buildVoiceSettingsPayload,
-  voiceSettingsDirty,
-  snapshotVoiceSettings,
+  ACTION_CHOICE_COMMAND,
+  ACTION_CHOICE_LIVE_START,
+  ACTION_CHOICE_LIVE_TOGGLE,
+  buildVoiceConfigChanges,
+  cloneVoiceConfig,
+  effectiveVoiceAction,
+  liveWakePhrases,
+  overlappingPhraseConflicts,
+  rebaseVoiceConfig,
+  sameVoiceAction,
+  voiceActionChoice,
+  voiceActionForChoice,
+  voiceConfigFromStatus,
 } from '../wakewordSettings.js';
 
-function calibrationStatus(overrides = {}) {
+const NABU = 'builtin/okay_nabu';
+const HEY_NABU = 'builtin/hey_nabu';
+const JARVIS = 'builtin/hey_jarvis';
+const DEFAULT_COMMAND = {
+  type: 'command',
+  agent_id: null,
+  session_behavior: null,
+};
+
+function phrase(modelId, overrides = {}) {
   return {
-    active: false,
-    phase: null,
-    scores: {},
-    peaks: {},
-    noise_levels: {},
-    sample_counts: {},
-    required_samples: 5,
-    target_model_id: null,
-    recommended_sensitivities: {},
-    noise_seconds_remaining: 0,
-    noise_high: false,
+    model_id: modelId,
+    label: modelId,
+    sensitivity: 0.5,
+    action: DEFAULT_COMMAND,
+    effective: {
+      type: 'command',
+      agent_id: 'main',
+      session_behavior: 'active',
+    },
+    problem: null,
     ...overrides,
   };
 }
 
-describe('createVoiceSettingsState', () => {
-  it('starts with both Nabu wakeword models active', () => {
-    const state = createVoiceSettingsState();
+function status(overrides = {}) {
+  return {
+    enabled: true,
+    state: 'listening',
+    sequence: 1,
+    microphone: { index: 2, name: 'Desk mic', host_api: 'WASAPI' },
+    echo_cancellation: { enabled: true, state: 'active' },
+    default_agent_id: 'main',
+    default_session_behavior: 'active',
+    phrases: [phrase(NABU), phrase(HEY_NABU, { sensitivity: 0.7 })],
+    ...overrides,
+  };
+}
 
-    expect(state.enabled).toBe(false);
-    expect(state.active_model_ids).toEqual([
-      'builtin/okay_nabu',
-      'builtin/hey_nabu',
-    ]);
-    expect(state.model_sensitivities).toEqual({});
-    expect(state.liveState).toBe('off');
-    expect(state.calibration).toEqual(calibrationStatus());
-  });
-
-  it('isolates arrays and objects between calls', () => {
-    const first = createVoiceSettingsState();
-    const second = createVoiceSettingsState();
-
-    first.active_model_ids.pop();
-    first.model_sensitivities['builtin/okay_nabu'] = 0.8;
-
-    expect(second.active_model_ids).toHaveLength(2);
-    expect(second.model_sensitivities).toEqual({});
-  });
-});
-
-describe('applyWakewordStatus', () => {
-  it('hydrates the multi-model bridge contract', () => {
-    const state = createVoiceSettingsState();
-    const status = {
-      enabled: true,
-      state: 'listening',
-      active_model_ids: ['builtin/okay_nabu', 'custom/computer'],
-      model_sensitivities: {
-        'builtin/okay_nabu': 0.8,
-        'custom/computer': 0.65,
-      },
-      target_agent_id: 'agent-1',
-      session_behavior: 'new',
-      calibration: calibrationStatus({
-        active: true,
-        phase: 'phrases',
-        scores: { 'builtin/okay_nabu': 0.4 },
-        peaks: { 'builtin/okay_nabu': 0.7 },
-        noise_levels: { 'builtin/okay_nabu': 0.03 },
-        sample_counts: { 'builtin/okay_nabu': 2 },
-        target_model_id: 'builtin/okay_nabu',
+describe('voiceConfigFromStatus', () => {
+  it('projects the editable configuration out of a snapshot', () => {
+    const config = voiceConfigFromStatus(
+      status({
+        default_session_behavior: 'new',
+        phrases: [
+          phrase(NABU, {
+            action: {
+              type: 'command',
+              agent_id: 'writer',
+              session_behavior: null,
+            },
+          }),
+          phrase(JARVIS, {
+            sensitivity: null,
+            action: { type: 'live_voice', mode: 'start' },
+          }),
+        ],
       }),
-    };
+    );
 
-    const hydrated = applyWakewordStatus(state, status);
-
-    expect(hydrated.enabled).toBe(true);
-    expect(hydrated.liveState).toBe('listening');
-    expect(hydrated.active_model_ids).toEqual(status.active_model_ids);
-    expect(hydrated.model_sensitivities).toEqual(status.model_sensitivities);
-    expect(hydrated.active_model_ids).not.toBe(status.active_model_ids);
-    expect(hydrated.model_sensitivities).not.toBe(status.model_sensitivities);
-    expect(hydrated.target_agent_id).toBe('agent-1');
-    expect(hydrated.session_behavior).toBe('new');
-    expect(hydrated.calibration).toEqual(status.calibration);
-    expect(hydrated.calibration).not.toBe(status.calibration);
+    expect(config).toEqual({
+      microphone: { index: 2, name: 'Desk mic', host_api: 'WASAPI' },
+      echo_cancellation: true,
+      active_model_ids: [NABU, JARVIS],
+      model_sensitivities: { [NABU]: 0.5 },
+      default_agent_id: 'main',
+      default_session_behavior: 'new',
+      phrase_actions: {
+        [NABU]: { type: 'command', agent_id: 'writer', session_behavior: null },
+        [JARVIS]: { type: 'live_voice', mode: 'start' },
+      },
+    });
   });
 
-  it('preserves editable values for missing keys and accepts explicit nulls', () => {
-    const state = {
-      ...createVoiceSettingsState(),
-      microphone: { index: 3, name: 'Desk mic', host_api: 'WASAPI' },
-      target_agent_id: 'agent-1',
-      model_sensitivities: { 'builtin/okay_nabu': 0.3 },
-    };
-
-    const hydrated = applyWakewordStatus(state, {
-      enabled: true,
+  it('reads a missing snapshot as an empty configuration', () => {
+    expect(voiceConfigFromStatus(null)).toEqual({
       microphone: null,
-      target_agent_id: null,
-      calibration: calibrationStatus({
-        active: true,
-        phase: 'phrases',
-        scores: { 'builtin/hey_nabu': 0.35 },
-        peaks: { 'builtin/hey_nabu': 0.72 },
-        noise_levels: { 'builtin/hey_nabu': 0.02 },
-        sample_counts: { 'builtin/hey_nabu': 1 },
-        target_model_id: 'builtin/hey_nabu',
-      }),
-    });
-
-    expect(hydrated.enabled).toBe(true);
-    expect(hydrated.microphone).toBeNull();
-    expect(hydrated.target_agent_id).toBeNull();
-    expect(hydrated.model_sensitivities).toEqual({
-      'builtin/okay_nabu': 0.3,
+      echo_cancellation: true,
+      active_model_ids: [],
+      model_sensitivities: {},
+      default_agent_id: null,
+      default_session_behavior: 'active',
+      phrase_actions: {},
     });
   });
 
-  it('returns the original state when status is absent', () => {
-    const state = createVoiceSettingsState();
-    expect(applyWakewordStatus(state, null)).toBe(state);
+  it('isolates the copy from the source', () => {
+    const config = voiceConfigFromStatus(status());
+    const copy = cloneVoiceConfig(config);
+
+    copy.active_model_ids.pop();
+    copy.model_sensitivities[NABU] = 0.9;
+    copy.phrase_actions[NABU].agent_id = 'writer';
+    copy.microphone.index = 7;
+
+    expect(config.active_model_ids).toEqual([NABU, HEY_NABU]);
+    expect(config.model_sensitivities[NABU]).toBe(0.5);
+    expect(config.phrase_actions[NABU]).toEqual(DEFAULT_COMMAND);
+    expect(config.microphone.index).toBe(2);
   });
 });
 
-describe('applyRuntimeStatus', () => {
-  it('updates runtime fields without reverting model edits', () => {
-    const state = {
-      ...createVoiceSettingsState(),
-      active_model_ids: ['builtin/hey_nabu'],
-      model_sensitivities: { 'builtin/hey_nabu': 0.9 },
-      target_agent_id: 'agent-1',
-    };
-    const status = {
-      state: 'recording',
-      mock: true,
-      mode: 'unavailable',
-      error_code: 'microphone_unavailable',
-      active_microphone: { index: 4, name: 'Desk mic', sample_rate: 48000 },
-      active_model_ids: ['builtin/okay_nabu'],
-      model_sensitivities: { 'builtin/okay_nabu': 0.5 },
-      target_agent_id: null,
-      calibration: calibrationStatus({
-        active: true,
-        phase: 'ready',
-        scores: { 'builtin/hey_nabu': 0.35 },
-        peaks: { 'builtin/hey_nabu': 0.72 },
-        noise_levels: { 'builtin/hey_nabu': 0.02 },
-        sample_counts: { 'builtin/hey_nabu': 3 },
-        recommended_sensitivities: { 'builtin/hey_nabu': 0.8 },
-      }),
-    };
-
-    const next = applyRuntimeStatus(state, status);
-
-    expect(next.liveState).toBe('recording');
-    expect(next.mock).toBe(true);
-    expect(next.mode).toBe('unavailable');
-    expect(next.errorCode).toBe('microphone_unavailable');
-    expect(next.activeMicrophone.name).toBe('Desk mic');
-    expect(next.active_model_ids).toEqual(['builtin/hey_nabu']);
-    expect(next.model_sensitivities).toEqual({ 'builtin/hey_nabu': 0.9 });
-    expect(next.target_agent_id).toBe('agent-1');
-    expect(next.calibration).toEqual(status.calibration);
+describe('buildVoiceConfigChanges', () => {
+  it('is empty when nothing differs', () => {
+    const baseline = voiceConfigFromStatus(status());
+    expect(
+      buildVoiceConfigChanges(cloneVoiceConfig(baseline), baseline),
+    ).toEqual({});
   });
 
-  it('returns the same reference when runtime state is unchanged', () => {
-    const state = {
-      ...createVoiceSettingsState(),
-      liveState: 'listening',
-      mock: false,
-    };
-    expect(applyRuntimeStatus(state, { state: 'listening', mock: false })).toBe(
-      state,
+  it('sends only the changed values and phrases', () => {
+    const baseline = voiceConfigFromStatus(
+      status({
+        phrases: [
+          phrase(NABU, {
+            action: { type: 'live_voice', mode: 'toggle' },
+          }),
+          phrase(HEY_NABU, {
+            action: {
+              type: 'command',
+              agent_id: 'writer',
+              session_behavior: null,
+            },
+          }),
+        ],
+      }),
     );
-  });
-});
-
-describe('buildVoiceSettingsPayload', () => {
-  it('builds a full structured payload without runtime fields', () => {
-    const state = {
-      ...createVoiceSettingsState(),
-      enabled: true,
-      model_sensitivities: {
-        'builtin/okay_nabu': 0.7,
-        'builtin/hey_nabu': 0.6,
-      },
-      target_agent_id: 'agent-1',
+    const draft = cloneVoiceConfig(baseline);
+    draft.microphone = { index: 5, name: 'Headset', host_api: 'MME' };
+    draft.echo_cancellation = false;
+    draft.active_model_ids = [NABU, HEY_NABU, JARVIS];
+    draft.model_sensitivities[HEY_NABU] = 0.8;
+    draft.model_sensitivities[JARVIS] = 0.6;
+    draft.default_agent_id = 'writer';
+    draft.default_session_behavior = 'new';
+    // Back to the default command: removes the stored action.
+    draft.phrase_actions[NABU] = DEFAULT_COMMAND;
+    // Only the Session override is left.
+    draft.phrase_actions[HEY_NABU] = {
+      type: 'command',
+      agent_id: null,
       session_behavior: 'new',
-      liveState: 'listening',
     };
+    draft.phrase_actions[JARVIS] = { type: 'live_voice', mode: 'start' };
 
-    const payload = buildVoiceSettingsPayload(state, null);
-
-    expect(payload.active_model_ids).toEqual(state.active_model_ids);
-    expect(payload.model_sensitivities).toEqual(state.model_sensitivities);
-    expect(payload.target_agent_id).toBe('agent-1');
-    expect(payload.session_behavior).toBe('new');
-    expect(payload.liveState).toBeUndefined();
-  });
-
-  it('detects array and object changes by value', () => {
-    const lastSaved = snapshotVoiceSettings(createVoiceSettingsState());
-    const state = {
-      ...lastSaved,
-      active_model_ids: ['builtin/okay_nabu'],
-      model_sensitivities: { 'builtin/okay_nabu': 0.9 },
-    };
-
-    expect(buildVoiceSettingsPayload(state, lastSaved)).toEqual({
-      active_model_ids: ['builtin/okay_nabu'],
-      model_sensitivities: { 'builtin/okay_nabu': 0.9 },
+    expect(buildVoiceConfigChanges(draft, baseline)).toEqual({
+      microphone: { index: 5, name: 'Headset', host_api: 'MME' },
+      echo_cancellation: false,
+      active_model_ids: [NABU, HEY_NABU, JARVIS],
+      model_sensitivities: { [HEY_NABU]: 0.8, [JARVIS]: 0.6 },
+      default_agent_id: 'writer',
+      default_session_behavior: 'new',
+      phrase_actions: {
+        [NABU]: null,
+        [HEY_NABU]: { type: 'command', session_behavior: 'new' },
+        [JARVIS]: { type: 'live_voice', mode: 'start' },
+      },
     });
   });
 
-  it('compares and clones stable microphone descriptors by value', () => {
-    const initial = {
-      ...createVoiceSettingsState(),
-      microphone: { index: 3, name: 'Desk mic', host_api: 'WASAPI' },
-    };
-    const lastSaved = snapshotVoiceSettings(initial);
-    const equivalent = {
-      ...initial,
-      microphone: { index: 3, name: 'Desk mic', host_api: 'WASAPI' },
-    };
+  it('treats a missing action and the default command as the same', () => {
+    const baseline = voiceConfigFromStatus(status());
+    const draft = cloneVoiceConfig(baseline);
+    draft.active_model_ids = [NABU, HEY_NABU, JARVIS];
+    draft.phrase_actions[JARVIS] = DEFAULT_COMMAND;
 
-    expect(buildVoiceSettingsPayload(equivalent, lastSaved)).toEqual({});
-
-    equivalent.microphone.index = 4;
-    expect(buildVoiceSettingsPayload(equivalent, lastSaved)).toEqual({
-      microphone: { index: 4, name: 'Desk mic', host_api: 'WASAPI' },
+    expect(buildVoiceConfigChanges(draft, baseline)).toEqual({
+      active_model_ids: [NABU, HEY_NABU, JARVIS],
     });
-    expect(lastSaved.microphone.index).toBe(3);
   });
+});
 
-  it('ignores runtime-only changes', () => {
-    const lastSaved = snapshotVoiceSettings(createVoiceSettingsState());
-    const state = {
-      ...lastSaved,
-      liveState: 'recording',
-      mock: true,
-      calibration: calibrationStatus({
-        active: true,
-        phase: 'noise',
-        scores: { 'builtin/okay_nabu': 0.4 },
-        peaks: { 'builtin/okay_nabu': 0.7 },
-        noise_seconds_remaining: 2,
+describe('rebaseVoiceConfig', () => {
+  it('keeps unsaved edits and takes everything else from the newer snapshot', () => {
+    const previous = voiceConfigFromStatus(status());
+    const draft = cloneVoiceConfig(previous);
+    draft.model_sensitivities[NABU] = 0.9;
+    draft.phrase_actions[HEY_NABU] = { type: 'live_voice', mode: 'start' };
+
+    const next = voiceConfigFromStatus(
+      status({
+        default_agent_id: 'writer',
+        echo_cancellation: { enabled: false, state: 'off' },
+        phrases: [
+          phrase(NABU, { sensitivity: 0.3 }),
+          phrase(HEY_NABU, { sensitivity: 0.4 }),
+        ],
       }),
-    };
-
-    expect(buildVoiceSettingsPayload(state, lastSaved)).toEqual({});
-    expect(voiceSettingsDirty(state, lastSaved)).toBe(false);
-  });
-});
-
-describe('voiceSettingsDirty and snapshotVoiceSettings', () => {
-  it('treats equivalent structured values as clean', () => {
-    const state = createVoiceSettingsState();
-    const lastSaved = snapshotVoiceSettings(state);
-
-    state.active_model_ids = [...state.active_model_ids];
-    state.model_sensitivities = { ...state.model_sensitivities };
-
-    expect(voiceSettingsDirty(state, lastSaved)).toBe(false);
-  });
-
-  it('deep-clones structured editable values', () => {
-    const state = createVoiceSettingsState();
-    const snapshot = snapshotVoiceSettings(state);
-
-    state.active_model_ids.pop();
-    state.model_sensitivities['builtin/okay_nabu'] = 0.8;
-
-    expect(snapshot.active_model_ids).toHaveLength(2);
-    expect(snapshot.model_sensitivities).toEqual({});
-  });
-});
-
-describe('per-model wakeword actions', () => {
-  it('hydrates, compares, and clones model actions by value', () => {
-    const state = applyWakewordStatus(createVoiceSettingsState(), {
-      model_actions: {
-        'builtin/okay_nabu': 'command',
-        'builtin/hey_nabu': 'live_voice',
-      },
-    });
-    const lastSaved = snapshotVoiceSettings(state);
-
-    state.model_actions = { ...state.model_actions };
-    expect(voiceSettingsDirty(state, lastSaved)).toBe(false);
-
-    state.model_actions['builtin/okay_nabu'] = 'live_voice';
-    expect(lastSaved.model_actions['builtin/okay_nabu']).toBe('command');
-    const payload = buildVoiceSettingsPayload(state, lastSaved);
-    expect(payload).toEqual({
-      model_actions: {
-        'builtin/okay_nabu': 'live_voice',
-        'builtin/hey_nabu': 'live_voice',
-      },
-    });
-    expect(payload.model_actions).not.toBe(state.model_actions);
-  });
-
-  it('keeps model actions when a status omits them', () => {
-    const state = {
-      ...createVoiceSettingsState(),
-      model_actions: { 'builtin/hey_nabu': 'live_voice' },
-    };
-
-    expect(applyWakewordStatus(state, { enabled: true }).model_actions).toEqual(
-      { 'builtin/hey_nabu': 'live_voice' },
     );
-    expect(applyRuntimeStatus(state, { model_actions: {} })).toBe(state);
+
+    expect(rebaseVoiceConfig(draft, previous, next)).toEqual({
+      ...next,
+      model_sensitivities: { [NABU]: 0.9, [HEY_NABU]: 0.4 },
+      phrase_actions: {
+        [NABU]: DEFAULT_COMMAND,
+        [HEY_NABU]: { type: 'live_voice', mode: 'start' },
+      },
+    });
+  });
+
+  it('drops entries of phrases the newer snapshot no longer has', () => {
+    const previous = voiceConfigFromStatus(status());
+    const next = voiceConfigFromStatus(status({ phrases: [phrase(NABU)] }));
+
+    const rebased = rebaseVoiceConfig(
+      cloneVoiceConfig(previous),
+      previous,
+      next,
+    );
+
+    expect(rebased.active_model_ids).toEqual([NABU]);
+    expect(rebased.model_sensitivities).toEqual({ [NABU]: 0.5 });
+    expect(rebased.phrase_actions).toEqual({ [NABU]: DEFAULT_COMMAND });
+  });
+});
+
+describe('phrase actions', () => {
+  it('compares actions with a missing action as the default command', () => {
+    expect(sameVoiceAction(undefined, DEFAULT_COMMAND)).toBe(true);
+    expect(
+      sameVoiceAction(
+        { type: 'command', agent_id: '' },
+        { type: 'command', agent_id: null, session_behavior: null },
+      ),
+    ).toBe(true);
+    expect(
+      sameVoiceAction(
+        { type: 'live_voice', mode: 'start' },
+        { type: 'live_voice', mode: 'toggle' },
+      ),
+    ).toBe(false);
+    expect(
+      sameVoiceAction(
+        { type: 'command', agent_id: 'writer' },
+        { type: 'command', agent_id: 'main' },
+      ),
+    ).toBe(false);
+  });
+
+  it('resolves command defaults for the effective action', () => {
+    const config = voiceConfigFromStatus(
+      status({
+        default_agent_id: 'main',
+        default_session_behavior: 'new',
+        phrases: [
+          phrase(NABU),
+          phrase(HEY_NABU, {
+            action: {
+              type: 'command',
+              agent_id: 'writer',
+              session_behavior: 'active',
+            },
+          }),
+          phrase(JARVIS, { action: { type: 'live_voice', mode: 'toggle' } }),
+        ],
+      }),
+    );
+
+    expect(effectiveVoiceAction(config, NABU)).toEqual({
+      type: 'command',
+      agent_id: 'main',
+      session_behavior: 'new',
+    });
+    expect(effectiveVoiceAction(config, HEY_NABU)).toEqual({
+      type: 'command',
+      agent_id: 'writer',
+      session_behavior: 'active',
+    });
+    expect(effectiveVoiceAction(config, JARVIS)).toEqual({
+      type: 'live_voice',
+      mode: 'toggle',
+    });
+  });
+
+  it('maps actions to select values and back', () => {
+    const override = {
+      type: 'command',
+      agent_id: 'writer',
+      session_behavior: 'new',
+    };
+    expect(voiceActionChoice(undefined)).toBe(ACTION_CHOICE_COMMAND);
+    expect(voiceActionChoice(override)).toBe(ACTION_CHOICE_COMMAND);
+    expect(voiceActionChoice({ type: 'live_voice', mode: 'start' })).toBe(
+      ACTION_CHOICE_LIVE_START,
+    );
+    expect(voiceActionChoice({ type: 'live_voice', mode: 'toggle' })).toBe(
+      ACTION_CHOICE_LIVE_TOGGLE,
+    );
+
+    expect(voiceActionForChoice(ACTION_CHOICE_LIVE_START, override)).toEqual({
+      type: 'live_voice',
+      mode: 'start',
+    });
+    expect(voiceActionForChoice(ACTION_CHOICE_LIVE_TOGGLE, override)).toEqual({
+      type: 'live_voice',
+      mode: 'toggle',
+    });
+    // Choosing "command" again keeps the command's overrides.
+    expect(voiceActionForChoice(ACTION_CHOICE_COMMAND, override)).toEqual(
+      override,
+    );
+    expect(
+      voiceActionForChoice(ACTION_CHOICE_COMMAND, {
+        type: 'live_voice',
+        mode: 'start',
+      }),
+    ).toEqual(DEFAULT_COMMAND);
+  });
+});
+
+describe('overlappingPhraseConflicts', () => {
+  const models = [
+    { id: NABU, overlaps: [HEY_NABU] },
+    { id: HEY_NABU, overlaps: [] },
+    { id: JARVIS, overlaps: [] },
+  ];
+
+  it('flags overlapping active phrases that do different things', () => {
+    const config = voiceConfigFromStatus(
+      status({
+        phrases: [
+          phrase(NABU),
+          phrase(HEY_NABU, { action: { type: 'live_voice', mode: 'toggle' } }),
+          phrase(JARVIS, { action: { type: 'live_voice', mode: 'start' } }),
+        ],
+      }),
+    );
+
+    const conflicts = overlappingPhraseConflicts(config, models);
+
+    expect(Object.fromEntries(conflicts)).toEqual({
+      [NABU]: [HEY_NABU],
+      [HEY_NABU]: [NABU],
+    });
+  });
+
+  it('accepts overlapping phrases with the same effective action', () => {
+    const config = voiceConfigFromStatus(
+      status({
+        default_agent_id: 'main',
+        phrases: [
+          phrase(NABU),
+          // The explicit default Agent does the same as no override.
+          phrase(HEY_NABU, {
+            action: {
+              type: 'command',
+              agent_id: 'main',
+              session_behavior: null,
+            },
+          }),
+        ],
+      }),
+    );
+
+    expect(overlappingPhraseConflicts(config, models).size).toBe(0);
+  });
+
+  it('ignores an inactive overlapping phrase', () => {
+    const config = voiceConfigFromStatus(status({ phrases: [phrase(NABU)] }));
+
+    expect(overlappingPhraseConflicts(config, models).size).toBe(0);
+  });
+});
+
+describe('liveWakePhrases', () => {
+  const command = {
+    type: 'command',
+    agent_id: 'main',
+    session_behavior: 'active',
+  };
+
+  it('lists the command phrases, including those with a problem', () => {
+    expect(
+      liveWakePhrases(
+        status({
+          phrases: [
+            phrase(NABU, { label: 'Okay Nabu', effective: command }),
+            phrase(JARVIS, {
+              label: 'Hey Jarvis',
+              effective: { type: 'live_voice', mode: 'toggle' },
+            }),
+            phrase(HEY_NABU, {
+              label: 'Hey Nabu',
+              effective: command,
+              problem: 'speech_to_text_unconfigured',
+            }),
+          ],
+        }),
+      ),
+    ).toEqual(['Okay Nabu', 'Hey Nabu']);
+  });
+
+  it('lists the phrases whenever Voice is enabled, whatever its state', () => {
+    const phrases = [phrase(NABU, { label: 'Okay Nabu', effective: command })];
+    expect(liveWakePhrases(null)).toEqual([]);
+    expect(liveWakePhrases(status({ enabled: false, phrases }))).toEqual([]);
+    for (const state of ['off', 'starting', 'microphone_disconnected', 'error'])
+      expect(
+        liveWakePhrases(
+          status({ state, error_code: 'engine_start_failed', phrases }),
+        ),
+      ).toEqual(['Okay Nabu']);
+  });
+
+  it('cleans, shortens, deduplicates and bounds the labels', () => {
+    const long = 'x'.repeat(70);
+    const phrases = [
+      phrase('a', { label: ' Okay​  Nabu\n', effective: command }),
+      phrase('b', { label: 'OKAY NABU', effective: command }),
+      phrase('c', { label: '\u0007', effective: command }),
+      phrase('d', { label: long, effective: command }),
+      ...Array.from({ length: 10 }, (_, index) =>
+        phrase(`m${index}`, { label: `Phrase ${index}`, effective: command }),
+      ),
+    ];
+
+    const result = liveWakePhrases(status({ phrases }));
+
+    expect(result).toHaveLength(8);
+    expect(result[0]).toBe('Okay Nabu');
+    expect(result[1]).toBe('x'.repeat(60));
+    expect(result.slice(2)).toEqual([
+      'Phrase 0',
+      'Phrase 1',
+      'Phrase 2',
+      'Phrase 3',
+      'Phrase 4',
+      'Phrase 5',
+    ]);
   });
 });

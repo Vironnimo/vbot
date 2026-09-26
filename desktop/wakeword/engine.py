@@ -1,4 +1,13 @@
-"""Wakeword model catalog and shared TFLite inference engine."""
+"""Wakeword model catalog and shared multi-phrase detection engine.
+
+The catalog lists curated built-ins and validated Desktop-local imports. Each
+descriptor carries its detector ``kind`` (``tflite_head`` today) and the ids of
+catalog models it ``overlaps`` with (models trained on overlapping phrases, so
+one utterance can trigger both). :class:`MultiWakewordEngine` runs every active
+detector over one shared openWakeWord feature stream, confirms threshold
+crossings per phrase, re-arms each phrase independently (overlapping phrases
+together), and returns at most one winner per audio window.
+"""
 
 from __future__ import annotations
 
@@ -7,21 +16,27 @@ import logging
 import os
 import tempfile
 from collections import deque
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 from uuid import uuid4
 
-from desktop.settings import DEFAULT_WAKEWORD_MODEL_IDS
+from desktop.wakeword.config import (
+    DEFAULT_MODEL_IDS,
+    DEFAULT_SENSITIVITY,
+    MAX_ACTIVE_PHRASES,
+    MAX_SENSITIVITY,
+    MIN_SENSITIVITY,
+    PhraseConfig,
+)
 
 logger = logging.getLogger("vbot.desktop.wakeword.engine")
 
-DEFAULT_WAKEWORD_SENSITIVITY = 0.5
-MIN_WAKEWORD_SENSITIVITY = 0.05
-MAX_WAKEWORD_SENSITIVITY = 0.95
-MAX_ACTIVE_WAKEWORD_MODELS = 2
 MAX_CUSTOM_WAKEWORD_MODEL_BYTES = 20 * 1024 * 1024
+
+# Detector kinds the engine can host over the shared feature stream.
+DETECTOR_KIND_TFLITE_HEAD = "tflite_head"
 
 # pyopen-wakeword emits raw, unsmoothed per-window scores, and the bundled heads
 # differ in shape: okay_nabu sustains ~10 windows above threshold while hey_nabu
@@ -42,7 +57,12 @@ _BUNDLED_HEY_NABU_PATH = Path(__file__).with_name("models") / "hey_nabu_v2.tflit
 
 @dataclass(frozen=True)
 class WakewordModelDescriptor:
-    """One Desktop-local TFLite wakeword model available for selection."""
+    """One Desktop-local wakeword model available for selection.
+
+    ``kind`` selects the detector implementation; ``overlaps`` lists catalog
+    model ids trained on overlapping phrases, so one utterance may trigger both
+    when they are active together.
+    """
 
     id: str
     label: str
@@ -51,6 +71,8 @@ class WakewordModelDescriptor:
     removable: bool
     target: str
     builtin: bool = False
+    kind: str = DETECTOR_KIND_TFLITE_HEAD
+    overlaps: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         """Return the public descriptor without exposing a local filesystem path."""
@@ -60,6 +82,8 @@ class WakewordModelDescriptor:
             "source": self.source,
             "format": self.format,
             "removable": self.removable,
+            "kind": self.kind,
+            "overlaps": list(self.overlaps),
         }
 
 
@@ -81,7 +105,9 @@ _BUILTIN_MODELS = (
         removable=False,
         target="okay_nabu",
         builtin=True,
+        overlaps=("builtin/hey_nabu",),
     ),
+    # The bundled hey_nabu_v2 head was trained on both "hey nabu" and "ok nabu".
     WakewordModelDescriptor(
         id="builtin/hey_nabu",
         label="Hey Nabu",
@@ -89,6 +115,7 @@ _BUILTIN_MODELS = (
         format="tflite",
         removable=False,
         target=str(_BUNDLED_HEY_NABU_PATH),
+        overlaps=("builtin/okay_nabu",),
     ),
     WakewordModelDescriptor(
         id="builtin/hey_jarvis",
@@ -170,23 +197,27 @@ class WakewordModelCatalog:
 
     def create_engine(
         self,
-        active_model_ids: list[str] | tuple[str, ...],
-        model_sensitivities: dict[str, float] | None = None,
+        phrases: Sequence[PhraseConfig],
         *,
         score_listener: Callable[[dict[str, float]], None] | None = None,
     ) -> MultiWakewordEngine:
-        """Create one shared-feature detector for the active catalog entries."""
-        model_ids = tuple(active_model_ids)
-        if not 1 <= len(model_ids) <= MAX_ACTIVE_WAKEWORD_MODELS:
-            raise WakewordModelError(
-                f"Choose between 1 and {MAX_ACTIVE_WAKEWORD_MODELS} wakeword models"
-            )
+        """Create one shared-feature detector for 1 to ``MAX_ACTIVE_PHRASES`` phrases.
+
+        ``phrases`` are :class:`PhraseConfig` entries with unique model ids.
+        ``score_listener`` receives every window's raw per-phrase scores.
+        """
+        configured = tuple(phrases)
+        if not all(isinstance(phrase, PhraseConfig) for phrase in configured):
+            raise WakewordModelError("Wake phrases must be phrase configurations")
+        if not 1 <= len(configured) <= MAX_ACTIVE_PHRASES:
+            raise WakewordModelError(f"Choose between 1 and {MAX_ACTIVE_PHRASES} wake phrases")
+        model_ids = tuple(phrase.model_id for phrase in configured)
         if len(set(model_ids)) != len(model_ids):
             raise WakewordModelError("Active wakeword models must be unique")
         descriptors = tuple(self.resolve(model_id) for model_id in model_ids)
         return MultiWakewordEngine(
             descriptors,
-            model_sensitivities or {},
+            {phrase.model_id: phrase.sensitivity for phrase in configured},
             score_listener=score_listener,
         )
 
@@ -254,7 +285,10 @@ class WakewordModelCatalog:
         """Permanently remove one imported model and its metadata."""
         descriptor = self.resolve(model_id)
         if not descriptor.removable:
-            raise WakewordModelError("Built-in wakeword models cannot be removed")
+            raise WakewordModelError(
+                "Built-in wakeword models cannot be removed",
+                error_code="wakeword_model_delete_failed",
+            )
         model_token = model_id.removeprefix(_CUSTOM_MODEL_PREFIX)
         model_path = self._model_directory / f"{model_token}{_CUSTOM_MODEL_FILE_SUFFIX}"
         metadata_path = self._metadata_path(model_token)
@@ -262,7 +296,10 @@ class WakewordModelCatalog:
             model_path.unlink()
             metadata_path.unlink(missing_ok=True)
         except OSError as exc:
-            raise WakewordModelError("Wakeword model could not be removed") from exc
+            raise WakewordModelError(
+                "Wakeword model could not be removed",
+                error_code="wakeword_model_delete_failed",
+            ) from exc
 
     def _custom_models(self) -> list[WakewordModelDescriptor]:
         if not self._model_directory.is_dir():
@@ -341,8 +378,8 @@ class MockWakewordEngine:
         self,
         score_sequence: list[float] | None = None,
         *,
-        model_id: str = DEFAULT_WAKEWORD_MODEL_IDS[0],
-        sensitivity: float = DEFAULT_WAKEWORD_SENSITIVITY,
+        model_id: str = DEFAULT_MODEL_IDS[0],
+        sensitivity: float = DEFAULT_SENSITIVITY,
         score_listener: Callable[[dict[str, float]], None] | None = None,
     ) -> None:
         self._score_sequence = score_sequence or [0.0]
@@ -378,12 +415,22 @@ class MockWakewordEngine:
 
 
 class MultiWakewordEngine:
-    """Run multiple pyopen-wakeword TFLite heads over one feature stream."""
+    """Run several wakeword detectors over one shared feature stream.
+
+    Each phrase confirms its own threshold crossings and keeps its own arm
+    state: a phrase that fired re-arms only once its raw score falls below its
+    threshold, while the other phrases stay armed. Active phrases whose models
+    ``overlap`` share one arm state instead, because one utterance drives both
+    detectors in consecutive windows: after either fires, neither fires again
+    until a window in which all of them are below their thresholds. Among
+    armed, confirmed phrases of one window the highest score-to-threshold
+    ratio wins, so independently tuned phrases stay comparable.
+    """
 
     def __init__(
         self,
         descriptors: tuple[WakewordModelDescriptor, ...],
-        model_sensitivities: dict[str, float],
+        model_sensitivities: Mapping[str, float],
         *,
         score_listener: Callable[[dict[str, float]], None] | None = None,
     ) -> None:
@@ -392,13 +439,15 @@ class MultiWakewordEngine:
         self._descriptors = descriptors
         self._thresholds = {
             descriptor.id: _threshold_for_sensitivity(
-                model_sensitivities.get(descriptor.id, DEFAULT_WAKEWORD_SENSITIVITY)
+                model_sensitivities.get(descriptor.id, DEFAULT_SENSITIVITY)
             )
             for descriptor in descriptors
         }
         self._models: list[tuple[WakewordModelDescriptor, Any]] = []
         self._features: Any = None
-        self._armed = True
+        self._arm_groups = _arm_groups(descriptors)
+        self._armed: dict[str, bool] = {}
+        self._arm_all()
         self._score_listener = score_listener
         self._recent_scores: dict[str, deque[float]] = {}
         self._reset_recent_scores()
@@ -421,7 +470,7 @@ class MultiWakewordEngine:
         try:
             features = _create_pyopenwakeword_features()
             for descriptor in self._descriptors:
-                models.append((descriptor, _create_pyopenwakeword_model(descriptor)))
+                models.append((descriptor, _create_detector(descriptor)))
         except Exception:
             _close_models(models)
             if features is not None:
@@ -429,7 +478,7 @@ class MultiWakewordEngine:
             raise
         self._features = features
         self._models = models
-        self._armed = True
+        self._arm_all()
         self._reset_recent_scores()
 
     def stop(self) -> None:
@@ -438,7 +487,7 @@ class MultiWakewordEngine:
         features = self._features
         self._models = []
         self._features = None
-        self._armed = True
+        self._arm_all()
         self._reset_recent_scores()
         try:
             _close_models(models)
@@ -447,22 +496,26 @@ class MultiWakewordEngine:
                 features.close()
 
     def detect(self, audio_chunk: bytes, *, speech_present: bool = True) -> WakewordMatch | None:
-        """Return the strongest confirmed model match for one chunk.
+        """Return the strongest confirmed, armed phrase match for one chunk.
 
-        ``speech_present=False`` mirrors upstream openWakeWord's VAD threshold:
-        model scores for windows without speech are zeroed before they can enter
+        ``speech_present=False`` zeroes this chunk's scores before they can enter
         confirmation or reach the score listener, so idle room noise cannot
-        accumulate toward a detection.
+        accumulate toward a detection and calibration sees the same gated scores.
+        The caller decides it; the detection loop's speech gate asks whether the
+        chunks 4 to 6 before this one carried speech, as upstream openWakeWord's
+        VAD threshold does. Re-arming uses the raw scores: a gate that closes
+        during a short pause while the score is still high must not count as
+        the phrase having ended, or the same utterance fires twice.
         """
         if self._features is None or not self._models:
             return None
         feature_batches = list(self._features.process_streaming(audio_chunk))
         best_match: WakewordMatch | None = None
         best_ratio = 0.0
-        all_below_threshold = True
         scores: dict[str, float] = {}
+        groups_below_threshold = dict.fromkeys(self._armed, True)
         for descriptor, model in self._models:
-            score = max(
+            raw_score = max(
                 (
                     _clamp_score(score)
                     for features in feature_batches
@@ -470,14 +523,18 @@ class MultiWakewordEngine:
                 ),
                 default=0.0,
             )
-            if not speech_present:
-                score = 0.0
+            threshold = self._thresholds[descriptor.id]
+            group = self._arm_groups[descriptor.id]
+            if raw_score >= threshold:
+                groups_below_threshold[group] = False
+            score = raw_score if speech_present else 0.0
             scores[descriptor.id] = score
             self._recent_scores[descriptor.id].append(score)
-            threshold = self._thresholds[descriptor.id]
             if score < threshold:
                 continue
-            all_below_threshold = False
+            if not self._armed[group]:
+                # Still above threshold since this phrase (or an overlapping one) fired.
+                continue
             if not _score_is_confirmed(self._recent_scores[descriptor.id], score, threshold):
                 continue
             ratio = score / threshold
@@ -486,13 +543,15 @@ class MultiWakewordEngine:
                 best_ratio = ratio
         if self._score_listener is not None:
             self._score_listener(scores)
-        if not self._armed:
-            if all_below_threshold:
-                self._armed = True
-            return None
+        for group, below_threshold in groups_below_threshold.items():
+            if below_threshold:
+                self._armed[group] = True
         if best_match is not None:
-            self._armed = False
+            self._armed[self._arm_groups[best_match.model_id]] = False
         return best_match
+
+    def _arm_all(self) -> None:
+        self._armed = dict.fromkeys(self._arm_groups.values(), True)
 
     def _reset_recent_scores(self) -> None:
         self._recent_scores = {
@@ -502,6 +561,38 @@ class MultiWakewordEngine:
             )
             for descriptor in self._descriptors
         }
+
+
+def _arm_groups(descriptors: tuple[WakewordModelDescriptor, ...]) -> dict[str, str]:
+    """Map each active model id to the id that represents its arm group.
+
+    Models join one group when either lists the other in ``overlaps``
+    (transitively); models without an active overlap form their own group.
+    """
+    active_ids = [descriptor.id for descriptor in descriptors]
+    group_of = {model_id: model_id for model_id in active_ids}
+
+    def root(model_id: str) -> str:
+        while group_of[model_id] != model_id:
+            model_id = group_of[model_id]
+        return model_id
+
+    for descriptor in descriptors:
+        for overlapping_id in descriptor.overlaps:
+            if overlapping_id in group_of:
+                first, second = sorted((root(descriptor.id), root(overlapping_id)))
+                group_of[second] = first
+    return {model_id: root(model_id) for model_id in active_ids}
+
+
+def _create_detector(descriptor: WakewordModelDescriptor) -> Any:
+    """Load the detector implementation that serves one descriptor's kind."""
+    if descriptor.kind == DETECTOR_KIND_TFLITE_HEAD:
+        return _create_pyopenwakeword_model(descriptor)
+    raise WakewordModelError(
+        f"Wakeword detector kind is not supported: {descriptor.kind}",
+        error_code="wakeword_model_unavailable",
+    )
 
 
 def _create_pyopenwakeword_features() -> Any:
@@ -543,10 +634,7 @@ def _validate_custom_model(model_path: Path) -> None:
 
 
 def _threshold_for_sensitivity(sensitivity: float) -> float:
-    normalized_sensitivity = max(
-        MIN_WAKEWORD_SENSITIVITY,
-        min(MAX_WAKEWORD_SENSITIVITY, float(sensitivity)),
-    )
+    normalized_sensitivity = max(MIN_SENSITIVITY, min(MAX_SENSITIVITY, float(sensitivity)))
     return 1.0 - normalized_sensitivity
 
 

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 import stat
-from pathlib import Path
 
 import pytest
 
@@ -15,6 +14,7 @@ from core.tools.tools import ToolRegistry
 from tests.core.tools.apply_patch_helpers import (
     apply,
     context,
+    text,
     update,
 )
 
@@ -28,15 +28,19 @@ def test_display_uses_generic_metadata_and_bounded_previews(tmp_path):
     assert isinstance(result, dict)
     display = registry.display_for_call("apply_patch", arguments, result=result)
     assert display["summary"] == "file.txt"
-    assert set(display["hidden_argument_keys"]) == {"patch", "input"}
+    assert {"patch", "input", "old_string", "content"} <= set(display["hidden_argument_keys"])
     assert {
         fact.get("change"): fact["value"]
         for fact in ctx.presentation_facts
         if fact["kind"] == "line_change"
     } == {"added": 2, "removed": 0}
-    preview = result["data"]["files"][0]["preview"][0]["after"]
+    assert text(result) == "Created file.txt (2 lines)."
+    updated = make_apply_patch_handler(FileReadState())(
+        ctx, {"patch": update("@@\n-" + "y" * 1000 + "\n+" + "y" * 999 + "z")}
+    )
+    preview = text(updated).splitlines()[1:]
     assert all(len(line) <= 255 for line in preview)
-    assert preview[0].startswith("1| ") and preview[1].startswith("2| ")
+    assert preview[0].startswith("1| ") and preview[1].startswith("2:")
 
 
 def test_permission_failure_during_atomic_write_leaves_original_and_no_temp(tmp_path, monkeypatch):
@@ -60,7 +64,7 @@ def test_precise_post_state_retry_precedes_similar_other_block(tmp_path):
     before = b"alpha\nvalue = 222\nomega\nalpha\nvalue = 111\nomega\n"
     path.write_bytes(before)
     result = apply(tmp_path, update("@@\n alpha\n-value = 123\n+value = 222\n omega"))
-    assert result["ok"] and result["data"]["already_applied"]
+    assert result["ok"] and result["data"]["status"] == "unchanged"
     assert path.read_bytes() == before
 
 
@@ -69,7 +73,7 @@ def test_read_stamp_after_noop_and_preexisting_syntax_error(tmp_path):
     path.write_bytes(b"broken = (\nold\n")
     state = FileReadState()
     result = apply(tmp_path, update("@@\n-old\n+new", "file.py"), state=state)
-    assert result["ok"] and result["data"]["files"][0]["syntax_warning"]
+    assert result["ok"] and "Warning: File was already syntactically invalid" in text(result)
     noop_state = FileReadState()
     assert apply(tmp_path, "*** Add File: file.py\n+broken = (\n+new", state=noop_state)["ok"]
     assert noop_state.check_stale("session-test", path) is None
@@ -152,7 +156,8 @@ def test_invalid_operation_keeps_successful_siblings(tmp_path, suffix):
     patch = "*** Add File: new/created.txt\n+would be new\n" + suffix
     result = apply(tmp_path, patch)
     assert result["ok"] and result["data"]["status"] == "partial"
-    assert [r["status"] for r in result["data"]["results"]] == ["applied", "failed"]
+    assert text(result).startswith("1 of 2 changes applied; 1 did not.")
+    assert "\nFailed: " in text(result)
     assert path.read_bytes() == b"original\n"
     assert (tmp_path / "new/created.txt").read_bytes() == b"would be new\n"
 
@@ -166,15 +171,21 @@ def test_multi_hunk_and_retries_do_not_repeat_changes(tmp_path):
     assert apply(tmp_path, update(first + "\n@@\n beta\n" + second))["ok"]
     before = path.read_bytes(), path.stat().st_mtime_ns
     result = apply(tmp_path, update(first + "\n" + second))
-    assert result["ok"] and result["data"]["already_applied"]
+    assert result["ok"] and result["data"]["status"] == "unchanged"
     assert (path.read_bytes(), path.stat().st_mtime_ns) == before
 
 
 def test_add_retry_and_context_only_patch(tmp_path):
     patch = "*** Add File: file.txt\n+content"
     assert apply(tmp_path, patch)["ok"]
-    assert apply(tmp_path, patch)["data"]["already_applied"]
-    assert apply(tmp_path, update("@@\n content"))["error"]["code"] == "no_changes"
+    retried = apply(tmp_path, patch)
+    assert retried["data"] == {
+        "status": "unchanged",
+        "content": "file.txt already has this content. No file was changed.",
+    }
+    context_only = apply(tmp_path, update("@@\n content"))
+    assert context_only["error"]["code"] == "no_changes"
+    assert "The unchanged lines match file.txt line 1." in text(context_only)
 
 
 @pytest.mark.parametrize("payload", [b"a\x00b", b"\xff\xfeabc"])
@@ -199,8 +210,8 @@ def test_current_content_stamps_stats_and_syntax_warnings(tmp_path):
     ctx = context(tmp_path, change_tracker=tracker)
     result = apply(tmp_path, update("@@\n-value = 1\n+value = (", "file.py"), state=state, ctx=ctx)
     assert result["ok"]
-    details = result["data"]["files"][0]
-    assert details["syntax_warning"] and details["warnings"]
+    assert "Warning: Syntax check failed" in text(result)
+    assert "Note: file.py changed after this Session last read it" in text(result)
     assert state.check_stale("session-test", path) is None
     stats = tracker.peek_run_stats("session-test")
     assert stats["added"] == 1 and stats["removed"] == 1
@@ -239,10 +250,10 @@ def test_write_failure_reports_actual_partial_changes(tmp_path, monkeypatch):
     monkeypatch.setattr(module, "atomic_write_bytes", fail_second)
     result = apply(tmp_path, "*** Add File: a.txt\n+first\n*** Add File: b.txt\n+second")
     assert result["ok"] and result["data"]["status"] == "partial"
-    assert [Path(item["path"]).name for item in result["data"]["files"]] == ["a.txt"]
+    assert "Created a.txt (1 line)." in text(result)
+    assert "Failed: Could not change b.txt: fixture failure." in text(result)
     assert (tmp_path / "a.txt").read_bytes() == b"first\n"
     assert not (tmp_path / "b.txt").exists()
-    assert result["data"]["results"][1]["error"]["code"] == "file_write_error"
 
 
 def test_failed_move_keeps_source(tmp_path, monkeypatch):
@@ -303,7 +314,12 @@ def test_external_change_during_planning_is_detected(tmp_path, monkeypatch):
         ({}, "invalid_arguments"),
         ({"patch": ""}, "invalid_arguments"),
         ({"patch": 42}, "invalid_patch"),
-        ({"patch": "x", "path": "x"}, "invalid_arguments"),
+        (
+            {"patch": "*** Add File: a.txt\n+x", "path": "a.txt", "content": "x"},
+            "invalid_arguments",
+        ),
+        ({"path": "a.txt"}, "invalid_arguments"),
+        ({"patch": "  ", "path": "a.txt"}, "invalid_arguments"),
     ],
 )
 def test_argument_validation(tmp_path, arguments, code):

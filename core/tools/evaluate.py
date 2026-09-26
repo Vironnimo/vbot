@@ -5,6 +5,7 @@ from __future__ import annotations
 from functools import cache
 from typing import Any
 
+from core.model_tasks import TaskUsageContext
 from core.model_tasks.decision_types import DecisionError
 from core.model_tasks.decisions import DecisionService
 from core.tools._evaluate_arguments import normalize_evaluate_arguments
@@ -83,12 +84,25 @@ def _normalize_evaluate_arguments(arguments: Any) -> Any:
 
 
 def register_evaluate_tool(registry: ToolRegistry, service: DecisionService) -> None:
-    async def handler(_context: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def handler(context: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
         questions = arguments.get("questions")
         try:
-            result = await service.evaluate(arguments.get("state"), questions)
+            result = await service.evaluate(
+                arguments.get("state"),
+                questions,
+                usage_context=TaskUsageContext(
+                    agent_id=context.agent_id,
+                    project_id=context.project_id,
+                    session_id=context.session_id,
+                    run_id=context.run_id,
+                    owner_name=context.execution_owner.extension
+                    if context.execution_owner
+                    else None,
+                    group_id=context.execution_owner.group_id if context.execution_owner else None,
+                ),
+            )
         except DecisionError as exc:
-            return tool_failure(exc.code, str(exc))
+            return tool_failure(exc.code, str(exc), retryable=False)
         return tool_success(_result_data(questions if isinstance(questions, list) else [], result))
 
     registry.register(

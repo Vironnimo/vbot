@@ -12,7 +12,7 @@ from core.tools import file_state as file_state_module
 from core.tools.apply_patch import register_apply_patch_tool
 from core.tools.file_state import FileReadState
 from core.tools.tools import ToolRegistry
-from tests.core.tools.apply_patch_helpers import context
+from tests.core.tools.apply_patch_helpers import context, text
 
 
 @pytest.mark.asyncio
@@ -31,7 +31,10 @@ async def test_redundant_inline_replacement_identifies_same_label_without_writin
     result = await registry.dispatch(
         context(tmp_path), {"patch": f"*** Update File: file.txt\n@@\n-{old}\n+{new}"}
     )
-    assert result["ok"] and result["data"]["already_applied"]
+    assert result["data"] == {
+        "status": "unchanged",
+        "content": "file.txt already contains this change. No file was changed.",
+    }
     assert path.read_bytes() == content and path.stat().st_mtime_ns == stamp
 
 
@@ -107,7 +110,7 @@ async def test_existing_prestate_is_updated_even_if_another_line_is_already_post
             '-"Series old": pd.Series(\n+"Series new": pd.Series('
         },
     )
-    assert result["ok"] and not result["data"].get("already_applied")
+    assert result["ok"] and result["data"]["status"] == "applied"
     assert path.read_bytes() == b'"Series new": pd.Series(\n"Series new": pd.Series(\n'
 
 
@@ -229,7 +232,7 @@ async def test_windows_retry_replaces_once_without_replaying_earlier_append(
         {"patch": "*** Update File: log.txt\n@@\n+done\n*** Update File: file.txt\n@@\n-old\n+new"},
         ["apply_patch"],
     )
-    assert result["ok"] and result["data"]["status"] == "success"
+    assert result["ok"] and result["data"]["status"] == "applied"
     assert attempts == ["log.txt", "file.txt", "file.txt", "file.txt"]
     assert len(sleeps) == 2
     assert (tmp_path / "log.txt").read_bytes() == b"start\ndone\n"
@@ -343,19 +346,21 @@ async def test_replace_failure_is_bounded_and_keeps_other_operations(
         {"patch": patch},
         ["apply_patch"],
     )
+    assert 1 < len(attempts) <= 10 if code == 5 else len(attempts) == 1
+    busy = f"The file was busy; {len(attempts)} attempts were made."
     if other_file:
         assert result["data"]["status"] == "partial"
-        error = result["data"]["results"][0]["error"]
+        assert "Created other.txt (1 line).\nFailed: Could not change file.txt" in text(result)
+        assert (busy in text(result)) is (code == 5)
         assert (tmp_path / "other.txt").read_bytes() == b"done\n"
     else:
-        assert not result["ok"]
         error = result["error"]
-    assert error["code"] == "file_write_error"
-    assert 1 < len(attempts) <= 10 if code == 5 else len(attempts) == 1
-    if code == 5:
-        assert error["retryable"] and error["attempts_made"] == len(attempts)
-    else:
-        assert "retryable" not in error and "attempts_made" not in error
+        assert error["code"] == "file_write_error"
+        if code == 5:
+            assert error["retryable"] and error["attempts_made"] == len(attempts)
+            assert busy in error["message"]
+        else:
+            assert "retryable" not in error and "attempts_made" not in error
     assert len(sleeps) == len(attempts) - 1 and sum(sleeps) < 2
     assert path.read_bytes() == b"old\n"
     assert sorted(p.name for p in tmp_path.iterdir()) == (

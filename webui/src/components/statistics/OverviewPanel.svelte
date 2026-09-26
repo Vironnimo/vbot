@@ -106,7 +106,7 @@
       <p class="stats-note">
         {t(
           'statistics.cost.scope',
-          'Saved Chat responses and Compaction calls. Background tasks and attempts without a saved response are outside this report. Missing prices are never counted as free.',
+          'Includes Chat, Compaction, Task Models and background Model requests, including retries. Recorded usage remains after a Session is archived or deleted. Older requests count where usage was retained; missing tokens and prices stay unknown. Session diagnostics cover retained, unarchived Sessions.',
         )}
       </p>
       <div class="stats-links">

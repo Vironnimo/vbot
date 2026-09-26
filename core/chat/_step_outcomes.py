@@ -180,11 +180,6 @@ class _ToolProgress:
     finalization_violations: int = 0
 
 
-def _tool_message_is_failure(message: ChatMessage) -> bool:
-    """Return whether one canonical Tool message carries a failure envelope."""
-    return _tool_message_failure_code(message) is not None
-
-
 def _tool_message_failure_code(message: ChatMessage) -> str | None:
     """Return one stable Tool failure code, or ``None`` for non-failures."""
 

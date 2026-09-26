@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -82,6 +83,27 @@ def _patch_repo_globals(monkeypatch, module, repo: Path) -> None:
     monkeypatch.setattr(module, "PROJECT_ROOT", repo)
     monkeypatch.setattr(module, "WORKTREES_DIR", repo / ".worktrees")
     monkeypatch.setattr(module.Path, "home", staticmethod(lambda: repo.parent / "home"))
+    monkeypatch.setenv("USERPROFILE", str(repo.parent / "home"))
+    monkeypatch.setenv("HOME", str(repo.parent / "home"))
+
+
+def _record_owned_data(module, worktree_path: Path, data_dir: Path) -> None:
+    """Give a temporary test checkout matching data ownership records."""
+    marker_path = worktree_path / module.WORKTREE_FILE_NAME
+    marker = json.loads(marker_path.read_text(encoding="utf-8")) if marker_path.exists() else {}
+    marker.update({"data_dir": str(data_dir), "data_owner": "test-owner"})
+    marker_path.write_text(json.dumps(marker), encoding="utf-8")
+    (data_dir / module.DATA_OWNER_FILE_NAME).write_text(
+        json.dumps(
+            {
+                "format_version": 1,
+                "data_owner": "test-owner",
+                "repository": os.path.normcase(str(module.PROJECT_ROOT.resolve())),
+                "worktree": os.path.normcase(str(worktree_path.resolve())),
+            }
+        ),
+        encoding="utf-8",
+    )
 
 
 @pytest.fixture

@@ -151,6 +151,37 @@ def test_initialize_losing_root_creation_race_never_writes_marker(
     assert all((data_dir / path).is_dir() for path in DATA_DIRECTORY_RELATIVE_PATHS)
 
 
+@pytest.mark.parametrize("concurrent", [False, True])
+def test_initialize_require_new_leaves_existing_root_untouched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, concurrent: bool
+) -> None:
+    data_dir = tmp_path / "data"
+    if concurrent:
+        _race_mkdir(monkeypatch, data_dir)
+    else:
+        data_dir.mkdir()
+
+    with pytest.raises(FileExistsError):
+        initialize_data_directory(
+            data_dir, resources_dir=PROJECT_ROOT / "resources", require_new=True
+        )
+
+    assert list(data_dir.iterdir()) == []
+
+
+def test_initialize_require_new_creates_authorized_canonical_layout(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+
+    result = initialize_data_directory(
+        data_dir, resources_dir=PROJECT_ROOT / "resources", require_new=True
+    )
+
+    assert data_dir in result.created_directories
+    assert (data_dir / "data-store.json").is_file()
+    assert (data_dir / "settings.json").read_text(encoding="utf-8") == INITIAL_SETTINGS_DOCUMENT
+    assert all((data_dir / path).is_dir() for path in DATA_DIRECTORY_RELATIVE_PATHS)
+
+
 def test_initialize_tolerates_concurrently_created_canonical_directory(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

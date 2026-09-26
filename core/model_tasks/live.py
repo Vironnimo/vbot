@@ -24,18 +24,18 @@ Relay audio for the accessor goes through :meth:`LiveCallHost.publish_audio`.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from core.model_tasks._live_brain import BrainTarget, LiveBrain
 from core.model_tasks._live_call import LiveCallSession
 from core.model_tasks._live_openai import ControlJoinError, open_openai_live_wire
 from core.model_tasks._live_tools import (
-    DIRECT_VOICE_INSTRUCTIONS,
     LIVE_TOOL_APP,
     LIVE_TOOL_TERMINAL,
-    VOICE_INSTRUCTIONS,
+    voice_instructions,
 )
 from core.model_tasks._live_wire import MEDIA_RELAY, MEDIA_WEBRTC, LiveWire
 from core.model_tasks._live_xai import open_xai_live_wire
@@ -51,12 +51,13 @@ from core.model_tasks.options import (
     backend_thinking_efforts,
     live_backend_candidates,
 )
-from core.model_tasks.task_execution import TaskBindingResolver
+from core.model_tasks.task_execution import TaskBindingResolver, TaskUsage
 from core.providers.errors import (
     ProviderAuthError,
     ProviderOutcomeUnknownError,
     ProviderRateLimitError,
 )
+from core.usage import UsageRecorder
 from core.utils.errors import ConfigError, TaskError, VBotError
 from core.utils.logging import get_logger
 
@@ -199,11 +200,16 @@ class LiveRuntime(Protocol):
 
 @dataclass(frozen=True)
 class _WireSetup:
-    """What opening one Provider's wire needs beyond the target."""
+    """What opening one Provider's wire needs beyond the target.
+
+    ``wake_phrases`` address other vBot Agents during the call; the voice
+    instructions tell the voice model to ignore speech starting with them.
+    """
 
     offer_sdp: str | None
     voice: str | None
     direct_tools: bool
+    wake_phrases: tuple[str, ...]
 
 
 async def _open_openai(runtime: Any, target_ref: TaskModelTargetRef, setup: _WireSetup) -> LiveWire:
@@ -211,7 +217,7 @@ async def _open_openai(runtime: Any, target_ref: TaskModelTargetRef, setup: _Wir
         runtime,
         target_ref,
         offer_sdp=setup.offer_sdp or "",
-        instructions=VOICE_INSTRUCTIONS,
+        instructions=voice_instructions(direct_tools=False, wake_phrases=setup.wake_phrases),
         voice=setup.voice,
     )
 
@@ -220,7 +226,9 @@ async def _open_xai(runtime: Any, target_ref: TaskModelTargetRef, setup: _WireSe
     return await open_xai_live_wire(
         runtime,
         target_ref,
-        instructions=DIRECT_VOICE_INSTRUCTIONS if setup.direct_tools else VOICE_INSTRUCTIONS,
+        instructions=voice_instructions(
+            direct_tools=setup.direct_tools, wake_phrases=setup.wake_phrases
+        ),
         voice=setup.voice,
         direct_tools=setup.direct_tools,
     )
@@ -257,9 +265,12 @@ class _CallPlan:
 class LiveVoiceService:
     """Start Live calls for the configured ``live_voice`` Task Model binding."""
 
-    def __init__(self, model_tasks: Any, runtime: LiveRuntime) -> None:
+    def __init__(
+        self, model_tasks: Any, runtime: LiveRuntime, *, usage_recorder: UsageRecorder | None = None
+    ) -> None:
         self._model_tasks = model_tasks
         self._runtime = runtime
+        self._usage_recorder = usage_recorder
 
     def status(self) -> JsonObject:
         """Return ``{"configured", "usable", "target", "media"}``.
@@ -280,13 +291,21 @@ class LiveVoiceService:
         }
 
     async def start_call(
-        self, *, media: str, offer_sdp: str | None = None, host: LiveCallHost
+        self,
+        *,
+        media: str,
+        offer_sdp: str | None = None,
+        wake_phrases: tuple[str, ...] = (),
+        host: LiveCallHost,
     ) -> LiveCall:
         """Create a provider call and return it once control is joined.
 
         *media* is the kind the accessor prepared; WebRTC needs *offer_sdp*.
-        Raises :class:`LiveStartRejected` for expected failures, including
-        ``media_mismatch`` when the bound target needs the other media kind.
+        *wake_phrases* are validated, printable phrases that address other vBot
+        Agents during the call; the voice model is told to ignore speech
+        starting with them. Raises :class:`LiveStartRejected` for expected
+        failures, including ``media_mismatch`` when the bound target needs the
+        other media kind.
         """
 
         if media == MEDIA_WEBRTC and not _valid_offer(offer_sdp):
@@ -302,10 +321,20 @@ class LiveVoiceService:
             target_ref.provider_id, target_ref.model_id, target_ref.local_connection_id
         )
         setup = _WireSetup(
-            offer_sdp=offer_sdp, voice=plan.voice, direct_tools=plan.brain_target is None
+            offer_sdp=offer_sdp,
+            voice=plan.voice,
+            direct_tools=plan.brain_target is None,
+            wake_phrases=wake_phrases,
         )
+        accounting = TaskUsage(self._usage_recorder, TASK_LIVE_VOICE, target_ref)
+        usage_call_id = await accounting.start()
+        wire: LiveWire | None = None
+        status: Literal["failed", "cancelled"] = "failed"
         try:
             wire = await plan.wire.open(self._runtime, target_ref, setup)
+        except asyncio.CancelledError:
+            status = "cancelled"
+            raise
         except ControlJoinError as exc:
             _LOGGER.warning(
                 "Live call control join failed: target=%s call_id=%s", label, exc.call_id
@@ -322,6 +351,9 @@ class LiveVoiceService:
             raise LiveStartRejected(code, str(exc)) from exc
         except KeyError as exc:
             raise LiveStartRejected("not_configured", "Live voice Provider is unavailable") from exc
+        finally:
+            if wire is None:
+                await accounting.finish(usage_call_id, status=status)
         brain_target = plan.brain_target
         brain = (
             LiveBrain(
@@ -329,19 +361,29 @@ class LiveVoiceService:
                 brain_target,
                 host.execute_tool,
                 conversation_id=f"live:{wire.call_id}",
+                usage_recorder=self._usage_recorder,
             )
             if brain_target is not None
             else None
         )
-        call = LiveCallSession(wire=wire, brain=brain, host=host, target=label)
+        call = LiveCallSession(
+            wire=wire,
+            brain=brain,
+            host=host,
+            target=label,
+            usage_accounting=accounting,
+            usage_call_id=usage_call_id,
+        )
         call.start()
         _LOGGER.info(
-            "Live call started: call_id=%s target=%s media=%s backend_model=%s backend_effort=%s",
+            "Live call started: call_id=%s target=%s media=%s backend_model=%s backend_effort=%s "
+            "wake_phrases=%d",
             call.id,
             label,
             plan.wire.media,
             brain_target.model_id if brain_target is not None else "none",
             (brain_target.thinking_effort if brain_target is not None else None) or "default",
+            len(wake_phrases),
         )
         return call
 

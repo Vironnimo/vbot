@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -95,6 +95,8 @@ class UsageTotals:
     model_calls: int = 0
     compaction_calls: int = 0
     unreported_calls: int = 0
+    chat_calls: int = 0
+    auxiliary_calls: int = 0
 
 
 @dataclass(frozen=True)
@@ -201,12 +203,22 @@ class CacheSection:
 
 
 @dataclass(frozen=True)
+class UsageKind:
+    kind: str
+    calls: int
+    measured_calls: int
+    estimated_calls: int
+    unreported_calls: int
+
+
+@dataclass(frozen=True)
 class UsageSection:
     totals: UsageTotals
     providers: list[ProviderUsage]
     models: list[ModelUsage]
     daily: list[UsageDailyPoint]
     cache: CacheSection
+    kinds: list[UsageKind] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

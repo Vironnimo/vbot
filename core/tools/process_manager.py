@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
+import re
 from asyncio.subprocess import DEVNULL, PIPE, Process
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
@@ -38,8 +39,11 @@ FINISHED_PROCESS_TTL = timedelta(minutes=30)
 SWEEP_INTERVAL_SECONDS = 60.0
 PROCESS_OUTPUT_DRAIN_SECONDS = 1.0
 
+PROCESS_WAIT_CHECK_SECONDS = 0.1
+
 ProcessStatus = Literal["running", "completed", "failed", "killed"]
 OutputStreamName = Literal["stdout", "stderr"]
+ProcessWaitOutcome = Literal["exited", "matched", "timed_out", "interrupted"]
 
 
 class ProcessManagerError(VBotError):
@@ -118,6 +122,8 @@ class TrackedProcess:
     cancelled_by_user: bool = False
     backgrounded: bool = False
     terminal_notified: bool = False
+    # The command as the Agent wrote it, for listings; None for other launches.
+    command: str | None = None
 
 
 class ProcessManager:
@@ -234,6 +240,7 @@ class ProcessManager:
         env: dict[str, str] | None,
         cwd: str | Path | None,
         execution_owner: RunExecutionOwner | None = None,
+        command: str | None = None,
     ) -> str:
         if self._closed:
             raise ProcessManagerError("Process manager is closed")
@@ -254,6 +261,7 @@ class ProcessManager:
                 env=env,
                 cwd=cwd,
                 execution_owner=execution_owner,
+                command=command,
             )
         )
         self._pending_spawns[task] = (scope_key, execution_owner)
@@ -287,6 +295,7 @@ class ProcessManager:
         env: dict[str, str] | None,
         cwd: str | Path | None,
         execution_owner: RunExecutionOwner | None = None,
+        command: str | None = None,
     ) -> str:
         """Start a subprocess and return its process id."""
         if not scope_key:
@@ -336,6 +345,7 @@ class ProcessManager:
             finished_at=None,
             last_poll_at=None,
             execution_owner=execution_owner,
+            command=command,
         )
         self._open_log_file(tracked)
         self._processes[process_id] = tracked
@@ -471,6 +481,55 @@ class ProcessManager:
                 "truncated": tracked.truncated,
                 "log_file": tracked.log_file,
             }
+
+    async def wait(
+        self,
+        process_id: str,
+        agent_id: str,
+        *,
+        project_id: str | None = None,
+        timeout_seconds: float,
+        pattern: re.Pattern[str] | None = None,
+        interrupted: Callable[[], bool] | None = None,
+    ) -> tuple[ProcessWaitOutcome, str | None]:
+        """Wait until the process exits, an output line matches ``pattern``, or time runs out.
+
+        Output printed before the call counts, so a line the caller missed still
+        matches. Returns the outcome and, when matched, the matching line. The
+        wait never consumes output or changes the process.
+        """
+        tracked = self._process_for_agent(process_id, agent_id, project_id=project_id)
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + max(timeout_seconds, 0)
+        scanned = 0
+        partial = b""
+        while True:
+            # Read the status first: output that arrived before exit is scanned below.
+            running = tracked.status == "running"
+            if pattern is not None:
+                async with tracked.lock:
+                    start = tracked.buffer_start_offset
+                    if scanned < start:
+                        partial = b""
+                    data = bytes(tracked.combined_buffer[max(scanned - start, 0) :])
+                    scanned = start + len(tracked.combined_buffer)
+                *lines, partial = (partial + data).split(b"\n")
+                for raw in [*lines, partial]:
+                    line = _decode(raw)
+                    if pattern.search(line):
+                        return "matched", line
+            if not running:
+                return "exited", None
+            if interrupted is not None and interrupted():
+                return "interrupted", None
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                return "timed_out", None
+            step = min(remaining, PROCESS_WAIT_CHECK_SECONDS)
+            if tracked.wait_task is None:
+                await asyncio.sleep(step)
+            else:
+                await asyncio.wait({tracked.wait_task}, timeout=step)
 
     async def kill(self, process_id: str, agent_id: str, *, project_id: str | None = None) -> None:
         """Terminate a tracked process with SIGKILL / platform equivalent."""

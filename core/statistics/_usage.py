@@ -8,9 +8,11 @@ that reported them.
 
 from __future__ import annotations
 
+from collections import Counter
+
 from core.statistics._accumulators import ReportLedger, _ModelAcc, _ProviderAcc
 from core.statistics._cache import CacheFacts, load_cache_facts
-from core.statistics._projection import CALL_KIND_COMPACTION
+from core.statistics._projection import CALL_KIND_CHAT, CALL_KIND_COMPACTION
 from core.statistics._units import UnitScan
 from core.statistics.report import (
     CacheSection,
@@ -18,6 +20,7 @@ from core.statistics.report import (
     ProviderUsage,
     SuspectedCacheBreaks,
     UsageDailyPoint,
+    UsageKind,
     UsageSection,
     UsageTotals,
 )
@@ -43,9 +46,11 @@ ESTIMATED_OUTPUT_SQL = (
     "SUM(CASE WHEN c.output_estimated = 1 THEN COALESCE(c.output_tokens, 0) ELSE 0 END)"
 )
 # Reasoning counts only for a measured output with a valid reported breakdown.
-_REASONING = "(c.output_estimated = 0 AND c.reasoning_tokens IS NOT NULL)"
+_REASONING = (
+    "(c.output_estimated = 0 AND c.output_tokens IS NOT NULL AND c.reasoning_tokens IS NOT NULL)"
+)
 # Cache fields count only for a measured prompt that reported them.
-_CACHE = "(c.input_estimated = 0 AND c.has_cache = 1)"
+_CACHE = "(c.input_estimated = 0 AND c.input_tokens IS NOT NULL AND c.has_cache = 1)"
 
 
 class UsageAccumulator:
@@ -53,6 +58,8 @@ class UsageAccumulator:
 
     def __init__(self) -> None:
         self.assistant_messages = 0
+        self.chat_calls = 0
+        self.auxiliary_calls = 0
         self.compaction_calls = 0
         self.unreported_calls = 0
         self.measured_turns = 0
@@ -64,11 +71,20 @@ class UsageAccumulator:
         self.cache_turns = 0
         self.cache_input_tokens = 0
         self.cache = CacheFacts()
+        self.kinds: dict[str, Counter[str]] = {}
 
-    def load(self, scan: UnitScan, ledger: ReportLedger) -> None:
+    def load(
+        self,
+        scan: UnitScan,
+        ledger: ReportLedger,
+        *,
+        include_cache: bool = True,
+        count_assistant: bool = True,
+    ) -> None:
         """Aggregate every in-window call, then walk turns for the cache heuristics."""
         for (
             kind,
+            purpose,
             model_key,
             day,
             calls,
@@ -86,8 +102,9 @@ class UsageAccumulator:
             cache_write,
         ) in scan.execute(
             f"""
-            SELECT c.kind, c.model_key, c.day, COUNT(*),
-                SUM(c.input_estimated = 1 OR c.output_estimated = 1),
+            SELECT c.kind, c.purpose, c.model_key, c.day, COUNT(*),
+                SUM((c.input_estimated = 1 OR c.output_estimated = 1)
+                    AND c.input_tokens IS NOT NULL AND c.output_tokens IS NOT NULL),
                 SUM(c.input_estimated = 0 AND c.output_estimated = 0
                     AND c.input_tokens IS NOT NULL AND c.output_tokens IS NOT NULL),
                 {MEASURED_INPUT_SQL}, {ESTIMATED_INPUT_SQL},
@@ -100,13 +117,22 @@ class UsageAccumulator:
                 SUM(CASE WHEN {_CACHE} THEN COALESCE(c.cache_write_tokens, 0) ELSE 0 END)
             FROM {scan.source("stat_calls", "c")}
             WHERE {scan.where("c")}
-            GROUP BY c.kind, c.model_key, c.day
+            GROUP BY c.kind, c.purpose, c.model_key, c.day
             """
         ):
             if kind == CALL_KIND_COMPACTION:
                 self.compaction_calls += calls
+            elif kind == CALL_KIND_CHAT:
+                self.chat_calls += calls
+                if count_assistant:
+                    self.assistant_messages += calls
             else:
-                self.assistant_messages += calls
+                self.auxiliary_calls += calls
+            counts = self.kinds.setdefault(purpose, Counter())
+            counts["calls"] += calls
+            counts["measured"] += measured_turns
+            counts["estimated"] += estimated_turns
+            counts["unreported"] += calls - estimated_turns - measured_turns
             model = ledger.model(model_key)
             provider = ledger.provider(model.provider)
             self.estimated_turns += estimated_turns
@@ -141,13 +167,16 @@ class UsageAccumulator:
             daily.cache_input_tokens += cache_input
             daily.cache_read_tokens += cache_read
             daily.cache_write_tokens += cache_write
-        self.cache = load_cache_facts(scan, top_incidents=TOP_CACHE_BREAK_INCIDENTS)
+        if include_cache:
+            self.cache = load_cache_facts(scan, top_incidents=TOP_CACHE_BREAK_INCIDENTS)
 
     def build(self, ledger: ReportLedger) -> UsageSection:
         models = ledger.models.values()
         totals = UsageTotals(
             assistant_messages=self.assistant_messages,
-            model_calls=self.assistant_messages + self.compaction_calls,
+            model_calls=self.chat_calls + self.compaction_calls + self.auxiliary_calls,
+            chat_calls=self.chat_calls,
+            auxiliary_calls=self.auxiliary_calls,
             compaction_calls=self.compaction_calls,
             unreported_calls=self.unreported_calls,
             measured_turns=self.measured_turns,
@@ -191,6 +220,16 @@ class UsageAccumulator:
                 for date, bucket in ledger.sorted_daily()
             ],
             cache=self._build_cache(),
+            kinds=[
+                UsageKind(
+                    kind,
+                    counts["calls"],
+                    counts["measured"],
+                    counts["estimated"],
+                    counts["unreported"],
+                )
+                for kind, counts in sorted(self.kinds.items())
+            ],
         )
 
     def _build_cache(self) -> CacheSection:

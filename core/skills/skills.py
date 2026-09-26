@@ -15,7 +15,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from html import escape
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from core.skills.requirements import (
     AVAILABLE,
@@ -126,6 +126,49 @@ def skill_origin_sort_key(origin: str | None) -> tuple[int, str]:
     if origin == SKILL_ORIGIN_AGENT:
         return (3, "")
     return (4, origin or "")
+
+
+def skill_origin_label(origin: str | None) -> str:
+    """Model-facing heading of one catalog origin group (path-free English)."""
+    if origin == SKILL_ORIGIN_BUNDLED:
+        return "Bundled skills"
+    if origin == SKILL_ORIGIN_GLOBAL:
+        return "Your global skills"
+    if origin is not None and origin.startswith(SKILL_ORIGIN_PROJECT_PREFIX):
+        return f"Skills from project '{origin[len(SKILL_ORIGIN_PROJECT_PREFIX) :]}'"
+    if origin == SKILL_ORIGIN_AGENT:
+        return "Your own skills"
+    return "Skills"
+
+
+class SkillCatalogEntry(Protocol):
+    """Skill fields one catalog line shows."""
+
+    @property
+    def name(self) -> str: ...
+
+    @property
+    def description(self) -> str: ...
+
+    @property
+    def origin(self) -> str | None: ...
+
+
+def format_skill_catalog_entries(skills: Iterable[SkillCatalogEntry]) -> str:
+    """Render ``- name: description`` lines under origin headings in catalog order.
+
+    A multi-line description folds onto its one line.
+    """
+    grouped: dict[str | None, list[SkillCatalogEntry]] = {}
+    for skill in skills:
+        grouped.setdefault(skill.origin, []).append(skill)
+    lines: list[str] = []
+    for origin in sorted(grouped, key=skill_origin_sort_key):
+        lines.append(f"{skill_origin_label(origin)}:")
+        lines.extend(
+            f"- {skill.name}: {' '.join(skill.description.split())}" for skill in grouped[origin]
+        )
+    return "\n".join(lines)
 
 
 @dataclass(frozen=True)
@@ -312,6 +355,18 @@ class SkillRegistry:
         if skill is None:
             return SkillAvailability("invalid", (f"skill '{name}' is not loadable",), ())
 
+        return self.availability_for_package(skill, allowed_skills)
+
+    def availability_for_package(
+        self,
+        skill: SkillMetadata,
+        allowed_skills: Sequence[str] | None = None,
+    ) -> SkillAvailability:
+        """Evaluate this package with the registry's environment and dependency pool.
+
+        Inventory may supply a same-named package shadowed in the merged pool;
+        its own requirements must still determine its displayed availability.
+        """
         allowed_names = self._allowed_names(allowed_skills)
         return self._availability_for_skill(skill, allowed_names, stack=())
 

@@ -28,6 +28,7 @@ from core.sessions.titles import (
     _title_input,
     _title_source_parts,
 )
+from tests.core.chat.usage_recorder_support import RecordingUsageRecorder
 
 
 def _address(agent_id: str, session_id: str, project_id: str | None = None) -> SessionAddress:
@@ -122,6 +123,46 @@ async def _wait_for_background(service: SessionTitleService) -> None:
     tasks = list(service._background_tasks)
     if tasks:
         await asyncio.gather(*tasks)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("group", [False, True])
+async def test_title_usage_keeps_effort_retry_and_invalid_generated_result(tmp_path, group):
+    class RetryThenInvalidAdapter(StubAdapter):
+        async def send(self, messages, **kwargs):
+            self.requests.append({"messages": messages, **kwargs})
+            if len(self.requests) == 1:
+                raise ProviderError("Reasoning is mandatory")
+            return {"content": "[title=]", "usage": {"input_tokens": 50, "output_tokens": 5}}
+
+    adapter = RetryThenInvalidAdapter()
+    runtime = StubRuntime(tmp_path, enabled=True, adapters=[adapter])
+    recorder = RecordingUsageRecorder()
+    service = SessionTitleService(cast(Any, runtime), usage_recorder=cast(Any, recorder))
+    with pytest.raises(ValueError):
+        await service._request_title(
+            model="openai/title::main",
+            title_input="Describe this topic",
+            agent_id="coder",
+            session_id="session-one",
+            project_id=None,
+            debug_run_id="title-run-one",
+            run_id=None if group else "run-one",
+            owner_name="example" if group else None,
+            group_id="group-one" if group else None,
+        )
+
+    assert adapter.closed
+    assert len(recorder.calls) == 2
+    failed, completed = recorder.calls
+    assert failed["status"] == "failed"
+    assert failed["usage"] == {"usage_call_id": failed["id"]}
+    assert completed["kind"] == ("group_title" if group else "session_title")
+    assert completed["model"] == "openai/title"
+    assert completed["connection_id"] == "openai:main"
+    assert completed["group_id"] == ("group-one" if group else None)
+    assert completed["usage"]["input_tokens"] == 50
+    assert completed["usage"]["output_tokens"] == 5
 
 
 @pytest.mark.asyncio

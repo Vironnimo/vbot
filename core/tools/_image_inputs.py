@@ -1,4 +1,8 @@
-"""Argument dialects and local image paths for the image and media generation Tools."""
+"""Argument dialects and requested images for the image and media generation Tools.
+
+analyze_image also takes image URLs and data: URLs (``resolve_analysis_images``);
+the generation Tools take local image files only (``resolve_local_images``).
+"""
 
 from __future__ import annotations
 
@@ -11,8 +15,9 @@ from typing import Any
 from urllib.parse import unquote, urlsplit
 
 from core.tools._argument_repair import normalize_call_arguments
+from core.tools._call_vocabulary import SpellingAliases
+from core.tools._image_downloads import ImageDownloadError, download_images, image_address
 from core.tools._path_suggestions import corrected_paths
-from core.tools._spelling_aliases import SpellingAliases
 from core.tools.contracts import ToolContract
 from core.tools.search import display_search_path
 from core.tools.tools import ToolContext
@@ -95,9 +100,18 @@ _WINDOWS_DRIVE_PATH = re.compile(r"/[A-Za-z]:[/\\]")
 class UnusableImageError(ValueError):
     """A requested image cannot be used; ``code`` is the Tool error code."""
 
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        retryable: bool = False,
+        attempts_made: int | None = None,
+    ) -> None:
         super().__init__(message)
         self.code = code
+        self.retryable = retryable
+        self.attempts_made = attempts_made
 
 
 def _item(value: Any) -> Any:
@@ -180,20 +194,20 @@ def normalize_generate_music_arguments(contract: ToolContract, arguments: Any) -
 
 def _local_path_text(text: str, field: str) -> str:
     """Turn a file: URL into a path; refuse web and data addresses with the reason."""
-    lowered = text.casefold()
-    if lowered.startswith(("http://", "https://")):
-        raise UnusableImageError(
-            "invalid_arguments",
-            f"{field} must be local image files; web addresses such as {text} cannot be "
-            "opened. Save the image to a file first, then pass that file's path.",
-        )
-    if lowered.startswith("data:"):
+    address = image_address(text)
+    if address is not None and address[:5].casefold() == "data:":
         raise UnusableImageError(
             "invalid_arguments",
             f"{field} must be local image files; data: URLs cannot be opened. Save the "
             "image to a file first, then pass that file's path.",
         )
-    if not lowered.startswith("file:"):
+    if address is not None:
+        raise UnusableImageError(
+            "invalid_arguments",
+            f"{field} must be local image files; web addresses such as {address} cannot be "
+            "opened. Save the image to a file first, then pass that file's path.",
+        )
+    if not text.casefold().startswith("file:"):
         return text
     parts = urlsplit(text)
     path = unquote(parts.path)
@@ -250,50 +264,114 @@ def resolve_local_image(context: ToolContext, raw_path: Any, field: str) -> Path
     return resolve_local_images(context, [raw_path], field, single=True)[0]
 
 
+def _requested_items(raw_paths: Any, field: str, one: str, many: str) -> list[str]:
+    """Return the requested image strings, trimmed, or refuse an unusable shape."""
+    if not isinstance(raw_paths, list):
+        raise UnusableImageError("invalid_arguments", f"{field} must be a list of {many}.")
+    if not raw_paths:
+        raise UnusableImageError("invalid_arguments", f"{field} is empty; pass at least one {one}.")
+    for index, raw in enumerate(raw_paths):
+        if not isinstance(raw, str) or not raw.strip():
+            raise UnusableImageError(
+                "invalid_arguments", f"{field}[{index}] must be a non-empty {one}."
+            )
+    return [raw.strip() for raw in raw_paths]
+
+
+def _present(context: ToolContext, images: list[tuple[Path, str]]) -> None:
+    """Show the requested images in the Tool row, including unavailable ones."""
+    context.presentation_images.extend(
+        {"path": str(path), "filename": name} for path, name in images
+    )
+
+
+def _named(paths: list[Path]) -> list[tuple[Path, str]]:
+    return [(path, path.name) for path in paths]
+
+
+def _check_local(
+    context: ToolContext,
+    items: list[str],
+    local: dict[int, Path],
+    field: str,
+    single: bool,
+) -> None:
+    """Refuse folders and missing files among the local images of ``items``."""
+    cwd = context.resolve_path(".")
+    missing: list[tuple[int, str, list[Path]]] = []
+    for index, path in local.items():
+        if path.is_dir():
+            raise _folder_problem(path, items[index], field, cwd, single)
+        if not path.exists():
+            missing.append((index, items[index], _similar_images(path, cwd)))
+    if missing:
+        raise UnusableImageError(
+            "image_not_found", _missing_message(items, missing, field, cwd, single)
+        )
+
+
 def resolve_local_images(
     context: ToolContext, raw_paths: Any, field: str, *, single: bool = False
 ) -> list[Path]:
-    """Resolve requested images against the working directory.
+    """Resolve requested local image files against the working directory.
 
     Missing files fail together, each with similar existing files and, when every
     missing file has one, the corrected call. Nothing is substituted.
     """
-    if not isinstance(raw_paths, list):
-        raise UnusableImageError(
-            "invalid_arguments", f"{field} must be a list of local image paths."
-        )
-    if not raw_paths:
-        raise UnusableImageError(
-            "invalid_arguments", f"{field} is empty; pass at least one local image path."
-        )
-    cwd = context.resolve_path(".")
-    requested: list[tuple[str, Path]] = []
-    for index, raw in enumerate(raw_paths):
-        if not isinstance(raw, str) or not raw.strip():
-            raise UnusableImageError(
-                "invalid_arguments", f"{field}[{index}] must be a non-empty path."
-            )
-        text = _local_path_text(raw.strip(), field)
-        requested.append((raw.strip(), context.resolve_path(text)))
-    context.presentation_images.extend(
-        {"path": str(path), "filename": path.name} for _, path in requested
+    items = _requested_items(raw_paths, field, "local image path", "local image paths")
+    local = {
+        index: context.resolve_path(_local_path_text(text, field))
+        for index, text in enumerate(items)
+    }
+    _present(context, _named(list(local.values())))
+    _check_local(context, items, local, field, single)
+    return list(local.values())
+
+
+async def resolve_analysis_images(
+    context: ToolContext, raw_paths: Any, field: str, *, attachment_store: Any
+) -> list[Path]:
+    """Resolve local paths, image URLs and data: URLs to local files, in order.
+
+    Local files are checked first, so a missing file fails before any download.
+    Downloaded images are stored as attachments; every failure names its image.
+    """
+    items = _requested_items(
+        raw_paths, field, "local image path or image URL", "local image paths or image URLs"
     )
-    missing: list[tuple[int, str, list[Path]]] = []
-    for index, (raw, path) in enumerate(requested):
-        if path.is_dir():
-            raise _folder_problem(path, raw, field, cwd, single)
-        if not path.exists():
-            similar = _similar_images(path, cwd)
-            missing.append((index, raw, similar))
-    if missing:
-        raise UnusableImageError(
-            "image_not_found", _missing_message(requested, missing, field, cwd, single)
+    addresses = {
+        index: address
+        for index, text in enumerate(items)
+        if (address := image_address(text)) is not None
+    }
+    local = {
+        index: context.resolve_path(_local_path_text(text, field))
+        for index, text in enumerate(items)
+        if index not in addresses
+    }
+    try:
+        _check_local(context, items, local, field, False)
+        downloaded = await download_images(
+            addresses, field=field, attachment_store=attachment_store, several=len(items) > 1
         )
-    return [path for _, path in requested]
+    except UnusableImageError:
+        _present(context, _named(list(local.values())))
+        raise
+    except ImageDownloadError as error:
+        _present(context, _named(list(local.values())))
+        raise UnusableImageError(
+            error.code, str(error), retryable=error.retryable, attempts_made=error.attempts_made
+        ) from error
+    images = [
+        (local[index], local[index].name) if index in local else downloaded[index]
+        for index in range(len(items))
+    ]
+    _present(context, images)
+    return [path for path, _ in images]
 
 
 def _missing_message(
-    requested: list[tuple[str, Path]],
+    items: list[str],
     missing: list[tuple[int, str, list[Path]]],
     field: str,
     cwd: Path,
@@ -307,7 +385,7 @@ def _missing_message(
         else:
             lines.append(f"No image at {raw}, and no similar file is beside it.")
     if all(similar for _, _, similar in missing):
-        corrected = [raw for raw, _ in requested]
+        corrected = list(items)
         for index, _, similar in missing:
             corrected[index] = display_search_path(similar[0], cwd=cwd)
         call = _call(field, corrected, single)

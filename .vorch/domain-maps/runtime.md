@@ -8,6 +8,17 @@ Blocking in-process work crosses named `BoundedWorkerPool` boundaries from `core
 
 ## DI Contracts
 
+Runtime constructs the canonical `UsageRecorder` after the Model registry and
+before request producers. It injects `usage_recorder` into Task services, Chat
+dependencies, Compaction, titles and Statistics; Extension sampling records its
+own exposed Adapter request. Immediately after Sessions opens, the recorder
+imports retained historical Usage before Agent lifecycle operations can remove
+history. `canonical_databases()` and offline declarations include
+`model-usage.db`; async shutdown drains its producers and Statistics readers
+before closing it, and failed-startup cleanup also closes it. Extension sampling
+retains its injected recorder through readiness withdrawal during shutdown. See
+`usage.md` for the accounting lifetime and import contract.
+
 `core/runtime/interfaces.py` holds `typing.Protocol` contracts. Only `ConfigProtocol` is constructor-injected; the rest are structural typings. `RuntimeServices` is the read-only service surface of a *started* runtime for core modules coordinating across it - consumers access services directly (a missing attribute is a wiring bug, never a `getattr` probe), and Chat deliberately does not consume it: Runtime builds Chat-owned `ChatLoopDependencies`, and Chat projects those into Run-local context. Heavy service types import under `TYPE_CHECKING` only - a runtime import of `core.runtime` loads `Runtime` and everything behind it (import cycle). The central credential contract is `ProviderCredentialResolverProtocol` (`providers.md` -> Usable; details in `providers/connections.md`).
 
 ## Bootstrap
@@ -64,7 +75,7 @@ Reload methods refresh already-wired consumers without restart. Provider/Model r
 - `reload_skills_async()` scans through the named Runtime worker pool and installs the replacement on the Event Loop; async callers, including Extension reload/disable, use it instead of the synchronous variant. If credentials reload during the scan, the replacement receives the current requirement environment before publication without discarding scanned package changes (`test_runtime_skills.py`, `test_runtime_extension_skill_refresh.py`).
 - Sync and async Skill reloads share a Runtime-owned generation: only the latest requested scan can publish, and shutdown invalidates pending results even across a restart. Async scans capture their original Skill owner before worker admission (`test_runtime_skills.py`).
 - `reload_skills()` - asks `core/skills/runtime.py::SkillRuntime` for a replacement global registry, then re-registers Skill Tools and updates prompts. `SkillRuntime` owns scan-layer resolution, Project/Agent/shared scoping, inventory, and both scoped registry caches; Runtime preserves the existing public facade methods.
-- `reload_recall_backend()` re-registers `session_search` from settings without restart. `_recall.py::RecallIntegration` owns the live backend/registry, Extension fallback, and best-effort deleted-Session index cleanup; Runtime retains the public readiness boundary.
+- `reload_recall_backend()` re-registers `session_search` from settings without restart. `_recall.py::RecallIntegration` owns the live backend/registry, Extension fallback, the Settings timezone loader handed to `session_search` for offset-less periods, and best-effort deleted-Session index cleanup; Runtime retains the public readiness boundary.
 - `reload_keep_awake()` holds/releases the Windows power request per persisted setting (no-op elsewhere).
 - `reload_channel_tool()` syncs `channel_send` registration with enabled-Channel existence.
 - `reload_environment_credentials()` refreshes the `.env` fallback inside the same resolver instance so every startup-injected consumer sees key/secret/token writes immediately, including requirement snapshots in all cached Skill scopes.

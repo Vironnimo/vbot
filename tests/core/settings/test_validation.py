@@ -133,6 +133,28 @@ def test_validate_data_dir_config_covers_every_json_document(tmp_path: Path) -> 
     ] == []
 
 
+@pytest.mark.parametrize("media_type", [[], {}, None, 1, True])
+def test_validate_data_dir_config_reports_invalid_attachment_media_type(
+    tmp_path: Path, media_type: object
+) -> None:
+    _write_data_dir_documents(tmp_path, current=True)
+    path = tmp_path / "artifacts" / "attachments" / "att_000000000001.json"
+    payload = {"format_version": 1, **_ATTACHMENT_METADATA, "media_type": media_type}
+    original = json.dumps(payload)
+    path.write_text(original, encoding="utf-8")
+
+    reports = validate_data_dir_config(tmp_path)
+
+    assert len(reports) == len(_DATA_DIR_DOCUMENTS)
+    invalid = [report for report in reports if not report.ok]
+    assert len(invalid) == 1
+    assert invalid[0].file_path == path
+    assert [(item.severity, item.path) for item in invalid[0].diagnostics] == [
+        ("error", "$.media_type")
+    ]
+    assert path.read_text(encoding="utf-8") == original
+
+
 def test_validate_data_dir_config_refuses_documents_before_generation_1(tmp_path: Path) -> None:
     _write_data_dir_documents(tmp_path, current=False)
 

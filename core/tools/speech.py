@@ -10,10 +10,11 @@ from core.model_tasks import (
     SpeechExecutionError,
     SpeechOutcomeUnknownError,
     SpeechUnsupportedTargetError,
+    TaskUsageContext,
 )
 from core.tools._argument_repair import normalize_call_arguments
+from core.tools._call_vocabulary import SpellingAliases
 from core.tools._media_failures import provider_failure_message, unavailable_message
-from core.tools._spelling_aliases import SpellingAliases
 from core.tools.contracts import compile_tool_contract
 from core.tools.tools import (
     JsonObject,
@@ -74,7 +75,7 @@ def _speech_failure(error: SpeechError) -> JsonObject:
 def make_text_to_speech_handler(speech_service: Any):
     """Create a text-to-speech tool handler bound to the runtime speech service."""
 
-    async def handler(_context: ToolContext, arguments: JsonObject) -> JsonObject:
+    async def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
 
         text = arguments.get("text")
         if not isinstance(text, str) or not text.strip():
@@ -85,7 +86,19 @@ def make_text_to_speech_handler(speech_service: Any):
             )
 
         try:
-            artifact = await speech_service.synthesize_artifact(text)
+            artifact = await speech_service.synthesize_artifact(
+                text,
+                usage_context=TaskUsageContext(
+                    agent_id=context.agent_id,
+                    project_id=context.project_id,
+                    session_id=context.session_id,
+                    run_id=context.run_id,
+                    owner_name=context.execution_owner.extension
+                    if context.execution_owner
+                    else None,
+                    group_id=context.execution_owner.group_id if context.execution_owner else None,
+                ),
+            )
         except SpeechError as exc:
             return _speech_failure(exc)
 

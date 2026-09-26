@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from argparse import Namespace
 
 import pytest
@@ -47,23 +48,30 @@ def test_swarm_workflow_persists_failed_calls_and_resumes_from_feedback():
 
         async def send(self, messages, **_kwargs):
             results = [json.loads(item["content"]) for item in messages if item["role"] == "tool"]
-            roster = next(
-                (item["data"] for item in results if (item.get("data") or {}).get("self")), {}
-            )
+            # swarm_state lists other participants as "- Name (prt_...): state".
             peer = next(
                 (
-                    row["id"]
-                    for row in roster.get("roster", [])
-                    if row["id"] != roster.get("self", {}).get("id")
+                    match.group(1)
+                    for item in results
+                    if (
+                        match := re.search(
+                            r"^- [^\n]*\((prt_[A-Za-z0-9]+)\): ",
+                            (item.get("data") or {}).get("content") or "",
+                            re.MULTILINE,
+                        )
+                    )
                 ),
                 "",
             )
             topic = next(
                 (
-                    row["id"]
+                    match.group(1)
                     for item in results
-                    for row in (item.get("data") or {}).get("entries", [])
-                    if row.get("title") == "Topic"
+                    if (
+                        match := re.search(
+                            r'- (\S+) "Topic"', (item.get("data") or {}).get("content") or ""
+                        )
+                    )
                 ),
                 "",
             )
@@ -416,9 +424,11 @@ def test_mcp_probe_uses_the_production_definition_for_every_case():
 
 
 def test_computer_probe_uses_production_definition_and_validates_matrix():
+    from core.tools.contracts import ToolContractError
     from resources.extensions.computer_use._arguments import (
         _validate_arguments,
     )
+    from resources.extensions.computer_use._dialects import normalize_computer_arguments
     from resources.extensions.computer_use.extension import (
         COMPUTER_PARAMETERS,
         InvalidComputerArgumentsError,
@@ -447,8 +457,8 @@ def test_computer_probe_uses_production_definition_and_validates_matrix():
                 }
                 else None
             )
-            _validate_arguments(expected, reference)
-        except InvalidComputerArgumentsError:
+            _validate_arguments(normalize_computer_arguments(dict(expected)), reference)
+        except (InvalidComputerArgumentsError, ToolContractError):
             assert case.startswith("invalid_")
         else:
             assert not case.startswith("invalid_")
@@ -462,7 +472,8 @@ def test_swarm_unassisted_requires_actual_feedback_and_a_later_publication():
 
         async def send(self, messages, **_kwargs):
             prompt = next(row["content"] for row in messages if row["role"] == "user")
-            goal_id = prompt.split("Board post ", 1)[1].split()[0]
+            # The initial message names the exact read call for the goal post.
+            goal_id = re.search(r'"message_id": "(pst_[A-Za-z0-9]+)"', prompt).group(1)
             calls = [
                 ("swarm_board", {"action": "read", "message_id": goal_id}),
                 ("swarm_inbox", {}),
@@ -515,22 +526,12 @@ def test_mcp_workflow_recovery_preserves_both_boolean_values():
                 arguments = {"action": "search", "query": "configure_render", "kind": "tool"}
             elif self.step == 1:
                 result = json.loads(messages[-1]["content"])
-
-                def target_in(value):
-                    if isinstance(value, dict):
-                        if value.get("name") == "configure_render" and "target" in value:
-                            return value["target"]
-                        for child in value.values():
-                            if found := target_in(child):
-                                return found
-                    elif isinstance(value, list):
-                        for child in value:
-                            if found := target_in(child):
-                                return found
-                    return None
-
-                target = target_in(result)
-                assert target, result
+                # Search lists one "target: description" line per match.
+                target = next(
+                    line.split(": ", 1)[0]
+                    for line in result["data"]["content"].splitlines()
+                    if line.startswith("tool:configure_render:")
+                )
                 arguments = {
                     "action": "call",
                     "target": target,

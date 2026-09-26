@@ -400,7 +400,7 @@ def test_main_routes_lifecycle_scripts_to_native_syntax_checks(monkeypatch, caps
     for label in ("ruff format", "ruff fix", "ruff check", "mypy"):
         line = next(line for line in output.splitlines() if line.startswith(label))
         assert "NO FILES" in line
-    assert ["bash", "-c", module.BASH_SYNTAX_LOOP, "bash", "scripts/uninstall.sh"] in commands
+    assert ["bash", "-n", "scripts/uninstall.sh"] in commands
     powershell = next(cmd for cmd in commands if cmd[0] == "pwsh")
     assert "'scripts/uninstall.ps1'" in powershell[-1]
     assert "scripts/uninstall.sh" not in powershell[-1]
@@ -432,7 +432,7 @@ def test_main_keeps_scripts_out_of_python_tools_in_mixed_scope(monkeypatch, caps
         "scripts/quality.py"
     ]
     assert next(cmd for cmd in commands if cmd[2:3] == ["mypy"])[4:] == ["scripts/quality.py"]
-    assert ["bash", "-c", module.BASH_SYNTAX_LOOP, "bash", "scripts/setup.sh"] in commands
+    assert ["bash", "-n", "scripts/setup.sh"] in commands
     assert next(cmd for cmd in commands if cmd[2:3] == ["pytest"])[-2:] == [
         "tests/scripts/test_quality.py",
         "tests/scripts/test_install_scripts.py",
@@ -483,25 +483,62 @@ def test_main_fails_on_script_syntax_error(monkeypatch, capsys):
     assert "scripts/setup.ps1:3:1: Missing closing '}'" in output
 
 
-def test_bash_syntax_loop_checks_every_script(tmp_path):
+def test_main_checks_every_shell_script_after_a_failure(monkeypatch, capsys):
+    module = _load_quality_module()
+    commands: list[list[str]] = []
+    monkeypatch.setattr(
+        module.sys, "argv", ["quality.py", "scripts/install.sh", "scripts/setup.sh"]
+    )
+    monkeypatch.setattr(module.shutil, "which", _fake_which({"bash"}))
+
+    def fake_run(cmd, capture_output, text, cwd, encoding, errors):
+        commands.append(cmd)
+        if cmd == ["bash", "-n", "scripts/install.sh"]:
+            return module.subprocess.CompletedProcess(
+                cmd, 2, stdout="", stderr="scripts/install.sh: syntax error\n"
+            )
+        return module.subprocess.CompletedProcess(cmd, 0, stdout="1 passed\n", stderr="")
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+
+    assert module.main() == 1
+
+    output = capsys.readouterr().out
+    assert [cmd for cmd in commands if cmd[0] == "bash"] == [
+        ["bash", "-n", "scripts/install.sh"],
+        ["bash", "-n", "scripts/setup.sh"],
+    ]
+    assert "sh syntax     .... FAIL" in output
+    assert "sh syntax     .... PASS" in output
+    assert "note: scripts/install.sh" in output
+    assert "note: scripts/setup.sh" in output
+    assert "scripts/install.sh: syntax error" in output
+
+
+def test_bash_syntax_checks_every_script(tmp_path):
     module = _load_quality_module()
     bash = module.shutil.which("bash")
     if bash is None:
         pytest.skip("bash is unavailable")
-    (tmp_path / "good.sh").write_text("echo ok\n", encoding="utf-8")
+    (tmp_path / "good.sh").write_text("touch executed.txt\n", encoding="utf-8")
     (tmp_path / "bad.sh").write_text("if then fi (\n", encoding="utf-8")
+    (tmp_path / "also good.sh").write_text("echo ok\n", encoding="utf-8")
 
-    # `bash -n good.sh bad.sh` would only parse good.sh; the loop must reach bad.sh.
-    result = module.subprocess.run(
-        [bash, "-c", module.BASH_SYNTAX_LOOP, "bash", "good.sh", "bad.sh"],
-        cwd=tmp_path,
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
+    # `bash -n good.sh bad.sh` only parses good.sh. Every file needs a process.
+    steps = module._native_script_steps(["good.sh", "bad.sh", "also good.sh"])
+    results = [
+        module.subprocess.run(
+            step.command, cwd=tmp_path, capture_output=True, text=True, timeout=30
+        )
+        for step in steps
+    ]
 
-    assert result.returncode != 0
-    assert "bad.sh" in result.stderr
+    assert len(results) == 3
+    assert results[0].returncode == 0
+    assert results[1].returncode != 0
+    assert "bad.sh" in results[1].stderr
+    assert results[2].returncode == 0
+    assert not (tmp_path / "executed.txt").exists()
 
 
 def test_powershell_parse_command_reports_errors_per_script(tmp_path):

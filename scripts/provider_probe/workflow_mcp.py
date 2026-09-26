@@ -27,6 +27,7 @@ async def _probe_mcp_workflow(adapter: Any, args: argparse.Namespace) -> dict[st
 
     from core.extensions.extensions import ExtensionAPI, ExtensionDeclarations
     from core.extensions.operations import ExtensionHost
+    from core.tools import tool_failure
     from core.tools.availability import ToolAccess
     from core.tools.tools import ToolContext, ToolDefinitionProfileContext, ToolRegistry
     from core.utils.ids import new_id
@@ -187,14 +188,10 @@ async def _probe_mcp_workflow(adapter: Any, args: argparse.Namespace) -> dict[st
                 result = await registry.dispatch(
                     call_context, inputs, service._allowed(call_context)
                 )
-            except (ValueError, ToolContractError):
+            except (ValueError, ToolContractError) as error:
+                # The Model sees the refusal Chat would return, including its corrected call.
                 invalid += 1
-                result = {
-                    "ok": False,
-                    "error": {"code": "invalid_arguments"},
-                    "data": None,
-                    "artifacts": [],
-                }
+                result = tool_failure("invalid_arguments", str(error))
             if inputs.get("action") == "read" and "739251" in json.dumps(result):
                 report_read = True
             messages.append(

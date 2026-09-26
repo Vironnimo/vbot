@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import threading
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -360,3 +361,141 @@ async def test_multiple_large_excerpts_stay_within_result_limit(tmp_path: Path) 
     )
     encoded = json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode()
     assert len(encoded) <= SESSION_SEARCH_RESULT_MAX_BYTES
+
+
+class _RecordingBackend:
+    """Returns no hits and records each request."""
+
+    def __init__(self, *, has_more: bool = False) -> None:
+        self.requests: list[RecallSearchRequest] = []
+        self.has_more = has_more
+
+    def search_capabilities(self) -> RecallSearchCapabilities:
+        return RecallSearchCapabilities(result_type="message", guidance="Test search.")
+
+    async def search_page(self, request: RecallSearchRequest) -> RecallSearchPage:
+        self.requests.append(request)
+        return RecallSearchPage((), "message", "test", "snapshot", self.has_more, 0)
+
+
+async def _search_recorded(
+    tmp_path: Path,
+    arguments: dict[str, Any],
+    *,
+    timezone: str | None = None,
+    has_more: bool = False,
+) -> tuple[dict[str, Any], RecallSearchRequest]:
+    backend = _RecordingBackend(has_more=has_more)
+    data = success(
+        await session_search_handler(
+            make_context(tmp_path),
+            arguments,
+            backend,
+            sessions=ChatSessionManager(tmp_path),
+            timezone_name_loader=(lambda: timezone) if timezone is not None else None,
+        )
+    )
+    assert len(backend.requests) == 1
+    return data, backend.requests[0]
+
+
+@pytest.mark.parametrize(("limit", "expected"), [(3, 3), ("5", 5), (10, 10), (None, 10)], ids=str)
+async def test_limit_up_to_ten_sets_the_hit_count(
+    tmp_path: Path, limit: object, expected: int
+) -> None:
+    data, request = await _search_recorded(tmp_path, {"query": "needle", "limit": limit})
+
+    assert request.limit == expected
+    assert "limit is at most" not in data["guidance"]
+
+
+async def test_limit_above_ten_is_capped_with_a_note(tmp_path: Path) -> None:
+    data, request = await _search_recorded(tmp_path, {"query": "needle", "max_results": 50})
+
+    assert request.limit == 10
+    assert data["guidance"].startswith(
+        "limit is at most 10; this search returned up to 10 matches."
+    )
+
+
+async def test_more_matches_under_a_small_limit_point_to_omitting_it(tmp_path: Path) -> None:
+    data, _request = await _search_recorded(
+        tmp_path, {"query": "needle", "limit": 2}, has_more=True
+    )
+
+    assert "More matches exist. Omit limit for up to 10 matches, or refine" in data["guidance"]
+
+
+@pytest.mark.parametrize(
+    ("period", "since", "until", "stated"),
+    [
+        (
+            "2026-07-01T09:00/2026-07-02",
+            datetime(2026, 7, 1, 7, 0, tzinfo=UTC),
+            datetime(2026, 7, 2, 21, 59, 59, 999999, tzinfo=UTC),
+            "2026-07-01T09:00:00+02:00/2026-07-02T23:59:59+02:00 (Europe/Berlin)",
+        ),
+        (
+            "2026-01-15",
+            datetime(2026, 1, 14, 23, 0, tzinfo=UTC),
+            datetime(2026, 1, 15, 22, 59, 59, 999999, tzinfo=UTC),
+            "2026-01-15T00:00:00+01:00/2026-01-15T23:59:59+01:00 (Europe/Berlin)",
+        ),
+        (
+            "2026-02",
+            datetime(2026, 1, 31, 23, 0, tzinfo=UTC),
+            datetime(2026, 2, 28, 22, 59, 59, 999999, tzinfo=UTC),
+            "2026-02-01T00:00:00+01:00/2026-02-28T23:59:59+01:00 (Europe/Berlin)",
+        ),
+        (
+            "2026-07-05/",
+            datetime(2026, 7, 4, 22, 0, tzinfo=UTC),
+            None,
+            "2026-07-05T00:00:00+02:00/ (Europe/Berlin)",
+        ),
+        (
+            "2026-07-01T09:00Z/2026-07-01T10:00+05:00",
+            datetime(2026, 7, 1, 5, 0, tzinfo=UTC),
+            datetime(2026, 7, 1, 9, 0, tzinfo=UTC),
+            "2026-07-01T10:00:00+05:00/2026-07-01T09:00:00+00:00",
+        ),
+    ],
+)
+async def test_period_without_offset_reads_the_settings_timezone_and_is_stated(
+    tmp_path: Path, period: str, since: datetime, until: datetime | None, stated: str
+) -> None:
+    data, request = await _search_recorded(
+        tmp_path, {"query": "needle", "period": period}, timezone="Europe/Berlin"
+    )
+
+    assert (request.since, request.until) == (since, until)
+    assert data["period"] == stated
+
+
+async def test_period_without_a_timezone_setting_reads_utc(tmp_path: Path) -> None:
+    data, request = await _search_recorded(tmp_path, {"query": "needle", "period": "2026-07-01"})
+
+    assert request.since == datetime(2026, 7, 1, tzinfo=UTC)
+    assert data["period"] == "2026-07-01T00:00:00+00:00/2026-07-01T23:59:59+00:00 (UTC)"
+
+
+async def test_search_without_period_states_none(tmp_path: Path) -> None:
+    data, request = await _search_recorded(tmp_path, {"query": "needle"}, timezone="Europe/Berlin")
+
+    assert (request.since, request.until) == (None, None)
+    assert "period" not in data
+
+
+async def test_single_timestamp_period_names_the_open_range_call(tmp_path: Path) -> None:
+    result = await session_search_handler(
+        make_context(tmp_path),
+        {"query": "needle", "period": "2026-07-01T09:00"},
+        _RecordingBackend(),
+        sessions=ChatSessionManager(tmp_path),
+    )
+
+    assert result["ok"] is False
+    assert result["error"]["message"] == (
+        "period must use start/end, such as 2026-07-01/2026-07-31. Omit period to search all "
+        'dates. For everything from 2026-07-01T09:00 on, use "2026-07-01T09:00/".'
+    )

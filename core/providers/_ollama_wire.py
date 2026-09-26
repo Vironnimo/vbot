@@ -12,6 +12,8 @@ from core.providers._ollama_constants import (
 from core.providers.adapter import (
     normalize_tool_call_candidates,
     project_tool_result_content_fallbacks,
+    tool_result_content_blocks,
+    tool_result_text,
 )
 from core.providers.errors import ProviderError
 
@@ -27,7 +29,11 @@ def _to_ollama_message(message: dict[str, Any]) -> dict[str, Any]:
     if role == "tool":
         tool_message = {
             "role": "tool",
-            "content": _flatten_text_content(message.get("content", "")),
+            "content": _flatten_text_content(
+                tool_result_text(
+                    message.get("content", ""), content_blocks=tool_result_content_blocks(message)
+                )
+            ),
             "tool_call_id": message.get("tool_call_id", ""),
         }
         tool_name = message.get("name")

@@ -403,7 +403,7 @@ async def test_analyze_image_tool_resolves_paths_and_returns_analysis(
     second = _image(workspace / "second.png")
     service = _ImageService(tmp_path / "unused.png")
     registry = ToolRegistry()
-    register_analyze_image_tool(registry, service)
+    register_analyze_image_tool(registry, service, attachment_store=None)
     tool = registry.get(ANALYZE_IMAGE_TOOL_NAME)
     assert tool.parameters == ANALYZE_IMAGE_TOOL_PARAMETERS
     assert "additionalProperties" not in tool.parameters
@@ -453,7 +453,9 @@ def test_analyze_image_tool_has_closed_result_contract(
     invalid_data: dict[str, object],
 ) -> None:
     registry = ToolRegistry()
-    register_analyze_image_tool(registry, _ImageService(tmp_path / "unused.png"))
+    register_analyze_image_tool(
+        registry, _ImageService(tmp_path / "unused.png"), attachment_store=None
+    )
     tool = registry.get(ANALYZE_IMAGE_TOOL_NAME)
 
     assert tool.result_schema == {
@@ -477,7 +479,7 @@ async def test_analyze_image_tool_accepts_single_path_string(tmp_path: Path) -> 
     image.write_bytes(b"\x89PNG\r\n\x1a\nsource")
     service = _ImageService(tmp_path / "unused.png")
     registry = ToolRegistry()
-    register_analyze_image_tool(registry, service)
+    register_analyze_image_tool(registry, service, attachment_store=None)
 
     result = await registry.dispatch(
         _make_context(tmp_path, tool_name=ANALYZE_IMAGE_TOOL_NAME),
@@ -497,7 +499,7 @@ async def test_analyze_image_tool_rejects_invalid_arguments_and_maps_image_error
         tmp_path / "unused.png",
         analysis_error=ImageInputError("bad image"),
     )
-    register_analyze_image_tool(registry, service)
+    register_analyze_image_tool(registry, service, attachment_store=None)
     context = _make_context(tmp_path, tool_name=ANALYZE_IMAGE_TOOL_NAME)
     _image(tmp_path / "photo.png")
 
@@ -550,6 +552,7 @@ async def test_analyze_image_tool_projects_stable_expected_error_codes(
     register_analyze_image_tool(
         registry,
         _ImageService(tmp_path / "unused.png", analysis_error=analysis_error),
+        attachment_store=None,
     )
     _image(tmp_path / "photo.png")
 
@@ -576,6 +579,7 @@ async def test_analyze_image_tool_preserves_provider_retry_metadata(tmp_path: Pa
     register_analyze_image_tool(
         registry,
         _ImageService(tmp_path / "unused.png", analysis_error=provider_error),
+        attachment_store=None,
     )
     _image(tmp_path / "photo.png")
 
@@ -601,6 +605,7 @@ async def test_analyze_image_tool_does_not_mask_unexpected_failure(tmp_path: Pat
             tmp_path / "unused.png",
             analysis_error=RuntimeError("implementation defect"),
         ),
+        attachment_store=None,
     )
     _image(tmp_path / "photo.png")
 
@@ -665,11 +670,13 @@ class _ImageService:
         output_dir: Path,
         call_options: dict[str, object] | None = None,
         source_paths: tuple[Path, ...] | None = None,
+        usage_context: object = None,
     ) -> tuple[object, ...]:
         self.received_prompt = prompt
         self.received_output_dirs.append(output_dir)
         self.received_call_options = call_options
         self.received_source_paths = source_paths
+        self.received_usage_context = usage_context
         if self._generation_error is not None:
             raise self._generation_error
         return (
@@ -721,7 +728,7 @@ async def test_analysis_preview_retains_only_original_paths_without_writing_file
         analysis_error=ImageNotFoundError("missing") if missing else None,
     )
     registry = ToolRegistry()
-    register_analyze_image_tool(registry, service)
+    register_analyze_image_tool(registry, service, attachment_store=None)
     context = replace(_make_context(tmp_path, tool_name=ANALYZE_IMAGE_TOOL_NAME), cwd=project)
     args = {"prompt": "Inspect", "images": [image.name]}
     result = await registry.dispatch(context, args)

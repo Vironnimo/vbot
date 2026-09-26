@@ -77,6 +77,10 @@ _HARNESS_NAMES = {
             "writetofile",
             "patch",
             "applydiff",
+            "strreplaceeditor",
+            "strreplacebasededittool",
+            "texteditor",
+            "replacefilecontent",
         ),
         "apply_patch",
     ),
@@ -127,10 +131,29 @@ _HARNESS_NAMES = {
         "web_search",
     ),
     **dict.fromkeys(
-        ("task", "agent", "delegate", "delegatetask", "spawnagent", "spawnsubagent"),
+        (
+            "task",
+            "agent",
+            "delegate",
+            "delegatetask",
+            "spawnagent",
+            "spawnsubagent",
+            "sessionsspawn",
+        ),
         "subagent",
     ),
-    **dict.fromkeys(("loadskill", "useskill", "skillview", "readskill"), "skill"),
+    **dict.fromkeys(
+        (
+            "loadskill",
+            "useskill",
+            "skillview",
+            "readskill",
+            "skilllist",
+            "skillslist",
+            "listskills",
+        ),
+        "skill",
+    ),
     **dict.fromkeys(
         (
             "viewimage",
@@ -189,8 +212,8 @@ def called_tool_name(
         for tool in offered
         if key in (_spelling_key(tool), _spelling_key(model_tool_name(tool)))
     }
-    if len(same_spelling) == 1:
-        return same_spelling.pop()
+    if same_spelling:
+        return same_spelling.pop() if len(same_spelling) == 1 else name
     target = _HARNESS_NAMES.get(key)
     return target if target is not None and target in offered else name
 

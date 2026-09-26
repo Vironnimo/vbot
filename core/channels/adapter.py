@@ -424,10 +424,13 @@ class ChannelAdapter(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def ensure_outbound_session(self, platform_target: str) -> RouteFacts:
+    async def ensure_outbound_session(
+        self, platform_target: str, *, thread_id: str | None = None
+    ) -> RouteFacts:
         """Resolve and ensure the Session that mirrors an outbound target chat.
 
         Proactive sends (e.g. the ``channel_send`` tool) record outbound context into the
         target chat's Session. This resolves that Session, creating it with channel context
         when it does not exist yet, so the model later sees what was sent proactively.
+        Its Reply Target records the thread/topic used for this send, when provided.
         """

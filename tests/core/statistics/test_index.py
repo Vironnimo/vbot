@@ -39,7 +39,7 @@ def test_index_is_a_kernel_disposable_projection(tmp_path: Path) -> None:
     identity = _index_identity(tmp_path)
     assert identity["application_id"] == APPLICATION_IDS["statistics"]
     assert identity["database_name"] == "statistics"
-    assert identity["projection_version"] == "1"
+    assert identity["projection_version"] == "2"
 
 
 def test_discard_removes_rollback_journal(tmp_path: Path) -> None:
@@ -463,6 +463,36 @@ def test_corrupt_index_is_discarded_and_rebuilt_once(tmp_path: Path) -> None:
         assert connection.execute("SELECT COUNT(*) FROM stat_sessions").fetchone()[0] == 1
 
 
+@pytest.mark.parametrize("table", ["stat_tools", "stat_skills"])
+@pytest.mark.parametrize("recovery", ["rebuild", "transient"])
+def test_report_recovery_discards_partial_aggregation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, table: str, recovery: str
+) -> None:
+    service, _manager, _session = _service(tmp_path)
+    expected = asdict(service.report())
+    expected.pop("generated_at")
+    database = service._index._database.get()
+    original_id = database.database_id
+    # Keep the live handle open so the missing fact table fails during report
+    # aggregation, after earlier sections have already accumulated totals.
+    database.write(lambda connection: connection.execute(f"DROP TABLE {table}"))
+    if recovery == "transient":
+
+        def unavailable_discard() -> None:
+            raise DatabaseUnavailableError("cannot discard the damaged index")
+
+        monkeypatch.setattr(service._index._database, "discard", unavailable_discard)
+
+    recovered = asdict(service.report())
+    recovered.pop("generated_at")
+
+    assert recovered == expected
+    assert (_index_identity(tmp_path)["database_id"] != original_id) == (recovery == "rebuild")
+    following = asdict(service.report())
+    following.pop("generated_at")
+    assert following == expected
+
+
 def test_projection_version_mismatch_discards_and_rebuilds_the_index(tmp_path: Path) -> None:
     service, manager, _session = _service(tmp_path)
     service.report()
@@ -475,7 +505,7 @@ def test_projection_version_mismatch_discards_and_rebuilds_the_index(tmp_path: P
     report = restarted.report()
 
     assert report.usage.totals.measured_input_tokens == 10
-    assert _index_identity(tmp_path)["projection_version"] == "1"
+    assert _index_identity(tmp_path)["projection_version"] == "2"
 
 
 def test_an_index_with_nullable_instants_is_rebuilt_at_the_same_version(tmp_path: Path) -> None:
@@ -499,7 +529,7 @@ def test_an_index_with_nullable_instants_is_rebuilt_at_the_same_version(tmp_path
     report = restarted.report()
 
     assert report.usage.totals.measured_input_tokens == 10
-    assert _index_identity(tmp_path)["projection_version"] == "1"
+    assert _index_identity(tmp_path)["projection_version"] == "2"
     with closing(sqlite3.connect(_index_path(tmp_path))) as connection:
         columns = {row[1]: row[3] for row in connection.execute("PRAGMA table_info(stat_errors)")}
         session_columns = {row[1] for row in connection.execute("PRAGMA table_info(stat_sessions)")}

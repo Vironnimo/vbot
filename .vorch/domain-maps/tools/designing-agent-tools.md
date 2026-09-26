@@ -33,10 +33,21 @@ The test: would a competent colleague who receives this request know exactly wha
 |---|---|---|
 | Unambiguous representation or dialect difference | Execute silently | `file_path` for `path`, `cmd` for `command`, `"true"` for `true`, a JSON-encoded array, a known call wrapper, `example.com` for a URL, a shell-style argument string for an argument list, a unified diff for a patch, read-output line prefixes or typographic quotes copied into patch context |
 | Fields the selected action does not use | Ignore; name them in the result only when a meaningful value suggests the Agent expected an effect | `subagent(action="run", id="unused")`, `process(action="kill", filter="all")` |
-| Interpretation that involved judgment | Execute and state the interpretation in the result | `timeout: 120000` read as milliseconds; an invalid regex searched as literal text; model indentation mapped to the file's tabs; a unique near-miss name resolved for a read-only lookup |
+| Interpretation that involved judgment | Execute and state the interpretation in the result | `timeout: 120000` read as milliseconds; an invalid regex searched as literal text; model indentation mapped to the file's tabs; a unique near-miss name resolved for a read-only lookup; an edit's old text with a misspelled word applied to the one passage it copies, naming the line that differed |
 | Plausible readings with different effects, or a missing decision | Refuse before side effects, name the problem and give the corrected call | patch removes `"earth"` but the file says `"world"`; `memory(action="add")` without scope |
 
 Never write to a guessed target, silently drop a requested effect, or resolve contradictory instructions by picking one. Similarity alone (edit distance, a single close schema match) does not establish intent for a mutation or an explicit target; domain evidence does.
+
+Text an Agent copied with errors is such evidence when it is strong enough: Agents misspell and misremember when copying, and demanding an exact copy wastes a round trip whenever the target is clear. An edit's old text therefore still identifies its passage when enough of it is copied correctly and exactly one passage qualifies:
+- Grade the evidence by length: short text must be exact, and each deviation needs several correctly copied words.
+- A different identifier or value is not a copy error; it may name another place or state (`load_user` for `save_user`, `3` for `5`, `<` for `>`).
+- Apply the change like a merge: a line the edit writes comes out as the Agent wrote it, up to the file's spelling, so text the Agent keeps in it must match the file (a difference may be wording the Agent meant to write); lines used only as context stay as the file has them; the change must rest on text the file holds.
+- Differences that cannot carry meaning (a hyphen for an em dash, an escaping backslash, invisible characters) are not differences, and kept text keeps the file's form; but where the copy escapes differently from the file, the text written must not repeat that difference.
+- Keep every line in its place: a copy that left out or joined lines must not shift the edit by one line.
+- Never fall back to another passage when the best one cannot take the change; refuse instead, and ask for a fresh copy when several passages qualify.
+- Name every line that differed and every respelled word in the result.
+
+Rules and thresholds: `apply_patch.md` -> `copy_match`. The `"earth"`/`"world"` example above stays a refusal: the change rests on a word the file does not hold, which is not a misspelling.
 
 Where it lives: shared representation repair (types, encodings, scalar-to-array) belongs to `contracts.py`; field aliases, wrappers, vocabulary formatting, inapplicable fields and empty-as-omitted belong to the owning Tool through `argument_normalizer` and `_argument_repair.normalize_call_arguments`. Repairs stay scoped to call syntax: they never rewrite payload values, quoted text, external identifiers or application data.
 

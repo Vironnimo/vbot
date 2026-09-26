@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any, cast
 
@@ -204,6 +205,39 @@ async def test_tool_called_by_another_harness_name_runs_and_is_stored_under_its_
 
 
 @pytest.mark.asyncio
+async def test_ambiguous_tool_spelling_never_dispatches_a_harness_alias(tmp_path: Path) -> None:
+    dispatched: list[str] = []
+
+    def probe(context: ToolContext, _arguments: JsonObject) -> JsonObject:
+        dispatched.append(context.tool_name)
+        return tool_success({"id": context.tool_call_id})
+
+    tools = ToolRegistry()
+    offered = ["read", "read_file", "readfile"]
+    for name in offered:
+        tools.register(name, "Read a resource.", {"type": "object"}, probe)
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=offered)
+    adapter = StubAdapter(
+        [
+            {
+                "content": None,
+                "tool_calls": [{"id": "ambiguous", "name": "ReadFile", "arguments": {}}],
+            },
+            {"content": "done", "tool_calls": None},
+        ]
+    )
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
+
+    await build_chat_loop(runtime).send("coder", "read", session_id="session-one")
+
+    assert dispatched == []
+    persisted = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
+    assert [call.name for message in persisted for call in message.tool_calls or []] == ["ReadFile"]
+    result = next(message for message in persisted if message.role == "tool")
+    assert json.loads(cast(str, result.content))["error"]["code"] == "tool_not_found"
+
+
+@pytest.mark.asyncio
 async def test_tool_cycle_boundaries_need_no_separate_journal_writes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -298,15 +332,19 @@ async def test_nested_run_receives_non_handoff_bash_definition(tmp_path: Path) -
 
     top_level_definition = adapter.requests[0]["kwargs"]["tools"][0]
     nested_definition = adapter.requests[1]["kwargs"]["tools"][0]
-    # The Provider request carries the name the Model knows on this host.
+    # The Provider request carries the name the Model knows on this host, and the
+    # description names no dedicated file Tool, since this Agent is offered none.
+    usual_pointer = (
+        "For reading, searching and editing files use read, search_files and apply_patch. "
+    )
     assert top_level_definition == {
         "name": model_tool_name(BASH_TOOL_NAME),
-        "description": BASH_TOOL_DESCRIPTION,
+        "description": BASH_TOOL_DESCRIPTION.replace(usual_pointer, ""),
         "parameters": BASH_TOOL_PARAMETERS,
     }
     assert nested_definition == {
         "name": model_tool_name(BASH_TOOL_NAME),
-        "description": BASH_SUBAGENT_TOOL_DESCRIPTION,
+        "description": BASH_SUBAGENT_TOOL_DESCRIPTION.replace(usual_pointer, ""),
         "parameters": BASH_SUBAGENT_TOOL_PARAMETERS,
     }
 

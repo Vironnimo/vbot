@@ -27,10 +27,11 @@ from core.model_tasks.speech_types import (
     SpeechSynthesisResult,
     SpeechTranscriptionResult,
 )
-from core.model_tasks.task_execution import TaskBindingResolver
+from core.model_tasks.task_execution import TaskBindingResolver, TaskUsage, TaskUsageContext
 from core.providers.errors import ProviderOutcomeUnknownError
 from core.providers.task_client import TaskClientRuntime
 from core.storage.layout import DataDirectoryLayout
+from core.usage import UsageRecorder
 from core.utils.errors import TaskError, VBotError
 from core.utils.logging import get_logger
 
@@ -107,8 +108,10 @@ class SpeechService:
         *,
         local_executor: LocalSpeechExecutor | None = None,
         transcription_audio_getter: Callable[[], Mapping[str, Any]] | None = None,
+        usage_recorder: UsageRecorder | None = None,
     ) -> None:
         self._runtime = runtime
+        self._usage_recorder = usage_recorder
         self._resolver = TaskBindingResolver(
             model_tasks, configuration_error=SpeechConfigurationError
         )
@@ -154,16 +157,20 @@ class SpeechService:
                 "Audio input could not be converted for transcription"
             ) from exc
 
+        usage = TaskUsage(self._usage_recorder, TASK_SPEECH_TO_TEXT, target_ref)
         if target_ref.kind == "local":
             try:
-                return await self._local_executor.transcribe(
-                    target_ref.local_id,
-                    prepared.audio,
-                    filename=prepared.filename,
-                    media_type=prepared.media_type,
-                    options=options,
-                    progress=progress,
-                )
+                async with usage.attempt() as call_id:
+                    result = await self._local_executor.transcribe(
+                        target_ref.local_id,
+                        prepared.audio,
+                        filename=prepared.filename,
+                        media_type=prepared.media_type,
+                        options=options,
+                        progress=progress,
+                    )
+                    await usage.update(call_id, result.usage)
+                    return result
             except LocalSpeechExecutionError as exc:
                 raise SpeechExecutionError(str(exc)) from exc
             except LocalSpeechError as exc:
@@ -171,7 +178,9 @@ class SpeechService:
 
         if progress is not None:
             progress.update("transcribing")
-        provider_client = ProviderSpeechClient.from_runtime(self._runtime, target_ref)
+        provider_client = ProviderSpeechClient.from_runtime(
+            self._runtime, target_ref, usage_observer=usage
+        )
         try:
             return await provider_client.transcribe(
                 prepared.audio,
@@ -214,7 +223,11 @@ class SpeechService:
         await self._local_executor.aclose()
 
     async def synthesize(
-        self, text: str, *, progress: SpeechProgress | None = None
+        self,
+        text: str,
+        *,
+        progress: SpeechProgress | None = None,
+        usage_context: TaskUsageContext | None = None,
     ) -> SpeechSynthesisResult:
         """Synthesize one text string using the configured TTS binding."""
 
@@ -224,14 +237,18 @@ class SpeechService:
 
         _binding, options, target_ref = self._resolver.resolve(TASK_TEXT_TO_SPEECH)
 
+        usage = TaskUsage(
+            self._usage_recorder, TASK_TEXT_TO_SPEECH, target_ref, context=usage_context
+        )
         if target_ref.kind == "local":
             try:
-                return await self._local_executor.synthesize(
-                    target_ref.local_id,
-                    normalized_text,
-                    options=options,
-                    progress=progress,
-                )
+                async with usage.attempt():
+                    return await self._local_executor.synthesize(
+                        target_ref.local_id,
+                        normalized_text,
+                        options=options,
+                        progress=progress,
+                    )
             except LocalSpeechExecutionError as exc:
                 raise SpeechExecutionError(str(exc)) from exc
             except LocalSpeechError as exc:
@@ -239,7 +256,9 @@ class SpeechService:
 
         if progress is not None:
             progress.update("synthesizing")
-        provider_client = ProviderSpeechClient.from_runtime(self._runtime, target_ref)
+        provider_client = ProviderSpeechClient.from_runtime(
+            self._runtime, target_ref, usage_observer=usage
+        )
         try:
             return await provider_client.synthesize(normalized_text, options=options)
         except SpeechError:
@@ -268,11 +287,15 @@ class SpeechService:
             raise SpeechExecutionError(str(exc)) from exc
 
     async def synthesize_artifact(
-        self, text: str, *, progress: SpeechProgress | None = None
+        self,
+        text: str,
+        *,
+        progress: SpeechProgress | None = None,
+        usage_context: TaskUsageContext | None = None,
     ) -> SpeechArtifact:
         """Synthesize speech and persist it as a runtime artifact."""
 
-        result = await self.synthesize(text, progress=progress)
+        result = await self.synthesize(text, progress=progress, usage_context=usage_context)
         stored = self._artifacts.write(
             result.audio,
             extension=_extension_for_audio(result.media_type, result.format),

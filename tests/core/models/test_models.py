@@ -534,6 +534,70 @@ class TestModelRegistryLoad:
         assert registry.get("test_provider", "model-a").name == "Updated"
         assert ModelRegistry.load(tmp_path) is registry
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("newer_async", [False, True], ids=["sync", "async"])
+    async def test_newer_reload_supersedes_an_in_flight_assembly(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, newer_async: bool
+    ) -> None:
+        models_dir = tmp_path / "models"
+        models_dir.mkdir()
+        _write_provider_catalog(models_dir, "test_provider", {"model-a": _model_record("Original")})
+        registry = ModelRegistry.load(tmp_path)
+        _write_provider_catalog(models_dir, "test_provider", {"model-a": _model_record("Stale")})
+        assemble = ModelRegistry._assemble_models.__func__  # type: ignore[attr-defined]
+        stale_assembled = threading.Event()
+        release_stale = threading.Event()
+        latest_assembled = threading.Event()
+        release_latest = threading.Event()
+
+        def blocked_assemble(cls: Any, *args: Any) -> Any:
+            result = assemble(cls, *args)
+            if result[0][("test_provider", "model-a")].name == "Stale":
+                stale_assembled.set()
+                assert release_stale.wait(timeout=5)
+            elif newer_async:
+                latest_assembled.set()
+                assert release_latest.wait(timeout=5)
+            return result
+
+        monkeypatch.setattr(ModelRegistry, "_assemble_models", classmethod(blocked_assemble))
+        stale_reload = asyncio.create_task(registry.reload_async(tmp_path))
+        latest_reload = None
+        try:
+            assert await asyncio.to_thread(stale_assembled.wait, 5)
+            _write_provider_catalog(
+                models_dir, "test_provider", {"model-a": _model_record("Latest")}
+            )
+            (models_dir / "test_provider.overrides.json").write_text(
+                json.dumps({"reasoning_replay": "current_run", "models": {}}), encoding="utf-8"
+            )
+            if newer_async:
+                latest_reload = asyncio.create_task(registry.reload_async(tmp_path))
+                # The newer request enters before the old worker is released.
+                await asyncio.sleep(0)
+                release_stale.set()
+                await asyncio.wait_for(stale_reload, timeout=5)
+                assert await asyncio.to_thread(latest_assembled.wait, 5)
+                # Keep the last published catalog while the latest one assembles.
+                assert registry.get("test_provider", "model-a").name == "Original"
+                release_latest.set()
+                await asyncio.wait_for(latest_reload, timeout=5)
+            else:
+                registry.reload(tmp_path)
+                assert registry.get("test_provider", "model-a").name == "Latest"
+                release_stale.set()
+                await asyncio.wait_for(stale_reload, timeout=5)
+
+            assert registry.get("test_provider", "model-a").name == "Latest"
+            assert registry.provider_reasoning_replay("test_provider") == "current_run"
+            assert ModelRegistry.load(tmp_path) is registry
+        finally:
+            release_stale.set()
+            release_latest.set()
+            await asyncio.wait_for(stale_reload, timeout=5)
+            if latest_reload is not None:
+                await asyncio.wait_for(latest_reload, timeout=5)
+
     def test_override_file_is_not_loaded_as_its_own_provider(self, tmp_path: Path):
         """``<provider>.overrides.json`` is a hand layer, not a provider file: it
         is excluded from the provider-file glob and applied during assembly. It

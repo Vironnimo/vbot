@@ -26,8 +26,9 @@ from typing import Any, Literal
 
 from core.model_tasks.constants import TASK_TEXT_EMBEDDING
 from core.model_tasks.embeddings_providers import EmbeddingUsage, ProviderEmbeddingClient
-from core.model_tasks.task_execution import TaskBindingResolver
+from core.model_tasks.task_execution import TaskBindingResolver, TaskUsage
 from core.providers.task_client import TaskClientRuntime
+from core.usage import UsageRecorder
 from core.utils.errors import EmbeddingError as _BaseEmbeddingError
 from core.utils.errors import VBotError
 from core.utils.logging import get_logger
@@ -110,8 +111,11 @@ class EmbeddingService:
         self,
         model_tasks: Any,
         runtime: TaskClientRuntime,
+        *,
+        usage_recorder: UsageRecorder | None = None,
     ) -> None:
         self._runtime = runtime
+        self._usage_recorder = usage_recorder
         self._resolver = TaskBindingResolver(
             model_tasks, configuration_error=EmbeddingConfigurationError
         )
@@ -153,7 +157,11 @@ class EmbeddingService:
             )
 
         identity = self._space_identity(target_ref, options)
-        provider_client = ProviderEmbeddingClient.from_runtime(self._runtime, target_ref)
+        provider_client = ProviderEmbeddingClient.from_runtime(
+            self._runtime,
+            target_ref,
+            usage_observer=TaskUsage(self._usage_recorder, TASK_TEXT_EMBEDDING, target_ref),
+        )
         try:
             response = await provider_client.embed(
                 list(texts),

@@ -533,6 +533,29 @@ async def test_completed_admission_outcomes_survive_reopen_and_later_epochs(stor
 
 
 @pytest.mark.asyncio
+async def test_start_replay_keeps_original_project_selection_after_profile_removal(store):
+    profile = await store.save_profile(
+        {**_profile(count=1), "working_directory": {"kind": "project", "project_id": "project"}},
+        expected_revision=None,
+    )
+    effective = {"cwd": "C:/original-project", "project_id": "project"}
+    started = await store.create_swarm(
+        profile["id"], "goal", effective, request_id="project-start", expected_profile_revision=1
+    )
+    await store.delete_profile(profile["id"], expected_revision=1)
+    await store.close()
+    await store.open()
+    assert await store.replay_start(profile["id"], "goal", request_id="project-start") == {
+        **started,
+        "replayed": True,
+    }
+    with pytest.raises(SwarmStoreError, match="request_conflict"):
+        await store.replay_start(
+            profile["id"], "goal", request_id="project-start", working_directory=effective["cwd"]
+        )
+
+
+@pytest.mark.asyncio
 async def test_late_start_and_wake_ack_cannot_resurrect_finished_run(store):
     started = await _swarm(store, count=1)
     sid = started["swarm_id"]

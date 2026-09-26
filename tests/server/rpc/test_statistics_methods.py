@@ -73,6 +73,7 @@ class _RuntimeStub:
         self._data_dir = data_dir
         self.chat_sessions = manager
         self.statistics_index = StatisticsIndex(data_dir)
+        self.usage_recorder = None
         self.agents = _FakeAgents(agent_ids)
         self.projects = ProjectStore(data_dir, sessions=manager)
         self.global_skills: list = []

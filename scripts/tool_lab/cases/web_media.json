@@ -150,10 +150,16 @@
    "expect": {"ok": false, "error_code": "image_not_found"}
   },
   {
-   "name": "analyze_image: web URL is explained",
+   "name": "analyze_image: private image URL is refused",
    "tool": "analyze_image",
-   "arguments": {"prompt": "Describe it", "images": ["https://example.com/cat.png"]},
-   "expect": {"ok": false, "contains": ["local"]}
+   "arguments": {"prompt": "Describe it", "images": ["http://127.0.0.1/cat.png"]},
+   "expect": {"ok": false, "error_code": "blocked_url"}
+  },
+  {
+   "name": "analyze_image: data URL without an image is explained",
+   "tool": "analyze_image",
+   "arguments": {"prompt": "Describe it", "images": ["photos/cat.png", "data:text/plain,hello"]},
+   "expect": {"ok": false, "error_code": "not_an_image", "contains": ["images[1]"]}
   },
   {
    "name": "image_generation: output_dir default is described",

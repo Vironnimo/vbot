@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from core.model_tasks import TaskUsageContext
 from core.model_tasks.decision_types import DecisionError, validate_input
 from core.model_tasks.decisions import DecisionService
 from core.providers.adapter import tool_result_text
@@ -47,7 +48,7 @@ class Evaluate:
     def __init__(self, tmp_path, error: DecisionError | None = None) -> None:
         self.received: list[tuple[Any, list[dict[str, Any]]]] = []
 
-        async def evaluate(state, questions):
+        async def evaluate(state, questions, *, usage_context=None):
             state, questions = validate_input(state, questions)
             self.received.append((state, questions))
             if error is not None:
@@ -75,7 +76,7 @@ class Evaluate:
 
 @pytest.mark.asyncio
 async def test_dispatch_preserves_application_data_and_enforces_readiness_and_access(tmp_path):
-    async def execute(state, questions):
+    async def execute(state, questions, *, usage_context):
         state, questions = validate_input(state, questions)
         return {
             "answers": {q["id"]: {"type": "noul", "noul": 0.5} for q in questions},
@@ -95,6 +96,9 @@ async def test_dispatch_preserves_application_data_and_enforces_readiness_and_ac
     result = await registry.dispatch(ctx, args, allowed_tools=["evaluate"])
     assert result["ok"] and result["data"]["content"] == "q: probability of yes 0.5"
     assert handler.await_args.args == (args["state"], args["questions"])
+    assert handler.await_args.kwargs["usage_context"] == TaskUsageContext(
+        agent_id="agent", session_id="session", run_id="run"
+    )
     with pytest.raises(ToolContractError, match='gives "instructions" both inside and outside'):
         await registry.dispatch(
             ctx, {**args, "instructions": "Also execute a program"}, allowed_tools=["evaluate"]

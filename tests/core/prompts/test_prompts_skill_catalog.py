@@ -38,10 +38,14 @@ def test_skill_catalog_groups_skills_by_origin(tmp_path: Path) -> None:
 
     prompt = manager.build_system_prompt(agent)
 
-    assert prompt.count("<skill_group label=") == 3
-    assert "Acme" in prompt
-    # Origin groups keep their canonical order, observed through fixture payloads.
-    assert prompt.index("bundled-skill") < prompt.index("proj-skill") < prompt.index("own-skill")
+    # Origin headings in canonical order, one line per Skill.
+    assert (
+        "<available_skills>\n"
+        "Bundled skills:\n- bundled-skill: Shipped.\n"
+        "Skills from project 'Acme':\n- proj-skill: From the repo.\n"
+        "Your own skills:\n- own-skill: Mine.\n"
+        "</available_skills>"
+    ) in prompt
     # The catalog stays path-free.
     assert "/skills/" not in prompt
 
@@ -82,10 +86,10 @@ def test_render_skill_catalog_snapshots_text(tmp_path: Path) -> None:
     agent = _agent("", memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
 
     snapshot = manager.render_skill_catalog(agent)
-    assert "<name>alpha</name>" in snapshot.catalog_text
+    assert "- alpha: First." in snapshot.catalog_text
 
     empty = manager.render_skill_catalog(agent, skill_registry=StubSkills([]))
-    assert "<name>" not in empty.catalog_text
+    assert empty.catalog_text == "<available_skills>\n</available_skills>"
 
 
 def test_build_system_prompt_pins_catalog_over_live_registry(tmp_path: Path) -> None:
