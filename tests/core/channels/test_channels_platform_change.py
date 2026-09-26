@@ -196,6 +196,11 @@ async def test_token_and_bot_changes_keep_channel_state(
         await asyncio.wait_for(adapters[0].started.wait(), timeout=1)
 
         await service.update_channel(_CHANNEL, token_env_var="TELEGRAM_BOT_TOKEN_OTHER")
+        # Rebuilding is deferred until shutdown finishes. Restarting sooner can
+        # legitimately coalesce with that pending start instead of creating a
+        # third adapter, so observe the updated connection before restarting it.
+        await wait_until(lambda: len(adapters) == 2)
+        await asyncio.wait_for(adapters[1].started.wait(), timeout=1)
         assert await service.restart_channel(_CHANNEL) is True
         await wait_until(lambda: len(adapters) == 3)
 
