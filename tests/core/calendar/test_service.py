@@ -13,6 +13,7 @@ from core.calendar import (
     CalendarService,
     CalendarStorageError,
     CalendarValidationError,
+    validate_calendar_events_file,
 )
 
 
@@ -398,6 +399,71 @@ class TestParseWindow:
 
 
 class TestPersistence:
+    @pytest.mark.parametrize("start", ["2026-09-14", "2026-09-14T09:00:00"])
+    @pytest.mark.parametrize(
+        "rrule",
+        [
+            {},
+            {"freq": "hourly"},
+            {"freq": "daily", "interval": 0},
+            {"freq": "daily", "until": "invalid"},
+            {"freq": "daily", "count": 2, "until": "2026-09-15"},
+            {"freq": "weekly", "by_weekday": ["invalid"]},
+        ],
+    )
+    def test_invalid_stored_recurrence_is_reported_and_isolated(self, tmp_path, start, rrule):
+        service = CalendarService(tmp_path, tz="UTC")
+        broken = service.create_event(title="Broken", start=start, rrule={"freq": "daily"})
+        valid = service.create_event(title="Valid", start="2026-09-14")
+        path = tmp_path / "calendar" / "events.json"
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        invalid_entry = next(entry for entry in payload["events"] if entry["id"] == broken.id)
+        invalid_entry["rrule"] = rrule
+        invalid_entry["future_field"] = {"retained": True}
+        path.write_text(json.dumps(payload), encoding="utf-8")
+
+        report = validate_calendar_events_file(path)
+        assert [item.path for item in report.diagnostics if item.severity == "error"] == [
+            "$.events[0].rrule"
+        ]
+        restarted = CalendarService(tmp_path, tz="UTC")
+        assert [event.id for event in restarted.list_events()] == [valid.id]
+        lower, upper = restarted.parse_window("2026-09-14", "2026-09-14")
+        assert [event.event_id for event in restarted.occurrences_in_window(lower, upper)] == [
+            valid.id
+        ]
+        assert restarted.find_free_slots(lower, upper, 30, now_utc=lower) == []
+
+        restarted.update_event(valid.id, title="Updated")
+        rewritten = json.loads(path.read_text(encoding="utf-8"))
+        assert next(entry for entry in rewritten["events"] if entry["id"] == broken.id) == (
+            invalid_entry
+        )
+
+    def test_stored_recurrence_defaults_are_normalized_without_rewriting_on_read(self, tmp_path):
+        service = CalendarService(tmp_path, tz="UTC")
+        event = service.create_event(
+            title="Daily", start="2026-09-14T09:00:00", rrule={"freq": "daily"}
+        )
+        path = tmp_path / "calendar" / "events.json"
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload["events"][0]["rrule"] = {"freq": "daily", "future_rule": {"kept": True}}
+        original = json.dumps(payload)
+        path.write_text(original, encoding="utf-8")
+
+        assert not any(
+            item.severity == "error" for item in validate_calendar_events_file(path).diagnostics
+        )
+        restarted = CalendarService(tmp_path, tz="UTC")
+        assert restarted.get_event(event.id).rrule == event.rrule
+        lower, upper = restarted.parse_window("2026-09-14", "2026-09-15")
+        assert len(restarted.occurrences_in_window(lower, upper)) == 2
+        assert path.read_text(encoding="utf-8") == original
+
+        restarted.update_event(event.id, title="Updated")
+        rewritten = json.loads(path.read_text(encoding="utf-8"))
+        assert rewritten["events"][0]["rrule"]["future_rule"] == {"kept": True}
+
     def test_events_survive_service_restart(self, tmp_path: Path) -> None:
         service = CalendarService(tmp_path, tz="Europe/Berlin")
         event = service.create_event(

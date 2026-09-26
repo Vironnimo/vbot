@@ -14,7 +14,7 @@ from core.calendar.errors import (
     CalendarStorageError,
     CalendarValidationError,
 )
-from core.calendar.recurrence import RRULE_FIELDS
+from core.calendar.recurrence import RRULE_FIELDS, normalize_rrule
 from core.config_validation import (
     JsonConfigValidationError,
     JsonDiagnostic,
@@ -208,7 +208,7 @@ class CalendarEvent:
             start_date=payload.get("start_date"),
             duration_minutes=payload.get("duration_minutes"),
             duration_days=payload.get("duration_days"),
-            rrule=payload.get("rrule"),
+            rrule=_normalize_stored_rrule(payload.get("rrule")),
             exdates=[str(value) for value in payload.get("exdates") or []],
             created_at=str(payload.get("created_at") or _utc_now_iso()),
             updated_at=str(
@@ -278,9 +278,10 @@ def _validate_event_data(diagnostics: list[JsonDiagnostic], item_path: str, item
             add_error(diagnostics, f"{item_path}.{field_name}", "must be an integer when provided")
     if item.get("all_day") is not None and not isinstance(item.get("all_day"), bool):
         add_error(diagnostics, f"{item_path}.all_day", "must be a boolean when provided")
-    rrule = item.get("rrule")
-    if rrule is not None and not isinstance(rrule, dict):
-        add_error(diagnostics, f"{item_path}.rrule", "must be an object when provided")
+    try:
+        _normalize_stored_rrule(item.get("rrule"))
+    except CalendarValidationError as error:
+        add_error(diagnostics, f"{item_path}.rrule", str(error))
     exdates = item.get("exdates")
     if exdates is not None and (
         not isinstance(exdates, list) or not all(isinstance(value, str) for value in exdates)
@@ -289,6 +290,13 @@ def _validate_event_data(diagnostics: list[JsonDiagnostic], item_path: str, item
     validate_non_empty_string(
         diagnostics, f"{item_path}.created_at", item.get("created_at"), required=False
     )
+
+
+def _normalize_stored_rrule(payload: object) -> dict[str, Any] | None:
+    """Validate known recurrence fields, leaving additive fields to document preservation."""
+    if isinstance(payload, dict):
+        payload = {key: value for key, value in payload.items() if key in RRULE_FIELDS}
+    return normalize_rrule(payload)
 
 
 def _event_to_inputs(event: CalendarEvent) -> dict[str, Any]:
