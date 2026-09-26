@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from importlib import import_module
+from pathlib import Path
 
 import httpx
 import pytest
@@ -12,6 +14,7 @@ from core.providers.openai import OpenAIAdapter
 from core.providers.token_getter import OAuthTokenGetter, StaticTokenGetter
 from core.providers.token_store import OAuthToken, TokenStore
 from core.providers.xai import XAIAdapter
+from core.storage import StorageManager
 from scripts._reasoning_probe_connection import _build_adapter
 from scripts._reasoning_probe_wire import (
     _build_tool_calls,
@@ -19,6 +22,25 @@ from scripts._reasoning_probe_wire import (
     _encrypted_reasoning_expected,
     _run_turn,
 )
+
+
+@pytest.mark.parametrize(
+    "module_name",
+    [
+        "scripts._reasoning_probe_connection",
+        "scripts.probe_reasoning_replay",
+        "scripts.probe_reasoning_replay_behavior",
+        "scripts.probe_reasoning_replay_alt_wires",
+        "scripts.probe_reasoning_replay_tokens",
+        "scripts.probe_reasoning_replay_native",
+    ],
+)
+def test_probe_credentials_use_the_shared_literal_parser(tmp_path: Path, module_name: str) -> None:
+    value = ' "literal\\secret\u2028OTHER_KEY=unrelated" '
+    storage = StorageManager(tmp_path)
+    storage.set_data_dir_credential("PROBE_KEY", value)
+
+    assert import_module(module_name)._load_api_key("PROBE_KEY", tmp_path) == value
 
 
 @pytest.mark.asyncio

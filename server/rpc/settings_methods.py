@@ -18,7 +18,6 @@ from core.settings import (
     SettingsPatchOperation,
     SettingsPathError,
     SettingsValidationError,
-    apply_settings_patch,
     build_effective_settings,
     catalog_payload,
     parse_patch_operations,
@@ -142,16 +141,13 @@ async def _patch_setting_paths(state: Any, params: JsonObject) -> JsonObject:
 
     storage = state.runtime.storage
 
-    def mutate(raw_settings: JsonObject) -> tuple[JsonObject, JsonObject, tuple[str, ...]]:
-        previous = deepcopy(raw_settings)
-        candidate, changed_paths = apply_settings_patch(raw_settings, operations)
+    def validate_candidate(previous: JsonObject, candidate: JsonObject) -> None:
         _validate_public_settings_candidate(state.runtime, previous, candidate, operations)
-        raw_settings.clear()
-        raw_settings.update(candidate)
-        return previous, candidate, changed_paths
 
     try:
-        previous, saved, changed_paths = storage.update_settings(mutate)
+        previous, saved, changed_paths = storage.patch_settings(
+            operations, validate_candidate=validate_candidate
+        )
         commands_changed = await state.runtime.apply_settings_change(
             previous,
             saved,

@@ -47,6 +47,7 @@ from tests.core.chat.chat_loop_support import (
     StubSkills,
     StubStorage,
     build_chat_loop,
+    build_request_messages,
     persisted_roles,
     session_address,
 )
@@ -83,7 +84,7 @@ async def test_compaction_maybe_auto_compact_falls_back_when_summary_model_malfo
     )
     compaction_service = StubCompactionService(should_auto=True, checkpoint=checkpoint)
     loop = build_chat_loop(runtime, compaction_service=cast(Any, compaction_service))
-    messages = await loop._requests._build_request_messages(agent, session)
+    messages = await build_request_messages(loop, agent, session)
     run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
 
     await _maybe_auto_compact(
@@ -134,7 +135,7 @@ async def test_compaction_maybe_auto_compact_falls_back_when_summary_adapter_loo
     )
     compaction_service = StubCompactionService(should_auto=True, checkpoint=checkpoint)
     loop = build_chat_loop(runtime, compaction_service=cast(Any, compaction_service))
-    messages = await loop._requests._build_request_messages(agent, session)
+    messages = await build_request_messages(loop, agent, session)
     run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
 
     await _maybe_auto_compact(
@@ -184,7 +185,7 @@ async def test_compaction_maybe_auto_compact_logs_warning_when_compaction_fails(
     session.append(ChatMessage.user("Hi"))
     session.append(ChatMessage.assistant(model=agent.model, content="Hello"))
     loop = build_chat_loop(runtime, compaction_service=cast(Any, compaction_service))
-    messages = await loop._requests._build_request_messages(agent, session)
+    messages = await build_request_messages(loop, agent, session)
     run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
 
     with caplog.at_level("WARNING"):
@@ -255,7 +256,7 @@ async def test_real_auto_compaction_truncation_preserves_history_skills_and_prom
     runtime.skills = StubSkills(
         [StubSkill("one", "One.", Path("a")), StubSkill("two", "Two.", Path("b"))]
     )
-    messages = await loop._requests._build_request_messages(agent, session)
+    messages = await build_request_messages(loop, agent, session)
     original_history = session.load()
     original_skills = session.activated_skill_contents()
     run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
@@ -316,7 +317,7 @@ async def test_compaction_projection_failure_does_not_persist_checkpoint(
             StubCompactionService(should_auto=True, checkpoint=checkpoint),
         ),
     )
-    messages = await loop._requests._build_request_messages(agent, session)
+    messages = await build_request_messages(loop, agent, session)
     run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
 
     async def fail_projected_request(*_args: Any, **_kwargs: Any) -> _RequestState:

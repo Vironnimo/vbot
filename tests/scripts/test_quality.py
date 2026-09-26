@@ -84,6 +84,73 @@ def test_filter_pytest_failure_output_removes_bare_nodeid_progress_lines():
     assert "1 failed, 1 passed in 0.12s" in filtered
 
 
+@pytest.mark.parametrize(
+    "nodeid",
+    [
+        "tests/example/test_demo.py::test_text[ID3 tags]",
+        "tests/example/test_demo.py::TestExample::test_text[with spaces]",
+        r"tests/example/test_demo.py::test_text[```\nSession naming audit\n```]",
+        "tests/example/test_demo.py::test_text[expected FAILED result]",
+        "[gw1] [ 50%] tests/example/test_demo.py::test_text[quoted [nested] value]",
+    ],
+)
+def test_filter_pytest_removes_parameterized_progress_but_keeps_failures(nodeid):
+    module = _load_quality_module()
+    failure = f"{nodeid} FAILED [100%]"
+    report = "\n".join(
+        [
+            "================ FAILURES ================",
+            "E   AssertionError: expected value",
+            "FAILED tests/example/test_demo.py::test_bad - AssertionError",
+        ]
+    )
+
+    filtered = module.filter_pytest_failure_output(f"{nodeid}\n{failure}\n{report}")
+
+    assert filtered == f"{failure}\n{report}"
+
+
+@pytest.mark.parametrize(
+    "progress",
+    [
+        "[gw0] [ 44%] PASSED tests/example/test_demo.py::test_status[[ERROR]-expected FAILED]",
+        "[gw3] [ 38%] PASSED tests/example/test_demo.py::test_output[ERROR: build failed]",
+        "tests/example/test_demo.py::test_status[expected FAILED] PASSED [100%]",
+        "PASSED tests/example/test_demo.py::test_status[[ERROR]]",
+    ],
+)
+def test_filter_pytest_uses_result_position_instead_of_words_in_parameters(progress):
+    module = _load_quality_module()
+    failure = "[gw1] [ 50%] FAILED tests/example/test_demo.py::test_status[expected PASSED]"
+    report = "================ FAILURES ================\nE   AssertionError"
+
+    filtered = module.filter_pytest_failure_output(f"{progress}\n{failure}\n{report}")
+
+    assert filtered == f"{failure}\n{report}"
+
+
+def test_filter_pytest_preserves_progress_like_text_in_diagnostics():
+    module = _load_quality_module()
+    report = "\n".join(
+        [
+            "================ FAILURES ================",
+            "E   AssertionError: expected PASSED status",
+            "---------------- Captured stdout call ----------------",
+            "tests/example/test_demo.py::test_text[diagnostic value]",
+            "command PASSED but produced the wrong result",
+            "platform details from the tested program",
+            "================ short test summary info ================",
+            "FAILED tests/example/test_demo.py::test_bad - AssertionError",
+        ]
+    )
+
+    filtered = module.filter_pytest_failure_output(
+        "tests/example/test_demo.py::test_ok[successful value]\n" + report
+    )
+
+    assert filtered == report
+
+
 def test_extract_pytest_profile_output_returns_only_duration_section():
     module = _load_quality_module()
     output = "\n".join(

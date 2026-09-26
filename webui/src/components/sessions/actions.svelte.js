@@ -76,7 +76,7 @@ export function createSessionActions(context) {
       editValue = '';
       // Re-fetch so the row reflects the server-normalized title (and the
       // fallback label when the name was cleared).
-      await context.loadSessions(targetAgentId);
+      await context.loadSessions();
     } catch (error) {
       renameError =
         error.message ||
@@ -137,7 +137,7 @@ export function createSessionActions(context) {
       );
       policySession = null;
       policyDraft = null;
-      await context.loadSessions(targetAgentId);
+      await context.loadSessions();
     } catch (error) {
       policyError =
         error.message ||
@@ -194,7 +194,7 @@ export function createSessionActions(context) {
       });
       // Re-fetch so the deleted row disappears immediately, without waiting for
       // the resource_changed round-trip.
-      await context.loadSessions(targetAgentId);
+      await context.loadSessions();
     } catch (error) {
       actionError =
         error.message ||

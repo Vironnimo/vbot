@@ -169,8 +169,20 @@ async def test_wait_reads_other_units_and_plain_text_patterns(manager, tmp_path,
         manager, make_context(tmp_path), {"action": "wait", "process_id": process_id, **arguments}
     )
 
-    assert result["data"]["output"].strip() == "done (exit 0)"
-    assert result["data"].get("note") == note
+    data = result["data"]
+    assert data["output"].strip() == "done (exit 0)"
+    expected_note = note
+    if "pattern" in arguments:
+        # Matching stdout may win the race with process-exit finalization.
+        assert data["matched"] == "done (exit 0)"
+        assert data["status"] in {"running", "completed"}
+        if data["status"] == "running":
+            expected_note = (
+                f"{note} The command is still running; vBot delivers its result when it exits."
+            )
+    else:
+        assert data["status"] == "completed"
+    assert data.get("note") == expected_note
 
 
 @pytest.mark.asyncio

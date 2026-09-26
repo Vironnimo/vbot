@@ -29,10 +29,16 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import re
 import sys
 from pathlib import Path
 from typing import Any
+
+# Direct execution must use this checkout's credential parser.
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if sys.path[:1] != [str(PROJECT_ROOT)]:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from core.utils.config import read_env_file  # noqa: E402
 
 try:
     import httpx
@@ -76,31 +82,10 @@ def _load_api_key(env_name: str, data_dir: Path) -> str:
     env_path = data_dir / ".env"
     if not env_path.is_file():
         raise SystemExit(f"no .env found at {env_path}")
-    for line in env_path.read_text(encoding="utf-8").splitlines():
-        match = re.match(rf"\s*{re.escape(env_name)}\s*=\s*(.+?)\s*$", line)
-        if match:
-            return match.group(1).strip().strip('"').strip("'")
+    value = read_env_file(env_path).get(env_name)
+    if value:
+        return value
     raise SystemExit(f"no {env_name} entry in {env_path}")
-
-
-def _tool_use_blocks(tool_calls: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Convert /v1-style tool_calls into Anthropic tool_use content blocks."""
-    blocks: list[dict[str, Any]] = []
-    for call in tool_calls:
-        function = call.get("function") or {}
-        try:
-            arguments = json.loads(function.get("arguments") or "{}")
-        except json.JSONDecodeError:
-            arguments = {}
-        blocks.append(
-            {
-                "type": "tool_use",
-                "id": call.get("id", "toolu_0"),
-                "name": function.get("name", "get_weather"),
-                "input": arguments,
-            }
-        )
-    return blocks
 
 
 async def _send_native_real(

@@ -42,6 +42,7 @@ describe('SessionListDrawer', () => {
     });
     renameSessionMock.mockReset();
     renameSessionMock.mockResolvedValue({ title: 'Release planning' });
+    setSessionCompactionPolicyMock.mockReset();
     deleteSessionMock.mockReset();
     deleteSessionMock.mockResolvedValue({
       agent_id: 'alpha',
@@ -381,6 +382,141 @@ describe('SessionListDrawer', () => {
       () => listSessionsMock.mock.calls.length === loadsBefore + 1,
     );
   });
+
+  it.each([
+    ['rename', 'Agent selection'],
+    ['delete', 'Agent selection'],
+    ['policy', 'Agent selection'],
+    ['rename', 'All agents filter'],
+    ['delete', 'All agents filter'],
+  ])(
+    'refreshes the current list after a pending %s and a change to %s',
+    async (operation, transition) => {
+      const { createChatViewParentHarness } =
+        await import('./chatViewParentHarness.svelte.js');
+      const harness = createChatViewParentHarness();
+      const changeAgent = transition === 'Agent selection';
+      const mutationAgent = changeAgent ? 'alpha' : 'beta';
+      const displayedAgent = changeAgent ? 'beta' : 'alpha';
+      const mutation = {
+        rename: renameSessionMock,
+        delete: deleteSessionMock,
+        policy: setSessionCompactionPolicyMock,
+      }[operation];
+      let finishMutation;
+      mutation.mockImplementationOnce(
+        () => new Promise((resolve) => (finishMutation = resolve)),
+      );
+      listSessionsMock.mockImplementation(async (requested, query) => {
+        const addresses = Array.isArray(requested) ? requested : [requested];
+        // Mirror the server contract: a required Session must belong to one
+        // of the requested Agents, including during post-mutation refreshes.
+        if (!addresses.includes(query.requiredSession?.agentId)) {
+          throw new Error('required Session is outside the requested Agents');
+        }
+        const requestNumber = listSessionsMock.mock.calls.length;
+        return {
+          sessions: addresses.map((address) => ({
+            id: `session-${address}`,
+            agent_address: address,
+            title: `${address} Session ${requestNumber}`,
+          })),
+        };
+      });
+      const onSessionDeleted = vi.fn();
+      const onCompactionPolicyChange = vi.fn();
+      mountedComponent = mount(SessionListDrawer, {
+        target: document.body,
+        props: {
+          get agentId() {
+            return harness.selectedAgentId;
+          },
+          get currentSessionId() {
+            return `session-${harness.selectedAgentId}`;
+          },
+          agents: [{ address: 'alpha' }, { address: 'beta' }],
+          initialFilters: { allAgents: !changeAgent },
+          onSessionDeleted,
+          onCompactionPolicyChange,
+        },
+      });
+      flushSync();
+      await waitForCondition(
+        () =>
+          document.querySelectorAll('.session-row').length ===
+          (changeAgent ? 1 : 2),
+      );
+
+      sessionRowButton(`${mutationAgent} Session`)
+        .closest('.session-row')
+        .querySelector('.session-row__menu-trigger')
+        .click();
+      flushSync();
+      buttonByText(
+        { rename: 'Rename', delete: 'Delete', policy: 'Compaction Policy' }[
+          operation
+        ],
+      ).click();
+      flushSync();
+      if (operation === 'rename') {
+        const input = document.querySelector('.session-row__edit-input');
+        input.value = 'Updated title';
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(
+          new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }),
+        );
+      } else if (operation === 'delete') {
+        confirmDialog('Delete');
+      } else {
+        buttonByText('Save').click();
+      }
+      flushSync();
+      await waitForCondition(() => mutation.mock.calls.length === 1);
+
+      if (changeAgent) {
+        harness.setSelectedAgentId(displayedAgent);
+      } else {
+        document.querySelector('[aria-label="All agents"]').click();
+      }
+      flushSync();
+      await waitForCondition(() =>
+        document
+          .querySelector('.session-row__name')
+          ?.textContent.includes(`${displayedAgent} Session 2`),
+      );
+      const effective = { enabled: false };
+      finishMutation({ next_session_id: 'landing-session', effective });
+      flushSync();
+
+      // The final server snapshot must reach the new list without reverting
+      // its Agent scope or reporting a mismatched required-Session error.
+      await waitForCondition(() =>
+        document
+          .querySelector('.session-row__name')
+          ?.textContent.includes(`${displayedAgent} Session 3`),
+      );
+      expect(document.querySelectorAll('.session-row')).toHaveLength(1);
+      expect(document.querySelector('[role="alert"]')).toBeNull();
+      expect(listSessionsMock.mock.calls.at(-1)[0]).toBe(displayedAgent);
+      expect(mutation.mock.calls[0].slice(0, 2)).toEqual([
+        mutationAgent,
+        `session-${mutationAgent}`,
+      ]);
+      if (operation === 'delete') {
+        expect(onSessionDeleted).toHaveBeenCalledWith({
+          deletedSessionId: `session-${mutationAgent}`,
+          nextSessionId: 'landing-session',
+          agentAddress: mutationAgent,
+        });
+      } else if (operation === 'policy') {
+        expect(onCompactionPolicyChange).toHaveBeenCalledWith(
+          mutationAgent,
+          `session-${mutationAgent}`,
+          effective,
+        );
+      }
+    },
+  );
 
   it('portals the complete row menu outside the clipped session drawer', async () => {
     mountedComponent = mount(SessionListDrawer, {

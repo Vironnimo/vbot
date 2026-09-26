@@ -594,6 +594,38 @@ async def test_invalid_event_storage_never_deletes_action_definitions(tmp_path, 
     assert stored["actions"][0]["id"] == action["id"]
 
 
+@pytest.mark.asyncio
+async def test_invalid_event_recurrence_does_not_block_other_actions(tmp_path):
+    service, broken_event, trigger, now = setup(tmp_path, recurring=True)
+    broken_action = service.actions.add(
+        broken_event.id, when="start - 1h", prompt="broken", target="main"
+    )
+    valid_event = service.create_event(
+        title="Valid", start=(now + timedelta(minutes=30)).isoformat()
+    )
+    valid_action = service.actions.add(
+        valid_event.id, when="start - 1h", prompt="valid", target="main"
+    )
+    path = tmp_path / "calendar" / "events.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    next(event for event in payload["events"] if event["id"] == broken_event.id)["rrule"] = {}
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    restarted = CalendarService(tmp_path, tz="Europe/Berlin")
+    restarted.actions.configure(trigger, Mock(), session_manager())
+    await restarted.actions.tick(now)
+    await drain(restarted)
+
+    trigger.trigger_run.assert_awaited_once()
+    assert valid_action["id"] in trigger.trigger_run.call_args.args[1]
+    stored = json.loads((tmp_path / "calendar" / "actions.json").read_text(encoding="utf-8"))
+    assert {action["id"] for action in stored["actions"]} == {
+        broken_action["id"],
+        valid_action["id"],
+    }
+    assert {row["action_id"] for row in stored["executions"].values()} == {valid_action["id"]}
+
+
 def test_short_action_ids_skip_collisions(tmp_path, monkeypatch):
     from core.utils import ids
 

@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 
+import core.model_tasks._live_call as live_call_module
 import core.model_tasks.live as live_module
 from core.model_tasks._live_brain import DelegationInput
 from core.model_tasks._live_call import LiveCallSession
@@ -254,6 +255,89 @@ async def test_live_usage_failure_still_publishes_closed(caplog: Any) -> None:
     assert host.of_type("state")[-1]["phase"] == "closed"
     assert len(host.of_type("closed")) == 1
     assert any(record.exc_info for record in caplog.records)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cleanup", ["failure", "timeout"])
+async def test_transport_cleanup_cannot_prevent_call_completion(
+    cleanup: str, monkeypatch: pytest.MonkeyPatch
+):
+    wire, host = FakeWire(), FakeHost()
+
+    async def close_transport() -> None:
+        if cleanup == "failure":
+            raise RuntimeError("test socket cleanup failure")
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(wire, "aclose", close_transport)
+    monkeypatch.setattr(live_call_module, "_TEARDOWN_TIMEOUT_SECONDS", 0.01)
+    call = _call(wire, None, host)
+    wire.push(WireClosed(reason="client_request", usage=None, confirmed=True))
+
+    await asyncio.wait_for(call.wait_closed(), 1)
+
+    assert host.of_type("closed") == [{"type": "closed", "reason": "client_request", "usage": None}]
+
+
+@pytest.mark.asyncio
+async def test_abort_during_transport_cleanup_keeps_abort_reason_priority(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    wire, host = FakeWire(), FakeHost()
+    cleanup_started = asyncio.Event()
+    cleanup_release = asyncio.Event()
+
+    async def close_transport() -> None:
+        cleanup_started.set()
+        await cleanup_release.wait()
+        wire.closed = True
+
+    monkeypatch.setattr(wire, "aclose", close_transport)
+    call = _call(wire, None, host)
+    wire.push(WireClosed(reason="client_request", usage=None, confirmed=True))
+    await asyncio.wait_for(cleanup_started.wait(), 1)
+    abort = asyncio.create_task(call.abort())
+    await _until(lambda: ("close",) in wire.sent)
+    cleanup_release.set()
+
+    await asyncio.wait_for(abort, 1)
+
+    assert wire.closed
+    assert host.of_type("closed") == [{"type": "closed", "reason": "aborted", "usage": None}]
+
+
+@pytest.mark.asyncio
+async def test_cancellation_during_transport_cleanup_preserves_terminal_usage(
+    recorder: UsageRecorder, monkeypatch: pytest.MonkeyPatch
+):
+    wire, host = FakeWire(), FakeHost()
+    cleanup_started = asyncio.Event()
+
+    async def close_transport() -> None:
+        cleanup_started.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(wire, "aclose", close_transport)
+    accounting = TaskUsage(recorder, "live_voice", parse_task_model_target_id(XAI_TARGET))
+    call_id = await accounting.start()
+    call = _call(wire, None, host, usage_accounting=accounting, usage_call_id=call_id)
+    wire.push(
+        WireClosed(
+            reason="client_request", usage={"input_tokens": 7, "output_tokens": 5}, confirmed=True
+        )
+    )
+    await asyncio.wait_for(cleanup_started.wait(), 1)
+    assert call._reader is not None
+    call._reader.cancel()
+
+    await asyncio.wait_for(call.wait_closed(), 1)
+
+    _, records = recorder.read_since()
+    assert len(records) == 1
+    assert records[0].status == "completed"
+    assert records[0].usage["input_tokens"] == 7
+    assert records[0].usage["output_tokens"] == 5
+    assert len(host.of_type("closed")) == 1
 
 
 @pytest.mark.asyncio

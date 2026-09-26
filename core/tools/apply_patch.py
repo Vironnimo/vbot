@@ -13,6 +13,7 @@ from contextlib import ExitStack
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
+from core.sessions import SessionAddress
 from core.tools._patch_entries import (
     _ABSENT,
     _entry_path,
@@ -288,7 +289,15 @@ def _commit(
             except _PatchError:
                 pass
             else:
-                context.change_tracker.record_write(context.session_id, path, before=old, after=new)
+                context.change_tracker.record_write(
+                    (
+                        SessionAddress(context.project_id, context.agent_id, context.session_id),
+                        context.run_id,
+                    ),
+                    path,
+                    before=old,
+                    after=new,
+                )
         # Record the completed write before observing it: an observation failure must
         # not report that nothing happened or invite a blind replay.
         try:

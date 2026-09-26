@@ -75,7 +75,15 @@ PYTEST_NOISE_LINE_PATTERNS = [
 ]
 PYTEST_RESULT_TOKENS = ("PASSED", "FAILED", "ERROR", "SKIPPED", "XFAIL", "XPASS")
 PYTEST_PROGRESS_NODEID_PATTERN = re.compile(
-    r"^(?:\[[^\]]+\]\s+)*(?:\[\s*\d+%\]\s+)?[^:\s][^\s]*::[^\s]+$"
+    r"^(?:\[(?:gw\d+|\s*\d+%)\]\s+)*[^\s]+\.py::[^\s\[]+(?:\[.*\])?$"
+)
+PYTEST_TRAILING_RESULT_PATTERN = re.compile(
+    rf"\s(?:{'|'.join(PYTEST_RESULT_TOKENS)})(?:\s+\[\s*\d+%\])?$"
+)
+PYTEST_PASSED_PROGRESS_PATTERN = re.compile(
+    r"^(?:\[(?:gw\d+|\s*\d+%)\]\s+)*(?:"
+    r"PASSED\s+[^\s]+\.py::.+|"
+    r"[^\s]+\.py::.+\sPASSED(?:\s+\[\s*\d+%\])?)$"
 )
 PYTEST_PROFILE_COUNT = 25
 
@@ -340,7 +348,7 @@ def _is_pytest_progress_nodeid_line(stripped_line: str) -> bool:
         return False
     if stripped_line.startswith(PYTEST_RESULT_TOKENS):
         return False
-    if any(f" {token}" in stripped_line for token in PYTEST_RESULT_TOKENS):
+    if PYTEST_TRAILING_RESULT_PATTERN.search(stripped_line):
         return False
     return bool(PYTEST_PROGRESS_NODEID_PATTERN.match(stripped_line))
 
@@ -349,16 +357,24 @@ def filter_pytest_failure_output(output: str) -> str:
     """Remove pytest success noise while keeping all failure details."""
 
     filtered_lines: list[str] = []
+    in_report = False
     for line in output.splitlines():
         stripped = line.strip()
+        # Failure/captured output may itself contain node ids or " PASSED".
+        # Only suppress progress before pytest starts its diagnostic sections.
+        if in_report:
+            filtered_lines.append(line.rstrip())
+            continue
         if not stripped:
             filtered_lines.append("")
             continue
         if any(pattern.match(stripped) for pattern in PYTEST_NOISE_LINE_PATTERNS):
             continue
+        if re.fullmatch(r"=+ .+ =+", stripped):
+            in_report = True
         if _is_pytest_progress_nodeid_line(stripped):
             continue
-        if " PASSED" in stripped and "FAILED" not in stripped and "ERROR" not in stripped:
+        if PYTEST_PASSED_PROGRESS_PATTERN.match(stripped):
             continue
         filtered_lines.append(line.rstrip())
 

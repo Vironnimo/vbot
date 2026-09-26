@@ -163,25 +163,6 @@ class _PathLockEntry:
         self.users = 0
 
 
-def stale_failure_text(reason: StaleReason, resolved: Path) -> tuple[str, str]:
-    """Map a full-write conflict to a model-facing failure code and message."""
-    if reason is StaleReason.NEVER_READ:
-        return (
-            "file_not_read",
-            f"{model_path(resolved)} has not been read in this session. "
-            "This Add would overwrite it. Read it first with the read Tool; shell reads "
-            "do not satisfy this check. If read is unavailable, use Update with current "
-            "matching context for the intended edits.",
-        )
-    return (
-        "file_modified_since_read",
-        f"{model_path(resolved)} has been modified since you last read it. "
-        "This Add would overwrite it. Read it again with the read Tool; shell reads "
-        "do not satisfy this check. If read is unavailable, use Update with current "
-        "matching context for the intended edits.",
-    )
-
-
 def _stamp(resolved: Path) -> tuple[float, int] | None:
     """Return a file's ``(mtime, size)``, or ``None`` if it cannot be stat'd."""
     try:
@@ -296,5 +277,4 @@ __all__ = [
     "ReadOnlyFileError",
     "StaleReason",
     "atomic_write_bytes",
-    "stale_failure_text",
 ]

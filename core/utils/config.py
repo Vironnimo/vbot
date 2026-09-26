@@ -85,6 +85,14 @@ def _resolve_default_data_dir() -> Path:
     return Path.home() / ".vbot"
 
 
+def split_env_lines(text: str) -> list[str]:
+    """Split newline-normalized dotenv text without treating Unicode as a delimiter."""
+    lines = text.split("\n")
+    if lines[-1] == "":
+        lines.pop()
+    return lines
+
+
 def parse_env_lines(lines: Iterable[str]) -> dict[str, str]:
     """Parse conservative ``KEY=VALUE`` pairs from dotenv-style lines.
 
@@ -116,6 +124,19 @@ def parse_env_lines(lines: Iterable[str]) -> dict[str, str]:
     return values
 
 
+def format_env_value(value: str) -> str:
+    """Keep a single-line value literal under :func:`parse_env_lines`.
+
+    Matching outer quotes delimit the entire value; inner quotes and
+    backslashes stay literal, with no escape decoding or interpolation.
+    """
+    if value != value.strip() or (
+        len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'")
+    ):
+        return f'"{value}"'
+    return value
+
+
 def read_env_file(env_path: str | Path) -> dict[str, str]:
     """Read and parse a dotenv-style file, returning raw string values."""
 
@@ -129,7 +150,9 @@ def read_env_file(env_path: str | Path) -> dict[str, str]:
         _LOGGER.warning("Ignoring unreadable environment file %s: %s", path, exc)
         return {}
 
-    return parse_env_lines(raw.splitlines())
+    # read_text normalizes CR/LF physical lines. Unicode separators are part
+    # of a credential value, never another environment assignment.
+    return parse_env_lines(split_env_lines(raw))
 
 
 def build_environment_snapshot(

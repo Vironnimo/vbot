@@ -43,3 +43,5 @@ Task-gated detail for `sessions.md`: how forks share history, how a history edit
 4. Delete the Session's own lineage rows and re-index the collected candidates.
 
 Then the `sessions` row is deleted (entries, Runs, side rows, prompt pins, seen Skills, Continuation and owned relations cascade; direct forks' `fork_parent_key` becomes NULL, so their `fork_source` disappears), and prompt blobs no other Session pins are deleted. A descendant's cursor stays valid across the materialization (same seqs and ids), while its revision bump makes Recall and Statistics re-read it.
+
+Materialization copies every live `entries` column, including additive columns unknown to this version, while replacing only the entry key, owning Session, Run reference and supersession state. Side-row and Run copies, including Run change paths, likewise preserve additive columns; deleting an ancestor must not erase newer fields from the descendant's history.

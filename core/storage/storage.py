@@ -18,7 +18,13 @@ from pathlib import Path
 from threading import RLock
 from typing import TYPE_CHECKING, Any, Protocol, TypeVar, cast
 
-from core.json_documents import JsonDocumentWriteError, write_json_document
+from core.json_documents import (
+    FORMAT_VERSION_FIELD,
+    JsonDocumentWriteError,
+    check_json_document_writable,
+    strip_unknown_fields,
+    write_json_document,
+)
 from core.settings import (
     SETTINGS_FORMAT,
     SettingsValidationError,
@@ -48,7 +54,11 @@ from core.settings.normalizers import (
     normalize_web_fetch_settings,
     normalize_web_search_settings,
 )
-from core.settings.paths import SUBAGENT_SETTING_DEFAULTS
+from core.settings.paths import (
+    SUBAGENT_SETTING_DEFAULTS,
+    SettingsPatchOperation,
+    apply_settings_patch,
+)
 from core.settings.settings import SETTINGS_UPDATE_SECTIONS
 from core.storage import _settings_updates as settings_updates
 from core.storage.errors import StorageError
@@ -57,7 +67,12 @@ from core.storage.prompt_blocks import PromptBlockStore
 from core.storage.prompt_fragments import PromptFragmentStore
 from core.storage.temp_files import TemporaryFileManager
 from core.utils.atomic import atomic_write_text
-from core.utils.config import build_environment_snapshot, read_env_file
+from core.utils.config import (
+    build_environment_snapshot,
+    format_env_value,
+    read_env_file,
+    split_env_lines,
+)
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -162,12 +177,14 @@ class StorageManager:
             env_path = self.data_dir / ".env"
             try:
                 lines = (
-                    env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []
+                    split_env_lines(env_path.read_text(encoding="utf-8"))
+                    if env_path.exists()
+                    else []
                 )
             except OSError as exc:
                 raise StorageError(f"Cannot read {env_path}: {exc}") from exc
 
-            new_line = f"{key}={value}"
+            new_line = f"{key}={format_env_value(value)}"
             updated_lines: list[str] = []
             replaced = False
             for line in lines:
@@ -209,7 +226,7 @@ class StorageManager:
             if not env_path.exists():
                 return False
             try:
-                lines = env_path.read_text(encoding="utf-8").splitlines()
+                lines = split_env_lines(env_path.read_text(encoding="utf-8"))
             except OSError as exc:
                 raise StorageError(f"Cannot read {env_path}: {exc}") from exc
 
@@ -334,6 +351,33 @@ class StorageManager:
             result = mutator(merged_settings)
             self.save_settings(merged_settings)
             return result
+
+    def patch_settings(
+        self,
+        operations: list[SettingsPatchOperation],
+        *,
+        validate_candidate: Callable[[dict[str, Any], dict[str, Any]], None] | None = None,
+    ) -> tuple[dict[str, Any], dict[str, Any], tuple[str, ...]]:
+        """Patch known Settings while pruning against a strict raw snapshot.
+
+        The optional runtime validator sees only known fields and runs before
+        the write. Unknown fields stay within the persistence boundary, where
+        their presence prevents a leaf reset from pruning their parent object.
+        """
+        with self._settings_lock:
+            try:
+                document = check_json_document_writable(self.settings_path, SETTINGS_FORMAT) or {}
+            except JsonDocumentWriteError as exc:
+                raise StorageError(str(exc)) from exc
+            previous = cast("dict[str, Any]", strip_unknown_fields(document, SETTINGS_FORMAT.shape))
+            previous.pop(FORMAT_VERSION_FIELD, None)
+            candidate, changed_paths = apply_settings_patch(
+                previous, operations, preservation_source=document
+            )
+            if validate_candidate is not None:
+                validate_candidate(previous, candidate)
+            self.save_settings(candidate)
+            return previous, candidate, changed_paths
 
     def update_settings_sections(self, settings_update: Mapping[str, Any]) -> dict[str, Any]:
         """Persist a parsed public Settings update in one settings transaction."""

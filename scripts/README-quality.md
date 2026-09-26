@@ -88,6 +88,7 @@ All gates passed in 6.0s.
 
 - Each step prints `label .... STATUS`; a fix step lists every changed file, indented, beneath its line.
 - A **failing** step's complete output is reproduced afterward in a `--- label ---` block, so the failure detail is always in the report (pytest/vitest passing-test noise is filtered out first; failure lines are kept verbatim).
+- Pytest filtering removes verbose progress, including parameterized ids with spaces, only before the diagnostic sections. Failure details and captured output remain intact even when they contain test ids or result words.
 - The frontend **build** never fails the gate on warnings. A build that exits `0` but emits stderr (oversized chunks, a11y hints, unused CSS, deprecations) reports `PASS (warnings)` and reproduces the warnings in a `--- build (warnings) ---` block — surfacing them without blocking.
 - The final line is either `All gates passed in Xs.` or `N gate(s) failed in Xs.`
 

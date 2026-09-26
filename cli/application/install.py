@@ -42,11 +42,12 @@ def install_payload(
     from_checkout: Path | None = None,
 ) -> Installation:
     root, payload = root.expanduser().absolute(), payload.expanduser().resolve()
+    resolved_root = root.resolve()
     if (
-        root == root.parent
-        or root == Path.home()
-        or root == payload
-        or payload.is_relative_to(root)
+        resolved_root == resolved_root.parent
+        or resolved_root == Path.home().resolve()
+        or resolved_root.is_relative_to(payload)
+        or payload.is_relative_to(resolved_root)
     ):
         raise ApplicationError(
             "Choose a dedicated application directory outside the supplied payload"

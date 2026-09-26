@@ -15,6 +15,7 @@ from core.settings.normalizers import (
     normalize_speech_settings,
     normalize_web_fetch_settings,
 )
+from core.settings.paths import SettingsPatchOperation, apply_settings_patch
 from core.settings.settings import parse_openrouter_routing
 from core.storage import DataDirectoryLayout, StorageError
 
@@ -315,6 +316,19 @@ class StubStorage:
         result = mutator(merged_settings)
         self.save_settings(merged_settings)
         return result
+
+    def patch_settings(
+        self,
+        operations: list[SettingsPatchOperation],
+        *,
+        validate_candidate: Callable[[JsonObject, JsonObject], None] | None = None,
+    ) -> tuple[JsonObject, JsonObject, tuple[str, ...]]:
+        previous = self.load_settings()
+        candidate, changed_paths = apply_settings_patch(previous, operations)
+        if validate_candidate is not None:
+            validate_candidate(previous, candidate)
+        self.save_settings(candidate)
+        return previous, candidate, changed_paths
 
     def update_settings_sections(self, settings_update: JsonObject) -> JsonObject:
         updated_sections: JsonObject = {}

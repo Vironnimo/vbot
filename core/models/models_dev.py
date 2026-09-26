@@ -469,28 +469,6 @@ def derive_reasoning_control(
     return None
 
 
-def reasoning_capability_block(
-    *,
-    supported: bool,
-    reasoning_options: Sequence[Mapping[str, Any]] | None,
-) -> dict[str, Any]:
-    """Build the full typed ``reasoning`` capability block.
-
-    Combines the ``supported`` flag (from the models.dev ``reasoning`` boolean)
-    with the derived control (:func:`derive_reasoning_control`). A supported
-    model with no usable ``reasoning_options`` serializes to the bare
-    ``{"supported": true}`` form — no fabricated ladder.
-    """
-
-    block: dict[str, Any] = {"supported": supported}
-    if not supported:
-        return block
-    control = derive_reasoning_control(reasoning_options)
-    if control is not None:
-        block.update(control)
-    return block
-
-
 def project_canonical_models(catalog: ModelsDevCatalog) -> dict[str, dict[str, Any]]:
     """Project ``catalog.models`` into the canonical ``models.json`` ``models`` map.
 

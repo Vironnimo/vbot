@@ -31,7 +31,7 @@ from tests.core.chat.block_resolver_test_support import (
     _media_message,
     _resolve,
 )
-from tests.core.chat.chat_loop_support import build_chat_loop
+from tests.core.chat.chat_loop_support import build_chat_loop, build_request_messages
 
 pytestmark = pytest.mark.usefixtures("current_format_data_directory")
 
@@ -788,7 +788,7 @@ def test_chat_loop_resolves_historical_blocks_when_latest_user_turn_is_plain_tex
     loop = build_chat_loop(runtime, attachment_resolver=ContentBlockResolver(store))
 
     # Act
-    request_messages = asyncio.run(loop._requests._build_request_messages(_StubAgent(), session))
+    request_messages = asyncio.run(build_request_messages(loop, _StubAgent(), session))
 
     # Assert
     assert [message["role"] for message in request_messages] == ["system", "user", "user"]
@@ -816,7 +816,7 @@ def test_chat_loop_skips_resolver_when_session_has_only_plain_text_user_messages
     loop = build_chat_loop(runtime, attachment_resolver=resolver)
 
     # Act
-    request_messages = asyncio.run(loop._requests._build_request_messages(_StubAgent(), session))
+    request_messages = asyncio.run(build_request_messages(loop, _StubAgent(), session))
 
     # Assert
     resolver.resolve_messages.assert_not_called()

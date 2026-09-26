@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 import time
 from collections.abc import Awaitable, Callable, Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import replace
 from functools import partial
 from pathlib import Path
@@ -113,6 +114,14 @@ class ChannelService:
         # delete, or the config read of a restart) is in flight off the Event
         # Loop; every other change of such a Channel is refused meanwhile.
         self._pending_config_changes: set[str] = set()
+        # Public changes own the lease across their off-loop read/write steps.
+        # Telegram migration handlers take the same lease on their worker, so
+        # neither can save a full config based on the other's stale snapshot.
+        self._config_leases: dict[str, threading.Lock] = {}
+        self._held_config_leases: set[str] = set()
+        # A drained Telegram migration must leave a replacement platform alone,
+        # but its new chat id still belongs in Telegram if the switch rolls back.
+        self._rollback_chat_migrations: dict[str, list[tuple[str, str]]] = {}
         self._failed_channels: set[str] = set()
         self._failure_reasons: dict[str, str] = {}
         self._started = False
@@ -210,10 +219,13 @@ class ChannelService:
             self._failure_reasons.pop(normalized_id, None)
 
         if self._is_stop_in_progress(normalized_id):
+            # The old adapter can still persist a Telegram chat-id migration
+            # while draining. Resolve its replacement from the config after
+            # shutdown, rather than retaining this pre-drain snapshot.
             self._schedule_pending_start(
                 normalized_id,
                 reset_backoff=reset_backoff,
-                config_override=config,
+                config_override=None,
             )
             return
 
@@ -464,8 +476,6 @@ class ChannelService:
                 "Disable the Channel and wait for shutdown or setup to finish before removing it"
             )
         had_enabled_channels = self.has_enabled_channels()
-        self.stop_channel(normalized_id)
-        self._pending_start_requests.pop(normalized_id, None)
         removed = False
 
         def remove() -> None:
@@ -477,6 +487,8 @@ class ChannelService:
 
         try:
             with self._config_change(normalized_id):
+                self.stop_channel(normalized_id)
+                self._pending_start_requests.pop(normalized_id, None)
                 await self._state.database.run_async(remove)
         finally:
             # The worker settles before a cancellation arrives here, so a
@@ -526,17 +538,19 @@ class ChannelService:
         adapter calls it from a worker thread.
         """
         normalized_id = _normalize_channel_id(channel_id)
-        config = self._storage.get(normalized_id)
-        self._state.migrate_group_access(normalized_id, old_chat_id, new_chat_id)
-        if old_chat_id not in config.allowed_chat_ids:
-            return
-
-        migrated_ids: list[str] = []
-        for allowed_chat_id in config.allowed_chat_ids:
-            candidate = new_chat_id if allowed_chat_id == old_chat_id else allowed_chat_id
-            if candidate not in migrated_ids:
-                migrated_ids.append(candidate)
-        self._storage.save(replace(config, allowed_chat_ids=migrated_ids))
+        with self._config_lease(normalized_id):
+            config = self._storage.get(normalized_id)
+            # A platform change persists before draining the old Telegram
+            # handler. Its ids must not change the replacement's config/state.
+            if config.platform != "telegram":
+                rollback = self._rollback_chat_migrations.get(normalized_id)
+                if rollback is not None:
+                    rollback.append((old_chat_id, new_chat_id))
+                return
+            self._state.migrate_group_access(normalized_id, old_chat_id, new_chat_id)
+            if old_chat_id not in config.allowed_chat_ids:
+                return
+            self._storage.save(_with_migrated_chat_id(config, old_chat_id, new_chat_id))
         _LOGGER.info(
             "Channel allowlist migrated (channel=%s old=%s new=%s)",
             normalized_id,
@@ -774,11 +788,23 @@ class ChannelService:
     def _config_change(self, channel_id: str) -> Iterator[None]:
         """Mark a config change of ``channel_id`` in flight; refuse overlapping ones."""
         self._require_no_config_change(channel_id)
+        if not self._config_lease(channel_id).acquire(blocking=False):
+            raise ChannelError("Wait for the current change of this Channel to finish")
+        self._held_config_leases.add(channel_id)
         self._pending_config_changes.add(channel_id)
         try:
             yield
         finally:
+            self._release_config_lease(channel_id)
             self._pending_config_changes.discard(channel_id)
+
+    def _config_lease(self, channel_id: str) -> threading.Lock:
+        return self._config_leases.setdefault(channel_id, threading.Lock())
+
+    def _release_config_lease(self, channel_id: str) -> None:
+        if channel_id in self._held_config_leases:
+            self._held_config_leases.remove(channel_id)
+            self._config_lease(channel_id).release()
 
     async def _load_config(self, channel_id: str) -> ChannelConfig:
         """Read one ``channel.json`` on the state database's worker pool."""
@@ -814,9 +840,15 @@ class ChannelService:
                 persist
             )
             was_running = self._is_running(channel_id) or self._is_stop_in_progress(channel_id)
+            if platform_changed and previous.platform == "telegram":
+                self._rollback_chat_migrations[channel_id] = []
             if was_running or not updated.enabled or platform_changed:
                 self.stop_channel(channel_id)
             if platform_changed:
+                # Drained Telegram handlers may be waiting for this lease.
+                # They leave the replacement platform alone while retaining id
+                # rewrites for rollback. Release before waiting for shutdown.
+                self._release_config_lease(channel_id)
                 stopping = self._adapter_stop_tasks.get(channel_id)
                 if stopping is not None:
                     await asyncio.shield(stopping)
@@ -832,6 +864,8 @@ class ChannelService:
                     previous, restart_adapter=was_running, rebind_state=platform_changed
                 )
             raise
+        finally:
+            self._rollback_chat_migrations.pop(channel_id, None)
         if had_enabled_channels != has_enabled_channels:
             self._notify_tool_registration_changed()
 
@@ -890,9 +924,9 @@ class ChannelService:
         With ``rebind_state`` the Channel state is first bound back to the
         previous platform, which resets it again when the change already reset
         it; this runs to its end even when cancelled meanwhile, so the previous
-        adapter never writes into state of the abandoned platform. The previous
-        adapter restarts next, on the Event Loop. Restoring ``channel.json`` on
-        the worker pool then runs to its end even when cancelled meanwhile.
+        adapter never writes into state of the abandoned platform. Restoring
+        ``channel.json`` runs to its end before requesting the previous adapter,
+        so a deferred start can safely reload the persisted configuration.
         """
         channel_id = previous.id
         self._pending_start_requests.pop(channel_id, None)
@@ -908,9 +942,31 @@ class ChannelService:
                 )
             except asyncio.CancelledError:
                 cancelled = True
+
+        holds_lease = channel_id in self._held_config_leases
+        restored = previous
+
+        def restore() -> None:
+            nonlocal restored
+            with nullcontext() if holds_lease else self._config_lease(channel_id):
+                for old_chat_id, new_chat_id in self._rollback_chat_migrations.get(channel_id, ()):
+                    # Cancellation can restore Telegram before the first
+                    # platform reset, so its existing group access still needs
+                    # the migration. After a reset this is an empty-state no-op.
+                    self._state.migrate_group_access(channel_id, old_chat_id, new_chat_id)
+                    restored = _with_migrated_chat_id(restored, old_chat_id, new_chat_id)
+                self._storage.save(restored)
+
+        try:
+            await _settle(
+                self._state.database.run_async(restore),
+                f"Rollback failed while restoring previous channel config (channel={channel_id})",
+            )
+        except asyncio.CancelledError:
+            cancelled = True
         if restart_adapter and previous.enabled:
             try:
-                self.start_channel(channel_id, config_override=previous)
+                self.start_channel(channel_id, config_override=restored)
             except Exception as error:
                 _LOGGER.error(
                     "Rollback failed while restarting previous channel adapter (channel=%s): %s",
@@ -918,10 +974,6 @@ class ChannelService:
                     error,
                     exc_info=(type(error), error, error.__traceback__),
                 )
-        await _settle(
-            self._state.database.run_async(self._storage.save, previous),
-            f"Rollback failed while restoring previous channel config (channel={channel_id})",
-        )
         if cancelled:
             raise asyncio.CancelledError
 
@@ -1193,6 +1245,18 @@ class ChannelService:
             error,
             exc_info=(type(error), error, error.__traceback__),
         )
+
+
+def _with_migrated_chat_id(
+    config: ChannelConfig, old_chat_id: str, new_chat_id: str
+) -> ChannelConfig:
+    allowed_chat_ids = list(
+        dict.fromkeys(
+            new_chat_id if chat_id == old_chat_id else chat_id
+            for chat_id in config.allowed_chat_ids
+        )
+    )
+    return replace(config, allowed_chat_ids=allowed_chat_ids)
 
 
 async def _settle(work: Awaitable[object], failure_message: str) -> None:

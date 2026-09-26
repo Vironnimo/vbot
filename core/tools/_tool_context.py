@@ -144,6 +144,11 @@ class ToolContext:
         repr=False,
         compare=False,
     )
+    # Canonical dispatch retains the selected Tool's result contract so outer
+    # dispatch adapters never have to resolve a changing catalog a second time.
+    result_contract: ToolContract | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
     presentation_facts: list[JsonObject] = field(
         default_factory=list,
         repr=False,
@@ -304,6 +309,10 @@ class ToolContext:
                 self.delivery_receipt_hook(self.tool_call_id, receipt)
         if self._turn_end_requested and self.request_turn_end_hook is not None:
             self.request_turn_end_hook(self.tool_call_id)
+
+    def _retain_result_contract(self, contract: ToolContract) -> None:
+        """Keep the canonical dispatch selection for this call's result checks."""
+        object.__setattr__(self, "result_contract", contract)
 
 
 @dataclass(frozen=True)

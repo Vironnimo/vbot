@@ -45,6 +45,7 @@ from tests.core.chat.chat_loop_support import (
     StubSkills,
     StubStorage,
     build_chat_loop,
+    build_request_messages,
     persisted_roles,
     session_address,
 )
@@ -96,7 +97,7 @@ async def test_compaction_refreshes_pinned_skill_catalog(tmp_path: Path) -> None
     address = session_address("coder", "session-one")
     affinity_before = runtime.chat_sessions.prompt_cache_affinity_id(address)
 
-    messages = await loop._requests._build_request_messages(agent, session)
+    messages = await build_request_messages(loop, agent, session)
     await _maybe_auto_compact(
         loop, agent, adapter, "gpt-5.2", session, messages, usage={"input_tokens": 90}, run=run
     )
@@ -245,7 +246,7 @@ async def test_compaction_refresh_failure_keeps_previous_prompt_snapshot(
         raise RuntimeError("scan failed")
 
     runtime.refresh_skills_for = fail_refresh
-    messages = await loop._requests._build_request_messages(agent, session)
+    messages = await build_request_messages(loop, agent, session)
     run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
 
     await _maybe_auto_compact(

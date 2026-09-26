@@ -11,12 +11,11 @@ from core.skills.skill_validator import (
     parse_skill_front_matter,
     repair_colon_scalars,
     split_skill_document,
-    validate_skill_metadata,
 )
 
 
 def test_name_directory_mismatch_is_warning() -> None:
-    result = validate_skill_metadata(
+    _, result = normalize_and_validate_skill_metadata(
         {"name": "metadata-name", "description": "Useful."},
         directory_name="directory-name",
         skill_file=Path("/skills/directory-name/SKILL.md"),
@@ -31,7 +30,7 @@ def test_name_directory_mismatch_is_warning() -> None:
 def test_oversized_name_is_warning() -> None:
     name = "a" * (MAX_SKILL_NAME_LENGTH + 1)
 
-    result = validate_skill_metadata(
+    _, result = normalize_and_validate_skill_metadata(
         {"name": name, "description": "Useful."},
         directory_name=name,
         skill_file=Path("/skills/long/SKILL.md"),
