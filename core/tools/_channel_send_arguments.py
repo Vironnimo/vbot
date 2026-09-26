@@ -213,6 +213,25 @@ def _read_media_tokens(arguments: dict[str, Any]) -> None:
         del arguments["message"]
 
 
+def stand_in_message_refusal(call: Mapping[str, Any]) -> str | None:
+    """The refusal for a message that is a stand-in such as ``<text to send>``, else None.
+
+    ``call`` is the canonical call with its Channel and chat resolved, so the
+    files-only alternative reaches the same chat. A stand-in is never sent.
+    """
+    message = call.get("message")
+    if not isinstance(message, str) or not _TEMPLATE.match(message):
+        return None
+    text = f'message "{message.strip()}" is a stand-in, so nothing was sent.'
+    if call.get("file_paths"):
+        return refusal(
+            f"{text} Put the actual text in its place, or send the files alone.",
+            call,
+            message=None,
+        )
+    return f"{REFUSAL_PREFIX}{text} Send the actual text in its place."
+
+
 __all__ = [
     "ACTION_FIELD",
     "CHANNEL_FIELD",
@@ -223,4 +242,5 @@ __all__ = [
     "normalize_channel_send_arguments",
     "refusal",
     "render_call",
+    "stand_in_message_refusal",
 ]

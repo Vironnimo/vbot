@@ -35,6 +35,7 @@ from core.tools._channel_send_arguments import (
     normalize_channel_send_arguments,
     refusal,
     render_call,
+    stand_in_message_refusal,
 )
 from core.tools._path_suggestions import similar_entries
 from core.tools.arguments import optional_string, required_string
@@ -409,6 +410,9 @@ def _prepare_channel_send(
         call["platform_target"] = requested_platform_target
     if requested_thread_id is not None:
         call["thread_id"] = requested_thread_id
+    stand_in = stand_in_message_refusal(call)
+    if stand_in is not None:
+        raise ChannelSendRefusedError(stand_in)
     _validate_platform_arguments(call, channel_config)
 
     message = optional_string(arguments.get("message"), field_name="message")

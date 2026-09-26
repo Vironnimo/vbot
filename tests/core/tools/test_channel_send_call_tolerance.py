@@ -394,6 +394,47 @@ class TestFiles:
         assert tool.sent() == []
 
 
+class TestStandIns:
+    @pytest.mark.parametrize(
+        "message", ["<text to send>", "<the message from this call>", " <text> "]
+    )
+    def test_a_stand_in_message_is_never_sent(self, tmp_path: Path, message: str) -> None:
+        tool = channel_send(tmp_path)
+
+        _envelope, text = tool.call({"channel_id": "tg-main", "message": message})
+
+        assert text == (
+            f'Error (invalid_arguments): channel_send was not run: message "{message.strip()}" '
+            "is a stand-in, so nothing was sent. Send the actual text in its place."
+        )
+        assert tool.sent() == []
+
+    def test_a_stand_in_message_with_files_offers_the_files_alone(self, tmp_path: Path) -> None:
+        tool = channel_send(tmp_path)
+        (tool.workspace / "a.txt").write_text("a", encoding="utf-8")
+
+        _envelope, text = tool.call(
+            {"target": "telegram:111", "message": "<text to send>\nMEDIA:a.txt"}
+        )
+
+        assert text == (
+            'Error (invalid_arguments): channel_send was not run: message "<text to send>" is '
+            "a stand-in, so nothing was sent. Put the actual text in its place, or send the "
+            'files alone. Send: {"channel_id":"tg-main","platform_target":"111",'
+            '"file_paths":["a.txt"]}'
+        )
+        assert tool.sent() == []
+
+        envelope, _text = tool.call(
+            {"channel_id": "tg-main", "platform_target": "111", "file_paths": ["a.txt"]}
+        )
+
+        assert envelope["ok"] is True
+        [(channel_id, message, target, sent_options)] = tool.sent()
+        assert (channel_id, message, target) == ("tg-main", None, "111")
+        assert [item.filename for item in sent_options["files"]] == ["a.txt"]
+
+
 class TestActions:
     def test_list_shows_channels_this_chat_and_allowed_chats(self, tmp_path: Path) -> None:
         tool = channel_send(
