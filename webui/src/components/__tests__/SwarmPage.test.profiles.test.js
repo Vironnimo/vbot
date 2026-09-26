@@ -309,6 +309,63 @@ describe('SwarmPage', () => {
     ).toEqual({ kind: 'project', project_id: 'project-a' });
   });
 
+  it('overrides the Compaction Policy for participants and returns to inheritance', async () => {
+    const { bridge, operation } = createBridge();
+    await render(bridge);
+    button('Edit').click();
+    await tick();
+    flushSync();
+    const custom = () =>
+      document.querySelector(
+        '[role="switch"][aria-label="Custom compaction policy"]',
+      );
+    const editor = () =>
+      document.querySelector('[data-testid="swarm-compaction-editor"]');
+    const saved = () =>
+      operation.mock.calls
+        .filter(([name]) => name === 'profiles.save')
+        .at(-1)[1].profile;
+    // A profile saved without the field inherits and is not dirty on open.
+    expect(custom().getAttribute('aria-checked')).toBe('false');
+    expect(editor()).toBeNull();
+    expect(saveButton().textContent.trim()).toBe('Saved');
+
+    custom().click();
+    await tick();
+    flushSync();
+    expect(editor()).not.toBeNull();
+    const tail = document.querySelector(
+      '[data-testid="swarm-compaction-editor"] input[aria-label="Verbatim tail tokens"]',
+    );
+    tail.value = '9000';
+    tail.dispatchEvent(new Event('input', { bubbles: true }));
+    await tick();
+    await choose('swarm-compaction-summary-model', 'demo/plain');
+    saveButton().click();
+    await vi.waitFor(() =>
+      expect(saveButton().textContent.trim()).toBe('Saved'),
+    );
+    expect(saved().compaction_policy).toEqual({
+      enabled: true,
+      trigger: { type: 'context_ratio', threshold: 0.8 },
+      strategy: {
+        type: 'summary_tail',
+        tail_tokens: 9000,
+        summary_model: 'demo/plain',
+      },
+    });
+
+    custom().click();
+    await tick();
+    flushSync();
+    expect(editor()).toBeNull();
+    saveButton().click();
+    await vi.waitFor(() =>
+      expect(saveButton().textContent.trim()).toBe('Saved'),
+    );
+    expect(saved().compaction_policy).toBeNull();
+  });
+
   it('returns to the invalid field and keeps failed saves editable', async () => {
     const { bridge, operation } = createBridge();
     await render(bridge);

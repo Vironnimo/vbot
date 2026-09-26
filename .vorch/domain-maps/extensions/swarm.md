@@ -65,6 +65,20 @@ not rewritten. Evidence: `extension.py`, `test_swarm_store.py`,
 
 Profiles expose all four private Swarm Tools under Tools & Skills, using the existing `tool_access.denied` policy for individual switches. All/None also enables/disables the current private set. The public Tool catalog remains unchanged; the Swarm editor appends owner-private catalog entries. Choices apply to future executions, while Resume retains the saved snapshot. Disabling a Tool does not remove its human tab or stored content and does not change independently configured Board delivery/wakes. Preview and actual Model definitions respect the same denials (`test_runtime_extension_host.py`, `test_swarm_lifecycle.py`, `SwarmPage.test.profiles.test.js`).
 
+Profiles carry an optional `compaction_policy`. `null` (materialized on save) or an
+absent key (profiles and snapshots saved before the field; no backfill) keeps
+participants on the normal chain, i.e. global Compaction settings; an object is
+normalized as one complete Policy by the shared Settings normalizer
+(`_store_values._compaction_policy`). Save replaces the whole profile, so omitting
+the field on an update returns to inheritance; only `slug` is retained on omission.
+`_participant_config` passes the snapshot value into every participant's
+`TemporaryAgentConfig`, where it is the Agent-level Policy for automatic and manual
+Compaction (`agent.md`, `compaction.md`). Edits apply to future Runs; Resume creates
+missing participants from the saved snapshot. The editor's Overview Compaction
+section reuses the shared `CompactionPolicyEditor`; turning the override on starts
+from the WebUI default Policy because the catalog carries no global Policy
+(`test_swarm_store.py`, `test_swarm_lifecycle.py`, `SwarmPage.test.profiles.test.js`).
+
 ## Invariants that affect changes
 
 The human UI calls reusable profiles "Swarms" and their executions "Runs";

@@ -21,12 +21,18 @@
   import TextArea from '../../../../webui/src/components/ui/TextArea.svelte';
   import Toggle from '../../../../webui/src/components/ui/Toggle.svelte';
   import ToolAccessEditor from '../../../../webui/src/components/tools/ToolAccessEditor.svelte';
+  import CompactionPolicyEditor from '../../../../webui/src/components/compaction/CompactionPolicyEditor.svelte';
   import ToggleChipList from '../../../../webui/src/components/ui/ToggleChipList.svelte';
   import Modal from '../../../../webui/src/components/ui/Modal.svelte';
   import { onDestroy, tick, untrack } from 'svelte';
   import { SvelteSet } from 'svelte/reactivity';
   import { createDebouncedAutosave } from '../../../../webui/src/lib/autosave.js';
   import { changeToolAccessMode } from '../../../../webui/src/lib/toolAccess.js';
+  import {
+    DEFAULT_COMPACTION_POLICY,
+    buildCompactionPolicyPayload,
+    normalizeCompactionPolicy,
+  } from '../../../../webui/src/lib/compactionPolicy.js';
   import { createProfilePromptPreview } from './profilePromptPreview.svelte.js';
   import './profileEditor.css';
 
@@ -65,6 +71,7 @@
       batch_messages: 20,
       batch_chars: 24000,
     },
+    compaction_policy: null,
   };
   let draft = $state(
     untrack(() => JSON.parse(JSON.stringify(profile ?? defaults))),
@@ -162,6 +169,10 @@
       payload.delivery[field] = text === '' ? null : Number(text);
     }
     if (!payload.slug?.trim()) delete payload.slug;
+    if (payload.compaction_policy)
+      payload.compaction_policy = buildCompactionPolicyPayload(
+        payload.compaction_policy,
+      );
     return payload;
   }
 
@@ -279,6 +290,30 @@
       if (denied.size) draft.tool_access.denied = [...denied];
       else delete draft.tool_access.denied;
     }
+  }
+  // Absent or null inherits the global Compaction settings for every participant.
+  const compactionPolicy = $derived(
+    draft.compaction_policy
+      ? normalizeCompactionPolicy(draft.compaction_policy)
+      : null,
+  );
+  const summaryModelOptions = $derived(
+    buildModelSelectOptions({
+      models,
+      modelOnly: true,
+      selectedModelValue: compactionPolicy?.strategy.summary_model ?? '',
+      emptyLabel: t('swarm.profile.summaryModelDefault', 'Participant Model'),
+      translate: t,
+    }),
+  );
+  function setCustomCompaction(enabled) {
+    draft.compaction_policy = enabled ? copy(DEFAULT_COMPACTION_POLICY) : null;
+  }
+  function selectSummaryModel(value) {
+    draft.compaction_policy = {
+      ...compactionPolicy,
+      strategy: { ...compactionPolicy.strategy, summary_model: value || null },
+    };
   }
   function setDirectoryKind(kind) {
     draft.working_directory =
@@ -623,6 +658,49 @@
               </FormField>
             {/if}
           </div>
+        </section>
+        <section class="form-section">
+          <h3>{t('swarm.profile.compactionHeading', 'Compaction')}</h3>
+          <p class="hint">
+            {compactionPolicy
+              ? t(
+                  'swarm.profile.compactionCustomHelp',
+                  'Every participant of new Runs uses this policy for automatic and manual Compaction.',
+                )
+              : t(
+                  'swarm.profile.compactionInheritHelp',
+                  'Participants use the global Compaction settings. Turn on to set a policy for this Swarm.',
+                )}
+          </p>
+          <div class="switch-row">
+            <span
+              >{t(
+                'swarm.profile.customCompaction',
+                'Custom compaction policy',
+              )}</span
+            >
+            <Toggle
+              checked={compactionPolicy !== null}
+              disabled={busy}
+              ariaLabel={t(
+                'swarm.profile.customCompaction',
+                'Custom compaction policy',
+              )}
+              onChange={setCustomCompaction}
+            />
+          </div>
+          {#if compactionPolicy}
+            <CompactionPolicyEditor
+              value={draft.compaction_policy}
+              disabled={busy}
+              idPrefix="swarm-compaction"
+              {summaryModelOptions}
+              summaryModelSelectValue={compactionPolicy.strategy
+                .summary_model ?? ''}
+              onSummaryModelSelect={selectSummaryModel}
+              onChange={(next) => (draft.compaction_policy = next)}
+            />
+          {/if}
         </section>
         <details class="advanced">
           <summary
