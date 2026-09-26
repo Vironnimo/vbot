@@ -39,9 +39,6 @@ async def test_patch_argument_repair_preserves_payload_and_input(tmp_path, shape
     "extra",
     [
         {"input": "*** Add File: other.txt\n+different"},
-        {"input": "placeholder"},
-        {"input": ""},
-        {"input": None},
         {"path": "other.txt"},
         {"dry_run": True},
         {"arguments": {"patch": "*** Add File: other.txt\n+different"}},
@@ -70,6 +67,31 @@ async def test_conflicting_or_unsupported_arguments_have_no_effect(tmp_path, ext
     )
     result = results[0]
     assert result["error"]["code"] == "invalid_arguments"
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("placeholder", ["placeholder", "", None])
+async def test_placeholder_beside_the_patch_asks_for_nothing(tmp_path, placeholder):
+    registry = ToolRegistry()
+    register_apply_patch_tool(registry, file_state=FileReadState())
+    arguments = {"input": placeholder, "patch": "*** Add File: new.txt\n+hello"}
+    result = await registry.dispatch(context(tmp_path), arguments, ["apply_patch"])
+    assert result["ok"], result
+    assert (tmp_path / "new.txt").read_bytes() == b"hello\n"
+
+
+@pytest.mark.asyncio
+async def test_conflicting_patch_spellings_name_both_values(tmp_path):
+    registry = ToolRegistry()
+    register_apply_patch_tool(registry, file_state=FileReadState())
+    arguments = {"input": "*** Add File: a.txt\n+a", "patch": "*** Add File: b.txt\n+b"}
+    with pytest.raises(ValueError) as refused:
+        await registry.dispatch(context(tmp_path), arguments, ["apply_patch"])
+    assert str(refused.value) == (
+        'Conflicting values for patch: input is "*** Add File: a.txt\\n+a" and patch is '
+        '"*** Add File: b.txt\\n+b". Send only the intended one.\nNo file was changed.'
+    )
     assert list(tmp_path.iterdir()) == []
 
 

@@ -40,6 +40,7 @@ _EOF_WARNING = (
     "The lines before *** End of File are not at the end of the file; the hunk was applied "
     "where they are."
 )
+_WITHIN_LINE_NOTE = "The - line is part of line {line}; only that part of the line was replaced."
 _BREAK = TEXT_LINE_BREAK
 _GUTTER = re.compile(r"^\s*[1-9][0-9]*(?::[1-9][0-9]*)?\|")
 _ESCAPE = re.compile(r"\\(n|r|t|\\|\"|')")
@@ -120,12 +121,52 @@ def _difference_window(text: str, position: int) -> tuple[int, str]:
     return start + 1, text[start : start + 240]
 
 
+def _part_of_lines(content: str, old: str) -> JsonObject | None:
+    """Name the lines that hold the first missing patch line only as part of their text."""
+    file_lines = split_text_lines(content)
+    whole = {_loose(line) for line in file_lines}
+    for wanted in split_text_lines(old):
+        text = wanted.strip()
+        if not text or _loose(wanted) in whole:
+            continue
+        numbers = [number for number, line in enumerate(file_lines, 1) if text in line]
+        if not numbers:
+            return None
+        excerpts = [
+            {
+                "line": number,
+                "text": file_lines[number - 1][:240],
+                "truncated": len(file_lines[number - 1]) > 240,
+                "continuations": (
+                    [{"offset": f"{number}:241", "limit": 1}]
+                    if len(file_lines[number - 1]) > 240
+                    else []
+                ),
+            }
+            for number in numbers[:3]
+        ]
+        return {
+            "text": text,
+            "count": len(numbers),
+            "lines": _line_list(numbers),
+            "excerpts": excerpts,
+        }
+    return None
+
+
 def _not_found(content: str, old: str, *, source: Literal["patch", "old_string"]) -> JsonObject:
     """Return the closest current text and the first line where it differs.
 
     ``source`` names the argument that holds ``old``, so the report can name it.
     """
+    part = _part_of_lines(content, old) if source == "patch" else None
+    # A missing line found inside a few longer lines explains the failure better
+    # than the closest text; inside many lines, the closest text is more useful.
+    if part is not None and part["count"] <= 3:
+        return {"candidates": [], "part_of": part}
     details = _candidates(content, old)
+    if part is not None and not details["candidates"]:
+        details["part_of"] = part
     if details["candidates"]:
         start = details["candidates"][0]["line"]
         file_lines = split_text_lines(content)
@@ -285,6 +326,26 @@ def _clean_additions(hunk: _Hunk, path: object) -> tuple[_Hunk, list[str]]:
             warnings.append(_GUTTER_WARNING)
         start = end
     return replace(hunk, lines=lines), warnings
+
+
+def _replace_within_line(window: str, hunk: _Hunk) -> tuple[str, int] | None:
+    """Replace one - line found only inside a longer line, as in-line text.
+
+    Models send part of a line after - and its new text after +. With exactly one
+    - line, one + line and no unchanged lines, a single exact occurrence says what
+    to replace; anything else keeps whole-line semantics. Returns the new window
+    and the 1-based line of the change within it.
+    """
+    if hunk.eof or hunk.no_newline or [prefix for prefix, _ in hunk.lines] != ["-", "+"]:
+        return None
+    old, new = hunk.lines[0][1], hunk.lines[1][1]
+    start = window.find(old)
+    # Overlapping occurrences count too: "aa" occurs twice in "aaa".
+    if not old.strip() or start < 0 or window.find(old, start + 1) >= 0:
+        return None
+    return window[:start] + new + window[start + len(old) :], len(
+        _BREAK.findall(window, 0, start)
+    ) + 1
 
 
 def _hint_text(hint: str) -> str:
@@ -547,6 +608,11 @@ def _apply_hunk(content: str, hunk: _Hunk, path: object) -> tuple[str, list[str]
             and (not hunk.no_newline or poststate.before_spans[0][1] == len(window))
         ):
             return content, warnings
+        within = _replace_within_line(window, hunk)
+        if within is not None:
+            edited, line = within
+            line += len(_BREAK.findall(content, 0, offset))
+            return content[:offset] + edited, [*warnings, _WITHIN_LINE_NOTE.format(line=line)]
         # An exact post-state elsewhere does not prove this target is satisfied.
         # Do not let approximate matching choose it (or a similar other target)
         # after the independent locator above failed to establish that fact.

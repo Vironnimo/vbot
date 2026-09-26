@@ -6,6 +6,7 @@ from unittest.mock import Mock
 
 import pytest
 
+from core.tools.apply_patch import APPLY_PATCH_TOOL_PARAMETERS
 from core.tools.file_state import FileReadState
 from core.tools.read import make_read_handler
 from tests.core.tools.apply_patch_helpers import (
@@ -16,13 +17,31 @@ from tests.core.tools.apply_patch_helpers import (
 )
 
 
+def test_the_example_in_the_patch_description_applies(tmp_path):
+    description = APPLY_PATCH_TOOL_PARAMETERS["properties"]["patch"]["description"]
+    example = description.partition("for example:\n")[2].partition("*** End Patch\n")[0]
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src/app.py").write_bytes(b"def main():\n    count = 1\n    run(count)\n")
+    (tmp_path / "old.txt").write_bytes(b"old\n")
+    (tmp_path / "a.txt").write_bytes(b"a\n")
+    state = FileReadState()
+
+    result = apply(tmp_path, example + "*** End Patch", state=state)
+
+    assert result["ok"] and result["data"]["status"] == "applied", result
+    assert (tmp_path / "src/app.py").read_bytes() == b"def main():\n    count = 2\n    run(count)\n"
+    assert (tmp_path / "notes.txt").read_bytes() == b"first line of a new file\n"
+    assert not (tmp_path / "old.txt").exists()
+    assert (tmp_path / "b.txt").read_bytes() == b"a\n" and not (tmp_path / "a.txt").exists()
+
+
 @pytest.mark.parametrize("separator", ["\f", "\x85", " ", " "])
 def test_unicode_separators_are_line_content_not_line_breaks(tmp_path, separator):
     path = tmp_path / "file.txt"
     before = f"alpha{separator}beta\nomega".encode()
     path.write_bytes(before)
 
-    missing = apply(tmp_path, update("@@\n-beta\n+changed"))
+    missing = apply(tmp_path, update("@@\n-beta\n+changed\n omega"))
     appended = apply(tmp_path, update(f"@@\n-alpha{separator}beta\n+changed\n omega"))
 
     assert missing["error"]["code"] == "text_not_found"
