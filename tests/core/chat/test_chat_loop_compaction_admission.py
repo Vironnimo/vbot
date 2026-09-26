@@ -32,6 +32,7 @@ from tests.core.chat.chat_loop_support import (
     StubRuntime,
     StubStorage,
     build_chat_loop,
+    build_request_messages,
 )
 
 
@@ -61,7 +62,7 @@ async def test_compaction_maybe_auto_compact_skips_when_auto_disabled(tmp_path: 
     )
     session = runtime.chat_sessions.create("coder", session_id="session-one")
     session.append(ChatMessage.user("Hi"))
-    messages = await build_chat_loop(runtime)._requests._build_request_messages(agent, session)
+    messages = await build_request_messages(build_chat_loop(runtime), agent, session)
     run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
 
     loop = build_chat_loop(
@@ -112,7 +113,7 @@ async def test_compaction_maybe_auto_compact_skips_when_threshold_not_reached(
     )
     session = runtime.chat_sessions.create("coder", session_id="session-one")
     session.append(ChatMessage.user("Hi"))
-    messages = await build_chat_loop(runtime)._requests._build_request_messages(agent, session)
+    messages = await build_request_messages(build_chat_loop(runtime), agent, session)
     run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
 
     loop = build_chat_loop(
@@ -168,7 +169,7 @@ async def test_compaction_keeps_measured_anchor_despite_higher_wire_estimate(
     )
     session = runtime.chat_sessions.create("coder", session_id="session-one")
     session.append(ChatMessage.user("Hi"))
-    messages = await build_chat_loop(runtime)._requests._build_request_messages(agent, session)
+    messages = await build_request_messages(build_chat_loop(runtime), agent, session)
     run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
 
     await _maybe_auto_compact(
@@ -225,7 +226,7 @@ async def test_compaction_new_run_estimates_selected_wire_instead_of_reusing_old
     )
     session.append(ChatMessage.user("Current"))
     loop = build_chat_loop(runtime, compaction_service=cast(Any, compaction_service))
-    messages = await loop._requests._build_request_messages(agent, session)
+    messages = await build_request_messages(loop, agent, session)
     run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
 
     await _maybe_auto_compact(
@@ -284,7 +285,7 @@ async def test_compaction_records_post_projection_with_selected_wire_estimator(
     session = runtime.chat_sessions.create("coder", session_id="session-one")
     session.append(ChatMessage.user("Head"))
     loop = build_chat_loop(runtime, compaction_service=cast(Any, compaction_service))
-    messages = await loop._requests._build_request_messages(agent, session)
+    messages = await build_request_messages(loop, agent, session)
     run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
 
     await _maybe_auto_compact(
@@ -337,7 +338,7 @@ async def test_compaction_maybe_auto_compact_skips_without_new_compactable_conte
     )
     session = runtime.chat_sessions.create("coder", session_id="session-one")
     session.append(ChatMessage.user("Keep working in this same turn"))
-    messages = await build_chat_loop(runtime)._requests._build_request_messages(agent, session)
+    messages = await build_request_messages(build_chat_loop(runtime), agent, session)
     run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
 
     result = await _maybe_auto_compact(
@@ -400,7 +401,7 @@ async def test_summary_tail_waits_until_a_loaded_skill_result_is_consumed(tmp_pa
     )
     compaction_service = StubCompactionService(should_auto=True, checkpoint=checkpoint)
     loop = build_chat_loop(runtime, compaction_service=cast(Any, compaction_service))
-    messages = await loop._requests._build_request_messages(agent, session)
+    messages = await build_request_messages(loop, agent, session)
 
     first = await _maybe_auto_compact(
         loop,
@@ -418,7 +419,7 @@ async def test_summary_tail_waits_until_a_loaded_skill_result_is_consumed(tmp_pa
     assert compaction_service.compactable_context_calls == []
 
     session.append(ChatMessage.assistant(model=agent.model, content="Skill result consumed"))
-    consumed_messages = await loop._requests._build_request_messages(agent, session)
+    consumed_messages = await build_request_messages(loop, agent, session)
     await _maybe_auto_compact(
         loop,
         agent,
@@ -454,7 +455,7 @@ async def test_compaction_resolves_floor_for_null_window_model(tmp_path: Path) -
     )
     session = runtime.chat_sessions.create("coder", session_id="session-one")
     session.append(ChatMessage.user("Hi"))
-    messages = await build_chat_loop(runtime)._requests._build_request_messages(agent, session)
+    messages = await build_request_messages(build_chat_loop(runtime), agent, session)
     run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
 
     loop = build_chat_loop(

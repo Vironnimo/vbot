@@ -22,6 +22,7 @@ from tests.core.chat.chat_loop_support import (
     StubSkills,
     _write_test_skill,
     build_chat_loop,
+    build_request_messages,
     persisted_roles,
     session_address,
 )
@@ -147,9 +148,7 @@ def test_compaction_checkpoint_expires_triggered_skill_content(tmp_path: Path) -
         )
     )
 
-    request_messages = asyncio.run(
-        build_chat_loop(runtime)._requests._build_request_messages(agent, session)
-    )
+    request_messages = asyncio.run(build_request_messages(build_chat_loop(runtime), agent, session))
 
     contents = [message.get("content", "") or "" for message in request_messages]
     assert contents[1] == "<system-reminder>\nCompacted historical context.\n</system-reminder>"
@@ -180,9 +179,7 @@ def test_skill_carried_in_checkpoint_tail_is_expired(tmp_path: Path) -> None:
         )
     )
 
-    request_messages = asyncio.run(
-        build_chat_loop(runtime)._requests._build_request_messages(agent, session)
-    )
+    request_messages = asyncio.run(build_request_messages(build_chat_loop(runtime), agent, session))
 
     contents = [message.get("content", "") or "" for message in request_messages]
     assert contents[1] == "<system-reminder>\nCompacted historical context.\n</system-reminder>"
@@ -213,9 +210,7 @@ def test_changed_skill_versions_do_not_cross_compaction(tmp_path: Path) -> None:
         )
     )
 
-    request_messages = asyncio.run(
-        build_chat_loop(runtime)._requests._build_request_messages(agent, session)
-    )
+    request_messages = asyncio.run(build_request_messages(build_chat_loop(runtime), agent, session))
 
     contents = [message.get("content", "") or "" for message in request_messages]
     assert all("<skill_content" not in content for content in contents)

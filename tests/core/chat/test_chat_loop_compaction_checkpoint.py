@@ -56,6 +56,7 @@ from tests.core.chat.chat_loop_support import (
     StubSkills,
     StubStorage,
     build_chat_loop,
+    build_request_messages,
     persisted_roles,
     session_address,
 )
@@ -217,9 +218,7 @@ def test_compaction_build_request_messages_without_checkpoint_keeps_existing_pat
     session.append(ChatMessage.user("Hi"))
     session.append(ChatMessage.assistant(model=agent.model, content="Hello"))
 
-    request_messages = asyncio.run(
-        build_chat_loop(runtime)._requests._build_request_messages(agent, session)
-    )
+    request_messages = asyncio.run(build_request_messages(build_chat_loop(runtime), agent, session))
 
     assert [message["role"] for message in request_messages] == ["system", "user", "assistant"]
     assert request_messages[1]["content"] == "Hi"
@@ -247,9 +246,7 @@ def test_compaction_build_request_messages_with_checkpoint_uses_summary_and_tail
         )
     )
 
-    request_messages = asyncio.run(
-        build_chat_loop(runtime)._requests._build_request_messages(agent, session)
-    )
+    request_messages = asyncio.run(build_request_messages(build_chat_loop(runtime), agent, session))
     request_text = "\n".join(message.get("content", "") or "" for message in request_messages)
 
     assert [message["role"] for message in request_messages] == [
@@ -587,7 +584,7 @@ async def test_compaction_reinjects_the_active_continuation_checkpoint(tmp_path:
     )
     reminder = render_continuation_reminder(prior, context_window=100)
     messages = inject_continuation_reminder(
-        await loop._requests._build_request_messages(agent, session),
+        await build_request_messages(loop, agent, session),
         reminder,
     )
     run = Run(run_id="run-two", agent_id=agent.id, session_id=session.id)
