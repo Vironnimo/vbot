@@ -14,6 +14,8 @@ from zoneinfo import ZoneInfo
 
 from core.calendar.when import parse_when
 from core.tools._calendar_arguments import (
+    DURATION_DAYS_FIELD,
+    DURATION_MINUTES_FIELD,
     END_FIELD,
     OMIT,
     STAND_INS,
@@ -217,6 +219,110 @@ def _repeating_in_server_time(
     )
 
 
+def apply_length(
+    arguments: JsonObject, server: ZoneInfo, *, stored_start: str | None, recurring: bool
+) -> tuple[JsonObject, str | None]:
+    """Turn a length in named units into the duration the event's kind stores.
+
+    An all-day event (a date start, sent or stored) lasts whole days; a timed one
+    lasts minutes. Without any start (find_free) lengths are minutes. Returns the
+    arguments with ``duration`` set and a note naming any conversion; refuses a
+    length the kind cannot hold exactly, or lengths that disagree.
+    """
+    result = dict(arguments)
+    minutes = result.pop(DURATION_MINUTES_FIELD, None)
+    days = result.pop(DURATION_DAYS_FIELD, None)
+    if minutes is None and days is None:
+        return result, None
+    start = result.get("start")
+    if not isinstance(start, str):
+        start = stored_start
+    all_day = isinstance(start, str) and is_date(start)
+    readings: dict[int, JsonObject] = {}
+    notes: list[str] = []
+    if isinstance(result.get("duration"), int):
+        readings.setdefault(result["duration"], {})
+    if isinstance(minutes, int):
+        if all_day:
+            assert isinstance(start, str)
+            if minutes % 1440:
+                raise CalendarCallRefusedError(_span_on_a_date(result, start, minutes))
+            readings.setdefault(minutes // 1440, {DURATION_MINUTES_FIELD: minutes})
+            notes.append(f"Read {minutes} minutes as {_days_text(minutes // 1440)}.")
+        else:
+            readings.setdefault(minutes, {DURATION_MINUTES_FIELD: minutes})
+    if isinstance(days, int):
+        if all_day:
+            readings.setdefault(days, {DURATION_DAYS_FIELD: days})
+        else:
+            length, until = _days_as_minutes(start, days, server, recurring)
+            readings.setdefault(length, {DURATION_DAYS_FIELD: days})
+            if until is None:
+                notes.append(f"Read {_days_text(days)} as {length} minutes.")
+            else:
+                notes.append(
+                    f"A timed event lasts minutes: read {_days_text(days)} as {length} minutes, "
+                    f"so it ends at {until}."
+                )
+    if len(readings) > 1:
+        unit = "days" if all_day else "minutes"
+        raise CalendarCallRefusedError(
+            choice(
+                f"the call gives different lengths: {', '.join(map(str, readings))} {unit}. "
+                "Send the one that is meant:",
+                [
+                    render_call(
+                        result,
+                        duration=length,
+                        **{DURATION_MINUTES_FIELD: OMIT, DURATION_DAYS_FIELD: OMIT},
+                    )
+                    for length in readings
+                ],
+            )
+        )
+    result["duration"] = next(iter(readings))
+    return result, " ".join(notes) or None
+
+
+def _span_on_a_date(arguments: JsonObject, start: str, minutes: int) -> str:
+    """Refuse a length in minutes for an all-day event, offering a timed event or whole days."""
+    date_text = start.strip()[:10]
+    whole_days = -(-minutes // 1440)
+    return choice(
+        f"a length of {length_text(minutes)} is a time span, but a date start makes an all-day "
+        "event, which lasts whole days. Send the one that is meant:",
+        [
+            render_call(arguments, start=f"{date_text}T<HH:MM>", duration=minutes)
+            + " (a timed event; put its start time in place of <HH:MM>)",
+            render_call(
+                arguments, start=date_text if "start" in arguments else OMIT, duration=whole_days
+            )
+            + f" (all day, {_days_text(whole_days)})",
+        ],
+    )
+
+
+def _days_as_minutes(
+    start: str | None, days: int, server: ZoneInfo, recurring: bool
+) -> tuple[int, str | None]:
+    """Minutes from a timed start to the same clock time ``days`` later, and that end."""
+    begin = parse_local(start) if isinstance(start, str) else None
+    if begin is None:
+        return days * 1440, None
+    first = begin.astimezone(server) if begin.tzinfo else begin.replace(tzinfo=server)
+    wall = first.replace(tzinfo=None) + timedelta(days=days)
+    until = wall.isoformat(timespec="minutes")
+    if recurring:
+        # Repeating events keep wall-clock lengths.
+        return days * 1440, until
+    last = wall.replace(tzinfo=server)
+    return round((last.astimezone(UTC) - first.astimezone(UTC)).total_seconds() / 60), until
+
+
+def _days_text(days: int) -> str:
+    return f"{days} day" if days == 1 else f"{days} days"
+
+
 def apply_end(
     arguments: JsonObject, server: ZoneInfo, *, stored_start: str | None, recurring: bool
 ) -> JsonObject:
@@ -363,6 +469,7 @@ def length_text(minutes: int) -> str:
 
 __all__ = [
     "apply_end",
+    "apply_length",
     "apply_timezone",
     "length_text",
     "local_text",

@@ -40,6 +40,7 @@ from core.tools._calendar_arguments import (
 )
 from core.tools._calendar_times import (
     apply_end,
+    apply_length,
     apply_timezone,
     length_text,
     local_text,
@@ -443,6 +444,7 @@ def _event_for_id(calendar_service: CalendarService, item_id: str) -> CalendarEv
 
 def _handle_find_free(calendar_service: CalendarService, arguments: JsonObject) -> JsonObject:
     zone = server_zone(calendar_service)
+    arguments, length_note = apply_length(arguments, zone, stored_start=None, recurring=True)
     duration = arguments.get("duration", _DEFAULT_FREE_MINUTES)
     window_start, window_end, note = read_window(arguments, zone, None)
     slots = calendar_service.find_free_slots(
@@ -454,7 +456,7 @@ def _handle_find_free(calendar_service: CalendarService, arguments: JsonObject) 
         "window": window_text(window_start, window_end, zone),
         "timezone": calendar_service.system_timezone_name(),
     }
-    notes = [note] if note else []
+    notes = [text for text in (length_note, note) if text]
     if not shown:
         notes.append(f"No free span of {length_text(duration)} or more in this window.")
     elif len(slots) > len(shown):
@@ -696,9 +698,13 @@ def _event_times(
         if "rrule" in arguments
         else event is not None and event.rrule is not None
     )
-    arguments, note = apply_timezone(arguments, server, recurring=recurring)
+    arguments, zone_note = apply_timezone(arguments, server, recurring=recurring)
     stored_start = _event_start(calendar_service, event) if event is not None else None
+    arguments, length_note = apply_length(
+        arguments, server, stored_start=stored_start, recurring=recurring
+    )
     arguments = apply_end(arguments, server, stored_start=stored_start, recurring=recurring)
+    note = " ".join(text for text in (zone_note, length_note) if text) or None
     return _apply_location(arguments, event), note
 
 
