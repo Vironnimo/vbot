@@ -28,6 +28,7 @@ from core.providers.errors import (
 from core.utils.http_status import is_retryable_status, parse_retry_after
 from core.utils.retry import retry_async
 from core.utils.tls import shared_ssl_context
+from core.utils.workers import BoundedWorkerPool
 
 if TYPE_CHECKING:
     from core.debug import ProviderDebugRecorder
@@ -43,6 +44,9 @@ _T = TypeVar("_T")
 _AUTH_ERROR_STATUS_CODES: frozenset[int] = frozenset({401, 403})
 _PROVIDER_HTTP_TIMEOUT_SECONDS = 60.0
 PROVIDER_NON_STREAMING_READ_TIMEOUT_SECONDS = 180.0
+# Keep large JSON allocations bounded without competing with Chat transforms
+# or the Event Loop's default executor. Threads start only on the first request.
+_REQUEST_BODY_WORKERS = BoundedWorkerPool(name="provider-request-body", max_workers=2)
 
 
 @dataclass(frozen=True)
@@ -373,6 +377,18 @@ def wrap_network_error(error: Exception) -> NetworkError | ProviderTimeoutError:
 # Request establishment with retry
 # ---------------------------------------------------------------------------
 
+
+def _encode_json_body(payload: dict[str, Any]) -> bytes:
+    # Use httpx itself so Unicode, JSON escaping and framing match json= exactly.
+    # Constructing a Request performs serialization only, never network I/O.
+    return httpx.Request("POST", "https://request.invalid", json=payload).content
+
+
+async def prepare_json_body(payload: dict[str, Any]) -> bytes:
+    """Encode one stable payload off the Event Loop for size checks and retries."""
+    return await _REQUEST_BODY_WORKERS.run(_encode_json_body, payload)
+
+
 # Receives (status_code, error_body, response_headers) for every HTTP >= 400
 # establishment response and must raise the appropriate ProviderError
 # subclass; it is never expected to return. The adapter owns detail formatting
@@ -392,7 +408,7 @@ def format_http_error_detail(status_code: int, body: str | None = None) -> str:
 async def connect_streaming_with_retry(
     client: httpx.AsyncClient,
     endpoint_path: str,
-    payload: dict[str, Any],
+    payload: dict[str, Any] | bytes,
     *,
     build_headers: Callable[[], Awaitable[dict[str, str]]],
     handle_error_status: HttpErrorStatusHandler,
@@ -406,15 +422,25 @@ async def connect_streaming_with_retry(
     closed before ``handle_error_status`` classifies it — this frees the
     connection for the next attempt. Mid-stream failures are out of scope:
     once this returns the response, Chat owns preservation and recovery.
+    Pre-encoded JSON bytes are reused on every attempt; dict callers retain
+    httpx's normal JSON serialization.
     """
 
     async def _connect() -> httpx.Response:
-        headers = await build_headers()
+        headers = httpx.Headers(await build_headers())
+        body_arguments: dict[str, Any]
+        if isinstance(payload, bytes):
+            headers.setdefault(
+                "Content-Type", client.headers.get("Content-Type", "application/json")
+            )
+            body_arguments = {"content": payload}
+        else:
+            body_arguments = {"json": payload}
         request = build_streaming_request(
             client,
             "POST",
             endpoint_path,
-            json=payload,
+            **body_arguments,
             headers=headers,
         )
         try:

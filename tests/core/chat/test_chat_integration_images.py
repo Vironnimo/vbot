@@ -589,7 +589,7 @@ async def test_long_mixed_image_run_keeps_images_and_can_reopen_originals(
                 if streaming:
                     wire._prepare_stream_payload(payload)
                 try:
-                    wire._check_payload_size(payload, model_id)
+                    await wire._prepare_request_body(payload, model_id)
                 except ProviderRequestTooLargeError as error:
                     rejected_sizes.append(error.size_bytes)
                     raise
