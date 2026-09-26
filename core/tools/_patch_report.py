@@ -184,9 +184,10 @@ def failure_text(error: JsonObject) -> str:
             lines.extend(_excerpts(candidates))
             difference = error.get("difference")
             if difference:
+                source = "old_string" if difference["source"] == "old_string" else "the patch"
                 lines.append(
                     f"First difference, line {difference['line']}: the file has "
-                    f"{difference['file']!r} where the patch has {difference['patch']!r}."
+                    f"{difference['file']!r} where {source} has {difference['copy']!r}."
                 )
         elif error.get("path_label"):
             read = model_tool_name("read")

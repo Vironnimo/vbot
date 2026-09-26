@@ -130,21 +130,41 @@ def test_copies_without_enough_evidence_are_refused(
 
 def test_other_differences_need_twelve_correct_words_and_the_file_keeps_them() -> None:
     content = (
-        "The scheduler runs every job in order, and it retries a failed job twice before "
-        "it reports the failure to the owner. Jobs never overlap.\n"
+        "The scheduler runs every job in order and retries a failed job twice.\n"
+        "It reports the failure to the owner after the last retry.\n"
     )
     old = (
-        "The scheduler runs every job in order and it retries a failed job twice before "
-        "it reports the failure to the owner. Jobs never overlap."
+        "The scheduler runs every job in order and retries a failed job three times.\n"
+        "It reports the failure to the owner after the last retry."
     )
 
-    found = _applied(replace_copied(content, old, old.replace("never", "may")))
+    found = _applied(replace_copied(content, old, old.replace("owner", "team")))
 
-    assert found.new_content == content.replace("never", "may")
+    assert found.new_content == content.replace("owner", "team")
     assert copy_warnings(found) == [
-        f"Line 1 did not match your old text exactly and was edited anyway; it read: "
-        f"{content.rstrip()}"
+        "Line 1 did not match your old text exactly and was left as it reads: "
+        "The scheduler runs every job in order and retries a failed job twice."
     ]
+
+
+@pytest.mark.parametrize(
+    ("held", "copied"),
+    [
+        ("retries a failed job twice", "retries a failed job three times"),
+        ("[--overwrite|--force]", "[--overwrite [--force]]"),
+        ("files may remain", "files remain"),
+    ],
+)
+def test_text_a_changed_line_keeps_must_be_copied_up_to_misspellings(
+    held: str, copied: str
+) -> None:
+    # The copy may hold wording its author meant to write: keeping the file's text
+    # there would silently drop it.
+    line = "The scheduler runs every job in order, {} and it reports the failure to the owner."
+    content = line.format(held) + "\n"
+    old = line.format(copied)
+
+    assert replace_copied(content, old, old.replace("owner", "team")) is None
 
 
 def test_a_rewrite_may_differ_where_it_discards_the_old_text() -> None:
@@ -163,12 +183,23 @@ def test_a_rewrite_may_differ_where_it_discards_the_old_text() -> None:
 
 
 def test_a_change_next_to_another_difference_is_refused() -> None:
-    content = "    if count > limit and the queue is not empty and the worker is still running:\n"
-    old = "    if count < limit and the queue is not empty and the worker is still running:"
+    content = (
+        "    if count > limit and the queue is not empty:\n"
+        "        the worker keeps running until it stops\n"
+    )
+    old = (
+        "    if count < limit and the queue is not empty:\n"
+        "        the worker keeps running until it stops"
+    )
 
     assert replace_copied(content, old, old.replace("limit", "limit + 1")) is None
+    # In a line the edit keeps, the difference only locates the change.
     far = _applied(replace_copied(content, old, old.replace("running", "running now")))
     assert far.new_content == content.replace("running", "running now")
+    assert copy_warnings(far) == [
+        "Line 1 did not match your old text exactly and was left as it reads: "
+        "    if count > limit and the queue is not empty:"
+    ]
 
 
 @pytest.mark.parametrize(
@@ -198,7 +229,10 @@ def test_kept_lines_may_lack_or_add_a_few_words(content: str, context: str, expe
     found = _applied(match_copied_edit(content, lines))
 
     assert found.new_content == expected
-    assert copy_warnings(found) == []
+    assert copy_warnings(found) == [
+        "Line 1 did not match your old text exactly and was left as it reads: "
+        + content.split("\n")[0]
+    ]
 
 
 def test_exact_end_lines_place_a_passage_around_similar_lines() -> None:
@@ -280,6 +314,355 @@ def test_a_change_that_does_not_fit_the_best_passage_is_not_applied_elsewhere() 
 
     # The first block holds every word, but its line break sits next to the change.
     assert match_copied_edit(content, lines) is None
+
+
+def test_a_kept_line_is_never_placed_on_another_line() -> None:
+    # The copy leaves out the blank line under the heading. Placed one line lower,
+    # the heading would fall on that blank line and the new block after it.
+    content = (
+        "# Guide\n\n## Setup\n\n"
+        "Install the tools with the package manager and run the setup script once.\n"
+        "\n## Usage\n\nRun it.\n"
+    )
+    lines = [
+        ("+", "Read the notes first."),
+        ("+", ""),
+        (" ", "## Setup"),
+        ("-", "Install the tools with the package manager and run the setup script once."),
+        ("+", "Install the tools with the package manager and run the setup script twice."),
+    ]
+
+    assert match_copied_edit(content, lines) is None
+
+
+def test_a_copy_joined_across_a_line_break_is_refused() -> None:
+    # Placed on the continuation line, the added item would take its indentation.
+    content = (
+        "- The first item explains the setup and then wraps onto\n"
+        "  a second line of text that ends here.\n"
+        "- Second item.\n"
+    )
+    old = "wraps onto a second line of text that ends here."
+
+    assert replace_copied(content, old, old + "\n- Inserted item.") is None
+
+
+def test_a_kept_line_that_holds_its_file_line_may_add_a_note() -> None:
+    # The copy adds a remark to a short comment line; every word of the line is there.
+    content = (
+        "func run_checks() -> void:\n"
+        "\t# Test kill\n"
+        "\tenemy.take_damage(enemy.hp + 1.0)\n"
+        "\tawait process_frame\n"
+        "\tif is_instance_valid(enemy):\n"
+        '\t\tprint("FAIL: enemy should be dead")\n'
+        "\t\tquit(1)\n"
+    )
+    lines = [
+        (" ", "\t# Test kill (the flash delays it)"),
+        (" ", "\tenemy.take_damage(enemy.hp + 1.0)"),
+        ("-", "\tawait process_frame"),
+        ("-", "\tif is_instance_valid(enemy):"),
+        ("-", '\t\tprint("FAIL: enemy should be dead")'),
+        ("+", "\tif enemy.hp > 0:"),
+        ("+", '\t\tprint("FAIL: enemy hp should be zero")'),
+        (" ", "\t\tquit(1)"),
+    ]
+
+    found = _applied(match_copied_edit(content, lines))
+
+    assert found.new_content == (
+        "func run_checks() -> void:\n"
+        "\t# Test kill\n"
+        "\tenemy.take_damage(enemy.hp + 1.0)\n"
+        "\tif enemy.hp > 0:\n"
+        '\t\tprint("FAIL: enemy hp should be zero")\n'
+        "\t\tquit(1)\n"
+    )
+    assert copy_warnings(found) == [
+        "Line 2 did not match your old text exactly and was left as it reads: \t# Test kill"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("kept", "between"),
+    [
+        # The copy leaves out the blank line under the rule: placed one line lower,
+        # the rule would fall on the blank line and the new heading after the rule.
+        ("---", ""),
+        # A heading on another heading that shares only its markup.
+        ("## Further bugs", "## Notes"),
+    ],
+)
+def test_a_kept_line_is_not_placed_on_a_line_it_does_not_hold(kept: str, between: str) -> None:
+    content = (
+        f"# Report\n\n{kept}\n{between}\n"
+        "No further flows could be tested because the login blocks every page.\n"
+    )
+    lines = [
+        ("+", "## Navigation bug"),
+        ("+", ""),
+        (" ", kept),
+        ("-", "No further flows could be tested because the login blocks every page."),
+        ("+", "Flow one is blocked by the login."),
+    ]
+
+    assert match_copied_edit(content, lines) is None
+
+
+def test_words_moved_between_kept_lines_of_the_passage_do_not_matter() -> None:
+    # The copy wraps a comment differently; both comment lines stay as the file has them.
+    content = (
+        "/**\n"
+        " * Build the response and classify the reading into its\n"
+        " * severity band, then persist the sample to the\n"
+        " * cross-restart store. The call is fire-and-forget so\n"
+        " * the response is not blocked on disk writes.\n"
+        " */\n"
+        "export function buildResponse(reading) {\n"
+        "  return classify(reading);\n"
+        "}\n"
+    )
+    lines = [
+        (" ", " * cross-restart store. The call is fire-and-forget so the"),
+        (" ", " * response is not blocked on disk writes."),
+        (" ", " */"),
+        (" ", "export function buildResponse(reading) {"),
+        ("-", "  return classify(reading);"),
+        ("+", "  return classify(reading, band);"),
+        (" ", "}"),
+    ]
+
+    found = _applied(match_copied_edit(content, lines))
+
+    assert found.new_content == content.replace("classify(reading)", "classify(reading, band)")
+    assert copy_warnings(found) == [
+        "Lines 4, 5 did not match your old text exactly and were left as they read:\n"
+        "4:  * cross-restart store. The call is fire-and-forget so\n"
+        "5:  * the response is not blocked on disk writes."
+    ]
+
+
+@pytest.mark.parametrize(
+    ("content", "lines"),
+    [
+        # A kept first line whose copy starts with the end of the line above.
+        (
+            "## Known issues\n"
+            "- The shell tool splits arguments at spaces unless the value is quoted, see\n"
+            "  the quoting section for the details of this behaviour.\n"
+            "- Second rule\n",
+            [
+                (" ", "see the quoting section for the details of this behaviour."),
+                ("+", "- A new rule about quoting."),
+            ],
+        ),
+        # A written line whose copy ends with the first word of the next line: the
+        # rewrite may drop that word or write it twice.
+        (
+            "alpha beta gamma delta epsilon zeta so\n"
+            "the response stays unblocked for callers here.\n",
+            [
+                ("-", "alpha beta gamma delta epsilon zeta so the"),
+                ("+", "one two three four five six seven"),
+                (" ", "response stays unblocked for callers here."),
+            ],
+        ),
+        # A kept line whose copy holds the first word of the written line below: the
+        # kept line stays as the file has it, so the rewrite would drop that word.
+        (
+            "alpha beta gamma delta epsilon zeta so\n"
+            "the response stays unblocked for callers here.\n",
+            [
+                (" ", "alpha beta gamma delta epsilon zeta so the"),
+                ("-", "response stays unblocked for callers here."),
+                ("+", "one two three four five six seven"),
+            ],
+        ),
+    ],
+)
+def test_words_that_continue_another_line_are_refused(
+    content: str, lines: list[tuple[str, str]]
+) -> None:
+    assert match_copied_edit(content, lines) is None
+
+
+@pytest.mark.parametrize(
+    ("held", "copied", "old_word", "new_word"),
+    [
+        # A hyphen for an em dash.
+        (
+            "- `profiles` \u2014 map keyed by the normalized server base URL for each user.",
+            "- `profiles` - map keyed by the normalized server base URL for each user.",
+            "normalized",
+            "canonical",
+        ),
+        # A backslash only the file holds.
+        (
+            'The note asks „what ran there\\" and names the model fields in the data.',
+            'The note asks „what ran there" and names the model fields in the data.',
+            "data.",
+            "measurement rows.",
+        ),
+        # A backslash only the copy holds.
+        (
+            '  "_comment": "Hand layer for the provider that expires 2026-08-31 and goes",',
+            '  \\"_comment\\": \\"Hand layer for the provider that expires 2026-08-31 and goes\\",',
+            "2026-08-31",
+            "2026-09-30",
+        ),
+    ],
+)
+def test_differences_that_never_matter_keep_the_file_text(
+    held: str, copied: str, old_word: str, new_word: str
+) -> None:
+    content = f"# Notes\n{held}\n"
+
+    found = _applied(replace_copied(content, copied, copied.replace(old_word, new_word)))
+
+    assert found.new_content == f"# Notes\n{held.replace(old_word, new_word)}\n"
+    assert copy_warnings(found) == [
+        f"Line 2 did not match your old text exactly and was edited anyway; it read: {held}"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("held", "copied"),
+    [
+        # Inside a word, at different places on the two sides.
+        (
+            "Die Fenster (Neustart, P1) entste\u200bhen **in** dieser Woche nach dem Umbau.",
+            "Die Fenster (Neustart, P1) entst\u200behen **in** dieser Woche nach dem Umbau.",
+        ),
+        # Only the file holds them, between words and on both sides of the change.
+        (
+            "Die Fenster (Neustart, P1) entstehen **in** dieser \u200dWoche\u2060 nach dem Umbau.",
+            "Die Fenster (Neustart, P1) entstehen **in** dieser Woche nach dem Umbau.",
+        ),
+        # Only the copy holds them, at its start and end.
+        (
+            "Die Fenster (Neustart, P1) entstehen **in** dieser Woche nach dem Umbau.",
+            "\ufeffDie Fenster (Neustart, P1) entstehen **in** dieser Woche nach dem Umbau.\u200c",
+        ),
+    ],
+)
+def test_zero_width_characters_are_invisible_to_the_copy(held: str, copied: str) -> None:
+    content = f"# Notes\n{held}\n"
+
+    found = _applied(replace_copied(content, copied, copied.replace("Woche", "Stunde")))
+
+    assert found.new_content == content.replace("Woche", "Stunde")
+    assert copy_warnings(found) == []
+
+
+def test_invisible_characters_written_beside_a_change_are_refused() -> None:
+    held = "Die Fenster (Neustart, P1) entstehen **in** dieser Woche nach dem Umbau."
+    content = f"# Notes\n{held}\n"
+
+    # Kept text brings the file's invisible characters there, so the caller's have no place.
+    assert replace_copied(content, held, held.replace("Woche", "\u200bStunde")) is None
+
+
+@pytest.mark.parametrize(
+    ("held", "copied"),
+    [
+        # Markup the copy lacks, a list marker and a table cell border it adds.
+        (
+            "confirm the server predates the patch** (check the start time)",
+            "confirm the server predates the patch (check the start time)",
+        ),
+        (
+            "Worker states: off, starting, listening and sending",
+            "- Worker states: off, starting, listening and sending",
+        ),
+        (
+            "the run stays open after the last control run.",
+            "the run stays open after the last control run. |",
+        ),
+    ],
+)
+def test_markup_a_changed_line_keeps_must_match_the_file(held: str, copied: str) -> None:
+    line = "{} Then the owner decides what comes next for the whole team."
+    content = line.format(held) + "\n"
+    old = line.format(copied)
+
+    assert replace_copied(content, old, old.replace("owner", "lead")) is None
+
+
+@pytest.mark.parametrize(
+    ("held", "copied", "old_part", "new_part"),
+    [
+        # The copy escapes quotes the file does not: its new quotes would carry the escape.
+        (
+            '  "_comment": "Hand layer for the provider that expires soon and goes",',
+            '  \\"_comment\\": \\"Hand layer for the provider that expires soon and goes\\",',
+            "expires soon",
+            'expires \\"soon\\"',
+        ),
+        # The file escapes quotes the copy does not: new quotes would lack the escape.
+        (
+            'The note asks „what ran there\\" and names the model fields in the data.',
+            'The note asks „what ran there" and names the model fields in the data.',
+            "the data.",
+            'the "data".',
+        ),
+        # A backslash only the file holds would escape the new text beside it.
+        (
+            'The rule says „write\\" and names the model fields in the data table.',
+            'The rule says „write" and names the model fields in the data table.',
+            'write"',
+            "write'",
+        ),
+    ],
+)
+def test_text_written_where_the_copy_escapes_differently_is_refused(
+    held: str, copied: str, old_part: str, new_part: str
+) -> None:
+    content = f"# Notes\n{held}\n"
+
+    assert replace_copied(content, copied, copied.replace(old_part, new_part)) is None
+
+
+def test_a_new_line_may_not_hold_a_sign_the_file_escapes_elsewhere_in_the_passage() -> None:
+    # A copy that drops the file's escapes comes with new text that drops them too.
+    held = [
+        '    print("say \\"hi\\" to everyone in the room today")',
+        '    print("say \\"bye\\" to everyone in the room today")',
+    ]
+    content = "def greet():\n" + "\n".join(held) + "\n"
+    old = "\n".join(line.replace("\\", "") for line in held)
+
+    new = old + '\n    print("say "ciao" to everyone in the room today")'
+
+    assert replace_copied(content, old, new) is None
+
+
+def test_overlapping_candidates_place_one_passage() -> None:
+    tail = "epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho sigma tau upsilon"
+    content = f"Intro gamma delta gamma delta {tail} end.\n"
+    old = "gamma delta " + tail.replace("theta", "thta").replace("zeta", "zed")
+
+    found = _applied(
+        replace_copied(content, old, old.replace("epsilon zed eta thta iota kappa", "a new text"))
+    )
+
+    assert found.new_content == (
+        "Intro gamma delta gamma delta a new text lambda mu nu xi omicron pi rho sigma tau "
+        "upsilon end.\n"
+    )
+
+
+def test_a_long_differing_line_is_shown_from_its_first_difference() -> None:
+    words = " ".join(f"word{n}" for n in range(60))
+    content = f"Intro {words} and the scheduler retries twice here.\n"
+    old = f"Intro {words} and the schedluer retries twice here."
+
+    found = _applied(replace_copied(content, old, old.replace("twice", "once")))
+
+    assert copy_warnings(found)[0] == (
+        "Line 1 did not match your old text exactly and was edited anyway; it read: "
+        "...word54 word55 word56 word57 word58 word59 and the scheduler retries twice here."
+    )
 
 
 def test_several_qualifying_passages_are_ambiguous() -> None:
@@ -366,6 +749,12 @@ def test_many_differing_lines_are_listed_briefly() -> None:
         "Lines 11, 12, 13, 14, 15 did not match your old text exactly and were edited anyway; "
         "they read:\n11: line 1\n12: line 2\n13: line 3\n(2 more)"
     ]
+    kept = FuzzyReplacement(
+        "", 1, 1, 1, "copied", ((0, 0),), ((0, 0),), kept_differed=((2, "a"), (4, "b"))
+    )
+    assert copy_warnings(kept) == [
+        "Lines 2, 4 did not match your old text exactly and were left as they read:\n2: a\n4: b"
+    ]
 
 
 def test_a_large_file_is_searched_quickly() -> None:
@@ -395,4 +784,39 @@ def test_a_large_file_is_searched_quickly() -> None:
         "    if value is None:\n        raise ValueError('field_49')\n"
         "    return context.process(value)\n"
     )
+    assert elapsed < 2.0
+
+
+def test_a_long_fragment_in_repetitive_lines_is_searched_quickly() -> None:
+    vocabulary = [
+        "the",
+        "a",
+        "skill",
+        "step",
+        "run",
+        "check",
+        "file",
+        "agent",
+        "tool",
+        "when",
+        "then",
+        "and",
+        "or",
+        "with",
+        "for",
+    ]
+    lines = [
+        f"- item{number}: "
+        + " ".join(vocabulary[(number * 7 + index * 3) % len(vocabulary)] for index in range(120))
+        for number in range(100)
+    ]
+    content = "\n".join(lines) + "\n"
+    old = " ".join(lines[50].split()[4:44]).replace("skill", "skil", 1)
+
+    started = time.perf_counter()
+    found = replace_copied(content, old, old + " more")
+    elapsed = time.perf_counter() - started
+
+    # Every line holds the same words in turn, so the copy resembles many places.
+    assert isinstance(found, AmbiguousFuzzyMatch)
     assert elapsed < 2.0
