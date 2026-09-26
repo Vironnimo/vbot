@@ -1,5 +1,8 @@
 """A Tool installed during a Run is usable in its next Provider cycle."""
 
+import asyncio
+import json
+import threading
 from typing import Any
 
 import pytest
@@ -14,9 +17,229 @@ from core.extensions import (
 )
 from core.extensions.extensions import ExtensionDeclarations
 from core.extensions.operations import ExtensionOperations
+from core.runs import TOOL_CALL_RESULT_EVENT
+from core.sessions import SessionAddress
 from core.tools import ToolRegistry, tool_success
 from core.tools.availability import ToolAccess
 from tests.core.chat.chat_loop_support import StubAdapter, StubAgent, StubRuntime, build_chat_loop
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("catalog_change", ["remove", "replace"])
+@pytest.mark.parametrize("valid_hook_result", [False, True])
+async def test_running_tool_result_survives_live_catalog_change(
+    tmp_path, catalog_change, valid_hook_result
+):
+    tools = ToolRegistry()
+    operations = ExtensionOperations("test")
+    operations.bind(tools)
+    started = asyncio.Event()
+    resume = asyncio.Event()
+    effects: list[str] = []
+
+    async def original(_context, _arguments):
+        started.set()
+        await resume.wait()
+        effects.append("completed")
+        return tool_success({"value": "completed"})
+
+    declaration = {
+        "name": "dynamic",
+        "description": "test-sentinel",
+        "parameters": {"type": "object"},
+        "handler": original,
+        "result_schema": {
+            "type": "object",
+            "properties": {"value": {"type": "string"}},
+            "required": ["value"],
+            "additionalProperties": False,
+        },
+    }
+    operations.replace_tools("catalog", [declaration])
+    adapter = StubAdapter(
+        [
+            {
+                "content": None,
+                "tool_calls": [{"id": "dynamic-call", "name": "dynamic", "arguments": {}}],
+            },
+            {"content": "finished"},
+        ]
+    )
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
+    extensions = ExtensionRegistry()
+    hook_results: list[dict[str, Any]] = []
+
+    def result_hook(_context, **payload):
+        hook_results.append(payload["result"])
+        return tool_success({"value": "completed and observed" if valid_hook_result else 1})
+
+    extensions.install_handler("observer", "tool_result", result_hook)
+    runtime.extensions = extensions
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    run = await build_chat_loop(runtime).start_run("coder", "run the Tool", session_id=session.id)
+    try:
+        await asyncio.wait_for(started.wait(), timeout=5)
+        candidates = []
+        if catalog_change == "replace":
+            candidates.append(
+                {
+                    **declaration,
+                    "result_schema": {
+                        "type": "object",
+                        "properties": {"value": {"type": "integer"}},
+                        "required": ["value"],
+                        "additionalProperties": False,
+                    },
+                }
+            )
+        operations.replace_tools("catalog", candidates)
+    finally:
+        resume.set()
+        await run.wait()
+
+    expected = tool_success(
+        {"value": "completed and observed" if valid_hook_result else "completed"}
+    )
+    assert effects == ["completed"]
+    assert hook_results == [tool_success({"value": "completed"})]
+    history = runtime.chat_sessions.get(SessionAddress(None, "coder", session.id)).load()
+    assert [json.loads(message.content) for message in history if message.role == "tool"] == [
+        expected
+    ]
+    assert [
+        event.payload["result"] for event in run.events if event.type == TOOL_CALL_RESULT_EVENT
+    ] == [expected]
+    assert run.status == "completed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("valid_hook_result", [False, True])
+async def test_worker_publication_before_dispatch_uses_selected_tool_contract(
+    tmp_path, monkeypatch, valid_hook_result
+):
+    tools = ToolRegistry()
+    operations = ExtensionOperations("test")
+    operations.bind(tools)
+    publish = threading.Event()
+    published = threading.Event()
+    effects: list[str] = []
+    publisher_threads: list[int] = []
+    main_thread = threading.get_ident()
+
+    async def original(_context, _arguments):
+        effects.append("original")
+        return tool_success({"value": "original"})
+
+    async def replacement(_context, _arguments):
+        effects.append("replacement")
+        return tool_success({"value": 42})
+
+    declaration = {
+        "name": "dynamic",
+        "description": "test-sentinel",
+        "parameters": {"type": "object"},
+        "handler": original,
+        "result_schema": {
+            "type": "object",
+            "properties": {"value": {"type": "string"}},
+            "required": ["value"],
+            "additionalProperties": False,
+        },
+    }
+    operations.replace_tools("catalog", [declaration])
+
+    def publisher(_context, _arguments):
+        publisher_threads.append(threading.get_ident())
+        assert publish.wait(timeout=5)
+        try:
+            operations.replace_tools(
+                "catalog",
+                [
+                    {
+                        **declaration,
+                        "handler": replacement,
+                        "result_schema": {
+                            "type": "object",
+                            "properties": {"value": {"type": "integer"}},
+                            "required": ["value"],
+                            "additionalProperties": False,
+                        },
+                    }
+                ],
+            )
+        finally:
+            published.set()
+        return tool_success({"published": True})
+
+    operations.replace_tools(
+        "publisher",
+        [
+            {
+                "name": "publish",
+                "description": "test-sentinel",
+                "parameters": {"type": "object"},
+                "handler": publisher,
+            }
+        ],
+    )
+    dispatch = tools.dispatch
+
+    async def dispatch_after_publication(context, arguments, allowed_tools=None):
+        if context.tool_name == "dynamic":
+            # Force a real sibling worker publication after Chat has entered
+            # dispatch but before canonical dispatch selects the executing Tool.
+            publish.set()
+            assert await asyncio.to_thread(published.wait, 5)
+        return await dispatch(context, arguments, allowed_tools)
+
+    monkeypatch.setattr(tools, "dispatch", dispatch_after_publication)
+    adapter = StubAdapter(
+        [
+            {
+                "content": None,
+                "tool_calls": [
+                    {"id": "publish-call", "name": "publish", "arguments": {}},
+                    {"id": "dynamic-call", "name": "dynamic", "arguments": {}},
+                ],
+            },
+            {"content": "finished"},
+        ]
+    )
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
+    extensions = ExtensionRegistry()
+    hook_results: list[dict[str, Any]] = []
+
+    def result_hook(_context, **payload):
+        if payload["tool_name"] != "dynamic":
+            return None
+        hook_results.append(payload["result"])
+        return tool_success({"value": 43 if valid_hook_result else "invalid"})
+
+    extensions.install_handler("observer", "tool_result", result_hook)
+    runtime.extensions = extensions
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    run = await build_chat_loop(runtime).start_run("coder", "run the Tools", session_id=session.id)
+    await run.wait()
+
+    expected = tool_success({"value": 43 if valid_hook_result else 42})
+    assert effects == ["replacement"]
+    assert len(publisher_threads) == 1 and publisher_threads[0] != main_thread
+    assert hook_results == [tool_success({"value": 42})]
+    history = runtime.chat_sessions.get(SessionAddress(None, "coder", session.id)).load()
+    assert {
+        message.tool_call_id: json.loads(message.content)
+        for message in history
+        if message.role == "tool"
+    } == {"publish-call": tool_success({"published": True}), "dynamic-call": expected}
+    assert [
+        event.payload["result"]
+        for event in run.events
+        if event.type == TOOL_CALL_RESULT_EVENT
+        and event.payload["tool_call"]["id"] == "dynamic-call"
+    ] == [expected]
+    assert run.status == "completed"
 
 
 @pytest.mark.asyncio

@@ -30,6 +30,71 @@ from tests.core.tools.tools_helpers import (
 
 class TestToolExecutor:
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("catalog_change", ["remove", "replace"])
+    @pytest.mark.parametrize("valid_result", [False, True])
+    async def test_running_call_keeps_its_result_contract(
+        self, catalog_change: str, valid_result: bool
+    ) -> None:
+        registry = ToolRegistry()
+        started = asyncio.Event()
+        resume = asyncio.Event()
+        effects: list[str] = []
+        result = tool_success({"value": "completed" if valid_result else 1})
+
+        async def handler(_context: ToolContext, _arguments: JsonObject) -> JsonObject:
+            started.set()
+            await resume.wait()
+            effects.append("completed")
+            return result
+
+        original = registry.register(
+            "dynamic",
+            "Test Tool.",
+            {"type": "object"},
+            handler,
+            result_schema={
+                "type": "object",
+                "properties": {"value": {"type": "string"}},
+                "required": ["value"],
+                "additionalProperties": False,
+            },
+        )
+        task = asyncio.create_task(
+            ToolExecutor(registry).execute_many(
+                [ToolCall(id="call-1", name="dynamic", arguments={})],
+                make_execution_config(allowed_tools=["dynamic"]),
+            )
+        )
+        try:
+            await asyncio.wait_for(started.wait(), timeout=5)
+            candidates = []
+            if catalog_change == "replace":
+                candidates.append(
+                    ToolRegistry().register(
+                        "dynamic",
+                        "Replacement Tool.",
+                        {"type": "object"},
+                        lambda _context, _arguments: tool_success({"value": 2}),
+                        result_schema={
+                            "type": "object",
+                            "properties": {"value": {"type": "integer"}},
+                            "required": ["value"],
+                            "additionalProperties": False,
+                        },
+                    )
+                )
+            registry.replace_owned_tools([original], candidates)
+        finally:
+            resume.set()
+            results = await task
+
+        assert effects == ["completed"]
+        if valid_result:
+            assert results == [result]
+        else:
+            assert results[0]["error"]["code"] == "invalid_tool_result"
+
+    @pytest.mark.asyncio
     async def test_exact_provider_contract_flows_to_dispatch_validation(self) -> None:
         registry = ToolRegistry()
         handler_calls: list[JsonObject] = []
