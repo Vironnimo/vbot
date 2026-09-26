@@ -143,26 +143,6 @@ def normalize_and_validate_skill_metadata(
     return normalized, ValidationResult(valid=True, warnings=warnings)
 
 
-def validate_skill_metadata(
-    fields: Any,
-    *,
-    directory_name: str,
-    skill_file: Path,
-    body: str = "",
-    parse_warnings: list[str] | None = None,
-) -> ValidationResult:
-    """Compatibility wrapper returning only the validation result."""
-
-    _, result = normalize_and_validate_skill_metadata(
-        fields,
-        directory_name=directory_name,
-        skill_file=skill_file,
-        body=body,
-        parse_warnings=parse_warnings,
-    )
-    return result
-
-
 def _parse_simple_key_values(front_matter: str) -> dict[str, Any]:
     fields: dict[str, Any] = {}
     for line in front_matter.splitlines():
