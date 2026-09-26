@@ -295,7 +295,9 @@ def compile_host(
         windows / ("desktop.manifest" if role == "desktop" else "launcher.manifest")
     ).resolve()
     numeric, display = _version_resource_values(version)
-    subsystem = "CONSOLE" if role in {"python", "host"} else "WINDOWS"
+    # CREATE_NO_WINDOW only gives console applications an invisible console.
+    # A GUI server makes pywinpty allocate and then hide a visible one on start.
+    subsystem = "CONSOLE" if role in {"python", "host", "server"} else "WINDOWS"
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="vbot-native-") as temporary:
         resource = Path(temporary) / "launcher.res"
