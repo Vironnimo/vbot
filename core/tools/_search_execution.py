@@ -33,29 +33,27 @@ def native_lines(
     budget: SearchBudget,
 ) -> Generator[bytes, None, None]:
     """Drain both pipes with bounded storage and interrupt even a silent process."""
-    process = subprocess.Popen(
-        [str(binary), "--no-config", *arguments],
-        cwd=context.effective_cwd,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        creationflags=subprocess_creation_flags(),
-    )
+    cancelled = threading.Event()
+    # The Run retains this callback until dispatch finishes on the Event Loop.
+    # Retaining Popen here would defer its Windows handle destructor to that
+    # thread. Native process operations and lifetime belong to this worker.
+    context.on_cancel(cancelled.set)
+
+    def keep_going() -> bool:
+        return budget.keep_going() and not cancelled.is_set()
+
+    if not keep_going():
+        return
     stopped = threading.Event()
     messages: queue.Queue[tuple[str, bytes]] = queue.Queue(maxsize=8)
     diagnostics = bytearray()
 
-    def kill() -> None:
+    def kill(child: subprocess.Popen[bytes]) -> None:
         with contextlib.suppress(OSError):
-            if process.poll() is None:
-                process.kill()
+            if child.poll() is None:
+                child.kill()
 
-    context.on_cancel(kill)
     monitored = None
-    # A fast child may exit before psutil attaches. Its pipes and exit status
-    # still belong to Popen and must be drained normally.
-    with contextlib.suppress(psutil.NoSuchProcess, psutil.AccessDenied):
-        monitored = psutil.Process(process.pid)
 
     def put(kind: str, data: bytes) -> None:
         while not stopped.is_set():
@@ -66,10 +64,10 @@ def native_lines(
                 continue
 
     def output() -> None:
-        assert process.stdout is not None
+        assert stdout is not None
         try:
             while not stopped.is_set():
-                line = process.stdout.readline(MAX_PROTOCOL_LINE + 1)
+                line = stdout.readline(MAX_PROTOCOL_LINE + 1)
                 if not line:
                     break
                 if len(line) > MAX_PROTOCOL_LINE:
@@ -80,15 +78,14 @@ def native_lines(
                             b"arch or use a file/count output mode."
                         ),
                     )
-                    kill()
                     break
                 put("line", line)
         finally:
             put("end", b"")
 
     def errors() -> None:
-        assert process.stderr is not None
-        while chunk := process.stderr.read(4096):
+        assert stderr is not None
+        while chunk := stderr.read(4096):
             if len(diagnostics) < 8192:
                 diagnostics.extend(chunk[: 8192 - len(diagnostics)])
 
@@ -96,11 +93,28 @@ def native_lines(
         threading.Thread(target=output, daemon=True),
         threading.Thread(target=errors, daemon=True),
     ]
-    for thread in threads:
-        thread.start()
+    started_threads = []
     next_memory_poll = 0.0
+    output_finished = False
+    process = subprocess.Popen(
+        [str(binary), "--no-config", *arguments],
+        cwd=context.effective_cwd,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        creationflags=subprocess_creation_flags(),
+    )
     try:
-        while budget.keep_going():
+        stdout, stderr = process.stdout, process.stderr
+        assert stdout is not None and stderr is not None
+        # A fast child may exit before psutil attaches. Its pipes and exit
+        # status still belong to Popen and must be drained normally.
+        with contextlib.suppress(psutil.NoSuchProcess, psutil.AccessDenied):
+            monitored = psutil.Process(process.pid)
+        for thread in threads:
+            thread.start()
+            started_threads.append(thread)
+        while keep_going():
             if monitored is not None and time.monotonic() >= next_memory_poll:
                 next_memory_poll = time.monotonic() + MEMORY_POLL_SECONDS
                 with contextlib.suppress(psutil.NoSuchProcess, psutil.AccessDenied):
@@ -113,35 +127,45 @@ def native_lines(
             except queue.Empty:
                 continue
             if kind == "end":
+                output_finished = True
                 break
             if kind == "error":
                 raise RuntimeError(line.decode())
             yield line
-        if budget.stopped:
-            kill()
-        try:
-            process.wait(timeout=max(0.1, budget.remaining_seconds()))
-        except subprocess.TimeoutExpired as error:
-            raise RuntimeError("Search timed out; narrow paths or filters and retry.") from error
+        # EOF can precede process exit. Keep checking cancellation here as well
+        # instead of waiting for the entire remaining search budget at once.
+        while keep_going() and process.poll() is None:
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                process.wait(timeout=0.05)
+        if output_finished and budget.timed_out:
+            raise RuntimeError("Search timed out; narrow paths or filters and retry.")
+        interrupted = budget.stopped or cancelled.is_set()
+        if interrupted:
+            kill(process)
         threads[1].join(timeout=1)
-        if process.returncode not in (0, 1) and not budget.stopped:
+        if process.returncode not in (0, 1) and not interrupted:
             raise RuntimeError(
                 diagnostics.decode("utf-8", errors="backslashreplace").strip()
                 or f"Search engine exited with code {process.returncode}."
             )
-        if diagnostics and not budget.stopped:
+        if diagnostics and not interrupted:
             raise RuntimeError(diagnostics.decode("utf-8", errors="backslashreplace").strip())
     finally:
-        stopped.set()
-        kill()
-        with contextlib.suppress(subprocess.TimeoutExpired):
-            process.wait(timeout=2)
-        for thread in threads:
-            thread.join(timeout=2)
-        if process.stdout:
-            process.stdout.close()
-        if process.stderr:
-            process.stderr.close()
+        try:
+            stopped.set()
+            kill(process)
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                process.wait(timeout=2)
+            for thread in started_threads:
+                thread.join(timeout=2)
+            if process.stdout is not None:
+                process.stdout.close()
+            if process.stderr is not None:
+                process.stderr.close()
+        finally:
+            # Also release it if a consumer retains this generator's traceback.
+            # Reader threads hold only their pipes, never the process object.
+            del process
 
 
 def file_types(
