@@ -1,10 +1,11 @@
-"""OS process containment, windowless launch and confirmed process-tree termination."""
+"""OS process containment, windowless launch, program presence and confirmed tree termination."""
 
 from __future__ import annotations
 
 import asyncio
 import ctypes
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -332,3 +333,94 @@ def kill_process_tree(proc: ProcessIdentity, *, targets: list[Any] | None = None
             return
         raise OSError("taskkill could not confirm process-tree termination")
     _kill_process_tree_posix(proc)
+
+
+# Script hosts that run an installed command-line program from a script
+# argument, such as ``node .../node_modules/@openai/codex/bin/codex.js``.
+_SCRIPT_HOSTS = frozenset({"node", "nodejs", "bun"})
+_COMMAND_SUFFIXES = (".exe", ".cmd", ".bat", ".ps1", ".js", ".mjs", ".cjs")
+_PATH_SEPARATORS = re.compile(r"[\\/]")
+
+
+def process_tree_runs(pid: int, program: str) -> bool:
+    """Whether *program* runs, not stopped, as process *pid* or one of its descendants.
+
+    A process runs *program* when its name, its executable, or its first
+    argument names it, or, for a script host such as ``node``, when its script
+    or the npm package holding the script does. A name matches exactly or as
+    ``<program>-...``: ``codex``, ``codex.exe``, ``codex.js`` and ``claude-code``
+    name their programs. Returns ``False`` when the tree cannot be inspected, so
+    callers fail closed.
+    """
+    import psutil  # type: ignore[import-untyped]
+
+    wanted = program.strip().casefold()
+    if not wanted:
+        return False
+    try:
+        root = psutil.Process(pid)
+        processes = [root, *root.children(recursive=True)]
+    except psutil.Error:
+        return False
+    return any(_process_runs(process, wanted) for process in processes)
+
+
+def _process_runs(process: Any, wanted: str) -> bool:
+    import psutil  # type: ignore[import-untyped]
+
+    stopped = {psutil.STATUS_STOPPED, psutil.STATUS_ZOMBIE, psutil.STATUS_DEAD}
+    try:
+        with process.oneshot():
+            if process.status() in stopped:
+                return False
+            name = process.name()
+            exe = _readable(process.exe, "")
+            cmdline = _readable(process.cmdline, [])
+    except psutil.Error:
+        return False
+    return _names_program(name, exe, cmdline, wanted)
+
+
+def _names_program(name: str, exe: str, cmdline: Sequence[str], wanted: str) -> bool:
+    """Whether a process with this name, executable and command line runs *wanted*."""
+    return any(
+        candidate == wanted or candidate.startswith(f"{wanted}-")
+        for candidate in _command_names(name, exe, cmdline)
+    )
+
+
+def _readable(read: Any, default: Any) -> Any:
+    """One process attribute, or *default* when the OS denies reading it."""
+    import psutil  # type: ignore[import-untyped]
+
+    try:
+        return read() or default
+    except psutil.AccessDenied:
+        return default
+
+
+def _command_names(name: str, exe: str, cmdline: Sequence[str]) -> set[str]:
+    """The lowercase program names one process runs under, without executable suffixes."""
+    names = {_command_name(name), _command_name(exe)}
+    if cmdline:
+        names.add(_command_name(cmdline[0]))
+    if names & _SCRIPT_HOSTS:
+        script = next((argument for argument in cmdline[1:] if not argument.startswith("-")), "")
+        names.add(_command_name(script))
+        parts = [part.casefold() for part in _PATH_SEPARATORS.split(script) if part]
+        if "node_modules" in parts:
+            package = parts[len(parts) - parts[::-1].index("node_modules") :][:2]
+            if len(package) == 2 and package[0].startswith("@"):
+                names.add(package[1])
+            elif package:
+                names.add(package[0])
+    names.discard("")
+    return names
+
+
+def _command_name(path: str) -> str:
+    base = _PATH_SEPARATORS.split(path.strip())[-1].casefold()
+    for suffix in _COMMAND_SUFFIXES:
+        if base.endswith(suffix):
+            return base[: -len(suffix)]
+    return base

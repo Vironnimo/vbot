@@ -31,6 +31,7 @@ from core.tools.terminal_manager import (
     TerminalCursorError,
     TerminalLaunchError,
     TerminalNotFoundError,
+    TerminalProgramNotRunningError,
     TerminalStaleScreenError,
 )
 from core.utils.errors import ConfigError, VBotError
@@ -50,6 +51,7 @@ from server.rpc.errors import (
     RPC_ERROR_PROJECT_NOT_FOUND,
     RPC_ERROR_RUN_NOT_FOUND,
     RPC_ERROR_SESSION_CAPABILITY_EXPIRED,
+    RPC_ERROR_TERMINAL_PROGRAM_NOT_RUNNING,
     RpcError,
 )
 
@@ -99,6 +101,8 @@ def _map_expected_error(error: Exception) -> RpcError:
         return RpcError(RPC_ERROR_INVALID_REQUEST, str(error))
     if isinstance(error, TerminalNotFoundError):
         return RpcError(RPC_ERROR_INVALID_REQUEST, str(error))
+    if isinstance(error, TerminalProgramNotRunningError):
+        return RpcError(RPC_ERROR_TERMINAL_PROGRAM_NOT_RUNNING, str(error))
     if isinstance(
         error,
         (

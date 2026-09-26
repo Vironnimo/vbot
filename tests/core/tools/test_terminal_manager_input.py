@@ -10,6 +10,7 @@ import pytest
 import core.tools.terminal_manager as terminal_module
 from core.tools.terminal_manager import (
     TerminalManager,
+    TerminalProgramNotRunningError,
     TerminalStaleScreenError,
 )
 from tests.core.tools.terminal_manager_helpers import (
@@ -195,3 +196,38 @@ async def test_operator_read_preserves_binding_and_rejects_stale_guarded_input(
             session.terminal_id, "second", expected_screen_revision=revision
         )
     assert session.attachment == original_attachment
+
+
+@pytest.mark.asyncio
+async def test_operator_input_expecting_a_program_writes_only_while_it_runs(tmp_path) -> None:
+    running: set[str] = {"codex"}
+    probes: list[tuple[int, str]] = []
+
+    def probe(pid: int, program: str) -> bool:
+        probes.append((pid, program))
+        return program in running
+
+    factory = AdapterFactory()
+    manager = TerminalManager(
+        adapter_factory=factory, sweep_interval_seconds=3600, program_probe=probe
+    )
+    manager.start()
+    try:
+        session = await manager.spawn(
+            owner(), ["pwsh"], cwd=tmp_path, env=None, origin_run_id="run-live"
+        )
+        revision = session.renderer.revision
+        await manager.send_operator_input(
+            session.terminal_id, "task", expected_program="codex", expected_screen_revision=revision
+        )
+        running.clear()
+        with pytest.raises(TerminalProgramNotRunningError, match="codex is not running"):
+            await manager.send_operator_input(session.terminal_id, "\r", expected_program="codex")
+        # Input without an expected program never asks the process tree.
+        await manager.send_operator_input(session.terminal_id, "dir\r")
+        with pytest.raises(ValueError, match="expected_program"):
+            await manager.send_operator_input(session.terminal_id, "x", expected_program=" ")
+        assert factory.adapters[0].writes == ["task", "dir\r"]
+        assert probes == [(factory.adapters[0].pid, "codex")] * 2
+    finally:
+        await manager.aclose()

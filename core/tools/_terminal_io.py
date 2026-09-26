@@ -29,6 +29,7 @@ from ._terminal_state import (
     TerminalAttention,
     TerminalClosedError,
     TerminalManagerError,
+    TerminalProgramNotRunningError,
     TerminalSession,
     TerminalStaleScreenError,
     _finish_files,
@@ -50,6 +51,7 @@ class TerminalSessionIO:
         activity_quiet_seconds: float,
         monotonic: Callable[[], float],
         sleep: Callable[[float], Awaitable[None]],
+        program_probe: Callable[[int, str], bool],
     ) -> None:
         self._events = events
         self._reader_executor = reader_executor
@@ -57,6 +59,7 @@ class TerminalSessionIO:
         self._activity_quiet_seconds = activity_quiet_seconds
         self._monotonic = monotonic
         self._sleep = sleep
+        self._program_probe = program_probe
 
     async def _send_initial_input_when_ready(
         self, session: TerminalSession, text: str, *, origin_run_id: str
@@ -497,9 +500,18 @@ class TerminalSessionIO:
             await self._mark_finished(session, None)
 
     async def send_operator_input(
-        self, session: TerminalSession, data: str, *, expected_screen_revision: int | None = None
+        self,
+        session: TerminalSession,
+        data: str,
+        *,
+        expected_screen_revision: int | None = None,
+        expected_program: str | None = None,
     ) -> None:
-        """Write exact user-controlled terminal bytes through the existing PTY."""
+        """Write exact user-controlled terminal bytes through the existing PTY.
+
+        *expected_program* writes only while that program runs in the Terminal's
+        process tree (the Terminal's own process or a descendant, not stopped).
+        """
         command_task = session.operator_command_task
         if command_task is not None and not command_task.done():
             # The launch command is typed into the shell while it is still
@@ -514,6 +526,14 @@ class TerminalSessionIO:
         write_error: BaseException | None = None
         async with session.lock:
             _require_live(session)
+            # Output waits for the lock, so the screen checked below is the
+            # screen the input reaches.
+            if expected_program is not None and not await asyncio.to_thread(
+                self._program_probe, session.adapter.pid, expected_program
+            ):
+                raise TerminalProgramNotRunningError(
+                    f"{expected_program} is not running in this Terminal; the input was not written"
+                )
             if (
                 expected_screen_revision is not None
                 and expected_screen_revision != session.renderer.revision
