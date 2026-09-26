@@ -18,6 +18,7 @@ import core.tools.read as read_module
 import core.tools.read_extract as read_extract_module
 from core.attachments import AttachmentTooLargeError
 from core.model_tasks import SpeechError, SpeechTranscriptionResult
+from core.sessions import SessionAddress
 from core.tools import (
     READ_TOOL_NAME,
     READ_TOOL_PARAMETERS,
@@ -745,13 +746,20 @@ async def test_read_never_records_change_tracker_stats(tmp_path: Path) -> None:
     workspace.mkdir()
     workspace.joinpath("notes.txt").write_bytes(b"alpha\nbeta\ngamma\n")
     tracker = ChangeTracker()
+    context = make_context(workspace, change_tracker=tracker)
 
-    result = await make_handler()(
-        make_context(workspace, change_tracker=tracker), {"path": "notes.txt"}
-    )
+    result = await make_handler()(context, {"path": "notes.txt"})
 
     assert_success_envelope(result)
-    assert tracker.peek_run_stats("session-1") is None
+    assert (
+        tracker.peek_run_stats(
+            (
+                SessionAddress(context.project_id, context.agent_id, context.session_id),
+                context.run_id,
+            )
+        )
+        is None
+    )
 
 
 @pytest.mark.asyncio

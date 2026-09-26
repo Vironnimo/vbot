@@ -813,9 +813,10 @@ def test_a_long_fragment_in_repetitive_lines_is_searched_quickly() -> None:
     content = "\n".join(lines) + "\n"
     old = " ".join(lines[50].split()[4:44]).replace("skill", "skil", 1)
 
-    started = time.perf_counter()
+    # Bound matching work, excluding time another test process owns the CPU.
+    started = time.process_time()
     found = replace_copied(content, old, old + " more")
-    elapsed = time.perf_counter() - started
+    elapsed = time.process_time() - started
 
     # Every line holds the same words in turn, so the copy resembles many places.
     assert isinstance(found, AmbiguousFuzzyMatch)

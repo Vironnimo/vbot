@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import os
 import stat
+from dataclasses import replace
 
 import pytest
 
+from core.sessions import SessionAddress
 from core.tools.apply_patch import make_apply_patch_handler, register_apply_patch_tool
 from core.tools.change_tracker import ChangeTracker
 from core.tools.file_state import FileReadState
@@ -213,7 +215,9 @@ def test_current_content_stamps_stats_and_syntax_warnings(tmp_path):
     assert "Warning: Syntax check failed" in text(result)
     assert "Note: file.py changed after this Session last read it" in text(result)
     assert state.check_stale("session-test", path) is None
-    stats = tracker.peek_run_stats("session-test")
+    stats = tracker.peek_run_stats(
+        (SessionAddress(ctx.project_id, ctx.agent_id, ctx.session_id), ctx.run_id)
+    )
     assert stats["added"] == 1 and stats["removed"] == 1
     assert path.read_bytes() == b"external = True\nvalue = (\n"
 
@@ -326,3 +330,29 @@ def test_argument_validation(tmp_path, arguments, code):
     result = make_apply_patch_handler(FileReadState())(context(tmp_path), arguments)
     assert result["error"]["code"] == code
     assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("scope_change", [{"project_id": "project"}, {"agent_id": "other-agent"}])
+def test_patch_stats_keep_identical_session_and_run_ids_in_separate_scopes(tmp_path, scope_change):
+    tracker = ChangeTracker()
+    first = context(tmp_path, change_tracker=tracker)
+    second = replace(first, **scope_change)
+    assert apply(tmp_path, "*** Add File: first.txt\n+one", ctx=first)["ok"]
+    assert apply(tmp_path, "*** Add File: second.txt\n+two\n+three", ctx=second)["ok"]
+    first_key = (SessionAddress(first.project_id, first.agent_id, first.session_id), first.run_id)
+    second_key = (
+        SessionAddress(second.project_id, second.agent_id, second.session_id),
+        second.run_id,
+    )
+    assert tracker.take_run_stats(first_key) == {
+        "files": 1,
+        "added": 1,
+        "removed": 0,
+        "paths": [str(tmp_path / "first.txt")],
+    }
+    assert tracker.take_run_stats(second_key) == {
+        "files": 1,
+        "added": 2,
+        "removed": 0,
+        "paths": [str(tmp_path / "second.txt")],
+    }

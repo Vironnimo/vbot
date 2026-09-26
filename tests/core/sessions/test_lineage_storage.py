@@ -170,6 +170,93 @@ async def test_a_fork_shares_history_until_its_ancestor_is_deleted(tmp_path: Pat
         manager.close()
 
 
+@pytest.mark.asyncio
+async def test_ancestor_delete_preserves_additive_entry_columns(tmp_path: Path) -> None:
+    manager = ChatSessionManager(tmp_path)
+    try:
+        source = manager.create("agent", session_id="source")
+        source.append(ChatMessage.user("retained text"))
+
+        def add_newer_fields(connection: sqlite3.Connection) -> None:
+            connection.execute("ALTER TABLE entries ADD COLUMN future_text TEXT")
+            connection.execute('ALTER TABLE entries ADD COLUMN "references" TEXT')
+            connection.execute(
+                "ALTER TABLE entries ADD COLUMN future_count INTEGER NOT NULL DEFAULT 0"
+            )
+            connection.execute(
+                "UPDATE entries SET future_text = 'durable payload', future_count = 42, "
+                "\"references\" = 'retained reference'"
+            )
+
+        manager.database.write(add_newer_fields)
+        child = await manager.fork(source.address)
+        grandchild = await manager.fork(child.address)
+
+        manager.delete(source.address)
+        manager.delete(child.address)
+
+        assert [message.content for message in grandchild.load_active()] == ["retained text"]
+        with manager.database.read() as connection:
+            assert _rows(
+                connection, 'SELECT future_text, future_count, "references" FROM entries'
+            ) == [("durable payload", 42, "retained reference")]
+            assert _rows(connection, "PRAGMA foreign_key_check") == []
+    finally:
+        manager.close()
+
+
+@pytest.mark.asyncio
+async def test_ancestor_delete_preserves_additive_run_change_path_columns(tmp_path: Path) -> None:
+    manager = ChatSessionManager(tmp_path)
+    try:
+        source = manager.create("agent", session_id="source")
+        run = source.start_run("run-one")
+        run.append(ChatMessage.user("retained text"))
+        complete_run(run, _summary("run-one"))
+        inherited = source.load_active()
+
+        def add_newer_fields(connection: sqlite3.Connection) -> None:
+            connection.execute("ALTER TABLE run_change_paths ADD COLUMN future_text TEXT")
+            connection.execute('ALTER TABLE run_change_paths ADD COLUMN "references" TEXT')
+            connection.execute(
+                "ALTER TABLE run_change_paths ADD COLUMN future_count INTEGER NOT NULL DEFAULT 0"
+            )
+            connection.execute(
+                "UPDATE run_change_paths SET future_text = 'durable path payload', "
+                "future_count = 42, \"references\" = 'retained path reference'"
+            )
+
+        manager.database.write(add_newer_fields)
+        child = await manager.fork(source.address)
+        manager.delete(source.address)
+        grandchild = await manager.fork(child.address)
+        manager.delete(child.address)
+
+        assert grandchild.load_active() == inherited
+        with manager.database.read() as connection:
+            assert _rows(
+                connection,
+                'SELECT p.ordinal, p.path, p.future_text, p.future_count, p."references", '
+                "r.run_id, r.inherited, s.session_id FROM run_change_paths AS p "
+                "JOIN runs AS r ON r.run_key = p.run_key "
+                "JOIN sessions AS s ON s.session_key = r.session_key",
+            ) == [
+                (
+                    0,
+                    "notes.md",
+                    "durable path payload",
+                    42,
+                    "retained path reference",
+                    "run-one",
+                    1,
+                    grandchild.id,
+                )
+            ]
+            assert _rows(connection, "PRAGMA foreign_key_check") == []
+    finally:
+        manager.close()
+
+
 def _unread_run_ids(manager: ChatSessionManager) -> dict[str, str | None]:
     rows = manager.list_completion_activity([(None, "agent")])[(None, "agent")]
     return {str(row["id"]): row["unread_run_id"] for row in rows}

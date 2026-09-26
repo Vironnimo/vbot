@@ -31,7 +31,6 @@ from core.models.models_dev import (
     provider_modalities,
     provider_reasoning_block,
     provider_reasoning_supported,
-    reasoning_capability_block,
     reasoning_response_field,
     refresh_canonical_layer,
     write_raw_catalog,
@@ -113,18 +112,6 @@ def test_derive_control_drops_unknown_effort_values():
     result = derive_reasoning_control(options)
     # Assert
     assert result == {"control": "levels", "levels": ["low", "high"]}
-
-
-def test_reasoning_capability_block_unsupported_is_bare():
-    assert reasoning_capability_block(supported=False, reasoning_options=[{"type": "toggle"}]) == {
-        "supported": False
-    }
-
-
-def test_reasoning_capability_block_supported_without_options_is_bare():
-    # A supported model with no usable options serializes to bare supported —
-    # no fabricated ladder.
-    assert reasoning_capability_block(supported=True, reasoning_options=None) == {"supported": True}
 
 
 # ---------------------------------------------------------------------------

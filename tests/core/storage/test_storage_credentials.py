@@ -172,6 +172,41 @@ def test_set_data_dir_credential_replaces_existing_key_and_preserves_other_lines
     )
 
 
+@pytest.mark.parametrize(
+    "value",
+    [
+        '"literal-secret"',
+        "'literal-secret'",
+        '"leading-quote',
+        'trailing-quote"',
+        "'leading-quote",
+        "trailing-quote'",
+        " secret with surrounding whitespace \t",
+        ' "mixed\'quotes" ',
+        r"literal\n\t\path=${NO_EXPANSION}",
+        "first=second#literal",
+        *[f"first{separator}SECOND_KEY=second" for separator in "\v\f\x1c\x1d\x1e\x85\u2028\u2029"],
+    ],
+)
+def test_credentials_round_trip_literal_values_through_other_mutations(
+    tmp_path: Path, value: str
+) -> None:
+    storage = StorageManager(tmp_path)
+    env_path = tmp_path / ".env"
+    env_path.write_text("EXISTING_KEY=retained\n", encoding="utf-8")
+
+    storage.set_data_dir_credential("LITERAL_KEY", value)
+    storage.set_data_dir_credential("OTHER_KEY", "temporary")
+    assert storage.remove_data_dir_credential("OTHER_KEY") is True
+
+    assert storage.load_data_dir_credentials() == {
+        "EXISTING_KEY": "retained",
+        "LITERAL_KEY": value,
+    }
+    assert storage.remove_data_dir_credential("LITERAL_KEY") is True
+    assert storage.load_data_dir_credentials() == {"EXISTING_KEY": "retained"}
+
+
 def test_concurrent_credential_sets_preserve_both_updates(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

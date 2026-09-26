@@ -825,9 +825,11 @@ def copy_entries(
     end interrupted. Returns the new entry keys.
     """
     now = utc_now_timestamp()
+    columns = _table_columns(connection, "entries")
+    column_sql = {column: '"' + column.replace('"', '""') + '"' for column in columns}
     rows = connection.execute(
-        "SELECT e.entry_key, e.seq, e.role, e.entry_id, e.created_at, e.run_key, e.model, "
-        f"e.searchable FROM entries AS e WHERE {_store_lineage.range_predicate()} ORDER BY e.seq",
+        f"SELECT {', '.join(f'e.{column_sql[column]}' for column in columns)} FROM entries AS e "
+        f"WHERE {_store_lineage.range_predicate()} ORDER BY e.seq",
         _store_lineage.range_params(view_range),
     ).fetchall()
     run_map = {
@@ -835,20 +837,17 @@ def copy_entries(
         for run_key in sorted({int(row["run_key"]) for row in rows if row["run_key"] is not None})
     }
     entry_map: dict[int, int] = {}
+    copied_columns = [column for column in columns if column != "entry_key"]
     for row in rows:
+        replaced = {
+            "session_key": target_key,
+            "run_key": None if row["run_key"] is None else run_map[int(row["run_key"])],
+            "superseded_at_seq": None,
+        }
         cursor = connection.execute(
-            "INSERT INTO entries (session_key, seq, role, entry_id, created_at, run_key, model, "
-            "searchable) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                target_key,
-                row["seq"],
-                row["role"],
-                row["entry_id"],
-                row["created_at"],
-                None if row["run_key"] is None else run_map[int(row["run_key"])],
-                row["model"],
-                row["searchable"],
-            ),
+            f"INSERT INTO entries ({', '.join(column_sql[column] for column in copied_columns)}) "
+            f"VALUES ({', '.join('?' for _ in copied_columns)})",
+            tuple(replaced.get(column, row[column]) for column in copied_columns),
         )
         assert cursor.lastrowid is not None
         entry_map[int(row["entry_key"])] = int(cursor.lastrowid)
@@ -897,9 +896,14 @@ def _copy_run(connection: sqlite3.Connection, run_key: int, target_key: int, now
     )
     assert cursor.lastrowid is not None
     copied = int(cursor.lastrowid)
+    path_columns = ", ".join(
+        '"' + column.replace('"', '""') + '"'
+        for column in _table_columns(connection, "run_change_paths")
+        if column != "run_key"
+    )
     connection.execute(
-        "INSERT INTO run_change_paths (run_key, ordinal, path) "
-        "SELECT ?, ordinal, path FROM run_change_paths WHERE run_key = ?",
+        f"INSERT INTO run_change_paths (run_key, {path_columns}) "
+        f"SELECT ?, {path_columns} FROM run_change_paths WHERE run_key = ?",
         (copied, run_key),
     )
     return copied

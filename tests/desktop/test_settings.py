@@ -111,19 +111,16 @@ def test_read_settings_returns_empty_for_non_object_json(
     assert desktop_settings.read_settings(settings_file) == {}
 
 
-def test_write_settings_creates_config_dir_and_round_trips(tmp_path: Path) -> None:
+def test_write_servers_creates_config_dir_and_round_trips(tmp_path: Path) -> None:
     settings_file = tmp_path / "missing-dir" / "settings.json"
 
-    desktop_settings.write_settings({"servers": [], "last_used": None}, settings_file)
+    desktop_settings.write_servers([], settings_file)
 
     assert settings_file.exists()
-    assert json.loads(settings_file.read_text(encoding="utf-8")) == {
-        "servers": [],
-        "last_used": None,
-    }
+    assert json.loads(settings_file.read_text(encoding="utf-8")) == {"servers": []}
 
 
-def test_write_settings_retries_transient_replace_errors(
+def test_write_servers_retries_transient_replace_errors(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -142,7 +139,7 @@ def test_write_settings_retries_transient_replace_errors(
     monkeypatch.setattr(Path, "replace", flaky_replace)
     monkeypatch.setattr(desktop_settings.time, "sleep", retry_delays.append)
 
-    desktop_settings.write_settings({"servers": []}, settings_file)
+    desktop_settings.write_servers([], settings_file)
 
     assert replace_attempts == desktop_settings._IO_RETRY_ATTEMPTS
     assert retry_delays == pytest.approx([0.05, 0.1])
@@ -151,7 +148,7 @@ def test_write_settings_retries_transient_replace_errors(
 
 
 @pytest.mark.parametrize("error_type", [PermissionError, OSError])
-def test_write_settings_raises_and_logs_persistent_write_errors(
+def test_write_servers_raises_and_logs_persistent_write_errors(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
@@ -173,7 +170,7 @@ def test_write_settings_raises_and_logs_persistent_write_errors(
         caplog.at_level(logging.ERROR, logger="vbot.desktop.settings"),
         pytest.raises(error_type, match="settings file remains locked"),
     ):
-        desktop_settings.write_settings({"servers": []}, settings_file)
+        desktop_settings.write_servers([], settings_file)
 
     assert replace_attempts == desktop_settings._IO_RETRY_ATTEMPTS
     error_records = [

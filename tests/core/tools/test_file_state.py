@@ -14,7 +14,6 @@ from core.tools.file_state import (
     FileReadState,
     StaleReason,
     atomic_write_bytes,
-    stale_failure_text,
 )
 
 
@@ -107,16 +106,6 @@ def test_eviction_caps_tracked_files(tmp_path: Path, monkeypatch: pytest.MonkeyP
     assert registry.check_stale("session-1", files[0]) is StaleReason.NEVER_READ
     assert registry.check_stale("session-1", files[1]) is None
     assert registry.check_stale("session-1", files[2]) is None
-
-
-def test_stale_failure_text_maps_reason_to_code() -> None:
-    never_code, never_message = stale_failure_text(StaleReason.NEVER_READ, Path("a.txt"))
-    assert never_code == "file_not_read"
-    assert "a.txt" in never_message
-
-    modified_code, modified_message = stale_failure_text(StaleReason.MODIFIED, Path("a.txt"))
-    assert modified_code == "file_modified_since_read"
-    assert "a.txt" in modified_message
 
 
 def test_path_lock_serializes_same_path(tmp_path: Path) -> None:

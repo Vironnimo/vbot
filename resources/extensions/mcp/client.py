@@ -175,6 +175,8 @@ class ConnectionRunner:
         self.catalog: dict[str, Any] = {}
         self.context: ToolContext | None = None
         self._queue: asyncio.Queue[Invocation | None] = asyncio.Queue(CONNECTION_QUEUE_LIMIT)
+        self._queue_space = asyncio.Event()
+        self._queue_space.set()
         self._task: asyncio.Task[None] | None = None
         self._active: asyncio.Task[dict[str, Any]] | None = None
         self._ready = asyncio.Event()
@@ -202,6 +204,8 @@ class ConnectionRunner:
 
     async def close(self) -> None:
         self._closing = True
+        self._ready.set()
+        self._reject_queued()
         self.inputs.cancel_connection(self.id)
         if self._active is not None:
             self._active.cancel()
@@ -220,6 +224,16 @@ class ConnectionRunner:
                     self.id,
                 )
         self.state = "disconnected"
+
+    def _reject_queued(self) -> None:
+        """Release unsent calls even when SDK teardown cannot finish."""
+        self._queue_space.set()
+        while not self._queue.empty():
+            invocation = self._queue.get_nowait()
+            if invocation is not None and not invocation.result.done():
+                invocation.result.set_exception(
+                    InvocationNotSentError(self.error or "MCP connection closed")
+                )
 
     def status(self) -> dict[str, Any]:
         return {
@@ -249,11 +263,22 @@ class ConnectionRunner:
             raise InvocationNotSentError("MCP connection is closing")
         if self._task is None or self._task.done():
             self.start()
+        owner = self._task
         await self._ready.wait()
-        if self.state != "connected":
-            raise InvocationNotSentError(self.error or "MCP connection did not become ready")
         result: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
-        await self._queue.put(Invocation(operation, arguments, context, result))
+        while True:
+            if self._closing or self._task is not owner or owner is None or owner.done():
+                raise InvocationNotSentError(self.error or "MCP connection closed")
+            if self.state != "connected":
+                raise InvocationNotSentError(self.error or "MCP connection did not become ready")
+            try:
+                # Admission and insertion must be atomic: a blocked Queue.put
+                # could resume only after its connection's final drain.
+                self._queue.put_nowait(Invocation(operation, arguments, context, result))
+                break
+            except asyncio.QueueFull:
+                self._queue_space.clear()
+                await self._queue_space.wait()
         return await result
 
     async def _run(self) -> None:
@@ -301,12 +326,7 @@ class ConnectionRunner:
         finally:
             self.client = None
             self._ready.set()
-            while not self._queue.empty():
-                invocation = self._queue.get_nowait()
-                if invocation is not None and not invocation.result.done():
-                    invocation.result.set_exception(
-                        InvocationNotSentError(self.error or "MCP connection closed")
-                    )
+            self._reject_queued()
 
     async def _transport(self, stack: AsyncExitStack) -> Any:
         if self.config["transport"] == "stdio":
@@ -384,6 +404,7 @@ class ConnectionRunner:
     async def _serve(self) -> None:
         while not self._closing:
             invocation = await self._queue.get()
+            self._queue_space.set()
             if invocation is None:
                 return
             if invocation.result.cancelled():

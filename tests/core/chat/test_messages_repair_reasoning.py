@@ -1,7 +1,7 @@
 """Dangling tool-result repair and reasoning replay shaping tests."""
 
 from core.providers.reasoning import REASONING_REPLAY_CURRENT_RUN
-from tests.core.chat.chat_loop_support import build_chat_loop
+from tests.core.chat.chat_loop_support import build_chat_loop, build_request_messages
 from tests.core.sessions.history_fixtures import history_revision
 
 from .messages_test_support import (
@@ -170,7 +170,7 @@ class TestRepairDanglingToolCalls:
         # Act: build the compacted request history through the same path the
         # chat loop uses (which calls _embed_notes_into_request internally).
         request_messages = asyncio.run(
-            build_chat_loop(runtime)._requests._build_request_messages(agent, session)
+            build_request_messages(build_chat_loop(runtime), agent, session)
         )
 
         # Assert: dangling tool call is answered with a synthesized failure.
@@ -203,7 +203,7 @@ class TestRepairDanglingToolCalls:
         session.append(ChatMessage.user("Fresh question", timestamp=FIXED_TIMESTAMP))
 
         request_messages = asyncio.run(
-            build_chat_loop(runtime)._requests._build_request_messages(agent, session)
+            build_request_messages(build_chat_loop(runtime), agent, session)
         )
 
         summary_entries = [
@@ -301,7 +301,7 @@ class TestRepairDanglingToolCalls:
 
         # Act: run the build path that synthesizes the missing tool result.
         request_messages = asyncio.run(
-            build_chat_loop(runtime)._requests._build_request_messages(agent, session)
+            build_request_messages(build_chat_loop(runtime), agent, session)
         )
         history_after = session.load()
 

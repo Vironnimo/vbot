@@ -29,7 +29,6 @@ from cli.application.state import (
 )
 from cli.autostart_management import (
     DEFAULT_TASK_NAME,
-    CommandRun,
     Runner,
     _default_runner,
     _windows_task_command,
@@ -339,11 +338,6 @@ def uninstall(
                 "data_removed": removed_data,
                 "data_preserved": not remove_data,
             }
-
-
-def command_runner(command: list[str]) -> CommandRun:
-    """Testable adapter for transition checks that need the existing runner record."""
-    return _default_runner(command)
 
 
 @dataclass(frozen=True)

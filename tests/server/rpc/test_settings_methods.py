@@ -9,6 +9,7 @@ returning 0.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from dataclasses import replace
 from pathlib import Path
@@ -96,6 +97,33 @@ async def test_settings_change_accepts_raw_null_extension_disabled_set(
 
     assert response["ok"] is True, response
     assert state.runtime.storage.load_settings()["keep_awake"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["settings.patch", "settings.update"])
+async def test_reset_last_default_preserves_unknown_fields_through_rpc(
+    tmp_path: Path, method: str
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.storage = StorageManager(tmp_path / "settings-data")
+    storage = state.runtime.storage
+    storage.save_settings(
+        {"defaults": {"agent": {"temperature": 0.2, "future_option": True}, "future_section": 1}}
+    )
+    params = (
+        {"operations": [{"op": "unset", "path": "defaults.agent.temperature"}]}
+        if method == "settings.patch"
+        else {"defaults": {"agent": {"temperature": None}}}
+    )
+
+    response = await dispatch_rpc(state, {"method": method, "params": params})
+
+    assert response["ok"] is True, response
+    assert storage.load_defaults() == {}
+    assert json.loads(storage.settings_path.read_text(encoding="utf-8"))["defaults"] == {
+        "agent": {"future_option": True},
+        "future_section": 1,
+    }
 
 
 @pytest.mark.asyncio

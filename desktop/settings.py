@@ -152,19 +152,6 @@ def _read_settings_unlocked(resolved_path: Path) -> dict[str, Any]:
     return data
 
 
-def write_settings(settings: dict[str, Any], path: Path | None = None) -> None:
-    """Persist Desktop settings with a same-directory atomic replace.
-
-    The config directory is created on demand. The write goes to a temporary
-    file in the same directory and is then atomically renamed into place, so a
-    reader never observes a half-written file.
-    """
-
-    resolved_path = _resolve_settings_path(path)
-    with _settings_lock(resolved_path):
-        _write_settings_unlocked(settings, resolved_path)
-
-
 def _write_settings_unlocked(settings: dict[str, Any], resolved_path: Path) -> None:
     """Write a resolved settings path while its caller owns the file lock."""
 

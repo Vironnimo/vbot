@@ -233,6 +233,35 @@ def test_unset_removes_override_and_restores_default() -> None:
     assert build_effective_settings(updated)["web_search"]["provider"] == "brave"
 
 
+def test_unset_prunes_empty_nested_task_options() -> None:
+    original = {
+        "model_tasks": {
+            "text_to_speech": {
+                "target": "openai/tts-1",
+                "options": {"audio": {"voice": "echo"}},
+            }
+        }
+    }
+
+    updated, _changed = apply_settings_patch(
+        original,
+        parse_patch_operations(
+            [{"op": "unset", "path": 'model_tasks["text_to_speech"].options["audio"]["voice"]'}]
+        ),
+    )
+
+    assert updated == {"model_tasks": {"text_to_speech": {"target": "openai/tts-1"}}}
+
+
+def test_unset_prunes_empty_extension_config() -> None:
+    updated, _changed = apply_settings_patch(
+        {"extensions": {"config": {"example": {"field": True}}}},
+        parse_patch_operations([{"op": "unset", "path": 'extensions.config["example"]["field"]'}]),
+    )
+
+    assert updated == {}
+
+
 def test_compaction_variant_can_be_changed_with_one_atomic_patch() -> None:
     operations = parse_patch_operations(
         [

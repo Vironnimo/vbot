@@ -14,6 +14,7 @@ from core.settings import (
     DEFAULT_APPEARANCE_CHAT_WORKING_MODE,
     DEFAULT_APPEARANCE_LANGUAGE,
 )
+from core.settings.paths import SettingsPathError, parse_patch_operations
 from core.storage import (
     StorageError,
     StorageManager,
@@ -85,6 +86,198 @@ def test_settings_updates_keep_unknown_fields_on_disk_at_every_modeled_level(
     assert local["models"]["m"]["future_model_field"] == 2
 
 
+@pytest.mark.parametrize("mutation", ["patch", "section"])
+def test_reset_last_agent_default_keeps_unknown_siblings(tmp_path: Path, mutation: str) -> None:
+    storage = StorageManager(tmp_path)
+    storage.save_settings(
+        {
+            "defaults": {
+                "agent": {"temperature": 0.2, "future_agent_option": {"enabled": True}},
+                "future_defaults_option": "retained",
+            }
+        }
+    )
+
+    if mutation == "patch":
+        operations = parse_patch_operations([{"op": "unset", "path": "defaults.agent.temperature"}])
+        storage.patch_settings(operations)
+    else:
+        storage.update_settings_sections({"defaults": {"agent": {"temperature": None}}})
+
+    assert storage.load_defaults() == {}
+    assert json.loads(storage.settings_path.read_text(encoding="utf-8"))["defaults"] == {
+        "agent": {"future_agent_option": {"enabled": True}},
+        "future_defaults_option": "retained",
+    }
+
+
+@pytest.mark.parametrize("mutation", ["patch", "section"])
+def test_remove_last_task_binding_keeps_unknown_siblings_only(
+    tmp_path: Path, mutation: str
+) -> None:
+    storage = StorageManager(tmp_path)
+    storage.save_settings(
+        {
+            "model_tasks": {
+                "text_to_speech": {"target": "openai/tts-1", "future_option": True},
+                "future_task": {"target": "future/target"},
+            }
+        }
+    )
+
+    if mutation == "patch":
+        operations = parse_patch_operations(
+            [{"op": "unset", "path": 'model_tasks["text_to_speech"].target'}]
+        )
+        storage.patch_settings(operations)
+    else:
+        storage.update_model_task_settings({"text_to_speech": {"target": ""}})
+
+    assert storage.load_model_task_settings() == {}
+    assert json.loads(storage.settings_path.read_text(encoding="utf-8"))["model_tasks"] == {
+        "future_task": {"target": "future/target"}
+    }
+
+
+def test_reset_missing_settings_does_not_create_empty_containers(tmp_path: Path) -> None:
+    storage = StorageManager(tmp_path)
+
+    storage.update_settings_sections({"defaults": {"agent": {"temperature": None}}})
+    storage.update_model_task_settings({"text_to_speech": {"target": ""}})
+
+    assert storage.load_settings() == {}
+
+
+@pytest.mark.parametrize("reset", ["last_field", "whole_policy"])
+@pytest.mark.parametrize("unknown_field", [False, True])
+def test_reset_model_routing_override_prunes_only_after_preserving_unknown_fields(
+    tmp_path: Path, reset: str, unknown_field: bool
+) -> None:
+    storage = StorageManager(tmp_path)
+    default_policy = {"mode": "allowed", "providers": ["approved"], "allow_fallbacks": False}
+    storage.save_settings(
+        {
+            "providers": {
+                "openrouter": {
+                    "routing": {
+                        "default": default_policy,
+                        "models": {
+                            "test/model": {
+                                "mode": "automatic",
+                                **({"future_option": "retained"} if unknown_field else {}),
+                            },
+                            "future/model": {"future_option": "retained"},
+                        },
+                        "future_routing": True,
+                    },
+                    "future_openrouter": True,
+                },
+                "future_provider": True,
+            }
+        }
+    )
+    path = 'providers.openrouter.routing.models["test/model"]'
+    if reset == "last_field":
+        path += ".mode"
+    operations = parse_patch_operations([{"op": "unset", "path": path}])
+
+    _previous, candidate, changed = storage.patch_settings(operations)
+    assert changed == (path,)
+
+    routing = storage.load_openrouter_routing_settings()
+    if reset == "last_field" and unknown_field:
+        assert candidate["providers"]["openrouter"]["routing"]["models"]["test/model"] == {}
+        assert routing["models"]["test/model"] == {
+            "mode": "automatic",
+            "providers": [],
+            "blocked": [],
+            "allow_fallbacks": True,
+        }
+    else:
+        assert "test/model" not in routing["models"]
+    assert routing["default"] == {**default_policy, "blocked": []}
+    on_disk = json.loads(storage.settings_path.read_text(encoding="utf-8"))["providers"]
+    assert on_disk["future_provider"] is True
+    assert on_disk["openrouter"]["future_openrouter"] is True
+    assert on_disk["openrouter"]["routing"]["future_routing"] is True
+    expected = {"future/model": {"future_option": "retained"}}
+    if reset == "last_field" and unknown_field:
+        expected["test/model"] = {"future_option": "retained"}
+    assert on_disk["openrouter"]["routing"]["models"] == expected
+
+
+def test_empty_and_unknown_only_model_policies_keep_automatic_meaning(tmp_path: Path) -> None:
+    storage = StorageManager(tmp_path)
+    storage.save_settings(
+        {
+            "providers": {
+                "openrouter": {
+                    "routing": {
+                        "default": {
+                            "mode": "allowed",
+                            "providers": ["approved"],
+                            "allow_fallbacks": False,
+                        },
+                        "models": {
+                            "empty/model": {},
+                            "future/model": {"future_option": "retained"},
+                            "explicit/model": {"mode": "automatic"},
+                        },
+                    }
+                }
+            }
+        }
+    )
+    operations = parse_patch_operations(
+        [{"op": "unset", "path": 'providers.openrouter.routing.models["future/model"].mode'}]
+    )
+
+    previous, candidate, changed = storage.patch_settings(operations)
+    assert changed == ()
+    assert candidate == previous
+    storage.set_provider_connection_enabled("openrouter:api-key", True)
+
+    routing = storage.load_openrouter_routing_settings()
+    automatic = {"mode": "automatic", "providers": [], "blocked": [], "allow_fallbacks": True}
+    assert routing["models"] == dict.fromkeys(
+        ("empty/model", "future/model", "explicit/model"), automatic
+    )
+    on_disk = json.loads(storage.settings_path.read_text(encoding="utf-8"))
+    assert on_disk["providers"]["openrouter"]["routing"]["models"]["future/model"] == {
+        **automatic,
+        "future_option": "retained",
+    }
+
+
+def test_patch_runtime_validation_sees_only_known_fields_and_precedes_write(tmp_path: Path) -> None:
+    storage = StorageManager(tmp_path)
+    storage.save_settings({"web_search": {"provider": "searxng", "future_option": "retained"}})
+    original = storage.settings_path.read_bytes()
+    operations = parse_patch_operations([{"op": "unset", "path": "web_search.provider"}])
+
+    def reject(previous: dict[str, Any], candidate: dict[str, Any]) -> None:
+        assert previous == {"web_search": {"provider": "searxng"}}
+        assert candidate == {"web_search": {}}
+        raise ValueError("runtime validation failed")
+
+    with pytest.raises(ValueError, match="runtime validation failed"):
+        storage.patch_settings(operations, validate_candidate=reject)
+    assert storage.settings_path.read_bytes() == original
+
+
+def test_patch_still_rejects_new_unknown_fields(tmp_path: Path) -> None:
+    storage = StorageManager(tmp_path)
+    storage.save_settings({"providers": {"future_option": "retained"}})
+    original = storage.settings_path.read_bytes()
+    operations = parse_patch_operations(
+        [{"op": "set", "path": "providers.openrouter.routing.default", "value": {"typo": True}}]
+    )
+
+    with pytest.raises(SettingsPathError, match="unsupported"):
+        storage.patch_settings(operations)
+    assert storage.settings_path.read_bytes() == original
+
+
 def test_settings_written_by_a_newer_vbot_are_not_used_or_overwritten(tmp_path: Path) -> None:
     storage = StorageManager(tmp_path)
     storage.ensure_directories()
@@ -96,6 +289,10 @@ def test_settings_written_by_a_newer_vbot_are_not_used_or_overwritten(tmp_path: 
         storage.update_settings(lambda settings: settings.update({"keep_awake": False}))
     with pytest.raises(StorageError, match="Refusing to overwrite Settings file"):
         storage.save_settings({"keep_awake": False})
+    with pytest.raises(StorageError, match="written by a newer vBot"):
+        storage.patch_settings(
+            parse_patch_operations([{"op": "unset", "path": "server.keep_awake"}])
+        )
     assert storage.settings_path.read_text(encoding="utf-8") == original
 
 
@@ -697,7 +894,7 @@ def test_model_task_empty_target_removes_binding(tmp_path: Path) -> None:
     updated = storage.update_model_task_settings({"speech_to_text": {"target": ""}})
 
     assert updated == {}
-    assert "model_tasks" not in storage.load_settings()
+    assert storage.load_settings()["model_tasks"] == {}
 
 
 @pytest.mark.parametrize("change_target", [False, True])

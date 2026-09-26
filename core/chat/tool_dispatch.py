@@ -236,12 +236,26 @@ class _EmittingToolRegistry(ToolRegistry):
             return ""
         return str(resolver(name))
 
-    def validate_result(self, name: str, result: Any) -> JsonObject:
+    def validate_result(
+        self, name: str, result: Any, *, contract: ToolContract | None = None
+    ) -> JsonObject:
         """Validate through the wrapped canonical registry."""
+        if contract is not None:
+            return super().validate_result(name, result, contract=contract)
         validator = getattr(self._registry, "validate_result", None)
         if not callable(validator):
             return _validated_tool_result(name, result)
         return cast(JsonObject, validator(name, result))
+
+    def _result_contract(self, name: str) -> ToolContract | None:
+        resolver = getattr(self._registry, "get", None)
+        if not callable(resolver):
+            return None
+        try:
+            contract = getattr(resolver(name), "contract", None)
+        except ToolNotFoundError:
+            return None
+        return contract if isinstance(contract, ToolContract) else None
 
     async def dispatch(
         self,
@@ -366,6 +380,25 @@ class _EmittingToolRegistry(ToolRegistry):
             # tool runs with and that tool_result hooks observe.
             effective_arguments = arguments
             result: JsonObject | None = None
+            result_contract: ToolContract | None = None
+
+            def validate_replacement(extension_name: str, candidate: Any) -> JsonObject | None:
+                nonlocal result_contract
+                # A hook replacement has no executing Tool. Retain the contract
+                # that validated the replacement only when it is accepted.
+                contract = self._result_contract(context.tool_name)
+                validated = _validated_extension_tool_hook_result(
+                    registry=self,
+                    tool_name=context.tool_name,
+                    extension_name=extension_name,
+                    hook_name="tool_call",
+                    result=candidate,
+                    contract=contract,
+                )
+                if validated is not None:
+                    result_contract = contract
+                return validated
+
             if self._extension_registry is not None:
                 async with self._extension_hook_lock:
                     decision = await self._extension_registry.dispatch_tool_call(
@@ -373,15 +406,7 @@ class _EmittingToolRegistry(ToolRegistry):
                         tool_name=context.tool_name,
                         tool_call_id=context.tool_call_id,
                         input=arguments,
-                        validator=lambda extension_name, candidate: (
-                            _validated_extension_tool_hook_result(
-                                registry=self,
-                                tool_name=context.tool_name,
-                                extension_name=extension_name,
-                                hook_name="tool_call",
-                                result=candidate,
-                            )
-                        ),
+                        validator=validate_replacement,
                     )
 
             if self._extension_registry is not None:
@@ -427,6 +452,7 @@ class _EmittingToolRegistry(ToolRegistry):
                 result = await self._dispatch_with_failure_envelope(
                     context, effective_arguments, allowed_tools
                 )
+                result_contract = context.result_contract
 
             if self._extension_registry is not None:
                 async with self._extension_hook_lock:
@@ -443,6 +469,7 @@ class _EmittingToolRegistry(ToolRegistry):
                                 extension_name=extension_name,
                                 hook_name="tool_result",
                                 result=candidate,
+                                contract=result_contract,
                             )
                         ),
                     )
@@ -559,7 +586,7 @@ class _EmittingToolRegistry(ToolRegistry):
                 # A Model-invented Tool name must not create a metric of its own.
                 timer.discard()
                 raise
-            return self.validate_result(context.tool_name, result)
+            return self.validate_result(context.tool_name, result, contract=context.result_contract)
 
 
 def _failure_envelope(context: ToolContext, error: Exception) -> JsonObject:
@@ -872,11 +899,12 @@ def _validated_extension_tool_hook_result(
     extension_name: str,
     hook_name: str,
     result: Any,
+    contract: ToolContract | None = None,
 ) -> JsonObject | None:
     try:
         validator = getattr(registry, "validate_result", None)
         validated = (
-            validator(tool_name, result)
+            validator(tool_name, result, **({"contract": contract} if contract is not None else {}))
             if callable(validator)
             else _validated_tool_result(tool_name, result)
         )

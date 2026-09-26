@@ -10,7 +10,6 @@ from core.chat.messages import ChatMessage
 from core.chat.usage import (
     RequestContextUsage,
     aggregate_session_usage,
-    build_model_step_context_usage,
     latest_session_context_usage,
 )
 from core.utils.tokens import estimate_request_input_tokens
@@ -162,78 +161,6 @@ def test_empty_history_yields_zero_totals() -> None:
     assert totals["estimated_turns"] == 0
     assert totals["cache_turns"] == 0
     assert totals["input_tokens"] == 0
-
-
-def test_context_usage_anchors_provider_measurement_and_estimates_only_tool_delta() -> None:
-    assistant = {
-        "role": "assistant",
-        "reasoning": "short",
-        "reasoning_meta": {
-            "response_output": [{"type": "reasoning", "encrypted_content": "x" * 200_000}],
-            "reasoning_items": [{"type": "reasoning", "encrypted_content": "x" * 200_000}],
-            "encrypted_content": ["x" * 200_000],
-        },
-        "tool_calls": [{"id": "call-1", "name": "read", "arguments": {"path": "a"}}],
-    }
-    tool_result = {
-        "role": "tool",
-        "tool_call_id": "call-1",
-        "name": "read",
-        "content": "result payload",
-    }
-    delta_tokens, _ = estimate_request_input_tokens([tool_result])
-
-    context_usage = build_model_step_context_usage(
-        {"input_tokens": 154_731, "output_tokens": 243},
-        [{"role": "system", "content": "large request"}, assistant, tool_result],
-        estimated_delta_messages=[tool_result],
-    )
-
-    assert context_usage == {
-        "tokens": 154_731 + 243 + delta_tokens,
-        "estimated": True,
-        "provider_input_tokens": 154_731,
-        "provider_output_tokens": 243,
-        "estimated_delta_tokens": delta_tokens,
-    }
-
-
-def test_context_usage_falls_back_to_complete_request_without_provider_measurement() -> None:
-    current_request = [
-        {"role": "system", "content": "rules"},
-        {"role": "user", "content": "hello"},
-        {"role": "assistant", "content": "world"},
-    ]
-    context_usage = build_model_step_context_usage(
-        {
-            "input_tokens": 10,
-            "output_tokens": 2,
-            "input_tokens_estimated": True,
-            "output_tokens_estimated": True,
-            "estimated": True,
-        },
-        current_request,
-    )
-
-    assert context_usage == {"tokens": 12, "estimated": True}
-
-
-def test_context_usage_preserves_provider_output_with_estimated_input() -> None:
-    context_usage = build_model_step_context_usage(
-        {
-            "input_tokens": 134_547,
-            "input_tokens_estimated": True,
-            "output_tokens": 2572,
-            "estimated": True,
-        },
-        [{"role": "user", "content": "request"}],
-    )
-
-    assert context_usage == {
-        "tokens": 137_119,
-        "estimated": True,
-        "provider_output_tokens": 2572,
-    }
 
 
 def test_latest_session_context_usage_restores_saved_snapshot_plus_new_messages() -> None:

@@ -348,8 +348,10 @@ class ToolRegistry:
         """Return the deterministic canonical schema fingerprint for a Tool."""
         return self.get(name).contract.schema_fingerprint
 
-    def validate_result(self, name: str, result: Any) -> JsonObject:
-        """Validate a Tool result envelope and its successful data contract."""
+    def validate_result(
+        self, name: str, result: Any, *, contract: ToolContract | None = None
+    ) -> JsonObject:
+        """Validate against the executing Tool's contract when a call retained it."""
         if not isinstance(result, dict):
             raise InvalidToolResultError(f"Tool handler must return a JSON object: {name}")
         if not is_tool_result_envelope(result):
@@ -358,7 +360,7 @@ class ToolRegistry:
             )
         if result["ok"]:
             try:
-                self.get(name).contract.validate_success_data(result["data"])
+                (contract or self.get(name).contract).validate_success_data(result["data"])
             except ValueError as error:
                 raise InvalidToolResultError(
                     f"Tool result violates its contract: {name}: {error}"
@@ -510,6 +512,7 @@ class ToolRegistry:
             tool = self.get(context.tool_name)
         except ToolNotFoundError:
             raise ToolNotFoundError(self._unknown_tool_message(context, allowed_tools)) from None
+        context._retain_result_contract(tool.contract)
         if tool.session_scoped and context.tool_name not in context.session_tool_grants:
             raise SessionToolUnavailableError(f"Session tool unavailable: {context.tool_name}")
         if (
@@ -555,7 +558,7 @@ class ToolRegistry:
             )
         if inspect.isawaitable(result):
             result = await result
-        return self.validate_result(context.tool_name, result)
+        return self.validate_result(context.tool_name, result, contract=tool.contract)
 
     def _unknown_tool_message(
         self, context: ToolContext, allowed_tools: Sequence[str] | None

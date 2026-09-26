@@ -9,6 +9,7 @@ from copy import deepcopy
 from difflib import get_close_matches
 from typing import Any
 
+from core.json_documents import OPAQUE, JsonShape, preserve_unknown_fields
 from core.model_tasks.constants import SUPPORTED_TASK_TYPES
 from core.settings._path_definitions import (
     _DEFINITIONS,
@@ -53,7 +54,7 @@ from core.settings.normalizers import (
 from core.settings.settings import (
     effective_timezone_name,
 )
-from core.settings.validation import PORT_SETTING_KEYS, validate_settings_data
+from core.settings.validation import PORT_SETTING_KEYS, SETTINGS_SHAPE, validate_settings_data
 from core.utils.errors import StorageError
 
 _IDENTIFIER_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_-]*")
@@ -233,11 +234,19 @@ def parse_patch_operations(raw_operations: Any) -> list[SettingsPatchOperation]:
 def apply_settings_patch(
     raw_settings: JsonObject,
     operations: list[SettingsPatchOperation],
+    *,
+    preservation_source: JsonObject | None = None,
 ) -> tuple[JsonObject, tuple[str, ...]]:
-    """Return a validated candidate settings mapping for an atomic patch."""
+    """Return a validated candidate for an atomic patch over known Settings.
+
+    ``preservation_source`` is the validated document snapshot before unknown
+    fields were stripped. It only decides whether an emptied ancestor still
+    owns unknown fields; new values retain the usual strict validation.
+    """
 
     original = deepcopy(raw_settings)
     candidate = deepcopy(raw_settings)
+    source = original if preservation_source is None else preservation_source
     _prepare_structured_patch(candidate, operations)
     changed_paths: list[str] = []
     for operation in operations:
@@ -277,9 +286,9 @@ def apply_settings_patch(
             operation.resolved.path.values[0] == "model_tasks"
             and operation.resolved.path.values[-1] == "target"
         ):
-            _delete_nested(candidate, raw_path[:-1])
+            _delete_nested(candidate, raw_path[:-1], preservation_source=source)
         else:
-            _delete_nested(candidate, raw_path)
+            _delete_nested(candidate, raw_path, preservation_source=source)
         if before is not _MISSING:
             changed_paths.append(operation.resolved.canonical_path)
 
@@ -603,20 +612,36 @@ def _set_nested(root: JsonObject, path: tuple[str, ...], value: Any) -> None:
     current[path[-1]] = deepcopy(value)
 
 
-def _delete_nested(root: JsonObject, path: tuple[str, ...]) -> None:
-    parents: list[tuple[JsonObject, str]] = []
+def _delete_nested(
+    root: JsonObject, path: tuple[str, ...], *, preservation_source: JsonObject
+) -> None:
+    # Prune only genuinely empty ancestors. The writer restores unknown fields
+    # from this same snapshot, so an apparently empty modeled object may still
+    # own data. Explicitly removing an object still removes its unknown fields.
     current = root
+    previous: Any = preservation_source
+    shape = SETTINGS_SHAPE
+    ancestors: list[tuple[JsonObject, str, Any, JsonShape]] = []
     for segment in path[:-1]:
         child = current.get(segment)
         if not isinstance(child, dict):
             return
-        parents.append((current, segment))
+        if shape.kind == "object":
+            shape = shape.nested.get(segment, OPAQUE)
+        elif shape.kind == "map":
+            shape = shape.known.get(segment, shape.values or OPAQUE)
+        else:
+            shape = OPAQUE
+        previous = previous.get(segment) if isinstance(previous, dict) else None
+        ancestors.append((current, segment, previous, shape))
         current = child
-    current.pop(path[-1], None)
-    for parent, segment in reversed(parents):
-        child = parent.get(segment)
-        if isinstance(child, dict) and not child:
-            parent.pop(segment, None)
+    if path[-1] not in current:
+        return
+    del current[path[-1]]
+    for parent, segment, previous_child, child_shape in reversed(ancestors):
+        if parent[segment] or preserve_unknown_fields(previous_child, parent[segment], child_shape):
+            break
+        del parent[segment]
 
 
 def _format_input_path(path: SettingsPath) -> str:

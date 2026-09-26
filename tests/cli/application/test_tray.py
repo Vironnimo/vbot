@@ -113,21 +113,54 @@ def test_update_is_disabled_while_an_operation_is_active():
 
 
 def test_callbacks_use_one_worker_and_recover_after_a_facade_exception():
-    actions = Actions(TrayState("stopped", "server"))
+    start_entered = threading.Event()
+    release_start = threading.Event()
+    logs_entered = threading.Event()
+    release_logs = threading.Event()
+    recovery_polled = threading.Event()
+    callback_threads: list[int] = []
+
+    class ControlledActions(Actions):
+        def state(self) -> TrayState:
+            if logs_entered.is_set() and release_logs.is_set():
+                recovery_polled.set()
+            return super().state()
+
+        def start_server(self) -> None:
+            callback_threads.append(threading.get_ident())
+            start_entered.set()
+            assert release_start.wait(timeout=5)
+            raise RuntimeError("test failure")
+
+        def open_logs(self) -> None:
+            callback_threads.append(threading.get_ident())
+            logs_entered.set()
+            assert release_logs.wait(timeout=5)
+
+    actions = ControlledActions(TrayState("stopped", "server"))
     controller = TrayController(actions, poll_interval=0.01)
     controller._poll_state()
     normal_status = controller.menu_items()[0].label
     controller.start()
     try:
-        actions.fail = "start_server"
         controller.invoke("start_server")
-        _wait_for_call(actions, "start_server")
-        assert controller.menu_items()[0].label != normal_status
-
-        actions.fail = None
+        assert start_entered.wait(timeout=5)
         controller.invoke("open_logs")
-        _wait_for_call(actions, "open_logs")
+        assert not logs_entered.is_set()
+
+        release_start.set()
+        assert logs_entered.wait(timeout=5)
+        # Entering the next callback proves the first exception was handled.
+        # Keep it blocked so successful recovery cannot clear the status yet.
+        assert controller.menu_items()[0].label != normal_status
+        assert callback_threads[0] == callback_threads[1] != threading.get_ident()
+
+        release_logs.set()
+        assert recovery_polled.wait(timeout=5)
+        assert controller.menu_items()[0].label == normal_status
     finally:
+        release_start.set()
+        release_logs.set()
         controller.close()
 
 
