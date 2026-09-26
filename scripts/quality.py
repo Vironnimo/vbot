@@ -80,6 +80,11 @@ PYTEST_PROGRESS_NODEID_PATTERN = re.compile(
 PYTEST_TRAILING_RESULT_PATTERN = re.compile(
     rf"\s(?:{'|'.join(PYTEST_RESULT_TOKENS)})(?:\s+\[\s*\d+%\])?$"
 )
+PYTEST_PASSED_PROGRESS_PATTERN = re.compile(
+    r"^(?:\[(?:gw\d+|\s*\d+%)\]\s+)*(?:"
+    r"PASSED\s+[^\s]+\.py::.+|"
+    r"[^\s]+\.py::.+\sPASSED(?:\s+\[\s*\d+%\])?)$"
+)
 PYTEST_PROFILE_COUNT = 25
 
 
@@ -369,7 +374,7 @@ def filter_pytest_failure_output(output: str) -> str:
             in_report = True
         if _is_pytest_progress_nodeid_line(stripped):
             continue
-        if " PASSED" in stripped and "FAILED" not in stripped and "ERROR" not in stripped:
+        if PYTEST_PASSED_PROGRESS_PATTERN.match(stripped):
             continue
         filtered_lines.append(line.rstrip())
 
