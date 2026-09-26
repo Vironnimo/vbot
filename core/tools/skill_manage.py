@@ -600,10 +600,12 @@ def _patch(
 ) -> tuple[SkillWriteResult, str]:
     file_path = call.file_path or SKILL_FILENAME
     found: list[FuzzyReplacement] = []
+    unchanged: list[bool] = []
 
     def edit(current: str) -> str:
         replacement, notes = _replace(current, call, file_path)
         found.append(replacement)
+        unchanged.append(replacement.new_content == current)
         call.notes.extend(notes)
         return replacement.new_content
 
@@ -617,6 +619,11 @@ def _patch(
         raise
     replacement = found[0]
     where = f"{file_path} of Skill '{call.name}'"
+    if unchanged[0]:
+        return result, (
+            f"{where} already reads as new_string at line {replacement.first_changed_line}; "
+            "nothing changed."
+        )
     if replacement.replacements > 1:
         return result, f"Replaced {replacement.replacements} occurrences in {where}."
     return result, f"Patched {where} at line {replacement.first_changed_line}."

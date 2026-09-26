@@ -710,6 +710,25 @@ def test_patch_applies_text_copied_with_other_line_endings_or_quotes(
     assert "“" not in body
 
 
+def test_patch_that_changes_nothing_says_so(tmp_path: Path) -> None:
+    harness, skill_file = _patch_harness(tmp_path, body="Say “hello” to users.\n")
+
+    result = harness.run(
+        {
+            "action": "patch",
+            "name": "demo",
+            "old_string": 'Say "hello" to users.',
+            "new_string": "Say “hello” to users.",
+        }
+    )
+
+    assert result["ok"] is True
+    assert result["data"]["content"] == (
+        "SKILL.md of Skill 'demo' already reads as new_string at line 9; nothing changed."
+    )
+    assert _body(skill_file) == "Say “hello” to users.\n"
+
+
 def test_patch_keeps_the_files_curly_quotes_for_a_plain_copy(tmp_path: Path) -> None:
     harness, skill_file = _patch_harness(tmp_path, body="Say “hello” to users.\n")
 

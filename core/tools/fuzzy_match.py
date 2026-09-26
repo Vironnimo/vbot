@@ -96,11 +96,13 @@ class FuzzyReplacement:
     strategy: str
     before_spans: tuple[tuple[int, int], ...]
     after_spans: tuple[tuple[int, int], ...]
-    # Only ``copy_match`` sets these: replaced lines that differed from the caller's
-    # copy as (1-based line, original text), and the caller's misspelled words its
-    # new text took the file's spelling of, as (caller's word, file's word).
+    # Only ``copy_match`` sets these: replaced and kept lines that differed from the
+    # caller's copy as (1-based line, original text or its part around the first
+    # difference), and the caller's misspelled words its new text took the file's
+    # spelling of, as (caller's word, file's word).
     differed: tuple[tuple[int, str], ...] = ()
     respelled: tuple[tuple[str, str], ...] = ()
+    kept_differed: tuple[tuple[int, str], ...] = ()
 
 
 @dataclass(frozen=True)
