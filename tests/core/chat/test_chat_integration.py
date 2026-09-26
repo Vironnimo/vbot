@@ -249,17 +249,25 @@ async def test_change_stats_stream_after_each_tool_round_and_match_terminal(
         peek_run_stats = tracker.peek_run_stats
         peek_threads: list[int] = []
 
-        def recording_peek(session_id: str) -> dict[str, object] | None:
+        def recording_peek(run_key) -> dict[str, object] | None:
             peek_threads.append(threading.get_ident())
-            return peek_run_stats(session_id)
+            return peek_run_stats(run_key)
 
         monkeypatch.setattr(tracker, "peek_run_stats", recording_peek)
+        take_run_stats = tracker.take_run_stats
+        take_threads: list[int] = []
+
+        def recording_take(run_key):
+            take_threads.append(threading.get_ident())
+            return take_run_stats(run_key)
+
+        monkeypatch.setattr(tracker, "take_run_stats", recording_take)
 
         await build_chat_loop(runtime).send("coder", "Write files", session_id="session-one")
-        # Both per-round line diffs run off the Event Loop; only the Run-end
-        # finalization peeks on it.
-        assert len(peek_threads) == 3
-        assert peek_threads.count(threading.get_ident()) == 1
+        # Live and terminal diffs run off the Event Loop; finalization computes once.
+        assert len(peek_threads) == 2
+        assert len(take_threads) == 1
+        assert threading.get_ident() not in [*peek_threads, *take_threads]
 
         messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
         run = runtime.chat_run_manager.get(str(messages[-1].run_id))

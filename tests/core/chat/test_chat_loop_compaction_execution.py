@@ -50,6 +50,7 @@ from tests.core.chat.chat_loop_support import (
     StubRuntime,
     StubStorage,
     build_chat_loop,
+    build_request_messages,
     persisted_roles,
     session_address,
 )
@@ -90,7 +91,7 @@ async def test_compaction_maybe_auto_compact_appends_checkpoint_and_rebuilds_mes
         checkpoint=checkpoint,
     )
     loop = build_chat_loop(runtime, compaction_service=cast(Any, compaction_service))
-    messages = await loop._requests._build_request_messages(agent, session)
+    messages = await build_request_messages(loop, agent, session)
     run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
     affinity_before = runtime.chat_sessions.prompt_cache_affinity_id(
         session_address("coder", session.id)
@@ -231,7 +232,7 @@ async def test_compaction_resolves_model_recommended_temperatures_for_both_targe
     )
     compaction_service = StubCompactionService(should_auto=True, checkpoint=checkpoint)
     loop = build_chat_loop(runtime, compaction_service=cast(Any, compaction_service))
-    messages = await loop._requests._build_request_messages(agent, session)
+    messages = await build_request_messages(loop, agent, session)
     run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
 
     await _maybe_auto_compact(

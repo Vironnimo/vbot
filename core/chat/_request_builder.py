@@ -43,7 +43,7 @@ from core.chat.usage import latest_session_context_usage
 from core.chat.wire_shaping import _restore_in_run_assistant_reasoning, limit_request_images
 from core.extensions import invoke_extension_handler
 from core.projects import ProjectError
-from core.prompts import BLOCK_KIND_DATA, BlockDefinition, PinnedSkillCatalog, ProjectPromptContext
+from core.prompts import BLOCK_KIND_DATA, BlockDefinition
 from core.prompts.pinned_context import stamp_prompt_files_read
 from core.providers.accounts import DEFAULT_ACCOUNT_ID, ConnectionRef, split_connection_id
 from core.providers.adapter import TOOL_RESULT_CONTENT_BLOCKS_FIELD
@@ -316,42 +316,6 @@ class RequestBuilder:
             note=SKILL_AVAILABLE_NOTE_PREFIX + "\n".join(lines),
             record_seen=SeenSkillsUpdate(baseline, tuple(new_names)),
         )
-
-    async def _build_request_messages(
-        self,
-        agent: Any,
-        session: ChatSession,
-        *,
-        replay_policy: ReasoningReplayPolicy = DEFAULT_REASONING_REPLAY_POLICY,
-        reasoning_scope_model: str | None = None,
-        input_modalities: frozenset[str] | None = None,
-        wire_media_types: frozenset[str] = frozenset(),
-        max_image_bytes: int | None = None,
-        agent_body: str = "",
-        project_context: ProjectPromptContext | None = None,
-        working_project_context: str | None = None,
-        agent_project_id: str | None = None,
-        skill_registry: SkillRegistry | None = None,
-        skill_catalog: PinnedSkillCatalog | None = None,
-    ) -> list[JsonObject]:
-        state = await self.build_request_state(
-            agent,
-            session,
-            inputs=RequestBuildInputs(
-                replay_policy=replay_policy,
-                reasoning_scope_model=reasoning_scope_model,
-                input_modalities=input_modalities,
-                wire_media_types=wire_media_types,
-                max_image_bytes=max_image_bytes,
-                agent_body=agent_body,
-                project_context=project_context,
-                working_project_context=working_project_context,
-                agent_project_id=agent_project_id,
-                skill_registry=skill_registry,
-                skill_catalog=skill_catalog,
-            ),
-        )
-        return state.messages
 
     async def build_request_state(
         self,

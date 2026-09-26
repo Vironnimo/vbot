@@ -145,50 +145,6 @@ def _context_digest(value: Any) -> str:
     ).hexdigest()
 
 
-def build_model_step_context_usage(
-    usage: Mapping[str, Any] | None,
-    current_request_messages: Sequence[Mapping[str, Any]],
-    *,
-    estimated_delta_messages: Sequence[Mapping[str, Any]] = (),
-    tools: Sequence[Mapping[str, Any]] = (),
-) -> JsonObject:
-    """Project the Context after one completed Model step.
-
-    Provider input Usage anchors the request that just ran, while Provider
-    output Usage accounts for the Assistant response appended after it. Either
-    counter may be estimated independently when the Provider omits it. Only
-    newer request messages, normally Tool Results, need an additional
-    structured estimate.
-    """
-
-    input_tokens = _optional_non_negative_int(usage.get("input_tokens") if usage else None)
-    output_tokens = _optional_non_negative_int(usage.get("output_tokens") if usage else None)
-    if usage is not None and input_tokens is not None:
-        output_tokens = output_tokens or 0
-        input_estimated = usage_token_is_estimated(usage, "input_tokens")
-        output_estimated = (
-            usage_token_is_estimated(usage, "output_tokens") if "output_tokens" in usage else False
-        )
-        estimated_delta_tokens, _ = estimate_request_input_tokens(estimated_delta_messages)
-        projected: JsonObject = {
-            "tokens": input_tokens + output_tokens + estimated_delta_tokens,
-            "estimated": input_estimated
-            or output_estimated
-            or bool(output_tokens)
-            or bool(estimated_delta_messages),
-        }
-        if not input_estimated:
-            projected["provider_input_tokens"] = input_tokens
-        if not output_estimated:
-            projected["provider_output_tokens"] = output_tokens
-        if estimated_delta_messages:
-            projected["estimated_delta_tokens"] = estimated_delta_tokens
-        return projected
-
-    estimated_tokens, _ = estimate_request_input_tokens(current_request_messages, tools)
-    return {"tokens": estimated_tokens, "estimated": True}
-
-
 def latest_session_context_usage(messages: list[ChatMessage]) -> JsonObject | None:
     """Return the newest durable server projection of a Session's Context.
 

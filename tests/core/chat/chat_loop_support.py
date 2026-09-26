@@ -14,6 +14,7 @@ from core.chat import (
     ChatMessage,
     ChatSessionManager,
 )
+from core.chat._run_state import RequestBuildInputs
 from core.database import write_bootstrap_marker
 from core.model_tasks import TASK_IMAGE_UNDERSTANDING
 from core.projects import AgentResolutionError, ConfigAgent
@@ -21,7 +22,7 @@ from core.providers.accounts import ConnectionRef
 from core.runs import (
     ChatRunManager,
 )
-from core.sessions import SessionAddress
+from core.sessions import ChatSession, SessionAddress
 from core.tools import (
     ToolRegistry,
 )
@@ -102,6 +103,14 @@ def build_chat_loop(runtime: Any, **kwargs: Any) -> ChatLoop:
         usage_recorder=getattr(runtime, "usage_recorder", None),
     )
     return ChatLoop(dependencies, **kwargs)
+
+
+async def build_request_messages(
+    loop: ChatLoop, agent: Any, session: ChatSession
+) -> list[JsonObject]:
+    """Project only messages for tests through the production request builder."""
+    state = await loop._requests.build_request_state(agent, session, inputs=RequestBuildInputs())
+    return state.messages
 
 
 def session_address(
