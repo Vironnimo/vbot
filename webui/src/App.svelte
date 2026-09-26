@@ -132,6 +132,7 @@
   import { createAppSetup } from './app/setup.svelte.js';
   import { createAppDesktop } from './app/desktop.svelte.js';
   import { createAppExtensions } from './app/extensions.svelte.js';
+  import { createLiveUiActions } from './app/liveUiActions.js';
   import './styles/app.css';
 
   const navigationItems = NAVIGATION_ITEMS;
@@ -205,6 +206,7 @@
   let debugEnabled = $state(false);
 
   let terminalsView = $state();
+  let projectsView = $state();
   let voiceChatSelection = null;
 
   // Settings is unmounted when another main view opens. Keep its reading
@@ -360,72 +362,17 @@
     return appController.handleChatSessionNavigation(override);
   };
 
-  const liveContext = async () => {
-    const projectId = selection.selectedProjectId;
-    const context = {
-      view: activeViewId,
-      selected_agent_id: selection.selectedAgentId,
-      selected_project_id: selection.selectedProjectId,
-      selected_project_agent_id: selection.selectedProjectAgentId,
-      chat_selection: voiceChatSelection,
-      agents: selection.agents.map((agent) => ({
-        agent_id: agent.id,
-        name: agent.name,
-      })),
-      projects: selection.projects.map((project) => ({
-        project_id: project.project_id,
-        name: project.display_name,
-        cwd: project.cwd,
-      })),
-    };
-    return {
-      ...context,
-      selected_project_team: projectId
-        ? ((await showProject(projectId)).scan?.team || []).map((agent) => ({
-            agent_id: `${agent.agent_id}@${projectId}`,
-            name: agent.display_name,
-          }))
-        : [],
-    };
-  };
-
-  // Live voice UI requests. `isCurrent` turns false once the requesting call
-  // stops, so a deferred autosave transition never navigates for an old call.
-  const liveNavigate = (view, target = {}, isCurrent = () => true) =>
-    requestAutosaveTransition(() => {
-      if (!isCurrent()) return false;
-      if (view === 'chat' && target.session_id) {
-        return appController.navigateToSession(
-          target.agent_id,
-          target.session_id,
-        );
-      }
-      if (activeViewId !== view) return appController.selectView(view);
-      return true;
-    });
-
-  const liveTerminalAction = async (
-    action,
-    args = {},
-    isCurrent = () => true,
-  ) => {
-    if (action === 'context')
-      return terminalsView?.getVoiceContext() ?? { visible_order: [] };
-    if ((await liveNavigate('terminals', {}, isCurrent)) === false)
-      throw new Error('navigation_not_applied');
-    await tick();
-    if (!terminalsView || !isCurrent())
-      throw new Error('terminal_view_unavailable');
-    return terminalsView.applyVoiceAction(action, args);
-  };
-
-  const liveUiActions = {
-    context: () => liveContext(),
-    open: ({ view, agent_id, session_id }, { isCurrent }) =>
-      liveNavigate(view, { agent_id, session_id }, isCurrent),
-    terminalView: ({ op, ...args }, { isCurrent }) =>
-      liveTerminalAction(op, args, isCurrent),
-  };
+  const liveUiActions = createLiveUiActions({
+    selection,
+    appController: () => appController,
+    activeView: () => activeViewId,
+    requestTransition: requestAutosaveTransition,
+    chatSelection: () => voiceChatSelection,
+    loadProject: showProject,
+    terminalsView: () => terminalsView,
+    projectsView: () => projectsView,
+    afterRender: tick,
+  });
 
   const navigateToSubAgent = (targetOrAgentId, maybeSessionId) =>
     requestAutosaveTransition(() =>
@@ -785,6 +732,7 @@
         />
       {:else if activeViewId === 'projects'}
         <ProjectsView
+          bind:this={projectsView}
           selectedProjectId={selection.managedProjectId}
           onProjectSelected={selection.selectManagedProject}
           onToast={desktop.showToast}

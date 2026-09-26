@@ -4,7 +4,7 @@ One Live call is active per server; starting another ends it. The accessor that
 started a call owns its media and display: it attaches one owner socket at
 ``/ws/live/{call_id}`` and answers UI requests through ``live.ui_result``. The
 registry buffers call updates until the owner attaches, ends a call whose owner
-never attaches or does not return, runs the call's app Tools, and feeds vBot
+never attaches or does not return, runs the call's Live Tools, and feeds vBot
 Runs that finish during the call to it.
 
 Owner socket frames, server to accessor:
@@ -44,14 +44,10 @@ from typing import Any, Protocol
 
 from core.model_tasks.live import LiveCall, LiveCallHost
 from core.utils.ids import new_id
+from server._live_context import UI_TIMEOUT, UI_UNAVAILABLE, LiveUiError, RpcInvoker
 from server._live_feed import LiveRunFeed
-from server._live_tools import (
-    UI_TIMEOUT,
-    UI_UNAVAILABLE,
-    LiveToolExecutor,
-    LiveUiError,
-    RpcInvoker,
-)
+from server._live_record import LiveCallRecorder
+from server._live_tools import LiveToolExecutor
 from server.events import ServerEventBus
 
 JsonObject = dict[str, Any]
@@ -180,8 +176,10 @@ class _LiveCallEntry:
         on_finalized: Callable[[_LiveCallEntry], None],
         started_at: datetime,
         after_sequence: int,
+        recorder: LiveCallRecorder | None = None,
     ) -> None:
         self._limits = limits
+        self._recorder = recorder
         self._rpc = rpc
         self._events = events
         self._on_finalized = on_finalized
@@ -198,8 +196,9 @@ class _LiveCallEntry:
         self._owner: LiveOwnerStream | None = None
         self._malformed_audio_logged = False
         self._ui_requests: dict[str, asyncio.Future[JsonObject]] = {}
-        self._tool_lock = asyncio.Lock()
-        self._executor = LiveToolExecutor(rpc=rpc, ui=self.ui_request, is_active=self._is_active)
+        self._executor = LiveToolExecutor(
+            rpc=rpc, ui=self.ui_request, is_active=self._is_active, started_at=started_at
+        )
         self._feed: LiveRunFeed | None = None
         self._timer: asyncio.Task[None] | None = None
         self._watcher: asyncio.Task[None] | None = None
@@ -219,9 +218,12 @@ class _LiveCallEntry:
     # -- LiveCallHost -----------------------------------------------------
 
     async def execute_tool(self, name: str, arguments: JsonObject) -> JsonObject:
-        """Run one app operation; executions of one call never overlap."""
-        async with self._tool_lock:
-            return await self._executor.execute(name, arguments)
+        """Run one prepared Live Tool call; the executor runs one call's executions in turn."""
+        return await self._executor.execute(name, arguments)
+
+    def known_refs(self) -> str:
+        """The refs this call's Tool results named so far, one labeled line each."""
+        return self._executor.known_refs()
 
     def publish(self, update: JsonObject) -> None:
         """Deliver one call update to the owner, or buffer it until one attaches."""
@@ -234,6 +236,11 @@ class _LiveCallEntry:
         self._deliver(update)
         if self._closed_published and self._owner is not None:
             self._owner.end(LIVE_SOCKET_CLOSE_ENDED)
+
+    def record(self, event: JsonObject) -> None:
+        """Keep one Tool call or delegation record locally for measurement."""
+        if self._recorder is not None:
+            self._recorder.record(self.call_id, event)
 
     def publish_audio(self, pcm: bytes) -> None:
         """Send assistant audio to the attached owner; dropped while none is attached."""
@@ -252,6 +259,7 @@ class _LiveCallEntry:
             events=self._events,
             rpc=self._rpc,
             announce=call.announce_run,
+            describe_session=self._executor.session_ref,
             report_failure=self._report_notification_failure,
             started_at=self._started_at,
             after_sequence=self._after_sequence,
@@ -463,6 +471,7 @@ class LiveCallRegistry:
 
     ``rpc`` dispatches one registered RPC method in-process; the call's Tools
     and Run announcements go through it so they behave like any accessor call.
+    ``recorder`` keeps the calls' Tool call and delegation records locally.
     """
 
     def __init__(
@@ -472,9 +481,11 @@ class LiveCallRegistry:
         rpc: RpcInvoker,
         limits: LiveCallLimits | None = None,
         clock: Callable[[], datetime] = _utc_now,
+        recorder: LiveCallRecorder | None = None,
     ) -> None:
         self._events = events
         self._rpc = rpc
+        self._recorder = recorder
         self._limits = limits or LiveCallLimits()
         self._clock = clock
         self._start_lock = asyncio.Lock()
@@ -516,6 +527,7 @@ class LiveCallRegistry:
                 on_finalized=self._entry_finalized,
                 started_at=self._clock(),
                 after_sequence=self._events.last_sequence,
+                recorder=self._recorder,
             )
             call = await service.start_call(
                 media=media, offer_sdp=offer_sdp, wake_phrases=wake_phrases, host=entry
@@ -575,6 +587,8 @@ class LiveCallRegistry:
             handle.cancel()
         self._linger.clear()
         self._entries.clear()
+        if self._recorder is not None:
+            await self._recorder.drain()
 
     def _entry_finalized(self, entry: _LiveCallEntry) -> None:
         if self._active is entry:

@@ -84,10 +84,12 @@ class WireDelegation:
 
 @dataclass(frozen=True)
 class WireToolCall:
-    """The voice model called one app Tool itself (direct Tools mode).
+    """The voice model called one function Tool itself (direct Tools mode).
 
-    ``arguments`` is the decoded argument value, which may not be an object.
-    The result returns through :meth:`LiveWire.deliver_result` with the same id.
+    ``name`` is the name as called, which the call maps to a Live Tool.
+    ``arguments`` is the decoded argument value, which may not be an object, or
+    the raw text when it is not JSON. The result text returns through
+    :meth:`LiveWire.deliver_result` with the same id.
     """
 
     call_id: str

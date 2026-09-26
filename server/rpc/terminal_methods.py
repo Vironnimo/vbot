@@ -169,7 +169,9 @@ async def _terminal_start(state: Any, params: JsonObject) -> JsonObject:
 
 async def _terminal_input(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(
-        params, {"terminal_id", "data", "expected_screen_revision"}, "terminal.input"
+        params,
+        {"terminal_id", "data", "expected_screen_revision", "expected_program"},
+        "terminal.input",
     )
     terminal_id = _required_string(params, "terminal_id")
     data = _required_string(params, "data")
@@ -179,12 +181,15 @@ async def _terminal_input(state: Any, params: JsonObject) -> JsonObject:
             f"params.data must not exceed {TERMINAL_INPUT_MAX_CHARS} characters",
         )
     try:
-        kwargs = {}
+        kwargs: JsonObject = {}
         if "expected_screen_revision" in params:
             revision = _required_integer(params, "expected_screen_revision")
             if revision < 0:
                 raise ValueError("expected_screen_revision must be non-negative")
             kwargs["expected_screen_revision"] = revision
+        # Written only while this program runs in the Terminal.
+        if (program := _optional_string(params, "expected_program")) is not None:
+            kwargs["expected_program"] = program
         terminal = await _terminal_manager(state).send_operator_input(terminal_id, data, **kwargs)
     except ValueError as exc:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc

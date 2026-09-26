@@ -22,7 +22,13 @@ const SOCKET_REATTACH_WINDOW_MS = 8000;
 const SOCKET_REATTACH_DELAY_MS = 500;
 const CAPTION_LIMIT = 20;
 const CAPTION_TEXT_LIMIT = 2000;
-const OPEN_VIEWS = new Set(['chat', 'terminals']);
+const OPEN_VIEWS = new Set(['chat', 'terminals', 'agents', 'projects']);
+// The ids that name one item of a view in an open request.
+const OPEN_TARGET_IDS = {
+  chat: ['agent_id', 'session_id'],
+  agents: ['agent_id'],
+  projects: ['project_id'],
+};
 const TERMINAL_VIEW_OPS = new Set([
   'context',
   'refresh',
@@ -457,6 +463,29 @@ export function createLiveVoice({
     return action;
   }
 
+  // An open request shows a view alone or exactly one item of it: a Chat
+  // Session (agent_id and session_id), an Agent page, or a Project page.
+  function openTarget(args) {
+    const { view } = args;
+    const ids = {
+      agent_id: args.agent_id ?? undefined,
+      session_id: args.session_id ?? undefined,
+      project_id: args.project_id ?? undefined,
+    };
+    const given = Object.keys(ids).filter((key) => ids[key] !== undefined);
+    if (!given.length) return { view };
+    const expected = OPEN_TARGET_IDS[view] ?? [];
+    if (
+      given.length !== expected.length ||
+      !expected.every((key) => isText(ids[key]))
+    )
+      throw failure('invalid_arguments');
+    return Object.fromEntries([
+      ['view', view],
+      ...expected.map((key) => [key, ids[key]]),
+    ]);
+  }
+
   // Validates one UI request and returns the operation that executes it.
   function uiOperation(actionName, rawArgs, guard) {
     const args = rawArgs ?? {};
@@ -466,20 +495,9 @@ export function createLiveVoice({
       return () => context(guard);
     }
     if (actionName === 'open') {
-      const { view } = args;
-      const agentId = args.agent_id ?? undefined;
-      const sessionId = args.session_id ?? undefined;
-      if (!OPEN_VIEWS.has(view)) throw failure('invalid_view');
-      const hasTarget = agentId !== undefined || sessionId !== undefined;
-      if (
-        hasTarget &&
-        (view !== 'chat' || !isText(agentId) || !isText(sessionId))
-      )
-        throw failure('invalid_arguments');
+      if (!OPEN_VIEWS.has(args.view)) throw failure('invalid_view');
+      const target = openTarget(args);
       const open = uiAction('open');
-      const target = hasTarget
-        ? { view, agent_id: agentId, session_id: sessionId }
-        : { view };
       return async () => ({ applied: (await open(target, guard)) !== false });
     }
     if (actionName === 'terminal_view') {
