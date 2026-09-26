@@ -282,7 +282,10 @@
     });
   });
 
-  const loadSessions = async (targetAgentId = asText(agentId)) => {
+  // Mutations may finish after selection or filters changed. Reload the
+  // drawer's current scope, while each mutation keeps its original target.
+  const loadSessions = async () => {
+    const targetAgentId = asText(agentId);
     if (!targetAgentId) {
       sessionState = createSessionListState();
       return;
