@@ -194,7 +194,8 @@ async def test_continuation_position_from_a_cut_off_read_resumes_mid_line(
     [
         (
             {"offset": 3, "start_line": 5},
-            "Conflicting values for offset; provide one intended value.",
+            "Conflicting values for offset: offset is 3 and start_line is 5. Send only the "
+            "intended one.",
         ),
         (
             {"lines": "4-6", "offset": 2},
