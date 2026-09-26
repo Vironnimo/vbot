@@ -451,16 +451,31 @@ class LiveCallSession:
             _LOGGER.error("Live call Usage could not be saved: call_id=%s", self.id, exc_info=True)
             raise
         finally:
-            self._set_phase("failed" if failed else "closed")
-            self._publish({"type": "closed", "reason": reason, "usage": usage})
-            _LOGGER.info(
-                "Live call ended: call_id=%s target=%s reason=%s duration_s=%.1f",
-                self.id,
-                self._target,
-                reason,
-                self._clock() - self._started_at,
-            )
-            self._done.set()
+            # A terminal Provider event need not close its transport. Settle
+            # Usage first so cancellation during socket cleanup cannot lose it.
+            try:
+                async with asyncio.timeout(_TEARDOWN_TIMEOUT_SECONDS):
+                    await self._wire.aclose()
+            except Exception as exc:
+                _LOGGER.warning(
+                    "Live call transport cleanup failed: call_id=%s error_type=%s",
+                    self.id,
+                    type(exc).__name__,
+                )
+            finally:
+                # An owner abort can arrive while transport cleanup is waiting.
+                reason = self._abort_reason or reason
+                failed = reason in {"connection_lost", "start_timeout"}
+                self._set_phase("failed" if failed else "closed")
+                self._publish({"type": "closed", "reason": reason, "usage": usage})
+                _LOGGER.info(
+                    "Live call ended: call_id=%s target=%s reason=%s duration_s=%.1f",
+                    self.id,
+                    self._target,
+                    reason,
+                    self._clock() - self._started_at,
+                )
+                self._done.set()
 
     async def _send_command(self, send: Callable[[], Awaitable[None]]) -> bool:
         if self._done.is_set():

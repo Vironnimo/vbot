@@ -23,12 +23,14 @@ from core.model_tasks._live_arguments import PreparedLiveCall, prepare_live_call
 from core.model_tasks._live_tools import (
     DELEGATION_INSTRUCTIONS,
     LIVE_READ_ONLY_TOOLS,
+    live_failure,
     live_result_text,
     live_tools,
 )
 from core.model_tasks.model_tasks import TaskModelTargetRef
 from core.model_tasks.task_execution import TaskUsage
 from core.providers.accounts import ConnectionRef
+from core.providers.adapter import TOOL_CALL_REJECTION_FIELD
 from core.providers.errors import ProviderAuthError, ProviderRateLimitError
 from core.usage import UsageRecorder
 from core.utils.errors import VBotError
@@ -235,7 +237,14 @@ class LiveBrain:
         progress.tool_calls += 1
         started = self._clock()
         arguments = tool_call.get("arguments")
-        prepared = prepare_live_call(tool_call.get("name"), arguments)
+        rejection = tool_call.get(TOOL_CALL_REJECTION_FIELD)
+        # The Adapter may replace unusable arguments with an empty placeholder.
+        # Its rejection must survive Live aliases and their implied arguments.
+        prepared = (
+            live_failure(rejection["code"], rejection["message"])
+            if rejection is not None
+            else prepare_live_call(tool_call.get("name"), arguments)
+        )
         if isinstance(prepared, PreparedLiveCall):
             if prepared.name not in LIVE_READ_ONLY_TOOLS:
                 progress.performed.append(prepared.name)
