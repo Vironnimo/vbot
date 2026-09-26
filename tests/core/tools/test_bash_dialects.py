@@ -86,6 +86,12 @@ def _refuse_credentials(key: str) -> str:
             {"command": "ls", "description": "Mine"},
         ),
         (
+            {"command": "ls", "title": "Check working directory"},
+            {"command": "ls", "description": "Check working directory"},
+        ),
+        ({"command": "ls", "label": "List"}, {"command": "ls", "description": "List"}),
+        ({"command": "ls", "summary": "List"}, {"command": "ls", "description": "List"}),
+        (
             {
                 "command": "ls",
                 "login": True,

@@ -54,7 +54,7 @@ _MODE_VALUES = {
 _BACKGROUND_FLAGS = frozenset({"background", "runinbackground", "isbackground"})
 # Seconds or milliseconds before a running command returns; zero asks for background now.
 _YIELD_FIELDS = frozenset({"yieldms", "yieldtimems", "yieldafter", "backgroundafterseconds"})
-_DESCRIPTION_FIELDS = frozenset({"explanation", "justification"})
+_DESCRIPTION_FIELDS = frozenset({"explanation", "justification", "title", "label", "summary"})
 # Requests vBot always satisfies or that only shape output: nothing to do.
 _SATISFIED_FIELDS = frozenset(
     {"notifyoncomplete", "login", "maxoutputtokens", "dangerouslydisablesandbox"}
