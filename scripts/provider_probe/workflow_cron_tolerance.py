@@ -125,7 +125,7 @@ async def cron_case(adapter: Any, args: argparse.Namespace, case: dict[str, Any]
             if action == "delete":
                 checks["deleted"] = not stored
             elif action == "list":
-                checks["listed"] = bool(results) and results[0].get("data", {}).get("jobs") == []
+                checks["listed"] = bool(results) and results[0].get("data", {}).get("jobs") == 0
             elif stored:
                 job = stored[0]
                 for field in ("name", "prompt"):

@@ -181,6 +181,25 @@ describe('chatTimelinePresentation', () => {
     expect(summary).toBe('status · process-1');
   });
 
+  it('labels a streaming cron call with its action and the job it names', () => {
+    const summary = toolArgumentSummary({
+      name: 'cron',
+      arguments: undefined,
+      previewArguments: {
+        action: 'create',
+        prompt: 'Summarize the queue.',
+        schedule: 'every 2h',
+      },
+    });
+    const byId = toolArgumentSummary({
+      name: 'cron',
+      arguments: { action: 'disable', id: 'cron_abc' },
+    });
+
+    expect(summary).toBe('create · every 2h');
+    expect(byId).toBe('disable · cron_abc');
+  });
+
   it('keeps legacy process request operations visible after history reload', () => {
     const summary = toolArgumentSummary({
       name: 'process',

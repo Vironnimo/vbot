@@ -1,0 +1,1293 @@
+{
+ "files": {},
+ "cases": [
+  {
+   "name": "cron: canonical recurring create",
+   "tool": "cron",
+   "arguments": {
+    "action": "create",
+    "name": "Build check",
+    "prompt": "Check the nightly build status and summarize failures.",
+    "schedule": "0 9 * * *"
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "status: active",
+     "schedule: 0 9 * * *",
+     "target: main",
+     "next_run: 20"
+    ],
+    "absent": [
+     "Check the nightly build"
+    ]
+   }
+  },
+  {
+   "name": "cron: canonical one-time create",
+   "tool": "cron",
+   "arguments": {
+    "action": "create",
+    "prompt": "Remind the user to stretch.",
+    "schedule": "in 30m"
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "status: active",
+     "schedule: 20"
+    ]
+   }
+  },
+  {
+   "name": "cron: limited interval create",
+   "tool": "cron",
+   "arguments": {
+    "action": "create",
+    "prompt": "Check the deployment health.",
+    "schedule": "every 2h",
+    "repeat": 3
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "schedule: every 2h",
+     "repeat: 3"
+    ]
+   }
+  },
+  {
+   "name": "cron: list",
+   "tool": "cron",
+   "arguments": {
+    "action": "list"
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "jobs:"
+    ]
+   }
+  },
+  {
+   "name": "cron: list shows a created job",
+   "steps": [
+    {
+     "tool": "cron",
+     "arguments": {
+      "action": "create",
+      "name": "Digest",
+      "prompt": "Write the daily digest.",
+      "schedule": "0 8 * * *"
+     }
+    },
+    {
+     "tool": "cron",
+     "arguments": {
+      "action": "list"
+     }
+    }
+   ],
+   "expect": {
+    "ok": true,
+    "contains": [
+     "name: Digest",
+     "prompt: Write the daily digest.",
+     "schedule: 0 8 * * *"
+    ]
+   }
+  },
+  {
+   "name": "cron: update the schedule",
+   "steps": [
+    {
+     "tool": "cron",
+     "arguments": {
+      "action": "create",
+      "prompt": "Check the queue.",
+      "schedule": "every 2h"
+     }
+    },
+    {
+     "tool": "cron",
+     "arguments": {
+      "action": "update",
+      "id": "$1.id",
+      "schedule": "every 4h"
+     }
+    }
+   ],
+   "expect": {
+    "ok": true,
+    "contains": [
+     "schedule: every 4h",
+     "status: active"
+    ]
+   }
+  },
+  {
+   "name": "cron: disable then enable",
+   "steps": [
+    {
+     "tool": "cron",
+     "arguments": {
+      "action": "create",
+      "prompt": "Check the queue.",
+      "schedule": "every 2h"
+     }
+    },
+    {
+     "tool": "cron",
+     "arguments": {
+      "action": "disable",
+      "id": "$1.id"
+     }
+    },
+    {
+     "tool": "cron",
+     "arguments": {
+      "action": "enable",
+      "id": "$1.id"
+     }
+    }
+   ],
+   "expect": {
+    "ok": true,
+    "contains": [
+     "status: active"
+    ]
+   }
+  },
+  {
+   "name": "cron: delete",
+   "steps": [
+    {
+     "tool": "cron",
+     "arguments": {
+      "action": "create",
+      "prompt": "Check the queue.",
+      "schedule": "every 2h",
+      "name": "Delete me"
+     }
+    },
+    {
+     "tool": "cron",
+     "arguments": {
+      "action": "delete",
+      "id": "$1.id"
+     }
+    },
+    {
+     "tool": "cron",
+     "arguments": {
+      "action": "list"
+     }
+    }
+   ],
+   "expect": {
+    "ok": true,
+    "absent": [
+     "name: Delete me"
+    ]
+   }
+  },
+  {
+   "name": "cron: unknown job id names the list call",
+   "tool": "cron",
+   "arguments": {
+    "action": "delete",
+    "id": "cron_missing"
+   },
+   "expect": {
+    "ok": false,
+    "error_code": "job_not_found",
+    "contains": [
+     "{\"action\":\"list\"}"
+    ]
+   }
+  },
+  {
+   "name": "cron: unknown target Agent",
+   "tool": "cron",
+   "arguments": {
+    "action": "create",
+    "prompt": "Check the queue.",
+    "schedule": "every 2h",
+    "target": "nobody"
+   },
+   "expect": {
+    "ok": false,
+    "error_code": "agent_not_found"
+   }
+  },
+  {
+   "name": "cron: historical flat create without prompt names the corrected call",
+   "tool": "cron",
+   "arguments": {
+    "action": "create",
+    "agent_id": "main",
+    "cron_expression": "0 3 */3 * *",
+    "schedule_type": "cron",
+    "session_id": "",
+    "status": "active"
+   },
+   "expect": {
+    "ok": false,
+    "error_code": "invalid_arguments",
+    "contains": [
+     "prompt",
+     "{\"action\":\"create\",\"target\":\"main\",\"prompt\":\"<instruction>\",\"schedule\":\"0 3 */3 * *\"}"
+    ],
+    "absent": [
+     "status",
+     "session_id",
+     "cron_expression",
+     "schedule_type"
+    ]
+   }
+  },
+  {
+   "name": "cron: historical flat create with prompt runs",
+   "tool": "cron",
+   "arguments": {
+    "action": "create",
+    "agent_id": "main",
+    "cron_expression": "0 3 */3 * *",
+    "schedule_type": "cron",
+    "session_id": "",
+    "status": "active",
+    "prompt": "Lint the wiki and report broken links."
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "schedule: 0 3 */3 * *",
+     "target: main",
+     "status: active"
+    ]
+   }
+  },
+  {
+   "name": "cron: historical stringified list operation",
+   "tool": "cron",
+   "arguments": {
+    "list": "{}"
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "jobs:"
+    ]
+   }
+  },
+  {
+   "name": "cron: historical create plus placeholder enable",
+   "tool": "cron",
+   "arguments": {
+    "create": {
+     "cron_expression": "0 3 */3 * *",
+     "prompt": "Lint the wiki and report broken links.",
+     "run_at": "2030-07-25T03:00:00Z",
+     "schedule_type": "cron"
+    },
+    "enable": {
+     "id": "placeholder"
+    }
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "schedule: 0 3 */3 * *",
+     "status: active"
+    ]
+   }
+  },
+  {
+   "name": "cron: historical update with cron_expression",
+   "steps": [
+    {
+     "tool": "cron",
+     "arguments": {
+      "action": "create",
+      "prompt": "Lint the wiki.",
+      "schedule": "0 3 */3 * *"
+     }
+    },
+    {
+     "tool": "cron",
+     "arguments": {
+      "action": "update",
+      "id": "$1.id",
+      "cron_expression": "30 0 */2 * *"
+     }
+    }
+   ],
+   "expect": {
+    "ok": true,
+    "contains": [
+     "schedule: 30 0 */2 * *"
+    ]
+   }
+  },
+  {
+   "name": "cron: historical operation-key update",
+   "steps": [
+    {
+     "tool": "cron",
+     "arguments": {
+      "action": "create",
+      "prompt": "Lint the wiki.",
+      "schedule": "0 3 */3 * *"
+     }
+    },
+    {
+     "tool": "cron",
+     "arguments": {
+      "update": {
+       "id": "$1.id",
+       "target": "main",
+       "name": "Wiki lint"
+      }
+     }
+    }
+   ],
+   "expect": {
+    "ok": true,
+    "contains": [
+     "name: Wiki lint",
+     "target: main"
+    ]
+   }
+  },
+  {
+   "name": "cron: recurring job moved to a one-time schedule",
+   "steps": [
+    {
+     "tool": "cron",
+     "arguments": {
+      "action": "create",
+      "prompt": "Check the queue.",
+      "schedule": "every 1d"
+     }
+    },
+    {
+     "tool": "cron",
+     "arguments": {
+      "action": "update",
+      "id": "$1.id",
+      "schedule": "in 2d"
+     }
+    }
+   ],
+   "expect": {
+    "ok": true,
+    "contains": [
+     "status: active",
+     "schedule: 20"
+    ]
+   }
+  },
+  {
+   "name": "cron: paused status on create creates a paused job",
+   "tool": "cron",
+   "arguments": {
+    "action": "create",
+    "prompt": "Check the queue.",
+    "schedule": "every 2h",
+    "status": "paused"
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "status: paused",
+     "\"action\":\"enable\""
+    ]
+   }
+  },
+  {
+   "name": "cron: enabled false on create creates a paused job",
+   "tool": "cron",
+   "arguments": {
+    "action": "create",
+    "prompt": "Check the queue.",
+    "schedule": "every 2h",
+    "enabled": false
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "status: paused"
+    ]
+   }
+  },
+  {
+   "name": "cron: terminal status on create is refused",
+   "tool": "cron",
+   "arguments": {
+    "action": "create",
+    "prompt": "Check the queue.",
+    "schedule": "every 2h",
+    "status": "completed"
+   },
+   "expect": {
+    "ok": false,
+    "error_code": "invalid_arguments",
+    "contains": [
+     "status"
+    ]
+   }
+  },
+  {
+   "name": "cron: status on update pauses the job",
+   "steps": [
+    {
+     "tool": "cron",
+     "arguments": {
+      "action": "create",
+      "prompt": "Check the queue.",
+      "schedule": "every 2h"
+     }
+    },
+    {
+     "tool": "cron",
+     "arguments": {
+      "action": "update",
+      "id": "$1.id",
+      "status": "paused"
+     }
+    }
+   ],
+   "expect": {
+    "ok": true,
+    "contains": [
+     "status: paused"
+    ]
+   }
+  },
+  {
+   "name": "cron: Claude Code CronCreate shape",
+   "tool": "cron",
+   "arguments": {
+    "cron": "0 9 * * 1-5",
+    "prompt": "Summarize open pull requests.",
+    "recurring": true,
+    "durable": true
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "schedule: 0 9 * * 1-5",
+     "status: active"
+    ]
+   }
+  },
+  {
+   "name": "cron: Claude Code one-shot CronCreate",
+   "tool": "cron",
+   "arguments": {
+    "cron": "30 14 * * *",
+    "prompt": "Remind the user about the call.",
+    "recurring": false
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "schedule: 30 14 * * *",
+     "repeat: 1"
+    ]
+   }
+  },
+  {
+   "name": "cron: Claude Code CronList shape",
+   "tool": "cron",
+   "arguments": {},
+   "expect": {
+    "ok": true,
+    "contains": [
+     "jobs:"
+    ]
+   }
+  },
+  {
+   "name": "cron: Claude Code CronDelete shape is ambiguous",
+   "steps": [
+    {
+     "tool": "cron",
+     "arguments": {
+      "action": "create",
+      "prompt": "Check the queue.",
+      "schedule": "every 2h",
+      "name": "Keep me"
+     }
+    },
+    {
+     "tool": "cron",
+     "arguments": {
+      "id": "$1.id"
+     }
+    },
+    {
+     "tool": "cron",
+     "arguments": {
+      "action": "list"
+     }
+    }
+   ],
+   "expect": {
+    "ok": true,
+    "contains": [
+     "name: Keep me"
+    ]
+   }
+  },
+  {
+   "name": "cron: bare id names the possible calls",
+   "tool": "cron",
+   "arguments": {
+    "id": "cron_missing"
+   },
+   "expect": {
+    "ok": false,
+    "error_code": "invalid_arguments",
+    "contains": [
+     "\"action\":\"delete\"",
+     "\"action\":\"disable\""
+    ]
+   }
+  },
+  {
+   "name": "cron: Hermes cronjob create with local delivery",
+   "tool": "cron",
+   "arguments": {
+    "action": "create",
+    "name": "Status check",
+    "prompt": "Check service status.",
+    "schedule": "every 2h",
+    "deliver": "local"
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "schedule: every 2h"
+    ]
+   }
+  },
+  {
+   "name": "cron: Hermes delivery to origin is refused before any job exists",
+   "steps": [
+    {
+     "tool": "cron",
+     "arguments": {
+      "action": "create",
+      "name": "Origin delivery",
+      "prompt": "Check service status.",
+      "schedule": "every 2h",
+      "deliver": "origin"
+     }
+    },
+    {
+     "tool": "cron",
+     "arguments": {
+      "action": "list"
+     }
+    }
+   ],
+   "expect": {
+    "ok": true,
+    "absent": [
+     "name: Origin delivery"
+    ]
+   }
+  },
+  {
+   "name": "cron: Hermes delivery error names the corrected call",
+   "tool": "cron",
+   "arguments": {
+    "action": "create",
+    "prompt": "Check service status.",
+    "schedule": "every 2h",
+    "deliver": "telegram"
+   },
+   "expect": {
+    "ok": false,
+    "error_code": "invalid_arguments",
+    "contains": [
+     "deliver",
+     "\"schedule\":\"every 2h\""
+    ]
+   }
+  },
+  {
+   "name": "cron: Hermes pause with job_id",
+   "steps": [
+    {
+     "tool": "cron",
+     "arguments": {
+      "action": "create",
+      "prompt": "Check the queue.",
+      "schedule": "every 2h"
+     }
+    },
+    {
+     "tool": "cron",
+     "arguments": {
+      "action": "pause",
+      "job_id": "$1.id"
+     }
+    }
+   ],
+   "expect": {
+    "ok": true,
+    "contains": [
+     "status: paused"
+    ]
+   }
+  },
+  {
+   "name": "cron: Hermes remove with job_id",
+   "steps": [
+    {
+     "tool": "cron",
+     "arguments": {
+      "action": "create",
+      "prompt": "Check the queue.",
+      "schedule": "every 2h",
+      "name": "Hermes remove"
+     }
+    },
+    {
+     "tool": "cron",
+     "arguments": {
+      "action": "remove",
+      "job_id": "$1.id"
+     }
+    },
+    {
+     "tool": "cron",
+     "arguments": {
+      "action": "list"
+     }
+    }
+   ],
+   "expect": {
+    "ok": true,
+    "absent": [
+     "name: Hermes remove"
+    ]
+   }
+  },
+  {
+   "name": "cron: Hermes run now is refused with a one-time job call",
+   "steps": [
+    {
+     "tool": "cron",
+     "arguments": {
+      "action": "create",
+      "prompt": "Check the queue.",
+      "schedule": "every 2h"
+     }
+    },
+    {
+     "tool": "cron",
+     "arguments": {
+      "action": "run",
+      "job_id": "$1.id"
+     }
+    }
+   ],
+   "expect": {
+    "ok": false,
+    "error_code": "invalid_arguments",
+    "contains": [
+     "\"schedule\":\"in 1m\""
+    ]
+   }
+  },
+  {
+   "name": "cron: Hermes unsupported skills field",
+   "tool": "cron",
+   "arguments": {
+    "action": "create",
+    "prompt": "Check service status.",
+    "schedule": "every 2h",
+    "skills": [
+     "ops"
+    ]
+   },
+   "expect": {
+    "ok": false,
+    "error_code": "invalid_arguments",
+    "contains": [
+     "skills"
+    ]
+   }
+  },
+  {
+   "name": "cron: OpenClaw add with a job object",
+   "tool": "cron",
+   "arguments": {
+    "action": "add",
+    "job": {
+     "name": "Digest",
+     "schedule": {
+      "kind": "cron",
+      "expr": "0 8 * * *"
+     },
+     "payload": {
+      "kind": "agentTurn",
+      "message": "Write the daily digest."
+     },
+     "sessionTarget": "isolated"
+    }
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "name: Digest",
+     "schedule: 0 8 * * *"
+    ]
+   }
+  },
+  {
+   "name": "cron: OpenClaw every in milliseconds",
+   "tool": "cron",
+   "arguments": {
+    "action": "add",
+    "job": {
+     "schedule": {
+      "kind": "every",
+      "everyMs": 3600000
+     },
+     "payload": {
+      "kind": "agentTurn",
+      "message": "Check the queue."
+     }
+    }
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "schedule: every 1h"
+    ]
+   }
+  },
+  {
+   "name": "cron: OpenClaw one-time at",
+   "tool": "cron",
+   "arguments": {
+    "action": "add",
+    "job": {
+     "schedule": {
+      "kind": "at",
+      "at": "2030-01-01T09:00:00Z"
+     },
+     "payload": {
+      "kind": "agentTurn",
+      "message": "Send the new-year note."
+     }
+    }
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "status: active",
+     "schedule: 2030-01-01T"
+    ]
+   }
+  },
+  {
+   "name": "cron: desktop cronExpression and description",
+   "tool": "cron",
+   "arguments": {
+    "action": "create",
+    "cronExpression": "0 8 * * *",
+    "prompt": "Write the daily digest.",
+    "description": "Daily digest"
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "name: Daily digest",
+     "schedule: 0 8 * * *"
+    ]
+   }
+  },
+  {
+   "name": "cron: timezone equal to the server zone is accepted",
+   "steps": [
+    {
+     "tool": "cron",
+     "arguments": {
+      "action": "list"
+     }
+    },
+    {
+     "tool": "cron",
+     "arguments": {
+      "action": "create",
+      "prompt": "Check the queue.",
+      "schedule": "0 9 * * *",
+      "timezone": "$1.timezone"
+     }
+    }
+   ],
+   "expect": {
+    "ok": true,
+    "contains": [
+     "schedule: 0 9 * * *"
+    ]
+   }
+  },
+  {
+   "name": "cron: timezone with a one-time local timestamp converts exactly",
+   "tool": "cron",
+   "arguments": {
+    "action": "create",
+    "prompt": "Send the new-year note.",
+    "schedule": "2030-01-01T09:00",
+    "timezone": "Pacific/Kiritimati"
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "Pacific/Kiritimati"
+    ]
+   }
+  },
+  {
+   "name": "cron: timezone with a cron expression in another zone is refused",
+   "tool": "cron",
+   "arguments": {
+    "action": "create",
+    "prompt": "Check the queue.",
+    "schedule": "0 9 * * *",
+    "timezone": "Pacific/Kiritimati"
+   },
+   "expect": {
+    "ok": false,
+    "error_code": "invalid_arguments",
+    "contains": [
+     "Pacific/Kiritimati",
+     "\"schedule\":\""
+    ]
+   }
+  },
+  {
+   "name": "cron: bare duration is refused with both readings",
+   "tool": "cron",
+   "arguments": {
+    "action": "create",
+    "prompt": "Check the queue.",
+    "schedule": "30m"
+   },
+   "expect": {
+    "ok": false,
+    "error_code": "invalid_arguments",
+    "contains": [
+     "\"schedule\":\"in 30m\"",
+     "\"schedule\":\"every 30m\""
+    ]
+   }
+  },
+  {
+   "name": "cron: spelled-out duration runs",
+   "tool": "cron",
+   "arguments": {
+    "action": "create",
+    "prompt": "Check the queue.",
+    "schedule": "every 2 hours"
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "schedule: every 2h"
+    ]
+   }
+  },
+  {
+   "name": "cron: real session_id is refused",
+   "tool": "cron",
+   "arguments": {
+    "action": "create",
+    "prompt": "Check the queue.",
+    "schedule": "every 2h",
+    "session_id": "sess_abc"
+   },
+   "expect": {
+    "ok": false,
+    "error_code": "invalid_arguments",
+    "contains": [
+     "Session",
+     "\"schedule\":\"every 2h\""
+    ]
+   }
+  },
+  {
+   "name": "cron: placeholder prompt is refused",
+   "tool": "cron",
+   "arguments": {
+    "action": "create",
+    "prompt": "<instruction>",
+    "schedule": "every 2h"
+   },
+   "expect": {
+    "ok": false,
+    "error_code": "invalid_arguments",
+    "contains": [
+     "prompt"
+    ]
+   }
+  },
+  {
+   "name": "cron: create with an id is refused",
+   "tool": "cron",
+   "arguments": {
+    "action": "create",
+    "id": "daily-digest",
+    "prompt": "Write the daily digest.",
+    "schedule": "0 8 * * *"
+   },
+   "expect": {
+    "ok": false,
+    "error_code": "invalid_arguments",
+    "contains": [
+     "\"action\":\"update\""
+    ]
+   }
+  },
+  {
+   "name": "evaluate: canonical question (needs a Decision model)",
+   "tool": "evaluate",
+   "arguments": {
+    "state": "The build failed twice today with the same timeout.",
+    "questions": [
+     {
+      "id": "flaky",
+      "type": "noul",
+      "instructions": "Is this likely a flaky test rather than a real regression?"
+     }
+    ]
+   }
+  },
+  {
+   "name": "calendar: timed create",
+   "tool": "calendar",
+   "arguments": {
+    "action": "create",
+    "title": "Dentist",
+    "start": "2030-01-10T15:00"
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "title: Dentist",
+     "start: 2030-01-10T15:00",
+     "end: 2030-01-10T16:00"
+    ]
+   }
+  },
+  {
+   "name": "calendar: all-day create",
+   "tool": "calendar",
+   "arguments": {
+    "action": "create",
+    "title": "Trip",
+    "start": "2030-01-10",
+    "duration": 3
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "start: 2030-01-10",
+     "days: 3"
+    ]
+   }
+  },
+  {
+   "name": "calendar: list a month",
+   "steps": [
+    {
+     "tool": "calendar",
+     "arguments": {
+      "action": "create",
+      "title": "Review",
+      "start": "2031-03-05T10:00"
+     }
+    },
+    {
+     "tool": "calendar",
+     "arguments": {
+      "action": "list",
+      "when": "2031-03"
+     }
+    }
+   ],
+   "expect": {
+    "ok": true,
+    "contains": [
+     "events: 1",
+     "window: 2031-03-01 to 2031-03-31",
+     "title: Review"
+    ]
+   }
+  },
+  {
+   "name": "calendar: find free time as whole spans",
+   "steps": [
+    {
+     "tool": "calendar",
+     "arguments": {
+      "action": "create",
+      "title": "Block",
+      "start": "2031-04-10T15:00"
+     }
+    },
+    {
+     "tool": "calendar",
+     "arguments": {
+      "action": "find_free",
+      "when": "2031-04-10",
+      "duration": 60
+     }
+    }
+   ],
+   "expect": {
+    "ok": true,
+    "contains": [
+     "free: 2",
+     "2031-04-10T00:00 to 2031-04-10T15:00 (15h)",
+     "2031-04-10T16:00 to 2031-04-11T00:00 (8h)"
+    ]
+   }
+  },
+  {
+   "name": "calendar: add an Agent action before an event",
+   "steps": [
+    {
+     "tool": "calendar",
+     "arguments": {
+      "action": "create",
+      "title": "Dentist",
+      "start": "2030-01-10T15:00"
+     }
+    },
+    {
+     "tool": "calendar",
+     "arguments": {
+      "action": "add_action",
+      "id": "$1.id",
+      "when": "start - 1h",
+      "prompt": "Remind the user to leave for the dentist."
+     }
+    }
+   ],
+   "expect": {
+    "ok": true,
+    "contains": [
+     "when: start - 1h",
+     "next_due: 2030-01-10T14:00"
+    ],
+    "absent": [
+     "Remind the user"
+    ]
+   }
+  },
+  {
+   "name": "calendar: reminder phrasing becomes a relative time",
+   "steps": [
+    {
+     "tool": "calendar",
+     "arguments": {
+      "action": "create",
+      "title": "Dentist",
+      "start": "2030-01-10T15:00"
+     }
+    },
+    {
+     "tool": "calendar",
+     "arguments": {
+      "action": "add_reminder",
+      "event_id": "$1.id",
+      "when": "30 minutes before",
+      "prompt": "Leave now."
+     }
+    }
+   ],
+   "expect": {
+    "ok": true,
+    "contains": [
+     "when: start - 30m"
+    ]
+   }
+  },
+  {
+   "name": "calendar: Google-style create with end and summary",
+   "tool": "calendar",
+   "arguments": {
+    "action": "create",
+    "summary": "Dentist",
+    "start": "2030-01-10T15:00",
+    "end": "2030-01-10T15:45",
+    "description": "Bring the insurance card."
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "title: Dentist",
+     "end: 2030-01-10T15:45",
+     "notes: Bring the insurance card."
+    ]
+   }
+  },
+  {
+   "name": "calendar: Google event object with dateTime and all-day end",
+   "tool": "calendar",
+   "arguments": {
+    "summary": "Trip",
+    "start": {
+     "date": "2030-01-10"
+    },
+    "end": {
+     "date": "2030-01-12"
+    }
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "start: 2030-01-10",
+     "days: 2"
+    ]
+   }
+  },
+  {
+   "name": "calendar: RRULE string",
+   "tool": "calendar",
+   "arguments": {
+    "action": "create",
+    "title": "Standup",
+    "start": "2030-01-07T09:00",
+    "duration": 15,
+    "rrule": "FREQ=WEEKLY;BYDAY=MO,WE"
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "repeats: {\"freq\":\"weekly\",\"by_weekday\":[\"mo\",\"we\"]}"
+    ]
+   }
+  },
+  {
+   "name": "calendar: event_id alias on delete",
+   "steps": [
+    {
+     "tool": "calendar",
+     "arguments": {
+      "action": "create",
+      "title": "Dentist",
+      "start": "2030-01-10T15:00"
+     }
+    },
+    {
+     "tool": "calendar",
+     "arguments": {
+      "action": "delete",
+      "event_id": "$1.id"
+     }
+    }
+   ],
+   "expect": {
+    "ok": true,
+    "contains": [
+     "status: deleted"
+    ]
+   }
+  },
+  {
+   "name": "calendar: start in another time zone is converted",
+   "tool": "calendar",
+   "arguments": {
+    "action": "create",
+    "title": "Call",
+    "start": "2030-01-12T10:00",
+    "timezone": "America/New_York"
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "as America/New_York time",
+     "in the server time zone"
+    ]
+   }
+  },
+  {
+   "name": "calendar: create without title names the corrected call",
+   "tool": "calendar",
+   "arguments": {
+    "action": "create",
+    "start": "2030-01-10T15:00"
+   },
+   "expect": {
+    "ok": false,
+    "error_code": "invalid_arguments",
+    "contains": [
+     "create needs \"title\"",
+     "\"start\":\"2030-01-10T15:00\""
+    ]
+   }
+  },
+  {
+   "name": "calendar: delete by title names the event id",
+   "steps": [
+    {
+     "tool": "calendar",
+     "arguments": {
+      "action": "create",
+      "title": "Orthodontist",
+      "start": "2031-05-02T09:30"
+     }
+    },
+    {
+     "tool": "calendar",
+     "arguments": {
+      "action": "delete",
+      "title": "orthodontist"
+     }
+    }
+   ],
+   "expect": {
+    "ok": false,
+    "error_code": "invalid_arguments",
+    "contains": [
+     "delete needs the event \"id\"; \"Orthodontist\" at 2031-05-02T09:30 has id evt_",
+     "Send: {\"action\":\"delete\",\"id\":\"evt_"
+    ]
+   }
+  },
+  {
+   "name": "calendar: requested reminders are refused with add_action guidance",
+   "tool": "calendar",
+   "arguments": {
+    "action": "create",
+    "title": "Dentist",
+    "start": "2030-01-10T15:00",
+    "reminders": {
+     "useDefault": false,
+     "overrides": [
+      {
+       "method": "popup",
+       "minutes": 10
+      }
+     ]
+    }
+   },
+   "expect": {
+    "ok": false,
+    "error_code": "invalid_arguments",
+    "contains": [
+     "the calendar has no reminders",
+     "add_action"
+    ]
+   }
+  }
+ ]
+}

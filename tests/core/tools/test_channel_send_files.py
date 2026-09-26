@@ -31,7 +31,7 @@ from tests.core.tools.channel_send_helpers import (
 def test_channel_send_requires_message_or_file_paths(tmp_path: Path) -> None:
     channel_service = Mock()
     channel_service.send = AsyncMock()
-    channel_service.list_channels.return_value = []
+    channel_service.list_channels.return_value = [make_channel_config()]
     chat_sessions = make_chat_sessions()
     registry = ToolRegistry()
     register_channel_send_tool(
@@ -52,23 +52,44 @@ def test_channel_send_requires_message_or_file_paths(tmp_path: Path) -> None:
         )
     )
 
-    error = result["error"]
-    assert isinstance(error, dict)
-    assert error["code"] == "invalid_arguments"
+    assert result == tool_failure(
+        "invalid_arguments",
+        'channel_send was not run: it needs "message", "file_paths", or both. Send: '
+        '{"channel_id":"tg-assistant","platform_target":"12345","message":"<text to send>"}',
+    )
     channel_service.send.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "empty",
+    ({"file_paths": []}, {"buttons": []}),
+)
+def test_channel_send_treats_an_empty_list_as_left_out(
+    tmp_path: Path, empty: dict[str, object]
+) -> None:
+    channel_service = Mock()
+    channel_service.send = AsyncMock()
+    channel_service.list_channels.return_value = [make_channel_config()]
+    registry = ToolRegistry()
+    register_channel_send_tool(
+        registry,
+        channel_service,
+        make_chat_sessions(),
+        max_attachment_size_bytes=_TEST_MAX_ATTACHMENT_SIZE_BYTES,
+    )
+    arguments = {"channel_id": "tg-assistant", "platform_target": "12345", "message": "Hello"}
+
+    result = asyncio.run(dispatch(registry, tmp_path, {**arguments, **empty}))
+
+    assert_success_envelope(result)
+    channel_service.send.assert_awaited_once_with(
+        "tg-assistant", "Hello", "12345", files=None, thread_id=None, buttons=None
+    )
 
 
 @pytest.mark.parametrize(
     ("arguments", "message"),
     (
-        (
-            {"channel_id": "tg-assistant", "message": "Hello", "file_paths": []},
-            'channel_send was not run: "file_paths" must not be empty.',
-        ),
-        (
-            {"channel_id": "tg-assistant", "message": "Hello", "buttons": []},
-            'channel_send was not run: "buttons" must not be empty.',
-        ),
         (
             {"channel_id": "tg-assistant", "message": "Hello", "buttons": [[]]},
             'channel_send was not run: "buttons[0]" must not be empty.',
@@ -218,9 +239,10 @@ def test_channel_send_message_and_file_paths_forwarded(tmp_path: Path) -> None:
 
 
 def test_channel_send_nonexistent_file_path_returns_failure(tmp_path: Path) -> None:
+    (tmp_path / "missing.pdf.txt").write_text("x", encoding="utf-8")
     channel_service = Mock()
     channel_service.send = AsyncMock()
-    channel_service.list_channels.return_value = []
+    channel_service.list_channels.return_value = [make_channel_config()]
     chat_sessions = make_chat_sessions()
     registry = ToolRegistry()
     register_channel_send_tool(
@@ -244,7 +266,8 @@ def test_channel_send_nonexistent_file_path_returns_failure(tmp_path: Path) -> N
 
     assert result == tool_failure(
         "invalid_arguments",
-        "file_paths[0] is not a file: missing.pdf",
+        f'channel_send was not run: file_paths "missing.pdf" does not exist '
+        f'({tmp_path / "missing.pdf"}). Files with similar names there: "missing.pdf.txt".',
     )
     channel_service.send.assert_not_called()
 
@@ -279,7 +302,8 @@ def test_channel_send_oversize_file_returns_failure_without_reading(tmp_path: Pa
 
     assert result == tool_failure(
         "invalid_arguments",
-        f"file_paths[0] size 16 exceeds limit 8: {attachment_path}",
+        f'channel_send was not run: file_paths "{attachment_path}" is 16 bytes; files '
+        "sent through a Channel may be at most 8 bytes.",
     )
     channel_service.send.assert_not_called()
 
@@ -311,9 +335,10 @@ def test_channel_send_fails_when_platform_target_is_missing_everywhere(tmp_path:
 
     assert result == tool_failure(
         "invalid_arguments",
-        "platform_target is required when session metadata has no "
-        "last_reply_target.platform_target and the channel has no unique "
-        "allowed_chat_ids target",
+        "channel_send was not run: this conversation is not with a chat on tg-assistant, and "
+        "the Channel allows no chats yet, so there is no chat to send to by default. Give the "
+        "chat's id on Telegram. Send: "
+        '{"channel_id":"tg-assistant","platform_target":"<chat id>","message":"Task finished"}',
     )
     channel_service.send.assert_not_called()
 

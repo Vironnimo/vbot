@@ -5,11 +5,17 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import re
 from dataclasses import dataclass
+from functools import cache
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlsplit
+from urllib.request import url2pathname
 
 from core.attachments.attachments import _sniff_mime
 from core.channels import (
+    ALLOWED_CHANNEL_PLATFORMS,
     ChannelConfig,
     ChannelConfigError,
     ChannelError,
@@ -18,9 +24,22 @@ from core.channels import (
 from core.channels.adapter import FileData, RouteFacts
 from core.extensions import InteractionButton
 from core.sessions import SessionAddress
-from core.tools._argument_repair import normalize_call_arguments
+from core.tools._call_vocabulary import spelling
+from core.tools._channel_send_arguments import (
+    ACTION_FIELD,
+    CHANNEL_FIELD,
+    REFUSAL_PREFIX,
+    TARGET_FIELD,
+    UNADVERTISED_PARAMETERS,
+    choice,
+    normalize_channel_send_arguments,
+    refusal,
+    render_call,
+    stand_in_message_refusal,
+)
+from core.tools._path_suggestions import similar_entries
 from core.tools.arguments import optional_string, required_string
-from core.tools.contracts import ToolContractError, compile_tool_contract
+from core.tools.contracts import ToolContract, compile_tool_contract
 from core.tools.tools import (
     JsonObject,
     ToolContext,
@@ -43,10 +62,17 @@ _LOGGER = get_logger("tools.channel")
 
 CHANNEL_SEND_TOOL_NAME = "channel_send"
 CHANNEL_SEND_TOOL_DESCRIPTION = (
-    "Send a proactive message or any file through a configured channel. Always use "
-    "this tool for channel file delivery, including replies."
+    "Send a message or files to a chat through your messaging Channels. Your final reply "
+    "already reaches the chat you are answering; use this Tool for files, including with a "
+    "reply, and to write to a chat on your own."
 )
 _INTERACTION_BUTTON_ARGUMENTS = frozenset(("label", "data"))
+_LISTED_CHATS = 10
+_WEB_ADDRESS = re.compile(r"^(?:[a-z][a-z0-9+.-]*://|data:|/api/)", re.IGNORECASE)
+
+
+class ChannelSendRefusedError(ValueError):
+    """A ``channel_send`` call was refused before anything was sent; the message names the fix."""
 
 
 @dataclass(frozen=True)
@@ -58,6 +84,7 @@ class _PreparedChannelSend:
     buttons: list[list[InteractionButton]] | None
     requested_platform_target: str | None
     requested_thread_id: str | None
+    call: JsonObject
 
 
 CHANNEL_SEND_TOOL_PARAMETERS: JsonObject = {
@@ -66,29 +93,26 @@ CHANNEL_SEND_TOOL_PARAMETERS: JsonObject = {
         "channel_id": {
             "type": "string",
             "minLength": 1,
-            "description": "Configured channel id to send through.",
+            "description": "Channel to send through; optional if you have only one.",
         },
         "message": {
             "type": "string",
             "minLength": 1,
-            "description": ("Outbound message text. Required unless file_paths is provided."),
+            "description": "Text to send, alone or with the files.",
         },
         "platform_target": {
             "type": "string",
             "minLength": 1,
             "description": (
-                "Platform-specific destination id, such as a chat or channel id. Omit to "
-                "use this Session's last Reply Target for channel_id; if none matches, use "
-                "the Channel's sole configured allowed chat. Required when neither fallback "
-                "is available."
+                "Chat id on the platform. Leave out for this conversation's chat on that "
+                "Channel, if any, else the Channel's only allowed chat."
             ),
         },
         "thread_id": {
             "type": "string",
             "minLength": 1,
             "description": (
-                "Telegram thread or forum-topic id. Omit to reuse the last Reply Target's "
-                "thread when available."
+                "Thread or topic id in that chat. Leave out for this conversation's thread, if any."
             ),
         },
         "file_paths": {
@@ -99,9 +123,8 @@ CHANNEL_SEND_TOOL_PARAMETERS: JsonObject = {
             },
             "minItems": 1,
             "description": (
-                "File paths to deliver through the channel. Use for every channel file "
-                "delivery, including replies. Required unless message is provided; relative "
-                "paths resolve from the working directory."
+                "Local files to send, such as images or documents. Relative paths start in the "
+                "working directory."
             ),
         },
         "buttons": {
@@ -136,9 +159,9 @@ CHANNEL_SEND_TOOL_PARAMETERS: JsonObject = {
             ),
         },
     },
-    "required": ["channel_id"],
 }
 
+# The fields each platform's adapter delivers; a profile shows the union of its Channels'.
 _CHANNEL_PROFILE_FIELDS: dict[str, tuple[str, ...]] = {
     "telegram": (
         "channel_id",
@@ -148,81 +171,67 @@ _CHANNEL_PROFILE_FIELDS: dict[str, tuple[str, ...]] = {
         "file_paths",
         "buttons",
     ),
-    "discord": (
-        "channel_id",
-        "message",
-        "platform_target",
-        "file_paths",
-    ),
+    "discord": ("channel_id", "message", "platform_target", "file_paths"),
+    "slack": ("channel_id", "message", "platform_target", "thread_id", "file_paths"),
+    "mattermost": ("channel_id", "message", "platform_target", "thread_id", "file_paths"),
+    "whatsapp": ("channel_id", "message", "platform_target", "file_paths"),
+}
+_PLATFORM_NAMES = {
+    "telegram": "Telegram",
+    "discord": "Discord",
+    "slack": "Slack",
+    "mattermost": "Mattermost",
+    "whatsapp": "WhatsApp",
 }
 
 
-_CHANNEL_SEND_RUNTIME_CONTRACT = compile_tool_contract(
-    name="channel_send",
-    input_schema={
-        **CHANNEL_SEND_TOOL_PARAMETERS,
-        "properties": {
-            **CHANNEL_SEND_TOOL_PARAMETERS["properties"],
-            "action": {"type": "string", "enum": ["send"]},
+@cache
+def _repair_contract() -> ToolContract:
+    return compile_tool_contract(
+        name=CHANNEL_SEND_TOOL_NAME,
+        input_schema={
+            **CHANNEL_SEND_TOOL_PARAMETERS,
+            "properties": {
+                **CHANNEL_SEND_TOOL_PARAMETERS["properties"],
+                **UNADVERTISED_PARAMETERS,
+            },
         },
-    },
-    require_closed_input=False,
-)
+        require_closed_input=False,
+    )
 
 
 def _normalize_channel_send_arguments(arguments: Any) -> Any:
-    arguments = normalize_call_arguments(
-        _CHANNEL_SEND_RUNTIME_CONTRACT, arguments, enum_fields=("action",)
-    )
-    if not isinstance(arguments, dict):
-        return arguments
-    action = arguments.pop("action", "send")
-    if action != "send":
-        raise ToolContractError(
-            "channel_send sends messages or files; action must be send or omitted."
-        )
-    return arguments
+    return normalize_channel_send_arguments(_repair_contract(), arguments)
+
+
+def _platform_name(platform: str) -> str:
+    return _PLATFORM_NAMES.get(platform, platform.title())
 
 
 def _channel_send_profile_parameters(configs: list[ChannelConfig]) -> JsonObject:
     canonical_properties = CHANNEL_SEND_TOOL_PARAMETERS["properties"]
     if not isinstance(canonical_properties, dict):
         raise ValueError("channel_send canonical properties must be an object")
-
-    channels_by_platform: dict[str, list[str]] = {}
-    for config in configs:
-        channels_by_platform.setdefault(config.platform, []).append(config.id)
-
     visible_fields = {
         field_name
-        for platform in channels_by_platform
-        for field_name in _CHANNEL_PROFILE_FIELDS[platform]
+        for config in configs
+        for field_name in _CHANNEL_PROFILE_FIELDS.get(config.platform, ())
     }
     properties = {
         name: copy.deepcopy(schema)
         for name, schema in canonical_properties.items()
         if name in visible_fields
     }
-    channel_id_schema = properties["channel_id"]
-    channel_id_schema["enum"] = sorted(
-        channel_id for channel_ids in channels_by_platform.values() for channel_id in channel_ids
-    )
-    return {
-        "type": "object",
-        "properties": properties,
-        "required": ["channel_id"],
-    }
+    properties["channel_id"]["enum"] = sorted(config.id for config in configs)
+    return {"type": "object", "properties": properties}
 
 
 def _channel_send_profile_description(configs: list[ChannelConfig]) -> str:
-    channels_by_platform: dict[str, list[str]] = {}
-    for config in configs:
-        channels_by_platform.setdefault(config.platform, []).append(config.id)
-    available = "; ".join(
-        f"{platform.title()}: {', '.join(sorted(channel_ids))}"
-        for platform, channel_ids in sorted(channels_by_platform.items())
+    available = ", ".join(
+        f"{config.id} ({_platform_name(config.platform)})"
+        for config in sorted(configs, key=lambda item: (item.platform, item.id))
     )
-    return f"{CHANNEL_SEND_TOOL_DESCRIPTION} Enabled Channels — {available}."
+    return f"{CHANNEL_SEND_TOOL_DESCRIPTION} Channels: {available}."
 
 
 def _channel_send_definition_profile(configs: list[ChannelConfig]) -> ToolDefinitionProfile:
@@ -238,18 +247,22 @@ def _channel_send_definition_profile(configs: list[ChannelConfig]) -> ToolDefini
     )
 
 
+def _owned_channels(channel_service: ChannelService, agent_id: str) -> list[ChannelConfig]:
+    return sorted(
+        (
+            config
+            for config in channel_service.list_channels()
+            if config.enabled and config.agent_id == agent_id
+        ),
+        key=lambda config: (config.platform, config.id),
+    )
+
+
 def _channel_send_profile_resolver(channel_service: ChannelService):
     def resolve(
         context: ToolDefinitionProfileContext,
     ) -> ToolDefinitionProfile | None:
-        configs = sorted(
-            (
-                config
-                for config in channel_service.list_channels()
-                if config.enabled and config.agent_id == context.agent_id
-            ),
-            key=lambda config: (config.platform, config.id),
-        )
+        configs = _owned_channels(channel_service, context.agent_id)
         if not configs:
             return None
         return _channel_send_definition_profile(configs)
@@ -257,9 +270,16 @@ def _channel_send_profile_resolver(channel_service: ChannelService):
     return resolve
 
 
-def _channel_send_display_parts(arguments: JsonObject) -> tuple[ToolDisplayPart, ...]:
+def _channel_send_display_parts(raw_arguments: JsonObject) -> tuple[ToolDisplayPart, ...]:
+    # Persisted calls keep the Model's own spelling; label what the call meant.
+    try:
+        arguments = _normalize_channel_send_arguments(raw_arguments)
+    except ValueError:
+        arguments = raw_arguments
+    if not isinstance(arguments, dict):
+        return ()
     parts: list[ToolDisplayPart] = []
-    channel_id = arguments.get("channel_id")
+    channel_id = arguments.get("channel_id") or arguments.get(CHANNEL_FIELD)
     if isinstance(channel_id, str) and channel_id.strip():
         parts.append(ToolDisplayPart(channel_id.strip(), kind="identifier", truncate="middle"))
     message = arguments.get("message")
@@ -296,8 +316,9 @@ def register_channel_send_tool(
         CHANNEL_SEND_TOOL_PARAMETERS,
         handler,
         open_input_schema=True,
+        unadvertised_parameters=UNADVERTISED_PARAMETERS,
         argument_normalizer=_normalize_channel_send_arguments,
-        result_schema={"type": "object", "required": ["channel_id", "platform_target"]},
+        result_schema={"type": "object"},
         display=ToolDisplay(parts_builder=_channel_send_display_parts),
         definition_profile_resolver=_channel_send_profile_resolver(channel_service),
     )
@@ -312,6 +333,8 @@ async def _handle_channel_send_tool(
     max_attachment_size_bytes: int,
 ) -> JsonObject:
     try:
+        if arguments.get(ACTION_FIELD) == "list":
+            return await _list_targets(channel_service, chat_sessions, context, arguments)
         prepared = await run_tool_worker(
             _prepare_channel_send,
             channel_service,
@@ -373,7 +396,26 @@ def _prepare_channel_send(
     arguments: JsonObject,
     max_size_bytes: int,
 ) -> _PreparedChannelSend:
-    channel_id = required_string(arguments.get("channel_id"), field_name="channel_id")
+    channel_config, target_chat, target_thread = _resolve_channel(
+        channel_service, context.agent_id, arguments
+    )
+    requested_platform_target = _one_value(
+        arguments, "platform_target", target_chat, channel_config
+    )
+    requested_thread_id = _one_value(arguments, "thread_id", target_thread, channel_config)
+    call: JsonObject = {
+        name: arguments[name] for name in ("message", "file_paths", "buttons") if name in arguments
+    }
+    call["channel_id"] = channel_config.id
+    if requested_platform_target is not None:
+        call["platform_target"] = requested_platform_target
+    if requested_thread_id is not None:
+        call["thread_id"] = requested_thread_id
+    stand_in = stand_in_message_refusal(call)
+    if stand_in is not None:
+        raise ChannelSendRefusedError(stand_in)
+    _validate_platform_arguments(call, channel_config)
+
     message = optional_string(arguments.get("message"), field_name="message")
     files = _build_file_data(
         arguments.get("file_paths"),
@@ -382,34 +424,188 @@ def _prepare_channel_send(
     )
     buttons = _build_buttons(arguments.get("buttons"))
     if message is None and not files:
-        raise ValueError("at least one of message or file_paths must be provided")
+        raise ChannelSendRefusedError(
+            refusal(
+                'it needs "message", "file_paths", or both.',
+                call,
+                message="<text to send>",
+            )
+        )
     if buttons is not None and files:
-        raise ValueError("buttons cannot be combined with file_paths")
-
-    channel_config = _channel_config_for_agent(channel_service, channel_id, context.agent_id)
-    _validate_platform_arguments(arguments, channel_config)
-    requested_thread_id = optional_string(arguments.get("thread_id"), field_name="thread_id")
-    requested_platform_target = optional_string(
-        arguments.get("platform_target"), field_name="platform_target"
-    )
+        without_buttons = render_call(call, buttons=None)
+        buttons_only = render_call(call, file_paths=None, message=call.get("message", "<text>"))
+        raise ChannelSendRefusedError(
+            f"{REFUSAL_PREFIX}buttons cannot go with files in one message. Send the files "
+            f"first, then the buttons, in two calls: {without_buttons} then {buttons_only}"
+        )
     return _PreparedChannelSend(
-        channel_id=channel_id,
+        channel_id=channel_config.id,
         channel_config=channel_config,
         message=message,
         files=files,
         buttons=buttons,
         requested_platform_target=requested_platform_target,
         requested_thread_id=requested_thread_id,
+        call=call,
     )
 
 
-def _validate_platform_arguments(arguments: JsonObject, channel_config: ChannelConfig) -> None:
-    allowed_arguments = frozenset(_CHANNEL_PROFILE_FIELDS[channel_config.platform])
-    unsupported_arguments = sorted(set(arguments) - allowed_arguments)
-    if unsupported_arguments:
-        names = ", ".join(unsupported_arguments)
-        raise ValueError(
-            f"{names} not supported by {channel_config.platform} Channel {channel_config.id}"
+def _resolve_channel(
+    channel_service: ChannelService, agent_id: str, arguments: JsonObject
+) -> tuple[ChannelConfig, str | None, str | None]:
+    """Return the Channel a call names, with the chat and thread a ``target`` carries."""
+    configs = channel_service.list_channels()
+    owned = sorted(
+        (config for config in configs if config.enabled and config.agent_id == agent_id),
+        key=lambda config: (config.platform, config.id),
+    )
+    chat: str | None = None
+    thread: str | None = None
+    references: list[str] = []
+    target = arguments.get(TARGET_FIELD)
+    if isinstance(target, str):
+        prefix, chat, thread = _split_target(target, owned, arguments)
+        if prefix is not None:
+            references.append(prefix)
+    reference = arguments.get(CHANNEL_FIELD)
+    if isinstance(reference, str):
+        references.append(reference)
+    resolved: list[ChannelConfig] = []
+    explicit = arguments.get("channel_id")
+    if isinstance(explicit, str):
+        resolved.append(_channel_config_for_agent(configs, explicit, agent_id))
+    resolved.extend(_channel_by_reference(owned, item, arguments) for item in references)
+    distinct = list({config.id: config for config in resolved}.values())
+    if len(distinct) > 1:
+        raise ChannelSendRefusedError(
+            choice(
+                "the call names different Channels:",
+                [_call_for(arguments, config, chat, thread) for config in distinct],
+            )
+        )
+    if distinct:
+        return distinct[0], chat, thread
+    if len(owned) == 1:
+        return owned[0], chat, thread
+    if not owned:
+        raise ChannelNotFoundError(f"Agent {agent_id} has no enabled Channel to send through.")
+    raise ChannelSendRefusedError(
+        choice(
+            'it needs "channel_id"; you have several Channels:',
+            [_call_for(arguments, config, chat, thread) for config in owned],
+        )
+    )
+
+
+def _split_target(
+    target: str, owned: list[ChannelConfig], arguments: JsonObject
+) -> tuple[str | None, str | None, str | None]:
+    """Read ``platform``, ``channel:chat`` or ``platform:chat:thread``, or a plain chat id."""
+    parts = [part.strip() for part in target.split(":")]
+    head = parts[0]
+    names_channel = head in {config.id for config in owned} or (
+        spelling(head) in ALLOWED_CHANNEL_PLATFORMS
+    )
+    if len(parts) == 1:
+        return (head, None, None) if names_channel else (None, head, None)
+    if not names_channel or len(parts) > 3 or not parts[1]:
+        ids = ", ".join(config.id for config in owned)
+        raise ChannelSendRefusedError(
+            refusal(
+                f'"target" "{target}" is not "channel:chat" with one of your Channels ({ids}). '
+                "Name the Channel and the chat separately.",
+                _canonical(arguments),
+                channel_id=owned[0].id if len(owned) == 1 else "<channel id>",
+                platform_target="<chat id>",
+            )
+        )
+    return head, parts[1], parts[2] if len(parts) == 3 and parts[2] else None
+
+
+def _channel_by_reference(
+    owned: list[ChannelConfig], reference: str, arguments: JsonObject
+) -> ChannelConfig:
+    """An exact Channel id of the Agent, or its only Channel on a named platform."""
+    for config in owned:
+        if config.id == reference:
+            return config
+    platform = spelling(reference)
+    matches = [config for config in owned if config.platform == platform]
+    if len(matches) == 1:
+        return matches[0]
+    listing = ", ".join(f"{config.id} ({_platform_name(config.platform)})" for config in owned)
+    if matches:
+        raise ChannelSendRefusedError(
+            choice(
+                f"you have several {_platform_name(platform)} Channels:",
+                [_call_for(arguments, config, None, None) for config in matches],
+            )
+        )
+    what = (
+        f"no {_platform_name(platform)} Channel"
+        if platform in ALLOWED_CHANNEL_PLATFORMS
+        else f'no Channel "{reference}"'
+    )
+    raise ChannelSendRefusedError(
+        choice(
+            f"you have {what}; your Channels are {listing}:",
+            [_call_for(arguments, config, None, None) for config in owned],
+        )
+    )
+
+
+def _one_value(
+    arguments: JsonObject, name: str, from_target: str | None, config: ChannelConfig
+) -> str | None:
+    """The explicit field and the part of ``target`` must agree."""
+    explicit = optional_string(arguments.get(name), field_name=name)
+    if explicit is not None and from_target is not None and explicit != from_target:
+        raise ChannelSendRefusedError(
+            choice(
+                f'"{name}" "{explicit}" and "target" name different values:',
+                [
+                    render_call(_canonical(arguments), channel_id=config.id, **{name: value})
+                    for value in (explicit, from_target)
+                ],
+            )
+        )
+    return explicit if explicit is not None else from_target
+
+
+def _canonical(arguments: JsonObject) -> JsonObject:
+    return {
+        key: value
+        for key, value in arguments.items()
+        if key not in (ACTION_FIELD, CHANNEL_FIELD, TARGET_FIELD)
+    }
+
+
+def _call_for(
+    arguments: JsonObject, config: ChannelConfig, chat: str | None, thread: str | None
+) -> str:
+    call = _canonical(arguments)
+    call["channel_id"] = config.id
+    if chat is not None and "platform_target" not in call:
+        call["platform_target"] = chat
+    if thread is not None and "thread_id" not in call:
+        call["thread_id"] = thread
+    return render_call(call)
+
+
+def _validate_platform_arguments(call: JsonObject, channel_config: ChannelConfig) -> None:
+    allowed_arguments = frozenset(_CHANNEL_PROFILE_FIELDS.get(channel_config.platform, ()))
+    unsupported = sorted(name for name in call if name not in allowed_arguments)
+    if unsupported:
+        names = " and ".join(unsupported)
+        verb = "does" if len(unsupported) == 1 else "do"
+        raise ChannelSendRefusedError(
+            refusal(
+                f"{names} {verb} not work on the {_platform_name(channel_config.platform)} "
+                f"Channel {channel_config.id}. The call below sends without "
+                f"{'it' if len(unsupported) == 1 else 'them'}; send it only if that is meant.",
+                call,
+                **dict.fromkeys(unsupported),
+            )
         )
 
 
@@ -417,6 +613,54 @@ def _contains_run_button(buttons: list[list[InteractionButton]] | None) -> bool:
     return bool(
         buttons and any(button.data.split(":", 1)[0] == "run" for row in buttons for button in row)
     )
+
+
+async def _list_targets(
+    channel_service: ChannelService,
+    chat_sessions: ChatSessionManager,
+    context: ToolContext,
+    arguments: JsonObject,
+) -> JsonObject:
+    """Show the Agent's Channels, this conversation's chat and the allowed chats."""
+    sends = sorted(name for name in ("message", "file_paths", "buttons") if name in arguments)
+    if sends:
+        raise ChannelSendRefusedError(
+            f"{REFUSAL_PREFIX}action list only shows where messages can go, but the call also "
+            f"has {', '.join(sends)}. To send, leave action out: "
+            f"{render_call(_canonical(arguments))}"
+        )
+    owned = _owned_channels(channel_service, context.agent_id)
+    metadata = await chat_sessions.get_metadata_async(
+        SessionAddress(
+            project_id=context.project_id,
+            agent_id=context.agent_id,
+            session_id=context.session_id,
+        )
+    )
+    blocks: list[str] = []
+    for config in owned:
+        lines = [f"{config.id} ({_platform_name(config.platform)})"]
+        current = _send_target_from_session_metadata(metadata, config.id)
+        if current is not None:
+            chat, thread = current
+            lines.append(
+                f"  this conversation's chat: {chat}" + (f", thread {thread}" if thread else "")
+            )
+        lines.append("  " + _allowed_text(config))
+        blocks.append("\n".join(lines))
+    data: JsonObject = {"channels": len(owned)}
+    if blocks:
+        data["content"] = "\n\n".join(blocks)
+    return tool_success(data)
+
+
+def _allowed_text(config: ChannelConfig) -> str:
+    chats = [str(item) for item in config.allowed_chat_ids]
+    if not chats:
+        return "allowed chats: none yet"
+    shown = ", ".join(chats[:_LISTED_CHATS])
+    more = f", and {len(chats) - _LISTED_CHATS} more" if len(chats) > _LISTED_CHATS else ""
+    return f"allowed chats: {shown}{more}"
 
 
 async def _record_outbound_message_note(
@@ -508,10 +752,25 @@ async def _resolve_send_target(
     if config_platform_target is not None:
         return config_platform_target, requested_thread_id
 
-    raise ValueError(
-        "platform_target is required when session metadata has no "
-        "last_reply_target.platform_target and the channel has no unique allowed_chat_ids target"
+    raise ChannelSendRefusedError(_missing_target(prepared))
+
+
+def _missing_target(prepared: _PreparedChannelSend) -> str:
+    """Name the chats a send without a target could mean, one call each."""
+    config = prepared.channel_config
+    chats = [str(item) for item in config.allowed_chat_ids]
+    why = (
+        f"this conversation is not with a chat on {config.id}, and the Channel allows no "
+        "chats yet, so there is no chat to send to by default. Give the chat's id on "
+        f"{_platform_name(config.platform)}:"
+        if not chats
+        else f"this conversation is not with a chat on {config.id}, and the Channel allows "
+        f"{len(chats)} chats, so it is not clear which one is meant. Choose one:"
     )
+    if not chats:
+        return refusal(why.removesuffix(":") + ".", prepared.call, platform_target="<chat id>")
+    calls = [render_call(prepared.call, platform_target=chat) for chat in chats[:_LISTED_CHATS]]
+    return choice(why, calls)
 
 
 def _send_target_from_session_metadata(
@@ -538,11 +797,11 @@ def _send_target_from_session_metadata(
 
 
 def _channel_config_for_agent(
-    channel_service: ChannelService,
+    configs: list[ChannelConfig],
     channel_id: str,
     agent_id: str,
 ) -> ChannelConfig:
-    for config in channel_service.list_channels():
+    for config in configs:
         if config.id != channel_id:
             continue
         if config.agent_id != agent_id:
@@ -576,17 +835,30 @@ def _build_file_data(
     for index, raw_path in enumerate(value):
         if not isinstance(raw_path, str) or not raw_path.strip():
             raise ValueError(f"file_paths[{index}] must be a non-empty string")
-
-        resolved_path = context.resolve_path(raw_path.strip())
+        path_text = raw_path.strip()
+        if path_text.lower().startswith("file://"):
+            path_text = url2pathname(urlsplit(path_text).path)
+        elif _WEB_ADDRESS.match(path_text):
+            raise ChannelSendRefusedError(
+                f'{REFUSAL_PREFIX}file_paths "{path_text}" is a web address, not a file on this '
+                "computer. Send the file's local path, or put the link in message."
+            )
+        resolved_path = context.resolve_path(path_text)
+        if resolved_path.is_dir():
+            raise ChannelSendRefusedError(
+                f'{REFUSAL_PREFIX}file_paths "{path_text}" is a folder; list the files in it '
+                "one by one."
+            )
         if not resolved_path.is_file():
-            raise ValueError(f"file_paths[{index}] is not a file: {raw_path}")
+            raise ChannelSendRefusedError(_missing_file(path_text, resolved_path))
 
         # Reject oversize files by their on-disk size before reading, so a large
         # file never gets loaded into memory just to be turned away.
         size_bytes = resolved_path.stat().st_size
         if size_bytes > max_size_bytes:
-            raise ValueError(
-                f"file_paths[{index}] size {size_bytes} exceeds limit {max_size_bytes}: {raw_path}"
+            raise ChannelSendRefusedError(
+                f'{REFUSAL_PREFIX}file_paths "{path_text}" is {_size_text(size_bytes)}; files '
+                f"sent through a Channel may be at most {_size_text(max_size_bytes)}."
             )
 
         try:
@@ -603,6 +875,24 @@ def _build_file_data(
         )
 
     return files
+
+
+def _missing_file(path_text: str, resolved_path: Path) -> str:
+    text = f'{REFUSAL_PREFIX}file_paths "{path_text}" does not exist ({resolved_path}).'
+    similar = similar_entries(resolved_path, kind="files", limit=3)
+    if similar:
+        base = Path(path_text).parent
+        names = ", ".join(f'"{(base / entry.name).as_posix()}"' for entry in similar)
+        text += f" Files with similar names there: {names}."
+    return text
+
+
+def _size_text(size_bytes: int) -> str:
+    if size_bytes >= 1024 * 1024:
+        return f"{size_bytes / (1024 * 1024):.1f} MB"
+    if size_bytes >= 1024:
+        return f"{size_bytes / 1024:.0f} KB"
+    return f"{size_bytes} bytes"
 
 
 def _build_buttons(value: object) -> list[list[InteractionButton]] | None:

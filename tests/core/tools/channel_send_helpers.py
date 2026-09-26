@@ -75,7 +75,7 @@ def make_channel_config(
     agent_id: str = "agent-1",
     platform: str = "telegram",
     enabled: bool = True,
-    allowed_chat_ids: list[int] | None = None,
+    allowed_chat_ids: list[int] | list[str] | None = None,
 ) -> Mock:
     return Mock(
         id=channel_id,

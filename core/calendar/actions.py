@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import copy
-import json
 import re
 from contextlib import suppress
 from datetime import UTC, datetime, time, timedelta
@@ -96,6 +95,39 @@ CALENDAR_ACTIONS_SHAPE = json_document(
         "executions": json_map(_EXECUTION_SHAPE),
     },
 )
+
+
+def action_message(
+    action: dict[str, Any], event: CalendarEvent, occurrence: EventOccurrence, zone_name: str
+) -> str:
+    """Return the message a due action's Run receives: what fired, the event, the instruction."""
+    if occurrence.all_day:
+        last_day = (
+            occurrence.end_date - timedelta(days=1)
+            if occurrence.end_date is not None
+            else occurrence.start_date
+        )
+        span = occurrence.occurrence_start
+        if last_day is not None and last_day.isoformat() != occurrence.occurrence_start:
+            span += f" to {last_day.isoformat()}"
+        time_text = f"{span}, all day"
+    else:
+        end = occurrence.occurrence_end or ""
+        time_text = f"{_minute_text(occurrence.occurrence_start)} to {_minute_text(end)}"
+    lines = [
+        f'Calendar action {action["id"]} is due ({action["when"]}) for "{event.title}" '
+        f"(event {event.id}).",
+        f"Event time: {time_text} ({zone_name})",
+    ]
+    if event.notes:
+        lines.append(f"Event notes: {event.notes}")
+    lines.extend(("", "Instruction:", action["prompt"]))
+    return "\n".join(lines)
+
+
+def _minute_text(value: str) -> str:
+    """Drop zero seconds from a naive ISO time: 2030-01-10T15:00:00 -> 2030-01-10T15:00."""
+    return value[:-3] if len(value) == 19 and value.endswith(":00") else value
 
 
 def parse_action_when(value: object) -> tuple[str, int, str]:
@@ -760,20 +792,8 @@ class CalendarActions:
             mark(status="claimed")
             await self._save_async()
             agent, project = parse_agent_address(action["target"])
-            message = json.dumps(
-                {
-                    "instruction": action["prompt"],
-                    "calendar_event": {
-                        "id": event.id,
-                        "title": event.title,
-                        "notes": event.notes,
-                        "start": occurrence.occurrence_start,
-                        "end": occurrence.occurrence_end
-                        or (occurrence.end_date.isoformat() if occurrence.end_date else None),
-                        "timezone": event.tz_name or self._calendar.system_timezone_name(),
-                    },
-                },
-                ensure_ascii=False,
+            message = action_message(
+                action, event, occurrence, event.tz_name or self._calendar.system_timezone_name()
             )
             async with asyncio.timeout(remaining):
                 run = await self._trigger.trigger_run(
