@@ -10,6 +10,8 @@ working directory, and select Tools. The Swarm section of Tools & Skills exposes
 Board, Inbox, State and Wiki individually. These private Tools start
 enabled; an empty ordinary Tool selection does not disable them. Use their
 switches or None to disable them. Changes apply to future Runs.
+The profile's Compaction section can set one Compaction Policy for every
+participant; while it is off, participants use the global Compaction settings.
 Enter a goal and start from the page, or use `/swarm <profile-slug> "goal"`.
 The Command supplies only the entered goal; it does not import source Session
 history or attachments.

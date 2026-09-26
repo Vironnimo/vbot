@@ -502,6 +502,72 @@ async def test_run_rejects_invalid_directory_before_creating_sessions(lifecycle,
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "policy",
+    [
+        None,
+        {
+            "enabled": False,
+            "trigger": {"type": "input_tokens", "tokens": 50_000},
+            "strategy": {"type": "continuation"},
+        },
+    ],
+)
+async def test_profile_compaction_policy_reaches_every_participant(lifecycle, tmp_path, policy):
+    from resources.extensions.swarm._extension_values import _participant_config
+
+    saved = await lifecycle.service.store.save_profile(
+        {
+            "schema_version": 1,
+            "name": "Compaction policy",
+            "participants": [
+                {"model": "fixture/model", "count": 1},
+                {"model": "fixture/model", "count": 1, "temperature": 0.2},
+            ],
+            "working_directory": {"kind": "directory", "path": str(tmp_path)},
+            "tool_access": {"mode": "selected", "allowed": []},
+            "compaction_policy": policy,
+        },
+        expected_revision=None,
+    )
+    started = await lifecycle.service.operation(
+        "swarms.start",
+        {"profile_id": saved["id"], "prompt": "compaction-goal", "request_id": "start"},
+    )
+    for entry in started["runs"]:
+        await lifecycle.runtime.chat_run_manager.get(entry["run_id"]).wait()
+    # A later profile edit applies to new Runs only; this Run keeps its snapshot.
+    await lifecycle.service.store.save_profile(
+        {
+            **saved,
+            "compaction_policy": None
+            if policy
+            else {
+                "enabled": True,
+                "trigger": {"type": "context_ratio", "threshold": 0.5},
+                "strategy": {"type": "summary_tail", "tail_tokens": 4_000},
+            },
+        },
+        expected_revision=saved["revision"],
+    )
+    swarm = await lifecycle.service.store.get_swarm(started["swarm_id"])
+    assert swarm["profile_snapshot"]["compaction_policy"] == policy
+    bindings = await lifecycle.groups.list(started["swarm_id"])
+    assert len(bindings) == 2
+    for binding in bindings:
+        agent = lifecycle.runtime.agent_resolver.temporary_agents.resolve(
+            binding.address, generation_id=binding.generation_id
+        )
+        assert agent.compaction_policy == policy
+    # Profiles and snapshots saved before the field existed have no key and inherit.
+    legacy = {
+        key: value for key, value in swarm["profile_snapshot"].items() if key != "compaction_policy"
+    }
+    participant = swarm["participants"][0]
+    assert _participant_config(legacy, participant, tmp_path).compaction_policy is None
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("selected", [[], ["core:runtime"]])
 async def test_profile_prompt_selection_reaches_model_without_hidden_orientation(
     lifecycle, tmp_path, selected
