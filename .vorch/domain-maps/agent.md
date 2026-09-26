@@ -38,6 +38,13 @@ be empty so an owner can retain a canonical admission receipt without adding
 guidance to the Model request; initial input must still be non-empty.
 Evidence: `temporary.py`, `test_temporary.py`, `test_swarm_lifecycle.py`.
 
+They also carry an optional `compaction_policy`: `None` inherits the global
+Compaction Policy; a dict is validated and normalized as one complete Policy by the
+shared Settings normalizer when the configuration is built, and resolves as the
+participant's Agent-level Policy (`compaction.md` -> Policy Resolution). The binding
+config stores the key only when set, so inheriting participants and bindings that
+predate the key are identical and resolve to `None` (`test_temporary.py`).
+
 Run paths resolve through one seam, `AgentResolver.resolve_agent(project_id, agent_id)` (owned by `core/projects/`; details in `projects/resolution.md`) - never `runtime.agents.get(...)` directly. Identity branch (`project_id=None`): this domain's store, unchanged behavior. Project branch synthesizes a workspace-less Config Agent from the Team scan whose policy computes inside the Project Tool Whitelist (repository denials narrow; a vBot override fully replaces scanned policy within the ceiling).
 
 Two freshness levels: team membership comes from the scan (cached per project, refreshed on open/re-scan); a single member's config reads fresh from the repo file on every resolve, mirroring identity agents re-reading `agent.json`.
