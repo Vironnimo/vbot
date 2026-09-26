@@ -15,7 +15,7 @@ from core.projects import (
     ResolutionAgentNotFoundError,
     ResolutionProjectNotFoundError,
 )
-from core.tools.cron import CRON_TOOL_NAME, CRON_TOOL_PARAMETERS
+from core.tools.cron import CRON_TOOL_DESCRIPTION, CRON_TOOL_NAME, CRON_TOOL_PARAMETERS
 
 from .cron_tool_support import cron_tool
 
@@ -206,6 +206,10 @@ def test_empty_list_has_no_body(tmp_path: Path) -> None:
     _envelope, text = cron_tool(tmp_path).call({"action": "list"})
 
     assert text == "jobs: 0\ntimezone: Europe/Berlin"
+    # The zone reaches Agents whose prompt shows no Runtime Environment: list names it.
+    assert "server time zone, shown by list and by Runtime Environment when present" in (
+        CRON_TOOL_DESCRIPTION
+    )
 
 
 def test_update_changes_only_the_named_fields(tmp_path: Path) -> None:

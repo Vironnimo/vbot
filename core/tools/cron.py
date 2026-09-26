@@ -49,7 +49,8 @@ CRON_TOOL_DESCRIPTION = (
     "Schedule jobs that run an instruction later, once or repeatedly. Each fire starts a new "
     "Run of the target Agent in a fresh Session with prompt as its only message: that Run sees "
     "nothing of this conversation, and its reply stays in that Session without notifying "
-    "anyone. Times are in the Time zone shown in Runtime Environment."
+    "anyone. Times are in the server time zone, shown by list and by Runtime Environment when "
+    "present."
 )
 
 CRON_ACTIONS = frozenset(("create", "list", "update", "delete", "enable", "disable"))
