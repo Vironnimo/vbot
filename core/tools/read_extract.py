@@ -14,6 +14,7 @@ with no usable extension) with the filename extension as a fallback.
 from __future__ import annotations
 
 import json
+import posixpath
 import zlib
 from io import BytesIO
 from pathlib import Path
@@ -333,7 +334,8 @@ def _resolve_worksheet_targets(data: bytes, budget: _ExtractionBudget) -> list[t
         target = relationship_targets.get(relationship_id) if relationship_id else None
         if target is None:
             continue
-        sheets.append((name, f"xl/{target.lstrip('/')}"))
+        member = posixpath.normpath(posixpath.join("/xl", target)).lstrip("/")
+        sheets.append((name, member))
 
     return sheets or _fallback_worksheet_targets(data)
 

@@ -5,11 +5,13 @@ from __future__ import annotations
 import json
 import zlib
 from io import BytesIO
+from pathlib import Path
 from zipfile import ZipFile
 
 import pytest
 
 import core.tools.read_extract as read_extract_module
+from core.tools import FileReadState, ToolCall, ToolExecutor, ToolRegistry, register_read_tool
 from core.tools.read_extract import (
     ExtractionError,
     ExtractionLimitExceededError,
@@ -17,6 +19,7 @@ from core.tools.read_extract import (
     document_label,
     extract_document_text,
 )
+from tests.core.tools.tools_helpers import make_execution_config
 
 _DOCX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 _XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -59,14 +62,19 @@ def _docx_bytes() -> bytes:
     return buffer.getvalue()
 
 
-def _xlsx_bytes(*, with_workbook: bool = True) -> bytes:
+def _xlsx_bytes(
+    *, with_workbook: bool = True, worksheet_target: str = "worksheets/sheet1.xml"
+) -> bytes:
     buffer = BytesIO()
     with ZipFile(buffer, "w") as archive:
         archive.writestr("xl/sharedStrings.xml", _SHARED_STRINGS_XML)
         archive.writestr("xl/worksheets/sheet1.xml", _SHEET_XML)
         if with_workbook:
             archive.writestr("xl/workbook.xml", _WORKBOOK_XML)
-            archive.writestr("xl/_rels/workbook.xml.rels", _WORKBOOK_RELS_XML)
+            archive.writestr(
+                "xl/_rels/workbook.xml.rels",
+                _WORKBOOK_RELS_XML.replace("worksheets/sheet1.xml", worksheet_target),
+            )
     return buffer.getvalue()
 
 
@@ -181,8 +189,18 @@ def test_extract_docx_joins_paragraphs_with_tabs_preserved() -> None:
     assert text == "Hello World\nLine\tTwo"
 
 
-def test_extract_xlsx_renders_tab_separated_rows_with_sheet_name() -> None:
-    text = extract_document_text(_xlsx_bytes(), "xlsx")
+@pytest.mark.parametrize(
+    "worksheet_target",
+    [
+        "worksheets/sheet1.xml",
+        "/xl/worksheets/sheet1.xml",
+        "./worksheets/sheet1.xml",
+        "worksheets/../worksheets/sheet1.xml",
+        "../xl/worksheets/sheet1.xml",
+    ],
+)
+def test_extract_xlsx_renders_tab_separated_rows_with_sheet_name(worksheet_target: str) -> None:
+    text = extract_document_text(_xlsx_bytes(worksheet_target=worksheet_target), "xlsx")
 
     assert text == "# Sheet: People\nName\tAge\nBob\t42"
 
@@ -191,6 +209,30 @@ def test_extract_xlsx_falls_back_to_worksheet_files_without_workbook() -> None:
     text = extract_document_text(_xlsx_bytes(with_workbook=False), "xlsx")
 
     assert text == "# Sheet: sheet1\nName\tAge\nBob\t42"
+
+
+@pytest.mark.asyncio
+async def test_read_xlsx_absolute_worksheet_target_returns_cell_content(tmp_path: Path) -> None:
+    document = tmp_path / "people.xlsx"
+    document.write_bytes(_xlsx_bytes(worksheet_target="/xl/worksheets/sheet1.xml"))
+    tools = ToolRegistry()
+    state = FileReadState()
+    register_read_tool(
+        tools,
+        attachment_store=None,
+        speech_service=None,
+        file_state=state,
+        speech_max_size_bytes=1024,
+    )
+
+    results = await ToolExecutor(tools).execute_many(
+        [ToolCall(id="read-workbook", name="read", arguments={"path": document.name})],
+        make_execution_config(allowed_tools=["read"], workspace=tmp_path),
+    )
+
+    assert results[0]["ok"] is True
+    assert "# Sheet: People\nName\tAge\nBob\t42" in results[0]["data"]["content"]
+    assert state.check_stale("session-1", document.resolve()) is None
 
 
 def test_extract_pdf_renders_pages_with_headers() -> None:
