@@ -179,6 +179,8 @@ class LiveTerminals:
         self._timings = timings
         self._sleep = sleep
         self._clock = clock
+        # Terminals a start is still typing its task into.
+        self._typing: set[str] = set()
 
     # -- start_coding_terminal --------------------------------------------
 
@@ -233,13 +235,20 @@ class LiveTerminals:
             head += " The app did not switch to it."
         if not task:
             return live_success(head)
-        outcomes = [
-            _outcome(item)
-            for item in await asyncio.gather(
-                *(self._start_task(terminal_id, program, task) for terminal_id in started),
-                return_exceptions=True,
-            )
-        ]
+        # Waiting for the programs takes up to the ready timeout: other calls run
+        # meanwhile, but none writes to these Terminals until the task is typed.
+        self._typing.update(started)
+        try:
+            self._ctx.let_others_run()
+            outcomes = [
+                _outcome(item)
+                for item in await asyncio.gather(
+                    *(self._start_task(terminal_id, program, task) for terminal_id in started),
+                    return_exceptions=True,
+                )
+            ]
+        finally:
+            self._typing.difference_update(started)
         report = _task_report(
             program, refs, outcomes, timeout_seconds=self._timings.ready_timeout_seconds
         )
@@ -350,7 +359,7 @@ class LiveTerminals:
 
     async def send(self, terminal: JsonObject, text: str) -> JsonObject:
         """Type *text* into a coding Terminal and send it with Enter."""
-        ref, program = self._coding(terminal, "send_message")
+        ref, program = self._writable(terminal, "send_message")
         if problem := text_problem(text):
             raise LiveToolError(
                 "invalid_text", f"{problem} Call send_message again with the message as text."
@@ -388,7 +397,7 @@ class LiveTerminals:
 
     async def interrupt(self, terminal: JsonObject) -> JsonObject:
         """Press the program's interrupt key."""
-        ref, program = self._coding(terminal, "stop")
+        ref, program = self._writable(terminal, "stop")
         return await self._press(terminal, ref, program, program.interrupt_key, tool="stop")
 
     # -- terminal -----------------------------------------------------------
@@ -445,7 +454,7 @@ class LiveTerminals:
                 f"key must be one of {', '.join(KEY_SEQUENCES)}. Call terminal again with "
                 f'{{"action": "key", "target": "{ref}", "key": "enter"}}.',
             )
-        ref, program = self._coding(terminal, "terminal")
+        ref, program = self._writable(terminal, "terminal")
         return await self._press(terminal, ref, program, key, tool="terminal")
 
     async def _create_group(self, name: str) -> JsonObject:
@@ -594,6 +603,18 @@ class LiveTerminals:
                 "not_a_coding_terminal",
                 f"{ref} does not run Codex or Claude Code; {tool} works only with coding "
                 "Terminals. Use open to show it to the user.",
+            )
+        return ref, program
+
+    def _writable(self, terminal: JsonObject, tool: str) -> tuple[str, CodingProgram]:
+        """A coding Terminal no start is still typing into; nothing else may write there."""
+        ref, program = self._coding(terminal, tool)
+        if str(terminal["terminal_id"]) in self._typing:
+            raise LiveToolError(
+                "terminal_busy",
+                f"{program.label} in {ref} is still starting and its task is not typed yet, so "
+                f"nothing was done. The start reports when the task is sent; then call {tool} "
+                "again if still needed.",
             )
         return ref, program
 

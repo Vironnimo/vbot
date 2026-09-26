@@ -108,10 +108,11 @@ Handler = Callable[[JsonObject, LiveCatalog], Awaitable[JsonObject]]
 class LiveToolExecutor:
     """Run the Live Tools for one call and keep the call's ref table.
 
-    The owner serializes executions per call. ``is_active`` turns false once
-    the call stops or is replaced; multi-step operations check it before each
-    further effect. ``started_at`` bounds the recently finished Sessions
-    ``overview`` shows.
+    Executions of one call run one at a time; only a coding Terminal start
+    lets the others run while it waits for the program and types the task.
+    ``is_active`` turns false once the call stops or is replaced; multi-step
+    operations check it before each further effect. ``started_at`` bounds the
+    recently finished Sessions ``overview`` shows.
     """
 
     def __init__(
@@ -155,8 +156,9 @@ class LiveToolExecutor:
                 f'There is no Tool called "{name}". Call one of: {", ".join(self._handlers)}.',
             )
         try:
-            self._ctx.ensure_active()
-            return await handler(dict(arguments), LiveCatalog(self._ctx, self._refs))
+            async with self._ctx.exclusive():
+                self._ctx.ensure_active()
+                return await handler(dict(arguments), LiveCatalog(self._ctx, self._refs))
         except LiveToolError as exc:
             return live_failure(exc.code, exc.message)
         except LiveUiError as exc:

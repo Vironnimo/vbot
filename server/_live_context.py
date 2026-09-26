@@ -8,7 +8,11 @@ requests to the call's owning accessor.
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+import asyncio
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass
 from typing import Any
 
 JsonObject = dict[str, Any]
@@ -76,17 +80,56 @@ class LiveToolError(Exception):
         self.message = message
 
 
+@dataclass
+class _Hold:
+    """One execution's hold on the call's Tool lock, released at most once."""
+
+    lock: asyncio.Lock
+    held: bool = True
+
+    def release(self) -> None:
+        if self.held:
+            self.held = False
+            self.lock.release()
+
+
 class LiveContext:
     """RPC and UI access for one Live call's Tool executions.
 
     ``is_active`` turns false once the call stops or is replaced; multi-step
-    operations check it before each further effect.
+    operations check it before each further effect. Executions run one at a
+    time (:meth:`exclusive`); a long wait may let the others run first
+    (:meth:`let_others_run`).
     """
 
     def __init__(self, *, rpc: RpcInvoker, ui: UiRequester, is_active: Callable[[], bool]) -> None:
         self._rpc = rpc
         self._ui = ui
         self._is_active = is_active
+        self._lock = asyncio.Lock()
+        self._hold: ContextVar[_Hold | None] = ContextVar("live_tool_hold", default=None)
+
+    @asynccontextmanager
+    async def exclusive(self) -> AsyncIterator[None]:
+        """Run one Tool execution while no other execution of the call runs."""
+        await self._lock.acquire()
+        hold = _Hold(self._lock)
+        token = self._hold.set(hold)
+        try:
+            yield
+        finally:
+            self._hold.reset(token)
+            hold.release()
+
+    def let_others_run(self) -> None:
+        """End the current execution's exclusive part early.
+
+        The execution may only wait and write to what it guards itself from
+        here on; other executions of the call run meanwhile.
+        """
+        hold = self._hold.get()
+        if hold is not None:
+            hold.release()
 
     async def call(self, method: str, params: JsonObject) -> JsonObject:
         """Dispatch one registered RPC method in-process."""

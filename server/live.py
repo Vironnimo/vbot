@@ -196,7 +196,6 @@ class _LiveCallEntry:
         self._owner: LiveOwnerStream | None = None
         self._malformed_audio_logged = False
         self._ui_requests: dict[str, asyncio.Future[JsonObject]] = {}
-        self._tool_lock = asyncio.Lock()
         self._executor = LiveToolExecutor(
             rpc=rpc, ui=self.ui_request, is_active=self._is_active, started_at=started_at
         )
@@ -219,9 +218,8 @@ class _LiveCallEntry:
     # -- LiveCallHost -----------------------------------------------------
 
     async def execute_tool(self, name: str, arguments: JsonObject) -> JsonObject:
-        """Run one prepared Live Tool call; executions of one call never overlap."""
-        async with self._tool_lock:
-            return await self._executor.execute(name, arguments)
+        """Run one prepared Live Tool call; the executor runs one call's executions in turn."""
+        return await self._executor.execute(name, arguments)
 
     def publish(self, update: JsonObject) -> None:
         """Deliver one call update to the owner, or buffer it until one attaches."""
