@@ -130,18 +130,18 @@ async def test_split_unicode_and_ansi_are_decoded_per_pipe_before_poll_and_spool
             cwd=None,
         )
         tracked = manager.get_process(process_id, AGENT_A)
-        manager._append_output(tracked, "stdout", b"\xe2")
-        manager._append_output(tracked, "stderr", b"error \x1b[")
+        await manager._capture_output(tracked, "stdout", b"\xe2")
+        await manager._capture_output(tracked, "stderr", b"error \x1b[")
         first = await manager.poll(process_id, AGENT_A)
         assert first["output"] == "error "
-        manager._append_output(tracked, "stdout", b"\x82\xac\x1b]title")
-        manager._append_output(tracked, "stderr", b"31mred\x1b[0m")
+        await manager._capture_output(tracked, "stdout", b"\x82\xac\x1b]title")
+        await manager._capture_output(tracked, "stderr", b"31mred\x1b[0m")
         second = await manager.poll(process_id, AGENT_A)
         assert second["stdout"] == "\u20ac"
         assert second["stderr"] == "red"
-        manager._append_output(tracked, "stdout", b"\x1b")
-        manager._append_output(tracked, "stderr", b"!")
-        manager._append_output(tracked, "stdout", b"\\done")
+        await manager._capture_output(tracked, "stdout", b"\x1b")
+        await manager._capture_output(tracked, "stderr", b"!")
+        await manager._capture_output(tracked, "stdout", b"\\done")
         await manager.kill(process_id, AGENT_A)
         assert (await manager.snapshot(process_id, AGENT_A))["output"] == "error \u20acred!done"
         assert tracked.log_file is not None
