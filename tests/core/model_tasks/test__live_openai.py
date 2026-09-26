@@ -13,6 +13,7 @@ import pytest
 import respx
 from websockets.exceptions import ConnectionClosedError
 
+from core.model_tasks._live_call import LiveCallSession
 from core.model_tasks._live_openai import (
     CODEX_LIVE_HEADERS,
     ControlJoinError,
@@ -368,6 +369,28 @@ async def test_lost_control_channel_ends_with_unconfirmed_close():
     )
 
     assert await _collect(wire) == [WireClosed(reason=None, usage=None, confirmed=False)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("dialect", ["codex", "public"])
+async def test_confirmed_live_call_closure_retires_its_control_socket(dialect: str):
+    socket = FakeSocket(
+        [{"type": "session.closed", "reason": "client_request", "usage": {"seconds": 12}}]
+    )
+    wire = OpenAILiveWire(call_id="rtc_1", answer_sdp=ANSWER, socket=socket, dialect=dialect)
+    updates: list[dict[str, Any]] = []
+    host: Any = SimpleNamespace(publish=updates.append)
+    call = LiveCallSession(wire=wire, brain=None, host=host, target="openai/test-live")
+    call.start()
+
+    await asyncio.wait_for(call.wait_closed(), 1)
+    await call.close()
+    await call.abort()
+
+    assert socket.closed
+    assert [update for update in updates if update["type"] == "closed"] == [
+        {"type": "closed", "reason": "client_request", "usage": {"seconds": 12}}
+    ]
 
 
 @pytest.mark.asyncio

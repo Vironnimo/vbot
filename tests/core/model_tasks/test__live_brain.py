@@ -13,6 +13,7 @@ from core.model_tasks._live_brain import BrainTarget, DelegationInput, LiveBrain
 from core.model_tasks._live_tools import DELEGATION_INSTRUCTIONS, LIVE_TOOL_NAMES
 from core.providers.accounts import ConnectionRef
 from core.providers.errors import ProviderError
+from core.providers.github_copilot_responses import normalize_responses_response
 from core.usage import UsageRecorder
 
 TARGET = BrainTarget(
@@ -298,6 +299,59 @@ async def test_unknown_tools_and_malformed_arguments_are_refused_without_executi
         "unknown_tool",
         "invalid_arguments",
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("name", "arguments"),
+    [
+        ("startcodex", '{"folder":"C:/explicit/project", "task":'),
+        ("overview", '["explicit-agent"]'),
+    ],
+)
+async def test_adapter_rejections_survive_live_argument_repair(
+    name: str, arguments: str, monkeypatch: pytest.MonkeyPatch
+):
+    harness = Harness(
+        [
+            {
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "function_call",
+                        "call_id": "rejected-call",
+                        "name": name,
+                        "arguments": arguments,
+                    },
+                    {
+                        "type": "function_call",
+                        "call_id": "valid-call",
+                        "name": "overview",
+                        "arguments": "{}",
+                    },
+                ],
+            },
+            {"status": "completed", "output": [{"type": "output_text", "text": "Done"}]},
+        ]
+    )
+    monkeypatch.setattr(
+        harness.adapter,
+        "normalize_response",
+        lambda response, **_kwargs: normalize_responses_response(response),
+    )
+
+    assert await harness.brain.answer(DELEGATION) == "Done"
+
+    assert harness.executed == [("overview", {})]
+    tool_messages = [m for m in harness.adapter.requests[1][0] if m["role"] == "tool"]
+    rejected = json.loads(tool_messages[0]["content"])
+    assert tool_messages[0]["tool_call_id"] == "rejected-call"
+    assert rejected["error"]["code"] == "malformed_tool_arguments"
+    assert json.loads(tool_messages[1]["content"])["ok"] is True
+    rejected_record = next(record for record in harness.records if record["type"] == "tool")
+    assert rejected_record["tool"] is None
+    assert rejected_record["run_arguments"] is None
+    assert rejected_record["ok"] is False
 
 
 @pytest.mark.asyncio
