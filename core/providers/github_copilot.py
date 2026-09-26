@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator, Mapping, Sequence
+from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
 from contextlib import aclosing
 from typing import Any, cast
 
@@ -269,7 +269,7 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
             request_kwargs,
             model_id,
             messages,
-            estimated_input_tokens=self.estimate_request_input_tokens(
+            estimated_input_tokens=lambda: self.estimate_request_input_tokens(
                 messages,
                 model_id=model_id,
                 tools=request_kwargs.get("tools"),
@@ -286,19 +286,21 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
         model_id: str,
         messages: list[dict[str, Any]],
         *,
-        estimated_input_tokens: int | None = None,
+        estimated_input_tokens: int | Callable[[], int] | None = None,
     ) -> None:
         self._validate_image_limits(model_id, _copilot_message_images(messages))
         max_prompt_tokens = self._runtime_metadata_for_model(model_id).get("max_prompt_tokens")
         if isinstance(max_prompt_tokens, int) and not isinstance(max_prompt_tokens, bool):
             tools = request_kwargs.get("tools")
             tool_definitions = tools if isinstance(tools, list) else None
-            estimated_input = self.estimate_request_input_tokens(
-                messages,
-                model_id=model_id,
-                tools=tool_definitions,
+            estimated_input = resolve_request_input_budget(
+                model_id,
+                lambda: self.estimate_request_input_tokens(
+                    messages,
+                    model_id=model_id,
+                    tools=tool_definitions,
+                ),
             )
-            estimated_input = resolve_request_input_budget(model_id, estimated_input)
             if estimated_input > max_prompt_tokens:
                 raise ProviderError(
                     "Request input exceeds the GitHub Copilot Model prompt limit "

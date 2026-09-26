@@ -392,3 +392,20 @@ async def test_request_input_budget_is_local_nested_and_never_reused_for_another
         assert resolve_request_input_budget("model", 280_000) == 280_000
 
     await asyncio.gather(one_budget(150_000), one_budget(20_000))
+
+
+def test_request_input_budget_evaluates_fallback_only_without_a_matching_scope():
+    from core.providers.adapter import request_input_budget, resolve_request_input_budget
+
+    calls = []
+
+    def estimate():
+        calls.append(True)
+        return 280_000
+
+    with request_input_budget("model", 0):
+        assert resolve_request_input_budget("model", estimate) == 0
+        assert calls == []
+        assert resolve_request_input_budget("other-model", estimate) == 280_000
+    assert resolve_request_input_budget("model", estimate) == 280_000
+    assert len(calls) == 2

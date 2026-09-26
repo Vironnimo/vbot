@@ -146,9 +146,12 @@ def request_input_budget(model_id: str, tokens: int) -> Iterator[None]:
         _REQUEST_INPUT_BUDGET.reset(token)
 
 
-def resolve_request_input_budget(model_id: str, local_estimate: int) -> int:
+def resolve_request_input_budget(model_id: str, local_estimate: int | Callable[[], int]) -> int:
+    """Use the scoped projection, evaluating a local fallback only when needed."""
     budget = _REQUEST_INPUT_BUDGET.get()
-    return budget[1] if budget is not None and budget[0] == model_id else local_estimate
+    if budget is not None and budget[0] == model_id:
+        return budget[1]
+    return local_estimate() if callable(local_estimate) else local_estimate
 
 
 def estimate_wire_request_input_tokens(
