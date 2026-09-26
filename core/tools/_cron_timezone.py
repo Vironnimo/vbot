@@ -12,11 +12,13 @@ refused before any side effect, naming the server zone and the corrected call.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, tzinfo
+import re
+from datetime import datetime, time, timedelta, tzinfo
 from typing import Any
 from zoneinfo import ZoneInfo
 
 from core.tools._cron_arguments import (
+    CLOCK_SCHEDULE,
     OMIT,
     TIMEZONE_FIELD,
     CronCallRefusedError,
@@ -45,10 +47,13 @@ def zoned_schedule(
     """Return the arguments without ``timezone``, with the schedule in server time, and a note."""
     result = dict(arguments)
     name = result.pop(TIMEZONE_FIELD, None)
+    schedule = result.get("schedule")
+    clock = CLOCK_SCHEDULE.match(schedule) if isinstance(schedule, str) else None
+    if clock is not None:
+        return _next_clock_time(result, clock, name, server, now)
     if not isinstance(name, str):
         return result, None
     zone = named_zone(name)
-    schedule = result.get("schedule")
     if not isinstance(schedule, str) or schedule.startswith(("in ", "every ")):
         if (
             not isinstance(schedule, str)
@@ -66,18 +71,64 @@ def zoned_schedule(
             )
         return result, None
     if zone is None:
-        raise CronCallRefusedError(
-            refusal(
-                f'"timezone" "{name}" is not a known time zone. Use an IANA name such as '
-                f'"Europe/Berlin", or omit it for the server time zone {server}.',
-                result,
-            )
-        )
+        raise CronCallRefusedError(_unknown_zone(name, server, result))
     if same_zone(zone, server, now):
         return result, None
     if schedule_kind(schedule) == "cron":
         return _cron_in_zone(result, schedule, name, zone, server, now)
     return _moment_in_zone(result, schedule, name, zone, server)
+
+
+def _unknown_zone(name: str, server: ZoneInfo, arguments: dict[str, Any]) -> str:
+    return refusal(
+        f'"timezone" "{name}" is not a known time zone. Use an IANA name such as '
+        f'"Europe/Berlin", or omit it for the server time zone {server}.',
+        arguments,
+    )
+
+
+def _next_clock_time(
+    arguments: dict[str, Any],
+    clock: re.Match[str],
+    name: Any,
+    server: ZoneInfo,
+    now: datetime,
+) -> tuple[dict[str, Any], str | None]:
+    """Read a clock time without a date as its next occurrence in the named or server zone."""
+    zone: tzinfo = server
+    where = f"the server time zone {server}"
+    if isinstance(name, str):
+        found = named_zone(name)
+        if found is None:
+            raise CronCallRefusedError(_unknown_zone(name, server, arguments))
+        if not same_zone(found, server, now):
+            zone, where = found, name
+    shown = f"{clock.group(1)}:{clock.group(2)}"
+    today = now.astimezone(zone).date()
+    for day in (today, today + timedelta(days=1)):
+        wall = datetime.combine(day, time(int(clock.group(1)), int(clock.group(2))))
+        unclear = unclear_local_time(wall, zone, where)
+        instants = (
+            [moment for moment, _label in unclear[1]] if unclear else local_readings(wall, zone)
+        )
+        if all(moment <= now for moment in instants):
+            continue
+        if unclear is not None:
+            reason, readings = unclear
+            calls = [
+                f"{render_call(arguments, schedule=server_text(moment, server))} ({label})"
+                for moment, label in readings
+            ]
+            raise CronCallRefusedError(
+                f"cron was not run: {shown} next comes on {day.isoformat()}, and {reason} Send "
+                f"the one that is meant: {' or '.join(calls)}."
+            )
+        arguments["schedule"] = server_text(instants[0], server)
+        return arguments, (
+            f"Read the clock time {shown} as its next occurrence in {where}: "
+            f"{arguments['schedule']}."
+        )
+    raise AssertionError("a clock time comes again within two days")
 
 
 def _moment_in_zone(
