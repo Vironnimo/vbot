@@ -44,6 +44,30 @@ async def test_guarded_operator_input_forwards_revision_and_read_is_nonbinding()
             await _terminal_input(
                 state, {"terminal_id": "t", "data": "yes", "expected_screen_revision": revision}
             )
+    await _terminal_input(state, {"terminal_id": "t", "data": "go", "expected_program": "codex"})
+    manager.send_operator_input.assert_awaited_with("t", "go", expected_program="codex")
+    for program in ("", 7):
+        with pytest.raises(RpcError, match="expected_program"):
+            await _terminal_input(
+                state, {"terminal_id": "t", "data": "go", "expected_program": program}
+            )
+
+
+@pytest.mark.asyncio
+async def test_input_for_a_program_that_is_not_running_has_its_own_error_code():
+    from unittest.mock import AsyncMock
+
+    from core.tools.terminal_manager import TerminalProgramNotRunningError
+
+    error = TerminalProgramNotRunningError("codex is not running in this Terminal")
+    manager = SimpleNamespace(send_operator_input=AsyncMock(side_effect=error))
+    state = SimpleNamespace(runtime=SimpleNamespace(terminal_manager=manager))
+    with pytest.raises(RpcError) as raised:
+        await _terminal_input(
+            state, {"terminal_id": "t", "data": "go", "expected_program": "codex"}
+        )
+    assert raised.value.code == "terminal_program_not_running"
+    assert "codex is not running" in raised.value.message
 
 
 class FakeTerminalManager:
