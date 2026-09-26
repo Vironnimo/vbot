@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from types import SimpleNamespace
 from typing import Any
 
@@ -16,6 +15,7 @@ from core.model_tasks._live_openai import ControlJoinError
 from core.model_tasks._live_tools import (
     DIRECT_VOICE_INSTRUCTIONS,
     VOICE_INSTRUCTIONS,
+    live_success,
     voice_instructions,
 )
 from core.model_tasks._live_wire import (
@@ -119,9 +119,11 @@ class FakeHost:
         self.updates: list[dict[str, Any]] = []
         self.audio: list[bytes] = []
         self.executed: list[tuple[str, dict[str, Any]]] = []
+        self.records: list[dict[str, Any]] = []
         self.tool_result: Any = {"ok": True}
         self.tool_release = asyncio.Event()
         self.tool_release.set()
+        self.refs = ""
 
     async def execute_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         self.executed.append((name, arguments))
@@ -130,11 +132,17 @@ class FakeHost:
             raise self.tool_result
         return dict(self.tool_result)
 
+    def known_refs(self) -> str:
+        return self.refs
+
     def publish(self, update: dict[str, Any]) -> None:
         self.updates.append(update)
 
     def publish_audio(self, pcm: bytes) -> None:
         self.audio.append(pcm)
+
+    def record(self, event: dict[str, Any]) -> None:
+        self.records.append(event)
 
     def of_type(self, kind: str) -> list[dict[str, Any]]:
         return [update for update in self.updates if update["type"] == kind]
@@ -162,12 +170,14 @@ def _notice(run_id: str = "run-1") -> LiveRunNotice:
         session_id="s-1",
         excerpt="All tests pass.",
         truncated=False,
+        session_ref="s3",
     )
 
 
 @pytest.mark.asyncio
 async def test_call_goes_live_relays_captions_and_answers_delegations():
     wire, brain, host = FakeWire(), FakeBrain(), FakeHost()
+    host.refs = "- s1: Session at Coder"
     call = _call(wire, brain, host)
 
     wire.push(
@@ -196,6 +206,7 @@ async def test_call_goes_live_relays_captions_and_answers_delegations():
             request="Start one Codex terminal",
             conversation="User: Start a terminal\nAssistant (still speaking): On it",
             updates="",
+            refs="- s1: Session at Coder",
         )
     ]
     assert host.of_type("activity") == [
@@ -315,7 +326,7 @@ async def test_run_notices_are_spoken_once_while_live_and_reach_later_delegation
 
     announcements = [s[1] for s in wire.sent if s[0] == "announce"]
     assert announcements == [
-        'vBot update: {"run": "completed", "agent": "coder@web", "session_id": "s-1", '
+        'vBot update: {"run": "completed", "agent": "coder@web", "session": "s3", '
         '"result_excerpt": "All tests pass.", "excerpt_truncated": false}'
     ]
     assert brain.inputs[0].updates.count("vBot update") == 2
@@ -335,7 +346,7 @@ async def test_run_notices_omit_the_excerpt_where_announcements_count_as_user_in
     await call.close()
 
     assert [s[1] for s in wire.sent if s[0] == "announce"] == [
-        'vBot update: {"run": "completed", "agent": "coder@web", "session_id": "s-1"}'
+        'vBot update: {"run": "completed", "agent": "coder@web", "session": "s3"}'
     ]
     assert '"result_excerpt": "All tests pass."' in brain.inputs[0].updates
 
@@ -701,15 +712,15 @@ async def test_relay_audio_stops_when_the_socket_is_gone():
 
 
 @pytest.mark.asyncio
-async def test_direct_tool_calls_run_on_the_host_and_return_json_results():
+async def test_direct_tool_calls_run_on_the_host_and_return_plain_text_results():
     wire, host = FakeWire(relay=True), FakeHost()
     host.tool_release.clear()
-    host.tool_result = {"ok": True, "sessions": ["s-1"]}
+    host.tool_result = live_success("Sent to s1 (Coder).")
     call = _call(wire, None, host)
 
     wire.push(
         WireStarted(None),
-        WireToolCall("call_1", "vbot_app", {"action": "sessions", "agent_id": "coder"}),
+        WireToolCall("call_1", "send_message", {"target": "s1", "text": "yes"}),
     )
     await _until(lambda: len(host.executed) == 1)
     assert host.of_type("activity") == [{"type": "activity", "busy": True, "label": "working"}]
@@ -717,11 +728,39 @@ async def test_direct_tool_calls_run_on_the_host_and_return_json_results():
     await _until(lambda: any(s[0] == "result" for s in wire.sent))
     await call.close()
 
-    assert host.executed == [("vbot_app", {"action": "sessions", "agent_id": "coder"})]
-    result = next(s for s in wire.sent if s[0] == "result")
-    assert result[1] == "call_1"
-    assert json.loads(result[2]) == {"ok": True, "sessions": ["s-1"]}
+    assert host.executed == [("send_message", {"target": "s1", "text": "yes"})]
+    assert next(s for s in wire.sent if s[0] == "result") == (
+        "result",
+        "call_1",
+        "Sent to s1 (Coder).",
+    )
     assert host.of_type("activity")[-1] == {"type": "activity", "busy": False, "label": None}
+
+
+@pytest.mark.asyncio
+async def test_direct_tool_calls_in_other_spellings_run_as_the_live_tool_they_mean():
+    wire, host = FakeWire(relay=True), FakeHost()
+    host.tool_result = live_success("Showing t1.")
+    call = _call(wire, None, host)
+
+    wire.push(WireStarted(None), WireToolCall("c", "functions.show", '{"terminal": "t1"}'))
+    await _until(lambda: any(s[0] == "result" for s in wire.sent))
+    await call.close()
+
+    assert host.executed == [("open", {"target": "t1"})]
+    # The record keeps the call as the Model wrote it and as it ran.
+    [record] = host.records
+    assert record == {
+        "type": "tool",
+        "mode": "direct",
+        "called": "functions.show",
+        "tool": "open",
+        "arguments": '{"terminal": "t1"}',
+        "run_arguments": {"target": "t1"},
+        "ok": True,
+        "result": "Showing t1.",
+        "duration_ms": record["duration_ms"],
+    }
 
 
 @pytest.mark.asyncio
@@ -729,10 +768,11 @@ async def test_direct_tool_calls_run_on_the_host_and_return_json_results():
     ("event", "code"),
     [
         (WireToolCall("c", "shell", {"command": "ls"}), "unknown_tool"),
-        (WireToolCall("c", "vbot_app", ["sessions"]), "invalid_arguments"),
-        (WireToolCall("c", "vbot_app", None), "invalid_arguments"),
+        (WireToolCall("c", "send_message", ["s1"]), "invalid_arguments"),
+        (WireToolCall("c", "send_message", "not json"), "invalid_arguments"),
+        (WireToolCall("c", "send_message", {"target": "s1"}), "invalid_arguments"),
     ],
-    ids=["unknown-tool", "array-arguments", "undecodable-arguments"],
+    ids=["unknown-tool", "array-arguments", "undecodable-arguments", "missing-field"],
 )
 async def test_direct_tool_calls_that_must_not_run_are_refused(event: WireToolCall, code: str):
     wire, host = FakeWire(relay=True), FakeHost()
@@ -743,9 +783,8 @@ async def test_direct_tool_calls_that_must_not_run_are_refused(event: WireToolCa
     await call.close()
 
     assert host.executed == []
-    result = json.loads(next(s for s in wire.sent if s[0] == "result")[2])
-    assert result["ok"] is False
-    assert result["error"]["code"] == code
+    assert next(s for s in wire.sent if s[0] == "result")[2].startswith(f"Error ({code}): ")
+    assert [(record["tool"], record["ok"]) for record in host.records] == [(None, False)]
 
 
 @pytest.mark.asyncio
@@ -754,18 +793,23 @@ async def test_failing_or_slow_direct_tool_calls_answer_with_an_error_and_never_
     host.tool_result = RuntimeError("boom")
     call = _call(wire, None, host, delegation_timeout=0.05)
 
-    wire.push(WireStarted(None), WireToolCall("fail", "vbot_terminal", {"action": "start"}))
+    wire.push(
+        WireStarted(None), WireToolCall("fail", "start_coding_terminal", {"program": "codex"})
+    )
     await _until(lambda: any(s[1] == "fail" for s in wire.sent if s[0] == "result"))
-    host.tool_result = {"ok": True}
+    host.tool_result = live_success("Nothing runs.")
     host.tool_release.clear()
-    wire.push(WireToolCall("slow", "vbot_terminal", {"action": "list"}))
+    wire.push(WireToolCall("slow", "overview", {}))
     await _until(lambda: any(s[1] == "slow" for s in wire.sent if s[0] == "result"))
     await call.close()
 
-    results = {s[1]: json.loads(s[2]) for s in wire.sent if s[0] == "result"}
-    assert results["fail"]["error"]["code"] == "tool_failed"
-    assert results["slow"]["error"]["code"] == "timeout"
-    assert [name for name, _arguments in host.executed] == ["vbot_terminal", "vbot_terminal"]
+    results = {s[1]: s[2] for s in wire.sent if s[0] == "result"}
+    assert results["fail"] == (
+        "Error (tool_failed): The Tool call failed. It may have partly completed; do not repeat "
+        "it. Call overview to see what happened."
+    )
+    assert results["slow"].startswith("Error (timeout): The Tool call took too long")
+    assert [name for name, _arguments in host.executed] == ["start_coding_terminal", "overview"]
 
 
 @pytest.mark.asyncio

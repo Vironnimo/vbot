@@ -151,6 +151,19 @@
     );
   }
 
+  // Live voice navigation: the App already passed its autosave transition.
+  export function selectVoiceProject(projectId) {
+    if (
+      !projectsState.projects.some(
+        (project) => project.project_id === projectId,
+      )
+    )
+      return false;
+    if (projectId !== projectsState.selectedProjectId)
+      projectsController.selectProject(projectId);
+    return true;
+  }
+
   function refreshScan() {
     void projectsController.refreshScan();
   }

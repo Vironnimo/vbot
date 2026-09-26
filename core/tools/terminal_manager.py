@@ -37,6 +37,7 @@ from core.tools.terminal_store import (
 from core.utils.ids import new_id
 from core.utils.logging import get_logger
 from core.utils.paths import model_path
+from core.utils.processes import process_tree_runs
 
 from ._terminal_catalog import TerminalCatalog
 from ._terminal_events import TerminalEvents
@@ -71,6 +72,7 @@ from ._terminal_state import (
     TerminalNotFoundError,
     TerminalNotOwnedError,
     TerminalOwner,
+    TerminalProgramNotRunningError,
     TerminalSession,
     TerminalStaleScreenError,
     TerminalState,
@@ -103,6 +105,7 @@ class TerminalManager:
         activity_quiet_seconds: float = TERMINAL_ACTIVITY_QUIET_SECONDS,
         monotonic: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        program_probe: Callable[[int, str], bool] = process_tree_runs,
     ) -> None:
         if scrollback_lines < 1:
             raise ValueError("Terminal scrollback cap must be positive")
@@ -141,6 +144,7 @@ class TerminalManager:
             activity_quiet_seconds=activity_quiet_seconds,
             monotonic=monotonic,
             sleep=sleep,
+            program_probe=program_probe,
         )
         self._sweeper_task: asyncio.Task[None] | None = None
 
@@ -607,18 +611,35 @@ class TerminalManager:
         return self._events.read_for_operator(self._catalog._get_for_operator(terminal_id))
 
     async def send_operator_input(
-        self, terminal_id: str, data: str, *, expected_screen_revision: int | None = None
+        self,
+        terminal_id: str,
+        data: str,
+        *,
+        expected_screen_revision: int | None = None,
+        expected_program: str | None = None,
     ) -> dict[str, Any]:
-        """Write exact user-controlled terminal bytes through the existing PTY."""
+        """Write exact user-controlled terminal bytes through the existing PTY.
+
+        ``expected_screen_revision`` rejects input based on an older screen;
+        ``expected_program`` rejects input unless that program (a command name
+        such as ``codex``) runs in the Terminal's process tree.
+        """
         if not isinstance(data, str) or not data:
             raise ValueError("Terminal input must be a non-empty string")
         if len(data) > TERMINAL_INPUT_MAX_CHARS:
             raise ValueError(
                 f"Terminal input must not exceed {TERMINAL_INPUT_MAX_CHARS} characters"
             )
+        if expected_program is not None and (
+            not isinstance(expected_program, str) or not expected_program.strip()
+        ):
+            raise ValueError("expected_program must be a non-empty program name")
         session = self._catalog._get_for_operator(terminal_id)
         await self._io.send_operator_input(
-            session, data, expected_screen_revision=expected_screen_revision
+            session,
+            data,
+            expected_screen_revision=expected_screen_revision,
+            expected_program=expected_program,
         )
         return self._catalog._operator_summary(session)
 
@@ -999,6 +1020,7 @@ __all__ = [
     "TerminalNotFoundError",
     "TerminalNotAttachedError",
     "TerminalOwner",
+    "TerminalProgramNotRunningError",
     "TerminalSession",
     "TerminalStaleScreenError",
     "TerminalState",

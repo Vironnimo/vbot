@@ -19,8 +19,9 @@ from collections import deque
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
-from core.model_tasks._live_brain import DelegationInput, LiveBrain
-from core.model_tasks._live_tools import LIVE_UPDATE_PREFIX, live_tool_error, live_tool_rejection
+from core.model_tasks._live_arguments import PreparedLiveCall, prepare_live_call
+from core.model_tasks._live_brain import DelegationInput, LiveBrain, record_tool_call
+from core.model_tasks._live_tools import LIVE_UPDATE_PREFIX, live_failure, live_result_text
 from core.model_tasks._live_wire import (
     MEDIA_RELAY,
     RELAY_BYTES_PER_MS,
@@ -283,6 +284,7 @@ class LiveCallSession:
                     request=event.request,
                     conversation=self._conversation_text(),
                     updates="\n".join(self._updates),
+                    refs=self._host.known_refs(),
                 )
                 try:
                     async with asyncio.timeout(self._delegation_timeout):
@@ -300,39 +302,52 @@ class LiveCallSession:
     async def _run_tool(self, event: WireToolCall) -> None:
         async with self._delegation_slots:
             self._set_busy(1)
+            started = self._clock()
             try:
-                result = await self._execute_tool_call(event)
+                prepared = prepare_live_call(event.name, event.arguments)
+                result = (
+                    await self._execute_tool_call(prepared)
+                    if isinstance(prepared, PreparedLiveCall)
+                    else prepared
+                )
             finally:
                 self._set_busy(-1)
-        text = json.dumps(result, ensure_ascii=False)
+        record_tool_call(
+            self._host.record,
+            mode="direct",
+            called=event.name,
+            arguments=event.arguments,
+            prepared=prepared,
+            result=result,
+            duration=self._clock() - started,
+        )
+        text = live_result_text(result)
         await self._send_command(lambda: self._wire.deliver_result(event.call_id, text))
 
-    async def _execute_tool_call(self, event: WireToolCall) -> JsonObject:
-        """Run one direct Tool call once; failures become an error result."""
+    async def _execute_tool_call(self, call: PreparedLiveCall) -> JsonObject:
+        """Run one prepared direct Tool call once; failures become an error result."""
 
-        rejection = live_tool_rejection(event.name, event.arguments)
-        if rejection is not None:
-            return rejection
         try:
             async with asyncio.timeout(self._delegation_timeout):
-                return await self._host.execute_tool(event.name, dict(event.arguments))
+                return await self._host.execute_tool(call.name, dict(call.arguments))
         except TimeoutError:
-            _LOGGER.warning("Live Tool call timed out: call_id=%s tool=%s", self.id, event.name)
-            return live_tool_error(
+            _LOGGER.warning("Live Tool call timed out: call_id=%s tool=%s", self.id, call.name)
+            return live_failure(
                 "timeout",
-                "The Tool call took too long and was stopped. It may have completed; "
-                "nothing was retried.",
+                "The Tool call took too long and was stopped. It may have completed; do not "
+                "repeat it. Call overview to see what happened.",
             )
         except Exception as exc:
             _LOGGER.warning(
                 "Live Tool call failed: call_id=%s tool=%s error_type=%s",
                 self.id,
-                event.name,
+                call.name,
                 type(exc).__name__,
             )
-            return live_tool_error(
+            return live_failure(
                 "tool_failed",
-                "The Tool call failed. It may have partly completed; nothing was retried.",
+                "The Tool call failed. It may have partly completed; do not repeat it. Call "
+                "overview to see what happened.",
             )
 
     async def _pump_audio(self) -> None:
@@ -512,11 +527,9 @@ class LiveCallSession:
 
 
 def _render_notice(notice: LiveRunNotice, *, excerpt: bool = True) -> str:
-    payload: JsonObject = {
-        "run": notice.kind,
-        "agent": notice.agent_id,
-        "session_id": notice.session_id,
-    }
+    payload: JsonObject = {"run": notice.kind, "agent": notice.agent_id}
+    if notice.session_ref:
+        payload["session"] = notice.session_ref
     if excerpt:
         text = notice.excerpt.strip()
         payload["result_excerpt"] = text[:_ANNOUNCEMENT_EXCERPT_CHARS]
