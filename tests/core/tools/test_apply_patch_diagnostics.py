@@ -14,7 +14,7 @@ from core.tools.apply_patch import register_apply_patch_tool
 from core.tools.file_state import FileReadState
 from core.tools.read import register_read_tool
 from core.tools.tools import ToolRegistry
-from tests.core.tools.apply_patch_helpers import context, text, update
+from tests.core.tools.apply_patch_helpers import apply, context, text, update
 
 
 @pytest.fixture
@@ -110,7 +110,9 @@ def test_missing_suffix_keeps_end_of_line_and_extra_text_visible(side):
     shorter = "shared text " * 180
     longer = shorter + "extra_value"
     actual, wanted = (longer, shorter) if side == "file" else (shorter, longer)
-    difference = _not_found(actual, wanted, source="patch")["difference"]
+    # A shorter patch line inside the file line is reported as part of that line
+    # instead (see below); old_string text is compared by its first difference.
+    difference = _not_found(actual, wanted, source="old_string")["difference"]
     assert difference["character"] == len(shorter) + 1
     assert difference["copy_character"] == len(shorter) + 1
     assert difference[side].endswith("extra_value")
@@ -170,3 +172,63 @@ async def test_ambiguous_long_lines_preserve_each_read_continuation(tmp_path, re
         )
         assert continued["ok"]
         assert continued["data"]["content"].split("\n")[0] == f"{call['offset']}| {line[240:]}"
+
+
+LONG_LINE = "The quick brown fox jumps over the lazy dog, and then keeps running home."
+
+
+def test_one_removed_line_inside_a_longer_line_is_replaced_within_it(tmp_path):
+    path = tmp_path / "file.txt"
+    path.write_bytes(f"# Title\n{LONG_LINE}\n".encode())
+
+    result = apply(tmp_path, update("@@\n-quick brown fox\n+quick red fox"))
+
+    assert result["ok"], result
+    assert path.read_bytes() == f"# Title\n{LONG_LINE.replace('brown', 'red')}\n".encode()
+    assert "Note: The - line is part of line 2; only that part of the line was replaced." in (
+        text(result)
+    )
+
+
+@pytest.mark.parametrize(
+    ("before", "body"),
+    [
+        # Unchanged lines around the part keep whole-line semantics.
+        (f"# Title\n{LONG_LINE}\n", "@@\n # Title\n-quick brown fox\n+quick red fox"),
+        # Removing a part of a line could also mean removing the whole line.
+        (f"# Title\n{LONG_LINE}\n", "@@\n-quick brown fox"),
+        # "aa" occurs twice in "aaa": the place to change is unclear.
+        ("aaa\n", "@@\n-aa\n+b"),
+    ],
+)
+def test_part_of_a_line_is_not_replaced_when_the_place_or_meaning_is_open(tmp_path, before, body):
+    path = tmp_path / "file.txt"
+    path.write_bytes(before.encode())
+
+    result = apply(tmp_path, update(body))
+
+    assert result["error"]["code"] == "text_not_found"
+    assert path.read_bytes() == before.encode()
+
+
+def test_patch_line_inside_longer_lines_names_those_lines(tmp_path):
+    path = tmp_path / "file.txt"
+    path.write_bytes(b'import os\n\n    g = Greeter("world")  # hi\n    h = Greeter("world")\n')
+
+    result = apply(tmp_path, update('@@\n import os\n-Greeter("world")\n+Greeter("mars")'))
+
+    assert text(result) == (
+        "file.txt: the lines to replace were not found.\n"
+        "The patch line 'Greeter(\"world\")' is only part of lines 3, 4. Each patch line is "
+        "a whole line, so copy all of the line you mean:\n"
+        '3|     g = Greeter("world")  # hi\n'
+        '4|     h = Greeter("world")\n'
+        "No file was changed."
+    )
+
+
+def test_patch_line_inside_many_lines_shows_the_closest_text_instead():
+    content = "".join(f"{prefix}_x = compute(1)\n" for prefix in "abcde")
+    details = _not_found(content, "x = compute(1)", source="patch")
+    assert "part_of" not in details
+    assert details["candidates"]

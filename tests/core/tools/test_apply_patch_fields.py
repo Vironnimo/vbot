@@ -297,7 +297,7 @@ async def test_unified_diff_file_operations(run):
         ),
         (
             {"target_file": "a.txt", "code_edit": "// ... existing code ...\ntwo"},
-            "code_edit cannot be applied: it marks unchanged code with placeholder comments",
+            'Send the exact lines instead: patch="*** Begin Patch\\n*** Update File: a.txt\\n@@',
         ),
         (
             {"file_path": "a.txt", "old_string": "one"},
@@ -313,6 +313,7 @@ async def test_open_or_conflicting_shapes_fail_before_any_change(run, arguments,
     with pytest.raises(ValueError, match=None) as raised:
         await run(arguments, **{"a.txt": "one\n"})
     assert message in str(raised.value)
+    assert str(raised.value).endswith("\nNo file was changed.")
     assert sorted(p.name for p in run.root.iterdir()) == ["a.txt"]
     assert content_of(run, "a.txt") == b"one\n"
 
