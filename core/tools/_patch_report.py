@@ -10,6 +10,7 @@ with the same failure text.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -149,7 +150,7 @@ def _file_text(report: _FileReport) -> str:
     return "\n".join(lines)
 
 
-def _excerpts(candidates: list[JsonObject]) -> list[str]:
+def _excerpts(candidates: list[JsonObject], path: str | None = None) -> list[str]:
     """Render file excerpts with line numbers; touching or overlapping ones merge."""
     groups: list[dict[int, str]] = []
     for candidate in sorted(candidates, key=lambda item: int(item["line"])):
@@ -164,7 +165,51 @@ def _excerpts(candidates: list[JsonObject]) -> list[str]:
         if index:
             rendered.append("--")
         rendered.extend(_gutter(number, group[number]) for number in sorted(group))
+    continuations = {
+        (item["offset"], item["limit"])
+        for candidate in candidates
+        for item in candidate.get("continuations", [])
+    }
+    if path and continuations:
+        read = model_tool_name("read")
+        calls = [
+            f"{read}(path={json.dumps(path, ensure_ascii=False)}, "
+            f"offset={json.dumps(offset)}, limit={limit})"
+            for offset, limit in sorted(
+                continuations, key=lambda item: tuple(map(int, item[0].split(":")))
+            )
+        ]
+        rendered.append(
+            f"Excerpt truncated. If {read} is available, continue with "
+            + "; ".join(calls)
+            + "; otherwise use another file reader."
+        )
+    elif any(candidate.get("truncated") for candidate in candidates):
+        rendered.append("Excerpt truncated.")
     return rendered
+
+
+def _difference_text(difference: JsonObject) -> list[str]:
+    source = "old_string" if difference["source"] == "old_string" else "the patch"
+    if not difference.get("truncated"):
+        return [
+            f"First difference, line {difference['line']}: the file has "
+            f"{difference['file']!r} where {source} has {difference['copy']!r}."
+        ]
+    lines = [
+        f"First difference, file line {difference['line']}, "
+        f"character {difference['character']}; copied line {difference['copy_line']}, "
+        f"character {difference['copy_character']} (excerpts truncated):"
+    ]
+    for key, label in (("file", "File"), ("copy", source.capitalize())):
+        start = difference[f"{key}_start"]
+        end = start + len(difference[key]) - 1
+        lines.append(
+            f"{label} characters {start}-{end}: {difference[key]!r}"
+            if difference[key]
+            else f"{label} character {start}: end of line."
+        )
+    return lines
 
 
 def failure_text(error: JsonObject) -> str:
@@ -181,14 +226,10 @@ def failure_text(error: JsonObject) -> str:
                 lines.append(f"The closest text in the file, {where}:")
             else:
                 lines.append("The closest texts in the file:")
-            lines.extend(_excerpts(candidates))
+            lines.extend(_excerpts(candidates, error.get("path_label")))
             difference = error.get("difference")
             if difference:
-                source = "old_string" if difference["source"] == "old_string" else "the patch"
-                lines.append(
-                    f"First difference, line {difference['line']}: the file has "
-                    f"{difference['file']!r} where {source} has {difference['copy']!r}."
-                )
+                lines.extend(_difference_text(difference))
         elif error.get("path_label"):
             read = model_tool_name("read")
             lines.append(
@@ -203,7 +244,7 @@ def failure_text(error: JsonObject) -> str:
             )
     elif code in _AMBIGUOUS_CODES and candidates:
         lines.append("Where it occurs:")
-        lines.extend(_excerpts(candidates))
+        lines.extend(_excerpts(candidates, error.get("path_label")))
     if error.get("content"):
         lines.append(str(error["content"]))
     if error.get("completed_paths"):
