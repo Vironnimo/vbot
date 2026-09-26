@@ -347,10 +347,16 @@ def live_tools() -> list[JsonObject]:
                 {
                     "target": _text(
                         "What to show: a Session or Terminal ref, a Terminal group name, an "
-                        "Agent name (opens its latest Session; with view agents, its page), or a "
-                        "Project name."
+                        "Agent name (opens its latest Session), or a Project name. Leave it out "
+                        "to open a view."
                     ),
-                    "view": _text("A view to open when no target is given.", enum=list(LIVE_VIEWS)),
+                    "view": _text(
+                        "Without a target, the view to open. With a target, the kind of thing "
+                        "it names: chat (a Session, or an Agent's latest Session), terminals (a "
+                        "Terminal or group), agents (an Agent's page), projects (a Project's "
+                        "page).",
+                        enum=list(LIVE_VIEWS),
+                    ),
                 }
             ),
         },

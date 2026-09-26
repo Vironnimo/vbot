@@ -91,6 +91,15 @@ _MAX_CHAT_CONTEXT_CHARS = 8_000
 # brackets) is taken as a question to the user; a heuristic, not a Run state.
 _QUESTION_END = re.compile(r"\?[\s\"')\]*_]*$")
 _FAILED_COMPLETIONS = {"failed": "failed", "interrupted": "interrupted"}
+# How a Session list marks a Session a Cron job or Channel started.
+_BACKGROUND_SESSION = "Cron or Channel Session"
+# With a target, open's view names the kind of thing to show.
+_OPEN_VIEW_KINDS = {
+    "chat": frozenset({SESSION, AGENT}),
+    "terminals": frozenset({TERMINAL, GROUP}),
+    "agents": frozenset({AGENT}),
+    "projects": frozenset({PROJECT}),
+}
 
 Handler = Callable[[JsonObject, LiveCatalog], Awaitable[JsonObject]]
 
@@ -241,19 +250,29 @@ class LiveToolExecutor:
         ]
         if not sessions:
             return f"{agent.label} has no Sessions."
+        background = {session_key(item) for item in (await self._agent_sessions(agent, catalog))[1]}
         shown = sessions[:_LIST_CAP]
         lines = [f"Sessions of {agent.label}, most recent first:"]
-        lines += [await self._session_line(item, catalog) for item in shown]
+        lines += [
+            await self._session_line(
+                item, catalog, origin=_BACKGROUND_SESSION if session_key(item) in background else ""
+            )
+            for item in shown
+        ]
         if len(sessions) > len(shown):
             lines.append(f"- and {len(sessions) - len(shown)} older")
         return "\n".join(lines)
 
-    async def _session_line(self, item: JsonObject, catalog: LiveCatalog) -> str:
+    async def _session_line(
+        self, item: JsonObject, catalog: LiveCatalog, *, origin: str = ""
+    ) -> str:
         key = session_key(item)
         ref = self._refs.session(key)
         name = await catalog.agent_name(key.address)
         title = str(item.get("title") or item.get("auto_title") or "").strip()
         head = f'- {ref} {name} "{title}"' if title else f"- {ref} {name}"
+        if origin:
+            head += f" ({origin})"
         if item.get("has_active_run") is True:
             return f"{head}: working"
         status = _FAILED_COMPLETIONS.get(str(item.get("unread_run_status") or ""))
@@ -497,6 +516,9 @@ class LiveToolExecutor:
             field="target",
             refs=self._refs,
             catalog=catalog,
+            kind_hint=(
+                'For an Agent, call overview with {"agent": "<its id>"} to see its Session refs.'
+            ),
         )
 
     async def _session_of(self, target: Target, tool: str, catalog: LiveCatalog) -> SessionKey:
@@ -505,27 +527,31 @@ class LiveToolExecutor:
             return target.session
         agent = target.agent
         assert agent is not None
-        sessions = [
-            item for item in await catalog.sessions() if item["agent_address"] == agent.address
-        ]
-        candidates = [
-            item
-            for item in sessions
-            if item.get("has_active_run") is True
-            or (
+        sessions, background = await self._agent_sessions(agent, catalog)
+
+        def clear(item: JsonObject) -> bool:
+            return item.get("has_active_run") is True or (
                 tool != TOOL_STOP
                 and (self._refs.is_touched(session_key(item)) or self._recent(item))
             )
-        ]
+
+        candidates = [item for item in sessions if clear(item)]
         if len(candidates) == 1:
             return session_key(candidates[0])
         if not candidates and tool == TOOL_READ and sessions:
             return session_key(sessions[0])
         if not candidates:
             what = "working" if tool == TOOL_STOP else "running or recent"
+            skipped = bool(background) if tool == TOOL_READ else any(map(clear, background))
+            note = (
+                f" Its {_BACKGROUND_SESSION}s (started by a schedule or another chat app) are "
+                "not chosen by its name."
+                if skipped
+                else ""
+            )
             raise LiveToolError(
                 "no_session",
-                f"{agent.label} has no {what} Session. Call overview with "
+                f"{agent.label} has no {what} Session.{note} Call overview with "
                 f'{{"agent": "{agent.name}"}} to see its Sessions, then call {tool} again with a '
                 "ref as target.",
             )
@@ -539,6 +565,27 @@ class LiveToolExecutor:
             "ambiguous_target",
             f"{agent.label} has several Sessions: {listed}. Ask the user which one they mean, "
             f"then call {tool} again with its ref as target.",
+        )
+
+    async def _agent_sessions(
+        self, agent: LiveAgent, catalog: LiveCatalog
+    ) -> tuple[list[JsonObject], list[JsonObject]]:
+        """The Agent's Sessions its name can select, then its Cron and Channel Sessions.
+
+        A Cron job's or Channel's Session is not the user's conversation with the
+        Agent, so its name selects one only when the Agent has no other Session.
+        """
+        sessions = [
+            item for item in await catalog.sessions() if item["agent_address"] == agent.address
+        ]
+        if not sessions:
+            return [], []
+        own = await catalog.own_sessions(agent.address)
+        if not own:
+            return sessions, []
+        return (
+            [item for item in sessions if session_key(item) in own],
+            [item for item in sessions if session_key(item) not in own],
         )
 
     async def _send(self, key: SessionKey, text: str) -> JsonObject:
@@ -593,11 +640,16 @@ class LiveToolExecutor:
             return live_success(f"Opened the {view} view.")
         target = await resolve_target(
             target_text,
-            {SESSION, TERMINAL, GROUP, AGENT, PROJECT},
+            _OPEN_VIEW_KINDS.get(view, {SESSION, TERMINAL, GROUP, AGENT, PROJECT}),
             tool=TOOL_OPEN,
             field="target",
             refs=self._refs,
             catalog=catalog,
+            kind_hint=(
+                "Or call open again with this target and the view of the kind meant: chat (a "
+                "Session), terminals (a Terminal or group), agents (an Agent), or projects (a "
+                "Project)."
+            ),
         )
         if target.session is not None:
             return await self._open_session(target.session, catalog)
@@ -628,9 +680,14 @@ class LiveToolExecutor:
     async def _open_agent(self, agent: LiveAgent, view: str, catalog: LiveCatalog) -> JsonObject:
         project_id = agent.address.partition("@")[2]
         if view != "agents":
-            sessions = [
-                item for item in await catalog.sessions() if item["agent_address"] == agent.address
-            ]
+            sessions = (await self._agent_sessions(agent, catalog))[0]
+            if not sessions and view == "chat":
+                raise LiveToolError(
+                    "no_session",
+                    f"{agent.label} has no Session to show in the chat. Call overview with "
+                    f'{{"agent": "{agent.name}"}} to see its Sessions, or call open with '
+                    f'{{"target": "{agent.name}", "view": "agents"}} for its page.',
+                )
             if sessions:
                 key = session_key(sessions[0])
                 await self._navigate(
