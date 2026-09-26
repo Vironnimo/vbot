@@ -230,6 +230,16 @@ def failure_text(error: JsonObject) -> str:
             difference = error.get("difference")
             if difference:
                 lines.extend(_difference_text(difference))
+        elif error.get("part_of"):
+            part = error["part_of"]
+            text = part["text"] if len(part["text"]) <= 80 else part["text"][:77] + "..."
+            single = part["lines"].startswith("line ")
+            whole = f"all of {part['lines']}" if single else "all of the line you mean"
+            lines.append(
+                f"The patch line {text!r} is only part of "
+                f"{part['lines']}. Each patch line is a whole line, so copy {whole}:"
+            )
+            lines.extend(_excerpts(part["excerpts"], error.get("path_label")))
         elif error.get("path_label"):
             read = model_tool_name("read")
             lines.append(

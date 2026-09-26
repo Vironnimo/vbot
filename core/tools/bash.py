@@ -133,7 +133,7 @@ def _dedicated_tools_sentence(offered: frozenset[str]) -> str:
 _USUAL_DEDICATED_TOOLS_SENTENCE = _dedicated_tools_sentence(_USUAL_DEDICATED_TOOLS)
 BASH_TOOL_DESCRIPTION = (
     "Run an unattended shell command and capture its output, such as scripts, builds, "
-    "non-interactive Git, file operations, and servers. "
+    "non-interactive Git, copying files and folders, and servers. "
     + _USUAL_DEDICATED_TOOLS_SENTENCE
     + "No interactive input or live screen "
     "is available; provide input through files or pipelines. Never manually detach or "
@@ -141,7 +141,7 @@ BASH_TOOL_DESCRIPTION = (
 )
 BASH_SUBAGENT_TOOL_DESCRIPTION = (
     "Run an unattended shell command and wait for its output, such as scripts, builds, "
-    "non-interactive Git, and file operations. "
+    "non-interactive Git, and copying files and folders. "
     + _USUAL_DEDICATED_TOOLS_SENTENCE
     + "Background execution is unavailable. "
     "No interactive input or live screen is available; provide input through files or "

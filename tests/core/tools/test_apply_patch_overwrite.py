@@ -18,6 +18,17 @@ async def read_file(root, state, path="file.txt"):
     assert result["ok"]
 
 
+@pytest.mark.parametrize("ending", [b"\r\n", b"\r"])
+def test_unread_file_shown_by_the_guard_has_plain_line_breaks(tmp_path, ending):
+    (tmp_path / "file.txt").write_bytes(b"one" + ending + b"two" + ending)
+
+    result = apply(tmp_path, "*** Add File: file.txt\n+new")
+
+    assert result["error"]["code"] == "file_not_read"
+    assert "1| one\n2| two" in text(result)
+    assert "\r" not in text(result)
+
+
 @pytest.mark.parametrize("ending", [b"\n", b"\r\n", b"\r"])
 @pytest.mark.parametrize("bom", [b"", b"\xef\xbb\xbf"])
 @pytest.mark.parametrize("final", [True, False])

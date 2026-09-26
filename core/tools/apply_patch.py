@@ -34,9 +34,15 @@ from core.tools._patch_requests import (
 )
 from core.tools._patch_syntax import _HEADER, _Operation, _PatchError
 from core.tools._path_suggestions import missing_file_message
-from core.tools._read_text import add_line_numbers
+from core.tools._read_text import add_line_numbers, plain_line_end
 from core.tools.arguments import split_text_lines
-from core.tools.file_state import FileReadState, StaleReason, atomic_write_bytes
+from core.tools.contracts import ToolContractError
+from core.tools.file_state import (
+    FileReadState,
+    StaleReason,
+    atomic_write_bytes,
+    os_error_reason,
+)
 from core.tools.fuzzy_match import FuzzyReplacement, replace_fuzzy
 from core.tools.model_names import model_tool_name
 from core.tools.search import display_search_path
@@ -68,8 +74,9 @@ APPLY_PATCH_TOOL_PARAMETERS: JsonObject = {
                 "*** Add File: notes.txt\n+first line of a new file\n"
                 "*** Delete File: old.txt\n*** Move File: a.txt -> b.txt\n*** End Patch\n"
                 "Under Update File, - lines are removed, + lines are added, and lines "
-                "starting with a space are unchanged lines that locate the change; copy "
-                "them exactly from the file. Every @@ block needs a - or + line. Text after "
+                "starting with a space are unchanged lines that locate the change. Each is "
+                "a whole line; copy - and unchanged lines exactly from the file. Every @@ "
+                "block needs a - or + line. Text after "
                 "@@ is optional and names an earlier line, such as the enclosing function. "
                 "Start another @@ block for another place in the same file. A block of only "
                 "+ lines goes after the @@ line, or at the end of the file after a bare @@. "
@@ -101,6 +108,11 @@ _PRECISE_RECOVERY = (
 )
 _STALE_WARNING = (
     "{path} changed after this Session last read it; the change used its current content."
+)
+_STALE_FAILURE = "{path} changed after this Session last read it; read it again before resending."
+# Failures that mean the patch's view of the file differs from its current content.
+_MISMATCH_CODES = frozenset(
+    {"text_not_found", "context_not_found", "ambiguous_match", "ambiguous_context"}
 )
 # A guard failure shows the whole current file when it is this small.
 _GUARD_CONTENT_MAX_BYTES = 16 * 1024
@@ -211,7 +223,7 @@ class _Batch:
 
 def _os_reason(error: OSError, batch: _Batch) -> str:
     """Describe a file-system error by its reason and shown path, never an absolute one."""
-    reason = error.strerror or str(error)
+    reason = os_error_reason(error)
     if error.filename:
         return f"{batch.shown(Path(error.filename))}: {reason}"
     return reason
@@ -267,7 +279,7 @@ def _commit(
                 else {
                     "code": "file_write_error",
                     "message": _WRITE_FAILED.format(
-                        path=batch.shown(path), reason=error.strerror or str(error)
+                        path=batch.shown(path), reason=os_error_reason(error)
                     ),
                 }
             )
@@ -304,7 +316,7 @@ def _commit(
             actual = _snapshot(path)
         except OSError as error:
             batch.blocked.update(before)
-            reason = error.strerror or str(error)
+            reason = os_error_reason(error)
             return completed, {
                 "code": "file_read_error",
                 "message": _UNCONFIRMED.format(path=batch.shown(path), reason=reason),
@@ -341,7 +353,7 @@ def _rename(
         return [], {
             "code": "file_write_error",
             "message": _WRITE_FAILED.format(
-                path=batch.shown(source), reason=error.strerror or str(error)
+                path=batch.shown(source), reason=os_error_reason(error)
             ),
         }
     completed = [batch.shown(destination)]
@@ -394,7 +406,9 @@ def _guard_failure(
         and _snapshot(path) == snapshot
     ):
         state.record_read(context.session_id, path)
-        shown = "".join(add_line_numbers(lines, 1)).rstrip("\n")
+        # A CRLF file shows plain line breaks, as read shows it.
+        plain = [plain_line_end(line) for line in lines]
+        shown = "".join(add_line_numbers(plain, 1)).rstrip("\n")
         return {
             "code": code,
             "message": (
@@ -491,6 +505,12 @@ def _run_step(
             and error.code == "text_not_found"
         ):
             outcome["error"]["message"] += " " + _PRECISE_RECOVERY
+        if (
+            isinstance(error, _PatchError)
+            and error.code in _MISMATCH_CODES
+            and state.check_stale(context.session_id, source) is StaleReason.MODIFIED
+        ):
+            outcome["error"]["message"] += " " + _STALE_FAILURE.format(path=batch.shown(source))
     if outcome["status"] == "failed":
         if operation.action in {"add", "move"} or operation.destination:
             batch.blocked.update(resolved)
@@ -641,7 +661,7 @@ def _execute(context: ToolContext, arguments: JsonObject, state: FileReadState) 
     try:
         arguments = normalize_patch_arguments(arguments)
     except ValueError as error:
-        return tool_failure("invalid_arguments", str(error))
+        return tool_failure("invalid_arguments", f"{error}\nNo file was changed.")
     try:
         operations = patch_operations(arguments)
     except _PatchError as error:
@@ -768,6 +788,14 @@ def patch_targets(arguments: JsonObject) -> list[str]:
     ]
 
 
+def _normalize_call(arguments: object) -> object:
+    """Normalize a call before dispatch; a refused call also says no file changed."""
+    try:
+        return normalize_patch_arguments(arguments)
+    except ValueError as error:
+        raise ToolContractError(f"{error}\nNo file was changed.") from error
+
+
 def make_apply_patch_handler(file_state: FileReadState) -> ToolHandler:
     def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
         return _execute(context, arguments, file_state)
@@ -800,7 +828,7 @@ def register_apply_patch_tool(registry: ToolRegistry, *, file_state: FileReadSta
         offload_tool_handler(make_apply_patch_handler(file_state)),
         family="files",
         open_input_schema=True,
-        argument_normalizer=normalize_patch_arguments,
+        argument_normalizer=_normalize_call,
         unadvertised_parameters=PATCH_HIDDEN_PARAMETERS,
         result_schema={"type": "object", "required": ["status", "content"]},
         display=ToolDisplay(

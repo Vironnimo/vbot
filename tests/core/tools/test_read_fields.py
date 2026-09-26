@@ -99,6 +99,8 @@ async def test_path_spellings_from_other_harnesses_read_the_file(
         {"lines": {"start": 4, "end": 6}},
         {"offset": "4-6"},
         {"offset": "4", "limit": "3"},
+        {"offset": " 4 ", "limit": "3.0"},
+        {"offset": 4.0, "limit": 3.0},
         {"from": 4, "to": 6},
         {"end_line": 6, "offset": 4},
         {"start_line": 4, "num_lines": 3},
@@ -190,11 +192,51 @@ async def test_continuation_position_from_a_cut_off_read_resumes_mid_line(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    ("arguments", "expected"),
+    [
+        (
+            {"offset": "3:8"},
+            '[Line 3 has no character 8, so offset "3:8" was read as offset=3, limit=6.]\n'
+            + window(3, 8),
+        ),
+        (
+            {"offset": "3:9", "limit": 2},
+            '[Line 3 has no character 9, so offset "3:9" was read as offset=3.]\n' + window(3, 4),
+        ),
+        (
+            {"offset": "9:8"},
+            '[Line 9 has no character 8, so offset "9:8" showed nothing. offset takes a line '
+            "number: offset=9 reads from line 9.]",
+        ),
+    ],
+)
+async def test_line_pair_past_the_line_end_reads_as_a_line_range(
+    project: Path, arguments: dict, expected: str
+) -> None:
+    # Line 3 has 7 characters with its line break, so character 8 can only mean a line.
+    result = await dispatch(project, {"path": "src/app.txt", **arguments})
+
+    assert content(result) == expected
+
+
+@pytest.mark.asyncio
+async def test_offset_text_that_is_no_line_names_the_line_calls(project: Path) -> None:
+    message = await rejected(project, {"path": "src/app.txt", "offset": "max-10"})
+
+    assert message == (
+        'offset takes a line number, not "max-10": offset=10 starts at line 10, and '
+        "offset=-10 shows the last 10 lines."
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     ("arguments", "message"),
     [
         (
             {"offset": 3, "start_line": 5},
-            "Conflicting values for offset; provide one intended value.",
+            "Conflicting values for offset: offset is 3 and start_line is 5. Send only the "
+            "intended one.",
         ),
         (
             {"lines": "4-6", "offset": 2},
