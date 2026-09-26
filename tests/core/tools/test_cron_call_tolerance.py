@@ -12,6 +12,7 @@ import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -364,6 +365,104 @@ def test_one_time_spellings_create_one_fire(tool: CronTool, fields: dict[str, An
     job, _text = created(tool, {"action": "create", "prompt": PROMPT, **fields})
 
     assert (job.schedule_type, job.remaining_runs) == ("once", 1)
+
+
+@pytest.mark.parametrize(
+    ("fields", "run_at", "where"),
+    [
+        ({"run_at": "0900"}, "2030-01-10T08:00:00+00:00", "the server time zone Europe/Berlin"),
+        ({"at": "9:00"}, "2030-01-10T08:00:00+00:00", "the server time zone Europe/Berlin"),
+        # 07:00 has passed in Berlin today, so the next 07:00 is tomorrow's.
+        ({"fireAt": "0700"}, "2030-01-11T06:00:00+00:00", "the server time zone Europe/Berlin"),
+        (
+            {"run_at": "08:30", "timezone": "America/New_York"},
+            "2030-01-10T13:30:00+00:00",
+            "America/New_York",
+        ),
+    ],
+)
+def test_clock_time_at_a_time_key_is_its_next_occurrence(
+    tool: CronTool,
+    monkeypatch: pytest.MonkeyPatch,
+    fields: dict[str, Any],
+    run_at: str,
+    where: str,
+) -> None:
+    # 08:00 in Berlin, 02:00 in New York.
+    monkeypatch.setattr("core.tools.cron.datetime", clock_at(datetime(2030, 1, 10, 7, tzinfo=UTC)))
+
+    job, text = created(tool, {"action": "create", "prompt": PROMPT, **fields})
+
+    assert job.run_at == run_at
+    zone = ZoneInfo(tool.service.system_timezone_name())
+    shown = datetime.fromisoformat(run_at).astimezone(zone).isoformat()
+    assert f"as its next occurrence in {where}: {shown}." in text
+
+
+def test_clock_time_the_clocks_skip_is_refused_with_each_instant(
+    tool: CronTool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # 01:00 in Berlin on the night the clocks jump from 02:00 to 03:00.
+    monkeypatch.setattr("core.tools.cron.datetime", clock_at(datetime(2030, 3, 31, 0, tzinfo=UTC)))
+
+    message = refused(tool, {"action": "create", "prompt": PROMPT, "run_at": "02:30"})
+
+    assert message.startswith(
+        'cron was not run: 02:30 next comes on 2030-03-31, and "2030-03-31T02:30" does not '
+        "exist in the server time zone Europe/Berlin: the clocks jump over it that day."
+    )
+    assert '"schedule":"2030-03-31T01:30:00+01:00"}' in message
+    assert '"schedule":"2030-03-31T03:30:00+02:00"}' in message
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"at": 1893484800000, "timezone": "Asia/Tokyo"},
+        {"at": "1893484800", "timezone": "Asia/Tokyo"},
+        {"atMs": "1893484800000"},
+        {"timestamp": 1893484800},
+    ],
+)
+def test_epoch_names_an_instant_in_every_zone(tool: CronTool, fields: dict[str, Any]) -> None:
+    job, _text = created(tool, {"action": "create", "prompt": PROMPT, **fields})
+
+    assert job.run_at == "2030-01-01T08:00:00+00:00"
+
+
+def test_compact_local_timestamp_is_read_as_server_time(tool: CronTool) -> None:
+    job, _text = created(tool, {"action": "create", "prompt": PROMPT, "run_at": "203001010900"})
+
+    assert job.run_at == "2030-01-01T08:00:00+00:00"
+
+
+@pytest.mark.parametrize(
+    ("fields", "text", "stand_in"),
+    [
+        ({"at": 900}, '"at" 900 is not an epoch time', "<local time such as 2030-01-01T09:00>"),
+        (
+            {"atMs": 1893484800},
+            '"atMs" 1893484800 is not an epoch time in milliseconds',
+            "<local time such as 2030-01-01T09:00>",
+        ),
+        ({"run_at": "2400"}, '"run_at" "2400" does not read as one time.', None),
+        (
+            {"run_at": "20300101"},
+            '"run_at" "20300101" is a date without a time of day',
+            "<2030-01-01 with a time of day, as 2030-01-01THH:MM>",
+        ),
+    ],
+)
+def test_digits_that_name_no_clear_time_are_refused_with_a_stand_in(
+    tool: CronTool, fields: dict[str, Any], text: str, stand_in: str | None
+) -> None:
+    message = refused(tool, {"action": "create", "prompt": PROMPT, **fields})
+
+    assert text in message
+    expected = stand_in or "<local time such as 2030-01-01T09:00>"
+    assert message.endswith(
+        f'Send: {{"action":"create","prompt":"{PROMPT}","schedule":"{expected}"}}'
+    )
 
 
 def test_bare_duration_is_refused_with_both_readings(tool: CronTool) -> None:

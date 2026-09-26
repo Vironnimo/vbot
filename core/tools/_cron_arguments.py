@@ -256,6 +256,13 @@ _ISO_DURATION = re.compile(
     r"^p(?:(\d+)w)?(?:(\d+)d)?(?:t(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?)?$", re.IGNORECASE
 )
 _DATE_ONLY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+CLOCK_SCHEDULE = re.compile(r"^at ([01]\d|2[0-3]):([0-5]\d)$")
+"""A clock time without a date; the handler reads it as its next occurrence."""
+_CLOCK_TEXT = re.compile(r"^(?:at\s*)?(?:(\d{1,2}):(\d{2})|(\d{2})(\d{2}))$")
+# Epochs this far from 1970 (2001 to 2286) are the only numbers read as instants.
+_EPOCH_SECONDS = (1_000_000_000, 10_000_000_000)
+_EPOCH_MILLISECONDS = (1_000_000_000_000, 10_000_000_000_000)
+_MOMENT_STAND_IN = "<local time such as 2030-01-01T09:00>"
 
 
 class _Problems:
@@ -476,9 +483,11 @@ def _read_schedule(arguments: dict[str, Any], problems: _Problems) -> None:
     """Resolve every schedule spelling into one canonical ``schedule`` string."""
     type_hint = _schedule_type(arguments, problems)
     candidates: list[tuple[str, str]] = []
+    # Epochs name instants in every zone, so a time zone next to one changes nothing.
+    absolute: set[str] = set()
     schedule = arguments.pop("schedule", None)
     if isinstance(schedule, dict):
-        type_hint = _schedule_object(arguments, schedule, type_hint, candidates, problems)
+        type_hint = _schedule_object(arguments, schedule, type_hint, candidates, problems, absolute)
     elif schedule is not None and not is_placeholder(schedule):
         candidates.append(("schedule", _schedule_text(schedule, type_hint, "schedule", problems)))
     for key in list(arguments):
@@ -487,7 +496,7 @@ def _read_schedule(arguments: dict[str, Any], problems: _Problems) -> None:
             item = arguments.pop(key)
             if is_placeholder(item):
                 continue
-            text = _keyed_schedule(word, key, item, problems)
+            text = _keyed_schedule(word, key, item, problems, absolute)
             if text is not None:
                 candidates.append((key, text))
     texts = list(dict.fromkeys(text for _key, text in candidates if text))
@@ -510,6 +519,8 @@ def _read_schedule(arguments: dict[str, Any], problems: _Problems) -> None:
     if type_hint is not None and schedule_kind(text) != type_hint:
         _schedule_type_mismatch(text, type_hint, problems)
     arguments["schedule"] = text
+    if text in absolute:
+        arguments.pop(TIMEZONE_FIELD, None)
 
 
 def _schedule_type(arguments: dict[str, Any], problems: _Problems) -> str | None:
@@ -541,6 +552,7 @@ def _schedule_object(
     type_hint: str | None,
     candidates: list[tuple[str, str]],
     problems: _Problems,
+    absolute: set[str],
 ) -> str | None:
     """Read an OpenClaw-style schedule object such as ``{"kind":"cron","expr":"0 8 * * *"}``."""
     inner = dict(schedule)
@@ -561,7 +573,7 @@ def _schedule_object(
         elif word in {"stagger", "staggerms", "exact"}:
             continue
         elif word in _CRON_KEYS | _AT_KEYS | _EVERY_KEYS | _IN_KEYS:
-            text = _keyed_schedule(word, key, item, problems)
+            text = _keyed_schedule(word, key, item, problems, absolute)
             if text is not None:
                 candidates.append((key, text))
         elif word == "schedule" or word == "value":
@@ -571,15 +583,13 @@ def _schedule_object(
     return type_hint
 
 
-def _keyed_schedule(word: str, key: str, item: Any, problems: _Problems) -> str | None:
+def _keyed_schedule(
+    word: str, key: str, item: Any, problems: _Problems, absolute: set[str]
+) -> str | None:
     if word in _CRON_KEYS:
         return _schedule_text(item, "cron", key, problems)
     if word in _AT_KEYS:
-        if isinstance(item, int | float) and not isinstance(item, bool):
-            return _epoch_text(item, milliseconds=word.endswith("ms"))
-        if isinstance(item, str) and item.strip().isdigit():
-            return _epoch_text(int(item.strip()), milliseconds=word.endswith("ms"))
-        return _schedule_text(item, "once", key, problems)
+        return _moment_text(key, item, problems, absolute, milliseconds=word.endswith("ms"))
     prefix = "every" if word in _EVERY_KEYS else "in"
     if isinstance(item, int | float) and not isinstance(item, bool):
         unit = next((size for suffix, size in _UNIT_BY_KEY_SUFFIX if word.endswith(suffix)), None)
@@ -602,6 +612,10 @@ def _schedule_text(value: Any, hint: str | None, key: str, problems: _Problems) 
     lowered = text.casefold()
     if lowered in _CRON_MACROS:
         return _CRON_MACROS[lowered]
+    if lowered.startswith("at "):
+        clock = _clock_text(lowered)
+        if clock is not None:
+            return clock
     prefix, _space, rest = lowered.partition(" ")
     if prefix in {"in", "every"} and rest:
         duration = _duration(rest)
@@ -674,9 +688,85 @@ def _duration_from_seconds(seconds: float) -> str | None:
     return f"{minutes}m"
 
 
-def _epoch_text(value: float, *, milliseconds: bool) -> str:
-    seconds = value / 1000 if milliseconds or value > 100_000_000_000 else value
-    return datetime.fromtimestamp(seconds, UTC).isoformat()
+def _moment_text(
+    key: str, item: Any, problems: _Problems, absolute: set[str], *, milliseconds: bool
+) -> str | None:
+    """Read a one-time value: a local time, a clock time, digits, or an epoch number."""
+    if isinstance(item, int | float) and not isinstance(item, bool):
+        return _epoch_text(key, item, problems, absolute, milliseconds=milliseconds)
+    if not isinstance(item, str):
+        return _schedule_text(item, "once", key, problems)
+    text = item.strip()
+    clock = _clock_text(text)
+    if clock is not None:
+        return clock
+    if not text.isdigit():
+        return _schedule_text(item, "once", key, problems)
+    if len(text) in {10, 13}:
+        return _epoch_text(key, int(text), problems, absolute, milliseconds=milliseconds)
+    stamp = None
+    if len(text) in {8, 12, 14}:
+        # A compact local date, or date and time: 20300101, 203001010900, 20300101090000.
+        shape = {8: "%Y%m%d", 12: "%Y%m%d%H%M", 14: "%Y%m%d%H%M%S"}[len(text)]
+        try:
+            stamp = datetime.strptime(text, shape)
+        except ValueError:
+            stamp = None
+    if stamp is not None and len(text) == 8:
+        day = stamp.date().isoformat()
+        problems.add(
+            f'"{key}" "{text}" is a date without a time of day; add one, as in "{day}T09:00".',
+            schedule=f"<{day} with a time of day, as {day}THH:MM>",
+        )
+        return None
+    if stamp is not None:
+        return stamp.isoformat(timespec="minutes" if len(text) == 12 else "seconds")
+    problems.add(
+        f'"{key}" "{text}" does not read as one time. Send a local time such as '
+        '"2030-01-01T09:00", a clock time such as "09:00", or a delay such as "in 30m".',
+        schedule=_MOMENT_STAND_IN,
+    )
+    return None
+
+
+def _clock_text(text: str) -> str | None:
+    """``at HH:MM`` for a clock time written "09:00", "9:00", "0900" or "at 9:00"."""
+    match = _CLOCK_TEXT.match(text.strip().casefold())
+    if match is None:
+        return None
+    hour_text, minute_text, *compact = match.groups()
+    if hour_text is None:
+        hour_text, minute_text = compact
+    hour, minute = int(hour_text), int(minute_text)
+    if hour > 23 or minute > 59:
+        return None
+    return f"at {hour:02d}:{minute:02d}"
+
+
+def _epoch_text(
+    key: str, value: float, problems: _Problems, absolute: set[str], *, milliseconds: bool
+) -> str | None:
+    """An epoch as a UTC instant, when its size leaves no doubt about the unit."""
+    low, high = _EPOCH_MILLISECONDS
+    if low <= value < high:
+        seconds = value / 1000
+    elif not milliseconds and _EPOCH_SECONDS[0] <= value < _EPOCH_SECONDS[1]:
+        seconds = value
+    else:
+        unit = "milliseconds" if milliseconds else "seconds or milliseconds"
+        problems.add(
+            f'"{key}" {_json_value(value)} is not an epoch time in {unit} after 2001. Send a '
+            'local time such as "2030-01-01T09:00", or a delay such as "in 30m".',
+            schedule=_MOMENT_STAND_IN,
+        )
+        return None
+    text = datetime.fromtimestamp(seconds, UTC).isoformat()
+    absolute.add(text)
+    return text
+
+
+def _json_value(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False)
 
 
 # -- state, recurrence, Session, delivery --------------------------------------------------
@@ -994,6 +1084,7 @@ def _boolean(value: Any) -> Any:
 
 
 __all__ = [
+    "CLOCK_SCHEDULE",
     "ENABLED_FIELD",
     "CronCallRefusedError",
     "OMIT",
