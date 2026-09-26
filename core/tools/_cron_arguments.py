@@ -798,6 +798,24 @@ def _omit_placeholders(arguments: dict[str, Any], problems: _Problems) -> None:
             f'{_REFUSAL_PREFIX}prompt "{prompt}" is a placeholder. Send the complete '
             "instruction the Agent should run at each fire."
         )
+    if isinstance(prompt, str) and _TEMPLATE.match(prompt):
+        # Dropped, the new instruction the update was meant to set would be lost.
+        raise ToolContractError(
+            f'{_REFUSAL_PREFIX}prompt "{prompt.strip()}" is a stand-in. Send the complete '
+            "instruction the Agent should run at each fire in its place, or leave prompt out "
+            "to keep the job's current one."
+        )
+    target = arguments.get("target")
+    if isinstance(target, str) and _TEMPLATE.match(target):
+        # Dropped, the job would run as the calling Agent instead of the one meant.
+        default = (
+            "keep the job's current target" if "id" in arguments else "run the job as yourself"
+        )
+        raise ToolContractError(
+            f'{_REFUSAL_PREFIX}target "{target.strip()}" is a stand-in. Send an existing Agent '
+            f"id, or agent@project for a Project member, in its place, or leave target out to "
+            f"{default}."
+        )
     for name in ("id", "name", "prompt", "schedule"):
         if name in arguments and _is_stand_in(arguments[name], PLACEHOLDER_WORDS):
             del arguments[name]

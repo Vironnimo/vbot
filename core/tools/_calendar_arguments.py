@@ -87,6 +87,17 @@ _LONG_TEXT_STAND_INS = {
     "notes": "<the notes from this call>",
 }
 _TEMPLATE = re.compile(r"^\s*<[^<>]+>\s*$")
+_FILLED_BY_AGENT = {
+    "title": "Send the event's actual title in its place.",
+    "notes": "Send the actual notes in its place, or leave notes out.",
+    "prompt": "Send the actual instruction the action's Run carries out in its place.",
+    "target": (
+        "Send an existing Agent id, or agent@project for a Project member, in its place, or "
+        "leave target out: a new action then runs as yourself, and update_action keeps the "
+        "current target."
+    ),
+}
+"""Fields whose stand-in only the Agent can replace, with what belongs there."""
 
 _FIELD_ALIASES = SpellingAliases(
     {
@@ -699,7 +710,25 @@ def _requests_reminder(item: Any) -> bool:
 
 
 def _omit_placeholders(arguments: dict[str, Any]) -> None:
-    for name in ("id", "title", "notes", "start", "when", "target", "session", LOCATION_FIELD):
+    for name, wanted in _FILLED_BY_AGENT.items():
+        item = arguments.get(name)
+        if isinstance(item, str) and _TEMPLATE.match(item):
+            # Kept, a stand-in would become the event's text, the Run's instruction or a
+            # target; dropped, the value the call was meant to set would be lost or defaulted.
+            raise ToolContractError(
+                f'{_REFUSAL_PREFIX}{name} "{item.strip()}" is a stand-in. {wanted}'
+            )
+    for name in (
+        "id",
+        "title",
+        "notes",
+        "start",
+        "when",
+        "prompt",
+        "target",
+        "session",
+        LOCATION_FIELD,
+    ):
         item = arguments.get(name)
         if isinstance(item, str) and (is_placeholder(item) or _TEMPLATE.match(item)):
             del arguments[name]
