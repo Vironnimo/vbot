@@ -596,6 +596,41 @@ def test_placeholder_prompt_is_refused(tool: CronTool, prompt: str) -> None:
     )
 
 
+def test_stand_in_prompt_on_update_is_refused_and_keeps_the_job(tool: CronTool) -> None:
+    job_id = existing(tool)
+
+    message = refused(
+        tool, {"action": "update", "id": job_id, "prompt": "<the prompt from this call>"}
+    )
+
+    assert tool.only_job().prompt == PROMPT
+    assert message == (
+        'cron was not run: prompt "<the prompt from this call>" is a stand-in. Send the '
+        "complete instruction the Agent should run at each fire in its place, or leave prompt "
+        "out to keep the job's current one."
+    )
+
+
+@pytest.mark.parametrize(
+    ("call", "default"),
+    [
+        ({"action": "create", "prompt": PROMPT, "schedule": "every 2h"}, "run the job as yourself"),
+        ({"action": "update", "schedule": "every 3h"}, "keep the job's current target"),
+    ],
+)
+def test_stand_in_target_is_refused(tool: CronTool, call: dict[str, Any], default: str) -> None:
+    if call["action"] == "update":
+        call = {**call, "id": existing(tool)}
+
+    message = refused(tool, {**call, "target": "<agent or agent@project>"})
+
+    assert message == (
+        'cron was not run: target "<agent or agent@project>" is a stand-in. Send an existing '
+        "Agent id, or agent@project for a Project member, in its place, or leave target out "
+        f"to {default}."
+    )
+
+
 def test_placeholder_fields_are_omitted(tool: CronTool) -> None:
     job, _text = created(
         tool,

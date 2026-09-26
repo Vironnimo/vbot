@@ -919,6 +919,61 @@ class TestIds:
         assert 'update needs the event "id"' in text
 
 
+class TestStandIns:
+    @pytest.mark.parametrize(
+        ("field", "stand_in", "wanted"),
+        [
+            ("prompt", "<instruction>", "Send the actual instruction the action's Run carries"),
+            ("prompt", "<the prompt from this call>", "Send the actual instruction"),
+            ("target", "<agent or agent@project>", "Send an existing Agent id"),
+        ],
+    )
+    def test_stand_in_action_field_is_refused(
+        self, tool: CalendarTool, field: str, stand_in: str, wanted: str
+    ) -> None:
+        event_id = _dentist(tool)
+        call = {"action": "add_action", "id": event_id, "when": "start - 1h", "prompt": "p"}
+
+        _, text = tool.call({**call, field: stand_in})
+
+        assert tool.actions() == []
+        assert text.startswith(
+            f'Error (invalid_arguments): calendar was not run: {field} "{stand_in}" is a '
+            f"stand-in. {wanted}"
+        )
+
+    @pytest.mark.parametrize(
+        ("field", "stand_in"), [("title", "<title>"), ("notes", "<the notes from this call>")]
+    )
+    def test_stand_in_event_text_is_refused_on_create_and_update(
+        self, tool: CalendarTool, field: str, stand_in: str
+    ) -> None:
+        event_id = _dentist(tool)
+
+        _, created = tool.call(
+            {"action": "create", "title": "T", "start": DENTIST_START, field: stand_in}
+        )
+        _, updated = tool.call({"action": "update", "id": event_id, field: stand_in})
+
+        event = tool.only_event()
+        assert (event.title, event.notes) == ("Dentist", None)
+        assert f'{field} "{stand_in}" is a stand-in.' in created
+        assert f'{field} "{stand_in}" is a stand-in.' in updated
+
+    def test_placeholder_word_prompt_counts_as_missing(self, tool: CalendarTool) -> None:
+        event_id = _dentist(tool)
+
+        _, text = tool.call(
+            {"action": "add_action", "id": event_id, "when": "start - 1h", "prompt": "TBD"}
+        )
+
+        assert tool.actions() == []
+        assert text.endswith(
+            f'Send: {{"action":"add_action","id":"{event_id}","when":"start - 1h",'
+            '"prompt":"<instruction>"}'
+        )
+
+
 class TestConflicts:
     def test_create_with_an_id_offers_update_or_create(self, tool: CalendarTool) -> None:
         event_id = _dentist(tool)
