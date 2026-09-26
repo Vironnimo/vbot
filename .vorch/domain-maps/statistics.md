@@ -69,6 +69,11 @@ returns the existing usage, Tools, Compaction and Run projections without costs,
 account data or separate counters. With the recorder, usage selects the same
 explicit Session/Run identities from durable requests, including auxiliary work;
 group-level requests without Run membership remain only in global accounting.
+Durable group selection drives indexed reads from the requested Run slices,
+then recovers each selected record's source Session key before reading its call
+through the existing `(session_key, seq)` index. Unrelated request history is
+neither scanned nor temporarily indexed for each group or participant report
+(`test_statistics_accounting.py`).
 A slice without any exact ledger match keeps its saved Session usage, including
 after an Agent takeover. Durable attribution stays at the original address;
 there is no canonical address alias to link auxiliary requests across a takeover,
