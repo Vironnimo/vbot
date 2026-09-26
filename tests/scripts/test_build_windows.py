@@ -498,7 +498,7 @@ def test_compile_host_constructs_msvc_abi_commands(
     assert ">true</longPathAware>" in manifest
     assert commands[1][0] == "clang-cl"
     assert '/DVBOT_ROLE=L"server"' in commands[1]
-    assert "/SUBSYSTEM:WINDOWS" in commands[2]
+    assert "/SUBSYSTEM:CONSOLE" in commands[2]
 
     commands.clear()
     build_windows.compile_host(source, tmp_path / "vBot.Python.exe", role="python", version="2.3.4")
@@ -577,7 +577,9 @@ def test_native_startup_failure_exits_and_reports_stderr_without_a_dialog(tmp_pa
     sys.platform != "win32" or not shutil.which("clang-cl") or not shutil.which("llvm-rc"),
     reason="Windows native compiler required",
 )
-@pytest.mark.parametrize("role, stable", [("host", True), ("update", False), ("gui", True)])
+@pytest.mark.parametrize(
+    "role, stable", [("host", True), ("update", False), ("gui", True), ("server", False)]
+)
 def test_native_redirected_output_preserves_unicode(tmp_path, role, stable):
     import sysconfig
 
@@ -596,7 +598,7 @@ def test_native_redirected_output_preserves_unicode(tmp_path, role, stable):
             "__pycache__", "site-packages", "test", "tests", "ensurepip", "idlelib", "tkinter"
         ),
     )
-    output = root / "vBot.exe" if stable else runtime / "vBot.Update.exe"
+    output = root / "vBot.exe" if stable else runtime / f"vBot.{role.title()}.exe"
     (root / "active-version").write_text("rel_test\n", encoding="ascii")
     build_windows.compile_host(
         Path(build_windows.__file__).parent.parent,
@@ -615,10 +617,14 @@ def test_native_redirected_output_preserves_unicode(tmp_path, role, stable):
     assert result.returncode == 0, result.stderr
     assert result.stdout.decode("utf-8").splitlines() == ["1", expected]
 
+    if role in {"gui", "server"}:
+        shutil.copytree(python_root / "DLLs", runtime / "DLLs")
+    if role == "server":
+        _assert_native_server_pseudoterminals_are_windowless(output)
+
     if role == "gui":
         import struct
 
-        shutil.copytree(python_root / "DLLs", runtime / "DLLs")
         executable = output.read_bytes()
         pe = struct.unpack_from("<I", executable, 0x3C)[0]
         assert struct.unpack_from("<H", executable, pe + 24 + 68)[0] == 2
@@ -649,3 +655,57 @@ def test_native_redirected_output_preserves_unicode(tmp_path, role, stable):
             assert observed["args"] == ["desktop", "--host", "example.test"]
             assert observed["console"] == 0
             assert version in Path(observed["module"]).parts
+
+
+def _assert_native_server_pseudoterminals_are_windowless(executable: Path) -> None:
+    import winpty
+
+    # The isolated native fixture loads only its copied standard library. Make
+    # this interpreter's installed PTY dependency available explicitly.
+    dependency_root = str(Path(winpty.__file__).parent.parent)
+    probe = (
+        "import ctypes, gc, os, sys\n"
+        "from ctypes import wintypes\n"
+        "kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)\n"
+        "kernel32.GetConsoleWindow.argtypes = []\n"
+        "kernel32.GetConsoleWindow.restype = wintypes.HWND\n"
+        "kernel32.GetConsoleProcessList.argtypes = [ctypes.POINTER(wintypes.DWORD), "
+        "wintypes.DWORD]\n"
+        "kernel32.GetConsoleProcessList.restype = wintypes.DWORD\n"
+        "def assert_windowless_console():\n"
+        "    processes = (wintypes.DWORD * 16)()\n"
+        "    count = kernel32.GetConsoleProcessList(processes, len(processes))\n"
+        "    assert count > 0, 'Native server must already have an attached console'\n"
+        "    assert not kernel32.GetConsoleWindow(), 'Native server must have no console window'\n"
+        # This precondition fails for a GUI-subsystem regression before pywinpty
+        # can allocate a visible console on the developer's desktop.
+        "assert_windowless_console()\n"
+        "sys.path.insert(0, sys.argv[1])\n"
+        "from winpty import PtyProcess\n"
+        "for index in range(2):\n"
+        "    marker = f'native-pty-{index}'\n"
+        "    process = PtyProcess.spawn([os.environ['COMSPEC'], '/d', '/q', '/c', "
+        "'echo ' + marker])\n"
+        "    try:\n"
+        "        assert_windowless_console()\n"
+        "        process.fileobj.settimeout(5)\n"
+        "        output = ''\n"
+        "        while marker not in output:\n"
+        "            output += process.read()\n"
+        "        assert marker in output, output\n"
+        "    finally:\n"
+        "        process.close(force=True)\n"
+        "    del process\n"
+        "    gc.collect()\n"
+        "    assert_windowless_console()\n"
+        "print('windowless-pty-completed')\n"
+    )
+    result = subprocess.run(
+        [str(executable), "-c", probe, dependency_root],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        creationflags=subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "windowless-pty-completed"
