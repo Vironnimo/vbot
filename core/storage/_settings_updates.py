@@ -381,10 +381,9 @@ def apply_model_task_settings(
             "options": options,
         }
 
-    if merged_model_tasks:
+    # Removing one binding does not remove unknown sibling task bindings.
+    if merged_model_tasks or "model_tasks" in settings:
         settings["model_tasks"] = merged_model_tasks
-    else:
-        settings.pop("model_tasks", None)
 
     return normalize_model_task_settings(settings.get("model_tasks"))
 
@@ -408,15 +407,13 @@ def apply_defaults(
                 continue
             current_agent_defaults[field] = normalized_value
 
-        if current_agent_defaults:
+        # A field reset does not remove its containing objects: the writer
+        # restores unknown sibling fields into these otherwise-empty shapes.
+        if current_agent_defaults or "agent" in merged_defaults:
             merged_defaults["agent"] = current_agent_defaults
-        else:
-            merged_defaults.pop("agent", None)
 
-    if merged_defaults:
+    if merged_defaults or "defaults" in settings:
         settings["defaults"] = merged_defaults
-    else:
-        settings.pop("defaults", None)
 
     return normalize_defaults_settings(merged_defaults)
 
