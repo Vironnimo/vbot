@@ -182,16 +182,34 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   function or variable). Exactly copied first and last lines (3+ lines, 2+ words
   each) also place a passage around similar lines (SequenceMatcher ratio >= 0.5,
   or 0.7 when the anchor pair repeats). Each line keeps its place: a kept line
-  must be mostly right (other differences <= correct words), and extra words
+  must hold at least half of its file line's words, and half of its words and
+  signs together (a blank file line holds none; counting words keeps shared
+  markup such as `##` from making another heading look right), and extra words
   that continue the line above or below mark a copy joined across a line break
   (a left-out blank line or wrapped line); such a passage refuses the edit
   instead of taking it one line off (Session replay 2026-09-26: a block landed
-  after its heading, a new list item was indented). A misspelling is a word of
+  after its heading, a new list item was indented). For a kept line only a
+  neighbor outside the passage counts: words moved across a break inside the
+  passage (a rewrapped comment) leave the kept line as the file has it; a
+  written line still counts neighbors inside, since its new text could drop or
+  repeat the moved words. A misspelling is a word of
   4+ characters within one edit (two from 8 characters, case-insensitive,
   adjacent swaps count once) of the file's word, with the same digits, that
-  occurs nowhere in the file. Passages copied up to misspellings and kept-line
-  gaps win over looser ones; overlapping candidates are one passage, placed by
-  the fewest differences (a tie between different spans stays ambiguous); more
+  occurs nowhere in the file. Some differences never matter: a hyphen (or two)
+  for an em dash, a lone backslash only one side holds, and zero-width
+  characters (U+200B-U+200D, U+2060, U+FEFF). They are neither correct words
+  nor differences, and kept text keeps the file's form, including the file's
+  zero-width characters beside it; zero-width characters the caller writes at
+  the edge of a change, other than its copy's there, refuse. A backslash
+  difference means the copy escapes differently: the text the edit writes may
+  then hold no backslash, nor, on a line where the file escapes a sign the copy
+  does not, that sign (other lines may: replay, a new list item under a line
+  with a stray escaped quote); a backslash only the file holds must not border
+  a change (it would escape the new text). A read-gutter leftover (`||` for
+  `|`) is not such a difference: new text would repeat it. Passages copied up
+  to misspellings and kept-line gaps win over looser ones; overlapping
+  candidates are one passage, placed by the fewest differences (a tie between
+  different spans stays ambiguous); more
   than one passage at the winning level is `ambiguous_match` (`ambiguous_copy`
   wording for `old_string`). What (merge): the change from old to new text is
   applied to the file's text. A line the edit writes comes out as the caller's
