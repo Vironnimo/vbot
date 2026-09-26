@@ -13,6 +13,7 @@ import pytest
 from core.runs import Run, RunExecutionOwner
 from core.sessions import ChatSessionManager, SessionAddress
 from core.statistics import AgentDirectory, StatisticsService
+from core.statistics._projection import CALL_COLUMNS
 from core.usage import UsageRecorder
 from core.utils.timestamps import format_canonical_timestamp
 from tests.core.sessions.history_fixtures import complete_run
@@ -260,7 +261,7 @@ async def test_run_activity_counts_unsaved_and_auxiliary_attempts(accounting):
 
 
 @pytest.mark.asyncio
-async def test_group_usage_includes_tasks_only_in_the_owned_run(accounting):
+async def test_group_usage_includes_tasks_only_in_the_owned_run_with_bounded_work(accounting):
     service, manager, recorder = accounting
     binding = manager.create_bound_temporary_session(
         SessionAddress(None, "temporary", "participant"),
@@ -289,6 +290,65 @@ async def test_group_usage_includes_tasks_only_in_the_owned_run(accounting):
     assert report["usage"]["totals"]["model_calls"] == 2
     assert report["usage"]["totals"]["measured_input_tokens"] == 15
     assert report["participants"][0]["usage"]["totals"]["model_calls"] == 2
+
+    # Count actual SQLite work, rather than timing or planner-specific text.
+    # The index is disposable: seed unrelated projected requests directly so
+    # this regression does not need thousands of canonical fsyncs.
+    database = service._index._database.get()
+    connection = database.writer
+
+    async def measured_report():
+        steps = 0
+
+        def progress():
+            nonlocal steps
+            steps += 100
+            return 0
+
+        connection.set_progress_handler(progress, 100)
+        try:
+            result = await service.group_usage(owner_name="swarm", group_id="group")
+        finally:
+            connection.set_progress_handler(None, 0)
+        return result, steps
+
+    before, baseline_steps = await measured_report()
+
+    def seed_unrelated(connection):
+        source = connection.execute(
+            f"SELECT {CALL_COLUMNS} FROM stat_usage_calls ORDER BY session_key, seq LIMIT 1"
+        ).fetchone()
+        assert source is not None
+        source = tuple(source)
+        last_seq = connection.execute("SELECT MAX(seq) FROM stat_usage_records").fetchone()[0]
+        unrelated_key = connection.execute(
+            "INSERT INTO stat_usage_units "
+            "(project_id, agent_id, session_id, owner_name, group_id, session_title) "
+            "VALUES ('', 'unrelated', 'other-session', 'swarm', 'other-group', NULL) "
+            "RETURNING session_key"
+        ).fetchone()[0]
+        sequences = range(last_seq + 1, last_seq + 20_001)
+        connection.executemany(
+            "INSERT INTO stat_usage_records "
+            "(seq, session_key, call_id, timestamp, instant, run_id, status) "
+            "SELECT ?, ?, ?, timestamp, instant, 'owned', status "
+            "FROM stat_usage_records WHERE seq = ?",
+            [(seq, unrelated_key, f"unrelated-{seq}", source[1]) for seq in sequences],
+        )
+        connection.executemany(
+            f"INSERT INTO stat_usage_calls ({CALL_COLUMNS}) "
+            f"VALUES ({', '.join('?' for _ in source)})",
+            [(unrelated_key, seq, *source[2:]) for seq in sequences],
+        )
+
+    database.write(seed_unrelated)
+    after, expanded_steps = await measured_report()
+
+    assert before == report == after
+    assert baseline_steps > 0
+    # Fixed selected Runs must not walk 20,000 unrelated requests, even when
+    # those requests reuse the Run id under a different Session and group.
+    assert expanded_steps <= baseline_steps * 2
 
 
 @pytest.mark.asyncio
