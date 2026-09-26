@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import sys
+from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 
+import psutil  # type: ignore[import-untyped]
 import pytest
 
 from core.runs import RunExecutionOwner
@@ -402,14 +405,20 @@ async def test_aclose_awaits_process_cleanup(manager: ProcessManager) -> None:
 
 
 @pytest.mark.asyncio
-async def test_kill_terminates_child_process_tree(manager: ProcessManager, tmp_path) -> None:
-    child_started_path = tmp_path / "child-started.txt"
+@pytest.mark.parametrize("kill_tree", [False, True])
+async def test_kill_terminates_child_process_tree(
+    manager: ProcessManager, tmp_path, kill_tree: bool
+) -> None:
+    child_release_path = tmp_path / "child-release.txt"
     child_survived_path = tmp_path / "child-survived.txt"
     child_script = (
-        "import pathlib, time; "
-        f"pathlib.Path({str(child_started_path)!r}).write_text('started'); "
-        "time.sleep(1); "
-        f"pathlib.Path({str(child_survived_path)!r}).write_text('survived')"
+        "import os, pathlib, time\n"
+        f"release = pathlib.Path({str(child_release_path)!r})\n"
+        "print(f'child-started:{os.getpid()}', flush=True)\n"
+        "while not release.exists():\n"
+        "    time.sleep(0.01)\n"
+        f"pathlib.Path({str(child_survived_path)!r}).write_text('survived')\n"
+        "print('child-released', flush=True)\n"
     )
     parent_script = (
         "import subprocess, sys, time; "
@@ -424,13 +433,28 @@ async def test_kill_terminates_child_process_tree(manager: ProcessManager, tmp_p
         cwd=tmp_path,
     )
 
-    for _ in range(20):
-        if child_started_path.exists():
-            break
-        await asyncio.sleep(0.05)
-    assert child_started_path.exists()
-
-    await manager.kill(process_id, AGENT_A)
-    await asyncio.sleep(1.2)
-
-    assert not child_survived_path.exists()
+    outcome, line = await manager.wait(
+        process_id, AGENT_A, timeout_seconds=10, pattern=re.compile(r"^child-started:\d+\r?$")
+    )
+    assert outcome == "matched" and line is not None
+    child = psutil.Process(int(line.split(":")[1]))
+    try:
+        assert child.is_running()
+        if kill_tree:
+            await manager.kill(process_id, AGENT_A)
+        # A surviving child may write only after kill has returned. The
+        # no-kill control proves that this signal really releases the child.
+        child_release_path.write_text("release", encoding="utf-8")
+        if kill_tree:
+            with suppress(psutil.NoSuchProcess):
+                assert not child.is_running() or child.status() == psutil.STATUS_ZOMBIE
+            assert not child_survived_path.exists()
+        else:
+            outcome, _line = await manager.wait(
+                process_id, AGENT_A, timeout_seconds=10, pattern=re.compile(r"^child-released\r?$")
+            )
+            assert outcome == "matched"
+            assert child_survived_path.read_text(encoding="utf-8") == "survived"
+    finally:
+        with suppress(psutil.NoSuchProcess):
+            child.kill()
