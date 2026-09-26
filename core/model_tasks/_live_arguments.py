@@ -172,6 +172,8 @@ def prepare_live_call(name: Any, arguments: Any) -> PreparedLiveCall | JsonObjec
                 "unknown_tool",
                 f"{called} is no longer available. Call one of: {', '.join(LIVE_TOOL_NAMES)}.",
             )
+        if isinstance(converted, dict):
+            return converted
         tool, parsed = converted
         implied: JsonObject = {}
     else:
@@ -217,12 +219,16 @@ def _parsed_arguments(arguments: Any) -> JsonObject | None:
 
 
 def _normalized(tool: str, arguments: JsonObject) -> JsonObject:
-    """Apply the owner's spellings, then the shared contract repairs."""
+    """Drop fields the call does not use, then apply the owner's spellings and repairs."""
 
+    payload = _payload_spellings(tool)
     cleaned = {
         key: value
         for key, value in arguments.items()
-        if not (is_placeholder(value) or value in ([], {}))
+        if not (
+            value in ([], {})
+            or (_blank(value) if spelling(key) in payload else is_placeholder(value))
+        )
     }
     normalized = normalize_call_arguments(
         _contract(tool),
@@ -238,6 +244,29 @@ def _normalized(tool: str, arguments: JsonObject) -> JsonObject:
 
 
 _TEXT_FIELDS = ("agent", "task", "target", "text", "folder", "project", "name", "action")
+# Fields whose value vBot passes on or writes into the app as given: a task, a
+# message, a new name. Their text is never rewritten; "None" or "n/a" there is
+# what the user said. Only a field that looks something up or picks a choice
+# treats such a word as a stand-in for leaving the field out.
+_PAYLOAD_FIELDS = ("task", "text", "name")
+
+
+@cache
+def _payload_spellings(tool: str) -> frozenset[str]:
+    """The spellings under which this Tool's call carries a payload field."""
+
+    properties = _contract(tool).input_schema.get("properties", {})
+    aliases = _FIELD_ALIASES[tool]
+    return frozenset(
+        spelling(name)
+        for field in _PAYLOAD_FIELDS
+        if field in properties
+        for name in (field, *aliases.get(field, ()))
+    )
+
+
+def _blank(value: Any) -> bool:
+    return value is None or (isinstance(value, str) and not value.strip())
 
 
 def _absent_field_aliases(tool: str, arguments: JsonObject) -> SpellingAliases:
@@ -291,8 +320,11 @@ _FIELD_NORMALIZERS: dict[str, Callable[[Any], Any]] = {
 }
 
 
-def _old_call(name: str, arguments: JsonObject) -> tuple[str, JsonObject] | None:
-    """Map a call of the former ``vbot_app`` / ``vbot_terminal`` Tools, when exact."""
+def _old_call(name: str, arguments: JsonObject) -> tuple[str, JsonObject] | JsonObject | None:
+    """Map a call of the former ``vbot_app`` / ``vbot_terminal`` Tools, when exact.
+
+    Returns a failure result for a call no Live Tool can do with the same effect.
+    """
 
     action = arguments.get("action")
     if name == _OLD_APP_TOOL and action in _OLD_APP_ACTIONS:
@@ -317,7 +349,7 @@ def _old_app_call(action: str, arguments: JsonObject) -> tuple[str, JsonObject]:
     return TOOL_SEND_MESSAGE, _present(target=session, text=arguments.get("text"))
 
 
-def _old_terminal_call(action: str, arguments: JsonObject) -> tuple[str, JsonObject]:
+def _old_terminal_call(action: str, arguments: JsonObject) -> tuple[str, JsonObject] | JsonObject:
     terminal = arguments.get("terminal_id")
     group = arguments.get("group_id")
     if action == "start":
@@ -332,9 +364,7 @@ def _old_terminal_call(action: str, arguments: JsonObject) -> tuple[str, JsonObj
     if action == "read":
         return TOOL_READ, _present(target=terminal)
     if action == "input":
-        if "key" in arguments:
-            return TOOL_TERMINAL, _present(action="key", target=terminal, key=arguments.get("key"))
-        return TOOL_SEND_MESSAGE, _present(target=terminal, text=arguments.get("text"))
+        return _old_input_call(terminal, arguments)
     if action in {"show", "show_group"}:
         return TOOL_OPEN, _present(target=terminal or group)
     if action in {"maximize", "close"}:
@@ -344,6 +374,31 @@ def _old_terminal_call(action: str, arguments: JsonObject) -> tuple[str, JsonObj
     if action == "reorder":
         return TOOL_TERMINAL, _present(action="reorder", target=group, order=arguments.get("order"))
     return TOOL_TERMINAL, _present(action=action, target=group, name=arguments.get("name"))
+
+
+def _old_input_call(terminal: Any, arguments: JsonObject) -> tuple[str, JsonObject] | JsonObject:
+    """Map ``input``: one key, or text followed by Enter (``submit`` defaulted to true)."""
+
+    target = json.dumps(terminal if isinstance(terminal, str) and terminal else "<Terminal ref>")
+    if "key" in arguments and ("text" in arguments or "submit" in arguments):
+        return live_failure(
+            "invalid_arguments",
+            "vbot_terminal is no longer available, and one call cannot both press a key and send "
+            f'text. Call terminal with {{"action": "key", "target": {target}, "key": "<key>"}} '
+            f'for the key, or send_message with {{"target": {target}, "text": "<the text>"}} for '
+            "the text.",
+        )
+    if "key" in arguments:
+        return TOOL_TERMINAL, _present(action="key", target=terminal, key=arguments.get("key"))
+    if arguments.get("submit", True) is not True:
+        return live_failure(
+            "invalid_arguments",
+            "vbot_terminal is no longer available, and no Tool types text without pressing "
+            "Enter, so nothing was typed. send_message types the text and presses Enter: call it "
+            f'with {{"target": {target}, "text": "<the text>"}} only if the text should be sent; '
+            "otherwise tell the user it cannot be typed without sending it.",
+        )
+    return TOOL_SEND_MESSAGE, _present(target=terminal, text=arguments.get("text"))
 
 
 def _present(**fields: Any) -> JsonObject:

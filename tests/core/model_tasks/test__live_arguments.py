@@ -169,6 +169,79 @@ def test_maps_exact_calls_of_the_former_terminal_tool(
     assert prepared("vbot_terminal", arguments) == expected
 
 
+@pytest.mark.parametrize(
+    ("name", "arguments", "expected"),
+    [
+        ("send_message", {"target": "s2", "text": "None"}, {"target": "s2", "text": "None"}),
+        ("send_message", {"session_id": "s2", "message": "n/a"}, {"target": "s2", "text": "n/a"}),
+        (
+            "start_agent_session",
+            {"agent": "coder", "task": "Empty", "project": "none"},
+            {"agent": "coder", "task": "Empty"},
+        ),
+        (
+            "start_coding_terminal",
+            {"program": "codex", "prompt": "???", "name": "None", "folder": "n/a"},
+            {"program": "codex", "task": "???", "name": "None"},
+        ),
+        (
+            "terminal",
+            {"action": "rename_group", "target": "Backend", "new_name": "TBD"},
+            {"action": "rename_group", "target": "Backend", "name": "TBD"},
+        ),
+    ],
+)
+def test_passes_task_message_and_name_text_on_unchanged(
+    name: str, arguments: JsonObject, expected: JsonObject
+) -> None:
+    # Words that stand for "not used" in a lookup field are the user's text here.
+    assert prepared(name, arguments)[1] == expected
+
+
+@pytest.mark.parametrize(
+    ("name", "arguments", "problem"),
+    [
+        ("start_agent_session", {"agent": "none", "task": "x"}, '"agent" is required'),
+        ("send_message", {"target": "s2", "text": "  \n"}, '"text" is required'),
+        ("read", {"target": "null"}, '"target" is required'),
+    ],
+)
+def test_a_stand_in_or_blank_value_leaves_the_field_out(
+    name: str, arguments: JsonObject, problem: str
+) -> None:
+    code, message = refused(name, arguments)
+    assert code == "invalid_arguments"
+    assert problem in message
+
+
+@pytest.mark.parametrize("submit", [False, "false", 0, None])
+def test_refuses_former_terminal_input_that_must_not_press_enter(submit: Any) -> None:
+    code, message = refused(
+        "vbot_terminal",
+        {"action": "input", "terminal_id": "term_1", "text": "draft", "submit": submit},
+    )
+    assert code == "invalid_arguments"
+    assert "nothing was typed" in message
+    assert 'send_message types the text and presses Enter: call it with {"target": "term_1"' in (
+        message
+    )
+
+
+def test_maps_former_terminal_input_with_submit_to_send_message() -> None:
+    assert prepared(
+        "vbot_terminal", {"action": "input", "terminal_id": "term_1", "text": "go", "submit": True}
+    ) == ("send_message", {"target": "term_1", "text": "go"})
+
+
+def test_refuses_former_terminal_input_with_both_a_key_and_text() -> None:
+    code, message = refused(
+        "vbot_terminal", {"action": "input", "terminal_id": "term_1", "key": "enter", "text": "y"}
+    )
+    assert code == "invalid_arguments"
+    assert '"action": "key", "target": "term_1"' in message
+    assert 'send_message with {"target": "term_1"' in message
+
+
 def test_refuses_unknown_tools_and_names_the_offered_ones() -> None:
     offered = (
         "Call one of: overview, start_agent_session, start_coding_terminal, send_message, read, "
