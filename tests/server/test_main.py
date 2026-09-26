@@ -219,6 +219,7 @@ def test_main_starts_uvicorn_with_configured_app(tmp_path: Path, monkeypatch, ac
 
     assert calls[0]["host"] == "127.0.0.1"
     assert calls[0]["port"] == 8765
+    assert calls[0]["ws_per_message_deflate"] is False
     assert calls[0]["log_level"] == "info"
     assert calls[0]["access_log"] is False
     assert calls[0]["log_config"]["handlers"]["vbot_proxy"] == {

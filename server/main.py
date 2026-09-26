@@ -124,6 +124,8 @@ def main(argv: list[str] | None = None) -> None:
                 app,
                 host=server_bind["listen_host"],
                 port=server_bind["listen_port"],
+                # Keep synchronous WebSocket compression off the shared Event Loop.
+                ws_per_message_deflate=False,
                 log_level="info",
                 access_log=False,
                 log_config=build_uvicorn_log_config(),
