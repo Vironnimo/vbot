@@ -623,18 +623,18 @@ def test_text_written_where_the_copy_escapes_differently_is_refused(
     assert replace_copied(content, copied, copied.replace(old_part, new_part)) is None
 
 
-def test_a_new_line_may_hold_a_sign_the_file_escapes_on_another_line() -> None:
-    held = 'The note asks „what ran there\\" and names the model fields in the data.'
-    copied = 'The note asks „what ran there" and names the model fields in the data.'
-    added = 'The next note asks „what failed" and names the rows it read.'
-    content = f"# Notes\n{held}\n"
-
-    found = _applied(replace_copied(content, copied, f"{copied}\n{added}"))
-
-    assert found.new_content == f"# Notes\n{held}\n{added}\n"
-    assert copy_warnings(found) == [
-        f"Line 2 did not match your old text exactly and was left as it reads: {held}"
+def test_a_new_line_may_not_hold_a_sign_the_file_escapes_elsewhere_in_the_passage() -> None:
+    # A copy that drops the file's escapes comes with new text that drops them too.
+    held = [
+        '    print("say \\"hi\\" to everyone in the room today")',
+        '    print("say \\"bye\\" to everyone in the room today")',
     ]
+    content = "def greet():\n" + "\n".join(held) + "\n"
+    old = "\n".join(line.replace("\\", "") for line in held)
+
+    new = old + '\n    print("say "ciao" to everyone in the room today")'
+
+    assert replace_copied(content, old, new) is None
 
 
 def test_overlapping_candidates_place_one_passage() -> None:

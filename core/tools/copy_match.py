@@ -49,9 +49,10 @@ correct words nor differences, and text the caller keeps comes out as the file h
 it, with the file's zero-width characters beside it; so zero-width characters the
 caller writes at the edge of a change, other than its copy's there, do not fit. A
 backslash only one side holds shows that the two escape differently, so the
-text the edit writes may hold no backslash, nor, on a line where the file escapes a
-character the copy does not, that character; and a backslash only the file holds
-must not border a change: it would escape the new text.
+text the edit writes may hold neither a backslash nor a character the file escapes
+where the copy does not, even on another line: a copy that drops the file's escapes
+comes with new text that drops them too. A backslash only the file holds must not
+border a change: it would escape the new text.
 """
 
 from __future__ import annotations
@@ -389,17 +390,16 @@ class _Alignment:
     after tokens only the file holds there (``extra``: their content count).
     ``gaps`` counts the ``other`` differences that are tokens only one side holds;
     ``foreign`` the other differences where either side is an identifier; ``alike``
-    the differences that never matter. ``escapes`` maps the copy boundaries where
-    only the file holds a lone backslash to the sign it escapes ("" for none), and
-    ``unwritable`` holds the characters text the edit writes must not hold, since the
-    copy escapes differently from the file.
+    the differences that never matter. ``escapes`` holds the copy boundaries where
+    only the file holds a lone backslash, and ``unwritable`` the characters text the
+    edit writes must not hold, since the copy escapes differently from the file.
     """
 
     states: list[str]
     before: dict[int, int] = field(default_factory=dict)
     after: dict[int, int] = field(default_factory=dict)
     extra: dict[int, int] = field(default_factory=dict)
-    escapes: dict[int, str] = field(default_factory=dict)
+    escapes: set[int] = field(default_factory=set)
     unwritable: set[str] = field(default_factory=set)
     correct: int = 0
     misspelled: int = 0
@@ -427,8 +427,8 @@ def _align(copy: _Text, actual: _Text, speller: _Speller) -> _Alignment:
         if tag == "insert":
             alignment.after[i1] = j2
             if _lone_backslash(held[j1:j2]):
-                alignment.escapes[i1] = _escaped(held, j2)
-                alignment.unwritable.add(_BACKSLASH)
+                alignment.escapes.add(i1)
+                alignment.unwritable.update(_escaped(held, j2))
                 alignment.alike += 1
                 continue
             alignment.extra[i1] = _content(held[j1:j2])
@@ -477,35 +477,12 @@ def _lone_backslash(keys: Sequence[str]) -> bool:
     return [key for key in keys if not _is_space(key)] == [_BACKSLASH]
 
 
-def _escaped(held: Sequence[str], index: int) -> str:
-    """The sign a backslash only the file holds escapes, or "" when a sign does not follow."""
+def _escaped(held: Sequence[str], index: int) -> set[str]:
+    """A backslash, and the sign after a backslash only the file holds: what it escapes."""
     following = held[index][:1] if index < len(held) else ""
     if following and not (following.isalnum() or following.isspace()):
-        return following
-    return ""
-
-
-def _writes_escaped(
-    alignment: _Alignment, keys: Sequence[str], first: int, last: int, written: str
-) -> bool:
-    """Whether ``written`` holds a sign the file escapes on the line it goes into.
-
-    A change that covers such a backslash is checked in all its text; one beside it
-    only in the text it writes on that line.
-    """
-    lines = TEXT_LINE_BREAK.split(written.translate(_FOLD))
-    for boundary, sign in alignment.escapes.items():
-        if not sign:
-            continue
-        if boundary < first:
-            part = None if any("\n" in key for key in keys[boundary:first]) else lines[0]
-        elif boundary > last:
-            part = None if any("\n" in key for key in keys[last:boundary]) else lines[-1]
-        else:
-            part = "\n".join(lines)
-        if part is not None and sign in part:
-            return True
-    return False
+        return {_BACKSLASH, following}
+    return {_BACKSLASH}
 
 
 def _dash_pair(copied: Sequence[str], held: Sequence[str]) -> bool:
@@ -576,9 +553,8 @@ def _merge(
     The result is the caller's new text up to the file's spelling: text the caller
     keeps must match the file up to misspellings, since a difference there may be
     wording the caller meant to write. The text written must not hold ``unwritable``
-    characters, nor a sign the file escapes on the line it goes into. Kept text holds
-    the file's invisible characters beside it, so ones the caller writes at the edge
-    of a change, other than its copy's there, do not fit.
+    characters. Kept text holds the file's invisible characters beside it, so ones the
+    caller writes at the edge of a change, other than its copy's there, do not fit.
     """
     copied = copy.keys
     opcodes = _changes(tuple(copied), tuple(new.keys))
@@ -595,8 +571,6 @@ def _merge(
                 return None
             written = speller.respell(new.span(j1, j2))
             if unwritable and not unwritable.isdisjoint(written.translate(_FOLD)):
-                return None
-            if _writes_escaped(alignment, copied, i1, i2, written):
                 return None
             pieces.append(written)
             continue
@@ -1052,7 +1026,7 @@ def _place_lines(
                 kept_differed.append((first + 1, old[segment.old]))
             continue
         wanted = _read(file.ending.join(new[segment.new : segment.new + segment.added]))
-        # A backslash the copy and the file hold differently anywhere bars written ones.
+        # How the copy escapes anywhere in the passage bars what every written line holds.
         merged = _merge(copy, actual, wanted, alignment, speller, total.unwritable)
         if merged is None or (
             segment.added and len(TEXT_LINE_BREAK.findall(merged)) != segment.added - 1
