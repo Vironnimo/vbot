@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 from datetime import UTC, datetime
 from pathlib import Path
@@ -288,6 +289,8 @@ class FakeClock:
 
     async def sleep(self, seconds: float) -> None:
         self.now += seconds
+        # Let other Tool executions run, as a real wait would.
+        await asyncio.sleep(0)
 
 
 class Fixture:
@@ -1026,6 +1029,34 @@ async def test_reports_an_unexpected_failure_as_uncertain(fx: Fixture) -> None:
         "read failed unexpectedly; nothing was changed. Call it again once, and tell the user if "
         "it fails again.",
     )
+
+
+@pytest.mark.asyncio
+async def test_other_calls_run_while_a_start_waits_but_never_write_into_it(fx: Fixture) -> None:
+    fx.app.add_terminal("term_other")
+    fx.app.screens["term_start2"] = [SHELL] * 20 + [CODEX_READY]
+    start = asyncio.create_task(fx.call("start_coding_terminal", program="codex", task="Go"))
+    while fx.app.count("terminal.read") < 2:
+        await asyncio.sleep(0)
+
+    # The new Terminal got t1 when it started.
+    assert "- t1 Codex" in await fx.ok("overview")
+    await fx.ok("send_message", target="term_other", text="hello")
+    code, message = await fx.failed("send_message", target="t1", text="other text")
+    assert code == "terminal_busy"
+    code, _message = await fx.failed("terminal", action="key", target="t1", key="enter")
+    assert code == "terminal_busy"
+    assert not start.done()
+    assert [terminal for terminal, _data, _revision in fx.app.inputs] == ["term_other"] * 2
+
+    result = await start
+    assert result["ok"] is True, result
+    assert [data for terminal, data, _rev in fx.app.inputs if terminal == "term_start2"] == [
+        "\x1b[200~Go\x1b[201~",
+        "\r",
+    ]
+    # Once the task is sent, the Terminal takes messages again.
+    await fx.ok("send_message", target="t1", text="more")
 
 
 @pytest.mark.asyncio
