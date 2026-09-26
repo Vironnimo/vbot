@@ -110,6 +110,25 @@ def test_filter_pytest_removes_parameterized_progress_but_keeps_failures(nodeid)
     assert filtered == f"{failure}\n{report}"
 
 
+@pytest.mark.parametrize(
+    "progress",
+    [
+        "[gw0] [ 44%] PASSED tests/example/test_demo.py::test_status[[ERROR]-expected FAILED]",
+        "[gw3] [ 38%] PASSED tests/example/test_demo.py::test_output[ERROR: build failed]",
+        "tests/example/test_demo.py::test_status[expected FAILED] PASSED [100%]",
+        "PASSED tests/example/test_demo.py::test_status[[ERROR]]",
+    ],
+)
+def test_filter_pytest_uses_result_position_instead_of_words_in_parameters(progress):
+    module = _load_quality_module()
+    failure = "[gw1] [ 50%] FAILED tests/example/test_demo.py::test_status[expected PASSED]"
+    report = "================ FAILURES ================\nE   AssertionError"
+
+    filtered = module.filter_pytest_failure_output(f"{progress}\n{failure}\n{report}")
+
+    assert filtered == f"{failure}\n{report}"
+
+
 def test_filter_pytest_preserves_progress_like_text_in_diagnostics():
     module = _load_quality_module()
     report = "\n".join(
