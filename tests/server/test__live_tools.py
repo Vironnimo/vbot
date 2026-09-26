@@ -1060,6 +1060,31 @@ async def test_other_calls_run_while_a_start_waits_but_never_write_into_it(fx: F
 
 
 @pytest.mark.asyncio
+async def test_known_refs_say_what_each_ref_names_most_recent_last(fx: Fixture) -> None:
+    """A later delegation sees the call's refs without reading them again."""
+    assert fx.executor.known_refs() == ""
+    fx.app.sessions = [session_row("ses_run", "coder", title="Fix login", has_active_run=True)]
+    fx.app.add_terminal("term_a", name="Build")
+    await fx.ok("overview")
+    # Addressing s1 again keeps its title and makes it the most recent ref.
+    await fx.ok("send_message", target="s1", text="go on")
+    await fx.ok("start_coding_terminal", program="claude", count=1, name="Docs")
+
+    assert fx.executor.known_refs().splitlines() == [
+        '- t1: Codex Terminal "Build"',
+        '- s1: Session at Coder "Fix login"',
+        '- t2: Claude Code Terminal "Docs"',
+    ]
+    # A name set in the app stays on its own short line.
+    fx.app.add_terminal("term_long", name="Line one\nline two " + "x" * 80)
+    await fx.ok("read", target="term_long")
+    last = fx.executor.known_refs().splitlines()[-1]
+    assert last.startswith('- t3: Codex Terminal "Line one line two xx')
+    assert last.endswith('..."')
+    assert len(last) < 90
+
+
+@pytest.mark.asyncio
 async def test_session_refs_are_shared_with_run_announcements(fx: Fixture) -> None:
     await fx.ok("start_agent_session", agent="Coder", task="x")
     assert fx.executor.session_ref("coder", "ses_new1") == "s1"

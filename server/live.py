@@ -221,6 +221,10 @@ class _LiveCallEntry:
         """Run one prepared Live Tool call; the executor runs one call's executions in turn."""
         return await self._executor.execute(name, arguments)
 
+    def known_refs(self) -> str:
+        """The refs this call's Tool results named so far, one labeled line each."""
+        return self._executor.known_refs()
+
     def publish(self, update: JsonObject) -> None:
         """Deliver one call update to the owner, or buffer it until one attaches."""
         if self._closed_published:

@@ -123,6 +123,7 @@ class FakeHost:
         self.tool_result: Any = {"ok": True}
         self.tool_release = asyncio.Event()
         self.tool_release.set()
+        self.refs = ""
 
     async def execute_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         self.executed.append((name, arguments))
@@ -130,6 +131,9 @@ class FakeHost:
         if isinstance(self.tool_result, Exception):
             raise self.tool_result
         return dict(self.tool_result)
+
+    def known_refs(self) -> str:
+        return self.refs
 
     def publish(self, update: dict[str, Any]) -> None:
         self.updates.append(update)
@@ -173,6 +177,7 @@ def _notice(run_id: str = "run-1") -> LiveRunNotice:
 @pytest.mark.asyncio
 async def test_call_goes_live_relays_captions_and_answers_delegations():
     wire, brain, host = FakeWire(), FakeBrain(), FakeHost()
+    host.refs = "- s1: Session at Coder"
     call = _call(wire, brain, host)
 
     wire.push(
@@ -201,6 +206,7 @@ async def test_call_goes_live_relays_captions_and_answers_delegations():
             request="Start one Codex terminal",
             conversation="User: Start a terminal\nAssistant (still speaking): On it",
             updates="",
+            refs="- s1: Session at Coder",
         )
     ]
     assert host.of_type("activity") == [

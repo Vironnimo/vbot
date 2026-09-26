@@ -26,7 +26,6 @@ from pathlib import Path
 from typing import Any
 
 from core.model_tasks.live import (
-    CODING_PROGRAMS,
     MAX_LIVE_NAME_CHARS,
     MAX_LIVE_TEXT_CHARS,
     CliPrompt,
@@ -56,8 +55,10 @@ from server._live_targets import (
     TERMINAL,
     LiveCatalog,
     LiveRefs,
+    coding_program,
     resolve_target,
     terminal_label,
+    terminal_title,
 )
 from server.rpc.errors import RPC_ERROR_TERMINAL_PROGRAM_NOT_RUNNING, RpcError
 
@@ -94,7 +95,6 @@ _STATE_WORDS = {
     "exited": "exited",
     "error": "failed",
 }
-_EXECUTABLE_SUFFIX = re.compile(r"\.(exe|cmd|bat|ps1)$", re.IGNORECASE)
 # The Terminal manager's message when input was based on an older screen.
 _STALE_SCREEN = "Terminal screen changed"
 _INPUT_ATTEMPTS = 3
@@ -126,13 +126,6 @@ class _Outcome:
     status: str
     prompt: CliPrompt | None = None
     detail: str = ""
-
-
-def coding_program(item: JsonObject) -> CodingProgram | None:
-    """The coding program a Terminal was started with, if it is one Live knows."""
-    command = str(item.get("launch_command") or item.get("command") or "").strip()
-    base = _EXECUTABLE_SUFFIX.sub("", re.split(r"[\\/]", command)[-1]).lower()
-    return next((program for program in CODING_PROGRAMS.values() if program.command == base), None)
 
 
 def terminal_state(item: JsonObject) -> str:
@@ -224,9 +217,10 @@ class LiveTerminals:
                 started.append(str(result["terminal"]["terminal_id"]))
         except Exception as exc:
             catalog.forget_terminals()
-            return self._start_failure(program, count, started, exc)
+            return self._start_failure(program, name, count, started, exc)
         catalog.forget_terminals()
-        refs = [self._refs.terminal(terminal_id) for terminal_id in started]
+        title = terminal_title({"launch_command": program.command, "name": name})
+        refs = [self._refs.terminal(terminal_id, title) for terminal_id in started]
         head = (
             f"Started {program.label} in {_count_phrase(len(refs), 'Terminal')} in "
             f"{model_path(workdir)}: {', '.join(refs)}."
@@ -258,7 +252,7 @@ class LiveTerminals:
         return live_failure("partial", f"{head} {report}")
 
     def _start_failure(
-        self, program: CodingProgram, count: int, started: list[str], exc: Exception
+        self, program: CodingProgram, name: str, count: int, started: list[str], exc: Exception
     ) -> JsonObject:
         if isinstance(exc, LiveToolError | RpcError):
             reason = exc.message
@@ -267,7 +261,8 @@ class LiveTerminals:
             _LOGGER.exception("Live Terminal start failed unexpectedly")
             reason = "The start failed unexpectedly."
             uncertain = True
-        refs = [self._refs.terminal(terminal_id) for terminal_id in started]
+        title = terminal_title({"launch_command": program.command, "name": name})
+        refs = [self._refs.terminal(terminal_id, title) for terminal_id in started]
         done = (
             f"Started {program.label} in {join_words(refs)}; "
             if refs
@@ -441,7 +436,7 @@ class LiveTerminals:
         )
         terminal = target.terminal
         assert terminal is not None
-        ref = self._refs.terminal(str(terminal["terminal_id"]))
+        ref = self._refs.terminal(str(terminal["terminal_id"]), terminal_title(terminal))
         if action == "maximize":
             await self._ctx.view("maximize", terminal_id=terminal["terminal_id"])
             return live_success(f"Maximized {ref} in the Terminals view.")
@@ -556,14 +551,20 @@ class LiveTerminals:
         ids = [str(item["terminal_id"]) for item in terminals]
         member_ids = {str(item["terminal_id"]) for item in members}
         if len(ids) != len(member_ids) or set(ids) != member_ids:
-            refs = [self._refs.terminal(str(item["terminal_id"])) for item in members]
+            refs = [
+                self._refs.terminal(str(item["terminal_id"]), terminal_title(item))
+                for item in members
+            ]
             raise LiveToolError(
                 "invalid_order",
                 f'order must name every Terminal of the group "{label}" exactly once: '
                 f"{', '.join(refs)}. Call terminal again with all of them in the new order.",
             )
         await self._ctx.call("terminal.group.order", {"group_id": group["group_id"], "order": ids})
-        new_order = ", ".join(self._refs.terminal(item) for item in ids)
+        new_order = ", ".join(
+            self._refs.terminal(str(item["terminal_id"]), terminal_title(item))
+            for item in terminals
+        )
         return live_success(
             await self._after_change(f'Reordered the group "{label}": {new_order}.')
         )
@@ -596,7 +597,7 @@ class LiveTerminals:
     # -- shared -------------------------------------------------------------
 
     def _coding(self, terminal: JsonObject, tool: str) -> tuple[str, CodingProgram]:
-        ref = self._refs.terminal(str(terminal["terminal_id"]))
+        ref = self._refs.terminal(str(terminal["terminal_id"]), terminal_title(terminal))
         program = coding_program(terminal)
         if program is None:
             raise LiveToolError(

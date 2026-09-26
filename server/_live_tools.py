@@ -76,6 +76,8 @@ from server._live_targets import (
     agent_spellings,
     resolve_target,
     session_key,
+    session_title,
+    terminal_title,
 )
 from server._live_terminals import LiveTerminals, TerminalTimings, terminal_line
 from server.rpc.errors import RpcError
@@ -146,6 +148,10 @@ class LiveToolExecutor:
     def session_ref(self, address: str, session_id: str) -> str:
         """The call's ref for a Session, assigned on first mention."""
         return self._refs.session(SessionKey(address=address, session_id=session_id))
+
+    def known_refs(self) -> str:
+        """The refs named so far in this call, one labeled line each, most recent last."""
+        return self._refs.legend()
 
     async def execute(self, name: str, arguments: JsonObject) -> JsonObject:
         """Run one canonical Live Tool call and return its Tool Result envelope."""
@@ -270,9 +276,9 @@ class LiveToolExecutor:
         self, item: JsonObject, catalog: LiveCatalog, *, origin: str = ""
     ) -> str:
         key = session_key(item)
-        ref = self._refs.session(key)
         name = await catalog.agent_name(key.address)
         title = str(item.get("title") or item.get("auto_title") or "").strip()
+        ref = self._refs.session(key, session_title(name, title))
         head = f'- {ref} {name} "{title}"' if title else f"- {ref} {name}"
         if origin:
             head += f" ({origin})"
@@ -308,10 +314,9 @@ class LiveToolExecutor:
         ordered = live + [item for item in terminals if item not in live]
         shown = ordered[:_LIST_CAP]
         lines = ["Terminals:"]
-        lines += [
-            f"- {terminal_line(self._refs.terminal(str(item['terminal_id'])), item)}"
-            for item in shown
-        ]
+        for item in shown:
+            ref = self._refs.terminal(str(item["terminal_id"]), terminal_title(item))
+            lines.append(f"- {terminal_line(ref, item)}")
         if len(ordered) > len(shown):
             lines.append(f"- and {len(ordered) - len(shown)} more")
         return "\n".join(lines)
@@ -338,7 +343,7 @@ class LiveToolExecutor:
             except Exception as exc:
                 return self._start_failure(agent, count, started, exc, created_ref=None)
             key = SessionKey(address=agent.address, session_id=str(created["session_id"]))
-            ref = self._refs.touch(key)
+            ref = self._refs.touch(key, session_title(agent.label))
             try:
                 self._ctx.ensure_active()
                 result = await self._send(key, task)
@@ -441,8 +446,8 @@ class LiveToolExecutor:
         if target.terminal is not None:
             return await self._terminals.send(target.terminal, text)
         key = await self._session_of(target, TOOL_SEND_MESSAGE, catalog)
-        ref = self._refs.touch(key)
         name = await catalog.agent_name(key.address)
+        ref = self._refs.touch(key, session_title(name))
         try:
             self._ctx.ensure_active()
             result = await self._send(key, text)
@@ -468,8 +473,8 @@ class LiveToolExecutor:
         if target.terminal is not None:
             return await self._terminals.read(target.terminal)
         key = await self._session_of(target, TOOL_READ, catalog)
-        ref = self._refs.session(key)
         name = await catalog.agent_name(key.address)
+        ref = self._refs.session(key, session_title(name))
         history = await self._ctx.call(
             "chat.history",
             {"agent_id": key.address, "session_id": key.session_id, "limit": _CHAT_READ_LIMIT},
@@ -494,8 +499,8 @@ class LiveToolExecutor:
         if target.terminal is not None:
             return await self._terminals.interrupt(target.terminal)
         key = await self._session_of(target, TOOL_STOP, catalog)
-        ref = self._refs.session(key)
         name = await catalog.agent_name(key.address)
+        ref = self._refs.session(key, session_title(name))
         history = await self._ctx.call(
             "chat.history", {"agent_id": key.address, "session_id": key.session_id, "limit": 1}
         )
@@ -657,7 +662,9 @@ class LiveToolExecutor:
         if target.session is not None:
             return await self._open_session(target.session, catalog)
         if target.terminal is not None:
-            ref = self._refs.terminal(str(target.terminal["terminal_id"]))
+            ref = self._refs.terminal(
+                str(target.terminal["terminal_id"]), terminal_title(target.terminal)
+            )
             await self._ctx.view("show", terminal_id=target.terminal["terminal_id"])
             return live_success(f"Showing {ref} in the Terminals view.")
         if target.group is not None:
@@ -674,7 +681,8 @@ class LiveToolExecutor:
             {"view": "chat", "agent_id": key.address, "session_id": key.session_id}
         )
         name = await catalog.agent_name(key.address)
-        return live_success(f"Showing {self._refs.session(key)} ({name}) in the chat.")
+        ref = self._refs.session(key, session_title(name))
+        return live_success(f"Showing {ref} ({name}) in the chat.")
 
     async def _open_project(self, project: LiveProject) -> JsonObject:
         await self._navigate({"view": "projects", "project_id": project.project_id})
@@ -696,9 +704,9 @@ class LiveToolExecutor:
                 await self._navigate(
                     {"view": "chat", "agent_id": key.address, "session_id": key.session_id}
                 )
+                ref = self._refs.session(key, session_title(agent.label))
                 return live_success(
-                    f"Showing the latest Session of {agent.label}, {self._refs.session(key)}, in "
-                    "the chat."
+                    f"Showing the latest Session of {agent.label}, {ref}, in the chat."
                 )
         if project_id:
             await self._navigate({"view": "projects", "project_id": project_id})
