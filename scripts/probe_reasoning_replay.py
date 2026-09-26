@@ -48,6 +48,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+# Direct execution must use this checkout's credential parser.
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if sys.path[:1] != [str(PROJECT_ROOT)]:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from core.utils.config import read_env_file  # noqa: E402
+
 try:
     from curl_cffi import requests as _curl_requests
 except ImportError:  # pragma: no cover - degraded mode
@@ -176,10 +183,9 @@ def _load_api_key(env_name: str, data_dir: Path) -> str:
     env_path = data_dir / ".env"
     if not env_path.is_file():
         raise SystemExit(f"no .env found at {env_path}")
-    for line in env_path.read_text(encoding="utf-8").splitlines():
-        match = re.match(rf"\s*{re.escape(env_name)}\s*=\s*(.+?)\s*$", line)
-        if match:
-            return match.group(1).strip().strip('"').strip("'")
+    value = read_env_file(env_path).get(env_name)
+    if value:
+        return value
     raise SystemExit(f"no {env_name} entry in {env_path}")
 
 

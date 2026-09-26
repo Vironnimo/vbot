@@ -34,6 +34,30 @@ def test_parse_env_lines_keeps_values_conservative() -> None:
     }
 
 
+def test_read_env_file_keeps_existing_quoting_backslashes_and_physical_lines(
+    tmp_path: Path,
+) -> None:
+    env_path = tmp_path / ".env"
+    env_path.write_bytes(
+        (
+            "SINGLE='old value'\r\n"
+            'DOUBLE="old value"\r'
+            r"BACKSLASH=literal\n\t\path"
+            '\nLEADING="literal\nTRAILING=literal"\n'
+            "UNICODE=first\u2028SECOND_KEY=second\n"
+        ).encode("utf-8")
+    )
+
+    assert read_env_file(env_path) == {
+        "SINGLE": "old value",
+        "DOUBLE": "old value",
+        "BACKSLASH": r"literal\n\t\path",
+        "LEADING": '"literal',
+        "TRAILING": 'literal"',
+        "UNICODE": "first\u2028SECOND_KEY=second",
+    }
+
+
 def test_unreadable_utf8_env_file_is_ignored(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
