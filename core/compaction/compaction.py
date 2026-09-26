@@ -73,6 +73,16 @@ SKILL_COMPACTION_GUIDANCE = (
 )
 
 MIN_AUTO_COMPACTION_RECLAIM_TOKENS = 4_096
+# ``tail_tokens`` is a target, not a hard limit: a Tail may grow to this share of
+# it, and any start at or above the floor share counts as close enough to prefer
+# a better cut point over a closer size.
+TAIL_SOFT_LIMIT_PERCENT = 150
+TAIL_PREFERRED_FLOOR_PERCENT = 50
+# Cut quality, best first: a User turn start, a step opening with new input
+# (notes such as delivered messages), a continuation inside a Tool loop.
+_TAIL_CUT_USER_TURN = 2
+_TAIL_CUT_NEW_INPUT = 1
+_TAIL_CUT_CONTINUATION = 0
 COMPACTION_WORKER_LIMIT = 4
 
 _COMPACTION_WORKERS = BoundedWorkerPool(
@@ -189,15 +199,26 @@ class CompactionContext:
 
 @dataclass(frozen=True)
 class _TailPlan:
-    """One bounded working-Tail projection and its canonical suffix boundary."""
+    """One working-Tail projection, its canonical start and its request start."""
 
     boundary_id: str
     boundary_index: int
+    request_start: int | None
     projected_suffix: tuple[ChatMessage, ...]
 
     @property
     def retained_messages(self) -> tuple[ChatMessage, ...]:
         return self.projected_suffix
+
+
+@dataclass(frozen=True)
+class _TailCandidate:
+    """One provider-safe Tail start with its cut quality and request-side size."""
+
+    start_index: int
+    request_start: int | None
+    cut_quality: int
+    tokens: int
 
 
 @dataclass(frozen=True)
@@ -247,7 +268,7 @@ class SummarizationStrategy:
         head = messages[: tail_plan.boundary_index]
         request_prefix = _request_prefix_before_tail(
             context.request_messages,
-            tail_plan.boundary_id,
+            tail_plan.request_start,
         )
         prompt = _build_compaction_instruction(
             context.storage.read_prompt_fragment(_fragment_name_for_trigger(context.trigger)),
@@ -676,12 +697,18 @@ def _plan_working_tail(
     request_messages: tuple[JsonObject, ...] | None = None,
     estimate_tail_tokens: RequestTokenEstimator | None = None,
 ) -> _TailPlan:
-    """Keep a chronological suffix of whole steps within the request-side budget.
+    """Choose a chronological suffix of whole steps around the Tail target.
 
-    Only the newest indivisible step may exceed the budget. There are no User
-    or older Assistant anchors and no payload edits inside retained steps.
-    Live request slices include replayed reasoning and request-only Tool media;
-    the selected Adapter counts the representation it will actually serialize.
+    ``tail_tokens`` is a target: the Tail may grow to the soft limit, and among
+    starts between the preferred floor and that limit the best cut wins (User
+    turn start, then a step opening with new input, then a Tool-loop
+    continuation), closeness to the target breaking ties. Without such a start
+    the largest Tail within the soft limit is kept; only the newest indivisible
+    step may exceed it. Notes immediately before a step belong to that step, so
+    the input a response reacted to stays with the response. Retained steps
+    are never edited. Live request slices include replayed reasoning and
+    request-only Tool media; the selected Adapter counts the representation it
+    will actually serialize.
     """
     if not messages:
         raise CompactionError("Cannot find tail boundary for an empty message list")
@@ -696,33 +723,108 @@ def _plan_working_tail(
         if request_messages is not None
         else {}
     )
-    selected_start = safe_boundaries[-1]
+    soft_limit = _tail_soft_limit(tail_tokens)
+    candidates: list[_TailCandidate] = []
     for boundary_index in reversed(safe_boundaries):
-        if request_messages is None:
-            candidate = [message.to_dict() for message in messages[boundary_index:]]
+        start_index, request_start = _tail_step_start(
+            messages, boundary_index, request_messages, request_indices
+        )
+        if request_messages is None or request_start is None:
+            candidate = [message.to_dict() for message in messages[start_index:]]
         else:
-            request_index = request_indices.get(messages[boundary_index].id)
-            if request_index is None:
-                raise CompactionError("Tail boundary was not found in the active request Context")
-            candidate = list(request_messages[request_index:])
+            candidate = list(request_messages[request_start:])
         tokens = (
             estimate_tail_tokens(candidate)
             if estimate_tail_tokens is not None
             else estimate_request_input_tokens(candidate)[0]
         )
-        if boundary_index != safe_boundaries[-1] and tokens > tail_tokens:
-            break
-        selected_start = boundary_index
-        if tokens >= tail_tokens:
+        candidates.append(
+            _TailCandidate(
+                start_index=start_index,
+                request_start=request_start,
+                cut_quality=_tail_cut_quality(messages, boundary_index, start_index),
+                tokens=tokens,
+            )
+        )
+        if tokens > soft_limit:
             break
 
+    selected = _select_tail_candidate(candidates, tail_tokens)
     return _TailPlan(
-        boundary_id=messages[selected_start].id,
-        boundary_index=selected_start,
+        boundary_id=messages[selected.start_index].id,
+        boundary_index=selected.start_index,
+        request_start=selected.request_start,
         projected_suffix=tuple(
-            compaction_projection_without_provider_state(messages[selected_start:])
+            compaction_projection_without_provider_state(messages[selected.start_index :])
         ),
     )
+
+
+def _select_tail_candidate(candidates: list[_TailCandidate], tail_tokens: int) -> _TailCandidate:
+    """Prefer a good cut near the target; never grow past the soft limit."""
+
+    soft_limit = _tail_soft_limit(tail_tokens)
+    within_limit = [candidate for candidate in candidates if candidate.tokens <= soft_limit]
+    if not within_limit:
+        return candidates[0]
+    floor = tail_tokens * TAIL_PREFERRED_FLOOR_PERCENT // 100
+    preferred = [candidate for candidate in within_limit if candidate.tokens >= floor]
+    if not preferred:
+        return within_limit[-1]
+    return max(
+        preferred,
+        key=lambda candidate: (candidate.cut_quality, -abs(candidate.tokens - tail_tokens)),
+    )
+
+
+def _tail_soft_limit(tail_tokens: int) -> int:
+    return (tail_tokens * TAIL_SOFT_LIMIT_PERCENT + 99) // 100
+
+
+def _tail_step_start(
+    messages: list[ChatMessage],
+    boundary_index: int,
+    request_messages: tuple[JsonObject, ...] | None,
+    request_indices: Mapping[Any, int],
+) -> tuple[int, int | None]:
+    """Return the canonical and request start of the step at ``boundary_index``.
+
+    The step includes the notes directly before its User or Assistant message.
+    Against a live request that holds only when those notes render as exactly
+    the request messages before the boundary; otherwise (for example notes
+    deferred past a Tool batch and merged with earlier ones) the step starts at
+    the boundary message so the request slice and the canonical suffix agree.
+    """
+
+    lead_in_start = boundary_index
+    while lead_in_start > 0 and _is_tail_lead_in_note(messages[lead_in_start - 1]):
+        lead_in_start -= 1
+    if request_messages is None:
+        return lead_in_start, None
+    request_index = request_indices.get(messages[boundary_index].id)
+    if request_index is None:
+        raise CompactionError("Tail boundary was not found in the active request Context")
+    if lead_in_start == boundary_index:
+        return boundary_index, request_index
+    rendered = _notes_to_request_messages(list(messages[lead_in_start:boundary_index]))
+    lead_in_request_start = request_index - len(rendered)
+    if lead_in_request_start >= 0 and (
+        list(request_messages[lead_in_request_start:request_index]) == rendered
+    ):
+        return lead_in_start, lead_in_request_start
+    return boundary_index, request_index
+
+
+def _is_tail_lead_in_note(message: ChatMessage) -> bool:
+    return message.role == "note" and not _is_compaction_checkpoint_note(message)
+
+
+def _tail_cut_quality(messages: list[ChatMessage], boundary_index: int, start_index: int) -> int:
+    if messages[boundary_index].role == "user":
+        return _TAIL_CUT_USER_TURN
+    if start_index < boundary_index:
+        return _TAIL_CUT_NEW_INPUT
+    return _TAIL_CUT_CONTINUATION
 
 
 def _safe_tail_boundary_indices(messages: list[ChatMessage]) -> list[int]:
@@ -852,18 +954,13 @@ def _estimate_message_tokens(message: ChatMessage) -> int:
 
 def _request_prefix_before_tail(
     request_messages: tuple[JsonObject, ...],
-    tail_boundary_id: str,
+    request_start: int | None,
 ) -> tuple[JsonObject, ...]:
     """Slice the already-built provider request immediately before the Tail."""
 
-    if not request_messages:
+    if not request_messages or request_start is None:
         raise CompactionError("Summary+Tail compaction requires an active request Context")
-    for index, message in enumerate(request_messages):
-        if message.get("id") == tail_boundary_id:
-            return tuple(dict(item) for item in request_messages[:index])
-    raise CompactionError(
-        f"Tail boundary was not found in the active request Context: {tail_boundary_id}"
-    )
+    return tuple(dict(item) for item in request_messages[:request_start])
 
 
 def _system_reminder_request_message(content: str) -> JsonObject:
