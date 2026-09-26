@@ -54,7 +54,9 @@ Run `python scripts/perf_load.py --help` for every option (turn shape, Tools, ti
 What it does:
 
 - Starts a scripted **fake Provider** (OpenAI-compatible, in its own process) and, per concurrency level, a **fresh vBot server** on a free port with a temporary data directory. It never touches an existing instance or data directory, passes no credentials to the server, and removes its processes and temporary files afterwards.
+- Disables automatic Memory/Skill reflection reviews only in that temporary server's Settings (`reflection.enabled=false`), so additional background Runs do not change the scripted workload or appear as repeated Provider requests. Use the same harness settings for baseline and comparison runs.
 - Creates the Sessions (spread over a few Identity Agents rooted in a fixture Project) and lets all of them run turns concurrently. Each turn is a directive in the user message (`[[perf id=... steps=4 tokens=400 rate=80 think_ms=600 tools=read,search_files,bash]]`): the fake Provider answers with real Tool calls (the Tools actually run) and then streams a text answer at a fixed rate.
+- Directives use registry Tool names on every host; the fake Provider projects them to the offered Model names (`bash` becomes `powershell` on Windows). A level fails, with a nonzero harness exit code, unless every expected Run completes, every scripted Tool result arrives, and all Tools succeed. Failed levels retain their measurements and evidence files for diagnosis.
 - Starts a server-side performance recording for each load phase and copies its trace and summary into the result.
 
 Because the fake Provider's own timing is known, the report can separate vBot's cost from the Provider's:

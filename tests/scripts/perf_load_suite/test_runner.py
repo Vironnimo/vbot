@@ -2,12 +2,13 @@
 
 from datetime import UTC, datetime
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 
 import scripts.perf_load_suite.runner as runner
 from scripts.perf_load_suite.driver import SessionTarget, Workload
-from scripts.perf_load_suite.metrics import RunRecord
+from scripts.perf_load_suite.metrics import RunRecord, ToolTiming, analyze_level
 from scripts.perf_load_suite.recording import RecordingError
 
 
@@ -190,3 +191,74 @@ def test_failed_recording_stop_fails_the_level(phase):
         _measure(phase)
 
     assert "stop sampler" in phase.events
+
+
+@pytest.mark.parametrize(
+    ("statuses", "tool_results", "tool_ok", "expected_status"),
+    [
+        (["completed"], 1, True, "ok"),
+        (["failed"], 1, True, "failed"),
+        (["cancelled"], 1, True, "failed"),
+        (["interrupted"], 1, True, "failed"),
+        (["timeout"], 1, True, "failed"),
+        (["pending"], 1, True, "failed"),
+        ([], 0, True, "failed"),
+        (["completed", "completed"], 1, True, "failed"),
+        (["completed"], 0, True, "failed"),
+        (["completed"], 2, True, "failed"),
+        (["completed"], 1, False, "failed"),
+    ],
+)
+def test_level_only_accepts_complete_successful_workload(
+    monkeypatch, tmp_path, statuses, tool_results, tool_ok, expected_status
+):
+    config = runner.LoadConfig(levels=(1,), turns=1, steps=2)
+    records = [
+        RunRecord(
+            tag=f"t{index}",
+            session_index=index,
+            turn_index=0,
+            agent_id="a",
+            session_id="s",
+            directive=config.turn_directive(1, index, 0),
+            sent_at=1.0,
+            finished_at=2.0,
+            status=status,
+            tool_timings=[
+                ToolTiming(f"c{call}", "read", 1.0, tool_ok) for call in range(tool_results)
+            ],
+        )
+        for index, status in enumerate(statuses)
+    ]
+    measured = {
+        "files": {"runs": "level-01/runs.json"},
+        "notes": [],
+        "client": analyze_level(records, []),
+        "load_seconds": 1.0,
+    }
+    server = MagicMock(console_log=tmp_path / "console.log")
+    monkeypatch.setattr(runner, "VbotServer", lambda **kwargs: server)
+    monkeypatch.setattr(runner, "check_instrumentation", lambda rpc: None)
+    monkeypatch.setattr(
+        runner, "seed_workload", lambda *args, **kwargs: SimpleNamespace(agent_ids=("a",))
+    )
+    monkeypatch.setattr(runner, "measure_load", lambda *args, **kwargs: measured)
+
+    level = runner.run_level(
+        config,
+        agents=1,
+        fake=MagicMock(),
+        fixture_dir=tmp_path / "fixture",
+        data_dir=tmp_path / "data",
+        level_dir=tmp_path / "level-01",
+        profile=False,
+        ui_reason=None,
+        log=lambda message: None,
+    )
+
+    assert level["status"] == expected_status
+    assert level["client"] == measured["client"]
+    assert level["files"]["runs"] == "level-01/runs.json"
+    assert runner.failed_levels([level]) == ([] if expected_status == "ok" else [1])
+    if expected_status == "failed":
+        assert (tmp_path / level["files"]["error"]).is_file()
