@@ -8,7 +8,7 @@ provider-specific behavior can subclass this adapter."""
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -477,7 +477,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         model_id: str,
         messages: list[dict[str, Any]],
         *,
-        estimated_input_tokens: int | None = None,
+        estimated_input_tokens: int | Callable[[], int] | None = None,
     ) -> None:
         """Resolve the output allowance and clamp it to remaining context.
 
@@ -495,7 +495,8 @@ class OpenAICompatibleAdapter(ProviderAdapter):
 
         Subclasses whose wire format differs from the chat-message shape (e.g.
         stateless Responses items) pass a wire-accurate ``estimated_input_tokens``
-        so the context clamp budgets against what the Provider actually receives.
+        fallback callable so the context clamp budgets against what the Provider
+        actually receives without re-estimating a matching scoped Chat budget.
         """
 
         explicit_values: list[int] = []
@@ -510,15 +511,22 @@ class OpenAICompatibleAdapter(ProviderAdapter):
 
         tools = request_kwargs.get("tools")
         tool_definitions = tools if isinstance(tools, list) else None
-        if estimated_input_tokens is None:
-            estimated_input = self.estimate_request_input_tokens(
-                messages,
-                model_id=model_id,
-                tools=tool_definitions,
+
+        def estimate_input() -> int:
+            if estimated_input_tokens is None:
+                return self.estimate_request_input_tokens(
+                    messages,
+                    model_id=model_id,
+                    tools=tool_definitions,
+                )
+            value = (
+                estimated_input_tokens()
+                if callable(estimated_input_tokens)
+                else estimated_input_tokens
             )
-        else:
-            estimated_input = max(0, int(estimated_input_tokens))
-        estimated_input = resolve_request_input_budget(model_id, estimated_input)
+            return max(0, int(value))
+
+        estimated_input = resolve_request_input_budget(model_id, estimate_input)
         resolved = resolve_request_output_limit(
             explicit_limit=explicit_limit,
             model_output_limit=self._model_max_output_tokens(model_id),

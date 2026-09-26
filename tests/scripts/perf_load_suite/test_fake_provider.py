@@ -6,6 +6,8 @@ import time
 import pytest
 from starlette.testclient import TestClient
 
+from core.tools import model_names
+from core.tools.model_names import model_tool_name
 from scripts.perf_load_suite.directive import PerfDirective
 from scripts.perf_load_suite.fake_provider import (
     DONE_FRAME,
@@ -18,7 +20,7 @@ from scripts.perf_load_suite.fake_provider import (
     plan_response,
     tool_call_frames,
 )
-from scripts.perf_load_suite.fixture import SEARCH_NEEDLE, source_file_paths
+from scripts.perf_load_suite.fixture import BASH_COMMAND, SEARCH_NEEDLE, source_file_paths
 from scripts.perf_load_suite.metrics import marker_latencies_ms
 
 TOOLS = [
@@ -47,7 +49,7 @@ TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "bash",
+            "name": model_tool_name("bash"),
             "parameters": {
                 "type": "object",
                 "properties": {"command": {"type": "string"}},
@@ -100,7 +102,7 @@ def test_tool_rounds_rotate_tools_until_the_final_text_round():
     assert kinds == [
         ("tool_calls", 0, ["read"]),
         ("tool_calls", 1, ["search_files"]),
-        ("tool_calls", 2, ["bash"]),
+        ("tool_calls", 2, [model_tool_name("bash")]),
         ("text", 3, []),
     ]
 
@@ -112,8 +114,27 @@ def test_scripted_arguments_target_the_fixture_project():
     arguments = {call.name: call.arguments for call in planned.tool_calls}
     assert arguments["read"]["path"] in source_file_paths()
     assert arguments["search_files"] == {"args": ["-F", SEARCH_NEEDLE, "src"]}
-    assert set(arguments["bash"]) == {"command"}
+    assert set(arguments[model_tool_name("bash")]) == {"command"}
     assert [call.call_id for call in planned.tool_calls] == ["call_1", "call_2", "call_3"]
+
+
+@pytest.mark.parametrize("shell_name", ["bash", "powershell"])
+def test_shell_uses_host_model_name_and_registry_scripted_arguments(monkeypatch, shell_name):
+    monkeypatch.setattr(model_names, "_MODEL_NAMES", {"bash": shell_name})
+    tools = [
+        {
+            "type": "function",
+            "function": {"name": shell_name, "parameters": TOOLS[2]["function"]["parameters"]},
+        }
+    ]
+    user = {"role": "user", "content": _directive(steps=2, tools=("bash",))}
+
+    planned = plan_response(_body([user], tools=tools), next_call_id=_ids())
+
+    assert planned.directive is not None and planned.directive.tools == ("bash",)
+    assert planned.tool_calls == (
+        ScriptedToolCall("call_1", shell_name, {"command": BASH_COMMAND}),
+    )
 
 
 def test_system_reminders_after_the_directive_do_not_hide_it():

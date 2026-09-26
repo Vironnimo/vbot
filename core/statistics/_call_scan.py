@@ -126,18 +126,26 @@ def _select_runs(connection: sqlite3.Connection, units: Sequence[ReportUnit]) ->
     )
     for suffix in ("calls", "records"):
         connection.execute(f"DROP TABLE IF EXISTS temp.stat_selected_usage_{suffix}")
+    # Drive these lookups from the requested Run slices. Without a fixed join
+    # order SQLite may scan all request records and build an automatic index
+    # of the slices instead of using the Session/Run index.
     connection.execute(
         "CREATE TEMP TABLE stat_selected_usage_records AS "
         "SELECT s.session_key, r.seq, r.timestamp, r.instant, r.run_id, r.status "
         "FROM temp.usage_run_slices s "
-        "JOIN stat_usage_units a ON a.project_id = s.project_id AND a.agent_id = s.agent_id "
+        "CROSS JOIN stat_usage_units a ON a.project_id = s.project_id AND a.agent_id = s.agent_id "
         "AND a.session_id = s.session_id "
-        "JOIN stat_usage_records r ON r.session_key = a.session_key AND r.run_id = s.run_id"
+        "CROSS JOIN stat_usage_records r ON r.session_key = a.session_key AND r.run_id = s.run_id"
     )
     connection.execute(
         f"CREATE TEMP TABLE stat_selected_usage_calls AS SELECT {selected} "
         "FROM temp.stat_selected_usage_records s "
-        "JOIN stat_usage_calls c ON c.seq = s.seq"
+        # The selected Session key is a Run-slice position, not the ledger's
+        # Session key. Recover the latter by the record's primary key so the
+        # call lookup uses (session_key, seq), without indexing all unrelated
+        # requests for each group and participant report.
+        "CROSS JOIN stat_usage_records r ON r.seq = s.seq "
+        "CROSS JOIN stat_usage_calls c ON c.session_key = r.session_key AND c.seq = r.seq"
     )
     # A takeover changes the Session address without reattributing incurred
     # requests. Keep its retained diagnostic slice when the new exact address

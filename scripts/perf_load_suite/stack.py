@@ -105,6 +105,7 @@ def provider_settings(provider_base_url: str) -> dict[str, Any]:
     return {
         "format_version": 1,
         "defaults": {"agent": {"model": AGENT_MODEL}},
+        "reflection": {"enabled": False},
         "providers": {
             "connections": {f"{FAKE_PROVIDER_ID}:default": True},
             "custom": {
