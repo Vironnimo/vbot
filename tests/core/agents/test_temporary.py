@@ -24,9 +24,12 @@ from core.tools.availability import ToolAccess
 from tests.core.chat.chat_loop_support import (
     StubAdapter,
     StubAgent,
+    StubCompactionService,
+    StubModels,
     StubRuntime,
     StubSkill,
     StubSkills,
+    StubStorage,
     build_chat_loop,
 )
 
@@ -181,6 +184,98 @@ def test_temporary_agent_config_is_an_immutable_snapshot(tmp_path: Path) -> None
         sessions.close()
 
 
+def test_temporary_agent_compaction_policy_round_trips_and_absence_inherits(
+    tmp_path: Path,
+) -> None:
+    write_bootstrap_marker(tmp_path)
+    sessions = ChatSessionManager(tmp_path)
+    registry = TemporaryAgentRegistry(sessions)
+
+    def config(policy: dict[str, Any] | None) -> TemporaryAgentConfig:
+        return TemporaryAgentConfig(
+            model="provider/model",
+            cwd=tmp_path,
+            tool_access=ToolAccess(mode="selected", allowed=()),
+            allowed_skills=[],
+            tools={},
+            name="Participant",
+            compaction_policy=policy,
+        )
+
+    policy = {
+        "enabled": False,
+        "trigger": {"type": "context_ratio", "threshold": 1},
+        "strategy": {"type": "summary_tail", "tail_tokens": 9_000},
+    }
+    normalized = {
+        "enabled": False,
+        "trigger": {"type": "context_ratio", "threshold": 1.0},
+        "strategy": {"type": "summary_tail", "tail_tokens": 9_000, "summary_model": None},
+    }
+    try:
+        assert config(policy).compaction_policy == normalized
+        overriding = registry.create(
+            owner_name="extension", group_id="group", participant_id="custom", config=config(policy)
+        )
+        assert overriding.config["compaction_policy"] == normalized
+        agent = registry.resolve(overriding.address, generation_id=overriding.generation_id)
+        assert agent is not None and agent.compaction_policy == normalized
+
+        # Inheriting participants store no key, exactly like bindings written before
+        # the optional key existed, so those resolve as inheriting and still reconcile.
+        inheriting = registry.create(
+            owner_name="extension", group_id="group", participant_id="inherit", config=config(None)
+        )
+        assert "compaction_policy" not in inheriting.config
+        agent = registry.resolve(inheriting.address, generation_id=inheriting.generation_id)
+        assert agent is not None and agent.compaction_policy is None
+        assert (
+            registry.create(
+                owner_name="extension",
+                group_id="group",
+                participant_id="inherit",
+                config=config(None),
+            )
+            == inheriting
+        )
+        with pytest.raises(ChatSessionError):
+            registry.create(
+                owner_name="extension",
+                group_id="group",
+                participant_id="inherit",
+                config=config(policy),
+            )
+    finally:
+        sessions.close()
+
+
+@pytest.mark.parametrize(
+    "policy",
+    [
+        "summary_tail",
+        {"enabled": True, "trigger": {"type": "context_ratio", "threshold": 0.8}},
+        {
+            "enabled": True,
+            "trigger": {"type": "context_ratio", "threshold": 1.5},
+            "strategy": {"type": "continuation"},
+        },
+    ],
+)
+def test_temporary_agent_config_rejects_invalid_compaction_policy(
+    tmp_path: Path, policy: Any
+) -> None:
+    with pytest.raises(ValueError, match="compaction_policy"):
+        TemporaryAgentConfig(
+            model="provider/model",
+            cwd=tmp_path,
+            tool_access=ToolAccess(),
+            allowed_skills=[],
+            tools={},
+            name="Participant",
+            compaction_policy=policy,
+        )
+
+
 def test_temporary_agent_config_rejects_relative_cwd(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="cwd must be absolute"):
         TemporaryAgentConfig(
@@ -233,6 +328,59 @@ async def test_temporary_session_runs_only_through_protected_chat_path(tmp_path:
         assert runtime.skills_for_calls[-1] == (None, None)
         assert runtime.system_prompts.render_soul_calls == 0
         assert runtime.system_prompts.render_memory_files_calls == 0
+    finally:
+        runtime.chat_sessions.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("policy", "threshold"),
+    [
+        (None, 0.8),
+        (
+            {
+                "enabled": True,
+                "trigger": {"type": "context_ratio", "threshold": 0.5},
+                "strategy": {"type": "summary_tail", "tail_tokens": 15_000},
+            },
+            0.5,
+        ),
+    ],
+)
+async def test_temporary_compaction_policy_is_the_participant_agent_policy(
+    tmp_path: Path, policy: dict[str, Any] | None, threshold: float
+) -> None:
+    """Automatic Compaction uses the admitted Policy; without one it inherits global."""
+    runtime = StubRuntime(
+        data_dir=tmp_path,
+        agent=StubAgent(id="ordinary", model="openai/gpt-5.2"),
+        adapter=StubAdapter([{"content": "participant result"}]),
+        storage=StubStorage({"auto": True, "threshold": 0.8, "tail_tokens": 15_000}),
+        models=StubModels({("openai", "gpt-5.2"): 1_000_000}),
+    )
+    install_temporary_fixture_extension(runtime, tmp_path, "swarm")
+    registry = TemporaryAgentRegistry(runtime.chat_sessions)
+    runtime.agent_resolver.temporary_agents = registry
+    binding = registry.create(
+        owner_name="swarm",
+        group_id="group",
+        participant_id="participant",
+        config=TemporaryAgentConfig(
+            model="openai/gpt-5.2",
+            cwd=tmp_path,
+            tool_access=ToolAccess(mode="selected", allowed=()),
+            allowed_skills=[],
+            tools={},
+            name="Participant",
+            compaction_policy=policy,
+        ),
+    )
+    service = StubCompactionService(should_auto=False)
+    loop = build_chat_loop(runtime, compaction_service=cast(Any, service))
+    try:
+        await (await loop.start_temporary_run(binding, "shared goal")).wait()
+        assert service.should_auto_calls
+        assert {call[2] for call in service.should_auto_calls} == {threshold}
     finally:
         runtime.chat_sessions.close()
 
