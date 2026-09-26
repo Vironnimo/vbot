@@ -6,7 +6,9 @@
   "README.md": {
    "repeat": "line {n}",
    "count": 3000
-  }
+  },
+  "src/buffer.rs": "fn undo(&mut self) -> bool {\n    let ok = self.history.undo(&mut self.text, &mut self.cursor);\n    if ok {\n        if self.track_revision {\n            self.revision += 1;\n        }\n        self.shadow = Some(self.text.clone());\n        self.shadow_cursor = self.cursor;\n    }\n    ok\n}\n\nfn redo(&mut self) -> bool {\n    let ok = self.history.redo(&mut self.text, &mut self.cursor);\n    if ok {\n        self.revision += 1;\n        self.shadow = Some(self.text.clone());\n        self.shadow_cursor = self.cursor;\n    }\n    ok\n}\n",
+  "docs/long.txt": "Retain the original text here. Retain the original text here. Retain the original text here. Retain the original text here. Retain the original text here. Retain the original text here. Retain the original text here. Retain the original text here. Retain the original text here. Retain the original text here. Retain the original text here. Retain the original text here. targetV2\n"
  },
  "cases": [
   {
@@ -914,6 +916,82 @@
     "contains": [
      "similar: src"
     ]
+   }
+  },
+  {
+   "name": "patch: stale undo locator cannot select the redo sibling",
+   "tool": "apply_patch",
+   "arguments": {
+    "patch": "*** Update File: src/buffer.rs\n@@\n     let ok = self.history.undo(&mut self.text, &mut self.cursor);\n     if ok {\n         self.revision += 1;\n-        self.shadow = Some(self.text.clone());\n+        self.shadow = Some(counted_clone(&self.text));\n         self.shadow_cursor = self.cursor;\n     }\n     ok\n"
+   },
+   "expect": {
+    "ok": false,
+    "error_code": "text_not_found",
+    "files": {
+     "src/buffer.rs": "fn undo(&mut self) -> bool {\n    let ok = self.history.undo(&mut self.text, &mut self.cursor);\n    if ok {\n        if self.track_revision {\n            self.revision += 1;\n        }\n        self.shadow = Some(self.text.clone());\n        self.shadow_cursor = self.cursor;\n    }\n    ok\n}\n\nfn redo(&mut self) -> bool {\n    let ok = self.history.redo(&mut self.text, &mut self.cursor);\n    if ok {\n        self.revision += 1;\n        self.shadow = Some(self.text.clone());\n        self.shadow_cursor = self.cursor;\n    }\n    ok\n}\n"
+    }
+   }
+  },
+  {
+   "name": "patch: stale undo remains failed while exact redo applies",
+   "tool": "apply_patch",
+   "arguments": {
+    "patch": "*** Update File: src/buffer.rs\n@@\n     let ok = self.history.undo(&mut self.text, &mut self.cursor);\n     if ok {\n         self.revision += 1;\n-        self.shadow = Some(self.text.clone());\n+        self.shadow = Some(counted_clone(&self.text));\n         self.shadow_cursor = self.cursor;\n     }\n     ok\n@@\n     let ok = self.history.redo(&mut self.text, &mut self.cursor);\n     if ok {\n         self.revision += 1;\n-        self.shadow = Some(self.text.clone());\n+        self.shadow = Some(counted_clone(&self.text));\n         self.shadow_cursor = self.cursor;\n     }\n     ok\n"
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "1 of 2 changes applied; 1 did not.",
+     "hunk 1"
+    ],
+    "files": {
+     "src/buffer.rs": "fn undo(&mut self) -> bool {\n    let ok = self.history.undo(&mut self.text, &mut self.cursor);\n    if ok {\n        if self.track_revision {\n            self.revision += 1;\n        }\n        self.shadow = Some(self.text.clone());\n        self.shadow_cursor = self.cursor;\n    }\n    ok\n}\n\nfn redo(&mut self) -> bool {\n    let ok = self.history.redo(&mut self.text, &mut self.cursor);\n    if ok {\n        self.revision += 1;\n        self.shadow = Some(counted_clone(&self.text));\n        self.shadow_cursor = self.cursor;\n    }\n    ok\n}\n"
+    }
+   }
+  },
+  {
+   "name": "patch: corrected undo after partial result changes only the remaining target",
+   "steps": [
+    {
+     "tool": "apply_patch",
+     "arguments": {
+      "patch": "*** Update File: src/buffer.rs\n@@\n     let ok = self.history.undo(&mut self.text, &mut self.cursor);\n     if ok {\n         self.revision += 1;\n-        self.shadow = Some(self.text.clone());\n+        self.shadow = Some(counted_clone(&self.text));\n         self.shadow_cursor = self.cursor;\n     }\n     ok\n@@\n     let ok = self.history.redo(&mut self.text, &mut self.cursor);\n     if ok {\n         self.revision += 1;\n-        self.shadow = Some(self.text.clone());\n+        self.shadow = Some(counted_clone(&self.text));\n         self.shadow_cursor = self.cursor;\n     }\n     ok\n"
+     }
+    },
+    {
+     "tool": "apply_patch",
+     "arguments": {
+      "patch": "*** Update File: src/buffer.rs\n@@\n     let ok = self.history.undo(&mut self.text, &mut self.cursor);\n     if ok {\n         if self.track_revision {\n             self.revision += 1;\n         }\n-        self.shadow = Some(self.text.clone());\n+        self.shadow = Some(counted_clone(&self.text));\n         self.shadow_cursor = self.cursor;\n     }\n     ok\n"
+     }
+    }
+   ],
+   "expect": {
+    "ok": true,
+    "files": {
+     "src/buffer.rs": "fn undo(&mut self) -> bool {\n    let ok = self.history.undo(&mut self.text, &mut self.cursor);\n    if ok {\n        if self.track_revision {\n            self.revision += 1;\n        }\n        self.shadow = Some(counted_clone(&self.text));\n        self.shadow_cursor = self.cursor;\n    }\n    ok\n}\n\nfn redo(&mut self) -> bool {\n    let ok = self.history.redo(&mut self.text, &mut self.cursor);\n    if ok {\n        self.revision += 1;\n        self.shadow = Some(counted_clone(&self.text));\n        self.shadow_cursor = self.cursor;\n    }\n    ok\n}\n"
+    }
+   }
+  },
+  {
+   "name": "patch: long mismatch shows the different target and character",
+   "tool": "apply_patch",
+   "arguments": {
+    "path": "docs/long.txt",
+    "old_string": "Retain the original text here. Retain the original text here. Retain the original text here. Retain the original text here. Retain the original text here. Retain the original text here. Retain the original text here. Retain the original text here. Retain the original text here. Retain the original text here. Retain the original text here. Retain the original text here. targetV1",
+    "new_string": "Updated text"
+   },
+   "expect": {
+    "ok": false,
+    "error_code": "text_not_found",
+    "contains": [
+     "targetV2",
+     "targetV1",
+     "character",
+     "excerpts truncated"
+    ],
+    "files": {
+     "docs/long.txt": "Retain the original text here. Retain the original text here. Retain the original text here. Retain the original text here. Retain the original text here. Retain the original text here. Retain the original text here. Retain the original text here. Retain the original text here. Retain the original text here. Retain the original text here. Retain the original text here. targetV2\n"
+    }
    }
   }
  ]

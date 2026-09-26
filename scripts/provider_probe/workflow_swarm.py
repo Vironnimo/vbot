@@ -54,6 +54,14 @@ async def _probe_swarm_tool(adapter: Any, args: argparse.Namespace) -> dict[str,
 
     tool_name = args.swarm_tool
     from resources.extensions.swarm.agent_text import DEFAULT_INSTRUCTIONS
+    from scripts.provider_probe.swarm_communication import COMMUNICATION_GOAL, communication_trial
+
+    instructions_file = getattr(args, "swarm_instructions_file", None)
+    instructions = (
+        Path(instructions_file).read_text(encoding="utf-8")
+        if instructions_file
+        else DEFAULT_INSTRUCTIONS
+    )
 
     with TemporaryDirectory(prefix="vbot-swarm-probe-") as directory:
         root = Path(directory)
@@ -109,7 +117,7 @@ async def _probe_swarm_tool(adapter: Any, args: argparse.Namespace) -> dict[str,
                 {
                     "schema_version": 1,
                     "slug": "probe",
-                    "instructions": DEFAULT_INSTRUCTIONS,
+                    "instructions": instructions,
                     "name": "Probe",
                     "participants": [{"model": "probe/model", "count": 3}],
                     "working_directory": {"kind": "directory", "path": directory},
@@ -119,8 +127,13 @@ async def _probe_swarm_tool(adapter: Any, args: argparse.Namespace) -> dict[str,
             )
             started = await store.create_swarm(
                 profile["id"],
-                "Work with your peers on a three-step checklist for reviewing a short text report. "
-                "Keep the checklist in the conversation; no files are needed."
+                COMMUNICATION_GOAL
+                if args.swarm_case.startswith("communication_")
+                else (
+                    "Work with your peers on a three-step checklist for reviewing "
+                    "a short text report. "
+                    "Keep the checklist in the conversation; no files are needed."
+                )
                 if args.swarm_case == "unassisted"
                 else "probe goal",
                 {"cwd": directory},
@@ -171,6 +184,10 @@ async def _probe_swarm_tool(adapter: Any, args: argparse.Namespace) -> dict[str,
                 delivery_receipt_hook=lambda *_: None,
                 request_turn_end_hook=lambda *_: None,
             )
+            if args.swarm_case.startswith("communication_"):
+                return await communication_trial(
+                    adapter, args, registry, service, sessions, context, binding, peer
+                )
             topic = await store.create_discussion(
                 sid, peer, title="Topic", text="opening", request_id="seed-topic"
             )

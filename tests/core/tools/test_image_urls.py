@@ -276,8 +276,7 @@ async def test_a_redirect_to_a_private_address_is_not_followed(workspace: Path, 
         (
             ReadTimeout("Operation timed out"),
             "timeout",
-            "example.com did not respond within 30 seconds. The site may be slow or down; try "
-            "again later or use another source.",
+            None,
             True,
         ),
         (
@@ -312,7 +311,7 @@ async def test_download_failures_say_what_went_wrong(
     web: _Web,
     response: PublicResponse | Exception,
     code: str,
-    message: str,
+    message: str | None,
     retryable: bool,
 ) -> None:
     web.responses["https://example.com/cat.png"] = response
@@ -321,7 +320,11 @@ async def test_download_failures_say_what_went_wrong(
     result = await call(["https://example.com/cat.png"])
 
     assert result["error"]["code"] == code
-    assert result["error"]["message"] == message
+    if message is not None:
+        assert result["error"]["message"] == message
+    else:
+        assert result["error"]["attempts_made"] == 2
+        assert len(web.requested) == 2
     assert result["error"]["retryable"] is retryable
     assert call.service.analyzed is None
     assert call.stored() == []

@@ -18,6 +18,12 @@ program's own exit code is lost. A closing statement exits with that code
 instead, as ``bash -c`` does, and otherwise with 0 or 1 by the last statement's
 success.
 
+If the last statement succeeded after PowerShell recorded an error, the exit
+status stays zero but a bounded diagnostic is appended. This uses ErrorRecord
+identity, not output text or a count increase: printed test failures are not
+errors, and PowerShell's bounded error collection may already be full. Errors
+can have been caught intentionally, which the diagnostic states explicitly.
+
 ``using`` statements and a script ``param`` block must precede every other
 statement, and named script blocks must contain every statement, so the one-line
 setup statement is inserted after those constructs, and a script of named blocks
@@ -28,7 +34,24 @@ this leading script structure; everything after it stays verbatim.
 from __future__ import annotations
 
 UTF8_OUTPUT_STATEMENT = "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)"
-EXIT_STATUS_STATEMENT = "if ($?) { exit 0 }; if ($LASTEXITCODE) { exit $LASTEXITCODE }; exit 1"
+ERROR_RECORD_BASELINE_STATEMENT = "$__vbotInitialError = $Error | Select-Object -First 1"
+POWERSHELL_ERROR_NOTE = (
+    "PowerShell recorded errors before exiting with code 0. Errors may have been handled; "
+    "inspect the error output and verify any changed files before relying on this result."
+)
+# Enter the success branch before any bookkeeping changes $? or $LASTEXITCODE.
+# Explicit exit statements bypass this epilogue, preserving the caller's control
+# flow. Clearing $Error also suppresses it; no note is not proof of no errors.
+EXIT_STATUS_STATEMENT = (
+    "if ($?) { "
+    "if ($Error.Count -and -not [object]::ReferenceEquals($Error[0], $__vbotInitialError)) { "
+    "$__vbotErrorSummary = ([string]$Error[0]) -replace '\\s+', ' '; "
+    "if ($__vbotErrorSummary.Length -gt 500) { "
+    "$__vbotErrorSummary = $__vbotErrorSummary.Substring(0, 500) + '...' }; "
+    f"[Console]::Error.WriteLine('{POWERSHELL_ERROR_NOTE} Latest error: ' + "
+    "$__vbotErrorSummary) }; exit 0 }; "
+    "if ($LASTEXITCODE) { exit $LASTEXITCODE }; exit 1"
+)
 # One line, so PowerShell's error positions stay one line off the Agent's command.
 UNIX_LINE_FILTERS_STATEMENT = "".join(
     (
@@ -74,7 +97,9 @@ UNIX_LINE_FILTERS_STATEMENT = "".join(
         "}.GetNewClosure()}",
     )
 )
-SETUP_STATEMENT = f"{UTF8_OUTPUT_STATEMENT}; {UNIX_LINE_FILTERS_STATEMENT}"
+SETUP_STATEMENT = (
+    f"{UTF8_OUTPUT_STATEMENT}; {UNIX_LINE_FILTERS_STATEMENT}; {ERROR_RECORD_BASELINE_STATEMENT}"
+)
 
 _SINGLE_QUOTES = "'‘’‚‛"
 _DOUBLE_QUOTES = '"“”„'

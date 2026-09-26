@@ -458,6 +458,28 @@ class WikiCall:
             if "title" in arguments:
                 parts.append(status["title"])
             rendered["status"] = " ".join(parts)
+        excerpt = data.get("content_excerpt")
+        if excerpt is not None:
+            end = excerpt["offset"] + len(excerpt["content"])
+            rendered["shown"] = text.WIKI_SAVED_SHOWN.format(
+                revision=data["revision"],
+                line=excerpt["line"],
+                start=excerpt["offset"],
+                end=end,
+                total=excerpt["total_chars"],
+            )
+            rendered["content"] = excerpt["content"]
+            if end < excerpt["total_chars"]:
+                rendered["more"] = text.WIKI_READ_MORE.format(
+                    call=call_text(
+                        {
+                            "action": "read",
+                            "page_id": data["page_id"],
+                            "revision": data["revision"],
+                            "offset": end,
+                        }
+                    )
+                )
         return rendered
 
 

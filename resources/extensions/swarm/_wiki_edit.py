@@ -25,6 +25,9 @@ from core.tools.fuzzy_match import (
     replace_fuzzy,
 )
 
+from ._wiki_emphasis import matching_lines, preserve_kept_emphasis
+from .wiki_text import WIKI_EMPHASIS_CLIPPED, WIKI_EMPHASIS_COPY
+
 _LINE_BREAK = re.compile(r"\r\n|\n|\r")
 _SNIPPET_LINE_CHARS = 240
 _MAX_OCCURRENCES_SHOWN = 3
@@ -86,6 +89,9 @@ def apply_text_edit(content: str, old: str, new: str) -> TextEdit | EditMiss:
     held = _already_applied(content, old, new)
     if held is not None:
         return TextEdit(content, held, False)
+    emphasis = _emphasis_copy(content, old, new)
+    if emphasis is not None:
+        return emphasis
     if not new.strip() or _replace(content, new, new) is None:
         copied = replace_copied(content, old, new)
         if isinstance(copied, AmbiguousFuzzyMatch):
@@ -98,6 +104,46 @@ def apply_text_edit(content: str, old: str, new: str) -> TextEdit | EditMiss:
         for candidate in find_closest_candidates(content, old)
     )
     return EditMiss(0, passages or _fragment_hint(content, old))
+
+
+def _emphasis_copy(content: str, old: str, new: str) -> TextEdit | EditMiss | None:
+    matches = matching_lines(content, old)
+    if len(matches) > 1:
+        return EditMiss(
+            len(matches),
+            tuple(_emphasis_passage(line, value) for line, _, value, _ in matches[:3]),
+            tuple(line for line, _, _, _ in matches),
+            similar=True,
+        )
+    if not matches:
+        return None
+    line, offset, current, safe = matches[0]
+    if not safe:
+        return EditMiss(0, (_emphasis_passage(line, current),))
+    replacement = preserve_kept_emphasis(old, current, new)
+    if replacement is None:
+        return EditMiss(0, (_emphasis_passage(line, current),))
+    updated = content[:offset] + replacement + content[offset + len(current) :]
+    start = max(0, len(_common_prefix(old, current)) - 40)
+    if len(current) <= _SNIPPET_LINE_CHARS:
+        start = 0
+    snippet = current[start : start + _SNIPPET_LINE_CHARS]
+    return TextEdit(
+        updated,
+        line,
+        updated != content,
+        (
+            WIKI_EMPHASIS_COPY.format(
+                line=line,
+                clipped=WIKI_EMPHASIS_CLIPPED if len(snippet) < len(current) else "",
+                content=snippet,
+            ),
+        ),
+    )
+
+
+def _emphasis_passage(line: int, value: str) -> Passage:
+    return Passage(line, value[:_SNIPPET_LINE_CHARS], len(value) > _SNIPPET_LINE_CHARS)
 
 
 def _fragment_hint(content: str, old: str) -> tuple[Passage, ...]:

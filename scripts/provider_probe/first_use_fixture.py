@@ -17,6 +17,8 @@ from core.runs import ChatRunManager
 from core.sessions import ChatSessionManager, SessionAddress
 from core.storage import TemporaryFileManager
 from core.subagents import SubAgentCoordinator
+from core.tools._shell_arguments import normalize_shell_arguments
+from core.tools.apply_patch import patch_targets, register_apply_patch_tool
 from core.tools.bash import register_bash_tool
 from core.tools.file_state import FileReadState
 from core.tools.process_manager import ProcessManager
@@ -51,6 +53,7 @@ class FirstUseFixture:
         self.hold_children = False
         self.seed_result: dict[str, Any] = {}
         self.seed_run: Any = None
+        self.trusted_execution_files: dict[str, bytes] = {}
         self.release = asyncio.Event()
         self.agents = {
             key: SimpleNamespace(
@@ -76,11 +79,13 @@ class FirstUseFixture:
         register_search_files_tool(self.registry)
         register_subagent_tools(self.registry, self.coordinator)
         register_bash_tool(self.registry, self.processes)
+        file_state = FileReadState()
+        register_apply_patch_tool(self.registry, file_state=file_state)
         register_read_tool(
             self.registry,
             attachment_store=None,
             speech_service=None,
-            file_state=FileReadState(),
+            file_state=file_state,
             speech_max_size_bytes=100000,
         )
         parent = self.sessions.create("parent")
@@ -104,6 +109,18 @@ class FirstUseFixture:
             path = self.repo / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(content, encoding="utf-8", newline="\n")
+        self.trusted_execution_files = self.execution_files()
+
+    def execution_files(self) -> dict[str, bytes]:
+        """A shell fixture can execute only the original trusted seed directory."""
+        paths = list(self.repo.rglob("*"))
+        if any(path.is_symlink() for path in paths):
+            raise FixtureBoundaryError("Shell execution fixture contains an untrusted link")
+        return {
+            path.relative_to(self.repo).as_posix(): path.read_bytes()
+            for path in paths
+            if path.is_file() and path.name != "check-result.txt"
+        }
 
     def resolve_agent(self, project_id, agent_id, *, run_overrides=None):
         if project_id is not None or agent_id not in self.agents:
@@ -182,7 +199,7 @@ class FirstUseFixture:
     def inside(self, value: str) -> bool:
         return (self.cwd / value).resolve().is_relative_to(self.root)
 
-    async def dispatch(self, call: dict[str, Any], *, shell_task: bool = False):
+    async def dispatch(self, call: dict[str, Any]):
         name, arguments = call["name"], call["arguments"]
         if name == "search_files":
             query = interpret_search_call(arguments)
@@ -193,24 +210,38 @@ class FirstUseFixture:
         elif name == "read":
             if not isinstance(arguments.get("path"), str) or not self.inside(arguments["path"]):
                 raise FixtureBoundaryError("Read selected a path outside the disposable repository")
+        elif name == "apply_patch":
+            if any(not self.inside(path) for path in patch_targets(arguments)):
+                raise FixtureBoundaryError("Edit selected a path outside the disposable repository")
         elif name == "bash":
-            command = arguments.get("command", "")
-            if not shell_task:
-                raise FixtureBoundaryError(
-                    "Selected shell instead of a file/delegation Tool; command was not executed"
-                )
-            if not re.fullmatch(
+            shell_arguments = normalize_shell_arguments(arguments)
+            command = shell_arguments.get("command", "")
+            if shell_arguments.get("env") or shell_arguments.get("env_keys"):
+                raise FixtureBoundaryError("Shell fixture does not allow environment changes")
+            # The same execution boundary applies to every task. A valid shell
+            # alternative is executed, then graded by its evidence/effect, not
+            # rejected merely because a dedicated Tool would be preferable.
+            check_command = re.fullmatch(
                 r"""(?:python|python3)(?:\.exe)?\s+["']?(?:\.[/\\])?check\.py["']?"""
                 r"""(?:;\s*(?:(?:echo|Write-Output)\s+)?["']?"""
                 r"""[\w :=-]*\$LASTEXITCODE["']?)?""",
                 command,
                 re.I,
-            ):
+            )
+            read_command = re.fullmatch(
+                r"(?:Get-Content\s+(?:(?:-LiteralPath|-Path)\s+)?|cat\s+)"
+                r"(?:README\.md|src[/\\]recipes\.py)(?:\s+-Raw)?",
+                command,
+                re.I,
+            )
+            if not (check_command or read_command):
                 raise FixtureBoundaryError(
                     "Shell command is outside the fixture's executable allowlist"
                 )
-            if (self.cwd / arguments.get("workdir", ".")).resolve() != self.repo:
+            if (self.cwd / (shell_arguments.get("workdir") or ".")).resolve() != self.repo:
                 raise FixtureBoundaryError("Shell selected a directory outside the fixture")
+            if check_command and self.execution_files() != self.trusted_execution_files:
+                raise FixtureBoundaryError("Shell executable fixture was changed after seeding")
         context = replace(self.context, tool_name=name, tool_call_id=call.get("id", "fixture"))
         previously_started = len(self.started_events)
         result = await self.registry.dispatch(context, arguments)

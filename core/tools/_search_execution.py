@@ -9,6 +9,7 @@ import queue
 import subprocess
 import threading
 import time
+import unicodedata
 from collections.abc import Generator, Iterator
 from pathlib import Path
 from typing import Any
@@ -207,17 +208,43 @@ def pattern_retry(
             True,
             "The pattern needs PCRE2 (look-around or backreferences), so it ran with -P.",
         )
-    repaired = [_escape_unbalanced(pattern) for pattern in patterns]
+    unescaped = [_unescape_unicode_punctuation(pattern) for pattern in patterns]
+    repaired = [_escape_unbalanced(pattern) for pattern in unescaped]
     changed = [(old, new) for old, new in zip(patterns, repaired, strict=True) if old != new]
     if not changed:
         return None
     described = "; ".join(f'"{old}" as "{new}"' for old, new in changed)
+    if unescaped != patterns:
+        explanation = "Unnecessary escapes before Unicode punctuation were removed"
+        if repaired != unescaped:
+            explanation += "; unbalanced regex characters were matched literally"
+        explanation += "; the rest keeps its regex meaning: "
+    else:
+        explanation = "Unbalanced regex characters were matched literally: "
     return (
         repaired,
         False,
-        f"Unbalanced regex characters were matched literally: searched {described}. "
-        "Add -F to args to search plain text.",
+        explanation + f"searched {described}. Add -F to args to search plain text.",
     )
+
+
+def _unescape_unicode_punctuation(pattern: str) -> str:
+    """Remove only escapes that cannot be regex syntax, preserving escaped slashes."""
+    out: list[str] = []
+    index = 0
+    while index < len(pattern):
+        char = pattern[index]
+        index += 1
+        if char == "\\" and index < len(pattern):
+            following = pattern[index]
+            index += 1
+            if not following.isascii() and unicodedata.category(following).startswith("P"):
+                out.append(following)
+            else:
+                out.append(char + following)
+        else:
+            out.append(char)
+    return "".join(out)
 
 
 def _escape_unbalanced(pattern: str) -> str:

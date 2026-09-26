@@ -68,20 +68,56 @@ def _hunk_text(hunk: _Hunk, prefixes: str) -> str:
 
 
 def _candidates(content: str, pattern: str) -> JsonObject:
-    return {
-        "candidates": [
-            {
-                "line": candidate.line_number,
-                "text": candidate.text,
-                "truncated": candidate.truncated,
-            }
-            for candidate in find_closest_candidates(content, pattern)
-        ]
-    }
+    file_lines = split_text_lines(content)
+    candidates = []
+    for candidate in find_closest_candidates(content, pattern):
+        details: JsonObject = {
+            "line": candidate.line_number,
+            "text": candidate.text,
+            "truncated": candidate.truncated,
+        }
+        if candidate.truncated:
+            shown = candidate.text.split("\n")
+            last = candidate.line_number + len(shown) - 1
+            character = len(shown[-1]) + 1
+            # A cut between whole lines resumes at the next line, not beyond
+            # the end of the one just shown. Coordinates count characters,
+            # like read, regardless of UTF-8 bytes or the file's line endings.
+            if len(shown[-1]) == len(file_lines[last - 1]):
+                last, character = last + 1, 1
+            remaining = max(1, len(split_text_lines(pattern)) - (last - candidate.line_number))
+            details["continuations"] = [
+                {"offset": f"{last}:{character}", "limit": min(8, remaining)}
+            ]
+        candidates.append(details)
+    return {"candidates": candidates}
 
 
 def _loose(text: str) -> str:
     return " ".join(text.split())
+
+
+def _difference_positions(actual: str, wanted: str) -> tuple[int, int]:
+    """Locate the first different token, ignoring earlier spacing-only differences."""
+    actual_words = list(re.finditer(r"\S+", actual))
+    wanted_words = list(re.finditer(r"\S+", wanted))
+    for file_word, copy_word in zip(actual_words, wanted_words, strict=False):
+        if file_word[0] != copy_word[0]:
+            shared = len(commonprefix((file_word[0], copy_word[0])))
+            return file_word.start() + shared, copy_word.start() + shared
+    shared_words = min(len(actual_words), len(wanted_words))
+    return (
+        actual_words[shared_words].start() if shared_words < len(actual_words) else len(actual),
+        wanted_words[shared_words].start() if shared_words < len(wanted_words) else len(wanted),
+    )
+
+
+def _difference_window(text: str, position: int) -> tuple[int, str]:
+    """Keep the actual mismatch in a bounded window, including a missing suffix."""
+    if len(text) <= 240:
+        return 1, text
+    start = max(0, position - 120)
+    return start + 1, text[start : start + 240]
 
 
 def _not_found(content: str, old: str, *, source: Literal["patch", "old_string"]) -> JsonObject:
@@ -93,16 +129,27 @@ def _not_found(content: str, old: str, *, source: Literal["patch", "old_string"]
     if details["candidates"]:
         start = details["candidates"][0]["line"]
         file_lines = split_text_lines(content)
-        for position, wanted in enumerate(split_text_lines(old)):
-            number = start + position
+        wanted_lines = split_text_lines(old)
+        first = next((index for index, line in enumerate(wanted_lines) if line.strip()), 0)
+        for position, wanted in enumerate(wanted_lines[first:], first):
+            number = start + position - first
             if number > len(file_lines):
                 break
             actual = file_lines[number - 1]
             if _loose(actual) != _loose(wanted):
+                file_position, copy_position = _difference_positions(actual, wanted)
+                file_start, file_text = _difference_window(actual, file_position)
+                copy_start, copy_text = _difference_window(wanted, copy_position)
                 details["difference"] = {
                     "line": number,
-                    "file": actual[:240],
-                    "copy": wanted[:240],
+                    "character": file_position + 1,
+                    "copy_line": position + 1,
+                    "copy_character": copy_position + 1,
+                    "file_start": file_start,
+                    "copy_start": copy_start,
+                    "file": file_text,
+                    "copy": copy_text,
+                    "truncated": len(file_text) < len(actual) or len(copy_text) < len(wanted),
                     "source": source,
                 }
                 break
@@ -131,6 +178,11 @@ def _ambiguity(
                 "line": start + 1,
                 "text": "\n".join(line[:240] for line in lines[start:end]),
                 "truncated": any(len(line) > 240 for line in lines[start:end]),
+                "continuations": [
+                    {"offset": f"{index}:241", "limit": 1}
+                    for index, line in enumerate(lines[start:end], start + 1)
+                    if len(line) > 240
+                ],
             }
         )
     details: JsonObject = {"occurrences": match.occurrences, "candidates": candidates}

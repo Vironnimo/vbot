@@ -111,6 +111,103 @@ async def test_look_around_runs_with_pcre2_and_says_so(tmp_path):
     assert "PCRE2" in result["data"]["note"]
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("pattern", "expected"),
+    [
+        (r"Alpha|16 \·", "code:1:Alpha\ncode:2:16 · cases"),
+        (r"[\·—]", "code:2:16 · cases\ncode:3:long—dash\ncode:4:call(·"),
+        (r"long\—dash|Beta", "code:3:long—dash"),
+        (r"Alpha|call(\·", "code:1:Alpha\ncode:4:call(·"),
+    ],
+)
+async def test_escaped_unicode_punctuation_preserves_regex_meaning(tmp_path, pattern, expected):
+    (tmp_path / "code").write_text("Alpha\n16 · cases\nlong—dash\ncall(·\n", encoding="utf-8")
+    registry = ToolRegistry()
+    register_search_files_tool(registry)
+
+    result = await registry.dispatch(context(tmp_path), {"pattern": pattern, "path": "code"})
+
+    assert result["ok"], result
+    assert result["data"]["content"] == expected
+    assert result["data"]["complete"] is True
+    assert "note" in result["data"]
+    if pattern == r"Alpha|call(\·":
+        assert "unbalanced regex characters" in result["data"]["note"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("args", [["-F"], []])
+async def test_literal_backslashes_before_unicode_punctuation_are_not_repaired(tmp_path, args):
+    (tmp_path / "code").write_text("16 \\·\n16 ·\n", encoding="utf-8")
+    registry = ToolRegistry()
+    register_search_files_tool(registry)
+    pattern = r"16 \·" if args else r"16 \\·"
+
+    result = await registry.dispatch(context(tmp_path), {"args": [*args, pattern, "code"]})
+
+    assert result["data"]["content"] == "code:1:16 \\·"
+    assert "note" not in result["data"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("pattern", [r"\q|Alpha", r"\é|Alpha", r"[\·|Alpha"])
+async def test_unicode_escape_repair_does_not_hide_unrelated_invalid_regex(tmp_path, pattern):
+    (tmp_path / "code").write_text("Alpha\n", encoding="utf-8")
+    registry = ToolRegistry()
+    register_search_files_tool(registry)
+
+    result = await registry.dispatch(context(tmp_path), {"pattern": pattern, "path": "code"})
+
+    assert result["ok"] is False
+    assert result["error"]["code"] == "search_error"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("arguments", "expected"),
+    [
+        ({"output": "count", "context": 2}, "code:2"),
+        ({"args": ["-c", "-C", "2"]}, "code:2"),
+        ({"args": ["-C2", "--count-matches"]}, "code:3"),
+        ({"output": "files", "context": 2, "args": ["-c"]}, "code:2"),
+        ({"output": "count", "context": 2, "args": ["--count-matches"]}, "code:3"),
+    ],
+)
+async def test_count_output_ignores_context_after_resolving_option_precedence(
+    tmp_path, arguments, expected
+):
+    (tmp_path / "code").write_text("before\nneedle needle\nneedle\nafter\n")
+    registry = ToolRegistry()
+    register_search_files_tool(registry)
+    supplied = {"pattern": "needle", "path": "code", **arguments}
+    original = copy.deepcopy(supplied)
+
+    result = await registry.dispatch(context(tmp_path), supplied)
+
+    assert supplied == original
+    assert result["ok"], result
+    assert result["data"]["content"] == expected
+    assert result["data"]["complete"] is True
+    assert "note" in result["data"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("args", [["-l"], ["-q"], ["--files-without-match"]])
+async def test_count_context_repair_does_not_override_a_different_final_mode(tmp_path, args):
+    (tmp_path / "code").write_text("needle\n")
+    registry = ToolRegistry()
+    register_search_files_tool(registry)
+
+    result = await registry.dispatch(
+        context(tmp_path),
+        {"pattern": "needle", "path": "code", "output": "count", "context": 2, "args": args},
+    )
+
+    assert result["ok"] is False
+    assert result["error"]["code"] == "invalid_arguments"
+
+
 @pytest.mark.parametrize(
     "tokens,patterns,roots,options,kind",
     [

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import re
 import sqlite3
+from bisect import bisect_right
 from itertools import islice
 from typing import cast
 
@@ -20,6 +22,7 @@ from ._store_values import Json, SwarmStoreError, _dump, _hash, _load, _request_
 from ._wiki_edit import EditMiss, apply_text_edit
 
 MUTATIONS = {"create", "update", "delete", "restore"}
+_LINE_BREAK = re.compile(r"\r\n|\n|\r")
 _FIELDS = {
     "list": {"query", "include_deleted", "cursor", "limit"},
     "read": {"page_id", "revision", "offset", "limit"},
@@ -283,7 +286,14 @@ def _mutate(
             raise SwarmStoreError("request_conflict")
         return {**_load(replay["outcome"]), "replayed": True}
 
-    def finish(result: Json) -> Json:
+    def finish(result: Json, *, changed_offset: int | None = None) -> Json:
+        if not result["deleted"] and (
+            action in {"create", "restore"} or {"old_text", "content"} & arguments.keys()
+        ):
+            saved = _page(connection, swarm_id, result["page_id"], result["revision"])
+            result["content_excerpt"] = _content_excerpt(
+                saved["content"], result.get("line", 1), changed_offset
+            )
         connection.execute(
             "INSERT INTO requests(scope,request_id,payload_hash,outcome) VALUES(?,?,?,?)",
             (scope, arguments["request_id"], payload_hash, _dump(result)),
@@ -292,6 +302,7 @@ def _mutate(
 
     now = utc_now_timestamp()
     line = None
+    previous_content = ""
     notes: list[str] = []
     if action == "create":
         title, content, deleted = arguments["title"], arguments["content"], 0
@@ -321,6 +332,7 @@ def _mutate(
     else:
         page_id = arguments["page_id"]
         current = _page(connection, swarm_id, page_id)
+        previous_content = current["content"]
         expected = arguments.get("expected_revision")
         # A passage edit from an older revision applies while its passage still matches.
         rebase = (
@@ -397,4 +409,39 @@ def _mutate(
         result["line"] = line
     if notes:
         result["notes"] = notes
-    return finish(result)
+    changed_offset = next(
+        (
+            index
+            for index, (before, after) in enumerate(zip(previous_content, content, strict=False))
+            if before != after
+        ),
+        min(len(previous_content), len(content)),
+    )
+    return finish(result, changed_offset=changed_offset)
+
+
+def _content_excerpt(content: str, line: int, changed_offset: int | None) -> Json:
+    """Bounded evidence from the exact saved revision, retained in its replay receipt."""
+
+    starts = [0, *(match.end() for match in _LINE_BREAK.finditer(content))]
+    index = min(max(0, line - 1), len(starts) - 1)
+    offset = starts[index]
+    if changed_offset is not None:
+        anchor = min(changed_offset, len(content))
+        line_start = starts[bisect_right(starts, anchor) - 1]
+        # A long line must show the change, not just its unchanged first 2000
+        # characters. Keep a little preceding context and exact page coordinates.
+        offset = max(line_start, anchor - 400)
+        if offset == len(content) and content:
+            offset = max(0, offset - 400)
+        index = bisect_right(starts, offset) - 1
+    end = min(len(content), offset + 2000)
+    if index + 8 < len(starts):
+        end = min(end, starts[index + 8])
+    snippet = content[offset:end]
+    return {
+        "line": index + 1,
+        "offset": offset,
+        "content": snippet,
+        "total_chars": len(content),
+    }
