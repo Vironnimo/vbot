@@ -581,3 +581,41 @@ def test_channel_send_session_reads_and_note_run_on_the_session_pool(
         assert threads["note"].startswith("vbot-db-sessions")
     finally:
         chat_sessions.close()
+
+
+@pytest.mark.usefixtures("current_format_data_directory")
+@pytest.mark.asyncio
+async def test_list_shows_the_project_sessions_own_chat(tmp_path: Path) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    sessions.create("agent-1", session_id="session-1", project_id="project-one")
+    sessions.set_metadata(
+        SessionAddress(project_id="project-one", agent_id="agent-1", session_id="session-1"),
+        {"last_reply_target": {"channel_id": "tg-assistant", "platform_target": "23456"}},
+    )
+    identity = sessions.create("agent-1", session_id="session-1")
+    sessions.set_metadata(
+        identity.address,
+        {"last_reply_target": {"channel_id": "tg-assistant", "platform_target": "99999"}},
+    )
+    channel_service = Mock()
+    channel_service.list_channels.return_value = [make_channel_config(allowed_chat_ids=[12345])]
+    registry = ToolRegistry()
+    register_channel_send_tool(
+        registry,
+        channel_service,
+        sessions,
+        max_attachment_size_bytes=_TEST_MAX_ATTACHMENT_SIZE_BYTES,
+    )
+    try:
+        result = await registry.dispatch(
+            make_context(tmp_path, project_id="project-one"),
+            {"action": "list"},
+            ["channel_send"],
+        )
+
+        assert result["ok"] is True, result
+        shown = str(result["data"])
+        assert "23456" in shown
+        assert "99999" not in shown
+    finally:
+        sessions.close()
