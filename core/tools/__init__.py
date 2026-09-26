@@ -38,7 +38,6 @@ from core.tools.contracts import (
 from core.tools.file_state import (
     FileReadState,
     StaleReason,
-    stale_failure_text,
 )
 from core.tools.history import (
     HISTORY_ACTIONS,
@@ -367,7 +366,6 @@ __all__ = [
     "project_bash_tool_definitions",
     "memory_handler",
     "session_search_handler",
-    "stale_failure_text",
     "tool_failure",
     "tool_is_ready",
     "tool_success",
