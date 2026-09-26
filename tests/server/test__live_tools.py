@@ -319,6 +319,12 @@ class Fixture:
         assert result["ok"] is False, result
         return str(result["error"]["code"]), str(result["error"]["message"])
 
+    async def partial(self, tool: str, **arguments: Any) -> str:
+        """A call that did part of its work: the failure message says which part."""
+        code, message = await self.failed(tool, **arguments)
+        assert code == "partial", message
+        return message
+
 
 @pytest.fixture
 def fx() -> Fixture:
@@ -361,7 +367,7 @@ async def test_overview_shows_selection_agents_sessions_and_terminals(fx: Fixtur
         "App: chat view; selected Agent: Main; selected Project: vBot.",
         "Agents: Main, Coder, Writer.",
         "Team of Project vBot: Reviewer.",
-        "Projects: vBot (C:\\work\\vbot).",
+        "Projects: vBot (C:/work/vbot).",
     ]
     assert '- s1 Coder "Fix login": working' in text
     assert (
@@ -371,8 +377,9 @@ async def test_overview_shows_selection_agents_sessions_and_terminals(fx: Fixtur
     assert '- s3 Reviewer "Review": finished: "...' in text
     assert 'Done."' in text
     assert "Old draft" not in text
-    assert '- t1 Codex "Build" in C:\\work\\vbot: idle' in text
-    assert "- t2 pwsh in C:\\work\\vbot: exited" in text
+    # Folders read with forward slashes, whatever the host writes.
+    assert '- t1 Codex "Build" in C:/work/vbot: idle' in text
+    assert "- t2 pwsh in C:/work/vbot: exited" in text
     assert fx.app.effects() == []
 
 
@@ -500,9 +507,8 @@ async def test_reports_a_created_session_whose_task_may_not_have_arrived(fx: Fix
 async def test_starts_codex_and_types_the_task_once_it_is_ready(fx: Fixture) -> None:
     fx.app.screens["term_start1"] = [SHELL, CODEX_LOADING, CODEX_READY]
     text = await fx.ok("start_coding_terminal", program="codex", task='Fix "a" & 100%')
-    assert text == (
-        "Started Codex in a Terminal in C:\\work\\vbot: t1. Typed the task into t1 and sent it."
-    )
+    assert "in C:/work/vbot: t1." in text
+    assert "Typed the task into t1 and sent it." in text
     start = fx.app.params("terminal.start")
     # The task never becomes part of the command line.
     assert start == [{"command": "codex", "workdir": "C:\\work\\vbot", "group_id": "grp_new2"}]
@@ -517,7 +523,7 @@ async def test_starts_codex_and_types_the_task_once_it_is_ready(fx: Fixture) -> 
 @pytest.mark.asyncio
 async def test_never_types_into_a_program_that_did_not_become_ready(fx: Fixture) -> None:
     fx.app.screens["term_start1"] = [SHELL]
-    text = await fx.ok("start_coding_terminal", program="codex", task="Fix it")
+    text = await fx.partial("start_coding_terminal", program="codex", task="Fix it")
     assert fx.app.inputs == []
     assert (
         "t1 did not show Codex's input line within 25 seconds, so the task was not typed." in text
@@ -528,7 +534,7 @@ async def test_never_types_into_a_program_that_did_not_become_ready(fx: Fixture)
 @pytest.mark.asyncio
 async def test_does_not_answer_a_trust_question_for_the_user(fx: Fixture) -> None:
     fx.app.screens["term_start1"] = [SHELL, CLAUDE_TRUST]
-    text = await fx.ok("start_coding_terminal", program="claude", task="Fix it")
+    text = await fx.partial("start_coding_terminal", program="claude", task="Fix it")
     assert fx.app.inputs == []
     assert (
         "Claude Code in t1 asks whether to trust the folder, so the task was not typed. Ask the "
@@ -544,7 +550,7 @@ async def test_does_not_answer_a_trust_question_for_the_user(fx: Fixture) -> Non
 async def test_names_every_terminal_that_needs_the_same_answer(fx: Fixture) -> None:
     fx.app.screens["term_start1"] = [SHELL, CLAUDE_TRUST]
     fx.app.screens["term_start2"] = [SHELL, CLAUDE_TRUST]
-    text = await fx.ok("start_coding_terminal", program="claude", task="Fix it", count=2)
+    text = await fx.partial("start_coding_terminal", program="claude", task="Fix it", count=2)
     assert fx.app.inputs == []
     assert "Claude Code in t1 and t2 asks whether to trust the folder" in text
     assert text.endswith('"<the task>"}. Do the same for t2.')
@@ -553,7 +559,7 @@ async def test_names_every_terminal_that_needs_the_same_answer(fx: Fixture) -> N
 @pytest.mark.asyncio
 async def test_reports_a_pending_codex_update_question(fx: Fixture) -> None:
     fx.app.screens["term_start1"] = [SHELL, CODEX_LOADING, CODEX_UPDATE]
-    text = await fx.ok("start_coding_terminal", program="codex", task="Fix it")
+    text = await fx.partial("start_coding_terminal", program="codex", task="Fix it")
     assert fx.app.inputs == []
     assert "Codex in t1 offers an update and waits, so the task was not typed." in text
 
@@ -629,7 +635,7 @@ async def test_reports_a_program_that_exits_before_it_is_ready(fx: Fixture) -> N
         return {"terminal": terminal, "screen": SHELL, "bracketed_paste": False}
 
     fx.app._terminal_read = exit_on_read  # type: ignore[method-assign]
-    text = await fx.ok("start_coding_terminal", program="codex", task="Go")
+    text = await fx.partial("start_coding_terminal", program="codex", task="Go")
     assert text.endswith("t1 ended before Codex was ready; the task was not typed.")
 
 

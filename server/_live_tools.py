@@ -46,6 +46,7 @@ from core.model_tasks.live import (
     live_success,
 )
 from core.tools._call_vocabulary import spelling
+from core.utils.paths import model_path
 from server._live_context import (
     NAVIGATION_NOT_APPLIED,
     OPERATION_FAILED,
@@ -205,7 +206,7 @@ class LiveToolExecutor:
             lines.append(f"Team of Project {selected_project.name}: {_capped(team)}.")
         if projects:
             listed = [
-                f"{project.name} ({project.folder})" if project.folder else project.name
+                f"{project.name} ({model_path(project.folder)})" if project.folder else project.name
                 for project in projects
             ]
             lines.append(f"Projects: {_capped(listed)}.")

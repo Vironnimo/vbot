@@ -40,6 +40,7 @@ from core.model_tasks.live import (
     selected_answer,
 )
 from core.tools._call_vocabulary import spelling
+from core.utils.paths import model_path
 from server._live_context import (
     UNCERTAIN_DELIVERY,
     VOICE_STOPPED,
@@ -148,7 +149,7 @@ def terminal_line(ref: str, item: JsonObject) -> str:
         parts.append(f'"{name.strip()}"')
     folder = item.get("workdir")
     if isinstance(folder, str) and folder:
-        parts.append(f"in {folder}")
+        parts.append(f"in {model_path(folder)}")
     return f"{' '.join(parts)}: {terminal_state(item)}"
 
 
@@ -225,23 +226,27 @@ class LiveTerminals:
         catalog.forget_terminals()
         refs = [self._refs.terminal(terminal_id) for terminal_id in started]
         head = (
-            f"Started {program.label} in {_count_phrase(len(refs), 'Terminal')} in {workdir}: "
-            f"{', '.join(refs)}."
+            f"Started {program.label} in {_count_phrase(len(refs), 'Terminal')} in "
+            f"{model_path(workdir)}: {', '.join(refs)}."
         )
-        shown = await self._show_quietly("show", terminal_id=started[0])
+        if not await self._show_quietly("show", terminal_id=started[0]):
+            head += " The app did not switch to it."
         if not task:
-            return live_success(head + ("" if shown else " The app did not switch to it."))
-        outcomes = await asyncio.gather(
-            *(self._start_task(terminal_id, program, task) for terminal_id in started),
-            return_exceptions=True,
-        )
+            return live_success(head)
+        outcomes = [
+            _outcome(item)
+            for item in await asyncio.gather(
+                *(self._start_task(terminal_id, program, task) for terminal_id in started),
+                return_exceptions=True,
+            )
+        ]
         report = _task_report(
-            program,
-            refs,
-            [_outcome(item) for item in outcomes],
-            timeout_seconds=self._timings.ready_timeout_seconds,
+            program, refs, outcomes, timeout_seconds=self._timings.ready_timeout_seconds
         )
-        return live_success(f"{head} {report}")
+        if all(outcome.status == "sent" for outcome in outcomes):
+            return live_success(f"{head} {report}")
+        # The Terminals run, but the call's task did not reach every one of them.
+        return live_failure("partial", f"{head} {report}")
 
     def _start_failure(
         self, program: CodingProgram, count: int, started: list[str], exc: Exception

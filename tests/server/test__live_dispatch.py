@@ -472,7 +472,10 @@ async def test_a_trust_question_is_confirmed_only_on_the_answer_the_guidance_nam
         ["No, exit", "Yes, I trust this folder"],
         numbered=False,
     )
-    text = await call.ok("start_coding_terminal", program="claude", task="Fix it")
+    # The Terminal runs, but the task is not typed: the call reports a partial result.
+    code, text = await call.failed("start_coding_terminal", program="claude", task="Fix it")
+    assert code == "partial"
+    assert "Started Claude Code in a Terminal" in text
     assert '"key": "down"} then {"action": "key", "target": "t1", "key": "enter"}' in text
     terminal = call.terminals.all[0]
     before = len(terminal.writes)
