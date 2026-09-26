@@ -29,7 +29,9 @@ from core.sessions import (
     SessionChatHistorySnapshot,
     TemporarySessionBinding,
 )
+from core.settings.normalizers import normalize_compaction_policy
 from core.tools.availability import ToolAccess, normalize_tool_access
+from core.utils.errors import StorageError
 from core.utils.ids import new_id
 
 
@@ -48,6 +50,9 @@ class TemporaryAgentConfig:
     fallback_models: list[str] | None = None
     instructions: str = ""
     prompt_blocks: list[str] | None = None
+    # ``None`` inherits the global Compaction Policy; a dict is the participant's
+    # complete Agent-level Policy for automatic and manual Compaction.
+    compaction_policy: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         """Validate and snapshot caller-owned mutable configuration at the boundary."""
@@ -86,6 +91,12 @@ class TemporaryAgentConfig:
         normalized_access = normalize_tool_access(self.tool_access)
         if not isinstance(self.tools, dict):
             raise ValueError("temporary tools must be an object")
+        if self.compaction_policy is not None:
+            try:
+                policy = normalize_compaction_policy(self.compaction_policy)
+            except StorageError as error:
+                raise ValueError(f"temporary compaction_policy is invalid: {error}") from error
+            object.__setattr__(self, "compaction_policy", policy)
         object.__setattr__(self, "cwd", cwd)
         object.__setattr__(self, "tool_access", normalized_access)
         object.__setattr__(self, "allowed_skills", list(self.allowed_skills))
@@ -138,24 +149,30 @@ class TemporaryAgentRegistry:
         # A concurrent creator can therefore win without making the same participant
         # fail merely because it generated a different unused address.
         address = SessionAddress(project_id, new_id("tmp"), new_id("ses"))
+        binding_config: dict[str, Any] = {
+            "model": config.model,
+            "cwd": str(config.cwd),
+            "tool_access": config.tool_access.to_dict(),
+            "allowed_skills": list(config.allowed_skills),
+            "tools": deepcopy(config.tools),
+            "name": config.name,
+            "temperature": config.temperature,
+            "thinking_effort": config.thinking_effort,
+            "fallback_models": list(config.fallback_models or []),
+            "instructions": config.instructions,
+            "prompt_blocks": deepcopy(config.prompt_blocks),
+        }
+        # Written only when set: an inheriting participant keeps the exact
+        # configuration of bindings that predate the optional key, so their
+        # idempotent re-creation still reconciles.
+        if config.compaction_policy is not None:
+            binding_config["compaction_policy"] = deepcopy(config.compaction_policy)
         return self._sessions.create_bound_temporary_session(
             address,
             owner_name=owner_name,
             group_id=group_id,
             participant_id=participant_id,
-            config={
-                "model": config.model,
-                "cwd": str(config.cwd),
-                "tool_access": config.tool_access.to_dict(),
-                "allowed_skills": list(config.allowed_skills),
-                "tools": deepcopy(config.tools),
-                "name": config.name,
-                "temperature": config.temperature,
-                "thinking_effort": config.thinking_effort,
-                "fallback_models": list(config.fallback_models or []),
-                "instructions": config.instructions,
-                "prompt_blocks": deepcopy(config.prompt_blocks),
-            },
+            config=binding_config,
         )
 
     def resolve(self, address: SessionAddress, *, generation_id: str) -> TemporaryAgent | None:
@@ -163,6 +180,9 @@ class TemporaryAgentRegistry:
         if binding is None or binding.generation_id != generation_id:
             return None
         config = binding.config
+        compaction_policy = config.get("compaction_policy")
+        if compaction_policy is not None and not isinstance(compaction_policy, dict):
+            raise ValueError("temporary Session binding configuration is invalid")
         try:
             return TemporaryAgent(
                 id=address.agent_id,
@@ -178,6 +198,7 @@ class TemporaryAgentRegistry:
                 temperature=config.get("temperature"),
                 thinking_effort=config.get("thinking_effort"),
                 current_session_id=address.session_id,
+                compaction_policy=deepcopy(compaction_policy),
             )
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError("temporary Session binding configuration is invalid") from error
