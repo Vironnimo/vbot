@@ -74,6 +74,7 @@ from core.providers._http_shared import (
     format_http_error_detail,
     iter_sse_events,
     parse_sse_json_data,
+    prepare_json_body,
     wrap_network_error,
 )
 from core.providers.adapter import (
@@ -789,17 +790,19 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         # rejected parameter from the exact payload — provider ``defaults`` would
         # otherwise refill the key on a rebuild.
         payload = self._build_payload(messages, model_id, **kwargs)
-        self._check_payload_size(payload, model_id)
 
         auth_recovery = OAuthRequestRecovery(self._token_getter, self._auth_config)
 
-        async def _do_request() -> dict[str, Any]:
-            headers = await self._build_request_headers(messages, payload)
+        async def _do_request(body: bytes) -> dict[str, Any]:
+            headers = httpx.Headers(await self._build_request_headers(messages, payload))
             headers.update(request_headers)
+            headers.setdefault(
+                "Content-Type", self._client.headers.get("Content-Type", "application/json")
+            )
             try:
                 response = await self._client.post(
                     CHAT_COMPLETIONS_ENDPOINT,
-                    json=payload,
+                    content=body,
                     headers=headers,
                 )
             except httpx.TransportError as exc:
@@ -840,8 +843,14 @@ class OpenAICompatibleAdapter(ProviderAdapter):
             )
             return parsed
 
+        async def _execute_payload() -> dict[str, Any]:
+            # Sampling fallback changes the payload; ordinary/OAuth retries do
+            # not. Prepare once for each revision and reuse its exact bytes.
+            body = await self._prepare_request_body(payload, model_id)
+            return await auth_recovery.run(lambda: retry_async(lambda: _do_request(body)))
+
         return await execute_with_sampling_fallback(
-            lambda: auth_recovery.run(lambda: retry_async(_do_request)),
+            _execute_payload,
             payload,
             logger=_LOGGER,
             provider_label=self._config.id,
@@ -861,16 +870,13 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         payload["stream"] = True
         _merge_stream_usage_options(payload)
 
-    def _check_payload_size(self, payload: dict[str, Any], model_id: str) -> None:
-        """Measure the same UTF-8 JSON encoding httpx sends, including all fields."""
+    async def _prepare_request_body(self, payload: dict[str, Any], model_id: str) -> bytes:
+        """Prepare the exact JSON bytes once and reject a known size overflow."""
+        body = await prepare_json_body(payload)
         limit = self.request_body_limit(model_id)
-        if limit is None:
-            return
-        # Constructing a Request performs serialization only, never network I/O.
-        # Use httpx itself so Unicode, JSON escaping and framing cannot drift.
-        size = len(httpx.Request("POST", self._config.base_url, json=payload).content)
-        if size > limit:
-            raise ProviderRequestTooLargeError(size, limit)
+        if limit is not None and len(body) > limit:
+            raise ProviderRequestTooLargeError(len(body), limit)
+        return body
 
     async def stream(
         self,
@@ -907,7 +913,6 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         request_headers = self._request_headers_from_kwargs(kwargs)
         payload = self._build_payload(messages, model_id, **kwargs)
         self._prepare_stream_payload(payload)
-        self._check_payload_size(payload, model_id)
         auth_recovery = OAuthRequestRecovery(self._token_getter, self._auth_config)
 
         async def _build_headers() -> dict[str, str]:
@@ -926,16 +931,20 @@ class OpenAICompatibleAdapter(ProviderAdapter):
                 response_headers=response_headers,
             )
 
-        response = await execute_with_sampling_fallback(
-            lambda: connect_streaming_with_retry(
+        async def _connect_payload() -> httpx.Response:
+            body = await self._prepare_request_body(payload, model_id)
+            return await connect_streaming_with_retry(
                 self._client,
                 CHAT_COMPLETIONS_ENDPOINT,
-                payload,
+                body,
                 build_headers=_build_headers,
                 handle_error_status=_handle_error_status,
                 auth_recovery=auth_recovery,
                 wrap_transport_error=self._wrap_transport_error,
-            ),
+            )
+
+        response = await execute_with_sampling_fallback(
+            _connect_payload,
             payload,
             logger=_LOGGER,
             provider_label=self._config.id,
