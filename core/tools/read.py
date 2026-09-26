@@ -1,21 +1,31 @@
-"""Built-in read tool: text files plus image/audio/video media handling."""
+"""Built-in read tool: text files, directories, and image/audio/video media."""
 
 from __future__ import annotations
 
 import base64
+import json
+import os
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
 from core.attachments import AttachmentError, sniff_media_type
 from core.model_tasks import SpeechError
-from core.tools._path_suggestions import similar_entries
-from core.tools.arguments import (
-    LINE_NUMBER_GUTTER_SEPARATOR,
-    TEXT_LINE_BREAK,
-    optional_int,
-    split_text_lines,
+from core.tools._path_suggestions import missing_file_message
+from core.tools._read_arguments import READ_HIDDEN_PARAMETERS, normalize_read_arguments
+from core.tools._read_text import (
+    DEFAULT_LINE_LIMIT,
+    MAX_FILE_BYTES,
+    parse_read_position,
+    render_directory_listing,
+    render_matching_lines,
+    render_text,
+    render_text_file,
+    render_text_path,
+    without_bom,
 )
+from core.tools.arguments import optional_int, split_text_lines
+from core.tools.contracts import ToolContractError
 from core.tools.file_state import FileReadState
 from core.tools.read_extract import (
     ExtractionError,
@@ -25,29 +35,23 @@ from core.tools.read_extract import (
     ensure_document_input_size,
     extract_document_text,
 )
+from core.tools.search import display_search_path
 from core.tools.tools import (
     JsonObject,
     ToolContext,
     ToolDisplay,
-    ToolDisplayField,
+    ToolDisplayPart,
     ToolHandler,
     ToolRegistry,
     run_tool_worker,
     tool_failure,
     tool_success,
 )
-from core.utils.paths import model_path
 
-MAX_FILE_BYTES = 50 * 1024
-DEFAULT_LINE_LIMIT = 2000
-# UTF-8 BOM that some Windows editors prepend; stripped on read so the model sees
-# clean content (apply_patch preserves it on the round-trip).
-_UTF8_BOM_BYTES = b"\xef\xbb\xbf"
 # A NUL byte within this leading window marks a file as binary (the classic
 # heuristic): text — even non-UTF-8 text shown with replacement chars — has none.
 _BINARY_DETECTION_BYTES = 8192
 _FILE_PROBE_BYTES = 64 * 1024
-_TEXT_STREAM_CHUNK_CHARACTERS = 64 * 1024
 
 
 @dataclass(frozen=True)
@@ -61,9 +65,10 @@ class _PreparedAudio:
 
 READ_TOOL_NAME = "read"
 READ_TOOL_DESCRIPTION = (
-    "Read a file. Images are shown to the model directly when it supports "
-    "vision; audio files are transcribed to text; PDF/Word/Excel/Jupyter "
-    "files (.pdf/.docx/.xlsx/.ipynb) are extracted to readable text."
+    "Read a text file with line numbers, list a directory, view an image, transcribe "
+    "an audio file, or extract the text of a PDF, Word, Excel or Jupyter file. Text "
+    'lines start with "N| " (the line number, not file content). Use this instead '
+    "of cat, head, tail, Get-Content or ls in the shell."
 )
 READ_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
@@ -71,40 +76,26 @@ READ_TOOL_PARAMETERS: JsonObject = {
         "path": {
             "type": "string",
             "minLength": 1,
-            "description": (
-                "Path to the file to read (relative to the working directory, or absolute)."
-            ),
+            "description": "File or directory, relative to the working directory or absolute.",
         },
         "offset": {
             "oneOf": [
-                {"type": "integer", "minimum": 1},
-                {
-                    "type": "string",
-                    "pattern": r"^[1-9][0-9]*:[1-9][0-9]*$",
-                },
+                {"type": "integer"},
+                {"type": "string", "pattern": r"^[1-9][0-9]*:[1-9][0-9]*$"},
             ],
             "description": (
-                "1-indexed start line, or a line:character address such as 12:34 to resume "
-                "at an exact position within the file."
+                "Line to start at, counting from 1. A negative number counts back from "
+                "the end: -50 shows the last 50 lines."
             ),
         },
         "limit": {
             "type": "integer",
             "minimum": 1,
-            "default": DEFAULT_LINE_LIMIT,
-            "description": "Maximum lines to read; omit for the default (2000).",
+            "description": "Maximum number of lines to show. Default 2000.",
         },
     },
     "required": ["path"],
 }
-
-
-@dataclass(frozen=True)
-class _ReadPosition:
-    """A 1-indexed source position, optionally inside one physical line."""
-
-    line: int
-    character: int = 1
 
 
 class _FileInputTooLargeError(Exception):
@@ -115,415 +106,17 @@ class _FileInputTooLargeError(Exception):
         super().__init__(f"file exceeds input limit {max_bytes}")
 
 
-def _missing_file_message(resolved: Path) -> str:
-    """Build a not-found error with directly reusable candidate paths."""
-    message = f"file not found: {model_path(resolved)}"
-    suggestions = similar_entries(resolved, kind="files")
-    if not suggestions:
-        return message
-    rendered = "\n".join(f"- {model_path(candidate)}" for candidate in suggestions)
-    return f"{message}\nSimilar files:\n{rendered}"
+def _path_label(path: Path, cwd: Path) -> str:
+    """Show a path relative to the working directory, absolute outside it."""
+    return display_search_path(path, cwd=cwd)
 
 
-def _truncate_utf8(text: str, max_bytes: int) -> str:
-    if max_bytes <= 0:
-        return ""
-    return text.encode("utf-8")[:max_bytes].decode("utf-8", errors="ignore")
-
-
-def _fit_lines_within_byte_limit(lines: list[str], max_bytes: int) -> tuple[str, int]:
-    if not lines or max_bytes <= 0:
-        return "", 0
-
-    kept_lines: list[str] = []
-    used_bytes = 0
-
-    for line in lines:
-        encoded_line = line.encode("utf-8")
-        if kept_lines and used_bytes + len(encoded_line) > max_bytes:
-            break
-        if not kept_lines and len(encoded_line) > max_bytes:
-            return _truncate_utf8(line, max_bytes), 1
-        if used_bytes + len(encoded_line) > max_bytes:
-            break
-        kept_lines.append(line)
-        used_bytes += len(encoded_line)
-
-    return "".join(kept_lines), len(kept_lines)
-
-
-def _build_read_hint(
-    shown_start: int,
-    shown_end: int,
-    total_lines: int | None,
-    *,
-    byte_limited: bool,
-    continuation_offset: str | None = None,
-) -> str:
-    message = f"[Showing lines {shown_start}-{shown_end}"
-    if total_lines is not None:
-        message += f" of {total_lines}"
-    message += "."
-    if byte_limited:
-        message += " Output truncated at 50 KB."
-    if continuation_offset is not None:
-        message += f" Use offset={continuation_offset} to continue."
-    elif total_lines is None or shown_end < total_lines:
-        message += f" Use offset={shown_end + 1} to continue."
-    return message + "]"
-
-
-def _line_gutter(line: int, character: int = 1) -> str:
-    """Return a display gutter for a full line or an in-line continuation."""
-    if character == 1:
-        return f"{line}{LINE_NUMBER_GUTTER_SEPARATOR} "
-    return f"{line}:{character}{LINE_NUMBER_GUTTER_SEPARATOR} "
-
-
-def _add_line_numbers(lines: list[str], start_line: int, start_character: int = 1) -> list[str]:
-    """Prefix each line with an unpadded ``N| `` reference gutter.
-
-    The gutter is deliberately unpadded: padding to a fixed width is pure token
-    overhead on dense source, while dropping the numbers entirely makes the model
-    hand-count lines and miss by one. One separator space keeps the gutter visually
-    distinct from source that begins with ``|`` or another punctuation character.
-    Each input line keeps its trailing newline (``keepends``); the number and
-    separator go in front, file-absolute from ``start_line``.
-    """
-    return [
-        f"{_line_gutter(start_line + index, start_character if index == 0 else 1)}{line}"
-        for index, line in enumerate(lines)
-    ]
-
-
-def render_text_file(raw: bytes, offset: object = None, limit: object = None) -> str:
-    """Render file bytes as numbered text with offset/limit controls and truncation.
-
-    Text attachments call this same renderer before entering a provider request, so
-    accepting a file through a channel has exactly the same 50 KiB, 2,000-line,
-    and continuation behavior as an explicit ``read`` call.
-    """
-    position = _parse_read_position(offset)
-    max_lines = optional_int(limit, field_name="limit", minimum=1) or DEFAULT_LINE_LIMIT
-
-    if raw.startswith(_UTF8_BOM_BYTES):
-        raw = raw[len(_UTF8_BOM_BYTES) :]
-    decoded = raw.decode("utf-8", errors="replace")
-    return _render_text(
-        decoded,
-        position.line,
-        max_lines,
-        number=True,
-        start_character=position.character,
-    )
-
-
-def _parse_read_position(offset: object) -> _ReadPosition:
-    """Parse a normal line offset or an in-line continuation address."""
-    if isinstance(offset, str) and ":" in offset:
-        parts = offset.split(":")
-        if len(parts) != 2:
-            raise ValueError("offset must be a line number or line:character address")
-        if not parts[0].isdigit():
-            raise ValueError("offset line must be an integer")
-        if not parts[1].isdigit():
-            raise ValueError("offset character must be an integer")
-        line = int(parts[0])
-        character = int(parts[1])
-        if line < 1:
-            raise ValueError("offset line must be >= 1")
-        if character < 1:
-            raise ValueError("offset character must be >= 1")
-        return _ReadPosition(line, character)
-
-    line = optional_int(offset, field_name="offset", minimum=1) or 1
-    return _ReadPosition(line)
-
-
-def _render_text(
-    text: str,
-    start_line: int,
-    max_lines: int,
-    *,
-    number: bool,
-    start_character: int = 1,
-) -> str:
-    """Apply offset/limit, optional line numbering, and truncation safeguards.
-
-    Shared by the literal-file path (``number=True`` adds the ``N| `` gutter) and
-    the extracted-document path (``number=False`` — a rendering of an Office or
-    notebook file is not editable source, so the gutter would only mislead).
-    """
-    all_lines = split_text_lines(text, keepends=True)
-    total_lines = len(all_lines)
-
-    if total_lines == 0:
-        return ""
-
-    start_index = start_line - 1
-    if start_index >= total_lines:
-        return (
-            f"[Offset {start_line} is beyond end of file ({total_lines} lines). Nothing to show.]"
-        )
-    source_line = all_lines[start_index]
-    if start_character > len(source_line):
-        return (
-            f"[Character offset {start_character} is beyond end of line {start_line}. "
-            "Nothing to show.]"
-        )
-
-    selected_lines = all_lines[start_index : start_index + max_lines]
-    selected_lines[0] = selected_lines[0][start_character - 1 :]
-    line_limited = start_index + len(selected_lines) < total_lines
-
-    # Number before any byte fitting so the gutter counts against the 50 KB
-    # budget and the model can cite/patch lines without hand-counting.
-    rendered_lines = (
-        _add_line_numbers(selected_lines, start_line, start_character) if number else selected_lines
-    )
-    output = "".join(rendered_lines)
-    byte_limited = len(output.encode("utf-8")) > MAX_FILE_BYTES
-
-    if not (line_limited or byte_limited):
-        return output
-
-    return _finalize_limited_text(
-        rendered_lines,
-        start_line=start_line,
-        start_character=start_character,
-        total_lines=total_lines,
-        byte_limited=byte_limited,
-        number=number,
-    )
-
-
-def _finalize_limited_text(
-    rendered_lines: list[str],
-    *,
-    start_line: int,
-    start_character: int,
-    total_lines: int | None,
-    byte_limited: bool,
-    number: bool,
-) -> str:
-    """Fit rendered lines and append a continuation hint."""
-    output = "".join(rendered_lines)
-
-    shown_line_count = len(rendered_lines)
-    continuation_offset: str | None = None
-    if byte_limited:
-        long_first_line = len(rendered_lines[0].encode("utf-8")) > MAX_FILE_BYTES
-        provisional_count = max(1, min(len(rendered_lines), shown_line_count))
-        while True:
-            provisional_end = start_line + provisional_count - 1
-            if total_lines is not None:
-                provisional_end = min(total_lines, provisional_end)
-            possible_continuation = (
-                f"{start_line}:{start_character + MAX_FILE_BYTES}" if long_first_line else None
-            )
-            hint = _build_read_hint(
-                start_line,
-                provisional_end,
-                total_lines,
-                byte_limited=True,
-                continuation_offset=possible_continuation,
-            )
-            reserved_bytes = len(hint.encode("utf-8")) + 2
-            available_bytes = max(MAX_FILE_BYTES - reserved_bytes, 0)
-            output, fitted_count = _fit_lines_within_byte_limit(rendered_lines, available_bytes)
-            if fitted_count == provisional_count:
-                shown_line_count = fitted_count
-                first_line_was_cut = (
-                    fitted_count == 1 and len(rendered_lines[0].encode("utf-8")) > available_bytes
-                )
-                if first_line_was_cut:
-                    gutter = _line_gutter(start_line, start_character) if number else ""
-                    shown_source = output[len(gutter) :]
-                    continuation_offset = f"{start_line}:{start_character + len(shown_source)}"
-                break
-            provisional_count = max(1, fitted_count)
-
-    if shown_line_count == 0 and output:
-        shown_line_count = 1
-    shown_start = start_line
-    shown_end = shown_start + max(shown_line_count, 0) - 1
-    if total_lines is not None:
-        shown_end = min(total_lines, shown_end)
-    hint = _build_read_hint(
-        shown_start,
-        shown_end,
-        total_lines,
-        byte_limited=byte_limited,
-        continuation_offset=continuation_offset,
-    )
-
-    return output + ("\n\n" if output and not output.endswith("\n") else "") + hint
-
-
-def _split_stream_fragments(
-    text: str, *, final: bool = False
-) -> tuple[list[tuple[str, bool]], str]:
-    """Split a bounded decoded chunk into line fragments without retaining a long line."""
-    held_carriage_return = ""
-    if not final and text.endswith("\r"):
-        text = text[:-1]
-        held_carriage_return = "\r"
-
-    fragments: list[tuple[str, bool]] = []
-    start = 0
-    for match in TEXT_LINE_BREAK.finditer(text):
-        fragments.append((text[start : match.end()], True))
-        start = match.end()
-    if start < len(text):
-        fragments.append((text[start:], False))
-    return fragments, held_carriage_return
-
-
-def _render_text_path(resolved: Path, arguments: JsonObject) -> str:
-    """Render a local text file with bounded memory and early truncation."""
-    position = _parse_read_position(arguments.get("offset"))
-    max_lines = (
-        optional_int(arguments.get("limit"), field_name="limit", minimum=1) or DEFAULT_LINE_LIMIT
-    )
-    rendered_lines: list[str] = []
-    rendered_bytes = 0
-    source_line = 1
-    source_character = 1
-    completed_source_lines = 0
-    current_source_line_has_content = False
-    target_line_seen = False
-    target_character_reached = False
-    character_offset_beyond_end = False
-    current_selected_line_started = False
-    selected_lines_completed = 0
-    selected_window_complete = False
-    line_limited = False
-    byte_limited = False
-    held_carriage_return = ""
-    first_chunk = True
-
-    def append_bounded(text: str) -> bool:
-        nonlocal rendered_bytes
-        if not text:
-            return True
-        remaining_bytes = MAX_FILE_BYTES + 1 - rendered_bytes
-        if remaining_bytes <= 0:
-            return False
-        kept = _truncate_utf8(text, remaining_bytes)
-        rendered_lines[-1] += kept
-        rendered_bytes += len(kept.encode("utf-8"))
-        return kept == text
-
-    def process_fragment(fragment: str, *, ends_line: bool) -> bool:
-        nonlocal byte_limited
-        nonlocal character_offset_beyond_end
-        nonlocal completed_source_lines
-        nonlocal current_source_line_has_content
-        nonlocal current_selected_line_started
-        nonlocal line_limited
-        nonlocal selected_lines_completed
-        nonlocal selected_window_complete
-        nonlocal source_character
-        nonlocal source_line
-        nonlocal target_character_reached
-        nonlocal target_line_seen
-
-        if not fragment:
-            return True
-        if selected_window_complete:
-            line_limited = True
-            return False
-
-        current_source_line_has_content = True
-        if source_line == position.line:
-            target_line_seen = True
-
-        selected_fragment = ""
-        if source_line >= position.line:
-            required_character = position.character if source_line == position.line else 1
-            skip_characters = max(required_character - source_character, 0)
-            if skip_characters < len(fragment):
-                selected_fragment = fragment[skip_characters:]
-                if source_line == position.line:
-                    target_character_reached = True
-                if not current_selected_line_started:
-                    current_selected_line_started = True
-                    rendered_lines.append(_line_gutter(source_line, required_character))
-                if not append_bounded(selected_fragment) or rendered_bytes > MAX_FILE_BYTES:
-                    byte_limited = True
-                    return False
-
-        source_character += len(fragment)
-        if not ends_line:
-            return True
-
-        if source_line == position.line and not target_character_reached:
-            character_offset_beyond_end = True
-            return False
-        if source_line >= position.line and current_selected_line_started:
-            selected_lines_completed += 1
-            if selected_lines_completed >= max_lines:
-                selected_window_complete = True
-        completed_source_lines += 1
-        source_line += 1
-        source_character = 1
-        current_source_line_has_content = False
-        current_selected_line_started = False
-        return True
-
-    with resolved.open("r", encoding="utf-8", errors="replace", newline="") as handle:
-        while not (line_limited or byte_limited or character_offset_beyond_end):
-            chunk = handle.read(_TEXT_STREAM_CHUNK_CHARACTERS)
-            if not chunk:
-                break
-            if first_chunk:
-                first_chunk = False
-                if chunk.startswith("\ufeff"):
-                    chunk = chunk[1:]
-                    if not chunk:
-                        continue
-            fragments, held_carriage_return = _split_stream_fragments(held_carriage_return + chunk)
-            for fragment, ends_line in fragments:
-                if not process_fragment(fragment, ends_line=ends_line):
-                    break
-
-        if (
-            not (line_limited or byte_limited or character_offset_beyond_end)
-            and held_carriage_return
-        ):
-            process_fragment(held_carriage_return, ends_line=True)
-
-    if character_offset_beyond_end or (target_line_seen and not target_character_reached):
-        return (
-            f"[Character offset {position.character} is beyond end of line {position.line}. "
-            "Nothing to show.]"
-        )
-
-    reached_eof = not (line_limited or byte_limited or character_offset_beyond_end)
-    total_lines = (
-        completed_source_lines + (1 if current_source_line_has_content else 0)
-        if reached_eof
-        else None
-    )
-    if total_lines == 0:
-        return ""
-    if not target_line_seen:
-        return (
-            f"[Offset {position.line} is beyond end of file ({total_lines or 0} lines). "
-            "Nothing to show.]"
-        )
-
-    output = "".join(rendered_lines)
-    if not (line_limited or byte_limited):
-        return output
-    return _finalize_limited_text(
-        rendered_lines,
-        start_line=position.line,
-        start_character=position.character,
-        total_lines=None,
-        byte_limited=byte_limited,
-        number=True,
-    )
+def _call_cwd(context: ToolContext) -> Path:
+    """Return the working directory in the resolved form that tool paths use."""
+    try:
+        return context.effective_cwd.resolve()
+    except (OSError, RuntimeError):
+        return context.effective_cwd
 
 
 def _read_file_bytes_with_limit(resolved: Path, max_bytes: int) -> bytes:
@@ -583,19 +176,26 @@ def make_read_handler(
             resolved = context.resolve_path(path_argument)
         except RuntimeError as error:
             return tool_failure("invalid_path", str(error))
-        displayed_path = model_path(resolved)
+        cwd = _call_cwd(context)
+        label = _path_label(resolved, cwd)
 
         if not resolved.exists():
-            return tool_failure("file_not_found", _missing_file_message(resolved))
+            return tool_failure("file_not_found", missing_file_message(resolved, cwd))
+        if resolved.is_dir():
+            if arguments.get("pattern") is not None:
+                return tool_failure(
+                    "invalid_arguments", _directory_search_message(arguments, label)
+                )
+            return _list_directory(resolved, arguments, label)
         if not resolved.is_file():
-            return tool_failure("not_a_file", f"path is not a file: {displayed_path}")
+            return tool_failure("not_a_file", f"{label} is neither a file nor a directory.")
 
         # Capture the stamp before reading bytes, but record it only after a
         # successful read: an external write landing during the read leaves the
         # stamp older than the new content, so the next full-file write errs toward
         # a (harmless) re-read, while a failed read never counts as seen.
         stamp = file_state.stamp(resolved)
-        result = read_resolved(context, arguments, resolved)
+        result = read_resolved(context, arguments, resolved, label)
         if isinstance(result, _PreparedAudio):
             return replace(result, stamp=stamp)
         if result.get("ok") is True and stamp is not None:
@@ -603,19 +203,31 @@ def make_read_handler(
         return result
 
     def read_resolved(
-        context: ToolContext, arguments: JsonObject, resolved: Path
+        context: ToolContext, arguments: JsonObject, resolved: Path, label: str
     ) -> JsonObject | _PreparedAudio:
-        displayed_path = model_path(resolved)
+        def read_error(error: OSError) -> JsonObject:
+            return tool_failure("file_read_error", f"Failed to read {label}: {error}")
+
         try:
             file_size = resolved.stat().st_size
             with resolved.open("rb") as handle:
                 probe = handle.read(_FILE_PROBE_BYTES)
         except OSError as error:
-            return tool_failure(
-                "file_read_error", f"failed to read file: {displayed_path}: {error}"
-            )
+            return read_error(error)
 
         media_type = sniff_media_type(probe, resolved.name)
+        kind = detect_extractable_document(resolved.name, media_type)
+        filtering = arguments.get("pattern") is not None
+        if (
+            filtering
+            and kind is None
+            and (media_type.startswith(("image/", "audio/", "video/")) or _looks_binary(probe))
+        ):
+            return tool_failure(
+                "invalid_arguments",
+                f"pattern selects text lines, but {label} is not a text file ({media_type}). "
+                f"Read it without pattern.",
+            )
         if media_type.startswith("image/"):
             try:
                 input_limit = _attachment_input_limit(attachment_store, file_size)
@@ -628,9 +240,7 @@ def make_read_handler(
                     f"Attachment size exceeds limit {error.max_bytes}",
                 )
             except OSError as error:
-                return tool_failure(
-                    "file_read_error", f"failed to read file: {displayed_path}: {error}"
-                )
+                return read_error(error)
             return _read_image(context, resolved, raw, media_type)
         if media_type.startswith("audio/"):
             if file_size > speech_max_size_bytes:
@@ -646,16 +256,13 @@ def make_read_handler(
                     f"Audio size exceeds limit {speech_max_size_bytes}",
                 )
             except OSError as error:
-                return tool_failure(
-                    "file_read_error", f"failed to read file: {displayed_path}: {error}"
-                )
+                return read_error(error)
             return _PreparedAudio(resolved=resolved, raw=raw, media_type=media_type)
         if media_type.startswith("video/"):
-            return _read_video(resolved, media_type)
+            return _read_video(label, media_type)
         # PDF/Office/notebook extraction runs before the binary check: pdf/docx/xlsx
         # are full of NUL bytes that would otherwise be dismissed as binary, and
         # ipynb is JSON that would dump as unreadable raw text.
-        kind = detect_extractable_document(resolved.name, media_type)
         if kind is not None:
             try:
                 input_limit = ensure_document_input_size(file_size)
@@ -668,23 +275,29 @@ def make_read_handler(
                         error = limit_error
                 return tool_failure("document_too_large", str(error))
             except OSError as error:
-                return tool_failure(
-                    "file_read_error", f"failed to read file: {displayed_path}: {error}"
-                )
-            extracted = _read_extracted_document(resolved.name, raw, kind, arguments)
+                return read_error(error)
+            extracted = _read_extracted_document(resolved.name, raw, kind, arguments, label)
             if extracted is not None:
                 return extracted
             del raw
         if _looks_binary(probe):
-            return _read_binary_notice(resolved)
+            if filtering:
+                return tool_failure(
+                    "invalid_arguments",
+                    f"pattern selects text lines, but {label} is a binary file. "
+                    "Read it without pattern.",
+                )
+            return _read_binary_notice(label)
         try:
-            content = _render_text_path(resolved, arguments)
+            if filtering:
+                with resolved.open("r", encoding="utf-8", errors="replace", newline="") as text:
+                    content = render_matching_lines(without_bom(text), arguments, label)
+            else:
+                content = render_text_path(resolved, arguments)
         except ValueError as error:
             return tool_failure("invalid_arguments", str(error))
         except OSError as error:
-            return tool_failure(
-                "file_read_error", f"failed to read file: {displayed_path}: {error}"
-            )
+            return read_error(error)
         return tool_success({"content": content})
 
     async def read_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
@@ -705,7 +318,7 @@ def make_read_handler(
 
 
 def _read_extracted_document(
-    name: str, raw: bytes, kind: str, arguments: JsonObject
+    name: str, raw: bytes, kind: str, arguments: JsonObject, label: str
 ) -> JsonObject | None:
     """Return rendered text for a PDF/Office/notebook file, or ``None`` to fall through.
 
@@ -722,8 +335,14 @@ def _read_extracted_document(
     except ExtractionError:
         return None
 
+    header = f"[Extracted text from {name} ({document_label(kind)})]:"
     try:
-        position = _parse_read_position(arguments.get("offset"))
+        if arguments.get("pattern") is not None:
+            lines = split_text_lines(extracted, keepends=True)
+            return tool_success(
+                {"content": f"{header}\n{render_matching_lines(lines, arguments, label)}"}
+            )
+        position = parse_read_position(arguments.get("offset"))
         max_lines = (
             optional_int(arguments.get("limit"), field_name="limit", minimum=1)
             or DEFAULT_LINE_LIMIT
@@ -731,8 +350,7 @@ def _read_extracted_document(
     except ValueError as error:
         return tool_failure("invalid_arguments", str(error))
 
-    header = f"[Extracted text from {name} ({document_label(kind)})]:"
-    body = _render_text(
+    body = render_text(
         extracted,
         position.line,
         max_lines,
@@ -801,34 +419,75 @@ def _looks_binary(raw: bytes) -> bool:
     return b"\x00" in raw[:_BINARY_DETECTION_BYTES]
 
 
-def _read_binary_notice(resolved: Path) -> JsonObject:
+def _read_binary_notice(label: str) -> JsonObject:
     """Return a short notice for a binary file instead of decoding it to garbage."""
-    return tool_success(
-        {
-            "content": (
-                f"[Binary file: {resolved.name} — Path: {model_path(resolved)}]. "
-                "It contains non-text (binary) data and is not shown as text."
-            )
-        }
-    )
+    return tool_success({"content": f"[{label} is a binary file; it is not shown as text.]"})
 
 
-def _read_video(resolved: Path, media_type: str) -> JsonObject:
+def _read_video(label: str, media_type: str) -> JsonObject:
     """Return a path note for video; no provider wire accepts raw video."""
     return tool_success(
-        {
-            "content": (
-                f"[Video: {resolved.name} ({media_type}) — Path: {model_path(resolved)}]. "
-                "This model cannot view video directly."
-            )
-        }
+        {"content": f"[{label} is a video ({media_type}); this model cannot view video.]"}
     )
+
+
+def _list_directory(resolved: Path, arguments: JsonObject, label: str) -> JsonObject:
+    """List a directory's entries; reading a directory never counts as reading a file."""
+    names: list[str] = []
+    try:
+        with os.scandir(resolved) as entries:
+            for entry in entries:
+                try:
+                    is_directory = entry.is_dir()
+                except OSError:
+                    is_directory = False
+                names.append(entry.name + ("/" if is_directory else ""))
+    except OSError as error:
+        return tool_failure("file_read_error", f"Failed to list {label}: {error}")
+    names.sort(key=lambda name: (name.casefold(), name))
+    try:
+        return tool_success({"content": render_directory_listing(names, arguments, label)})
+    except ValueError as error:
+        return tool_failure("invalid_arguments", str(error))
+
+
+def _directory_search_message(arguments: JsonObject, label: str) -> str:
+    """Name the search_files call that finds matching lines across a directory."""
+    call: dict[str, Any] = {"pattern": arguments["pattern"], "path": label}
+    if arguments.get("ignore_case") is True:
+        call["args"] = ["-i"]
+    if arguments.get("context"):
+        call["context"] = arguments["context"]
+    rendered = ", ".join(
+        f"{key}={json.dumps(value, ensure_ascii=False)}" for key, value in call.items()
+    )
+    return (
+        f"{label} is a directory, and read shows the lines of one file. To find matching "
+        f"lines in its files, call search_files({rendered})."
+    )
+
+
+def _normalized_for_display(arguments: Any) -> JsonObject:
+    """Return the arguments the handler would see, or the raw call if they are invalid."""
+    try:
+        normalized = normalize_read_arguments(arguments)
+    except (ToolContractError, ValueError):
+        normalized = arguments
+    return normalized if isinstance(normalized, dict) else {}
+
+
+def _display_parts(arguments: JsonObject) -> list[ToolDisplayPart]:
+    path = _normalized_for_display(arguments).get("path")
+    if not isinstance(path, str) or not path.strip():
+        return []
+    return [ToolDisplayPart(path, kind="path", truncate="start", tooltip="always", copyable=True)]
 
 
 def _read_line_range_facts(
     arguments: JsonObject, _result: JsonObject | None
 ) -> tuple[JsonObject, ...]:
     """Describe an explicitly bounded read without coupling the UI to read arguments."""
+    arguments = _normalized_for_display(arguments)
     if "offset" not in arguments and "limit" not in arguments:
         return ()
 
@@ -875,20 +534,11 @@ def register_read_tool(
         ),
         family="files",
         result_schema={"type": "object", "required": ["content"]},
-        display=ToolDisplay(
-            primary_candidates=(
-                ToolDisplayField(
-                    "path",
-                    kind="path",
-                    truncate="start",
-                    tooltip="always",
-                    copyable=True,
-                ),
-            ),
-            fact_builder=_read_line_range_facts,
-        ),
+        display=ToolDisplay(parts_builder=_display_parts, fact_builder=_read_line_range_facts),
         parallel_safe=True,
         open_input_schema=True,
+        unadvertised_parameters=READ_HIDDEN_PARAMETERS,
+        argument_normalizer=normalize_read_arguments,
     )
 
 

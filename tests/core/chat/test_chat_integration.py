@@ -435,9 +435,8 @@ def test_runtime_prompt_includes_workspace_files_and_filtered_tool_skill_metadat
         assert "# User Profile" in prompt
         assert "No entries yet." in prompt
         assert "- read_file: Read a workspace file." in prompt
-        assert "shell" not in prompt
-        assert "<name>agent-cli</name>" in prompt
-        assert "Delegate coding tasks" in prompt
+        assert "- shell:" not in prompt
+        assert "- agent-cli: Delegate coding tasks" in prompt
         assert "news" not in prompt
         assert tool_definitions == [
             {

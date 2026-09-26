@@ -11,6 +11,7 @@ from core.tools.read import make_read_handler
 from tests.core.tools.apply_patch_helpers import (
     apply,
     context,
+    text,
     update,
 )
 
@@ -168,7 +169,7 @@ def test_complete_read_gutters_recover_without_corrupting_added_lines(tmp_path, 
     result = apply(tmp_path, update(hunk))
     assert result["ok"], result
     assert path.read_bytes() == b"alpha\nnew\nomega\n"
-    assert result["data"]["files"][0]["warnings"]
+    assert "Note: Removed read-output line-number prefixes" in text(result)
 
 
 def test_literal_gutter_shaped_content_wins(tmp_path):
@@ -210,7 +211,7 @@ def test_single_mixed_and_stale_read_gutters_use_unique_current_lines(tmp_path, 
     result = apply(tmp_path, update(hunk))
     assert result["ok"], result
     assert path.read_bytes() == b"alpha\nnew\nomega\n"
-    assert result["data"]["files"][0]["warnings"]
+    assert "Note: Removed read-output line-number prefixes" in text(result)
 
 
 def test_normalized_read_gutters_do_not_resolve_ambiguity_by_number(tmp_path):
@@ -255,7 +256,7 @@ def test_escaped_text_requires_matching_evidence(tmp_path):
     result = apply(tmp_path, update("@@\n alpha\n-\\told\n+\\tnew\n omega"))
     assert result["ok"], result
     assert path.read_bytes() == b"alpha\n\tnew\nomega\n"
-    assert result["data"]["files"][0]["warnings"]
+    assert "Note: Normalized escaped patch text" in text(result)
 
 
 def test_literal_backslashes_are_preserved(tmp_path):
@@ -307,8 +308,32 @@ def test_similarity_never_replaces_a_different_removed_line(tmp_path, before, bo
     result = apply(tmp_path, update("@@\n" + body))
 
     assert result["error"]["code"] == "text_not_found"
-    assert '"candidates": [{"line": 1' in result["error"]["message"]
+    assert "The closest text in the file, lines 1-" in text(result)
     assert path.read_bytes() == before.encode()
+
+
+@pytest.mark.parametrize("hint", ["@@", "@@ import os"])
+def test_a_removed_line_copied_with_a_misspelling_is_applied_and_named(tmp_path, hint):
+    path = tmp_path / "file.py"
+    path.write_bytes(b"import os\n\ndef load(order):\n    return order.reciept_total\n")
+
+    result = apply(
+        tmp_path,
+        update(
+            f"{hint}\n def load(order):\n-    return order.receipt_total\n"
+            "+    return order.receipt_total + order.tax",
+            "file.py",
+        ),
+    )
+
+    assert result["ok"], result
+    assert path.read_bytes() == (
+        b"import os\n\ndef load(order):\n    return order.reciept_total + order.tax\n"
+    )
+    assert (
+        "Line 4 did not match your old text exactly and was edited anyway; it read:     "
+        "return order.reciept_total" in text(result)
+    )
 
 
 def test_similarity_absorbs_context_drift_around_precise_removed_lines(tmp_path):
@@ -426,7 +451,9 @@ def test_hint_may_be_repeated_in_context_and_insert_retry_is_anchored(tmp_path):
     patch = update("@@ section\n+inserted")
     assert apply(tmp_path, patch)["ok"]
     before = path.read_bytes()
-    assert apply(tmp_path, patch)["data"]["already_applied"]
+    retried = apply(tmp_path, patch)
+    assert retried["data"]["status"] == "unchanged"
+    assert "file.txt already contains this change" in text(retried)
     assert path.read_bytes() == before == b"section\ninserted\nnew\ntail\n"
 
 
@@ -436,6 +463,20 @@ def test_mid_file_no_newline_marker_rejects_without_joining_lines(tmp_path):
     result = apply(tmp_path, update("@@\n-old\n+new\n\\ No newline at end of file"))
     assert result["error"]["code"] == "invalid_patch"
     assert path.read_bytes() == b"old\ntail\n"
+
+
+def test_end_of_file_marker_on_lines_elsewhere_is_ignored_and_named(tmp_path):
+    path = tmp_path / "file.txt"
+    path.write_bytes(b"first\nold\ntail\n")
+
+    result = apply(tmp_path, update("@@\n first\n-old\n+new\n*** End of File"))
+
+    assert result["ok"], result
+    assert path.read_bytes() == b"first\nnew\ntail\n"
+    assert (
+        "The lines before *** End of File are not at the end of the file; the hunk was "
+        "applied where they are." in text(result)
+    )
 
 
 @pytest.mark.parametrize(

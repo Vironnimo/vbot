@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import stat
 from collections.abc import Iterator
 from contextlib import closing, contextmanager
 from pathlib import Path
@@ -277,6 +278,41 @@ def test_install_registers_every_database_and_moves_replaced_files_aside(
     assert agent["tool_access"]["allowed"] == ["read", "search_files"]
     connections = data_dir / "extension-data/mcp/connections.json"
     assert json.loads(connections.read_text(encoding="utf-8"))["connections"][0]["id"] == "docs"
+
+
+@pytest.mark.parametrize("mode", [0o600, 0o400])
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_conversion_preserves_oauth_and_relocated_document_permissions(
+    data_dir: Path, mode: int, dry_run: bool
+) -> None:
+    _write(data_dir, "settings.json", {})
+    documents = {
+        "oauth/github-copilot-oauth.json": {"access_token": "secret-token"},
+        "mcp/connections.json": [],
+    }
+    originals = {}
+    for relative, content in documents.items():
+        _write(data_dir, relative, content)
+        path = data_dir / relative
+        path.chmod(mode)
+        originals[relative] = (path.read_bytes(), stat.S_IMODE(path.stat().st_mode))
+
+    report = convert_data_directory(data_dir, dry_run=dry_run)
+
+    assert report["result"] == ("verified" if dry_run else "installed")
+    assert not (data_dir / "generation-1-staging").exists()
+    assert read_maintenance(data_dir) is None
+    for relative, (original_bytes, original_mode) in originals.items():
+        if dry_run:
+            untouched = data_dir / relative
+        else:
+            untouched = data_dir / "pre-generation-1" / relative
+            target = f"extension-data/{relative}" if relative.startswith("mcp/") else relative
+            installed = data_dir / target
+            assert stat.S_IMODE(installed.stat().st_mode) == original_mode
+            assert json.loads(installed.read_text(encoding="utf-8"))["format_version"] == 1
+        assert untouched.read_bytes() == original_bytes
+        assert stat.S_IMODE(untouched.stat().st_mode) == original_mode
 
 
 def test_the_cli_prints_a_summary_and_writes_the_report(

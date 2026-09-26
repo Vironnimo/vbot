@@ -11,11 +11,12 @@ from core.model_tasks.artifacts import GeneratedMediaArtifact, write_generated_m
 from core.model_tasks.constants import TASK_VIDEO_GENERATION
 from core.model_tasks.image import load_image_inputs
 from core.model_tasks.model_tasks import TaskModelTargetRef, model_supports_task
-from core.model_tasks.task_execution import TaskBindingResolver
+from core.model_tasks.task_execution import TaskBindingResolver, TaskUsage, TaskUsageContext
 from core.model_tasks.video_providers import ProviderVideoClient
 from core.model_tasks.video_types import VideoGenerationResult
 from core.providers.errors import ProviderOutcomeUnknownError
 from core.providers.task_client import TaskClientRuntime
+from core.usage import UsageRecorder
 from core.utils.errors import TaskError, VBotError
 
 JsonObject = dict[str, Any]
@@ -51,9 +52,16 @@ class VideoOutcomeUnknownError(VideoExecutionError):
 class VideoService:
     """Execute ``video_generation`` through its configured Task Model."""
 
-    def __init__(self, model_tasks: Any, runtime: TaskClientRuntime) -> None:
+    def __init__(
+        self,
+        model_tasks: Any,
+        runtime: TaskClientRuntime,
+        *,
+        usage_recorder: UsageRecorder | None = None,
+    ) -> None:
         self._model_tasks = model_tasks
         self._runtime = runtime
+        self._usage_recorder = usage_recorder
         self._resolver = TaskBindingResolver(
             model_tasks,
             configuration_error=VideoConfigurationError,
@@ -81,6 +89,7 @@ class VideoService:
         *,
         call_options: Mapping[str, Any] | None = None,
         frame_paths: Mapping[str, str | Path] | None = None,
+        usage_context: TaskUsageContext | None = None,
     ) -> VideoGenerationResult:
         normalized_prompt = prompt.strip() if isinstance(prompt, str) else ""
         if not normalized_prompt:
@@ -97,7 +106,13 @@ class VideoService:
         merged_options = {**options, **_validated_video_call_options(model, call_options or {})}
         frames = await self._load_frames(model, frame_paths or {})
 
-        client = ProviderVideoClient.from_runtime(self._runtime, target_ref)
+        client = ProviderVideoClient.from_runtime(
+            self._runtime,
+            target_ref,
+            usage_observer=TaskUsage(
+                self._usage_recorder, TASK_VIDEO_GENERATION, target_ref, context=usage_context
+            ),
+        )
         try:
             return await client.generate(
                 normalized_prompt,
@@ -120,6 +135,7 @@ class VideoService:
         output_dir: str | Path,
         call_options: Mapping[str, Any] | None = None,
         frame_paths: Mapping[str, str | Path] | None = None,
+        usage_context: TaskUsageContext | None = None,
     ) -> GeneratedMediaArtifact:
         """Generate one Video and persist it in the caller-owned directory."""
 
@@ -127,6 +143,7 @@ class VideoService:
             prompt,
             call_options=call_options,
             frame_paths=frame_paths,
+            usage_context=usage_context,
         )
         return write_generated_media_artifact(
             result.data,

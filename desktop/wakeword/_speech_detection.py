@@ -1,28 +1,46 @@
-"""Speech detection."""
+"""Speech detection: the neural speech detector, its fail-open WebRTC fallback, and
+the delayed :class:`SpeechGate` for wakeword scores.
+
+Every consumer (the detection gate, command endpointing) creates its own
+:class:`SpeechDetector` because the model keeps per-stream state. All audio is
+16 kHz mono PCM16.
+"""
 
 from __future__ import annotations
 
+import logging
 import os
+from collections import deque
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
-from desktop.wakeword._audio_capture import (
-    CapturedAudioFrame,
-)
-from desktop.wakeword._worker_constants import (
-    _DETECTION_VAD_FRAME_BYTES,
-    _DETECTION_VAD_MIN_SPEECH_FRAMES,
-    _SAMPLE_RATE,
-    _SPEECH_PROB_NEG_THRESHOLD,
-    _SPEECH_PROB_THRESHOLD,
-    _SPEECH_VAD_CONTEXT_SAMPLES,
-    _SPEECH_VAD_HOP_SAMPLES,
-    _SPEECH_VAD_SAMPLE_RATE,
-    _VAD_MODE,
-    logger,
-)
+logger = logging.getLogger("vbot.desktop.wakeword.speech_detection")
+
+SPEECH_SAMPLE_RATE = 16000
+"""Rate of all audio this module judges."""
+
+SPEECH_HOP_SAMPLES = 512
+"""One neural detector hop (32 ms), the recording endpointing frame size."""
+
+# Silero v5 consumes strict 512-sample hops at 16 kHz with a 64-sample leading
+# context; the detector buffers partial hops for callers feeding other sizes.
+_SPEECH_VAD_CONTEXT_SAMPLES = 64
+_SPEECH_PROB_THRESHOLD = 0.5  # Silero's canonical speech threshold
+_SPEECH_PROB_NEG_THRESHOLD = 0.35  # exit threshold (threshold - 0.15)
+_VAD_MODE = 1  # moderate WebRTC aggressiveness for the fallback
+
+# The WebRTC fallback judges 10 ms slices (it accepts only 10, 20 or 30 ms
+# frames); two speech slices (20 ms) count as speech so isolated blips cannot,
+# while real speech beginning mid-frame still passes.
+_FALLBACK_SLICE_BYTES = int(SPEECH_SAMPLE_RATE * 0.010) * 2  # 320 bytes
+_FALLBACK_MIN_SPEECH_SLICES = 2
+
+# Upstream openWakeWord gates a chunk's scores on the speech decisions of the
+# chunks 4 to 6 before it (0.32-0.56 s earlier): the heads peak after the phrase.
+_GATE_NEAREST_CHUNK = 4
+_GATE_FARTHEST_CHUNK = 6
 
 
 class SpeechDetector:
@@ -91,7 +109,7 @@ class SpeechDetector:
         buffered ``probability`` path instead.
         """
         samples = np.frombuffer(pcm16, dtype=np.int16).astype(np.float32) / 32768.0
-        if len(samples) == _SPEECH_VAD_HOP_SAMPLES:
+        if len(samples) == SPEECH_HOP_SAMPLES:
             probability = self._score_window(np.concatenate([self._context, samples]))
         else:
             probability = self.probability(samples)
@@ -121,11 +139,11 @@ class SpeechDetector:
         buffered = np.concatenate([self._pending, samples_16k])
         max_probability = 0.0
         consumed = 0
-        while consumed + _SPEECH_VAD_HOP_SAMPLES <= len(buffered):
-            hop = buffered[consumed : consumed + _SPEECH_VAD_HOP_SAMPLES]
+        while consumed + SPEECH_HOP_SAMPLES <= len(buffered):
+            hop = buffered[consumed : consumed + SPEECH_HOP_SAMPLES]
             probability = self._score_window(np.concatenate([self._context, hop]))
             max_probability = max(max_probability, probability)
-            consumed += _SPEECH_VAD_HOP_SAMPLES
+            consumed += SPEECH_HOP_SAMPLES
         self._pending = np.array(buffered[consumed:], dtype=np.float32)
         return max_probability
 
@@ -136,7 +154,7 @@ class SpeechDetector:
             {
                 "input": window.reshape(1, -1).astype(np.float32),
                 "state": self._state,
-                "sr": np.array(_SPEECH_VAD_SAMPLE_RATE, dtype=np.int64),
+                "sr": np.array(SPEECH_SAMPLE_RATE, dtype=np.int64),
             },
         )
         self._state = np.asarray(state, dtype=np.float32)
@@ -145,57 +163,45 @@ class SpeechDetector:
         return probability
 
 
-def _create_recording_fallback_vad() -> Any | None:
-    """Create the legacy WebRTC VAD used when the neural detector is absent."""
+def create_fallback_vad() -> Any | None:
+    """Create the WebRTC VAD used when the neural detector is absent, or ``None``.
+
+    A missing VAD never mutes Voice: speech decisions without any detector
+    fail open.
+    """
     try:
         import webrtcvad  # type: ignore[import-untyped]
 
         return webrtcvad.Vad(_VAD_MODE)
     except Exception:
-        logger.warning("WebRTC fallback VAD unavailable", exc_info=True)
+        logger.warning("WebRTC fallback VAD unavailable; speech decisions fail open", exc_info=True)
         return None
 
 
-def _frame_is_speech(
-    frame: CapturedAudioFrame,
+def frame_is_speech(
+    pcm16: bytes,
     detector: SpeechDetector | None,
     fallback_vad: Any | None,
 ) -> bool:
-    """Decide whether one 30 ms frame carries speech, with a fail-open bias.
+    """Decide whether one 32 ms (512-sample) frame carries speech, with a fail-open bias.
 
-    The neural detector is authoritative when present. Without it (or on an
-    unexpected scoring error) the WebRTC fallback decides; a totally unavailable
-    stack counts frames as speech so a technical failure can never mute
-    recording — the worst case is today's noise-fragile behavior.
+    The neural detector is authoritative when present (with hysteresis across
+    frames). Without it (or on an unexpected scoring error) the WebRTC
+    fallback decides on the frame's 10 ms slices (see
+    :func:`_webrtc_contains_speech`); a totally unavailable stack counts frames
+    as speech so a technical failure can never mute recording.
     """
     if detector is not None:
         try:
-            return detector.is_speech(frame.detection_pcm16)
+            return detector.is_speech(pcm16)
         except Exception:
             logger.warning("Neural speech scoring failed; using WebRTC fallback", exc_info=True)
     if fallback_vad is None:
         return True
-    try:
-        verdict: bool = bool(fallback_vad.is_speech(frame.detection_pcm16, _SAMPLE_RATE))
-    except Exception:
-        return True
-    return verdict
+    return _webrtc_contains_speech(pcm16, fallback_vad)
 
 
-def _create_detection_vad() -> Any | None:
-    """Create the VAD that gates detection scores, or None when unavailable."""
-    try:
-        import webrtcvad  # type: ignore[import-untyped]
-
-        return webrtcvad.Vad(_VAD_MODE)
-    except Exception:
-        # A missing or broken VAD must not silently disable wake word
-        # detection — the gate fails open and scores stay ungated.
-        logger.warning("Detection VAD unavailable; wakeword scores stay ungated", exc_info=True)
-        return None
-
-
-def _chunk_contains_speech(
+def chunk_contains_speech(
     detection_pcm16: bytes,
     speech_detector: SpeechDetector | None,
     fallback_vad: Any | None,
@@ -204,29 +210,72 @@ def _chunk_contains_speech(
 
     Prefers the neural speech detector: ambient noise must not open the gate,
     or wakeword scores would accumulate toward false activations in wind and
-    rain. Falls back to the legacy WebRTC VAD when no neural detector loaded,
-    keeping the previous 20 ms speech-slices rule. Both paths fail open — the
-    gate can never turn into an accidental mute.
+    rain. Falls back to the WebRTC VAD when no neural detector loaded. Both
+    paths fail open: the gate can never turn into an accidental mute.
     """
     if speech_detector is not None:
         try:
             return speech_detector.speech_probability(detection_pcm16) >= _SPEECH_PROB_THRESHOLD
         except Exception:
             logger.warning("Neural speech scoring failed; using WebRTC fallback", exc_info=True)
-    if not fallback_vad or len(detection_pcm16) < _DETECTION_VAD_FRAME_BYTES:
+    if not fallback_vad:
         return True
-    speech_frames = 0
-    frame_count = len(detection_pcm16) // _DETECTION_VAD_FRAME_BYTES
-    for frame_index in range(frame_count):
-        offset = frame_index * _DETECTION_VAD_FRAME_BYTES
+    return _webrtc_contains_speech(detection_pcm16, fallback_vad)
+
+
+class SpeechGate:
+    """Decides per 80 ms detection chunk whether its wakeword scores count.
+
+    Mirrors upstream openWakeWord's VAD threshold: a chunk's scores count when
+    any of the chunks 4 to 6 before it carried speech (see
+    :func:`chunk_contains_speech`), because the heads score a phrase highest
+    0.2-0.5 s after it ended, when the current chunk is already silent. Like
+    upstream, the gate stays closed for the first four chunks after creation or
+    :meth:`reset`, and the fifth and sixth consult the shorter history they have.
+    Without any speech detector the gate is open, as upstream without VAD.
+    """
+
+    def __init__(self, speech_detector: SpeechDetector | None, fallback_vad: Any | None) -> None:
+        self._detector = speech_detector
+        self._fallback_vad = fallback_vad
+        self._speech: deque[bool] = deque(maxlen=_GATE_FARTHEST_CHUNK + 1)
+
+    def admits(self, detection_pcm16: bytes) -> bool:
+        """Record this chunk's speech decision and return whether its scores count."""
+        if self._detector is None and self._fallback_vad is None:
+            return True
+        self._speech.append(
+            chunk_contains_speech(detection_pcm16, self._detector, self._fallback_vad)
+        )
+        return any(list(self._speech)[:-_GATE_NEAREST_CHUNK])
+
+    def reset(self) -> None:
+        """Forget the speech history, e.g. when the audio around a capture gap does not connect."""
+        self._speech.clear()
+        if self._detector is not None:
+            self._detector.reset()
+
+
+def _webrtc_contains_speech(pcm16: bytes, vad: Any) -> bool:
+    """Whether WebRTC VAD hears speech in at least two 10 ms slices of 16 kHz PCM16.
+
+    WebRTC VAD accepts only 10, 20 or 30 ms frames, so the audio is judged in
+    10 ms slices and a shorter trailing remainder is ignored; audio with a
+    single slice needs that one. Fails open: audio shorter than one slice or a
+    VAD error counts as speech.
+    """
+    slice_count = len(pcm16) // _FALLBACK_SLICE_BYTES
+    if slice_count == 0:
+        return True
+    required_slices = min(_FALLBACK_MIN_SPEECH_SLICES, slice_count)
+    speech_slices = 0
+    for slice_index in range(slice_count):
+        offset = slice_index * _FALLBACK_SLICE_BYTES
         try:
-            if fallback_vad.is_speech(
-                detection_pcm16[offset : offset + _DETECTION_VAD_FRAME_BYTES],
-                _SAMPLE_RATE,
-            ):
-                speech_frames += 1
+            if vad.is_speech(pcm16[offset : offset + _FALLBACK_SLICE_BYTES], SPEECH_SAMPLE_RATE):
+                speech_slices += 1
         except Exception:
             return True
-        if speech_frames >= _DETECTION_VAD_MIN_SPEECH_FRAMES:
+        if speech_slices >= required_slices:
             return True
     return False

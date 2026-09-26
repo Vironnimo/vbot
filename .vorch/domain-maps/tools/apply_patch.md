@@ -1,8 +1,9 @@
 # Apply Patch Tool
 
-Applies ordered V4A file operations. It replaces the archived `edit` and `write` Tools (see `edit.md` and `write.md`).
+Applies ordered V4A file operations. It replaces the archived `edit` and `write` Tools (see `edit.md` and `write.md`)
+and also runs calls shaped for other harnesses' edit/write Tools.
 Add File creation-or-replacement is a vBot extension to the V4A-style interface.
-`core/tools/apply_patch.py` owns the in-memory plan, filesystem execution, results, and display metadata. Its internal `_patch_syntax.py` owns V4A parsing and parsed operation values; `_patch_hunks.py` owns matching and applying one hunk to current text (including patch recoveries); `_patch_entries.py` owns entry snapshots, Delete/Move entry resolution, and entry renames; `_change_preview.py` owns bounded before/after previews.
+`core/tools/apply_patch.py` owns the in-memory plan, filesystem execution, and display metadata. Its internal `_patch_requests.py` turns other harnesses' argument shapes into canonical fields and parsed operations; `_patch_syntax.py` owns parsing (V4A, unified/git diffs, SEARCH/REPLACE blocks) and parsed operation values; `_patch_hunks.py` owns matching and applying one hunk or replacement to current text (including patch recoveries); `_patch_entries.py` owns entry snapshots, Delete/Move entry resolution, and entry renames; `_patch_report.py` owns the Model-facing result text; `_change_preview.py` owns bounded preview regions.
 
 ## Contract
 
@@ -11,17 +12,43 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   Provider-neutral function Tool, not a Provider-native patch operation. The
   open model-facing schema's parameter list is enforced at dispatch: unknown
   arguments fail before the handler.
-- The owner-selected argument repair accepts `input` as the patch-text alias,
-  ordinary field formatting and shared call wrappers. Equal aliases coalesce;
-  conflicting aliases (including placeholder text) and unsupported fields fail
-  before mutation. Patch contents remain literal. The canonical schema stays `patch`.
-- The definition states that a patch can contain one or more edits across one or more
-  files, without prescribing how many to combine. One example combines three replacement/insertion
-  edits in two files. Each text edit supplies its changed lines and locating context
-  together; a context-only call cannot select a location for a later call.
-  Further guidance covers Add/Delete/Move headers, insertion-after and EOF targeting.
-  Detailed continuation guidance belongs in
-  results; matching errors distinguish missing/ambiguous context hints from hunk text.
+- The owner-selected argument repair (`normalize_patch_arguments`) accepts patch-text
+  aliases (`input`, `patch_text`, `diff`, ...), ordinary field formatting and shared
+  call wrappers. Equal aliases coalesce; conflicting aliases (including placeholder
+  text) and unsupported fields fail before mutation. Patch contents remain literal.
+  The advertised schema stays `patch` only.
+- Other harnesses' shapes run when they name one exact change. Unadvertised root
+  fields (`PATCH_HIDDEN_PARAMETERS`: `path`, `old_string`, `new_string`,
+  `replace_all`, `expected_replacements`, `edits`, `content`, `insert_line`) are
+  validated but never offered; spelling aliases match ignoring case, `_`, `-` and
+  spaces (`file_path`, `filePath`, `old_str`, `file_text`, ...). Shapes: Claude Code
+  Edit/MultiEdit/Write, Gemini `replace` (`expected_replacements`) and `write_file`,
+  text-editor `command` `str_replace`/`create`/`insert` (`view` and `undo_edit` fail
+  naming the next call), Hermes `mode` replace/patch, and `path` plus a headerless
+  patch body. A single edit travels as an `edits` item and empty `content` as an
+  empty Add File patch, because shared contract normalization drops empty
+  unadvertised root values (`_carry_empty_text`). Remark fields (`explanation`,
+  `instructions`, `description`, Roo's `line_count`; any spelling) are dropped, and
+  so are switches while `false` (Windsurf `EmptyFile`, Roo `use_regex`/`ignore_case`,
+  MCP filesystem `dryRun`). Turned on, each stays an unknown parameter, except
+  `EmptyFile: true` without content, which creates an empty file. Windsurf
+  `replace_file_content` chunks (`ReplacementChunks` of `TargetContent`/
+  `ReplacementContent`/`AllowMultiple`) run as `edits`.
+  Two kinds of change in one call, a `path` that
+  contradicts the patch's file, incomplete old/new pairs and Cursor `code_edit`
+  (placeholder comments leave the change open) fail before any effect.
+  `old_string` replacements match precisely, else as a copy with errors
+  (`copy_match`, below; never with `replace_all` or an expected count); an empty
+  `old_string` creates a file or fills an empty one and fails with `file_exists`
+  otherwise. `patch_targets(arguments)` lists every named path for callers that
+  vet targets first (the provider probe).
+- The description says one call can change several places in several files, in
+  order, and that successful changes stay applied when another fails. The `patch`
+  parameter carries one example (Update with an `@@` hint, Add, Delete, Move File)
+  and the rules for `-`/`+`/space lines, `@@` text, insertion-only blocks and EOF
+  appends, Add File replacement and path resolution. Other harnesses' fields are
+  never described. Detailed continuation guidance belongs in results; matching
+  errors distinguish missing/ambiguous context hints from hunk text.
 - Add, Update, Delete, standalone `Move File: source -> destination`, and
   Update plus `Move to: destination` are supported. Paths use ordinary
   `ToolContext.resolve_path` semantics: cwd-relative or absolute, with resolved
@@ -32,8 +59,8 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   move destination, even a dangling one, is an existing destination. Link moves
   and case-only renames (the same entry under another spelling on Windows) use
   one `os.rename` instead of copy-then-delete; relative link targets are not
-  rewritten. Their `files` entries report the destination addition and source
-  deletion; link entries carry no preview (`test__patch_entries.py`).
+  rewritten. They read as `Moved A to B.`; an Update through a link reports the
+  link target's path (`test__patch_entries.py`).
 - The complete patch structure is parsed before mutation; unparseable framing or
   operation syntax rejects the call without writes. Once parsed, each Update
   hunk and each Add/Delete/Move is attempted in order against actual current
@@ -42,42 +69,64 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   Parent/file overlaps reject the affected entries, not unrelated files. Add
   creates or fully replaces files. Existing targets require a current Session read
   stamp; missing/stale stamps fail with `file_not_read`/`file_modified_since_read`.
-  An identical Add is a verified no-op and does not require a prior read.
+  When the file is text of at most 16 KB and 400 lines and unchanged since the
+  snapshot, that failure shows its whole numbered content and stamps it, so the
+  same call succeeds when sent again; otherwise it names the `read` call.
+  An identical Add is a verified no-op and does not require a prior read; an
+  existing file that is empty or whitespace-only (after a BOM) needs no read.
   Empty Add bodies produce empty files; `\ No newline at end of file` suppresses
   the trailing newline. Replacement preserves existing line endings, UTF-8 BOM,
   and permission bits. Move destinations still reject different existing files.
 - Failed creates/moves and uncertain writes block later entries touching those
-  paths for this call. A failed hunk in Update plus Move leaves successful hunks
-  applied at the source and skips that operation's move. Other files continue.
-- Success data includes ordered entry outcomes with 1-based operation/hunk
-  coordinates, resolved paths, and status; counts distinguish successful entries
-  from failed/skipped/partially committed entries. Mixed outcomes return
-  `status: partial` with guidance to retry only unfinished entries. All-failed
-  calls use the ordinary failure envelope, retaining indexed errors/candidates
-  in its message; no applied effects are hidden behind a failure envelope.
-- `files` reports net completed file effects once per path, including bounded
-  read-compatible previews with neighboring lines, first/last regions, long-line
-  windows around changed characters, and omission metadata. Moves appear as
-  destination addition and source deletion; the entry outcome retains the move
-  relationship. Syntax warnings compare the initial and final Tool-written text,
-  avoiding warnings caused only by intermediate hunks. A created or fully replaced
-  file reports any final syntax error, even when the original was already invalid.
-- `no_change` means zero net file effects, including cancelling edits.
-  `already_applied` is emitted only when every entry was a verified already-present
-  no-op. It never substitutes for failed or uncertain operations.
+  paths for this call ("was not tried because an earlier change ... did not
+  complete"). A failed hunk in Update plus Move leaves successful hunks applied at
+  the source and skips that operation's move with its own message (the file keeps
+  its name). Other files continue.
+- Results are plain text: success data is `{status, content}` (result schema
+  requires both), `status` one of `applied`, `partial`, `unchanged`. Paths show
+  relative to the call's cwd when inside it (`display_search_path`). Each file's
+  net effect reads once: `Created X (N lines).`, `Replaced the content of X (...)`,
+  `Deleted X.`, `Moved A to B.`, or `Updated X:` / `Updated A and moved it to B:`
+  followed by the changed regions as they are now with `read`-style gutters
+  (touching regions merge; more than two keep first and last plus an omission
+  line; long lines show a window with an `N:C|` gutter). Notes (recoveries,
+  metadata drift) and syntax warnings follow as `Note:` / `Warning:` lines. Syntax
+  warnings compare the initial and final Tool-written text; a created or fully
+  replaced file reports any final syntax error, even when the original was invalid.
+- Mixed outcomes return `status: partial`, led by counts (`N of M changes
+  applied; K did not.`, or `fully applied; K only in part` when a write was
+  incomplete) and the instruction to resend only unfinished changes; each failure
+  follows as `Failed:`/`Skipped:`/`Incomplete:` with its `where` (path plus
+  `hunk N`/`edit N` when several). All-failed calls use the ordinary failure
+  envelope (`all_changes_failed` for several) with the same failure text and
+  `No file was changed.`; no applied effect hides behind a failure envelope.
+- `unchanged` covers verified no-ops (`already has this content`, `already
+  contains this change`, `already has that name`, identical old/new text) and
+  changes that cancel out (`cancel each other out`). It never substitutes for
+  failed or uncertain operations. WebUI reads only `status === 'partial'`.
 
 ## Matching and recovery
 
 - Canonical framing is `*** Begin Patch` / `*** End Patch`; one enclosing
-  Markdown patch/diff fence, repeated leading Begin markers, omitted framing,
-  and successive frames (with or without another Begin before a file header)
-  are tolerated. Every frame is parsed before mutation. Body line prefixes retain
-  their meaning even when content spells a patch marker.
+  Markdown fence (any info string), repeated Begin markers, a Begin marker between
+  operations (it cannot be `+` content, so it only starts a frame), omitted
+  framing, and successive frames are tolerated. Every frame is parsed before
+  mutation. Body line prefixes retain their meaning even when content spells a
+  patch marker. Headers match case-insensitively with synonyms (Add/Create/New,
+  Update/Edit/Modify, Delete/Remove, Move/Rename); quoted or backticked paths are
+  unquoted. A header repeated just before Begin Patch, and identical adjacent
+  Update headers before a body, coalesce; a different empty Update target is not
+  discarded (`empty_update`).
   Missing context prefixes and omitted `@@` are accepted; unknown operation
   headers, unframed prose, and body text after End Patch without a new file header
-  are rejected. Identical adjacent Update headers before a body coalesce; a
-  different empty Update target is not discarded.
-  Explicit `@@` hunks following Move File use Update-plus-Move semantics.
+  are rejected. Explicit `@@` hunks following Move File use Update-plus-Move semantics.
+- Format selection (`_parse`): any V4A header selects V4A; otherwise a `---`/`+++`
+  pair or `diff --git` before the first `@@` selects unified diff (git `a/`/`b/`
+  prefixes, `/dev/null` add/delete, `rename from`/`rename to` as Move, binary
+  diffs rejected, hunk counts only gate `---`/`+++` detection); otherwise
+  SEARCH/REPLACE blocks (Aider filename line, Cline `------- SEARCH`/`+++++++
+  REPLACE`, Roo `:start_line:`; an empty SEARCH creates a file only if absent or
+  empty); otherwise a headerless body updates the `path` field's file.
 - Add bodies tolerate missing `+` prefixes, including blank lines, preserving the
   entire unprefixed line and its indentation. A bare opening `@@` is tolerated.
   Unprefixed removals, context hints and later hunk delimiters remain invalid;
@@ -88,37 +137,100 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
 - `@@ context` hints select successive unique whole lines at the hunk's section.
   The final hint may also appear as the first context/removal line. Multiple
   hints can narrow a section. Numeric unified-diff headers are advisory;
-  content remains authoritative. `*** End of File` restricts matching to EOF.
+  content remains authoritative. `*** End of File` restricts matching to EOF;
+  when a hunk with context or removed lines fails there, it is retried without
+  the marker and, if that places it, applied with a warning naming the marker.
   Addition-only hunks insert after a hint or append without a hint; exact
   adjacent content at a hint makes repeated nonblank insertions no-ops.
   Unanchored appends always append because an existing suffix cannot distinguish
   a retry from an intentional repeated line.
-- Match errors return bounded raw candidate excerpts with starting file lines.
-  Missing targets use similarity-ranked diagnostics; ambiguity reports the
-  winning match's actual locations (including section offsets), not guessed
-  alternatives. These excerpts never authorize a write. The missing-target
-  guidance points at those excerpts only when the result carries any, and
-  otherwise tells the Model to read the file.
-- After any text-entry failure on a path, remaining hunks on that path allow
-  only unique precise/normalized matches, preventing approximate matching from
-  silently satisfying a failed earlier precondition. Other files retain normal
-  tolerance.
-- `fuzzy_match.replace_fuzzy` remains the matching owner. Patch-only options
-  require whole-line matches, permit precise-only retry checks, and constrain
-  EOF. The matcher retains its default substring mode for direct callers. Precise matches win;
+- Match errors show bounded candidate excerpts with `read`-style gutters
+  (`The closest text in the file, lines A-B:`); touching or overlapping excerpts
+  merge. Missing targets use similarity-ranked diagnostics plus `First difference,
+  line N: the file has '...' where the patch has '...'` (`where old_string
+  has` for `old_string` edits), and note when the new
+  text already occurs (a change made earlier; not when `old_string` contains
+  `new_string`, as after a deletion); without candidates the text names
+  the `read` call. Ambiguity reports the winning match's actual locations
+  (including section offsets) under `Where it occurs:`, not guessed alternatives.
+  An `expected_replacements` mismatch fails with `occurrence_mismatch`. These
+  excerpts never authorize a write.
+- After any text-entry failure on a path, remaining hunks and `old_string` edits
+  on that path allow only unique precise matches (no `copy_match`), preventing
+  tolerance from silently satisfying a failed earlier precondition. Other files
+  retain normal tolerance.
+- `fuzzy_match.replace_fuzzy` owns precise matching: exact, normalized (newline,
+  Unicode, typography), line-trimmed, and whitespace-normalized, in that order.
+  Patch-only options require whole-line matches and constrain EOF. The matcher
+  retains its default substring mode for direct callers. Precise matches win;
   ambiguity at a winning strategy never falls through to a looser strategy.
   Ambiguity counts every occurrence, including overlapping ones (repeated
   closing-brace lines) and ones following a filtered partial occurrence, for
   hunks and `@@` anchors alike; `replace_all` still replaces leftmost
   non-overlapping spans.
 - Newline/Unicode/typography/whitespace/indentation differences are supported
-  for every hunk line. The bounded block-anchor and context-similarity
-  strategies may absorb differences only in context lines: each removed (`-`)
-  line must still equal its actual line up to those normalizations (user
-  decision). Otherwise the hunk fails with `text_not_found` and candidate
-  excerpts; similar candidates failing this rule are discarded before the
-  ambiguity check (`replace_fuzzy(required_lines=...)`). Only changed lines are
-  emitted from the replacement; context lines keep their actual original bytes.
+  for every hunk line. Old text copied with other errors is applied whenever the
+  passage is clearly identified, with stricter evidence for shorter text (user
+  decision 2026-09-25). `core/tools/copy_match.py` owns this for `apply_patch`
+  hunks and `old_string` edits, `skill_manage` patches and Swarm Wiki edits; it
+  runs only after every precise attempt and the already-applied check missed, and
+  not when the new text is already present. Where (location), from the number W
+  of correctly copied words: below 3 the copy is exact up to spacing; from 3 it
+  may misspell one word per 3 correct words, and a kept (context) line may lack
+  or add words or signs, one per 2 correct words; from 12 it may also differ
+  otherwise, one difference per 4 correct words, but never where either side of
+  a difference is an identifier (underscore, digit, or inner capital: another
+  function or variable). Exactly copied first and last lines (3+ lines, 2+ words
+  each) also place a passage around similar lines (SequenceMatcher ratio >= 0.5,
+  or 0.7 when the anchor pair repeats). Each line keeps its place: a kept line
+  must hold at least half of its file line's words, and half of its words and
+  signs together (a blank file line holds none; counting words keeps shared
+  markup such as `##` from making another heading look right), and extra words
+  that continue the line above or below mark a copy joined across a line break
+  (a left-out blank line or wrapped line); such a passage refuses the edit
+  instead of taking it one line off (Session replay 2026-09-26: a block landed
+  after its heading, a new list item was indented). For a kept line only a
+  neighbor outside the passage counts: words moved across a break inside the
+  passage (a rewrapped comment) leave the kept line as the file has it; a
+  written line still counts neighbors inside, since its new text could drop or
+  repeat the moved words. A misspelling is a word of
+  4+ characters within one edit (two from 8 characters, case-insensitive,
+  adjacent swaps count once) of the file's word, with the same digits, that
+  occurs nowhere in the file. Some differences never matter: a hyphen (or two)
+  for an em dash, a lone backslash only one side holds, and zero-width
+  characters (U+200B-U+200D, U+2060, U+FEFF). They are neither correct words
+  nor differences, and kept text keeps the file's form, including the file's
+  zero-width characters beside it; zero-width characters the caller writes at
+  the edge of a change, other than its copy's there, refuse. A backslash
+  difference means the copy escapes differently: the text the edit writes may
+  then hold neither a backslash nor a sign the file escapes where the copy does
+  not, on any line of the passage (a copy that drops the file's escapes comes
+  with new text that drops them too, so a new line would lack them); a
+  backslash only the file holds must not border a change (it would escape the
+  new text). A read-gutter leftover (`||` for
+  `|`) is not such a difference: new text would repeat it. Passages copied up
+  to misspellings and kept-line gaps win over looser ones; overlapping
+  candidates are one passage, placed by the fewest differences (a tie between
+  different spans stays ambiguous); more
+  than one passage at the winning level is `ambiguous_match` (`ambiguous_copy`
+  wording for `old_string`). What (merge): the change from old to new text is
+  applied to the file's text. A line the edit writes comes out as the caller's
+  new text up to the file's spelling of misspelled words: kept text in it must
+  match the file up to misspellings and spacing, since a difference there may
+  be wording the caller meant to write (replay: an intended change inside the
+  old text was dropped). Lines the edit keeps stay as the file has them. The 3
+  words or signs on each side of each change must match up to misspellings, and
+  within a change other differences need 4 correct words each (a rewrite may
+  differ; `3` to `4` where the file says `5` may not); changes separated only by
+  spacing count as one. When the winning passage cannot take the change,
+  nothing is applied elsewhere and the hunk fails `text_not_found`. Warnings
+  name each replaced line and each kept line that differed (`... was edited
+  anyway; it read:` / `... was left as it reads:`, long lines from just before
+  the first difference) and each respelled word (`copy_warnings`). Tests:
+  `test_copy_match.py`, plus the
+  patch, field, Skill and Wiki suites.
+- Only changed lines are emitted from the replacement; context lines keep their
+  actual original bytes.
 - Changed lines matched with different indentation are written in the file's
   indentation style: each indent the matched lines show maps to its file
   indent, and other indents (new deeper lines) convert level by level between
@@ -146,10 +258,10 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   for that next hunk, including multiline context. Missing or ambiguous anchors
   fail without falling back to a different location; duplicate matches after
   the anchor remain ambiguous. Anchors do not leak into subsequent edits or files.
-  An entirely context-only patch fails with `no_changes` and explains that
-  context locates an edit but supplies
-  no insertion/removal. It never invents omitted replacement content or reports
-  success. Identical old/new line sequences are no-ops only when located. A unique
+  An entirely context-only patch fails with `no_changes`, explains that
+  space-prefixed lines are unchanged lines, and says which file lines those lines
+  match when they are found precisely (`The unchanged lines match X line(s) N-M.`).
+  It never invents omitted replacement content or reports success. Identical old/new line sequences are no-ops only when located. A unique
   precise post-state with at least four shared non-whitespace context characters
   permits an already-applied retry before approximate matching. A single-line
   replacement can also identify its post-state through the unchanged prefix and
@@ -205,6 +317,10 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   handle without delete sharing, not just injected exceptions.
 - `test_apply_patch_session_regressions.py` covers Session-derived concatenated
   frames, repeated headers, argument aliases/conflicts and preserved context anchors.
+  `test_apply_patch_fields.py` runs other harnesses' shapes (Edit, MultiEdit, Write,
+  text-editor commands, Hermes mode, SEARCH/REPLACE, unified/git diffs) through
+  production dispatch, including empty-text edits, the read guard and conflicts.
+  `scripts/tool_lab/cases/files.json` holds the Model-visible result cases.
 - Existing fuzzy-match, file-state, Runtime and Provider-schema
   tests cover the shared boundaries.
   `tests/core/providers/test_ollama.py` verifies intact patch arguments through
@@ -213,8 +329,9 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   production registry and disposable files. Its matrix separates natural batching tasks
   (no imposed call count or prebuilt arguments), exact edge/invalid requests,
   and continuation from an actual partial Tool Result with candidate excerpts.
-  It rejects imports from a different checkout, checks file effects and entry
-  statuses, and verifies that recovery avoids replaying a completed append. Natural
+  It vets targets through `patch_targets`, rejects imports from a different
+  checkout, checks file effects, result `status` and expected result text
+  (`mentions`), and verifies that recovery avoids replaying a completed append. Natural
   tasks also cover insertion, EOF targeting, and recovery from missing/ambiguous
   hints. Exact cases pair move-metadata recovery with conflicting destinations and
   literal move-shaped text. Probe tests reject scope escapes and false completion.

@@ -99,7 +99,7 @@ def test_patch_recovery_probe_supplies_real_result_and_rejects_replay():
     assert row["passed"] and row["recovery_ok"]
     result = json.loads(adapter.messages[-1]["content"])
     assert result["data"]["status"] == "partial"
-    assert result["data"]["results"][1]["error"]["candidates"]
+    assert "The closest text in the file, lines 1-3:" in result["data"]["content"]
     replay = _PatchAdapter({"patch": "*** Update File: log.txt\n@@\n+done\n" + patch})
     row = asyncio.run(probe_workflow_patch._probe_apply_patch_case(replay, args, case))
     assert not row["passed"] and not row["recovery_ok"] and not row["effect_ok"]
@@ -117,8 +117,12 @@ def test_mcp_workflow_probe_dispatches_discovered_targets_through_real_mcp():
                 arguments = {"action": "search"}
             elif self.step == 2:
                 result = json.loads(messages[-1]["content"])
+                # Search lists one "kind:name:fingerprint: description" line per match.
                 self.targets = {
-                    item["name"]: item["target"] for item in result["data"]["preview"]["matches"]
+                    target.split(":")[1]: target
+                    for line in result["data"]["content"].splitlines()
+                    if line.startswith("tool:")
+                    for target in [line.split(": ", 1)[0]]
                 }
                 arguments = {"action": "describe", "target": self.targets["get_scene_info"]}
             elif self.step == 3:

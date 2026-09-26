@@ -86,6 +86,7 @@ A message can carry an inline keyboard; tapping produces a tap event normally ro
 - **`allowed_chat_ids` gates inbound only - outbound is deliberately unrestricted within the adapter's supported targets.** `channel_send` with an explicit target may message any reachable chat; the platform bounds this. WhatsApp supports only `self` in either direction, as explicitly selected for the personal-account integration. Do not add outbound allowlist filtering to other adapters.
 - Session history remains the single source of truth: Channels add routing metadata and contextual notes but keep no parallel transcript or separate mutable surface store.
 - `channel_send` records sent content as a contextual system reminder in the target chat's Session (via `ensure_outbound_session`) under the Session write lock, so inbound replies keep context; this proactive path writes no reply-surface note.
+- `ensure_outbound_session(..., thread_id=...)` records the actual outbound topic in the Session's Reply Target. Adapters with sub-addressed threads pass it into the engine's `ConversationFacts`; Discord keeps using the thread's own platform target.
 
 ## Constraints & Gotchas
 

@@ -6,11 +6,13 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from core.models.pricing import TokenPricing
 from core.projects.address import format_agent_address
 from core.sessions import OwnedRunRecord, SessionAddress
 from core.statistics._aggregation import ReportBuilder
+from core.statistics._call_scan import account_run_activity
 from core.statistics._extensions import ExtensionSliceKey, extension_actor_key
 from core.statistics._runs import load_run_activity
 from core.statistics._sources import (
@@ -38,6 +40,9 @@ from core.statistics.skills import (
     SkillInventorySource,
     offered_skill_names,
 )
+
+if TYPE_CHECKING:
+    from core.usage import UsageRecorder
 
 
 @dataclass(frozen=True)
@@ -81,6 +86,7 @@ class StatisticsService:
         *,
         pricing_lookup: Callable[[str], TokenPricing | None] | None = None,
         index: StatisticsIndex | None = None,
+        usage_recorder: UsageRecorder | None = None,
     ) -> None:
         self._sessions = chat_sessions
         self._agents = agents
@@ -88,11 +94,15 @@ class StatisticsService:
         self._skill_inventory = skill_inventory
         self._pricing_lookup = pricing_lookup
         self._index = index if index is not None else StatisticsIndex(Path(chat_sessions.data_dir))
+        self._usage_recorder = usage_recorder
 
     def warm_index(self) -> None:
         """Reconcile the disposable index without building a report."""
+        self._import_session_usage()
         scopes = _index_scopes(self._statistics_scopes(), self._extension_sessions())
-        self._index.read(self._sessions, scopes, lambda _view: None)
+        self._index.read(
+            self._sessions, scopes, lambda _view: None, usage_recorder=self._usage_recorder
+        )
 
     async def warm_index_async(self) -> None:
         """``warm_index`` on the index database's worker pool."""
@@ -112,16 +122,17 @@ class StatisticsService:
         self, *, since: datetime | None = None, until: datetime | None = None
     ) -> StatisticsReport:
         """Reconcile all Session scopes and return the aggregated report."""
-        builder = ReportBuilder(since=since, until=until, pricing_lookup=self._pricing_lookup)
+        self._import_session_usage()
         scopes = self._statistics_scopes()
         extension_sessions = self._extension_sessions()
 
-        def consume(view: IndexView) -> None:
+        def consume(view: IndexView) -> ReportBuilder:
+            builder = ReportBuilder(since=since, until=until, pricing_lookup=self._pricing_lookup)
             for scope in scopes:
                 builder.register_scope(agent_id=scope.agent_id, project_id=scope.project_id)
                 surviving: list[JsonObject] = []
                 for indexed, session_id in _surviving(view, scope):
-                    _add_unit(builder, scope.display_key, session_id, indexed)
+                    _add_unit(builder, scope, session_id, indexed)
                     surviving.append(indexed.summary)
                 builder.register_agent(scope.display_key, surviving)
             # Extension-owned Sessions count once per owner under its reserved
@@ -131,16 +142,20 @@ class StatisticsService:
                 builder.register_scope(agent_id=None, project_id=entry.scope.project_id)
                 surviving = owner_summaries.setdefault(entry.key.owner_name, [])
                 for indexed, session_id in _surviving(view, entry.scope):
-                    _add_unit(
-                        builder, entry.scope.display_key, session_id, indexed, extension=entry.key
-                    )
+                    _add_unit(builder, entry.scope, session_id, indexed, extension=entry.key)
                     surviving.append(indexed.summary)
             for owner_name, summaries in owner_summaries.items():
                 if summaries:
                     builder.register_agent(extension_actor_key(owner_name), summaries)
-            builder.aggregate(view.connection)
+            builder.aggregate(view.connection, durable_usage=self._usage_recorder is not None)
+            return builder
 
-        self._index.read(self._sessions, _index_scopes(scopes, extension_sessions), consume)
+        builder = self._index.read(
+            self._sessions,
+            _index_scopes(scopes, extension_sessions),
+            consume,
+            usage_recorder=self._usage_recorder,
+        )
         return builder.build(self._skill_inventory)
 
     def run_activity(
@@ -150,6 +165,7 @@ class StatisticsService:
         until: datetime,
     ) -> RunActivityReport:
         """Return persisted Runs whose execution overlaps the selected interval."""
+        self._import_session_usage()
         scopes = _index_scopes(self._statistics_scopes(), self._extension_sessions())
 
         def consume(view: IndexView) -> tuple[int, list[RunActivity]]:
@@ -159,15 +175,21 @@ class StatisticsService:
                     session_key=indexed.session_key,
                     session_id=session_id,
                     title=_title(indexed.summary),
+                    address=SessionAddress(scope.project_id, scope.agent_id, session_id),
                 )
                 for scope in scopes
                 for indexed, session_id in _surviving(view, scope)
             ]
-            return load_run_activity(
+            total, runs = load_run_activity(
                 view.connection, units, since=since, until=until, limit=MAX_RUN_ACTIVITY
             )
+            if self._usage_recorder is not None:
+                runs = account_run_activity(view.connection, runs, units)
+            return total, runs
 
-        total_runs, runs = self._index.read(self._sessions, scopes, consume)
+        total_runs, runs = self._index.read(
+            self._sessions, scopes, consume, usage_recorder=self._usage_recorder
+        )
         return RunActivityReport(
             generated_at=datetime.now(UTC).isoformat(),
             window=WindowInfo(since=since.isoformat(), until=until.isoformat()),
@@ -189,6 +211,7 @@ class StatisticsService:
         )
 
     def _group_usage(self, owner_name: str, group_id: str, query: JsonObject) -> JsonObject:
+        self._import_session_usage()
         if set(query) - {"participant_id"}:
             raise ValueError("invalid group usage query")
         if (
@@ -276,28 +299,44 @@ class StatisticsService:
             overall = _group_builder()
             participants: dict[str, ReportBuilder] = {}
             for position, record in enumerate(owned):
-                if position not in present:
+                if position not in present and self._usage_recorder is None:
                     continue
                 display_key = record.owner.participant_id
                 unit = ReportUnit(
                     display_key=display_key,
                     session_key=position,
                     session_id=record.address.session_id,
+                    address=record.address,
+                    run_id=record.run_id,
                 )
                 peer = participants.setdefault(display_key, _group_builder())
                 for target in (overall, peer):
                     target.register_agent(display_key, [{"id": record.address.session_id}])
                     target.add_unit(unit)
-            overall.aggregate(view.connection)
+            overall.aggregate(
+                view.connection, durable_usage=self._usage_recorder is not None, group_usage=True
+            )
             for peer in participants.values():
-                peer.aggregate(view.connection)
+                peer.aggregate(
+                    view.connection,
+                    durable_usage=self._usage_recorder is not None,
+                    group_usage=True,
+                )
             return overall.build(None), {
                 peer_id: peer.build(None) for peer_id, peer in participants.items()
             }
 
         return self._index.read(
-            self._sessions, _owner_scopes(records, summaries), consume, prune=False
+            self._sessions,
+            _owner_scopes(records, summaries),
+            consume,
+            prune=False,
+            usage_recorder=self._usage_recorder,
         )
+
+    def _import_session_usage(self) -> None:
+        if self._usage_recorder is not None:
+            self._usage_recorder.import_session_history(self._sessions)
 
     def _project_scopes(self) -> list[tuple[str, str]]:
         """Return ``(project_id, agent_id)`` for every session-owning project agent."""
@@ -391,7 +430,7 @@ def _surviving(view: IndexView, scope: StatisticsScope) -> list[tuple[IndexedSes
 
 def _add_unit(
     builder: ReportBuilder,
-    display_key: str,
+    scope: StatisticsScope,
     session_id: str,
     indexed: IndexedSession,
     *,
@@ -400,11 +439,12 @@ def _add_unit(
     created_at = indexed.summary.get("created_at")
     builder.add_unit(
         ReportUnit(
-            display_key=display_key,
+            display_key=scope.display_key,
             session_key=indexed.session_key,
             session_id=session_id,
             title=_title(indexed.summary),
             extension=extension,
+            address=SessionAddress(scope.project_id, scope.agent_id, session_id),
         ),
         created_at=created_at if isinstance(created_at, str) else None,
         offered_skills=offered_skill_names(indexed.summary),

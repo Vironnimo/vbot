@@ -99,7 +99,11 @@ class ChannelSessionRouting:
             self._update_session_metadata,
             route,
             conversation,
-            ReplyPlanFacts(channel_id=self._config.id, platform_target=conversation.chat_id),
+            ReplyPlanFacts(
+                channel_id=self._config.id,
+                platform_target=conversation.chat_id,
+                thread_id=conversation.thread_id,
+            ),
             create_missing=True,
         )
         return route

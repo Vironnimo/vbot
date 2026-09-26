@@ -695,6 +695,7 @@ def create_app(
                 inspection.run,
                 after_sequence=claims["after_sequence"],
                 file_delivery=delivery,
+                include_file_urls=True,
             ),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},

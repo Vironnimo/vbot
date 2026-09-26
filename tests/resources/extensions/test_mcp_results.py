@@ -12,12 +12,14 @@ from resources.extensions.mcp.content import (
     READ_TOO_LARGE,
     RESULT_DENIED,
     RESULT_MISSING,
+    RESULT_TEXT_CHARACTERS,
     RESULT_VIEW_CHARACTERS,
     ContentStore,
 )
 from resources.extensions.mcp.extension import MCP_MESSAGES, remote_tool_name
 from tests.resources.extensions.mcp_helpers import (
     context,
+    model_text,
     payloads,
 )
 from tests.resources.extensions.mcp_helpers import (
@@ -38,26 +40,30 @@ async def test_large_result_is_kept_with_the_tool_result_and_readable_in_chunks(
     receipt, _ = await store.present(payload, context(host), "example")
     restored = ContentStore(host)
     document = await restored.load_result(receipt["result_id"], context(host), "example")
-    arguments = {
+    text = payload["content"][0]["text"]
+    continuation = {
         "action": "read",
         "result_id": receipt["result_id"],
         "pointer": "/content/0/text",
-        "limit": 997,
+        "offset": RESULT_TEXT_CHARACTERS,
     }
-    pieces = []
+    arguments = {**continuation, "limit": 997}
+    pieces = [receipt["content"]]
     while True:
         page = restored.read_result(document, arguments)
-        pieces.append(page["value"])
+        pieces.append(page["content"])
         if "next" not in page:
             break
         arguments = page["next"]
 
-    # The receipt names no file: read is the only way to the saved payload.
-    assert set(receipt) == {"result_id", "complete", "preview", "read"}
-    assert receipt["read"] == {"action": "read", "result_id": receipt["result_id"]}
-    assert not receipt["complete"]
+    # The view shows the text start and names the read that continues it; it holds no
+    # file path: read is the only way to the saved payload.
+    assert set(receipt) == {"result_id", "_meta", "note", "content"}
+    assert receipt["content"] == text[:RESULT_TEXT_CHARACTERS]
+    assert json.dumps(continuation, separators=(",", ":")) in receipt["note"]
+    assert f"first {RESULT_TEXT_CHARACTERS} of {len(text)} characters" in receipt["note"]
     assert len(json.dumps(receipt)) < RESULT_VIEW_CHARACTERS
-    assert "".join(pieces) == payload["content"][0]["text"]
+    assert "".join(pieces) == text
     assert document["payload"]["_meta"] == payload["_meta"]
     assert list(payloads(host).rows) == [receipt["result_id"]]
     assert not (host.data_dir / "mcp").exists()
@@ -79,7 +85,7 @@ async def test_saved_result_is_readable_only_where_its_tool_result_is_visible(ho
             await store.load_result(identifier, elsewhere, "example")
     with pytest.raises(ValueError, match=RESULT_MISSING):
         await store.load_result("../outside", context(host), "example")
-    with pytest.raises(ValueError, match=RESULT_DENIED):
+    with pytest.raises(ValueError, match=RESULT_DENIED.format(connection="example")):
         await store.load_result(identifier, context(host), "other")
 
 
@@ -90,11 +96,10 @@ async def test_complete_results_and_calls_outside_a_session_keep_no_payload(host
     large = {"sentinel": "x" * 7000}
 
     inline, _ = await store.present(small, context(host), "example")
-    outside, _ = await store.present(
-        large, context(host, session=None), "example", preview={"page": 1}
-    )
+    outside, _ = await store.present(large, context(host, session=None), "example")
 
-    assert inline == {"complete": True, "value": small}
+    # A complete result in a Session is shown as its own fields.
+    assert inline == small
     # Outside a Session nothing could read a saved result, so all of it is inline.
     assert outside == {"complete": True, "value": large}
     assert payloads(host).rows == {}
@@ -173,15 +178,50 @@ async def test_connection_disconnect_keeps_the_fixed_model_definition(context_se
 @pytest.mark.asyncio
 async def test_large_error_keeps_full_payload_and_bounded_receipt(context_service, host):
     service, registry, runner, calls = context_service
-    payload = {"isError": True, "content": [{"type": "text", "text": "failure" * 3000}]}
+    report = "start " + "failure " * 3000 + "NameError: final line"
+    payload = {"isError": True, "content": [{"type": "text", "text": report}]}
 
-    result = await service._present(runner, context(host), payload)
-    receipt = json.loads(result["error"]["message"])
-    saved = await service.content.load_result(receipt["result_id"], context(host), "example")
+    result = await service._present(runner, context(host), payload, source="inspect")
+    message = result["error"]["message"]
+    identifier = payload_id(message)
+    saved = await service.content.load_result(identifier, context(host), "example")
+    page = await registry.dispatch(
+        context(host),
+        {"action": "read", "result_id": identifier, "pointer": "/content/0/text"},
+        allowed_tools=["mcp_example"],
+    )
 
     assert not result["ok"]
-    assert len(result["error"]["message"]) < 6000
+    assert message.startswith("The MCP tool inspect reported an error:\nstart failure")
+    assert "NameError: final line\n\nIt may have changed the application" in message
+    assert '"pointer":"/content/0/text","offset":1000' in message
+    assert len(message) < 4000
     assert saved["payload"] == payload
+    assert page["data"]["content"] == report[:4000]
+
+
+def payload_id(message: str) -> str:
+    return message.split('"result_id":"', 1)[1].split('"', 1)[0]
+
+
+@pytest.mark.asyncio
+async def test_tool_error_reads_as_the_servers_own_report(context_service, host):
+    service, registry, runner, calls = context_service
+    payload = {
+        "isError": True,
+        "content": [{"type": "text", "text": "Traceback:\nNameError: name 'scene' is undefined"}],
+    }
+
+    result = await service._present(runner, context(host), payload, source="inspect")
+
+    assert model_text(result) == (
+        "Error (mcp_tool_error): The MCP tool inspect reported an error:\n"
+        "Traceback:\nNameError: name 'scene' is undefined\n\n"
+        "It may have changed the application before failing. Fix what the error describes, "
+        "then call it again; an unchanged repeat helps only when the error says the problem "
+        "is temporary."
+    )
+    assert payloads(host).rows == {}
 
 
 @pytest.mark.asyncio
@@ -213,7 +253,7 @@ async def test_string_pages_shrink_until_escaped_text_fits(host):
     while True:
         page = store.read_result(saved, arguments)
         assert len(json.dumps(page, ensure_ascii=False)) <= RESULT_VIEW_CHARACTERS
-        pieces.append(page["value"])
+        pieces.append(page["content"])
         if "next" not in page:
             break
         arguments = page["next"]

@@ -1,8 +1,9 @@
 """Desktop launch, target probing, and window wiring for the vBot pywebview accessor.
 
 The entrypoint builds the in-window server-selection controller
-(:mod:`desktop.connection`) and the voice bridge (:mod:`desktop.wakeword.bridge`),
-wires the *same* bridge as the window's single ``js_api`` (so both the shell
+(:mod:`desktop.connection`), Voice (:mod:`desktop.wakeword.controller`) and the
+page pushes (:mod:`desktop.page_events`), wires the *same* bridge facade
+(:mod:`desktop.bridge`) as the window's single ``js_api`` (so both the shell
 connection screen and the remote WebUI call into it), and hands the live window
 to the controller. There is no silent localhost default: the controller
 auto-connects to the last-used server after the GUI loop starts, or shows the
@@ -34,14 +35,14 @@ import httpx
 from desktop import _windows
 from desktop.settings import (
     config_dir,
-    read_wakeword_settings,
     read_window_size,
     write_window_size,
 )
 
 if TYPE_CHECKING:
     from desktop.connection import ConnectionController
-    from desktop.hotkey import LiveHotkeyController
+    from desktop.page_events import PageEventDispatcher
+    from desktop.wakeword.controller import VoiceController
 
 logger = logging.getLogger("vbot.desktop")
 
@@ -353,8 +354,8 @@ def launch_desktop(
     last-used server, or shows the connection screen on first run. There is no
     silent localhost default — only a *deliberate* CLI override skips
     auto-connect. The effective launch target (override else last-used) is
-    resolved once and used for both the window navigation and the voice worker's
-    server URL, so window and voice always point at the same server.
+    resolved once and used for both the window navigation and Voice's server
+    URL, so window and Voice always point at the same server.
     """
 
     args = parse_args(argv)
@@ -400,9 +401,10 @@ def _run_desktop(
 ) -> None:
     """Create the window and its services for the instance that owns the Desktop."""
 
+    from desktop.bridge import DesktopBridge
     from desktop.connection import ConnectionController, build_connection_html
     from desktop.hotkey import LiveHotkeyController
-    from desktop.live_requests import LiveRequestDispatcher
+    from desktop.page_events import PageEventDispatcher
 
     webview = webview_module if webview_module is not None else load_webview()
 
@@ -412,25 +414,22 @@ def _run_desktop(
     # so Live voice can open the microphone over plain HTTP on the LAN. The list
     # is fixed for this process; a server added later needs a restart.
     secure_origins = _windows.webview_secure_origins(_launch_targets(controller, override))
-    live_requests = LiveRequestDispatcher()
+    page_events = PageEventDispatcher()
     live_hotkey = LiveHotkeyController(
         settings_path=settings_file,
-        on_press=lambda: live_requests.request("toggle", "hotkey"),
+        on_press=lambda: page_events.request_live("toggle", "hotkey"),
     )
-    bridge = _create_wakeword_bridge(
-        args,
-        settings_file,
-        controller,
-        server_url,
+    voice = _create_voice(args, settings_file, server_url, page_events)
+    bridge = DesktopBridge(
+        voice=voice,
+        connection=controller,
         live_hotkey=live_hotkey,
-        live_requests=live_requests.request,
         secure_origins=secure_origins,
     )
-    wakeword_enabled = bool(read_wakeword_settings(settings_file).get("enabled", False))
-    # Voice follows the window: every successful in-window connect retargets the
-    # worker, so first-run connect and runtime server switches no longer leave
-    # voice pointed at the launch-time (or empty) server.
-    controller.set_active_server_listener(bridge.set_server_url)
+    # Voice follows the window: every successful in-window connect retargets
+    # it, so first-run connect and runtime server switches never leave Voice
+    # pointed at the launch-time (or empty) server.
+    controller.set_active_server_listener(voice.set_server_url)
 
     # The window must be created with initial content before the GUI loop; the
     # connection screen is a safe neutral page that the post-loop entry callable
@@ -456,7 +455,7 @@ def _run_desktop(
         window, lambda: _windows.url_origin(controller.active_server_url())
     )
     controller.attach_window(window)
-    live_requests.attach_window(window)
+    page_events.attach_window(window)
     instance.listen(_WindowFocus(window).bring_to_front)
 
     start_kwargs: dict[str, Any] = {}
@@ -480,10 +479,9 @@ def _run_desktop(
     def start_visible_services() -> None:
         # The lightweight shell must become visible before any network probe or
         # optional ML/audio initialization. Connect first so Voice follows the
-        # window's resolved target, then create its worker only when enabled.
+        # window's resolved target; Voice starts listening only when enabled.
         connection_entry()
-        if wakeword_enabled:
-            bridge._start_worker()
+        voice.start()
         live_hotkey.start()
 
     window.events.shown += start_visible_services
@@ -504,8 +502,8 @@ def _run_desktop(
         webview.start(**start_kwargs)
     finally:
         live_hotkey.stop()
-        live_requests.close()
-        bridge._stop_worker()
+        voice.close()
+        page_events.close()
 
 
 class _WindowFocus:
@@ -742,85 +740,41 @@ def _is_vbot_health_response(response: HttpResponse) -> bool:
     return bool(payload == {"status": "ok"})
 
 
-def _create_wakeword_bridge(
+def _create_voice(
     args: argparse.Namespace,
     settings_file: Path | None,
-    controller: ConnectionController,
     server_url: str,
-    *,
-    live_hotkey: LiveHotkeyController | None = None,
-    live_requests: Callable[[str, str], None] | None = None,
-    secure_origins: tuple[str, ...] = (),
-) -> Any:
-    """Create the DesktopBridge with engine and worker for the wakeword pipeline.
+    page_events: PageEventDispatcher,
+) -> VoiceController:
+    """Create Voice for the window's server; it starts listening on ``start()``.
 
-    The controller is passed in as the bridge's connection delegate (so the
-    shell connection screen's ``connect`` call routes through it). ``server_url``
-    is the *effective launch target* the caller resolved once (CLI override else
-    last-used), so the local voice pipeline sends transcripts to the same server
-    the window opens. An empty ``server_url`` is reported as an actionable Voice
-    startup error before the engine or microphone opens.
-
-    Mock mode is explicit through ``--mock-wakeword``. A missing on-device stack
-    selects the non-simulating unavailable worker instead, so production never
-    shows fake listening/sending activity. Returns the bridge instance in every
-    mode so the WebUI can query capabilities and the concrete reason.
+    ``server_url`` is the *effective launch target* the caller resolved once
+    (CLI override else last-used), so Voice sends commands to the server the
+    window opens. Mock mode is explicit through ``--mock-wakeword``. A missing
+    on-device stack is detected lazily, when a listener first starts, and
+    reported as the ``unavailable`` mode instead of simulated activity.
     """
 
-    from desktop.wakeword._worker_support import check_speech_to_text_readiness
-    from desktop.wakeword.bridge import DesktopBridge
+    from desktop.wakeword.controller import VoiceController
 
-    def worker_factory(bridge: DesktopBridge) -> Any:
-        from desktop.wakeword.worker import (
-            MockWakewordWorker,
-            UnavailableWakewordWorker,
-            WakewordWorker,
-        )
-
-        if bool(args.mock_wakeword):
-            return MockWakewordWorker(bridge=bridge)
-        # The TFLite detector and sounddevice are optional Desktop extras.
-        # Probe them only when Voice is actually starting, never on an ordinary
-        # Desktop launch with Voice disabled.
-        if not _real_wakeword_available():
-            bridge._set_mode("unavailable")
-            return UnavailableWakewordWorker(bridge=bridge)
-        bridge._set_mode("real")
-        engine = bridge._create_wakeword_engine()
-        # Read the current server URL off the bridge (not a captured constant) so
-        # a worker rebuilt after a server switch targets the new server.
-        return WakewordWorker(
-            engine=engine,
-            bridge=bridge,
-            settings_path=settings_file,
-            server_url=bridge.server_url,
-            config_reader=bridge.worker_config,
-            speech_readiness_checker=check_speech_to_text_readiness,
-            calibration_checker=bridge.wakeword_calibration_active,
-        )
-
-    bridge = DesktopBridge(
+    return VoiceController(
         settings_path=settings_file,
-        worker_factory=worker_factory,
-        connection=controller,
         server_url=server_url,
+        sink=page_events,
+        live_requests=page_events.request_live,
         mock=bool(args.mock_wakeword),
-        mode="mock" if bool(args.mock_wakeword) else "real",
-        speech_readiness_checker=check_speech_to_text_readiness,
-        live_hotkey=live_hotkey,
-        live_requests=live_requests,
-        secure_origins=secure_origins,
+        stack_available=_real_wakeword_available,
     )
-    return bridge
 
 
 def _real_wakeword_available() -> bool:
     """Whether the on-device wakeword stack can be imported.
 
     The detector, microphone capture, anti-aliasing resampler, and VAD modules
-    must import for the real worker; a missing dependency selects unavailable
-    mode. The worker factory calls this lazily only when Voice is enabled or
-    explicitly retried, keeping the stack out of the normal Desktop startup path.
+    must import for a real listener; a missing dependency selects the
+    unavailable mode. Voice calls this lazily when a listener first starts
+    (Voice enabled) or on a retry, keeping the stack out of the normal Desktop
+    startup path.
     """
 
     try:

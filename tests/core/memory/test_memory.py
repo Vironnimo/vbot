@@ -13,8 +13,11 @@ from core.memory import (
     MEMORY_PROMPT_MODE_AGENT,
     MEMORY_PROMPT_MODE_AGENT_USER,
     MEMORY_PROMPT_MODE_OFF,
+    MemoryBudgetError,
     MemoryError,
+    MemoryMatchError,
     MemoryService,
+    MemoryTextChange,
     memory_block_definition,
     memory_prompt_file_paths,
     read_memory_files,
@@ -346,3 +349,60 @@ def test_memory_service_replace_respects_scope_budget(tmp_path: Path) -> None:
     # Growing it to exactly the budget is allowed (total == budget, not over).
     replaced = service.replace_entry(workspace, "user", 2, "c" * second)
     assert replaced.content == "c" * second
+
+
+def test_text_addressed_changes_write_lf_and_report_previous_text(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    service = MemoryService()
+    service.add_entry(workspace, "agent", "Uses pytest.")
+    service.add_entry(workspace, "agent", "Deploys from main.")
+
+    replaced = service.replace_matching(workspace, "agent", "pytest", "Uses pytest with xdist.")
+    removed = service.remove_matching(workspace, "agent", "- Deploys from main.")
+
+    assert replaced == MemoryTextChange("agent", "Uses pytest.", "Uses pytest with xdist.")
+    assert removed == MemoryTextChange("agent", "Deploys from main.", None)
+    assert (workspace / "MEMORY.md").read_bytes() == b"- Uses pytest with xdist.\n"
+    assert service.scope_usage(workspace, "agent") == (23, _MAX_SCOPE_BUDGET["agent"])
+
+
+def test_replace_matching_folds_into_an_identical_existing_entry(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    service = MemoryService()
+    service.add_entry(workspace, "user", "Prefers short answers.")
+    service.add_entry(workspace, "user", "Prefers concise answers.")
+
+    service.replace_matching(workspace, "user", "short", "Prefers concise answers.")
+
+    assert [entry.content for entry in service.list_entries(workspace, "user")] == [
+        "Prefers concise answers."
+    ]
+
+
+def test_match_errors_carry_matches_and_current_entries(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    service = MemoryService()
+    service.add_entry(workspace, "agent", "Host A needs VPN.")
+    service.add_entry(workspace, "agent", "Host B needs VPN.")
+
+    with pytest.raises(MemoryMatchError) as ambiguous:
+        service.remove_matching(workspace, "agent", "needs VPN")
+    with pytest.raises(MemoryMatchError) as missing:
+        service.replace_matching(workspace, "agent", "Postgres", "x")
+
+    assert ambiguous.value.matches == ("Host A needs VPN.", "Host B needs VPN.")
+    assert missing.value.matches == ()
+    assert missing.value.entries == ("Host A needs VPN.", "Host B needs VPN.")
+    assert len(service.list_entries(workspace, "agent")) == 2
+
+
+def test_budget_error_reports_resulting_total(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    service = MemoryService()
+    service.add_entry(workspace, "user", "a" * 2000)
+
+    with pytest.raises(MemoryBudgetError) as error:
+        service.add_entry(workspace, "user", "b" * 1500)
+
+    assert (error.value.scope, error.value.total, error.value.budget) == ("user", 3500, 3000)
+    assert "free at least 500 characters" in str(error.value)

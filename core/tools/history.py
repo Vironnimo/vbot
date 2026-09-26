@@ -1,10 +1,10 @@
-"""Bounded, lossless access to original records in the current compacted Session."""
+"""Bounded access to original conversation records in the current compacted Session."""
 
 from __future__ import annotations
 
 import json
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from core.sessions import (
     ChatSession,
@@ -34,6 +34,7 @@ from core.tools._history_protocol import (
 )
 from core.tools._history_protocol import (
     _checkpoint,
+    _continued_request,
     _cursor_payload,
     _encode_cursor,
     _HistoryError,
@@ -70,6 +71,16 @@ HISTORY_RESULT_MAX_BYTES = 50 * 1024
 HISTORY_SEARCH_EXCERPT_CHARS = 320
 HISTORY_OVERVIEW_SUMMARY_CHARS = 320
 HISTORY_SCAN_BATCH_SIZE = 128
+# Stored Message fields that are provider replay data, accounting or presentation, not
+# conversation content; returned records omit them.
+_INTERNAL_MESSAGE_FIELDS = (
+    "reasoning_meta",
+    "reasoning_scope",
+    "reasoning_timing",
+    "usage",
+    "timing",
+    "tool_display",
+)
 
 _HISTORY_CHECKPOINT_PARAMETER: JsonObject = {
     "type": "integer",
@@ -99,7 +110,7 @@ _HISTORY_CURSOR_PARAMETER: JsonObject = {
     "type": "string",
     "minLength": 1,
     "description": (
-        "Continuation returned by the same action. When set, send only action and cursor."
+        "next_cursor from the previous page of the same action; other fields may be omitted."
     ),
 }
 
@@ -204,7 +215,7 @@ def make_history_handler(sessions: ChatSessionManager):
             )
         action = raw_action
         try:
-            _validate_history_action_arguments(arguments, action)
+            notes = _validate_history_action_arguments(arguments, action)
         except _HistoryError as error:
             return tool_failure(error.code, str(error))
         checkpoint: int | None = None
@@ -244,10 +255,14 @@ def make_history_handler(sessions: ChatSessionManager):
                 checkpoints=resolved.checkpoints,
             )
             request = (
-                _request_from_cursor(cursor_payload, snapshot, context.session_id)
+                _continued_request(
+                    _request_from_cursor(cursor_payload, snapshot, context.session_id),
+                    arguments,
+                )
                 if cursor_payload is not None
                 else _request_from_arguments(arguments, snapshot)
             )
+            request = replace(request, notes=notes)
             action = request.action
             checkpoint = request.checkpoint
             direction = request.direction
@@ -292,7 +307,7 @@ def _sanitize_record(data: JsonObject) -> JsonObject | None:
     if role == "tool" and data.get("name") == HISTORY_TOOL_NAME:
         return None
     if role != "assistant":
-        return dict(data)
+        return _without_internal_fields(data)
 
     tool_calls = data.get("tool_calls")
     if isinstance(tool_calls, list):
@@ -306,9 +321,14 @@ def _sanitize_record(data: JsonObject) -> JsonObject | None:
             data["tool_calls"] = remaining
         else:
             data.pop("tool_calls", None)
+    # Eligibility matches the store's record filter, which counts opaque reasoning.
     if not any(data.get(key) for key in ("content", "reasoning", "reasoning_meta", "tool_calls")):
         return None
-    return dict(data)
+    return _without_internal_fields(data)
+
+
+def _without_internal_fields(data: JsonObject) -> JsonObject:
+    return {key: value for key, value in data.items() if key not in _INTERNAL_MESSAGE_FIELDS}
 
 
 def _source_items(
@@ -640,6 +660,8 @@ def _page_data(
         "items": items,
         "has_more": has_more,
     }
+    if request.notes:
+        data["note"] = " ".join(request.notes)
     if has_more:
         data["next_cursor"] = _encode_cursor(
             _cursor_for(

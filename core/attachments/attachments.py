@@ -140,7 +140,7 @@ def validate_attachment_metadata_data(data: Any) -> list[JsonDiagnostic]:
     for name in ("id", "filename", "stored_at"):
         validate_non_empty_string(diagnostics, f"$.{name}", data.get(name), required=True)
     media_type = data.get("media_type")
-    if media_type not in _CANONICAL_EXTENSION_BY_MEDIA_TYPE:
+    if not isinstance(media_type, str) or media_type not in _CANONICAL_EXTENSION_BY_MEDIA_TYPE:
         add_error(diagnostics, "$.media_type", "must be a media type vBot stores attachments as")
     size_bytes = data.get("size_bytes")
     if isinstance(size_bytes, bool) or not isinstance(size_bytes, int) or size_bytes < 0:

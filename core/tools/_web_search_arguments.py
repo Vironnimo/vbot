@@ -15,7 +15,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from core.tools._argument_repair import normalize_call_arguments
-from core.tools._spelling_aliases import SpellingAliases, spelling
+from core.tools._call_vocabulary import SpellingAliases
 from core.tools.contracts import ToolContract, ToolContractError
 
 RECENCY_VALUES = ("day", "week", "month", "year")
@@ -165,13 +165,18 @@ _DATE_RANGE_REFUSAL = (
 )
 
 
+def _value_key(value: str) -> str:
+    # Keeps "." and ":" ("1.5d", "qdr:m"), unlike field-name spelling.
+    return re.sub(r"[\s_-]+", "", value.casefold())
+
+
 def recency_token(value: Any) -> str | None:
     """Return a canonical window, ``"<days>d"`` for another duration, or None."""
     if not isinstance(value, str):
         return None
     if _DATE_RANGE.fullmatch(value.strip().lower()):
         raise ToolContractError(_DATE_RANGE_REFUSAL)
-    key = spelling(value)
+    key = _value_key(value)
     if key in RECENCY_VALUES:
         return key
     if key in _RECENCY_WORDS:
@@ -264,7 +269,7 @@ def _domains(value: Any) -> Any:
 
 
 def _recency(value: Any) -> Any:
-    if isinstance(value, str) and spelling(value) in _NO_RECENCY | {""}:
+    if isinstance(value, str) and _value_key(value) in _NO_RECENCY | {""}:
         return None
     return recency_token(value) or value
 

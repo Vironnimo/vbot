@@ -67,6 +67,9 @@ class ImageUnderstandingRunContext:
     agent_id: str
     session_id: str
     iteration_number: int
+    project_id: str | None = None
+    owner_name: str | None = None
+    group_id: str | None = None
 
 
 @dataclass(frozen=True)

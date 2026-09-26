@@ -1,0 +1,795 @@
+{
+ "files": {
+  "MEMORY.md": "- Project Atlas uses pytest with xdist.\n- The staging host is reachable only over the VPN.\n- Deploys run from the release branch.\n",
+  "USER.md": "- User prefers concise answers.\n- User's name is Sam.\n",
+  "../../data/agents/main/skills/deploy-checklist/SKILL.md": "---\nname: deploy-checklist\ndescription: Steps to deploy the Atlas service safely. Use before any production deploy.\nmetadata:\n  vbot:\n    author: agent\n---\n\n# Deploy checklist\n\n1. Run the test suite with `pytest -n auto`.\n2. Tag the release: \"v1.2.3\".\n3. Deploy with `make deploy`.\n\n## Pitfalls\n\n- Never deploy on Fridays.\n- Check the Friday freeze calendar.\n",
+  "../../data/agents/main/skills/deploy-checklist/references/notes.md": "Rollback: run `make rollback`.\n"
+ },
+ "cases": [
+  {
+   "name": "memory: list without scope shows both scopes",
+   "tool": "memory",
+   "arguments": {
+    "action": "list"
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "# Agent Memory",
+     "# User Profile",
+     "staging host",
+     "Sam"
+    ]
+   }
+  },
+  {
+   "name": "memory: list one scope",
+   "tool": "memory",
+   "arguments": {
+    "action": "list",
+    "scope": "agent"
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "staging host"
+    ],
+    "absent": [
+     "concise answers"
+    ]
+   }
+  },
+  {
+   "name": "memory: add answers compactly",
+   "tool": "memory",
+   "arguments": {
+    "action": "add",
+    "scope": "user",
+    "content": "User works in UTC+2."
+   },
+   "expect": {
+    "ok": true,
+    "absent": [
+     "concise answers"
+    ],
+    "files": {
+     "USER.md": "- User prefers concise answers.\n- User's name is Sam.\n- User works in UTC+2.\n"
+    }
+   }
+  },
+  {
+   "name": "memory: duplicate add changes nothing",
+   "tool": "memory",
+   "arguments": {
+    "action": "add",
+    "scope": "user",
+    "content": "User prefers concise answers."
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "already"
+    ],
+    "files": {
+     "USER.md": "- User prefers concise answers.\n- User's name is Sam.\n"
+    }
+   }
+  },
+  {
+   "name": "memory: replace by old_text",
+   "tool": "memory",
+   "arguments": {
+    "action": "replace",
+    "scope": "agent",
+    "old_text": "staging host",
+    "content": "The staging host needs VPN and an SSH key."
+   },
+   "expect": {
+    "ok": true,
+    "files": {
+     "MEMORY.md": "- Project Atlas uses pytest with xdist.\n- The staging host needs VPN and an SSH key.\n- Deploys run from the release branch.\n"
+    }
+   }
+  },
+  {
+   "name": "memory: replace without scope finds the only matching scope",
+   "tool": "memory",
+   "arguments": {
+    "action": "replace",
+    "old_text": "concise answers",
+    "content": "User prefers concise answers with code first."
+   },
+   "expect": {
+    "ok": true,
+    "files": {
+     "USER.md": "- User prefers concise answers with code first.\n- User's name is Sam.\n",
+     "MEMORY.md": "- Project Atlas uses pytest with xdist.\n- The staging host is reachable only over the VPN.\n- Deploys run from the release branch.\n"
+    }
+   }
+  },
+  {
+   "name": "memory: remove by old_text",
+   "tool": "memory",
+   "arguments": {
+    "action": "remove",
+    "scope": "agent",
+    "old_text": "Deploys run from the release branch."
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "release branch"
+    ],
+    "files": {
+     "MEMORY.md": "- Project Atlas uses pytest with xdist.\n- The staging host is reachable only over the VPN.\n"
+    }
+   }
+  },
+  {
+   "name": "memory: copied bullet and typographic apostrophe",
+   "tool": "memory",
+   "arguments": {
+    "action": "remove",
+    "scope": "user",
+    "old_text": "- User’s name is Sam."
+   },
+   "expect": {
+    "ok": true,
+    "files": {
+     "USER.md": "- User prefers concise answers.\n"
+    }
+   }
+  },
+  {
+   "name": "memory: Hermes target/new_text dialect",
+   "tool": "memory",
+   "arguments": {
+    "action": "replace",
+    "target": "memory",
+    "old_text": "release branch",
+    "new_text": "Deploys run from main."
+   },
+   "expect": {
+    "ok": true,
+    "files": {
+     "MEMORY.md": "- Project Atlas uses pytest with xdist.\n- The staging host is reachable only over the VPN.\n- Deploys run from main.\n"
+    }
+   }
+  },
+  {
+   "name": "memory: operation inside a request wrapper",
+   "tool": "memory",
+   "arguments": {
+    "request": {
+     "operation": "add",
+     "scope": "agent",
+     "content": "CI runs on GitHub Actions."
+    }
+   },
+   "expect": {
+    "ok": true,
+    "files": {
+     "MEMORY.md": "- Project Atlas uses pytest with xdist.\n- The staging host is reachable only over the VPN.\n- Deploys run from the release branch.\n- CI runs on GitHub Actions.\n"
+    }
+   }
+  },
+  {
+   "name": "memory: action synonym",
+   "tool": "memory",
+   "arguments": {
+    "action": "delete",
+    "scope": "agent",
+    "old_text": "pytest with xdist"
+   },
+   "expect": {
+    "ok": true,
+    "files": {
+     "MEMORY.md": "- The staging host is reachable only over the VPN.\n- Deploys run from the release branch.\n"
+    }
+   }
+  },
+  {
+   "name": "memory: remove with the entry text in content",
+   "tool": "memory",
+   "arguments": {
+    "action": "remove",
+    "scope": "user",
+    "content": "User's name is Sam."
+   },
+   "expect": {
+    "ok": true,
+    "files": {
+     "USER.md": "- User prefers concise answers.\n"
+    }
+   }
+  },
+  {
+   "name": "memory: ambiguous old_text lists the candidates",
+   "tool": "memory",
+   "arguments": {
+    "action": "remove",
+    "scope": "agent",
+    "old_text": "the"
+   },
+   "expect": {
+    "ok": false,
+    "contains": [
+     "staging host",
+     "release branch"
+    ],
+    "files": {
+     "MEMORY.md": "- Project Atlas uses pytest with xdist.\n- The staging host is reachable only over the VPN.\n- Deploys run from the release branch.\n"
+    }
+   }
+  },
+  {
+   "name": "memory: unmatched old_text shows current entries",
+   "tool": "memory",
+   "arguments": {
+    "action": "replace",
+    "scope": "agent",
+    "old_text": "Postgres",
+    "content": "Uses Postgres 16."
+   },
+   "expect": {
+    "ok": false,
+    "contains": [
+     "staging host",
+     "Project Atlas"
+    ],
+    "files": {
+     "MEMORY.md": "- Project Atlas uses pytest with xdist.\n- The staging host is reachable only over the VPN.\n- Deploys run from the release branch.\n"
+    }
+   }
+  },
+  {
+   "name": "memory: add without scope asks for the scope",
+   "tool": "memory",
+   "arguments": {
+    "action": "add",
+    "content": "User likes tea."
+   },
+   "expect": {
+    "ok": false,
+    "contains": [
+     "user",
+     "agent"
+    ],
+    "files": {
+     "USER.md": "- User prefers concise answers.\n- User's name is Sam.\n",
+     "MEMORY.md": "- Project Atlas uses pytest with xdist.\n- The staging host is reachable only over the VPN.\n- Deploys run from the release branch.\n"
+    }
+   }
+  },
+  {
+   "name": "memory: entry_id from an old result is refused with the entry text",
+   "tool": "memory",
+   "arguments": {
+    "action": "remove",
+    "scope": "agent",
+    "entry_id": 2
+   },
+   "expect": {
+    "ok": false,
+    "contains": [
+     "staging host",
+     "old_text"
+    ],
+    "files": {
+     "MEMORY.md": "- Project Atlas uses pytest with xdist.\n- The staging host is reachable only over the VPN.\n- Deploys run from the release branch.\n"
+    }
+   }
+  },
+  {
+   "name": "memory: full scope says how much to free",
+   "steps": [
+    {
+     "tool": "memory",
+     "arguments": {
+      "action": "add",
+      "scope": "user",
+      "content": "User fact xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+     }
+    },
+    {
+     "tool": "memory",
+     "arguments": {
+      "action": "add",
+      "scope": "user",
+      "content": "User fact xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx more"
+     }
+    }
+   ],
+   "expect": {
+    "ok": false,
+    "contains": [
+     "concise answers",
+     "free at least"
+    ]
+   }
+  },
+  {
+   "name": "skill: list",
+   "tool": "skill",
+   "arguments": {},
+   "expect": {
+    "ok": true,
+    "contains": [
+     "deploy-checklist",
+     "vbot-cli"
+    ]
+   }
+  },
+  {
+   "name": "skill: load a private Skill",
+   "tool": "skill",
+   "arguments": {
+    "name": "deploy-checklist"
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "Never deploy on Fridays"
+    ]
+   }
+  },
+  {
+   "name": "skill: case and separator differences",
+   "tool": "skill",
+   "arguments": {
+    "name": "Deploy_Checklist"
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "Never deploy on Fridays"
+    ]
+   }
+  },
+  {
+   "name": "skill: slash trigger prefix",
+   "tool": "skill",
+   "arguments": {
+    "name": "/deploy-checklist"
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "Never deploy on Fridays"
+    ]
+   }
+  },
+  {
+   "name": "skill: Claude Code skill field",
+   "tool": "skill",
+   "arguments": {
+    "skill": "deploy-checklist"
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "Never deploy on Fridays"
+    ]
+   }
+  },
+  {
+   "name": "skill: Claude Code command field",
+   "tool": "skill",
+   "arguments": {
+    "command": "deploy-checklist"
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "Never deploy on Fridays"
+    ]
+   }
+  },
+  {
+   "name": "skill: package path in name reads that file",
+   "tool": "skill",
+   "arguments": {
+    "name": "deploy-checklist/references/notes.md"
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "make rollback"
+    ]
+   }
+  },
+  {
+   "name": "skill: read a reference with a backslash path",
+   "tool": "skill",
+   "arguments": {
+    "name": "deploy-checklist",
+    "file_path": "references\\notes.md"
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "make rollback"
+    ]
+   }
+  },
+  {
+   "name": "skill: stray leading letter suggests the close name",
+   "tool": "skill",
+   "arguments": {
+    "name": "cdeploy-checklist"
+   },
+   "expect": {
+    "ok": false,
+    "error_code": "skill_not_found",
+    "contains": [
+     "deploy-checklist"
+    ]
+   }
+  },
+  {
+   "name": "skill: partial name suggests matching Skills",
+   "tool": "skill",
+   "arguments": {
+    "name": "deploy"
+   },
+   "expect": {
+    "ok": false,
+    "error_code": "skill_not_found",
+    "contains": [
+     "deploy-checklist"
+    ]
+   }
+  },
+  {
+   "name": "skill_manage: patch with old_string/new_string",
+   "tool": "skill_manage",
+   "arguments": {
+    "action": "patch",
+    "name": "deploy-checklist",
+    "old_string": "3. Deploy with `make deploy`.",
+    "new_string": "3. Deploy with `make deploy ENV=prod`."
+   },
+   "expect": {
+    "ok": true,
+    "absent": [
+     "warnings: []"
+    ],
+    "files": {
+     "../../data/agents/main/skills/deploy-checklist/SKILL.md": "---\nname: deploy-checklist\ndescription: Steps to deploy the Atlas service safely. Use before any production deploy.\nmetadata:\n  vbot:\n    author: agent\n---\n\n# Deploy checklist\n\n1. Run the test suite with `pytest -n auto`.\n2. Tag the release: \"v1.2.3\".\n3. Deploy with `make deploy ENV=prod`.\n\n## Pitfalls\n\n- Never deploy on Fridays.\n- Check the Friday freeze calendar.\n"
+    }
+   }
+  },
+  {
+   "name": "skill_manage: patch with match/content",
+   "tool": "skill_manage",
+   "arguments": {
+    "action": "patch",
+    "name": "deploy-checklist",
+    "match": "- Never deploy on Fridays.",
+    "content": "- Never deploy on Fridays or holidays."
+   },
+   "expect": {
+    "ok": true,
+    "files": {
+     "../../data/agents/main/skills/deploy-checklist/SKILL.md": "---\nname: deploy-checklist\ndescription: Steps to deploy the Atlas service safely. Use before any production deploy.\nmetadata:\n  vbot:\n    author: agent\n---\n\n# Deploy checklist\n\n1. Run the test suite with `pytest -n auto`.\n2. Tag the release: \"v1.2.3\".\n3. Deploy with `make deploy`.\n\n## Pitfalls\n\n- Never deploy on Fridays or holidays.\n- Check the Friday freeze calendar.\n"
+    }
+   }
+  },
+  {
+   "name": "skill_manage: patch copied with CRLF and trailing spaces",
+   "tool": "skill_manage",
+   "arguments": {
+    "action": "patch",
+    "name": "deploy-checklist",
+    "old_string": "## Pitfalls  \r\n\r\n- Never deploy on Fridays.",
+    "new_string": "## Pitfalls\r\n\r\n- Never deploy on weekends."
+   },
+   "expect": {
+    "ok": true,
+    "files": {
+     "../../data/agents/main/skills/deploy-checklist/SKILL.md": "---\nname: deploy-checklist\ndescription: Steps to deploy the Atlas service safely. Use before any production deploy.\nmetadata:\n  vbot:\n    author: agent\n---\n\n# Deploy checklist\n\n1. Run the test suite with `pytest -n auto`.\n2. Tag the release: \"v1.2.3\".\n3. Deploy with `make deploy`.\n\n## Pitfalls\n\n- Never deploy on weekends.\n- Check the Friday freeze calendar.\n"
+    }
+   }
+  },
+  {
+   "name": "skill_manage: patch with typographic quotes",
+   "tool": "skill_manage",
+   "arguments": {
+    "action": "patch",
+    "name": "deploy-checklist",
+    "old_string": "2. Tag the release: “v1.2.3”.",
+    "new_string": "2. Tag the release: “v1.2.4”."
+   },
+   "expect": {
+    "ok": true,
+    "files": {
+     "../../data/agents/main/skills/deploy-checklist/SKILL.md": "---\nname: deploy-checklist\ndescription: Steps to deploy the Atlas service safely. Use before any production deploy.\nmetadata:\n  vbot:\n    author: agent\n---\n\n# Deploy checklist\n\n1. Run the test suite with `pytest -n auto`.\n2. Tag the release: \"v1.2.4\".\n3. Deploy with `make deploy`.\n\n## Pitfalls\n\n- Never deploy on Fridays.\n- Check the Friday freeze calendar.\n"
+    }
+   }
+  },
+  {
+   "name": "skill_manage: patch with one extra level of JSON escaping",
+   "tool": "skill_manage",
+   "arguments": {
+    "action": "patch",
+    "name": "deploy-checklist",
+    "old_string": "2. Tag the release: \\\"v1.2.3\\\".\\n3. Deploy",
+    "new_string": "2. Tag the release: \\\"v2.0.0\\\".\\n3. Deploy"
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "escap"
+    ],
+    "files": {
+     "../../data/agents/main/skills/deploy-checklist/SKILL.md": "---\nname: deploy-checklist\ndescription: Steps to deploy the Atlas service safely. Use before any production deploy.\nmetadata:\n  vbot:\n    author: agent\n---\n\n# Deploy checklist\n\n1. Run the test suite with `pytest -n auto`.\n2. Tag the release: \"v2.0.0\".\n3. Deploy with `make deploy`.\n\n## Pitfalls\n\n- Never deploy on Fridays.\n- Check the Friday freeze calendar.\n"
+    }
+   }
+  },
+  {
+   "name": "skill_manage: patch miss shows the closest text",
+   "tool": "skill_manage",
+   "arguments": {
+    "action": "patch",
+    "name": "deploy-checklist",
+    "old_string": "1. Run the tests with pytest.",
+    "new_string": "1. Run the tests."
+   },
+   "expect": {
+    "ok": false,
+    "contains": [
+     "Run the test suite",
+     "line"
+    ],
+    "files": {
+     "../../data/agents/main/skills/deploy-checklist/SKILL.md": "---\nname: deploy-checklist\ndescription: Steps to deploy the Atlas service safely. Use before any production deploy.\nmetadata:\n  vbot:\n    author: agent\n---\n\n# Deploy checklist\n\n1. Run the test suite with `pytest -n auto`.\n2. Tag the release: \"v1.2.3\".\n3. Deploy with `make deploy`.\n\n## Pitfalls\n\n- Never deploy on Fridays.\n- Check the Friday freeze calendar.\n"
+    }
+   }
+  },
+  {
+   "name": "skill_manage: patch copied with a misspelling is applied and named",
+   "tool": "skill_manage",
+   "arguments": {
+    "action": "patch",
+    "name": "deploy-checklist",
+    "old_string": "- Check the Friday freeze calender.",
+    "new_string": "- Check the Friday freeze calender weekly."
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "did not match your old text exactly"
+    ],
+    "files": {
+     "../../data/agents/main/skills/deploy-checklist/SKILL.md": "---\nname: deploy-checklist\ndescription: Steps to deploy the Atlas service safely. Use before any production deploy.\nmetadata:\n  vbot:\n    author: agent\n---\n\n# Deploy checklist\n\n1. Run the test suite with `pytest -n auto`.\n2. Tag the release: \"v1.2.3\".\n3. Deploy with `make deploy`.\n\n## Pitfalls\n\n- Never deploy on Fridays.\n- Check the Friday freeze calendar weekly.\n"
+    }
+   }
+  },
+  {
+   "name": "skill_manage: ambiguous patch offers replace_all",
+   "tool": "skill_manage",
+   "arguments": {
+    "action": "patch",
+    "name": "deploy-checklist",
+    "old_string": "Friday",
+    "new_string": "weekend"
+   },
+   "expect": {
+    "ok": false,
+    "contains": [
+     "replace_all"
+    ],
+    "files": {
+     "../../data/agents/main/skills/deploy-checklist/SKILL.md": "---\nname: deploy-checklist\ndescription: Steps to deploy the Atlas service safely. Use before any production deploy.\nmetadata:\n  vbot:\n    author: agent\n---\n\n# Deploy checklist\n\n1. Run the test suite with `pytest -n auto`.\n2. Tag the release: \"v1.2.3\".\n3. Deploy with `make deploy`.\n\n## Pitfalls\n\n- Never deploy on Fridays.\n- Check the Friday freeze calendar.\n"
+    }
+   }
+  },
+  {
+   "name": "skill_manage: replace_all",
+   "tool": "skill_manage",
+   "arguments": {
+    "action": "patch",
+    "name": "deploy-checklist",
+    "old_string": "Friday",
+    "new_string": "weekend",
+    "replace_all": true
+   },
+   "expect": {
+    "ok": true,
+    "files": {
+     "../../data/agents/main/skills/deploy-checklist/SKILL.md": "---\nname: deploy-checklist\ndescription: Steps to deploy the Atlas service safely. Use before any production deploy.\nmetadata:\n  vbot:\n    author: agent\n---\n\n# Deploy checklist\n\n1. Run the test suite with `pytest -n auto`.\n2. Tag the release: \"v1.2.3\".\n3. Deploy with `make deploy`.\n\n## Pitfalls\n\n- Never deploy on weekends.\n- Check the weekend freeze calendar.\n"
+    }
+   }
+  },
+  {
+   "name": "skill_manage: Hermes-style empty placeholders",
+   "tool": "skill_manage",
+   "arguments": {
+    "action": "patch",
+    "name": "deploy-checklist",
+    "old_string": "Never deploy on Fridays.",
+    "new_string": "Never deploy after 4 pm.",
+    "file_content": "",
+    "replace_all": false,
+    "file_path": ""
+   },
+   "expect": {
+    "ok": true,
+    "files": {
+     "../../data/agents/main/skills/deploy-checklist/SKILL.md": "---\nname: deploy-checklist\ndescription: Steps to deploy the Atlas service safely. Use before any production deploy.\nmetadata:\n  vbot:\n    author: agent\n---\n\n# Deploy checklist\n\n1. Run the test suite with `pytest -n auto`.\n2. Tag the release: \"v1.2.3\".\n3. Deploy with `make deploy`.\n\n## Pitfalls\n\n- Never deploy after 4 pm.\n- Check the Friday freeze calendar.\n"
+    }
+   }
+  },
+  {
+   "name": "skill_manage: conflicting new_string and content",
+   "tool": "skill_manage",
+   "arguments": {
+    "action": "patch",
+    "name": "deploy-checklist",
+    "old_string": "Never deploy on Fridays.",
+    "new_string": "A",
+    "content": "B"
+   },
+   "expect": {
+    "ok": false,
+    "files": {
+     "../../data/agents/main/skills/deploy-checklist/SKILL.md": "---\nname: deploy-checklist\ndescription: Steps to deploy the Atlas service safely. Use before any production deploy.\nmetadata:\n  vbot:\n    author: agent\n---\n\n# Deploy checklist\n\n1. Run the test suite with `pytest -n auto`.\n2. Tag the release: \"v1.2.3\".\n3. Deploy with `make deploy`.\n\n## Pitfalls\n\n- Never deploy on Fridays.\n- Check the Friday freeze calendar.\n"
+    }
+   }
+  },
+  {
+   "name": "skill_manage: edit with a fragment and old_string patches",
+   "tool": "skill_manage",
+   "arguments": {
+    "action": "edit",
+    "name": "deploy-checklist",
+    "old_string": "- Never deploy on Fridays.",
+    "content": "- Never deploy on Fridays or holidays."
+   },
+   "expect": {
+    "ok": true,
+    "files": {
+     "../../data/agents/main/skills/deploy-checklist/SKILL.md": "---\nname: deploy-checklist\ndescription: Steps to deploy the Atlas service safely. Use before any production deploy.\nmetadata:\n  vbot:\n    author: agent\n---\n\n# Deploy checklist\n\n1. Run the test suite with `pytest -n auto`.\n2. Tag the release: \"v1.2.3\".\n3. Deploy with `make deploy`.\n\n## Pitfalls\n\n- Never deploy on Fridays or holidays.\n- Check the Friday freeze calendar.\n"
+    }
+   }
+  },
+  {
+   "name": "skill_manage: create with front matter",
+   "tool": "skill_manage",
+   "arguments": {
+    "action": "create",
+    "name": "release-notes-a",
+    "content": "---\nname: release-notes-a\ndescription: Write release notes for Atlas. Use when preparing a release.\n---\n\n# Release notes\n\nList user-visible changes.\n"
+   },
+   "expect": {
+    "ok": true,
+    "files": {
+     "../../data/agents/main/skills/release-notes-a/SKILL.md": "---\nname: release-notes-a\ndescription: Write release notes for Atlas. Use when preparing a release.\nmetadata:\n  vbot:\n    author: agent\n---\n\n# Release notes\n\nList user-visible changes.\n"
+    }
+   }
+  },
+  {
+   "name": "skill_manage: create from body plus description",
+   "tool": "skill_manage",
+   "arguments": {
+    "action": "create",
+    "name": "release-notes-b",
+    "description": "Write release notes for Atlas. Use when preparing a release.",
+    "content": "# Release notes\n\nList user-visible changes.\n"
+   },
+   "expect": {
+    "ok": true,
+    "files": {
+     "../../data/agents/main/skills/release-notes-b/SKILL.md": "---\nname: release-notes-b\ndescription: Write release notes for Atlas. Use when preparing a release.\nmetadata:\n  vbot:\n    author: agent\n---\n\n# Release notes\n\nList user-visible changes.\n"
+    }
+   }
+  },
+  {
+   "name": "skill_manage: create without front matter shows the header",
+   "tool": "skill_manage",
+   "arguments": {
+    "action": "create",
+    "name": "release-notes-c",
+    "content": "# Release notes\n\nList changes.\n"
+   },
+   "expect": {
+    "ok": false,
+    "contains": [
+     "---",
+     "description:"
+    ],
+    "files": {
+     "../../data/agents/main/skills/release-notes-c/SKILL.md": null
+    }
+   }
+  },
+  {
+   "name": "skill_manage: near-miss Skill name is suggested, not written",
+   "tool": "skill_manage",
+   "arguments": {
+    "action": "patch",
+    "name": "deploy-checklists",
+    "old_string": "Never deploy on Fridays.",
+    "new_string": "Never deploy."
+   },
+   "expect": {
+    "ok": false,
+    "contains": [
+     "deploy-checklist"
+    ],
+    "files": {
+     "../../data/agents/main/skills/deploy-checklist/SKILL.md": "---\nname: deploy-checklist\ndescription: Steps to deploy the Atlas service safely. Use before any production deploy.\nmetadata:\n  vbot:\n    author: agent\n---\n\n# Deploy checklist\n\n1. Run the test suite with `pytest -n auto`.\n2. Tag the release: \"v1.2.3\".\n3. Deploy with `make deploy`.\n\n## Pitfalls\n\n- Never deploy on Fridays.\n- Check the Friday freeze calendar.\n"
+    }
+   }
+  },
+  {
+   "name": "skill_manage: bundled Skill is read-only",
+   "tool": "skill_manage",
+   "arguments": {
+    "action": "patch",
+    "name": "vbot-cli",
+    "old_string": "vBot",
+    "new_string": "VBOT"
+   },
+   "expect": {
+    "ok": false,
+    "error_code": "skill_write_rejected"
+   }
+  },
+  {
+   "name": "skill_manage: write_file with file_content",
+   "tool": "skill_manage",
+   "arguments": {
+    "action": "write_file",
+    "name": "deploy-checklist",
+    "file_path": "references/extra.md",
+    "file_content": "Extra notes.\n"
+   },
+   "expect": {
+    "ok": true,
+    "files": {
+     "../../data/agents/main/skills/deploy-checklist/references/extra.md": "Extra notes.\n"
+    }
+   }
+  },
+  {
+   "name": "session_search: limit within ten",
+   "tool": "session_search",
+   "arguments": {
+    "query": "deploy",
+    "limit": 5
+   },
+   "expect": {
+    "ok": true
+   }
+  },
+  {
+   "name": "session_search: larger limit is capped with a note",
+   "tool": "session_search",
+   "arguments": {
+    "query": "deploy",
+    "limit": 50
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "10"
+    ]
+   }
+  },
+  {
+   "name": "session_search: offset-less period states its timezone",
+   "tool": "session_search",
+   "arguments": {
+    "query": "deploy",
+    "period": "2026-07-01T09:00/2026-07-02"
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "2026-07-01T09:00:00"
+    ]
+   }
+  }
+ ]
+}

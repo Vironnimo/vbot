@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from core.providers.adapter import TOOL_RESULT_CONTENT_BLOCKS_FIELD
 from core.providers.tool_schema import render_tool_definitions
+from core.tools import tool_failure, tool_success
+from core.utils.tokens import estimate_structured_tokens
 
 from .openai_compatible_test_support import (
     API_KEY,
@@ -358,6 +362,62 @@ class TestSendRequestFormat:
 
     @respx.mock
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("with_media", [False, True])
+    @pytest.mark.parametrize(
+        "literal_result",
+        [tool_success({"content": "inner text"}), tool_failure("inner", "Literal file content.")],
+        ids=["success_json", "failure_json"],
+    )
+    async def test_send_preserves_envelope_shaped_literal_tool_output(
+        self, openai_adapter, literal_result, with_media: bool
+    ) -> None:
+        route = respx.post(OPENAI_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+        literal = json.dumps(literal_result, separators=(",", ":"))
+        messages: list[dict[str, Any]] = [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"id": "call_1", "name": "read", "arguments": {}}],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_1",
+                "content": json.dumps(tool_success({"content": literal})),
+            },
+        ]
+        if with_media:
+            messages[1][TOOL_RESULT_CONTENT_BLOCKS_FIELD] = [
+                {"type": "media", "base64": "aW1hZ2U=", "media_type": "image/png"}
+            ]
+        original = json.dumps(messages)
+
+        await openai_adapter.send(messages, model_id="gpt-5.2")
+
+        wire_messages = json.loads(route.calls.last.request.content)["messages"]
+        assert wire_messages[1] == {
+            "role": "tool",
+            "tool_call_id": "call_1",
+            "content": literal,
+        }
+        assert len(wire_messages) == (3 if with_media else 2)
+        if with_media:
+            assert wire_messages[2] == {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "data:image/png;base64,aW1hZ2U="},
+                    }
+                ],
+            }
+        estimated, _ = estimate_structured_tokens(wire_messages, model_id="gpt-5.2")
+        assert openai_adapter.estimate_request_input_tokens(messages, model_id="gpt-5.2") == (
+            estimated
+        )
+        assert json.dumps(messages) == original
+
+    @respx.mock
+    @pytest.mark.asyncio
     async def test_send_uses_request_only_user_fallback_for_rich_tool_result(
         self,
         openai_adapter,
@@ -367,7 +427,7 @@ class TestSendRequestFormat:
             {
                 "role": "tool",
                 "tool_call_id": "call_image",
-                "content": '{"ok":true}',
+                "content": json.dumps(tool_success({"content": "image result"})),
                 TOOL_RESULT_CONTENT_BLOCKS_FIELD: [
                     {
                         "type": "media",
@@ -386,7 +446,7 @@ class TestSendRequestFormat:
             {
                 "role": "tool",
                 "tool_call_id": "call_image",
-                "content": '{"ok":true}\n\n[Image path: C:/diagram.png]',
+                "content": "image result\n\n[Image path: C:/diagram.png]",
             },
             {
                 "role": "user",

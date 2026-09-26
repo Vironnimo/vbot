@@ -13,6 +13,12 @@ WORKTREE_FILE_NAME = ".vbot-worktree"
 DATA_DIR_KEY = "data_dir"
 
 
+DATA_OWNER_KEY = "data_owner"
+
+
+DATA_OWNER_FILE_NAME = ".vbot-worktree-owner.json"
+
+
 MANAGED_BRANCH_KEY = "managed_branch"
 
 
@@ -29,7 +35,7 @@ def _read_worktree_marker(marker_path: Path) -> dict[str, object] | None:
     """Read a worktree marker JSON object."""
     try:
         data = json.loads(marker_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, UnicodeError, json.JSONDecodeError):
         return None
 
     if not isinstance(data, dict):

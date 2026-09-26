@@ -104,10 +104,10 @@ def test_content_that_is_not_an_envelope_passes_through() -> None:
     assert tool_result_text(None) is None
 
 
-def test_rendering_is_idempotent() -> None:
-    text = tool_result_text(_content(tool_success({"status": "ok", "output": "{}"})))
+def test_a_body_that_looks_like_an_envelope_is_literal_content() -> None:
+    literal = _content(tool_failure("not_found", "This is file content, not a failure."))
 
-    assert tool_result_text(text) == text
+    assert tool_result_text(_content(tool_success({"content": literal}))) == literal
 
 
 def test_function_response_marks_failures_as_errors() -> None:
@@ -137,9 +137,9 @@ def test_chat_completions_and_text_only_wires_send_the_rendered_text() -> None:
     }
 
     assert _to_openai_message(_tool_message(_FAILURE))["content"] == _FAILURE_TEXT
-    assert project_tool_result_content_fallbacks([rich])[0]["content"] == (
-        f"{_SUCCESS_TEXT}\n\n[Image path: a.png]"
-    )
+    projected = project_tool_result_content_fallbacks([rich])[0]
+    assert projected["content"] == _SUCCESS
+    assert _to_openai_message(projected)["content"] == (f"{_SUCCESS_TEXT}\n\n[Image path: a.png]")
 
 
 def test_responses_wire_sends_the_rendered_text() -> None:

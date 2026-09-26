@@ -30,14 +30,15 @@ from tests.core.tools.bash_helpers import (
 )
 
 
-@pytest.mark.parametrize("newline", ["\n", "\r\n", "\r"])
+@pytest.mark.parametrize("newline", ["\n", "\r\n"])
 @pytest.mark.parametrize("has_log", [False, True])
 def test_handoff_snapshot_keeps_twenty_newest_lines(tmp_path, newline, has_log):
     tracked = types.SimpleNamespace(
         log_file=tmp_path / "command.log" if has_log else None, truncated=False
     )
-    lines = [f"line-{index}{newline}" for index in range(40)]
-    fields = bash_results._shape_output_fields(tracked, "".join(lines), handoff=True)
+    lines = [f"line-{index}\n" for index in range(40)]
+    output = "".join(line.replace("\n", newline) for line in lines)
+    fields = bash_results._shape_output_fields(tracked, output, handoff=True)
     assert fields["truncated"] is True
     assert fields["output"].split("\n", 1)[1] == "".join(lines[-20:])
     assert len(fields["output"]) <= 4000

@@ -26,7 +26,9 @@ from __future__ import annotations
 
 import contextlib
 import functools
+import os
 import shutil
+import stat
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -325,5 +327,13 @@ def _resume(data_dir: Path, plan: InstallPlan) -> dict[str, Any]:
 
 
 def _discard(path: Path) -> None:
+    def make_writable_and_retry(
+        action: Callable[[str], object], target: str, _error: object
+    ) -> None:
+        # Staged JSON keeps source permissions, including Windows read-only files.
+        # Only this disposable copy becomes writable; the source is untouched.
+        os.chmod(target, stat.S_IMODE(Path(target).stat().st_mode) | stat.S_IWUSR)
+        action(target)
+
     if path.exists():
-        shutil.rmtree(path)
+        shutil.rmtree(path, onerror=make_writable_and_retry)

@@ -96,6 +96,7 @@ from core.tools import (
 from core.tools.process_manager import ProcessManager
 from core.tools.terminal_manager import TerminalManager, TerminalManagerError
 from core.tools.tools import ToolPromptBlockRegistry, ToolRegistry
+from core.usage import UsageRecorder
 from core.utils.logging import LogManager
 
 # Windows environment variable names are case-insensitive. The data-dir `.env`
@@ -184,6 +185,7 @@ class Runtime:
         self._extension_runtime: ExtensionRuntime | None = None
         self._chat_sessions: ChatSessionManager | None = None
         self._statistics_index: StatisticsIndex | None = None
+        self._usage_recorder: UsageRecorder | None = None
         self._projects: ProjectStore | None = None
         self._agent_resolver: AgentResolver | None = None
         self._temporary_agents: TemporaryAgentRegistry | None = None
@@ -248,6 +250,7 @@ class Runtime:
                 agents=self.agents,
                 sessions=self.chat_sessions,
                 statistics_index=self.statistics_index,
+                usage_recorder=self.usage_recorder,
                 tools=self.tools,
                 models=self.models,
                 provider_credentials=self.provider_credentials,
@@ -338,7 +341,23 @@ class Runtime:
             for key in ("stop_sequences", "tool_choice")
             if request.get(key) is not None
         }
+        owner = context.execution_owner
+        recorder = self.usage_recorder
+        call_id = None
+        usage = None
+        outcome = "failed"
         try:
+            call_id = await recorder.start(
+                model=f"{provider_id}/{model_id}",
+                kind="extension_sampling",
+                connection_id=connection_id,
+                agent_id=context.agent_id,
+                session_id=context.session_id,
+                project_id=context.project_id,
+                run_id=context.run_id,
+                owner_name=owner.extension if owner else None,
+                group_id=owner.group_id if owner else None,
+            )
             response = await adapter.send(
                 request["messages"],
                 model_id=model_id,
@@ -355,8 +374,17 @@ class Runtime:
                 ),
             )
             normalized = adapter.normalize_response(response, model_id=model_id)
+            usage = normalized.get("usage")
+            outcome = "completed"
+        except asyncio.CancelledError:
+            outcome = "cancelled"
+            raise
         finally:
-            await adapter.aclose()
+            try:
+                if call_id is not None:
+                    await recorder.finish(call_id, usage, status=outcome)
+            finally:
+                await adapter.aclose()
         return {"model": f"{provider_id}/{model_id}", **normalized}
 
     def activate_bootstrap(self) -> None:
@@ -412,6 +440,8 @@ class Runtime:
             self._decisions.close()
         if self._speech is not None:
             self._speech.close()
+        if self._usage_recorder is not None:
+            self._usage_recorder.close()
         self._clear_service_references()
         self._log_manager.close()
         if terminal_error is not None:
@@ -492,6 +522,8 @@ class Runtime:
         if self._statistics_index is not None:
             # A running Statistics read holds the index lock; wait on its pool.
             await self._statistics_index.aclose()
+        if self._usage_recorder is not None:
+            await self._usage_recorder.aclose()
         if self._chat_sessions is not None:
             self._chat_sessions.close()
 
@@ -540,6 +572,9 @@ class Runtime:
         if self._channel_service is not None:
             with suppress(Exception):
                 self._channel_service.close()
+        if self._usage_recorder is not None:
+            with suppress(Exception):
+                self._usage_recorder.close()
         if self._chat_sessions is not None:
             with suppress(Exception):
                 self._chat_sessions.close()
@@ -1035,6 +1070,8 @@ class Runtime:
         databases: list[Database] = []
         if self._chat_sessions is not None:
             databases.append(self._chat_sessions.database)
+        if self._usage_recorder is not None:
+            databases.append(self._usage_recorder.database)
         if self._decisions is not None:
             databases.append(self._decisions.database)
         if self._provider_usage is not None:
@@ -1062,6 +1099,10 @@ class Runtime:
 
     statistics_index: _StartedService[StatisticsIndex] = _StartedService(
         lambda runtime: runtime._statistics_index, "Statistics index is not available"
+    )
+
+    usage_recorder: _StartedService[UsageRecorder] = _StartedService(
+        lambda runtime: runtime._usage_recorder, "Usage accounting is not available"
     )
 
     subagents: _StartedService[SubAgentCoordinator] = _StartedService(

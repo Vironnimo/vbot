@@ -6,7 +6,7 @@ import json
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from functools import partial
-from typing import Any, Literal, Protocol, cast
+from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
 
 from core.chat import (
     compaction_projection_without_active_skills,
@@ -22,20 +22,27 @@ from core.chat.messages import (
     ChatMessage,
     JsonObject,
 )
-from core.chat.streaming import StreamingAccumulator, iter_with_chunk_timeout
 from core.chat.wire_shaping import (
     SYSTEM_REMINDER_CLOSE_TAG,
     SYSTEM_REMINDER_OPEN_TAG,
     _notes_to_request_messages,
-    model_facing_request,
+)
+from core.compaction._model_request import _send_streaming_model_request
+from core.compaction.errors import (
+    CompactionError as CompactionError,
+)
+from core.compaction.errors import (
+    CompactionInsufficientReclaimError as CompactionInsufficientReclaimError,
 )
 from core.models.pricing import TokenPricing, price_usage
-from core.providers.adapter import TERMINAL_OUTCOME_STOP, estimate_wire_request_input_tokens
+from core.providers.adapter import estimate_wire_request_input_tokens
 from core.sessions import SessionAddress, current_skill_activation_contents, skill_tool_activation
 from core.settings.normalizers import normalize_compaction_policy
-from core.utils.errors import VBotError
 from core.utils.tokens import estimate_message_tokens, estimate_request_input_tokens
 from core.utils.workers import BoundedWorkerPool
+
+if TYPE_CHECKING:
+    from core.usage import UsageRecorder
 
 TRIGGER_CONTEXT_RATIO = "context_ratio"
 TRIGGER_INPUT_TOKENS = "input_tokens"
@@ -211,14 +218,6 @@ class CompactionStrategy(Protocol):
         """Return the single-call-or-less Context transformation plan."""
 
 
-class CompactionError(VBotError):
-    """Raised when a compaction plan cannot be produced or executed."""
-
-
-class CompactionInsufficientReclaimError(CompactionError):
-    """Raised when an automatic checkpoint would not reclaim enough Context."""
-
-
 def find_tail_boundary(messages: list[ChatMessage], tail_tokens: int) -> str:
     """Return the canonical boundary of the bounded chronological Tail suffix."""
 
@@ -325,8 +324,10 @@ class CompactionService:
         triggers: dict[str, CompactionTrigger] | None = None,
         *,
         pricing_lookup: Callable[[str], TokenPricing | None] | None = None,
+        usage_recorder: UsageRecorder | None = None,
     ) -> None:
         self._pricing_lookup = pricing_lookup
+        self._usage_recorder = usage_recorder
         if strategies is None:
             resolved_strategies: tuple[CompactionStrategy, ...] = (
                 SummarizationStrategy(),
@@ -427,6 +428,9 @@ class CompactionService:
         active_temperature: float | None = None,
         summary_model_reference: str | None = None,
         active_model_reference: str | None = None,
+        run_id: str | None = None,
+        owner_name: str | None = None,
+        group_id: str | None = None,
     ) -> ChatMessage:
         """Execute at most one Model request and persist its assembled projection."""
         if trigger not in COMPACTION_TRIGGERS:
@@ -483,19 +487,28 @@ class CompactionService:
                     plan,
                     strip_reasoning=(adapter is not active_adapter or model_id != active_model_id),
                 )
-                response = await _send_streaming_model_request(
-                    adapter, model_messages, request_options
-                )
                 reference = (
                     summary_model_reference
                     if plan.model_target == "summary"
                     else active_model_reference
                 )
+                response = await _send_streaming_model_request(
+                    adapter,
+                    model_messages,
+                    request_options,
+                    usage_recorder=self._usage_recorder,
+                    model_reference=reference,
+                    session_address=session_address,
+                    run_id=run_id,
+                    owner_name=owner_name,
+                    group_id=group_id,
+                )
                 usage = dict(response.get("usage") or {})
                 pricing = (
                     self._pricing_lookup(reference) if self._pricing_lookup and reference else None
                 )
-                usage["cost"] = price_usage(usage, pricing)
+                if "cost" not in usage:
+                    usage["cost"] = price_usage(usage, pricing)
                 model_call = {"model": reference, "usage": usage}
             checkpoint = await _COMPACTION_WORKERS.run(
                 _finalize_compaction,
@@ -925,38 +938,6 @@ def _build_compaction_instruction(
     if instruction and instruction.strip():
         sections.append(f"<user_instruction>\n{instruction.strip()}\n</user_instruction>")
     return "\n\n".join(sections)
-
-
-async def _send_streaming_model_request(
-    adapter: Any,
-    messages: list[dict[str, Any]],
-    request_options: dict[str, Any],
-) -> dict[str, Any]:
-    """Consume one canonical stream, accepting only a completed text response.
-
-    Some providers (observed on OpenRouter's stealth tier) reject large
-    non-streaming completions outright while streaming the same payload fine,
-    so Compaction always streams. Adapter deltas are already normalized and must
-    never be passed back through a raw-wire response parser.
-    """
-    accumulator = StreamingAccumulator()
-    tools = request_options.get("tools")
-    messages, model_tools = model_facing_request(messages, list(tools or []))
-    if tools is not None:
-        request_options = {**request_options, "tools": model_tools}
-    # Internal maintenance must remain bounded even when a local Model stalls;
-    # no fallback result may replace an incomplete summary checkpoint.
-    async for delta in iter_with_chunk_timeout(adapter.stream(messages, **request_options)):
-        if delta.get("type") != "heartbeat":
-            accumulator.add_delta(delta)
-    if accumulator.finish_reason != TERMINAL_OUTCOME_STOP:
-        raise CompactionError(
-            "Summary stream did not complete successfully "
-            f"(outcome={accumulator.finish_reason or 'missing'})"
-        )
-    if accumulator.has_partial_tool_call:
-        raise CompactionError("Summary stream requested Tools instead of completing its summary")
-    return accumulator.finalize_assistant_fields().to_response_dict()
 
 
 def _extract_summary_text(response: dict[str, Any]) -> str:

@@ -59,7 +59,9 @@ class FailingAdapter(ChannelAdapter):
     ) -> None:
         return
 
-    async def ensure_outbound_session(self, platform_target: str) -> RouteFacts:
+    async def ensure_outbound_session(
+        self, platform_target: str, *, thread_id: str | None = None
+    ) -> RouteFacts:
         raise NotImplementedError
 
 
@@ -92,7 +94,9 @@ class RunThenCrashAdapter(ChannelAdapter):
     ) -> None:
         return
 
-    async def ensure_outbound_session(self, platform_target: str) -> RouteFacts:
+    async def ensure_outbound_session(
+        self, platform_target: str, *, thread_id: str | None = None
+    ) -> RouteFacts:
         raise NotImplementedError
 
 

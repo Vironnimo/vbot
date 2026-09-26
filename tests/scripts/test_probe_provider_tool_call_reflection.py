@@ -65,7 +65,8 @@ def test_reflection_probe_uses_production_memory_results_and_keeps_expectations_
     results = [
         json.loads(message["content"]) for message in adapter.messages if message["role"] == "tool"
     ]
-    assert results[-1]["data"]["entries"][0]["content"] == "User prefers German responses."
+    assert results[0]["data"]["content"].startswith("# User Profile")
+    assert results[-1]["data"]["content"].startswith("Added to user Memory")
     assert "standing_preference" not in json.dumps(adapter.messages)
     assert '"expected"' not in json.dumps(adapter.messages)
 
@@ -112,7 +113,7 @@ def test_reflection_probe_accepts_a_noop_after_reading_current_memory():
     results = [
         json.loads(message["content"]) for message in adapter.messages if message["role"] == "tool"
     ]
-    assert "German" in results[0]["data"]["entries"][0]["content"]
+    assert "German" in results[0]["data"]["content"]
 
 
 def test_reflection_probe_verifies_skill_replacement_and_preservation():

@@ -1,6 +1,8 @@
 """Present MCP payloads: binary bytes become Attachments, large results stay readable.
 
-A result too large to show at once is attached to its Tool Result as a result
+In a Session the Model reads a view of the payload (``_views.py``): text as a
+verbatim body, other fields compact. A view too large to show at once shows
+its start; the complete payload is attached to its Tool Result as a result
 payload and read selectively through the ``read`` action. Outside a Session
 (management and CLI calls) nothing could read a saved result later, so the
 complete payload is returned inline.
@@ -21,24 +23,49 @@ from core.extensions.operations import ExtensionHost
 from core.tools.tools import ToolContext, read_media_artifact, run_tool_worker
 from core.utils.ids import is_safe_id, new_id
 
+from ._views import Part, body_parts, compact, error_text, join_parts, payload_view, view_size
+
 RESULT_VIEW_CHARACTERS = 6000
 RESULT_PREVIEW_CHARACTERS = 400
 RESULT_READ_ENTRIES = 20
-RESULT_READ_CHARACTERS = 2000
+RESULT_READ_CHARACTERS = 4000
+# The start of a large text result, and the ends of a long error report, shown before a read.
+RESULT_TEXT_CHARACTERS = 3000
+ERROR_HEAD_CHARACTERS = 1000
+ERROR_TAIL_CHARACTERS = 2000
+# A field of a large result shown beside its text start; larger ones are read.
+RESULT_FIELD_CHARACTERS = 500
 
 RESULT_MISSING = (
-    "Saved MCP result is unavailable. Use an existing result_id returned by this connection."
+    "read was not run: that saved MCP result is not available in this conversation. Use a "
+    "result_id that this connection returned here. To get the data again, repeat the "
+    "original call only if it changes nothing."
 )
 
-RESULT_DENIED = "This Agent cannot read this saved MCP result."
+RESULT_DENIED = (
+    "read was not run: that saved result belongs to the MCP connection {connection}. "
+    "Read it with mcp_{connection}."
+)
 
-POINTER_INVALID = "Invalid JSON Pointer. Use a pointer returned by read."
+POINTER_INVALID = (
+    "read was not run: pointer {pointer} does not select a value; {reason}. "
+    "See what it holds with {call}."
+)
 
-READ_INVALID = "These read options do not apply to the selected value."
+READ_INVALID = (
+    "read was not run: {options} apply to {applies}, but {selection} is {kind}. Send {call}."
+)
 
 READ_TOO_LARGE = (
     "This selection is too large to show. Read a deeper pointer, fewer fields, or a smaller limit."
 )
+
+
+class _PointerError(ValueError):
+    def __init__(self, reached: str, reason: str) -> None:
+        super().__init__(reason)
+        self.reached = reached
+        self.reason = reason
 
 
 class ContentStore:
@@ -117,23 +144,93 @@ class ContentStore:
         connection: str,
         *,
         source: str | None = None,
-        preview: Any = None,
     ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        """Return the Model's view of a payload, or the complete payload outside a Session."""
         preserved, artifacts = await self.preserve(payload)
-        encoded = json.dumps(preserved, ensure_ascii=False, separators=(",", ":"))
-        if not context.result_payloads_available or (
-            preview is None and len(encoded) <= RESULT_VIEW_CHARACTERS
-        ):
+        if not context.result_payloads_available:
             return {"complete": True, "value": preserved}, artifacts
-        identifier = context.attach_result_payload(
-            {"connection": connection, "source": source, "payload": preserved}
+        view = payload_view(preserved)
+        if view_size(view) <= RESULT_VIEW_CHARACTERS:
+            return view, artifacts
+        identifier = self.attach(preserved, context, connection, source)
+        rendered = body_parts(preserved)
+        if rendered is None:
+            return {
+                "result_id": identifier,
+                "complete": False,
+                "preview": self._preview(preserved),
+                "read": {"action": "read", "result_id": identifier},
+            }, artifacts
+        return self._text_start(identifier, view, rendered[0]), artifacts
+
+    async def error_report(
+        self,
+        payload: dict[str, Any],
+        context: ToolContext,
+        connection: str,
+        *,
+        source: str | None = None,
+    ) -> tuple[str, list[dict[str, Any]]]:
+        """Return a failed call's own report; a long report's middle is left to ``read``."""
+        preserved, artifacts = await self.preserve(payload)
+        text = error_text(payload_view(preserved))
+        shown = ERROR_HEAD_CHARACTERS + ERROR_TAIL_CHARACTERS
+        if not context.result_payloads_available or len(text) <= shown + 200:
+            return text, artifacts
+        identifier = self.attach(preserved, context, connection, source)
+        call: dict[str, Any] = {"action": "read", "result_id": identifier}
+        rendered = body_parts(preserved)
+        parts = rendered[0] if rendered is not None else []
+        if len(parts) == 1 and parts[0].pointer is not None and not parts[0].prefix:
+            call.update(pointer=parts[0].pointer, offset=ERROR_HEAD_CHARACTERS)
+        omitted = len(text) - shown
+        return (
+            f"{text[:ERROR_HEAD_CHARACTERS]}\n[... {omitted} characters omitted; read the "
+            f"complete report with {compact(call)} ...]\n{text[-ERROR_TAIL_CHARACTERS:]}"
+        ), artifacts
+
+    @staticmethod
+    def attach(
+        payload: dict[str, Any],
+        context: ToolContext,
+        connection: str,
+        source: str | None = None,
+    ) -> str:
+        """Keep a complete payload with its Tool Result for ``read``; return its id."""
+        return context.attach_result_payload(
+            {"connection": connection, "source": source, "payload": payload}
         )
-        return {
-            "result_id": identifier,
-            "complete": False,
-            "preview": self._preview(preview if preview is not None else preserved),
-            "read": {"action": "read", "result_id": identifier},
-        }, artifacts
+
+    @staticmethod
+    def _text_start(identifier: str, view: dict[str, Any], parts: list[Part]) -> dict[str, Any]:
+        """Show the start of a large text result and the reads that continue it."""
+        read = {"action": "read", "result_id": identifier}
+        result: dict[str, Any] = {"result_id": identifier}
+        large = []
+        for key, value in view.items():
+            if key == "content":
+                continue
+            if len(compact(value)) <= RESULT_FIELD_CHARACTERS:
+                result[key] = value
+            else:
+                large.append("/" + pointer_part(key))
+        text, continuation, following = _text_prefix(parts, RESULT_TEXT_CHARACTERS)
+        notes = []
+        if continuation is not None:
+            notes.append(
+                f"This shows the first {len(text)} of {len(view['content'])} characters. "
+                f"Continue with {compact({**read, **continuation})}."
+            )
+            if following is not None:
+                notes.append(f"The next part starts at pointer {following}.")
+        if large:
+            notes.append(
+                f"Too large to show here: {', '.join(large)}; read it with "
+                f"{compact({**read, 'pointer': large[0]})}."
+            )
+        result["note"] = " ".join(notes)
+        result["content"] = text
+        return result
 
     async def load_result(
         self,
@@ -148,7 +245,7 @@ class ContentStore:
         if not isinstance(document, dict):
             raise ValueError(RESULT_MISSING)
         if document.get("connection") != connection:
-            raise ValueError(RESULT_DENIED)
+            raise ValueError(RESULT_DENIED.format(connection=document.get("connection")))
         return document
 
     @staticmethod
@@ -168,33 +265,41 @@ class ContentStore:
     def read_result(self, document: dict[str, Any], arguments: dict[str, Any]) -> dict[str, Any]:
         identifier = arguments["result_id"]
         pointer = arguments.get("pointer", "")
-        value = select_pointer(document["payload"], pointer)
+        try:
+            value = select_pointer(document["payload"], pointer)
+        except _PointerError as error:
+            call = {"action": "read", "result_id": identifier}
+            if error.reached:
+                call["pointer"] = error.reached
+            raise ValueError(
+                POINTER_INVALID.format(pointer=pointer, reason=error.reason, call=compact(call))
+            ) from None
         fields = arguments.get("fields")
         offset = arguments.get("offset", 0)
         default_limit = RESULT_READ_CHARACTERS if isinstance(value, str) else RESULT_READ_ENTRIES
         limit = arguments.get("limit", default_limit)
         if fields is not None and not isinstance(value, (dict, list)):
-            raise ValueError(READ_INVALID)
-        response: dict[str, Any] = {
-            "result_id": identifier,
-            "pointer": pointer,
-            "type": json_kind(value),
-        }
+            raise ValueError(_inapplicable(arguments, value, ("fields",), "objects and lists"))
+        response: dict[str, Any] = {"result_id": identifier, "pointer": pointer}
         if isinstance(value, str):
             limit = min(limit, RESULT_READ_CHARACTERS)
             while True:
-                page = {**response, "value": value[offset : offset + limit]}
-                page.update(offset=offset, total=len(value))
+                page = {**response, "offset": offset, "total": len(value)}
                 end = min(offset + limit, len(value))
                 if end < len(value):
                     page["next"] = {**arguments, "offset": end}
+                # The Model reads the text verbatim as the body below these fields.
+                page["content"] = value[offset : offset + limit]
                 # Escaped characters can outgrow the view; a shorter page still advances.
                 if limit == 1 or _fits(page):
                     return self._bounded_read(page)
                 limit //= 2
+        response["type"] = json_kind(value)
         if not isinstance(value, (dict, list)):
             if offset or "limit" in arguments:
-                raise ValueError(READ_INVALID)
+                raise ValueError(
+                    _inapplicable(arguments, value, ("offset", "limit"), "text, objects and lists")
+                )
             response["value"] = value
             return self._bounded_read(response)
         candidates = list(value.items()) if isinstance(value, dict) else list(enumerate(value))
@@ -236,7 +341,7 @@ class ContentStore:
             return response
         return {
             "result_id": response["result_id"],
-            "type": response["type"],
+            "type": response.get("type", "string"),
             "complete": False,
             "guidance": READ_TOO_LARGE,
         }
@@ -244,6 +349,46 @@ class ContentStore:
 
 def _fits(response: dict[str, Any]) -> bool:
     return len(json.dumps(response, ensure_ascii=False)) <= RESULT_VIEW_CHARACTERS
+
+
+def _inapplicable(
+    arguments: dict[str, Any], value: Any, options: tuple[str, ...], applies: str
+) -> str:
+    supplied = [option for option in options if option in arguments]
+    corrected = {key: item for key, item in arguments.items() if key not in supplied}
+    kind = json_kind(value)
+    return READ_INVALID.format(
+        options=" and ".join(supplied),
+        applies=applies,
+        selection=arguments.get("pointer") or "the root",
+        kind=f"an {kind}" if kind[:1] in "aeiou" else f"a {kind}",
+        call=compact(corrected),
+    )
+
+
+def _text_prefix(parts: list[Part], budget: int) -> tuple[str, dict[str, Any] | None, str | None]:
+    """Return the body start within budget, the read that continues it, and the next part."""
+    rendered = join_parts(parts)
+    if len(rendered) <= budget:
+        return rendered, None, None
+    separator = "\n\n" if any("\n" in part.rendered for part in parts) else "\n"
+    shown: list[str] = []
+    used = 0
+    for index, part in enumerate(parts):
+        gap = len(separator) if shown else 0
+        if used + gap + len(part.rendered) <= budget:
+            shown.append(part.rendered)
+            used += gap + len(part.rendered)
+            continue
+        room = budget - used - gap - len(part.prefix)
+        if part.pointer is not None and room > 0:
+            shown.append(part.prefix + part.text[:room])
+            continuation: dict[str, Any] = {"pointer": part.pointer, "offset": room}
+        else:
+            continuation = {"pointer": part.item}
+        following = parts[index + 1].item if index + 1 < len(parts) else None
+        return separator.join(shown), continuation, following
+    return rendered, None, None
 
 
 def pointer_part(value: str) -> str:
@@ -254,18 +399,22 @@ def select_pointer(value: Any, pointer: str) -> Any:
     if pointer == "":
         return value
     if not pointer.startswith("/") or re.search(r"~(?![01])", pointer):
-        raise ValueError(POINTER_INVALID)
+        raise _PointerError("", "a pointer starts with / and writes ~ as ~0 and / in a name as ~1")
+    reached = ""
     for part in pointer[1:].split("/"):
         key = part.replace("~1", "/").replace("~0", "~")
-        try:
-            if isinstance(value, dict):
-                value = value[key]
-            elif isinstance(value, list) and re.fullmatch(r"0|[1-9][0-9]*", key):
-                value = value[int(key)]
-            else:
-                raise ValueError(POINTER_INVALID)
-        except (KeyError, IndexError):
-            raise ValueError(POINTER_INVALID) from None
+        place = reached or "the root"
+        if isinstance(value, dict):
+            if key not in value:
+                raise _PointerError(reached, f"{place} has no field {key[:60]}")
+            value = value[key]
+        elif isinstance(value, list):
+            if not re.fullmatch(r"0|[1-9][0-9]*", key) or int(key) >= len(value):
+                raise _PointerError(reached, f"{place} is a list of {len(value)} entries")
+            value = value[int(key)]
+        else:
+            raise _PointerError(reached, f"{place} is a {json_kind(value)} without parts")
+        reached += "/" + part
     return value
 
 

@@ -641,10 +641,10 @@
   canSwitchServer={Boolean(desktop.desktopCapabilities?.serverSelection)}
   onSwitchServer={() => (serverSwitcherOpen = true)}
   desktopContextMenuEnabled={Boolean(desktop.desktopCapabilities?.contextMenu)}
-  wakewordStatus={desktop.wakewordStatus}
-  desktopCapabilities={desktop.desktopCapabilities}
+  voiceAvailable={desktop.voiceAvailable}
+  voiceStatus={desktop.voiceStatus}
   onNavigateToVoiceSettings={navigateToVoiceSettings}
-  onStopWakewordRecording={desktop.handleStopWakewordRecording}
+  onStopVoiceRecording={desktop.handleStopVoiceRecording}
   onToast={desktop.showToast}
 >
   {#if setup.showFinishSetup}
@@ -666,6 +666,7 @@
       configured={Boolean(setup.settings?.model_tasks?.live_voice?.target)}
       uiActions={liveUiActions}
       {serverUnavailable}
+      voiceStatus={desktop.voiceStatus}
       onToast={desktop.showToast}
     />
   {/snippet}
@@ -835,6 +836,7 @@
           onToast={desktop.showToast}
           agents={selection.agents}
           desktopCapabilities={desktop.desktopCapabilities}
+          desktopVoice={desktop.desktopVoice}
           targetPanelId={settingsPanelTarget}
           targetPanelRequestId={settingsPanelTargetRequestId}
           onDebugEnabledChange={handleDebugEnabledChange}

@@ -5,48 +5,51 @@ description: "Operate desktop applications with the computer Tool, including vis
 
 # Computer Use
 
-Use the computer Tool to complete the user's task in desktop applications. Actions execute by default; apply=false is a preview and sends no input. Screenshots arrive directly in the result.
+Use the computer Tool to complete the user's task in desktop applications. Input executes immediately, and screenshots arrive directly in the result.
 
-## Choose the target and input
+## Choose the target and delivery
 
-Start with windows and capture the chosen pid and window_id. Use apps and launch if the application is not open, then select its window. Window control initially uses background input so the user's pointer and active application can remain independent. A target keeps its chosen foreground setting for this Run; an explicit foreground value changes it. Background support depends on the application; test one small action and inspect its effect before doing more.
+Start with windows (narrow it with app or pid) and capture the chosen window with its pid and window_id. If the application is not open, use apps and launch, then select its window from windows. Window input starts as background input, so the user's pointer and active application stay independent. foreground=true uses the real mouse and keyboard on the active window; the desktop always uses them. A target keeps its delivery setting for this Run until an explicit foreground value changes it. Background support depends on the application: test one small action and inspect its effect before doing more.
 
-Desktop input uses the shared mouse and keyboard. foreground=true also uses foreground control. If the user wants to keep using their mouse, stay with background window control and report when the application requires foreground input. A screenshot does not activate a window. The user may be clicking or typing in another window while you work. This is normal concurrent activity, not a request to cancel the Run or stop the Tool. Do not routinely ask the user to stop using the computer. Unexpected focus, selection, or layout changes can come from the user or the application; do not assume a Tool defect. Inspect the returned outcome and current target state, then continue the task from that state. Do not undo unexplained changes that may be the user's work.
+If the user wants to keep using their mouse, stay with background input and report when the application requires foreground input. The user may be clicking or typing in another window while you work. This is normal concurrent activity, not a request to cancel the Run or stop the Tool, so do not routinely ask the user to stop. Unexpected focus, selection, or layout changes can come from the user or the application; do not assume a Tool defect. Continue from the current state, and do not undo unexplained changes that may be the user's work.
 
-To switch to foreground control, capture the window with foreground=true before coordinate input. If it is not foreground, capture the desktop with {"action":"capture"}, use that image to select the intended window or its taskbar entry, then capture the window with its pid, window_id and foreground=true. A background title-bar click is not a reliable activation method. Keep a working delivery setting until observed behavior requires a change; a new Run needs a fresh capture.
+Coordinates for foreground input need a screenshot captured with foreground=true. A screenshot never activates a window: if the window is not active, capture the desktop with {"action":"capture"}, click the window or its taskbar entry there, then capture the window with foreground=true. A background title-bar click is not a reliable way to activate a window.
 
-## Observe and act
+## Screenshots and coordinates
 
-The default observation is a screenshot. Use mode=som when you need named window elements, or mode=ax when pixels are unnecessary. query is one case-insensitive literal substring, not a regular expression or an OR expression. Omit it for an overview; limit bounds the element list. These options also work on input actions, letting you request the elements needed for the next step without another capture.
+Measure coordinates in the returned image, from its top-left; display scaling is handled, so do not multiply by a monitor scale. A call without pid, window_id or view_id continues with the latest screenshot and its target, and coordinates without view_id use their target's current screenshot. Every input replaces all earlier screenshots and element refs with the new screenshot it returns. If you captured several targets since the last input, input must say which one with view_id, or pid and window_id; a failure lists the current views.
 
-A filtered or incomplete element list does not establish that a control is unavailable. Try an unfiltered overview or a query using its visible label, then use pixels if needed.
+The default screenshot is an image (mode vision). mode=som adds refs for named window elements; mode=ax returns only the element refs. query filters elements by one case-insensitive literal substring (not a regular expression) and implies som; limit bounds the list (default 200). These options also work on input actions, so the returned screenshot can include the elements for the next step. A filtered or incomplete element list does not prove a control is missing; try an overview or the visible label, then use pixels. resolution=original returns full-resolution screenshots for that target until changed back to auto.
 
-Use the returned view_id with coordinates measured in the displayed image. It identifies the target and foreground setting, so pid and window_id may be omitted for input, capture, wait, verify, and zoom. For example, use capture with the current view_id and mode=som to add named controls without changing the target or foreground setting. Zoom enlarges a rectangle from captured pixels; it does not change the application's zoom. Use the new image's view_id and coordinates when acting from a crop.
+Use complete element refs exactly as returned; never construct one from an earlier index. Prefer coordinates for canvases and when element actions have no visible effect.
 
-Use complete element refs exactly as returned for named controls; they identify their window and foreground setting. Never construct a ref from an earlier index or a similar token. Prefer coordinates for canvases and when element actions have no visible effect. After input or a new capture, continue from the returned observation; earlier views and element refs are invalid. Read-only zooms preserve the parent view and its element refs. Multiple zooms of one current view may be requested together; a capture followed by a zoom of the old view, or two separate inputs using the same refs, cannot. Wait for each new observation before using its refs, or use sequence for known coordinate steps.
+For a small control, zoom first: {"action":"zoom","coordinate":[100,40],"to_coordinate":[300,120]} enlarges that rectangle of the current screenshot without changing the application. The crop has its own view_id and coordinates starting at [0,0]; act with the crop's view_id and coordinates measured in the crop, or with the parent view_id and parent coordinates. After a zoom, coordinates need an explicit view_id. After a window resize, application zoom, or delivery change, remeasure small controls in the new image.
+
+## Keys and text
+
+type enters text into the focused field; set_value replaces an element's text. key presses the key or combination in text: enter, escape, tab, backspace, delete, home, end, pageup, pagedown, up, down, left, right, space, f1 to f24, or combinations such as ctrl+s, alt+f4, ctrl+shift+t and ctrl+plus. With foreground=true, key with duration_ms (up to 2000) holds the key, and click, scroll or drag with modifiers such as ["ctrl"] or ["shift","alt"] holds those keys during the gesture.
+
+If a Windows text field ignores typed Unicode, confirm its focus and use type with foreground=true and text_mode=keyboard. This sends physical key events on the active keyboard layout; outside a text field, those keys may invoke commands.
 
 ## Work in short sequences
 
-Use sequence for up to eight known steps on one target. Put view_id on the sequence to share it across coordinate steps. Only the first step may use an element ref. End the sequence when a menu, dialog, layout change, or uncertain application behavior requires a new observation.
+Use sequence for up to eight known steps on one target, for example {"action":"sequence","steps":[{"action":"click","coordinate":[120,80]},{"action":"type","text":"Example"}]} after measuring the field in your screenshot. Steps share the sequence's screenshot; only the first step may use an element ref. The sequence stops at the first failure and captures once at the end. End it when a menu, dialog, layout change, or uncertain application behavior requires a new look.
 
-Before repeating an operation, verify one instance and the application's current mode, selection, and active control. A completed gesture can leave an edit active; a confirmation key can leave focus in the same field. Resolve that state before the next operation.
+Before repeating an operation, verify one instance and the application's current mode, selection, and active control. A completed gesture can leave an edit active, and a confirmation key can leave focus in the same field.
 
-Example: with a text field observed at [120,80], replace VIEW with the current view_id and use {"action":"sequence","view_id":"VIEW","steps":[{"action":"click","coordinate":[120,80]},{"action":"type","text":"Example"}]}. Coordinates are illustrative; measure them in your image. The result supplies the view for the next call.
+## Window operations and checks
+
+- menu opens a menu path of a window: {"action":"menu","menu_path":["File","Save As..."]}.
+- resize moves a window to screen position coordinate with size [width,height].
+- verify waits up to timeout_ms (0 to 10000, default 5000) for conditions, then captures: {"action":"verify","expect":[{"element":{"selector":{"role":"Button","label_contains":"Save"},"exists":true}}]}. A condition is {"window":{"exists":false}} or an element selector with exists, enabled, selected or value_equals.
+- wait pauses duration_ms (default 1000, up to 10000) and captures again, for an application that is still reacting.
+- monitors lists displays; capture with monitor selects one display of the desktop.
+- capture_after=false skips the screenshot after input. apply=false previews an input action without sending it.
 
 ## Recover and finish
 
-Check applied, completed_steps, partial, and any error before continuing. When ok=false, recovery details are in artifacts. A recovery object contains arguments for a read-only computer call: pass that object directly to the Tool to inspect the next state. target and foreground identify the requested target and delivery setting; they do not prove the window still exists or is active. Recovery may start with a desktop capture or windows discovery. After selecting a window on the desktop, capture that window with foreground=true before window-coordinate input.
+Check applied, completed_steps, partial, and any error before continuing. A failure says whether input was sent and names the exact next call; send it as given. When input was sent but its new screenshot failed or was skipped, the result contains recovery: call computer with that object as the arguments to see the current state. Input that was sent does not prove the application changed, and a failed screenshot does not mean the input failed: inspect before continuing, and never repeat input only because its screenshot is missing. After a stopped sequence, do not repeat the completed steps.
 
-After input or a failed capture, a missing new observation means the previous view_id is no longer usable. Validation errors before either operation preserve the current observation. This also applies after capture_after=false. Use recovery or capture with explicit target fields. A retained observation is labeled as such and is not a fresh screenshot. Dispatched input does not prove the application changed; inspect before continuing with the remaining work and never replay input merely because its observation failed. With a current view, use wait for a later image or verify for window and element conditions.
+If an action has no visible effect, check the delivery setting, the selected control, and the target position before changing coordinates or input methods. Treat an unverified explanation as a hypothesis; a failed call does not establish an application limitation.
 
-If an action has no visible effect, check the returned foreground setting, selected control, and target position before changing coordinates or switching input methods. Treat an unverified explanation as a hypothesis; a failed call or incomplete observation does not establish an application limitation.
-
-When a dialog opens, use its returned target or find it through windows and capture it before entering text. Save through the application and verify that the dialog closed and the expected file or saved state exists before reporting success. An interrupted action may have had partial effects. Follow the user's latest instructions and capture again before further input. The computer Tool remains available. Use close when finished.
-
-## Precision and keyboard-only applications
-
-Windows display scaling is handled by the Tool. Measure coordinates in the returned image; do not multiply them by a monitor DPI scale. For a small menu row or control, zoom first and click using the crop's local coordinates and its view_id. The full-window coordinates belong to the parent view_id. A successful input returns a new full-target observation, so use that image's dimensions and reference next. After a window resize, application zoom, or change between foreground and background capture, remeasure small controls in the new image instead of reusing a coordinate map. An explicit resolution choice is retained for subsequent observations of that target.
-
-Example: zoom with {"action":"zoom","view_id":"VIEW","coordinate":[100,40],"to_coordinate":[300,120]}. Replace VIEW with the current reference and measure the rectangle in that image. If the desired control appears at [30,20] in the returned crop, click [30,20] using the crop's view_id, not the parent's coordinates.
-
-Use type for focused text fields and key for individual shortcuts. If a Windows text field ignores Unicode input, confirm its focus and use type with foreground=true and text_mode=keyboard. This sends characters as physical key events on the active keyboard layout. Outside a text field, those keys may invoke commands. Inspect the result before repeating input.
+When a dialog blocks a window, capturing that window shows the dialog and returns its window_id. Save through the application and verify that the dialog closed and the expected file or saved state exists before reporting success. An interrupted action may have had partial effects: follow the user's latest instructions and capture again before further input. Use close when finished.

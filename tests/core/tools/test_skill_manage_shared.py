@@ -96,7 +96,8 @@ def test_receiver_patch_lands_in_the_owner_package(tmp_path: Path) -> None:
         }
     )
 
-    assert result["ok"] is True
+    # The result reads exactly like a patch of one of the caller's own Skills.
+    assert result["data"] == {"content": "Patched SKILL.md of Skill 'deploy' at line 6."}
     document = harness.owner_skill_file("deploy").read_text(encoding="utf-8")
     assert "# Patched" in document
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import builtins
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from core.sessions import (
     ChatSession,
@@ -17,6 +17,9 @@ from core.statistics.index import (
     StatisticsScope,
 )
 from core.statistics.report import JsonObject
+
+if TYPE_CHECKING:
+    from core.database import Database
 
 
 class _AgentLike(Protocol):
@@ -58,6 +61,13 @@ class SessionSource(Protocol):
     """
 
     data_dir: Path
+
+    @property
+    def database(self) -> Database: ...
+
+    def usage_history(
+        self, after_entry_key: int = 0, *, limit: int = 1000
+    ) -> tuple[JsonObject, ...]: ...
 
     def list_summaries(
         self,

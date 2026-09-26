@@ -111,6 +111,187 @@
    }
   },
   {
+   "name": "read: view_range from a text editor tool",
+   "tool": "read",
+   "arguments": {
+    "path": "src/app.py",
+    "view_range": [
+     8,
+     9
+    ]
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "8|     def greet"
+    ],
+    "absent": [
+     "import os"
+    ]
+   }
+  },
+  {
+   "name": "read: lines given as a range string",
+   "tool": "read",
+   "arguments": {
+    "filePath": "src/app.py",
+    "lines": "12-13"
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "12| def main"
+    ],
+    "absent": [
+     "print("
+    ]
+   }
+  },
+  {
+   "name": "read: negative offset reads the last lines",
+   "tool": "read",
+   "arguments": {
+    "path": "README.md",
+    "offset": -2
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "2999| line 2999",
+     "3000| line 3000"
+    ],
+    "absent": [
+     "2998|"
+    ]
+   }
+  },
+  {
+   "name": "read: a cut-off read reports the line count",
+   "tool": "read",
+   "arguments": {
+    "path": "README.md",
+    "limit": 3
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "[Showing lines 1-3 of 3000. Use offset=4 to continue.]"
+    ]
+   }
+  },
+  {
+   "name": "read: offset 0 and limit 0 read from the top",
+   "tool": "read",
+   "arguments": {
+    "path": "src/app.py",
+    "offset": 0,
+    "limit": 0
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "1| import os",
+     "14|     print"
+    ]
+   }
+  },
+  {
+   "name": "read: pattern field shows matching lines",
+   "tool": "read",
+   "arguments": {
+    "path": "src/app.py",
+    "pattern": "Greeter"
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "4| class Greeter",
+     "13|     g = Greeter"
+    ],
+    "absent": [
+     "import os"
+    ]
+   }
+  },
+  {
+   "name": "read: pattern on a directory names the search call",
+   "tool": "read",
+   "arguments": {
+    "path": "src",
+    "pattern": "greet"
+   },
+   "expect": {
+    "ok": false,
+    "contains": [
+     "search_files(pattern=\"greet\", path=\"src\")"
+    ]
+   }
+  },
+  {
+   "name": "read: contradictory line windows name both calls",
+   "tool": "read",
+   "arguments": {
+    "path": "src/app.py",
+    "offset": 2,
+    "lines": "8-9"
+   },
+   "expect": {
+    "ok": false,
+    "contains": [
+     "offset=2 or offset=8, limit=2"
+    ]
+   }
+  },
+  {
+   "name": "read: a bare line count is ambiguous",
+   "tool": "read",
+   "arguments": {
+    "path": "src/app.py",
+    "lines": 5
+   },
+   "expect": {
+    "ok": false,
+    "contains": [
+     "limit=5",
+     "offset=5, limit=1"
+    ]
+   }
+  },
+  {
+   "name": "read: Cursor read_file with an explanation",
+   "tool": "read",
+   "arguments": {
+    "target_file": "src/app.py",
+    "start_line_one_indexed": 1,
+    "end_line_one_indexed_inclusive": 2,
+    "should_read_entire_file": false,
+    "explanation": "Look at the entry point."
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "1| "
+    ]
+   }
+  },
+  {
+   "name": "read: a list of several files names one call per file",
+   "tool": "read",
+   "arguments": {
+    "paths": [
+     "src/app.py",
+     "README.md"
+    ]
+   },
+   "expect": {
+    "ok": false,
+    "contains": [
+     "read(path=\"src/app.py\")",
+     "read(path=\"README.md\")"
+    ]
+   }
+  },
+  {
    "name": "patch: canonical update",
    "tool": "apply_patch",
    "arguments": {
@@ -285,6 +466,52 @@
    }
   },
   {
+   "name": "patch: old_string copied with a misspelling is applied and named",
+   "tool": "apply_patch",
+   "arguments": {
+    "path": "src/app.py",
+    "old_string": "return f\"Hello, {self.nmae}!\"",
+    "new_string": "return f\"Hi, {self.nmae}!\""
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "Line 9 did not match your old text exactly"
+    ],
+    "files": {
+     "src/app.py": "import os\n\n\nclass Greeter:\n    def __init__(self, name):\n        self.name = name\n\n    def greet(self):\n        return f\"Hi, {self.name}!\"\n\n\ndef main():\n    g = Greeter(\"world\")\n    print(g.greet())\n"
+    }
+   }
+  },
+  {
+   "name": "patch: hunk with a stale context line is applied",
+   "tool": "apply_patch",
+   "arguments": {
+    "patch": "*** Begin Patch\n*** Update File: src/app.py\n@@\n def main(args):\n-    g = Greeter(\"world\")\n+    g = Greeter(\"mars\")\n*** End Patch"
+   },
+   "expect": {
+    "ok": true,
+    "files": {
+     "src/app.py": "import os\n\n\nclass Greeter:\n    def __init__(self, name):\n        self.name = name\n\n    def greet(self):\n        return f\"Hello, {self.name}!\"\n\n\ndef main():\n    g = Greeter(\"mars\")\n    print(g.greet())\n"
+    }
+   }
+  },
+  {
+   "name": "patch: short old_string with a misspelling is refused",
+   "tool": "apply_patch",
+   "arguments": {
+    "path": "src/app.py",
+    "old_string": "self.nmae",
+    "new_string": "self.title"
+   },
+   "expect": {
+    "ok": false,
+    "files": {
+     "src/app.py": "import os\n\n\nclass Greeter:\n    def __init__(self, name):\n        self.name = name\n\n    def greet(self):\n        return f\"Hello, {self.name}!\"\n\n\ndef main():\n    g = Greeter(\"world\")\n    print(g.greet())\n"
+    }
+   }
+  },
+  {
    "name": "patch: file does not exist",
    "tool": "apply_patch",
    "arguments": {
@@ -307,6 +534,228 @@
     "ok": true,
     "files": {
      "src/notes.txt": "first line\r\n2nd line\r\nthird line\r\n"
+    }
+   }
+  },
+  {
+   "name": "patch: Edit with an empty new_string deletes the text",
+   "tool": "apply_patch",
+   "arguments": {
+    "file_path": "src/app.py",
+    "old_string": "import os\n",
+    "new_string": ""
+   },
+   "expect": {
+    "ok": true,
+    "files": {
+     "src/app.py": "\n\nclass Greeter:\n    def __init__(self, name):\n        self.name = name\n\n    def greet(self):\n        return f\"Hello, {self.name}!\"\n\n\ndef main():\n    g = Greeter(\"world\")\n    print(g.greet())\n"
+    }
+   }
+  },
+  {
+   "name": "patch: MultiEdit edits list",
+   "tool": "apply_patch",
+   "arguments": {
+    "file_path": "src/app.py",
+    "edits": [
+     {
+      "old_string": "import os",
+      "new_string": "import sys"
+     },
+     {
+      "old_string": "    g = Greeter(\"world\")",
+      "new_string": "    g = Greeter(\"mars\")"
+     }
+    ]
+   },
+   "expect": {
+    "ok": true,
+    "files": {
+     "src/app.py": "import sys\n\n\nclass Greeter:\n    def __init__(self, name):\n        self.name = name\n\n    def greet(self):\n        return f\"Hello, {self.name}!\"\n\n\ndef main():\n    g = Greeter(\"mars\")\n    print(g.greet())\n"
+    }
+   }
+  },
+  {
+   "name": "patch: str_replace text editor command",
+   "tool": "apply_patch",
+   "arguments": {
+    "command": "str_replace",
+    "path": "src/app.py",
+    "old_str": "    g = Greeter(\"world\")",
+    "new_str": "    g = Greeter(\"mars\")"
+   },
+   "expect": {
+    "ok": true,
+    "files": {
+     "src/app.py": "import os\n\n\nclass Greeter:\n    def __init__(self, name):\n        self.name = name\n\n    def greet(self):\n        return f\"Hello, {self.name}!\"\n\n\ndef main():\n    g = Greeter(\"mars\")\n    print(g.greet())\n"
+    }
+   }
+  },
+  {
+   "name": "patch: SEARCH/REPLACE block",
+   "tool": "apply_patch",
+   "arguments": {
+    "path": "src/app.py",
+    "diff": "<<<<<<< SEARCH\n    g = Greeter(\"world\")\n=======\n    g = Greeter(\"mars\")\n>>>>>>> REPLACE"
+   },
+   "expect": {
+    "ok": true,
+    "files": {
+     "src/app.py": "import os\n\n\nclass Greeter:\n    def __init__(self, name):\n        self.name = name\n\n    def greet(self):\n        return f\"Hello, {self.name}!\"\n\n\ndef main():\n    g = Greeter(\"mars\")\n    print(g.greet())\n"
+    }
+   }
+  },
+  {
+   "name": "patch: header repeated before Begin Patch",
+   "tool": "apply_patch",
+   "arguments": {
+    "patch": "*** Update File: src/app.py\n*** Begin Patch\n*** Update File: src/app.py\n@@\n-    g = Greeter(\"world\")\n+    g = Greeter(\"mars\")\n*** End Patch"
+   },
+   "expect": {
+    "ok": true,
+    "files": {
+     "src/app.py": "import os\n\n\nclass Greeter:\n    def __init__(self, name):\n        self.name = name\n\n    def greet(self):\n        return f\"Hello, {self.name}!\"\n\n\ndef main():\n    g = Greeter(\"mars\")\n    print(g.greet())\n"
+    }
+   }
+  },
+  {
+   "name": "patch: git rename diff",
+   "tool": "apply_patch",
+   "arguments": {
+    "patch": "diff --git a/src/notes.txt b/docs/notes.txt\nsimilarity index 100%\nrename from src/notes.txt\nrename to docs/notes.txt\n"
+   },
+   "expect": {
+    "ok": true,
+    "files": {
+     "src/notes.txt": null,
+     "docs/notes.txt": "first line\r\nsecond line\r\nthird line\r\n"
+    }
+   }
+  },
+  {
+   "name": "patch: Write content creates a file",
+   "tool": "apply_patch",
+   "arguments": {
+    "file_path": "src/new.txt",
+    "content": "hello\n"
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "Created src/new.txt (1 line)."
+    ],
+    "files": {
+     "src/new.txt": "hello\n"
+    }
+   }
+  },
+  {
+   "name": "patch: Write over an unread file shows it, then the resend replaces it",
+   "steps": [
+    {
+     "tool": "apply_patch",
+     "arguments": {
+      "file_path": "src/notes.txt",
+      "content": "replaced\n"
+     }
+    },
+    {
+     "tool": "apply_patch",
+     "arguments": {
+      "file_path": "src/notes.txt",
+      "content": "replaced\n"
+     }
+    }
+   ],
+   "expect": {
+    "ok": true,
+    "files": {
+     "src/notes.txt": "replaced\r\n"
+    }
+   }
+  },
+  {
+   "name": "patch: expected_replacements that does not match changes nothing",
+   "tool": "apply_patch",
+   "arguments": {
+    "file_path": "src/app.py",
+    "old_string": "self.name",
+    "new_string": "self.title",
+    "expected_replacements": 3
+   },
+   "expect": {
+    "ok": false,
+    "error_code": "occurrence_mismatch",
+    "contains": [
+     "occurs 2 times (lines 6, 9)"
+    ],
+    "files": {
+     "src/app.py": "import os\n\n\nclass Greeter:\n    def __init__(self, name):\n        self.name = name\n\n    def greet(self):\n        return f\"Hello, {self.name}!\"\n\n\ndef main():\n    g = Greeter(\"world\")\n    print(g.greet())\n"
+    }
+   }
+  },
+  {
+   "name": "patch: ambiguous old_string shows each place",
+   "tool": "apply_patch",
+   "arguments": {
+    "file_path": "src/app.py",
+    "old_string": "self.name",
+    "new_string": "self.title"
+   },
+   "expect": {
+    "ok": false,
+    "error_code": "ambiguous_match",
+    "contains": [
+     "Where it occurs:",
+     "9|         return f\"Hello, {self.name}!\""
+    ],
+    "files": {
+     "src/app.py": "import os\n\n\nclass Greeter:\n    def __init__(self, name):\n        self.name = name\n\n    def greet(self):\n        return f\"Hello, {self.name}!\"\n\n\ndef main():\n    g = Greeter(\"world\")\n    print(g.greet())\n"
+    }
+   }
+  },
+  {
+   "name": "patch: context-only hunk says where its lines are",
+   "tool": "apply_patch",
+   "arguments": {
+    "patch": "*** Begin Patch\n*** Update File: src/app.py\n@@\n def main():\n*** End Patch"
+   },
+   "expect": {
+    "ok": false,
+    "error_code": "no_changes",
+    "contains": [
+     "The unchanged lines match src/app.py line 12."
+    ]
+   }
+  },
+  {
+   "name": "patch: text editor view names the read call",
+   "tool": "apply_patch",
+   "arguments": {
+    "command": "view",
+    "path": "src/app.py"
+   },
+   "expect": {
+    "ok": false,
+    "contains": [
+     "read(path=\"src/app.py\")"
+    ]
+   }
+  },
+  {
+   "name": "patch: code_edit with placeholders is refused",
+   "tool": "apply_patch",
+   "arguments": {
+    "target_file": "src/app.py",
+    "code_edit": "// ... existing code ...\n    g = Greeter(\"mars\")"
+   },
+   "expect": {
+    "ok": false,
+    "contains": [
+     "code_edit cannot be applied"
+    ],
+    "files": {
+     "src/app.py": "import os\n\n\nclass Greeter:\n    def __init__(self, name):\n        self.name = name\n\n    def greet(self):\n        return f\"Hello, {self.name}!\"\n\n\ndef main():\n    g = Greeter(\"world\")\n    print(g.greet())\n"
     }
    }
   },

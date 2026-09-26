@@ -7,7 +7,6 @@ import json
 import logging
 from collections.abc import AsyncIterator
 from dataclasses import replace
-from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -24,6 +23,7 @@ from core.extensions.operations import ExtensionHost
 from core.tools import ToolRegistry
 from resources.extensions.swarm.extension import register
 from tests.core.chat.chat_loop_support import StubAdapter, StubAgent, StubRuntime, build_chat_loop
+from tests.resources.extensions.test_swarm_board import Received, received
 
 # Generous Swarm coordination deadline: under full-gate xdist load, wakes, board
 # writes and state transitions perform durable SQLite work that can take several
@@ -129,22 +129,20 @@ async def test_busy_burst_reaches_next_request_without_duplicate_wakes(
     assert all(
         f"burst-sentinel-{index}" in str(adapter.requests[1]["messages"]) for index in range(15)
     )
-    delivered = []
-    for message in adapter.requests[1]["messages"]:
-        content = message.get("content", "")
-        if isinstance(content, str) and "burst-sentinel-" in content:
-            payload, _ = json.JSONDecoder().raw_decode(content[content.index("{") :])
-            delivered.extend(payload["entries"])
-    assert [entry["sequence"] for entry in delivered] == list(range(1, 16))
-    assert len({entry["id"] for entry in delivered}) == 15
-    for entry in delivered:
-        assert entry["route_class"] == "main"
-        assert entry["discussion_title"] == "Main"
-        assert entry["author"] == {"kind": "user", "id": "user", "name": "User"}
-        assert datetime.fromisoformat(entry["created_at"]).utcoffset() == timedelta(0)
-        assert entry["reply_to"] is None and entry["recipients"] == []
-
+    delivered = delivered_messages(adapter.requests[1], "burst-sentinel-")
     snapshot = await lifecycle.service.store.get_swarm(started["swarm_id"])
+    main = snapshot["main_discussion_id"]
+    page = await lifecycle.service.store.read_posts(
+        started["swarm_id"], snapshot["participants"][0]["id"], discussion_id=main, limit=15
+    )
+    assert delivered == [
+        Received(f"the main discussion ({main})", post["id"], "User", None, post["text"])
+        for post in page.entries
+    ]
+    assert sorted(message.text for message in delivered) == sorted(
+        f"burst-sentinel-{index}" for index in range(15)
+    )
+
     assert snapshot["state"] == "idle"
     inbox = await lifecycle.service.store.prepare_inbox_delivery(
         started["swarm_id"], participant["id"]
@@ -220,15 +218,23 @@ async def test_automatic_delivery_updates_pending_during_each_running_iteration(
             assert any(change[0:2] == ("swarms", [sid]) for change in changes)
         adapter.release[-1].set()
         await run.wait()
-    delivered = []
-    for message in adapter.requests[-1]["messages"]:
-        content = message.get("content", "")
-        if isinstance(content, str) and "pending-sentinel-" in content:
-            payload, _ = json.JSONDecoder().raw_decode(content[content.index("{") :])
-            delivered.extend(payload["entries"])
-    assert [entry["sequence"] for entry in delivered] == list(range(1, 13))
-    assert len({entry["id"] for entry in delivered}) == 12
+    delivered = delivered_messages(adapter.requests[-1], "pending-sentinel-")
+    assert [message.text for message in delivered] == [
+        f"pending-sentinel-{index}" for index in range(12)
+    ]
+    assert len({message.post_id for message in delivered}) == 12
     assert run.status.value == "completed"
+
+
+def delivered_messages(request, marker):
+    """Return the Board messages that automatic delivery placed in one Provider request."""
+
+    messages = []
+    for message in request["messages"]:
+        content = message.get("content", "")
+        if isinstance(content, str) and marker in content:
+            messages.extend(received(content.replace("</system-reminder>", "").strip()))
+    return messages
 
 
 @pytest.mark.asyncio
@@ -535,7 +541,9 @@ async def test_profile_prompt_selection_reaches_model_without_hidden_orientation
     ]
     inputs = [message["content"] for message in messages if message["role"] == "user"]
     swarm = await lifecycle.service.store.get_swarm(started["swarm_id"])
-    assert len(inputs) == 1 and swarm["goal_post_id"] in inputs[0]
+    assert len(inputs) == 1
+    # The initial input names the exact call that reads the goal post.
+    assert f'{{"action": "read", "message_id": "{swarm["goal_post_id"]}"}}' in inputs[0]
     assert "goal-sentinel" not in str(messages)
     goal = await lifecycle.service.store.read_human_posts(
         swarm["id"], message_id=swarm["goal_post_id"]
@@ -839,6 +847,55 @@ async def test_replaying_start_preserves_the_active_run(lifecycle, tmp_path, con
     assert replay == {**first, "replayed": True}
     assert run.status.value == "running"
     assert len(adapter.requests) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("pinned_revision", [False, True])
+@pytest.mark.parametrize("change", ["profile_update", "profile_delete", "directory", "catalog"])
+async def test_start_replay_uses_admitted_snapshot(lifecycle, tmp_path, change, pinned_revision):
+    working = tmp_path / "working"
+    working.mkdir()
+    profile = await single_participant_profile(lifecycle, working)
+    arguments = {"profile_id": profile["id"], "prompt": "saved goal", "request_id": "saved-start"}
+    if pinned_revision:
+        arguments["expected_profile_revision"] = profile["revision"]
+    started = await lifecycle.service.operation("swarms.start", arguments)
+    await lifecycle.runtime.chat_run_manager.get(started["runs"][0]["run_id"]).wait()
+    requests_before = len(lifecycle.runtime.adapter.requests)
+
+    if change == "profile_update":
+        await lifecycle.service.store.save_profile(
+            {
+                **profile,
+                "name": "Changed",
+                "working_directory": {"kind": "directory", "path": str(tmp_path)},
+            },
+            expected_revision=profile["revision"],
+        )
+    elif change == "profile_delete":
+        await lifecycle.service.store.delete_profile(
+            profile["id"], expected_revision=profile["revision"]
+        )
+    elif change == "directory":
+        working.rmdir()
+    else:
+
+        async def empty_catalog():
+            return {"models": [], "tools": [], "skills": [], "projects": []}
+
+        lifecycle.service.host = replace(lifecycle.service.host, catalog=empty_catalog)
+
+    replay = await lifecycle.service.operation("swarms.start", arguments)
+    assert replay == {**started, "replayed": True}
+    assert len(lifecycle.runtime.adapter.requests) == requests_before
+    for changed in (
+        {"profile_id": "another-profile"},
+        {"prompt": "another goal"},
+        {"expected_profile_revision": profile["revision"] + 1},
+        {"working_directory": str(tmp_path)},
+    ):
+        with pytest.raises(ValueError, match="^request_conflict$"):
+            await lifecycle.service.operation("swarms.start", {**arguments, **changed})
 
 
 @pytest.mark.asyncio

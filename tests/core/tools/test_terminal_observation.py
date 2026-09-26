@@ -121,7 +121,8 @@ async def test_status_pages_forward_with_absolute_start_line(
     )
     first_scrollback = cast(dict[str, Any], first["data"])["scrollback"]
     assert "screen" not in first["data"]
-    assert first_scrollback["text"] == "line-0\nline-1\nline-2"
+    assert first["data"]["history"] == "line-0\nline-1\nline-2"
+    assert "text" not in first_scrollback
     assert first_scrollback["total_lines"] == 50
     assert first_scrollback["start_line"] == 0
     assert first_scrollback["end_line"] == 3
@@ -140,7 +141,7 @@ async def test_status_pages_forward_with_absolute_start_line(
         cast(dict[str, Any], first_scrollback["next_request"]),
     )
     followed_scrollback = cast(dict[str, Any], followed["data"])["scrollback"]
-    assert followed_scrollback["text"] == "line-3\nline-4\nline-5"
+    assert followed["data"]["history"] == "line-3\nline-4\nline-5"
     assert followed_scrollback["start_line"] == 3
     assert followed_scrollback["next_start_line"] == 6
 
@@ -160,13 +161,13 @@ async def test_status_pages_forward_with_absolute_start_line(
         terminal_manager, context, {"action": "status", "terminal_id": terminal_id}
     )
     assert current["data"]["screen"] == session.renderer.screen_text()
-    assert current["data"]["scrollback"]["text"]
+    assert current["data"]["history"]
     all_lines = []
     request = {"action": "status", "terminal_id": terminal_id, "start_line": 0, "lines": 7}
     while request is not None:
         page = await call(terminal_manager, context, request)
         assert "screen" not in page["data"]
-        all_lines.extend(page["data"]["scrollback"]["text"].splitlines())
+        all_lines.extend(page["data"]["history"].splitlines())
         request = page["data"]["scrollback"]["next_request"]
     assert all_lines == [f"line-{index}" for index in range(50)]
 
@@ -175,26 +176,21 @@ async def test_status_pages_forward_with_absolute_start_line(
 async def test_status_rejects_cursor_parameter_as_unknown(
     manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
 ) -> None:
-    terminal_manager, factory = manager
+    terminal_manager, _factory = manager
+    registry = ToolRegistry()
+    register_terminal_tool(registry, terminal_manager, ProjectStore(tmp_path))
     context = make_context(tmp_path)
-    started = await call(
-        terminal_manager,
-        context,
-        {"action": "start", "command": "fake-tui"},
+    started = await registry.dispatch(
+        context, {"action": "start", "command": "fake-tui"}, ["terminal"]
     )
     terminal_id = cast(dict[str, Any], started["data"])["terminal_id"]
 
-    rejected = await call(
-        terminal_manager,
-        context,
-        {
-            "action": "status",
-            "terminal_id": terminal_id,
-            "cursor": "some-signed-cursor",
-        },
-    )
-    assert rejected["ok"] is False
-    assert cast(dict[str, Any], rejected["error"])["code"] == "invalid_arguments"
+    with pytest.raises(ValueError, match="cursor"):
+        await registry.dispatch(
+            context,
+            {"action": "status", "terminal_id": terminal_id, "cursor": "some-signed-cursor"},
+            ["terminal"],
+        )
 
 
 @pytest.mark.asyncio
@@ -456,15 +452,9 @@ async def test_new_attachment_does_not_inherit_another_sessions_screen_observati
     "arguments",
     (
         {"action": "start", "command": "   "},
-        {"action": "list", "terminal_id": "not-accepted"},
         {"action": "status"},
         {"action": "input", "terminal_id": "missing", "key": "space"},
-        {
-            "action": "input",
-            "terminal_id": "missing",
-            "data": "raw",
-            "enter": True,
-        },
+        {"action": "input", "terminal_id": "missing", "data": "raw", "key": "enter"},
         {"action": "resize", "terminal_id": "missing", "columns": 120},
         {"action": "unknown"},
     ),

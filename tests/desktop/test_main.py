@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import logging
 import sys
+import threading
+import time
 import types
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -16,8 +18,8 @@ import pytest
 
 from desktop import connection as desktop_connection
 from desktop import hotkey as desktop_hotkey
-from desktop import live_requests as desktop_live_requests
 from desktop import main as desktop_main
+from desktop import page_events as desktop_page_events
 from desktop.main import DesktopProbeResult, DesktopTarget
 
 _TEST_DESKTOP_SESSION_ID = "desktop-test-session"
@@ -347,16 +349,16 @@ def test_desktop_logging_writes_structured_daily_file(tmp_path: Path) -> None:
     handler = desktop_main.configure_desktop_logging(tmp_path)
     assert handler is not None
     try:
-        logging.getLogger("vbot.desktop.wakeword.worker").warning(
-            "Wakeword worker stopped (reason=speech_to_text_unconfigured)"
+        logging.getLogger("vbot.desktop.wakeword.controller").warning(
+            "Voice state: error (speech_to_text_unconfigured)"
         )
         handler.flush()
 
         log_files = list((tmp_path / "logs").glob("*.log"))
         assert len(log_files) == 1
         content = log_files[0].read_text(encoding="utf-8")
-        assert "[WARN] vbot.desktop.wakeword.worker" in content
-        assert "reason=speech_to_text_unconfigured" in content
+        assert "[WARN] vbot.desktop.wakeword.controller" in content
+        assert "error (speech_to_text_unconfigured)" in content
     finally:
         desktop_main.close_desktop_logging(handler)
 
@@ -612,7 +614,7 @@ def test_launch_creates_window_before_loop_with_html_and_bridge_js_api(tmp_path:
     # multi-monitor layouts don't push it off-screen.
     assert kwargs["screen"] is not None
     assert hasattr(kwargs["js_api"], "connect")
-    assert hasattr(kwargs["js_api"], "getWakewordStatus")
+    assert hasattr(kwargs["js_api"], "getVoiceStatus")
 
 
 def test_resolve_window_layout_uses_screen_aware_first_run_size() -> None:
@@ -982,104 +984,74 @@ def test_launch_attaches_the_created_window_to_the_controller(tmp_path: Path) ->
     ]
 
 
-def test_launch_does_not_start_worker_when_gui_fails_before_window_is_shown(
+class RecordingVoice:
+    """Voice double recording its lifecycle calls during a launch."""
+
+    def __init__(self, events: list[str], on_start: Callable[[], None] | None = None) -> None:
+        self.events = events
+        self.on_start = on_start
+        self.server_urls: list[str] = []
+
+    def start(self) -> None:
+        if self.on_start is not None:
+            self.on_start()
+        self.events.append("voice.start")
+
+    def close(self) -> None:
+        self.events.append("voice.close")
+
+    def set_server_url(self, server_url: str) -> None:
+        self.server_urls.append(server_url)
+
+
+def test_launch_does_not_start_voice_when_gui_fails_before_window_is_shown(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    settings_file = tmp_path / "settings.json"
-    settings_file.write_text(json.dumps({"wakeword": {"enabled": True}}), encoding="utf-8")
-    created: list[bool] = []
-    stopped: list[bool] = []
+    events: list[str] = []
 
     class StartRaisesWebview(FakeWebview):
         def start(self, func: Callable[[], Any] | None = None, **kwargs: Any) -> None:
             raise RuntimeError("gui loop crashed")
 
-    class RecordingWorker:
-        def start(self) -> None:
-            pass
-
-        def stop(self) -> None:
-            stopped.append(True)
-
-        def is_running(self) -> bool:
-            return True
-
-    # Pin the worker factory to a recording worker via the public factory hook
-    # rather than the real audio stack, so the test stays headless.
-    def fake_bridge(
-        args: Any, settings: Any, controller: Any, server_url: str, **_kwargs: Any
-    ) -> Any:
-        from desktop.wakeword.bridge import DesktopBridge
-
-        def create_worker(_bridge: DesktopBridge) -> RecordingWorker:
-            created.append(True)
-            return RecordingWorker()
-
-        bridge = DesktopBridge(
-            settings_path=settings,
-            worker_factory=create_worker,
-            connection=controller,
-        )
-        return bridge
-
-    monkeypatch.setattr(desktop_main, "_create_wakeword_bridge", fake_bridge)
+    monkeypatch.setattr(desktop_main, "_create_voice", lambda *_args: RecordingVoice(events))
 
     with pytest.raises(RuntimeError, match="gui loop crashed"):
         desktop_main.launch_desktop(
             [],
-            settings_file=settings_file,
+            settings_file=tmp_path / "settings.json",
             probe=lambda target: DesktopProbeResult(desktop_main.PROBE_WEBUI_AVAILABLE, target),
             webview_module=StartRaisesWebview(),
             app_icon_path=tmp_path / "missing-icon.png",
         )
 
-    assert created == []
-    assert stopped == []
+    assert events == ["voice.close"]
 
 
-def test_launch_starts_enabled_voice_only_after_window_is_shown(
+def test_launch_starts_voice_only_after_window_is_shown_and_follows_the_server(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    settings_file = tmp_path / "settings.json"
-    settings_file.write_text(json.dumps({"wakeword": {"enabled": True}}), encoding="utf-8")
     fake_webview = FakeWebview()
     events: list[str] = []
 
-    class RecordingWorker:
-        def start(self) -> None:
-            assert len(fake_webview.created_windows) == 1
-            events.append("started")
+    def window_exists() -> None:
+        assert len(fake_webview.created_windows) == 1
+        assert fake_webview.window.loaded_urls  # the window connected first
 
-        def stop(self) -> None:
-            events.append("stopped")
-
-        def is_running(self) -> bool:
-            return True
-
-    def fake_bridge(
-        args: Any, settings: Any, controller: Any, server_url: str, **_kwargs: Any
-    ) -> Any:
-        from desktop.wakeword.bridge import DesktopBridge
-
-        return DesktopBridge(
-            settings_path=settings,
-            worker_factory=lambda _bridge: RecordingWorker(),
-            connection=controller,
-        )
-
-    monkeypatch.setattr(desktop_main, "_create_wakeword_bridge", fake_bridge)
+    voice = RecordingVoice(events, on_start=window_exists)
+    monkeypatch.setattr(desktop_main, "_create_voice", lambda *_args: voice)
 
     desktop_main.launch_desktop(
-        [],
-        settings_file=settings_file,
+        ["--host", "pi.lan", "--port", "9000"],
+        settings_file=tmp_path / "settings.json",
         probe=lambda target: DesktopProbeResult(desktop_main.PROBE_WEBUI_AVAILABLE, target),
         webview_module=fake_webview,
         app_icon_path=tmp_path / "missing-icon.png",
     )
 
-    assert events == ["started", "stopped"]
+    assert events == ["voice.start", "voice.close"]
+    assert voice.server_urls == ["http://pi.lan:9000/"]
 
 
 def test_launch_with_disabled_voice_never_probes_wakeword_dependencies(
@@ -1090,8 +1062,8 @@ def test_launch_with_disabled_voice_never_probes_wakeword_dependencies(
         raise AssertionError("Voice dependencies must stay lazy while Voice is disabled")
 
     monkeypatch.setattr(desktop_main, "_real_wakeword_available", fail_if_probed)
-    monkeypatch.setitem(sys.modules, "desktop.wakeword.worker", None)
-    monkeypatch.setitem(sys.modules, "desktop.wakeword._audio_capture", None)
+    monkeypatch.setitem(sys.modules, "desktop.wakeword.capture", None)
+    monkeypatch.setitem(sys.modules, "desktop.wakeword.echo", None)
 
     desktop_main.launch_desktop(
         [],
@@ -1108,12 +1080,23 @@ def test_enabled_voice_probes_dependencies_only_after_window_exists(
 ) -> None:
     settings_file = tmp_path / "settings.json"
     settings_file.write_text(json.dumps({"wakeword": {"enabled": True}}), encoding="utf-8")
-    fake_webview = FakeWebview()
-    probed: list[bool] = []
+    probed = threading.Event()
+
+    class RunningWebview(FakeWebview):
+        """Keeps the GUI loop running until Voice reported its start result."""
+
+        def start(self, func: Callable[[], Any] | None = None, **kwargs: Any) -> None:
+            super().start(func, **kwargs)
+            bridge = self.created_windows[0][1]["js_api"]
+            deadline = time.monotonic() + 5
+            while bridge.getVoiceStatus()["state"] != "error" and time.monotonic() < deadline:
+                time.sleep(0.01)
+
+    fake_webview = RunningWebview()
 
     def unavailable_after_window_created() -> bool:
         assert len(fake_webview.created_windows) == 1
-        probed.append(True)
+        probed.set()
         return False
 
     monkeypatch.setattr(
@@ -1130,10 +1113,9 @@ def test_enabled_voice_probes_dependencies_only_after_window_exists(
         app_icon_path=tmp_path / "missing-icon.png",
     )
 
-    assert probed == [True]
-    bridge = fake_webview.created_windows[0][1]["js_api"]
-    assert bridge.getWakewordStatus()["mode"] == "unavailable"
-    assert bridge.getWakewordStatus()["error_code"] == "voice_stack_unavailable"
+    assert probed.is_set()
+    status = fake_webview.created_windows[0][1]["js_api"].getVoiceStatus()
+    assert status["mode"] == "unavailable"
 
 
 # -- Single instance, browser arguments, and Live voice integration ----------
@@ -1303,12 +1285,13 @@ def test_live_hotkey_runs_only_while_the_window_is_shown(
     assert bridge.getDesktopCapabilities()["liveHotkey"] is True
 
 
-def test_hands_free_requests_reach_the_window_page_until_it_closes(
+def test_page_pushes_reach_the_window_page_until_it_closes(
     tmp_path: Path,
     launch_seams: LaunchSeams,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     dispatchers: list[RecordingDispatcher] = []
+    voice_sinks: list[Any] = []
 
     class RecordingDispatcher:
         def __init__(self) -> None:
@@ -1320,13 +1303,26 @@ def test_hands_free_requests_reach_the_window_page_until_it_closes(
         def attach_window(self, window: Any) -> None:
             self.window = window
 
-        def request(self, action: str, source: str) -> None:
+        def request_live(self, action: str, source: str) -> None:
             self.requests.append((action, source))
+
+        def publish_status(self, _status: Any) -> None:
+            pass
+
+        def publish_event(self, _event: Any) -> None:
+            pass
 
         def close(self) -> None:
             self.closed = True
 
-    monkeypatch.setattr(desktop_live_requests, "LiveRequestDispatcher", RecordingDispatcher)
+    original_create_voice = desktop_main._create_voice
+
+    def create_voice(args: Any, settings: Any, server_url: str, page_events: Any) -> Any:
+        voice_sinks.append(page_events)
+        return original_create_voice(args, settings, server_url, page_events)
+
+    monkeypatch.setattr(desktop_page_events, "PageEventDispatcher", RecordingDispatcher)
+    monkeypatch.setattr(desktop_main, "_create_voice", create_voice)
     fake_webview = FakeWebview()
 
     desktop_main.launch_desktop(
@@ -1340,10 +1336,24 @@ def test_hands_free_requests_reach_the_window_page_until_it_closes(
     dispatcher = dispatchers[0]
     assert dispatcher.window is fake_webview.window
     assert dispatcher.closed is True
+    assert voice_sinks == [dispatcher]
     launch_seams.hotkeys[0].on_press()
-    bridge = fake_webview.created_windows[0][1]["js_api"]
-    bridge.request_live_voice("start", "wakeword")
-    assert dispatcher.requests == [("toggle", "hotkey"), ("start", "wakeword")]
+    assert dispatcher.requests == [("toggle", "hotkey")]
+
+
+def test_create_voice_selects_the_mock_mode_from_the_flag(tmp_path: Path) -> None:
+    page_events = desktop_page_events.PageEventDispatcher()
+    voice = desktop_main._create_voice(
+        desktop_main.parse_args(["--mock-wakeword"]),
+        tmp_path / "settings.json",
+        "http://pi.lan:9000",
+        page_events,
+    )
+    try:
+        assert voice.status()["mode"] == "mock"
+    finally:
+        voice.close()
+        page_events.close()
 
 
 @pytest.mark.parametrize(

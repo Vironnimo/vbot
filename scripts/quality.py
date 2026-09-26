@@ -45,11 +45,6 @@ LIFECYCLE_SCRIPT_TESTS = {
     for stem in ("install", "setup", "uninstall")
     for suffix in (SHELL_SCRIPT_SUFFIX, POWERSHELL_SCRIPT_SUFFIX)
 }
-# `bash -n a b` checks only `a` (later arguments become positional
-# parameters), so every script gets its own syntax-only invocation.
-BASH_SYNTAX_LOOP = (
-    'status=0; for script in "$@"; do "$BASH" -n "$script" || status=1; done; exit "$status"'
-)
 FULL_MYPY_PATHS = ["core/", "server/", "cli/", "desktop/", "tests/"]
 SNAPSHOT_IGNORED_DIRS = {
     ".git",
@@ -278,8 +273,8 @@ class Step(NamedTuple):
 
 
 def _bash_syntax_command(executable: str, paths: list[str]) -> list[str]:
-    """Return a command that runs ``bash -n`` once per shell script."""
-    return [executable, "-c", BASH_SYNTAX_LOOP, "bash", *paths]
+    """Return a direct syntax check for one script, without a shell wrapper."""
+    return [executable, "-n", *paths]
 
 
 def _native_script_steps(paths: list[str]) -> list[Step]:
@@ -313,6 +308,13 @@ def _native_script_steps(paths: list[str]) -> list[Step]:
                     skip_status=f"SKIPPED ({tool_name} not found)",
                     notes=tuple(f"{path}: syntax not checked" for path in scripts),
                 )
+            )
+        elif suffix == SHELL_SCRIPT_SUFFIX:
+            # Bash checks only the first file passed to -n. Give each file its
+            # own process, avoiding -c quoting changes in Windows WSL launchers.
+            steps.extend(
+                Step(label, build_command(executable, [script]), "gate", notes=(script,))
+                for script in scripts
             )
         else:
             steps.append(Step(label, build_command(executable, scripts), "gate"))
@@ -604,6 +606,8 @@ def main() -> int:
                 failures.append((label, output))
 
         print(f"{label:<14}.... {status}")
+        for note in step_notes:
+            print(f"{'':<18}note: {note}")
         if changed_files:
             for changed_path in changed_files:
                 print(f"{'':<18}{changed_path}")

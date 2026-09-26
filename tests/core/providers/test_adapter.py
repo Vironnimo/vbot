@@ -195,7 +195,8 @@ class TestProviderAdapterABC:
             {
                 "role": "tool",
                 "tool_call_id": "call_one",
-                "content": "one\n\npath one",
+                "content": "one",
+                TOOL_RESULT_CONTENT_BLOCKS_FIELD: [{"type": "text", "text": "path one"}],
             },
             {
                 "role": "tool",

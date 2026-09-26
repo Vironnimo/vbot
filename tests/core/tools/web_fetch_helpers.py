@@ -9,11 +9,11 @@ from typing import Any, cast
 
 import pytest
 
-import core.tools.web_fetch as web_fetch_module
+import core.tools._public_http as public_http
+from core.tools._public_http import PublicResponse
 from core.tools.tools import ToolContext, is_tool_result_envelope
 from core.tools.web_fetch import (
     WEB_FETCH_TOOL_NAME,
-    _FetchResult,
     make_web_fetch_handler,
 )
 
@@ -58,7 +58,7 @@ def make_result(
     text: str = "",
     url: str = "https://example.com/",
     content: bytes | None = None,
-) -> _FetchResult:
+) -> PublicResponse:
     """Build a normalized fetch result with lower-cased header keys.
 
     ``content`` defaults to the UTF-8 encoding of ``text`` so a text response
@@ -66,7 +66,7 @@ def make_result(
     """
     normalized = {name.lower(): value for name, value in (headers or {}).items()}
     body = text.encode("utf-8") if content is None else content
-    return _FetchResult(
+    return PublicResponse(
         status_code=status_code, headers=normalized, text=text, url=url, content=body
     )
 
@@ -124,7 +124,7 @@ class _StreamingSession:
 def stub_http_session(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep mocked HTTP tests from creating curl's Windows selector thread."""
     monkeypatch.setattr(
-        web_fetch_module,
+        public_http,
         "AsyncSession",
         lambda **_kwargs: _StreamingSession(),
     )
@@ -132,7 +132,7 @@ def stub_http_session(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def install_http_get(
     monkeypatch: pytest.MonkeyPatch,
-    responder: Callable[[str], _FetchResult],
+    responder: Callable[[str], PublicResponse],
 ) -> None:
     """Replace the network seam so no real request is made.
 
@@ -140,11 +140,11 @@ def install_http_get(
     a transport error.
     """
 
-    async def _fake_http_get(session: object, url: str) -> _FetchResult:
-        del session
+    async def _fake_http_get(session: object, url: str, max_bytes: int) -> PublicResponse:
+        del session, max_bytes
         return responder(url)
 
-    monkeypatch.setattr(web_fetch_module, "_http_get", _fake_http_get)
+    monkeypatch.setattr(public_http, "_http_get", _fake_http_get)
 
 
 @pytest.fixture(autouse=True)
@@ -159,7 +159,7 @@ def stub_dns_resolution(monkeypatch: pytest.MonkeyPatch) -> None:
         resolved = host_mapping.get(host.rstrip(".").lower(), ("93.184.216.34",))
         return [ipaddress.ip_address(address) for address in resolved]
 
-    monkeypatch.setattr(web_fetch_module, "_resolve_host_addresses", _fake_resolve_host_addresses)
+    monkeypatch.setattr(public_http, "_resolve_host_addresses", _fake_resolve_host_addresses)
 
 
 def assert_success_envelope(result: dict[str, object]) -> dict[str, object]:

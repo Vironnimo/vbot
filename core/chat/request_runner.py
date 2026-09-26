@@ -8,6 +8,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
+from core.chat._boundaries import _finish_visible_boundary
 from core.chat._run_state import (
     ChatLoopDependencies,
     _AssistantStep,
@@ -95,15 +96,13 @@ def _has_fallback_chain(agent: Any) -> bool:
 
 
 def _normalize_non_streaming_step(
-    adapter: Any,
-    response: JsonObject,
+    normalized: JsonObject,
     *,
     model_id: str,
     response_model: str,
     public_model: str,
 ) -> _AssistantStep:
     """Normalize one Provider response and build its canonical Assistant step."""
-    normalized = adapter.normalize_response(response, model_id=model_id)
     terminal_outcome = terminal_outcome_from_response(normalized)
     _check_empty_response(normalized, terminal_outcome)
     message = _assistant_message_from_response(
@@ -452,24 +451,61 @@ class WireRequestRunner:
         top_p: float | None,
     ) -> _AssistantStep:
         send_started = time.perf_counter()
-        response = await adapter.send(
-            messages,
-            model_id=model_id,
-            temperature=temperature,
-            top_p=top_p,
-            thinking_effort=agent.thinking_effort,
-            tools=tools,
-            **request_context,
-        )
-        # Without streaming, the first Model output arrives with the whole response.
-        _record_first_token(run, send_started)
-        return await _CHAT_TRANSFORM_WORKERS.run(
-            _normalize_non_streaming_step,
-            adapter,
-            response,
-            model_id=model_id,
-            response_model=response_model,
-            public_model=public_model,
+        recorder = self._dependencies.usage_recorder
+        call_id = await self._start_usage_call(public_model, run)
+        normalized: JsonObject | None = None
+        try:
+            response = await adapter.send(
+                messages,
+                model_id=model_id,
+                temperature=temperature,
+                top_p=top_p,
+                thinking_effort=agent.thinking_effort,
+                tools=tools,
+                **request_context,
+            )
+            # Without streaming, the first output arrives with the whole response.
+            _record_first_token(run, send_started)
+            normalized = await _CHAT_TRANSFORM_WORKERS.run(
+                adapter.normalize_response, response, model_id=model_id
+            )
+            step = await _CHAT_TRANSFORM_WORKERS.run(
+                _normalize_non_streaming_step,
+                normalized,
+                model_id=model_id,
+                response_model=response_model,
+                public_model=public_model,
+            )
+        except BaseException as exc:
+            if recorder is not None and call_id is not None:
+                await recorder.finish(
+                    call_id,
+                    normalized.get("usage") if normalized is not None else None,
+                    status="cancelled" if isinstance(exc, asyncio.CancelledError) else "failed",
+                )
+            raise
+        if recorder is not None and call_id is not None:
+            usage = await recorder.finish(
+                call_id,
+                step.message.usage,
+                status="failed" if step.message.interrupted else "completed",
+            )
+            step = replace(step, message=replace(step.message, usage=usage))
+        return step
+
+    async def _start_usage_call(self, public_model: str, run: Run) -> str | None:
+        recorder = self._dependencies.usage_recorder
+        if recorder is None:
+            return None
+        return await recorder.start(
+            model=public_model,
+            kind="chat",
+            agent_id=run.agent_id,
+            session_id=run.session_id,
+            project_id=run.project_id,
+            run_id=run.id,
+            owner_name=run.execution_owner.extension if run.execution_owner is not None else None,
+            group_id=run.execution_owner.group_id if run.execution_owner is not None else None,
         )
 
     async def _consume_stream_attempt(
@@ -494,6 +530,79 @@ class WireRequestRunner:
         recovery_deadline: float | None = None,
     ) -> _AssistantStep:
         accumulator = StreamingAccumulator()
+        recorder = self._dependencies.usage_recorder
+        call_id = await self._start_usage_call(public_model, run)
+        try:
+            step = await self._consume_stream_response(
+                agent,
+                adapter,
+                model_id,
+                response_model,
+                messages,
+                tools,
+                run,
+                accumulator,
+                public_model=public_model,
+                can_restart=can_restart,
+                output_cwd=output_cwd,
+                chunk_timeout_seconds=chunk_timeout_seconds,
+                request_context=request_context,
+                continuation_tracker=continuation_tracker,
+                temperature=temperature,
+                top_p=top_p,
+                has_fallback_chain=has_fallback_chain,
+                recovery_deadline=recovery_deadline,
+            )
+        except BaseException as exc:
+            if recorder is not None and call_id is not None:
+                await recorder.finish(
+                    call_id,
+                    accumulator.usage,
+                    status="cancelled" if isinstance(exc, asyncio.CancelledError) else "failed",
+                )
+            raise
+        if recorder is not None and call_id is not None:
+            status = (
+                "cancelled"
+                if run.cancel_requested
+                else "failed"
+                if step.message.interrupted or step.failure is not None
+                else "completed"
+            )
+            usage = await _finish_visible_boundary(
+                recorder.finish(call_id, step.message.usage, status=status),
+                run,
+                step.message.interrupted
+                or (
+                    not step.message.tool_calls
+                    and bool(step.message.content or step.message.reasoning)
+                ),
+            )
+            step = replace(step, message=replace(step.message, usage=usage))
+        return step
+
+    async def _consume_stream_response(
+        self,
+        agent: Any,
+        adapter: Any,
+        model_id: str,
+        response_model: str,
+        messages: list[JsonObject],
+        tools: list[JsonObject],
+        run: Run,
+        accumulator: StreamingAccumulator,
+        *,
+        public_model: str,
+        can_restart: bool,
+        output_cwd: Path | None,
+        chunk_timeout_seconds: float | None,
+        request_context: dict[str, Any] | None,
+        continuation_tracker: ContinuationTracker | None,
+        temperature: float | None,
+        top_p: float | None,
+        has_fallback_chain: bool,
+        recovery_deadline: float | None,
+    ) -> _AssistantStep:
         delta_emitter = _StreamingRunDeltaEmitter(run)
         attempt_started = time.perf_counter()
         awaiting_first_delta = True

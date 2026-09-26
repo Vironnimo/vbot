@@ -26,15 +26,11 @@
   background: var(--green);
   animation: voice-pulse 1.6s ease-in-out infinite;
 }
-.voice-settings .voice-dot--detected {
-  background: var(--green);
-  animation: voice-pulse 0.6s ease-in-out infinite;
-}
 .voice-settings .voice-dot--recording {
   background: var(--amber);
 }
-/* Processing is a running state: amber, told apart from recording by its
-   blink. */
+/* Processing (also starting) is a running state: amber, told apart from
+   recording by its blink. */
 .voice-settings .voice-dot--processing {
   background: var(--amber);
   animation: voice-spin 1s linear infinite;
@@ -86,8 +82,7 @@
 
 /* In a stacked row the control owns the full content width and starts at
    its left edge. */
-.voice-settings .s-group > .s-row--stacked > .voice-model-control,
-.voice-settings .s-group > .s-row--stacked > .voice-calibration-control {
+.voice-settings .s-group > .s-row--stacked > .voice-model-control {
   width: 100%;
   min-width: 0;
   margin-left: 0;
@@ -117,6 +112,24 @@
 }
 .voice-settings .voice-model-card--active {
   background: var(--surface-3);
+}
+/* A running calibration needs the full row. */
+.voice-settings .voice-model-card--calibrating {
+  grid-column: 1 / -1;
+}
+/* A phrase problem or overlap, continuing the card header. */
+.voice-settings .voice-model-card__notice {
+  margin: 8px 0 0;
+  color: var(--text-med);
+  font-size: var(--fs-body-sm);
+  line-height: 1.4;
+}
+.voice-settings .voice-model-card__notice--warn {
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--amber) 22%, transparent);
+  border-radius: var(--r-sm);
+  background: color-mix(in srgb, var(--amber) 12%, transparent);
+  color: var(--text-hi);
 }
 .voice-settings .voice-model-card__header,
 .voice-settings .voice-model-card__identity,
@@ -184,24 +197,18 @@
   display: none;
 }
 
-.voice-settings .voice-calibration-entry {
+.voice-settings .voice-echo-control {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  color: var(--text-med);
-  font-size: var(--fs-body-sm);
+  gap: 10px;
 }
-.voice-settings .voice-calibration-entry > span {
-  min-width: 0;
-  flex: 1;
-  max-width: 62ch;
-}
-/* The running calibration is an inset inside its row. */
+
+/* The running calibration is an inset inside its phrase card. */
 .voice-settings .voice-calibration-panel {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  margin-top: 10px;
   padding: 16px;
   border-radius: var(--r-md);
   background: var(--surface-2);
@@ -278,11 +285,6 @@
 .voice-settings .voice-calibration-steps li[data-state='complete'] {
   color: var(--green);
 }
-.voice-settings .voice-calibration-models {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
 .voice-settings .voice-calibration-model {
   display: flex;
   flex-direction: column;
@@ -290,11 +292,6 @@
   padding: 10px;
   border-radius: var(--r-sm);
   background: var(--bg);
-}
-/* The Model to speak now is the active item: an accent rail marks it; a
-   finished Model is marked by its check. */
-.voice-settings .voice-calibration-model--target {
-  box-shadow: inset 2px 0 0 var(--accent);
 }
 .voice-settings .voice-calibration-model__header {
   gap: 12px;
@@ -310,27 +307,6 @@
 .voice-settings .voice-calibration-model__identity {
   min-width: 0;
   gap: 7px;
-}
-.voice-settings .voice-calibration-model__target {
-  color: var(--text-hi);
-  font-size: var(--fs-label-sm);
-  font-weight: 600;
-}
-.voice-settings .voice-calibration-model__check {
-  color: var(--green);
-  font-size: var(--fs-body-md);
-  font-weight: 600;
-}
-.voice-settings .voice-calibration-model__retry {
-  display: flex;
-  justify-content: flex-end;
-  padding-top: 4px;
-}
-.voice-settings .voice-calibration-model-progress {
-  margin-top: 4px;
-  color: var(--text-lo);
-  font-size: var(--fs-label-sm);
-  font-variant-numeric: tabular-nums;
 }
 .voice-settings .voice-calibration-noise-warning {
   padding: 10px 12px;
@@ -458,7 +434,6 @@
 
 @media (prefers-reduced-motion: reduce) {
   .voice-settings .voice-dot--listening,
-  .voice-settings .voice-dot--detected,
   .voice-settings .voice-dot--processing {
     animation: none;
   }
@@ -468,7 +443,6 @@
 }
 
 @media (max-width: 640px) {
-  .voice-settings .voice-calibration-entry,
   .voice-settings .voice-calibration-header,
   .voice-settings .voice-calibration-model__header,
   .voice-settings .voice-calibration-actions {

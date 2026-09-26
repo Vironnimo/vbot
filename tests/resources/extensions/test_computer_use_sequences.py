@@ -163,14 +163,10 @@ def test_cancel_during_start_prevents_capture(computer):
     "args",
     [
         {"action": "capture", "pid": 1},
-        {"action": "windows", "session": "foreign"},
         {"action": "capture", "pid": True, "window_id": 2},
         {"action": "capture", "pid": 1.0, "window_id": 2},
-        {"action": "capture", "pid": 1, "window_id": 2, "apply": True},
-        {"action": "click", "pid": 1, "window_id": 2, "coordinate": [1, 1]},
         {"action": "key", "pid": 1, "window_id": 2, "shortcut": "+"},
         {"action": "scroll", "pid": 1, "window_id": 2, "direction": "down", "amount": 101},
-        {"action": "capture", "scope": "desktop", "pid": 1, "window_id": 2},
         {"action": "capture", "mode": "ax"},
         {
             "action": "sequence",
@@ -278,7 +274,6 @@ def test_post_input_capture_delay_is_bounded_without_screen_polling(
     client.call = response
     result = call(computer, "type", text="draft", apply=True)
     assert result["ok"]
-    assert result["data"]["observation_delay_ms"] == 1000
     assert observed_states == [render_after <= 1.0]
     assert "verification" not in result["data"]
     assert clock[0] == pytest.approx(1.0)
@@ -425,7 +420,6 @@ def test_wait_interrupts_immediately_without_recapture(computer, monkeypatch):
         {"action": "click", "pid": 1, "window_id": 2, "element": "1", "modifiers": ["ctrl"]},
         {"action": "resize", "pid": 1, "window_id": 2, "coordinate": [0, 0], "size": [0, 5]},
         {"action": "wait", "duration_ms": 10_001},
-        {"action": "capture", "capture_after": False},
     ],
 )
 def test_compact_contract_rejects_bad_values_before_connect(computer, arguments):
@@ -471,7 +465,12 @@ def test_sequence_zero_completed_steps_uses_failure_envelope(computer):
     result = call(computer, "sequence", apply=True, steps=[{"action": "type", "text": "draft"}])
     assert is_tool_result_envelope(result)
     assert not result["ok"] and result["data"] is None
-    assert "No sequence step completed successfully" in result["error"]["message"]
+    message = result["error"]["message"]
+    assert message.startswith("No sequence step completed. ")
+    assert message.endswith(
+        'See the current state with {"action":"capture","pid":1,"window_id":2,"foreground":false}'
+        " before deciding whether to repeat input."
+    )
     assert computer[2].snapshots == 2
 
 
@@ -491,10 +490,10 @@ def test_sequence_inherits_one_view_and_reports_each_outcome(computer):
     )
     assert result["ok"] and result["data"]["completed_steps"] == 2
     assert result["data"]["total_steps"] == 2
-    assert [step["step"] for step in result["data"]["step_results"]] == [1, 2]
-    assert all(step["effect"] == "unverifiable" for step in result["data"]["step_results"])
+    # Routine per-step outcomes repeat the counts, so they are left out.
+    assert "step_results" not in result["data"]
     assert client.inputs == 2 and client.snapshots == 2
-    assert len(json.dumps(result)) < 1400
+    assert len(json.dumps(result)) < 1000
 
 
 @pytest.mark.parametrize("first", ["click", "key"])

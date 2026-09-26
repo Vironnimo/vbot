@@ -292,6 +292,8 @@ PROCESS_CASES = (
     "status_list",
     "status_one",
     "kill",
+    "wait",
+    "wait_pattern",
     "running",
     "finished",
     "all",

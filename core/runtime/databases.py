@@ -19,6 +19,7 @@ from core.providers.usage_history import DATABASE_NAME as PROVIDER_USAGE_DATABAS
 from core.providers.usage_history import provider_usage_database_spec
 from core.sessions._store_schema import session_database_spec
 from core.sessions.schema import DATABASE_NAME as SESSIONS_DATABASE_NAME
+from core.usage import usage_database_spec
 
 
 def canonical_database_specs(data_dir: Path) -> tuple[DatabaseSpec, ...]:
@@ -37,4 +38,5 @@ def canonical_database_specs(data_dir: Path) -> tuple[DatabaseSpec, ...]:
             canonical_database_path(data_dir, PROVIDER_USAGE_DATABASE_NAME)
         ),
         channel_database_spec(canonical_database_path(data_dir, CHANNELS_DATABASE_NAME)),
+        usage_database_spec(canonical_database_path(data_dir, "model_usage")),
     )
