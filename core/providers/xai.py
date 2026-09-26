@@ -145,7 +145,7 @@ class XAIAdapter(OpenAIAdapter):
                 request_kwargs,
                 model_id,
                 messages,
-                estimated_input_tokens=self.estimate_request_input_tokens(
+                estimated_input_tokens=lambda: self.estimate_request_input_tokens(
                     messages,
                     model_id=model_id,
                     tools=request_kwargs.get("tools"),
