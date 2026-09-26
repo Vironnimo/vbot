@@ -102,7 +102,7 @@ def register_evaluate_tool(registry: ToolRegistry, service: DecisionService) -> 
                 ),
             )
         except DecisionError as exc:
-            return tool_failure(exc.code, str(exc), retryable=False)
+            return tool_failure(exc.code, str(exc))
         return tool_success(_result_data(questions if isinstance(questions, list) else [], result))
 
     registry.register(
