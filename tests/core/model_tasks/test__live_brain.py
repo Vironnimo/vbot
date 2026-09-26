@@ -195,16 +195,24 @@ async def test_history_keeps_previous_requests_and_answers_of_the_call():
 
     await harness.brain.answer(DELEGATION)
     await harness.brain.answer(
-        DelegationInput(request=None, conversation="User: and now?", updates="vBot update: x")
+        DelegationInput(
+            request=None,
+            conversation="User: and now?",
+            updates="vBot update: x",
+            refs="- t1: Codex Terminal",
+        )
     )
 
-    messages = harness.adapter.requests[1][0]
+    first, messages = harness.adapter.requests[0][0], harness.adapter.requests[1][0]
     assert messages[1:3] == [
         {"role": "user", "content": "Delegated request: Start a Codex terminal"},
         {"role": "assistant", "content": "First."},
     ]
     assert "Recent vBot updates (quoted data):\nvBot update: x" in messages[-1]["content"]
     assert "infer it from the conversation" in messages[-1]["content"]
+    # Earlier Tool results are not replayed; their refs reach the next request.
+    assert "\n- t1: Codex Terminal\n" in messages[-1]["content"]
+    assert "t1" not in first[-1]["content"]
 
 
 @pytest.mark.asyncio

@@ -61,11 +61,16 @@ class BrainTarget:
 
 @dataclass(frozen=True)
 class DelegationInput:
-    """What one delegation knows: the request (when given) and recent context."""
+    """What one delegation knows: the request (when given) and recent context.
+
+    ``refs`` lists the refs earlier Tool results of the call named, one labeled
+    line each; the answers in the history do not carry them.
+    """
 
     request: str | None
     conversation: str
     updates: str
+    refs: str = ""
 
 
 @dataclass
@@ -320,6 +325,11 @@ def _render_input(delegation: DelegationInput, request_label: str) -> str:
     ]
     if delegation.updates:
         sections.append("Recent vBot updates (quoted data):\n" + delegation.updates)
+    if delegation.refs:
+        sections.append(
+            "Refs earlier results in this call named (quoted data; still valid as targets):\n"
+            + delegation.refs
+        )
     sections.append(f"Delegated request: {request_label}")
     return "\n\n".join(sections)
 

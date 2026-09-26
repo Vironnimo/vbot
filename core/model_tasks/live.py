@@ -163,13 +163,18 @@ class LiveCallHost(Protocol):
     ``execute_tool`` runs one prepared Live Tool call (a canonical name from
     ``LIVE_TOOL_NAMES`` with validated arguments) and returns a Tool result
     envelope, reporting operation failures inside it. Concurrent delegations
-    may call it concurrently; the host serializes executions. ``publish``
+    may call it concurrently; the host runs executions one at a time.
+    ``known_refs`` lists the refs earlier Tool results of the call named (one
+    ``- s1: Session at Coder`` line each, empty when none), so a later
+    delegation can target them without reading them again. ``publish``
     delivers an accessor update, ``publish_audio`` relayed assistant audio
     (PCM16 mono 24 kHz), and ``record`` one Tool call or delegation record for
     local measurement, all without blocking.
     """
 
     async def execute_tool(self, name: str, arguments: JsonObject) -> JsonObject: ...
+
+    def known_refs(self) -> str: ...
 
     def publish(self, update: JsonObject) -> None: ...
 

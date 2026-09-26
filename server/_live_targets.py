@@ -23,6 +23,7 @@ from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from typing import Any
 
+from core.model_tasks.live import CODING_PROGRAMS, CodingProgram
 from core.projects import format_agent_address
 from core.tools._call_vocabulary import spelling
 from server._live_context import (
@@ -33,11 +34,14 @@ from server._live_context import (
     LiveUiError,
 )
 
+_EXECUTABLE_SUFFIX = re.compile(r"\.(exe|cmd|bat|ps1)$", re.IGNORECASE)
 _REF = re.compile(r"^\s*#?\s*([st])\s*[-_.: ]?\s*(\d{1,6})\s*$", re.IGNORECASE)
 _MIN_PREFIX_CHARS = 4
 _SESSION_LIST_LIMIT = 100
 _MAX_AGENT_BATCH = 100
 _MAX_LISTED_CANDIDATES = 8
+_MAX_LEGEND_REFS = 30
+_MAX_LEGEND_NAME_CHARS = 60
 
 SESSION = "session"
 TERMINAL = "terminal"
@@ -103,7 +107,12 @@ def parse_ref(text: str) -> str | None:
 
 
 class LiveRefs:
-    """The call's ref table plus the Sessions Live started or addressed."""
+    """The call's ref table plus the Sessions Live started or addressed.
+
+    Each ref keeps the latest label a result gave it (``Session at Coder``,
+    ``Codex Terminal``), so later delegations can see what the refs name
+    without reading them again.
+    """
 
     def __init__(self) -> None:
         self._sessions: dict[str, SessionKey] = {}
@@ -111,30 +120,50 @@ class LiveRefs:
         self._terminals: dict[str, str] = {}
         self._terminal_refs: dict[str, str] = {}
         self._touched: OrderedDict[SessionKey, None] = OrderedDict()
+        self._labels: OrderedDict[str, str] = OrderedDict()
 
-    def session(self, key: SessionKey) -> str:
+    def session(self, key: SessionKey, label: str = "") -> str:
         """Return the Session's ref, assigning the next one on first appearance."""
         ref = self._session_refs.get(key)
         if ref is None:
             ref = f"s{len(self._sessions) + 1}"
             self._sessions[ref] = key
             self._session_refs[key] = ref
+        self._label(ref, label, fallback=f"Session at {key.address}")
         return ref
 
-    def terminal(self, terminal_id: str) -> str:
+    def terminal(self, terminal_id: str, label: str = "") -> str:
         """Return the Terminal's ref, assigning the next one on first appearance."""
         ref = self._terminal_refs.get(terminal_id)
         if ref is None:
             ref = f"t{len(self._terminals) + 1}"
             self._terminals[ref] = terminal_id
             self._terminal_refs[terminal_id] = ref
+        self._label(ref, label, fallback="Terminal")
         return ref
 
-    def touch(self, key: SessionKey) -> str:
+    def touch(self, key: SessionKey, label: str = "") -> str:
         """Remember a Session Live started or addressed; returns its ref."""
         self._touched[key] = None
         self._touched.move_to_end(key)
-        return self.session(key)
+        return self.session(key, label)
+
+    def legend(self) -> str:
+        """The refs named so far, most recently named last, one line each."""
+        shown = list(self._labels.items())[-_MAX_LEGEND_REFS:]
+        return "\n".join(f"- {ref}: {label}" for ref, label in shown)
+
+    def _label(self, ref: str, label: str, *, fallback: str) -> None:
+        """Keep the latest label a result gave; the fallback only until one does.
+
+        A shorter form of the kept label (``Session at Coder`` for
+        ``Session at Coder "Fix"``) keeps the longer one.
+        """
+        if label and not self._labels.get(ref, "").startswith(label):
+            self._labels[ref] = label
+        elif ref not in self._labels:
+            self._labels[ref] = fallback
+        self._labels.move_to_end(ref)
 
     def touched(self) -> list[SessionKey]:
         """Sessions Live started or addressed in this call, oldest first."""
@@ -395,9 +424,9 @@ async def describe(target: Target, refs: LiveRefs, catalog: LiveCatalog) -> str:
     """A short label naming the target with its ref where it has one."""
     if target.session is not None:
         name = await catalog.agent_name(target.session.address)
-        return f"{refs.session(target.session)} ({name})"
+        return f"{refs.session(target.session, session_title(name))} ({name})"
     if target.terminal is not None:
-        ref = refs.terminal(str(target.terminal["terminal_id"]))
+        ref = refs.terminal(str(target.terminal["terminal_id"]), terminal_title(target.terminal))
         return f"{ref} ({terminal_label(target.terminal)})"
     if target.group is not None:
         name = target.group.get("name") or target.group["group_id"]
@@ -416,6 +445,38 @@ def terminal_label(item: JsonObject) -> str:
     if isinstance(name, str) and name.strip():
         return name.strip()
     return str(item.get("launch_command") or item.get("command") or "Terminal")
+
+
+def coding_program(item: JsonObject) -> CodingProgram | None:
+    """The coding program a Terminal was started with, if it is one Live knows."""
+    command = str(item.get("launch_command") or item.get("command") or "").strip()
+    base = _EXECUTABLE_SUFFIX.sub("", re.split(r"[\\/]", command)[-1]).lower()
+    return next((program for program in CODING_PROGRAMS.values() if program.command == base), None)
+
+
+def terminal_title(item: JsonObject) -> str:
+    """What a Terminal is, as the call's ref legend names it: ``Codex Terminal "Build"``."""
+    program = coding_program(item)
+    command = str(item.get("launch_command") or item.get("command") or "").strip()
+    kind = f"{program.label if program else command} Terminal".strip()
+    name = _legend_name(item.get("name"))
+    return f'{kind} "{name}"' if name else kind
+
+
+def session_title(agent_name: str, title: str = "") -> str:
+    """What a Session is, as the call's ref legend names it: ``Session at Coder "Fix"``."""
+    name = _legend_name(title)
+    return f'Session at {agent_name} "{name}"' if name else f"Session at {agent_name}"
+
+
+def _legend_name(value: object) -> str:
+    """A title or name on one short line, so each legend entry stays one line."""
+    if not isinstance(value, str):
+        return ""
+    text = " ".join(value.split())
+    return (
+        text if len(text) <= _MAX_LEGEND_NAME_CHARS else text[: _MAX_LEGEND_NAME_CHARS - 3] + "..."
+    )
 
 
 async def _ref_target(

@@ -183,7 +183,8 @@ DELEGATION_INSTRUCTIONS = "\n\n".join(
     (
         "You operate the vBot app for the user. A voice assistant talks with the user and hands "
         "you their requests; your final answer goes back to it and is spoken to the user. Each "
-        "request contains the recent conversation, recent vBot updates, and the request itself. "
+        "request contains the recent conversation, recent vBot updates, the refs earlier results "
+        "named, and the request itself. "
         "If the request is missing or incomplete, take it from the latest user speech; if it "
         "stays unclear, say what is needed instead of guessing.",
         "vBot runs AI Agents in Chat Sessions and coding agents (Codex, Claude Code) in Terminals.",

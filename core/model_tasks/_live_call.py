@@ -284,6 +284,7 @@ class LiveCallSession:
                     request=event.request,
                     conversation=self._conversation_text(),
                     updates="\n".join(self._updates),
+                    refs=self._host.known_refs(),
                 )
                 try:
                     async with asyncio.timeout(self._delegation_timeout):
