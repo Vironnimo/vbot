@@ -253,6 +253,14 @@ def _rrf_page_is_stable(
         return True
     if len(fused) < needed:
         return False
+    # Membership alone does not establish the order within the prefix or its
+    # source labels: an unseen contribution can still reorder selected hits.
+    # Every selected score must be final before the outside bound can settle it.
+    for hit in fused[:needed]:
+        if (literal_more and "literal" not in hit.sources) or (
+            semantic_more and "semantic" not in hit.sources
+        ):
+            return False
     literal_bound = 1.0 / (_RRF_RANK_CONSTANT + depth + 1) if literal_more else 0.0
     semantic_bound = 1.0 / (_RRF_RANK_CONSTANT + depth + 1) if semantic_more else 0.0
     competitor_bound = literal_bound + semantic_bound

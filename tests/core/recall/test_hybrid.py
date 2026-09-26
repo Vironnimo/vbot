@@ -11,6 +11,7 @@ that fall through the FTS trigram path.
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -19,7 +20,13 @@ import pytest
 
 from core.chat import ChatMessage
 from core.model_tasks import EmbeddingResult, EmbeddingSpaceIdentity
-from core.recall import RecallBackendContext, RecallSearchPage, RecallSearchRequest, hybrid
+from core.recall import (
+    RecallBackendContext,
+    RecallSearchHit,
+    RecallSearchPage,
+    RecallSearchRequest,
+    hybrid,
+)
 from core.recall.canonical import RecallScope
 from core.recall.hybrid import (
     HybridRecallBackend,
@@ -306,3 +313,59 @@ async def test_hybrid_short_query_retains_literal_and_semantic_sources(tmp_path:
     )
     assert page.hits[0].session_id == "short"
     assert page.hits[0].sources == ("literal", "semantic")
+
+
+@pytest.mark.parametrize(("offset", "limit"), [(0, 10), (8, 2), (9, 1)])
+async def test_hybrid_resolves_late_contributions_before_returning_selected_hits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, offset: int, limit: int
+) -> None:
+    literal = ["a", "b", *[f"shared-{index}" for index in range(1, 9)]]
+    semantic = [
+        *[f"shared-{index}" for index in range(1, 9)],
+        *[f"filler-{index}" for index in range(9, 21)],
+        "b",
+        *[f"filler-{index}" for index in range(22, 40)],
+        "a",
+    ]
+
+    class Ranking:
+        def __init__(self, names: list[str]) -> None:
+            self.names = names
+
+        async def prepare(self, *_args: Any) -> Ranking:
+            return self
+
+        async def page(self, start: int, count: int) -> RecallSearchPage:
+            return RecallSearchPage(
+                hits=tuple(
+                    RecallSearchHit(
+                        "passage", "session", name, "user", "", name, 0, passage_id=name
+                    )
+                    for name in self.names[start : start + count]
+                ),
+                result_type="passage",
+                ranking="fixture",
+                snapshot_id="fixed",
+                has_more=start + count < len(self.names),
+                total_candidate_sessions=1,
+            )
+
+    recall = backend(tmp_path, ChatSessionManager(tmp_path))
+    monkeypatch.setattr(recall._fts, "prepare_passage_search", Ranking(literal).prepare)
+    monkeypatch.setattr(recall._vector, "prepare_search", Ranking(semantic).prepare)
+    try:
+        page = await recall.search_page(
+            replace(search_request("query", limit=limit), offset=offset)
+        )
+    finally:
+        await recall.aclose()
+
+    # The top ten members are already known at depth 20, but b's semantic
+    # contribution at rank 21 must put it before a (whose other rank is 40).
+    expected = [f"shared-{index}" for index in range(1, 9)] + ["b", "a"]
+    assert [hit.message_id for hit in page.hits] == expected[offset : offset + limit]
+    for hit in page.hits:
+        assert hit.sources == ("literal", "semantic")
+        assert hit.score == pytest.approx(
+            1 / (61 + literal.index(hit.message_id)) + 1 / (61 + semantic.index(hit.message_id))
+        )
