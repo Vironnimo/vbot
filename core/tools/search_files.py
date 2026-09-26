@@ -465,6 +465,7 @@ def search_files_handler(context: ToolContext, arguments: JsonObject) -> JsonObj
         patterns = query["patterns"]
         notes: list[str] = query["notes"]
         options = parse_options(query["options"], action=action, kind=kind)
+        notes.extend(options.notes)
         reference = options.get("reference")
         searching = set(arguments) - {"args"} or patterns or query["paths"]
         if reference == "help":
@@ -636,7 +637,7 @@ def search_files_handler(context: ToolContext, arguments: JsonObject) -> JsonObj
     if budget.stopped:
         complete = False
         warnings.append(
-            "Search timed out; narrow paths or filters and retry."
+            "Search timed out; results are incomplete. Search fewer files or use a narrower path."
             if budget.timed_out
             else "Run cancelled; search results are incomplete."
         )
@@ -646,6 +647,18 @@ def search_files_handler(context: ToolContext, arguments: JsonObject) -> JsonObj
             "nly to the searched portions."
         )
     data = page.data(complete=complete, warnings=warnings, quiet=options.enabled("quiet"))
+    if budget.timed_out:
+        directories = [root.as_posix() for root in roots if root.is_dir()]
+        if directories:
+            data["narrow_call"] = {
+                "path": directories,
+                "args": ["--dirs", "--max-depth", "1"],
+                "limit": 50,
+            }
+            notes.append(
+                "Use narrow_call to list immediate subdirectories, then repeat this search "
+                "with a narrower path. Lowering limit does not reduce directory traversal."
+            )
     if notes:
         data["note"] = " ".join(notes)
     if missing_roots:
