@@ -15,9 +15,10 @@ from urllib.parse import unquote
 
 import pytest
 
+from core.debug import recorder as recorder_module
 from core.debug import store as store_module
 from core.debug.recorder import DebugContext, ProviderDebugRecorder
-from core.debug.store import DebugTraceStore
+from core.debug.store import DebugTraceStore, drain_debug_traces
 
 _REDACTED = "[REDACTED]"
 
@@ -233,6 +234,71 @@ class TestErrorCapture:
 
 
 class TestLifecycle:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("body", [None, b"", b' {"text": "\xc3\xa4\xff"} \n'])
+    async def test_request_body_decoding_runs_only_on_the_trace_thread(
+        self, recorder, store, monkeypatch, body
+    ):
+        event_loop_thread = threading.get_ident()
+        decode_threads = []
+        decode_body = recorder_module._decode_body
+
+        def tracked_decode(raw):
+            decode_threads.append(threading.get_ident())
+            return decode_body(raw)
+
+        monkeypatch.setattr(recorder_module, "_decode_body", tracked_decode)
+        capture = recorder.begin_capture(
+            method="POST", url="https://api.example.com/v1/chat", headers={}, body=body
+        )
+        assert decode_threads == []
+
+        capture.finalize()
+        await drain_debug_traces()
+
+        entries = await store.get_traces_async()
+        assert len(entries) == 1
+        trace = await store.get_trace_async(entries[0]["trace_id"])
+        assert trace["request"]["body"] == (body.decode("utf-8", "replace") if body else None)
+        assert decode_threads
+        assert event_loop_thread not in decode_threads
+
+    @pytest.mark.asyncio
+    async def test_overlapping_captures_keep_independent_request_snapshots(self, recorder, store):
+        captures = []
+        headers = {"X-Request-Id": "", "Authorization": "Bearer secret"}
+        for index in range(10):
+            request_id = f"request-{index}"
+            recorder.set_context(_make_context(run_id=request_id))
+            headers["X-Request-Id"] = request_id
+            capture = recorder.begin_capture(
+                method="POST",
+                url="https://api.example.com/v1/chat",
+                headers=headers,
+                body=f' {{"text": "{request_id} ä"}} \n'.encode(),
+            )
+            capture.record_response_head(200, {})
+            capture.feed_body(request_id.encode())
+            captures.append(capture)
+
+        headers["X-Request-Id"] = "changed-after-capture"
+        recorder.set_context(_make_context(run_id="changed-after-capture"))
+        for capture in reversed(captures):
+            capture.finalize()
+        await drain_debug_traces()
+
+        entries = await store.get_traces_async()
+        assert len(entries) == len(captures)
+        for entry in entries:
+            trace = await store.get_trace_async(entry["trace_id"])
+            request_id = trace["context"]["run_id"]
+            assert trace["request"]["body"] == f' {{"text": "{request_id} ä"}} \n'
+            assert trace["request"]["headers"] == {
+                "X-Request-Id": request_id,
+                "Authorization": _REDACTED,
+            }
+            assert trace["response"]["body"] == request_id
+
     def test_double_finalize_writes_once(self, recorder, store):
         recorder.set_context(_make_context())
         capture = recorder.begin_capture(

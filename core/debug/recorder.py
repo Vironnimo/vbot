@@ -80,7 +80,8 @@ class ProviderDebugRecorder:
 
         Called by the capturing transport immediately before the request
         is handed to the underlying transport. Request headers and URL are
-        redacted here; the body is stored raw (prompts are never redacted).
+        redacted here; immutable body bytes are retained for decoding on the
+        trace thread (prompts are never redacted).
         """
         return _TraceCapture(
             store=self._store,
@@ -88,7 +89,7 @@ class ProviderDebugRecorder:
             method=method,
             url=redact_url(url),
             headers=redact_headers(headers),
-            request_body=_decode_body(body),
+            request_body=body,
         )
 
 
@@ -111,7 +112,7 @@ class _TraceCapture:
         method: str,
         url: str,
         headers: dict[str, str],
-        request_body: str | None,
+        request_body: bytes | None,
     ) -> None:
         self._store = store
         self._context = context
@@ -121,8 +122,8 @@ class _TraceCapture:
             "method": method,
             "url": url,
             "headers": headers,
-            "body": request_body,
         }
+        self._request_body = request_body
         self._response: dict[str, Any] | None = None
         self._error: dict[str, str] | None = None
         self._body_chunks: list[bytes] = []
@@ -201,7 +202,7 @@ class _TraceCapture:
             "context": self._context_dict(),
             "provider_id": self._context.provider_id if self._context else "",
             "model_id": self._context.model_id if self._context else "",
-            "request": self._request,
+            "request": {**self._request, "body": _decode_body(self._request_body)},
             "response": trace_response,
         }
 

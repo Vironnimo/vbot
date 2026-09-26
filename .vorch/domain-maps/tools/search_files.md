@@ -183,6 +183,15 @@ process monitoring attaches still has its output, diagnostics and exit code drai
 through the original process handle; memory monitoring remains active when available
 and polls the child every 50 ms rather than per output record.
 
+Native subprocess creation, termination and final resource release stay in the
+search worker. The Run's cancel callback retains only an event signal, never the
+`Popen` object: dropping the callback on the Event Loop must not trigger a blocking
+Windows process-handle destructor. Cancellation is checked before launch, while
+draining output and while waiting after stdout EOF; a late signal is harmless.
+Regression coverage in `test_search_files_lifecycle.py` uses real subprocesses to
+verify worker-thread finalization with retained callbacks, generators and errors,
+plus cancellation before/during launch and for silent or stdout-closed children.
+
 Independent bounds cover 50 KiB content output, 8 MiB native protocol records,
 bounded pipe queues/stderr, 512 MiB child RSS, candidate storage (128 MiB), one
 million observed entries, glob expansion, and process arguments. Failures and
