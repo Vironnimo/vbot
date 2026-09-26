@@ -404,14 +404,33 @@ def test_repeating_schedule_marked_one_time_is_refused(tool: CronTool) -> None:
 
 
 @pytest.mark.parametrize(
-    ("schedule", "text"),
+    ("schedule", "text", "stand_in"),
     [
-        ("2030-01-01", "has no time of day"),
-        ("0 0 9 * * *", "cron here takes exactly five"),
+        (
+            "2030-01-01",
+            "has no time of day",
+            "<2030-01-01 with a time of day, as 2030-01-01THH:MM>",
+        ),
+        (
+            "0 0 9 * * *",
+            "cron here takes exactly five",
+            "<five cron fields: minute hour day-of-month month day-of-week>",
+        ),
     ],
 )
-def test_incomplete_schedules_are_refused(tool: CronTool, schedule: str, text: str) -> None:
-    assert text in refused(tool, {"action": "create", "prompt": PROMPT, "schedule": schedule})
+def test_incomplete_schedules_are_refused_with_a_stand_in(
+    tool: CronTool, schedule: str, text: str, stand_in: str
+) -> None:
+    message = refused(tool, {"action": "create", "prompt": PROMPT, "schedule": schedule})
+
+    assert text in message
+    assert message.endswith(
+        f'Send: {{"action":"create","prompt":"{PROMPT}","schedule":"{stand_in}"}}'
+    )
+    # Sent back unchanged, the stand-in schedules nothing.
+    assert "create needs" in refused(
+        tool, {"action": "create", "prompt": PROMPT, "schedule": stand_in}
+    )
 
 
 @pytest.mark.parametrize(
@@ -580,9 +599,35 @@ def test_delete_with_changes_is_refused(tool: CronTool) -> None:
     assert f'{{"action":"update","id":"{job_id}","schedule":"every 3h"}}' in message
 
 
-def test_list_with_job_fields_is_refused(tool: CronTool) -> None:
-    assert "To make a job, use create." in refused(
-        tool, {"action": "list", "prompt": PROMPT, "schedule": "every 2h"}
+def test_list_with_job_fields_offers_list_or_create(tool: CronTool) -> None:
+    message = refused(tool, {"action": "list", "prompt": PROMPT, "schedule": "every 2h"})
+
+    assert message == (
+        "cron was not run: list only shows jobs (optionally one job by id); it takes no prompt, "
+        'schedule. To show jobs, leave them out; to make a job, use create: {"action":"list"} '
+        f'or {{"action":"create","prompt":"{PROMPT}","schedule":"every 2h"}}'
+    )
+
+
+def test_delete_with_changes_offers_delete_or_update(tool: CronTool) -> None:
+    job_id = existing(tool)
+
+    message = refused(tool, {"action": "delete", "id": job_id, "schedule": "every 3h"})
+
+    assert message.endswith(
+        f'Either delete it or change it: {{"action":"delete","id":"{job_id}"}} or '
+        f'{{"action":"update","id":"{job_id}","schedule":"every 3h"}}'
+    )
+
+
+def test_list_with_an_id_and_changes_offers_list_or_update(tool: CronTool) -> None:
+    job_id = existing(tool)
+
+    message = refused(tool, {"action": "list", "id": job_id, "schedule": "every 3h"})
+
+    assert message.endswith(
+        f'to change job "{job_id}", use update: {{"action":"list","id":"{job_id}"}} or '
+        f'{{"action":"update","id":"{job_id}","schedule":"every 3h"}}'
     )
 
 

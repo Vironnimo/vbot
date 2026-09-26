@@ -264,9 +264,12 @@ class _Problems:
     def __init__(self) -> None:
         self.texts: list[str] = []
         self.choice: tuple[str, list[dict[str, Any]]] | None = None
+        self.overrides: dict[str, Any] = {}
 
-    def add(self, text: str) -> None:
+    def add(self, text: str, **overrides: Any) -> None:
+        """Refuse the call; ``overrides`` replace refused values in the corrected call."""
         self.texts.append(text)
+        self.overrides.update(overrides)
 
     def choose(self, text: str, alternatives: list[dict[str, Any]]) -> None:
         """Refuse a call with several plausible readings; each alternative overrides fields."""
@@ -276,13 +279,14 @@ class _Problems:
             self.texts.append(text)
 
     def raise_if_any(self, arguments: Mapping[str, Any]) -> None:
+        call = {**arguments, **self.overrides}
         if self.choice is not None:
             text, alternatives = self.choice
-            calls = " or ".join(render_call(arguments, **overrides) for overrides in alternatives)
+            calls = " or ".join(render_call(call, **overrides) for overrides in alternatives)
             raise ToolContractError(_REFUSAL_PREFIX + " ".join([*self.texts, text, calls]))
         if self.texts:
             texts = " ".join(self.texts)
-            raise ToolContractError(f"{_REFUSAL_PREFIX}{texts} Send: {render_call(arguments)}")
+            raise ToolContractError(f"{_REFUSAL_PREFIX}{texts} Send: {render_call(call)}")
 
 
 def normalize_cron_arguments(contract: ToolContract, arguments: Any) -> Any:
@@ -614,13 +618,17 @@ def _schedule_text(value: Any, hint: str | None, key: str, problems: _Problems) 
         )
         return f"in {duration}"
     if _DATE_ONLY.match(text):
-        problems.add(f'"{key}" "{text}" has no time of day; add one, as in "{text}T09:00".')
+        problems.add(
+            f'"{key}" "{text}" has no time of day; add one, as in "{text}T09:00".',
+            schedule=f"<{text} with a time of day, as {text}THH:MM>",
+        )
         return text
     fields = text.split()
     if len(fields) in {6, 7} and "T" not in text:
         problems.add(
             f'"{key}" "{text}" has {len(fields)} fields; cron here takes exactly five '
-            "(minute hour day-of-month month day-of-week), without seconds or years."
+            "(minute hour day-of-month month day-of-week), without seconds or years.",
+            schedule="<five cron fields: minute hour day-of-month month day-of-week>",
         )
     return text
 
@@ -914,11 +922,19 @@ def _read_action(arguments: dict[str, Any], problems: _Problems) -> None:
         arguments.pop(ENABLED_FIELD, None)
         arguments.pop(TIMEZONE_FIELD, None)
         if extra:
-            problems.add(
+            text = (
                 "list only shows jobs (optionally one job by id); it takes no "
                 + ", ".join(extra)
-                + ". To make a job, use create."
+                + ". To show jobs, leave them out"
             )
+            alternatives: list[dict[str, Any]] = [dict.fromkeys(extra, OMIT)]
+            if job_id is not None:
+                text += f'; to change job "{job_id}", use update'
+                alternatives.append({"action": "update"})
+            elif "prompt" in arguments:
+                text += "; to make a job, use create"
+                alternatives.append({"action": "create"})
+            problems.choose(text + ":", alternatives)
     elif action == "delete":
         extra = [name for name in changes if name not in {ENABLED_FIELD}]
         arguments.pop(ENABLED_FIELD, None)
