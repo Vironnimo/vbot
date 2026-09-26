@@ -99,3 +99,12 @@ def test_compare_option_rejects_a_bad_baseline_before_running(tmp_path):
         perf_load.main(["--compare", str(bad)])
 
     assert caught.value.code == 2
+
+
+@pytest.mark.parametrize("status, expected_exit", [("ok", 0), ("failed", 1)])
+def test_run_exit_code_reflects_level_outcome(monkeypatch, tmp_path, status, expected_exit):
+    result = {"levels": [{"agents": 1, "status": status}]}
+    monkeypatch.setattr(perf_load, "activate_process_containment", lambda: None)
+    monkeypatch.setattr(perf_load, "run_load", lambda config: (tmp_path, result))
+
+    assert perf_load.main(["--agents", "1"]) == expected_exit

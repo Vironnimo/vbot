@@ -267,6 +267,21 @@ def run_level(
             level["files"].update(measured.pop("files"))
             level["notes"].extend(measured.pop("notes"))
             level.update(measured)
+            runs = level["client"]["runs"]
+            expected_runs = agents * config.turns
+            expected_calls = expected_runs * (config.steps - 1) * config.calls
+            if (
+                runs["total"] != expected_runs
+                or runs["ok"] != expected_runs
+                or runs["tool_calls"] != expected_calls
+                or runs["tool_errors"]
+            ):
+                raise LevelError(
+                    f"measured workload incomplete or failed: {runs['ok']}/{expected_runs} "
+                    f"Runs completed ({runs['total']} recorded, statuses={runs['by_status']}), "
+                    f"{runs['tool_calls']}/{expected_calls} Tool results, "
+                    f"{runs['tool_errors']} Tool errors"
+                )
             level["status"] = "ok"
     except Exception as exc:  # noqa: BLE001 - recorded in the level; later levels still run
         level["status"] = "failed"
