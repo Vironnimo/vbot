@@ -5,12 +5,14 @@ Every Session and Terminal a Live result mentions gets a short ref (``s1``,
 a voice Model can name it without reading ids aloud. Refs are a Live-scoped
 alias table held by the call's executor; storage and RPCs keep exact ids.
 
-A target names a Session, Terminal, Terminal group, Agent, or Project. The
-stages below run in order and the first stage with matches decides; several
-matches in that stage make the target ambiguous: a ref (tolerant spellings such
-as ``S2``, ``s-2``, ``#s2``), an exact id or Agent address, a unique id prefix,
-a Terminal name, a Terminal group name, an Agent name, a Project name. Names
-compare by :func:`core.tools._call_vocabulary.spelling`.
+A target names a Session, Terminal, Terminal group, Agent, or Project. A ref
+(tolerant spellings such as ``S2``, ``s-2``, ``#s2``) decides. Otherwise each
+kind the Tool accepts contributes its matches: its exact ids (a Session or
+Terminal id, a group id, an Agent address, a Project id) if any match, else its
+id prefixes (>= 4 characters, Sessions and Terminals) and names together. The
+target resolves only when exactly one thing matches across all accepted kinds;
+a Terminal and an Agent of the same name are ambiguous, never decided by kind
+order. Names compare by :func:`core.tools._call_vocabulary.spelling`.
 """
 
 from __future__ import annotations
@@ -168,6 +170,7 @@ class LiveCatalog:
         self._projects: list[LiveProject] | None = None
         self._teams: dict[str, list[LiveAgent]] = {}
         self._sessions: list[JsonObject] | None = None
+        self._own_sessions: dict[str, frozenset[SessionKey]] = {}
         self._terminals: tuple[list[JsonObject], list[JsonObject]] | None = None
 
     async def selection(self) -> JsonObject | None:
@@ -293,6 +296,28 @@ class LiveCatalog:
                 ]
         return self._sessions
 
+    async def own_sessions(self, address: str) -> frozenset[SessionKey]:
+        """The Agent's Sessions that no Cron job or Channel started, by the Session list."""
+        if address not in self._own_sessions:
+            listed = await self._ctx.call(
+                "session.list",
+                {
+                    "agent_id": address,
+                    "limit": _SESSION_LIST_LIMIT,
+                    "include_subagents": False,
+                    "include_memory_reflections": False,
+                    "include_skill_reflections": False,
+                    "include_cron": False,
+                    "include_channels": False,
+                },
+            )
+            self._own_sessions[address] = frozenset(
+                session_key(item)
+                for item in _objects(listed.get("sessions"))
+                if _text(item.get("id")) and _text(item.get("agent_address"))
+            )
+        return self._own_sessions[address]
+
     async def terminals(self) -> list[JsonObject]:
         return (await self._terminal_catalog())[0]
 
@@ -329,26 +354,32 @@ async def resolve_target(
     field: str,
     refs: LiveRefs,
     catalog: LiveCatalog,
+    kind_hint: str = "",
 ) -> Target:
-    """Resolve *text* to one target of the allowed *kinds* or raise a guiding failure."""
+    """Resolve *text* to one target of the allowed *kinds* or raise a guiding failure.
+
+    *kind_hint* tells the Model how to pick one kind when things of several
+    kinds match; it follows the ambiguity failure.
+    """
     allowed = frozenset(kinds)
     wanted = _kinds_phrase(allowed)
     ref = parse_ref(text)
     if ref is not None:
         return await _ref_target(ref, allowed, tool=tool, field=field, refs=refs, catalog=catalog)
-    for stage in _STAGES:
-        matches = await stage(text, allowed, refs, catalog)
-        if len(matches) == 1:
-            return matches[0]
-        if matches:
-            listed = ", ".join(
-                [await describe(item, refs, catalog) for item in matches[:_MAX_LISTED_CANDIDATES]]
-            )
-            raise LiveToolError(
-                "ambiguous_target",
-                f'"{text}" matches several: {listed}. Ask the user which one they mean, then '
-                f"call {tool} again with its ref or exact name as {field}.",
-            )
+    matches = await _matches(text, allowed, refs, catalog)
+    if len(matches) == 1:
+        return matches[0]
+    if matches:
+        listed = ", ".join(
+            [await describe(item, refs, catalog) for item in matches[:_MAX_LISTED_CANDIDATES]]
+        )
+        several_kinds = len({item.kind for item in matches}) > 1
+        raise LiveToolError(
+            "ambiguous_target",
+            f'"{text}" matches several: {listed}. Ask the user which one they mean, then call '
+            f"{tool} again with its ref or id as {field}."
+            + (f" {kind_hint}" if several_kinds and kind_hint else ""),
+        )
     hint = ""
     if AGENT in allowed:
         names = ", ".join(agent.label for agent in (await catalog.agents())[:12])
@@ -369,11 +400,13 @@ async def describe(target: Target, refs: LiveRefs, catalog: LiveCatalog) -> str:
         ref = refs.terminal(str(target.terminal["terminal_id"]))
         return f"{ref} ({terminal_label(target.terminal)})"
     if target.group is not None:
-        return f'group "{target.group.get("name") or target.group["group_id"]}"'
+        name = target.group.get("name") or target.group["group_id"]
+        return f'group "{name}" (id {target.group["group_id"]})'
     if target.agent is not None:
-        return f"Agent {target.agent.label}"
+        team = f"{target.agent.project} team, " if target.agent.project else ""
+        return f"Agent {target.agent.name} ({team}id {target.agent.address})"
     if target.project is not None:
-        return f"Project {target.project.name}"
+        return f"Project {target.project.name} (id {target.project.project_id})"
     return "?"
 
 
@@ -426,87 +459,77 @@ async def _ref_target(
     )
 
 
-Stage = Callable[[str, frozenset[str], LiveRefs, LiveCatalog], Awaitable[list["Target"]]]
+Matcher = Callable[[str, LiveRefs, LiveCatalog], Awaitable[list["Target"]]]
 
 
-async def _exact_ids(
+async def _matches(
     text: str, allowed: frozenset[str], refs: LiveRefs, catalog: LiveCatalog
 ) -> list[Target]:
+    """Every thing of the allowed kinds *text* names, per kind exact ids first."""
+    found: list[Target] = []
+    for kind in _KIND_WORDS:
+        if kind not in allowed:
+            continue
+        exact, loose = _KIND_MATCHERS[kind]
+        matches = await exact(text, refs, catalog)
+        if not matches:
+            matches = await loose(text, refs, catalog)
+        found += matches
+    return found
+
+
+async def _exact_sessions(text: str, refs: LiveRefs, catalog: LiveCatalog) -> list[Target]:
     value = text.strip()
-    found: list[Target] = []
-    if TERMINAL in allowed:
-        found += [
-            Target(kind=TERMINAL, terminal=item)
-            for item in await catalog.terminals()
-            if item["terminal_id"] == value
-        ]
-    if GROUP in allowed:
-        found += [
-            Target(kind=GROUP, group=item)
-            for item in await catalog.groups()
-            if item["group_id"] == value
-        ]
-    if SESSION in allowed:
-        found += [
-            Target(kind=SESSION, session=key)
-            for key in await _session_keys(refs, catalog)
-            if value in {key.session_id, f"{key.address}/{key.session_id}"}
-        ]
-    if AGENT in allowed:
-        found += [
-            Target(kind=AGENT, agent=agent)
-            for agent in await catalog.agents()
-            if agent.address == value
-        ]
-    if PROJECT in allowed:
-        found += [
-            Target(kind=PROJECT, project=project)
-            for project in await catalog.projects()
-            if project.project_id == value
-        ]
-    return found
-
-
-async def _id_prefixes(
-    text: str, allowed: frozenset[str], refs: LiveRefs, catalog: LiveCatalog
-) -> list[Target]:
-    value = text.strip().lower()
-    if len(spelling(value)) < _MIN_PREFIX_CHARS:
-        return []
-    found: list[Target] = []
-    if TERMINAL in allowed:
-        found += [
-            Target(kind=TERMINAL, terminal=item)
-            for item in await catalog.terminals()
-            if _id_prefix(str(item["terminal_id"]), value)
-        ]
-    if SESSION in allowed:
-        found += [
-            Target(kind=SESSION, session=key)
-            for key in await _session_keys(refs, catalog)
-            if _id_prefix(key.session_id, value)
-        ]
-    return found
-
-
-async def _terminal_names(
-    text: str, allowed: frozenset[str], refs: LiveRefs, catalog: LiveCatalog
-) -> list[Target]:
-    if TERMINAL not in allowed:
-        return []
-    key = spelling(text)
     return [
-        Target(kind=TERMINAL, terminal=item)
-        for item in await catalog.terminals()
-        if key and spelling(str(item.get("name") or "")) == key
+        Target(kind=SESSION, session=key)
+        for key in await _session_keys(refs, catalog)
+        if value in {key.session_id, f"{key.address}/{key.session_id}"}
     ]
 
 
-async def _group_names(
-    text: str, allowed: frozenset[str], refs: LiveRefs, catalog: LiveCatalog
-) -> list[Target]:
-    if GROUP not in allowed:
+async def _session_prefixes(text: str, refs: LiveRefs, catalog: LiveCatalog) -> list[Target]:
+    prefix = _prefix(text)
+    if prefix is None:
         return []
+    return [
+        Target(kind=SESSION, session=key)
+        for key in await _session_keys(refs, catalog)
+        if _id_prefix(key.session_id, prefix)
+    ]
+
+
+async def _exact_terminals(text: str, refs: LiveRefs, catalog: LiveCatalog) -> list[Target]:
+    value = text.strip()
+    return [
+        Target(kind=TERMINAL, terminal=item)
+        for item in await catalog.terminals()
+        if item["terminal_id"] == value
+    ]
+
+
+async def _terminal_names_and_prefixes(
+    text: str, refs: LiveRefs, catalog: LiveCatalog
+) -> list[Target]:
+    key = spelling(text)
+    prefix = _prefix(text)
+    return [
+        Target(kind=TERMINAL, terminal=item)
+        for item in await catalog.terminals()
+        if (key and spelling(str(item.get("name") or "")) == key)
+        or (prefix is not None and _id_prefix(str(item["terminal_id"]), prefix))
+    ]
+
+
+async def _exact_groups(text: str, refs: LiveRefs, catalog: LiveCatalog) -> list[Target]:
+    value = text.strip()
+    return [
+        Target(kind=GROUP, group=item)
+        for item in await catalog.groups()
+        if item["group_id"] == value
+    ]
+
+
+async def _group_names(text: str, refs: LiveRefs, catalog: LiveCatalog) -> list[Target]:
     key = spelling(text)
     return [
         Target(kind=GROUP, group=item)
@@ -515,11 +538,16 @@ async def _group_names(
     ]
 
 
-async def _agent_names(
-    text: str, allowed: frozenset[str], refs: LiveRefs, catalog: LiveCatalog
-) -> list[Target]:
-    if AGENT not in allowed:
-        return []
+async def _exact_agents(text: str, refs: LiveRefs, catalog: LiveCatalog) -> list[Target]:
+    value = text.strip()
+    return [
+        Target(kind=AGENT, agent=agent)
+        for agent in await catalog.agents()
+        if agent.address == value
+    ]
+
+
+async def _agent_names(text: str, refs: LiveRefs, catalog: LiveCatalog) -> list[Target]:
     key = spelling(text)
     return [
         Target(kind=AGENT, agent=agent)
@@ -533,11 +561,16 @@ def agent_spellings(agent: LiveAgent) -> set[str]:
     return {spelling(agent.name), spelling(agent.address), spelling(agent.address.split("@")[0])}
 
 
-async def _project_names(
-    text: str, allowed: frozenset[str], refs: LiveRefs, catalog: LiveCatalog
-) -> list[Target]:
-    if PROJECT not in allowed:
-        return []
+async def _exact_projects(text: str, refs: LiveRefs, catalog: LiveCatalog) -> list[Target]:
+    value = text.strip()
+    return [
+        Target(kind=PROJECT, project=project)
+        for project in await catalog.projects()
+        if project.project_id == value
+    ]
+
+
+async def _project_names(text: str, refs: LiveRefs, catalog: LiveCatalog) -> list[Target]:
     key = spelling(text)
     return [
         Target(kind=PROJECT, project=project)
@@ -546,14 +579,14 @@ async def _project_names(
     ]
 
 
-_STAGES: tuple[Stage, ...] = (
-    _exact_ids,
-    _id_prefixes,
-    _terminal_names,
-    _group_names,
-    _agent_names,
-    _project_names,
-)
+# Per kind: the exact-id matcher, then the matcher of names and id prefixes.
+_KIND_MATCHERS: dict[str, tuple[Matcher, Matcher]] = {
+    SESSION: (_exact_sessions, _session_prefixes),
+    TERMINAL: (_exact_terminals, _terminal_names_and_prefixes),
+    GROUP: (_exact_groups, _group_names),
+    AGENT: (_exact_agents, _agent_names),
+    PROJECT: (_exact_projects, _project_names),
+}
 
 
 async def _session_keys(refs: LiveRefs, catalog: LiveCatalog) -> list[SessionKey]:
@@ -561,6 +594,12 @@ async def _session_keys(refs: LiveRefs, catalog: LiveCatalog) -> list[SessionKey
     for item in await catalog.sessions():
         keys[session_key(item)] = None
     return list(keys)
+
+
+def _prefix(text: str) -> str | None:
+    """The text as an id prefix, or ``None`` when it is too short to be one."""
+    value = text.strip().lower()
+    return value if len(spelling(value)) >= _MIN_PREFIX_CHARS else None
 
 
 def _id_prefix(identifier: str, prefix: str) -> bool:

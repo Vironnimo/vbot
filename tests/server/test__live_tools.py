@@ -144,7 +144,14 @@ class FakeApp:
         return {"project": {}, "scan": {"team": self.teams.get(params["project_id"], [])}}
 
     def _session_list(self, params: JsonObject) -> JsonObject:
-        rows = [row for row in self.sessions if row["agent_address"] in params["agent_ids"]]
+        addresses = params.get("agent_ids") or [params["agent_id"]]
+        rows = [
+            row
+            for row in self.sessions
+            if row["agent_address"] in addresses
+            and (params.get("include_cron", True) or "cron" not in row.get("run_kinds", ()))
+            and (params.get("include_channels", True) or not row.get("platform_conv_id"))
+        ]
         rows.sort(key=lambda row: row["last_active_at"], reverse=True)
         return {"sessions": rows[: params["limit"]]}
 
@@ -453,8 +460,12 @@ async def test_does_not_guess_an_unknown_or_ambiguous_agent(fx: Fixture) -> None
     assert text.startswith("Started a Session at Coder with")
     code, message = await fx.failed("start_agent_session", agent="Coder", task="x")
     assert code == "ambiguous_target"
-    assert "Agent Coder, Agent Coder (vBot team)" in message
+    assert "(id coder)" in message
+    assert "(vBot team, id coder@vbot)" in message
     assert fx.app.count("chat.stream") == 1
+    # The id the failure lists selects that Agent.
+    await fx.ok("start_agent_session", agent="coder@vbot", task="x")
+    assert fx.app.params("session.create")[-1] == {"agent_id": "coder@vbot"}
 
 
 @pytest.mark.asyncio
@@ -664,6 +675,75 @@ async def test_an_agent_name_needs_one_clear_session(fx: Fixture) -> None:
     code, message = await fx.failed("send_message", target="Writer", text="yes")
     assert code == "no_session"
     assert 'Call overview with {"agent": "Writer"}' in message
+
+
+@pytest.mark.asyncio
+async def test_an_agent_name_skips_cron_and_channel_sessions_while_it_has_others(
+    fx: Fixture,
+) -> None:
+    fx.app.sessions = [
+        session_row("ses_own", "coder", has_active_run=True),
+        session_row("ses_cron", "coder", has_active_run=True, run_kinds=["cron"]),
+        session_row(
+            "ses_chan", "coder", has_active_run=True, platform="telegram", platform_conv_id="42"
+        ),
+    ]
+    await fx.ok("send_message", target="Coder", text="yes")
+    assert [params["session_id"] for params in fx.app.params("chat.stream")] == ["ses_own"]
+
+    # Only Cron and Channel Sessions are working: the name selects none of them.
+    fx.app.sessions[0]["has_active_run"] = False
+    fx.app.histories = {"ses_cron": {"messages": [], "active_run": {"run_id": "run_cron"}}}
+    code, message = await fx.failed("stop", target="Coder")
+    assert code == "no_session"
+    assert "Cron or Channel Sessions" in message
+    assert fx.app.count("chat.cancel") == 0
+    listing = await fx.ok("overview", agent="Coder")
+    assert "(Cron or Channel Session): working" in listing
+    assert listing.count("Cron or Channel Session") == 2
+
+
+@pytest.mark.asyncio
+async def test_an_agent_name_selects_a_channel_session_when_it_has_no_other(fx: Fixture) -> None:
+    fx.app.sessions = [
+        session_row(
+            "ses_chan", "writer", has_active_run=True, platform="telegram", platform_conv_id="42"
+        )
+    ]
+    await fx.ok("send_message", target="Writer", text="yes")
+    assert fx.app.params("chat.stream")[-1]["session_id"] == "ses_chan"
+
+
+@pytest.mark.asyncio
+async def test_a_name_shared_by_a_terminal_and_an_agent_is_ambiguous(fx: Fixture) -> None:
+    fx.app.sessions = [session_row("ses_1", "coder", has_active_run=True)]
+    fx.app.add_terminal("term_a", name="coder")
+    # Neither the Agent's exact id nor the Terminal's name wins by kind.
+    for target in ("coder", "Coder"):
+        code, message = await fx.failed("send_message", target=target, text="yes")
+        assert code == "ambiguous_target"
+        assert "t1 (coder)" in message
+        assert "Agent Coder (id coder)" in message
+        assert 'call overview with {"agent": "<its id>"}' in message
+    assert fx.app.effects() == []
+    # The ways out the failure names work.
+    await fx.ok("send_message", target="t1", text="yes")
+    assert "s1 Coder: working" in await fx.ok("overview", agent="coder")
+
+
+@pytest.mark.asyncio
+async def test_open_picks_the_kind_by_view_when_names_are_shared(fx: Fixture) -> None:
+    fx.app.groups.append({"group_id": "grp_vbot", "name": "vBot", "kind": "user"})
+    code, message = await fx.failed("open", target="vBot")
+    assert code == "ambiguous_target"
+    assert 'group "vBot" (id grp_vbot)' in message
+    assert "Project vBot (id vbot)" in message
+    assert "view of the kind meant" in message
+    assert fx.ui.of("open") == [] and fx.ui.of("terminal_view") == []
+    await fx.ok("open", target="vBot", view="projects")
+    await fx.ok("open", target="vBot", view="terminals")
+    assert fx.ui.of("open") == [{"view": "projects", "project_id": "vbot"}]
+    assert fx.ui.of("terminal_view") == [{"op": "show_group", "group_id": "grp_vbot"}]
 
 
 @pytest.mark.asyncio
