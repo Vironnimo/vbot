@@ -42,7 +42,7 @@ const TOOL_DISPLAY_ARGS = {
   web_fetch: ['url'],
   web_search: ['query'],
   process: ['action', 'process_id'],
-  cron: ['action', 'id', 'agent_id', 'schedule_type'],
+  cron: ['name', 'id', 'target', 'schedule'],
   channel_send: ['channel_id', 'message'],
   skill: ['name'],
 };
@@ -373,6 +373,16 @@ function humanReadableToolLabel(toolName, argumentsValue) {
       : '';
     if (legacyOperation) {
       return legacyOperation;
+    }
+  }
+
+  if (toolName === 'cron') {
+    const action = trimmedString(args.action);
+    if (action) {
+      const detail = ['name', 'id', 'target', 'schedule']
+        .map((key) => trimmedString(args[key]))
+        .find(Boolean);
+      return [action, detail].filter(Boolean).join(' · ');
     }
   }
 

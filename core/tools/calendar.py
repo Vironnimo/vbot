@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
-from typing import TYPE_CHECKING
+import json
+from datetime import UTC, date, datetime, time, timedelta
+from functools import cache
+from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
 from core.calendar.errors import (
@@ -12,9 +14,45 @@ from core.calendar.errors import (
     CalendarStorageError,
     CalendarValidationError,
 )
-from core.calendar.when import looks_like_date
-from core.projects.address import format_agent_address
-from core.tools.arguments import optional_int, optional_string, required_string
+from core.calendar.service import FIND_FREE_MAX_RESULTS
+from core.tools._calendar_actions import (
+    action_lines,
+    find_action,
+    handle_add_action,
+    handle_delete_action,
+    handle_update_action,
+)
+from core.tools._calendar_arguments import (
+    LOCATION_FIELD,
+    OMIT,
+    QUERY_FIELD,
+    STAND_INS,
+    TIMEZONE_FIELD,
+    UNADVERTISED_PARAMETERS,
+    WHEN_STAND_IN,
+    CalendarCallRefusedError,
+    choice,
+    is_date,
+    normalize_calendar_arguments,
+    parse_local,
+    refusal,
+    render_call,
+)
+from core.tools._calendar_times import (
+    apply_end,
+    apply_length,
+    apply_timezone,
+    length_text,
+    local_text,
+    minute_text,
+    named_instant,
+    read_window,
+    server_zone,
+    unknown_zone,
+    window_text,
+)
+from core.tools._named_zones import named_zone
+from core.tools.contracts import ToolContract, compile_tool_contract
 from core.tools.tools import (
     JsonObject,
     ToolContext,
@@ -28,13 +66,16 @@ from core.tools.tools import (
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
-    from core.calendar import CalendarEvent, CalendarService, EventOccurrence, FreeSlot
+    from core.calendar import CalendarEvent, CalendarService, EventOccurrence
 
 CALENDAR_TOOL_NAME = "calendar"
 CALENDAR_TOOL_DESCRIPTION = (
-    "Manage single or repeating calendar events and find free time. Attach instructions "
-    "for an agent to execute automatically before, at, or after an event. Moving or "
-    "cancelling the event updates its pending actions."
+    "The user's calendar: list events, find free time, create, change and delete events, and "
+    "attach actions, instructions an Agent carries out before, at or after an event. Times are "
+    "local to the server time zone, shown by list and by Runtime Environment when present. An "
+    "action starts a Run of its target Agent with prompt plus the event's title, time and "
+    "notes; it moves with its event and is deleted with it. For schedules that should not "
+    "appear in the calendar, use cron if available."
 )
 
 CALENDAR_ACTIONS = frozenset(
@@ -49,107 +90,6 @@ CALENDAR_ACTIONS = frozenset(
         "delete_action",
     )
 )
-
-_LIST_ARGUMENTS = frozenset({"when"})
-_CREATE_ARGUMENTS = frozenset({"title", "start", "duration", "rrule", "notes"})
-_UPDATE_ARGUMENTS = frozenset({"id", "title", "start", "duration", "rrule", "notes"})
-_DELETE_ARGUMENTS = frozenset({"id", "start"})
-_FIND_FREE_ARGUMENTS = frozenset({"when", "duration"})
-_ACTION_ARGUMENTS: dict[str, frozenset[str]] = {
-    "list": _LIST_ARGUMENTS,
-    "create": _CREATE_ARGUMENTS,
-    "update": _UPDATE_ARGUMENTS,
-    "delete": _DELETE_ARGUMENTS,
-    "find_free": _FIND_FREE_ARGUMENTS,
-    "add_action": frozenset({"id", "when", "prompt", "target", "session"}),
-    "update_action": frozenset({"id", "when", "prompt", "target", "session"}),
-    "delete_action": frozenset({"id"}),
-}
-_ACTION_RECOMMENDATIONS = {
-    "list": 'Use {"action":"list","when":"this week"}',
-    "create": (
-        'Use {"action":"create","title":"Dentist","start":"2026-09-10T15:00"} for a timed '
-        'event or {"action":"create","title":"Trip","start":"2026-09-10","duration":3} for '
-        "an all-day event"
-    ),
-    "update": (
-        'Use {"action":"update","id":"<event-id>","start":"2026-09-10T16:00"}; include only '
-        "fields that should change"
-    ),
-    "delete": (
-        'Use {"action":"delete","id":"<event-id>"} for the whole event; add the occurrence '
-        '"start" from list to remove one occurrence of a repeating event'
-    ),
-    "find_free": 'Use {"action":"find_free","when":"next week","duration":60}',
-    "add_action": (
-        'Use {"action":"add_action","id":"<event-id>","when":"start - 1h","prompt":"<instruction>"}'
-    ),
-    "update_action": 'Use {"action":"update_action","id":"<action-id>","when":"start - 30m"}',
-    "delete_action": 'Use {"action":"delete_action","id":"<action-id>"}',
-}
-
-_DEFAULT_ALL_DAY_DURATION_DAYS = 1
-_DEFAULT_FREE_SLOT_MINUTES = 60
-_DEFAULT_FREE_WINDOW_DAYS = 7
-_ONE_DAY = timedelta(days=1)
-
-_CALENDAR_WHEN_PARAMETER: JsonObject = {
-    "type": "string",
-    "minLength": 1,
-    "description": (
-        "Time window for list and find_free: today, tomorrow, this week, next week, "
-        "this month, next month, a date, a year-month, or 'start..end'. Omit for the "
-        "current month on list and the next 7 days on find_free. For add_action, use start "
-        "or end, optionally followed by + or - and a duration, e.g. 'start - 1h'. "
-        "Durations use m, h, or d. Omit on update_action to keep the time."
-    ),
-}
-_CALENDAR_ID_PARAMETER: JsonObject = {
-    "type": "string",
-    "minLength": 1,
-    "description": (
-        "Event id from a previous list. Required for update, delete, and add_action. "
-        "For update_action and delete_action, use the action id returned by list or add_action."
-    ),
-}
-_CALENDAR_TITLE_PARAMETER: JsonObject = {
-    "type": "string",
-    "minLength": 1,
-    "description": ("Event title. Required for create; omit on update to keep the current title."),
-}
-_CALENDAR_START_PARAMETER: JsonObject = {
-    "type": "string",
-    "minLength": 1,
-    "description": (
-        "Required for create; omit on update to keep the current start. A date "
-        "(YYYY-MM-DD) makes the event all-day, a datetime makes it timed. On delete of a "
-        "repeating event, one occurrence's start from list removes only that occurrence; "
-        "omit to delete the whole event."
-    ),
-}
-_CALENDAR_DURATION_PARAMETER: JsonObject = {
-    "type": "integer",
-    "minimum": 1,
-    "description": (
-        "Length in minutes for a timed event, days for an all-day event, minutes for "
-        "find_free slots. Omit for the default (60 minutes, 1 day, 60-minute slots) and "
-        "on update to keep the current length."
-    ),
-}
-_CALENDAR_RRULE_PARAMETER: JsonObject = {
-    "type": ["object", "null"],
-    "description": (
-        "Repeat rule for create; omit for a single event and on update to keep the "
-        "current rule; null on update stops repeating. Object: freq (daily, weekly, "
-        "monthly, or yearly), optional interval (default 1), optional end as count or "
-        "until (inclusive date, not both), and by_weekday for weekly rules (list from "
-        "mo, tu, we, th, fr, sa, su)."
-    ),
-}
-_CALENDAR_NOTES_PARAMETER: JsonObject = {
-    "type": "string",
-    "description": "Free-text notes. Omit on update to keep the current notes.",
-}
 
 CALENDAR_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
@@ -166,41 +106,119 @@ CALENDAR_TOOL_PARAMETERS: JsonObject = {
                 "update_action",
                 "delete_action",
             ],
-            "description": "Calendar action to perform.",
+            "description": (
+                "list shows events with their ids and actions; find_free shows free time. "
+                "update and update_action change only the fields you send."
+            ),
         },
-        "when": _CALENDAR_WHEN_PARAMETER,
-        "id": _CALENDAR_ID_PARAMETER,
-        "title": _CALENDAR_TITLE_PARAMETER,
-        "start": _CALENDAR_START_PARAMETER,
-        "duration": _CALENDAR_DURATION_PARAMETER,
-        "rrule": _CALENDAR_RRULE_PARAMETER,
-        "notes": _CALENDAR_NOTES_PARAMETER,
+        "when": {
+            "type": "string",
+            "minLength": 1,
+            "description": (
+                "For list and find_free: today, tomorrow, this week, next week, this month, "
+                "next month, a date, a year-month (2030-01) or 'start..end'; defaults are this "
+                "month and the next 7 days. For actions: start or end, optionally +/- a "
+                "duration in m, h or d, e.g. 'start - 1h'."
+            ),
+        },
+        "id": {
+            "type": "string",
+            "minLength": 1,
+            "description": (
+                "Event id, or for update_action and delete_action the action id (act_...), "
+                "from list or an earlier result."
+            ),
+        },
+        "title": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Event title. Required for create.",
+        },
+        "start": {
+            "type": "string",
+            "minLength": 1,
+            "description": (
+                "Local date or time: 2030-01-10 makes an all-day event, 2030-01-10T15:00 a "
+                "timed one. Required for create. On delete, an occurrence start from list "
+                "removes just that occurrence of a repeating event."
+            ),
+        },
+        "duration": {
+            "type": "integer",
+            "minimum": 1,
+            "description": (
+                "Minutes for timed events and find_free, days for all-day events. Defaults: "
+                "60 minutes, 1 day."
+            ),
+        },
+        "rrule": {
+            "type": ["object", "null"],
+            "description": (
+                'Repetition, e.g. {"freq":"weekly","by_weekday":["mo","we"]}: freq daily, '
+                "weekly, monthly or yearly; optional interval, count or until (inclusive "
+                "date), by_weekday for weekly. null on update stops repeating."
+            ),
+        },
+        "notes": {"type": "string", "description": "Free text kept with the event."},
         "prompt": {
             "type": "string",
-            "description": (
-                "Self-contained instruction for the scheduled agent. Required for add_action; "
-                "omit on update_action to keep the instruction."
-            ),
+            "description": "Instruction the action's Run carries out. Required for add_action.",
         },
         "target": {
             "type": "string",
             "description": (
-                "Agent address: agent or agent@project. Omit on add_action to use the current "
-                "agent; omit on update_action to keep the target."
+                "Agent that runs the action: agent or agent@project. Defaults to the current Agent."
             ),
         },
         "session": {
             "type": "string",
             "description": (
-                "Existing session owned by the target agent. Omit on add_action for a fresh "
-                "session each time; omit on update_action to keep the selection."
+                "Session of the target Agent to run the action in. Omit for a fresh Session "
+                "each time."
             ),
         },
     },
     "required": ["action"],
 }
 
+_EVENT_ID_ACTIONS = frozenset({"update", "delete", "add_action"})
+_ACTION_ID_ACTIONS = frozenset({"update_action", "delete_action"})
+_DEFAULT_FREE_MINUTES = 60
+_NEARBY = timedelta(days=7)
+_LISTED_OCCURRENCES = 8
+_TITLE_MATCHES = 5
+_WEEKDAY_ORDER = ("mo", "tu", "we", "th", "fr", "sa", "su")
+_FIELD_WORDS = {
+    "title": "title",
+    "start": "start",
+    "duration": "duration",
+    "duration_minutes": "duration",
+    "duration_days": "duration",
+    "rrule": "rrule",
+    "notes": "notes",
+    "when": "when",
+    "window": "when",
+    "prompt": "prompt",
+}
+_TARGET_GUIDANCE = 'Set "target" to an existing Agent id, or to agent@project for a Project member.'
+
 _LOGGER = get_logger("tools.calendar")
+
+
+@cache
+def _repair_contract() -> ToolContract:
+    return compile_tool_contract(
+        name=CALENDAR_TOOL_NAME,
+        input_schema={
+            **CALENDAR_TOOL_PARAMETERS,
+            "properties": {**CALENDAR_TOOL_PARAMETERS["properties"], **UNADVERTISED_PARAMETERS},
+        },
+        require_closed_input=False,
+    )
+
+
+def _normalize_calendar_arguments(arguments: Any) -> Any:
+    return normalize_calendar_arguments(_repair_contract(), arguments)
 
 
 def register_calendar_tool(registry: ToolRegistry, calendar_service: CalendarService) -> None:
@@ -215,12 +233,13 @@ def register_calendar_tool(registry: ToolRegistry, calendar_service: CalendarSer
         CALENDAR_TOOL_PARAMETERS,
         handler,
         open_input_schema=True,
+        argument_normalizer=_normalize_calendar_arguments,
+        unadvertised_parameters=UNADVERTISED_PARAMETERS,
         result_schema={"type": "object"},
         display=ToolDisplay(
             parts_builder=_calendar_display_parts,
-            fact_builder=result_count_fact_builder(
-                "occurrences", when_arguments={"action": "list"}
-            ),
+            # Only list results carry an occurrence count.
+            fact_builder=result_count_fact_builder("occurrences"),
         ),
     )
 
@@ -228,279 +247,562 @@ def register_calendar_tool(registry: ToolRegistry, calendar_service: CalendarSer
 def _handle_calendar_tool(
     calendar_service: CalendarService, arguments: JsonObject, context: ToolContext | None = None
 ) -> JsonObject:
-    raw_action = arguments.get("action")
-    if not isinstance(raw_action, str) or raw_action not in CALENDAR_ACTIONS:
+    action = arguments.get("action")
+    if not isinstance(action, str) or action not in CALENDAR_ACTIONS:
         options = ", ".join(sorted(CALENDAR_ACTIONS))
-        return tool_failure(
-            "invalid_arguments",
-            f"action must be one of: {options}. {_ACTION_RECOMMENDATIONS['list']}",
-            retryable=False,
-        )
-    action = raw_action
-    operation_arguments = dict(arguments)
-    operation_arguments.pop("action", None)
-
-    unknown_arguments = sorted(set(operation_arguments) - _ACTION_ARGUMENTS[action])
-    if unknown_arguments:
-        names = ", ".join(unknown_arguments)
-        allowed = ", ".join(sorted(_ACTION_ARGUMENTS[action])) or "no additional fields"
-        return tool_failure(
-            "invalid_arguments",
-            _with_action_recommendation(
-                action,
-                f"Action '{action}' does not accept: {names}. Allowed: {allowed}",
-            ),
-            retryable=False,
-        )
-
+        return tool_failure("invalid_arguments", f"action must be one of: {options}.")
     try:
-        if action in {"add_action", "update_action", "delete_action"}:
-            action_id = required_string(operation_arguments.pop("id", None), field_name="id")
-            if action == "delete_action":
-                calendar_service.actions.delete(action_id)
-                return tool_success({"id": action_id, "deleted": True})
-            if action == "update_action":
-                return tool_success(
-                    {"action": calendar_service.actions.update(action_id, **operation_arguments)}
-                )
-            target = optional_string(operation_arguments.get("target"), field_name="target")
-            if target is None and context is not None:
-                target = format_agent_address(context.agent_id, context.project_id)
-            return tool_success(
-                {
-                    "action": calendar_service.actions.add(
-                        action_id,
-                        when=required_string(operation_arguments.get("when"), field_name="when"),
-                        prompt=required_string(
-                            operation_arguments.get("prompt"), field_name="prompt"
-                        ),
-                        target=required_string(target, field_name="target"),
-                        session=optional_string(
-                            operation_arguments.get("session"), field_name="session"
-                        ),
-                    )
-                }
-            )
+        if action in _EVENT_ID_ACTIONS | _ACTION_ID_ACTIONS and "id" not in arguments:
+            raise CalendarCallRefusedError(_missing_id(calendar_service, action, arguments))
+        if action in _EVENT_ID_ACTIONS | _ACTION_ID_ACTIONS:
+            _check_id_kind(calendar_service, action, arguments)
         if action == "list":
-            return _handle_list(calendar_service, operation_arguments)
+            return _handle_list(calendar_service, arguments)
+        if action == "find_free":
+            return _handle_find_free(calendar_service, arguments)
         if action == "create":
-            return _handle_create(calendar_service, operation_arguments)
+            return _handle_create(calendar_service, arguments)
         if action == "update":
-            return _handle_update(calendar_service, operation_arguments)
+            return _handle_update(calendar_service, arguments)
         if action == "delete":
-            return _handle_delete(calendar_service, operation_arguments)
-        return _handle_find_free(calendar_service, operation_arguments)
-    except (ValueError, CalendarValidationError) as error:
-        return tool_failure(
-            "invalid_arguments",
-            _with_action_recommendation(action, str(error)),
-            retryable=False,
-        )
+            return _handle_delete(calendar_service, arguments)
+        if action == "add_action":
+            return handle_add_action(calendar_service, arguments, context)
+        if action == "update_action":
+            return handle_update_action(calendar_service, arguments, context)
+        return handle_delete_action(calendar_service, arguments)
+    except CalendarCallRefusedError as error:
+        return tool_failure("invalid_arguments", str(error))
     except CalendarEventNotFoundError as error:
+        kind = "action" if "action not found" in str(error) else "event"
         return tool_failure(
-            "event_not_found",
-            f'{error}. Use {{"action":"list"}} to get current event ids',
-            retryable=False,
+            f"{kind}_not_found",
+            f'No {kind} has id "{arguments.get("id")}". {{"action":"list"}} shows events, their '
+            'actions and ids; add a when such as "next month" to look further ahead.',
         )
+    except CalendarValidationError as error:
+        return tool_failure("invalid_arguments", _validation_message(arguments, error))
     except CalendarStorageError as error:
         _LOGGER.warning("Calendar storage error for action=%s: %s", action, error)
         return tool_failure(
-            "calendar_storage_error",
-            f"{error}. Do not repeat the same call unchanged",
-            retryable=False,
+            "calendar_storage_error", f"{error}. Do not repeat the same call unchanged."
         )
     except CalendarServiceError as error:
         _LOGGER.warning("Calendar service error for action=%s: %s", action, error)
         return tool_failure(
-            "calendar_service_error",
-            f"{error}. Do not repeat the same call unchanged",
-            retryable=False,
+            "calendar_service_error", f"{error}. Do not repeat the same call unchanged."
         )
 
 
+def _missing_id(calendar_service: CalendarService, action: str, arguments: JsonObject) -> str:
+    """Name the call with the id: a title that matches one event supplies it."""
+    kind = "action" if action in _ACTION_ID_ACTIONS else "event"
+    title = arguments.get("title")
+    if kind == "event" and isinstance(title, str):
+        wanted = title.strip().casefold()
+        events = calendar_service.list_events()
+        matches = [event for event in events if event.title.strip().casefold() == wanted]
+        matches = matches or [event for event in events if wanted in event.title.casefold()]
+        # update may be renaming; delete and add_action only used the title to find the event.
+        kept: dict[str, Any] = {} if action == "update" else {"title": OMIT}
+        if len(matches) == 1:
+            event = matches[0]
+            start = _event_fields(calendar_service, event)["start"]
+            return refusal(
+                f'{action} needs the event "id"; "{event.title}" at {start} has id {event.id}.',
+                arguments,
+                id=event.id,
+                **kept,
+            )
+        if matches:
+            calls = [
+                render_call(arguments, id=event.id, **kept)
+                + f' ("{event.title}" at {_event_fields(calendar_service, event)["start"]})'
+                for event in matches[:_TITLE_MATCHES]
+            ]
+            return choice(f'{action} needs the event "id"; several events match "{title}":', calls)
+    return refusal(
+        f'{action} needs the {kind} "id"; {{"action":"list"}} shows events, their actions and ids.',
+        arguments,
+        id=f"<{kind} id from list>",
+        **({} if action == "update" else {"title": OMIT}),
+    )
+
+
+def _check_id_kind(calendar_service: CalendarService, action: str, arguments: JsonObject) -> None:
+    """Refuse an event id where an action id belongs, or the reverse, naming the right call."""
+    item_id = str(arguments["id"])
+    if action in _ACTION_ID_ACTIONS and item_id.startswith("evt_"):
+        event = calendar_service.get_event(item_id)
+        actions = calendar_service.actions.list_actions(event.id)
+        text = f'{action} takes an action id (act_...); "{item_id}" is the event "{event.title}"'
+        if not actions:
+            if action == "delete_action":
+                raise CalendarCallRefusedError(
+                    f"calendar was not run: {text}, which has no actions to delete."
+                )
+            raise CalendarCallRefusedError(
+                refusal(
+                    f"{text}, which has no actions; add_action attaches one.",
+                    arguments,
+                    action="add_action",
+                    when=arguments.get("when", WHEN_STAND_IN),
+                )
+            )
+        if len(actions) == 1:
+            raise CalendarCallRefusedError(
+                refusal(
+                    f"{text}, whose one action is {actions[0]['id']}.",
+                    arguments,
+                    id=actions[0]["id"],
+                )
+            )
+        calls = [
+            render_call(arguments, id=item["id"]) + f" ({item['when']}: {_brief(item['prompt'])})"
+            for item in actions
+        ]
+        raise CalendarCallRefusedError(choice(f"{text}, which has several actions:", calls))
+    if action in _EVENT_ID_ACTIONS and item_id.startswith("act_"):
+        # delete and update of an action id were already read as delete_action/update_action.
+        current = find_action(calendar_service, item_id)
+        event = calendar_service.get_event(current["event_id"])
+        raise CalendarCallRefusedError(
+            refusal(
+                f'{action} takes an event id; "{item_id}" is an action of "{event.title}" '
+                f"({event.id}).",
+                arguments,
+                id=event.id,
+            )
+        )
+
+
+def _brief(text: str) -> str:
+    line = " ".join(str(text).split())
+    return line if len(line) <= 40 else line[:37] + "..."
+
+
+# -- reading the calendar ---------------------------------------------------------------
+
+
 def _handle_list(calendar_service: CalendarService, arguments: JsonObject) -> JsonObject:
-    window_start, window_end = _resolve_window(calendar_service, arguments, "this month")
-    occurrences = calendar_service.occurrences_in_window(window_start, window_end)
-    listed_ids = {occurrence.event_id for occurrence in occurrences}
-    events = [
-        _event_payload(event, calendar_service)
-        for event in calendar_service.list_events()
-        if event.id in listed_ids
-    ]
-    return tool_success(
-        {
-            "events": events,
-            "occurrences": [_occurrence_payload(occurrence) for occurrence in occurrences],
-            "actions": [
-                a for a in calendar_service.actions.list_actions() if a["event_id"] in listed_ids
-            ],
-            "executions": calendar_service.actions.project(occurrences),
-            "action_error": calendar_service.actions.storage_error,
-            "system_timezone": calendar_service.system_timezone_name(),
+    zone = server_zone(calendar_service)
+    window_start, window_end, note = read_window(arguments, zone, "this month")
+    events = {event.id: event for event in calendar_service.list_events()}
+    by_event: dict[str, list[EventOccurrence]] = {}
+    item_id = arguments.get("id")
+    if isinstance(item_id, str):
+        # One event, shown even when none of its occurrences falls in the window.
+        chosen = _event_for_id(calendar_service, item_id)
+        events = {chosen.id: chosen}
+        by_event[chosen.id] = []
+    for occurrence in calendar_service.occurrences_in_window(window_start, window_end):
+        if occurrence.event_id in events:
+            by_event.setdefault(occurrence.event_id, []).append(occurrence)
+    query = arguments.get(QUERY_FIELD)
+    if isinstance(query, str):
+        text = query.casefold()
+        by_event = {
+            event_id: items
+            for event_id, items in by_event.items()
+            if text in events[event_id].title.casefold()
+            or text in (events[event_id].notes or "").casefold()
         }
-    )
+    actions: dict[str, list[dict[str, Any]]] = {}
+    for item in calendar_service.actions.list_actions():
+        actions.setdefault(item["event_id"], []).append(item)
+    listed = [item for items in by_event.values() for item in items]
+    runs: dict[str, list[dict[str, Any]]] = {}
+    for row in calendar_service.actions.project(listed):
+        runs.setdefault(row["action_id"], []).append(row)
+    data: JsonObject = {
+        "events": len(by_event),
+        "occurrences": len(listed),
+        "window": window_text(window_start, window_end, zone),
+        "timezone": calendar_service.system_timezone_name(),
+    }
+    if isinstance(query, str):
+        data["matching"] = query
+    if calendar_service.actions.storage_error:
+        data["action_error"] = calendar_service.actions.storage_error
+    if note:
+        data["note"] = note
+    if by_event:
+        data["content"] = "\n\n".join(
+            _event_block(calendar_service, events[event_id], items, actions.get(event_id, []), runs)
+            for event_id, items in by_event.items()
+        )
+    return tool_success(data)
 
 
-def _handle_create(calendar_service: CalendarService, arguments: JsonObject) -> JsonObject:
-    title = required_string(arguments.get("title"), field_name="title")
-    start = required_string(arguments.get("start"), field_name="start")
-    duration = optional_int(arguments.get("duration"), field_name="duration", minimum=1)
-    rrule = _validate_rrule(arguments["rrule"], allow_null=False) if "rrule" in arguments else None
-    notes = optional_string(arguments.get("notes"), field_name="notes")
-    all_day = looks_like_date(start)
-    event = calendar_service.create_event(
-        title=title,
-        start=start,
-        duration_minutes=None if all_day else duration,
-        duration_days=duration if all_day else None,
-        rrule=rrule,
-        notes=notes,
-    )
-    return tool_success({"event": _event_payload(event, calendar_service)})
-
-
-def _handle_update(calendar_service: CalendarService, arguments: JsonObject) -> JsonObject:
-    event_id = required_string(arguments.get("id"), field_name="id")
-    updates: JsonObject = {}
-    if "title" in arguments:
-        updates["title"] = required_string(arguments.get("title"), field_name="title")
-    if "start" in arguments:
-        start = required_string(arguments.get("start"), field_name="start")
-        updates["start"] = start
-        # The start form decides the event kind; pass it explicitly so switching
-        # between all-day and timed works without an all_day parameter.
-        updates["all_day"] = looks_like_date(start)
-    if "duration" in arguments:
-        duration = optional_int(arguments.get("duration"), field_name="duration", minimum=1)
-        if _update_targets_all_day(calendar_service, event_id, arguments):
-            updates["duration_days"] = duration
-        else:
-            updates["duration_minutes"] = duration
-    if "rrule" in arguments:
-        updates["rrule"] = _validate_rrule(arguments.get("rrule"), allow_null=True)
-    if "notes" in arguments:
-        updates["notes"] = optional_string(arguments.get("notes"), field_name="notes")
-    if not updates:
-        raise ValueError("update requires at least one field to change")
-
-    event = calendar_service.update_event(event_id, **updates)
-    return tool_success({"event": _event_payload(event, calendar_service)})
-
-
-def _handle_delete(calendar_service: CalendarService, arguments: JsonObject) -> JsonObject:
-    event_id = required_string(arguments.get("id"), field_name="id")
-    occurrence_start = optional_string(arguments.get("start"), field_name="start")
-    if occurrence_start is None:
-        calendar_service.delete_event(event_id)
-        return tool_success({"id": event_id, "deleted": True})
-    calendar_service.add_exdate(event_id, occurrence_start)
-    return tool_success({"id": event_id, "excluded_occurrence": occurrence_start})
+def _event_for_id(calendar_service: CalendarService, item_id: str) -> CalendarEvent:
+    """The event an id names: an event id, or an action id standing for its event."""
+    for item in calendar_service.actions.list_actions():
+        if item["id"] == item_id:
+            return calendar_service.get_event(item["event_id"])
+    return calendar_service.get_event(item_id)
 
 
 def _handle_find_free(calendar_service: CalendarService, arguments: JsonObject) -> JsonObject:
-    duration = optional_int(
-        arguments.get("duration"),
-        field_name="duration",
-        default=_DEFAULT_FREE_SLOT_MINUTES,
-        minimum=1,
+    zone = server_zone(calendar_service)
+    arguments, length_note = apply_length(arguments, zone, stored_start=None, recurring=True)
+    duration = arguments.get("duration", _DEFAULT_FREE_MINUTES)
+    window_start, window_end, note = read_window(arguments, zone, None)
+    slots = calendar_service.find_free_slots(
+        window_start, window_end, duration, max_results=FIND_FREE_MAX_RESULTS + 1
     )
-    window_start, window_end = _resolve_window(calendar_service, arguments, "today")
-    if "when" not in arguments:
-        window_end = window_start + _DEFAULT_FREE_WINDOW_DAYS * _ONE_DAY
-    slots = calendar_service.find_free_slots(window_start, window_end, duration)
-    zone = _server_zone(calendar_service)
+    shown = slots[:FIND_FREE_MAX_RESULTS]
+    data: JsonObject = {
+        "free": len(shown),
+        "window": window_text(window_start, window_end, zone),
+        "timezone": calendar_service.system_timezone_name(),
+    }
+    notes = [text for text in (length_note, note) if text]
+    if not shown:
+        notes.append(f"No free span of {length_text(duration)} or more in this window.")
+    elif len(slots) > len(shown):
+        notes.append(
+            f"More free time follows after {local_text(shown[-1].end_utc, zone)}; a later "
+            "when shows it."
+        )
+    if notes:
+        data["note"] = " ".join(notes)
+    if shown:
+        data["content"] = "\n".join(
+            f"{local_text(slot.start_utc, zone)} to {local_text(slot.end_utc, zone)} "
+            f"({length_text(int((slot.end_utc - slot.start_utc).total_seconds() // 60))})"
+            for slot in shown
+        )
+    return tool_success(data)
+
+
+def _event_block(
+    calendar_service: CalendarService,
+    event: CalendarEvent,
+    occurrences: list[EventOccurrence],
+    actions: list[dict[str, Any]],
+    runs: dict[str, list[dict[str, Any]]],
+) -> str:
+    zone = server_zone(calendar_service)
+    fields = _event_fields(calendar_service, event)
+    fields.pop("actions", None)
+    notes = fields.pop("notes", None)
+    lines = [f"{key}: {value}" for key, value in fields.items()]
+    if event.rrule is not None:
+        lines.append(_occurrence_line(occurrences))
+    if notes:
+        lines.append("notes: " + "\n  ".join(str(notes).splitlines()))
+    for item in actions:
+        lines.extend(action_lines(item, runs.get(item["id"], []), zone))
+    return "\n".join(lines)
+
+
+def _occurrence_line(occurrences: list[EventOccurrence]) -> str:
+    starts = [minute_text(item.occurrence_start) for item in occurrences]
+    if not starts:
+        return "occurrences: none in this window"
+    if len(starts) <= _LISTED_OCCURRENCES:
+        return "occurrences: " + ", ".join(starts)
+    return f"occurrences: {len(starts)} in this window, {', '.join(starts[:3])}, ..., {starts[-1]}"
+
+
+# -- changing events ----------------------------------------------------------------------
+
+
+def _handle_create(calendar_service: CalendarService, arguments: JsonObject) -> JsonObject:
+    missing = [name for name in ("title", "start") if name not in arguments]
+    if missing:
+        texts = {
+            "title": '"title"',
+            "start": '"start", a date for an all-day event or a local time for a timed one',
+        }
+        raise CalendarCallRefusedError(
+            refusal(
+                "create needs " + " and ".join(texts[name] for name in missing) + ".",
+                arguments,
+                **{name: STAND_INS[name] for name in missing},
+            )
+        )
+    if arguments.get("rrule", 0) is None:
+        raise CalendarCallRefusedError(
+            refusal(
+                "rrule null only stops repetition on update; omit it for a single event.",
+                arguments,
+                rrule=OMIT,
+            )
+        )
+    arguments, note = _event_times(calendar_service, arguments, None)
+    start = str(arguments["start"])
+    all_day = is_date(start)
+    duration = arguments.get("duration")
+    event = calendar_service.create_event(
+        title=str(arguments["title"]),
+        start=start,
+        duration_minutes=None if all_day else duration,
+        duration_days=duration if all_day else None,
+        rrule=arguments.get("rrule"),
+        notes=arguments.get("notes"),
+    )
+    return _event_success(calendar_service, event, note)
+
+
+def _handle_update(calendar_service: CalendarService, arguments: JsonObject) -> JsonObject:
+    event = calendar_service.get_event(str(arguments["id"]))
+    arguments, note = _event_times(calendar_service, arguments, event)
+    updates: JsonObject = {}
+    for name in ("title", "notes"):
+        if name in arguments:
+            updates[name] = arguments[name]
+    if "start" in arguments:
+        updates["start"] = arguments["start"]
+        # The start form decides the kind; pass it so all-day and timed can switch.
+        updates["all_day"] = is_date(str(arguments["start"]))
+    if "duration" in arguments:
+        all_day = updates.get("all_day", event.all_day)
+        updates["duration_days" if all_day else "duration_minutes"] = arguments["duration"]
+    if "rrule" in arguments:
+        updates["rrule"] = arguments["rrule"]
+    if not updates:
+        raise CalendarCallRefusedError(
+            refusal(
+                "update needs a field to change: title, start, duration, rrule or notes.",
+                arguments,
+                start=STAND_INS["start"],
+            )
+        )
+    updated = calendar_service.update_event(event.id, **updates)
+    return _event_success(calendar_service, updated, note)
+
+
+def _handle_delete(calendar_service: CalendarService, arguments: JsonObject) -> JsonObject:
+    event = calendar_service.get_event(str(arguments["id"]))
+    start = arguments.get("start")
+    removed_actions = len(calendar_service.actions.list_actions(event.id))
+    if not isinstance(start, str):
+        calendar_service.delete_event(event.id)
+        return _deleted(event, removed_actions, None)
+    occurrence = _occurrence_start(calendar_service, event, start, arguments)
+    if event.rrule is None:
+        calendar_service.delete_event(event.id)
+        return _deleted(
+            event, removed_actions, "The event does not repeat, so the whole event was deleted."
+        )
+    calendar_service.add_exdate(event.id, occurrence)
     return tool_success(
         {
-            "slots": [_free_slot_payload(slot, zone) for slot in slots],
-            "system_timezone": calendar_service.system_timezone_name(),
+            "id": event.id,
+            "title": event.title,
+            "removed_occurrence": minute_text(occurrence),
+            "status": "occurrence removed; the rest of the series stays",
         }
     )
 
 
-def _resolve_window(
-    calendar_service: CalendarService, arguments: JsonObject, default_when: str
-) -> tuple[datetime, datetime]:
-    when = optional_string(arguments.get("when"), field_name="when")
-    if when is None:
-        when = default_when
-    return calendar_service.resolve_when(when)
+def _deleted(event: CalendarEvent, removed_actions: int, note: str | None) -> JsonObject:
+    data: JsonObject = {"id": event.id, "title": event.title, "status": "deleted"}
+    if removed_actions:
+        data["actions_removed"] = removed_actions
+    if note:
+        data["note"] = note
+    return tool_success(data)
 
 
-def _update_targets_all_day(
-    calendar_service: CalendarService, event_id: str, arguments: JsonObject
-) -> bool:
-    start = optional_string(arguments.get("start"), field_name="start")
-    if start is not None:
-        return looks_like_date(start)
-    return bool(calendar_service.get_event(event_id).all_day)
+def _occurrence_start(
+    calendar_service: CalendarService, event: CalendarEvent, start: str, arguments: JsonObject
+) -> str:
+    """Return the stored form of the occurrence start a delete names, or refuse."""
+    server = server_zone(calendar_service)
+    # Occurrence starts are written in the event's own wall-clock zone.
+    own = ZoneInfo(event.tz_name) if event.tz_name else server
+    text = start.strip()
+    if event.all_day:
+        wanted = text[:10]
+        if not is_date(wanted):
+            raise CalendarCallRefusedError(
+                refusal(
+                    f'"{start}" is not a date; this all-day event has dates as occurrence starts.',
+                    arguments,
+                    start="<occurrence date from list>",
+                )
+            )
+        center = datetime.combine(date.fromisoformat(wanted), time.min, server)
+    else:
+        parsed = parse_local(text)
+        if parsed is None:
+            raise CalendarCallRefusedError(
+                refusal(
+                    f'"{start}" is not a local time; this timed event has times such as '
+                    "2030-01-10T15:00 as occurrence starts.",
+                    arguments,
+                    start="<occurrence start from list>",
+                )
+            )
+        name = arguments.get(TIMEZONE_FIELD)
+        if isinstance(name, str) and parsed.tzinfo is None:
+            zone = named_zone(name)
+            if zone is None:
+                raise CalendarCallRefusedError(unknown_zone(name, server, arguments))
+            parsed = named_instant(arguments, "start", parsed, name, zone)
+        if parsed.tzinfo is not None:
+            parsed = parsed.astimezone(own).replace(tzinfo=None)
+        wanted = parsed.replace(microsecond=0).isoformat()
+        center = parsed.replace(tzinfo=own)
+    nearby = calendar_service.event_occurrences(
+        event, (center - _NEARBY).astimezone(UTC), (center + _NEARBY).astimezone(UTC)
+    )
+    starts = [item.occurrence_start for item in nearby]
+    if wanted in starts:
+        return wanted
+    corrected: dict[str, Any] = {TIMEZONE_FIELD: OMIT}
+    if event.rrule is None:
+        own_start = _event_fields(calendar_service, event)["start"]
+        raise CalendarCallRefusedError(
+            refusal(
+                f'the event does not repeat and starts at {own_start}, not "{start}". To delete '
+                "it, send the call without start.",
+                arguments,
+                start=OMIT,
+                **corrected,
+            )
+        )
+    if not starts:
+        listing = render_call({"action": "list", "id": event.id, "when": "<its month>"})
+        raise CalendarCallRefusedError(
+            refusal(
+                f'"{start}" is not an occurrence of this event, and none falls within a week of '
+                f"it. {listing} shows them.",
+                arguments,
+                start="<occurrence start from list>",
+                **corrected,
+            )
+        )
+    closest = sorted(starts, key=lambda item: abs(_seconds(item) - _seconds(wanted)))[:3]
+    calls = [
+        render_call(arguments, start=minute_text(item), **corrected) for item in sorted(closest)
+    ]
+    raise CalendarCallRefusedError(
+        choice(f'"{start}" is not an occurrence of this event. Nearby occurrences:', calls)
+    )
 
 
-def _validate_rrule(value: object, *, allow_null: bool) -> object:
-    if value is None:
-        if allow_null:
-            return None
-        raise ValueError("rrule must be an object when provided; omit it for a single event")
-    if not isinstance(value, dict):
-        raise ValueError("rrule must be an object with a freq field")
-    return value
+def _seconds(value: str) -> float:
+    return (datetime.fromisoformat(value) - datetime(2000, 1, 1)).total_seconds()
 
 
-def _event_payload(event: CalendarEvent, calendar_service: CalendarService) -> JsonObject:
-    """Render one event record in the agent-facing shape (server-local times)."""
-    payload: JsonObject = {
+def _event_times(
+    calendar_service: CalendarService, arguments: JsonObject, event: CalendarEvent | None
+) -> tuple[JsonObject, str | None]:
+    """Read a call's zone, end and location into the fields the calendar stores."""
+    server = server_zone(calendar_service)
+    recurring = (
+        arguments["rrule"] is not None
+        if "rrule" in arguments
+        else event is not None and event.rrule is not None
+    )
+    arguments, zone_note = apply_timezone(arguments, server, recurring=recurring)
+    stored_start = _event_start(calendar_service, event) if event is not None else None
+    arguments, length_note = apply_length(
+        arguments, server, stored_start=stored_start, recurring=recurring
+    )
+    arguments = apply_end(arguments, server, stored_start=stored_start, recurring=recurring)
+    note = " ".join(text for text in (zone_note, length_note) if text) or None
+    return _apply_location(arguments, event), note
+
+
+def _apply_location(arguments: JsonObject, event: CalendarEvent | None) -> JsonObject:
+    """Keep a location as the first line of notes: the calendar has no location field."""
+    result = dict(arguments)
+    location = result.pop(LOCATION_FIELD, None)
+    if not isinstance(location, str):
+        return result
+    base = result.get("notes", event.notes if event else None)
+    lines = [line for line in str(base or "").splitlines() if not line.startswith("Location: ")]
+    result["notes"] = "\n".join([f"Location: {location.strip()}", *lines]).strip()
+    return result
+
+
+def _event_success(
+    calendar_service: CalendarService, event: CalendarEvent, note: str | None
+) -> JsonObject:
+    data = _event_fields(calendar_service, event)
+    if note:
+        data["note"] = note
+    return tool_success(data)
+
+
+def _event_fields(calendar_service: CalendarService, event: CalendarEvent) -> JsonObject:
+    """One event in the Agent-facing shape: server-local times, repetition as sent."""
+    data: JsonObject = {
         "id": event.id,
         "title": event.title,
-        "all_day": event.all_day,
-        "recurring": event.rrule is not None,
-        "notes": event.notes,
-        "rrule": event.rrule,
+        "start": _event_start(calendar_service, event),
     }
     if event.all_day:
-        payload["start"] = event.start_date
-        payload["duration"] = event.duration_days or _DEFAULT_ALL_DAY_DURATION_DAYS
-        return payload
-    # Recurring anchors render in their own wall-clock zone, like their occurrences.
-    zone = ZoneInfo(event.tz_name) if event.tz_name else _server_zone(calendar_service)
-    start_utc, end_utc = calendar_service.event_span(event)
-    payload["start"] = event.start_local or _to_local_naive(start_utc, zone)
-    payload["end"] = _to_local_naive(end_utc, zone)
-    return payload
+        data["days"] = event.duration_days or 1
+    else:
+        zone = ZoneInfo(event.tz_name) if event.tz_name else server_zone(calendar_service)
+        data["end"] = local_text(calendar_service.event_span(event)[1], zone)
+    if event.rrule is not None:
+        # The rule as the Agent would send it: no nulls, no default interval.
+        rule = {
+            key: value
+            for key, value in event.rrule.items()
+            if value is not None and not (key == "interval" and value == 1)
+        }
+        if isinstance(rule.get("by_weekday"), list):
+            rule["by_weekday"] = sorted(rule["by_weekday"], key=_WEEKDAY_ORDER.index)
+        data["repeats"] = json.dumps(rule, separators=(",", ":"))
+        if event.exdates:
+            data["removed_occurrences"] = ", ".join(minute_text(item) for item in event.exdates)
+    if event.notes:
+        data["notes"] = event.notes
+    actions = len(calendar_service.actions.list_actions(event.id))
+    if actions:
+        data["actions"] = actions
+    return data
 
 
-def _occurrence_payload(occurrence: EventOccurrence) -> JsonObject:
-    payload: JsonObject = {
-        "event_id": occurrence.event_id,
-        "title": occurrence.title,
-        "start": occurrence.occurrence_start,
-        "all_day": occurrence.all_day,
-        "recurring": occurrence.recurring,
-    }
-    if occurrence.occurrence_end is not None:
-        payload["end"] = occurrence.occurrence_end
-    return payload
+def _event_start(calendar_service: CalendarService, event: CalendarEvent) -> str:
+    """The event's start as the Agent sees and sends it: a date, or a server-local time."""
+    if event.all_day:
+        return event.start_date or ""
+    if event.start_local:
+        return minute_text(event.start_local)
+    zone = ZoneInfo(event.tz_name) if event.tz_name else server_zone(calendar_service)
+    return local_text(calendar_service.event_span(event)[0], zone)
 
 
-def _free_slot_payload(slot: FreeSlot, zone: ZoneInfo) -> JsonObject:
-    return {
-        "start": _to_local_naive(slot.start_utc, zone),
-        "end": _to_local_naive(slot.end_utc, zone),
-    }
+# -- rendering -------------------------------------------------------------------------------
 
 
-def _to_local_naive(value: datetime, zone: ZoneInfo) -> str:
-    return value.astimezone(zone).replace(tzinfo=None, microsecond=0).isoformat()
+def _validation_message(arguments: JsonObject, error: CalendarValidationError) -> str:
+    detail = str(error).rstrip(". ")
+    if "target does not identify" in detail:
+        return refusal(f"{detail}. {_TARGET_GUIDANCE}", arguments, target=STAND_INS["target"])
+    if "session does not exist" in detail:
+        return refusal(
+            f"{detail}. Omit session for a fresh Session each time.", arguments, session=OMIT
+        )
+    field = _FIELD_WORDS.get(detail.split(" ", 1)[0].split(".", 1)[0])
+    if field is None and detail.startswith("cannot parse when"):
+        field = "when"
+    if field is not None and field in arguments:
+        stand_in = (
+            "this week"
+            if field == "when" and arguments.get("action") in {"list", "find_free"}
+            else STAND_INS[field]
+        )
+        return refusal(f"{detail}.", arguments, **{field: stand_in})
+    return f"calendar was not run: {detail}."
 
 
-def _server_zone(calendar_service: CalendarService) -> ZoneInfo:
-    return ZoneInfo(calendar_service.system_timezone_name())
-
-
-def _with_action_recommendation(action: str, message: str) -> str:
-    recommendation = _ACTION_RECOMMENDATIONS[action]
-    return f"{message.rstrip('. ')}. {recommendation}"
-
-
-def _calendar_display_parts(arguments: JsonObject) -> tuple[ToolDisplayPart, ...]:
+def _calendar_display_parts(raw_arguments: JsonObject) -> tuple[ToolDisplayPart, ...]:
+    # Persisted calls keep the Model's own spelling; label what the call meant.
+    try:
+        arguments = _normalize_calendar_arguments(raw_arguments)
+    except ValueError:
+        arguments = raw_arguments
+    if not isinstance(arguments, dict):
+        return ()
     action = arguments.get("action")
     if not isinstance(action, str) or action not in CALENDAR_ACTIONS:
         return ()

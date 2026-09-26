@@ -270,13 +270,13 @@ class TelegramTransport:
 
         for index, file_data in enumerate(files):
             item_caption = caption if index == 0 else None
-            input_file = telegram.InputFile(file_data.data, filename=file_data.filename)
-            if is_image:
-                media_items.append(telegram.InputMediaPhoto(media=input_file, caption=item_caption))
-            else:
-                media_items.append(
-                    telegram.InputMediaDocument(media=input_file, caption=item_caption)
-                )
+            # Raw bytes let the library upload each file as its own multipart part and point
+            # the media entry at it (attach://); a prebuilt InputFile would lack that link,
+            # and Telegram then rejects the group with "media not found".
+            media_type = telegram.InputMediaPhoto if is_image else telegram.InputMediaDocument
+            media_items.append(
+                media_type(media=file_data.data, filename=file_data.filename, caption=item_caption)
+            )
 
         payload: dict[str, Any] = {"chat_id": chat_id, "media": media_items}
         if message_thread_id is not None:

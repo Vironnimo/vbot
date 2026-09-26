@@ -363,13 +363,19 @@ def install_fake_telegram_media(monkeypatch: pytest.MonkeyPatch) -> None:
             self.filename = filename
 
     class FakeInputMediaPhoto:
-        def __init__(self, media: FakeInputFile, caption: str | None = None) -> None:
+        def __init__(
+            self, media: bytes, *, filename: str | None = None, caption: str | None = None
+        ) -> None:
             self.media = media
+            self.filename = filename
             self.caption = caption
 
     class FakeInputMediaDocument:
-        def __init__(self, media: FakeInputFile, caption: str | None = None) -> None:
+        def __init__(
+            self, media: bytes, *, filename: str | None = None, caption: str | None = None
+        ) -> None:
             self.media = media
+            self.filename = filename
             self.caption = caption
 
     class FakeReplyParameters:

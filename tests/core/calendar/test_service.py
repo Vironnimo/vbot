@@ -317,16 +317,29 @@ class TestFindFreeSlots:
 
         assert restarted.find_free_slots(start, end, 60, now_utc=start) == []
 
-    def test_finds_gaps_around_events(self, service: CalendarService) -> None:
+    def test_slots_are_whole_gaps_around_events(self, service: CalendarService) -> None:
         service.create_event(title="Block", start="2026-09-03T15:00:00+02:00", duration_minutes=60)
-        window_start, window_end = service.parse_window("2026-09-03", "2026-09-04")
+        window_start, window_end = service.parse_window("2026-09-03", "2026-09-03")
+
         slots = service.find_free_slots(window_start, window_end, 60, now_utc=window_start)
-        assert len(slots) >= 1
-        blocked_start = datetime(2026, 9, 3, 13, 0, tzinfo=UTC)
-        blocked_end = datetime(2026, 9, 3, 14, 0, tzinfo=UTC)
-        for slot in slots:
-            overlaps_block = slot.start_utc < blocked_end and slot.end_utc > blocked_start
-            assert not overlaps_block
+
+        # Local midnight to 15:00 and 16:00 to midnight, not one-hour pieces.
+        assert [(slot.start_utc, slot.end_utc) for slot in slots] == [
+            (datetime(2026, 9, 2, 22, 0, tzinfo=UTC), datetime(2026, 9, 3, 13, 0, tzinfo=UTC)),
+            (datetime(2026, 9, 3, 14, 0, tzinfo=UTC), datetime(2026, 9, 3, 22, 0, tzinfo=UTC)),
+        ]
+
+    def test_gaps_shorter_than_the_duration_are_skipped(self, service: CalendarService) -> None:
+        service.create_event(title="A", start="2026-09-03T09:00:00+00:00", duration_minutes=60)
+        service.create_event(title="B", start="2026-09-03T10:30:00+00:00", duration_minutes=60)
+        window_start = datetime(2026, 9, 3, 9, 0, tzinfo=UTC)
+        window_end = datetime(2026, 9, 3, 13, 0, tzinfo=UTC)
+
+        slots = service.find_free_slots(window_start, window_end, 45, now_utc=window_start)
+
+        assert [(slot.start_utc, slot.end_utc) for slot in slots] == [
+            (datetime(2026, 9, 3, 11, 30, tzinfo=UTC), window_end)
+        ]
 
     def test_fully_booked_window_returns_no_slots(self, service: CalendarService) -> None:
         service.create_event(title="All day", start="2026-09-03", duration_days=1)

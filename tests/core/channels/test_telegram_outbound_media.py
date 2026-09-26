@@ -113,6 +113,36 @@ async def test_send_two_images_uses_single_homogeneous_media_group(
 
 
 @pytest.mark.asyncio
+async def test_media_group_files_are_uploaded_as_attached_parts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The real library, not fakes: each group entry must point at its multipart upload,
+    # or Telegram rejects the whole group with "media not found".
+    adapter, _chat_sessions, _trigger_mock, bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[12345],
+    )
+
+    await adapter.send(
+        "two screenshots",
+        "12345",
+        files=[
+            FileData(filename="desktop.png", media_type="image/png", data=b"first"),
+            FileData(filename="mobile.png", media_type="image/png", data=b"second"),
+        ],
+    )
+
+    media = bot.send_media_group.await_args.kwargs["media"]
+    assert [item.media.filename for item in media] == ["desktop.png", "mobile.png"]
+    assert [item.media.input_file_content for item in media] == [b"first", b"second"]
+    assert all(item.media.attach_uri.startswith("attach://") for item in media)
+    assert [item.caption for item in media] == ["two screenshots", None]
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
 async def test_send_mixed_batches_caption_only_on_first_item_of_first_batch(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
