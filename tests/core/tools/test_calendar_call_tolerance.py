@@ -320,23 +320,117 @@ class TestLengths:
 
         assert tool.only_event().duration_minutes == 90
 
-    def test_time_span_on_a_date_start_asks_for_a_start_time(self, tool: CalendarTool) -> None:
-        _, text = tool.call(
-            {"action": "create", "title": "L", "start": "2030-01-10", "duration": "1h"}
-        )
+    @pytest.mark.parametrize("length", [{"duration": "1h"}, {"minutes": 60}])
+    def test_time_span_on_a_date_start_offers_a_timed_event_or_whole_days(
+        self, tool: CalendarTool, length: dict[str, Any]
+    ) -> None:
+        _, text = tool.call({"action": "create", "title": "L", "start": "2030-01-10", **length})
 
         assert tool.events() == []
-        assert text.endswith(
-            '{"action":"create","title":"L","start":"2030-01-10T<HH:MM>","duration":60}'
+        assert text == (
+            "Error (invalid_arguments): calendar was not run: a length of 1h is a time span, but "
+            "a date start makes an all-day event, which lasts whole days. Send the one that is "
+            'meant: {"action":"create","title":"L","start":"2030-01-10T<HH:MM>","duration":60} '
+            "(a timed event; put its start time in place of <HH:MM>) or "
+            '{"action":"create","title":"L","start":"2030-01-10","duration":1} (all day, 1 day)'
         )
 
-    def test_unreadable_duration_is_refused(self, tool: CalendarTool) -> None:
+    def test_unreadable_duration_is_refused_with_a_stand_in(self, tool: CalendarTool) -> None:
         _, text = tool.call(
             {"action": "create", "title": "L", "start": DENTIST_START, "duration": "a while"}
         )
 
         assert tool.events() == []
-        assert 'duration "a while" must be a whole number' in text
+        assert text == (
+            'Error (invalid_arguments): calendar was not run: duration "a while" is not a '
+            "length. Send a whole number: minutes for a timed event, days for an all-day event. "
+            'Send: {"action":"create","title":"L","start":"2030-01-10T15:00",'
+            '"duration":"<minutes, or days for all-day>"}'
+        )
+
+    @pytest.mark.parametrize(
+        ("start", "minutes", "until"),
+        [
+            (DENTIST_START, 2880, "2030-01-12T15:00"),
+            # Berlin moves its clocks forward on 2030-03-31: two days are 47 hours.
+            ("2030-03-30T10:00", 2820, "2030-04-01T10:00"),
+        ],
+    )
+    def test_days_for_a_timed_start_become_minutes_to_the_same_clock_time(
+        self, tool: CalendarTool, start: str, minutes: int, until: str
+    ) -> None:
+        _, text = tool.call({"action": "create", "title": "L", "start": start, "days": 2})
+
+        assert tool.only_event().duration_minutes == minutes
+        assert (
+            f"note: A timed event lasts minutes: read 2 days as {minutes} minutes, so it ends "
+            f"at {until}."
+        ) in text
+
+    def test_days_for_a_date_start_are_the_all_day_length(self, tool: CalendarTool) -> None:
+        tool.call({"action": "create", "title": "L", "start": "2030-01-10", "days": 3})
+
+        assert tool.only_event().duration_days == 3
+
+    @pytest.mark.parametrize(
+        ("start", "change", "minutes", "days"),
+        [
+            (DENTIST_START, {"duration": "1.5h"}, 90, None),
+            (DENTIST_START, {"duration": "2d"}, 2880, None),
+            ("2030-01-10", {"duration": "2d"}, None, 2),
+            ("2030-01-10", {"duration": "P1W"}, None, 7),
+            ("2030-01-10", {"minutes": 2880}, None, 2),
+        ],
+    )
+    def test_length_with_a_unit_on_update_reads_against_the_stored_start(
+        self,
+        tool: CalendarTool,
+        start: str,
+        change: dict[str, Any],
+        minutes: int | None,
+        days: int | None,
+    ) -> None:
+        event_id = tool.service.create_event(title="L", start=start).id
+
+        tool.call({"action": "update", "id": event_id, **change})
+
+        event = tool.only_event()
+        assert (event.duration_minutes, event.duration_days) == (minutes, days)
+
+    def test_minutes_on_update_of_an_all_day_event_are_refused(self, tool: CalendarTool) -> None:
+        event_id = tool.service.create_event(title="L", start="2030-01-10").id
+
+        _, text = tool.call({"action": "update", "id": event_id, "minutes": 90})
+
+        assert tool.only_event().duration_days == 1
+        assert text.endswith(
+            f'{{"action":"update","id":"{event_id}","start":"2030-01-10T<HH:MM>","duration":90}} '
+            "(a timed event; put its start time in place of <HH:MM>) or "
+            f'{{"action":"update","id":"{event_id}","duration":1}} (all day, 1 day)'
+        )
+
+    def test_lengths_that_disagree_offer_each(self, tool: CalendarTool) -> None:
+        _, text = tool.call(
+            {
+                "action": "create",
+                "title": "L",
+                "start": DENTIST_START,
+                "duration": 60,
+                "minutes": 90,
+            }
+        )
+
+        assert tool.events() == []
+        assert text.endswith(
+            'Send the one that is meant: {"action":"create","title":"L",'
+            '"start":"2030-01-10T15:00","duration":60} or {"action":"create","title":"L",'
+            '"start":"2030-01-10T15:00","duration":90}'
+        )
+
+    def test_find_free_reads_days_as_minutes(self, tool: CalendarTool) -> None:
+        _, text = tool.call({"action": "find_free", "when": "2030-01-07", "duration": "1d"})
+
+        assert "note: Read 1 day as 1440 minutes." in text
 
     @pytest.mark.parametrize(
         ("start", "end", "minutes"),

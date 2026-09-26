@@ -32,18 +32,27 @@ TIMEZONE_FIELD = "timezone"
 END_FIELD = "end"
 LOCATION_FIELD = "location"
 QUERY_FIELD = "query"
+DURATION_MINUTES_FIELD = "duration_minutes"
+DURATION_DAYS_FIELD = "duration_days"
 UNADVERTISED_PARAMETERS: dict[str, Any] = {
     TIMEZONE_FIELD: {"type": "string", "minLength": 1},
     END_FIELD: {"type": "string", "minLength": 1},
     LOCATION_FIELD: {"type": "string", "minLength": 1},
     QUERY_FIELD: {"type": "string", "minLength": 1},
+    # A length whose unit the call names; the handler turns it into the duration the
+    # event's kind stores, which needs the start, stored or sent.
+    DURATION_MINUTES_FIELD: {"type": "integer", "minimum": 1},
+    DURATION_DAYS_FIELD: {"type": "integer", "minimum": 1},
 }
 OMIT = object()
 """``render_call`` override that removes a field from the rendered call."""
 
 EVENT_FIELDS = ("title", "start", "duration", "rrule", "notes")
 ACTION_FIELDS = ("when", "prompt", "target", "session")
+LENGTH_FIELDS = ("duration", DURATION_MINUTES_FIELD, DURATION_DAYS_FIELD)
 _EXTRA_EVENT_FIELDS = (END_FIELD, LOCATION_FIELD, TIMEZONE_FIELD)
+# Fields that describe an event, including unadvertised spellings of its length and end.
+_EVENT_CHANGE_FIELDS = (*EVENT_FIELDS, *LENGTH_FIELDS[1:], END_FIELD, LOCATION_FIELD)
 _WINDOW_ACTIONS = frozenset({"list", "find_free"})
 _EVENT_ACTIONS = frozenset({"create", "update"})
 _ACTION_ACTIONS = frozenset({"add_action", "update_action", "delete_action"})
@@ -74,6 +83,8 @@ _CALL_ORDER = (
     "title",
     "start",
     "duration",
+    DURATION_MINUTES_FIELD,
+    DURATION_DAYS_FIELD,
     "rrule",
     "notes",
     "when",
@@ -128,15 +139,15 @@ _FIELD_ALIASES = SpellingAliases(
             "instance_start",
             "recurrence_id",
         ),
-        "duration": (
-            "duration_minutes",
-            "length",
+        "duration": ("length", "slot_duration"),
+        DURATION_MINUTES_FIELD: (
             "minutes",
             "length_minutes",
             "duration_min",
+            "duration_mins",
             "slot_minutes",
-            "slot_duration",
         ),
+        DURATION_DAYS_FIELD: ("length_days",),
         "rrule": (
             "recurrence",
             "recurrence_rule",
@@ -435,7 +446,7 @@ def normalize_calendar_arguments(contract: ToolContract, arguments: Any) -> Any:
     if not isinstance(normalized, dict):
         return normalized
     if hours is not None:
-        _merge(normalized, "duration", hours, problems)
+        _merge(normalized, DURATION_MINUTES_FIELD, hours, problems)
     _read_extras(normalized, problems)
     _omit_placeholders(normalized)
     _read_action(normalized, problems)
@@ -617,9 +628,10 @@ def _take_rule_parts(arguments: dict[str, Any]) -> tuple[dict[str, Any], dict[st
         part = _RULE_PART_KEYS.get(spelling(key))
         if part is not None and (has_freq or part == "freq"):
             parts[part] = value
-        elif spelling(key) == "days" and _number(value) is not None and "duration" not in arguments:
-            # "days": 3 next to a date start is the length of an all-day event.
-            rest["duration"] = value
+        elif spelling(key) == "days" and _number(value) is not None:
+            # "days": 3 without a frequency is a length in days; the handler reads it against
+            # the start, which decides whether the event lasts whole days.
+            rest[DURATION_DAYS_FIELD] = value
         else:
             rest[key] = value
     return rest, parts
@@ -741,7 +753,7 @@ def _read_action(arguments: dict[str, Any], problems: _Problems) -> None:
     action = arguments.get("action")
     item_id = arguments.get("id")
     action_id = isinstance(item_id, str) and item_id.startswith(_ACTION_ID_PREFIX)
-    has_event_fields = any(name in arguments for name in (*EVENT_FIELDS, END_FIELD, LOCATION_FIELD))
+    has_event_fields = any(name in arguments for name in _EVENT_CHANGE_FIELDS)
     has_action_fields = "prompt" in arguments or "session" in arguments
     if action is None:
         arguments["action"] = _inferred_action(arguments, action_id, has_event_fields)
@@ -792,7 +804,9 @@ def _inferred_action(
     if "id" not in arguments:
         if "title" in arguments:
             return "create"
-        if "duration" in arguments and ("when" in arguments or "start" in arguments):
+        if any(name in arguments for name in LENGTH_FIELDS) and (
+            "when" in arguments or "start" in arguments
+        ):
             return "find_free"
         return "list"
     if action_id:
@@ -1154,56 +1168,52 @@ def _offset_minutes(amount: str | None, unit: str | None) -> int | None:
 
 
 def _read_duration(arguments: dict[str, Any], problems: _Problems) -> None:
+    """Read a duration written with a unit ("1.5h", "2 days", "PT90M") as minutes or days.
+
+    The unit, not the event, decides which: the handler relates the length to the
+    start, which a call that changes only the length does not carry.
+    """
     duration = arguments.get("duration")
     if not isinstance(duration, str) or duration.strip().isdigit():
         return
-    start = arguments.get("start")
-    all_day = isinstance(start, str) and is_date(start)
-    kind_known = isinstance(start, str) or arguments.get("action") == "find_free"
-    text = duration.strip().lower()
+    minutes, days = _duration_units(duration.strip().lower())
+    if minutes is not None:
+        del arguments["duration"]
+        _merge(arguments, DURATION_MINUTES_FIELD, minutes, problems)
+    elif days is not None:
+        del arguments["duration"]
+        _merge(arguments, DURATION_DAYS_FIELD, days, problems)
+    else:
+        problems.add(
+            f'duration "{duration}" is not a length. Send a whole number: minutes for a timed '
+            "event, days for an all-day event."
+        )
+        arguments["duration"] = STAND_INS["duration"]
+
+
+def _duration_units(text: str) -> tuple[int | None, int | None]:
+    """Whole positive minutes or days a duration text names; (None, None) when unreadable."""
     iso = _ISO_DURATION.match(text)
-    minutes: float | None = None
-    days: int | None = None
     if iso is not None and any(iso.groups()):
         weeks, day_count, hours, mins, seconds = (int(part or 0) for part in iso.groups())
         if seconds or ((weeks or day_count) and (hours or mins)):
-            minutes = None
-        elif weeks or day_count:
-            days = weeks * 7 + day_count
-        else:
-            minutes = hours * 60 + mins
-    else:
-        match = _DURATION_TEXT.match(text)
-        if match is not None:
-            number, unit = float(match.group(1)), match.group(2)
-            if unit in _MINUTE_UNITS:
-                minutes = number * _MINUTE_UNITS[unit]
-            elif unit in _DAY_UNITS and number == int(number):
-                days = int(number)
-            elif unit in {"w", "week", "weeks"} and number == int(number):
-                days = int(number) * 7
-    if minutes is not None and minutes == int(minutes) and minutes > 0 and kind_known:
-        if all_day:
-            problems.choose(
-                f'duration "{duration}" is a time span, but a date start makes an all-day '
-                "event, which lasts whole days. For a timed event, give start a time:",
-                [{"start": f"{str(start).strip()}T<HH:MM>", "duration": int(minutes)}],
-            )
-        else:
-            arguments["duration"] = int(minutes)
-        return
-    if days is not None and days > 0 and kind_known:
-        if all_day:
-            arguments["duration"] = days
-        elif arguments.get("action") == "find_free":
-            problems.add(f'find_free looks for time spans in minutes, not "{duration}".')
-        else:
-            arguments["duration"] = days * 1440
-        return
-    problems.add(
-        f'duration "{duration}" must be a whole number: minutes for a timed event, days for '
-        "an all-day event."
-    )
+            return None, None
+        if weeks or day_count:
+            return None, weeks * 7 + day_count
+        return hours * 60 + mins or None, None
+    match = _DURATION_TEXT.match(text)
+    if match is None:
+        return None, None
+    number, unit = float(match.group(1)), match.group(2)
+    if unit in _MINUTE_UNITS:
+        minutes = number * _MINUTE_UNITS[unit]
+        return (int(minutes), None) if minutes == int(minutes) and minutes > 0 else (None, None)
+    whole = int(number) if number == int(number) and number > 0 else None
+    if unit in _DAY_UNITS and whole is not None:
+        return None, whole
+    if unit in {"w", "week", "weeks"} and whole is not None:
+        return None, whole * 7
+    return None, None
 
 
 def _check_fields(arguments: dict[str, Any], problems: _Problems) -> None:
@@ -1216,7 +1226,7 @@ def _check_fields(arguments: dict[str, Any], problems: _Problems) -> None:
             # A title on a read names what to look for.
             arguments[QUERY_FIELD] = arguments["title"]
         keep = {"action", "when", TIMEZONE_FIELD}
-        keep |= {"duration"} if action == "find_free" else {QUERY_FIELD, "id"}
+        keep |= set(LENGTH_FIELDS) if action == "find_free" else {QUERY_FIELD, "id"}
         for name in list(arguments):
             if name not in keep:
                 del arguments[name]
@@ -1243,11 +1253,8 @@ def _check_fields(arguments: dict[str, Any], problems: _Problems) -> None:
             )
         return
     if action == "delete":
-        changes = [
-            name
-            for name in ("title", "duration", "rrule", "notes", END_FIELD, LOCATION_FIELD)
-            if name in arguments
-        ]
+        # A start on delete names the occurrence to remove, not a change.
+        changes = [name for name in _EVENT_CHANGE_FIELDS if name != "start" and name in arguments]
         for name in ACTION_FIELDS:
             arguments.pop(name, None)
         if "start" not in arguments:
@@ -1269,7 +1276,7 @@ def _check_fields(arguments: dict[str, Any], problems: _Problems) -> None:
     if action in _ACTION_ACTIONS:
         when = arguments.get("when")
         clock_time = isinstance(when, str) and (is_date(when) or parse_local(when) is not None)
-        for name in (*EVENT_FIELDS, END_FIELD, LOCATION_FIELD):
+        for name in _EVENT_CHANGE_FIELDS:
             if name == "title" and "id" not in arguments and action == "add_action":
                 continue  # The handler finds the event by its title and names the id.
             arguments.pop(name, None)
@@ -1295,7 +1302,10 @@ def _number(value: Any) -> float | None:
 
 
 __all__ = [
+    "DURATION_DAYS_FIELD",
+    "DURATION_MINUTES_FIELD",
     "END_FIELD",
+    "LENGTH_FIELDS",
     "LOCATION_FIELD",
     "OMIT",
     "QUERY_FIELD",
