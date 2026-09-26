@@ -44,6 +44,7 @@ from core.tools._calendar_times import (
     length_text,
     local_text,
     minute_text,
+    named_instant,
     read_window,
     server_zone,
     unknown_zone,
@@ -638,7 +639,7 @@ def _occurrence_start(
             zone = named_zone(name)
             if zone is None:
                 raise CalendarCallRefusedError(unknown_zone(name, server, arguments))
-            parsed = parsed.replace(tzinfo=zone)
+            parsed = named_instant(arguments, "start", parsed, name, zone)
         if parsed.tzinfo is not None:
             parsed = parsed.astimezone(own).replace(tzinfo=None)
         wanted = parsed.replace(microsecond=0).isoformat()

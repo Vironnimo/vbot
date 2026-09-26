@@ -23,7 +23,7 @@ from core.tools._calendar_arguments import (
     parse_local,
     refusal,
 )
-from core.tools._calendar_times import local_text, server_zone, unknown_zone
+from core.tools._calendar_times import local_text, named_instant, server_zone, unknown_zone
 from core.tools._named_zones import named_zone
 from core.tools.tools import JsonObject, ToolContext, tool_success
 
@@ -132,7 +132,9 @@ def _relative_when(
         zone = found
     if moment is None:
         moment = datetime.combine(date.fromisoformat(when), time.min)
-    if moment.tzinfo is None:
+    if moment.tzinfo is None and isinstance(name, str):
+        moment = named_instant(arguments, "when", moment, name, zone)
+    elif moment.tzinfo is None:
         moment = moment.replace(tzinfo=zone)
     start = _occurrence_start_near(calendar_service, event, moment)
     minutes = round((moment - start).total_seconds() / 60)

@@ -39,12 +39,12 @@ Manages the local calendar through `CalendarService`: listing with expanded occu
 
 Events store no zone of their own (recurring events anchor in the server zone; a per-event zone would change the persisted format). The unadvertised `timezone` (or Google `timeZone`) is read against the server zone through `core/tools/_named_zones.py` and executed when the reading is exact:
 
-- the server zone (by key or identical offsets over the next year): dropped;
+- the server zone (by key, or a difference of zero all year; `_named_zones` reads the difference now and just after every exact offset change of either zone over the coming year): dropped;
 - list/find_free windows: read in that zone, with a note naming the server-time window;
-- a single event's start/end: converted to the server-local instant, with a note naming both times;
-- a repeating event: converted only when the offset to the server zone never changes and the date stays the same; otherwise refused with the first occurrence's conversion and the reason;
-- an aware value whose offset is not that zone's: refused with both readings; each time in its own zone (two different `timeZone`s): executed as exact instants;
-- an unknown zone: refused with the call without it; a clock-time action `when` is converted to the relative form for single events.
+- a single event's start/end: converted to the server-local instant, with a note naming both times. A local time the zone skips or repeats is refused with one call per instant, each written with that zone's offset and keeping `timezone`, so the other time field still reads in that zone;
+- a repeating event: its occurrences keep the written wall-clock time in the server zone (gap shifted forward, repeated hour first), so it is converted only when the difference to the server zone is constant all year and the date stays the same; the written wall time is shifted, so a first occurrence in a gap keeps its wall time on later dates. Otherwise refused with every time field as the server wall time at the first occurrence, `timezone` omitted, and the reason;
+- an aware value whose offset is not one that zone has at that local time: refused with the time as written and each reading in that zone, all in that zone's offset and keeping `timezone`; each time in its own zone (two different `timeZone`s): executed as exact instants;
+- an unknown zone: refused with the call without it. A clock-time action `when` is read in the named zone (a skipped or repeated time is refused with each instant) and converted to the relative form for single events.
 
 ## Constraints & Gotchas
 

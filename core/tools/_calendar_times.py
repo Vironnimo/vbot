@@ -26,7 +26,16 @@ from core.tools._calendar_arguments import (
     refusal,
     render_call,
 )
-from core.tools._named_zones import named_zone, offset, same_zone, server_shifts, server_text
+from core.tools._named_zones import (
+    local_readings,
+    named_zone,
+    offset,
+    offset_matches,
+    same_zone,
+    server_shifts,
+    server_text,
+    unclear_local_time,
+)
 from core.tools.tools import JsonObject
 
 if TYPE_CHECKING:
@@ -95,69 +104,115 @@ def apply_timezone(
         raise CalendarCallRefusedError(unknown_zone(name, server, result))
     if same_zone(zone, server, now):
         return result, None
-    written, shown = [], []
-    for field in fields:
-        written.append(f'"{result[field]}"')
-        result[field] = _in_server_time(
-            str(result[field]), field, name, zone, server, recurring, result
-        )
-        converted = datetime.fromisoformat(result[field]).replace(tzinfo=None)
-        shown.append(converted.isoformat(timespec="minutes"))
+    # Corrected calls keep the zone, so the other time still reads as the call meant it.
+    call = {**result, TIMEZONE_FIELD: name}
+    moments = {field: _zone_instant(call, field, name, zone, recurring) for field in fields}
+    if recurring:
+        converted = _repeating_in_server_time(call, moments, name, zone, server, now)
+    else:
+        converted = {field: server_text(moment, server) for field, moment in moments.items()}
+    written = [f'"{result[field]}"' for field in fields]
+    shown = [
+        datetime.fromisoformat(converted[field]).replace(tzinfo=None).isoformat(timespec="minutes")
+        for field in fields
+    ]
+    result.update(converted)
     return result, (
         f"Read {' and '.join(written)} as {name} time: {' and '.join(shown)} in the server "
         f"time zone {server}."
     )
 
 
-def _in_server_time(
-    text: str,
-    field: str,
+def _zone_instant(
+    call: JsonObject, field: str, name: str, zone: tzinfo, recurring: bool
+) -> datetime:
+    """The instant a time field names in ``zone``; refuses a time that names no single one."""
+    text = str(call[field]).strip()
+    parsed = parse_local(text)
+    assert parsed is not None
+    wall = parsed.replace(tzinfo=None)
+    if parsed.tzinfo is None:
+        if recurring:
+            # Every occurrence keeps this wall-clock time; the first one only measures the offset.
+            return wall.replace(tzinfo=zone)
+        return named_instant(call, field, wall, name, zone)
+    if offset_matches(parsed, zone):
+        return parsed
+    reason = f'"{text}" carries an offset that is not {name} time.'
+    unclear = unclear_local_time(wall, zone, name)
+    if unclear is None:
+        meant = [(local_readings(wall, zone)[0], f"{wall.isoformat(timespec='minutes')} in {name}")]
+    else:
+        reason = f"{reason[:-1]}, and {unclear[0]}"
+        meant = unclear[1]
+    meant.insert(0, (parsed, f"{text} as written"))
+    raise CalendarCallRefusedError(_readings_choice(call, field, zone, reason, meant))
+
+
+def named_instant(
+    call: JsonObject, field: str, wall: datetime, name: str, zone: tzinfo
+) -> datetime:
+    """The one instant a naive time names in ``zone``; refuses a time the clocks skip or repeat.
+
+    The refusal offers each instant meant as a time with ``zone``'s offset, so the
+    corrected call keeps the zone for its other times.
+    """
+    unclear = unclear_local_time(wall, zone, name)
+    if unclear is None:
+        return local_readings(wall, zone)[0]
+    reason, meant = unclear
+    raise CalendarCallRefusedError(_readings_choice(call, field, zone, reason, meant))
+
+
+def _readings_choice(
+    call: JsonObject, field: str, zone: tzinfo, reason: str, meant: list[tuple[datetime, str]]
+) -> str:
+    calls = [
+        f"{render_call(call, **{field: moment.astimezone(zone).isoformat(timespec='minutes')})} "
+        f"({label})"
+        for moment, label in meant
+    ]
+    return choice(f"{reason} Send the one that is meant:", calls)
+
+
+def _repeating_in_server_time(
+    call: JsonObject,
+    moments: dict[str, datetime],
     name: str,
     zone: tzinfo,
     server: ZoneInfo,
-    recurring: bool,
-    arguments: JsonObject,
-) -> str:
-    parsed = parse_local(text)
-    assert parsed is not None
-    if parsed.tzinfo is not None:
-        if parsed.replace(tzinfo=zone).utcoffset() != parsed.utcoffset():
-            wall = parsed.replace(tzinfo=None)
-            as_written = render_call(arguments, **{field: text})
-            zoned = render_call(
-                arguments, **{field: server_text(wall.replace(tzinfo=zone), server)}
-            )
-            raise CalendarCallRefusedError(
-                choice(
-                    f'"{text}" carries an offset that is not {name} time. Send the one that is '
-                    "meant:",
-                    [
-                        f"{as_written} (the time as written)",
-                        f"{zoned} ({wall.isoformat(timespec='minutes')} in {name})",
-                    ],
-                )
-            )
-        parsed = parsed.replace(tzinfo=None)
-    moment = parsed.replace(tzinfo=zone)
-    if not recurring:
-        return server_text(moment, server)
-    # A repeating event keeps its server wall-clock time on every occurrence.
-    converted = parsed + offset(server, moment) - offset(zone, moment)
-    constant = len(server_shifts(zone, server, datetime.now(UTC))) == 1
-    if constant and converted.date() == parsed.date():
-        return converted.isoformat(timespec="minutes")
+    now: datetime,
+) -> dict[str, str]:
+    """Server wall-clock times for a repeating event, when they match every occurrence.
+
+    Every occurrence keeps the wall-clock time as written, even when the first one
+    falls where the clocks skip it, so the written time is shifted, not the instant.
+    """
+    written: dict[str, datetime] = {}
+    walls: dict[str, datetime] = {}
+    for field, moment in moments.items():
+        parsed = parse_local(str(call[field]))
+        assert parsed is not None
+        written[field] = parsed.replace(tzinfo=None)
+        walls[field] = written[field] + offset(server, moment) - offset(zone, moment)
+    moved = [field for field in moments if walls[field].date() != written[field].date()]
+    converted = {field: wall.isoformat(timespec="minutes") for field, wall in walls.items()}
+    if not moved and len(server_shifts(zone, server, now)) == 1:
+        return converted
     reason = (
         "falls on another day there"
-        if converted.date() != parsed.date()
+        if moved
         else f"differs from {name} by an offset that changes during the year"
     )
+    texts = " and ".join(str(call[field]).strip() for field in moments)
     raise CalendarCallRefusedError(
         refusal(
             f"a repeating event keeps the same wall-clock time in the server time zone {server}, "
             f"which {reason}, so no server time matches {name} time on every occurrence. This "
-            f"call uses the server time of {text} {name} time at the first occurrence.",
-            arguments,
-            **{field: converted.isoformat(timespec="minutes")},
+            f"call uses the server time of {texts} {name} time at the first occurrence.",
+            call,
+            timezone=OMIT,
+            **converted,
         )
     )
 
@@ -267,9 +322,6 @@ def server_zone(calendar_service: CalendarService) -> ZoneInfo:
     return ZoneInfo(calendar_service.system_timezone_name())
 
 
-__all__ = []
-
-
 def unknown_zone(name: str, server: ZoneInfo, arguments: JsonObject) -> str:
     """The refusal for a ``timezone`` that names no time zone."""
     return refusal(
@@ -315,6 +367,7 @@ __all__ = [
     "length_text",
     "local_text",
     "minute_text",
+    "named_instant",
     "read_window",
     "server_zone",
     "unknown_zone",
