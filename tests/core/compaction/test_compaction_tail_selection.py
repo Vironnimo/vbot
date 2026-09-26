@@ -7,15 +7,22 @@ from typing import Any
 
 import pytest
 
+from core.chat import ChatMessage
 from core.chat._message_history import effective_compaction_messages
-from core.chat.wire_shaping import _embed_notes_into_request, _restore_in_run_assistant_reasoning
+from core.chat.wire_shaping import (
+    _embed_notes_into_request,
+    _notes_to_request_messages,
+    _restore_in_run_assistant_reasoning,
+)
 from core.compaction import (
     CompactionService,
     CompactionSettings,
     find_tail_boundary,
 )
 from core.compaction.compaction import (
+    COMPACTION_SUMMARY_NOTE_PREFIX,
     COMPACTION_USER_QUOTE_PREFIX,
+    TAIL_SOFT_LIMIT_PERCENT,
     _plan_working_tail,
 )
 from core.providers.github_copilot_responses import (
@@ -159,6 +166,120 @@ def test_working_tail_summarizes_whole_older_steps_instead_of_anchoring_user() -
     assert list(plan.retained_messages) == [recent]
     assert plan.boundary_index == 2
     assert _tail_token_span(plan.retained_messages) <= target
+
+
+def test_working_tail_treats_budget_as_target_up_to_soft_limit() -> None:
+    steps = [assistant(f"a{index}", "step work " * 300) for index in range(4)]
+    messages = [user("u", "long task"), *steps]
+    # Each step is about 60% of the target: one step alone falls short, two
+    # overshoot a hard budget but stay within the soft limit and closer to it.
+    target = _tail_token_span(steps[-1:]) * 10 // 6
+
+    plan = _plan_working_tail(messages, target)
+
+    assert list(plan.retained_messages) == steps[-2:]
+    assert _tail_token_span(plan.retained_messages) > target
+    assert _tail_token_span(plan.retained_messages) <= target * TAIL_SOFT_LIMIT_PERCENT // 100
+
+
+def test_working_tail_prefers_user_turn_start_over_closer_continuation() -> None:
+    older = assistant("a-old", "older work " * 4_000)
+    turn = user("u-turn", "Now adjust the parser " + "detail " * 400)
+    working = assistant("a-work", "working " * 700)
+    latest = assistant("a-latest", "latest " * 300)
+    messages = [older, turn, working, latest]
+    target = _tail_token_span([working, latest])
+    assert _tail_token_span([turn, working, latest]) <= target * TAIL_SOFT_LIMIT_PERCENT // 100
+
+    plan = _plan_working_tail(messages, target)
+
+    assert plan.boundary_id == "u-turn"
+    assert list(plan.retained_messages) == [turn, working, latest]
+
+
+def _tool_step(index: int, output: str) -> list[ChatMessage]:
+    call_id = f"call-{index}"
+    return [
+        message(
+            f"a-{index}",
+            "assistant",
+            "",
+            model="openai/gpt-5",
+            tool_calls=[{"id": call_id, "name": "read", "arguments": {"path": str(index)}}],
+        ),
+        message(f"t-{index}", "tool", output, tool_call_id=call_id, name="read"),
+    ]
+
+
+def _live_request(messages: list[ChatMessage]) -> list[dict[str, Any]]:
+    return [
+        {"id": "system-1", "role": "system", "content": "system"},
+        *_embed_notes_into_request(messages),
+    ]
+
+
+def test_working_tail_keeps_delivered_notes_with_the_step_they_trigger() -> None:
+    delivery = message("n-delivery", "note", "New Board messages for you: please review.")
+    reply = assistant("a-reply", "Reviewed; posting my findings.")
+    messages = [user("u", "start"), *_tool_step(1, "output " * 2_000), delivery, reply]
+    live = _live_request(messages)
+
+    plan = _plan_working_tail(messages, 1, request_messages=tuple(live))
+
+    assert plan.boundary_id == "n-delivery"
+    assert list(plan.retained_messages) == [delivery, reply]
+    assert plan.request_start is not None
+    assert live[plan.request_start :] == [
+        *_notes_to_request_messages([delivery]),
+        live[-1],
+    ]
+    assert live[plan.request_start - 1]["id"] == "t-1"
+
+
+def test_working_tail_starts_at_the_step_when_lead_in_notes_do_not_match_request() -> None:
+    delivery = message("n-delivery", "note", "New Board messages for you: please review.")
+    reply = assistant("a-reply", "Reviewed; posting my findings.")
+    messages = [user("u", "start"), *_tool_step(1, "output " * 2_000), delivery, reply]
+    live = _live_request(messages)
+    # The request merged the delivery with other context, so its request message
+    # is not exactly the rendered note: the Tail must not claim it.
+    live[-2] = {"role": "user", "content": live[-2]["content"] + "\nother context"}
+
+    plan = _plan_working_tail(messages, 1, request_messages=tuple(live))
+
+    assert plan.boundary_id == "a-reply"
+    assert list(plan.retained_messages) == [reply]
+    assert plan.request_start == len(live) - 1
+
+
+@pytest.mark.asyncio
+async def test_summary_tail_summarizes_before_lead_in_notes_and_retains_them() -> None:
+    delivery = message("n-delivery", "note", "New Board messages for you: please review.")
+    reply = assistant("a-reply", "Reviewed; posting my findings.")
+    messages = [
+        user("u", "start"),
+        *_tool_step(1, "output " * 8_000),
+        delivery,
+        reply,
+    ]
+    live = _live_request(messages)
+    adapter = StubAdapter("SUMMARY: reviewed the first output.")
+
+    result = await CompactionService().compact(
+        messages,
+        session_address=SessionAddress(project_id=None, agent_id="coder", session_id="session"),
+        prompt_cache_affinity_id="test-affinity",
+        summary_adapter=adapter,
+        summary_model_id="gpt-5",
+        storage=StubStorage(),
+        settings=CompactionSettings(tail_tokens=100),
+        request_messages=live,
+    )
+
+    assert adapter.requests[0]["messages"][:-1] == live[:-2]
+    projection = effective_compaction_messages([result])
+    assert str(projection[0].content).startswith(COMPACTION_SUMMARY_NOTE_PREFIX)
+    assert [item.id for item in projection[-2:]] == ["n-delivery", "a-reply"]
 
 
 def test_working_tail_counts_live_reasoning_before_choosing_boundary() -> None:
@@ -309,7 +430,10 @@ async def test_long_run_compaction_budgets_and_replays_the_actual_tail(opaque: b
     assert len(adapter.requests) == 1
     assert adapter.requests[0]["messages"][:-1] == live[:start]
     assert all(model_id == "gpt-5" for _, model_id in adapter.estimates)
-    assert adapter.estimate_request_input_tokens(tail, model_id="gpt-5") <= budget
+    assert (
+        adapter.estimate_request_input_tokens(tail, model_id="gpt-5")
+        <= budget * TAIL_SOFT_LIMIT_PERCENT // 100
+    )
     assert [item["id"] for item in tail] == [item["id"] for item in live[start:]]
     for actual, original in zip(tail, live[start:], strict=True):
         for key in (
