@@ -9,92 +9,60 @@ import {
 } from '../fileMentions.js';
 
 describe('extractMentionTokens', () => {
-  it('extracts boundary-anchored tokens', () => {
-    expect(extractMentionTokens('look at @src/app.py please')).toEqual([
-      'src/app.py',
-    ]);
-    expect(extractMentionTokens('@README.md')).toEqual(['README.md']);
-  });
-
-  it('ignores mid-word @ such as email addresses', () => {
-    expect(extractMentionTokens('mail user@example.com now')).toEqual([]);
-    expect(extractMentionTokens('agent@projekt is not a file')).toEqual([]);
-    expect(extractMentionTokens('mail jürgen@exämple.de now')).toEqual([]);
-    expect(extractMentionTokens('mail x@"quoted" now')).toEqual([]);
-  });
-
-  it('reads bare tokens in any script', () => {
-    expect(extractMentionTokens('read @docs/Übersicht.md now')).toEqual([
-      'docs/Übersicht.md',
-    ]);
-    expect(extractMentionTokens('@笔记/计划.md')).toEqual(['笔记/计划.md']);
-  });
-
-  it('reads quoted tokens with escaped quotes and backslashes', () => {
-    expect(
-      extractMentionTokens(
-        String.raw`see @"notes/meeting notes.md" and @"a \"b\".txt"`,
-      ),
-    ).toEqual(['notes/meeting notes.md', 'a "b".txt']);
-    expect(extractMentionTokens(String.raw`@"dir\\x y"`)).toEqual([
-      String.raw`dir\x y`,
-    ]);
-    expect(extractMentionTokens('unclosed @"notes/meeting notes.md')).toEqual(
-      [],
-    );
-  });
-
-  it('deduplicates repeated mentions', () => {
-    expect(extractMentionTokens('@a.txt and @a.txt again')).toEqual(['a.txt']);
-  });
-
-  it('returns empty for non-strings and text without @', () => {
-    expect(extractMentionTokens(null)).toEqual([]);
-    expect(extractMentionTokens('no mentions here')).toEqual([]);
-  });
-
-  it('collects multiple distinct mentions in order', () => {
-    expect(extractMentionTokens('@one.md then @two/three.py')).toEqual([
-      'one.md',
-      'two/three.py',
-    ]);
+  it.each([
+    ['look at @src/app.py please', ['src/app.py']],
+    ['@README.md', ['README.md']],
+    // A mid-word @ such as an email address is no mention.
+    ['mail user@example.com now', []],
+    ['agent@projekt is not a file', []],
+    ['mail jürgen@exämple.de now', []],
+    ['mail x@"quoted" now', []],
+    // Bare tokens read in any script.
+    ['read @docs/Übersicht.md now', ['docs/Übersicht.md']],
+    ['@笔记/计划.md', ['笔记/计划.md']],
+    // Quoted tokens unescape quotes and backslashes; unclosed quotes read nothing.
+    [
+      String.raw`see @"notes/meeting notes.md" and @"a \"b\".txt"`,
+      ['notes/meeting notes.md', 'a "b".txt'],
+    ],
+    [String.raw`@"dir\\x y"`, [String.raw`dir\x y`]],
+    ['unclosed @"notes/meeting notes.md', []],
+    ['@a.txt and @a.txt again', ['a.txt']],
+    ['@one.md then @two/three.py', ['one.md', 'two/three.py']],
+    ['no mentions here', []],
+    [null, []],
+  ])('extracts from %j', (text, tokens) => {
+    expect(extractMentionTokens(text)).toEqual(tokens);
   });
 });
 
 describe('matchMentionCandidates', () => {
   const files = ['src/app.py', 'README.md', 'docs/guide.md'];
 
-  it('keeps only tokens that are actual files', () => {
-    expect(
-      matchMentionCandidates(['src/app.py', 'staticmethod'], files),
-    ).toEqual(['src/app.py']);
-  });
-
-  it('trims trailing sentence punctuation', () => {
-    expect(matchMentionCandidates(['README.md.'], files)).toEqual([
-      'README.md',
-    ]);
-    expect(matchMentionCandidates(['docs/guide.md,'], files)).toEqual([
-      'docs/guide.md',
-    ]);
-  });
-
-  it('normalizes backslashes to the server path form', () => {
-    expect(matchMentionCandidates(['src\\app.py'], files)).toEqual([
-      'src/app.py',
-    ]);
-  });
-
-  it('matches a literal backslash in a listed name before normalizing', () => {
-    expect(
-      matchMentionCandidates([String.raw`a\b.txt`], [String.raw`a\b.txt`]),
-    ).toEqual([String.raw`a\b.txt`]);
-  });
-
-  it('deduplicates matches', () => {
-    expect(matchMentionCandidates(['README.md', 'README.md.'], files)).toEqual([
-      'README.md',
-    ]);
+  it.each([
+    [
+      'keeps only actual files',
+      ['src/app.py', 'staticmethod'],
+      files,
+      ['src/app.py'],
+    ],
+    ['trims a trailing period', ['README.md.'], files, ['README.md']],
+    ['trims a trailing comma', ['docs/guide.md,'], files, ['docs/guide.md']],
+    [
+      'normalizes backslashes to the server path form',
+      ['src\\app.py'],
+      files,
+      ['src/app.py'],
+    ],
+    [
+      'matches a literal backslash in a listed name before normalizing',
+      [String.raw`a\b.txt`],
+      [String.raw`a\b.txt`],
+      [String.raw`a\b.txt`],
+    ],
+    ['deduplicates matches', ['README.md', 'README.md.'], files, ['README.md']],
+  ])('%s', (_label, tokens, listed, matches) => {
+    expect(matchMentionCandidates(tokens, listed)).toEqual(matches);
   });
 });
 
@@ -142,41 +110,40 @@ describe('fuzzyFilterFiles', () => {
     expect(fuzzyFilterFiles(files, '', 3)).toEqual(files.slice(0, 3));
   });
 
-  it('matches the query anywhere in the filename, not only as prefix', () => {
-    const results = fuzzyFilterFiles(files, 'search');
+  it.each([
+    [
+      'anywhere in the filename, not only as prefix',
+      'search',
+      ['.vorch/domain-maps/tools/session_search.md', 'core/tools/search.py'],
+      ['webui/src/lib/api.js'],
+    ],
+    [
+      'as a subsequence across the full path',
+      'dmtools',
+      ['.vorch/domain-maps/tools/session_search.md'],
+      [],
+    ],
+    ['case-insensitively', 'SEARCH', ['core/tools/search.py'], []],
+    ['nothing without the query as a subsequence', 'zzz', [], files],
+  ])('matches %s', (_label, query, included, excluded) => {
+    const results = fuzzyFilterFiles(files, query);
 
-    expect(results).toContain('.vorch/domain-maps/tools/session_search.md');
-    expect(results).toContain('core/tools/search.py');
-    expect(results).not.toContain('webui/src/lib/api.js');
+    expect(results).toEqual(expect.arrayContaining(included));
+    for (const file of excluded) {
+      expect(results).not.toContain(file);
+    }
   });
 
   it('ranks filename hits above path-only hits', () => {
-    const results = fuzzyFilterFiles(
-      ['tools/other.py', 'src/tools.py'],
-      'tools',
-    );
-
-    expect(results[0]).toBe('src/tools.py');
-  });
-
-  it('supports subsequence matches across the full path', () => {
-    const results = fuzzyFilterFiles(files, 'dmtools');
-
-    expect(results).toContain('.vorch/domain-maps/tools/session_search.md');
-  });
-
-  it('drops entries that do not contain the query as a subsequence', () => {
-    expect(fuzzyFilterFiles(files, 'zzz')).toEqual([]);
+    expect(
+      fuzzyFilterFiles(['tools/other.py', 'src/tools.py'], 'tools')[0],
+    ).toBe('src/tools.py');
   });
 
   it('applies the result limit', () => {
     const many = Array.from({ length: 20 }, (_, i) => `file-${i}.txt`);
 
     expect(fuzzyFilterFiles(many, 'file', 5)).toHaveLength(5);
-  });
-
-  it('is case-insensitive', () => {
-    expect(fuzzyFilterFiles(files, 'SEARCH')).toContain('core/tools/search.py');
   });
 });
 

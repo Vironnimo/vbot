@@ -12,18 +12,90 @@ import {
 } from '../markdown.js';
 
 describe('renderMarkdown()', () => {
-  it('renders headings', () => {
-    const html = renderMarkdown('# Title\n\n## Subtitle');
+  it.each([
+    [
+      'headings',
+      '# Title\n\n## Subtitle',
+      ['<h1>Title</h1>', '<h2>Subtitle</h2>'],
+      [],
+    ],
+    [
+      'bold and italic text',
+      '**bold** and _italic_',
+      ['<strong>bold</strong>', '<em>italic</em>'],
+      [],
+    ],
+    ['inline code', 'Use `code` here.', ['<code>code</code>'], []],
+    [
+      'unordered and ordered lists',
+      '- a\n- b\n\n1. c\n2. d',
+      ['<ul>', '<li>a</li>', '<li>b</li>', '<ol>', '<li>c</li>', '<li>d</li>'],
+      [],
+    ],
+    [
+      'GFM tables',
+      '|A|B|\n|-|-|\n|1|2|',
+      ['<table>', '<thead>', '<tbody>', '<th>A</th>', '<td>1</td>'],
+      [],
+    ],
+    [
+      'https links with target and rel attributes',
+      '[text](https://example.com)',
+      [
+        'href="https://example.com"',
+        'target="_blank"',
+        'rel="noopener noreferrer"',
+      ],
+      [],
+    ],
+    [
+      'literal http and https URLs as links without trailing punctuation',
+      'Open http://localhost:8421/test or https://example.com/docs.',
+      [
+        'href="http://localhost:8421/test"',
+        'href="https://example.com/docs"',
+        'target="_blank"',
+        'rel="noopener noreferrer"',
+      ],
+      ['href="https://example.com/docs."'],
+    ],
+    [
+      'unsupported schemes, bare domains, and code without links',
+      'example.com ftp://example.com file:///tmp/x `https://example.com/code`',
+      ['<code>https://example.com/code</code>'],
+      ['<a'],
+    ],
+    [
+      'a javascript link as inert text',
+      '[x](javascript:alert(1))',
+      ['[x](javascript:alert(1))'],
+      ['href="javascript:'],
+    ],
+    [
+      'raw HTML tags escaped',
+      '<script>alert(1)</script>',
+      ['&lt;script&gt;alert(1)&lt;/script&gt;'],
+      ['<script>alert(1)</script>'],
+    ],
+    [
+      'an unclosed code fence as a code block',
+      '```\nunterminated',
+      ['<pre><code>'],
+      [],
+    ],
+  ])('renders %s', (_label, source, contained, absent) => {
+    const html = renderMarkdown(source);
 
-    expect(html).toContain('<h1>Title</h1>');
-    expect(html).toContain('<h2>Subtitle</h2>');
+    for (const fragment of contained) {
+      expect(html).toContain(fragment);
+    }
+    for (const fragment of absent) {
+      expect(html).not.toContain(fragment);
+    }
   });
 
-  it('renders bold and italic text', () => {
-    const html = renderMarkdown('**bold** and _italic_');
-
-    expect(html).toContain('<strong>bold</strong>');
-    expect(html).toContain('<em>italic</em>');
+  it('returns an empty string for empty input', () => {
+    expect(renderMarkdown('')).toBe('');
   });
 
   it('renders fenced code blocks with the shared header contract', () => {
@@ -49,122 +121,51 @@ describe('renderMarkdown()', () => {
     ]);
   });
 
-  it('renders inline code', () => {
-    const html = renderMarkdown('Use `code` here.');
-
-    expect(html).toContain('<code>code</code>');
-  });
-
-  it('renders https links with target and rel attributes', () => {
-    const html = renderMarkdown('[text](https://example.com)');
-
-    expect(html).toContain('href="https://example.com"');
-    expect(html).toContain('target="_blank"');
-    expect(html).toContain('rel="noopener noreferrer"');
-  });
-
-  it('autolinks literal http and https URLs without trailing punctuation', () => {
-    const html = renderMarkdown(
-      'Open http://localhost:8421/test or https://example.com/docs.',
-    );
-
-    expect(html).toContain('href="http://localhost:8421/test"');
-    expect(html).toContain('href="https://example.com/docs"');
-    expect(html).not.toContain('href="https://example.com/docs."');
-    expect(html).toContain('target="_blank"');
-    expect(html).toContain('rel="noopener noreferrer"');
-  });
-
-  it('does not autolink unsupported schemes, bare domains, or code', () => {
-    const html = renderMarkdown(
-      'example.com ftp://example.com file:///tmp/x `https://example.com/code`',
-    );
-
-    expect(html).not.toContain('<a');
-    expect(html).toContain('<code>https://example.com/code</code>');
-  });
-
-  it('does not create a live javascript link', () => {
-    const html = renderMarkdown('[x](javascript:alert(1))');
-
-    expect(html).not.toContain('href="javascript:');
-    expect(html).toContain('[x](javascript:alert(1))');
-  });
-
-  it('escapes raw html tags', () => {
-    const html = renderMarkdown('<script>alert(1)</script>');
-
-    expect(html).toContain('&lt;script&gt;alert(1)&lt;/script&gt;');
-    expect(html).not.toContain('<script>alert(1)</script>');
-  });
-
-  it('renders unclosed code fences without throwing', () => {
-    expect(() => renderMarkdown('```\nunterminated')).not.toThrow();
-
-    const html = renderMarkdown('```\nunterminated');
-    expect(html).toContain('<pre><code>');
-  });
-
-  it('renders streaming content with an unclosed fence as a code block', () => {
-    const html = renderMarkdownStreaming('## Title\n\n```js\nconst value = 1;');
-
-    expect(html).toContain('<h2>Title</h2>');
-    expect(html).toContain('<span class="msg-code__language">js</span>');
-    expect(html).toContain('<pre><code>');
-    expect(html).toContain('const value = 1;');
-    expect(html).not.toContain('data-markdown-code-index');
-  });
-
-  it('falls back to normal rendering for closed fences while streaming', () => {
-    const html = renderMarkdownStreaming('```\nconst value = 1;\n```');
-
-    expect(html).toContain('<pre><code>');
-    expect(html).toContain('const value = 1;');
-  });
-
-  it('does not treat triple backticks inside code content as a closing fence', () => {
-    const html = renderMarkdownStreaming(
+  it.each([
+    [
+      'an unclosed fence as a non-copyable code block',
+      '## Title\n\n```js\nconst value = 1;',
+      [
+        '<h2>Title</h2>',
+        '<span class="msg-code__language">js</span>',
+        '<pre><code>',
+        'const value = 1;',
+      ],
+      ['data-markdown-code-index'],
+    ],
+    [
+      'a closed fence like normal rendering',
+      '```\nconst value = 1;\n```',
+      ['<pre><code>', 'const value = 1;', 'data-markdown-code-index="0"'],
+      [],
+    ],
+    [
+      'triple backticks inside code content without closing the fence',
       '```js\nconsole.log("``` not a fence");',
-    );
+      ['<pre><code>', 'console.log(&quot;``` not a fence&quot;);'],
+      [],
+    ],
+    [
+      'an open tilde fence as a non-copyable code block',
+      '~~~json\n{"partial": true}',
+      [
+        '<span class="msg-code__language">json</span>',
+        '{&quot;partial&quot;: true}',
+      ],
+      ['data-markdown-code-index'],
+    ],
+  ])('streams %s', (_label, source, contained, absent) => {
+    const html = renderMarkdownStreaming(source);
 
-    expect(html).toContain('<pre><code>');
-    expect(html).toContain('console.log(&quot;``` not a fence&quot;);');
+    for (const fragment of contained) {
+      expect(html).toContain(fragment);
+    }
+    for (const fragment of absent) {
+      expect(html).not.toContain(fragment);
+    }
   });
 
-  it('keeps an open tilde fence non-copyable while streaming', () => {
-    const html = renderMarkdownStreaming('~~~json\n{"partial": true}');
-
-    expect(html).toContain('<span class="msg-code__language">json</span>');
-    expect(html).toContain('{&quot;partial&quot;: true}');
-    expect(html).not.toContain('data-markdown-code-index');
-  });
-
-  it('returns an empty string for empty input', () => {
-    expect(renderMarkdown('')).toBe('');
-  });
-
-  it('renders unordered and ordered lists', () => {
-    const html = renderMarkdown('- a\n- b\n\n1. c\n2. d');
-
-    expect(html).toContain('<ul>');
-    expect(html).toContain('<li>a</li>');
-    expect(html).toContain('<li>b</li>');
-    expect(html).toContain('<ol>');
-    expect(html).toContain('<li>c</li>');
-    expect(html).toContain('<li>d</li>');
-  });
-
-  it('renders gfm tables', () => {
-    const html = renderMarkdown('|A|B|\n|-|-|\n|1|2|');
-
-    expect(html).toContain('<table>');
-    expect(html).toContain('<thead>');
-    expect(html).toContain('<tbody>');
-    expect(html).toContain('<th>A</th>');
-    expect(html).toContain('<td>1</td>');
-  });
-
-  it('memoizes rendering so identical source is parsed only once', () => {
+  it('parses identical source once and stays correct past the cache limit', () => {
     const renderSpy = vi.spyOn(MarkdownIt.prototype, 'render');
     const source = `cache-hit-${Math.random()}\n\n**bold**`;
 
@@ -174,18 +175,14 @@ describe('renderMarkdown()', () => {
     expect(second).toBe(first);
     expect(second).toContain('<strong>bold</strong>');
     expect(renderSpy).toHaveBeenCalledTimes(1);
-
     renderSpy.mockRestore();
-  });
 
-  it('keeps returning correct output after the cache limit is exceeded', () => {
     for (let index = 0; index < 350; index += 1) {
       renderMarkdown(`cache-filler-${index}\n\ncontent ${index}`);
     }
-
-    const html = renderMarkdown('# After eviction');
-
-    expect(html).toContain('<h1>After eviction</h1>');
+    expect(renderMarkdown('# After eviction')).toContain(
+      '<h1>After eviction</h1>',
+    );
   });
 });
 
