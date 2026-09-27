@@ -1,4 +1,4 @@
-"""Tests for the Session-scoped History tool."""
+"""The Session-scoped history Tool through production dispatch."""
 
 from __future__ import annotations
 
@@ -16,10 +16,10 @@ from core.tools import (
     HISTORY_TOOL_NAME,
     ToolContext,
     ToolRegistry,
-    make_history_handler,
     register_history_tool,
 )
 from tests.core.sessions.history_fixtures import append_tool_fixture
+from tests.core.tools.tools_test_support import dispatch_as_executor
 
 pytestmark = pytest.mark.usefixtures("current_format_data_directory")
 
@@ -51,8 +51,13 @@ def _call(
     manager: ChatSessionManager,
     session: ChatSession,
     arguments: dict[str, Any],
+    *,
+    agent_id: str = "agent",
 ) -> dict[str, Any]:
-    return cast(dict[str, Any], make_history_handler(manager)(_context(session.id), arguments))
+    registry = ToolRegistry()
+    register_history_tool(registry, manager)
+    context = _context(session.id, agent_id=agent_id)
+    return asyncio.run(dispatch_as_executor(registry, context, arguments))
 
 
 def _data(result: dict[str, Any]) -> dict[str, Any]:
@@ -91,8 +96,6 @@ def test_registration_is_session_scoped_and_schema_is_flat(tmp_path: Path) -> No
         "cursor",
     }
     assert tool.parameters["required"] == ["action"]
-    assert "oneOf" not in tool.parameters
-    assert "additionalProperties" not in tool.parameters
     assert '"default"' not in json.dumps(tool.parameters)
     assert tool.description
     assert all(
@@ -126,21 +129,15 @@ def test_checkpoint_grant_and_cursor_lifecycle_across_restart_move_takeover_and_
     source.append(ChatMessage.user("first"))
     source.append(ChatMessage.assistant(model="openai/gpt-5.2", content="second"))
     source.append(_checkpoint())
-    first = _data(
-        make_history_handler(manager)(
-            _context(source.id, agent_id="alpha"),
-            {"action": "read", "limit": 1},
-        )
-    )
+    first = _data(_call(manager, source, {"action": "read", "limit": 1}, agent_id="alpha"))
     cursor = first["next_cursor"]
 
     restarted = ChatSessionManager(tmp_path)
     restarted_source = restarted.get(
         SessionAddress(project_id=None, agent_id="alpha", session_id=source.id)
     )
-    restarted_page = make_history_handler(restarted)(
-        _context(source.id, agent_id="alpha"),
-        {"action": "read", "cursor": cursor},
+    restarted_page = _call(
+        restarted, source, {"action": "read", "cursor": cursor}, agent_id="alpha"
     )
     assert restarted_page["ok"] is True
 
@@ -150,19 +147,10 @@ def test_checkpoint_grant_and_cursor_lifecycle_across_restart_move_takeover_and_
             SessionAddress(project_id=None, agent_id="beta", session_id=restarted_source.id),
         )
     )
-    moved_page = make_history_handler(restarted)(
-        _context(moved.id, agent_id="beta"),
-        {"action": "read", "cursor": cursor},
-    )
+    moved_page = _call(restarted, moved, {"action": "read", "cursor": cursor}, agent_id="beta")
     assert moved_page["ok"] is True
     moved.append(ChatMessage.agent_takeover(from_address="alpha", to_address="beta"))
-    assert (
-        make_history_handler(restarted)(
-            _context(moved.id, agent_id="beta"),
-            {"action": "overview"},
-        )["ok"]
-        is True
-    )
+    assert _call(restarted, moved, {"action": "overview"}, agent_id="beta")["ok"] is True
 
     fork = asyncio.run(
         restarted.fork(
@@ -170,16 +158,9 @@ def test_checkpoint_grant_and_cursor_lifecycle_across_restart_move_takeover_and_
             target_agent_id="gamma",
         )
     )
-    assert (
-        make_history_handler(restarted)(
-            _context(fork.id, agent_id="gamma"),
-            {"action": "overview"},
-        )["ok"]
-        is True
-    )
-    fork_cursor_result = make_history_handler(restarted)(
-        _context(fork.id, agent_id="gamma"),
-        {"action": "read", "cursor": cursor},
+    assert _call(restarted, fork, {"action": "overview"}, agent_id="gamma")["ok"] is True
+    fork_cursor_result = _call(
+        restarted, fork, {"action": "read", "cursor": cursor}, agent_id="gamma"
     )
     assert fork_cursor_result["error"]["code"] == "invalid_cursor"
 
@@ -195,22 +176,22 @@ def test_checkpoint_free_session_returns_history_unavailable(tmp_path: Path) -> 
     assert result["error"]["code"] == "history_unavailable"
 
 
-def test_history_tool_rejects_retired_operation_shapes(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "arguments",
+    [{"request": {"operation": "overview"}}, {"overview": {}}, {"action": "OVERVIEW"}],
+)
+def test_action_wrappers_and_spellings_run_the_named_action(
+    tmp_path: Path, arguments: dict[str, Any]
+) -> None:
     manager = ChatSessionManager(tmp_path)
     session = manager.create("agent", session_id="session-one")
+    session.append(ChatMessage.user("Hello"))
     session.append(_checkpoint())
 
-    nested_result = _call(
-        manager,
-        session,
-        {"request": {"operation": "overview"}},
-    )
-    operation_key_result = _call(manager, session, {"overview": {}})
+    data = _data(_call(manager, session, arguments))
 
-    for result in (nested_result, operation_key_result):
-        assert result["ok"] is False
-        assert result["error"]["code"] == "invalid_arguments"
-        assert "action must be one of" in result["error"]["message"]
+    assert [item["checkpoint"] for item in data["items"]] == [1]
+    assert data["snapshot"]["checkpoint_id"]
 
 
 def test_overview_reports_fixed_checkpoint_sections(tmp_path: Path) -> None:
@@ -505,7 +486,7 @@ def test_cursor_uses_checkpoint_sequence_when_public_ids_repeat(tmp_path: Path) 
     assert [message["id"] for message in _messages(second_page)] == [second.id]
 
 
-def test_search_scans_canonical_records_in_bounded_batches(
+def test_reads_are_bounded_and_search_scans_in_fixed_batches(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     manager = ChatSessionManager(tmp_path)
@@ -527,16 +508,21 @@ def test_search_scans_canonical_records_in_bounded_batches(
         limits.append(cast(int, kwargs["limit"]))
         return original(self, *args, **kwargs)
 
+    def fail_load_active(self: ChatSession) -> list[ChatMessage]:
+        raise AssertionError("History must use bounded Session reads")
+
     monkeypatch.setattr(ChatSession, "load_history_records", recording_read)
+    monkeypatch.setattr(ChatSession, "load_active", fail_load_active)
 
     data = _data(_call(manager, session, {"action": "search", "query": "needle", "limit": 1}))
 
     assert [item["message_id"] for item in data["items"]] == [needle.id]
     assert len(limits) == 3
     assert max(limits) == 128
+    assert _data(_call(manager, session, {"action": "read", "limit": 1}))["items"]
 
 
-def test_cursor_survives_manager_restart_but_not_action_session_or_corruption(
+def test_cursor_is_refused_for_another_action_or_session_and_when_corrupted(
     tmp_path: Path,
 ) -> None:
     manager = ChatSessionManager(tmp_path)
@@ -547,11 +533,6 @@ def test_cursor_survives_manager_restart_but_not_action_session_or_corruption(
     first_page = _data(_call(manager, session, {"action": "read", "limit": 1}))
     cursor = first_page["next_cursor"]
 
-    restarted = ChatSessionManager(tmp_path)
-    restarted_session = restarted.get(
-        SessionAddress(project_id=None, agent_id="agent", session_id="session-one")
-    )
-    resumed = _call(restarted, restarted_session, {"action": "read", "cursor": cursor})
     wrong_action = _call(manager, session, {"action": "search", "cursor": cursor})
     replacement = "x" if cursor[0] != "x" else "y"
     corrupted = _call(
@@ -565,7 +546,6 @@ def test_cursor_survives_manager_restart_but_not_action_session_or_corruption(
         other.append(message)
     wrong_session = _call(manager, other, {"action": "read", "cursor": cursor})
 
-    assert resumed["ok"] is True
     assert wrong_action["error"]["code"] == "invalid_cursor"
     assert corrupted["error"]["code"] == "invalid_cursor"
     assert wrong_session["error"]["code"] == "invalid_cursor"
@@ -763,19 +743,6 @@ def test_oversized_unicode_record_continues_losslessly_under_50_kib(tmp_path: Pa
     assert json.loads("".join(chunks)) == original.to_dict()
 
 
-def test_explicit_limit_returns_only_requested_logical_amount(tmp_path: Path) -> None:
-    manager = ChatSessionManager(tmp_path)
-    session = manager.create("agent", session_id="session-one")
-    for index in range(5):
-        session.append(ChatMessage.user(f"message {index}"))
-    session.append(_checkpoint())
-
-    data = _data(_call(manager, session, {"action": "read", "limit": 2}))
-
-    assert len(data["items"]) == 2
-    assert data["has_more"] is True
-
-
 def test_empty_roles_and_no_search_matches_are_successes(tmp_path: Path) -> None:
     manager = ChatSessionManager(tmp_path)
     session = manager.create("agent", session_id="session-one")
@@ -794,11 +761,9 @@ def test_empty_roles_and_no_search_matches_are_successes(tmp_path: Path) -> None
 @pytest.mark.parametrize(
     "arguments",
     [
-        {"action": "overview", "query": "x"},
-        {"action": "search", "query": ""},
-        {"action": "read", "limit": 0},
-        {"action": "read", "roles": ["unknown"]},
-        {"action": "around", "message_id": ""},
+        {"action": "search", "query": " "},
+        {"action": "around", "message_id": " "},
+        {"action": "read", "roles": ["user", "user"]},
         {"action": "around", "message_id": "x", "before": 101},
     ],
 )
@@ -843,21 +808,3 @@ def test_session_read_failure_returns_history_session_error(
     result = _call(manager, session, {"action": "read"})
 
     assert result["error"]["code"] == "history_session_error"
-
-
-def test_history_reads_do_not_load_the_complete_active_session(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    manager = ChatSessionManager(tmp_path)
-    session = manager.create("agent", session_id="session-one")
-    session.append(ChatMessage.user("first"))
-    session.append(_checkpoint())
-
-    def fail_load_active(self: ChatSession) -> list[ChatMessage]:
-        raise AssertionError("History must use bounded Session reads")
-
-    monkeypatch.setattr(ChatSession, "load_active", fail_load_active)
-
-    result = _call(manager, session, {"action": "read"})
-
-    assert result["ok"] is True

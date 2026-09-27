@@ -1,4 +1,4 @@
-"""Conversation-only search, bounded context and visibility regressions."""
+"""Session search: conversation-only hits, bounded context and visibility."""
 
 from pathlib import Path
 
@@ -17,15 +17,14 @@ from core.recall.canonical import SESSION_RECALL_DEFAULT_ROLES
 from core.recall.passages import build_session_passages
 from core.runs import RunKind
 from core.sessions import ChatSession, ChatSessionManager
-from core.tools.session_search import session_search_handler
 from scripts.provider_probe.recall_cases import FixtureEmbeddings
 from tests.core.sessions.history_fixtures import admit_run, append_tool_fixture
-from tests.core.tools.session_search_helpers import make_context, success
+from tests.core.tools.session_search_test_support import search, success
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("current_format_data_directory")]
 
 
-async def test_hit_includes_question_and_final_answer_without_tool_payload_or_full_load(
+async def test_fts_hit_includes_question_and_final_answer_without_loading_history(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     sessions = ChatSessionManager(tmp_path)
@@ -49,17 +48,17 @@ async def test_hit_includes_question_and_final_answer_without_tool_payload_or_fu
     monkeypatch.setattr(ChatSession, "load", reject_load)
     monkeypatch.setattr(ChatSession, "load_active", reject_load)
     backend = SqliteFtsRecallBackend(RecallBackendContext(tmp_path, sessions))
-    data = success(
-        await session_search_handler(
-            make_context(tmp_path, project_id="p1"), {"query": "Retention"}, backend
-        )
-    )
+    data = success(await search(tmp_path, {"query": "Retention"}, backend, project_id="p1"))
+    missing = success(await search(tmp_path, {"query": "absent"}, backend, project_id="p1"))
+
     hit = data["items"][0]
     assert hit["message_id"] == interim.id
     assert [item["message_id"] for item in hit["context"]] == [question.id, answer.id]
     assert [item["text"] for item in hit["context"]] == [question.content, answer.content]
     assert "read_ref" not in hit
     assert hit["context_is_partial"] is True
+    assert data["sessions"] == [{"agent_id": "coder", "session_id": "target"}]
+    assert missing["items"] == []
 
 
 async def test_only_conversation_text_matches_before_candidate_limit(tmp_path: Path) -> None:
@@ -81,9 +80,7 @@ async def test_only_conversation_text_matches_before_candidate_limit(tmp_path: P
     visible = ChatMessage.user("needle actual conversation")
     session.append(visible)
     backend = SqliteFtsRecallBackend(RecallBackendContext(tmp_path, sessions))
-    data = success(
-        await session_search_handler(make_context(tmp_path), {"query": "needle"}, backend)
-    )
+    data = success(await search(tmp_path, {"query": "needle"}, backend))
     assert [hit["message_id"] for hit in data["items"]] == [visible.id]
     passages = build_session_passages(session.load_active())
     assert all(
@@ -99,7 +96,7 @@ async def test_substring_matches_are_not_hidden_by_whole_word_hits(tmp_path: Pat
     messages = [ChatMessage.user("Auto"), ChatMessage.user("Autobahn")]
     session.append_many(messages)
     backend = SqliteFtsRecallBackend(RecallBackendContext(tmp_path, sessions))
-    data = success(await session_search_handler(make_context(tmp_path), {"query": "Auto"}, backend))
+    data = success(await search(tmp_path, {"query": "Auto"}, backend))
     assert {hit["message_id"] for hit in data["items"]} == {message.id for message in messages}
 
 
@@ -122,13 +119,9 @@ async def test_visibility_filters_still_apply_to_search_and_context(tmp_path: Pa
         for kind in kinds:
             await admit_run(sessions, session.address, kind)
     backend = SqliteFtsRecallBackend(RecallBackendContext(tmp_path, sessions))
-    normal = success(
-        await session_search_handler(make_context(tmp_path), {"query": "needle"}, backend)
-    )
+    normal = success(await search(tmp_path, {"query": "needle"}, backend))
     delegated = success(
-        await session_search_handler(
-            make_context(tmp_path), {"query": "needle", "include_subagents": True}, backend
-        )
+        await search(tmp_path, {"query": "needle", "include_subagents": True}, backend)
     )
     assert {hit["session_id"] for hit in normal["items"]} == {"user", "calendar"}
     assert {hit["session_id"] for hit in delegated["items"]} == {"user", "calendar", "sub"}
@@ -170,9 +163,7 @@ async def test_summaries_are_searchable_and_separate_from_verbatim_passages(tmp_
         for passage in summary_passages
     )
     backend = SqliteFtsRecallBackend(RecallBackendContext(tmp_path, sessions))
-    data = success(
-        await session_search_handler(make_context(tmp_path), {"query": "needle"}, backend)
-    )
+    data = success(await search(tmp_path, {"query": "needle"}, backend))
     assert data["items"][0]["content_kind"] == "compaction_summary"
     assert data["items"][0]["context"] == []
 
@@ -203,11 +194,7 @@ async def test_multi_message_passage_does_not_attribute_all_text_to_first_speake
     backend = VectorRecallBackend(
         RecallBackendContext(tmp_path, sessions, embeddings=FixtureEmbeddings())
     )
-    data = success(
-        await session_search_handler(
-            make_context(tmp_path), {"query": "Aurora Aufbewahrung"}, backend
-        )
-    )
+    data = success(await search(tmp_path, {"query": "Aurora Aufbewahrung"}, backend))
     hit = data["items"][0]
     assert hit["content_kind"] == "conversation_excerpt"
     assert "role" not in hit
@@ -225,10 +212,8 @@ async def test_empty_filtered_page_keeps_more_matches_signal(tmp_path: Path) -> 
             return RecallSearchPage((), "message", "relevance", "snapshot", True, 12)
 
     data = success(
-        await session_search_handler(
-            make_context(tmp_path),
-            {"query": "Aurora"},
-            EmptyBackend(RecallBackendContext(tmp_path, sessions)),
+        await search(
+            tmp_path, {"query": "Aurora"}, EmptyBackend(RecallBackendContext(tmp_path, sessions))
         )
     )
     assert data["items"] == []
@@ -247,10 +232,8 @@ async def test_backend_failures_keep_code_without_leaking_internal_diagnostics(
         async def search_page(self, request):
             raise RecallSearchError(code, "private-database-path-and-provider-detail")
 
-    result = await session_search_handler(
-        make_context(tmp_path),
-        {"query": "Aurora"},
-        BrokenBackend(RecallBackendContext(tmp_path, sessions)),
+    result = await search(
+        tmp_path, {"query": "Aurora"}, BrokenBackend(RecallBackendContext(tmp_path, sessions))
     )
     assert result["ok"] is False
     assert result["error"]["code"] == code

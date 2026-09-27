@@ -41,6 +41,6 @@ The delay is additional to observation, Provider and command latency, not a prom
 ## Verification owners
 
 - `tests/core/model_tasks/test_decision_{types,store,actions,providers}.py`, `test_decisions.py`: validation, revision conflicts, immutable snapshots, pagination, admission disconnection, idempotency, partial progress, exact command arguments, real subprocess timeout/cancellation and no ambiguous Provider replay.
-- `tests/core/tools/test_evaluate.py`, `tests/server/rpc/test_decision_methods.py`: production dispatch/access/readiness and RPC boundaries.
+- `tests/core/tools/test_evaluate.py`, `tests/server/rpc/test_decision_methods.py`: production dispatch/readiness and RPC boundaries.
 - `components/decisions/__tests__/`: mounted autosave races, invalid JSON, explicit execution mode, navigation lifetime, internal question ids, snapshot-specific comparisons, bounded large-state previews/readers, and view visibility.
 - Real Provider verification uses the production definitions through `scripts/probe_provider_tool_call.py` with OpenAI subscription Luna plus synthetic Jev evaluations; never put credentials or raw private state into repository fixtures.
