@@ -41,6 +41,15 @@ _EOF_WARNING = (
     "where they are."
 )
 _WITHIN_LINE_NOTE = "The - line is part of line {line}; only that part of the line was replaced."
+_UNMARKED_ADVICE = "Start every added line with +."
+_FIRST_AFTER_HINT_NOTE = (
+    "The lines to replace occur {occurrences} times after {hint!r}; the first, at line "
+    "{line}, was changed."
+)
+_FIRST_AFTER_PREVIOUS_NOTE = (
+    "The lines to replace occur {occurrences} times; the first after the previous change "
+    "in this file, at line {line}, was changed."
+)
 _BREAK = TEXT_LINE_BREAK
 _GUTTER = re.compile(r"^\s*[1-9][0-9]*(?::[1-9][0-9]*)?\|")
 _ESCAPE = re.compile(r"\\(n|r|t|\\|\"|')")
@@ -242,6 +251,7 @@ def _match(
     new: str,
     *,
     eof: bool = False,
+    first: bool = False,
 ) -> FuzzyReplacement | AmbiguousFuzzyMatch | None:
     if old == "":
         positions = []
@@ -252,7 +262,7 @@ def _match(
             offset += len(text) + len(ending)
         if not positions:
             return None
-        if len(positions) > 1:
+        if len(positions) > 1 and not first:
             return AmbiguousFuzzyMatch(
                 len(positions), [line for _, line in positions], [1] * len(positions)
             )
@@ -274,6 +284,7 @@ def _match(
         whole_lines=True,
         at_eof=eof,
         typographic=True,
+        first=first,
     )
 
 
@@ -352,6 +363,71 @@ def _replace_within_line(window: str, hunk: _Hunk) -> tuple[str, int] | None:
     return window[:start] + new + window[start + len(old) :], len(
         _BREAK.findall(window, 0, start)
     ) + 1
+
+
+def _unmarked_runs(lines: list[tuple[str, str]]) -> list[range]:
+    """Return the runs of unchanged lines that sit between two + lines."""
+    runs: list[range] = []
+    start = 0
+    while start < len(lines):
+        end = start
+        while end < len(lines) and lines[end][0] == " ":
+            end += 1
+        if 0 < start < end < len(lines) and lines[start - 1][0] == lines[end][0] == "+":
+            runs.append(range(start, end))
+        start = end + 1
+    return runs
+
+
+def _unmarked_readings(content: str, hunk: _Hunk) -> list[tuple[_Hunk, list[str]]]:
+    """Return readings of a parsed hunk that add its unprefixed lines between + lines.
+
+    Models leave the + off some added lines, often a statement's continuation
+    lines; such a line parses as unchanged. Each reading is the hunk with the
+    lines of some such runs added as the patch wrote them, paired with their
+    texts: first the runs holding a line the file lacks, then all runs. A
+    reading keeps at least one unchanged or removed line to place it.
+    """
+    lines = hunk.lines
+    if len(hunk.written) != len(lines):
+        return []
+    runs = _unmarked_runs(lines)
+    present = {_loose(line) for line in split_text_lines(content)}
+    missing = [
+        run
+        for run in runs
+        if any(lines[i][1].strip() and _loose(lines[i][1]) not in present for i in run)
+    ]
+    readings = []
+    for chosen in dict.fromkeys((tuple(missing), tuple(runs))):
+        if not chosen:
+            continue
+        added = [i for run in chosen for i in run]
+        # A line the patch wrote with only whitespace is a blank added line.
+        texts = {i: hunk.written[i] if hunk.written[i].strip() else "" for i in added}
+        read = [("+", texts[i]) if i in texts else line for i, line in enumerate(lines)]
+        if any(prefix in " -" for prefix, _ in read):
+            reading = replace(hunk, lines=read, written=[], precise_only=True)
+            readings.append((reading, [texts[i] for i in added]))
+    return readings
+
+
+def _unmarked_note(texts: list[str]) -> str:
+    """Name the unprefixed lines a reading added, by the first that is not blank."""
+    shown = next((text.strip() for text in texts if text.strip()), "")
+    quoted = repr(shown if len(shown) <= 80 else shown[:77] + "...")
+    if len(texts) == 1:
+        subject = f"The patch line {quoted}" if shown else "A blank patch line"
+        return (
+            f"{subject} between + lines has no + prefix, but the file does not have it "
+            f"there, so it was added as a + line. {_UNMARKED_ADVICE}"
+        )
+    subject = f"{len(texts)} patch lines" if shown else f"{len(texts)} blank patch lines"
+    example = f"; for example {quoted}" if shown else ""
+    return (
+        f"{subject} between + lines have no + prefix, but the file does not have them "
+        f"there, so they were added as + lines{example}. {_UNMARKED_ADVICE}"
+    )
 
 
 def _hint_text(hint: str) -> str:
@@ -494,14 +570,47 @@ def _insert_at_line(content: str, hunk: _Hunk, path: object) -> str:
     return content[:position] + "".join(text + ending for text in texts) + content[position:]
 
 
-def _apply_hunk(content: str, hunk: _Hunk, path: object) -> tuple[str, list[str]]:
+def _apply_hunks(
+    content: str, hunks: list[_Hunk], path: object, previous: int | None = None
+) -> tuple[str, list[str], int | None]:
+    """Apply one file's hunks in order and return the text, the notes and the change end.
+
+    Each hunk sees the text the hunks before it produced. ``previous``, and the
+    returned change end, is where the line holding the file's last change starts;
+    it orders the occurrences of lines a later hunk matches.
+    """
+    notes: list[str] = []
+    for hunk in hunks:
+        edited, placed = _apply_hunk(content, hunk, path, previous)
+        if edited != content:
+            previous = _change_end_line(content, edited)
+        content = edited
+        notes.extend(placed)
+    return content, notes, previous
+
+
+def _change_end_line(before: str, after: str) -> int:
+    """Return where the line holding the end of the change from ``before`` starts."""
+    prefix = len(commonprefix((before, after)))
+    limit = min(len(before), len(after)) - prefix
+    suffix = len(commonprefix((before[::-1][:limit], after[::-1][:limit])))
+    end = max(prefix, len(after) - suffix - 1)
+    return max(after.rfind("\n", 0, end), after.rfind("\r", 0, end)) + 1
+
+
+def _apply_hunk(
+    content: str, hunk: _Hunk, path: object, previous: int | None = None
+) -> tuple[str, list[str]]:
+    """Apply one hunk; ``previous`` is where the line of the file's last change starts."""
     if hunk.replacement is not None:
         return _apply_replacement(content, hunk, path)
     if hunk.insert_line is not None:
         return _insert_at_line(content, hunk, path), []
     if not any(prefix in "+-" for prefix, _ in hunk.lines):
         return content, []
+    parsed = hunk
     hunk, warnings = _clean_additions(hunk, path)
+    copied = False
     offset = 0
     hint_start = 0
     for hint in hunk.hints:
@@ -624,15 +733,53 @@ def _apply_hunk(content: str, hunk: _Hunk, path: object) -> tuple[str, list[str]
         # after the independent locator above failed to establish that fact.
         # Old text copied with errors is placed and merged by ``copy_match``.
         if not hunk.precise_only and (not new or _match(window, new, new) is None):
-            found = match_copied_edit(window, hunk.lines, at_eof=hunk.eof)
+            found, copied = match_copied_edit(window, hunk.lines, at_eof=hunk.eof), True
     if isinstance(found, AmbiguousFuzzyMatch):
-        details, values = _ambiguity(content, found, offset)
-        raise _PatchError("ambiguous_match", path=path, label=hunk.label, details=details, **values)
+        # As in Codex, an @@ line or the file's previous change orders the
+        # occurrences, and the first after it is meant (Sessions: 60 of 61 such
+        # hunks). A hunk with neither, or a copy with errors, must match once.
+        start = offset if hunk.hints else previous
+        first = (
+            _match(content[start:], old, new, eof=hunk.eof, first=True)
+            if start is not None and not copied
+            else None
+        )
+        if start is None or not isinstance(first, FuzzyReplacement):
+            details, values = _ambiguity(content, found, offset)
+            raise _PatchError(
+                "ambiguous_match",
+                template="ambiguous_patch_copy" if copied else None,
+                path=path,
+                label=hunk.label,
+                details=details,
+                **values,
+            )
+        line = first.first_changed_line + len(_BREAK.findall(content, 0, start))
+        warnings.append(
+            _FIRST_AFTER_HINT_NOTE.format(
+                occurrences=found.occurrences,
+                hint=_hint_text(hunk.hints[-1]).strip(),
+                line=line,
+            )
+            if hunk.hints
+            else _FIRST_AFTER_PREVIOUS_NOTE.format(occurrences=found.occurrences, line=line)
+        )
+        offset, window, found = start, content[start:], first
+    if found is None:
+        # Only the lines between + lines are re-read, and only a precise match
+        # places the reading: the file must hold the lines around them adjacent.
+        for reading, added in _unmarked_readings(content, parsed):
+            try:
+                edited, notes = _apply_hunk(content, reading, path, previous)
+            except _PatchError:
+                continue
+            if edited != content:
+                return edited, [*notes, _unmarked_note(added)]
     if found is None and hunk.eof:
         # The marker only claims where the lines are; the lines alone may still place
         # them. Text found elsewhere never proves the change was made earlier.
         try:
-            edited, placed = _apply_hunk(content, replace(hunk, eof=False), path)
+            edited, placed = _apply_hunk(content, replace(hunk, eof=False), path, previous)
         except _PatchError:
             pass
         else:
@@ -646,12 +793,16 @@ def _apply_hunk(content: str, hunk: _Hunk, path: object) -> tuple[str, list[str]
                 label=hunk.label,
                 details=_candidates(content, old),
             )
-        raise _PatchError(
-            "text_not_found",
-            path=path,
-            label=hunk.label,
-            details=_not_found(content, old, source="patch"),
-        )
+        details = _not_found(content, old, source="patch")
+        difference = details.get("difference")
+        if difference:
+            # Number the hunk's unchanged and removed lines as the report counts them.
+            numbered = [i for i, (prefix, _) in enumerate(hunk.lines) if prefix in " -"]
+            unmarked = {i for run in _unmarked_runs(hunk.lines) for i in run}
+            position = difference["copy_line"] - 1
+            if position < len(numbered) and numbered[position] in unmarked:
+                difference["unprefixed"] = True
+        raise _PatchError("text_not_found", path=path, label=hunk.label, details=details)
     if [t for p, t in hunk.lines if p in " -"] == [t for p, t in hunk.lines if p in " +"]:
         return content, warnings
     start, end = found.before_spans[0]

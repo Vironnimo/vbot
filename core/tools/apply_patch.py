@@ -24,7 +24,7 @@ from core.tools._patch_entries import (
     _Snapshot,
     _snapshot,
 )
-from core.tools._patch_hunks import _apply_hunk, _clean_additions, _ending, _excerpt
+from core.tools._patch_hunks import _apply_hunks, _clean_additions, _ending, _excerpt
 from core.tools._patch_report import _excerpts, _FileReport, file_report, patch_result
 from core.tools._patch_requests import (
     APPLY_PATCH_TOOL_NAME,
@@ -151,8 +151,15 @@ def _is_empty(payload: bytes | None) -> bool:
 
 
 def _plan(
-    operations: list[_Operation], paths: dict[str, Path], before: dict[Path, _Snapshot]
+    operations: list[_Operation],
+    paths: dict[str, Path],
+    before: dict[Path, _Snapshot],
+    change_ends: dict[Path, int | None],
 ) -> tuple[dict[Path, _Snapshot], dict[Path, list[str]]]:
+    """Plan the operations' effects; each Update's change end goes into ``change_ends``.
+
+    See ``_apply_hunks`` for what a change end orders.
+    """
     pending = before.copy()
     warnings: dict[Path, list[str]] = {}
     for operation in operations:
@@ -192,9 +199,10 @@ def _plan(
             raise _PatchError("file_changed", path=path)
         if operation.action == "update":
             content = _decode(payload, path)
-            for hunk in operation.hunks:
-                content, notes = _apply_hunk(content, hunk, path)
-                warnings.setdefault(path, []).extend(notes)
+            content, notes, change_ends[path] = _apply_hunks(
+                content, operation.hunks, path, change_ends.get(path)
+            )
+            warnings.setdefault(path, []).extend(notes)
             bom = _BOM if payload.startswith(_BOM) else b""
             payload = bom + content.encode("utf-8")
             if b"\x00" in payload:
@@ -222,6 +230,9 @@ class _Batch:
     respelled: dict[Path, tuple[Path, Path]] = field(default_factory=dict)
     # Completed moves by shown path: source -> destination.
     moves: dict[str, str] = field(default_factory=dict)
+    # Where the line holding the current Update's last completed change starts,
+    # by file; a later hunk takes the first of several occurrences after it.
+    change_ends: dict[Path, int | None] = field(default_factory=dict)
     results: list[JsonObject] = field(default_factory=list)
 
 
@@ -463,7 +474,8 @@ def _run_step(
                 operation = replace(
                     operation, hunks=[replace(h, precise_only=True) for h in operation.hunks]
                 )
-            pending, warnings = _plan([operation], paths, before)
+            change_ends = dict(batch.change_ends)
+            pending, warnings = _plan([operation], paths, before, change_ends)
             if (
                 operation.action == "add"
                 and before[source].payload is not None
@@ -481,6 +493,8 @@ def _run_step(
                     batch.blocked.update(resolved)
                     raise _PatchError("file_changed", path=path)
             completed, failure = _commit(context, state, batch, before, pending, warnings)
+            if not failure:
+                batch.change_ends.update(change_ends)
         if operation.action == "add" and completed:
             batch.replaced.add(source)
         elif operation.destination and source in batch.replaced:
@@ -520,6 +534,9 @@ def _run_step(
             batch.blocked.update(resolved)
         else:
             batch.failed_text.add(source)
+            # A failed hunk's target keeps its old lines, so the earlier change no
+            # longer tells which occurrence a later hunk means.
+            batch.change_ends.pop(source, None)
 
 
 def _file_effects(batch: _Batch) -> list[tuple[Path, _Snapshot, _Snapshot]]:
@@ -713,6 +730,8 @@ def _execute(context: ToolContext, arguments: JsonObject, state: FileReadState) 
         for path in sorted(all_paths, key=str):
             locks.enter_context(state.lock_path(path))
         for number, operation in enumerate(operations, 1):
+            # Occurrences are ordered by earlier changes of the same Update only.
+            batch.change_ends.clear()
             steps = [operation]
             if operation.action == "update":
                 steps = [

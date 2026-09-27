@@ -98,8 +98,14 @@ _MESSAGES = {
     "unsupported_encoding": "{path} is not UTF-8 text, so its text cannot be patched.",
     "ambiguous_match": (
         "{where}: the lines to replace occur {occurrences} times ({lines}). Add unchanged "
-        "lines around the change, or an @@ line naming the enclosing function or class, "
-        "so it matches once."
+        "lines around the change until it matches once, or start the block with an @@ line "
+        "naming an earlier line, such as the enclosing function: the first occurrence after "
+        "that line is changed."
+    ),
+    "ambiguous_patch_copy": (
+        "{where}: the lines to replace do not match the file exactly and resemble "
+        "{occurrences} places ({lines}). Copy the current lines of the one to change "
+        "exactly, with enough unchanged lines around them to tell it apart."
     ),
     "ambiguous_replacement": (
         "{where}: old_string occurs {occurrences} times ({lines}). Include more of the "
@@ -203,6 +209,10 @@ class _Hunk:
     replacement: _Replacement | None = None
     insert_line: int | None = None
     label: str = ""
+    # V4A Update lines as the patch wrote them, one per ``lines`` entry of the
+    # parsed hunk: an unprefixed line and a space-prefixed one parse alike, but
+    # read as added text they differ by that space. Empty for other forms.
+    written: list[str] = field(default_factory=list, compare=False, repr=False)
 
     def changes_text(self) -> bool:
         if self.replacement is not None:
@@ -499,6 +509,7 @@ def _parse_v4a(lines: list[str], default_path: str | None) -> list[_Operation]:
                 if anchor.strip():
                     hunk.hints.append(anchor)
                 hunk.lines = []
+                hunk.written = []
             if hunk is None or hunk.lines:
                 hunk = _Hunk()
                 current.hunks.append(hunk)
@@ -551,6 +562,7 @@ def _parse_v4a(lines: list[str], default_path: str | None) -> list[_Operation]:
             prefix, text = "+", line[1:] if line.startswith("+") else line
         else:
             prefix, text = (line[0], line[1:]) if line and line[0] in " +-" else (" ", line)
+            hunk.written.append(line)
         hunk.lines.append((prefix, text))
     return operations
 

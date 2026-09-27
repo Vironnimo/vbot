@@ -132,14 +132,16 @@ def replace_fuzzy(
     whole_lines: bool = False,
     at_eof: bool = False,
     typographic: bool = False,
+    first: bool = False,
 ) -> FuzzyReplacement | AmbiguousFuzzyMatch | None:
     """Find ``old_string`` in ``content`` via the strategy chain and replace it.
 
     Returns a :class:`FuzzyReplacement` on success, an :class:`AmbiguousFuzzyMatch`
-    when the winning strategy matched more than once without ``replace_all``, or
-    ``None`` when no strategy matched.
+    when the winning strategy matched more than once without ``replace_all`` or
+    ``first``, or ``None`` when no strategy matched.
 
-    Patch callers can require whole-line spans or anchor a hunk at EOF.
+    Patch callers can require whole-line spans, anchor a hunk at EOF, or take the
+    winning strategy's first match.
     """
     replacement_text = _normalize_replacement_newlines(new_string)
     old_lf = _normalize_newlines(old_string)
@@ -167,7 +169,7 @@ def replace_fuzzy(
         # Matchers report overlapping occurrences too: a shadowed second
         # occurrence still makes a single-target request ambiguous.
         matches = sorted(set(matches))
-        if len(matches) > 1 and not replace_all:
+        if len(matches) > 1 and not replace_all and not first:
             locations = [_line_and_character_at(content, start) for start, _ in matches]
             return AmbiguousFuzzyMatch(
                 len(matches),
