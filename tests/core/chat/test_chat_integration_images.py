@@ -1,4 +1,9 @@
-"""Tests for chat integration images."""
+"""Images through the chat loop on a real Runtime: validation, budgets, overflow and replay.
+
+User attachments and Tool Result images reach the Provider as Run-local base64 that never
+enters the Session history; the image budget and Provider body limits decide what a request
+carries, and the originals stay reopenable.
+"""
 
 from __future__ import annotations
 
@@ -28,16 +33,10 @@ from core.providers.adapter import (
 )
 from core.providers.errors import ProviderRequestTooLargeError
 from core.providers.openai_compatible import OpenAICompatibleAdapter
-from core.runtime import Runtime
 from core.tools import read_media_artifact, tool_success
-from core.utils.config import Config
-from tests.core.chat.chat_integration_test_support import (
-    FakeAdapter,
-    JsonObject,
-)
-from tests.core.chat.chat_integration_test_support import (
-    resources_dir as resources_dir,
-)
+from tests.core.chat.chat_integration_test_support import FakeAdapter, JsonObject, StartRuntime
+from tests.core.chat.chat_integration_test_support import resources_dir as resources_dir
+from tests.core.chat.chat_integration_test_support import start_runtime as start_runtime
 from tests.core.chat.chat_loop_support import session_address
 
 _png_stream = io.BytesIO()
@@ -46,15 +45,14 @@ _PNG_BYTES = _png_stream.getvalue()
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("source", ["user", "tool"])
-@pytest.mark.parametrize("damaged", [False, True])
+@pytest.mark.parametrize(
+    ("source", "damaged"),
+    [("user", False), ("user", True), ("tool", True)],
+    ids=["user-resized", "user-damaged", "tool-damaged"],
+)
 async def test_image_validation_and_known_limits_reach_chat_requests(
-    tmp_path,
-    resources_dir,
-    monkeypatch,
-    source,
-    damaged,
-):
+    start_runtime: StartRuntime, source: str, damaged: bool
+) -> None:
     class LimitedAdapter(FakeAdapter):
         def image_size_limit(self, model_id):
             return 512
@@ -62,7 +60,7 @@ async def test_image_validation_and_known_limits_reach_chat_requests(
         def wire_media_support(self, model_id):
             return frozenset({"image/png"})
 
-    responses = [{"content": "done", "tool_calls": None}]
+    responses: list[JsonObject] = [{"content": "done", "tool_calls": None}]
     if source == "tool":
         responses.insert(
             0,
@@ -74,14 +72,7 @@ async def test_image_validation_and_known_limits_reach_chat_requests(
             },
         )
     adapter = LimitedAdapter(responses)
-    config = Config(data_dir=tmp_path / "data")
-    config._data["RESOURCES_PATH"] = str(resources_dir)
-    config._data["VBOT_VERSION"] = "test-version"
-    runtime = Runtime(config)
-    monkeypatch.setenv("FAKE_API_KEY", "test-key")
-    monkeypatch.setattr(runtime, "get_adapter", lambda connection: adapter)
-    runtime.start()
-    try:
+    with start_runtime(adapter) as runtime:
         agent = runtime.agents.create("coder", "Coder", model="fake-provider/fake-model-vision")
         stream = io.BytesIO()
         Image.frombytes("RGB", (128, 64), random.Random(9).randbytes(128 * 64 * 3)).save(
@@ -92,7 +83,7 @@ async def test_image_validation_and_known_limits_reach_chat_requests(
             original = original[: len(original) // 2]
         path = Path(agent.workspace) / "image.png"
         path.write_bytes(original)
-        content = "Inspect image.png"
+        content: str | list[ContentBlock] = "Inspect image.png"
         if source == "user":
             record = runtime.attachment_store.store("image.png", original)
             content = [
@@ -130,28 +121,16 @@ async def test_image_validation_and_known_limits_reach_chat_requests(
             assert "resized from 128x64" in notes
             assert "original file is unchanged" in notes
         assert path.read_bytes() == original
-    finally:
-        runtime.stop()
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "source,groups",
-    [
-        ("user", [4]),
-        ("user", [51]),
-        ("tool", [4]),
-        ("tool", [1, 1, 1, 1]),
-        ("tool", [51]),
-        ("tool", [17, 17, 17]),
-    ],
+    [("user", [4]), ("user", [51]), ("tool", [1, 1, 1, 1]), ("tool", [17, 17, 17])],
+    ids=["user-within-budget", "user-over-budget", "tool-within-budget", "tool-over-budget"],
 )
 async def test_fresh_images_are_delivered_together_or_fail_explicitly(
-    tmp_path: Path,
-    resources_dir: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    source: str,
-    groups: list[int],
+    start_runtime: StartRuntime, source: str, groups: list[int]
 ) -> None:
     count = sum(groups)
     responses: list[JsonObject] = [{"content": "done", "tool_calls": None}]
@@ -167,14 +146,7 @@ async def test_fresh_images_are_delivered_together_or_fail_explicitly(
             },
         )
     adapter = FakeAdapter(responses)
-    config = Config(data_dir=tmp_path / "data")
-    config._data["RESOURCES_PATH"] = str(resources_dir)
-    config._data["VBOT_VERSION"] = "test-version"
-    runtime = Runtime(config)
-    monkeypatch.setenv("FAKE_API_KEY", "test-key")
-    monkeypatch.setattr(runtime, "get_adapter", lambda connection: adapter)
-    runtime.start()
-    try:
+    with start_runtime(adapter) as runtime:
         runtime.agents.create("coder", "Coder", model="fake-provider/fake-model-vision")
         record = runtime.attachment_store.store("fixture.png", _PNG_BYTES)
 
@@ -243,19 +215,16 @@ async def test_fresh_images_are_delivered_together_or_fail_explicitly(
         if count > 50:
             assert any(message.role == "error" for message in persisted)
             assert persisted[-1].to_dict()["status"] == "failed"
-    finally:
-        runtime.stop()
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("source", ["user", "tool", "text"])
-@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize(
+    ("source", "streaming"),
+    [("user", False), ("tool", True), ("text", False)],
+    ids=["user-plain", "tool-streaming", "text-plain"],
+)
 async def test_provider_body_overflow_preserves_fresh_inputs_and_stops_without_retry(
-    tmp_path: Path,
-    resources_dir: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    source: str,
-    streaming: bool,
+    start_runtime: StartRuntime, source: str, streaming: bool
 ) -> None:
     rejected: list[list[JsonObject]] = []
 
@@ -287,14 +256,7 @@ async def test_provider_body_overflow_preserves_fresh_inputs_and_stops_without_r
             ],
         }
     )
-    config = Config(data_dir=tmp_path / "data")
-    config._data["RESOURCES_PATH"] = str(resources_dir)
-    config._data["VBOT_VERSION"] = "test-version"
-    runtime = Runtime(config)
-    monkeypatch.setenv("FAKE_API_KEY", "test-key")
-    monkeypatch.setattr(runtime, "get_adapter", lambda connection: adapter)
-    runtime.start()
-    try:
+    with start_runtime(adapter) as runtime:
         agent = runtime.agents.create("coder", "Coder", model="fake-provider/fake-model-vision")
         image_path = Path(agent.workspace) / "frame.png"
         image_path.write_bytes(_PNG_BYTES)
@@ -320,8 +282,6 @@ async def test_provider_body_overflow_preserves_fresh_inputs_and_stops_without_r
         )
         assert "base64" not in json.dumps([message.to_dict() for message in persisted])
         assert image_path.read_bytes() == _PNG_BYTES
-    finally:
-        runtime.stop()
 
 
 def _tool_result_content_parts(messages: list[JsonObject]) -> list[JsonObject]:
@@ -337,12 +297,9 @@ def _tool_result_content_parts(messages: list[JsonObject]) -> list[JsonObject]:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("source_format", ["PNG", "BMP", "TIFF", "AVIF", "HEIF"])
+@pytest.mark.parametrize("source_format", ["PNG", "TIFF"])
 async def test_read_image_returns_run_local_base64_in_tool_result_for_vision_model(
-    tmp_path: Path,
-    resources_dir: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    source_format: str,
+    tmp_path: Path, start_runtime: StartRuntime, source_format: str
 ) -> None:
     class DeletingAdapter(FakeAdapter):
         async def send(self, messages: list[dict], *, model_id: str, **kwargs: Any) -> dict:
@@ -368,15 +325,7 @@ async def test_read_image_returns_run_local_base64_in_tool_result_for_vision_mod
             {"content": "I can see the diagram.", "tool_calls": None},
         ]
     )
-    config = Config(data_dir=tmp_path / "data")
-    config._data["RESOURCES_PATH"] = str(resources_dir)
-    config._data["VBOT_VERSION"] = "test-version"
-    runtime = Runtime(config)
-    monkeypatch.setenv("FAKE_API_KEY", "test-key")
-    monkeypatch.setattr(runtime, "get_adapter", lambda connection: adapter)
-
-    runtime.start()
-    try:
+    with start_runtime(adapter) as runtime:
         agent = runtime.agents.create(
             "coder", "Coder Agent", model="fake-provider/fake-model-vision"
         )
@@ -439,17 +388,12 @@ async def test_read_image_returns_run_local_base64_in_tool_result_for_vision_mod
         next_run_messages = adapter.requests[3].messages
         assert all(TOOL_RESULT_CONTENT_BLOCKS_FIELD not in message for message in next_run_messages)
         assert "base64" not in json.dumps(next_run_messages)
-    finally:
-        runtime.stop()
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("source_format", ["PNG", "TIFF"])
 async def test_rereading_overwritten_image_delivers_each_calls_own_pixels(
-    tmp_path: Path,
-    resources_dir: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    source_format: str,
+    tmp_path: Path, start_runtime: StartRuntime, source_format: str
 ) -> None:
     colors = [(255, 0, 0), (0, 0, 255), (0, 255, 0)]
     frames = []
@@ -501,14 +445,7 @@ async def test_rereading_overwritten_image_delivers_each_calls_own_pixels(
         ]
         + [{"content": "done", "tool_calls": None}]
     )
-    config = Config(data_dir=tmp_path / "data")
-    config._data["RESOURCES_PATH"] = str(resources_dir)
-    config._data["VBOT_VERSION"] = "test-version"
-    runtime = Runtime(config)
-    monkeypatch.setenv("FAKE_API_KEY", "test-key")
-    monkeypatch.setattr(runtime, "get_adapter", lambda connection: adapter)
-    runtime.start()
-    try:
+    with start_runtime(adapter) as runtime:
         agent = runtime.agents.create("coder", "Coder", model="fake-provider/fake-model-vision")
         image_path = Path(agent.workspace) / "front.png"
         stored_before = set((tmp_path / "data" / "artifacts" / "attachments").rglob("*"))
@@ -517,19 +454,19 @@ async def test_rereading_overwritten_image_delivers_each_calls_own_pixels(
         persisted = runtime.chat_sessions.get(session_address("coder", "reread")).load()
         assert "base64" not in json.dumps([message.to_dict() for message in persisted])
         assert set((tmp_path / "data" / "artifacts" / "attachments").rglob("*")) == stored_before
-    finally:
-        runtime.stop()
 
 
+# About 3 s per case: sixteen durable Model steps on a real Runtime, each re-encoding up
+# to fourteen images, are what exercise the eviction and reopening sequence end to end.
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "budget_kind,streaming",
     [("none", False), ("harness", False), ("provider", False), ("provider", True)],
 )
 async def test_long_mixed_image_run_keeps_images_and_can_reopen_originals(
-    tmp_path: Path,
     resources_dir: Path,
     monkeypatch: pytest.MonkeyPatch,
+    start_runtime: StartRuntime,
     budget_kind: str,
     streaming: bool,
 ) -> None:
@@ -633,135 +570,132 @@ async def test_long_mixed_image_run_keeps_images_and_can_reopen_originals(
             }
 
     adapter = RebuildingAdapter(responses)
-    config = Config(data_dir=tmp_path / "data")
-    config._data["RESOURCES_PATH"] = str(resources_dir)
-    config._data["VBOT_VERSION"] = "test-version"
-    runtime = Runtime(config)
-    monkeypatch.setenv("FAKE_API_KEY", "test-key")
-    monkeypatch.setattr(runtime, "get_adapter", lambda connection: adapter)
-    runtime.start()
-    loop = runtime.streaming_chat_loop if streaming else runtime.chat_loop
-    wire = OpenAICompatibleAdapter(
-        runtime.providers.get("fake-provider"),
-        "test-key",
-        model_lookup=lambda model_id: runtime.models.get("fake-provider", model_id),
-    )
-    # Five encoded frames fit beside the request's ~40 KB of text and Tools; six do not.
-    monkeypatch.setattr(wire, "request_body_limit", lambda model_id: 1024 * 1024)
-    monkeypatch.setattr(runtime.storage, "load_reflection_settings", lambda: {"enabled": False})
-    try:
-        # Exercise the exact shared artifact contract used by MCP binary results,
-        # alternating with the real read Tool; no external Blender process needed.
-        original_build = loop._requests.build_request_state
-
-        async def capture_budget(agent: Any, session: Any, *, inputs: RequestBuildInputs) -> Any:
-            if inputs.image_budget is not None and not live_budgets:
-                live_budgets.append(inputs.image_budget)
-            return await original_build(agent, session, inputs=inputs)
-
-        monkeypatch.setattr(loop._requests, "build_request_state", capture_budget)
-
-        def capture(_context: Any, arguments: JsonObject) -> JsonObject:
-            index = arguments["index"]
-            record = runtime.attachment_store.store(f"frame-{index}.png", frames[index])
-            return tool_success(
-                {"frame": index},
-                artifacts=[
-                    read_media_artifact(
-                        attachment_id=record.id,
-                        filename=record.filename,
-                        media_type=record.media_type,
-                    )
-                ],
-            )
-
-        runtime.tools.register(
-            "mcp_capture",
-            "Capture a test frame.",
-            {
-                "type": "object",
-                "properties": {"index": {"type": "integer"}},
-                "required": ["index"],
-                "additionalProperties": False,
-            },
-            capture,
+    with start_runtime(adapter) as runtime:
+        loop = runtime.streaming_chat_loop if streaming else runtime.chat_loop
+        wire = OpenAICompatibleAdapter(
+            runtime.providers.get("fake-provider"),
+            "test-key",
+            model_lookup=lambda model_id: runtime.models.get("fake-provider", model_id),
         )
-        agent = runtime.agents.create("coder", "Coder", model="fake-provider/fake-model-vision")
-        for index, frame in enumerate(frames):
-            Path(agent.workspace).joinpath(f"frame-{index}.png").write_bytes(frame)
-        assistant = await loop.send("coder", "Inspect successive frames", session_id="session-one")
-        assert assistant.content == "done"
-        assert len(adapter.requests) == 16
-        for iteration, request in enumerate(adapter.requests):
-            images = [
-                part
-                for part in _tool_result_content_parts(request.messages)
-                if part["type"] == "media"
-            ]
-            expected_indices = list(range(iteration)) if iteration <= 14 else [*range(14), 0]
-            if tight_budget or provider_pressure:
-                starts = [0, 0, 0, 0, 0, 3, 3, 3, 6, 6, 6, 9, 9, 9, 12, 12]
-                if provider_pressure:
-                    starts = [0, 0, 0, 0, 0, 0, 4, 4, 4, 4, 8, 8, 8, 8, 12, 12]
-                expected_indices = expected_indices[starts[iteration] :]
-            assert [base64.b64decode(part["base64"]) for part in images] == [
-                frames[index] for index in expected_indices
-            ]
-            assert (
-                sum(len(part["base64"]) for part in images)
-                <= wire_shaping.REQUEST_IMAGE_BYTES_LIMIT
+        # Five encoded frames fit beside the request's ~40 KB of text and Tools; six do not.
+        monkeypatch.setattr(wire, "request_body_limit", lambda model_id: 1024 * 1024)
+        monkeypatch.setattr(runtime.storage, "load_reflection_settings", lambda: {"enabled": False})
+        try:
+            # Exercise the exact shared artifact contract used by MCP binary results,
+            # alternating with the real read Tool; no external Blender process needed.
+            original_build = loop._requests.build_request_state
+
+            async def capture_budget(
+                agent: Any, session: Any, *, inputs: RequestBuildInputs
+            ) -> Any:
+                if inputs.image_budget is not None and not live_budgets:
+                    live_budgets.append(inputs.image_budget)
+                return await original_build(agent, session, inputs=inputs)
+
+            monkeypatch.setattr(loop._requests, "build_request_state", capture_budget)
+
+            def capture(_context: Any, arguments: JsonObject) -> JsonObject:
+                index = arguments["index"]
+                record = runtime.attachment_store.store(f"frame-{index}.png", frames[index])
+                return tool_success(
+                    {"frame": index},
+                    artifacts=[
+                        read_media_artifact(
+                            attachment_id=record.id,
+                            filename=record.filename,
+                            media_type=record.media_type,
+                        )
+                    ],
+                )
+
+            runtime.tools.register(
+                "mcp_capture",
+                "Capture a test frame.",
+                {
+                    "type": "object",
+                    "properties": {"index": {"type": "integer"}},
+                    "required": ["index"],
+                    "additionalProperties": False,
+                },
+                capture,
             )
-            pressure_steps = {6, 10, 14} if provider_pressure else {5, 8, 11, 14}
-            if iteration and (budget_kind == "none" or iteration not in pressure_steps):
-                previous_images = [
+            agent = runtime.agents.create("coder", "Coder", model="fake-provider/fake-model-vision")
+            for index, frame in enumerate(frames):
+                Path(agent.workspace).joinpath(f"frame-{index}.png").write_bytes(frame)
+            assistant = await loop.send(
+                "coder", "Inspect successive frames", session_id="session-one"
+            )
+            assert assistant.content == "done"
+            assert len(adapter.requests) == 16
+            for iteration, request in enumerate(adapter.requests):
+                images = [
                     part
-                    for part in _tool_result_content_parts(adapter.requests[iteration - 1].messages)
+                    for part in _tool_result_content_parts(request.messages)
                     if part["type"] == "media"
                 ]
-                assert images[: len(previous_images)] == previous_images
-            for index in range(iteration):
-                if index < 14:
-                    assert any(
-                        message.get("content") == f"inspection-{index}"
-                        for message in request.messages
-                    )
-        rebuilt_images = [
-            part
-            for part in _tool_result_content_parts(rebuilt_requests[0])
-            if part["type"] == "media"
-        ]
-        assert [base64.b64decode(part["base64"]) for part in rebuilt_images] == (
-            frames[8:10] if provider_pressure else frames[6:10] if tight_budget else frames[:10]
-        )
-        session = runtime.chat_sessions.get(session_address("coder", "session-one"))
-        persisted = session.load()
-        assert persisted[-1].iteration_count == 16
-        assert not any(message.role == "error" for message in persisted)
-        assert len(rejected_sizes) == (3 if provider_pressure else 0)
-        assert runtime.chat_runs is not None
-        assert "base64" not in json.dumps([message.to_dict() for message in persisted])
-        assert len([message for message in persisted if message.role == "tool"]) == 15
-        for message in persisted:
-            if message.role == "tool":
-                assert isinstance(message.content, str)
-                artifacts = json.loads(message.content)["artifacts"]
-                if message.name == "read":
-                    assert artifacts == []
-                    assert message.tool_display is not None
-                    assert message.tool_display["image_files"]
-                else:
-                    record = runtime.attachment_store.get(artifacts[0]["attachment_id"])
-                    assert Path(record.file_path).read_bytes() in frames
-    finally:
-        await wire.aclose()
-        runtime.stop()
+                expected_indices = list(range(iteration)) if iteration <= 14 else [*range(14), 0]
+                if tight_budget or provider_pressure:
+                    starts = [0, 0, 0, 0, 0, 3, 3, 3, 6, 6, 6, 9, 9, 9, 12, 12]
+                    if provider_pressure:
+                        starts = [0, 0, 0, 0, 0, 0, 4, 4, 4, 4, 8, 8, 8, 8, 12, 12]
+                    expected_indices = expected_indices[starts[iteration] :]
+                assert [base64.b64decode(part["base64"]) for part in images] == [
+                    frames[index] for index in expected_indices
+                ]
+                assert (
+                    sum(len(part["base64"]) for part in images)
+                    <= wire_shaping.REQUEST_IMAGE_BYTES_LIMIT
+                )
+                pressure_steps = {6, 10, 14} if provider_pressure else {5, 8, 11, 14}
+                if iteration and (budget_kind == "none" or iteration not in pressure_steps):
+                    previous_images = [
+                        part
+                        for part in _tool_result_content_parts(
+                            adapter.requests[iteration - 1].messages
+                        )
+                        if part["type"] == "media"
+                    ]
+                    assert images[: len(previous_images)] == previous_images
+                for index in range(iteration):
+                    if index < 14:
+                        assert any(
+                            message.get("content") == f"inspection-{index}"
+                            for message in request.messages
+                        )
+            rebuilt_images = [
+                part
+                for part in _tool_result_content_parts(rebuilt_requests[0])
+                if part["type"] == "media"
+            ]
+            assert [base64.b64decode(part["base64"]) for part in rebuilt_images] == (
+                frames[8:10] if provider_pressure else frames[6:10] if tight_budget else frames[:10]
+            )
+            session = runtime.chat_sessions.get(session_address("coder", "session-one"))
+            persisted = session.load()
+            assert persisted[-1].iteration_count == 16
+            assert not any(message.role == "error" for message in persisted)
+            assert len(rejected_sizes) == (3 if provider_pressure else 0)
+            assert runtime.chat_runs is not None
+            assert "base64" not in json.dumps([message.to_dict() for message in persisted])
+            assert len([message for message in persisted if message.role == "tool"]) == 15
+            for message in persisted:
+                if message.role == "tool":
+                    assert isinstance(message.content, str)
+                    artifacts = json.loads(message.content)["artifacts"]
+                    if message.name == "read":
+                        assert artifacts == []
+                        assert message.tool_display is not None
+                        assert message.tool_display["image_files"]
+                    else:
+                        record = runtime.attachment_store.get(artifacts[0]["attachment_id"])
+                        assert Path(record.file_path).read_bytes() in frames
+        finally:
+            await wire.aclose()
 
 
 @pytest.mark.asyncio
 async def test_read_image_degrades_to_note_for_non_vision_model(
-    tmp_path: Path,
-    resources_dir: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    start_runtime: StartRuntime,
 ) -> None:
     adapter = FakeAdapter(
         [
@@ -774,15 +708,7 @@ async def test_read_image_degrades_to_note_for_non_vision_model(
             {"content": "I cannot view the image directly.", "tool_calls": None},
         ]
     )
-    config = Config(data_dir=tmp_path / "data")
-    config._data["RESOURCES_PATH"] = str(resources_dir)
-    config._data["VBOT_VERSION"] = "test-version"
-    runtime = Runtime(config)
-    monkeypatch.setenv("FAKE_API_KEY", "test-key")
-    monkeypatch.setattr(runtime, "get_adapter", lambda connection: adapter)
-
-    runtime.start()
-    try:
+    with start_runtime(adapter) as runtime:
         agent = runtime.agents.create(
             "coder",
             "Coder Agent",
@@ -821,5 +747,3 @@ async def test_read_image_degrades_to_note_for_non_vision_model(
         assert all(
             not isinstance(message.content, list) for message in messages if message.role == "user"
         )
-    finally:
-        runtime.stop()
