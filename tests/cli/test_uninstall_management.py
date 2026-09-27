@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import base64
+from collections.abc import Callable
 from pathlib import Path
+
+import pytest
 
 from cli.install_state import (
     DESKTOP_CLIENT_SHAPE,
@@ -21,7 +24,7 @@ from cli.uninstall_management import (
     launch_uninstall,
     run_uninstall,
 )
-from core.utils.logging import resolve_daily_log_path
+from tests.cli.cli_test_support import make_instance
 
 
 def _install_root(tmp_path: Path) -> Path:
@@ -35,17 +38,6 @@ def _install_root(tmp_path: Path) -> Path:
 
 def _decode_powershell(encoded: str) -> str:
     return base64.b64decode(encoded).decode("utf-16-le")
-
-
-def _instance(tmp_path: Path) -> ServerInstance:
-    data_dir = tmp_path / "data"
-    return ServerInstance(
-        host="127.0.0.1",
-        port=8420,
-        data_dir=data_dir,
-        url="http://127.0.0.1:8420",
-        log_path=resolve_daily_log_path(data_dir),
-    )
 
 
 def _write_desktop_client_state(root: Path, tmp_path: Path) -> None:
@@ -176,7 +168,8 @@ def test_windows_surfaces_elevation_failure(tmp_path: Path) -> None:
     assert "UAC cancelled" in result.message
 
 
-def test_linux_replaces_cli_with_bundled_uninstaller(tmp_path: Path) -> None:
+@pytest.mark.parametrize("remove_data", [False, True], ids=["application", "all"])
+def test_linux_replaces_cli_with_bundled_uninstaller(tmp_path: Path, remove_data: bool) -> None:
     root = _install_root(tmp_path)
     exec_calls: list[tuple[str, list[str]]] = []
     changed_to: list[Path] = []
@@ -193,52 +186,41 @@ def test_linux_replaces_cli_with_bundled_uninstaller(tmp_path: Path) -> None:
         working_directory=tmp_path,
         home_directory=tmp_path,
         service_name="custom-vbot",
+        remove_data=remove_data,
+        data_directory=tmp_path / "data" if remove_data else None,
+        server_host="127.0.0.1" if remove_data else None,
+        server_port=9000 if remove_data else None,
     )
 
+    # execv replaces the process; returning at all means the handoff failed.
     assert not result.ok
     assert changed_to == [tmp_path]
+    script = str(root / "scripts" / "uninstall.sh")
+    data_arguments = (
+        [
+            "--data-dir",
+            str(tmp_path / "data"),
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "9000",
+            "--remove-data",
+        ]
+        if remove_data
+        else []
+    )
     assert exec_calls == [
         (
             "/bin/bash",
             [
                 "/bin/bash",
-                str(root / "scripts" / "uninstall.sh"),
+                script,
                 "--remove-autostart",
                 "--service-name",
                 "custom-vbot",
+                *data_arguments,
             ],
         )
-    ]
-
-
-def test_linux_all_mode_forwards_exact_data_and_server_target(tmp_path: Path) -> None:
-    root = _install_root(tmp_path)
-    exec_calls: list[list[str]] = []
-
-    result = launch_uninstall(
-        platform="linux",
-        root=root,
-        execv=lambda _executable, arguments: exec_calls.append(arguments),
-        change_directory=lambda _path: None,
-        bash_path="/bin/bash",
-        working_directory=tmp_path,
-        home_directory=tmp_path,
-        remove_data=True,
-        data_directory=tmp_path / "data",
-        server_host="127.0.0.1",
-        server_port=9000,
-        service_name="custom-vbot",
-    )
-
-    assert not result.ok
-    assert exec_calls[0][-7:] == [
-        "--data-dir",
-        str(tmp_path / "data"),
-        "--host",
-        "127.0.0.1",
-        "--port",
-        "9000",
-        "--remove-data",
     ]
 
 
@@ -257,7 +239,7 @@ def test_uninstall_reports_missing_script_and_unsupported_platform(tmp_path: Pat
 
 def test_interactive_data_reset_restarts_previously_running_server(tmp_path: Path) -> None:
     root = _install_root(tmp_path)
-    instance = _instance(tmp_path)
+    instance = make_instance(tmp_path)
     answers = iter(["2", "DELETE"])
     output: list[str] = []
     calls: list[str] = []
@@ -280,62 +262,9 @@ def test_interactive_data_reset_restarts_previously_running_server(tmp_path: Pat
     assert output
 
 
-def test_data_reset_keeps_previously_stopped_server_stopped(tmp_path: Path) -> None:
-    root = _install_root(tmp_path)
-    instance = _instance(tmp_path)
-    calls: list[str] = []
-
-    result = run_uninstall(
-        mode=UninstallMode.DATA_ONLY,
-        assume_yes=True,
-        root=root,
-        resolve=lambda **_kwargs: instance,
-        probe=lambda _instance: HealthProbeResult(reachable=False, is_vbot=False),
-        stop=lambda _instance: _record_command(calls, "unexpected-stop", instance),
-        start=lambda _instance: _record_command(calls, "unexpected-start", instance),
-        systemd_managed=lambda _instance, _name: False,
-        remove_directory=lambda path: calls.append(f"remove:{path}"),
-    )
-
-    assert result.ok
-    assert calls == [f"remove:{instance.data_dir}"]
-
-
-def test_data_reset_preserves_systemd_ownership(tmp_path: Path) -> None:
-    root = _install_root(tmp_path)
-    instance = _instance(tmp_path)
-    calls: list[str] = []
-
-    result = run_uninstall(
-        mode=UninstallMode.DATA_ONLY,
-        assume_yes=True,
-        root=root,
-        service_name="custom-vbot",
-        resolve=lambda **_kwargs: instance,
-        probe=lambda _instance: HealthProbeResult(reachable=True, is_vbot=True),
-        stop=lambda _instance: _record_command(calls, "unexpected-stop", instance),
-        start=lambda _instance: _record_command(calls, "unexpected-start", instance),
-        systemd_managed=lambda selected, name: selected is instance and name == "custom-vbot",
-        stop_systemd=lambda _instance, name: _record_command(
-            calls, f"systemd-stop:{name}", instance
-        ),
-        start_systemd=lambda _instance, name: _record_command(
-            calls, f"systemd-start:{name}", instance
-        ),
-        remove_directory=lambda path: calls.append(f"remove:{path}"),
-    )
-
-    assert result.ok
-    assert calls == [
-        "systemd-stop:custom-vbot",
-        f"remove:{instance.data_dir}",
-        "systemd-start:custom-vbot",
-    ]
-
-
 def test_app_only_preserves_data_and_all_forwards_data_to_launcher(tmp_path: Path) -> None:
     root = _install_root(tmp_path)
-    instance = _instance(tmp_path)
+    instance = make_instance(tmp_path)
     launches: list[dict[str, object]] = []
     calls: list[str] = []
 
@@ -372,7 +301,6 @@ def test_app_only_preserves_data_and_all_forwards_data_to_launcher(tmp_path: Pat
     )
 
     assert app_result.ok and all_result.ok
-    assert calls == ["stop", "launch", "stop", "launch"]
     assert launches[0]["remove_data"] is False
     assert launches[0]["data_directory"] == instance.data_dir
     assert launches[1]["remove_data"] is True
@@ -381,68 +309,9 @@ def test_app_only_preserves_data_and_all_forwards_data_to_launcher(tmp_path: Pat
     assert launches[1]["server_port"] == instance.port
 
 
-def test_application_removal_aborts_before_launcher_when_server_stop_fails(
-    tmp_path: Path,
-) -> None:
-    root = _install_root(tmp_path)
-    instance = _instance(tmp_path)
-    launched = False
-
-    def launcher(**_kwargs: object) -> UninstallResult:
-        nonlocal launched
-        launched = True
-        return UninstallResult(ok=True, message="launched")
-
-    result = run_uninstall(
-        mode=UninstallMode.APP_ONLY,
-        assume_yes=True,
-        root=root,
-        resolve=lambda **_kwargs: instance,
-        probe=lambda _instance: HealthProbeResult(reachable=True, is_vbot=True),
-        stop=lambda _instance: _command_result(instance, ok=False, message="locked"),
-        systemd_managed=lambda _instance, _name: False,
-        launcher=launcher,
-    )
-
-    assert not result.ok
-    assert "locked" in result.message
-    assert str(root) in result.message
-    assert not launched
-
-
-def test_application_removal_stops_systemd_owned_server_before_launcher(
-    tmp_path: Path,
-) -> None:
-    root = _install_root(tmp_path)
-    instance = _instance(tmp_path)
-    calls: list[str] = []
-
-    def launcher(**_kwargs: object) -> UninstallResult:
-        calls.append("launch")
-        return UninstallResult(ok=True, message="launched")
-
-    result = run_uninstall(
-        mode=UninstallMode.APP_ONLY,
-        assume_yes=True,
-        root=root,
-        service_name="custom-vbot",
-        resolve=lambda **_kwargs: instance,
-        probe=lambda _instance: HealthProbeResult(reachable=True, is_vbot=True),
-        stop=lambda _instance: _record_command(calls, "unexpected-stop", instance),
-        systemd_managed=lambda selected, name: selected is instance and name == "custom-vbot",
-        stop_systemd=lambda _instance, name: _record_command(
-            calls, f"systemd-stop:{name}", instance
-        ),
-        launcher=launcher,
-    )
-
-    assert result.ok
-    assert calls == ["systemd-stop:custom-vbot", "launch"]
-
-
 def test_uninstall_requires_explicit_mode_and_confirmation_without_tty(tmp_path: Path) -> None:
     root = _install_root(tmp_path)
-    instance = _instance(tmp_path)
+    instance = make_instance(tmp_path)
 
     missing_mode = run_uninstall(
         root=root,
@@ -485,7 +354,7 @@ def test_uninstall_defaults_to_recorded_installation_target(tmp_path: Path) -> N
 
     def resolve(**kwargs: object) -> ServerInstance:
         resolved.append(kwargs)
-        return _instance(tmp_path)
+        return make_instance(tmp_path)
 
     result = run_uninstall(
         mode=UninstallMode.APP_ONLY,
@@ -551,7 +420,7 @@ def test_desktop_client_data_only_requires_complete_explicit_target(tmp_path: Pa
 
     def resolve(**kwargs: object) -> ServerInstance:
         resolved.append(kwargs)
-        return _instance(tmp_path)
+        return make_instance(tmp_path)
 
     def launcher(**_kwargs: object) -> UninstallResult:
         nonlocal launched
@@ -584,7 +453,7 @@ def test_desktop_client_data_only_requires_complete_explicit_target(tmp_path: Pa
 def test_desktop_client_data_only_accepts_complete_explicit_target(tmp_path: Path) -> None:
     root = _install_root(tmp_path)
     _write_desktop_client_state(root, tmp_path)
-    instance = _instance(tmp_path)
+    instance = make_instance(tmp_path)
     resolved: list[dict[str, object]] = []
     calls: list[str] = []
 
@@ -614,7 +483,7 @@ def test_desktop_client_data_only_accepts_complete_explicit_target(tmp_path: Pat
 
 def test_interactive_cancel_makes_no_changes(tmp_path: Path) -> None:
     root = _install_root(tmp_path)
-    instance = _instance(tmp_path)
+    instance = make_instance(tmp_path)
     launched = False
 
     def launcher(**_kwargs: object) -> UninstallResult:
@@ -658,26 +527,118 @@ def test_data_reset_refuses_protected_or_live_paths(tmp_path: Path) -> None:
     assert not result.ok
 
 
-def test_data_reset_aborts_before_delete_when_stop_fails(tmp_path: Path) -> None:
-    root = _install_root(tmp_path)
-    instance = _instance(tmp_path)
-    removed = False
+def _lifecycle(
+    calls: list[str], instance: ServerInstance, *, stop_ok: bool = True
+) -> dict[str, Callable[..., CommandResult]]:
+    """Record every server lifecycle call; only ``stop`` may fail."""
 
-    def remove_directory(_path: Path) -> None:
-        nonlocal removed
-        removed = True
+    def stop(_instance: ServerInstance) -> CommandResult:
+        calls.append("stop")
+        return _command_result(instance, ok=stop_ok, message="stopped" if stop_ok else "locked")
+
+    return {
+        "stop": stop,
+        "start": lambda _instance: _record_command(calls, "start", instance),
+        "stop_systemd": lambda _instance, name: _record_command(
+            calls, f"systemd-stop:{name}", instance
+        ),
+        "start_systemd": lambda _instance, name: _record_command(
+            calls, f"systemd-start:{name}", instance
+        ),
+    }
+
+
+@pytest.mark.parametrize(
+    ("running", "systemd", "stop_ok", "ok", "expected"),
+    [
+        pytest.param(False, False, True, True, ["remove"], id="stopped-stays-stopped"),
+        pytest.param(
+            True,
+            True,
+            True,
+            True,
+            ["systemd-stop:custom-vbot", "remove", "systemd-start:custom-vbot"],
+            id="systemd-keeps-ownership",
+        ),
+        pytest.param(True, False, False, False, ["stop"], id="stop-fails-before-delete"),
+    ],
+)
+def test_data_reset_stops_and_restores_the_server_state_around_the_delete(
+    tmp_path: Path,
+    running: bool,
+    systemd: bool,
+    stop_ok: bool,
+    ok: bool,
+    expected: list[str],
+) -> None:
+    root = _install_root(tmp_path)
+    instance = make_instance(tmp_path)
+    calls: list[str] = []
+    lifecycle = _lifecycle(calls, instance, stop_ok=stop_ok)
 
     result = run_uninstall(
         mode=UninstallMode.DATA_ONLY,
         assume_yes=True,
         root=root,
+        service_name="custom-vbot",
         resolve=lambda **_kwargs: instance,
-        probe=lambda _instance: HealthProbeResult(reachable=True, is_vbot=True),
-        stop=lambda _instance: _command_result(instance, ok=False, message="locked"),
-        systemd_managed=lambda _instance, _name: False,
-        remove_directory=remove_directory,
+        probe=lambda _instance: HealthProbeResult(reachable=running, is_vbot=running),
+        systemd_managed=lambda selected, name: (
+            systemd and selected is instance and name == "custom-vbot"
+        ),
+        remove_directory=lambda path: calls.append(
+            "remove" if path == instance.data_dir else f"remove:{path}"
+        ),
+        stop=lifecycle["stop"],
+        start=lifecycle["start"],
+        stop_systemd=lifecycle["stop_systemd"],
+        start_systemd=lifecycle["start_systemd"],
     )
 
-    assert not result.ok
-    assert "locked" in result.message
-    assert not removed
+    assert result.ok is ok
+    assert calls == expected
+    if not ok:
+        assert "locked" in result.message
+
+
+@pytest.mark.parametrize(
+    ("systemd", "stop_ok", "ok", "expected"),
+    [
+        pytest.param(False, True, True, ["stop", "launch"], id="managed-server"),
+        pytest.param(True, True, True, ["systemd-stop:custom-vbot", "launch"], id="systemd"),
+        pytest.param(False, False, False, ["stop"], id="stop-fails"),
+    ],
+)
+def test_application_removal_stops_the_running_server_before_the_launcher(
+    tmp_path: Path, systemd: bool, stop_ok: bool, ok: bool, expected: list[str]
+) -> None:
+    root = _install_root(tmp_path)
+    instance = make_instance(tmp_path)
+    calls: list[str] = []
+
+    def launcher(**_kwargs: object) -> UninstallResult:
+        calls.append("launch")
+        return UninstallResult(ok=True, message="launched")
+
+    lifecycle = _lifecycle(calls, instance, stop_ok=stop_ok)
+    result = run_uninstall(
+        mode=UninstallMode.APP_ONLY,
+        assume_yes=True,
+        root=root,
+        service_name="custom-vbot",
+        resolve=lambda **_kwargs: instance,
+        probe=lambda _instance: HealthProbeResult(reachable=True, is_vbot=True),
+        stop=lifecycle["stop"],
+        stop_systemd=lifecycle["stop_systemd"],
+        systemd_managed=lambda selected, name: (
+            systemd and selected is instance and name == "custom-vbot"
+        ),
+        launcher=launcher,
+    )
+
+    assert result.ok is ok
+    assert calls == expected
+    if not ok:
+        # The message names the installation that was kept.
+        assert "locked" in result.message
+        assert str(root) in result.message

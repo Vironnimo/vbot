@@ -9,19 +9,7 @@ import httpx
 import pytest
 
 from cli import rpc_client
-from cli.server_management import ServerInstance, build_server_base_url
-from core.utils.logging import resolve_daily_log_path
-
-
-def make_instance(tmp_path: Path, *, host: str = "127.0.0.1", port: int = 8420) -> ServerInstance:
-    data_dir = tmp_path / "data"
-    return ServerInstance(
-        host=host,
-        port=port,
-        data_dir=data_dir,
-        url=build_server_base_url(host, port),
-        log_path=resolve_daily_log_path(data_dir),
-    )
+from tests.cli.cli_test_support import make_instance
 
 
 def _capture_request(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
@@ -30,44 +18,26 @@ def _capture_request(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     def fake_post(
         url: str, *, json: dict[str, Any], timeout: Any, trust_env: bool
     ) -> httpx.Response:
-        captured["url"] = url
-        del json
-        captured["timeout"] = timeout
-        captured["trust_env"] = trust_env
+        captured.update(url=url, json=json, timeout=timeout, trust_env=trust_env)
         return httpx.Response(200, json={"ok": True, "result": {}})
 
     monkeypatch.setattr(rpc_client.httpx, "post", fake_post)
     return captured
 
 
-def test_rpc_call_uses_default_timeout_for_ordinary_method(
+def test_rpc_call_posts_to_an_ipv6_safe_url_with_a_bounded_timeout_and_no_proxies(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     captured = _capture_request(monkeypatch)
 
-    rpc_client.rpc_call(make_instance(tmp_path), "settings.get_raw", {})
-
-    assert captured["timeout"] == rpc_client.RPC_TIMEOUT_SECONDS
-
-
-def test_rpc_call_ignores_environment_proxies(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # RPC bodies carry secrets (e.g. provider.set_key) over a plaintext loopback call, so the
-    # transport must never honor ambient HTTP_PROXY/.netrc that could divert them off-host.
-    captured = _capture_request(monkeypatch)
-
-    rpc_client.rpc_call(make_instance(tmp_path), "provider.set_key", {"value": "sk-secret"})
-
-    assert captured["trust_env"] is False
-
-
-def test_rpc_call_uses_ipv6_safe_url(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    captured = _capture_request(monkeypatch)
-
-    rpc_client.rpc_call(make_instance(tmp_path, host="::1"), "settings.get_raw", {})
+    rpc_client.rpc_call(make_instance(tmp_path, host="::1"), "provider.set_key", {"value": "k"})
 
     assert captured["url"] == "http://[::1]:8420/api/rpc"
+    assert captured["json"] == {"method": "provider.set_key", "params": {"value": "k"}}
+    assert captured["timeout"] == rpc_client.RPC_TIMEOUT_SECONDS
+    # RPC bodies carry secrets (e.g. provider.set_key) over a plaintext loopback call, so the
+    # transport must never honor ambient HTTP_PROXY/.netrc that could divert them off-host.
+    assert captured["trust_env"] is False
 
 
 @pytest.mark.parametrize(

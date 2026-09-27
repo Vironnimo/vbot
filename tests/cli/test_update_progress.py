@@ -1,64 +1,94 @@
 """Update progress is observable before work and final state is explicit."""
 
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
 import pytest
 
 from cli import update_management
 from cli._output import print_update_command_result
 from cli._update_types import UpdateResult, _Step
-from cli.server_management import CommandResult, WebUIProbeResult
-from tests.cli.update_management_test_support import _instance, _ok, _upstream, _write_state
+from cli.server_management import CommandResult, ServerInstance, WebUIProbeResult
+from cli.update_management import CommandRun
+from tests.cli.update_management_test_support import (
+    _instance,
+    _ok,
+    _upstream,
+    _write_state,
+    checkout,
+)
 
 
-@pytest.mark.parametrize("mode", ["completed", "pending", "skipped", "not_applicable", "failed"])
-def test_update_restart_state_and_progress(tmp_path, monkeypatch, mode):
+@pytest.fixture(autouse=True)
+def no_running_launchers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the Windows launcher guards away from this machine's real processes."""
+
+    monkeypatch.setattr(update_management, "_running_process_id", lambda *_args, **_kw: None)
+
+
+@pytest.mark.parametrize(
+    ("mode", "restarted_by"),
+    [
+        ("completed", "restart"),
+        # A Run's own server cannot restart inline: a detached helper does it later.
+        ("pending", "schedule"),
+        ("skipped", None),
+        ("not_applicable", None),
+        ("failed", "restart"),
+    ],
+)
+def test_update_restart_state_and_progress(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str, restarted_by: str | None
+) -> None:
     (tmp_path / ".git").mkdir()
     _write_state(tmp_path, shape="desktop-client" if mode == "not_applicable" else "server")
-    progress = []
-    calls = []
+    progress: list[tuple[str, str]] = []
+    calls: list[tuple[str, ServerInstance, str]] = []
+    handle = checkout(upstream=_upstream(behind=1))
 
-    def emit(status, message):
-        progress.append((status, message))
+    def runner(command: list[str], cwd: Path) -> CommandRun:
+        assert progress, "progress is announced before the first command"
+        return handle(command)
 
-    def runner(command, cwd):
-        assert progress
-        if command[:2] == ["git", "rev-parse"]:
-            return _ok("samesha")
-        if command[:2] == ["git", "symbolic-ref"]:
-            return _ok("main")
-        if command[:2] == ["git", "rev-list"]:
-            return _upstream(behind=1)
-        return _ok()
-
-    def snapshot(instance):
+    def snapshot(instance: ServerInstance) -> _Step:
         assert progress[-1][0] == "busy"
         return _Step(True, "test-owned snapshot")
 
-    def restart(instance, **kwargs):
-        assert progress[-1][0] == "busy"
-        calls.append(instance)
-        return CommandResult(ok=mode != "failed", message="test-owned restart", instance=instance)
+    def recorder(label: str) -> Any:
+        def restart(instance: ServerInstance, *, service_name: str, **_kw: Any) -> CommandResult:
+            assert progress[-1][0] == "busy"
+            calls.append((label, instance, service_name))
+            return CommandResult(
+                ok=mode != "failed", message="test-owned restart", instance=instance
+            )
+
+        return restart
 
     monkeypatch.setattr(update_management, "has_vbot_run_context", lambda: mode == "pending")
-    monkeypatch.setattr(update_management, "restart_server", restart)
-    monkeypatch.setattr(update_management, "schedule_server_restart", restart)
+    monkeypatch.setattr(update_management, "restart_server", recorder("restart"))
+    monkeypatch.setattr(update_management, "schedule_server_restart", recorder("schedule"))
+
     result = update_management.run_update(
         _instance(),
         root=tmp_path,
         runner=runner,
         data_snapshot_fn=snapshot,
         platform_name="posix",
-        progress=emit,
+        progress=lambda status, message: progress.append((status, message)),
         restart=mode != "skipped",
     )
+
     assert isinstance(result, UpdateResult)
     assert result.restart_state == mode
     assert result.ok == (mode != "failed")
-    assert len(calls) == (0 if mode in {"skipped", "not_applicable"} else 1)
+    assert calls == ([] if restarted_by is None else [(restarted_by, _instance(), "vbot")])
     assert ("info", "test-owned snapshot") in progress
 
 
 @pytest.mark.parametrize(
-    "mode,status",
+    ("mode", "status"),
     [
         ("completed", "[OK]"),
         ("pending", "[WARN]"),
@@ -68,12 +98,14 @@ def test_update_restart_state_and_progress(tmp_path, monkeypatch, mode):
         ("failed", "[ERROR]"),
     ],
 )
-def test_update_summary_does_not_repeat_details_or_hide_pending_work(mode, status, capsys):
+def test_update_summary_does_not_repeat_details_or_hide_pending_work(
+    mode: str, status: str, capsys: pytest.CaptureFixture[str]
+) -> None:
     result = UpdateResult(
         ok=mode != "failed",
         message="test-owned delivered detail\ntest-owned final detail",
         instance=_instance(),
-        restart_state=mode,
+        restart_state=mode,  # type: ignore[arg-type]
     )
     print_update_command_result(
         result,
@@ -89,7 +121,9 @@ def test_update_summary_does_not_repeat_details_or_hide_pending_work(mode, statu
     assert "\033[" not in output
 
 
-def test_healthy_server_with_unavailable_webui_is_visibly_a_warning(capsys):
+def test_healthy_server_with_unavailable_webui_is_visibly_a_warning(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     result = UpdateResult(
         ok=True,
         message="test-owned restart",
@@ -104,10 +138,10 @@ def test_healthy_server_with_unavailable_webui_is_visibly_a_warning(capsys):
     assert "WebUI: unavailable" in output
 
 
-def test_snapshot_failure_is_reported_before_any_checkout_mutation(tmp_path):
+def test_snapshot_failure_is_reported_before_any_checkout_mutation(tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()
     _write_state(tmp_path)
-    progress = []
+    progress: list[tuple[str, str]] = []
     read_only = {
         "symbolic-ref": _ok("main"),
         "rev-parse": _ok("samesha"),
@@ -116,7 +150,7 @@ def test_snapshot_failure_is_reported_before_any_checkout_mutation(tmp_path):
         "rev-list": _upstream(behind=1),
     }
 
-    def runner(command, cwd):
+    def runner(command: list[str], cwd: Path) -> CommandRun:
         assert command[0] == "git" and command[1] in read_only, command
         return read_only[command[1]]
 

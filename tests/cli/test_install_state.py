@@ -85,31 +85,39 @@ def test_read_legacy_manifest_upgrades_schema_and_keeps_target_optional(
     assert loaded.server_data_directory is None
 
 
-def test_desktop_client_cannot_claim_local_webui(tmp_path: Path) -> None:
-    with pytest.raises(InstallStateError):
-        write_install_state(
-            tmp_path,
-            _state(install_shape=DESKTOP_CLIENT_SHAPE, webui_revision="abc"),
-        )
+@pytest.mark.parametrize(
+    ("changes", "reason"),
+    [
+        pytest.param(
+            {"install_shape": DESKTOP_CLIENT_SHAPE, "webui_revision": "abc"},
+            "desktop-client must not own a WebUI revision",
+            id="desktop-client-with-local-webui",
+        ),
+        pytest.param(
+            {
+                "install_shape": DESKTOP_CLIENT_SHAPE,
+                "webui_revision": None,
+                "server_host": "127.0.0.1",
+                "server_port": 8420,
+                "server_data_directory": "data",
+            },
+            "desktop-client must not own a server target",
+            id="desktop-client-with-server-target",
+        ),
+        pytest.param(
+            {"server_host": "127.0.0.1"},
+            "server target must be complete",
+            id="incomplete-server-target",
+        ),
+    ],
+)
+def test_write_install_state_refuses_an_inconsistent_manifest(
+    tmp_path: Path, changes: dict[str, object], reason: str
+) -> None:
+    with pytest.raises(InstallStateError, match=reason):
+        write_install_state(tmp_path, _state(**changes))
 
-
-def test_desktop_client_cannot_claim_server_target(tmp_path: Path) -> None:
-    with pytest.raises(InstallStateError):
-        write_install_state(
-            tmp_path,
-            _state(
-                install_shape=DESKTOP_CLIENT_SHAPE,
-                webui_revision=None,
-                server_host="127.0.0.1",
-                server_port=8420,
-                server_data_directory=str(tmp_path / "data"),
-            ),
-        )
-
-
-def test_server_target_must_be_complete(tmp_path: Path) -> None:
-    with pytest.raises(InstallStateError):
-        write_install_state(tmp_path, _state(server_host="127.0.0.1"))
+    assert not (tmp_path / INSTALL_STATE_FILE).exists()
 
 
 def test_build_install_state_records_exact_groups_and_digest(
@@ -166,15 +174,29 @@ line-length = 100
 
 
 @pytest.mark.parametrize(
-    ("old", "new"),
+    ("old", "new", "consumed"),
     [
-        ('version = "1.0.0"', 'version = "1.0.1"'),
-        ("line-length = 100", "line-length = 120"),
-        ('dependencies = ["httpx"]', 'dependencies = [ "httpx" ]  # reformatted'),
+        pytest.param('version = "1.0.0"', 'version = "1.0.1"', False, id="version"),
+        pytest.param("line-length = 100", "line-length = 120", False, id="tool-setting"),
+        pytest.param(
+            'dependencies = ["httpx"]',
+            'dependencies = [ "httpx" ]  # reformatted',
+            False,
+            id="formatting",
+        ),
+        pytest.param(
+            'dependencies = ["httpx"]', 'dependencies = ["httpx", "pyyaml"]', True, id="dependency"
+        ),
+        pytest.param('server = ["fastapi"]', 'server = ["fastapi", "uvicorn"]', True, id="extra"),
+        pytest.param('vbot = "cli.main:main"', 'vbot = "cli.other:main"', True, id="script"),
+        pytest.param('packages = ["core"]', 'packages = ["core", "server"]', True, id="packages"),
+        pytest.param(
+            'requires = ["hatchling"]', 'requires = ["hatchling>=1.27"]', True, id="build-system"
+        ),
     ],
 )
-def test_dependency_digest_ignores_changes_an_install_does_not_consume(
-    tmp_path: Path, old: str, new: str
+def test_dependency_digest_tracks_only_what_an_install_consumes(
+    tmp_path: Path, old: str, new: str, consumed: bool
 ) -> None:
     project = tmp_path / "pyproject.toml"
     project.write_bytes(_PYPROJECT.encode())
@@ -182,29 +204,7 @@ def test_dependency_digest_ignores_changes_an_install_does_not_consume(
 
     project.write_bytes(_PYPROJECT.replace(old, new).encode())
 
-    assert dependency_digest(tmp_path) == before
-
-
-@pytest.mark.parametrize(
-    ("old", "new"),
-    [
-        ('dependencies = ["httpx"]', 'dependencies = ["httpx", "pyyaml"]'),
-        ('server = ["fastapi"]', 'server = ["fastapi", "uvicorn"]'),
-        ('vbot = "cli.main:main"', 'vbot = "cli.other:main"'),
-        ('packages = ["core"]', 'packages = ["core", "server"]'),
-        ('requires = ["hatchling"]', 'requires = ["hatchling>=1.27"]'),
-    ],
-)
-def test_dependency_digest_tracks_what_an_install_consumes(
-    tmp_path: Path, old: str, new: str
-) -> None:
-    project = tmp_path / "pyproject.toml"
-    project.write_bytes(_PYPROJECT.encode())
-    before = dependency_digest(tmp_path)
-
-    project.write_bytes(_PYPROJECT.replace(old, new).encode())
-
-    assert dependency_digest(tmp_path) != before
+    assert (dependency_digest(tmp_path) != before) is consumed
 
 
 def test_dependency_digest_falls_back_to_bytes_for_an_unparseable_file(tmp_path: Path) -> None:

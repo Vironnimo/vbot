@@ -213,6 +213,30 @@ def test_agent_create_confirms_the_saved_agent(
             },
             id="clears-delegation-and-policy",
         ),
+        pytest.param(
+            (
+                "--name", "Coder Two",
+                "--tool-access-mode", "selected",
+                "--tool-allow", "read_file",
+                "--tool-deny", "memory",
+                "--default-workspace",
+                "--copy-workspace-files",
+                "--clear-project",
+            ),
+            {
+                "name": "Coder Two",
+                "tool_access": {"mode": "selected", "allowed": ["read_file"], "denied": ["memory"]},
+                "workspace": None,
+                "copy_workspace_identity_files": True,
+                "root_project_id": None,
+            },
+            id="selected-tools-and-default-workspace",
+        ),
+        pytest.param(
+            ("--tool-access-mode", "selected"),
+            {"tool_access": {"mode": "selected", "allowed": []}},
+            id="explicit-empty-selection",
+        ),
     ],
 )  # fmt: skip
 def test_agent_update_sends_only_the_given_changes(
@@ -253,6 +277,11 @@ def test_agent_update_sends_only_the_given_changes(
             ("--copy-workspace-files",),
             ("--copy-workspace-files", "--workspace", "--default-workspace"),
             id="copy-without-workspace-target",
+        ),
+        pytest.param(
+            ("--tool-deny", "memory"),
+            ("require --tool-access-mode",),
+            id="tool-names-without-mode",
         ),
     ],
 )

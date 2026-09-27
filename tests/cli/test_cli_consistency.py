@@ -9,7 +9,7 @@ from cli import _commands, _output, main, rpc_client
 from cli._parser_common import AREA_HELP, COMMAND_PATHS
 from cli._progress import ProgressPrinter, current_progress
 from cli.formatting import output_mode, record_fields
-from cli.parser import build_parser, parse_args
+from cli.parser import AREA_ALIASES, build_parser, parse_args
 from cli.server_management import CommandResult, ServerInstance
 
 
@@ -60,6 +60,54 @@ def test_nested_commands_and_legacy_spellings_preserve_every_argument(area, lega
     )
 
 
+@pytest.mark.parametrize("alias,canonical", AREA_ALIASES.items())
+def test_area_aliases_parse_identically(alias, canonical):
+    # Collection areas share a list command; other aliased areas name their read command.
+    command = {"performance": "status"}.get(canonical, "list")
+    target = [command, "--host", "192.0.2.10", "--port", "9000"]
+    if canonical == "session":
+        target.insert(1, "test-agent")
+    assert vars(parse_args([alias, *target])) == vars(parse_args([canonical, *target]))
+
+
+@pytest.mark.parametrize(
+    "tokens",
+    [
+        ["agent", "update", "a", "--model", "p/m", "--clear-model"],
+        ["agent", "update", "a", "--temperature", "0.4", "--clear-temperature"],
+        ["agent", "update", "a", "--thinking-effort", "none", "--clear-thinking-effort"],
+        ["agent", "update", "a", "--fallback-models", "p/m", "--clear-fallback-models"],
+        ["agent", "update", "a", "--workspace", "C:/x", "--default-workspace"],
+        ["agent", "update", "a", "--project", "p", "--clear-project"],
+        ["agent", "update", "a", "--compaction-policy", "{}", "--clear-compaction-policy"],
+        ["project", "set", "p", "--default-agent", "a", "--clear-default-agent"],
+        ["project", "set", "p", "--default-model", "p/m", "--clear-default-model"],
+        ["project", "set", "p", "--default-temperature", "0.4", "--clear-default-temperature"],
+        [
+            "project", "add", "C:/x",
+            "--default-thinking-effort", "none", "--clear-default-thinking-effort",
+        ],
+        ["provider", "set-key", "openai", "sentinel", "--stdin"],
+        ["config", "set", "debug.enabled", "true", "--stdin"],
+        ["cron", "update", "job", "--session", "s", "--clear-session"],
+        ["uninstall", "--app-only", "--data-only"],
+        ["update", "--discard", "--stash"],
+        # Target options follow the action, and desktop never selects a data directory.
+        ["config", "--port", "8999", "get", "debug.enabled"],
+        ["desktop", "--data-dir", "data"],
+    ],
+)  # fmt: skip
+def test_conflicting_or_misplaced_arguments_fail_before_dispatch(tokens):
+    with pytest.raises(SystemExit) as error:
+        parse_args(tokens)
+    assert error.value.code == 2
+
+
+def test_target_options_after_the_action_are_kept():
+    args = parse_args(["config", "get", "debug.enabled", "--host", "remote", "--port", "8999"])
+    assert (args.host, args.port) == ("remote", 8999)
+
+
 @pytest.mark.parametrize(
     "tokens",
     [
@@ -102,13 +150,20 @@ AREAS = [
 ]
 
 
-@pytest.mark.parametrize("area,tokens", AREAS)
+OUTCOMES = [
+    (True, (), "[OK]"),
+    (False, (), "[ERROR]"),
+    (True, ("Saved; further action required",), "[WARN]"),
+]
+
+
+# Every area and every outcome appear; the shared status output does not depend on
+# the combination, so each area is paired with one outcome in turn.
 @pytest.mark.parametrize(
-    "ok,attention,marker",
+    "area,tokens,ok,attention,marker",
     [
-        (True, (), "[OK]"),
-        (False, (), "[ERROR]"),
-        (True, ("Saved; further action required",), "[WARN]"),
+        pytest.param(area, tokens, *OUTCOMES[index % len(OUTCOMES)], id=area)
+        for index, (area, tokens) in enumerate(AREAS)
     ],
 )
 def test_all_management_areas_report_outcomes_without_changing_payload(

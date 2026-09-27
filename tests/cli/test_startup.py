@@ -1,4 +1,9 @@
-"""The native Desktop shortcut must not initialize the full console/server stack."""
+"""Fresh-process import boundaries of the CLI entry points.
+
+The native Desktop shortcut must not initialize the console or server stack, and a
+CLI/Desktop-only install without the ``server`` extra (no fastapi) must still load
+the complete CLI.
+"""
 
 from __future__ import annotations
 
@@ -72,6 +77,36 @@ assert not any(name.startswith('VBOT_RUN_') for name in options['env'])
 """
     result = subprocess.run(
         [sys.executable, "-c", script, str(install.root)],
+        cwd=Path(__file__).resolve().parents[2],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_cli_imports_without_the_server_package_or_fastapi() -> None:
+    script = """
+import importlib.abc
+import sys
+
+class BlockServerStack(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path, target=None):
+        if fullname.split('.', 1)[0] in ('fastapi', 'server'):
+            raise ModuleNotFoundError(f'blocked import of {fullname!r}', name=fullname)
+
+sys.meta_path.insert(0, BlockServerStack())
+try:
+    import server
+except ModuleNotFoundError:
+    pass
+else:
+    raise AssertionError('the blocker must make the server package unimportable')
+import cli._commands, cli.parser, cli.main
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script],
         cwd=Path(__file__).resolve().parents[2],
         capture_output=True,
         text=True,

@@ -1,11 +1,11 @@
-"""Shared fixtures and fakes for update management behavior tests."""
+"""Shared fakes for ``vbot update`` tests: a scripted checkout, restart recorders, the manifest."""
 
 from __future__ import annotations
 
 import io
 import sys
 import tarfile
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from cli._update_types import _Step
@@ -16,9 +16,9 @@ from cli.install_state import (
 )
 from cli.install_state import dependency_digest as current_dependency_digest
 from cli.server_management import CommandResult, ServerInstance
-from cli.update_management import (
-    CommandRun,
-)
+from cli.update_management import CommandRun
+
+Handler = Callable[[list[str]], CommandRun]
 
 
 def _instance() -> ServerInstance:
@@ -45,10 +45,64 @@ def _upstream(*, behind: int = 0, ahead: int = 0) -> CommandRun:
     return _ok(f"{ahead}	{behind}")
 
 
+def checkout(
+    *,
+    heads: str | Sequence[str] = "samesha",
+    branch: bool = True,
+    status: str = "",
+    upstream: CommandRun | None = None,
+    on_merge: Callable[[], object] | None = None,
+    answer: Callable[[list[str]], CommandRun | None] | None = None,
+) -> Handler:
+    """Answer the updater's commands for one checkout.
+
+    ``heads`` answers successive ``git rev-parse HEAD`` calls; the last one repeats. A branch
+    checkout is on ``main`` with ``upstream`` as its ahead/behind count; ``branch=False`` is a
+    detached release checkout. ``on_merge`` runs when the updater fast-forwards. ``answer`` sees
+    every command first and may return a reply; every other command succeeds silently.
+    """
+
+    remaining = [heads] if isinstance(heads, str) else list(heads)
+
+    def handle(command: list[str]) -> CommandRun:
+        if answer is not None and (reply := answer(command)) is not None:
+            return reply
+        if command[:2] == ["git", "symbolic-ref"]:
+            return _ok("main") if branch else _err()
+        if command[:2] == ["git", "rev-parse"]:
+            return _ok(remaining.pop(0) if len(remaining) > 1 else remaining[0])
+        if command[:2] == ["git", "status"]:
+            return _ok(status)
+        if command[:2] == ["git", "rev-list"]:
+            return upstream or _upstream()
+        if command[:2] == ["git", "merge"] and on_merge is not None:
+            on_merge()
+        return _ok()
+
+    return handle
+
+
+def only_reads(*queries: str, **replies: CommandRun) -> Callable[[list[str]], CommandRun | None]:
+    """An ``answer`` that fails the test on any command except the named git queries.
+
+    ``replies`` answers named git subcommands; the remaining ``queries`` fall through to the
+    checkout's defaults.
+    """
+
+    def answer(command: list[str]) -> CommandRun | None:
+        if command[0] == "git" and command[1] in replies:
+            return replies[command[1]]
+        if command[0] == "git" and command[1] in queries:
+            return None
+        raise AssertionError(f"unexpected command: {command}")
+
+    return answer
+
+
 class ScriptedRunner:
     """Records command invocations and answers from a per-command handler."""
 
-    def __init__(self, handler: Callable[[list[str]], CommandRun]) -> None:
+    def __init__(self, handler: Handler) -> None:
         self._handler = handler
         self.calls: list[list[str]] = []
 
@@ -99,6 +153,15 @@ def _webui_tar_bytes(files: dict[str, bytes] | None = None) -> bytes:
             info.size = len(payload)
             archive.addfile(info, io.BytesIO(payload))
     return buffer.getvalue()
+
+
+def write_webui_build(root: Path, content: str = "<!doctype html>") -> Path:
+    """Write an installed WebUI build and return its ``dist`` directory."""
+
+    dist = root / "webui" / "dist"
+    dist.mkdir(parents=True, exist_ok=True)
+    (dist / "index.html").write_text(content, encoding="utf-8")
+    return dist
 
 
 def _write_state(

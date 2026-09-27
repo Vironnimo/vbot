@@ -208,41 +208,35 @@ def test_open_desktop_uses_the_versioned_desktop_host_and_shape_target(
     assert environment["VBOT_INSTALL_ROOT"] == str(install.root)
 
 
-def test_desktop_client_launches_without_an_implicit_server_target(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
-    install = _install(tmp_path, shape="desktop-client")
+@pytest.mark.parametrize(
+    ("shape", "target", "target_arguments"),
+    [
+        pytest.param("desktop-client", {}, [], id="client-without-implicit-target"),
+        pytest.param(
+            "server-desktop",
+            {"host": "192.0.2.8", "port": 18420},
+            ["--host", "192.0.2.8", "--port", "18420"],
+            id="explicit-target",
+        ),
+    ],
+)
+def test_open_desktop_targets_only_an_explicit_or_owned_server(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    shape: str,
+    target: dict[str, Any],
+    target_arguments: list[str],
+) -> None:
+    install = _install(tmp_path, shape=shape)
     executable = _desktop_interpreter(install)
     executable.parent.mkdir(parents=True, exist_ok=True)
     executable.write_bytes(b"")
     launches: list[list[str]] = []
     monkeypatch.setattr(host.subprocess, "Popen", lambda args, **_kwargs: launches.append(args))
 
-    host.ApplicationFacade(install).open_desktop()
-    assert launches[0] == [str(executable), "-m", "desktop.main"]
+    host.ApplicationFacade(install).open_desktop(**target)
 
-
-def test_open_desktop_preserves_explicit_host_and_port(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
-    install = _install(tmp_path, shape="server-desktop")
-    executable = _desktop_interpreter(install)
-    executable.parent.mkdir(parents=True, exist_ok=True)
-    executable.write_bytes(b"")
-    launches: list[list[str]] = []
-    monkeypatch.setattr(host.subprocess, "Popen", lambda args, **_kwargs: launches.append(args))
-
-    host.ApplicationFacade(install).open_desktop(host="192.0.2.8", port=18420)
-
-    assert launches[0] == [
-        str(executable),
-        "-m",
-        "desktop.main",
-        "--host",
-        "192.0.2.8",
-        "--port",
-        "18420",
-    ]
+    assert launches == [[str(executable), "-m", "desktop.main", *target_arguments]]
 
 
 def test_browser_and_logs_use_only_the_owned_local_target(

@@ -8,6 +8,7 @@ import json
 import os
 import subprocess
 import zipfile
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -15,6 +16,7 @@ import pytest
 
 from cli.application import customize
 from cli.application.state import ApplicationError, Installation
+from tests.cli.application.git_repositories import git as _git
 
 
 def _server_install(root: Path) -> Installation:
@@ -22,13 +24,6 @@ def _server_install(root: Path) -> Installation:
     install.save()
     (root / "active-version").write_text("rel_base\n", encoding="ascii")
     return install
-
-
-def _git(directory: Path, *arguments: str) -> str:
-    result = subprocess.run(
-        ["git", *arguments], cwd=directory, check=True, capture_output=True, text=True
-    )
-    return result.stdout.strip()
 
 
 def test_development_git_runs_windowless_and_retains_output(
@@ -48,22 +43,13 @@ def test_development_git_runs_windowless_and_retains_output(
     assert options["capture_output"] is True
 
 
-def _repository(path: Path) -> str:
-    path.mkdir()
-    _git(path, "init")
-    _git(path, "config", "user.name", "Test User")
-    _git(path, "config", "user.email", "test@example.invalid")
-    (path / "tracked.txt").write_text("base\n", encoding="utf-8")
-    _git(path, "add", "tracked.txt")
-    _git(path, "commit", "-m", "base")
-    return _git(path, "rev-parse", "HEAD")
-
-
 def test_prepare_checks_out_the_exact_release_revision_and_uses_fresh_test_data(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    plain_repository: Callable[[Path], str],
 ) -> None:
     install = _server_install(tmp_path / "install")
-    revision = _repository(tmp_path / "source")
+    revision = plain_repository(tmp_path / "source")
     monkeypatch.setattr(
         customize,
         "validate_release",
@@ -86,11 +72,13 @@ def test_prepare_checks_out_the_exact_release_revision_and_uses_fresh_test_data(
 
 
 def test_check_verifies_the_complete_source_before_recording_the_intent(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    plain_repository: Callable[[Path], str],
 ) -> None:
     install = _server_install(tmp_path / "install")
     working = tmp_path / "working"
-    _repository(working)
+    plain_repository(working)
     (working / "webui").mkdir()
     python = customize._development_python(install)
     python.parent.mkdir(parents=True)
@@ -119,11 +107,13 @@ def test_check_verifies_the_complete_source_before_recording_the_intent(
 
 
 def test_activation_archive_rejects_a_source_changed_after_check(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    plain_repository: Callable[[Path], str],
 ) -> None:
     install = _server_install(tmp_path / "install")
     working = tmp_path / "working"
-    revision = _repository(working)
+    revision = plain_repository(working)
     candidate = install.version("local_checked")
     candidate.mkdir(parents=True)
     (candidate / "release.json").write_text("{}", encoding="utf-8")
@@ -139,7 +129,7 @@ def test_activation_archive_rejects_a_source_changed_after_check(
     }
     target = install.root / "development" / "source"
     target.parent.mkdir(parents=True)
-    subprocess.run(["git", "clone", "--quiet", str(working), str(target)], check=True)
+    _git(target.parent, "clone", "--quiet", str(working), str(target))
     customize.save_state(install, state)
     monkeypatch.setattr(customize, "validate_release", lambda *_args, **_kwargs: {})
     (target / "tracked.txt").write_text("changed\n", encoding="utf-8")
@@ -386,12 +376,14 @@ def test_pending_rebase_promotes_only_after_its_exact_candidate_is_active(tmp_pa
 
 
 def test_pending_checked_rebase_is_activatable_without_an_initial_candidate(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    plain_repository: Callable[[Path], str],
 ) -> None:
     install = _server_install(tmp_path / "install")
     source = install.root / "development" / "rebase-rel_new"
     source.parent.mkdir(parents=True)
-    revision = _repository(source)
+    revision = plain_repository(source)
     candidate = install.version("local_rebased")
     candidate.mkdir(parents=True)
     (candidate / "release.json").write_text("{}", encoding="utf-8")
@@ -520,11 +512,13 @@ def test_rebase_conflict_keeps_source_and_records_reconciliation_location(
     assert any(arguments and arguments[0] == "rebase" for _, arguments in calls)
 
 
-def test_update_rejects_clean_user_commit_created_after_last_check(tmp_path: Path) -> None:
+def test_update_rejects_clean_user_commit_created_after_last_check(
+    tmp_path: Path, plain_repository: Callable[[Path], str]
+) -> None:
     install = _server_install(tmp_path / "install")
     source = install.root / "development" / "source"
     source.parent.mkdir(parents=True)
-    checked = _repository(source)
+    checked = plain_repository(source)
     customize.save_state(
         install,
         {

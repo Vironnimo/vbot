@@ -6,6 +6,7 @@ import json
 import re
 import subprocess
 import sys
+from contextlib import nullcontext
 from ctypes import wintypes
 from pathlib import Path
 from types import SimpleNamespace
@@ -79,10 +80,33 @@ def test_packaged_autostart_refuses_foreign_registration_before_disable(tmp_path
         autostart(install, "disable", platform="win32", runner=runner)
 
 
-def test_host_exit_validates_exact_process_and_writes_bounded_request(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def _short_path_alias(path: Path) -> str | None:
+    """Return the Windows 8.3 alias of *path*, or None where none exists."""
+
+    if sys.platform != "win32":
+        return None
+    buffer = ctypes.create_unicode_buffer(32768)
+    short_path = ctypes.windll.kernel32.GetShortPathNameW
+    short_path.argtypes = [wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD]
+    short_path.restype = wintypes.DWORD
+    length = short_path(str(path), buffer, len(buffer))
+    if not length or length >= len(buffer) or Path(buffer.value) == path:
+        return None
+    return buffer.value
+
+
+@pytest.mark.parametrize("executable", ["owned", "short-path-alias", "foreign"])
+def test_host_exit_requests_only_the_exact_owned_host_process(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, executable: str
 ) -> None:
-    install = _install(tmp_path / "app")
+    install = _install(tmp_path / "application with spaces")
+    launcher = install.root / "vBot.exe"
+    foreign = tmp_path / "foreign.exe"
+    foreign.write_bytes(b"foreign")
+    alias = _short_path_alias(launcher) if executable == "short-path-alias" else None
+    if executable == "short-path-alias" and alias is None:
+        pytest.skip("8.3 aliases are unavailable for this test directory")
+    process_executable = {"owned": str(launcher), "foreign": str(foreign)}.get(executable, alias)
     (install.root / "host.json").write_text(
         json.dumps({"schema_version": 1, "pid": 42, "process_created": 12.5}),
         encoding="utf-8",
@@ -98,8 +122,8 @@ def test_host_exit_validates_exact_process_and_writes_bounded_request(
         def create_time(self) -> float:
             return 12.5
 
-        def exe(self) -> str:
-            return str(install.root / "vBot.exe")
+        def exe(self) -> str | None:
+            return process_executable
 
         def is_running(self) -> bool:
             return False
@@ -112,93 +136,25 @@ def test_host_exit_validates_exact_process_and_writes_bounded_request(
         "psutil",
         SimpleNamespace(Process=Process, NoSuchProcess=NoSuchProcessError, STATUS_ZOMBIE="zombie"),
     )
+    request_path = install.root / "host-exit-request.json"
 
+    if executable == "foreign":
+        with pytest.raises(ApplicationError, match="targets another executable"):
+            request_host_exit(install)
+        assert not request_path.exists()
+        return
     result = request_host_exit(install)
 
-    request = json.loads((install.root / "host-exit-request.json").read_text(encoding="utf-8"))
+    request = json.loads(request_path.read_text(encoding="utf-8"))
     assert request["schema_version"] == 1
     assert len(request["nonce"]) == 32
     assert result == {"ok": True, "running": False, "changed": True}
 
 
-def test_host_exit_accepts_short_path_alias_for_owned_executable(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("stopped", [True, False], ids=["stopped", "stop-fails"])
+def test_uninstall_launches_only_after_the_exact_server_stopped(
+    tmp_path: Path, stopped: bool
 ) -> None:
-    install = _install(tmp_path / "application with spaces")
-    launcher = install.root / "vBot.exe"
-    buffer = ctypes.create_unicode_buffer(32768)
-    length = 0
-    if sys.platform == "win32":
-        short_path = ctypes.windll.kernel32.GetShortPathNameW
-        short_path.argtypes = [wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD]
-        short_path.restype = wintypes.DWORD
-        length = short_path(str(launcher), buffer, len(buffer))
-    else:
-        pytest.skip("Windows short-path behavior")
-    if not length or length >= len(buffer) or Path(buffer.value) == launcher:
-        pytest.skip("8.3 aliases are unavailable for this test directory")
-    (install.root / "host.json").write_text(
-        json.dumps({"schema_version": 1, "pid": 42, "process_created": 12.5}),
-        encoding="utf-8",
-    )
-
-    class Process:
-        def __init__(self, pid: int) -> None:
-            assert pid == 42
-
-        def create_time(self) -> float:
-            return 12.5
-
-        def exe(self) -> str:
-            return buffer.value
-
-        def is_running(self) -> bool:
-            return False
-
-        def status(self) -> str:
-            return "stopped"
-
-    monkeypatch.setitem(
-        sys.modules,
-        "psutil",
-        SimpleNamespace(Process=Process, NoSuchProcess=RuntimeError, STATUS_ZOMBIE="zombie"),
-    )
-
-    assert request_host_exit(install)["changed"] is True
-
-
-def test_host_exit_refuses_existing_foreign_executable(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    install = _install(tmp_path / "app")
-    foreign = tmp_path / "foreign.exe"
-    foreign.write_bytes(b"foreign")
-    (install.root / "host.json").write_text(
-        json.dumps({"schema_version": 1, "pid": 42, "process_created": 12.5}),
-        encoding="utf-8",
-    )
-
-    class Process:
-        def __init__(self, pid: int) -> None:
-            assert pid == 42
-
-        def create_time(self) -> float:
-            return 12.5
-
-        def exe(self) -> str:
-            return str(foreign)
-
-    monkeypatch.setitem(
-        sys.modules,
-        "psutil",
-        SimpleNamespace(Process=Process, NoSuchProcess=RuntimeError, STATUS_ZOMBIE="zombie"),
-    )
-
-    with pytest.raises(ApplicationError, match="targets another executable"):
-        request_host_exit(install)
-
-
-def test_uninstall_stops_exact_server_and_preserves_data_by_default(tmp_path: Path) -> None:
     install = _install(tmp_path / "app")
     uninstaller = install.root / "unins000.exe"
     uninstaller.write_bytes(b"exe")
@@ -207,37 +163,21 @@ def test_uninstall_stops_exact_server_and_preserves_data_by_default(tmp_path: Pa
 
     def stop(candidate: Installation) -> SimpleNamespace:
         events.append(f"stop:{candidate.server_port}")
-        return SimpleNamespace(ok=True, message="stopped")
+        return SimpleNamespace(ok=stopped, message="stopped" if stopped else "busy")
 
-    result = uninstall(
-        install,
-        platform="win32",
-        runner=lambda command: CommandRun(3, "", ""),
-        exit_host=lambda candidate: events.append("exit-host"),
-        stop=stop,
-        launcher=lambda path: events.append(f"launch:{path.name}"),
-    )
-
-    assert events == ["exit-host", "stop:8420", "launch:unins000.exe"]
-    assert result["data_preserved"] is True
-
-
-def test_uninstall_does_not_launch_when_exact_stop_fails(tmp_path: Path) -> None:
-    install = _install(tmp_path / "app")
-    (install.root / "unins000.exe").write_bytes(b"exe")
-    (install.root / "unins000.dat").write_bytes(b"data")
-    launched: list[Path] = []
-
-    with pytest.raises(ApplicationError, match="could not stop"):
-        uninstall(
+    with nullcontext() if stopped else pytest.raises(ApplicationError, match="could not stop"):
+        result = uninstall(
             install,
             platform="win32",
             runner=lambda command: CommandRun(3, "", ""),
-            exit_host=lambda candidate: None,
-            stop=lambda candidate: SimpleNamespace(ok=False, message="busy"),
-            launcher=launched.append,
+            exit_host=lambda candidate: events.append("exit-host"),
+            stop=stop,
+            launcher=lambda path: events.append(f"launch:{path.name}"),
         )
-    assert launched == []
+
+    assert events == ["exit-host", "stop:8420", *(["launch:unins000.exe"] if stopped else [])]
+    if stopped:
+        assert result["data_preserved"] is True
 
 
 def test_data_only_reset_preserves_application_autostart_and_running_state(tmp_path: Path) -> None:

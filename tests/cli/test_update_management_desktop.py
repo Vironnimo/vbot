@@ -1,63 +1,60 @@
-"""Tests for update management desktop."""
+"""``vbot update`` for Desktop installs and Windows launchers, shims and shortcuts."""
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
 
 import cli.update_management as update_management
 from cli._update_types import UpdateResult
-from cli.update_management import (
-    CommandRun,
-    _running_process_id,
-    run_update,
-)
+from cli.update_management import CommandRun, _running_process_id, run_update
 from tests.cli.update_management_test_support import (
     ScriptedRunner,
     _instance,
-    _ok,
     _recording_restart,
     _upstream,
     _write_state,
+    checkout,
+    only_reads,
+    write_webui_build,
 )
 
 
-def test_desktop_client_update_keeps_exact_shape_and_never_starts_server(
-    tmp_path: Path,
-) -> None:
+def _write_pyproject(root: Path, content: str) -> None:
+    (root / "pyproject.toml").write_text(content, encoding="utf-8")
+
+
+def _windows_environment(root: Path, *launchers: str) -> tuple[Path, Path]:
+    """Create ``.venv/Scripts`` with ``python.exe`` and the named launchers."""
+
+    scripts_dir = root / ".venv" / "Scripts"
+    scripts_dir.mkdir(parents=True)
+    for name in ("python.exe", *launchers):
+        (scripts_dir / name).write_bytes(b"")
+    return scripts_dir, scripts_dir / "python.exe"
+
+
+def _no_running_launchers(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(update_management, "_running_process_id", lambda *_args, **_kw: None)
+
+
+def test_desktop_client_update_keeps_exact_shape_and_never_starts_server(tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()
-    (tmp_path / "pyproject.toml").write_text("before", encoding="utf-8")
-    _write_state(
-        tmp_path,
-        revision="old",
-        shape="desktop-client",
-        groups=("cli", "desktop"),
+    _write_pyproject(tmp_path, "before")
+    _write_state(tmp_path, revision="old", shape="desktop-client", groups=("cli", "desktop"))
+    runner = ScriptedRunner(
+        checkout(
+            heads=["old", "new"],
+            upstream=_upstream(behind=1),
+            on_merge=lambda: _write_pyproject(tmp_path, "after"),
+        )
     )
-    revisions = iter(["old", "new"])
-
-    def handler(command: list[str]) -> CommandRun:
-        if command[:2] == ["git", "symbolic-ref"]:
-            return _ok("main")
-        if command[:2] == ["git", "rev-parse"]:
-            return _ok(next(revisions))
-        if command[:2] == ["git", "status"]:
-            return _ok("")
-        if command[:2] == ["git", "rev-list"]:
-            return _upstream(behind=1)
-        if command[:2] == ["git", "merge"]:
-            (tmp_path / "pyproject.toml").write_text("after", encoding="utf-8")
-        return _ok()
-
-    runner = ScriptedRunner(handler)
     events, stop, start = _recording_restart()
+
     result = run_update(
-        _instance(),
-        runner=runner,
-        root=tmp_path,
-        stop=stop,
-        start=start,
-        platform_name="posix",
+        _instance(), runner=runner, root=tmp_path, stop=stop, start=start, platform_name="posix"
     )
 
     assert result.ok, result.message
@@ -66,67 +63,49 @@ def test_desktop_client_update_keeps_exact_shape_and_never_starts_server(
     assert events == []
 
 
-def test_windows_update_refuses_running_owned_desktop_before_changes(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    ("launcher", "shape", "process_id"),
+    [
+        pytest.param("vbot-desktop.exe", "server-desktop", 4242, id="desktop"),
+        pytest.param("vbot.exe", "server", 31337, id="package-launcher"),
+    ],
+)
+def test_windows_update_refuses_a_running_launcher_before_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, launcher: str, shape: str, process_id: int
 ) -> None:
     (tmp_path / ".git").mkdir()
-    scripts_dir = tmp_path / ".venv" / "Scripts"
-    scripts_dir.mkdir(parents=True)
-    python_executable = scripts_dir / "python.exe"
-    python_executable.write_bytes(b"")
-    desktop_launcher = scripts_dir / "vbot-desktop.exe"
-    desktop_launcher.write_bytes(b"")
-    _write_state(
-        tmp_path,
-        shape="server-desktop",
-        python_executable=str(python_executable),
-    )
+    scripts_dir, python_executable = _windows_environment(tmp_path, launcher)
+    _write_state(tmp_path, shape=shape, python_executable=str(python_executable))
     manifest = tmp_path / ".vbot-install.json"
     manifest_before = manifest.read_bytes()
-
-    package_launcher = scripts_dir / "vbot.exe"
+    running = (scripts_dir / launcher).resolve()
+    lookups: list[tuple[Path, bool]] = []
 
     def running_process_id(executable: Path, *, include_current: bool = False) -> int | None:
-        if executable == package_launcher.resolve():
-            assert include_current
-            return None
-        assert executable == desktop_launcher.resolve()
-        assert not include_current
-        return 4242
+        lookups.append((executable, include_current))
+        return process_id if executable == running else None
 
     monkeypatch.setattr(update_management, "_running_process_id", running_process_id)
-
-    def handler(command: list[str]) -> CommandRun:
-        if command[:2] == ["git", "symbolic-ref"]:
-            return _ok("main")
-        if command[:2] == ["git", "rev-parse"]:
-            return _ok("samesha")
-        raise AssertionError(f"update mutated state after Desktop preflight failed: {command}")
-
-    runner = ScriptedRunner(handler)
+    runner = ScriptedRunner(checkout(answer=only_reads("symbolic-ref", "rev-parse")))
     events, stop, start = _recording_restart()
+
     result = run_update(
-        _instance(),
-        runner=runner,
-        root=tmp_path,
-        stop=stop,
-        start=start,
-        platform_name="nt",
+        _instance(), runner=runner, root=tmp_path, stop=stop, start=start, platform_name="nt"
     )
 
     assert not result.ok
-    assert "process 4242" in result.message
+    assert f"process {process_id}" in result.message
     expected_recovery = (
         f"Set-Location -LiteralPath '{tmp_path.resolve()}'; "
         f"& '{python_executable}' -m cli.main update"
     )
     assert f"resume update: {expected_recovery}" in result.message
     assert manifest.read_bytes() == manifest_before
-    assert not runner.ran("git", "status")
-    assert not runner.ran("git", "merge")
-    assert not runner.ran("pip")
     assert events == []
+    # The package launcher may be this very process; the Desktop launcher never is.
+    package_lookup = ((scripts_dir / "vbot.exe").resolve(), True)
+    desktop_lookup = ((scripts_dir / "vbot-desktop.exe").resolve(), False)
+    assert lookups == ([package_lookup, desktop_lookup] if shape != "server" else [package_lookup])
 
 
 def test_windows_update_rechecks_desktop_immediately_before_pip(
@@ -134,13 +113,8 @@ def test_windows_update_rechecks_desktop_immediately_before_pip(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     (tmp_path / ".git").mkdir()
-    (tmp_path / "pyproject.toml").write_text("before", encoding="utf-8")
-    scripts_dir = tmp_path / ".venv" / "Scripts"
-    scripts_dir.mkdir(parents=True)
-    python_executable = scripts_dir / "python.exe"
-    python_executable.write_bytes(b"")
-    desktop_launcher = scripts_dir / "vbot-desktop.exe"
-    desktop_launcher.write_bytes(b"")
+    _write_pyproject(tmp_path, "before")
+    scripts_dir, python_executable = _windows_environment(tmp_path, "vbot-desktop.exe")
     _write_state(
         tmp_path,
         revision="old",
@@ -150,205 +124,109 @@ def test_windows_update_rechecks_desktop_immediately_before_pip(
     )
     manifest = tmp_path / ".vbot-install.json"
     manifest_before = manifest.read_bytes()
-    process_ids = iter([None, 4242])
-
-    package_launcher = scripts_dir / "vbot.exe"
+    desktop_ids = iter([None, 4242])
 
     def running_process_id(executable: Path, *, include_current: bool = False) -> int | None:
-        if executable == package_launcher.resolve():
-            assert include_current
+        if executable == (scripts_dir / "vbot.exe").resolve():
             return None
-        assert executable == desktop_launcher.resolve()
-        assert not include_current
-        return next(process_ids)
+        return next(desktop_ids)
 
     monkeypatch.setattr(update_management, "_running_process_id", running_process_id)
-    revisions = iter(["old", "new"])
+    runner = ScriptedRunner(
+        checkout(
+            heads=["old", "new"],
+            upstream=_upstream(behind=1),
+            on_merge=lambda: _write_pyproject(tmp_path, "after"),
+            answer=only_reads("symbolic-ref", "status", "rev-parse", "fetch", "rev-list", "merge"),
+        )
+    )
 
-    def handler(command: list[str]) -> CommandRun:
-        if command[:2] == ["git", "symbolic-ref"]:
-            return _ok("main")
-        if command[:2] == ["git", "status"]:
-            return _ok("")
-        if command[:2] == ["git", "rev-parse"]:
-            return _ok(next(revisions))
-        if command[:2] == ["git", "fetch"]:
-            return _ok("")
-        if command[:2] == ["git", "rev-list"]:
-            return _upstream(behind=1)
-        if command[:2] == ["git", "merge"]:
-            (tmp_path / "pyproject.toml").write_text("after", encoding="utf-8")
-            return _ok("")
-        raise AssertionError(f"dependency step continued while Desktop was running: {command}")
-
-    runner = ScriptedRunner(handler)
     result = run_update(
-        _instance(),
-        runner=runner,
-        root=tmp_path,
-        restart=False,
-        platform_name="nt",
+        _instance(), runner=runner, root=tmp_path, restart=False, platform_name="nt"
     )
 
     assert not result.ok
+    assert "process 4242" in result.message
     assert runner.ran("git", "merge")
     assert not runner.ran("pip")
     assert manifest.read_bytes() == manifest_before
 
 
-def test_windows_update_refuses_active_package_launcher_before_changes(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    (tmp_path / ".git").mkdir()
-    scripts_dir = tmp_path / ".venv" / "Scripts"
-    scripts_dir.mkdir(parents=True)
-    python_executable = scripts_dir / "python.exe"
-    python_executable.write_bytes(b"")
-    package_launcher = scripts_dir / "vbot.exe"
-    package_launcher.write_bytes(b"")
-    _write_state(tmp_path, python_executable=str(python_executable))
-    manifest = tmp_path / ".vbot-install.json"
-    manifest_before = manifest.read_bytes()
-
-    def running_process_id(executable: Path, *, include_current: bool = False) -> int | None:
-        assert executable == package_launcher.resolve()
-        assert include_current
-        return 31337
-
-    monkeypatch.setattr(update_management, "_running_process_id", running_process_id)
-
-    def handler(command: list[str]) -> CommandRun:
-        if command[:2] == ["git", "symbolic-ref"]:
-            return _ok("main")
-        if command[:2] == ["git", "rev-parse"]:
-            return _ok("samesha")
-        raise AssertionError(f"update mutated state after launcher preflight failed: {command}")
-
-    runner = ScriptedRunner(handler)
-    result = run_update(
-        _instance(),
-        runner=runner,
-        root=tmp_path,
-        restart=False,
-        platform_name="nt",
-    )
-
-    assert not result.ok
-    assert "process 31337" in result.message
-    expected_recovery = (
-        f"Set-Location -LiteralPath '{tmp_path.resolve()}'; "
-        f"& '{python_executable}' -m cli.main update"
-    )
-    assert f"resume update: {expected_recovery}" in result.message
-    assert manifest.read_bytes() == manifest_before
-    assert not runner.ran("git", "status")
-    assert not runner.ran("git", "merge")
-    assert not runner.ran("pip")
-
-
 def test_windows_update_migrates_installer_command_shim_to_python_module(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    _no_running_launchers(monkeypatch)
     (tmp_path / ".git").mkdir()
-    (tmp_path / "pyproject.toml").write_text("same", encoding="utf-8")
-    dist = tmp_path / "webui" / "dist"
-    dist.mkdir(parents=True)
-    (dist / "index.html").write_text("<!doctype html>", encoding="utf-8")
-    scripts_dir = tmp_path / ".venv" / "Scripts"
-    scripts_dir.mkdir(parents=True)
-    python_executable = scripts_dir / "python.exe"
-    python_executable.write_bytes(b"")
+    _write_pyproject(tmp_path, "same")
+    write_webui_build(tmp_path)
+    _scripts_dir, python_executable = _windows_environment(tmp_path)
     shim = tmp_path / "bin" / "vbot.cmd"
     shim.parent.mkdir()
     shim.write_bytes(b'@echo off\r\n"old\\vbot.exe" %*\r\n')
-    _write_state(
-        tmp_path,
-        python_executable=str(python_executable),
-        webui_revision="samesha",
-    )
+    _write_state(tmp_path, python_executable=str(python_executable), webui_revision="samesha")
 
-    def handler(command: list[str]) -> CommandRun:
-        if command[:2] == ["git", "symbolic-ref"]:
-            return _ok("main")
-        if command[:2] == ["git", "rev-parse"]:
-            return _ok("samesha")
-        if command[:2] == ["git", "status"]:
-            return _ok("")
-        if command[:2] == ["git", "fetch"]:
-            return _ok("")
-        if command[:2] == ["git", "rev-list"]:
-            return _upstream()
+    def search_runtime(command: list[str]) -> CommandRun | None:
         if command[1:] == ["-m", "cli.search_runtime"]:
-            return _ok("")
-        raise AssertionError(f"unexpected command: {command}")
+            return None
+        return only_reads("symbolic-ref", "rev-parse", "status", "fetch", "rev-list")(command)
 
-    result = run_update(
-        _instance(),
-        runner=ScriptedRunner(handler),
-        root=tmp_path,
-        restart=False,
-        platform_name="nt",
-    )
+    for _attempt in range(2):
+        result = run_update(
+            _instance(),
+            runner=ScriptedRunner(checkout(answer=search_runtime)),
+            root=tmp_path,
+            restart=False,
+            platform_name="nt",
+        )
 
-    assert isinstance(result, UpdateResult)
-    assert result.ok, result.message
-    assert result.restart_state == "unchanged"
-    assert shim.read_bytes() == (
-        f'@echo off\r\n"{python_executable}" -P -m cli.main %*\r\n'.encode()
-    )
-
-    repeated = run_update(
-        _instance(),
-        runner=ScriptedRunner(handler),
-        root=tmp_path,
-        restart=False,
-        platform_name="nt",
-    )
-
-    assert repeated.ok, repeated.message
+        assert isinstance(result, UpdateResult)
+        assert result.ok, result.message
+        assert result.restart_state == "unchanged"
+        assert shim.read_bytes() == (
+            f'@echo off\r\n"{python_executable}" -P -m cli.main %*\r\n'.encode()
+        )
 
 
-def test_running_desktop_lookup_matches_only_exact_executable(
+def test_running_launcher_lookup_matches_only_the_exact_executable(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     launcher = tmp_path / "owned" / "Scripts" / "vbot-desktop.exe"
     other_launcher = tmp_path / "other" / "Scripts" / "vbot-desktop.exe"
+    package_launcher = tmp_path / "owned" / "Scripts" / "vbot.exe"
 
     class FakeProcess:
-        def __init__(self, process_id: int, executable: Path) -> None:
-            self.info = {"pid": process_id, "exe": str(executable)}
+        def __init__(self, process_id: int, executable: Path | None) -> None:
+            self.info = {"pid": process_id, "exe": None if executable is None else str(executable)}
 
     processes = [
+        FakeProcess(1000, None),  # access denied: no executable path
         FakeProcess(1001, other_launcher),
         FakeProcess(1002, launcher),
+        FakeProcess(os.getpid(), package_launcher),
     ]
     monkeypatch.setattr(
-        update_management.psutil,
-        "process_iter",
-        lambda _attributes: iter(processes),
+        update_management.psutil, "process_iter", lambda _attributes: iter(processes)
     )
 
     assert _running_process_id(launcher) == 1002
     assert _running_process_id(tmp_path / "missing" / "vbot-desktop.exe") is None
+    # The update itself may run from the package launcher; only an explicit lookup counts it.
+    assert _running_process_id(package_launcher) is None
+    assert _running_process_id(package_launcher, include_current=True) == os.getpid()
 
 
-def test_windows_desktop_update_refreshes_shortcut_to_gui_launcher(tmp_path: Path) -> None:
+def test_windows_desktop_update_refreshes_shortcut_to_gui_launcher(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _no_running_launchers(monkeypatch)
     (tmp_path / ".git").mkdir()
-    (tmp_path / "pyproject.toml").write_text("before", encoding="utf-8")
+    _write_pyproject(tmp_path, "before")
     setup_script = tmp_path / "scripts" / "setup.ps1"
     setup_script.parent.mkdir()
     setup_script.write_text("# shortcut mode", encoding="utf-8")
-    dist = tmp_path / "webui" / "dist"
-    dist.mkdir(parents=True)
-    (dist / "index.html").write_text("<!doctype html>", encoding="utf-8")
-    scripts_dir = tmp_path / ".venv" / "Scripts"
-    scripts_dir.mkdir(parents=True)
-    python_executable = scripts_dir / "python.exe"
-    python_executable.write_bytes(b"")
-    desktop_launcher = scripts_dir / "vbot-desktop.exe"
-    desktop_launcher.write_bytes(b"")
+    write_webui_build(tmp_path)
+    scripts_dir, python_executable = _windows_environment(tmp_path, "vbot-desktop.exe")
     _write_state(
         tmp_path,
         revision="old",
@@ -356,46 +234,32 @@ def test_windows_desktop_update_refreshes_shortcut_to_gui_launcher(tmp_path: Pat
         python_executable=str(python_executable),
         webui_revision="old",
     )
-    revisions = iter(["old", "new"])
-
-    def handler(command: list[str]) -> CommandRun:
-        if command[:2] == ["git", "symbolic-ref"]:
-            return _ok("main")
-        if command[:2] == ["git", "rev-parse"]:
-            return _ok(next(revisions))
-        if command[:2] == ["git", "status"]:
-            return _ok("")
-        if command[:2] == ["git", "rev-list"]:
-            return _upstream(behind=1)
-        if command[:2] == ["git", "merge"]:
-            (tmp_path / "pyproject.toml").write_text("after", encoding="utf-8")
-        return _ok("")
-
-    runner = ScriptedRunner(handler)
+    runner = ScriptedRunner(
+        checkout(
+            heads=["old", "new"],
+            upstream=_upstream(behind=1),
+            on_merge=lambda: _write_pyproject(tmp_path, "after"),
+        )
+    )
     events, stop, start = _recording_restart()
 
     result = run_update(
-        _instance(),
-        runner=runner,
-        root=tmp_path,
-        stop=stop,
-        start=start,
-        platform_name="nt",
+        _instance(), runner=runner, root=tmp_path, stop=stop, start=start, platform_name="nt"
     )
 
     assert result.ok, result.message
+    powershell = [
+        "powershell.exe",
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+    ]
+    desktop_launcher = str((scripts_dir / "vbot-desktop.exe").resolve())
     assert any(
-        call[:7]
-        == [
-            "powershell.exe",
-            "-NoLogo",
-            "-NoProfile",
-            "-NonInteractive",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-File",
-        ]
-        and call[-2:] == ["-DesktopShortcutTarget", str(desktop_launcher.resolve())]
+        call[:7] == powershell and call[-2:] == ["-DesktopShortcutTarget", desktop_launcher]
         for call in runner.calls
     )
     assert events == ["stop", "start"]

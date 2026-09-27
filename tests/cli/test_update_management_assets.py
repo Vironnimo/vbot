@@ -1,9 +1,10 @@
-"""Tests for update management assets."""
+"""WebUI and Extension page assets of ``vbot update``: release archives and dev builds."""
 
 from __future__ import annotations
 
 import io
-import sys
+import shutil
+import subprocess
 import tarfile
 from pathlib import Path
 
@@ -13,29 +14,11 @@ import respx
 
 from cli import _update_assets
 from cli._update_assets import _extract_within
-from cli.update_management import (
-    UNKNOWN_VBOT_VERSION,
-    _default_runner,
-    read_checkout_version,
-)
-from tests.cli.update_management_test_support import (
-    _webui_tar_bytes,
-)
+from cli.update_management import CommandRun, _default_runner
+from tests.cli.update_management_test_support import _err, _ok, _webui_tar_bytes
 
-
-def test_read_checkout_version_uses_live_pyproject(tmp_path: Path) -> None:
-    (tmp_path / "pyproject.toml").write_text(
-        '[project]\nname = "vbot"\nversion = "1.2.3"\n',
-        encoding="utf-8",
-    )
-
-    assert read_checkout_version(tmp_path) == "1.2.3"
-
-
-def test_read_checkout_version_reports_unknown_for_invalid_project(tmp_path: Path) -> None:
-    (tmp_path / "pyproject.toml").write_text("[project]\n", encoding="utf-8")
-
-    assert read_checkout_version(tmp_path) == UNKNOWN_VBOT_VERSION
+NPM_CI = _update_assets._npm_command(["ci"])
+NPM_BUILD = _update_assets._npm_command(["run", "build"])
 
 
 @respx.mock
@@ -153,97 +136,264 @@ def test_extract_within_extracts_benign_archive(tmp_path: Path) -> None:
     assert (destination / "dist" / "index.html").is_file()
 
 
-def test_extract_within_rejects_path_escape(tmp_path: Path) -> None:
+def _member(name: str, kind: bytes = tarfile.REGTYPE, *, linkname: str = "") -> tarfile.TarInfo:
+    member = tarfile.TarInfo(name)
+    member.type = kind
+    member.linkname = linkname
+    member.size = 1 if kind == tarfile.REGTYPE else 0
+    return member
+
+
+@pytest.mark.parametrize(
+    ("member", "leftover"),
+    [
+        pytest.param(_member("../escape.txt"), "../escape.txt", id="path-escape"),
+        # A symlink could redirect later members outside the tree after the name-based
+        # pre-check has passed, so the fallback refuses links outright.
+        pytest.param(
+            _member("dist/evil", tarfile.SYMTYPE, linkname="../../outside"),
+            "dist/evil",
+            id="link",
+        ),
+        pytest.param(_member("dist/special", tarfile.FIFOTYPE), "dist/special", id="fifo"),
+    ],
+)
+def test_extract_within_rejects_members_that_could_leave_the_tree(
+    tmp_path: Path, member: tarfile.TarInfo, leftover: str
+) -> None:
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
-        payload = b"x"
-        info = tarfile.TarInfo("../escape.txt")
-        info.size = len(payload)
-        archive.addfile(info, io.BytesIO(payload))
+        archive.addfile(member, io.BytesIO(b"x") if member.isfile() else None)
     buffer.seek(0)
     destination = tmp_path / "webui"
     destination.mkdir()
 
     with tarfile.open(fileobj=buffer, mode="r:gz") as archive, pytest.raises(tarfile.TarError):
         _extract_within(archive, destination)
-    assert not (tmp_path / "escape.txt").exists()
+    assert not (destination / leftover).exists()
 
 
-def test_extract_within_rejects_link_members(tmp_path: Path) -> None:
-    # A symlink member could redirect later members outside the tree after the
-    # name-based pre-check has passed, so the fallback refuses links outright.
-    buffer = io.BytesIO()
-    with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
-        link = tarfile.TarInfo("dist/evil")
-        link.type = tarfile.SYMTYPE
-        link.linkname = "../../outside"
-        archive.addfile(link)
-    buffer.seek(0)
-    destination = tmp_path / "webui"
-    destination.mkdir()
-
-    with tarfile.open(fileobj=buffer, mode="r:gz") as archive, pytest.raises(tarfile.TarError):
-        _extract_within(archive, destination)
-    assert not (destination / "dist" / "evil").exists()
+BUILD_INPUT_CHANGES = [
+    ("resources/extensions/swarm/ui/ProfileEditor.svelte", "edit", True),
+    ("resources/extensions/other/ui/nested/component.js", "edit", True),
+    ("resources/extensions/new/ui/page.html", "add", True),
+    ("resources/extensions/old/ui/page.html", "delete", True),
+    ("webui/src/lib/shared.js", "edit", True),
+    ("tests/fixtures/extension-pages/alpha/ui/page.html", "edit", True),
+    ("resources/extensions/swarm/backend.py", "edit", False),
+    ("core/example.py", "edit", False),
+]
 
 
-def test_extract_within_rejects_special_members(tmp_path: Path) -> None:
-    buffer = io.BytesIO()
-    with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
-        fifo = tarfile.TarInfo("dist/special")
-        fifo.type = tarfile.FIFOTYPE
-        archive.addfile(fifo)
-    buffer.seek(0)
-    destination = tmp_path / "webui"
-    destination.mkdir()
+@pytest.fixture(scope="module")
+def build_input_commits(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> tuple[Path, str, dict[str, str]]:
+    """One Git repository with a base commit and one commit per single-path change."""
 
-    with tarfile.open(fileobj=buffer, mode="r:gz") as archive, pytest.raises(tarfile.TarError):
-        _extract_within(archive, destination)
-    assert not (destination / "dist" / "special").exists()
+    repo = tmp_path_factory.mktemp("webui-inputs")
+    marks = repo / ".git" / "test-marks"
+    # One fast-import stream writes every commit: blob :1 is "before", blob :2 is
+    # "after", commit :10 is the base, and each change commit starts from it.
+    stream = ["blob", "mark :1", "data 6", "before", "blob", "mark :2", "data 5", "after"]
+
+    def commit(mark: int, *operations: str) -> None:
+        header = [f"commit refs/heads/c{mark}", f"mark :{mark}"]
+        stream.extend([*header, "committer Test <test@example.com> 0 +0000", "data 0"])
+        stream.extend(operations)
+
+    commit(
+        10, *(f"M 100644 :1 {path}" for path, change, _ in BUILD_INPUT_CHANGES if change != "add")
+    )
+    for mark, (path, change, _rebuild) in enumerate(BUILD_INPUT_CHANGES, start=11):
+        commit(mark, "from :10", f"D {path}" if change == "delete" else f"M 100644 :2 {path}")
+    subprocess.run(["git", "init", "--quiet"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "fast-import", "--quiet", f"--export-marks={marks}"],
+        cwd=repo,
+        input=("\n".join(stream) + "\n").encode(),
+        check=True,
+        capture_output=True,
+    )
+    commits = dict(line.split() for line in marks.read_text(encoding="utf-8").splitlines())
+    changes = {
+        path: commits[f":{mark}"] for mark, (path, _, _) in enumerate(BUILD_INPUT_CHANGES, 11)
+    }
+    return repo, commits[":10"], changes
 
 
-def test_default_runner_disables_git_prompt(tmp_path: Path) -> None:
-    result = _default_runner(
-        [sys.executable, "-c", "import os; print(os.environ.get('GIT_TERMINAL_PROMPT', 'unset'))"],
-        tmp_path,
+@pytest.mark.parametrize(("changed_path", "change", "rebuild"), BUILD_INPUT_CHANGES)
+def test_dev_webui_detects_build_inputs_with_git(
+    tmp_path: Path,
+    build_input_commits: tuple[Path, str, dict[str, str]],
+    changed_path: str,
+    change: str,
+    rebuild: bool,
+) -> None:
+    repo, before, changes = build_input_commits
+    dist = tmp_path / "webui" / "dist"
+    dist.mkdir(parents=True)
+    (dist / "index.html").write_text("existing build", encoding="utf-8")
+    builds: list[list[str]] = []
+
+    def runner(command: list[str], cwd: Path) -> CommandRun:
+        if command[0] == "git":
+            # Real Git decides which paths are build inputs.
+            return _default_runner(command, repo)
+        assert cwd == tmp_path / "webui"
+        if command[0] != "node":
+            builds.append(command)
+        return _ok()
+
+    result = _update_assets._refresh_dev_webui(runner, tmp_path, before, changes[changed_path])
+
+    assert result.ok
+    assert builds == ([NPM_CI, NPM_BUILD] if rebuild else [])
+
+
+def test_dev_webui_reuses_installed_packages_while_their_inputs_are_unchanged(
+    tmp_path: Path,
+) -> None:
+    webui = tmp_path / "webui"
+    webui.mkdir()
+    (webui / "package.json").write_text('{"name": "webui"}', encoding="utf-8")
+    (webui / "package-lock.json").write_text('{"lock": 1}', encoding="utf-8")
+    npm_calls: list[list[str]] = []
+
+    def runner(command: list[str], cwd: Path) -> CommandRun:
+        if command[:3] == ["git", "diff", "--quiet"]:
+            return _err()
+        if command == ["node", "--version"]:
+            return _ok("v22.0.0")
+        npm_calls.append(command)
+        if command == NPM_CI:
+            (webui / "node_modules").mkdir(exist_ok=True)
+        else:
+            (webui / "dist").mkdir(exist_ok=True)
+            (webui / "dist" / "index.html").write_text("built", encoding="utf-8")
+        return _ok()
+
+    first = _update_assets._refresh_dev_webui(runner, tmp_path, None, "first")
+    second = _update_assets._refresh_dev_webui(runner, tmp_path, "first", "second")
+
+    assert first.ok, first.message
+    assert second.ok, second.message
+    assert npm_calls == [NPM_CI, NPM_BUILD, NPM_BUILD]
+
+
+def _write_build(root: Path, content: str) -> None:
+    """Write a WebUI build and the build of one Extension page."""
+
+    dist = root / "webui" / "dist"
+    dist.mkdir(parents=True, exist_ok=True)
+    (dist / "index.html").write_text(content, encoding="utf-8")
+    page = root / "resources" / "extensions" / "swarm"
+    (page / "ui").mkdir(parents=True, exist_ok=True)
+    (page / "ui" / "page.html").write_text("page source", encoding="utf-8")
+    (page / "web").mkdir(exist_ok=True)
+    (page / "web" / "index.html").write_text(content, encoding="utf-8")
+
+
+def _break_build(root: Path) -> None:
+    """Leave every output tree the way a build failing part-way does."""
+
+    pages = (root / "resources" / "extensions").glob("*/ui/page.html")
+    for tree in [root / "webui" / "dist", *(page.parent.parent / "web" for page in pages)]:
+        shutil.rmtree(tree, ignore_errors=True)
+        tree.mkdir(parents=True)
+        (tree / "partial.js").write_text("partial", encoding="utf-8")
+
+
+def _checkout_files(root: Path) -> dict[str, str]:
+    return {
+        path.relative_to(root).as_posix(): path.read_text(encoding="utf-8")
+        for path in root.rglob("*")
+        if path.is_file() and ".previous-build" not in path.parts
+    }
+
+
+# The dependency install fails before any output; the build fails part-way.
+@pytest.mark.parametrize(
+    ("failing", "partial_output", "message"),
+    [
+        pytest.param(NPM_CI, False, "webui dependency install failed: lock mismatch", id="npm-ci"),
+        pytest.param(NPM_BUILD, True, "webui build failed: render failed", id="npm-build"),
+    ],
+)
+def test_dev_webui_failure_names_the_npm_step_and_keeps_the_previous_build(
+    tmp_path: Path, failing: list[str], partial_output: bool, message: str
+) -> None:
+    _write_build(tmp_path, "old")
+    # A page without a previous build: the failed build's partial tree must go too.
+    added = tmp_path / "resources" / "extensions" / "added" / "ui"
+    added.mkdir(parents=True)
+    (added / "page.html").write_text("new page source", encoding="utf-8")
+    before = _checkout_files(tmp_path)
+
+    def runner(command: list[str], cwd: Path) -> CommandRun:
+        if command[:3] == ["git", "diff", "--quiet"]:
+            return _err()
+        if command == failing:
+            if partial_output:
+                _break_build(tmp_path)
+            return _err(message.rpartition(": ")[2])
+        return _ok()
+
+    result = _update_assets._refresh_dev_webui(runner, tmp_path, "old", "new")
+
+    assert not result.ok
+    assert result.message == f"{message}\nthe previous WebUI was kept"
+    assert _checkout_files(tmp_path) == before
+    assert not (tmp_path / "webui" / ".previous-build").exists()
+
+
+def test_dev_webui_interrupted_build_is_restored_before_the_next_build(tmp_path: Path) -> None:
+    _write_build(tmp_path, "old")
+    before = _checkout_files(tmp_path)
+
+    def interrupted(command: list[str], cwd: Path) -> CommandRun:
+        if command[:3] == ["git", "diff", "--quiet"]:
+            return _err()
+        if command == NPM_BUILD:
+            _break_build(tmp_path)
+            raise KeyboardInterrupt
+        return _ok()
+
+    with pytest.raises(KeyboardInterrupt):
+        _update_assets._refresh_dev_webui(interrupted, tmp_path, "old", "new")
+    assert _checkout_files(tmp_path) != before
+    seen_by_build: list[dict[str, str]] = []
+
+    def resumed(command: list[str], cwd: Path) -> CommandRun:
+        if command[:3] == ["git", "diff", "--quiet"]:
+            return _err()
+        if command == NPM_BUILD:
+            seen_by_build.append(_checkout_files(tmp_path))
+            _write_build(tmp_path, "new")
+        return _ok()
+
+    result = _update_assets._refresh_dev_webui(resumed, tmp_path, "old", "new")
+
+    assert result.ok, result.message
+    assert seen_by_build == [before]
+    assert (tmp_path / "webui" / "dist" / "index.html").read_text(encoding="utf-8") == "new"
+    assert not (tmp_path / "webui" / ".previous-build").exists()
+
+
+@pytest.mark.parametrize("leftover", ["other_revision", "incomplete"])
+def test_dev_webui_discards_a_copy_it_cannot_trust(tmp_path: Path, leftover: str) -> None:
+    _write_build(tmp_path, "older")
+    _update_assets._save_previous_build(
+        tmp_path, "older" if leftover == "other_revision" else "current"
+    )
+    if leftover == "incomplete":
+        (tmp_path / "webui" / ".previous-build" / "trees.json").unlink()
+    _write_build(tmp_path, "current")
+
+    result = _update_assets._refresh_dev_webui(
+        lambda _command, _cwd: _ok(), tmp_path, "current", "current"
     )
 
-    assert result.returncode == 0
-    assert result.stdout == "0"
-
-
-def test_default_runner_prefers_utf8_output(tmp_path: Path) -> None:
-    result = _default_runner(
-        [
-            sys.executable,
-            "-c",
-            "import sys; sys.stdout.buffer.write('Łódź'.encode('utf-8'))",
-        ],
-        tmp_path,
-    )
-
-    assert result.returncode == 0
-    assert result.stdout == "Łódź"
-
-
-def test_default_runner_preserves_undecodable_output(tmp_path: Path) -> None:
-    result = _default_runner(
-        [
-            sys.executable,
-            "-c",
-            "import sys; sys.stdout.buffer.write(bytes([0x81]) + b'tail')",
-        ],
-        tmp_path,
-    )
-
-    assert result.returncode == 0
-    assert result.stdout == r"\x81tail"
-
-
-def test_default_runner_times_out(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("cli.update_management._COMMAND_TIMEOUT_SECONDS", 0.2)
-
-    result = _default_runner([sys.executable, "-c", "import time; time.sleep(5)"], tmp_path)
-
-    assert result.returncode == 124
-    assert "timed out" in result.stderr
+    assert result.ok, result.message
+    assert (tmp_path / "webui" / "dist" / "index.html").read_text(encoding="utf-8") == "current"
+    assert not (tmp_path / "webui" / ".previous-build").exists()
