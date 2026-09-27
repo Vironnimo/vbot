@@ -21,146 +21,135 @@ def _assistant(usage: JsonObject | None) -> ChatMessage:
     return ChatMessage.assistant(model="openai/gpt-5.2", content="ok", usage=usage)
 
 
-def test_sums_measured_turns_field_by_field() -> None:
-    messages = [
-        ChatMessage.user(content="hello"),
-        _assistant(
+NO_TURNS = {
+    "measured_turns": 0,
+    "estimated_turns": 0,
+    "cache_turns": 0,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "cache_read_tokens": 0,
+    "cache_write_tokens": 0,
+}
+
+
+@pytest.mark.parametrize(
+    ("messages", "totals"),
+    [
+        ([], NO_TURNS),
+        (
+            [
+                ChatMessage.user(content="hello"),
+                _assistant(
+                    {
+                        "input_tokens": 1000,
+                        "output_tokens": 50,
+                        "cache_read_tokens": 800,
+                        "cache_write_tokens": 100,
+                        "reasoning_tokens": 30,
+                    }
+                ),
+                _assistant({"input_tokens": 2000, "output_tokens": 150, "cache_read_tokens": 1900}),
+            ],
             {
-                "input_tokens": 1000,
-                "output_tokens": 50,
-                "cache_read_tokens": 800,
+                "measured_turns": 2,
+                "estimated_turns": 0,
+                "cache_turns": 2,
+                "input_tokens": 3000,
+                "output_tokens": 200,
+                "cache_read_tokens": 2700,
                 "cache_write_tokens": 100,
+                "reasoning_turns": 1,
                 "reasoning_tokens": 30,
-            }
+            },
         ),
-        _assistant({"input_tokens": 2000, "output_tokens": 150, "cache_read_tokens": 1900}),
-    ]
-
-    totals = aggregate_session_usage(messages)
-
-    assert totals == {
-        "measured_turns": 2,
-        "estimated_turns": 0,
-        "cache_turns": 2,
-        "input_tokens": 3000,
-        "output_tokens": 200,
-        "cache_read_tokens": 2700,
-        "cache_write_tokens": 100,
-        "reasoning_turns": 1,
-        "reasoning_tokens": 30,
-    }
-
-
-def test_estimated_turns_are_counted_but_never_summed() -> None:
-    messages = [
-        _assistant({"input_tokens": 1000, "output_tokens": 10}),
-        _assistant(
+        (
+            # Reported zeros count as cache and reasoning turns; absent fields do not.
+            [
+                _assistant(
+                    {
+                        "input_tokens": 100,
+                        "output_tokens": 20,
+                        "cache_read_tokens": 0,
+                        "reasoning_tokens": 0,
+                    }
+                ),
+                _assistant({"input_tokens": 500, "output_tokens": 5}),
+            ],
             {
-                "input_tokens": 9999,
-                "output_tokens": 9999,
-                "reasoning_tokens": 5000,
-                "input_tokens_estimated": True,
-                "output_tokens_estimated": True,
-                "estimated": True,
-            }
+                **NO_TURNS,
+                "measured_turns": 2,
+                "cache_turns": 1,
+                "input_tokens": 600,
+                "output_tokens": 25,
+                "reasoning_turns": 1,
+                "reasoning_tokens": 0,
+            },
         ),
-    ]
-
-    totals = aggregate_session_usage(messages)
-
-    assert totals["measured_turns"] == 1
-    assert totals["estimated_turns"] == 1
-    assert totals["input_tokens"] == 1000
-    assert totals["output_tokens"] == 10
-    assert "reasoning_tokens" not in totals
-    assert "reasoning_turns" not in totals
-
-
-def test_partial_turn_splits_estimated_input_from_measured_output() -> None:
-    totals = aggregate_session_usage(
-        [
-            _assistant(
-                {
-                    "input_tokens": 9999,
-                    "input_tokens_estimated": True,
-                    "output_tokens": 2572,
-                    "estimated": True,
-                }
-            )
-        ]
-    )
-
-    assert totals["measured_turns"] == 0
-    assert totals["estimated_turns"] == 1
-    assert totals["input_tokens"] == 0
-    assert totals["output_tokens"] == 2572
-
-
-def test_reasoning_turns_count_reported_zero_without_changing_output() -> None:
-    totals = aggregate_session_usage(
-        [
-            _assistant(
-                {
-                    "input_tokens": 100,
-                    "output_tokens": 20,
-                    "reasoning_tokens": 0,
-                }
-            )
-        ]
-    )
-
-    assert totals["output_tokens"] == 20
-    assert totals["reasoning_tokens"] == 0
-    assert totals["reasoning_turns"] == 1
-
-
-def test_cache_turns_counts_field_presence_not_value() -> None:
-    messages = [
-        _assistant({"input_tokens": 500, "output_tokens": 5, "cache_read_tokens": 0}),
-        _assistant({"input_tokens": 500, "output_tokens": 5}),
-    ]
-
-    totals = aggregate_session_usage(messages)
-
-    assert totals["cache_turns"] == 1
-    assert totals["cache_read_tokens"] == 0
-
-
-def test_ignores_non_assistant_messages_usage_less_turns_and_junk_values() -> None:
-    messages = [
-        ChatMessage.user(content="hi"),
-        ChatMessage.note(content="internal"),
-        _assistant(None),
-        _assistant(
+        (
+            [
+                _assistant({"input_tokens": 1000, "output_tokens": 10}),
+                _assistant(
+                    {
+                        "input_tokens": 9999,
+                        "output_tokens": 9999,
+                        "reasoning_tokens": 5000,
+                        "input_tokens_estimated": True,
+                        "output_tokens_estimated": True,
+                        "estimated": True,
+                    }
+                ),
+            ],
             {
-                "input_tokens": -5,
-                "output_tokens": "junk",
-                "cache_read_tokens": True,
-                "reasoning_tokens": True,
-            }
+                **NO_TURNS,
+                "measured_turns": 1,
+                "estimated_turns": 1,
+                "input_tokens": 1000,
+                "output_tokens": 10,
+            },
         ),
-    ]
-
-    totals = aggregate_session_usage(messages)
-
-    assert totals == {
-        "measured_turns": 1,
-        "estimated_turns": 0,
-        "cache_turns": 1,
-        "input_tokens": 0,
-        "output_tokens": 0,
-        "cache_read_tokens": 0,
-        "cache_write_tokens": 0,
-    }
-
-
-def test_empty_history_yields_zero_totals() -> None:
-    totals = aggregate_session_usage([])
-
-    assert totals["measured_turns"] == 0
-    assert totals["estimated_turns"] == 0
-    assert totals["cache_turns"] == 0
-    assert totals["input_tokens"] == 0
+        (
+            [
+                _assistant(
+                    {
+                        "input_tokens": 9999,
+                        "input_tokens_estimated": True,
+                        "output_tokens": 2572,
+                        "estimated": True,
+                    }
+                )
+            ],
+            {**NO_TURNS, "estimated_turns": 1, "output_tokens": 2572},
+        ),
+        (
+            [
+                ChatMessage.user(content="hi"),
+                ChatMessage.note(content="internal"),
+                _assistant(None),
+                _assistant(
+                    {
+                        "input_tokens": -5,
+                        "output_tokens": "junk",
+                        "cache_read_tokens": True,
+                        "reasoning_tokens": True,
+                    }
+                ),
+            ],
+            {**NO_TURNS, "measured_turns": 1, "cache_turns": 1},
+        ),
+    ],
+    ids=[
+        "empty",
+        "measured-field-by-field",
+        "reported-zeros",
+        "estimated-never-summed",
+        "partial-estimated-input",
+        "junk-ignored",
+    ],
+)
+def test_session_usage_sums_only_measured_counters(
+    messages: list[ChatMessage], totals: JsonObject
+) -> None:
+    assert aggregate_session_usage(messages) == totals
 
 
 def test_latest_session_context_usage_restores_saved_snapshot_plus_new_messages() -> None:
@@ -307,22 +296,16 @@ def test_request_projection_accounts_for_retired_images_and_persists_signed_delt
     assert restored["estimated"] is True
 
 
-def test_estimated_input_is_never_promoted_to_a_measurement():
+def test_estimated_input_never_anchors_or_replaces_a_measurement():
     accounting = RequestContextUsage()
     args = {"adapter": _BiasedInputAdapter(), "model_id": "model", "tools": [], "scope": "epoch"}
-    messages = [{"role": "user", "content": "task"}]
-    accounting.observe({"input_tokens": 10, "input_tokens_estimated": True}, messages, **args)
-    assert accounting.project(messages, **args) == {
-        "tokens": 120_000 + estimate_request_input_tokens(messages)[0],
+    base = [{"role": "user", "content": "task"}]
+    accounting.observe({"input_tokens": 10, "input_tokens_estimated": True}, base, **args)
+    assert accounting.project(base, **args) == {
+        "tokens": 120_000 + estimate_request_input_tokens(base)[0],
         "estimated": True,
     }
 
-
-def test_missing_usage_keeps_previous_measured_request_anchor():
-    accounting = RequestContextUsage()
-    adapter = _BiasedInputAdapter()
-    args = {"adapter": adapter, "model_id": "model", "tools": [], "scope": "epoch"}
-    base = [{"role": "user", "content": "task"}]
     accounting.observe({"input_tokens": 10_000}, base, **args)
     next_request = [*base, {"role": "assistant", "content": "hello"}]
     before = accounting.project(next_request, **args)

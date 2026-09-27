@@ -1,17 +1,19 @@
-"""Chat-loop tests grouped by usage."""
+"""Usage in Chat Runs: measured and estimated counters on the answer, the history and the Run
+end, the Context guard, price snapshots and the usage record of every Model attempt."""
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from core.tools import (
-    ToolRegistry,
-    tool_success,
-)
-from core.utils.errors import ProviderError
+from core.models.pricing import TokenPricing
+from core.providers.errors import NetworkError, ProviderError
+from core.runs import RunCancelledError
+from core.tools import ToolRegistry, tool_success
+from core.usage import UsageRecorder
 from core.utils.tokens import estimate_message_tokens, estimate_request_input_tokens
 from tests.core.chat.chat_loop_support import (
     StubAdapter,
@@ -19,182 +21,226 @@ from tests.core.chat.chat_loop_support import (
     StubModels,
     StubRuntime,
     build_chat_loop,
+    history,
+    last_run,
     session_address,
 )
+from tests.core.chat.usage_recorder_support import RecordingUsageRecorder
 
 JsonObject = dict[str, Any]
 
+MEASURED = {
+    "input_tokens": 1000,
+    "output_tokens": 40,
+    "cache_read_tokens": 700,
+    "cache_write_tokens": 200,
+    "reasoning_tokens": 25,
+}
+FUTURE_FIELD = {"measurement": "preserve-me"}
+SESSION = session_address("coder", "session-one")
 
-def usage_counters(usage: JsonObject | None) -> JsonObject:
+
+def _runtime(tmp_path: Path, adapter: StubAdapter, **runtime_options: Any) -> Any:
+    agent = StubAgent(id="coder", model="openai/gpt-4.1", allowed_tools=["*"])
+    return StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, **runtime_options)
+
+
+def _adapter(text: str = "Hello", usage: JsonObject | None = None) -> StubAdapter:
+    """One answer, served to a plain request and to a streaming one.
+
+    A stream reports only token counters; a plain response may carry further fields.
+    """
+    response: JsonObject = {"content": text, "tool_calls": None}
+    stream: list[JsonObject] = [{"type": "content_delta", "text": text}]
+    if usage is not None:
+        response["usage"] = usage
+        counters = {key: value for key, value in usage.items() if key.endswith("_tokens")}
+        stream.append({"type": "usage", **counters})
+    stream.append({"type": "finish", "reason": "stop"})
+    return StubAdapter([response], stream_responses=[stream])
+
+
+def _weather_adapter(
+    first_usage: JsonObject | None = None, adapter_type: type[StubAdapter] = StubAdapter
+) -> StubAdapter:
+    call: JsonObject = {
+        "content": None,
+        "tool_calls": [{"id": "call_1", "name": "get_weather", "arguments": {"city": "Berlin"}}],
+    }
+    if first_usage is not None:
+        call["usage"] = first_usage
+    return adapter_type([call, {"content": "Sunny", "tool_calls": None}])
+
+
+def _weather_tools(report: str = "") -> ToolRegistry:
+    tools = ToolRegistry()
+    tools.register(
+        "get_weather",
+        "Get weather.",
+        {"type": "object"},
+        lambda _context, arguments: tool_success(
+            {"temp": 22, "city": arguments["city"], "report": report}
+        ),
+    )
+    return tools
+
+
+def _counters(usage: JsonObject | None) -> JsonObject:
     assert usage is not None
-    return {key: value for key, value in usage.items() if key not in {"context_usage", "cost"}}
+    return {key: value for key, value in usage.items() if key.endswith(("_tokens", "estimated"))}
+
+
+def _run_completed(runtime: Any, session_id: str = "session-one") -> JsonObject:
+    run = last_run(runtime, session_id)
+    [payload] = [event.payload for event in run.events if event.type == "run_completed"]
+    return dict(payload)
+
+
+def _saved_answer(runtime: Any, session_id: str = "session-one") -> Any:
+    """The Session's last saved Assistant step."""
+    return [message for message in history(runtime, session_id) if message.role == "assistant"][-1]
+
+
+def _hello_tokens() -> int:
+    """The estimated size the saved "Hello" answer adds to the next request."""
+    return estimate_request_input_tokens([{"role": "assistant", "content": "Hello"}])[0]
 
 
 @pytest.mark.asyncio
-async def test_non_streaming_response_with_usage_produces_assistant_with_usage(
-    tmp_path: Path,
+@pytest.mark.parametrize("streaming", [False, True], ids=["plain", "streaming"])
+async def test_measured_usage_reaches_the_answer_the_run_end_and_the_usage_record(
+    tmp_path: Path, streaming: bool
 ) -> None:
-    agent = StubAgent(id="coder", model="openai/gpt-4.1", allowed_tools=["*"])
-    adapter = StubAdapter(
-        [
-            {
-                "content": "Hello",
-                "reasoning": None,
-                "tool_calls": None,
-                "usage": {
-                    "input_tokens": 150,
-                    "output_tokens": 12,
-                    "cache_write_tokens": 10,
-                    "reasoning_tokens": 8,
-                },
-            }
-        ]
-    )
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime = _runtime(tmp_path, _adapter(usage={**MEASURED, "future_usage_field": FUTURE_FIELD}))
+    recorder = runtime.usage_recorder = UsageRecorder(tmp_path / "model-usage.db")
+    try:
+        answer = await build_chat_loop(runtime, streaming=streaming).send(
+            "coder", "Hi", session_id="session-one"
+        )
 
-    assistant = await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
+        assert answer.usage is not None
+        saved = _saved_answer(runtime)
+        completed = _run_completed(runtime)
+        # Measured counters are kept as reported, without an estimated flag.
+        for usage in (answer.usage, saved.usage, completed["usage"]):
+            assert _counters(usage) == MEASURED
+        assert saved.usage["context_usage"] == answer.usage["context_usage"]
+        if not streaming:
+            assert saved.usage["future_usage_field"] == FUTURE_FIELD
+        assert completed["status"] == "completed"
+        assert completed["timing"]["duration_ms"] >= 0
+        assert completed["session_usage"] == {
+            "measured_turns": 1,
+            "estimated_turns": 0,
+            "cache_turns": 1,
+            "input_tokens": 1000,
+            "output_tokens": 40,
+            "cache_read_tokens": 700,
+            "cache_write_tokens": 200,
+            "reasoning_turns": 1,
+            "reasoning_tokens": 25,
+        }
+        assert completed["context_usage"] == {
+            "tokens": 1000 + _hello_tokens(),
+            "estimated": True,
+            "estimated_delta_tokens": _hello_tokens(),
+            "provider_input_tokens": 1000,
+            "provider_output_tokens": 40,
+        }
 
-    expected_usage = {
-        "input_tokens": 150,
-        "output_tokens": 12,
-        "cache_write_tokens": 10,
-        "reasoning_tokens": 8,
-    }
-    assert usage_counters(assistant.usage) == expected_usage
-    session = runtime.chat_sessions.get(session_address("coder", "session-one"))
-    persisted = session.load()
-    assert usage_counters(persisted[1].usage) == expected_usage
-    run = next(iter(runtime.chat_runs._runs.values()))
-    completed = [event for event in run.events if event.type == "run_completed"]
-    assert len(completed) == 1
-    assert completed[0].payload["status"] == "completed"
-    assert usage_counters(completed[0].payload["usage"]) == expected_usage
-    assert completed[0].payload["timing"]["duration_ms"] >= 0
+        # The usage record keeps only the canonical counters and outlives the Session.
+        runtime.chat_sessions.delete(SESSION)
+        _, records = recorder.read_since()
+        assert [record.id for record in records] == [answer.usage["usage_call_id"]]
+        assert _counters(records[0].usage) == MEASURED
+        assert not {"estimated", "context_usage", "future_usage_field"} & set(records[0].usage)
+    finally:
+        recorder.close()
 
 
 @pytest.mark.asyncio
-async def test_run_completed_payload_carries_whole_session_usage_totals(
-    tmp_path: Path,
+async def test_completed_answer_saves_a_price_snapshot_with_its_usage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    agent = StubAgent(id="coder", model="openai/gpt-4.1", allowed_tools=["*"])
-    adapter = StubAdapter(
-        [
-            {
-                "content": "Hello",
-                "reasoning": None,
-                "tool_calls": None,
-                "usage": {
-                    "input_tokens": 1000,
-                    "output_tokens": 40,
-                    "cache_read_tokens": 700,
-                    "cache_write_tokens": 200,
-                    "reasoning_tokens": 25,
-                },
-            }
-        ]
+    usage = {"input_tokens": 1000, "output_tokens": 100, "cache_read_tokens": 500}
+    runtime = _runtime(tmp_path, _adapter(usage=usage))
+    pricing = TokenPricing.from_cost(
+        {"input": 2, "output": 8, "cache_read": 0.2}, source="models.dev:openai/gpt-4.1"
     )
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    monkeypatch.setattr(runtime.models, "pricing_for", lambda _: pricing)
 
-    await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
+    answer = await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
 
-    run = next(iter(runtime.chat_runs._runs.values()))
-    completed = [event for event in run.events if event.type == "run_completed"]
-    assert len(completed) == 1
-    assert completed[0].payload["session_usage"] == {
-        "measured_turns": 1,
-        "estimated_turns": 0,
-        "cache_turns": 1,
-        "input_tokens": 1000,
-        "output_tokens": 40,
-        "cache_read_tokens": 700,
-        "cache_write_tokens": 200,
-        "reasoning_turns": 1,
-        "reasoning_tokens": 25,
-    }
-    assert completed[0].payload["context_usage"] == {
-        "tokens": 1003,
+    assert answer.usage is not None
+    assert answer.usage["cost"]["amount_usd"] == pytest.approx(0.0019)
+    assert answer.usage["cost"]["source"] == "catalog"
+    assert _saved_answer(runtime).usage["cost"] == answer.usage["cost"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("streaming", "with_tool"),
+    [(False, False), (True, False), (False, True)],
+    ids=["plain", "streaming", "after-tool-results"],
+)
+async def test_missing_usage_is_estimated_from_the_sent_request_and_answer(
+    tmp_path: Path, streaming: bool, with_tool: bool
+) -> None:
+    if with_tool:
+        adapter = _weather_adapter()
+        runtime = _runtime(tmp_path, adapter, tools=_weather_tools())
+    else:
+        adapter = _adapter()
+        runtime = _runtime(tmp_path, adapter)
+
+    answer = await build_chat_loop(runtime, streaming=streaming).send(
+        "coder", "Hi", session_id="session-one"
+    )
+
+    # The last request includes the previous Tool Call and its result.
+    request = (adapter.stream_requests if streaming else adapter.requests)[-1]
+    expected = {
+        "input_tokens": estimate_request_input_tokens(
+            request["messages"], request["kwargs"]["tools"]
+        )[0],
+        "input_tokens_estimated": True,
+        "output_tokens": estimate_message_tokens({"role": "assistant", "content": answer.content})[
+            0
+        ],
+        "output_tokens_estimated": True,
         "estimated": True,
-        "estimated_delta_tokens": 3,
-        "provider_input_tokens": 1000,
-        "provider_output_tokens": 40,
     }
+    for usage in (answer.usage, _saved_answer(runtime).usage, _run_completed(runtime)["usage"]):
+        assert _counters(usage) == expected
 
 
 @pytest.mark.asyncio
-async def test_streaming_response_with_usage_delta_produces_assistant_with_usage(
-    tmp_path: Path,
+@pytest.mark.parametrize(
+    "reported",
+    [{"output_tokens": 2572}, {"input_tokens": 0, "output_tokens": 2572}],
+    ids=["output-only", "zero-input"],
+)
+async def test_unusable_provider_input_is_estimated_and_measured_output_kept(
+    tmp_path: Path, reported: JsonObject
 ) -> None:
-    agent = StubAgent(id="coder", model="openai/gpt-4.1", allowed_tools=["*"])
-    adapter = StubAdapter(
-        [],
-        stream_responses=[
-            [
-                {"type": "content_delta", "text": "Hello"},
-                {
-                    "type": "usage",
-                    "input_tokens": 200,
-                    "output_tokens": 25,
-                    "reasoning_tokens": 15,
-                },
-                {"type": "finish", "reason": "stop"},
-            ]
-        ],
-    )
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime = _runtime(tmp_path, _adapter(usage=reported))
 
-    assistant = await build_chat_loop(runtime, streaming=True).send(
+    answer = await build_chat_loop(runtime, streaming=True).send(
         "coder", "Hi", session_id="session-one"
     )
 
-    assert assistant.content == "Hello"
-    expected_usage = {
-        "input_tokens": 200,
-        "output_tokens": 25,
-        "reasoning_tokens": 15,
-    }
-    assert usage_counters(assistant.usage) == expected_usage
-    session = runtime.chat_sessions.get(session_address("coder", "session-one"))
-    persisted = session.load()
-    assert usage_counters(persisted[1].usage) == expected_usage
-    run = next(iter(runtime.chat_runs._runs.values()))
-    completed = [event for event in run.events if event.type == "run_completed"]
-    assert len(completed) == 1
-    assert completed[0].payload["status"] == "completed"
-    assert usage_counters(completed[0].payload["usage"]) == expected_usage
-    assert completed[0].payload["timing"]["duration_ms"] >= 0
-
-
-@pytest.mark.asyncio
-async def test_partial_provider_usage_estimates_only_missing_input(
-    tmp_path: Path,
-) -> None:
-    agent = StubAgent(id="coder", model="ollama-cloud/minimax-m3", allowed_tools=["*"])
-    adapter = StubAdapter(
-        [],
-        stream_responses=[
-            [
-                {"type": "content_delta", "text": "Hello"},
-                {"type": "usage", "output_tokens": 2572},
-                {"type": "finish", "reason": "stop"},
-            ]
-        ],
-    )
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
-
-    assistant = await build_chat_loop(runtime, streaming=True).send(
-        "coder", "Hi", session_id="session-one"
-    )
-
-    assert assistant.usage is not None
-    assert usage_counters(assistant.usage) == {
-        "input_tokens": assistant.usage["input_tokens"],
+    assert answer.usage is not None
+    estimated_input = answer.usage["input_tokens"]
+    assert estimated_input > 0
+    assert _counters(answer.usage) == {
+        "input_tokens": estimated_input,
         "input_tokens_estimated": True,
         "output_tokens": 2572,
         "estimated": True,
     }
-    run = next(iter(runtime.chat_runs._runs.values()))
-    completed = [event for event in run.events if event.type == "run_completed"]
-    assert completed[0].payload["session_usage"] == {
+    completed = _run_completed(runtime)
+    # Session totals count the measured output but never the estimated input.
+    assert completed["session_usage"] == {
         "measured_turns": 0,
         "estimated_turns": 1,
         "cache_turns": 0,
@@ -203,305 +249,171 @@ async def test_partial_provider_usage_estimates_only_missing_input(
         "cache_read_tokens": 0,
         "cache_write_tokens": 0,
     }
-    assert completed[0].payload["context_usage"] == {
-        "tokens": assistant.usage["input_tokens"] + 3,
+    assert completed["context_usage"] == {
+        "tokens": estimated_input + _hello_tokens(),
         "estimated": True,
     }
 
 
 @pytest.mark.asyncio
-async def test_zero_provider_input_on_nonempty_request_is_estimated(
-    tmp_path: Path,
+@pytest.mark.parametrize(
+    ("measured_input", "report", "estimation_bias", "fits"),
+    [(950, "x" * 400, 0, False), (300, "", 0, True), (300, "", 2_000, True)],
+    ids=["measured-fills-window", "measured-below-window", "biased-estimate-below-window"],
+)
+async def test_measured_context_decides_whether_the_next_request_fits_the_window(
+    tmp_path: Path, measured_input: int, report: str, estimation_bias: int, fits: bool
 ) -> None:
-    agent = StubAgent(id="coder", model="compatible/reasoning-model", allowed_tools=["*"])
-    adapter = StubAdapter(
-        [],
-        stream_responses=[
-            [
-                {"type": "content_delta", "text": "Hello"},
-                {"type": "usage", "input_tokens": 0, "output_tokens": 12},
-                {"type": "finish", "reason": "stop"},
-            ]
-        ],
-    )
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
-
-    assistant = await build_chat_loop(runtime, streaming=True).send(
-        "coder", "Hi", session_id="session-one"
-    )
-
-    assert assistant.usage is not None
-    assert assistant.usage["input_tokens"] > 0
-    assert assistant.usage["input_tokens_estimated"] is True
-    assert assistant.usage["output_tokens"] == 12
-    assert assistant.usage["estimated"] is True
-
-
-@pytest.mark.asyncio
-async def test_response_without_usage_applies_estimation(
-    tmp_path: Path,
-) -> None:
-    """When the provider doesn't supply usage, the chat loop estimates tokens."""
-    agent = StubAgent(id="coder", model="openai/gpt-4.1", allowed_tools=["*"])
-    adapter = StubAdapter([{"content": "Hello world", "reasoning": None, "tool_calls": None}])
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
-
-    assistant = await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
-
-    assert assistant.usage is not None
-    assert assistant.usage["estimated"] is True
-    assert usage_counters(assistant.usage) == {
-        "input_tokens": assistant.usage["input_tokens"],
-        "input_tokens_estimated": True,
-        "output_tokens": assistant.usage["output_tokens"],
-        "output_tokens_estimated": True,
-        "estimated": True,
-    }
-    session = runtime.chat_sessions.get(session_address("coder", "session-one"))
-    persisted = session.load()
-    assert persisted[1].usage is not None
-    assert persisted[1].usage["estimated"] is True
-    run = next(iter(runtime.chat_runs._runs.values()))
-    completed = [event for event in run.events if event.type == "run_completed"]
-    assert len(completed) == 1
-    assert completed[0].payload["usage"]["estimated"] is True
-
-
-@pytest.mark.asyncio
-async def test_estimation_computes_from_request_message_contents(
-    tmp_path: Path,
-) -> None:
-    """Estimation derives token counts from structured request and response messages."""
-    agent = StubAgent(id="coder", model="openai/gpt-4.1", allowed_tools=["*"])
-    adapter = StubAdapter([{"content": "Hello world", "reasoning": None, "tool_calls": None}])
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
-
-    assistant = await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
-
-    # Reconstruct expected estimation from the actual request messages
-    request_messages = adapter.requests[0]["messages"]
-    expected_input, _ = estimate_request_input_tokens(
-        request_messages, adapter.requests[0]["kwargs"]["tools"]
-    )
-    assert expected_input > sum(estimate_message_tokens(message)[0] for message in request_messages)
-    expected_output, _ = estimate_message_tokens({"role": "assistant", "content": "Hello world"})
-
-    assert usage_counters(assistant.usage) == {
-        "input_tokens": expected_input,
-        "input_tokens_estimated": True,
-        "output_tokens": expected_output,
-        "output_tokens_estimated": True,
-        "estimated": True,
-    }
-
-
-@pytest.mark.asyncio
-async def test_provider_usage_preserved_without_estimated_flag(
-    tmp_path: Path,
-) -> None:
-    """When the provider supplies usage, it is kept as-is with no estimated flag."""
-    agent = StubAgent(id="coder", model="openai/gpt-4.1", allowed_tools=["*"])
-    adapter = StubAdapter(
-        [
-            {
-                "content": "Hello",
-                "reasoning": None,
-                "tool_calls": None,
-                "usage": {"input_tokens": 150, "output_tokens": 12},
-            }
-        ]
-    )
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
-
-    assistant = await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
-
-    assert usage_counters(assistant.usage) == {"input_tokens": 150, "output_tokens": 12}
-    assert assistant.usage is not None
-    assert "estimated" not in assistant.usage
-    session = runtime.chat_sessions.get(session_address("coder", "session-one"))
-    persisted = session.load()
-    assert usage_counters(persisted[1].usage) == {"input_tokens": 150, "output_tokens": 12}
-    assert "estimated" not in persisted[1].usage
-
-
-@pytest.mark.asyncio
-async def test_streaming_without_usage_applies_estimation(
-    tmp_path: Path,
-) -> None:
-    """Streaming mode also applies estimation when no usage delta is received."""
-    agent = StubAgent(id="coder", model="openai/gpt-4.1", allowed_tools=["*"])
-    adapter = StubAdapter(
-        [],
-        stream_responses=[
-            [
-                {"type": "content_delta", "text": "Hello"},
-                {"type": "finish", "reason": "stop"},
-            ]
-        ],
-    )
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
-
-    assistant = await build_chat_loop(runtime, streaming=True).send(
-        "coder", "Hi", session_id="session-one"
-    )
-
-    assert assistant.content == "Hello"
-    assert assistant.usage is not None
-    assert assistant.usage["estimated"] is True
-    assert isinstance(assistant.usage["input_tokens"], int)
-    assert isinstance(assistant.usage["output_tokens"], int)
-    run = next(iter(runtime.chat_runs._runs.values()))
-    completed = [event for event in run.events if event.type == "run_completed"]
-    assert len(completed) == 1
-    assert completed[0].payload["usage"]["estimated"] is True
-
-
-@pytest.mark.asyncio
-async def test_estimation_with_tool_calls_in_history(
-    tmp_path: Path,
-) -> None:
-    """Estimation includes tool call content from previous turns in input tokens."""
-    agent = StubAgent(id="coder", model="openai/gpt-4.1", allowed_tools=["get_weather"])
-    adapter = StubAdapter(
-        [
-            {
-                "content": None,
-                "tool_calls": [
-                    {"id": "call_1", "name": "get_weather", "arguments": {"city": "Berlin"}}
-                ],
-            },
-            {"content": "Sunny", "tool_calls": None},
-        ]
-    )
-    tools = ToolRegistry()
-    tools.register(
-        "get_weather",
-        "Get weather.",
-        {"type": "object"},
-        lambda _context, arguments: tool_success({"temp": 22, "city": arguments["city"]}),
-    )
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
-
-    assistant = await build_chat_loop(runtime).send("coder", "Weather?", session_id="session-one")
-
-    assert assistant.content == "Sunny"
-    assert assistant.usage is not None
-    assert assistant.usage["estimated"] is True
-    # The second request includes previous assistant + tool messages, so
-    # input_tokens should be larger than the first request alone.
-    assert assistant.usage["input_tokens"] > 0
-
-
-@pytest.mark.asyncio
-async def test_measured_context_guard_fails_run_before_second_request(
-    tmp_path: Path,
-) -> None:
-    """A measured anchor filling the window fails cleanly before the next send."""
-    agent = StubAgent(id="coder", model="openai/gpt-4.1", allowed_tools=["get_weather"])
-    adapter = StubAdapter(
-        [
-            {
-                "content": None,
-                "tool_calls": [
-                    {"id": "call_1", "name": "get_weather", "arguments": {"city": "Berlin"}}
-                ],
-                "usage": {"input_tokens": 950, "output_tokens": 20},
-            },
-            {"content": "Sunny", "tool_calls": None},
-        ]
-    )
-    tools = ToolRegistry()
-    tools.register(
-        "get_weather",
-        "Get weather.",
-        {"type": "object"},
-        lambda _context, arguments: tool_success(
-            {"temp": 22, "city": arguments["city"], "report": "x" * 400}
-        ),
-    )
-    runtime: Any = StubRuntime(
-        data_dir=tmp_path,
-        agent=agent,
-        adapter=adapter,
-        tools=tools,
-        models=StubModels({("openai", "gpt-4.1"): 1_000}),
-    )
-
-    with pytest.raises(ProviderError) as exc_info:
-        await build_chat_loop(runtime).send("coder", "Weather?", session_id="session-one")
-
-    assert exc_info.value.retryable is False
-    assert len(adapter.requests) == 1
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("estimation_bias", [0, 2_000])
-async def test_measured_context_below_window_does_not_trip_the_guard(
-    tmp_path: Path,
-    estimation_bias: int,
-) -> None:
-    """Measured usage below the window lets the run continue normally."""
-    agent = StubAgent(id="coder", model="openai/gpt-4.1", allowed_tools=["get_weather"])
-
     class BiasedAdapter(StubAdapter):
         def estimate_request_input_tokens(self, messages, *, model_id, tools=None):
             return estimation_bias + estimate_request_input_tokens(messages, tools)[0]
 
-    adapter = BiasedAdapter(
-        [
-            {
-                "content": None,
-                "tool_calls": [
-                    {"id": "call_1", "name": "get_weather", "arguments": {"city": "Berlin"}}
-                ],
-                "usage": {"input_tokens": 300, "output_tokens": 10},
-            },
-            {"content": "Sunny", "tool_calls": None},
-        ]
+    adapter = _weather_adapter(
+        {"input_tokens": measured_input, "output_tokens": 20}, adapter_type=BiasedAdapter
     )
-    tools = ToolRegistry()
-    tools.register(
-        "get_weather",
-        "Get weather.",
-        {"type": "object"},
-        lambda _context, arguments: tool_success({"temp": 22, "city": arguments["city"]}),
-    )
-    runtime: Any = StubRuntime(
-        data_dir=tmp_path,
-        agent=agent,
-        adapter=adapter,
-        tools=tools,
+    runtime = _runtime(
+        tmp_path,
+        adapter,
+        tools=_weather_tools(report),
         models=StubModels({("openai", "gpt-4.1"): 1_000}),
     )
+    loop = build_chat_loop(runtime)
 
-    assistant = await build_chat_loop(runtime).send("coder", "Weather?", session_id="session-one")
-
-    assert assistant.content == "Sunny"
-    assert len(adapter.requests) == 2
+    # A measured anchor that fills the window fails cleanly before the next send; an
+    # estimation bias never overrides a measurement below the window.
+    if fits:
+        answer = await loop.send("coder", "Weather?", session_id="session-one")
+        assert answer.content == "Sunny"
+        assert len(adapter.requests) == 2
+    else:
+        with pytest.raises(ProviderError) as raised:
+            await loop.send("coder", "Weather?", session_id="session-one")
+        assert raised.value.retryable is False
+        assert len(adapter.requests) == 1
 
 
 @pytest.mark.asyncio
-async def test_completed_response_saves_price_snapshot_with_usage(tmp_path: Path, monkeypatch):
-    from core.models.pricing import TokenPricing
-
-    agent = StubAgent(id="coder", model="openai/gpt-4.1", allowed_tools=["*"])
+@pytest.mark.parametrize("streaming", [False, True], ids=["plain", "streaming"])
+async def test_empty_or_restarted_attempt_keeps_reported_usage_and_links_saved_step(
+    tmp_path: Path, recovery_waits: list[float], streaming: bool
+) -> None:
     adapter = StubAdapter(
         [
             {
-                "content": "Hello",
-                "tool_calls": None,
-                "usage": {"input_tokens": 1000, "output_tokens": 100, "cache_read_tokens": 500},
-            }
-        ]
+                "content": "",
+                "terminal_outcome": "stop",
+                "usage": {"input_tokens": 20, "output_tokens": 4},
+            },
+            {"content": "Recovered", "usage": {"input_tokens": 30}},
+        ],
+        stream_responses=[
+            [
+                {"type": "usage", "input_tokens": 20, "output_tokens": 4},
+                NetworkError("retry this attempt"),
+            ],
+            [
+                {"type": "content_delta", "text": "Recovered"},
+                {"type": "usage", "input_tokens": 30},
+                {"type": "finish", "reason": "stop"},
+            ],
+        ],
     )
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
-    pricing = TokenPricing.from_cost(
-        {"input": 2, "output": 8, "cache_read": 0.2}, source="models.dev:openai/gpt-4.1"
+    runtime = _runtime(tmp_path, adapter)
+    recorder = runtime.usage_recorder = RecordingUsageRecorder()
+
+    answer = await build_chat_loop(runtime, streaming=streaming).send(
+        "coder", "Work", session_id="session-one"
     )
-    monkeypatch.setattr(runtime.models, "pricing_for", lambda _: pricing)
-    assistant = await build_chat_loop(runtime).send("coder", "Hi", session_id="cost-snapshot")
-    assert assistant.usage is not None
-    assert assistant.usage["cost"]["amount_usd"] == pytest.approx(0.0019)
-    assert assistant.usage["cost"]["source"] == "catalog"
-    persisted = runtime.chat_sessions.get(session_address("coder", "cost-snapshot")).load()[1]
-    assert persisted.usage["cost"] == assistant.usage["cost"]
+
+    failed, completed = recorder.calls
+    assert failed["status"] == "failed"
+    assert failed["usage"] == {
+        "input_tokens": 20,
+        "output_tokens": 4,
+        "usage_call_id": failed["id"],
+    }
+    assert completed["status"] == "completed"
+    assert completed["usage"]["input_tokens"] == 30
+    assert completed["usage"]["output_tokens_estimated"] is True
+    assert completed["usage"]["cost"]["source"] == "unknown"
+    assert (completed["model"], completed["session_id"], completed["run_id"]) == (
+        "openai/gpt-4.1",
+        "session-one",
+        last_run(runtime).id,
+    )
+    # Only the saved step links to its usage record.
+    assert answer.usage is not None
+    assert answer.usage["usage_call_id"] == completed["id"]
+    assert _saved_answer(runtime).usage["usage_call_id"] == completed["id"]
+    assert [message.role for message in history(runtime)].count("assistant") == 1
+    assert len(recovery_waits) == 1
+
+
+@pytest.mark.asyncio
+async def test_cancel_before_visible_output_keeps_reported_counters(tmp_path: Path) -> None:
+    waiting = asyncio.Event()
+
+    class UsageThenWaitAdapter(StubAdapter):
+        async def stream(self, messages, **kwargs):
+            yield {"type": "usage", "input_tokens": 42}
+            waiting.set()
+            await asyncio.Event().wait()
+
+    runtime = _runtime(tmp_path, UsageThenWaitAdapter([]))
+    runtime.chat_sessions.create("coder", session_id="session-one")
+    recorder = runtime.usage_recorder = RecordingUsageRecorder()
+    run = await build_chat_loop(runtime, streaming=True).start_run(
+        "coder", "Work", session_id="session-one"
+    )
+    await asyncio.wait_for(waiting.wait(), 3)
+    run.request_cancel()
+    with pytest.raises(RunCancelledError):
+        await run.wait()
+
+    [call] = recorder.calls
+    assert call["status"] == "cancelled"
+    assert call["usage"] == {"input_tokens": 42, "usage_call_id": call["id"]}
+    assert all(message.role != "assistant" for message in history(runtime))
+
+
+@pytest.mark.asyncio
+async def test_fatal_request_without_counters_records_unknown_usage(tmp_path: Path) -> None:
+    runtime = _runtime(tmp_path, StubAdapter([ProviderError("not available", retryable=False)]))
+    recorder = runtime.usage_recorder = RecordingUsageRecorder()
+
+    with pytest.raises(ProviderError):
+        await build_chat_loop(runtime).send("coder", "Work", session_id="session-one")
+
+    [call] = recorder.calls
+    assert call["status"] == "failed"
+    assert call["usage"] == {"usage_call_id": call["id"]}
+
+
+@pytest.mark.asyncio
+async def test_cancel_during_usage_persistence_keeps_visible_answer(tmp_path: Path) -> None:
+    saving = asyncio.Event()
+    release = asyncio.Event()
+
+    class WaitingUsageRecorder(RecordingUsageRecorder):
+        async def finish(self, call_id, usage=None, *, status="completed"):
+            saving.set()
+            await release.wait()
+            return await super().finish(call_id, usage, status=status)
+
+    runtime = _runtime(
+        tmp_path, _adapter("Visible answer", {"input_tokens": 42, "output_tokens": 5})
+    )
+    runtime.chat_sessions.create("coder", session_id="session-one")
+    recorder = runtime.usage_recorder = WaitingUsageRecorder()
+    run = await build_chat_loop(runtime, streaming=True).start_run(
+        "coder", "Work", session_id="session-one"
+    )
+    await asyncio.wait_for(saving.wait(), 3)
+    run.request_cancel()
+    release.set()
+    with pytest.raises(RunCancelledError):
+        await run.wait()
+
+    saved = _saved_answer(runtime)
+    assert saved.content == "Visible answer"
+    assert saved.usage["usage_call_id"] == recorder.calls[0]["id"]
