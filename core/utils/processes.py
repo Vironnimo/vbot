@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import ctypes
+import functools
 import os
 import re
 import signal
@@ -14,6 +16,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol, cast
 
 from core.utils.logging import get_logger
+from core.utils.workers import BoundedWorkerPool
 
 
 class ProcessIdentity(Protocol):
@@ -185,6 +188,120 @@ def subprocess_creation_flags(
     if breakaway and _windows_explicit_breakaway_allowed():
         flags |= int(cast(Any, subprocess).CREATE_BREAKAWAY_FROM_JOB)
     return flags
+
+
+_LAUNCH_WORKERS = BoundedWorkerPool(name="process-launch", max_workers=4)
+
+
+async def create_subprocess_exec(
+    program: str,
+    *args: str,
+    stdin: int | None = None,
+    stdout: int | None = None,
+    stderr: int | None = None,
+    limit: int = 2**16,
+    **popen_arguments: Any,
+) -> asyncio.subprocess.Process:
+    """``asyncio.create_subprocess_exec`` without OS process creation on the Event Loop.
+
+    asyncio's Windows Proactor creates the process and its pipes on the loop
+    thread, and ``CreateProcess`` can take a second while the image is mapped
+    and scanned. Here that work runs on a launch worker; the started process is
+    then attached to the loop's subprocess transport, so the returned
+    ``Process`` behaves exactly like asyncio's. Other platforms and loops use
+    asyncio directly.
+    """
+    loop = asyncio.get_running_loop()
+    if os.name != "nt" or not isinstance(loop, getattr(asyncio, "ProactorEventLoop", ())):
+        return await asyncio.create_subprocess_exec(
+            program,
+            *args,
+            stdin=stdin,
+            stdout=stdout,
+            stderr=stderr,
+            limit=limit,
+            **popen_arguments,
+        )
+    return await _create_windows_subprocess_exec(
+        loop, [program, *args], stdin, stdout, stderr, limit, popen_arguments
+    )
+
+
+async def _create_windows_subprocess_exec(
+    loop: asyncio.AbstractEventLoop,
+    argv: list[str],
+    stdin: int | None,
+    stdout: int | None,
+    stderr: int | None,
+    limit: int,
+    popen_arguments: dict[str, Any],
+) -> asyncio.subprocess.Process:
+    from asyncio import windows_utils
+    from asyncio.subprocess import Process, SubprocessStreamProtocol
+
+    started: list[Any] = []
+
+    def launch() -> Any:
+        popen = windows_utils.Popen(
+            argv, stdin=stdin, stdout=stdout, stderr=stderr, bufsize=0, **popen_arguments
+        )
+        started.append(popen)
+        return popen
+
+    try:
+        popen = await _LAUNCH_WORKERS.run(launch)
+    except BaseException:
+        # Cancellation waits for a started launch; never leave its process behind.
+        for orphan in started:
+            _discard_unattached_process(orphan)
+        raise
+    protocol = SubprocessStreamProtocol(limit=limit, loop=loop)
+    waiter = loop.create_future()
+    try:
+        transport = _attached_transport_type()(
+            loop, protocol, argv, False, stdin, stdout, stderr, 0, waiter=waiter, popen=popen
+        )
+    except BaseException:
+        _discard_unattached_process(popen)
+        raise
+    try:
+        await waiter
+    except BaseException:
+        # The same cleanup asyncio applies to a transport it constructed itself.
+        transport.close()
+        await transport._wait()
+        raise
+    return Process(transport, protocol, loop)
+
+
+@functools.cache
+def _attached_transport_type() -> type[Any]:
+    """asyncio's Windows subprocess transport, attached to an already started process."""
+    from asyncio import windows_events
+
+    base = cast(Any, windows_events)._WindowsSubprocessTransport
+
+    class AttachedWindowsSubprocessTransport(base):  # type: ignore[misc, valid-type]
+        def _start(self, *_args: Any, popen: Any, **_kwargs: Any) -> None:
+            # asyncio's own _start, minus creating the process on the loop.
+            self._proc = popen
+
+            def exited(_future: Any) -> None:
+                self._process_exited(popen.poll())
+
+            waiting = self._loop._proactor.wait_for_handle(int(popen._handle))
+            waiting.add_done_callback(exited)
+
+    return AttachedWindowsSubprocessTransport
+
+
+def _discard_unattached_process(popen: Any) -> None:
+    with contextlib.suppress(OSError):
+        popen.kill()
+    for stream in (popen.stdin, popen.stdout, popen.stderr):
+        if stream is not None:
+            with contextlib.suppress(OSError):
+                stream.close()
 
 
 def _windows_explicit_breakaway_allowed() -> bool:

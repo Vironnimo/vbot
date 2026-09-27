@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import gc
+import json
 import logging
 import threading
 import time
@@ -40,12 +42,20 @@ def block_event_loop_for_test() -> None:
     time.sleep(0.3)
 
 
-def _is_test_stall(stall: dict) -> bool:
-    return any(
-        "block_event_loop_for_test" in frame
-        for sample in stall["samples"]
-        for frame in sample["stack"]
-    )
+def collect_slowly_for_test() -> None:
+    def slow_collection(phase: str, _info: dict) -> None:
+        if phase == "start":
+            time.sleep(0.3)
+
+    gc.callbacks.append(slow_collection)
+    try:
+        gc.collect(0)
+    finally:
+        gc.callbacks.remove(slow_collection)
+
+
+def _is_test_stall(stall: dict, marker: str = "block_event_loop_for_test") -> bool:
+    return any(marker in frame for sample in stall["samples"] for frame in sample["stack"])
 
 
 @pytest.mark.asyncio
@@ -70,7 +80,7 @@ async def test_blocked_loop_records_lag_and_a_stall_with_the_blocking_stack(
 
     # A busy test host may add unrelated stalls; select the one this test caused.
     stall = next(filter(_is_test_stall, snapshot["stalls"]))
-    assert set(stall) == {"started_at", "duration_ms", "samples"}
+    assert set(stall) == {"started_at", "duration_ms", "gc_ms", "samples"}
     assert stall["duration_ms"] >= 150
     datetime.fromisoformat(stall["started_at"])
     frames = [frame for sample in stall["samples"] for frame in sample["stack"]]
@@ -81,6 +91,40 @@ async def test_blocked_loop_records_lag_and_a_stall_with_the_blocking_stack(
     assert snapshot["metrics"]["event_loop.lag"]["max_ms"] >= 150
     assert stall in result["summary"]["stalls"]
     assert result["summary"]["metrics"]["event_loop.lag"]["max_ms"] >= 150
+
+
+@pytest.mark.asyncio
+async def test_collection_pauses_are_timed_and_attributed_to_the_stall(tmp_path: Path) -> None:
+    service = _fast_service(tmp_path)
+    service.start()
+    try:
+        await asyncio.sleep(0.05)
+        service.start_recording()
+        asyncio.get_running_loop().call_soon(collect_slowly_for_test)
+
+        def is_collection_stall(stall: dict) -> bool:
+            return _is_test_stall(stall, "collect_slowly_for_test")
+
+        async def stalled() -> bool:
+            snapshot = await service.snapshot()
+            return "gc.gen0" in snapshot["metrics"] and any(
+                map(is_collection_stall, snapshot["stalls"])
+            )
+
+        await _wait_for(stalled)
+        snapshot = await service.snapshot()
+        result = await service.stop_recording()
+    finally:
+        await service.aclose()
+
+    stall = next(filter(is_collection_stall, snapshot["stalls"]))
+    assert 150 <= stall["gc_ms"] <= stall["duration_ms"]
+    assert snapshot["metrics"]["gc.gen0"]["max_ms"] >= 150
+    trace = json.loads(Path(result["trace_path"]).read_text(encoding="utf-8"))
+    assert any(
+        event["ph"] == "X" and event["name"] == "gc gen0" and event["dur"] >= 150_000
+        for event in trace["traceEvents"]
+    )
 
 
 @pytest.mark.asyncio
@@ -144,6 +188,7 @@ def test_long_stall_warnings_are_rate_limited_and_count_suppressions(
         started_at=datetime.now(UTC),
         duration_ms=1500.0,
         samples=((3, ("core/chat/x.py:10 work", "asyncio/events.py:88 Handle._run")),),
+        gc_ms=1200.0,
     )
     short = StallRecord(stall.started_perf, stall.started_at, 400.0, ())
 
@@ -158,7 +203,7 @@ def test_long_stall_warnings_are_rate_limited_and_count_suppressions(
 
     warnings = [record.getMessage() for record in caplog.records]
     assert len(warnings) == 2
-    assert "stalled for 1500 ms" in warnings[0]
+    assert "stalled for 1500 ms (gc_ms=1200 samples=3" in warnings[0]
     assert "core/chat/x.py:10 work <- asyncio/events.py:88 Handle._run" in warnings[0]
     assert "suppressed_warnings=0" in warnings[0]
     assert "suppressed_warnings=1" in warnings[1]
@@ -172,6 +217,7 @@ def _monitor_resources(service: PerformanceService) -> tuple[asyncio.Task, threa
 
 @pytest.mark.asyncio
 async def test_stop_and_aclose_end_the_monitor_task_and_watchdog_thread(tmp_path: Path) -> None:
+    collection_callbacks = len(gc.callbacks)
     for close_async in (False, True):
         service = _fast_service(tmp_path)
         service.start()
@@ -189,6 +235,7 @@ async def test_stop_and_aclose_end_the_monitor_task_and_watchdog_thread(tmp_path
         assert not service.monitoring
         assert task.done()
         assert not thread.is_alive()
+        assert len(gc.callbacks) == collection_callbacks
 
 
 def test_watchdog_exits_when_its_event_loop_closes_without_stop(tmp_path: Path) -> None:

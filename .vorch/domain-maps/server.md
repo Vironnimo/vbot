@@ -37,6 +37,7 @@ Agent create/update/rename/delete likewise enter through the reference lock befo
   Local-speech setup admits restart only after verification; embedded apps without
   this callback report restart unavailable. See `model_tasks/speech.md` and
   `tests/server/test_main.py`.
+- `create_app(on_ready=...)` runs the callback once at the end of lifespan startup, before uvicorn accepts connections. Only `server/main.py` passes one: it runs a full `gc.collect()` and then `gc.freeze()`, logging `Startup heap frozen (objects=... collect_ms=...)`. Later cyclic collections skip the frozen startup objects (modules, classes, Runtime services); on the packaged CPython 3.13 every full collection otherwise traverses them while holding the GIL and stalls the Event Loop. Frozen objects that later become unreachable cyclic garbage are never collected, which bounds the cost to the startup heap. Test and embedded apps omit the hook, so a test process never freezes its heap (`tests/server/test_app.py`, `tests/server/test_main.py`).
 
 ## Source routing
 

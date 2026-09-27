@@ -335,7 +335,7 @@ async def test_pending_log_open_reserves_id_and_settles_during_shutdown(
 
     monkeypatch.setattr(process_module, "new_id", colliding_id)
     monkeypatch.setattr(ProcessOutputSpool, "_open", blocked_open)
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+    monkeypatch.setattr(process_module, "create_subprocess_exec", create_process)
     monkeypatch.setattr(manager, "_release_process_pipe_references", lambda _: None)
     first = asyncio.create_task(manager.spawn("run", "agent", ["fake"], env=None, cwd=None))
     shutdown = None

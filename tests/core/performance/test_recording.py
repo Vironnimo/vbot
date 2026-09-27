@@ -164,6 +164,7 @@ def test_written_trace_is_valid_chrome_trace_event_json(tmp_path: Path) -> None:
         {
             "started_at": "2026-09-24T12:00:00.100000+00:00",
             "duration_ms": 320.0,
+            "gc_ms": 12.5,
             "samples": [{"count": 2, "stack": ["core/x.py:3 work"]}],
         },
         100.1,
@@ -194,6 +195,7 @@ def test_written_trace_is_valid_chrome_trace_event_json(tmp_path: Path) -> None:
     stall = next(event for event in events if event["ph"] == "i")
     assert stall["s"] == "p" and stall["ts"] == 100_000
     assert stall["args"]["samples"][0]["stack"] == ["core/x.py:3 work"]
+    assert stall["args"]["gc_ms"] == 12.5
     assert {event["ph"] for event in events} == {"M", "X", "C", "i"}
     assert result["trace_path"] == trace_path.absolute().as_posix()
     assert "\\" not in result["trace_path"]
