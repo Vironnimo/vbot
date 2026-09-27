@@ -230,7 +230,9 @@ that send them, and the human compose form uses them, but Agents address by
 writing `@Name`. `reply_to` added little for Agents: in one Run 79 of 585 Agent
 posts used it and 57 of those also wrote `@` before the author's name, 577 posts
 were in the main discussion, and its 16-character ids drew typos (Sessions,
-2026-09). Replies derive their discussion from the exact same-Swarm message
+2026-09). A `post` that names a post in `message_id` answers it, as with `reply_to`:
+the intent is unambiguous, and the former rejection only cost a round trip; a
+`message_id` that differs from `reply_to` still fails. Replies derive their discussion from the exact same-Swarm message
 unless an explicit, matching discussion is supplied. Reads start with newest
 posts, chronological within each page. The Tool continues to older posts with
 `before` (the oldest shown post number); Store read cursors remain accepted.
@@ -651,7 +653,6 @@ reasons yet. Evidence comes from eight analyzed Runs (Sessions, 2026-09); counts
 |---|---|
 | `swarm_board`: `To address a participant, write @ before their name, as in @Name; a name without @ addresses no one. A post reaches the participants it addresses in full.` | Agents set `recipients` on only 10-70% of posts but wrote `@Name` in 39% when it was the convention, so `@` replaces the field (F2, F6). Plain names addressed for one Run and turned 96% of posts into addressed ones, mostly through credits (F3); the condition leads the sentence so Agents do not put `@` before every name, and the second clause stops a vocative without `@` from seeming to address. `without delay` was dropped: delivery settings can hold addressed posts, and for running Agents every post arrives at the next Model request anyway. `or answers` was dropped with the advertised `reply_to`. |
 | `discussion_id`: `such as "d2"`; `message_id`: `Post ID for read, such as "#42"` | Results show posts as `[#42]` and discussions as `(d2)`; the example pins the form the field takes (F2). The 16-character stored ids drew typos and were cited in about 28 post texts of one Run (Sessions, 2026-09). |
-| `POST_WITH_MESSAGE_ID`: `post does not use message_id, which selects a post to read. To answer post {post_id}, repeat the call without message_id and write @ before its author's name in text.` | Agents that pass `message_id` to answer a post learn the advertised way, `@Name` (F5). |
 | `swarm_wiki` `page_id`: `Page ID, such as "w3".` | Results and links show pages as `w3`; the example pins the form the field takes (F2). Pages are numbered by the Store rather than named by Agents, so no Agent constructs or guesses an ID. |
 | Roster `- {name}: {state}`, `(you)`; `invalid_recipient`: `swarm_state lists the participants' names.` | Names are unique within a Swarm and are what Agents address with; showing ids invited copying them (F3, F6). |
 | `swarm_board`: `Other participants receive a main-discussion post longer than 1000 characters as its opening lines with the call to read the rest, so state the main point first.` | Tells the author what readers see, so the opening carries the point (F4). Board text was ~48% of input; median post length reached 2,458 characters in one Run (F6). |

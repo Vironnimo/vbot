@@ -1200,27 +1200,28 @@ async def test_board_extra_targets_run_only_when_they_change_nothing(board):
     assert sorted(row["title"] for row in listed.entries) == ["First", "Main", "Second", "Third"]
 
     target = first["data"]["opening_post_id"]
+    # A post that names a post with message_id answers it, as with reply_to.
     only_message, _ = await dispatch(
         board, {"action": "post", "message_id": target, "text": "answer"}
     )
-    assert only_message["error"]["message"] == (
-        f"post does not use message_id, which selects a post to read. To answer post {target}, "
-        "repeat the call without message_id and write @ before its author's name in text. "
-        "Nothing was saved."
-    )
+    assert only_message["ok"], only_message
     differing, _ = await dispatch(
-        board, {"action": "post", "message_id": main, "reply_to": target, "text": "answer"}
+        board, {"action": "post", "message_id": main, "reply_to": target, "text": "other"}
     )
-    assert "it differs from reply_to" in differing["error"]["message"]
+    assert differing["error"]["message"] == (
+        "message_id and reply_to name different posts. Repeat the call with only reply_to, set "
+        "to the post you answer. Nothing was saved."
+    )
     same, _ = await dispatch(
-        board, {"action": "post", "message_id": target, "reply_to": target, "text": "answer"}
+        board, {"action": "post", "message_id": target, "reply_to": target, "text": "again"}
     )
     assert same["ok"], same
     replies = [
         post for post in await board_posts(board, discussion_id=existing) if post["reply_to"]
     ]
-    assert [(post["text"], f"#{post['reply_sequence']}") for post in replies] == [
-        ("answer", target)
+    assert sorted((post["text"], f"#{post['reply_sequence']}") for post in replies) == [
+        ("again", target),
+        ("answer", target),
     ]
 
 
