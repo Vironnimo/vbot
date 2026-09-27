@@ -426,7 +426,8 @@ function Add-VbotShim {
     # live process tree prevents Windows from locking the file against itself.
     # Expose only vbot, so the venv's python/pip do not shadow the user's.
     $escapedPythonExe = $pythonExe.Replace("%", "%%")
-    $content = "@echo off`r`n`"$escapedPythonExe`" -m cli.main %*`r`n"
+    # -P keeps a cli package or cli.py in the caller's directory from shadowing vBot.
+    $content = "@echo off`r`n`"$escapedPythonExe`" -P -m cli.main %*`r`n"
     [System.IO.File]::WriteAllText($shim, $content, (New-Object System.Text.UTF8Encoding($false)))
     Write-Step "Making the vBot command available"
     Add-ToUserPath -PathToAdd $binDir

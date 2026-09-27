@@ -761,7 +761,7 @@ def test_windows_installer_shim_does_not_lock_the_pip_package_launcher() -> None
     shim = script[shim_start:shim_end]
 
     assert 'Scripts\\python.exe"' in shim
-    assert '" -m cli.main %*' in shim
+    assert '" -P -m cli.main %*' in shim
     assert "Scripts\\vbot.exe" not in shim
 
 

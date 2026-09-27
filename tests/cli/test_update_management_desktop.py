@@ -282,7 +282,9 @@ def test_windows_update_migrates_installer_command_shim_to_python_module(
     )
 
     assert result.ok, result.message
-    assert shim.read_bytes() == (f'@echo off\r\n"{python_executable}" -m cli.main %*\r\n'.encode())
+    assert shim.read_bytes() == (
+        f'@echo off\r\n"{python_executable}" -P -m cli.main %*\r\n'.encode()
+    )
 
     repeated = run_update(
         _instance(),
