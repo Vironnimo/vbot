@@ -1,508 +1,609 @@
-"""Providers: registry behavior."""
+"""Providers: the Provider registry (parsing, validation, lookup, caching, Custom Providers)."""
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from core.providers.providers import (
+    AuthConfig,
+    ConnectionConfig,
+    OAuthConfig,
+    ProviderConfig,
     ProviderRegistry,
 )
 from core.utils.errors import ConfigError
-from tests.core.providers.providers_helpers import (
-    OPENAI_DATA,
-)
-from tests.core.providers.providers_helpers import (
-    _clear_cache as _clear_cache,
-)
-from tests.core.providers.providers_helpers import (
-    providers_dir as providers_dir,
-)
+
+# A field set to ``_DROP`` is left out of the written JSON.
+_DROP: Any = object()
 
 
-# Registry: loading and lookup
-class TestProviderRegistryLoad:
-    """Tests for ProviderRegistry.load() and provider lookup."""
+def _without_dropped(data: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in data.items() if value is not _DROP}
 
-    def test_tolerant_load_skips_corrupt_provider_and_keeps_valid_sibling(
-        self,
-        tmp_path: Path,
-        caplog: pytest.LogCaptureFixture,
-    ) -> None:
-        providers_dir = tmp_path / "providers"
-        providers_dir.mkdir()
-        providers_dir.joinpath("healthy.json").write_text(
-            json.dumps(OPENAI_DATA),
-            encoding="utf-8",
+
+def _connection(**changes: Any) -> dict[str, Any]:
+    return _without_dropped(
+        {
+            "id": "api-key",
+            "type": "api_key",
+            "label": "API Key",
+            "auth": {
+                "header": "Authorization",
+                "prefix": "Bearer ",
+                "credential_key": "MINIMAL_API_KEY",
+            },
+            **changes,
+        }
+    )
+
+
+def _oauth(**changes: Any) -> dict[str, Any]:
+    return {
+        "flow": "device",
+        "client_id": "client-id",
+        "device_auth_url": "https://auth.example.test/device/code",
+        "token_url": "https://auth.example.test/oauth/token",
+        "scopes": ["openid"],
+        **changes,
+    }
+
+
+def _provider(**changes: Any) -> dict[str, Any]:
+    return _without_dropped(
+        {
+            "id": "minimal",
+            "name": "Minimal",
+            "adapter": "openai_compatible",
+            "base_url": "https://minimal.example.test/v1",
+            "connections": [_connection()],
+            **changes,
+        }
+    )
+
+
+def _write_providers(resources: Path, *documents: Any) -> Path:
+    providers_dir = resources / "providers"
+    providers_dir.mkdir(parents=True, exist_ok=True)
+    for index, document in enumerate(documents):
+        (providers_dir / f"provider-{index}.json").write_text(
+            json.dumps(document), encoding="utf-8"
         )
-        corrupt_path = providers_dir / "corrupt.json"
-        corrupt_path.write_text('{"id":', encoding="utf-8")
-
-        with caplog.at_level(logging.WARNING, logger="vbot.providers"):
-            registry = ProviderRegistry.load(tmp_path, tolerate_invalid=True)
-
-        assert registry.list_ids() == ["openai"]
-        assert str(corrupt_path) in caplog.text
-
-    def test_tolerant_load_survives_provider_directory_scan_failure(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        caplog: pytest.LogCaptureFixture,
-    ) -> None:
-        providers_dir = tmp_path / "providers"
-        providers_dir.mkdir()
-
-        def fail_scan(*_args: object, **_kwargs: object) -> list[Path]:
-            raise OSError("scan failed")
-
-        monkeypatch.setattr(Path, "glob", fail_scan)
-
-        with caplog.at_level(logging.WARNING, logger="vbot.providers"):
-            registry = ProviderRegistry.load(
-                tmp_path,
-                custom_providers={},
-                tolerate_invalid=True,
-            )
-
-        assert registry.list_ids() == []
-        assert str(providers_dir) in caplog.text
-
-    def test_tolerant_load_does_not_populate_strict_registry_cache(self, tmp_path: Path) -> None:
-        providers_dir = tmp_path / "providers"
-        providers_dir.mkdir()
-        providers_dir.joinpath("corrupt.json").write_text('{"id":', encoding="utf-8")
-
-        assert ProviderRegistry.load(tmp_path, tolerate_invalid=True).list_ids() == []
-        with pytest.raises(json.JSONDecodeError):
-            ProviderRegistry.load(tmp_path)
-
-    def test_load_creates_registry_with_all_providers(self, providers_dir: Path) -> None:
-        """Loading populates the registry with all JSON provider files."""
-        # Arrange / Act
-        registry = ProviderRegistry.load(providers_dir)
-
-        # Assert
-        assert len(registry._configs) == 3
-
-    def test_get_returns_correct_provider_config(self, providers_dir: Path) -> None:
-        """get() returns the ProviderConfig matching the requested ID."""
-        # Arrange
-        registry = ProviderRegistry.load(providers_dir)
-
-        # Act
-        config = registry.get("openai")
-
-        # Assert
-        assert config.id == "openai"
-        assert config.name == "OpenAI"
-        assert config.adapter == "openai_compatible"
-        assert config.base_url == "https://api.openai.com/v1"
-
-    def test_get_anthropic_provider(self, providers_dir: Path) -> None:
-        """get() returns the Anthropic provider config correctly."""
-        # Arrange
-        registry = ProviderRegistry.load(providers_dir)
-
-        # Act
-        config = registry.get("anthropic")
-
-        # Assert
-        assert config.id == "anthropic"
-        assert config.adapter == "anthropic"
-        assert config.base_url == "https://api.anthropic.com/v1"
-
-    def test_get_openrouter_provider(self, providers_dir: Path) -> None:
-        """get() returns the OpenRouter provider config correctly."""
-        # Arrange
-        registry = ProviderRegistry.load(providers_dir)
-
-        # Act
-        config = registry.get("openrouter")
-
-        # Assert
-        assert config.id == "openrouter"
-        assert config.base_url == "https://openrouter.ai/api/v1"
-
-
-class TestProviderRegistryListIds:
-    """Tests for ProviderRegistry.list_ids()."""
-
-    def test_list_ids_returns_sorted_provider_ids(self, providers_dir: Path) -> None:
-        """list_ids() returns a sorted list of all registered provider IDs."""
-        # Arrange
-        registry = ProviderRegistry.load(providers_dir)
-
-        # Act
-        ids = registry.list_ids()
-
-        # Assert
-        assert ids == ["anthropic", "openai", "openrouter"]
-
-
-class TestProviderRegistryMissing:
-    """Tests for error handling on missing providers."""
-
-    def test_get_missing_provider_raises_key_error(self, providers_dir: Path) -> None:
-        """get() raises KeyError for a provider ID that does not exist."""
-        # Arrange
-        registry = ProviderRegistry.load(providers_dir)
-
-        # Act / Assert
-        with pytest.raises(KeyError):
-            registry.get("nonexistent")
-
-    def test_get_missing_provider_error_includes_available_ids(self, providers_dir: Path) -> None:
-        """The KeyError message lists available provider IDs."""
-        # Arrange
-        registry = ProviderRegistry.load(providers_dir)
-
-        # Act / Assert
-        with pytest.raises(KeyError, match="anthropic"):
-            registry.get("no-such-provider")
-
-
-# Registry: caching
-class TestProviderRegistryCaching:
-    """Tests for ProviderRegistry caching behaviour."""
-
-    def test_second_load_returns_same_instance(self, providers_dir: Path) -> None:
-        """Calling load() twice returns the exact same registry instance."""
-        # Arrange — first load
-        first = ProviderRegistry.load(providers_dir)
-
-        # Act — second load
-        second = ProviderRegistry.load(providers_dir)
-
-        # Assert — same object, not a new instance
-        assert first is second
-
-    def test_cache_prevents_re_reading_files(self, providers_dir: Path) -> None:
-        """After caching, deleting a JSON file does not affect the registry."""
-        # Arrange — load to populate cache
-        registry = ProviderRegistry.load(providers_dir)
-        original_ids = registry.list_ids()
-
-        # Act — delete one of the JSON files
-        (providers_dir / "providers" / "anthropic.json").unlink()
-
-        # Second load should still return cached registry with all 3 providers
-        cached_registry = ProviderRegistry.load(providers_dir)
-
-        # Assert
-        assert cached_registry.list_ids() == original_ids
-
-    def test_different_dirs_return_different_instances(
-        self, providers_dir: Path, tmp_path: Path
-    ) -> None:
-        """Two different resource directories yield two different registry instances."""
-        # Arrange
-        other_dir = tmp_path / "other_resources"
-        other_dir.mkdir()
-        other_providers = other_dir / "providers"
-        other_providers.mkdir()
-
-        # Act
-        first = ProviderRegistry.load(providers_dir)
-        second = ProviderRegistry.load(other_dir)
-
-        # Assert
-        assert first is not second
-
-
-# Registry: duplicate IDs
-class TestProviderRegistryDuplicates:
-    """Tests for duplicate provider ID detection."""
-
-    def test_duplicate_id_raises_key_error(self, tmp_path: Path) -> None:
-        """Two provider configs with the same 'id' raise KeyError on load."""
-        # Arrange
-        prov_dir = tmp_path / "providers"
-        prov_dir.mkdir()
-        data_a = dict(OPENAI_DATA)
-        data_b = dict(OPENAI_DATA)  # same id: "openai"
-        (prov_dir / "a.json").write_text(json.dumps(data_a), encoding="utf-8")
-        (prov_dir / "b.json").write_text(json.dumps(data_b), encoding="utf-8")
-
-        # Act / Assert
-        with pytest.raises(KeyError):
-            ProviderRegistry.load(tmp_path)
-
-    def test_duplicate_connection_local_id_raises_key_error(self, tmp_path: Path) -> None:
-        """Duplicate connection local IDs within one provider raise KeyError."""
-        # Arrange
-        prov_dir = tmp_path / "providers"
-        prov_dir.mkdir()
-        data = dict(OPENAI_DATA)
-        data["connections"] = [
-            dict(OPENAI_DATA["connections"][0]),
-            dict(OPENAI_DATA["connections"][0]),
-        ]
-        (prov_dir / "openai.json").write_text(json.dumps(data), encoding="utf-8")
-
-        # Act / Assert
-        with pytest.raises(KeyError):
-            ProviderRegistry.load(tmp_path)
-
-
-class TestProviderRegistryRequiredFields:
-    """Tests for clear provider config errors on missing required fields."""
-
-    def test_missing_connections_field_raises_config_error(self, tmp_path: Path) -> None:
-        """A provider JSON without connections raises a clear ConfigError."""
-        # Arrange
-        prov_dir = tmp_path / "providers"
-        prov_dir.mkdir()
-        data = dict(OPENAI_DATA)
-        data.pop("connections")
-        (prov_dir / "openai.json").write_text(json.dumps(data), encoding="utf-8")
-
-        # Act / Assert
-        with pytest.raises(ConfigError):
-            ProviderRegistry.load(tmp_path)
-
-
-class TestProviderRegistryConnectionTypes:
-    """Tests for connection type validation."""
-
-    @pytest.mark.parametrize("connection_type", ["bearer", "oidc"])
-    def test_unknown_connection_type_raises_config_error(
-        self, tmp_path: Path, connection_type: str
-    ) -> None:
-        """Unknown connection types are rejected at config load time."""
-        # Arrange
-        prov_dir = tmp_path / "providers"
-        prov_dir.mkdir()
-        data = dict(OPENAI_DATA)
-        connection = dict(OPENAI_DATA["connections"][0])
-        connection["type"] = connection_type
-        data["connections"] = [connection]
-        (prov_dir / "openai.json").write_text(json.dumps(data), encoding="utf-8")
-
-        # Act / Assert
-        with pytest.raises(ConfigError):
-            ProviderRegistry.load(tmp_path)
-
-    def test_duplicate_connection_types_are_allowed(self, tmp_path: Path) -> None:
-        """Multiple connections with the same type are allowed if local IDs differ."""
-        # Arrange
-        prov_dir = tmp_path / "providers"
-        prov_dir.mkdir()
-        data = dict(OPENAI_DATA)
-        first = dict(OPENAI_DATA["connections"][1])
-        second = dict(OPENAI_DATA["connections"][1])
-        first["id"] = "primary-key"
-        second["id"] = "secondary-key"
-        data["connections"] = [first, second]
-        (prov_dir / "openai.json").write_text(json.dumps(data), encoding="utf-8")
-
-        # Act
-        registry = ProviderRegistry.load(tmp_path)
-        config = registry.get("openai")
-
-        # Assert
-        assert [connection.type for connection in config.connections] == [
-            "api_key",
-            "api_key",
-        ]
-
-    def test_api_key_connection_without_credential_key_raises_config_error(
-        self, tmp_path: Path
-    ) -> None:
-        """API key connections still require a credential_key."""
-        # Arrange
-        prov_dir = tmp_path / "providers"
-        prov_dir.mkdir()
-        data = dict(OPENAI_DATA)
-        connection = dict(OPENAI_DATA["connections"][1])
-        auth = dict(connection["auth"])
-        auth.pop("credential_key")
-        connection["auth"] = auth
-        data["connections"] = [connection]
-        (prov_dir / "openai.json").write_text(json.dumps(data), encoding="utf-8")
-
-        # Act / Assert
-        with pytest.raises(ConfigError):
-            ProviderRegistry.load(tmp_path)
-
-    @pytest.mark.parametrize("local_id", ["api--key", "api:key"])
-    def test_connection_id_with_ambiguous_characters_raises_config_error(
-        self, tmp_path: Path, local_id: str
-    ) -> None:
-        """Connection ids with '--' or ':' would break token filenames and id parsing."""
-        # Arrange
-        prov_dir = tmp_path / "providers"
-        prov_dir.mkdir()
-        data = dict(OPENAI_DATA)
-        connection = dict(OPENAI_DATA["connections"][1])
-        connection["id"] = local_id
-        data["connections"] = [connection]
-        (prov_dir / "openai.json").write_text(json.dumps(data), encoding="utf-8")
-
-        # Act / Assert
-        with pytest.raises(ConfigError):
-            ProviderRegistry.load(tmp_path)
-
-    def test_provider_id_with_colon_raises_config_error(self, tmp_path: Path) -> None:
-        """Provider ids with ':' would break the compositional connection id grammar."""
-        # Arrange
-        prov_dir = tmp_path / "providers"
-        prov_dir.mkdir()
-        data = dict(OPENAI_DATA)
-        data["id"] = "open:ai"
-        (prov_dir / "openai.json").write_text(json.dumps(data), encoding="utf-8")
-
-        # Act / Assert
-        with pytest.raises(ConfigError):
-            ProviderRegistry.load(tmp_path)
-
-    def test_unknown_oauth_flow_raises_config_error(self, tmp_path: Path) -> None:
-        """Only Device Flow OAuth configs are accepted in this phase."""
-        # Arrange
-        prov_dir = tmp_path / "providers"
-        prov_dir.mkdir()
-        data = dict(OPENAI_DATA)
-        connection = dict(OPENAI_DATA["connections"][0])
-        connection["oauth"] = {
-            "flow": "authorization_code",
-            "client_id": "client-id",
-            "device_auth_url": "https://github.com/login/device/code",
-            "token_url": "https://github.com/login/oauth/access_token",
-            "scopes": ["copilot"],
-        }
-        data["connections"] = [connection]
-        (prov_dir / "openai.json").write_text(json.dumps(data), encoding="utf-8")
-
-        # Act / Assert
-        with pytest.raises(ConfigError):
-            ProviderRegistry.load(tmp_path)
-
-    def test_unknown_oauth_device_flow_raises_config_error(self, tmp_path: Path) -> None:
-        """OAuth Device Flow variants are validated explicitly."""
-        # Arrange
-        prov_dir = tmp_path / "providers"
-        prov_dir.mkdir()
-        data = dict(OPENAI_DATA)
-        connection = dict(OPENAI_DATA["connections"][0])
-        connection["oauth"] = {
-            "flow": "device",
-            "device_flow": "unknown",
-            "client_id": "client-id",
-            "device_auth_url": "https://github.com/login/device/code",
-            "token_url": "https://github.com/login/oauth/access_token",
-            "scopes": ["copilot"],
-        }
-        data["connections"] = [connection]
-        (prov_dir / "openai.json").write_text(json.dumps(data), encoding="utf-8")
-
-        # Act / Assert
-        with pytest.raises(ConfigError):
-            ProviderRegistry.load(tmp_path)
-
-
-class TestCustomProviderRegistry:
-    def test_load_materializes_keyless_custom_provider(self, tmp_path: Path) -> None:
+    return resources
+
+
+# ---------------------------------------------------------------------------
+# Parsing
+# ---------------------------------------------------------------------------
+
+_EVERY_OPTIONAL_FIELD = {
+    "id": "gateway",
+    "name": "Gateway",
+    "adapter": "openai",
+    "base_url": "https://gateway.example.test/v1",
+    "connections": [
+        {
+            "id": "subscription",
+            "type": "oauth",
+            "label": "Subscription",
+            "auth": {"header": "Authorization", "prefix": "Bearer "},
+            "base_url": "https://chatgpt.com/backend-api",
+            "mode": "codex_responses",
+            "models_endpoint": "/codex/models",
+            "oauth": _oauth(
+                device_flow="openai_codex",
+                token_exchange_url="https://auth.example.test/oauth/exchange",
+                verification_uri="https://auth.example.test/codex/device",
+                redirect_uri="https://auth.example.test/deviceauth/callback",
+                expires_in=600,
+            ),
+        },
+        {
+            "id": "api-key",
+            "type": "api_key",
+            "label": "API Key",
+            "auth": {"header": "x-api-key", "prefix": "", "credential_key": "GATEWAY_API_KEY"},
+            "catalog_requires_credentials": False,
+        },
+        # Keyless Connections need no auth block; an empty one parses leniently.
+        {"id": "local", "type": "none", "label": "Local", "auto_refresh": True},
+        {"id": "lan", "type": "none", "label": "LAN", "auth": {}},
+    ],
+    "defaults": {"max_tokens": 4096, "temperature": 0.7},
+    "extra_headers": {"HTTP-Referer": "https://vbot.app", "X-Title": "vBot"},
+    "models_endpoint": "/models",
+    "models_dev_id": "gateway-dev",
+    "context_window": 128_000,
+    "catalog_exclusions": ["broken-preview", "legacy-model"],
+}
+
+_KEYLESS_AUTH = AuthConfig(header="", prefix="", credential_key="")
+
+
+@pytest.mark.parametrize(
+    ("document", "expected"),
+    [
+        pytest.param(
+            _EVERY_OPTIONAL_FIELD,
+            ProviderConfig(
+                id="gateway",
+                name="Gateway",
+                adapter="openai",
+                base_url="https://gateway.example.test/v1",
+                connections=[
+                    ConnectionConfig(
+                        id="subscription",
+                        type="oauth",
+                        label="Subscription",
+                        auth=AuthConfig(header="Authorization", prefix="Bearer "),
+                        base_url="https://chatgpt.com/backend-api",
+                        oauth=OAuthConfig(
+                            flow="device",
+                            client_id="client-id",
+                            device_auth_url="https://auth.example.test/device/code",
+                            token_url="https://auth.example.test/oauth/token",
+                            scopes=["openid"],
+                            token_exchange_url="https://auth.example.test/oauth/exchange",
+                            device_flow="openai_codex",
+                            verification_uri="https://auth.example.test/codex/device",
+                            redirect_uri="https://auth.example.test/deviceauth/callback",
+                            expires_in=600,
+                        ),
+                        mode="codex_responses",
+                        models_endpoint="/codex/models",
+                    ),
+                    ConnectionConfig(
+                        id="api-key",
+                        type="api_key",
+                        label="API Key",
+                        auth=AuthConfig(
+                            header="x-api-key", prefix="", credential_key="GATEWAY_API_KEY"
+                        ),
+                        catalog_requires_credentials=False,
+                    ),
+                    ConnectionConfig(
+                        id="local",
+                        type="none",
+                        label="Local",
+                        auth=_KEYLESS_AUTH,
+                        auto_refresh=True,
+                    ),
+                    ConnectionConfig(id="lan", type="none", label="LAN", auth=_KEYLESS_AUTH),
+                ],
+                defaults={"max_tokens": 4096, "temperature": 0.7},
+                extra_headers={"HTTP-Referer": "https://vbot.app", "X-Title": "vBot"},
+                models_endpoint="/models",
+                models_dev_id="gateway-dev",
+                context_window=128_000,
+                catalog_exclusions=frozenset({"broken-preview", "legacy-model"}),
+            ),
+            id="every-optional-field",
+        ),
+        # Absent optional fields parse to the documented "unset" values.
+        pytest.param(
+            _provider(),
+            ProviderConfig(
+                id="minimal",
+                name="Minimal",
+                adapter="openai_compatible",
+                base_url="https://minimal.example.test/v1",
+                connections=[
+                    ConnectionConfig(
+                        id="api-key",
+                        type="api_key",
+                        label="API Key",
+                        auth=AuthConfig(
+                            header="Authorization",
+                            prefix="Bearer ",
+                            credential_key="MINIMAL_API_KEY",
+                        ),
+                        base_url=None,
+                        oauth=None,
+                        mode=None,
+                        models_endpoint=None,
+                        auto_refresh=False,
+                        catalog_requires_credentials=True,
+                    )
+                ],
+                defaults=None,
+                extra_headers=None,
+                models_endpoint=None,
+                models_dev_id=None,
+                context_window=None,
+                catalog_exclusions=frozenset(),
+                custom=False,
+            ),
+            id="required-fields-only",
+        ),
+    ],
+)
+def test_load_parses_bundled_provider_json(
+    tmp_path: Path, document: dict[str, Any], expected: ProviderConfig
+) -> None:
+    registry = ProviderRegistry.load(_write_providers(tmp_path, document))
+
+    assert registry.get(expected.id) == expected
+
+
+def test_direct_construction_leaves_optional_facts_unset() -> None:
+    config = ProviderConfig(
+        id="opencode-go",
+        name="OpenCode Go",
+        adapter="opencode_go",
+        base_url="https://example.test/v1",
+    )
+    connection = ConnectionConfig(
+        id="api-key",
+        type="api_key",
+        label="API Key",
+        auth=AuthConfig(header="Authorization", prefix="Bearer "),
+    )
+
+    assert (
+        config.connections,
+        config.models_dev_id,
+        config.context_window,
+        config.catalog_exclusions,
+        config.custom,
+    ) == ([], None, None, frozenset(), False)
+    assert (
+        connection.mode,
+        connection.models_endpoint,
+        connection.auto_refresh,
+        connection.catalog_requires_credentials,
+    ) == (None, None, False, True)
+    # The models.dev key falls back to the vBot Provider id.
+    assert config.effective_models_dev_id() == "opencode-go"
+    assert dataclasses.replace(config, models_dev_id="opencode").effective_models_dev_id() == (
+        "opencode"
+    )
+
+
+@pytest.mark.parametrize(
+    ("instance", "field_name"),
+    [
+        pytest.param(
+            ProviderConfig(id="p", name="P", adapter="openai_compatible", base_url="https://p"),
+            "id",
+            id="provider",
+        ),
+        pytest.param(
+            ConnectionConfig(id="c", type="none", label="C", auth=_KEYLESS_AUTH),
+            "label",
+            id="connection",
+        ),
+        pytest.param(_KEYLESS_AUTH, "credential_key", id="auth"),
+    ],
+)
+def test_parsed_configs_are_immutable(instance: object, field_name: str) -> None:
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        setattr(instance, field_name, "changed")
+
+
+def test_auth_config_carries_only_credential_centric_fields() -> None:
+    assert [field.name for field in dataclasses.fields(AuthConfig)] == [
+        "header",
+        "prefix",
+        "credential_key",
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Validation
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("documents", "error"),
+    [
+        pytest.param([[]], ConfigError, id="root-not-an-object"),
+        pytest.param([_provider(id="open:ai")], ConfigError, id="provider-id-with-colon"),
+        pytest.param([_provider(), _provider()], KeyError, id="duplicate-provider-id"),
+        pytest.param([_provider(connections=_DROP)], ConfigError, id="missing-connections"),
+        # '--' and ':' would break token filenames and Connection id parsing.
+        pytest.param(
+            [_provider(connections=[_connection(id="api--key")])],
+            ConfigError,
+            id="connection-id-with-double-dash",
+        ),
+        pytest.param(
+            [_provider(connections=[_connection(id="api:key")])],
+            ConfigError,
+            id="connection-id-with-colon",
+        ),
+        pytest.param(
+            [_provider(connections=[_connection(), _connection()])],
+            KeyError,
+            id="duplicate-connection-id",
+        ),
+        pytest.param(
+            [_provider(connections=[_connection(type="bearer")])],
+            ConfigError,
+            id="unknown-connection-type",
+        ),
+        pytest.param(
+            [_provider(connections=[_connection(auth=_DROP)])],
+            ConfigError,
+            id="keyed-connection-without-auth",
+        ),
+        pytest.param(
+            [
+                _provider(
+                    connections=[_connection(auth={"header": "Authorization", "prefix": "Bearer "})]
+                )
+            ],
+            ConfigError,
+            id="api-key-without-credential-key",
+        ),
+        pytest.param(
+            [
+                _provider(
+                    connections=[_connection(type="oauth", oauth=_oauth(flow="authorization_code"))]
+                )
+            ],
+            ConfigError,
+            id="unknown-oauth-flow",
+        ),
+        pytest.param(
+            [
+                _provider(
+                    connections=[_connection(type="oauth", oauth=_oauth(device_flow="unknown"))]
+                )
+            ],
+            ConfigError,
+            id="unknown-oauth-device-flow",
+        ),
+        pytest.param(
+            [_provider(connections=[_connection(type="oauth", oauth=_oauth(expires_in=0))])],
+            ConfigError,
+            id="non-positive-oauth-expiry",
+        ),
+        pytest.param(
+            [_provider(connections=[_connection(mode=42)])], ConfigError, id="non-string-mode"
+        ),
+        pytest.param(
+            [_provider(connections=[_connection(models_endpoint=["not", "a", "string"])])],
+            ConfigError,
+            id="non-string-connection-models-endpoint",
+        ),
+        pytest.param(
+            [_provider(connections=[_connection(auto_refresh="yes")])],
+            ConfigError,
+            id="non-boolean-auto-refresh",
+        ),
+        pytest.param(
+            [_provider(connections=[_connection(catalog_requires_credentials="no")])],
+            ConfigError,
+            id="non-boolean-catalog-requires-credentials",
+        ),
+        pytest.param(
+            [_provider(models_dev_id=["not", "a", "string"])],
+            ConfigError,
+            id="non-string-models-dev-id",
+        ),
+        pytest.param([_provider(context_window=0)], ConfigError, id="non-positive-context-window"),
+        pytest.param([_provider(context_window=1.5)], ConfigError, id="non-int-context-window"),
+        pytest.param([_provider(context_window=True)], ConfigError, id="boolean-context-window"),
+        pytest.param(
+            [_provider(catalog_exclusions="broken-preview")],
+            ConfigError,
+            id="catalog-exclusions-not-a-list",
+        ),
+        pytest.param(
+            [_provider(catalog_exclusions=[""])], ConfigError, id="empty-catalog-exclusion"
+        ),
+        pytest.param(
+            [_provider(catalog_exclusions=[123])], ConfigError, id="non-string-catalog-exclusion"
+        ),
+    ],
+)
+def test_load_rejects_invalid_provider_json(
+    tmp_path: Path, documents: list[Any], error: type[Exception]
+) -> None:
+    with pytest.raises(error):
+        ProviderRegistry.load(_write_providers(tmp_path, *documents))
+
+
+def test_several_connections_may_share_a_type(tmp_path: Path) -> None:
+    document = _provider(
+        connections=[_connection(id="primary-key"), _connection(id="secondary-key")]
+    )
+
+    config = ProviderRegistry.load(_write_providers(tmp_path, document)).get("minimal")
+
+    assert [(connection.id, connection.type) for connection in config.connections] == [
+        ("primary-key", "api_key"),
+        ("secondary-key", "api_key"),
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Lookup
+# ---------------------------------------------------------------------------
+
+
+def test_lookup_lists_sorted_ids_and_names_what_is_available_on_a_miss(tmp_path: Path) -> None:
+    registry = ProviderRegistry.load(_write_providers(tmp_path, _provider(), _EVERY_OPTIONAL_FIELD))
+    config = registry.get("gateway")
+
+    assert registry.list_ids() == ["gateway", "minimal"]
+    assert config.get_connection("api-key") is config.connections[1]
+    with pytest.raises(KeyError, match="gateway, minimal"):
+        registry.get("no-such-provider")
+    with pytest.raises(KeyError, match="subscription, api-key, local, lan"):
+        config.get_connection("missing")
+
+
+@pytest.mark.parametrize("create_directory", [True, False], ids=["empty", "missing"])
+def test_a_resources_directory_without_provider_json_is_an_empty_registry(
+    tmp_path: Path, create_directory: bool
+) -> None:
+    if create_directory:
+        (tmp_path / "providers").mkdir()
+
+    assert ProviderRegistry.load(tmp_path).list_ids() == []
+
+
+# ---------------------------------------------------------------------------
+# Caching and tolerant loading
+# ---------------------------------------------------------------------------
+
+
+def test_bundled_registry_is_cached_per_resources_directory(tmp_path: Path) -> None:
+    resources = _write_providers(tmp_path / "resources", _provider(), _EVERY_OPTIONAL_FIELD)
+    other = _write_providers(tmp_path / "other")
+
+    first = ProviderRegistry.load(resources)
+    (resources / "providers" / "provider-0.json").unlink()
+    second = ProviderRegistry.load(resources)
+
+    assert second is first
+    assert second.list_ids() == ["gateway", "minimal"]
+    assert ProviderRegistry.load(other) is not first
+
+
+def test_tolerant_load_skips_invalid_configs_and_keeps_valid_ones(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    resources = _write_providers(tmp_path, _provider())
+    corrupt_path = resources / "providers" / "corrupt.json"
+    corrupt_path.write_text('{"id":', encoding="utf-8")
+    shadowing = {
+        "name": "Shadow",
+        "adapter": "openai_compatible",
+        "base_url": "https://shadow.example/v1",
+        "auth": "none",
+    }
+
+    with caplog.at_level(logging.WARNING, logger="vbot.providers"):
         registry = ProviderRegistry.load(
-            tmp_path,
-            custom_providers={
-                "local-ai": {
-                    "name": "Local AI",
-                    "adapter": "openai_compatible",
-                    "base_url": "http://127.0.0.1:8080/v1",
-                    "auth": "none",
-                    "models_endpoint": "/models",
-                    "defaults": {},
-                    "models": {},
-                }
-            },
+            resources, custom_providers={"minimal": shadowing}, tolerate_invalid=True
         )
 
-        provider = registry.get("local-ai")
-        assert provider.custom is True
-        assert provider.models_endpoint == "/models"
-        assert provider.get_connection("default").type == "none"
+    assert registry.list_ids() == ["minimal"]
+    assert registry.get("minimal").custom is False
+    assert str(corrupt_path) in caplog.text
+    assert "Ignoring invalid Custom Provider 'minimal'" in caplog.text
 
-    def test_reload_replaces_custom_provider_in_place(self, tmp_path: Path) -> None:
-        registry = ProviderRegistry.load(tmp_path, custom_providers={})
-        held_reference = registry
 
-        registry.reload(
-            tmp_path,
-            custom_providers={
-                "gateway": {
-                    "name": "Gateway",
-                    "adapter": "openai_compatible",
-                    "base_url": "https://gateway.example/v1",
-                    "auth": "api_key",
-                    "models_endpoint": None,
-                    "defaults": {},
-                    "models": {},
-                }
-            },
-        )
+def test_tolerant_load_survives_provider_directory_scan_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    providers_dir = tmp_path / "providers"
+    providers_dir.mkdir()
 
-        connection = held_reference.get("gateway").get_connection("default")
-        assert connection.auth.credential_key == "VBOT_CUSTOM_GATEWAY_API_KEY"
-        assert connection.auth.header == "Authorization"
-        assert connection.auth.prefix == "Bearer "
+    def fail_scan(*_args: object, **_kwargs: object) -> list[Path]:
+        raise OSError("scan failed")
 
-    def test_custom_provider_registries_are_isolated_per_runtime_data(
-        self,
-        tmp_path: Path,
-    ) -> None:
-        first = ProviderRegistry.load(
-            tmp_path,
-            custom_providers={
-                "first": {
-                    "name": "First",
-                    "adapter": "openai_compatible",
-                    "base_url": "https://first.example/v1",
-                    "auth": "none",
-                    "models_endpoint": None,
-                    "defaults": {},
-                    "models": {},
-                }
-            },
-        )
-        second = ProviderRegistry.load(
-            tmp_path,
-            custom_providers={
-                "second": {
-                    "name": "Second",
-                    "adapter": "openai_compatible",
-                    "base_url": "https://second.example/v1",
-                    "auth": "none",
-                    "models_endpoint": None,
-                    "defaults": {},
-                    "models": {},
-                }
-            },
-        )
-        bundled_only = ProviderRegistry.load(tmp_path)
+    monkeypatch.setattr(Path, "glob", fail_scan)
 
-        assert first.list_ids() == ["first"]
-        assert second.list_ids() == ["second"]
-        assert bundled_only.list_ids() == []
+    with caplog.at_level(logging.WARNING, logger="vbot.providers"):
+        registry = ProviderRegistry.load(tmp_path, custom_providers={}, tolerate_invalid=True)
 
-    def test_custom_provider_cannot_shadow_bundled_provider(
-        self,
-        providers_dir: Path,
-    ) -> None:
-        with pytest.raises(ConfigError):
-            ProviderRegistry.load(
-                providers_dir,
-                custom_providers={
-                    "openai": {
-                        "name": "Shadow",
-                        "adapter": "openai_compatible",
-                        "base_url": "https://shadow.example/v1",
-                        "auth": "none",
-                        "models_endpoint": None,
-                        "defaults": {},
-                        "models": {},
-                    }
-                },
-            )
+    assert registry.list_ids() == []
+    assert str(providers_dir) in caplog.text
+
+
+def test_tolerant_load_does_not_populate_strict_registry_cache(tmp_path: Path) -> None:
+    providers_dir = tmp_path / "providers"
+    providers_dir.mkdir()
+    providers_dir.joinpath("corrupt.json").write_text('{"id":', encoding="utf-8")
+
+    assert ProviderRegistry.load(tmp_path, tolerate_invalid=True).list_ids() == []
+    with pytest.raises(json.JSONDecodeError):
+        ProviderRegistry.load(tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# Custom Providers
+# ---------------------------------------------------------------------------
+
+
+def _custom(auth: str, **changes: Any) -> dict[str, Any]:
+    return {
+        "name": "Custom",
+        "adapter": "openai_compatible",
+        "base_url": "http://127.0.0.1:8080/v1",
+        "auth": auth,
+        "models_endpoint": None,
+        "defaults": {},
+        "models": {},
+        **changes,
+    }
+
+
+@pytest.mark.parametrize(
+    ("provider_id", "custom", "connection"),
+    [
+        pytest.param(
+            "local-ai",
+            _custom("none", models_endpoint="/models"),
+            ConnectionConfig(id="default", type="none", label="Default", auth=_KEYLESS_AUTH),
+            id="keyless",
+        ),
+        # The credential key is derived from the normalized Custom Provider id.
+        pytest.param(
+            "my-gateway",
+            _custom("api_key"),
+            ConnectionConfig(
+                id="default",
+                type="api_key",
+                label="Default",
+                auth=AuthConfig(
+                    header="Authorization",
+                    prefix="Bearer ",
+                    credential_key="VBOT_CUSTOM_MY_GATEWAY_API_KEY",
+                ),
+            ),
+            id="api-key",
+        ),
+    ],
+)
+def test_custom_provider_materializes_one_default_connection(
+    tmp_path: Path, provider_id: str, custom: dict[str, Any], connection: ConnectionConfig
+) -> None:
+    registry = ProviderRegistry.load(tmp_path, custom_providers={provider_id: custom})
+
+    assert registry.get(provider_id) == ProviderConfig(
+        id=provider_id,
+        name="Custom",
+        adapter="openai_compatible",
+        base_url="http://127.0.0.1:8080/v1",
+        connections=[connection],
+        defaults={},
+        models_endpoint=custom["models_endpoint"],
+        custom=True,
+    )
+
+
+def test_reload_replaces_custom_providers_in_place(tmp_path: Path) -> None:
+    registry = ProviderRegistry.load(tmp_path, custom_providers={})
+    held_reference = registry
+
+    registry.reload(tmp_path, custom_providers={"gateway": _custom("api_key")})
+
+    assert held_reference.list_ids() == ["gateway"]
+
+
+def test_custom_provider_registries_are_isolated_per_runtime_data(tmp_path: Path) -> None:
+    first = ProviderRegistry.load(tmp_path, custom_providers={"first": _custom("none")})
+    second = ProviderRegistry.load(tmp_path, custom_providers={"second": _custom("none")})
+    bundled_only = ProviderRegistry.load(tmp_path)
+
+    assert first.list_ids() == ["first"]
+    assert second.list_ids() == ["second"]
+    assert bundled_only.list_ids() == []
+
+
+def test_custom_provider_cannot_shadow_bundled_provider(tmp_path: Path) -> None:
+    resources = _write_providers(tmp_path, _provider())
+
+    with pytest.raises(ConfigError):
+        ProviderRegistry.load(resources, custom_providers={"minimal": _custom("none")})
