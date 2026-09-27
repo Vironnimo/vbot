@@ -400,6 +400,9 @@ Important behavior:
 - if the worktree is dirty, delete fails unless you explicitly use `--force`;
   the error output lists each blocking file as an `uncommitted:` line so you
   can decide whether to commit the work or discard it with `--force`
+- when `git worktree remove` fails, a non-force delete stops unless
+  `git worktree list` confirms Git already deregistered the checkout (Windows
+  can keep locked files behind); then it finishes the removal itself
 - for proven-owned data, before removing anything it stops the worktree's managed server and fake
   Provider with `scripts/test-env.py stop` for the recorded data dir and port;
   when the worktree no longer has that script, the copy in the checkout running
