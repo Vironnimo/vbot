@@ -29,6 +29,7 @@ from .engine_test_support import (
     QUEUE_DRAIN_TIMEOUT_SECONDS,
     MemoryChannelAccessRegistry,
     channel_state,
+    drain,
     make_command_dispatcher,
     make_config,
     make_trigger_service,
@@ -349,8 +350,11 @@ def make_adapter(
     chat_sessions = ChatSessionManager(tmp_path)
     trigger_mock = trigger_run or AsyncMock()
 
-    config = make_config(dm_scope=dm_scope, response_mode=response_mode)
-    config.allowed_chat_ids = [str(chat_id) for chat_id in allowed_chat_ids or ()]
+    config = make_config(
+        dm_scope=dm_scope,
+        response_mode=response_mode,
+        allowed_chat_ids=[str(chat_id) for chat_id in allowed_chat_ids or ()],
+    )
     config.validate()
 
     adapter = TelegramChannelAdapter(
@@ -390,11 +394,7 @@ async def drain_chat_queue(adapter: TelegramChannelAdapter, chat_id: int) -> Non
             asyncio.gather(*pending, return_exceptions=True),
             timeout=QUEUE_DRAIN_TIMEOUT_SECONDS,
         )
-    queue = adapter._engine._chat_queues.get(str(chat_id))
-    if queue is None:
-        await asyncio.sleep(0)
-        return
-    await asyncio.wait_for(queue.join(), timeout=QUEUE_DRAIN_TIMEOUT_SECONDS)
+    await drain(adapter._engine, chat_id)
 
 
 def sent_texts(bot: SimpleNamespace) -> list[str]:

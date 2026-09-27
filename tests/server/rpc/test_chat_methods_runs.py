@@ -9,20 +9,15 @@ from typing import Any
 
 import pytest
 
-from core.chat import ChatMessage, CommandDispatcher
+from core.chat import ChatMessage
 from core.database import write_bootstrap_marker
 from core.runs import ChatRunManager, Run
 from core.sessions import ChatSessionManager, SessionAddress
 from core.tools import ToolContext, tool_success
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RPC_ERROR_RUN_NOT_FOUND
-from tests.core.chat.chat_loop_support import build_chat_loop
 from tests.core.sessions.history_fixtures import complete_run
 from tests.server.rpc.chat_methods_test_support import call
-from tests.server.rpc_integration_test_support import (
-    IntegrationRuntime,
-    JsonObject,
-    SequencedAdapter,
-)
+from tests.server.rpc_test_support import JsonObject, StubAdapter, make_state
 
 ADDRESS = SessionAddress(project_id=None, agent_id="coder", session_id="session-one")
 
@@ -41,31 +36,29 @@ async def _held_run() -> tuple[SimpleNamespace, Run]:
 
 @pytest.mark.asyncio
 async def test_cancel_stops_the_run_during_a_tool_and_ignores_its_late_output(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    adapter = SequencedAdapter(
-        [
-            {
-                "content": None,
-                "reasoning": "Need slow work.",
-                "tool_calls": [
-                    {"id": "call_slow", "name": "slow_tool", "arguments": {"value": "late"}}
-                ],
-            },
-            {"content": "Should not be requested", "tool_calls": None},
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    adapter = StubAdapter(
+        stream_deltas=[
+            [
+                {"type": "reasoning_delta", "text": "Need slow work."},
+                {"type": "tool_call_delta", "id": "call_slow", "name_delta": "slow_tool"},
+                {
+                    "type": "tool_call_delta",
+                    "id": "call_slow",
+                    "arguments_delta": '{"value":"late"}',
+                },
+                {"type": "finish", "reason": "tool_calls"},
+            ],
+            [
+                {"type": "content_delta", "text": "Should not be requested"},
+                {"type": "finish", "reason": "stop"},
+            ],
         ]
     )
-    runtime = IntegrationRuntime(tmp_path, adapter)
-    chat_runs = ChatRunManager(persistence=runtime.chat_sessions)
-    runtime.chat_runs = chat_runs
-    state = SimpleNamespace(
-        runtime=runtime,
-        chat_runs=chat_runs,
-        chat_loop=build_chat_loop(runtime),
-        streaming_chat_loop=build_chat_loop(runtime, streaming=True),
-        command_dispatcher=CommandDispatcher(chat_runs),
-        event_bus=None,
-    )
+    state = make_state(tmp_path, adapter)
+    runtime = state.runtime
     slow_tool_started = asyncio.Event()
     release_tool = asyncio.Event()
     tool_results: list[JsonObject] = []

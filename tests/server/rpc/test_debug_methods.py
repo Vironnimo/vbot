@@ -67,13 +67,11 @@ def _make_debug_state(
     debug_enabled: bool = True,
     trace_limit: int = 50,
 ) -> SimpleNamespace:
-    """Create a test RPC state with ``load_debug_settings`` on the stub storage."""
+    """Create a test RPC state whose persisted Settings carry the debug section."""
     state = make_state(tmp_path, StubAdapter())
-
-    storage = state.runtime.storage
-    storage._debug_settings = {"enabled": debug_enabled, "trace_limit": trace_limit}
-    storage.load_debug_settings = lambda: dict(storage._debug_settings)
-
+    state.runtime.storage.save_settings(
+        {"debug": {"enabled": debug_enabled, "trace_limit": trace_limit}}
+    )
     return state
 
 

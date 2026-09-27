@@ -426,6 +426,13 @@ async def test_agent_reorder_persists_the_order_and_rejects_a_stale_revision(
 # ---------------------------------------------------------------------------
 
 
+def _write_prompt_copy(prompts_dir: Path, content: str) -> None:
+    """Place a hand-edited ``runtime.md`` copy, as a user does in the data directory."""
+
+    prompts_dir.mkdir(parents=True, exist_ok=True)
+    (prompts_dir / "runtime.md").write_text(content, encoding="utf-8")
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("default_layout_saved", [True, False], ids=["saved", "bundled"])
 async def test_enabling_a_custom_prompt_seeds_the_agent_from_the_effective_defaults(
@@ -433,7 +440,7 @@ async def test_enabling_a_custom_prompt_seeds_the_agent_from_the_effective_defau
 ) -> None:
     state = make_state(tmp_path, StubAdapter())
     storage = state.runtime.storage
-    storage.write_prompt_fragment("runtime.md", "custom default runtime")
+    _write_prompt_copy(storage.prompts_dir, "custom default runtime")
     default_layout = [
         LayoutEntry(id="core:intro", enabled=True, source="core"),
         LayoutEntry(id="tool:bash", enabled=False, source="tool"),
@@ -459,10 +466,10 @@ async def test_reenabling_a_custom_prompt_preserves_the_agent_customizations(
     storage = state.runtime.storage
     customized = [LayoutEntry(id="user:house-rules", enabled=True, source="user")]
     state.runtime.agents.update("coder", custom_system_prompt_enabled=True)
-    storage.write_agent_prompt_fragment("coder", "runtime.md", "agent custom")
+    _write_prompt_copy(storage.agent_prompts_dir("coder"), "agent custom")
     storage.write_block_layout("coder", customized)
     state.runtime.agents.update("coder", custom_system_prompt_enabled=False)
-    storage.write_prompt_fragment("runtime.md", "custom default runtime")
+    _write_prompt_copy(storage.prompts_dir, "custom default runtime")
 
     await rpc_result(state, "agent.update", id="coder", custom_system_prompt_enabled=True)
 

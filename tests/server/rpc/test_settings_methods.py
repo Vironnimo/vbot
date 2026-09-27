@@ -307,7 +307,7 @@ async def test_settings_get_returns_normalized_settings_payload_without_secrets(
             "trace_count": 0,
         },
         "reflection": {
-            "enabled": False,
+            "enabled": True,
             "memory_turn_interval": 10,
             "skill_model_step_interval": 10,
         },
@@ -365,11 +365,11 @@ async def test_settings_get_reports_zero_traces_when_the_trace_store_fails(
 @pytest.mark.asyncio
 async def test_settings_get_raw_returns_raw_settings_payload(tmp_path: Path) -> None:
     state = make_state(tmp_path, StubAdapter())
-    state.runtime.storage.save_settings({"server_port": 9001, "feature_flags": {"logs": True}})
+    state.runtime.storage.save_settings({"server_port": 9001, "debug": {"trace_limit": 20}})
 
     result = await rpc_result(state, "settings.get_raw")
 
-    assert result == {"settings": {"server_port": 9001, "feature_flags": {"logs": True}}}
+    assert result == {"settings": {"server_port": 9001, "debug": {"trace_limit": 20}}}
 
 
 @pytest.mark.asyncio

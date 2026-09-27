@@ -29,6 +29,7 @@ from core.providers.accounts import (
 )
 from core.runs import ChatRunManager
 from core.runtime.runtime import Runtime
+from core.storage import StorageManager
 from core.tools import FileReadState, ToolRegistry
 from core.utils.errors import ConfigError
 from server.events import ServerEventBus
@@ -41,11 +42,6 @@ from tests.server.rpc_test_support_common import (
     StubProjects,
     StubProviders,
 )
-from tests.server.rpc_test_support_storage import (
-    StubStorage,
-)
-
-__all__ = ["StubStorage"]
 
 JsonObject = dict[str, Any]
 
@@ -179,7 +175,8 @@ class ReloadableStubRuntimeSkills:
 
     def list_all(self) -> list[StubSkill]:
         return [
-            StubSkill(name, f"{name} skill.") for name in self._runtime.storage._skill_directories
+            StubSkill(name, f"{name} skill.")
+            for name in self._runtime.storage.load_skill_directory_settings()
         ]
 
     def warnings_for(self, _name: str) -> list[str]:
@@ -197,11 +194,17 @@ class StubAdapter:
         self,
         responses: list[JsonObject] | None = None,
         *,
-        stream_deltas: list[JsonObject] | None = None,
+        stream_deltas: list[Any] | None = None,
         block: bool = False,
     ) -> None:
+        """Answer ``send`` from ``responses`` and ``stream`` from ``stream_deltas``.
+
+        ``stream_deltas`` is one delta list replayed for every stream, or one delta
+        list per stream request.
+        """
+
         self._responses = responses or []
-        self._stream_deltas = stream_deltas or []
+        self._stream_deltas: list[Any] = stream_deltas or []
         self._block = block
         self.request_started = asyncio.Event()
         self.release = asyncio.Event()
@@ -286,7 +289,7 @@ class StubTerminalManager:
 class StubRuntime:
     def __init__(self, tmp_path: Path, adapter: StubAdapter) -> None:
         self._model_database_refresh_lock = asyncio.Lock()
-        self.storage = StubStorage(tmp_path)
+        self.storage = StorageManager(tmp_path)
         self.agents = StubAgents(
             StubAgent(id="coder", allowed_tools=["*"]),
             defaults_provider=lambda: self.storage.load_defaults().get("agent", {}),
@@ -303,7 +306,7 @@ class StubRuntime:
         self.tools = ToolRegistry()
         self.system_prompts = StubPrompts(self.tools)
         self.skills: Any = StubSkills()
-        self._models = StubModels()
+        self.models: Any = StubModels()
         self.providers = StubProviders()
         self.adapter = adapter
         self.chat_runs: ChatRunManager | None = None
@@ -320,7 +323,7 @@ class StubRuntime:
             self.chat_run_manager,
             agent_resolver=cast(Any, self.agent_resolver),
             sessions=self.chat_sessions,
-            models=cast(Any, self._models),
+            models=cast(Any, self.models),
             projects=cast(Any, self.projects),
             agents=cast(Any, self.agents),
             storage=cast(Any, self.storage),
@@ -353,10 +356,6 @@ class StubRuntime:
 
     def model_database_refresh(self) -> asyncio.Lock:
         return self._model_database_refresh_lock
-
-    @property
-    def models(self) -> Any:
-        return self._models
 
     def has_provider_credentials(self, provider_id: str) -> bool:
         provider = cast(Any, self.providers.get(provider_id))
