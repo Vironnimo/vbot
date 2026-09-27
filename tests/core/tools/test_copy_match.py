@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-import time
+import sys
+from collections.abc import Callable
 
 import pytest
 
@@ -744,67 +745,77 @@ def test_fragment_cannot_drop_a_different_row_identifier_to_find_a_match() -> No
     assert replace_copied(actual, actual.replace("B8", "A7"), "Changed") is None
 
 
-def test_a_large_file_is_searched_quickly() -> None:
-    blocks = [
-        f"def handler_{index}(request, context):\n"
-        f"    value = request.get('field_{index % 50}')\n"
-        "    if value is None:\n"
-        "        return None\n"
-        "    return context.process(value)\n"
-        for index in range(4000)
-    ]
-    content = "".join(blocks)
-    lines = [
-        (" ", "def handler_3999(request, context):"),
-        (" ", "    value = request.get('field_49')"),
-        (" ", "    if value is None:"),
-        ("-", "        retrun None"),
-        ("+", "        raise ValueError('field_49')"),
-        (" ", "    return context.process(value)"),
-    ]
+def _work(function: Callable[..., object], *args: object) -> tuple[int, object]:
+    """Count the calls ``function`` makes: a measure of work that no machine load changes."""
+    calls = 0
 
-    started = time.perf_counter()
-    found = _applied(match_copied_edit(content, lines))
-    elapsed = time.perf_counter() - started
+    def count(frame: object, event: str, arg: object) -> None:
+        nonlocal calls
+        if event in ("call", "c_call"):
+            calls += 1
 
-    assert found.new_content.endswith(
-        "    if value is None:\n        raise ValueError('field_49')\n"
-        "    return context.process(value)\n"
-    )
-    assert elapsed < 2.0
+    previous = sys.getprofile()
+    sys.setprofile(count)
+    try:
+        result = function(*args)
+    finally:
+        sys.setprofile(previous)
+    return calls, result
 
 
-def test_a_long_fragment_in_repetitive_lines_is_searched_quickly() -> None:
-    vocabulary = [
-        "the",
-        "a",
-        "skill",
-        "step",
-        "run",
-        "check",
-        "file",
-        "agent",
-        "tool",
-        "when",
-        "then",
-        "and",
-        "or",
-        "with",
-        "for",
-    ]
-    lines = [
-        f"- item{number}: "
-        + " ".join(vocabulary[(number * 7 + index * 3) % len(vocabulary)] for index in range(120))
-        for number in range(100)
-    ]
-    content = "\n".join(lines) + "\n"
-    old = " ".join(lines[50].split()[4:44]).replace("skill", "skil", 1)
+def test_searching_a_file_twice_as_long_takes_about_twice_the_work() -> None:
+    def handlers(count: int) -> tuple[str, list[tuple[str, str]]]:
+        content = "".join(
+            f"def handler_{index}(request, context):\n"
+            f"    value = request.get('field_{index % 50}')\n"
+            "    if value is None:\n"
+            "        return None\n"
+            "    return context.process(value)\n"
+            for index in range(count)
+        )
+        lines = [
+            (" ", f"def handler_{count - 1}(request, context):"),
+            (" ", "    value = request.get('field_49')"),
+            (" ", "    if value is None:"),
+            ("-", "        retrun None"),
+            ("+", "        raise ValueError('field_49')"),
+            (" ", "    return context.process(value)"),
+        ]
+        return content, lines
 
-    # Bound matching work, excluding time another test process owns the CPU.
-    started = time.process_time()
-    found = replace_copied(content, old, old + " more")
-    elapsed = time.process_time() - started
+    small_work, small = _work(match_copied_edit, *handlers(200))
+    large_work, large = _work(match_copied_edit, *handlers(400))
 
-    # Every line holds the same words in turn, so the copy resembles many places.
-    assert isinstance(found, AmbiguousFuzzyMatch)
-    assert elapsed < 2.0
+    for found in (small, large):
+        assert _applied(found).new_content.endswith(
+            "    if value is None:\n        raise ValueError('field_49')\n"
+            "    return context.process(value)\n"
+        )
+    # Linear search doubles; comparing passages with the whole file would quadruple.
+    assert large_work < 2.5 * small_work
+
+
+def test_work_per_resembling_place_does_not_grow_with_the_line() -> None:
+    vocabulary = ["the", "a", "skill", "step", "run", "check", "file", "agent", "tool"]
+    vocabulary += ["when", "then", "and", "or", "with", "for"]
+
+    def repetitive(words: int) -> tuple[str, str]:
+        lines = [
+            f"- item{number}: "
+            + " ".join(
+                vocabulary[(number * 7 + index * 3) % len(vocabulary)] for index in range(words)
+            )
+            for number in range(3)
+        ]
+        old = " ".join(lines[1].split()[4:24]).replace("skill", "skil", 1)
+        return "\n".join(lines) + "\n", old
+
+    per_place = []
+    for words in (120, 240):
+        content, old = repetitive(words)
+        work, found = _work(replace_copied, content, old, old + " more")
+        # Every line holds the same words in turn, so the copy resembles many places.
+        assert isinstance(found, AmbiguousFuzzyMatch)
+        per_place.append(work / found.occurrences)
+    # Pairing every start of a line with every end would grow with the line's square.
+    assert per_place[1] < 1.5 * per_place[0]
