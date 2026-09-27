@@ -321,6 +321,23 @@ def test_participant_name_pool_is_short_and_unique():
         name.isascii() and name.isalpha() and 1 <= len(name) <= 8 for name in _PARTICIPANT_NAMES
     )
 
+    def one_edit_apart(first: str, second: str) -> bool:
+        if len(first) == len(second):
+            return sum(a != b for a, b in zip(first, second, strict=True)) == 1
+        shorter, longer = sorted((first, second), key=len)
+        return len(longer) - len(shorter) == 1 and any(
+            longer[:index] + longer[index + 1 :] == shorter for index in range(len(longer))
+        )
+
+    # Agents address each other by name, so no name reads as a typo of another.
+    folded = [name.casefold() for name in _PARTICIPANT_NAMES]
+    assert not [
+        (first, second)
+        for index, first in enumerate(folded)
+        for second in folded[index + 1 :]
+        if one_edit_apart(first, second)
+    ]
+
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("count", [300, 601])
