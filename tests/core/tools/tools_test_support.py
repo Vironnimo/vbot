@@ -1,4 +1,4 @@
-"""Shared Tool fakes for the Tools framework tests."""
+"""Shared Tool fakes and production-style dispatch for the Tools tests."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from core.tools import (
     ToolContext,
     ToolExecutionConfig,
     ToolRegistry,
+    tool_failure,
     tool_success,
 )
 
@@ -72,3 +73,16 @@ def register_read_file(registry: ToolRegistry) -> Tool:
         parameters=READ_FILE_SCHEMA,
         handler=read_file_handler,
     )
+
+
+async def dispatch_as_executor(
+    registry: ToolRegistry, context: ToolContext, arguments: Any
+) -> JsonObject:
+    """Dispatch ``context.tool_name`` as the Tool executor does.
+
+    Argument errors become the ``invalid_arguments`` failure the Model reads.
+    """
+    try:
+        return await registry.dispatch(context, arguments, [context.tool_name])
+    except ValueError as error:
+        return tool_failure("invalid_arguments", str(error))

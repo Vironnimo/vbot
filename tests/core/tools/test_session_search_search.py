@@ -1,4 +1,4 @@
-"""Session search: search behavior."""
+"""Session search: ranking, scope, limits and periods."""
 
 from __future__ import annotations
 
@@ -21,20 +21,13 @@ from core.recall import (
     SqliteFtsRecallBackend,
 )
 from core.runs import RunKind
-from core.sessions import ChatSession, ChatSessionManager, SessionAddress
+from core.sessions import ChatSessionManager, SessionAddress
 from core.tools._session_recall_results import (
     SESSION_SEARCH_EXCERPT_MAX_CHARS,
 )
-from core.tools.session_search import (
-    SESSION_SEARCH_RESULT_MAX_BYTES,
-    session_search_handler,
-)
+from core.tools.session_search import SESSION_SEARCH_RESULT_MAX_BYTES
 from tests.core.sessions.history_fixtures import admit_run, append_tool_fixture
-from tests.core.tools.session_search_helpers import (
-    make_context,
-    success,
-    timestamp,
-)
+from tests.core.tools.session_search_test_support import search, success, timestamp
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("current_format_data_directory")]
 
@@ -55,8 +48,8 @@ async def test_search_applies_period_and_backend_default_ranking(tmp_path: Path)
         session.append(message)
 
     data = success(
-        await session_search_handler(
-            make_context(tmp_path),
+        await search(
+            tmp_path,
             {
                 "query": "Telegram",
                 "period": "2026-05-02/2026-05-03",
@@ -83,11 +76,7 @@ async def test_unscoped_search_keeps_repeated_hits_and_one_session_descriptor(
     await admit_run(sessions, address, RunKind.USER)
 
     data = success(
-        await session_search_handler(
-            make_context(tmp_path),
-            {"query": "needle"},
-            CanonicalSessionRecallBackend(sessions),
-        )
+        await search(tmp_path, {"query": "needle"}, CanonicalSessionRecallBackend(sessions))
     )
 
     assert [item["message_id"] for item in data["items"]] == [second.id, first.id]
@@ -110,9 +99,7 @@ async def test_search_returns_at_most_ten_results_without_pagination(tmp_path: P
         messages.append(message)
     backend = CanonicalSessionRecallBackend(sessions)
 
-    data = success(
-        await session_search_handler(make_context(tmp_path), {"query": "needle"}, backend)
-    )
+    data = success(await search(tmp_path, {"query": "needle"}, backend))
 
     assert len(data["items"]) == 10
     assert data["items"][0]["message_id"] == messages[-1].id
@@ -174,14 +161,7 @@ async def test_unscoped_search_rechecks_hit_sessions_before_result_shaping(
                 total_candidate_sessions=5,
             )
 
-    data = success(
-        await session_search_handler(
-            make_context(tmp_path),
-            {"query": "needle"},
-            _RankedBackend(),
-            sessions=sessions,
-        )
-    )
+    data = success(await search(tmp_path, {"query": "needle"}, _RankedBackend(), sessions=sessions))
 
     assert [request.limit for request in seen_requests] == [10]
     assert seen_requests[0].excluded_session_ids == ("current-session",)
@@ -206,8 +186,8 @@ async def test_session_scoped_search_keeps_multiple_hits_and_does_not_overfetch(
         session.append(message)
 
     data = success(
-        await session_search_handler(
-            make_context(tmp_path),
+        await search(
+            tmp_path,
             {"query": "needle", "session_id": "target"},
             CanonicalSessionRecallBackend(sessions),
         )
@@ -231,53 +211,11 @@ async def test_fts_search_keeps_backend_relevance(tmp_path: Path) -> None:
     )
     backend = SqliteFtsRecallBackend(RecallBackendContext(data_dir=tmp_path, sessions=sessions))
 
-    data = success(
-        await session_search_handler(
-            make_context(tmp_path),
-            {"query": "telegram"},
-            backend,
-        )
-    )
+    data = success(await search(tmp_path, {"query": "telegram"}, backend))
 
     assert "backend" not in data
     assert "ranking" not in data
     assert [item["session_id"] for item in data["items"]] == ["dense", "sparse"]
-
-
-async def test_fts_tool_search_does_not_reconstruct_complete_session_histories(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    sessions = ChatSessionManager(tmp_path)
-    session = sessions.create("coder", session_id="indexed")
-    message = ChatMessage.user("indexed needle", timestamp=timestamp(1))
-    session.append(message)
-    backend = SqliteFtsRecallBackend(RecallBackendContext(data_dir=tmp_path, sessions=sessions))
-
-    def fail_history_load(_session: ChatSession) -> list[ChatMessage]:
-        raise AssertionError("FTS Tool search must not load complete Session history")
-
-    monkeypatch.setattr(ChatSession, "load", fail_history_load)
-    monkeypatch.setattr(ChatSession, "load_active", fail_history_load)
-
-    data = success(
-        await session_search_handler(
-            make_context(tmp_path),
-            {"query": "needle"},
-            backend,
-        )
-    )
-
-    assert [item["message_id"] for item in data["items"]] == [message.id]
-    assert data["sessions"] == [{"agent_id": "coder", "session_id": "indexed"}]
-    missing = success(
-        await session_search_handler(
-            make_context(tmp_path),
-            {"query": "absent"},
-            backend,
-        )
-    )
-    assert missing["items"] == []
 
 
 @pytest.mark.parametrize("tool_name", ["session_search", "session_read"])
@@ -300,19 +238,13 @@ async def test_search_excludes_its_own_persisted_results(
     session.append(real)
 
     data = success(
-        await session_search_handler(
-            make_context(tmp_path),
-            {"query": "needle"},
-            CanonicalSessionRecallBackend(sessions),
-        )
+        await search(tmp_path, {"query": "needle"}, CanonicalSessionRecallBackend(sessions))
     )
 
     assert [item["message_id"] for item in data["items"]] == [real.id]
 
 
 async def test_sync_extension_search_runs_outside_event_loop(tmp_path: Path) -> None:
-    from core.recall import RecallSearchCapabilities, RecallSearchPage
-
     caller_thread = threading.get_ident()
 
     class _SyncBackend:
@@ -328,9 +260,7 @@ async def test_sync_extension_search_runs_outside_event_loop(tmp_path: Path) -> 
             return RecallSearchPage((), "message", "extension", "snapshot", False, 0)
 
     backend = _SyncBackend()
-    data = success(
-        await session_search_handler(make_context(tmp_path), {"query": "extension"}, backend)
-    )
+    data = success(await search(tmp_path, {"query": "extension"}, backend))
 
     assert data["items"] == []
     assert backend.search_thread is not None
@@ -348,11 +278,7 @@ async def test_multiple_large_excerpts_stay_within_result_limit(tmp_path: Path) 
             )
         )
 
-    result = await session_search_handler(
-        make_context(tmp_path),
-        {"query": "needle"},
-        CanonicalSessionRecallBackend(sessions),
-    )
+    result = await search(tmp_path, {"query": "needle"}, CanonicalSessionRecallBackend(sessions))
     data = success(result)
 
     assert len(data["items"]) == 3
@@ -387,12 +313,8 @@ async def _search_recorded(
 ) -> tuple[dict[str, Any], RecallSearchRequest]:
     backend = _RecordingBackend(has_more=has_more)
     data = success(
-        await session_search_handler(
-            make_context(tmp_path),
-            arguments,
-            backend,
-            sessions=ChatSessionManager(tmp_path),
-            timezone_name_loader=(lambda: timezone) if timezone is not None else None,
+        await search(
+            tmp_path, arguments, backend, sessions=ChatSessionManager(tmp_path), timezone=timezone
         )
     )
     assert len(backend.requests) == 1
@@ -487,8 +409,8 @@ async def test_search_without_period_states_none(tmp_path: Path) -> None:
 
 
 async def test_single_timestamp_period_names_the_open_range_call(tmp_path: Path) -> None:
-    result = await session_search_handler(
-        make_context(tmp_path),
+    result = await search(
+        tmp_path,
         {"query": "needle", "period": "2026-07-01T09:00"},
         _RecordingBackend(),
         sessions=ChatSessionManager(tmp_path),

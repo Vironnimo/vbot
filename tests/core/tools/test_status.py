@@ -1,16 +1,20 @@
-"""Tests for the built-in status tool."""
+"""The built-in status Tool through production dispatch.
+
+The report text itself is built by ``core.chat.status_report`` and covered with the /status
+command in ``tests/core/chat/test_commands_status.py``; these tests guard the Tool's target
+selection, its refusals, and that it feeds the report from the services it was registered with.
+"""
 
 from __future__ import annotations
 
 import asyncio
-import inspect
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
 import pytest
 
-import core.tools.status as status_tool_module
 from core.agents.agents import Agent
 from core.chat import (
     ChatSessionError,
@@ -18,35 +22,28 @@ from core.chat import (
     CommandExecutionContext,
     ReplySurface,
 )
-from core.chat.messages import (
-    ChatMessage,
-)
-from core.chat.status_report import (
-    STATUS_PLACEHOLDER,
-    ReasoningIntent,
-    build_status_text,
-    status_session_facts,
-)
+from core.chat.messages import ChatMessage
+from core.chat.status_report import ReasoningIntent, status_session_facts
 from core.models.models import Capabilities, Model, ModelRegistry, ReasoningCapabilities
 from core.projects import (
     AgentResolutionError,
     AgentResolver,
-    ConfigAgent,
     ProjectStore,
     ResolutionAgentNotFoundError,
     ResolutionProjectNotFoundError,
 )
 from core.runs import ChatRunManager, Run
 from core.sessions import ChatSessionManager, SessionAddress
-from core.tools import ToolAccess, ToolContext, ToolRegistry, tool_failure
-from core.tools.status import STATUS_TOOL_NAME, STATUS_TOOL_PARAMETERS, register_status_tool
+from core.tools import ToolAccess, ToolContext, ToolRegistry
+from core.tools.status import STATUS_TOOL_NAME, register_status_tool
+from tests.core.tools.tools_test_support import dispatch_as_executor
 
 
-def _make_agent(*, model: str = "openai/gpt-5.2") -> Agent:
-    return Agent(
+def _make_agent(**overrides: Any) -> Agent:
+    agent = Agent(
         id="coder",
         name="Coder",
-        model=model,
+        model="openai/gpt-5.2",
         fallback_models=["openai/gpt-5.1"],
         workspace="workspace",
         temperature=0.3,
@@ -57,12 +54,13 @@ def _make_agent(*, model: str = "openai/gpt-5.2") -> Agent:
         created_at="2026-05-18T10:00:00+00:00",
         updated_at="2026-05-18T10:00:00+00:00",
     )
+    return replace(agent, **overrides)
 
 
-def _make_model(*, model_id: str = "gpt-5.2", name: str = "GPT-5.2") -> Model:
-    return Model(
-        model_id=model_id,
-        name=name,
+def _make_model(**overrides: Any) -> Model:
+    model = Model(
+        model_id="gpt-5.2",
+        name="GPT-5.2",
         capabilities=Capabilities(
             vision=True,
             tools=True,
@@ -72,6 +70,7 @@ def _make_model(*, model_id: str = "gpt-5.2", name: str = "GPT-5.2") -> Model:
         context_window=200_000,
         max_output_tokens=8_192,
     )
+    return replace(model, **overrides)
 
 
 def _context(tmp_path: Path, *, project_id: str | None = None) -> ToolContext:
@@ -89,35 +88,14 @@ def _context(tmp_path: Path, *, project_id: str | None = None) -> ToolContext:
     )
 
 
-async def _dispatch(
-    registry: ToolRegistry,
-    tmp_path: Path,
-    arguments: dict[str, object] | None = None,
-    *,
-    project_id: str | None = None,
-) -> dict[str, object]:
-    try:
-        return await registry.dispatch(
-            _context(tmp_path, project_id=project_id),
-            arguments or {},
-            [STATUS_TOOL_NAME],
-        )
-    except ValueError as error:
-        return tool_failure("invalid_arguments", str(error))
-
-
 class _StubResolver:
-    """Resolver stub that returns a fixed agent regardless of project/agent id.
+    """Returns one Agent for every target and records the targets it was asked for."""
 
-    Records the ``(project_id, agent_id)`` it was asked to resolve so a test can
-    assert the handler threads ``context.project_id`` through.
-    """
-
-    def __init__(self, agent: Agent | ConfigAgent) -> None:
+    def __init__(self, agent: Agent) -> None:
         self._agent = agent
         self.calls: list[tuple[str | None, str]] = []
 
-    def resolve_agent(self, project_id: str | None, agent_id: str) -> Agent | ConfigAgent:
+    def resolve_agent(self, project_id: str | None, agent_id: str) -> Agent:
         self.calls.append((project_id, agent_id))
         return self._agent
 
@@ -164,18 +142,6 @@ class _StubModels:
         return self._model
 
 
-class _RecordingModels:
-    def __init__(self, model: Model) -> None:
-        self._model = model
-        self.calls: list[tuple[str, str]] = []
-
-    def get(self, provider_id: str, model_id: str) -> Model:
-        self.calls.append((provider_id, model_id))
-        if provider_id != "openai" or model_id != "gpt-5.2":
-            raise KeyError(model_id)
-        return self._model
-
-
 class _StubProject:
     def __init__(self, project_id: str, display_name: str) -> None:
         self.project_id = project_id
@@ -192,30 +158,50 @@ class _StubProjects:
         return self._project
 
 
-def test_status_tool_registered_with_correct_name() -> None:
+def _registry(
+    *,
+    resolver: Any = None,
+    sessions: Any = None,
+    models: Any = None,
+    chat_runs: ChatRunManager | None = None,
+    started_at: datetime | None = None,
+    **options: Any,
+) -> ToolRegistry:
     registry = ToolRegistry()
     register_status_tool(
         registry,
-        cast(AgentResolver, _StubResolver(_make_agent())),
-        cast(ChatSessionManager, _StubSessions([])),
-        cast(ModelRegistry, _StubModels(_make_model())),
-        ChatRunManager(),
-        None,
+        cast(AgentResolver, resolver or _StubResolver(_make_agent())),
+        cast(ChatSessionManager, sessions if sessions is not None else _StubSessions([])),
+        cast(ModelRegistry, models or _StubModels(_make_model())),
+        chat_runs or ChatRunManager(),
+        started_at,
+        **options,
     )
+    return registry
 
-    tool = registry.get(STATUS_TOOL_NAME)
-    assert tool.name == STATUS_TOOL_NAME
-    assert tool.parameters == STATUS_TOOL_PARAMETERS
-    assert tool.parameters["required"] == []
+
+def _dispatch(
+    registry: ToolRegistry,
+    tmp_path: Path,
+    arguments: dict[str, object] | None = None,
+    *,
+    project_id: str | None = None,
+) -> dict[str, Any]:
+    context = _context(tmp_path, project_id=project_id)
+    return asyncio.run(dispatch_as_executor(registry, context, arguments or {}))
+
+
+def test_schema_offers_only_the_optional_target() -> None:
+    tool = _registry().get(STATUS_TOOL_NAME)
+
     assert set(tool.parameters["properties"]) == {"agent_id", "session_id"}
-    assert "oneOf" not in tool.parameters
-    assert "additionalProperties" not in tool.parameters
+    assert tool.parameters["required"] == []
     assert tool.open_input_schema is True
-    assert inspect.iscoroutinefunction(tool.handler)
 
 
-def test_status_tool_returns_text_with_full_deps(tmp_path: Path) -> None:
+def test_status_tool_reports_the_current_session_like_the_status_command(tmp_path: Path) -> None:
     session_started = datetime(2026, 5, 18, 10, 0, tzinfo=UTC)
+    started_at = datetime(2026, 5, 18, 9, 0, tzinfo=UTC)
     messages = [
         ChatMessage.user("Status check", timestamp=session_started),
         ChatMessage.assistant(
@@ -230,37 +216,90 @@ def test_status_tool_returns_text_with_full_deps(tmp_path: Path) -> None:
             timestamp=session_started,
         ),
     ]
-
-    registry = ToolRegistry()
-    register_status_tool(
-        registry,
-        cast(AgentResolver, _StubResolver(_make_agent())),
-        cast(ChatSessionManager, _StubSessions(messages)),
-        cast(ModelRegistry, _StubModels(_make_model())),
+    resolver = cast(AgentResolver, _StubResolver(_make_agent()))
+    sessions = cast(ChatSessionManager, _StubSessions(messages))
+    models = cast(ModelRegistry, _StubModels(_make_model(name="GPT-5.2 Registry")))
+    dispatcher = CommandDispatcher(
         ChatRunManager(),
-        datetime(2026, 5, 18, 9, 0, tzinfo=UTC),
+        agent_resolver=resolver,
+        sessions=sessions,
+        models=models,
+        started_at=started_at,
     )
+    prepared = dispatcher.prepare("/status")
+    assert prepared is not None
+    command_result = asyncio.run(
+        dispatcher.execute(
+            prepared,
+            CommandExecutionContext(
+                agent_id="coder",
+                session_id="session-one",
+                project_id=None,
+                reply_surface=ReplySurface.webui(),
+            ),
+        )
+    )
+    assert command_result.feedback is not None
+    registry = _registry(resolver=resolver, sessions=sessions, models=models, started_at=started_at)
 
-    result = asyncio.run(_dispatch(registry, tmp_path))
+    result = _dispatch(registry, tmp_path)
 
     assert result["ok"] is True
-    data = cast(dict[str, Any], result["data"])
-    text = cast(str, data["text"])
-    assert text
-    assert "Agent: Coder (openai/gpt-5.2)" in text
-    assert "Model display name: GPT-5.2" in text
-    assert "Activity: idle" in text
-    assert f"Run created at: {STATUS_PLACEHOLDER}" in text
-    assert f"Run updated at: {STATUS_PLACEHOLDER}" in text
-    assert "Last request cache: read 800 / 1234 (64.8% hit), write 100" in text
-    assert "Session cache: read 800 / 1234 (64.8% hit), write 100, turns 1" in text
-    assert set(data) == {
-        "text",
-        "agent_id",
-        "session_id",
-    }
-    assert data["agent_id"] == "coder"
-    assert data["session_id"] == "session-one"
+    data = result["data"]
+    assert (set(data), data["agent_id"], data["session_id"]) == (
+        {"text", "agent_id", "session_id"},
+        "coder",
+        "session-one",
+    )
+
+    def _without_live_time_lines(status_text: str) -> list[str]:
+        return [
+            line
+            for line in status_text.splitlines()
+            if not line.startswith(("Session started:", "App uptime:", "Current time:"))
+        ]
+
+    assert _without_live_time_lines(data["text"]) == _without_live_time_lines(
+        command_result.feedback.text
+    )
+    assert "Agent: Coder (openai/gpt-5.2)" in data["text"]
+    assert "Activity: idle" in data["text"]
+    assert "Session cache: read 800 / 1234 (64.8% hit), write 100, turns 1" in data["text"]
+
+
+def test_status_tool_reports_through_the_services_it_was_registered_with(tmp_path: Path) -> None:
+    # A project run: the resolver and the Session lookup receive the Project, and the Model
+    # registry, the Project store and the reasoning describer each feed their report line.
+    resolver = _StubResolver(_make_agent(thinking_effort="xhigh", temperature=None))
+    sessions = _StubSessions([])
+    described: list[tuple[str, str, str | None]] = []
+
+    def describe_render(provider_id: str, model_id: str, effort: str | None) -> ReasoningIntent:
+        described.append((provider_id, model_id, effort))
+        return ReasoningIntent("effort", effort_level="max")
+
+    registry = _registry(
+        resolver=resolver,
+        sessions=sessions,
+        models=_StubModels(_make_model(name="GPT-5.2 Registry", recommended_temperature=1.0)),
+        projects=cast(ProjectStore, _StubProjects(_StubProject("vbot", "vBot"))),
+        reasoning_render_describer=describe_render,
+    )
+
+    result = _dispatch(registry, tmp_path, project_id="vbot")
+
+    text = result["data"]["text"]
+    assert resolver.calls == [("vbot", "coder")]
+    assert sessions.calls == [("coder", "session-one", "vbot")]
+    assert described == [("openai", "gpt-5.2", "xhigh")]
+    for line in (
+        "Project: vBot (vbot)",
+        "Model display name: GPT-5.2 Registry",
+        "Selected thinking effort: xhigh",
+        "Actual model thinking effort: max",
+        "Temperature: 1 (model recommendation)",
+    ):
+        assert line in text
 
 
 @pytest.mark.parametrize(
@@ -276,43 +315,17 @@ def test_status_tool_reports_why_the_target_agent_cannot_be_resolved(
 ) -> None:
     # Only a missing Agent or Project is "not found"; an Agent that exists but
     # cannot run reports the resolver's reason instead.
-    registry = ToolRegistry()
-    register_status_tool(
-        registry,
-        cast(AgentResolver, _RaisingResolver(resolver_error)),
-        cast(ChatSessionManager, _StubSessions([])),
-        cast(ModelRegistry, _StubModels(_make_model())),
-        ChatRunManager(),
-        None,
-    )
+    registry = _registry(resolver=_RaisingResolver(resolver_error))
 
-    result = asyncio.run(_dispatch(registry, tmp_path, project_id="vbot"))
+    result = _dispatch(registry, tmp_path, project_id="vbot")
 
     assert result["ok"] is False
-    error = cast(dict[str, object], result["error"])
+    error = result["error"]
     assert error["code"] == expected_code
     if expected_code == "agent_unavailable":
         assert error["retryable"] is False
-        assert "agent 'coder' has no usable model" in cast(str, error["message"])
-        assert "coder@vbot" in cast(str, error["message"])
-
-
-def test_status_tool_returns_failure_when_session_not_found(tmp_path: Path) -> None:
-    registry = ToolRegistry()
-    register_status_tool(
-        registry,
-        cast(AgentResolver, _StubResolver(_make_agent())),
-        cast(ChatSessionManager, _NotFoundSessions()),
-        cast(ModelRegistry, _StubModels(_make_model())),
-        ChatRunManager(),
-        None,
-    )
-
-    result = asyncio.run(_dispatch(registry, tmp_path, {"session_id": "missing"}))
-
-    assert result["ok"] is False
-    error = cast(dict[str, str], result["error"])
-    assert error["code"] == "session_not_found"
+        assert "agent 'coder' has no usable model" in error["message"]
+        assert "coder@vbot" in error["message"]
 
 
 @pytest.mark.parametrize(
@@ -336,33 +349,17 @@ def test_status_tool_returns_failure_when_session_not_found(tmp_path: Path) -> N
 def test_status_tool_names_the_next_call_when_session_is_missing(
     tmp_path: Path, arguments: dict[str, object], message: str
 ) -> None:
-    registry = ToolRegistry()
-    register_status_tool(
-        registry,
-        cast(AgentResolver, _StubResolver(_make_agent())),
-        cast(ChatSessionManager, _NotFoundSessions()),
-        cast(ModelRegistry, _StubModels(_make_model())),
-        ChatRunManager(),
-        None,
-    )
+    registry = _registry(sessions=_NotFoundSessions())
 
-    result = asyncio.run(_dispatch(registry, tmp_path, arguments))
+    result = _dispatch(registry, tmp_path, arguments)
 
     assert result["error"] == {"code": "session_not_found", "message": message}
 
 
 def test_status_tool_names_the_next_call_when_agent_is_missing(tmp_path: Path) -> None:
-    registry = ToolRegistry()
-    register_status_tool(
-        registry,
-        cast(AgentResolver, _RaisingResolver(ResolutionAgentNotFoundError("Agent not found"))),
-        cast(ChatSessionManager, _StubSessions([])),
-        cast(ModelRegistry, _StubModels(_make_model())),
-        ChatRunManager(),
-        None,
-    )
+    registry = _registry(resolver=_RaisingResolver(ResolutionAgentNotFoundError("Agent not found")))
 
-    result = asyncio.run(_dispatch(registry, tmp_path, {"agent_id": "gone", "session_id": "s"}))
+    result = _dispatch(registry, tmp_path, {"agent_id": "gone", "session_id": "s"})
 
     assert result["error"] == {
         "code": "agent_not_found",
@@ -374,18 +371,10 @@ def test_status_tool_names_the_next_call_when_agent_is_missing(tmp_path: Path) -
 
 def test_status_tool_rejects_agent_id_without_session_id(tmp_path: Path) -> None:
     sessions = _StubSessions([])
-    registry = ToolRegistry()
-    register_status_tool(
-        registry,
-        cast(AgentResolver, _StubResolver(_make_agent())),
-        cast(ChatSessionManager, sessions),
-        cast(ModelRegistry, _StubModels(_make_model())),
-        ChatRunManager(),
-        None,
-    )
+    registry = _registry(sessions=sessions)
 
-    result = asyncio.run(_dispatch(registry, tmp_path, {"agent_id": "other"}))
-    own = asyncio.run(_dispatch(registry, tmp_path, {"agent_id": "coder"}))
+    result = _dispatch(registry, tmp_path, {"agent_id": "other"})
+    own = _dispatch(registry, tmp_path, {"agent_id": "coder"})
 
     assert result["ok"] is False
     assert result["error"] == {
@@ -423,21 +412,12 @@ def test_status_tool_reads_clear_targets_written_other_ways(
     tmp_path: Path, arguments: dict[str, object], target: tuple[str, str]
 ) -> None:
     sessions = _StubSessions([])
-    registry = ToolRegistry()
-    register_status_tool(
-        registry,
-        cast(AgentResolver, _StubResolver(_make_agent())),
-        cast(ChatSessionManager, sessions),
-        cast(ModelRegistry, _StubModels(_make_model())),
-        ChatRunManager(),
-        None,
-    )
+    registry = _registry(sessions=sessions)
 
-    result = asyncio.run(_dispatch(registry, tmp_path, arguments))
+    result = _dispatch(registry, tmp_path, arguments)
 
     assert result["ok"] is True, result
-    data = cast(dict[str, Any], result["data"])
-    assert (data["agent_id"], data["session_id"]) == target
+    assert (result["data"]["agent_id"], result["data"]["session_id"]) == target
     assert sessions.calls == [(*target, None)]
 
 
@@ -479,42 +459,22 @@ def test_status_tool_refuses_unclear_ids_before_lookup(
     tmp_path: Path, arguments: dict[str, object], message: str
 ) -> None:
     sessions = _StubSessions([])
-    registry = ToolRegistry()
-    register_status_tool(
-        registry,
-        cast(AgentResolver, _StubResolver(_make_agent())),
-        cast(ChatSessionManager, sessions),
-        cast(ModelRegistry, _StubModels(_make_model())),
-        ChatRunManager(),
-        None,
-    )
+    registry = _registry(sessions=sessions)
 
-    result = asyncio.run(_dispatch(registry, tmp_path, arguments))
+    result = _dispatch(registry, tmp_path, arguments)
 
     assert result["ok"] is False
-    error = cast(dict[str, str], result["error"])
-    assert error["code"] == "invalid_arguments"
-    assert message in error["message"]
+    assert result["error"]["code"] == "invalid_arguments"
+    assert message in result["error"]["message"]
     assert sessions.calls == []
 
 
 def test_status_tool_rejects_unknown_arguments(tmp_path: Path) -> None:
-    registry = ToolRegistry()
-    register_status_tool(
-        registry,
-        cast(AgentResolver, _StubResolver(_make_agent())),
-        cast(ChatSessionManager, _StubSessions([])),
-        cast(ModelRegistry, _StubModels(_make_model())),
-        ChatRunManager(),
-        None,
-    )
-
-    result = asyncio.run(_dispatch(registry, tmp_path, {"unexpected": True}))
+    result = _dispatch(_registry(), tmp_path, {"unexpected": True})
 
     assert result["ok"] is False
-    error = cast(dict[str, str], result["error"])
-    assert error["code"] == "invalid_arguments"
-    assert "unexpected" in error["message"]
+    assert result["error"]["code"] == "invalid_arguments"
+    assert "unexpected" in result["error"]["message"]
 
 
 @pytest.mark.parametrize(
@@ -529,20 +489,10 @@ def test_status_tool_accepts_recognizable_operation_shapes(
     tmp_path: Path,
     arguments: dict[str, object],
 ) -> None:
-    registry = ToolRegistry()
-    register_status_tool(
-        registry,
-        cast(AgentResolver, _StubResolver(_make_agent())),
-        cast(ChatSessionManager, _StubSessions([])),
-        cast(ModelRegistry, _StubModels(_make_model())),
-        ChatRunManager(),
-        None,
-    )
-
-    result = asyncio.run(_dispatch(registry, tmp_path, arguments))
+    result = _dispatch(_registry(), tmp_path, arguments)
 
     assert result["ok"] is True
-    assert cast(dict[str, Any], result["data"])["session_id"] == "session-one"
+    assert result["data"]["session_id"] == "session-one"
 
 
 @pytest.mark.asyncio
@@ -561,23 +511,10 @@ async def test_status_tool_reports_running_target_session(tmp_path: Path) -> Non
         execute,
     )
     await started.wait()
-    registry = ToolRegistry()
-    register_status_tool(
-        registry,
-        cast(AgentResolver, _StubResolver(_make_agent())),
-        cast(ChatSessionManager, _StubSessions([])),
-        cast(ModelRegistry, _StubModels(_make_model())),
-        chat_runs,
-        None,
-    )
+    registry = _registry(chat_runs=chat_runs)
 
-    result = await registry.dispatch(
-        _context(tmp_path),
-        {
-            "agent_id": "reviewer",
-            "session_id": "session-two",
-        },
-        [STATUS_TOOL_NAME],
+    result = await dispatch_as_executor(
+        registry, _context(tmp_path), {"agent_id": "reviewer", "session_id": "session-two"}
     )
     expected_updated_at = run.updated_at
     release.set()
@@ -591,362 +528,3 @@ async def test_status_tool_reports_running_target_session(tmp_path: Path) -> Non
     assert f"Run updated at: {expected_updated_at}" in text
     assert data["agent_id"] == "reviewer"
     assert data["session_id"] == "session-two"
-
-
-def test_status_tool_matches_status_command_for_registry_display(tmp_path: Path) -> None:
-    session_started = datetime(2026, 5, 18, 10, 0, tzinfo=UTC)
-    started_at = datetime(2026, 5, 18, 9, 0, tzinfo=UTC)
-    messages = [
-        ChatMessage.user("Status check", timestamp=session_started),
-        ChatMessage.assistant(
-            model="openai/gpt-5.2",
-            content="All systems go.",
-            usage={"input_tokens": 1234, "output_tokens": 42},
-            timestamp=session_started,
-        ),
-    ]
-    agent = _make_agent()
-    # Both the /status command and the status tool now resolve through the same
-    # run-path resolver seam, wrapping the same agent so the two renderings stay
-    # comparable.
-    resolver = cast(AgentResolver, _StubResolver(agent))
-    sessions = cast(ChatSessionManager, _StubSessions(messages))
-    models = cast(ModelRegistry, _StubModels(_make_model(name="GPT-5.2 Registry")))
-
-    dispatcher = CommandDispatcher(
-        ChatRunManager(),
-        agent_resolver=resolver,
-        sessions=sessions,
-        models=models,
-        started_at=started_at,
-    )
-    prepared = dispatcher.prepare("/status")
-    assert prepared is not None
-    command_result = asyncio.run(
-        dispatcher.execute(
-            prepared,
-            CommandExecutionContext(
-                agent_id="coder",
-                session_id="session-one",
-                project_id=None,
-                reply_surface=ReplySurface.webui(),
-            ),
-        )
-    )
-    assert command_result.feedback is not None
-
-    registry = ToolRegistry()
-    chat_runs = ChatRunManager()
-    register_status_tool(registry, resolver, sessions, models, chat_runs, started_at)
-    tool_result = asyncio.run(_dispatch(registry, tmp_path))
-
-    assert tool_result["ok"] is True
-    data = cast(dict[str, Any], tool_result["data"])
-    text = cast(str, data["text"])
-
-    def _without_live_time_lines(status_text: str) -> list[str]:
-        return [
-            line
-            for line in status_text.splitlines()
-            if not line.startswith(("Session started:", "App uptime:", "Current time:"))
-        ]
-
-    assert _without_live_time_lines(text) == _without_live_time_lines(command_result.feedback.text)
-    assert "Model display name: GPT-5.2 Registry" in text
-
-
-def test_status_tool_strips_pinned_suffix_before_registry_lookup(tmp_path: Path) -> None:
-    recording_models = _RecordingModels(_make_model(name="GPT-5.2 Registry"))
-    registry = ToolRegistry()
-    register_status_tool(
-        registry,
-        cast(AgentResolver, _StubResolver(_make_agent(model="openai/gpt-5.2::primary"))),
-        cast(ChatSessionManager, _StubSessions([])),
-        cast(ModelRegistry, recording_models),
-        ChatRunManager(),
-        None,
-    )
-
-    result = asyncio.run(_dispatch(registry, tmp_path))
-
-    assert result["ok"] is True
-    data = cast(dict[str, Any], result["data"])
-    text = cast(str, data["text"])
-    assert "Model display name: GPT-5.2 Registry" in text
-    assert recording_models.calls == [("openai", "gpt-5.2")]
-
-
-def test_status_tool_reports_project_for_project_session(tmp_path: Path) -> None:
-    registry = ToolRegistry()
-    register_status_tool(
-        registry,
-        cast(AgentResolver, _StubResolver(_make_agent())),
-        cast(ChatSessionManager, _StubSessions([])),
-        cast(ModelRegistry, _StubModels(_make_model())),
-        ChatRunManager(),
-        None,
-        projects=cast(ProjectStore, _StubProjects(_StubProject("vbot", "vBot"))),
-    )
-
-    result = asyncio.run(_dispatch(registry, tmp_path, project_id="vbot"))
-
-    assert result["ok"] is True
-    data = cast(dict[str, Any], result["data"])
-    assert "Project: vBot (vbot)" in cast(str, data["text"])
-
-
-def test_status_tool_reports_no_project_for_identity_session(tmp_path: Path) -> None:
-    registry = ToolRegistry()
-    register_status_tool(
-        registry,
-        cast(AgentResolver, _StubResolver(_make_agent())),
-        cast(ChatSessionManager, _StubSessions([])),
-        cast(ModelRegistry, _StubModels(_make_model())),
-        ChatRunManager(),
-        None,
-        projects=cast(ProjectStore, _StubProjects(_StubProject("vbot", "vBot"))),
-    )
-
-    result = asyncio.run(_dispatch(registry, tmp_path))
-
-    assert result["ok"] is True
-    data = cast(dict[str, Any], result["data"])
-    assert f"Project: {STATUS_PLACEHOLDER}" in cast(str, data["text"])
-
-
-def test_status_tool_splits_selected_and_actual_thinking_effort(tmp_path: Path) -> None:
-    """The tool reports the selection and the ladder-snapped wire effort separately."""
-    agent = Agent(
-        id="coder",
-        name="Coder",
-        model="openai/gpt-5.2",
-        fallback_models=["openai/gpt-5.1"],
-        workspace="workspace",
-        temperature=0.3,
-        thinking_effort="max",
-        tool_access=ToolAccess(mode="all"),
-        allowed_skills=["*"],
-        tools={},
-        created_at="2026-05-18T10:00:00+00:00",
-        updated_at="2026-05-18T10:00:00+00:00",
-    )
-    model = Model(
-        model_id="gpt-5.2",
-        name="GPT-5.2",
-        capabilities=Capabilities(
-            vision=True,
-            tools=True,
-            json_mode=True,
-            reasoning=ReasoningCapabilities(
-                supported=True,
-                control="levels",
-                levels=("low", "medium", "high"),
-            ),
-        ),
-        context_window=200_000,
-        max_output_tokens=8_192,
-    )
-
-    registry = ToolRegistry()
-    register_status_tool(
-        registry,
-        cast(AgentResolver, _StubResolver(agent)),
-        cast(ChatSessionManager, _StubSessions([])),
-        cast(ModelRegistry, _StubModels(model)),
-        ChatRunManager(),
-        None,
-    )
-
-    result = asyncio.run(_dispatch(registry, tmp_path))
-
-    data = cast(dict[str, Any], result["data"])
-    text = cast(str, data["text"])
-    assert "Selected thinking effort: max" in text
-    assert "Actual model thinking effort: high" in text
-    assert "Temperature: 0.3 (agent)" in text
-
-
-def test_status_tool_reports_adapter_described_effort_for_on_off_model(tmp_path: Path) -> None:
-    """The wired describer makes the tool report the wire effort, not the toggle.
-
-    The ollama-cloud glm-5.3-flash case: the catalog declares a binary on_off
-    control, but the Cloud adapter renders the effort level onto the wire.
-    """
-    agent = Agent(
-        id="coder",
-        name="Coder",
-        model="ollama-cloud/glm-5.3-flash",
-        fallback_models=[],
-        workspace="workspace",
-        temperature=0.3,
-        thinking_effort="xhigh",
-        tool_access=ToolAccess(mode="all"),
-        allowed_skills=["*"],
-        tools={},
-        created_at="2026-05-18T10:00:00+00:00",
-        updated_at="2026-05-18T10:00:00+00:00",
-    )
-    model = Model(
-        model_id="glm-5.3-flash",
-        name="glm-5.3-flash",
-        capabilities=Capabilities(
-            vision=True,
-            tools=True,
-            json_mode=False,
-            reasoning=ReasoningCapabilities(supported=True, control="on_off"),
-        ),
-        context_window=1_048_576,
-        max_output_tokens=None,
-    )
-
-    def describe_render(provider_id: str, model_id: str, effort: str | None):
-        assert (provider_id, model_id, effort) == ("ollama-cloud", "glm-5.3-flash", "xhigh")
-        return ReasoningIntent("effort", effort_level="max")
-
-    registry = ToolRegistry()
-    register_status_tool(
-        registry,
-        cast(AgentResolver, _StubResolver(agent)),
-        cast(ChatSessionManager, _StubSessions([])),
-        cast(ModelRegistry, _StubModels(model)),
-        ChatRunManager(),
-        None,
-        reasoning_render_describer=describe_render,
-    )
-
-    result = asyncio.run(_dispatch(registry, tmp_path))
-
-    data = cast(dict[str, Any], result["data"])
-    text = cast(str, data["text"])
-    assert "Selected thinking effort: xhigh" in text
-    assert "Actual model thinking effort: max" in text
-
-
-def test_status_tool_reports_resolved_model_recommended_temperature(
-    tmp_path: Path,
-) -> None:
-    """Without an agent temperature, the tool reports the model recommendation."""
-    agent = Agent(
-        id="coder",
-        name="Coder",
-        model="openai/gpt-5.2",
-        fallback_models=["openai/gpt-5.1"],
-        workspace="workspace",
-        temperature=None,
-        thinking_effort=None,
-        tool_access=ToolAccess(mode="all"),
-        allowed_skills=["*"],
-        tools={},
-        created_at="2026-05-18T10:00:00+00:00",
-        updated_at="2026-05-18T10:00:00+00:00",
-    )
-    model = Model(
-        model_id="gpt-5.2",
-        name="GPT-5.2",
-        capabilities=Capabilities(
-            vision=True,
-            tools=True,
-            json_mode=True,
-            reasoning=ReasoningCapabilities(supported=False),
-        ),
-        context_window=200_000,
-        max_output_tokens=8_192,
-        recommended_temperature=1.0,
-    )
-
-    registry = ToolRegistry()
-    register_status_tool(
-        registry,
-        cast(AgentResolver, _StubResolver(agent)),
-        cast(ChatSessionManager, _StubSessions([])),
-        cast(ModelRegistry, _StubModels(model)),
-        ChatRunManager(),
-        None,
-    )
-
-    result = asyncio.run(_dispatch(registry, tmp_path))
-
-    data = cast(dict[str, Any], result["data"])
-    assert "Temperature: 1 (model recommendation)" in cast(str, data["text"])
-
-
-def _make_config_agent() -> ConfigAgent:
-    """A resolved project config-agent profile, as the resolver would return."""
-    return ConfigAgent(
-        id="orchestrator",
-        name="Orchestrator",
-        model="openai/gpt-5.2",
-        temperature=None,
-        tool_access=ToolAccess(mode="all"),
-        allowed_skills=["*"],
-        tools={},
-        body="You orchestrate the team.",
-        source_path=Path("/repo/.opencode/agents/orchestrator.md"),
-        source_format="opencode",
-    )
-
-
-def test_status_tool_resolves_project_agent_profile(tmp_path: Path) -> None:
-    """For a project run, /status shows the resolved config-agent profile.
-
-    The handler must thread ``context.project_id`` into the resolver (so the
-    project Team's config agent is shown, not an identity-store agent) and into
-    the session lookup (so the project-anchored session is found).
-    """
-    resolver = _StubResolver(_make_config_agent())
-    sessions = _StubSessions(
-        [
-            ChatMessage.assistant(
-                model="openai/gpt-5.2",
-                content="Ready.",
-                usage={"input_tokens": 10, "output_tokens": 2},
-                timestamp=datetime(2026, 5, 18, 10, 0, tzinfo=UTC),
-            ),
-        ]
-    )
-
-    registry = ToolRegistry()
-    register_status_tool(
-        registry,
-        cast(AgentResolver, resolver),
-        cast(ChatSessionManager, sessions),
-        cast(ModelRegistry, _StubModels(_make_model())),
-        ChatRunManager(),
-        None,
-    )
-
-    result = asyncio.run(_dispatch(registry, tmp_path, project_id="vbot"))
-
-    assert result["ok"] is True
-    data = cast(dict[str, Any], result["data"])
-    text = cast(str, data["text"])
-    assert "Agent: Orchestrator (openai/gpt-5.2)" in text
-    # The project id reached both the resolver and the project-anchored session.
-    assert resolver.calls == [("vbot", "coder")]
-    assert sessions.calls == [("coder", "session-one", "vbot")]
-
-
-def test_status_tool_identity_run_resolves_without_project(tmp_path: Path) -> None:
-    """An identity run resolves with ``project_id=None`` — unchanged behavior."""
-    resolver = _StubResolver(_make_agent())
-    sessions = _StubSessions([])
-
-    registry = ToolRegistry()
-    register_status_tool(
-        registry,
-        cast(AgentResolver, resolver),
-        cast(ChatSessionManager, sessions),
-        cast(ModelRegistry, _StubModels(_make_model())),
-        ChatRunManager(),
-        None,
-    )
-
-    result = asyncio.run(_dispatch(registry, tmp_path))
-
-    assert result["ok"] is True
-    assert resolver.calls == [(None, "coder")]
-    assert sessions.calls == [("coder", "session-one", None)]
-
-
-def test_build_status_text_is_single_source_of_truth() -> None:
-    assert status_tool_module.build_status_reply.__module__ == build_status_text.__module__

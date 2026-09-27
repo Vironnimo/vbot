@@ -1,4 +1,4 @@
-"""Tests for the built-in memory tool, dispatched through the production executor."""
+"""The built-in memory Tool, dispatched through the production executor."""
 
 import asyncio
 from pathlib import Path
@@ -7,18 +7,9 @@ from typing import Any
 import pytest
 
 from core.memory import MemoryService
-from core.tools.memory import (
-    _MAX_MEMORY_FAILURES_PER_RUN,
-    MEMORY_TOOL_DESCRIPTION,
-    MEMORY_TOOL_NAME,
-    MEMORY_TOOL_PARAMETERS,
-    _MemoryThrashTracker,
-    memory_handler,
-    register_memory_tool,
-)
+from core.tools.memory import MEMORY_TOOL_NAME, register_memory_tool
 from core.tools.tools import (
     ToolCall,
-    ToolContext,
     ToolExecutionConfig,
     ToolExecutor,
     ToolRegistry,
@@ -51,14 +42,24 @@ def files(workspace: Path) -> tuple[str, str]:
     )
 
 
-def run(workspace: Path, *calls: JsonObject) -> list[JsonObject]:
-    """Dispatch calls as one Assistant turn through the production executor."""
+def memory_registry() -> ToolRegistry:
     registry = ToolRegistry()
     register_memory_tool(registry, MemoryService())
+    return registry
+
+
+def run(
+    workspace: Path,
+    *calls: JsonObject,
+    registry: ToolRegistry | None = None,
+    run_id: str = "run-1",
+) -> list[JsonObject]:
+    """Dispatch calls as one Assistant turn through the production executor."""
+    registry = registry or memory_registry()
     config = ToolExecutionConfig(
         agent_id="main",
         session_id="session-1",
-        run_id="run-1",
+        run_id=run_id,
         workspace=workspace,
         data_root=workspace.parent,
         vbot_root=workspace.parent,
@@ -90,15 +91,12 @@ def failure(result: JsonObject, code: str) -> str:
 
 
 def test_registration_offers_text_addressing_and_orders_calls() -> None:
-    registry = ToolRegistry()
-    register_memory_tool(registry, MemoryService())
+    registry = memory_registry()
 
     tool = registry.get(MEMORY_TOOL_NAME)
     definition = registry.provider_definitions([MEMORY_TOOL_NAME])[0]
     parameters = definition["parameters"]
 
-    assert tool.description == MEMORY_TOOL_DESCRIPTION
-    assert tool.parameters == MEMORY_TOOL_PARAMETERS
     assert tool.parallel_safe is False
     assert set(parameters["properties"]) == {"action", "scope", "content", "old_text"}
     assert parameters["required"] == ["action"]
@@ -403,51 +401,36 @@ def test_shrinking_an_over_budget_scope_is_allowed(workspace: Path) -> None:
     assert files(workspace)[1] == f"- short\n- {'b' * 1900}\n"
 
 
-def _context(workspace: Path, run_id: str = "run-1") -> ToolContext:
-    return ToolContext(
-        agent_id="main",
-        session_id="session-1",
-        run_id=run_id,
-        tool_call_id="call-1",
-        tool_name=MEMORY_TOOL_NAME,
-        tool_call_index=0,
-        workspace=workspace,
-        vbot_root=workspace.parent,
-        data_root=workspace.parent,
+# The 4th consecutive failed mutation in a Run is cut off.
+_FAILURES_BEFORE_CUT_OFF = 3
+_FAILING = {"action": "remove", "scope": "agent", "old_text": "Postgres"}
+
+
+def test_thrash_guard_cuts_off_repeated_mutation_failures_within_a_run(workspace: Path) -> None:
+    registry = memory_registry()
+
+    *failed, cut_off = run(
+        workspace, *[_FAILING] * (_FAILURES_BEFORE_CUT_OFF + 1), registry=registry
     )
+    [other_run] = run(workspace, _FAILING, registry=registry, run_id="run-2")
 
-
-def test_thrash_guard_cuts_off_repeated_mutation_failures(workspace: Path) -> None:
-    service = MemoryService()
-    tracker = _MemoryThrashTracker()
-    failing = {"action": "remove", "scope": "agent", "old_text": "Postgres"}
-
-    for _ in range(_MAX_MEMORY_FAILURES_PER_RUN):
-        failure(memory_handler(_context(workspace), failing, service, tracker), "memory_no_match")
-
-    error = memory_handler(_context(workspace), failing, service, tracker)["error"]
+    for result in failed:
+        failure(result, "memory_no_match")
+    error = cut_off["error"]
     assert error["code"] == "memory_error"
     assert error["retryable"] is False
     assert "Stop retrying" in error["message"]
-    assert error["attempts_made"] == _MAX_MEMORY_FAILURES_PER_RUN + 1
-    other_run = memory_handler(_context(workspace, "run-2"), failing, service, tracker)
+    assert error["attempts_made"] == _FAILURES_BEFORE_CUT_OFF + 1
     failure(other_run, "memory_no_match")
 
 
 def test_thrash_guard_resets_on_successful_mutation(workspace: Path) -> None:
-    service = MemoryService()
-    tracker = _MemoryThrashTracker()
-    failing = {"action": "remove", "scope": "agent", "old_text": "Postgres"}
-    for _ in range(_MAX_MEMORY_FAILURES_PER_RUN):
-        memory_handler(_context(workspace), failing, service, tracker)
+    registry = memory_registry()
+    success = {"action": "add", "scope": "agent", "content": "x"}
 
-    content(
-        memory_handler(
-            _context(workspace),
-            {"action": "add", "scope": "agent", "content": "x"},
-            service,
-            tracker,
-        )
+    *_, added, after_success = run(
+        workspace, *[_FAILING] * _FAILURES_BEFORE_CUT_OFF, success, _FAILING, registry=registry
     )
 
-    failure(memory_handler(_context(workspace), failing, service, tracker), "memory_no_match")
+    content(added)
+    failure(after_success, "memory_no_match")

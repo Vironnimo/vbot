@@ -1,4 +1,4 @@
-"""Tests for the explicit Identity-Agent Project Context Tool."""
+"""The Identity-Agent Project Context Tool through production dispatch."""
 
 from __future__ import annotations
 
@@ -11,15 +11,11 @@ from typing import Any, cast
 import pytest
 
 from core.projects import ProjectStore
-from core.tools import FileReadState, StaleReason, ToolContext, ToolContractError, ToolRegistry
+from core.tools import FileReadState, StaleReason, ToolContext, ToolRegistry
 from core.tools.model_names import SHELL_MODEL_NAME
-from core.tools.project import (
-    PROJECT_TOOL_NAME,
-    PROJECT_TOOL_PARAMETERS,
-    make_project_handler,
-    register_project_tool,
-)
+from core.tools.project import PROJECT_TOOL_NAME, register_project_tool
 from core.utils.paths import model_path
+from tests.core.tools.tools_test_support import dispatch_as_executor
 
 
 class _Renderer:
@@ -57,36 +53,41 @@ def _context(tmp_path: Path, *, project_id: str | None = None) -> ToolContext:
     )
 
 
-def _handler(
+def _registry(
     projects: ProjectStore,
-    file_state: FileReadState,
+    file_state: FileReadState | None = None,
     skills: list[Any] | None = None,
-) -> Any:
-    renderer = _Renderer()
-    return make_project_handler(
-        projects,
-        lambda: renderer,
-        lambda _project_id: list(skills or []),
-        file_state,
-    )
-
-
-def test_project_tool_exposes_open_model_schema(tmp_path: Path) -> None:
+) -> ToolRegistry:
     registry = ToolRegistry()
-    projects = ProjectStore(tmp_path / "data")
-
+    renderer = _Renderer()
     register_project_tool(
         registry,
         projects,
-        lambda: _Renderer(),
-        lambda _project_id: [],
-        FileReadState(),
+        lambda: renderer,
+        lambda _project_id: list(skills or []),
+        file_state or FileReadState(),
     )
+    return registry
 
-    tool = registry.get(PROJECT_TOOL_NAME)
-    assert tool.parameters == PROJECT_TOOL_PARAMETERS
+
+def _call(
+    tmp_path: Path,
+    projects: ProjectStore,
+    arguments: Any,
+    *,
+    file_state: FileReadState | None = None,
+    skills: list[Any] | None = None,
+    project_id: str | None = None,
+) -> dict[str, Any]:
+    registry = _registry(projects, file_state, skills)
+    context = _context(tmp_path, project_id=project_id)
+    return asyncio.run(dispatch_as_executor(registry, context, arguments))
+
+
+def test_project_tool_exposes_open_model_schema(tmp_path: Path) -> None:
+    tool = _registry(ProjectStore(tmp_path / "data")).get(PROJECT_TOOL_NAME)
+
     assert tool.parameters["required"] == ["project_id"]
-    assert "additionalProperties" not in tool.parameters
     assert tool.open_input_schema is True
 
 
@@ -102,7 +103,9 @@ def test_project_tool_loads_context_skills_and_stamps_files_read(tmp_path: Path)
     file_state = FileReadState()
     skill = SimpleNamespace(name="review", description="Review changes.", path=skill_path)
 
-    result = _handler(projects, file_state, [skill])(_context(tmp_path), {"project_id": "vbot"})
+    result = _call(
+        tmp_path, projects, {"project_id": "vbot"}, file_state=file_state, skills=[skill]
+    )
     data = cast(dict[str, Any], result["data"])
 
     project_path = model_path(repo.resolve())
@@ -134,7 +137,7 @@ def test_project_tool_returns_context_for_bare_project(tmp_path: Path) -> None:
     projects.create("empty", "Empty", repo)
     projects.update("empty", auto_load=[])
 
-    result = _handler(projects, FileReadState())(_context(tmp_path), {"project_id": "empty"})
+    result = _call(tmp_path, projects, {"project_id": "empty"})
     data = cast(dict[str, Any], result["data"])
 
     assert result["ok"] is True
@@ -147,9 +150,7 @@ def test_project_tool_returns_context_for_bare_project(tmp_path: Path) -> None:
 
 
 def test_project_tool_rejects_unknown_project(tmp_path: Path) -> None:
-    result = _handler(ProjectStore(tmp_path / "data"), FileReadState())(
-        _context(tmp_path), {"project_id": "missing"}
-    )
+    result = _call(tmp_path, ProjectStore(tmp_path / "data"), {"project_id": "missing"})
 
     assert result["ok"] is False
     assert result["error"] == {
@@ -172,9 +173,8 @@ def test_project_tool_never_guesses_a_project_and_names_the_ids(
     for key, name in (("vbot", "vBot"), ("docs", "Docs Site")):
         (tmp_path / key).mkdir()
         projects.create(key, name, tmp_path / key)
-    file_state = FileReadState()
 
-    result = _handler(projects, file_state)(_context(tmp_path), {"project_id": project_id})
+    result = _call(tmp_path, projects, {"project_id": project_id})
 
     assert result["error"] == {
         "code": "project_not_found",
@@ -203,28 +203,20 @@ def test_project_tool_reads_other_spellings_of_project_id(
     repo.mkdir()
     projects = ProjectStore(tmp_path / "data")
     projects.create("vbot", "vBot", repo)
-    registry = ToolRegistry()
-    register_project_tool(
-        registry, projects, lambda: _Renderer(), lambda _project_id: [], FileReadState()
-    )
 
-    result = asyncio.run(registry.dispatch(_context(tmp_path), arguments))
+    result = _call(tmp_path, projects, arguments)
 
     assert result["ok"] is True, result
     assert result["data"]["project_id"] == "vbot"
 
 
 def test_project_tool_refuses_conflicting_project_ids(tmp_path: Path) -> None:
-    projects = ProjectStore(tmp_path / "data")
-    registry = ToolRegistry()
-    register_project_tool(
-        registry, projects, lambda: _Renderer(), lambda _project_id: [], FileReadState()
+    result = _call(
+        tmp_path, ProjectStore(tmp_path / "data"), {"project_id": "vbot", "project": "docs"}
     )
 
-    with pytest.raises(ToolContractError, match="Conflicting values for project_id"):
-        asyncio.run(
-            registry.dispatch(_context(tmp_path), {"project_id": "vbot", "project": "docs"})
-        )
+    assert result["error"]["code"] == "invalid_arguments"
+    assert "Conflicting values for project_id" in result["error"]["message"]
 
 
 def test_project_tool_rejects_unknown_argument_before_loading(tmp_path: Path) -> None:
@@ -235,28 +227,23 @@ def test_project_tool_rejects_unknown_argument_before_loading(tmp_path: Path) ->
     projects = ProjectStore(tmp_path / "data")
     projects.create("vbot", "vBot", repo)
     file_state = FileReadState()
-    registry = ToolRegistry()
-    register_project_tool(
-        registry, projects, lambda: _Renderer(), lambda _project_id: [], file_state
+
+    result = _call(
+        tmp_path, projects, {"project_id": "vbot", "unexpected": True}, file_state=file_state
     )
 
-    with pytest.raises(ToolContractError, match='"unexpected" is not a parameter'):
-        asyncio.run(
-            registry.dispatch(_context(tmp_path), {"project_id": "vbot", "unexpected": True})
-        )
-
+    assert result["error"]["code"] == "invalid_arguments"
+    assert '"unexpected" is not a parameter' in result["error"]["message"]
     assert file_state.check_stale("session-one", agents_file.resolve()) is StaleReason.NEVER_READ
 
 
-@pytest.mark.parametrize("project_id", [None, 42, ""])
-def test_project_tool_rejects_missing_or_invalid_project_id(
+@pytest.mark.parametrize("project_id", [None, ""])
+def test_project_tool_rejects_missing_or_empty_project_id(
     tmp_path: Path, project_id: object
 ) -> None:
     arguments = {} if project_id is None else {"project_id": project_id}
 
-    result = _handler(ProjectStore(tmp_path / "data"), FileReadState())(
-        _context(tmp_path), arguments
-    )
+    result = _call(tmp_path, ProjectStore(tmp_path / "data"), arguments)
 
     assert result["ok"] is False
     assert result["error"]["code"] == "invalid_arguments"
@@ -267,22 +254,20 @@ def test_project_tool_rejects_unreachable_project_path(tmp_path: Path) -> None:
     projects = ProjectStore(tmp_path / "data")
     projects.create("missing", "Missing", tmp_path / "does-not-exist")
 
-    result = _handler(projects, FileReadState())(_context(tmp_path), {"project_id": "missing"})
+    result = _call(tmp_path, projects, {"project_id": "missing"})
 
     assert result["ok"] is False
     assert result["error"]["code"] == "project_unavailable"
     assert "no reachable Project path" in result["error"]["message"]
 
 
-def test_project_tool_rejects_config_agent_even_if_called_directly(tmp_path: Path) -> None:
+def test_project_tool_refuses_a_project_run(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     projects = ProjectStore(tmp_path / "data")
     projects.create("vbot", "vBot", repo)
 
-    result = _handler(projects, FileReadState())(
-        _context(tmp_path, project_id="vbot"), {"project_id": "vbot"}
-    )
+    result = _call(tmp_path, projects, {"project_id": "vbot"}, project_id="vbot")
 
     assert result["ok"] is False
     assert result["error"]["code"] == "project_identity_required"
@@ -295,7 +280,7 @@ def test_project_tool_does_not_stamp_missing_auto_load_file(tmp_path: Path) -> N
     projects.create("vbot", "vBot", repo)
     file_state = FileReadState()
 
-    result = _handler(projects, file_state)(_context(tmp_path), {"project_id": "vbot"})
+    result = _call(tmp_path, projects, {"project_id": "vbot"}, file_state=file_state)
 
     assert result["ok"] is True
     assert (

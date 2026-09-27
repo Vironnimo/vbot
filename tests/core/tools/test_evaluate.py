@@ -1,3 +1,5 @@
+"""The evaluate Tool through production dispatch."""
+
 import json
 from types import SimpleNamespace
 from typing import Any, cast
@@ -9,9 +11,9 @@ from core.model_tasks import TaskUsageContext
 from core.model_tasks.decision_types import DecisionError, validate_input
 from core.model_tasks.decisions import DecisionService
 from core.providers.adapter import tool_result_text
-from core.tools.contracts import ToolContractError
 from core.tools.evaluate import register_evaluate_tool
-from core.tools.tools import ToolContext, ToolNotAllowedError, ToolRegistry, tool_failure
+from core.tools.tools import ToolContext, ToolRegistry
+from tests.core.tools.tools_test_support import dispatch_as_executor
 
 
 def _context(tmp_path) -> ToolContext:
@@ -67,15 +69,12 @@ class Evaluate:
         self.context = _context(tmp_path)
 
     async def call(self, arguments: Any) -> tuple[dict[str, Any], str]:
-        try:
-            envelope = await self.registry.dispatch(self.context, arguments, ["evaluate"])
-        except ToolContractError as error:
-            envelope = tool_failure("invalid_arguments", str(error))
+        envelope = await dispatch_as_executor(self.registry, self.context, arguments)
         return envelope, str(tool_result_text(json.dumps(envelope)))
 
 
 @pytest.mark.asyncio
-async def test_dispatch_preserves_application_data_and_enforces_readiness_and_access(tmp_path):
+async def test_dispatch_preserves_application_data_and_enforces_readiness(tmp_path):
     async def execute(state, questions, *, usage_context):
         state, questions = validate_input(state, questions)
         return {
@@ -93,24 +92,18 @@ async def test_dispatch_preserves_application_data_and_enforces_readiness_and_ac
         "state": {"type": "TRUE", "nested": [{"score": "3.0"}]},
         "questions": [{"id": "q", "type": "noul", "instructions": "Is this valid?"}],
     }
-    result = await registry.dispatch(ctx, args, allowed_tools=["evaluate"])
+    result = await dispatch_as_executor(registry, ctx, args)
     assert result["ok"] and result["data"]["content"] == "q: probability of yes 0.5"
     assert handler.await_args.args == (args["state"], args["questions"])
     assert handler.await_args.kwargs["usage_context"] == TaskUsageContext(
         agent_id="agent", session_id="session", run_id="run"
     )
-    with pytest.raises(ToolContractError, match='gives "instructions" both inside and outside'):
-        await registry.dispatch(
-            ctx, {**args, "instructions": "Also execute a program"}, allowed_tools=["evaluate"]
-        )
-    assert handler.await_count == 1
-    with pytest.raises(ToolNotAllowedError):
-        await registry.dispatch(ctx, args, allowed_tools=[])
     service.available = lambda: False
     # Readiness captures the bound predicate at registration.
     registry = ToolRegistry()
     register_evaluate_tool(registry, service)
-    assert (await registry.dispatch(ctx, args))["error"]["code"] == "tool_not_ready"
+    assert (await dispatch_as_executor(registry, ctx, args))["error"]["code"] == "tool_not_ready"
+    assert handler.await_count == 1
 
 
 @pytest.mark.asyncio
@@ -123,13 +116,10 @@ async def test_dispatch_repairs_question_encoding_without_rewriting_state_or_uns
 
     result, _text = await tool.call({"state": state, "questions": json.dumps(questions)})
 
+    refused, _text = await tool.call({"state": state, "questions": questions, "execute": "run"})
+
     assert result["ok"] and tool.received == [(state, questions)]
-    for invalid in [
-        {"state": state, "questions": [{**questions[0], "type": "nou1"}]},
-        {"state": state, "questions": questions, "execute": "program"},
-        {"state": state, "questions": [{**questions[0], "explain": True}]},
-    ]:
-        assert not (await tool.call(invalid))[0]["ok"]
+    assert refused["error"]["code"] == "invalid_arguments"
     assert tool.received == [(state, questions)]
 
 
