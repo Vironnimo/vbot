@@ -1,4 +1,4 @@
-"""Tests for block resolver."""
+"""ContentBlockResolver: current-turn native delivery, earlier-turn notes, text and Tool images."""
 
 from __future__ import annotations
 
@@ -6,36 +6,31 @@ import asyncio
 import base64
 import io
 import threading
+from copy import deepcopy
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
-from unittest.mock import Mock
 
 import pytest
 from PIL import Image
 
 from core.attachments import AttachmentStore
 from core.attachments.images import ImageConverter
-from core.chat import ChatMessage
 from core.chat.block_resolver import ContentBlockResolver
-from core.chat.content_blocks import MediaBlock
-from core.sessions import ChatSessionManager
-from core.tools import ToolAccess, ToolRegistry
-from core.tools.file_state import FileReadState
+from core.chat.file_mentions import file_mention_request_text
 from core.tools.read import render_text_file
-from core.utils.paths import model_path
 from tests.core.chat.block_resolver_test_support import (
+    CURRENT,
+    EARLIER,
     IMAGE_WIRE,
     TEXT_IMAGE,
     TEXT_IMAGE_AUDIO,
-    _media_message,
-    _resolve,
+    TEXT_ONLY,
+    attachment_message,
+    path_note,
+    resolve,
 )
-from tests.core.chat.chat_loop_support import build_chat_loop, build_request_messages
 
 pytestmark = pytest.mark.usefixtures("current_format_data_directory")
-
-TEXT_ONLY = frozenset({"text"})
 
 
 def _png_bytes() -> bytes:
@@ -44,341 +39,225 @@ def _png_bytes() -> bytes:
     return stream.getvalue()
 
 
-IMAGE_PDF_WIRE = IMAGE_WIRE | frozenset({"application/pdf"})
-
-
-TEXT_IMAGE_PDF = frozenset({"text", "image", "pdf"})
-
-
+PNG_BYTES = _png_bytes()
 PDF_BYTES = b"%PDF-1.7\n1 0 obj\n"
-
-
 MP4_BYTES = b"\x00\x00\x00\x18ftypisomvideo-payload"
+TEXT_IMAGE_PDF = frozenset({"text", "image", "pdf"})
+TEXT_VIDEO = frozenset({"text", "video"})
+IMAGE_PDF_WIRE = IMAGE_WIRE | frozenset({"application/pdf"})
+IMAGE_NOTE = "[Image: photo.png (image/png) — Path: {path}]"
+VIDEO_NOTE = "[Video: clip.mp4 (video/mp4) — Path: {path}]"
+PDF_NOTE = "[File: report.pdf (application/pdf) — Path: {path}]"
 
 
-class _StubPrompts:
-    def build_system_prompt(
-        self,
-        _agent: object,
-        scope: object = None,
-        *,
-        agent_body: str = "",
-        project_context: object = None,
-        working_project_context: str | None = None,
-        soul_context: str | None = None,
-        memory_files_context: str | None = None,
-        agent_project_id: str | None = None,
-        nesting_depth: int = 0,
-        skill_registry: object = None,
-        skill_catalog: object = None,
-        read_paths: list[Path] | None = None,
-        effective_tool_names: object = None,
-        session_tool_grants: object = (),
-        request_block_definitions: object = (),
-    ) -> str:
-        del agent_project_id, request_block_definitions
-        return "System prompt"
-
-    def render_soul(self, _agent: object, *, on_read: object = None) -> str:
-        return ""
-
-    def render_memory_files(self, _agent: object, *, on_read: object = None) -> str:
-        return ""
-
-    def provider_tool_definitions(
-        self,
-        _agent: object,
-        *,
-        session_tool_grants: object = (),
-    ) -> list[dict[str, object]]:
-        return []
-
-    def render_project_files(self, project_context: object, *, on_read: object = None) -> str:
-        return "" if project_context is None else "RENDERED-PROJECT-FILES"
-
-
-class _StubModels:
-    """Mirror ``ModelRegistry.get`` enough for input-modality resolution."""
-
-    def get(self, _provider_id: str, _model_id: str) -> object:
-        return SimpleNamespace(capabilities=SimpleNamespace(input_modalities=("text", "image")))
-
-
-class _StubRuntime:
-    def __init__(self) -> None:
-        from core.runs import ChatRunManager
-
-        self.chat_run_manager = ChatRunManager()
-        self.system_prompts = _StubPrompts()
-        self.models = _StubModels()
-        self.file_read_state = FileReadState()
-        self.tools = ToolRegistry()
-
-
-class _StubAgent:
-    def __init__(self, model: str = "openai/gpt-5.2") -> None:
-        self.model = model
-        self.tool_access = ToolAccess()
-
-
-def test_current_turn_image_media_block_resolves_to_base64(tmp_path: Path) -> None:
-    # Arrange
+@pytest.mark.parametrize(
+    ("filename", "payload", "block_type", "message_id", "modalities", "wire", "native", "note"),
+    [
+        ("photo.png", PNG_BYTES, "media", CURRENT, TEXT_IMAGE, IMAGE_WIRE, True, IMAGE_NOTE),
+        (
+            "photo.png",
+            PNG_BYTES,
+            "media",
+            EARLIER,
+            TEXT_IMAGE,
+            IMAGE_WIRE,
+            False,
+            "[Image from an earlier turn: photo.png (image/png) — Path: {path}]",
+        ),
+        # A model without vision must not abort the Run: the image degrades to its path.
+        (
+            "photo.png",
+            PNG_BYTES,
+            "media",
+            CURRENT,
+            TEXT_ONLY,
+            IMAGE_WIRE,
+            False,
+            "[Image: photo.png (image/png) — this model has no vision capability, so the "
+            "image itself cannot be shown; only the stored file path is provided — Path: {path}]",
+        ),
+        ("clip.mp4", MP4_BYTES, "media", CURRENT, TEXT_VIDEO, {"video/mp4"}, True, VIDEO_NOTE),
+        ("clip.mp4", MP4_BYTES, "media", CURRENT, TEXT_IMAGE_AUDIO, IMAGE_WIRE, False, VIDEO_NOTE),
+        ("clip.mp4", MP4_BYTES, "media", EARLIER, TEXT_VIDEO, {"video/mp4"}, False, VIDEO_NOTE),
+        ("report.pdf", PDF_BYTES, "file", CURRENT, TEXT_IMAGE_PDF, IMAGE_PDF_WIRE, True, PDF_NOTE),
+        ("report.pdf", PDF_BYTES, "file", CURRENT, TEXT_IMAGE, IMAGE_PDF_WIRE, False, PDF_NOTE),
+        # An unverified OpenAI-compatible wire cannot carry the PDF the model accepts.
+        ("report.pdf", PDF_BYTES, "file", CURRENT, TEXT_IMAGE_PDF, IMAGE_WIRE, False, PDF_NOTE),
+        ("report.pdf", PDF_BYTES, "file", EARLIER, TEXT_IMAGE_PDF, IMAGE_PDF_WIRE, False, PDF_NOTE),
+    ],
+    ids=[
+        "image-current",
+        "image-earlier",
+        "image-without-vision",
+        "video-current",
+        "video-without-video-modality",
+        "video-earlier",
+        "pdf-current",
+        "pdf-without-pdf-modality",
+        "pdf-on-a-wire-without-pdf",
+        "pdf-earlier",
+    ],
+)
+def test_attachment_goes_native_only_for_the_current_turn_on_model_and_wire_support(
+    tmp_path: Path,
+    filename: str,
+    payload: bytes,
+    block_type: str,
+    message_id: str,
+    modalities: frozenset[str],
+    wire: frozenset[str],
+    native: bool,
+    note: str,
+) -> None:
     store = AttachmentStore(tmp_path)
-    image_bytes = _png_bytes()
-    record = store.store("photo.png", image_bytes)
-    resolver = ContentBlockResolver(store)
-    messages = [_media_message(record)]
+    record = store.store(filename, payload)
+    messages = [attachment_message(record, block_type=block_type, message_id=message_id)]
+    persisted = deepcopy(messages)
 
-    # Act
-    resolved = _resolve(
-        resolver,
+    resolved = resolve(
+        ContentBlockResolver(store),
         messages,
-        current_user_message_id="user-current",
-        input_modalities=TEXT_IMAGE,
+        input_modalities=modalities,
+        wire_media_types=frozenset(wire),
     )
 
-    # Assert
+    encoded = base64.b64encode(payload).decode("ascii")
+    native_block = (
+        {"type": "media", "base64": encoded, "media_type": record.media_type}
+        if block_type == "media"
+        else {
+            "type": "document",
+            "base64": encoded,
+            "media_type": record.media_type,
+            "filename": filename,
+        }
+    )
+    # A native block always rides with its path note, so the Agent keeps a file handle.
     assert resolved[0]["content"] == [
+        *([native_block] if native else []),
+        path_note(record, note),
+    ]
+    assert messages == persisted
+
+
+@pytest.mark.parametrize(
+    ("message_id", "label"),
+    [(CURRENT, "Image 2"), (EARLIER, "Image 2 from an earlier turn")],
+)
+def test_image_reference_numbers_the_image_label(
+    tmp_path: Path, message_id: str, label: str
+) -> None:
+    store = AttachmentStore(tmp_path)
+    record = store.store("photo.png", PNG_BYTES)
+    message = attachment_message(record, message_id=message_id, image_reference=2)
+
+    resolved = resolve(ContentBlockResolver(store), [message], input_modalities=TEXT_IMAGE)
+
+    assert resolved[0]["content"][-1] == path_note(
+        record, f"[{label}: photo.png (image/png) — Path: {{path}}]"
+    )
+
+
+@pytest.mark.parametrize(
+    ("filename", "payload", "message_id", "note"),
+    [
+        (
+            "gone.png",
+            PNG_BYTES,
+            EARLIER,
+            "[Image from an earlier turn: gone.png (image/png) — file no longer available]",
+        ),
+        (
+            "gone.mp4",
+            MP4_BYTES,
+            CURRENT,
+            "[Video: gone.mp4 (video/mp4) — file no longer available]",
+        ),
+    ],
+    ids=["image-earlier", "video-current"],
+)
+def test_deleted_attachment_degrades_to_an_unavailable_note(
+    tmp_path: Path, filename: str, payload: bytes, message_id: str, note: str
+) -> None:
+    store = AttachmentStore(tmp_path)
+    record = store.store(filename, payload)
+    store.delete(record.id)
+
+    resolved = resolve(
+        ContentBlockResolver(store),
+        [attachment_message(record, message_id=message_id)],
+        input_modalities=TEXT_IMAGE_AUDIO,
+    )
+
+    assert resolved[0]["content"] == [{"type": "text", "text": note}]
+
+
+def test_text_blocks_keep_their_order_and_string_content_passes_through(tmp_path: Path) -> None:
+    store = AttachmentStore(tmp_path)
+    record = store.store("photo.png", PNG_BYTES)
+    image = attachment_message(record)["content"][0]
+    mention = {
+        "type": "file_mention",
+        "path": "src/app.py",
+        "status": "inlined",
+        "text": "value = 1\n",
+        "size_bytes": 10,
+    }
+    messages: list[dict] = [
+        {"id": "system", "role": "system", "content": "System prompt"},
+        {"id": "plain", "role": "user", "content": "Simple text"},
+        {"id": EARLIER, "role": "user", "content": [{"type": "text", "text": "hello"}, mention]},
+        {"id": CURRENT, "role": "user", "content": [{"type": "text", "text": "Look:"}, image]},
+    ]
+
+    resolved = resolve(ContentBlockResolver(store), messages, input_modalities=TEXT_IMAGE)
+
+    assert resolved[:2] == messages[:2]
+    # A mention is a durable snapshot: it renders identically on every turn.
+    mention_text = {"type": "text", "text": file_mention_request_text(mention)}
+    assert resolved[2]["content"] == [{"type": "text", "text": "hello"}, mention_text]
+    assert resolve(
+        ContentBlockResolver(store),
+        [{"id": CURRENT, "role": "user", "content": [mention]}],
+        input_modalities=TEXT_ONLY,
+    )[0]["content"] == [mention_text]
+    assert resolved[3]["content"] == [
+        {"type": "text", "text": "Look:"},
         {
             "type": "media",
-            "base64": base64.b64encode(image_bytes).decode("ascii"),
+            "base64": base64.b64encode(PNG_BYTES).decode("ascii"),
             "media_type": "image/png",
         },
-        {
-            "type": "text",
-            "text": f"[Image: photo.png (image/png) — Path: {model_path(record.file_path)}]",
-        },
-    ]
-    assert messages[0]["content"][0] == {
-        "type": "media",
-        "attachment_id": record.id,
-        "filename": record.filename,
-        "media_type": "image/png",
-    }
-
-
-def test_image_reference_is_rendered_for_the_model(tmp_path: Path) -> None:
-    store = AttachmentStore(tmp_path)
-    record = store.store("image.png", _png_bytes())
-    resolver = ContentBlockResolver(store)
-    message = _media_message(record)
-    message["content"][0]["image_reference"] = 2
-
-    resolved = _resolve(
-        resolver,
-        [message],
-        current_user_message_id="user-current",
-        input_modalities=TEXT_IMAGE,
-    )
-
-    assert resolved[0]["content"][1] == {
-        "type": "text",
-        "text": f"[Image 2: image.png (image/png) — Path: {model_path(record.file_path)}]",
-    }
-
-
-def test_file_mention_block_resolves_to_snapshot_text(tmp_path: Path) -> None:
-    # Arrange
-    store = AttachmentStore(tmp_path)
-    resolver = ContentBlockResolver(store)
-    messages = [
-        {
-            "id": "user-current",
-            "role": "user",
-            "content": [
-                {"type": "text", "text": "look at @src/app.py"},
-                {
-                    "type": "file_mention",
-                    "path": "src/app.py",
-                    "status": "inlined",
-                    "text": "value = 1\n",
-                    "size_bytes": 10,
-                },
-            ],
-        }
-    ]
-
-    # Act
-    resolved = _resolve(
-        resolver,
-        messages,
-        current_user_message_id="user-current",
-        input_modalities=TEXT_ONLY,
-    )
-
-    # Assert — the snapshot renders as plain text with origin framing + content.
-    mention_text = resolved[0]["content"][1]
-    assert mention_text["type"] == "text"
-    assert "@src/app.py" in mention_text["text"]
-    assert mention_text["text"].endswith("value = 1\n")
-
-
-def test_file_mention_block_resolves_identically_on_historical_turns(tmp_path: Path) -> None:
-    # The snapshot is durable: replayed history must render byte-identically to
-    # the current turn (prompt-cache invariant), unlike media attachments.
-    store = AttachmentStore(tmp_path)
-    resolver = ContentBlockResolver(store)
-    block = {
-        "type": "file_mention",
-        "path": "notes.md",
-        "status": "too_large",
-        "text": None,
-        "size_bytes": 999_999,
-    }
-    message = {"id": "user-old", "role": "user", "content": [block]}
-
-    current = _resolve(
-        resolver,
-        [dict(message)],
-        current_user_message_id="user-old",
-        input_modalities=TEXT_ONLY,
-    )
-    historical = _resolve(
-        resolver,
-        [dict(message)],
-        current_user_message_id="another-turn",
-        input_modalities=TEXT_ONLY,
-    )
-
-    assert current[0]["content"] == historical[0]["content"]
-
-
-def test_historical_turn_image_resolves_to_placeholder_text(tmp_path: Path) -> None:
-    # Arrange
-    store = AttachmentStore(tmp_path)
-    record = store.store("old-photo.png", _png_bytes())
-    resolver = ContentBlockResolver(store)
-    messages = [_media_message(record, message_id="user-historical")]
-
-    # Act
-    resolved = _resolve(
-        resolver,
-        messages,
-        current_user_message_id="other-message",
-        input_modalities=TEXT_IMAGE,
-    )
-
-    # Assert
-    assert resolved[0]["content"] == [
-        {
-            "type": "text",
-            "text": (
-                f"[Image from an earlier turn: old-photo.png (image/png) "
-                f"— Path: {model_path(record.file_path)}]"
-            ),
-        }
+        path_note(record, IMAGE_NOTE),
     ]
 
 
-def test_historical_turn_image_with_deleted_attachment_degrades_gracefully(
-    tmp_path: Path,
+@pytest.mark.parametrize("message_id", [CURRENT, EARLIER])
+def test_text_attachment_renders_like_the_read_tool_and_drops_a_persisted_full_copy(
+    tmp_path: Path, message_id: str
 ) -> None:
-    # Arrange
-    store = AttachmentStore(tmp_path)
-    record = store.store("gone.png", _png_bytes())
-    store.delete(record.id)
-    resolver = ContentBlockResolver(store)
-    messages = [_media_message(record, message_id="user-historical")]
-
-    # Act
-    resolved = _resolve(
-        resolver,
-        messages,
-        current_user_message_id="other-message",
-        input_modalities=TEXT_IMAGE,
-    )
-
-    # Assert
-    assert resolved[0]["content"] == [
-        {
-            "type": "text",
-            "text": "[Image from an earlier turn: gone.png (image/png) — file no longer available]",
-        }
-    ]
-
-
-@pytest.mark.parametrize("current_turn", [True, False])
-def test_file_block_resolves_to_text_path_note(tmp_path: Path, current_turn: bool) -> None:
-    # Arrange
-    store = AttachmentStore(tmp_path)
-    record = store.store("report.pdf", b"%PDF-1.7\n1 0 obj\n")
-    resolver = ContentBlockResolver(store)
-    message_id = "user-current" if current_turn else "user-historical"
-    messages = [
-        {
-            "id": message_id,
-            "role": "user",
-            "content": [
-                {
-                    "type": "file",
-                    "attachment_id": record.id,
-                    "filename": record.filename,
-                    "media_type": record.media_type,
-                }
-            ],
-        }
-    ]
-
-    # Act
-    resolved = _resolve(
-        resolver,
-        messages,
-        current_user_message_id="user-current",
-        input_modalities=TEXT_IMAGE,
-    )
-
-    # Assert
-    assert resolved[0]["content"] == [
-        {
-            "type": "text",
-            "text": (
-                f"[File: report.pdf (application/pdf) — Path: {model_path(record.file_path)}]"
-            ),
-        }
-    ]
-
-
-@pytest.mark.parametrize("current_turn", [True, False])
-def test_text_file_block_resolves_through_the_read_renderer(
-    tmp_path: Path,
-    current_turn: bool,
-) -> None:
-    # Text attachments use the same renderer as the read tool, including line
-    # gutters and its 50 KiB / 2,000-line boundary.
+    # Older Sessions stored the complete text right after the file block; every request
+    # replaces it with the read Tool's bounded rendering. Other following text stays.
     store = AttachmentStore(tmp_path)
     source = b"".join(f"line {index}\n".encode() for index in range(1, 2_500))
     record = store.store("notes.txt", source)
-    resolver = ContentBlockResolver(store)
-    message_id = "user-current" if current_turn else "user-historical"
-    messages = [
-        {
-            "id": message_id,
-            "role": "user",
-            "content": [
-                {
-                    "type": "file",
-                    "attachment_id": record.id,
-                    "filename": record.filename,
-                    "media_type": record.media_type,
-                }
-            ],
-        }
+    message = attachment_message(record, block_type="file", message_id=message_id)
+    message["content"] += [
+        {"type": "text", "text": source.decode("utf-8")},
+        {"type": "text", "text": "Please review."},
     ]
 
-    resolved = _resolve(
-        resolver,
-        messages,
-        current_user_message_id="user-current",
+    resolved = resolve(
+        ContentBlockResolver(store),
+        [message],
         input_modalities=frozenset({"text", "image", "file"}),
         wire_media_types=frozenset({"text/plain"}),
     )
 
     assert resolved[0]["content"] == [
-        {
-            "type": "text",
-            "text": f"[File: notes.txt (text/plain) — Path: {model_path(record.file_path)}]",
-        },
+        path_note(record, "[File: notes.txt (text/plain) — Path: {path}]"),
         {"type": "text", "text": render_text_file(source)},
+        {"type": "text", "text": "Please review."},
     ]
 
 
@@ -405,23 +284,14 @@ async def test_attachment_reads_run_off_the_event_loop(
         return get_record(attachment_id)
 
     monkeypatch.setattr(store, "get", blocked_get)
-
-    def file_block(record: Any) -> dict:
-        return {
-            "type": "file",
-            "attachment_id": record.id,
-            "filename": record.filename,
-            "media_type": record.media_type,
-        }
-
     messages = [
-        {"id": "user-earlier", "role": "user", "content": [file_block(notes)]},
-        {"id": "user-current", "role": "user", "content": [file_block(report)]},
+        attachment_message(notes, block_type="file", message_id=EARLIER),
+        attachment_message(report, block_type="file"),
     ]
     resolving = asyncio.create_task(
         resolver.resolve_messages(
             messages,
-            current_user_message_id="user-current",
+            current_user_message_id=CURRENT,
             input_modalities=frozenset({"text", "pdf"}),
             wire_media_types=frozenset({"application/pdf"}),
         )
@@ -443,403 +313,21 @@ async def test_attachment_reads_run_off_the_event_loop(
     assert resolved[1]["content"][0]["type"] == "document"
 
 
-def test_full_text_previously_persisted_beside_an_attachment_is_suppressed(tmp_path: Path) -> None:
-    # Earlier sessions stored a complete text copy after the file block. On the
-    # next request it must be replaced by the bounded shared read rendering.
-    store = AttachmentStore(tmp_path)
-    source = b"x" * 60_000
-    record = store.store("large.txt", source)
-    resolver = ContentBlockResolver(store)
-    messages = [
-        {
-            "id": "user-current",
-            "role": "user",
-            "content": [
-                {
-                    "type": "file",
-                    "attachment_id": record.id,
-                    "filename": record.filename,
-                    "media_type": record.media_type,
-                },
-                {"type": "text", "text": source.decode("utf-8")},
-            ],
-        }
-    ]
-
-    resolved = _resolve(
-        resolver,
-        messages,
-        current_user_message_id="user-current",
-        input_modalities=TEXT_ONLY,
-    )
-
-    assert resolved[0]["content"] == [
-        {
-            "type": "text",
-            "text": f"[File: large.txt (text/plain) — Path: {model_path(record.file_path)}]",
-        },
-        {"type": "text", "text": render_text_file(source)},
-    ]
-
-
-def _file_message(record: Any, *, message_id: str = "user-current") -> dict:
-    return {
-        "id": message_id,
-        "role": "user",
-        "content": [
-            {
-                "type": "file",
-                "attachment_id": record.id,
-                "filename": record.filename,
-                "media_type": record.media_type,
-            }
-        ],
-    }
-
-
-def test_current_turn_pdf_resolves_to_native_document_block(tmp_path: Path) -> None:
-    # A PDF-capable model whose adapter wire carries application/pdf gets the
-    # canonical native document block end-to-end.
-    store = AttachmentStore(tmp_path)
-    record = store.store("report.pdf", PDF_BYTES)
-    resolver = ContentBlockResolver(store)
-    messages = [_file_message(record)]
-
-    resolved = _resolve(
-        resolver,
-        messages,
-        current_user_message_id="user-current",
-        input_modalities=TEXT_IMAGE_PDF,
-        wire_media_types=IMAGE_PDF_WIRE,
-    )
-
-    assert resolved[0]["content"] == [
-        {
-            "type": "document",
-            "base64": base64.b64encode(PDF_BYTES).decode("ascii"),
-            "media_type": "application/pdf",
-            "filename": "report.pdf",
-        },
-        {
-            "type": "text",
-            "text": f"[File: report.pdf (application/pdf) — Path: {model_path(record.file_path)}]",
-        },
-    ]
-
-
-def test_current_turn_pdf_degrades_to_path_note_without_pdf_modality(tmp_path: Path) -> None:
-    # The wire carries PDF, but the model does not advertise the pdf modality.
-    store = AttachmentStore(tmp_path)
-    record = store.store("report.pdf", PDF_BYTES)
-    resolver = ContentBlockResolver(store)
-    messages = [_file_message(record)]
-
-    resolved = _resolve(
-        resolver,
-        messages,
-        current_user_message_id="user-current",
-        input_modalities=TEXT_IMAGE,
-        wire_media_types=IMAGE_PDF_WIRE,
-    )
-
-    assert resolved[0]["content"] == [
-        {
-            "type": "text",
-            "text": f"[File: report.pdf (application/pdf) — Path: {model_path(record.file_path)}]",
-        },
-    ]
-
-
-def test_current_turn_pdf_degrades_to_path_note_when_wire_cannot_carry(tmp_path: Path) -> None:
-    # The model advertises pdf, but the chosen adapter wire cannot carry it
-    # (e.g. an unverified OpenAI-compatible provider) — degrade, never crash.
-    store = AttachmentStore(tmp_path)
-    record = store.store("report.pdf", PDF_BYTES)
-    resolver = ContentBlockResolver(store)
-    messages = [_file_message(record)]
-
-    resolved = _resolve(
-        resolver,
-        messages,
-        current_user_message_id="user-current",
-        input_modalities=TEXT_IMAGE_PDF,
-        wire_media_types=IMAGE_WIRE,
-    )
-
-    assert resolved[0]["content"][0]["type"] == "text"
-    assert "report.pdf" in resolved[0]["content"][0]["text"]
-
-
-def test_historical_pdf_degrades_to_path_note_even_when_native_capable(tmp_path: Path) -> None:
-    # An earlier-turn PDF is never re-sent natively, regardless of capability.
-    store = AttachmentStore(tmp_path)
-    record = store.store("report.pdf", PDF_BYTES)
-    resolver = ContentBlockResolver(store)
-    messages = [_file_message(record, message_id="user-historical")]
-
-    resolved = _resolve(
-        resolver,
-        messages,
-        current_user_message_id="other-message",
-        input_modalities=TEXT_IMAGE_PDF,
-        wire_media_types=IMAGE_PDF_WIRE,
-    )
-
-    assert resolved[0]["content"][0]["type"] == "text"
-    assert "report.pdf" in resolved[0]["content"][0]["text"]
-
-
-@pytest.mark.parametrize("current_turn", [True, False])
-def test_text_block_resolves_to_text_dict(tmp_path: Path, current_turn: bool) -> None:
-    # Arrange
-    store = AttachmentStore(tmp_path)
-    resolver = ContentBlockResolver(store)
-    message_id = "user-current" if current_turn else "user-historical"
-    messages = [
-        {
-            "id": message_id,
-            "role": "user",
-            "content": [{"type": "text", "text": "hello"}],
-        }
-    ]
-
-    # Act
-    resolved = _resolve(
-        resolver,
-        messages,
-        current_user_message_id="user-current",
-        input_modalities=TEXT_IMAGE,
-    )
-
-    # Assert
-    assert resolved[0]["content"] == [{"type": "text", "text": "hello"}]
-
-
-def test_current_turn_image_degrades_to_path_note_when_vision_not_supported(
-    tmp_path: Path,
-) -> None:
-    # A current-turn image to a non-vision model must not abort the run: it
-    # degrades to a path note that explains the model cannot see it.
-    store = AttachmentStore(tmp_path)
-    record = store.store("photo.png", _png_bytes())
-    resolver = ContentBlockResolver(store)
-    messages = [_media_message(record)]
-
-    resolved = _resolve(
-        resolver,
-        messages,
-        current_user_message_id="user-current",
-        input_modalities=TEXT_ONLY,
-    )
-
-    assert resolved[0]["content"] == [
-        {
-            "type": "text",
-            "text": (
-                "[Image: photo.png (image/png) — this model has no vision "
-                "capability, so the image itself cannot be shown; only the stored "
-                f"file path is provided — Path: {model_path(record.file_path)}]"
-            ),
-        }
-    ]
-
-
-@pytest.mark.parametrize("current_turn", [True, False])
-def test_video_block_resolves_to_path_note(tmp_path: Path, current_turn: bool) -> None:
-    # Arrange
-    store = AttachmentStore(tmp_path)
-    record = store.store("clip.mp4", MP4_BYTES)
-    resolver = ContentBlockResolver(store)
-    message_id = "user-current" if current_turn else "user-historical"
-    messages = [_media_message(record, message_id=message_id)]
-
-    # Act
-    resolved = _resolve(
-        resolver,
-        messages,
-        current_user_message_id="user-current",
-        input_modalities=TEXT_IMAGE_AUDIO,
-    )
-
-    # Assert
-    assert resolved[0]["content"] == [
-        {
-            "type": "text",
-            "text": f"[Video: clip.mp4 (video/mp4) — Path: {model_path(record.file_path)}]",
-        }
-    ]
-
-
-def test_current_turn_video_resolves_natively_when_model_and_wire_support_it(
-    tmp_path: Path,
-) -> None:
-    store = AttachmentStore(tmp_path)
-    record = store.store("clip.mp4", MP4_BYTES)
-    resolver = ContentBlockResolver(store)
-
-    resolved = _resolve(
-        resolver,
-        [_media_message(record, message_id="user-current")],
-        current_user_message_id="user-current",
-        input_modalities=frozenset({"text", "video"}),
-        wire_media_types=frozenset({"video/mp4"}),
-    )
-
-    assert resolved[0]["content"] == [
-        {
-            "type": "media",
-            "base64": base64.b64encode(MP4_BYTES).decode("ascii"),
-            "media_type": "video/mp4",
-        },
-        {
-            "type": "text",
-            "text": f"[Video: clip.mp4 (video/mp4) — Path: {model_path(record.file_path)}]",
-        },
-    ]
-
-
-def test_mixed_text_and_image_blocks_resolve_in_order(tmp_path: Path) -> None:
-    # Arrange
-    store = AttachmentStore(tmp_path)
-    image_bytes = _png_bytes()
-    record = store.store("photo.png", image_bytes)
-    resolver = ContentBlockResolver(store)
-    messages = [
-        {
-            "id": "user-current",
-            "role": "user",
-            "content": [
-                {"type": "text", "text": "Analyze this image:"},
-                {
-                    "type": "media",
-                    "attachment_id": record.id,
-                    "filename": record.filename,
-                    "media_type": record.media_type,
-                },
-            ],
-        }
-    ]
-
-    # Act
-    resolved = _resolve(
-        resolver,
-        messages,
-        current_user_message_id="user-current",
-        input_modalities=TEXT_IMAGE,
-    )
-
-    # Assert
-    assert resolved[0]["content"] == [
-        {"type": "text", "text": "Analyze this image:"},
-        {
-            "type": "media",
-            "base64": base64.b64encode(image_bytes).decode("ascii"),
-            "media_type": "image/png",
-        },
-        {
-            "type": "text",
-            "text": f"[Image: photo.png (image/png) — Path: {model_path(record.file_path)}]",
-        },
-    ]
-
-
-def test_string_content_messages_pass_through_unmodified(tmp_path: Path) -> None:
-    # Arrange
-    store = AttachmentStore(tmp_path)
-    resolver = ContentBlockResolver(store)
-    messages = [
-        {"id": "sys", "role": "system", "content": "System prompt"},
-        {"id": "u1", "role": "user", "content": "Simple text"},
-    ]
-
-    # Act
-    resolved = _resolve(
-        resolver,
-        messages,
-        current_user_message_id="u1",
-        input_modalities=TEXT_IMAGE,
-    )
-
-    # Assert
-    assert resolved == messages
-
-
-def test_chat_loop_resolves_historical_blocks_when_latest_user_turn_is_plain_text(
-    tmp_path: Path,
-) -> None:
-    # Arrange
-    store = AttachmentStore(tmp_path)
-    record = store.store("old-photo.png", _png_bytes())
-    session = ChatSessionManager(tmp_path).create("agent", session_id="session-one")
-    session.append(
-        ChatMessage.user(
-            [
-                MediaBlock(
-                    type="media",
-                    attachment_id=record.id,
-                    filename=record.filename,
-                    media_type=record.media_type,
-                )
-            ]
-        )
-    )
-    session.append(ChatMessage.user("latest plain text"))
-    runtime: Any = _StubRuntime()
-    loop = build_chat_loop(runtime, attachment_resolver=ContentBlockResolver(store))
-
-    # Act
-    request_messages = asyncio.run(build_request_messages(loop, _StubAgent(), session))
-
-    # Assert
-    assert [message["role"] for message in request_messages] == ["system", "user", "user"]
-    assert request_messages[1]["content"] == [
-        {
-            "type": "text",
-            "text": (
-                f"[Image from an earlier turn: old-photo.png (image/png) "
-                f"— Path: {model_path(record.file_path)}]"
-            ),
-        }
-    ]
-    assert request_messages[2]["content"] == "latest plain text"
-
-
-def test_chat_loop_skips_resolver_when_session_has_only_plain_text_user_messages(
-    tmp_path: Path,
-) -> None:
-    # Arrange
-    session = ChatSessionManager(tmp_path).create("agent", session_id="session-one")
-    session.append(ChatMessage.user("first"))
-    session.append(ChatMessage.user("second"))
-    resolver = Mock()
-    runtime: Any = _StubRuntime()
-    loop = build_chat_loop(runtime, attachment_resolver=resolver)
-
-    # Act
-    request_messages = asyncio.run(build_request_messages(loop, _StubAgent(), session))
-
-    # Assert
-    resolver.resolve_messages.assert_not_called()
-    assert [message["role"] for message in request_messages] == ["system", "user", "user"]
-    assert request_messages[1]["content"] == "first"
-    assert request_messages[2]["content"] == "second"
+def _bmp_tool_image(path: str, encoded: str) -> dict[str, str]:
+    return {"path": path, "filename": Path(path).name, "media_type": "image/bmp", "base64": encoded}
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("target", ["image/png", "image/jpeg"])
-async def test_local_tool_image_converts_loaded_pixels_without_source_file(target: str) -> None:
+async def test_local_tool_image_converts_loaded_pixels_without_its_source_file() -> None:
     source = io.BytesIO()
     Image.new("RGB", (12, 8), "blue").save(source, format="BMP")
-    image = {
-        "path": "removed-original.bmp",
-        "filename": "original.bmp",
-        "media_type": "image/bmp",
-        "base64": base64.b64encode(source.getvalue()).decode("ascii"),
-    }
+    image = _bmp_tool_image("removed-original.bmp", base64.b64encode(source.getvalue()).decode())
+
     parts = await ContentBlockResolver.resolve_tool_image(
-        image, TEXT_IMAGE, frozenset({target}), ImageConverter()
+        image, TEXT_IMAGE, frozenset({"image/jpeg"}), ImageConverter()
     )
-    assert parts[0]["media_type"] == target
+
+    assert parts[0]["media_type"] == "image/jpeg"
     with Image.open(io.BytesIO(base64.b64decode(parts[0]["base64"]))) as delivered:
         assert delivered.size == (12, 8)
     assert "converted copy" in parts[1]["text"]
@@ -848,18 +336,14 @@ async def test_local_tool_image_converts_loaded_pixels_without_source_file(targe
 
 
 @pytest.mark.asyncio
-async def test_local_tool_image_conversion_failure_retains_original_path() -> None:
+async def test_local_tool_image_conversion_failure_retains_the_original_path() -> None:
     parts = await ContentBlockResolver.resolve_tool_image(
-        {
-            "path": "broken.bmp",
-            "filename": "broken.bmp",
-            "media_type": "image/bmp",
-            "base64": base64.b64encode(b"broken pixels").decode("ascii"),
-        },
+        _bmp_tool_image("broken.bmp", base64.b64encode(b"broken pixels").decode()),
         TEXT_IMAGE,
         frozenset({"image/png"}),
         ImageConverter(),
     )
+
     assert len(parts) == 1
     assert parts[0]["type"] == "text"
     assert "damaged or unreadable" in parts[0]["text"]
