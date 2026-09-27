@@ -99,7 +99,7 @@ Schema design rules for every Generation 1 table and later addition: no enum CHE
 - `open_offline_database` skips all marker safety; never use it for Runtime paths.
 - Residual risk of the update rollback: another vBot server or offline tool that writes to the data directory and exits while the candidate runs is indistinguishable from the candidate, so the rollback discards its writes too. The stamp catches writes before the candidate starts; the updater's server-claim check (`core.utils.server_control.live_server_ports`) catches a server still running at rollback time. An interrupted rollback keeps the maintenance guard, and the automatic path never resumes it: an operator repeats it with `vbot data-store snapshot restore <id> --all --yes`.
 
-Tests: `tests/core/database/` (`test_connections`, `test_schema`, `test_ledger` incl. the older-binary simulation, `test_profiles`, `test_marker`, `test_snapshots`, `test_snapshot_documents`, `test_recovery`, `test_update_rollback`, `test_status`, `test_errors`, `test_named_columns`); Session integration in `tests/core/sessions/test_store_database.py`.
+Tests: `tests/core/database/` (`test_database_runtime`, `test_database_evolution` incl. the older-binary simulation, `test_database_profiles`, `test_marker`, `test_snapshots` incl. an online snapshot while another thread keeps writing, `test_snapshot_documents`, `test_recovery`, `test_update_rollback`, `test_status`, `test_named_columns`); Session integration in `tests/core/sessions/test_store_database.py`.
 
 ## References
 

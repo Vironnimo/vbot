@@ -12,8 +12,10 @@ from __future__ import annotations
 
 import ast
 import re
-from collections.abc import Iterator
 from pathlib import Path
+from typing import NamedTuple
+
+import pytest
 
 _REPO_ROOT = Path(__file__).parents[3]
 _RUNTIME_PACKAGES = ("core", "server", "resources/extensions")
@@ -28,6 +30,7 @@ _IMPLICIT_COLUMNS = (
     re.compile(r",\s*\*\s*(?:,|\bFROM\b)", re.IGNORECASE),
 )
 _WRITE = re.compile(r"\b(?:INSERT|REPLACE)\b", re.IGNORECASE)
+_INTO = re.compile(r"\bINTO\b", re.IGNORECASE)
 # The target runs up to what follows it: a column list, or the row source of
 # an INSERT that has none.
 _INSERT = re.compile(
@@ -42,8 +45,21 @@ _TEMP_TABLE = re.compile(
 _TEMP_SCHEMA = re.compile(r"^[\"`\[]?temp(?:orary)?[\"`\]]?\.", re.IGNORECASE)
 
 
+class _Source(NamedTuple):
+    """One parsed source file with every string literal it holds."""
+
+    relative: str
+    package: str
+    text: str
+    literals: list[tuple[int, str]]
+
+
 def _literals(tree: ast.AST) -> list[tuple[int, str]]:
-    """Every string literal, with f-string text parts joined around placeholders."""
+    """Every string literal, with f-string text parts joined around placeholders.
+
+    ``ast.walk`` yields an f-string before its parts, so one pass can skip the
+    parts it already joined.
+    """
     literals: list[tuple[int, str]] = []
     formatted_parts: set[int] = set()
     for node in ast.walk(tree):
@@ -56,8 +72,7 @@ def _literals(tree: ast.AST) -> list[tuple[int, str]]:
                 else:
                     text += " {} "
             literals.append((node.lineno, text))
-    for node in ast.walk(tree):
-        if (
+        elif (
             isinstance(node, ast.Constant)
             and isinstance(node.value, str)
             and id(node) not in formatted_parts
@@ -66,24 +81,35 @@ def _literals(tree: ast.AST) -> list[tuple[int, str]]:
     return literals
 
 
-def _sources(packages: tuple[str, ...], marker: re.Pattern[str]) -> Iterator[tuple[str, str]]:
-    """Each Python source under *packages* that mentions *marker*, by relative path."""
-    for package in packages:
+@pytest.fixture(scope="module")
+def sources() -> list[_Source]:
+    """Every Python source that may hold runtime SQL, read and parsed once."""
+    parsed: list[_Source] = []
+    for package in sorted(set(_RUNTIME_PACKAGES) | set(_WRITING_PACKAGES)):
         for source_path in sorted((_REPO_ROOT / package).rglob("*.py")):
-            source = source_path.read_text(encoding="utf-8")
-            if marker.search(source):
-                yield source_path.relative_to(_REPO_ROOT).as_posix(), source
+            text = source_path.read_text(encoding="utf-8")
+            reads = package in _RUNTIME_PACKAGES and _SQL.search(text)
+            # An INSERT names its target after INTO, so a file without INTO holds none.
+            writes = _WRITE.search(text) and _INTO.search(text)
+            if not (reads or writes):
+                continue
+            relative = source_path.relative_to(_REPO_ROOT).as_posix()
+            literals = _literals(ast.parse(text, filename=relative))
+            parsed.append(_Source(relative, package, text, literals))
+    return parsed
 
 
-def _implicit_column_reads() -> list[tuple[str, int, str]]:
+def _implicit_column_reads(sources: list[_Source]) -> list[tuple[str, int, str]]:
     findings: list[tuple[str, int, str]] = []
-    for relative, source in _sources(_RUNTIME_PACKAGES, _SQL):
-        for line, text in _literals(ast.parse(source, filename=relative)):
+    for source in sources:
+        if source.package not in _RUNTIME_PACKAGES:
+            continue
+        for line, text in source.literals:
             if not _SQL.search(text):
                 continue
             for pattern in _IMPLICIT_COLUMNS:
                 for match in pattern.finditer(text):
-                    findings.append((relative, line, match.group(0)))
+                    findings.append((source.relative, line, match.group(0)))
     return findings
 
 
@@ -100,30 +126,35 @@ def _unnamed_inserts(text: str, temp_tables: set[str]) -> list[str]:
     return findings
 
 
-def _implicit_column_writes() -> list[tuple[str, int, str]]:
+def _implicit_column_writes(sources: list[_Source]) -> list[tuple[str, int, str]]:
     findings: list[tuple[str, int, str]] = []
-    for relative, source in _sources(_WRITING_PACKAGES, _WRITE):
-        literals = _literals(ast.parse(source, filename=relative))
+    for source in sources:
+        if not _WRITE.search(source.text):
+            continue
         temp_tables = {
             match.group("name").lower()
-            for _line, text in literals
+            for _line, text in source.literals
             for match in _TEMP_TABLE.finditer(text)
         }
-        for line, text in literals:
+        for line, text in source.literals:
             findings.extend(
-                (relative, line, insert) for insert in _unnamed_inserts(text, temp_tables)
+                (source.relative, line, insert) for insert in _unnamed_inserts(text, temp_tables)
             )
     return findings
 
 
-def test_runtime_sql_never_selects_columns_implicitly() -> None:
-    unexpected = [f"{path}:{line}: {match!r}" for path, line, match in _implicit_column_reads()]
+def test_runtime_sql_never_selects_columns_implicitly(sources: list[_Source]) -> None:
+    unexpected = [
+        f"{path}:{line}: {match!r}" for path, line, match in _implicit_column_reads(sources)
+    ]
 
     assert unexpected == [], "name the selected columns instead of '*'"
 
 
-def test_sql_never_inserts_without_a_column_list() -> None:
-    unexpected = [f"{path}:{line}: {match!r}" for path, line, match in _implicit_column_writes()]
+def test_sql_never_inserts_without_a_column_list(sources: list[_Source]) -> None:
+    unexpected = [
+        f"{path}:{line}: {match!r}" for path, line, match in _implicit_column_writes(sources)
+    ]
 
     assert unexpected == [], "name the inserted columns"
 

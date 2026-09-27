@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-import json
+import os
 import shutil
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -25,27 +26,22 @@ from core.database import (
     read_marker,
     restore_data_snapshot,
     restore_update_snapshot,
+    snapshot_root,
+    unregister_database,
 )
-from core.database import recovery as recovery_module
-from core.database.marker import MarkerEntry, _write_marker
 from core.database.recovery import quarantine_root
-from core.database.snapshots import SNAPSHOT_MANIFEST_NAME, snapshot_root
-from core.database.update_rollback import UPDATE_ROLLBACK_CAUSE, data_stamp
+from core.database.update_rollback import UPDATE_ROLLBACK_CAUSE
 from tests.core.database.database_test_support import (
     add_note,
+    manifest_payload,
     notes_spec,
+    rewrite_marker,
     stored_bodies,
+    write_document,
 )
 
 _SETTINGS = '{"format_version": 1, "theme": "dark"}\n'
 _AGENT = '{"format_version": 1, "id": "main"}\n'
-
-
-def _write(data_dir: Path, relative: str, text: str) -> Path:
-    path = data_dir.joinpath(*relative.split("/"))
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text, encoding="utf-8", newline="")
-    return path
 
 
 def _prepared(data_dir: Path) -> None:
@@ -54,8 +50,8 @@ def _prepared(data_dir: Path) -> None:
         database = open_database(notes_spec(data_dir, name=name))
         add_note(database, f"saved {name}")
         database.close()
-    _write(data_dir, "settings.json", _SETTINGS)
-    _write(data_dir, "agents/main/agent.json", _AGENT)
+    write_document(data_dir, "settings.json", _SETTINGS)
+    write_document(data_dir, "agents/main/agent.json", _AGENT)
 
 
 def _snapshot(data_dir: Path, operation_id: str = "upd_1") -> UpdateSnapshot:
@@ -70,9 +66,9 @@ def _candidate_writes(data_dir: Path) -> None:
     database = open_database(notes_spec(data_dir))
     add_note(database, "written by the candidate")
     database.close()
-    _write(data_dir, "settings.json", '{"format_version": 2}\n')
+    write_document(data_dir, "settings.json", '{"format_version": 2}\n')
     (data_dir / "agents" / "main" / "agent.json").unlink()
-    _write(
+    write_document(
         data_dir,
         "extension-data/mcp/connections.json",
         '{"format_version": 1, "connections": []}\n',
@@ -85,11 +81,7 @@ def test_the_update_snapshot_is_bound_to_its_operation_and_captures_everything(
 ) -> None:
     snapshot = _snapshot(data_dir)
 
-    manifest = json.loads(
-        (snapshot_root(data_dir) / snapshot.snapshot_id / SNAPSHOT_MANIFEST_NAME).read_text(
-            encoding="utf-8"
-        )
-    )
+    manifest = manifest_payload(snapshot_root(data_dir) / snapshot.snapshot_id)
     assert manifest["reason"] == "update upd_1"
     assert sorted(manifest["members"]) == ["notes", "tasks"]
     assert sorted(manifest["documents"]) == ["agents/main/agent.json", "settings.json"]
@@ -99,30 +91,20 @@ def test_the_update_snapshot_is_bound_to_its_operation_and_captures_everything(
     assert find_update_snapshot(data_dir, "upd_other") is None
 
 
-def test_no_registered_database_needs_no_update_snapshot(data_dir: Path) -> None:
-    _write(data_dir, "settings.json", _SETTINGS)
-
+def test_an_update_snapshot_is_needed_exactly_when_databases_exist(
+    data_dir: Path, tmp_path: Path
+) -> None:
+    write_document(data_dir, "settings.json", _SETTINGS)
     assert create_update_snapshot(data_dir, operation_id="upd_1") is None
 
-
-def test_databases_without_a_marker_refuse_the_update_snapshot(tmp_path: Path) -> None:
-    (tmp_path / "sessions.db").write_bytes(b"")
-
+    unmarked = tmp_path / "unmarked"
+    unmarked.mkdir()
+    (unmarked / "sessions.db").write_bytes(b"")
     with pytest.raises(DatabaseFormatError, match="without a current-format"):
-        create_update_snapshot(tmp_path, operation_id="upd_1")
+        create_update_snapshot(unmarked, operation_id="upd_1")
 
 
-def test_a_failed_capture_raises_with_the_recorded_reason(data_dir: Path) -> None:
-    _prepared(data_dir)
-    begin_maintenance(data_dir, "convert")
-
-    with pytest.raises(DatabaseFormatError, match="maintenance is incomplete"):
-        create_update_snapshot(data_dir, operation_id="upd_1")
-
-
-def test_a_missing_extension_database_refuses_the_update_with_its_release_command(
-    data_dir: Path,
-) -> None:
+def test_an_update_snapshot_that_cannot_be_captured_refuses_the_update(data_dir: Path) -> None:
     _prepared(data_dir)
     open_database(notes_spec(data_dir, name="ext.gone.state")).close()
     notes_spec(data_dir, name="ext.gone.state").path.unlink()
@@ -131,34 +113,34 @@ def test_a_missing_extension_database_refuses_the_update_with_its_release_comman
         DatabaseUnavailableError, match="`vbot data-store unregister ext.gone.state --yes`"
     ):
         create_update_snapshot(data_dir, operation_id="upd_1")
+    unregister_database(data_dir, "ext.gone.state")
+    begin_maintenance(data_dir, "convert")
+    with pytest.raises(DatabaseFormatError, match="maintenance is incomplete"):
+        create_update_snapshot(data_dir, operation_id="upd_1")
     assert find_update_snapshot(data_dir, "upd_1") is None
 
 
-@pytest.mark.parametrize("change", ["database", "document", "marker"])
-def test_every_write_after_the_snapshot_is_detected(data_dir: Path, change: str) -> None:
+def test_every_write_after_the_snapshot_is_detected(data_dir: Path) -> None:
     snapshot = _snapshot(data_dir)
+    notes_wal = Path(f"{notes_spec(data_dir).path}-wal")
 
-    if change == "database":
-        database = open_database(notes_spec(data_dir, name="tasks"))
-        add_note(database, "later")
-        database.close()
-    elif change == "document":
-        _write(data_dir, "agents/main/agent.json", '{"format_version": 1, "id": "other"}\n')
-    else:
-        open_database(notes_spec(data_dir, name="journal")).close()
-
-    assert data_changed_since(data_dir, snapshot) is not None
-
-
-def test_the_stamp_ignores_an_empty_journal_left_by_a_read_only_open(data_dir: Path) -> None:
-    _prepared(data_dir)
-    before = data_stamp(data_dir)
-    wal = Path(f"{notes_spec(data_dir).path}-wal")
-    wal.write_bytes(b"")
-
-    assert data_stamp(data_dir) == before
-    wal.write_bytes(b"frames")
-    assert data_stamp(data_dir) != before
+    # A read-only open of a WAL database leaves an empty WAL behind; it holds nothing.
+    notes_wal.write_bytes(b"")
+    assert data_changed_since(data_dir, snapshot) is None
+    # Each check reports the first difference: marker, then files, then documents.
+    write_document(data_dir, "agents/main/agent.json", '{"format_version": 1, "id": "other"}\n')
+    assert data_changed_since(data_dir, snapshot) == (
+        "the JSON document agents/main/agent.json changed"
+    )
+    tasks = open_database(notes_spec(data_dir, name="tasks"))
+    add_note(tasks, "later")
+    tasks.close()
+    assert str(data_changed_since(data_dir, snapshot)).startswith("tasks.db")
+    notes_wal.write_bytes(b"frames")
+    assert data_changed_since(data_dir, snapshot) == "notes.db-wal changed"
+    notes_wal.unlink()
+    open_database(notes_spec(data_dir, name="journal")).close()
+    assert data_changed_since(data_dir, snapshot) == "the data-store marker changed"
 
 
 def test_the_rollback_restores_every_member_and_the_document_set(data_dir: Path) -> None:
@@ -203,7 +185,9 @@ def test_a_missing_snapshot_is_refused_without_changes(data_dir: Path) -> None:
     assert not quarantine_root(data_dir).exists()
 
 
-def test_a_snapshot_of_another_operation_is_refused(data_dir: Path) -> None:
+def test_a_snapshot_or_data_directory_this_update_did_not_leave_is_refused(
+    data_dir: Path,
+) -> None:
     snapshot = _snapshot(data_dir)
     manual = create_data_snapshot(data_dir, reason="manual")
     assert manual is not None
@@ -212,12 +196,6 @@ def test_a_snapshot_of_another_operation_is_refused(data_dir: Path) -> None:
         restore_update_snapshot(data_dir, replace(snapshot, snapshot_id=manual.name))
     with pytest.raises(UpdateRollbackRefusedError, match="another operation"):
         restore_update_snapshot(data_dir, replace(snapshot, operation_id="upd_2"))
-    assert not quarantine_root(data_dir).exists()
-
-
-def test_a_snapshot_whose_content_differs_from_the_capture_is_refused(data_dir: Path) -> None:
-    snapshot = _snapshot(data_dir)
-
     with pytest.raises(UpdateRollbackRefusedError, match="databases differ"):
         restore_update_snapshot(
             data_dir, replace(snapshot, member_hashes={**snapshot.member_hashes, "notes": "0" * 64})
@@ -225,6 +203,18 @@ def test_a_snapshot_whose_content_differs_from_the_capture_is_refused(data_dir: 
     stamp = replace(snapshot.stamp, documents={"settings.json": "0" * 64})
     with pytest.raises(UpdateRollbackRefusedError, match="JSON documents differ"):
         restore_update_snapshot(data_dir, replace(snapshot, stamp=stamp))
+
+    def replaced(payload: dict[str, Any]) -> None:
+        payload["databases"]["notes"]["database_id"] = "f" * 32
+
+    rewrite_marker(data_dir, replaced)
+    with pytest.raises(UpdateRollbackRefusedError, match="notes database registration changed"):
+        restore_update_snapshot(data_dir, snapshot)
+    begin_maintenance(data_dir, "restore")
+    with pytest.raises(UpdateRollbackRefusedError, match="maintenance"):
+        restore_update_snapshot(data_dir, snapshot)
+    assert read_maintenance(data_dir) is not None
+    assert not quarantine_root(data_dir).exists()
 
 
 @pytest.mark.parametrize("member", ["notes.db", "documents/settings.json"])
@@ -245,45 +235,30 @@ def test_a_tampered_member_is_refused_without_changes(data_dir: Path, member: st
     assert not quarantine_root(data_dir).exists()
 
 
-def test_a_changed_database_identity_is_refused(data_dir: Path) -> None:
-    snapshot = _snapshot(data_dir)
-    marker = read_marker(data_dir)
-    assert marker is not None
-    _write_marker(data_dir, {**marker.databases, "notes": MarkerEntry("f" * 32, 1)})
-
-    with pytest.raises(UpdateRollbackRefusedError, match="notes database registration changed"):
-        restore_update_snapshot(data_dir, snapshot)
-
-
-def test_incomplete_maintenance_is_refused(data_dir: Path) -> None:
-    snapshot = _snapshot(data_dir)
-    begin_maintenance(data_dir, "restore")
-
-    with pytest.raises(UpdateRollbackRefusedError, match="maintenance"):
-        restore_update_snapshot(data_dir, snapshot)
-    assert read_maintenance(data_dir) is not None
-
-
 def test_an_interrupted_rollback_keeps_the_guard_and_completes_when_repeated(
     data_dir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     snapshot = _snapshot(data_dir)
     _candidate_writes(data_dir)
-    real_retire = recovery_module._retire_databases_locked
+    retired_batches = quarantine_root(data_dir) / "journal"
+    real_replace = os.replace
 
-    def fail_retire(*_args: object) -> None:
-        raise DatabaseUnavailableError("injected interruption")
+    def interrupt_retiring(source: str | Path, destination: str | Path) -> None:
+        if Path(destination).parent.parent == retired_batches:
+            raise OSError("injected interruption")
+        real_replace(source, destination)
 
-    monkeypatch.setattr(recovery_module, "_retire_databases_locked", fail_retire)
-    with pytest.raises(DatabaseUnavailableError, match="injected interruption"):
-        restore_update_snapshot(data_dir, snapshot)
+    with monkeypatch.context() as patched:
+        patched.setattr(os, "replace", interrupt_retiring)
+        with pytest.raises(DatabaseUnavailableError, match="injected interruption"):
+            restore_update_snapshot(data_dir, snapshot)
     guard = read_maintenance(data_dir)
     assert guard is not None and guard.operation == "restore"
+    assert notes_spec(data_dir, name="journal").path.exists()
     # The automatic path never resumes; an operator repeats the complete restore.
     with pytest.raises(UpdateRollbackRefusedError):
         restore_update_snapshot(data_dir, snapshot)
 
-    monkeypatch.setattr(recovery_module, "_retire_databases_locked", real_retire)
     result = restore_data_snapshot(
         data_dir,
         snapshot_root(data_dir) / snapshot.snapshot_id,
@@ -293,15 +268,3 @@ def test_an_interrupted_rollback_keeps_the_guard_and_completes_when_repeated(
     assert result.retired == ("journal",)
     assert read_maintenance(data_dir) is None
     assert (data_dir / "settings.json").read_text(encoding="utf-8") == _SETTINGS
-
-
-def test_retiring_requires_every_member(data_dir: Path) -> None:
-    snapshot = _snapshot(data_dir)
-
-    with pytest.raises(ValueError, match="every member"):
-        restore_data_snapshot(
-            data_dir,
-            snapshot_root(data_dir) / snapshot.snapshot_id,
-            names=["notes"],
-            retire_unlisted=True,
-        )

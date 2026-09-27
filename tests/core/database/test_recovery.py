@@ -3,22 +3,25 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import sqlite3
 import threading
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from core.database import (
+    MARKER_FILE_NAME,
     DatabaseCorruptError,
     DatabaseFormatError,
     DatabaseSchemaMismatchError,
+    DatabaseSpec,
     DatabaseUnavailableError,
     IncidentConflictError,
-    MarkerEntry,
     acknowledge_incident,
     active_incidents,
     create_data_snapshot,
@@ -30,26 +33,26 @@ from core.database import (
     read_maintenance,
     read_marker,
     restore_data_snapshot,
+    snapshot_root,
     unregister_database,
 )
-from core.database import marker as marker_module
 from core.database import recovery as recovery_module
-from core.database.marker import _write_marker, acquire_operation_lock
+from core.database.marker import acquire_operation_lock
 from core.database.recovery import (
     QUARANTINE_ROOT_NAME,
     auto_restore_if_needed,
     incident_path,
-    quarantine_database,
     quarantine_root,
     write_incident,
 )
-from core.database.snapshots import SNAPSHOT_MANIFEST_NAME
 from tests.core.database.database_test_support import (
     NOTES_SCHEMA_SQL,
     add_note,
     note_bodies,
     notes_spec,
     raw_execute,
+    rewrite_manifest,
+    rewrite_marker,
     snapshot_with_notes,
     stored_bodies,
 )
@@ -61,7 +64,8 @@ def _database_id(data_dir: Path, name: str = "notes") -> str:
     return marker.databases[name].database_id
 
 
-def _restore(data_dir: Path, spec=None) -> bool:
+def _restore(data_dir: Path, spec: DatabaseSpec | None = None) -> bool:
+    """The locked re-probe and restore an open runs for a damaged or pending database."""
     spec = spec or notes_spec(data_dir)
     return auto_restore_if_needed(data_dir, spec, _database_id(data_dir, spec.name))
 
@@ -75,12 +79,70 @@ def _into_quarantine(destination: str | Path) -> bool:
     return QUARANTINE_ROOT_NAME in Path(destination).parts
 
 
-def test_a_damaged_database_is_restored_on_open_with_incident_and_quarantine(
-    data_dir: Path,
+def _failing_replace(
+    fails: Callable[[Path, Path], bool], error: type[OSError] = OSError
+) -> Callable[[str | Path, str | Path], None]:
+    """``os.replace`` that raises ``error`` for the moves ``fails`` selects."""
+    real_replace = os.replace
+
+    def replace(source: str | Path, destination: str | Path) -> None:
+        if fails(Path(source), Path(destination)):
+            raise error("injected move failure")
+        real_replace(source, destination)
+
+    return replace
+
+
+def _garbage(path: Path) -> None:
+    path.write_bytes(b"damaged")
+
+
+def _missing(path: Path) -> None:
+    path.unlink()
+
+
+def _foreign_identity(path: Path) -> None:
+    raw_execute(path, f"UPDATE kernel_meta SET value = '{'b' * 32}' WHERE key = 'database_id'")
+
+
+def _corrupt_pages(path: Path) -> None:
+    """Overwrite the table and index root pages inside an otherwise valid file."""
+    connection = sqlite3.connect(path)
+    try:
+        page_size = int(connection.execute("PRAGMA page_size").fetchone()[0])
+        # The open probe may read either.
+        root_pages = [
+            int(row[0])
+            for row in connection.execute(
+                "SELECT rootpage FROM sqlite_master WHERE tbl_name = 'notes' AND rootpage > 0"
+            )
+        ]
+    finally:
+        connection.close()
+    with path.open("r+b") as handle:
+        for root_page in root_pages:
+            handle.seek((root_page - 1) * page_size)
+            handle.write(b"\xff" * page_size)
+
+
+@pytest.mark.parametrize(
+    ("damage", "cause"),
+    [
+        (_garbage, "malformed canonical notes database"),
+        (_missing, "missing canonical notes database"),
+        (_foreign_identity, "notes database identity mismatch"),
+        # Which damaged page the probe reads first decides the cause.
+        (_corrupt_pages, None),
+    ],
+    ids=["garbage", "missing", "identity", "page-corruption"],
+)
+def test_a_damaged_database_is_restored_on_open_with_an_incident(
+    data_dir: Path, damage: Callable[[Path], None], cause: str | None
 ) -> None:
     snapshot = snapshot_with_notes(data_dir, "saved")
     path = notes_spec(data_dir).path
-    path.write_bytes(b"damaged")
+    damage(path)
+    damaged = path.read_bytes() if path.exists() else None
 
     database = open_database(notes_spec(data_dir))
     try:
@@ -89,42 +151,25 @@ def test_a_damaged_database_is_restored_on_open_with_incident_and_quarantine(
     finally:
         database.close()
 
+    assert not has_live_connection(path)
+    assert status["state"] == "recovered_with_incident"
     incident = read_incident(data_dir, "notes")
     assert incident is not None
     assert incident["verification"] == "ok"
     assert incident["database"] == "notes"
     assert incident["acknowledged"] is False
     assert incident["restored_snapshot_id"] == snapshot.name
-    assert incident["cause"] == "malformed canonical notes database"
-    quarantine = Path(incident["quarantine"])
-    assert quarantine.parent == quarantine_root(data_dir) / "notes"
-    assert re.fullmatch(r"\d{8}T\d{6}-[0-9a-f]{8}", quarantine.name)
-    assert (quarantine / "notes.db").read_bytes() == b"damaged"
+    if cause is not None:
+        assert incident["cause"] == cause
     assert [item["incident_id"] for item in active_incidents(data_dir)] == [incident["incident_id"]]
-    assert status["state"] == "recovered_with_incident"
-
-
-def test_a_missing_registered_database_is_restored_without_quarantine(data_dir: Path) -> None:
-    snapshot_with_notes(data_dir, "saved")
-    notes_spec(data_dir).path.unlink()
-
-    assert stored_bodies(notes_spec(data_dir)) == ["saved"]
-    incident = read_incident(data_dir, "notes")
-    assert incident is not None
-    assert incident["cause"] == "missing canonical notes database"
-    assert incident["quarantine"] is None
-
-
-def test_identity_mismatch_recovers_and_leaves_no_connection_open(data_dir: Path) -> None:
-    snapshot_with_notes(data_dir, "saved")
-    path = notes_spec(data_dir).path
-    raw_execute(path, f"UPDATE kernel_meta SET value = '{'b' * 32}' WHERE key = 'database_id'")
-
-    assert stored_bodies(notes_spec(data_dir)) == ["saved"]
-    incident = read_incident(data_dir, "notes")
-    assert incident is not None
-    assert incident["cause"] == "notes database identity mismatch"
-    assert not has_live_connection(path)
+    if damaged is None:
+        assert incident["quarantine"] is None
+        assert not quarantine_root(data_dir).exists()
+    else:
+        quarantine = Path(incident["quarantine"])
+        assert _quarantine_batches(data_dir) == [quarantine]
+        assert re.fullmatch(r"\d{8}T\d{6}-[0-9a-f]{8}", quarantine.name)
+        assert (quarantine / "notes.db").read_bytes() == damaged
 
 
 @pytest.mark.parametrize("changed", ["live-table", "declaration"])
@@ -167,33 +212,6 @@ def test_a_schema_mismatch_refuses_without_quarantine_or_restore(
     assert read_incident(data_dir, "notes") is None
 
 
-def test_page_corruption_inside_a_valid_file_still_restores(data_dir: Path) -> None:
-    snapshot_with_notes(data_dir, "saved")
-    path = notes_spec(data_dir).path
-    connection = sqlite3.connect(path)
-    try:
-        page_size = int(connection.execute("PRAGMA page_size").fetchone()[0])
-        # The table and its index: the open probe may read either.
-        root_pages = [
-            int(row[0])
-            for row in connection.execute(
-                "SELECT rootpage FROM sqlite_master WHERE tbl_name = 'notes' AND rootpage > 0"
-            )
-        ]
-    finally:
-        connection.close()
-    with path.open("r+b") as handle:
-        for root_page in root_pages:
-            handle.seek((root_page - 1) * page_size)
-            handle.write(b"\xff" * page_size)
-
-    assert stored_bodies(notes_spec(data_dir)) == ["saved"]
-    incident = read_incident(data_dir, "notes")
-    assert incident is not None
-    assert incident["verification"] == "ok"
-    assert len(_quarantine_batches(data_dir)) == 1
-
-
 @pytest.mark.parametrize("mode", ["manual", "automatic"])
 def test_restore_rejects_an_incompatible_member_before_touching_data(
     data_dir: Path, mode: str
@@ -213,7 +231,8 @@ def test_restore_rejects_an_incompatible_member_before_touching_data(
             restore_data_snapshot(data_dir, snapshot, specs=(changed,))
         assert read_maintenance(data_dir) is None
     else:
-        assert _restore(data_dir, changed) is False
+        with pytest.raises(DatabaseCorruptError):
+            open_database(changed)
     assert path.read_bytes() == original
     assert not quarantine_root(data_dir).exists()
     assert read_incident(data_dir, "notes") is None
@@ -234,33 +253,38 @@ def test_a_newer_vbot_database_is_never_replaced(data_dir: Path) -> None:
     assert not quarantine_root(data_dir).exists()
 
 
-def test_failed_quarantine_keeps_the_original_and_the_guard_until_repeated(
+def test_a_failed_restore_keeps_the_original_the_guard_and_its_pending_evidence(
     data_dir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     snapshot = snapshot_with_notes(data_dir, "saved")
     database = open_database(notes_spec(data_dir))
-    add_note(database, "newer")
+    add_note(database, "newer original")
     database.close()
     path = notes_spec(data_dir).path
     original = path.read_bytes()
-    real_replace = recovery_module.os.replace
 
-    def fail_quarantine(source: str | Path, destination: str | Path) -> None:
-        if _into_quarantine(destination):
-            raise OSError("injected quarantine failure")
-        real_replace(source, destination)
-
-    monkeypatch.setattr(recovery_module.os, "replace", fail_quarantine)
-    with pytest.raises(DatabaseUnavailableError):
-        restore_data_snapshot(data_dir, snapshot)
+    with monkeypatch.context() as patched:
+        patched.setattr(
+            os,
+            "replace",
+            _failing_replace(lambda _source, target: _into_quarantine(target), PermissionError),
+        )
+        with pytest.raises(DatabaseUnavailableError):
+            restore_data_snapshot(data_dir, snapshot)
     assert path.read_bytes() == original
+    pending = read_incident(data_dir, "notes")
+    assert pending is not None
+    assert pending["verification"] == "pending"
     guard = read_maintenance(data_dir)
     assert guard is not None
     assert guard.operation == "restore"
     with pytest.raises(DatabaseFormatError, match="maintenance is incomplete"):
         open_database(notes_spec(data_dir))
+    # The re-probe never mistakes the untouched original for the restored copy.
+    assert _restore(data_dir) is False
+    assert path.read_bytes() == original
+    assert read_incident(data_dir, "notes") == pending
 
-    monkeypatch.setattr(recovery_module.os, "replace", real_replace)
     assert restore_data_snapshot(data_dir, snapshot).databases == ("notes",)
     assert read_maintenance(data_dir) is None
     assert stored_bodies(notes_spec(data_dir)) == ["saved"]
@@ -272,14 +296,8 @@ def test_incident_publication_failure_does_not_report_recovery(
     snapshot_with_notes(data_dir, "saved")
     path = notes_spec(data_dir).path
     path.write_bytes(b"damaged")
-    real_replace = recovery_module.os.replace
-
-    def fail_incident(source: str | Path, destination: str | Path) -> None:
-        if Path(destination) == incident_path(data_dir, "notes"):
-            raise OSError("injected incident publication failure")
-        real_replace(source, destination)
-
-    monkeypatch.setattr(recovery_module.os, "replace", fail_incident)
+    evidence = incident_path(data_dir, "notes")
+    monkeypatch.setattr(os, "replace", _failing_replace(lambda _source, target: target == evidence))
 
     with pytest.raises(DatabaseCorruptError):
         open_database(notes_spec(data_dir))
@@ -287,97 +305,44 @@ def test_incident_publication_failure_does_not_report_recovery(
     assert _quarantine_batches(data_dir) == []
 
 
-def test_final_incident_failure_leaves_pending_evidence_and_completes_on_next_open(
-    data_dir: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    snapshot_with_notes(data_dir, "saved")
-    notes_spec(data_dir).path.write_bytes(b"damaged")
-    real_replace = recovery_module.os.replace
-    incident_replaces = 0
-
-    def fail_final_incident(source: str | Path, destination: str | Path) -> None:
-        nonlocal incident_replaces
-        if Path(destination) == incident_path(data_dir, "notes"):
-            incident_replaces += 1
-            if incident_replaces == 2:
-                raise OSError("injected final incident publication failure")
-        real_replace(source, destination)
-
-    monkeypatch.setattr(recovery_module.os, "replace", fail_final_incident)
-    with pytest.raises(DatabaseCorruptError):
-        open_database(notes_spec(data_dir))
-    pending = read_incident(data_dir, "notes")
-    assert pending is not None
-    assert pending["verification"] == "pending"
-    assert pending["recovered_at"] is None
-    assert (Path(pending["quarantine"]) / "notes.db").read_bytes() == b"damaged"
-
-    monkeypatch.setattr(recovery_module.os, "replace", real_replace)
-    assert stored_bodies(notes_spec(data_dir)) == ["saved"]
-    completed = read_incident(data_dir, "notes")
-    assert completed is not None
-    assert completed["incident_id"] == pending["incident_id"]
-    assert completed["verification"] == "ok"
-    assert completed["quarantine"] == pending["quarantine"]
-    assert completed["possible_loss_interval"] == pending["possible_loss_interval"]
-
-
-def test_an_older_vbot_completes_and_acknowledges_an_incident_with_newer_fields(
-    data_dir: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    snapshot_with_notes(data_dir, "saved")
-    notes_spec(data_dir).path.write_bytes(b"damaged")
-    real_replace = recovery_module.os.replace
-    incident_replaces = 0
-
-    def fail_final_incident(source: str | Path, destination: str | Path) -> None:
-        nonlocal incident_replaces
-        if Path(destination) == incident_path(data_dir, "notes"):
-            incident_replaces += 1
-            if incident_replaces == 2:
-                raise OSError("injected final incident publication failure")
-        real_replace(source, destination)
-
-    monkeypatch.setattr(recovery_module.os, "replace", fail_final_incident)
-    with pytest.raises(DatabaseCorruptError):
-        open_database(notes_spec(data_dir))
-    monkeypatch.setattr(recovery_module.os, "replace", real_replace)
-    evidence = incident_path(data_dir, "notes")
-    pending = json.loads(evidence.read_text(encoding="utf-8"))
-    pending["operator_note"] = {"source": "newer vBot"}
-    pending["possible_loss_interval"]["confidence"] = "exact"
-    evidence.write_text(json.dumps(pending), encoding="utf-8")
-
-    # Every open reads the incident; a newer vBot's fields never block it.
-    assert stored_bodies(notes_spec(data_dir)) == ["saved"]
-    completed = read_incident(data_dir, "notes")
-    assert completed is not None
-    assert completed["verification"] == "ok"
-    assert completed["operator_note"] == {"source": "newer vBot"}
-    assert completed["possible_loss_interval"]["confidence"] == "exact"
-    assert acknowledge_incident(data_dir, completed["incident_id"]) is True
-    assert read_incident(data_dir, "notes") == {**completed, "acknowledged": True}
-
-
-def test_final_incident_failure_never_restores_an_older_snapshot(
+def test_a_final_incident_failure_stops_at_pending_evidence_that_the_next_open_completes(
     data_dir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     snapshot_with_notes(data_dir, "one")
     snapshot_with_notes(data_dir, "two")
     notes_spec(data_dir).path.write_bytes(b"damaged")
-    real_publish = recovery_module.write_incident
+    evidence = incident_path(data_dir, "notes")
+    publications: list[Path] = []
 
-    def fail_final_incident(*args: Any, **kwargs: Any) -> dict[str, Any]:
-        if kwargs.get("verification") == "ok":
-            raise DatabaseUnavailableError("injected finalization failure")
-        return real_publish(*args, **kwargs)
+    def final_publication(_source: Path, target: Path) -> bool:
+        if target == evidence:
+            publications.append(target)
+        return len(publications) == 2 and target == evidence
 
-    monkeypatch.setattr(recovery_module, "write_incident", fail_final_incident)
-    assert _restore(data_dir) is False
-    monkeypatch.setattr(recovery_module, "write_incident", real_publish)
+    with monkeypatch.context() as patched:
+        patched.setattr(os, "replace", _failing_replace(final_publication))
+        with pytest.raises(DatabaseCorruptError):
+            open_database(notes_spec(data_dir))
+    pending = read_incident(data_dir, "notes")
+    assert pending is not None
+    assert pending["verification"] == "pending"
+    assert pending["recovered_at"] is None
+    assert (Path(pending["quarantine"]) / "notes.db").read_bytes() == b"damaged"
+    # A newer vBot may have added fields meanwhile; they never block completion.
+    pending["operator_note"] = {"source": "newer vBot"}
+    pending["possible_loss_interval"]["confidence"] = "exact"
+    evidence.write_text(json.dumps(pending), encoding="utf-8")
 
+    # The installed newest copy is confirmed; an older snapshot is never tried.
     assert stored_bodies(notes_spec(data_dir)) == ["one", "two"]
     assert len(_quarantine_batches(data_dir)) == 1
+    completed = read_incident(data_dir, "notes")
+    assert completed is not None
+    assert completed["verification"] == "ok"
+    for kept in ("incident_id", "quarantine", "possible_loss_interval", "operator_note"):
+        assert completed[kept] == pending[kept], kept
+    assert acknowledge_incident(data_dir, completed["incident_id"]) is True
+    assert read_incident(data_dir, "notes") == {**completed, "acknowledged": True}
 
 
 def test_concurrent_recovery_reprobes_after_the_first_owner_finishes(data_dir: Path) -> None:
@@ -401,34 +366,30 @@ def test_concurrent_recovery_reprobes_after_the_first_owner_finishes(data_dir: P
 
 
 @pytest.mark.parametrize("rejection", ["hash", "live"])
-def test_a_rejected_restore_preserves_the_existing_incident(
-    data_dir: Path, monkeypatch: pytest.MonkeyPatch, rejection: str
-) -> None:
-    snapshot = snapshot_with_notes(data_dir, "saved")
-    write_incident(
-        data_dir,
-        "notes",
-        cause="earlier recovery",
-        quarantine_path=None,
-        restored_snapshot_id="earlier",
-        restored_snapshot_time="2026-08-31T10:00:00Z",
-    )
+def test_a_rejected_restore_preserves_the_existing_incident(data_dir: Path, rejection: str) -> None:
+    incident = _recovered(data_dir)
+    snapshot = snapshot_root(data_dir) / incident["restored_snapshot_id"]
     evidence = incident_path(data_dir, "notes").read_bytes()
     path = notes_spec(data_dir).path
-    original = path.read_bytes()
+    expected: type[Exception]
     if rejection == "hash":
-        manifest_path = snapshot / SNAPSHOT_MANIFEST_NAME
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        manifest["members"]["notes"]["sha256"] = "0" * 64
-        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
-        expected: type[Exception] = DatabaseCorruptError
-    else:
-        monkeypatch.setattr(recovery_module, "has_live_connection", lambda _path: True)
-        expected = DatabaseUnavailableError
 
-    with pytest.raises(expected):
-        restore_data_snapshot(data_dir, snapshot)
-    assert path.read_bytes() == original
+        def tampered(payload: dict[str, Any]) -> None:
+            payload["members"]["notes"]["sha256"] = "0" * 64
+
+        rewrite_manifest(snapshot, tampered)
+        expected = DatabaseCorruptError
+    else:
+        expected = DatabaseUnavailableError
+    database = open_database(notes_spec(data_dir)) if rejection == "live" else None
+    try:
+        original = path.read_bytes()
+        with pytest.raises(expected):
+            restore_data_snapshot(data_dir, snapshot)
+        assert path.read_bytes() == original
+    finally:
+        if database is not None:
+            database.close()
     assert incident_path(data_dir, "notes").read_bytes() == evidence
 
 
@@ -448,192 +409,108 @@ def test_a_copy_failure_stops_the_candidate_fallback(
             raise OSError("injected temporary write failure")
         return real_copy(source, destination, *args, **kwargs)
 
-    monkeypatch.setattr(recovery_module.shutil, "copy2", fail_first_copy)
+    monkeypatch.setattr(shutil, "copy2", fail_first_copy)
 
-    assert _restore(data_dir) is False
+    with pytest.raises(DatabaseCorruptError):
+        open_database(notes_spec(data_dir))
     assert attempted == [newest / "notes.db"]
     assert path.read_bytes() == b"damaged"
     assert not quarantine_root(data_dir).exists()
     assert read_incident(data_dir, "notes") is None
 
 
-@pytest.mark.parametrize(
-    "serialized", [b"{", b"\xff", b"[]", b'{"incident_id":"a","acknowledged":false}']
-)
-def test_open_preserves_invalid_incident_evidence(data_dir: Path, serialized: bytes) -> None:
-    snapshot_with_notes(data_dir, "saved")
-    evidence = incident_path(data_dir, "notes")
-    evidence.parent.mkdir(parents=True, exist_ok=True)
-    evidence.write_bytes(serialized)
-
-    with pytest.raises(DatabaseCorruptError):
-        open_database(notes_spec(data_dir))
-    assert evidence.read_bytes() == serialized
-
-
-@pytest.mark.parametrize(
-    "field", ["restored_snapshot_time", "recovered_at", "interval.start", "interval.end"]
-)
-@pytest.mark.parametrize("value", ["2026-09-01T10:00:00Z", "2026-09-01T12:00:00.000000+02:00"])
-def test_a_non_canonical_incident_timestamp_is_invalid_evidence(
-    data_dir: Path, field: str, value: str
-) -> None:
-    snapshot_with_notes(data_dir, "saved")
-    notes_spec(data_dir).path.write_bytes(b"damaged")
+def test_invalid_incident_evidence_is_reported_and_never_rewritten(data_dir: Path) -> None:
     open_database(notes_spec(data_dir)).close()
     evidence = incident_path(data_dir, "notes")
-    incident = json.loads(evidence.read_text(encoding="utf-8"))
-    if field.startswith("interval."):
-        incident["possible_loss_interval"][field.removeprefix("interval.")] = value
-    else:
-        incident[field] = value
-    serialized = json.dumps(incident).encode("utf-8")
-    evidence.write_bytes(serialized)
+    evidence.parent.mkdir(parents=True, exist_ok=True)
 
+    for serialized in (b"{", b"\xff", b"[]"):
+        evidence.write_bytes(serialized)
+        with pytest.raises(DatabaseCorruptError):
+            open_database(notes_spec(data_dir))
+        with pytest.raises(DatabaseCorruptError):
+            acknowledge_incident(data_dir, "a" * 32)
+        assert evidence.read_bytes() == serialized
+
+
+def test_a_non_canonical_incident_timestamp_is_invalid_evidence(data_dir: Path) -> None:
+    incident = _recovered(data_dir)
+    evidence = incident_path(data_dir, "notes")
     # An incident is written with canonical timestamps only; another form is
     # damage, reported and preserved like any unreadable incident.
-    with pytest.raises(DatabaseCorruptError, match="invalid timestamp"):
-        read_incident(data_dir, "notes")
-    with pytest.raises(DatabaseCorruptError):
-        acknowledge_incident(data_dir, incident["incident_id"])
-    assert evidence.read_bytes() == serialized
+    for field in ("restored_snapshot_time", "recovered_at", "interval.start", "interval.end"):
+        for value in ("2026-09-01T10:00:00Z", "2026-09-01T12:00:00.000000+02:00"):
+            changed = json.loads(json.dumps(incident))
+            if field.startswith("interval."):
+                changed["possible_loss_interval"][field.removeprefix("interval.")] = value
+            else:
+                changed[field] = value
+            serialized = json.dumps(changed).encode("utf-8")
+            evidence.write_bytes(serialized)
 
-
-def test_a_pending_restore_never_mistakes_the_untouched_original_for_success(
-    data_dir: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    snapshot = snapshot_with_notes(data_dir, "saved")
-    database = open_database(notes_spec(data_dir))
-    add_note(database, "newer original")
-    database.close()
-    path = notes_spec(data_dir).path
-    original = path.read_bytes()
-    real_replace = recovery_module.os.replace
-
-    def fail_quarantine(source: str | Path, destination: str | Path) -> None:
-        if _into_quarantine(destination):
-            raise PermissionError("injected quarantine access failure")
-        real_replace(source, destination)
-
-    monkeypatch.setattr(recovery_module.os, "replace", fail_quarantine)
-    with pytest.raises(DatabaseUnavailableError):
-        restore_data_snapshot(data_dir, snapshot)
-    pending = read_incident(data_dir, "notes")
-    assert pending is not None
-    assert pending["verification"] == "pending"
-    monkeypatch.setattr(recovery_module.os, "replace", real_replace)
-
-    assert _restore(data_dir) is False
-    assert path.read_bytes() == original
-    assert read_incident(data_dir, "notes") == pending
+            with pytest.raises(DatabaseCorruptError, match="invalid timestamp"):
+                read_incident(data_dir, "notes")
+            with pytest.raises(DatabaseCorruptError):
+                acknowledge_incident(data_dir, incident["incident_id"])
+            assert evidence.read_bytes() == serialized
 
 
 @pytest.mark.parametrize("partial_install", [False, True])
 def test_a_restore_retry_keeps_the_original_quarantine_and_failure_time(
     data_dir: Path, monkeypatch: pytest.MonkeyPatch, partial_install: bool
 ) -> None:
-    snapshot = snapshot_with_notes(data_dir, "saved")
+    snapshot_with_notes(data_dir, "saved")
     path = notes_spec(data_dir).path
     path.write_bytes(b"damaged original")
-    real_replace = recovery_module.os.replace
 
-    def fail_install(source: str | Path, destination: str | Path) -> None:
-        if Path(destination) == path:
-            raise PermissionError("injected restore publication failure")
-        real_replace(source, destination)
-
-    monkeypatch.setattr(recovery_module.os, "replace", fail_install)
-    with pytest.raises(DatabaseUnavailableError):
-        restore_data_snapshot(data_dir, snapshot)
+    with monkeypatch.context() as patched:
+        patched.setattr(
+            os,
+            "replace",
+            _failing_replace(lambda _source, target: target == path, PermissionError),
+        )
+        with pytest.raises(DatabaseCorruptError):
+            open_database(notes_spec(data_dir))
     pending = read_incident(data_dir, "notes")
     assert pending is not None
+    assert pending["verification"] == "pending"
     assert not path.exists()
     if partial_install:
         path.write_bytes(b"damaged retry output")
-    monkeypatch.setattr(recovery_module.os, "replace", real_replace)
 
-    assert _restore(data_dir) is True
+    assert stored_bodies(notes_spec(data_dir)) == ["saved"]
     completed = read_incident(data_dir, "notes")
     assert completed is not None
-    assert completed["incident_id"] == pending["incident_id"]
-    assert completed["cause"] == "manual operator restore"
-    assert completed["possible_loss_interval"] == pending["possible_loss_interval"]
-    assert completed["quarantine"] == pending["quarantine"]
+    assert completed["verification"] == "ok"
+    for kept in ("incident_id", "cause", "possible_loss_interval", "quarantine"):
+        assert completed[kept] == pending[kept], kept
     assert (Path(completed["quarantine"]) / "notes.db").read_bytes() == b"damaged original"
 
 
 def test_a_retry_after_quarantine_rollback_records_the_actual_evidence(
     data_dir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    snapshot = snapshot_with_notes(data_dir, "saved")
+    snapshot_with_notes(data_dir, "saved")
     path = notes_spec(data_dir).path
     path.write_bytes(b"damaged original")
-    real_replace = recovery_module.os.replace
 
-    def fail_quarantine(source: str | Path, destination: str | Path) -> None:
-        if _into_quarantine(destination):
-            raise PermissionError("injected quarantine failure")
-        real_replace(source, destination)
-
-    monkeypatch.setattr(recovery_module.os, "replace", fail_quarantine)
-    with pytest.raises(DatabaseUnavailableError):
-        restore_data_snapshot(data_dir, snapshot)
+    with monkeypatch.context() as patched:
+        patched.setattr(
+            os,
+            "replace",
+            _failing_replace(lambda _source, target: _into_quarantine(target), PermissionError),
+        )
+        with pytest.raises(DatabaseCorruptError):
+            open_database(notes_spec(data_dir))
     pending = read_incident(data_dir, "notes")
     assert pending is not None
+    # Only reserved: the rolled-back quarantine holds no evidence.
     assert not Path(pending["quarantine"]).exists()
-    monkeypatch.setattr(recovery_module.os, "replace", real_replace)
 
-    assert _restore(data_dir) is True
+    assert stored_bodies(notes_spec(data_dir)) == ["saved"]
     completed = read_incident(data_dir, "notes")
     assert completed is not None
     assert (Path(completed["quarantine"]) / "notes.db").read_bytes() == b"damaged original"
-
-
-def test_a_failed_quarantine_rollback_keeps_the_only_copy(
-    data_dir: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    path = notes_spec(data_dir).path
-    sidecar = Path(f"{path}-wal")
-    path.write_bytes(b"original database")
-    sidecar.write_bytes(b"original wal")
-    real_replace = recovery_module.os.replace
-
-    def fail_sidecar_and_rollback(source: str | Path, destination: str | Path) -> None:
-        if Path(source) == sidecar or Path(destination) == path:
-            raise OSError("injected move failure")
-        real_replace(source, destination)
-
-    monkeypatch.setattr(recovery_module.os, "replace", fail_sidecar_and_rollback)
-    result = quarantine_database(data_dir, "notes")
-
-    assert result.status == "failed"
-    assert result.path is not None
-    assert (result.path / path.name).read_bytes() == b"original database"
-    assert sidecar.read_bytes() == b"original wal"
-
-
-def test_a_quarantine_durability_failure_rolls_back_the_whole_bundle(
-    data_dir: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    path = notes_spec(data_dir).path
-    sidecar = Path(f"{path}-wal")
-    path.write_bytes(b"database evidence")
-    sidecar.write_bytes(b"wal evidence")
-    real_fsync = recovery_module.fsync_dir
-
-    def fail_quarantine_sync(directory: Path) -> None:
-        if directory.parent == quarantine_root(data_dir) / "notes":
-            raise OSError("injected quarantine durability failure")
-        real_fsync(directory)
-
-    monkeypatch.setattr(recovery_module, "fsync_dir", fail_quarantine_sync)
-    result = quarantine_database(data_dir, "notes")
-
-    assert result.status == "failed"
-    assert result.path is None
-    assert path.read_bytes() == b"database evidence"
-    assert sidecar.read_bytes() == b"wal evidence"
-    assert _quarantine_batches(data_dir) == []
 
 
 def test_operator_restore_replaces_only_the_selected_members(data_dir: Path) -> None:
@@ -642,8 +519,6 @@ def test_operator_restore_replaces_only_the_selected_members(data_dir: Path) -> 
     try:
         add_note(notes, "saved note")
         add_note(tasks, "saved task")
-        from core.database import create_data_snapshot
-
         snapshot = create_data_snapshot(data_dir, reason="test", databases=(notes, tasks))
         assert snapshot is not None
         add_note(notes, "later note")
@@ -663,7 +538,9 @@ def test_operator_restore_replaces_only_the_selected_members(data_dir: Path) -> 
     assert read_maintenance(data_dir) is None
 
 
-def test_operator_restore_checks_every_selected_member_first(data_dir: Path) -> None:
+def test_operator_restore_checks_the_request_and_every_selected_member_first(
+    data_dir: Path,
+) -> None:
     snapshot = snapshot_with_notes(data_dir, "saved")
     database = open_database(notes_spec(data_dir))
     add_note(database, "later")
@@ -674,21 +551,22 @@ def test_operator_restore_checks_every_selected_member_first(data_dir: Path) -> 
     assert restore_data_snapshot(data_dir, snapshot, check_only=True).databases == ("notes",)
     with pytest.raises(DatabaseFormatError, match="has no tasks member"):
         restore_data_snapshot(data_dir, snapshot, names=["notes", "tasks"])
-    _write_marker(data_dir, {"notes": MarkerEntry("f" * 32, 1)})
+    with pytest.raises(ValueError, match="every member"):
+        restore_data_snapshot(data_dir, snapshot, names=["notes"], retire_unlisted=True)
+
+    def replaced(payload: dict[str, Any]) -> None:
+        payload["databases"]["notes"]["database_id"] = "f" * 32
+
+    rewrite_marker(data_dir, replaced)
     with pytest.raises(DatabaseFormatError, match="does not belong"):
+        restore_data_snapshot(data_dir, snapshot)
+    (data_dir / MARKER_FILE_NAME).unlink()
+    with pytest.raises(DatabaseFormatError, match="does not authorize"):
         restore_data_snapshot(data_dir, snapshot)
 
     assert path.read_bytes() == original
     assert read_maintenance(data_dir) is None
     assert read_incident(data_dir, "notes") is None
-
-
-def test_operator_restore_requires_the_current_marker(data_dir: Path) -> None:
-    snapshot = snapshot_with_notes(data_dir, "saved")
-    (data_dir / marker_module.MARKER_FILE_NAME).unlink()
-
-    with pytest.raises(DatabaseFormatError, match="does not authorize"):
-        restore_data_snapshot(data_dir, snapshot)
 
 
 def _recovered(data_dir: Path) -> dict[str, Any]:
@@ -700,40 +578,22 @@ def _recovered(data_dir: Path) -> dict[str, Any]:
     return incident
 
 
-def test_acknowledging_an_incident_is_durable_and_idempotent(data_dir: Path) -> None:
-    incident = _recovered(data_dir)
-
-    assert acknowledge_incident(data_dir, incident["incident_id"]) is True
-    assert acknowledge_incident(data_dir, incident["incident_id"]) is True
-
-    stored = read_incident(data_dir, "notes")
-    assert stored == {**incident, "acknowledged": True}
-    assert active_incidents(data_dir) == []
-    assert data_store_status(data_dir)["state"] == "healthy"
-
-
-def test_acknowledging_without_any_incident_reports_nothing(data_dir: Path) -> None:
+def test_acknowledging_acknowledges_exactly_the_observed_incident_durably(
+    data_dir: Path,
+) -> None:
     assert acknowledge_incident(data_dir, "a" * 32) is False
-
-
-def test_acknowledging_a_stale_incident_id_conflicts(data_dir: Path) -> None:
     incident = _recovered(data_dir)
     evidence = incident_path(data_dir, "notes").read_bytes()
 
     with pytest.raises(IncidentConflictError):
         acknowledge_incident(data_dir, "0" * 32)
     assert incident_path(data_dir, "notes").read_bytes() == evidence
-    assert read_incident(data_dir, "notes") == incident
+    assert acknowledge_incident(data_dir, incident["incident_id"]) is True
+    assert acknowledge_incident(data_dir, incident["incident_id"]) is True
 
-
-def test_acknowledging_never_rewrites_invalid_evidence(data_dir: Path) -> None:
-    evidence = incident_path(data_dir, "notes")
-    evidence.parent.mkdir(parents=True)
-    evidence.write_bytes(b"[]")
-
-    with pytest.raises(DatabaseCorruptError):
-        acknowledge_incident(data_dir, "a" * 32)
-    assert evidence.read_bytes() == b"[]"
+    assert read_incident(data_dir, "notes") == {**incident, "acknowledged": True}
+    assert active_incidents(data_dir) == []
+    assert data_store_status(data_dir)["state"] == "healthy"
 
 
 def test_an_unreadable_incident_is_unavailable(
@@ -759,7 +619,7 @@ def test_acknowledging_waits_for_the_operation_lock(
     incident = _recovered(data_dir)
     owner = acquire_operation_lock(data_dir)
     assert owner is not None
-    monkeypatch.setattr(marker_module, "OPERATION_LOCK_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr("core.database.marker.OPERATION_LOCK_TIMEOUT_SECONDS", 0.05)
     try:
         with pytest.raises(DatabaseUnavailableError, match="busy"):
             acknowledge_incident(data_dir, incident["incident_id"])
@@ -882,6 +742,59 @@ def test_unregistering_is_refused_for_core_unknown_open_or_maintenance(
     assert path.read_bytes() == original
     assert _registered(data_dir) == {"notes", _EXTENSION}
     assert not quarantine_root(data_dir).exists()
+
+
+def _extension_with_sidecar(data_dir: Path) -> tuple[Path, Path, bytes]:
+    """A registered Extension database whose bundle also holds a WAL sidecar."""
+    open_database(notes_spec(data_dir, name=_EXTENSION)).close()
+    path = notes_spec(data_dir, name=_EXTENSION).path
+    sidecar = Path(f"{path}-wal")
+    sidecar.write_bytes(b"wal evidence")
+    return path, sidecar, path.read_bytes()
+
+
+def test_a_failed_quarantine_rollback_keeps_the_only_copy_in_the_batch(
+    data_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path, sidecar, original = _extension_with_sidecar(data_dir)
+    monkeypatch.setattr(
+        os,
+        "replace",
+        # The sidecar cannot move, and moving the database back fails too.
+        _failing_replace(lambda source, target: source == sidecar or target == path),
+    )
+
+    with pytest.raises(DatabaseUnavailableError, match="rollback failed; retained bundle at"):
+        unregister_database(data_dir, _EXTENSION)
+
+    monkeypatch.undo()
+    (batch,) = _quarantine_batches(data_dir, _EXTENSION)
+    assert (batch / path.name).read_bytes() == original
+    assert not path.exists()
+    assert sidecar.read_bytes() == b"wal evidence"
+    assert _registered(data_dir) == {_EXTENSION}
+
+
+def test_a_quarantine_durability_failure_moves_the_whole_bundle_back(
+    data_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path, sidecar, original = _extension_with_sidecar(data_dir)
+    batches = quarantine_root(data_dir) / _EXTENSION
+    real_fsync = recovery_module.fsync_dir
+
+    def fail_quarantine_sync(directory: Path) -> None:
+        if directory.parent == batches:
+            raise OSError("injected quarantine durability failure")
+        real_fsync(directory)
+
+    monkeypatch.setattr(recovery_module, "fsync_dir", fail_quarantine_sync)
+    with pytest.raises(DatabaseUnavailableError, match="injected quarantine durability failure"):
+        unregister_database(data_dir, _EXTENSION)
+
+    assert path.read_bytes() == original
+    assert sidecar.read_bytes() == b"wal evidence"
+    assert _quarantine_batches(data_dir, _EXTENSION) == []
+    assert _registered(data_dir) == {_EXTENSION}
 
 
 def test_restoring_an_unregistered_member_registers_it_again(data_dir: Path) -> None:
