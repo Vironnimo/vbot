@@ -886,9 +886,14 @@ async def test_quiesce_waits_for_creation_and_permanently_retires_owner(tmp_path
 
 
 @pytest.mark.asyncio
-@pytest.mark.timeout(120)
-async def test_forty_temporary_participants_use_actual_chat_and_independent_history(tmp_path):
-    # Keep all forty real Runs while allowing for durable writes on Windows CI disks.
+@pytest.mark.parametrize(
+    "participants",
+    # Forty real Runs are a load case; their durable writes need a longer timeout.
+    [3, pytest.param(40, marks=[pytest.mark.stress, pytest.mark.timeout(120)])],
+)
+async def test_temporary_participants_use_actual_chat_and_independent_history(
+    tmp_path, participants
+):
     from tests.core.chat.chat_loop_support import (
         StubAdapter,
         StubAgent,
@@ -896,7 +901,7 @@ async def test_forty_temporary_participants_use_actual_chat_and_independent_hist
         build_chat_loop,
     )
 
-    adapter = StubAdapter([{"content": "fixture result"} for _ in range(40)])
+    adapter = StubAdapter([{"content": "fixture result"} for _ in range(participants)])
     runtime = StubRuntime(
         data_dir=tmp_path,
         agent=StubAgent(id="ordinary", model="openai/gpt-5.2"),
@@ -925,7 +930,7 @@ async def test_forty_temporary_participants_use_actual_chat_and_independent_hist
         instructions="shared-instructions-sentinel",
     )
     bindings = await asyncio.gather(
-        *(groups.create("large-group", f"peer-{index}", config) for index in range(40))
+        *(groups.create("large-group", f"peer-{index}", config) for index in range(participants))
     )
     handle = await groups.open_group("large-group")
     try:
@@ -942,8 +947,8 @@ async def test_forty_temporary_participants_use_actual_chat_and_independent_hist
         await asyncio.gather(
             *(runtime.chat_run_manager.get(start.run_id).wait() for start in starts)
         )
-        assert len({binding.address for binding in bindings}) == 40
-        assert len(adapter.requests) == 40
+        assert len({binding.address for binding in bindings}) == participants
+        assert len(adapter.requests) == participants
         for binding, start in zip(bindings, starts, strict=True):
             history = runtime.chat_sessions.get(binding.address).load()
             assert [message.content for message in history if message.role == "user"] == [

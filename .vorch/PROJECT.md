@@ -141,6 +141,7 @@ Backend: pytest with `--import-mode=importlib`; frontend: Vitest, optionally jsd
 ```bash
 python -m pytest tests/core/tools/test_bash.py         # file, directory, node id; -k/-x/--lf as usual
 python -m pytest --durations=25 tests/core/chat        # plus the slowest tests
+python -m pytest -m stress                             # load tests, excluded by default
 python -m pytest tests/core/calendar --cov=core/calendar --cov-branch   # coverage of an owner
 python -m ruff check --fix <paths>; python -m ruff format <paths>
 python -m mypy                                         # configured project; seconds with a warm cache
@@ -148,7 +149,7 @@ cd webui && npx vitest run src/lib/__tests__/i18n.test.js
 cd webui && npx vitest run src/lib/__tests__/*.guard.test.js   # repo-wide WebUI guards
 cd webui && npm run build              # also: npm run lint, npm run format:check
 ```
-pytest runs on all physical cores (`-n auto`, work-stealing xdist) with a 30 s per-test timeout; pass `-n 0` for a handful of tests or a debugger. WebUI guard tests (`src/**/__tests__/*.guard.test.js`) scan every WebUI and Extension page source. The complete suites are `python -m pytest` and `npx vitest run`; CI runs them as the release gate.
+pytest runs on all physical cores (`-n auto`, work-stealing xdist) with a 30 s per-test timeout; pass `-n 0` for a handful of tests or a debugger. Load tests (for example the same behavior with forty participants instead of three) carry the `stress` marker; the default options deselect them (`-m "not stress"`), so the suite, the commit hook and CI skip them until `-m stress` selects them. WebUI guard tests (`src/**/__tests__/*.guard.test.js`) scan every WebUI and Extension page source. The complete suites are `python -m pytest` and `npx vitest run`; CI runs them as the release gate.
 
 **Commit hook:** `.githooks/pre-commit` and `.githooks/pre-merge-commit` run `scripts/commit_check.py` on the staged files of every commit and merge commit. Static checks come first: Ruff fix, format and lint for Python; mypy over the configured project plus staged Python files outside it; Prettier and ESLint for WebUI and Extension page `ui/` sources. It applies and re-stages fixes only for completely staged files and checks partially staged files as they are in the working tree. mypy errors block in staged files and in files without uncommitted changes; errors in files with unstaged or untracked work are reported without blocking. The first mypy run in a new worktree builds its cache (~40 s). The `dev` extra pins Ruff, mypy and pytest-testmon exactly so the hook and CI agree; upgrade them deliberately, together with the fixes a new version requires.
 

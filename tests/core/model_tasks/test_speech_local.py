@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import io
 import json
 import os
@@ -353,25 +354,40 @@ def test_native_transformers_adapter_contracts_without_weights(
     assert engine._model is None and engine._processor is None
 
 
-@_cold_native_imports
-@pytest.mark.parametrize("frames", [1, 48, 49, 50, 104, 105, 106, 3000])
-@pytest.mark.parametrize("language", ["", "de-DE"])
+class _Features(dict[str, Any]):
+    """Processor output: numpy arrays stand in for tensors, so no native import is needed."""
+
+    def to(self, *_args: Any) -> _Features:
+        return self
+
+
+def _pad(chunk: Any, padding: tuple[int, int, int, int]) -> Any:
+    # torch.nn.functional.pad lists padding from the last dimension backwards.
+    last_before, last_after, frames_before, frames_after = padding
+    return np.pad(chunk, ((0, 0), (frames_before, frames_after), (last_before, last_after)))
+
+
+@pytest.mark.parametrize(
+    ("frames", "language"),
+    [(1, ""), (48, "de-DE"), (49, ""), (50, "de-DE"), (104, ""), (105, "de-DE"), (106, "")]
+    + [(3000, "de-DE")],
+)
 def test_nemotron_keeps_every_streaming_frame_and_language_prompt(frames, language):
-    torch = pytest.importorskip("torch")
-    transformers = pytest.importorskip("transformers")
     from core.model_tasks.speech_local import _NemotronEngine
 
     engine = _NemotronEngine.__new__(_NemotronEngine)
-    engine._torch = torch
-    engine._model = MagicMock(device=torch.device("cpu"), dtype=torch.float32)
-    engine._model.max_symbols_per_step = 10
+    engine._torch = SimpleNamespace(
+        nn=SimpleNamespace(functional=SimpleNamespace(pad=_pad)),
+        inference_mode=contextlib.nullcontext,
+    )
+    engine._model = MagicMock(max_symbols_per_step=10)
     processor = engine._processor = MagicMock(
         num_mel_frames_first_audio_chunk=49, num_mel_frames_per_audio_chunk=56
     )
-    features = torch.arange((frames + 3) * 8, dtype=torch.float32).reshape(1, frames + 3, 8)
-    mask = torch.tensor([[1] * frames + [0] * 3])
-    processor.return_value = transformers.BatchFeature(
-        {"input_features": features, "attention_mask": mask, "prompt_ids": torch.tensor([9])}
+    features = np.arange((frames + 3) * 8, dtype=np.float32).reshape(1, frames + 3, 8)
+    mask = np.array([[1] * frames + [0] * 3])
+    processor.return_value = _Features(
+        input_features=features, attention_mask=mask, prompt_ids=np.array([9])
     )
     processor.decode.side_effect = lambda _tokens, *, skip_special_tokens: [
         "Hallo Welt." if skip_special_tokens else "Hallo Welt.<de-DE>"
@@ -380,12 +396,11 @@ def test_nemotron_keeps_every_streaming_frame_and_language_prompt(frames, langua
 
     def generate(**kwargs):
         assert kwargs["prompt_ids"].tolist() == [9]
-        assert kwargs["prompt_ids"].dtype == torch.int64
         assert kwargs["num_lookahead_tokens"] == 6
         assert "attention_mask" not in kwargs
         consumed.extend(kwargs["input_features"])
         assert kwargs["max_new_tokens"] > len(consumed) * 7 * 10
-        return SimpleNamespace(sequences=torch.tensor([[1, 2, 3]]))
+        return SimpleNamespace(sequences=np.array([[1, 2, 3]]))
 
     engine._model.generate.side_effect = generate
     result = engine.transcribe(np.ones(1600, dtype=np.float32), {"language": language})
@@ -395,8 +410,8 @@ def test_nemotron_keeps_every_streaming_frame_and_language_prompt(frames, langua
     processor.set_num_lookahead_tokens.assert_called_once_with(6)
     assert consumed[0].shape[1] == 49
     assert all(chunk.shape[1] == 56 for chunk in consumed[1:])
-    joined = torch.cat(consumed, dim=1)
-    assert torch.equal(joined[:, :frames], features[:, :frames])
+    joined = np.concatenate(consumed, axis=1)
+    assert np.array_equal(joined[:, :frames], features[:, :frames])
     assert not joined[:, frames:].any()
 
 

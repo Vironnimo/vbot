@@ -79,7 +79,7 @@ Tests guard behavior against regressions from concurrent and later work. Every t
 - A bug fix extends the existing test that owns the behavior, with a new parameter case or assertion. Add a new test only when no existing test covers that behavior.
 - One test per distinct behavior; parameterize only over genuinely different cases.
 - Developer scripts and probes get at most a smoke test, unless they protect data or installations (converters, installers, update and worktree tooling).
-- Keep tests fast and deterministic: controlled clocks and in-memory fakes instead of real waits, subprocesses, and network. A test that needs more than about a second must justify it.
+- Keep tests fast and deterministic: controlled clocks and in-memory fakes instead of real waits, subprocesses, and network. A test that needs more than about a second must justify it. Load and scale variants carry the `stress` marker, which the normal suite skips (PROJECT.md -> Testing).
 - When a change makes tests obsolete or redundant, delete or merge them in the same change.
 - Documentation-only edits need no tests; review content, references, and the diff.
 
