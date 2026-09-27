@@ -12,6 +12,8 @@ manifest records the source commit and SHA-256 hashes. The archive is outside
 runtime discovery and excluded from source distributions. Restore only in a
 worktree and reconcile shared files with current source; the archived Tool is
 not a supported runtime capability.
+`tests/test_archived_edit.py` guards the archive's hashes, its absence from the
+runtime package and the source-distribution exclusion.
 
 `core/tools/fuzzy_match.py` remains the active matching owner. Bounded change
 previews now live in `core/tools/_change_preview.py`; `apply_patch` imports no

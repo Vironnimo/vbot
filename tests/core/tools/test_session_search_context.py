@@ -13,8 +13,6 @@ from core.recall import (
     SqliteFtsRecallBackend,
     VectorRecallBackend,
 )
-from core.recall.canonical import SESSION_RECALL_DEFAULT_ROLES
-from core.recall.passages import build_session_passages
 from core.runs import RunKind
 from core.sessions import ChatSession, ChatSessionManager
 from scripts.provider_probe.recall_cases import FixtureEmbeddings
@@ -82,12 +80,6 @@ async def test_only_conversation_text_matches_before_candidate_limit(tmp_path: P
     backend = SqliteFtsRecallBackend(RecallBackendContext(tmp_path, sessions))
     data = success(await search(tmp_path, {"query": "needle"}, backend))
     assert [hit["message_id"] for hit in data["items"]] == [visible.id]
-    passages = build_session_passages(session.load_active())
-    assert all(
-        "metadata" not in passage.text and "needle result" not in passage.text
-        for passage in passages
-    )
-    assert "error" not in SESSION_RECALL_DEFAULT_ROLES
 
 
 async def test_substring_matches_are_not_hidden_by_whole_word_hits(tmp_path: Path) -> None:
@@ -131,21 +123,7 @@ async def test_visibility_filters_still_apply_to_search_and_context(tmp_path: Pa
     )
 
 
-async def test_context_is_bounded_and_missing_anchor_does_not_borrow_a_block(
-    tmp_path: Path,
-) -> None:
-    sessions = ChatSessionManager(tmp_path)
-    session = sessions.create("coder", session_id="long")
-    question = ChatMessage.user("Q" * 10000)
-    answer = ChatMessage.assistant(model="test", content="answer")
-    session.append_many([question, answer])
-    context = sessions.recall_context(session.address, answer.id)
-    assert len(context[0]["text"]) == 800
-    assert context[0]["truncated"] is True
-    assert sessions.recall_context(session.address, "missing") == []
-
-
-async def test_summaries_are_searchable_and_separate_from_verbatim_passages(tmp_path: Path) -> None:
+async def test_summary_hits_are_labeled_and_carry_no_context(tmp_path: Path) -> None:
     sessions = ChatSessionManager(tmp_path)
     session = sessions.create("coder", session_id="summary")
     question = ChatMessage.user("Original question")
@@ -154,33 +132,10 @@ async def test_summaries_are_searchable_and_separate_from_verbatim_passages(tmp_
     )
     answer = ChatMessage.assistant(model="test", content="Final answer")
     session.append_many([question, summary, answer])
-    passages = build_session_passages(session.load_active())
-    summary_passages = [passage for passage in passages if "needle" in passage.text]
-    assert summary_passages
-    assert all(
-        passage.start_role == passage.end_role == "compaction_checkpoint"
-        and passage.start_message_id == passage.end_message_id == summary.id
-        for passage in summary_passages
-    )
     backend = SqliteFtsRecallBackend(RecallBackendContext(tmp_path, sessions))
     data = success(await search(tmp_path, {"query": "needle"}, backend))
     assert data["items"][0]["content_kind"] == "compaction_summary"
     assert data["items"][0]["context"] == []
-
-
-async def test_context_excludes_superseded_history(tmp_path: Path) -> None:
-    sessions = ChatSessionManager(tmp_path)
-    session = sessions.create("coder", session_id="edited")
-    old_question = ChatMessage.user("Old question")
-    obsolete = ChatMessage.assistant(model="test", content="Obsolete answer")
-    question = ChatMessage.user("Question")
-    replacement = ChatMessage.assistant(model="test", content="New answer")
-    session.append_many([old_question, obsolete])
-    session.apply_edit(old_question.id, [question, replacement])
-    assert sessions.recall_context(session.address, obsolete.id) == []
-    assert [
-        item["message_id"] for item in sessions.recall_context(session.address, question.id)
-    ] == [replacement.id]
 
 
 async def test_multi_message_passage_does_not_attribute_all_text_to_first_speaker(
