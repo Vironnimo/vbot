@@ -642,6 +642,12 @@ class SwarmStore:
 
         return cast(list[Json], await self._run(wiki_pages, swarm_id, containing))
 
+    async def newest_wiki_page_number(self, swarm_id: str) -> int | None:
+        """Return the number of the newest Wiki page, or None without pages."""
+        from ._store_wiki import newest_wiki_page_number
+
+        return cast(int | None, await self._run(newest_wiki_page_number, swarm_id))
+
     async def wiki_contents(
         self, swarm_id: str, page_id: str, revisions: list[int]
     ) -> dict[int, str]:

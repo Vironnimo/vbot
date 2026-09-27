@@ -535,8 +535,17 @@ hover/focus tooltips. The roster filters by each participant's current
 discussions outside the selector's loaded page. Being addressed does not join a peer.
 Posts list their addressed participants by display name ("To: ..."); the compose
 form's optional recipient field takes participant IDs. Each post header shows the
-post number (`#N`) beside its time, a reply shows its target's number, and the
+post number (`#N`) beside its time, a reply shows its target's number as a link, and the
 compose form's reply field takes a post number.
+Rendered Markdown in posts, Wiki pages and Activity links cited `#N` and `wN`
+(`ui/referenceLinks.js`), never inside code, links or controls, and never in the
+user request. A post links only earlier posts; elsewhere a number links up to the
+newest post or page, which `swarms.get` reports as `newest_post_sequence` and
+`newest_wiki_page_number` for the page only. A link's tooltip loads the post's
+author and opening, or the page's title and opening, on first hover or focus.
+A post link opens the post's discussion on the Board, loads earlier pages until the
+post appears and scrolls to and focuses it; `#0` opens the user request
+(`SwarmPage.test.js`, `SwarmWiki.test.js`, `test_swarm_board.py`).
 Post backgrounds and left borders share the stable author color. The Swarm id
 stays under Usage (`SwarmPage.test.js`, `test_swarm_store_board.py`).
 Usage totals and participant Model rows abbreviate large counts with k/mio/mrd
@@ -588,7 +597,7 @@ so an unsaved draft of the deleted profile is discarded, not saved again
 
 Management operation descriptions state each action and its continuation or revision requirements. The CLI lists compact descriptions first and exposes the complete argument schema through per-operation help. Profile save/preview help includes a validator-checked creation example, optional fields, and revision guidance. Source: `_registration.py` registration and `cli/extensions_management.py`; tests: `tests/resources/extensions/test_mcp.py` and `tests/cli/test_extensions_operations.py`.
 
-Private UI routing: `ui/SwarmPage.svelte` composes the page; `pageModel.svelte.js` retains its management state, request generations, Board/Usage loading, mutations, and bridge lifetime, while `pageActivity.svelte.js` owns participant History/replay subscriptions and context projection. `pagePresentation.js` holds display-only count/avatar helpers. `ProfileEditor.svelte` retains profile drafts, validation, and autosave; `profilePromptPreview.svelte.js` owns preview request ordering and freshness. Adjacent `swarmPage.css` and `profileEditor.css` scope styles to their page/editor surfaces, including portaled dialogs.
+Private UI routing: `ui/SwarmPage.svelte` composes the page; `pageModel.svelte.js` retains its management state, request generations, Board/Usage loading, mutations, and bridge lifetime, while `pageActivity.svelte.js` owns participant History/replay subscriptions and context projection. `pagePresentation.js` holds display-only count/avatar helpers. `referenceLinks.js` turns cited post and page numbers in rendered Markdown into links with lazy tooltips; the model decides which numbers exist and what a click opens. `ProfileEditor.svelte` retains profile drafts, validation, and autosave; `profilePromptPreview.svelte.js` owns preview request ordering and freshness. Adjacent `swarmPage.css` and `profileEditor.css` scope styles to their page/editor surfaces, including portaled dialogs.
 
 Background invalidations are coalesced by the Swarm-internal `ui/pageRefresh.js`:
 each mounted page/panel has one refresh in flight and at most one pending pass,

@@ -658,6 +658,26 @@ body {
   padding: 14px 16px;
   overflow-anchor: auto;
 }
+.swarm-page .board > li[data-revealed],
+.swarm-page .swarm-goal-post[data-revealed] {
+  outline: none;
+  animation: swarm-post-revealed 2s ease-out;
+}
+@keyframes swarm-post-revealed {
+  from {
+    box-shadow: 0 0 0 2px var(--accent);
+  }
+  to {
+    box-shadow: 0 0 0 2px transparent;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .swarm-page .board > li[data-revealed],
+  .swarm-page .swarm-goal-post[data-revealed] {
+    animation: none;
+    box-shadow: 0 0 0 2px var(--accent);
+  }
+}
 .swarm-page .board .post-header {
   border-bottom-color: color-mix(
     in srgb,

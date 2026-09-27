@@ -17,7 +17,7 @@ function wikiBridge() {
     page_id: 'wpg-one',
     number: 1,
     title: 'Shared research',
-    content: 'Original evidence',
+    content: 'Original evidence from #1',
     revision: 1,
     current_revision: 1,
     deleted: false,
@@ -27,12 +27,21 @@ function wikiBridge() {
   const versions = [structuredClone(page)];
   fixture.operation.mockImplementation(async (name, args) => {
     if (name === 'swarms.get')
-      return { swarm: { ...swarm, goal_post_id: 'pst-goal' } };
+      return {
+        swarm: {
+          ...swarm,
+          goal_post_id: 'pst-goal',
+          newest_post_sequence: 1,
+          newest_wiki_page_number: 1,
+        },
+      };
     if (name === 'board.read')
       return {
         entries: [
           {
             id: 'pst-link',
+            sequence: 1,
+            discussion_id: 'dsc-main',
             author: { name: 'Alpha' },
             text: '[Research](#wiki/w1)',
           },
@@ -178,6 +187,12 @@ describe('Swarm Wiki', () => {
         revision: 2,
       }),
     );
+    // A post number in a page opens that post on the Board.
+    document.querySelector('.wiki-content a[href="#post/1"]').click();
+    await vi.waitFor(() =>
+      expect(document.activeElement.dataset.postNumber).toBe('1'),
+    );
+    expect(fixture.bridge.openLink).not.toHaveBeenCalled();
   });
 
   it('saves the current draft before switching tabs and preserves a conflicting draft', async () => {

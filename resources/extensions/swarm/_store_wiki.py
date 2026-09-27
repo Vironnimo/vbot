@@ -125,6 +125,17 @@ def _page_numbers(connection: sqlite3.Connection, swarm_id: str) -> dict[str, in
     return {row["page_id"]: number for number, row in enumerate(rows, 1)}
 
 
+def newest_wiki_page_number(db: SwarmDatabase, swarm_id: str) -> int | None:
+    """Return the number of the Swarm's newest page, or None without pages."""
+
+    with db._read() as connection:
+        count = connection.execute(
+            "SELECT COUNT(DISTINCT page_id) FROM wiki_revisions WHERE swarm_id=?", (swarm_id,)
+        ).fetchone()[0]
+    # Numbers are dense in creation order (see _page_numbers).
+    return int(count) or None
+
+
 def _page_id(connection: sqlite3.Connection, swarm_id: str, reference: str) -> str:
     """Return the ID of the page ``reference`` numbers ("w3"); any other value unchanged."""
 

@@ -386,7 +386,10 @@
                 </Button>
               </div>
               <div class="board-context">
-                <details class="swarm-goal-post" use:model.contentLinks>
+                <details
+                  class="swarm-goal-post"
+                  use:model.contentLinks={{ references: false }}
+                >
                   <summary
                     >{t('swarm.board.goal', 'Pinned user request')}</summary
                   >
@@ -439,6 +442,7 @@
                   title={t('swarm.board.empty', 'No Board messages yet.')}
                 />{:else}<ol class="board" use:model.contentLinks>
                   {#each model.board as post (post.id)}<li
+                      data-post-number={post.sequence}
                       style:--participant-color={post.author?.kind ===
                         'participant' && post.author?.id
                         ? participantColor(post.author.id)
@@ -488,12 +492,15 @@
                           source={post.text}
                           class="msg-markdown"
                         />{/if}
-                      {#if post.reply_to}<small
+                      {#if post.reply_sequence != null}<small
+                          ><a href="#post/{post.reply_sequence}"
+                            >{t('swarm.board.reply', 'Reply to {id}', {
+                              id: `#${post.reply_sequence}`,
+                            })}</a
+                          ></small
+                        >{:else if post.reply_to}<small
                           >{t('swarm.board.reply', 'Reply to {id}', {
-                            id:
-                              post.reply_sequence != null
-                                ? `#${post.reply_sequence}`
-                                : post.reply_to,
+                            id: post.reply_to,
                           })}</small
                         >{/if}{#if post.recipients?.length}<small
                           >{t('swarm.board.addressed', 'To: {names}', {

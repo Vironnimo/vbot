@@ -486,11 +486,27 @@ async def test_management_profiles_and_swarm_snapshots_are_owner_operations(boar
     assert events == {"entries": [], "has_more": False}
     snapshot = await operations.invoke("swarms.get", {"swarm_id": board.swarm["id"]})
     assert snapshot["swarm"]["main_discussion_id"] == board.swarm["main_discussion_id"]
+    assert snapshot["swarm"]["newest_wiki_page_number"] is None
     posted = await operations.invoke(
         "board.post",
         {"swarm_id": board.swarm["id"], "text": "operator note", "request_id": "operator"},
     )
     assert posted["discussion_id"] == board.swarm["main_discussion_id"]
+    await operations.invoke(
+        "wiki",
+        {
+            "swarm_id": board.swarm["id"],
+            "action": "create",
+            "title": "Notes",
+            "content": "x",
+            "request_id": "page",
+        },
+    )
+    # The page links "#N" and "wN" only up to the newest post and page.
+    snapshot = await operations.invoke("swarms.get", {"swarm_id": board.swarm["id"]})
+    newest = await board.store.read_human_posts(board.swarm["id"], limit=1)
+    assert snapshot["swarm"]["newest_post_sequence"] == newest.entries[0]["sequence"]
+    assert snapshot["swarm"]["newest_wiki_page_number"] == 1
     discussions = await operations.invoke("board.list", {"swarm_id": board.swarm["id"]})
     assert discussions["entries"][0]["id"] == board.swarm["main_discussion_id"]
     page = await operations.invoke("board.read", {"swarm_id": board.swarm["id"]})

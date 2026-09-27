@@ -545,6 +545,9 @@ class SwarmExtension:
                 and inspection.run is not None
                 and inspection.run.status.value == "running"
             )
+        # The page links "#46" and "w7" in Markdown only when they name a post or page.
+        swarm["newest_post_sequence"] = await self._store().newest_post_number(swarm["id"])
+        swarm["newest_wiki_page_number"] = await self._store().newest_wiki_page_number(swarm["id"])
         return {"swarm": _swarm_projection(swarm)}
 
     async def _swarms_events(self, arguments: Json) -> Json:
