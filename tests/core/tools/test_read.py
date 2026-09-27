@@ -351,7 +351,7 @@ async def test_read_missing_file_without_similar_names_names_the_listing_call(
     in_missing = await make_handler()(make_context(workspace), {"path": "gone/alpha.txt"})
 
     assert assert_failure_envelope(in_existing, "file_not_found")["message"] == (
-        "File not found: docs/alpha.txt. Read docs to list that directory."
+        'File not found: docs/alpha.txt. read(path="docs") lists its directory.'
     )
     assert assert_failure_envelope(in_missing, "file_not_found")["message"] == (
         "File not found: gone/alpha.txt. Its directory gone does not exist."
