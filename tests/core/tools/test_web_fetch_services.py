@@ -1,21 +1,47 @@
-"""Vendor wire contracts and opt-in routing without paid network calls."""
+"""web_fetch fetch services: vendor wire contracts and opt-in routing, without paid
+network calls. Each service request is billable, so it is never repeated."""
+
+from __future__ import annotations
 
 import asyncio
 import json
 import re
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock
 
 import httpx
 import pytest
 import respx
 
+import core.tools._public_http as public_http
 from core.tools import _web_fetch_services as services
-from core.tools.web_fetch import make_web_fetch_handler
-from tests.core.tools.web_fetch_helpers import install_http_get, make_context, make_result
-from tests.core.tools.web_fetch_helpers import stub_dns_resolution as stub_dns_resolution
-from tests.core.tools.web_fetch_helpers import stub_http_session as stub_http_session
+from tests.core.tools.web_fetch_test_support import (
+    fetch,
+    install_http_get,
+    make_context,
+    make_result,
+    web_fetch_registry,
+)
+from tests.core.tools.web_fetch_test_support import stub_dns_resolution as stub_dns_resolution
+from tests.core.tools.web_fetch_test_support import stub_http_session as stub_http_session
 
 URL = "https://example.com/article"
+TAVILY = "https://api.tavily.com/extract"
+EXA = "https://api.exa.ai/contents"
+_SERVICE_NOTE = (
+    "Saved content covers only the service's extraction; inaccessible or interactive "
+    "sections may be missing."
+)
+
+
+def _service(provider: str, mode: str, key: str | None = "fixture-key") -> dict[str, Any]:
+    """Registration options selecting one fetch service in Settings."""
+    return {
+        "credential_resolver": lambda _variable: key,
+        "settings_loader": lambda: {"provider": provider, "mode": mode},
+    }
 
 
 @pytest.mark.asyncio
@@ -34,18 +60,8 @@ URL = "https://example.com/article"
             },
             "url",
         ),
-        (
-            "tavily",
-            "https://api.tavily.com/extract",
-            {"results": [{"url": URL, "raw_content": "Full page"}]},
-            "urls",
-        ),
-        (
-            "exa",
-            "https://api.exa.ai/contents",
-            {"results": [{"url": URL, "text": "Full page"}]},
-            "ids",
-        ),
+        ("tavily", TAVILY, {"results": [{"url": URL, "raw_content": "Full page"}]}, "urls"),
+        ("exa", EXA, {"results": [{"url": URL, "text": "Full page"}]}, "ids"),
         (
             "parallel",
             "https://api.parallel.ai/v1/extract",
@@ -54,10 +70,21 @@ URL = "https://example.com/article"
         ),
     ],
 )
-async def test_vendor_requests_full_page_and_normalizes_result(provider, endpoint, response, field):
+async def test_preferred_service_gets_one_full_page_request(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    provider: str,
+    endpoint: str,
+    response: dict[str, Any],
+    field: str,
+) -> None:
+    direct = AsyncMock()
+    monkeypatch.setattr(public_http, "_http_get", direct)
     with respx.mock() as router:
         route = router.post(endpoint).respond(json=response)
-        result = await services.fetch_service(provider, "fixture-key", URL, "markdown")
+        result = await fetch(tmp_path, {"url": URL}, **_service(provider, "prefer"))
+
+    assert route.call_count == 1
     request = route.calls[0].request
     payload = json.loads(request.content)
     assert payload[field] == (URL if field == "url" else [URL])
@@ -65,8 +92,6 @@ async def test_vendor_requests_full_page_and_normalizes_result(provider, endpoin
         "Bearer fixture-key",
         "fixture-key",
     }
-    assert result["content"] == "Full page" and result["source"] == provider
-    assert route.call_count == 1
     if provider == "firecrawl":
         assert payload["onlyMainContent"] is False and payload["maxAge"] == 0
     elif provider == "tavily":
@@ -75,68 +100,119 @@ async def test_vendor_requests_full_page_and_normalizes_result(provider, endpoin
         assert payload["text"] is True and payload["maxAgeHours"] == 0
     else:
         assert payload["advanced_settings"]["full_content"] is True
+    assert result["ok"] and result["data"]["content"] == "Full page"
+    assert result["data"]["note"] == _SERVICE_NOTE
+    direct.assert_not_awaited()
+
+
+def _time_out(route: respx.Route) -> None:
+    route.mock(side_effect=httpx.ReadTimeout("uncertain"))
+
+
+def _status(status: int) -> Callable[[respx.Route], None]:
+    def configure(route: respx.Route) -> None:
+        route.respond(status, text="credential-like-body-must-stay-private")
+
+    return configure
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure", [httpx.ReadTimeout("uncertain"), 401, 429, 503])
-async def test_billable_requests_are_not_automatically_replayed(failure):
+@pytest.mark.parametrize(
+    ("endpoint", "provider", "configure", "max_bytes", "reason"),
+    [
+        (
+            TAVILY,
+            "tavily",
+            _time_out,
+            None,
+            "tavily request failed or timed out. It was not automatically repeated; a retry "
+            "may be billed again.",
+        ),
+        (TAVILY, "tavily", _status(401), None, "tavily returned HTTP 401. Check the API key."),
+        (
+            TAVILY,
+            "tavily",
+            _status(429),
+            None,
+            "tavily returned HTTP 429. Check the service quota and account.",
+        ),
+        (
+            TAVILY,
+            "tavily",
+            _status(503),
+            None,
+            "tavily returned HTTP 503. Try another source or try later.",
+        ),
+        (
+            EXA,
+            "exa",
+            lambda route: route.respond(json={"results": []}),
+            None,
+            "exa could not extract the page.",
+        ),
+        (
+            EXA,
+            "exa",
+            lambda route: route.respond(content=b"x" * 31),
+            30,
+            "exa response exceeds the 12 MB limit.",
+        ),
+    ],
+    ids=["timeout", "unauthorized", "quota", "unavailable", "empty", "oversized"],
+)
+async def test_failed_preferred_service_is_not_repeated_and_direct_fetch_answers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    endpoint: str,
+    provider: str,
+    configure: Callable[[respx.Route], None],
+    max_bytes: int | None,
+    reason: str,
+) -> None:
+    if max_bytes is not None:
+        monkeypatch.setattr(services, "_MAX_BYTES", max_bytes)
+    install_http_get(monkeypatch, lambda url: make_result(text="Direct content", url=url))
     with respx.mock() as router:
-        route = router.post("https://api.tavily.com/extract")
-        if isinstance(failure, int):
-            route.respond(failure, text="credential-like-body-must-stay-private")
-        else:
-            route.mock(side_effect=failure)
-        with pytest.raises(services.FetchServiceError) as error:
-            await services.fetch_service("tavily", "fixture-key", URL, "markdown")
-        assert route.call_count == 1
-        assert "fixture-key" not in str(error.value) and "credential-like" not in str(error.value)
+        route = router.post(endpoint)
+        configure(route)
+        result = await fetch(tmp_path, {"url": URL}, **_service(provider, "prefer"))
 
-
-@pytest.mark.asyncio
-async def test_provider_bound_and_empty_response_failures(monkeypatch):
-    with respx.mock() as router:
-        route = router.post("https://api.exa.ai/contents").respond(json={"results": []})
-        with pytest.raises(services.FetchServiceError):
-            await services.fetch_service("exa", "key", URL, "markdown")
-        monkeypatch.setattr(services, "_MAX_BYTES", 30)
-        route.respond(content=b"x" * 31)
-        with pytest.raises(services.FetchServiceError, match="limit"):
-            await services.fetch_service("exa", "key", URL, "markdown")
+    assert route.call_count == 1
+    assert result["ok"] and result["data"]["content"] == "Direct content"
+    assert result["data"]["note"] == f"Service unavailable; used direct fetch. {reason}"
+    serialized = json.dumps(result)
+    assert "fixture-key" not in serialized and "credential-like" not in serialized
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mode", ["fallback", "prefer"])
-async def test_service_success_is_saved_and_followups_never_bill_again(tmp_path, monkeypatch, mode):
+async def test_service_page_is_saved_and_followups_never_bill_again(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str
+) -> None:
     install_http_get(monkeypatch, lambda url: make_result(status_code=403, url=url))
-    service = AsyncMock(
-        return_value={"content": "Service content " * 1000, "url": URL, "source": "tavily"}
-    )
-    monkeypatch.setattr("core.tools.web_fetch.fetch_service", service)
-    tool = make_web_fetch_handler(
-        None,
-        credential_resolver=lambda _: "key",
-        settings_loader=lambda: {"provider": "tavily", "mode": mode},
-    )
+    tool = web_fetch_registry(**_service("tavily", mode))
     context = make_context(tmp_path)
-    first = await tool(context, {"url": URL})
-    assert first["ok"] and first["data"]["content"].startswith("Service content")
-    follow_up = json.loads(re.search(r"Continue with (\{.*?\})", first["data"]["more"])[1])
-    second = await tool(context, follow_up)
+    page = {"results": [{"url": URL, "raw_content": "Service content " * 1000}]}
+    with respx.mock() as router:
+        route = router.post(TAVILY).respond(json=page)
+        first = await tool.dispatch(context, {"url": URL})
+        assert first["ok"] and first["data"]["content"].startswith("Service content")
+        found = re.search(r"Continue with (\{.*?\})", first["data"]["more"])
+        assert found is not None
+        second = await tool.dispatch(context, json.loads(found[1]))
+
     assert second["ok"] and second["data"]["content"].startswith("Service content")
-    service.assert_awaited_once()
+    assert route.call_count == 1
 
 
 @pytest.mark.asyncio
 async def test_failed_recovery_keeps_the_direct_failure_and_adds_the_service_reason(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     install_http_get(monkeypatch, lambda url: make_result(status_code=403, url=url))
-    tool = make_web_fetch_handler(
-        None,
-        credential_resolver=lambda _: None,
-        settings_loader=lambda: {"provider": "firecrawl", "mode": "fallback"},
-    )
-    result = await tool(make_context(tmp_path), {"url": URL})
+
+    result = await fetch(tmp_path, {"url": URL}, **_service("firecrawl", "fallback", key=None))
+
     assert result["error"]["code"] == "access_denied"
     assert result["error"]["message"].endswith(
         "Try another source. The firecrawl fetch service also failed: The firecrawl fetch "
@@ -148,17 +224,25 @@ async def test_failed_recovery_keeps_the_direct_failure_and_adds_the_service_rea
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "url,status,location",
+    ("url", "status", "location", "options"),
     [
-        ("http://127.0.0.1/", 200, None),
-        (URL, 302, "http://127.0.0.1/"),
-        (URL, 302, "https://user:password@public.example/"),
-        (URL, 404, None),
+        ("http://127.0.0.1/", 200, None, _service("tavily", "fallback")),
+        (URL, 302, "http://127.0.0.1/", _service("tavily", "fallback")),
+        (URL, 302, "https://user:password@public.example/", _service("tavily", "fallback")),
+        (URL, 404, None, _service("tavily", "fallback")),
+        # Direct stays the default even when a service key exists.
+        (URL, 403, None, {"credential_resolver": lambda _variable: "fixture-key"}),
     ],
+    ids=["private", "redirect-private", "redirect-credentials", "missing", "default-direct"],
 )
-async def test_no_service_on_blocked_targets_or_missing_pages(
-    tmp_path, monkeypatch, url, status, location
-):
+async def test_no_service_for_blocked_targets_missing_pages_or_direct_settings(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    url: str,
+    status: int,
+    location: str | None,
+    options: dict[str, Any],
+) -> None:
     install_http_get(
         monkeypatch,
         lambda target: make_result(
@@ -168,59 +252,31 @@ async def test_no_service_on_blocked_targets_or_missing_pages(
             url=target,
         ),
     )
-    service = AsyncMock()
-    monkeypatch.setattr("core.tools.web_fetch.fetch_service", service)
-    tool = make_web_fetch_handler(
-        None,
-        credential_resolver=lambda _: "key",
-        settings_loader=lambda: {"provider": "tavily", "mode": "fallback"},
-    )
-    result = await tool(make_context(tmp_path), {"url": url})
+    with respx.mock(assert_all_called=False) as router:
+        route = router.post(TAVILY).respond(json={})
+        result = await fetch(tmp_path, {"url": url}, **options)
+
     assert not result["ok"]
-    service.assert_not_awaited()
+    assert route.call_count == 0
 
 
 @pytest.mark.asyncio
-async def test_default_direct_does_not_enable_service_because_key_exists(tmp_path, monkeypatch):
-    install_http_get(monkeypatch, lambda url: make_result(status_code=403, url=url))
-    service = AsyncMock()
-    monkeypatch.setattr("core.tools.web_fetch.fetch_service", service)
-    result = await make_web_fetch_handler(None, credential_resolver=lambda _: "key")(
-        make_context(tmp_path), {"url": URL}
-    )
-    assert not result["ok"]
-    service.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_preferred_failure_recovers_directly_with_source_and_warning(tmp_path, monkeypatch):
-    install_http_get(monkeypatch, lambda url: make_result(text="Direct content", url=url))
-    service = AsyncMock(side_effect=services.FetchServiceError("Service temporarily unavailable"))
-    monkeypatch.setattr("core.tools.web_fetch.fetch_service", service)
-    tool = make_web_fetch_handler(
-        None,
-        credential_resolver=lambda _: "key",
-        settings_loader=lambda: {"provider": "exa", "mode": "prefer"},
-    )
-    result = await tool(make_context(tmp_path), {"url": URL})
-    assert result["ok"] and result["data"]["content"] == "Direct content"
-    assert result["data"]["note"] == (
-        "Service unavailable; used direct fetch. Service temporarily unavailable"
-    )
-
-
-@pytest.mark.asyncio
-async def test_cancellation_propagates_without_direct_replay(tmp_path, monkeypatch):
+async def test_cancellation_propagates_without_direct_replay(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     direct = AsyncMock()
-    monkeypatch.setattr("core.tools._public_http._http_get", direct)
-    monkeypatch.setattr(
-        "core.tools.web_fetch.fetch_service", AsyncMock(side_effect=asyncio.CancelledError)
-    )
-    tool = make_web_fetch_handler(
-        None,
-        credential_resolver=lambda _: "key",
-        settings_loader=lambda: {"provider": "parallel", "mode": "prefer"},
-    )
-    with pytest.raises(asyncio.CancelledError):
-        await tool(make_context(tmp_path), {"url": URL})
+    monkeypatch.setattr(public_http, "_http_get", direct)
+    requests: list[httpx.Request] = []
+
+    def cancel(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        raise asyncio.CancelledError
+
+    # respx records no call when the side effect cancels, so count requests here.
+    with respx.mock(assert_all_called=False) as router:
+        router.post("https://api.parallel.ai/v1/extract").mock(side_effect=cancel)
+        with pytest.raises(asyncio.CancelledError):
+            await fetch(tmp_path, {"url": URL}, **_service("parallel", "prefer"))
+
+    assert len(requests) == 1
     direct.assert_not_awaited()

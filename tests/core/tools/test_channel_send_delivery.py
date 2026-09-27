@@ -1,385 +1,307 @@
-"""Channel send: delivery behavior."""
+"""channel_send delivery: what reaches the Channel service, the note in the chat's Session,
+and Reply Targets kept in real Session storage."""
 
 from __future__ import annotations
 
 import asyncio
+import logging
+import threading
 from pathlib import Path
-from unittest.mock import AsyncMock, Mock
+from types import SimpleNamespace
+from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 
-from core.channels.adapter import RouteFacts
+from core.channels import ChannelError, ChannelNotFoundError
+from core.channels.adapter import ConversationFacts, RouteFacts
+from core.channels.telegram import TelegramChannelAdapter
 from core.extensions import InteractionButton
-from core.tools.channel import (
-    CHANNEL_SEND_TOOL_NAME,
-    register_channel_send_tool,
+from core.sessions import ChatSessionManager, SessionAddress
+from tests.core.channels.channels_helpers import (
+    make_config as make_real_channel_config,
 )
-from core.tools.tools import (
-    ToolRegistry,
-    tool_failure,
+from tests.core.channels.channels_helpers import (
+    make_service as make_channel_service,
 )
-from tests.core.tools.channel_send_helpers import (
-    _TEST_MAX_ATTACHMENT_SIZE_BYTES,
-    assert_success_envelope,
-    dispatch,
+from tests.core.tools.channel_send_test_support import (
+    OUTBOUND_SESSION,
+    channel_send,
+    delivered,
     make_channel_config,
-    make_chat_sessions,
-    make_context,
+    model_text,
+    options,
+    refused,
 )
 
-
-def test_channel_send_happy_path_with_explicit_platform_target(tmp_path: Path) -> None:
-    channel_service = Mock()
-    channel_service.send = AsyncMock()
-    channel_service.list_channels.return_value = [make_channel_config()]
-    chat_sessions = make_chat_sessions()
-    registry = ToolRegistry()
-    register_channel_send_tool(
-        registry,
-        channel_service,
-        chat_sessions,
-        max_attachment_size_bytes=_TEST_MAX_ATTACHMENT_SIZE_BYTES,
-    )
-
-    result = asyncio.run(
-        dispatch(
-            registry,
-            tmp_path,
-            {
-                "channel_id": "tg-assistant",
-                "message": "Task finished",
-                "platform_target": "12345",
-            },
-        )
-    )
-
-    data = assert_success_envelope(result)
-    assert data == {"channel_id": "tg-assistant", "platform_target": "12345"}
-    channel_service.send.assert_awaited_once_with(
-        "tg-assistant",
-        "Task finished",
-        "12345",
-        files=None,
-        thread_id=None,
-        buttons=None,
-    )
-    chat_sessions.get_metadata.assert_not_called()
-    channel_service.list_channels.assert_called_once_with()
-
-
-def test_channel_send_delivers_recognizable_envelope_shapes(tmp_path: Path) -> None:
-    channel_service = Mock()
-    channel_service.send = AsyncMock()
-    channel_service.list_channels.return_value = [make_channel_config()]
-    chat_sessions = make_chat_sessions()
-    registry = ToolRegistry()
-    register_channel_send_tool(
-        registry,
-        channel_service,
-        chat_sessions,
-        max_attachment_size_bytes=_TEST_MAX_ATTACHMENT_SIZE_BYTES,
-    )
-
-    retired_shapes: tuple[dict[str, object], ...] = (
-        {
-            "request": {
-                "operation": "send",
-                "channel_id": "tg-assistant",
-                "message": "Task finished",
-                "platform_target": "12345",
-            }
-        },
-        {
-            "send": {
-                "channel_id": "tg-assistant",
-                "message": "Task finished",
-                "platform_target": "12345",
-            }
-        },
-    )
-    for retired_arguments in retired_shapes:
-        result = asyncio.run(
-            dispatch(
-                registry,
-                tmp_path,
-                retired_arguments,
-            )
-        )
-        assert result["ok"] is True
-        channel_service.send.assert_awaited_with(
-            "tg-assistant",
-            "Task finished",
-            "12345",
-            files=None,
-            thread_id=None,
-            buttons=None,
-        )
-
-    assert channel_service.send.await_count == len(retired_shapes)
-
-
-def test_channel_send_accepts_flat_arguments(tmp_path: Path) -> None:
-    channel_service = Mock()
-    channel_service.send = AsyncMock()
-    channel_service.list_channels.return_value = [make_channel_config()]
-    chat_sessions = make_chat_sessions()
-    registry = ToolRegistry()
-    register_channel_send_tool(
-        registry,
-        channel_service,
-        chat_sessions,
-        max_attachment_size_bytes=_TEST_MAX_ATTACHMENT_SIZE_BYTES,
-    )
-
-    result = asyncio.run(
-        dispatch(
-            registry,
-            tmp_path,
-            {
-                "channel_id": "tg-assistant",
-                "message": "Task finished",
-                "platform_target": "12345",
-            },
-        )
-    )
-
-    assert_success_envelope(result)
-    channel_service.send.assert_awaited_once()
-
-
-def test_channel_send_passes_buttons_to_service(tmp_path: Path) -> None:
-    channel_service = Mock()
-    channel_service.send = AsyncMock()
-    channel_service.list_channels.return_value = [make_channel_config()]
-    chat_sessions = make_chat_sessions()
-    registry = ToolRegistry()
-    register_channel_send_tool(
-        registry,
-        channel_service,
-        chat_sessions,
-        max_attachment_size_bytes=_TEST_MAX_ATTACHMENT_SIZE_BYTES,
-    )
-
-    result = asyncio.run(
-        dispatch(
-            registry,
-            tmp_path,
-            {
-                "channel_id": "tg-assistant",
-                "message": "Shopping list",
-                "platform_target": "12345",
-                "buttons": [
-                    [
-                        {"label": "Milk ⬜", "data": "chk:milk"},
-                        {"label": "Eggs ⬜", "data": "chk:eggs"},
-                    ]
-                ],
-            },
-        )
-    )
-
-    assert_success_envelope(result)
-    channel_service.send.assert_awaited_once_with(
-        "tg-assistant",
-        "Shopping list",
-        "12345",
-        files=None,
-        thread_id=None,
-        buttons=[
-            [
-                InteractionButton(label="Milk ⬜", data="chk:milk"),
-                InteractionButton(label="Eggs ⬜", data="chk:eggs"),
-            ]
-        ],
-    )
-
-
-def test_channel_send_binds_run_buttons_to_calling_session(tmp_path: Path) -> None:
-    channel_service = Mock()
-    channel_service.send = AsyncMock()
-    channel_service.list_channels.return_value = [make_channel_config()]
-    channel_service.ensure_outbound_session = AsyncMock(
-        return_value=RouteFacts(agent_id="agent-1", session_id="telegram-session")
-    )
-    chat_sessions = make_chat_sessions()
-    chat_sessions.get_or_create.return_value = Mock()
-    registry = ToolRegistry()
-    register_channel_send_tool(
-        registry,
-        channel_service,
-        chat_sessions,
-        max_attachment_size_bytes=_TEST_MAX_ATTACHMENT_SIZE_BYTES,
-    )
-
-    result = asyncio.run(
-        dispatch(
-            registry,
-            tmp_path,
-            {
-                "channel_id": "tg-assistant",
-                "message": "Shopping list",
-                "platform_target": "12345",
-                "buttons": [[{"label": "Fertig", "data": "run:done"}]],
-            },
-        )
-    )
-
-    assert_success_envelope(result)
-    channel_service.send.assert_awaited_once_with(
-        "tg-assistant",
-        "Shopping list",
-        "12345",
-        files=None,
-        thread_id=None,
-        buttons=[[InteractionButton(label="Fertig", data="run:done")]],
-        run_origin=RouteFacts(agent_id="agent-1", session_id="session-1"),
-    )
-
-
-def test_project_channel_send_keeps_legacy_unbound_run_button_behavior(tmp_path: Path) -> None:
-    channel_service = Mock()
-    channel_service.send = AsyncMock()
-    channel_service.list_channels.return_value = [make_channel_config()]
-    chat_sessions = make_chat_sessions()
-    registry = ToolRegistry()
-    register_channel_send_tool(
-        registry,
-        channel_service,
-        chat_sessions,
-        max_attachment_size_bytes=_TEST_MAX_ATTACHMENT_SIZE_BYTES,
-    )
-
-    result = asyncio.run(
-        registry.dispatch(
-            make_context(tmp_path, project_id="project-1"),
-            {
-                "channel_id": "tg-assistant",
-                "message": "Project approval",
-                "platform_target": "12345",
-                "buttons": [[{"label": "Approve", "data": "run:approve"}]],
-            },
-            [CHANNEL_SEND_TOOL_NAME],
-        )
-    )
-
-    assert_success_envelope(result)
-    channel_service.send.assert_awaited_once_with(
-        "tg-assistant",
-        "Project approval",
-        "12345",
-        files=None,
-        thread_id=None,
-        buttons=[[InteractionButton(label="Approve", data="run:approve")]],
-    )
-
-
-def test_channel_send_rejects_malformed_buttons(tmp_path: Path) -> None:
-    channel_service = Mock()
-    channel_service.send = AsyncMock()
-    channel_service.list_channels.return_value = [make_channel_config()]
-    chat_sessions = make_chat_sessions()
-    registry = ToolRegistry()
-    register_channel_send_tool(
-        registry,
-        channel_service,
-        chat_sessions,
-        max_attachment_size_bytes=_TEST_MAX_ATTACHMENT_SIZE_BYTES,
-    )
-
-    result = asyncio.run(
-        dispatch(
-            registry,
-            tmp_path,
-            {
-                "channel_id": "tg-assistant",
-                "message": "Shopping list",
-                "platform_target": "12345",
-                # Missing the required "data" field.
-                "buttons": [[{"label": "Milk"}]],
-            },
-        )
-    )
-
-    error = result["error"]
-    assert isinstance(error, dict)
-    assert error["code"] == "invalid_arguments"
-    channel_service.send.assert_not_awaited()
-
-
-def test_channel_send_rejects_unknown_button_fields(tmp_path: Path) -> None:
-    channel_service = Mock()
-    channel_service.send = AsyncMock()
-    channel_service.list_channels.return_value = [make_channel_config()]
-    chat_sessions = make_chat_sessions()
-    registry = ToolRegistry()
-    register_channel_send_tool(
-        registry,
-        channel_service,
-        chat_sessions,
-        max_attachment_size_bytes=_TEST_MAX_ATTACHMENT_SIZE_BYTES,
-    )
-
-    result = asyncio.run(
-        dispatch(
-            registry,
-            tmp_path,
-            {
-                "channel_id": "tg-assistant",
-                "message": "Shopping list",
-                "platform_target": "12345",
-                "buttons": [[{"label": "Milk", "data": "chk:milk", "unexpected": True}]],
-            },
-        )
-    )
-
-    error = result["error"]
-    assert isinstance(error, dict)
-    assert error["code"] == "invalid_arguments"
-    channel_service.send.assert_not_awaited()
+NOTE_HEAD = 'A message was sent to this chat via the channel_send tool by agent "agent-1".'
 
 
 @pytest.mark.parametrize(
-    ("field_name", "value"),
-    (
-        ("thread_id", "42"),
-        ("buttons", [[{"label": "Go", "data": "run:go"}]]),
-    ),
+    ("data", "project_id", "run_origin"),
+    [
+        pytest.param("chk:milk", None, None, id="handler-button"),
+        pytest.param(
+            "run:done",
+            None,
+            RouteFacts(agent_id="agent-1", session_id="session-1"),
+            id="run-button-wakes-this-session",
+        ),
+        # A Project Session keeps the raw callback: Channels route Identity Sessions only.
+        pytest.param("run:done", "project-1", None, id="run-button-in-project"),
+    ],
 )
-def test_channel_send_rejects_telegram_only_fields_for_discord(
-    tmp_path: Path,
-    field_name: str,
-    value: object,
+def test_buttons_reach_the_channel(
+    tmp_path: Path, data: str, project_id: str | None, run_origin: RouteFacts | None
 ) -> None:
-    channel_service = Mock()
-    channel_service.send = AsyncMock()
-    channel_service.list_channels.return_value = [
-        make_channel_config(channel_id="discord-primary", platform="discord")
+    tool = channel_send(tmp_path)
+
+    envelope = tool.call(
+        {
+            "message": "Shopping list",
+            "platform_target": "111",
+            "buttons": [
+                [{"label": "Milk ⬜", "data": data}, {"label": "Eggs", "data": "chk:eggs"}]
+            ],
+        },
+        project_id=project_id,
+    )
+
+    delivered(envelope)
+    buttons = [
+        [InteractionButton(label="Milk ⬜", data=data), InteractionButton("Eggs", "chk:eggs")]
     ]
-    registry = ToolRegistry()
-    register_channel_send_tool(
-        registry,
-        channel_service,
-        make_chat_sessions(),
-        max_attachment_size_bytes=_TEST_MAX_ATTACHMENT_SIZE_BYTES,
-    )
+    expected = options(buttons=buttons)
+    if run_origin is not None:
+        expected["run_origin"] = run_origin
+    assert tool.sent() == [("tg-main", "Shopping list", "111", expected)]
 
-    result = asyncio.run(
-        dispatch(
-            registry,
-            tmp_path,
-            {
-                "channel_id": "discord-primary",
-                "message": "Hello",
-                "platform_target": "12345",
-                field_name: value,
-            },
+
+@pytest.mark.parametrize(
+    ("error", "code"),
+    [
+        (ChannelNotFoundError("Channel not active: tg-main"), "channel_not_found"),
+        (ChannelError("Telegram rejected the message"), "channel_error"),
+    ],
+    ids=["inactive-channel", "platform-rejection"],
+)
+def test_a_failed_delivery_is_a_failure_result(
+    tmp_path: Path, error: ChannelError, code: str
+) -> None:
+    tool = channel_send(tmp_path)
+    tool.service.send.side_effect = error
+
+    envelope = tool.call({"message": "Task finished"})
+
+    assert refused(envelope, code) == str(error)
+    tool.service.ensure_outbound_session.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("arguments", "thread", "note"),
+    [
+        pytest.param(
+            {"message": "Task finished"}, None, f"{NOTE_HEAD}\n\nTask finished", id="message"
+        ),
+        pytest.param(
+            {"message": "See topic", "thread_id": "42"},
+            "42",
+            f"{NOTE_HEAD}\n\nSee topic",
+            id="message-in-thread",
+        ),
+        pytest.param(
+            {"file_paths": ["report.pdf"]},
+            None,
+            f"{NOTE_HEAD}\n\nAttached file(s): report.pdf",
+            id="file",
+        ),
+    ],
+)
+def test_the_chats_session_gets_a_note_of_what_was_sent(
+    tmp_path: Path, arguments: dict[str, Any], thread: str | None, note: str
+) -> None:
+    tool = channel_send(tmp_path)
+    (tool.workspace / "report.pdf").write_bytes(b"%PDF-1.7\n")
+
+    envelope = tool.call(arguments)
+
+    delivered(envelope)
+    tool.service.ensure_outbound_session.assert_awaited_once_with(
+        "tg-main", "111", thread_id=thread
+    )
+    tool.sessions.get_or_create.assert_called_once_with(
+        SessionAddress(project_id=None, agent_id="agent-1", session_id=OUTBOUND_SESSION.session_id)
+    )
+    tool.sessions.get_or_create.return_value.add_note.assert_called_once_with(note)
+
+
+def test_a_note_that_cannot_be_recorded_keeps_the_send_successful(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    tool = channel_send(tmp_path)
+    tool.service.ensure_outbound_session.side_effect = RuntimeError("boom")
+
+    with caplog.at_level(logging.WARNING):
+        envelope = tool.call({"message": "Task finished"})
+
+    assert delivered(envelope) == {"channel_id": "tg-main", "platform_target": "111"}
+    assert tool.sent() == [("tg-main", "Task finished", "111", options())]
+    assert "Could not record channel_send outbound note" in caplog.text
+
+
+def _reply_target(chat: str) -> dict[str, Any]:
+    return {"last_reply_target": {"channel_id": "tg-main", "platform_target": chat}}
+
+
+@pytest.mark.usefixtures("current_format_data_directory")
+@pytest.mark.parametrize(
+    ("project_chat", "expected"),
+    [(None, "111"), ("23456", "23456")],
+    ids=["configured-chat", "project-reply-target"],
+)
+@pytest.mark.asyncio
+async def test_a_project_session_never_uses_a_same_named_identity_sessions_chat(
+    tmp_path: Path, project_chat: str | None, expected: str
+) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    try:
+        project = sessions.create("agent-1", session_id="session-1", project_id="project-one")
+        identity = sessions.create("agent-1", session_id="session-1")
+        sessions.set_metadata(identity.address, _reply_target("99999"))
+        if project_chat is not None:
+            sessions.set_metadata(project.address, _reply_target(project_chat))
+        tool = channel_send(
+            tmp_path, make_channel_config(allowed_chat_ids=[111]), sessions=sessions
         )
-    )
 
-    assert result == tool_failure(
-        "invalid_arguments",
-        f"channel_send was not run: {field_name} does not work on the Discord Channel "
-        "discord-primary. The call below sends without it; send it only if that is meant. "
-        'Send: {"channel_id":"discord-primary","platform_target":"12345","message":"Hello"}',
+        sent = await tool.dispatch({"message": "Project result"}, project_id="project-one")
+        listed = await tool.dispatch({"action": "list"}, project_id="project-one")
+
+        assert delivered(sent)["platform_target"] == expected
+        assert tool.sent() == [("tg-main", "Project result", expected, options())]
+        assert "99999" not in model_text(listed)
+        assert ("this conversation's chat: 23456" in model_text(listed)) is (
+            project_chat is not None
+        )
+    finally:
+        sessions.close()
+
+
+@pytest.mark.usefixtures("current_format_data_directory")
+def test_session_reads_and_the_note_run_on_the_session_pool(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    caller = sessions.create("agent-1", session_id="session-1").address
+    sessions.set_metadata(caller, _reply_target("111"))
+    threads: dict[str, str] = {}
+    get_metadata = sessions.get_metadata
+    get_or_create = sessions.get_or_create
+
+    def recorded_metadata(address: SessionAddress) -> Any:
+        threads["target"] = threading.current_thread().name
+        return get_metadata(address)
+
+    def recorded_get_or_create(address: SessionAddress) -> Any:
+        threads["note"] = threading.current_thread().name
+        return get_or_create(address)
+
+    monkeypatch.setattr(sessions, "get_metadata", recorded_metadata)
+    monkeypatch.setattr(sessions, "get_or_create", recorded_get_or_create)
+    tool = channel_send(
+        tmp_path, make_channel_config(allowed_chat_ids=[111, 222]), sessions=sessions
     )
-    channel_service.send.assert_not_awaited()
+    try:
+        envelope = tool.call({"message": "Done"})
+
+        assert delivered(envelope)["platform_target"] == "111"
+        target = SessionAddress(
+            project_id=None, agent_id="agent-1", session_id=OUTBOUND_SESSION.session_id
+        )
+        assert [entry.role for entry in sessions.get(target).load()] == ["note"]
+        # The Reply Target and the outbound note use the Session database's pool.
+        assert threads["target"].startswith("vbot-db-sessions")
+        assert threads["note"].startswith("vbot-db-sessions")
+    finally:
+        sessions.close()
+
+
+@pytest.mark.usefixtures("current_format_data_directory")
+@pytest.mark.parametrize("first_target", ["inbound_topic", "explicit_topic"])
+@pytest.mark.asyncio
+async def test_file_deliveries_keep_the_actual_topic_for_followup_sends(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, first_target: str
+) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    service = make_channel_service(tmp_path, chat_sessions=sessions)
+    config = make_real_channel_config(allowed_chat_ids=[-10001])
+    adapter = TelegramChannelAdapter(
+        config,
+        service._trigger_service,
+        sessions,
+        lambda _key: "test-token",
+        command_dispatcher=service._command_dispatcher,
+        conversation_pointers=service._state,
+    )
+    bot = SimpleNamespace(send_document=AsyncMock())
+    adapter._application = SimpleNamespace(
+        bot=bot, updater=None, stop=AsyncMock(), shutdown=AsyncMock()
+    )
+    started = asyncio.Event()
+
+    async def hold_network_listener() -> None:
+        started.set()
+        await asyncio.Future()
+
+    monkeypatch.setattr(adapter, "start", hold_network_listener)
+    monkeypatch.setattr(service, "_create_adapter", lambda _config: adapter)
+    tool = channel_send(tmp_path, service=service, sessions=sessions)
+    (tool.workspace / "report.pdf").write_bytes(b"%PDF-1.7\n")
+    try:
+        await service.create_channel(config)
+        await asyncio.wait_for(started.wait(), timeout=5)
+        route, _ = await adapter._engine._routing._prepare_inbound_route_async(
+            ConversationFacts(
+                platform="telegram",
+                channel_id=config.id,
+                chat_id="-10001",
+                user_id="1",
+                access_scope_id="-10001",
+                kind="group",
+                thread_id="42",
+            )
+        )
+        caller = {"agent_id": "assistant", "session_id": route.session_id}
+        address = SessionAddress(project_id=None, **caller)
+        expected_topic = "73" if first_target == "explicit_topic" else "42"
+        for index in range(2):
+            arguments: dict[str, Any] = {"channel_id": config.id, "file_paths": ["report.pdf"]}
+            if index == 0 and first_target == "explicit_topic":
+                arguments.update(platform_target="-10001", thread_id=expected_topic)
+            result = await tool.dispatch(arguments, **caller)
+            assert delivered(result)["thread_id"] == expected_topic
+
+        assert [call.kwargs["message_thread_id"] for call in bot.send_document.await_args_list] == [
+            int(expected_topic),
+            int(expected_topic),
+        ]
+        assert sessions.get_metadata(address)["last_reply_target"] == {
+            "channel_id": config.id,
+            "platform_target": "-10001",
+            "thread_id": expected_topic,
+        }
+        assert len([entry for entry in sessions.get(address).load() if entry.role == "note"]) == 2
+
+        # An explicit chat target without a topic is a new unthreaded delivery;
+        # it must clear the previous topic instead of silently inheriting it.
+        result = await tool.dispatch(
+            {"channel_id": config.id, "platform_target": "-10001", "file_paths": ["report.pdf"]},
+            **caller,
+        )
+        assert delivered(result) == {"channel_id": config.id, "platform_target": "-10001"}
+        assert "message_thread_id" not in bot.send_document.await_args.kwargs
+        assert "thread_id" not in sessions.get_metadata(address)["last_reply_target"]
+    finally:
+        await service.aclose()
+        service.close()
+        sessions.close()
