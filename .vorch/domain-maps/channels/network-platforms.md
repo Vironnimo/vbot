@@ -36,7 +36,9 @@ Logged-out bridges remain idle for explicit re-pairing; ordinary connection fail
 
 ## Verification owners
 
-- `tests/core/channels/test_network_channels.py`: real engine ingress, access gating, receipts, media limits, outbound wire contracts and JavaScript gate execution.
-- `tests/core/channels/test_network_lifecycle.py`: handshakes, acknowledgements, worker/reader concurrency, cancellation and uncertain-write errors.
+- `tests/core/channels/test_network_ingress.py`: handshakes, acknowledgements, real engine ingress, access gating, receipts, media limits and cancellation.
+- `tests/core/channels/test_network_delivery.py`: outbound wire contracts, chunk and file retries, and uncertain-write errors.
+- `tests/core/channels/test_whatsapp.py`: bridge worker/reader concurrency, disconnects and JavaScript gate execution.
+- `tests/core/channels/test_channels_whatsapp.py`: setup and pairing operations that block other Channel changes.
 - `tests/core/channels/whatsapp_gate.test.mjs`: self identity, other-chat/history rejection and echo suppression.
 - RPC/CLI and mounted WebUI tests cover configuration, credential boundaries and QR setup.

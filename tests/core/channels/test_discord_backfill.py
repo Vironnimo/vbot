@@ -1,217 +1,237 @@
-"""Bounded Discord history travels with the addressed turn's admission."""
+"""Discord: bounded history backfill travels with the addressed turn's admission."""
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock
 
 import pytest
 
 from core.attachments import AttachmentStore
-from core.runs import ASSISTANT_OUTPUT_EVENT, ChatRunManager, Run
-from core.sessions import SessionAddress
-from tests.core.channels.discord_helpers import (
+from core.chat import MessageSender
+from core.runs import ChatRunManager, Run
+
+from .discord_test_support import (
+    BOT_MENTION,
+    GROUP_REPLY_SURFACE,
+    DiscordHarness,
     FakeAttachment,
     FakeChannel,
     make_adapter,
+    make_completed_run,
     make_message,
+    session_address,
 )
+from .engine_test_support import HeldRuns, assert_member_trigger
 
 pytestmark = pytest.mark.usefixtures("current_format_data_directory")
 
+SESSION_ID = "ch-dc-assistant-100"
+
+
+def context_messages(channel: FakeChannel, *message_ids: int) -> list[Any]:
+    """Return channel history newest first, as the Discord API yields it."""
+    return [
+        make_message(channel, message_id=index, author_id=50, content=f"context {index}")
+        for index in sorted(message_ids, reverse=True)
+    ]
+
+
+def context_notes(*message_ids: int) -> list[str]:
+    return [f"[channel-message] [Alice|50|member]: context {index}" for index in message_ids]
+
+
+def mention(channel: FakeChannel, message_id: int, **fields: Any) -> Any:
+    return make_message(
+        channel,
+        message_id=message_id,
+        author_id=50,
+        content=f"question {message_id} <@999>",
+        mentions=[BOT_MENTION],
+        **fields,
+    )
+
+
+def record_notes_at_trigger(h: DiscordHarness) -> list[str]:
+    """Make each triggered Run record the Session notes its Agent would see."""
+    observed: list[str] = []
+
+    async def trigger(_agent_id: str, _content: Any, session_id: str, **_kwargs: Any) -> Run:
+        observed.extend(h.notes())
+        return make_completed_run(session_id)
+
+    h.trigger.side_effect = trigger
+    return observed
+
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("with_attachment", [False, True])
-@pytest.mark.parametrize("initially_busy", [False, True])
-async def test_full_history_does_not_displace_trigger_or_disappear_on_busy(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, with_attachment: bool, initially_busy: bool
-) -> None:
+async def test_mention_backfills_history_since_last_bot_reply_in_order(tmp_path: Path) -> None:
     channel = FakeChannel(100, guild=SimpleNamespace(id=1))
     channel.history_messages = [
-        make_message(channel, message_id=index, author_id=50, content=f"context {index}")
-        for index in range(50, 0, -1)
+        make_message(channel, message_id=12, author_id=51, content="second", display_name="Bob"),
+        make_message(channel, message_id=11, author_id=50, content="first", display_name="Alice"),
+        make_message(
+            channel,
+            message_id=10,
+            author_id=999,
+            content="previous bot reply",
+            display_name="vBot",
+            author_is_bot=True,
+        ),
+        make_message(channel, message_id=9, author_id=52, content="too old", display_name="Eve"),
     ]
-    trigger = AsyncMock()
-    adapter, sessions, _trigger, _client = make_adapter(
+    h = make_adapter(tmp_path, target=channel, allowed_chat_ids=[100])
+    observed = record_notes_at_trigger(h)
+
+    await h.receive(mention(channel, 13))
+    await h.drain()
+
+    assert observed == [
+        "[channel-message] [Alice|50|member]: first",
+        "[channel-message] [Bob|51|member]: second",
+    ]
+    assert_member_trigger(
+        h.trigger,
+        "assistant",
+        "question 13 <@999>",
+        SESSION_ID,
+        sender=MessageSender(id="50", display_name="Alice"),
+        reply_surface=GROUP_REPLY_SURFACE,
+    )
+    assert channel.history_calls[0]["limit"] == 50
+    assert channel.history_calls[0]["oldest_first"] is False
+    await h.adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_history_failure_still_processes_triggering_message(tmp_path: Path) -> None:
+    channel = FakeChannel(100, guild=SimpleNamespace(id=1))
+
+    def fail_history(**_kwargs: Any) -> Any:
+        raise PermissionError("missing read message history")
+
+    channel.history = fail_history  # type: ignore[method-assign]
+    h = make_adapter(tmp_path, target=channel, allowed_chat_ids=[100])
+
+    await h.receive(mention(channel, 13))
+    await h.drain()
+
+    h.trigger.assert_awaited_once()
+    await h.adapter.stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("observe_unaddressed", "notes"),
+    [
+        (False, None),
+        (True, ["[channel-message] [Alice|50|member]: background context"]),
+    ],
+    ids=["dropped", "observed"],
+)
+async def test_unaddressed_group_message_never_backfills_history(
+    tmp_path: Path, observe_unaddressed: bool, notes: list[str] | None
+) -> None:
+    channel = FakeChannel(100, guild=SimpleNamespace(id=1))
+    channel.history_messages = context_messages(channel, 1)
+    h = make_adapter(
+        tmp_path,
+        target=channel,
+        allowed_chat_ids=[100],
+        observe_unaddressed=observe_unaddressed,
+    )
+
+    await h.receive(
+        make_message(channel, message_id=11, author_id=50, content="background context")
+    )
+    await h.drain()
+
+    # Passive observation records the message itself; without it nothing is stored.
+    if notes is None:
+        assert not h.sessions.exists(session_address(100))
+    else:
+        assert h.notes() == notes
+    assert channel.history_calls == []
+    h.trigger.assert_not_awaited()
+    await h.adapter.stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("with_attachment", [False, True], ids=["text", "attachment"])
+async def test_turn_refused_while_busy_keeps_its_history_for_the_retry(
+    tmp_path: Path, with_attachment: bool
+) -> None:
+    channel = FakeChannel(100, guild=SimpleNamespace(id=1))
+    channel.history_messages = context_messages(channel, 1, 2, 3)
+    waiting = ChatRunManager(waiting_work_limit=1)
+    h = make_adapter(
         tmp_path,
         target=channel,
         allowed_chat_ids=[100],
         attachment_store=AttachmentStore(tmp_path),
-        trigger_run=trigger,
+        waiting_work_manager=waiting,
     )
-    waiting = ChatRunManager(waiting_work_limit=1)
-    monkeypatch.setattr(
-        adapter._engine._trigger_service, "reserve_waiting_work", waiting.reserve_waiting_work
-    )
-    monkeypatch.setattr(
-        adapter._engine._trigger_service,
-        "release_waiting_work",
-        lambda admission: (
-            waiting.release_waiting_work(admission) if admission is not None else False
-        ),
-    )
-    observed: list[str] = []
-
-    async def completed_run(_agent_id: str, _content: Any, session_id: str, **_kwargs: Any) -> Run:
-        observed.extend(
-            message.content
-            for message in sessions.get(SessionAddress(None, "assistant", session_id)).load()
-            if message.role == "note" and isinstance(message.content, str)
-        )
-        run = Run(run_id="test-run", agent_id="assistant", session_id=session_id)
-        run.emit(ASSISTANT_OUTPUT_EVENT, {"message": {"content": "answer"}})
-        run.mark_completed("answer")
-        return run
-
-    trigger.side_effect = completed_run
-    message = make_message(
-        channel,
-        message_id=200,
-        author_id=50,
-        content="question <@999>",
-        mentions=[SimpleNamespace(id=999)],
-        attachments=[FakeAttachment(300, "file.txt", b"context file")] if with_attachment else [],
-    )
+    observed = record_notes_at_trigger(h)
+    attachments = [FakeAttachment(300, "file.txt", b"context file")] if with_attachment else []
+    message = mention(channel, 200, attachments=attachments)
     try:
-        if initially_busy:
-            held = waiting.reserve_waiting_work(scope="busy", scope_limit=1)
-            await adapter._handle_inbound_message(message)
-            trigger.assert_not_awaited()
-            assert waiting.waiting_work_count() == 1
-            assert not sessions.exists(SessionAddress(None, "assistant", "ch-dc-assistant-100"))
-            if with_attachment:
-                message.attachments[0].read.assert_not_awaited()
-            waiting.release_waiting_work(held)
-
-        await adapter._handle_inbound_message(message)
-        queue = adapter._engine._chat_queues.get("100")
-        if queue is not None:
-            await queue.join()
-        trigger.assert_awaited_once()
-        assert observed == [
-            f"[channel-message] [Alice|50|member]: context {index}" for index in range(1, 51)
-        ]
-        assert waiting.waiting_work_count() == 0
-    finally:
-        await adapter.stop()
-        await waiting.aclose()
-
-
-@pytest.mark.asyncio
-async def test_stop_releases_one_admission_for_pending_history_turn(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    channel = FakeChannel(100, guild=SimpleNamespace(id=1))
-    channel.history_messages = [
-        make_message(channel, message_id=index, author_id=50, content=f"context {index}")
-        for index in range(50, 0, -1)
-    ]
-    adapter, _sessions, trigger, _client = make_adapter(
-        tmp_path, target=channel, allowed_chat_ids=[100]
-    )
-    waiting = ChatRunManager(waiting_work_limit=32)
-    monkeypatch.setattr(
-        adapter._engine._trigger_service, "reserve_waiting_work", waiting.reserve_waiting_work
-    )
-    monkeypatch.setattr(
-        adapter._engine._trigger_service,
-        "release_waiting_work",
-        lambda admission: (
-            waiting.release_waiting_work(admission) if admission is not None else False
-        ),
-    )
-    processing = asyncio.Event()
-
-    async def pause_processing(_queued: Any) -> None:
-        processing.set()
-        await asyncio.Event().wait()
-
-    monkeypatch.setattr(adapter._engine, "_process_queued_work", pause_processing)
-    try:
-        await adapter._handle_inbound_message(
-            make_message(
-                channel,
-                message_id=200,
-                author_id=50,
-                content="question <@999>",
-                mentions=[SimpleNamespace(id=999)],
-            )
-        )
-        await processing.wait()
+        held = waiting.reserve_waiting_work(scope="busy", scope_limit=1)
+        await h.receive(message)
+        h.trigger.assert_not_awaited()
         assert waiting.waiting_work_count() == 1
-        await adapter.stop()
+        assert not h.sessions.exists(session_address(100))
+        for attachment in attachments:
+            attachment.read.assert_not_awaited()
+        waiting.release_waiting_work(held)
+
+        # Within a limit of one, the whole history rides on the turn's own admission.
+        await h.receive(message)
+        await h.drain()
+        h.trigger.assert_awaited_once()
+        assert observed == context_notes(1, 2, 3)
         assert waiting.waiting_work_count() == 0
-        trigger.assert_not_awaited()
     finally:
-        await adapter.stop()
+        await h.adapter.stop()
         await waiting.aclose()
 
 
 @pytest.mark.asyncio
-async def test_pending_triggers_share_history_without_duplicate_notes(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+@pytest.mark.parametrize("finish", ["release", "stop"])
+async def test_pending_turns_store_shared_history_once(tmp_path: Path, finish: str) -> None:
     channel = FakeChannel(100, guild=SimpleNamespace(id=1))
-    channel.history_messages = [
-        make_message(channel, message_id=index, author_id=50, content=f"context {index}")
-        for index in range(3, 0, -1)
-    ]
-    trigger = AsyncMock()
-    adapter, sessions, _trigger, _client = make_adapter(
-        tmp_path, target=channel, allowed_chat_ids=[100], trigger_run=trigger
-    )
-    release_worker = asyncio.Event()
-    process = adapter._engine._process_queued_work
-
-    async def pause_processing(queued: Any) -> None:
-        await release_worker.wait()
-        await process(queued)
-
-    async def completed_run(_agent: str, _content: Any, session_id: str, **_kwargs: Any) -> Run:
-        run = Run(
-            run_id=f"test-run-{trigger.await_count}", agent_id="assistant", session_id=session_id
-        )
-        run.emit(ASSISTANT_OUTPUT_EVENT, {"message": {"content": "answer"}})
-        run.mark_completed("answer")
-        return run
-
-    trigger.side_effect = completed_run
-    monkeypatch.setattr(adapter._engine, "_process_queued_work", pause_processing)
-    first = make_message(
-        channel,
-        message_id=200,
-        author_id=50,
-        content="first <@999>",
-        mentions=[SimpleNamespace(id=999)],
+    runs = HeldRuns()
+    waiting = ChatRunManager(waiting_work_limit=32)
+    h = make_adapter(
+        tmp_path,
+        target=channel,
+        allowed_chat_ids=[100],
+        trigger_run=runs.trigger,
+        waiting_work_manager=waiting,
     )
     try:
-        await adapter._handle_inbound_message(first)
-        channel.history_messages.insert(0, first)
-        await adapter._handle_inbound_message(
-            make_message(
-                channel,
-                message_id=201,
-                author_id=50,
-                content="second <@999>",
-                mentions=[SimpleNamespace(id=999)],
-            )
-        )
-        release_worker.set()
-        await adapter._engine._chat_queues["100"].join()
-        assert trigger.await_count == 2
-        notes = [
-            message.content
-            for message in sessions.get(
-                SessionAddress(None, "assistant", "ch-dc-assistant-100")
-            ).load()
-            if message.role == "note"
-        ]
-        assert notes == [
-            f"[channel-message] [Alice|50|member]: context {index}" for index in range(1, 4)
-        ]
+        await h.receive(mention(channel, 200))
+        await runs.wait_started(SESSION_ID)
+        # The active Run keeps both later turns pending in the chat's queue.
+        channel.history_messages = context_messages(channel, 1, 2, 3)
+        second = mention(channel, 210)
+        await h.receive(second)
+        channel.history_messages.insert(0, second)
+        await h.receive(mention(channel, 211))
+        # One admission per pending turn: the history rides on the second turn's.
+        assert waiting.waiting_work_count() == 2
+
+        if finish == "stop":
+            await h.adapter.stop()
+            assert waiting.waiting_work_count() == 0
+            runs.trigger.assert_awaited_once()
+        else:
+            runs.release()
+            await h.drain()
+            assert runs.trigger.await_count == 3
+            assert h.notes() == context_notes(1, 2, 3)
+            assert waiting.waiting_work_count() == 0
     finally:
-        release_worker.set()
-        await adapter.stop()
+        runs.release()
+        await h.adapter.stop()
+        await waiting.aclose()

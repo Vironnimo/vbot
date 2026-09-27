@@ -324,6 +324,53 @@ def make_interrupted_run(*, output_text: str | None, session_id: str = SESSION_I
     return run
 
 
+def make_trigger_service(
+    trigger_run: AsyncMock,
+    *,
+    waiting_work_manager: ChatRunManager | None = None,
+    compact_session: AsyncMock | None = None,
+    has_active_run: Mock | None = None,
+) -> SimpleNamespace:
+    """Build the trigger service double a Channel engine runs on.
+
+    With ``waiting_work_manager``, admissions are real and the triggered Run takes
+    its admission over, as in production; otherwise every reservation succeeds.
+    ``reserve_waiting_work`` is a Mock, so a test can assert nothing was admitted.
+    """
+
+    async def trigger_with_admission(*args: Any, **kwargs: Any) -> Any:
+        admission = kwargs.pop("waiting_work_admission", None)
+        if waiting_work_manager is not None and isinstance(admission, WaitingWorkAdmission):
+            waiting_work_manager.release_waiting_work(admission)
+        return await trigger_run(*args, **kwargs)
+
+    admission_ids = count()
+
+    def reserve_waiting_work(*, scope: str, scope_limit: int) -> WaitingWorkAdmission:
+        if waiting_work_manager is not None:
+            return waiting_work_manager.reserve_waiting_work(
+                scope=scope,
+                scope_limit=scope_limit,
+            )
+        del scope_limit
+        return WaitingWorkAdmission(id=f"admission-{next(admission_ids)}", scope=scope)
+
+    def release_waiting_work(admission: WaitingWorkAdmission | None) -> bool:
+        if waiting_work_manager is not None and admission is not None:
+            return waiting_work_manager.release_waiting_work(admission)
+        return True
+
+    return SimpleNamespace(
+        trigger_run=trigger_with_admission,
+        compact_session=compact_session or AsyncMock(return_value="Context compacted."),
+        # Synchronous on purpose: the real has_active_run returns a bool, not a
+        # coroutine. An AsyncMock would return a truthy coroutine -> always "busy".
+        has_active_run=has_active_run or Mock(return_value=False),
+        reserve_waiting_work=Mock(side_effect=reserve_waiting_work),
+        release_waiting_work=release_waiting_work,
+    )
+
+
 def make_engine(
     tmp_path: Path,
     *,
@@ -350,37 +397,11 @@ def make_engine(
         write_bootstrap_marker(tmp_path)
     chat_sessions = ChatSessionManager(tmp_path)
     trigger_mock = trigger_run or AsyncMock()
-
-    async def trigger_with_admission(*args: Any, **kwargs: Any) -> Any:
-        admission = kwargs.pop("waiting_work_admission", None)
-        if waiting_work_manager is not None and isinstance(admission, WaitingWorkAdmission):
-            waiting_work_manager.release_waiting_work(admission)
-        return await trigger_mock(*args, **kwargs)
-
-    admission_ids = count()
-
-    def reserve_waiting_work(*, scope: str, scope_limit: int) -> WaitingWorkAdmission:
-        if waiting_work_manager is not None:
-            return waiting_work_manager.reserve_waiting_work(
-                scope=scope,
-                scope_limit=scope_limit,
-            )
-        del scope_limit
-        return WaitingWorkAdmission(id=f"admission-{next(admission_ids)}", scope=scope)
-
-    def release_waiting_work(admission: WaitingWorkAdmission | None) -> bool:
-        if waiting_work_manager is not None and admission is not None:
-            return waiting_work_manager.release_waiting_work(admission)
-        return True
-
-    trigger_service = SimpleNamespace(
-        trigger_run=trigger_with_admission,
-        compact_session=compact_session or AsyncMock(return_value="Context compacted."),
-        # Synchronous on purpose: the real has_active_run returns a bool, not a
-        # coroutine. An AsyncMock would return a truthy coroutine -> always "busy".
-        has_active_run=has_active_run or Mock(return_value=False),
-        reserve_waiting_work=reserve_waiting_work,
-        release_waiting_work=release_waiting_work,
+    trigger_service = make_trigger_service(
+        trigger_mock,
+        waiting_work_manager=waiting_work_manager,
+        compact_session=compact_session,
+        has_active_run=has_active_run,
     )
     resolved_transport = transport or FakeTransport()
     resolved_dispatcher = command_dispatcher or make_command_dispatcher()
@@ -408,7 +429,7 @@ def make_engine(
     return engine, chat_sessions, trigger_mock, resolved_transport
 
 
-async def drain(engine: ChannelConversationEngine, platform_target: int) -> None:
+async def drain(engine: ChannelConversationEngine, platform_target: int | str) -> None:
     queue = engine._chat_queues.get(str(platform_target))
     if queue is None:
         await asyncio.sleep(0)
