@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from itertools import count
 from pathlib import Path
@@ -13,18 +12,11 @@ from typing import Any, cast
 from unittest.mock import AsyncMock, Mock
 from weakref import WeakValueDictionary
 
-import pytest
-
-import core.channels.engine as engine_module
-from core.attachments import AttachmentTooLargeError, AttachmentTypeNotAllowedError
 from core.channels import ChannelConfig
 from core.channels.adapter import (
     ChannelAccessRegistry,
     ConversationFacts,
-    MessageFacts,
     QuotedMessageFacts,
-    ReplyPlanFacts,
-    RouteFacts,
     RunButtonBindingRegistry,
 )
 from core.channels.engine import ChannelConversationEngine
@@ -34,14 +26,12 @@ from core.chat.commands import (
     CommandFeedback,
     CommandNavigation,
     CommandOutcome,
-    CommandRun,
     CommandUnavailability,
     PreparedCommand,
 )
-from core.chat.content_blocks import ContentBlock, MediaBlock, TextBlock
+from core.chat.content_blocks import ContentBlock
 from core.chat.messages import GroupRole
 from core.database import write_bootstrap_marker
-from core.extensions.interactions import InteractionButton, InteractionEvent
 from core.runs import (
     ASSISTANT_OUTPUT_EVENT,
     ChatRunManager,
@@ -426,6 +416,47 @@ async def drain(engine: ChannelConversationEngine, platform_target: int) -> None
     await asyncio.wait_for(queue.join(), timeout=QUEUE_DRAIN_TIMEOUT_SECONDS)
 
 
+class HeldRuns:
+    """Trigger double whose first Run per Session stays active until released.
+
+    While a Session's first Run is held, the Channel worker keeps relaying it, so
+    later work for that conversation waits in its queue. Later Runs complete at
+    once without output.
+    """
+
+    def __init__(self) -> None:
+        self.trigger = AsyncMock(side_effect=self._start)
+        self._started: dict[str, asyncio.Event] = {}
+        self._held: list[Run] = []
+
+    async def _start(self, agent_id: str, content: Any, session_id: str, **_kwargs: Any) -> Run:
+        run = Run(
+            run_id=f"run-{self.trigger.await_count}", agent_id=agent_id, session_id=session_id
+        )
+        started = self._started.setdefault(session_id, asyncio.Event())
+        if started.is_set():
+            run.mark_completed("ok")
+        else:
+            self._held.append(run)
+            started.set()
+        return run
+
+    async def wait_started(self, session_id: str = SESSION_ID) -> None:
+        """Wait until the Session's held Run was triggered."""
+        started = self._started.setdefault(session_id, asyncio.Event())
+        await asyncio.wait_for(started.wait(), timeout=QUEUE_DRAIN_TIMEOUT_SECONDS)
+
+    def release(self) -> None:
+        """Complete every held Run so the workers continue."""
+        for run in self._held:
+            run.mark_completed("ok")
+
+    @property
+    def contents(self) -> list[Any]:
+        """Return the content of every triggered Run, in trigger order."""
+        return [call.args[1] for call in self.trigger.await_args_list]
+
+
 def assert_member_trigger(
     trigger_mock: AsyncMock,
     *args: Any,
@@ -446,68 +477,3 @@ def assert_member_trigger(
     assert callable(resolver)
     assert kwargs == {}
     return cast(Callable[[str], str | None], resolver)
-
-
-__all__ = [
-    "asyncio",
-    "contextlib",
-    "logging",
-    "AsyncIterator",
-    "Awaitable",
-    "Callable",
-    "count",
-    "Path",
-    "SimpleNamespace",
-    "Any",
-    "cast",
-    "AsyncMock",
-    "Mock",
-    "pytest",
-    "engine_module",
-    "AttachmentTooLargeError",
-    "AttachmentTypeNotAllowedError",
-    "ConversationFacts",
-    "MessageFacts",
-    "QuotedMessageFacts",
-    "ReplyPlanFacts",
-    "RouteFacts",
-    "ChannelConfig",
-    "ChannelConversationEngine",
-    "MessageSender",
-    "ReplySurface",
-    "CommandFeedback",
-    "CommandNavigation",
-    "CommandOutcome",
-    "CommandRun",
-    "CommandUnavailability",
-    "PreparedCommand",
-    "ContentBlock",
-    "MediaBlock",
-    "TextBlock",
-    "InteractionButton",
-    "InteractionEvent",
-    "ASSISTANT_OUTPUT_EVENT",
-    "ChatRunManager",
-    "Run",
-    "RunKind",
-    "WaitingWorkAdmission",
-    "ChatSessionManager",
-    "SESSION_ID",
-    "CHANNEL_REPLY_SURFACE",
-    "CHANNEL_GROUP_REPLY_SURFACE",
-    "MemoryChannelAccessRegistry",
-    "FakeTransport",
-    "make_config",
-    "make_conversation",
-    "make_command_dispatcher",
-    "command_outcome",
-    "make_new_only_dispatcher",
-    "make_completed_run",
-    "make_empty_completed_run",
-    "make_failed_run",
-    "make_cancelled_run",
-    "make_interrupted_run",
-    "make_engine",
-    "drain",
-    "assert_member_trigger",
-]
