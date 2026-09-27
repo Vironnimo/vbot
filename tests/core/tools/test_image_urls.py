@@ -21,14 +21,14 @@ from core.model_tasks import ImageUnderstandingRunContext
 from core.tools._public_http import PublicResponse
 from core.tools.image import ANALYZE_IMAGE_TOOL_NAME, register_analyze_image_tool
 from core.tools.tools import ToolContext, ToolRegistry
-from tests.core.tools.web_fetch_helpers import (
-    _StreamingSession,
+from tests.core.tools.web_fetch_test_support import (
+    StreamingSession,
     make_result,
 )
-from tests.core.tools.web_fetch_helpers import (
+from tests.core.tools.web_fetch_test_support import (
     stub_dns_resolution as stub_dns_resolution,
 )
-from tests.core.tools.web_fetch_helpers import (
+from tests.core.tools.web_fetch_test_support import (
     stub_http_session as stub_http_session,
 )
 
@@ -73,9 +73,9 @@ class _Web:
                 )
             return response
 
-        def session(**kwargs: Any) -> _StreamingSession:
+        def session(**kwargs: Any) -> StreamingSession:
             self.accept.append(kwargs["headers"]["Accept"])
-            return _StreamingSession()
+            return StreamingSession()
 
         async def no_sleep(*_args: object) -> None:
             return None

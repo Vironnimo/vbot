@@ -1,54 +1,51 @@
-"""Shared fixtures and fakes for web fetch behavior tests."""
+"""Fake public transport and a registered web_fetch Tool for web fetch tests.
+
+Import the autouse fixtures ``stub_http_session`` and ``stub_dns_resolution`` into
+a test module so no test there creates a curl session or resolves a real host.
+"""
 
 from __future__ import annotations
 
 import ipaddress
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Callable
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import pytest
 
 import core.tools._public_http as public_http
 from core.tools._public_http import PublicResponse
-from core.tools.tools import ToolContext, is_tool_result_envelope
-from core.tools.web_fetch import (
-    WEB_FETCH_TOOL_NAME,
-    make_web_fetch_handler,
-)
+from core.tools.tools import ToolContext, ToolRegistry, is_tool_result_envelope
+from core.tools.web_fetch import WEB_FETCH_TOOL_NAME, register_web_fetch_tool
 
-# The handler is created by ``make_web_fetch_handler``; this shim builds it with an
-# optional fake store and invokes it, so existing ``await web_fetch_handler(ctx, args)``
-# call sites stay unchanged while image tests pass an ``attachment_store``.
-_FetchHandler = Callable[[ToolContext, dict[str, Any]], Awaitable[dict[str, Any]]]
+IPV6_HOST = "ipv6.example"
+IPV6_ADDRESS = "2606:2800:220:1:248:1893:25c8:1946"
 
 
-def web_fetch_handler(
-    context: ToolContext, arguments: dict[str, Any], *, attachment_store: Any = None
-) -> Awaitable[dict[str, Any]]:
-    handler = cast(_FetchHandler, make_web_fetch_handler(attachment_store))
-    return handler(context, arguments)
-
-
-def make_context(workspace: Path, tool_name: str = WEB_FETCH_TOOL_NAME) -> ToolContext:
+def make_context(tmp_path: Path) -> ToolContext:
     return ToolContext(
         agent_id="agent-1",
         session_id="session-1",
         run_id="run-1",
         tool_call_id="call-1",
-        tool_name=tool_name,
+        tool_name=WEB_FETCH_TOOL_NAME,
         tool_call_index=0,
-        workspace=workspace,
-        vbot_root=workspace.parent,
-        data_root=workspace.parent / "data",
+        workspace=tmp_path / "workspace",
+        vbot_root=tmp_path,
+        data_root=tmp_path / "data",
     )
 
 
-def web_fetch_arguments(url: str, output: str | None = None) -> dict[str, Any]:
-    arguments: dict[str, Any] = {"url": url}
-    if output is not None:
-        arguments["output"] = output
-    return arguments
+def web_fetch_registry(*, attachment_store: Any = None, **options: Any) -> ToolRegistry:
+    """Return a registry holding web_fetch as production registers it."""
+    registry = ToolRegistry()
+    register_web_fetch_tool(registry, attachment_store=attachment_store, **options)
+    return registry
+
+
+async def fetch(tmp_path: Path, arguments: Any, **registration: Any) -> dict[str, Any]:
+    """Dispatch one web_fetch call through a freshly registered Tool."""
+    return await web_fetch_registry(**registration).dispatch(make_context(tmp_path), arguments)
 
 
 def make_result(
@@ -71,8 +68,8 @@ def make_result(
     )
 
 
-class _StreamingResponse:
-    """Small curl-response stand-in for testing bounded response collection."""
+class StreamingResponse:
+    """Curl response stand-in that streams its body in the given chunks."""
 
     def __init__(self, chunks: list[bytes], *, headers: dict[str, str] | None = None) -> None:
         self._chunks = chunks
@@ -85,29 +82,31 @@ class _StreamingResponse:
     def text(self) -> str:
         return self.content.decode("utf-8", errors="replace")
 
-    async def aiter_content(self):
+    async def aiter_content(self) -> AsyncIterator[bytes]:
         for chunk in self._chunks:
             yield chunk
 
 
 class _StreamingRequest:
-    def __init__(self, response: _StreamingResponse) -> None:
+    def __init__(self, response: StreamingResponse) -> None:
         self._response = response
 
-    async def __aenter__(self) -> _StreamingResponse:
+    async def __aenter__(self) -> StreamingResponse:
         return self._response
 
     async def __aexit__(self, *arguments: object) -> None:
         del arguments
 
 
-class _StreamingSession:
-    def __init__(self, response: _StreamingResponse | None = None) -> None:
+class StreamingSession:
+    """Curl session stand-in that records requests and curl options."""
+
+    def __init__(self, response: StreamingResponse | None = None) -> None:
         self._response = response
         self.calls: list[tuple[str, str, dict[str, object]]] = []
         self.curl_options: dict[object, object] = {}
 
-    async def __aenter__(self) -> _StreamingSession:
+    async def __aenter__(self) -> StreamingSession:
         return self
 
     async def __aexit__(self, *arguments: object) -> None:
@@ -123,11 +122,19 @@ class _StreamingSession:
 @pytest.fixture(autouse=True)
 def stub_http_session(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep mocked HTTP tests from creating curl's Windows selector thread."""
-    monkeypatch.setattr(
-        public_http,
-        "AsyncSession",
-        lambda **_kwargs: _StreamingSession(),
-    )
+    monkeypatch.setattr(public_http, "AsyncSession", lambda **_kwargs: StreamingSession())
+
+
+@pytest.fixture(autouse=True)
+def stub_dns_resolution(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Resolve every host to a public address; ``IPV6_HOST`` to a public IPv6 one."""
+
+    async def _fake_resolve_host_addresses(host: str, port: int) -> list[object]:
+        del port
+        address = IPV6_ADDRESS if host.rstrip(".").lower() == IPV6_HOST else "93.184.216.34"
+        return [ipaddress.ip_address(address)]
+
+    monkeypatch.setattr(public_http, "_resolve_host_addresses", _fake_resolve_host_addresses)
 
 
 def install_http_get(
@@ -147,22 +154,20 @@ def install_http_get(
     monkeypatch.setattr(public_http, "_http_get", _fake_http_get)
 
 
-@pytest.fixture(autouse=True)
-def stub_dns_resolution(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def _fake_resolve_host_addresses(host: str, port: int) -> list[object]:
-        del port
-        host_mapping: dict[str, tuple[str, ...]] = {
-            "example.com": ("93.184.216.34",),
-            "target.example": ("93.184.216.34",),
-            "public.example": ("93.184.216.34",),
-        }
-        resolved = host_mapping.get(host.rstrip(".").lower(), ("93.184.216.34",))
-        return [ipaddress.ip_address(address) for address in resolved]
+@pytest.fixture
+def retry_sleeps(monkeypatch: pytest.MonkeyPatch) -> list[float | None]:
+    """Skip retry backoff and record each wait's Retry-After hint."""
+    hints: list[float | None] = []
 
-    monkeypatch.setattr(public_http, "_resolve_host_addresses", _fake_resolve_host_addresses)
+    async def record(attempt: int, retry_after: float | None = None) -> None:
+        del attempt
+        hints.append(retry_after)
+
+    monkeypatch.setattr(public_http, "sleep_for_retry", record)
+    return hints
 
 
-def assert_success_envelope(result: dict[str, object]) -> dict[str, object]:
+def assert_success_envelope(result: dict[str, Any]) -> dict[str, Any]:
     assert is_tool_result_envelope(result) is True
     assert result["ok"] is True
     assert result["error"] is None
@@ -174,7 +179,7 @@ def assert_success_envelope(result: dict[str, object]) -> dict[str, object]:
     return data
 
 
-def assert_failure_envelope(result: dict[str, object], code: str) -> dict[str, str]:
+def assert_failure_envelope(result: dict[str, Any], code: str) -> dict[str, Any]:
     assert is_tool_result_envelope(result) is True
     assert result["ok"] is False
     assert result["data"] is None
@@ -184,4 +189,4 @@ def assert_failure_envelope(result: dict[str, object], code: str) -> dict[str, s
     assert error["code"] == code
     assert isinstance(error["message"], str)
     assert error["message"]
-    return error  # type: ignore[return-value]
+    return error
