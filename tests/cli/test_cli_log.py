@@ -1,154 +1,55 @@
-"""Tests for log CLI commands."""
+"""Tests for the ``vbot log`` commands."""
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any
-
-import httpx
-import pytest
-
-from cli import log_management
-from cli import main as cli_main
-from cli.server_management import CommandResult, ServerInstance
-from core.utils.logging import resolve_daily_log_path
+from tests.cli.cli_test_support import FakeRpc, RunCli
 
 
-def make_instance(tmp_path: Path) -> ServerInstance:
-    data_dir = tmp_path / "data"
-    return ServerInstance(
-        host="127.0.0.1",
-        port=8420,
-        data_dir=data_dir,
-        url="http://127.0.0.1:8420",
-        log_path=resolve_daily_log_path(data_dir),
-    )
+def test_log_list_prints_the_daily_files_and_the_default(rpc: FakeRpc, run_cli: RunCli) -> None:
+    rpc.reply("log.list", {"files": ["2026-05-11", "2026-05-10"], "default_file": "2026-05-11"})
+
+    code, out, _err = run_cli("log", "list")
+
+    assert code == 0
+    assert rpc.calls == [("log.list", {})]
+    assert out.count("2026-05-11") == 2
+    assert "2026-05-10" in out
 
 
-def test_log_list_posts_rpc_and_formats_files(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+def test_log_read_prints_every_entry_field_and_its_continuation(
+    rpc: FakeRpc, run_cli: RunCli
 ) -> None:
-    instance = make_instance(tmp_path)
+    entry = {
+        "timestamp": "2026-05-11 09:00:00",
+        "level": "info",
+        "logger_name": "vbot.server.app",
+        "message": "Ready",
+        "continuation": "trace line",
+    }
+    rpc.reply("log.read", {"file": "2026-05-11", "cursor": "cursor-1", "entries": [entry]})
 
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        assert url == f"{instance.url}/api/rpc"
-        assert json == {"method": "log.list", "params": {}}
-        assert timeout == 10.0
-        return httpx.Response(
-            200,
-            json={
-                "ok": True,
-                "result": {"files": ["2026-05-11", "2026-05-10"], "default_file": "2026-05-11"},
-            },
-        )
+    code, out, _err = run_cli("log", "read", "2026-05-11")
 
-    monkeypatch.setattr(log_management.httpx, "post", fake_post)
-
-    result = log_management.log_list(instance)
-
-    assert result.ok
-    assert result.instance == instance
-    assert result.message.count("2026-05-11") == 2
-    assert "2026-05-10" in result.message
+    assert code == 0
+    assert rpc.calls == [("log.read", {"file": "2026-05-11"})]
+    for value in ("2026-05-11", *entry.values()):
+        assert value in out
 
 
-def test_log_read_posts_rpc_and_formats_entries(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+def test_log_read_filters_the_level_before_keeping_the_last_entries(
+    rpc: FakeRpc, run_cli: RunCli
 ) -> None:
-    instance = make_instance(tmp_path)
-
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        assert json == {"method": "log.read", "params": {"file": "2026-05-11"}}
-        return httpx.Response(
-            200,
-            json={
-                "ok": True,
-                "result": {
-                    "file": "2026-05-11",
-                    "cursor": "cursor-1",
-                    "entries": [
-                        {
-                            "timestamp": "2026-05-11 09:00:00",
-                            "level": "info",
-                            "logger_name": "vbot.server.app",
-                            "message": "Ready",
-                            "continuation": "trace line",
-                        }
-                    ],
-                },
-            },
-        )
-
-    monkeypatch.setattr(log_management.httpx, "post", fake_post)
-
-    result = log_management.log_read(instance, "2026-05-11")
-
-    assert result.ok
-    assert result.instance == instance
-    for value in (
-        "2026-05-11",
-        "2026-05-11 09:00:00",
-        "info",
-        "vbot.server.app",
-        "Ready",
-        "trace line",
-    ):
-        assert value in result.message
-
-
-def test_run_dispatches_log_read(
-    tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    instance = make_instance(tmp_path)
-    calls: list[tuple[ServerInstance, str]] = []
-
-    def fake_resolve(*, host: str, port: int | None, data_dir: str | None) -> ServerInstance:
-        return instance
-
-    def fake_read_log(resolved_instance: ServerInstance, file_name: str) -> CommandResult:
-        calls.append((resolved_instance, file_name))
-        return CommandResult(ok=True, message="log: 2026-05-11", instance=instance)
-
-    exit_code = cli_main.run(
-        ["log", "read", "2026-05-11"],
-        resolve=fake_resolve,
-        read_log_fn=fake_read_log,
-    )
-
-    assert exit_code == 0
-    assert calls == [(instance, "2026-05-11")]
-    assert capsys.readouterr().out.splitlines() == ["log: 2026-05-11"]
-
-
-def test_log_filter_precedes_tail_and_preserves_multiline(tmp_path, monkeypatch):
-    from cli import log_management as management
-
-    entries = [
+    entries: list[dict[str, str]] = [
         {"level": "error", "message": f"sentinel-{i}", "continuation": "traceback-sentinel"}
         for i in range(120)
     ]
     entries.append({"level": "info", "message": "excluded-info"})
-    monkeypatch.setattr(
-        management.httpx,
-        "post",
-        lambda *a, **kw: httpx.Response(
-            200,
-            json={
-                "ok": True,
-                "result": {"entries": entries, "file": "test.log", "cursor": "unused-handoff"},
-            },
-        ),
-    )
-    result = management.log_read(make_instance(tmp_path), "test.log", limit=2, level="error")
-    assert result.ok
-    assert "sentinel-118" in result.message and "sentinel-119" in result.message
-    assert "sentinel-117" not in result.message and "excluded-info" not in result.message
-    assert "traceback-sentinel" in result.message
-    assert "unused-handoff" not in result.message
+    rpc.reply("log.read", {"entries": entries, "file": "test.log", "cursor": "unused-handoff"})
+
+    code, out, _err = run_cli("log", "read", "test.log", "--limit", "2", "--level", "error")
+
+    assert code == 0
+    assert "sentinel-118" in out and "sentinel-119" in out
+    assert "sentinel-117" not in out and "excluded-info" not in out
+    assert "traceback-sentinel" in out
+    assert "unused-handoff" not in out

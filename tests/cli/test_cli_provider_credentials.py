@@ -1,417 +1,456 @@
-"""Tests for cli provider credentials."""
+"""Tests for provider credential commands: API keys, OAuth device flow and Custom Providers."""
 
 from __future__ import annotations
 
-from pathlib import Path
+import io
+import sys
 from typing import Any
 
-import httpx
 import pytest
 
-from cli import main as cli_main
-from cli import provider_management
-from cli.server_management import CommandResult, ServerInstance
-from tests.cli.cli_provider_test_support import (
-    make_instance,
-)
+from tests.cli.cli_test_support import FakeRpc, RunCli
+
+KEY_SAVED = {
+    "provider_id": "openrouter",
+    "connection_id": "openrouter:api-key",
+    "account": "default",
+    "credential_key": "OPENROUTER_API_KEY",
+    "configured": True,
+}
+KEY_SAVED_FOR_WORK = KEY_SAVED | {"account": "work", "credential_key": "OPENROUTER_API_KEY__WORK"}
+OAUTH_CONNECTIONS = [
+    {"id": "openai:api-key", "provider_id": "openai", "type": "api_key"},
+    {"id": "openai:subscription", "provider_id": "openai", "type": "oauth"},
+    {"id": "other:oauth", "provider_id": "other", "type": "oauth"},
+]
+DEVICE_FLOW = {
+    "user_code": "ABCD-1234",
+    "verification_uri": "https://example.com/device",
+    "expires_in": 900,
+}
 
 
-def test_provider_set_key_posts_set_key_rpc_without_echoing_secret(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    instance = make_instance(tmp_path)
-    calls: list[dict[str, Any]] = []
-
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        calls.append({"url": url, "json": json, "timeout": timeout})
-        return httpx.Response(
-            200,
-            json={
-                "ok": True,
-                "result": {
-                    "provider_id": "openrouter",
-                    "connection_id": "openrouter:api-key",
-                    "account": "default",
-                    "credential_key": "OPENROUTER_API_KEY",
-                    "configured": True,
-                },
-            },
-        )
-
-    monkeypatch.setattr(provider_management.httpx, "post", fake_post)
-
-    result = provider_management.provider_set_key(
-        instance,
-        provider_id="openrouter",
-        connection_id="openrouter:api-key",
-        value="sk-or-test",
-    )
-
-    assert result.ok is True
-    assert result.instance is instance
-    assert "openrouter:api-key" in result.message
-    assert "OPENROUTER_API_KEY" in result.message
-    assert "account: default" in result.message
-    assert "sk-or-test" not in result.message
-    assert calls == [
-        {
-            "url": f"{instance.url}/api/rpc",
-            "json": {
-                "method": "provider.set_key",
-                "params": {
-                    "provider_id": "openrouter",
-                    "value": "sk-or-test",
-                    "connection_id": "openrouter:api-key",
-                },
-            },
-            "timeout": 10.0,
-        }
-    ]
-
-
-def test_provider_set_key_passes_account_and_reports_derived_key(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    instance = make_instance(tmp_path)
-    calls: list[dict[str, Any]] = []
-
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        calls.append(json)
-        return httpx.Response(
-            200,
-            json={
-                "ok": True,
-                "result": {
-                    "provider_id": "openrouter",
-                    "connection_id": "openrouter:api-key",
-                    "account": "work",
-                    "credential_key": "OPENROUTER_API_KEY__WORK",
-                    "configured": True,
-                },
-            },
-        )
-
-    monkeypatch.setattr(provider_management.httpx, "post", fake_post)
-
-    result = provider_management.provider_set_key(
-        instance,
-        provider_id="openrouter",
-        value="sk-or-work",
-        account="work",
-    )
-
-    assert result.ok is True
-    assert result.instance is instance
-    assert "openrouter:api-key" in result.message
-    assert "OPENROUTER_API_KEY__WORK" in result.message
-    assert "account: work" in result.message
-    assert calls == [
-        {
-            "method": "provider.set_key",
-            "params": {"provider_id": "openrouter", "value": "sk-or-work", "account": "work"},
-        }
-    ]
-
-
-def test_provider_set_key_can_refresh_models(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    instance = make_instance(tmp_path)
-    calls: list[dict[str, Any]] = []
-
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        calls.append(json)
-        if json["method"] == "provider.set_key":
-            return httpx.Response(
-                200,
-                json={
-                    "ok": True,
-                    "result": {
-                        "connection_id": "openrouter:api-key",
-                        "account": "default",
-                        "credential_key": "OPENROUTER_API_KEY",
-                    },
-                },
-            )
-        return httpx.Response(
-            200,
-            json={"ok": True, "result": {"provider_id": "openrouter", "model_count": 42}},
-        )
-
-    monkeypatch.setattr(provider_management.httpx, "post", fake_post)
-
-    result = provider_management.provider_set_key(
-        instance,
-        provider_id="openrouter",
-        value="sk-or-test",
-        refresh_models=True,
-    )
-
-    assert result.ok is True
-    assert result.instance is instance
-    assert "openrouter:api-key" in result.message
-    assert "OPENROUTER_API_KEY" in result.message
-    assert "42" in result.message
-    assert calls == [
-        {
-            "method": "provider.set_key",
-            "params": {"provider_id": "openrouter", "value": "sk-or-test"},
-        },
-        {"method": "model.refresh_db", "params": {"provider_id": "openrouter"}},
-    ]
-
-
-def test_parse_args_supports_provider_unset_key_options() -> None:
-    args = cli_main.parse_args(
-        [
-            "provider",
-            "unset-key",
-            "openrouter",
-            "--connection",
-            "openrouter:api-key",
-        ]
-    )
-
-    assert args.area == "provider"
-    assert args.command == "unset-key"
-    assert args.provider == "openrouter"
-    assert args.connection == "openrouter:api-key"
-
-
-def test_provider_unset_key_posts_unset_key_rpc(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    instance = make_instance(tmp_path)
-    calls: list[dict[str, Any]] = []
-
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        calls.append({"url": url, "json": json, "timeout": timeout})
-        return httpx.Response(
-            200,
-            json={
-                "ok": True,
-                "result": {
-                    "provider_id": "openrouter",
-                    "connection_id": "openrouter:api-key",
-                    "account": "default",
-                    "credential_key": "OPENROUTER_API_KEY",
-                    "removed": True,
-                    "configured": False,
-                },
-            },
-        )
-
-    monkeypatch.setattr(provider_management.httpx, "post", fake_post)
-
-    result = provider_management.provider_unset_key(instance, provider_id="openrouter")
-
-    assert result.ok is True
-    assert result.instance is instance
-    assert "openrouter:api-key" in result.message
-    assert "OPENROUTER_API_KEY" in result.message
-    assert "account: default" in result.message
-    assert calls == [
-        {
-            "url": f"{instance.url}/api/rpc",
-            "json": {
-                "method": "provider.unset_key",
-                "params": {"provider_id": "openrouter"},
-            },
-            "timeout": 10.0,
-        }
-    ]
-
-
-def test_provider_unset_key_passes_account_through(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    instance = make_instance(tmp_path)
-    calls: list[dict[str, Any]] = []
-
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        calls.append(json)
-        return httpx.Response(
-            200,
-            json={
-                "ok": True,
-                "result": {
-                    "provider_id": "openrouter",
-                    "connection_id": "openrouter:api-key",
-                    "account": "work",
-                    "credential_key": "OPENROUTER_API_KEY__WORK",
-                    "removed": True,
-                    "configured": False,
-                },
-            },
-        )
-
-    monkeypatch.setattr(provider_management.httpx, "post", fake_post)
-
-    result = provider_management.provider_unset_key(
-        instance, provider_id="openrouter", account="work"
-    )
-
-    assert result.ok is True
-    assert result.instance is instance
-    assert "openrouter:api-key" in result.message
-    assert "OPENROUTER_API_KEY__WORK" in result.message
-    assert "account: work" in result.message
-    assert calls == [
-        {
-            "method": "provider.unset_key",
-            "params": {"provider_id": "openrouter", "account": "work"},
-        }
-    ]
-
-
-def test_provider_unset_key_reports_remaining_process_env_credential(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    instance = make_instance(tmp_path)
-
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        return httpx.Response(
-            200,
-            json={
-                "ok": True,
-                "result": {
-                    "provider_id": "openrouter",
-                    "connection_id": "openrouter:api-key",
-                    "account": "default",
-                    "credential_key": "OPENROUTER_API_KEY",
-                    "removed": False,
-                    "configured": True,
-                },
-            },
-        )
-
-    monkeypatch.setattr(provider_management.httpx, "post", fake_post)
-
-    result = provider_management.provider_unset_key(instance, provider_id="openrouter")
-
-    assert result.ok is True
-    assert "OPENROUTER_API_KEY" in result.message
-    assert "process environment" in result.message
-
-
-def test_run_provider_set_key_dispatches_and_prints_plain_output(
-    tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    instance = make_instance(tmp_path, port=8765)
-    calls: list[tuple[str, Any]] = []
-
-    def fake_resolve(*, host: str, port: int | None, data_dir: str | None) -> ServerInstance:
-        calls.append(("resolve", {"host": host, "port": port, "data_dir": data_dir}))
-        return instance
-
-    def fake_set_key(
-        resolved_instance: ServerInstance,
-        provider_id: str,
-        value: str,
-        connection_id: str | None,
-        refresh_models: bool,
-        account: str | None,
-    ) -> CommandResult:
-        calls.append(
-            (
-                "provider.set_key",
-                {
-                    "instance": resolved_instance,
-                    "provider_id": provider_id,
-                    "value": value,
-                    "connection_id": connection_id,
-                    "refresh_models": refresh_models,
-                    "account": account,
-                },
-            )
-        )
-        return CommandResult(
-            ok=True,
-            message="set openrouter:api-key credential OPENROUTER_API_KEY",
-            instance=resolved_instance,
-        )
-
-    exit_code = cli_main.run(
-        [
-            "provider",
-            "set-key",
-            "openrouter",
-            "sk-or-test",
-            "--connection",
-            "openrouter:api-key",
-            "--account",
-            "work",
-            "--host",
-            "localhost",
-            "--port",
-            "8765",
-            "--data-dir",
-            "data",
-        ],
-        resolve=fake_resolve,
-        set_provider_key=fake_set_key,
-    )
-
-    assert exit_code == 0
-    assert calls == [
-        ("resolve", {"host": "localhost", "port": 8765, "data_dir": "data"}),
-        (
-            "provider.set_key",
+@pytest.mark.parametrize(
+    ("argv", "stdin", "params", "saved", "expected"),
+    [
+        pytest.param(
+            ("openrouter", "sk-or-test", "--connection", "openrouter:api-key"),
+            None,
             {
-                "instance": instance,
                 "provider_id": "openrouter",
                 "value": "sk-or-test",
                 "connection_id": "openrouter:api-key",
-                "refresh_models": False,
-                "account": "work",
             },
+            KEY_SAVED,
+            "set openrouter:api-key credential OPENROUTER_API_KEY (account: default)",
+            id="argument-and-connection",
         ),
-    ]
-    assert capsys.readouterr().out.splitlines() == [
-        "set openrouter:api-key credential OPENROUTER_API_KEY"
-    ]
+        pytest.param(
+            ("openrouter", "--stdin", "--account", "work"),
+            "sk-or-test\r\n",
+            {"provider_id": "openrouter", "value": "sk-or-test", "account": "work"},
+            KEY_SAVED_FOR_WORK,
+            "set openrouter:api-key credential OPENROUTER_API_KEY__WORK (account: work)",
+            id="stdin-and-account",
+        ),
+    ],
+)
+def test_provider_key_set_saves_the_key_without_echoing_it(
+    rpc: FakeRpc,
+    run_cli: RunCli,
+    monkeypatch: pytest.MonkeyPatch,
+    argv: tuple[str, ...],
+    stdin: str | None,
+    params: dict[str, Any],
+    saved: dict[str, Any],
+    expected: str,
+) -> None:
+    if stdin is not None:
+        monkeypatch.setattr(sys, "stdin", io.StringIO(stdin))
+    rpc.reply("provider.set_key", saved)
+
+    code, out, err = run_cli("provider", "key", "set", *argv)
+
+    assert code == 0
+    assert rpc.calls == [("provider.set_key", params)]
+    assert out.splitlines() == [expected]
+    assert "sk-or-test" not in out + err
 
 
-def test_set_key_preserves_save_and_reports_discovery_failure(tmp_path, monkeypatch):
-    calls = []
-
-    def post(url, **kwargs):
-        calls.append(kwargs["json"])
-        result = (
-            {"connection_id": "openai:api-key", "credential_key": "OPENAI_API_KEY"}
-            if len(calls) == 1
-            else {
+@pytest.mark.parametrize(
+    ("refresh", "code", "shown"),
+    [
+        pytest.param({"provider_id": "openai", "model_count": 42}, 0, "42", id="refreshed"),
+        pytest.param(
+            {
                 "provider_id": "openai",
                 "errors": [{"connection_id": "openai:api-key", "error": "discovery-sentinel"}],
-            }
-        )
-        return httpx.Response(200, json={"ok": True, "result": result})
-
-    monkeypatch.setattr(provider_management.httpx, "post", post)
-    result = provider_management.provider_set_key(
-        make_instance(tmp_path), "openai", "secret-sentinel", refresh_models=True
+            },
+            1,
+            "discovery-sentinel",
+            id="discovery-failed-after-save",
+        ),
+    ],
+)
+def test_provider_key_set_can_refresh_the_model_catalog(
+    rpc: FakeRpc, run_cli: RunCli, refresh: dict[str, Any], code: int, shown: str
+) -> None:
+    rpc.reply(
+        "provider.set_key", {"connection_id": "openai:api-key", "credential_key": "OPENAI_API_KEY"}
     )
-    assert not result.ok
-    assert [call["method"] for call in calls] == ["provider.set_key", "model.refresh_db"]
-    assert "OPENAI_API_KEY" in result.message
-    assert "discovery-sentinel" in result.message
-    assert "secret-sentinel" not in result.message
+    rpc.reply("model.refresh_db", refresh)
+
+    exit_code, out, err = run_cli(
+        "provider", "key", "set", "openai", "secret-sentinel", "--refresh-models"
+    )
+
+    assert exit_code == code
+    assert rpc.calls == [
+        ("provider.set_key", {"provider_id": "openai", "value": "secret-sentinel"}),
+        ("model.refresh_db", {"provider_id": "openai"}),
+    ]
+    assert "set openai:api-key credential OPENAI_API_KEY (account: default)" in out
+    assert shown in out
+    assert "secret-sentinel" not in out + err
+
+
+@pytest.mark.parametrize(
+    ("options", "params", "result", "expected"),
+    [
+        pytest.param(
+            ("--connection", "openrouter:api-key"),
+            {"provider_id": "openrouter", "connection_id": "openrouter:api-key"},
+            KEY_SAVED | {"removed": True, "configured": False},
+            ["removed openrouter:api-key credential OPENROUTER_API_KEY (account: default)"],
+            id="removed",
+        ),
+        pytest.param(
+            ("--account", "work"),
+            {"provider_id": "openrouter", "account": "work"},
+            KEY_SAVED_FOR_WORK | {"removed": True, "configured": False},
+            ["removed openrouter:api-key credential OPENROUTER_API_KEY__WORK (account: work)"],
+            id="named-account",
+        ),
+        pytest.param(
+            (),
+            {"provider_id": "openrouter"},
+            KEY_SAVED | {"removed": False, "configured": True},
+            [
+                "no stored credential OPENROUTER_API_KEY for openrouter:api-key (account: default)",
+                "still configured from the process environment; "
+                "unset the variable there to fully disable the connection",
+            ],
+            id="process-environment-remains",
+        ),
+    ],
+)
+def test_provider_key_unset_reports_what_remains_configured(
+    rpc: FakeRpc,
+    run_cli: RunCli,
+    options: tuple[str, ...],
+    params: dict[str, Any],
+    result: dict[str, Any],
+    expected: list[str],
+) -> None:
+    rpc.reply("provider.unset_key", result)
+
+    code, out, _err = run_cli("provider", "key", "unset", "openrouter", *options)
+
+    assert code == 0
+    assert rpc.calls == [("provider.unset_key", params)]
+    assert out.splitlines() == expected
+
+
+@pytest.mark.parametrize(
+    ("command", "method"),
+    [
+        pytest.param(("connect",), "provider.connect", id="connect"),
+        pytest.param(("connection", "status"), "provider.connection_status", id="status"),
+        pytest.param(("disconnect",), "provider.disconnect", id="disconnect"),
+    ],
+)
+def test_oauth_commands_select_the_only_oauth_connection(
+    rpc: FakeRpc, run_cli: RunCli, command: tuple[str, ...], method: str
+) -> None:
+    rpc.reply("connection.list", {"connections": OAUTH_CONNECTIONS})
+    rpc.reply(method, DEVICE_FLOW | {"account": "work", "connected": True})
+
+    code, _out, _err = run_cli("providers", *command, "openai", "--account", "work")
+
+    assert code == 0
+    assert rpc.calls == [
+        ("connection.list", {}),
+        (
+            method,
+            {"provider_id": "openai", "connection_id": "openai:subscription", "account": "work"},
+        ),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("types", "shown"),
+    [
+        pytest.param([], ("example",), id="unknown-provider"),
+        pytest.param(["api_key"], ("no OAuth Connection", "vbot provider key set"), id="no-oauth"),
+        pytest.param(
+            ["oauth", "oauth"],
+            ("--connection", "example:connection-0", "example:connection-1"),
+            id="several-oauth",
+        ),
+    ],
+)
+def test_oauth_connect_never_starts_without_exactly_one_oauth_connection(
+    rpc: FakeRpc, run_cli: RunCli, types: list[str], shown: tuple[str, ...]
+) -> None:
+    connections = [
+        {"id": f"example:connection-{index}", "provider_id": "example", "type": kind}
+        for index, kind in enumerate(types)
+    ]
+    rpc.reply("connection.list", {"connections": connections})
+
+    code, out, _err = run_cli("provider", "connect", "example")
+
+    assert code == 1
+    assert rpc.methods == ["connection.list"]
+    for text in shown:
+        assert text in out
+
+
+@pytest.mark.parametrize(
+    ("options", "account", "follow_up"),
+    [
+        pytest.param(
+            (),
+            "default",
+            "vbot provider connection status openai --connection openai:subscription "
+            "(keep the same target options)",
+            id="default-account",
+        ),
+        pytest.param(
+            ("--account", "work"),
+            "work",
+            "vbot provider connection status openai --connection openai:subscription "
+            "--account work (keep the same target options)",
+            id="named-account",
+        ),
+    ],
+)
+def test_oauth_connect_prints_the_device_flow_instructions(
+    rpc: FakeRpc, run_cli: RunCli, options: tuple[str, ...], account: str, follow_up: str
+) -> None:
+    rpc.reply("provider.connect", DEVICE_FLOW | {"account": account})
+
+    code, out, err = run_cli(
+        "provider", "connect", "openai", "--connection", "openai:subscription", *options
+    )
+
+    assert code == 0
+    params = {"provider_id": "openai", "connection_id": "openai:subscription"}
+    assert rpc.calls == [("provider.connect", params | ({"account": account} if options else {}))]
+    lines = out.splitlines()
+    assert lines[:4] == [
+        f"device flow started for openai:subscription (account: {account})",
+        "user_code: ABCD-1234",
+        "verification_uri: https://example.com/device",
+        "expires_in_seconds: 900",
+    ]
+    assert lines[4].endswith(follow_up)
+    assert "Login started; browser authorization is still required" in err
+
+
+@pytest.mark.parametrize("account", ["default", "work"])
+def test_oauth_disconnect_removes_the_account_token(
+    rpc: FakeRpc, run_cli: RunCli, account: str
+) -> None:
+    options = () if account == "default" else ("--account", account)
+    rpc.reply("provider.disconnect", {"account": account, "status": "disconnected"})
+
+    code, out, _err = run_cli(
+        "provider", "disconnect", "openai", "--connection", "openai:subscription", *options
+    )
+
+    assert code == 0
+    params = {"provider_id": "openai", "connection_id": "openai:subscription"}
+    assert rpc.calls == [
+        ("provider.disconnect", params | ({"account": account} if options else {}))
+    ]
+    assert out.splitlines() == [f"disconnected openai:subscription (account: {account})"]
+
+
+@pytest.mark.parametrize(
+    ("options", "state", "expected", "attention"),
+    [
+        pytest.param(
+            (),
+            {"connected": True, "flow_active": False, "account": "default"},
+            "openai:subscription: account=default connected=yes flow_active=no",
+            None,
+            id="connected",
+        ),
+        pytest.param(
+            ("--account", "work"),
+            {"connected": False, "flow_active": True, "account": "work"},
+            "openai:subscription: account=work connected=no flow_active=yes",
+            "Account is not connected; inspect the device-flow state",
+            id="flow-pending",
+        ),
+    ],
+)
+def test_oauth_connection_status_reports_the_account_state(
+    rpc: FakeRpc,
+    run_cli: RunCli,
+    options: tuple[str, ...],
+    state: dict[str, Any],
+    expected: str,
+    attention: str | None,
+) -> None:
+    rpc.reply("provider.connection_status", state)
+
+    code, out, err = run_cli(
+        "provider",
+        "connection",
+        "status",
+        "openai",
+        "--connection",
+        "openai:subscription",
+        *options,
+    )
+
+    assert code == 0
+    params = {"provider_id": "openai", "connection_id": "openai:subscription"}
+    account = {"account": state["account"]} if options else {}
+    assert rpc.calls == [("provider.connection_status", params | account)]
+    assert out.splitlines() == [expected]
+    if attention is None:
+        assert "not connected" not in err
+    else:
+        assert attention in err
+
+
+def test_oauth_commands_surface_server_errors(rpc: FakeRpc, run_cli: RunCli) -> None:
+    rpc.fail(
+        "provider.connect",
+        "oauth_not_supported",
+        "provider connection 'openai:api-key' is not an OAuth connection",
+        status=200,
+    )
+
+    code, out, err = run_cli("provider", "connect", "openai", "--connection", "openai:api-key")
+
+    assert code == 1
+    assert out.startswith("oauth_not_supported:")
+    assert "openai:api-key" in out
+    assert "rpc_method: provider.connect" in err
+
+
+@pytest.mark.parametrize(
+    ("options", "stdin", "provider", "api_key", "saved", "expected"),
+    [
+        pytest.param(
+            ("--api-key-stdin", "--models-endpoint", "/models", "--model", "chat-model"),
+            "secret-sentinel\n",
+            {
+                "auth": "api_key",
+                "models_endpoint": "/models",
+                "models": {"chat-model": {"name": "chat-model", "capabilities": {}}},
+            },
+            {"api_key": "secret-sentinel"},
+            {"id": "local-ai", "model_count": 1, "usable": True},
+            "saved Custom Provider local-ai (1 models, usable)",
+            id="api-key-from-stdin",
+        ),
+        pytest.param(
+            ("--auth", "none", "--model", "chat-model", "--model", "image-model"),
+            None,
+            {
+                "auth": "none",
+                "models": {
+                    "chat-model": {"name": "chat-model", "capabilities": {}},
+                    "image-model": {"name": "image-model", "capabilities": {}},
+                },
+            },
+            {},
+            {"id": "local-ai", "usable": False},
+            "saved Custom Provider local-ai (2 models, not usable)",
+            id="keyless",
+        ),
+    ],
+)
+def test_custom_provider_save_sends_the_definition_and_the_key_once(
+    rpc: FakeRpc,
+    run_cli: RunCli,
+    monkeypatch: pytest.MonkeyPatch,
+    options: tuple[str, ...],
+    stdin: str | None,
+    provider: dict[str, Any],
+    api_key: dict[str, Any],
+    saved: dict[str, Any],
+    expected: str,
+) -> None:
+    if stdin is not None:
+        monkeypatch.setattr(sys, "stdin", io.StringIO(stdin))
+    rpc.reply("provider.custom_save", {"provider": saved})
+
+    code, out, err = run_cli(
+        "provider", "custom", "save", "local-ai",
+        "--name", "Local AI",
+        "--base-url", "http://127.0.0.1:8080/v1",
+        *options,
+    )  # fmt: skip
+
+    assert code == 0
+    definition = {
+        "id": "local-ai",
+        "name": "Local AI",
+        "adapter": "openai_compatible",
+        "base_url": "http://127.0.0.1:8080/v1",
+    }
+    assert rpc.calls == [("provider.custom_save", {"provider": definition | provider} | api_key)]
+    assert out.splitlines() == [expected]
+    assert "secret-sentinel" not in out + err
+
+
+@pytest.mark.parametrize(
+    ("providers", "expected"),
+    [
+        pytest.param(
+            [
+                {
+                    "id": "local-ai",
+                    "name": "Local AI",
+                    "auth": "none",
+                    "base_url": "http://127.0.0.1:8080/v1",
+                    "model_count": 2,
+                    "credentials_configured": True,
+                }
+            ],
+            [
+                "Custom Providers:",
+                "- id: local-ai  name: Local AI  auth: none  configured: yes  models: 2  "
+                "endpoint: http://127.0.0.1:8080/v1",
+            ],
+            id="configured",
+        ),
+        pytest.param([], ["no Custom Providers configured"], id="empty"),
+    ],
+)
+def test_custom_provider_list_shows_each_definition(
+    rpc: FakeRpc, run_cli: RunCli, providers: list[dict[str, Any]], expected: list[str]
+) -> None:
+    rpc.reply("provider.custom_list", {"providers": providers})
+
+    code, out, _err = run_cli("provider", "custom", "list")
+
+    assert code == 0
+    assert rpc.calls == [("provider.custom_list", {})]
+    assert out.splitlines() == expected
+
+
+def test_custom_provider_delete(rpc: FakeRpc, run_cli: RunCli) -> None:
+    rpc.reply("provider.custom_delete", {"deleted": True})
+
+    code, out, _err = run_cli("provider", "custom", "delete", "local-ai")
+
+    assert code == 0
+    assert rpc.calls == [("provider.custom_delete", {"provider_id": "local-ai"})]
+    assert out.splitlines() == ["deleted Custom Provider local-ai"]

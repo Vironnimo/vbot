@@ -1,146 +1,185 @@
-"""Dynamic Extension CLI flags retain exact argument and credential boundaries."""
+"""Dynamic Extension operations keep exact argument, target and credential boundaries."""
+
+from __future__ import annotations
 
 import io
 import json
-from types import SimpleNamespace
+import sys
+from typing import Any
 
 import pytest
 
-from cli import extensions_management
-from cli.extensions_management import _operation_arguments
-from cli.parser import parse_args
+from cli import main as cli_main
+from cli.server_management import ServerInstance
+from tests.cli.cli_test_support import FakeRpc, RunCli
 
 
-def test_dynamic_arguments_and_target_survive_the_cli_parser():
-    args = parse_args(
-        [
-            "extensions",
-            "mcp",
-            "invoke",
-            "blender",
-            "--agent",
-            "alice@project",
-            "--operation",
-            "tools/call",
-            "--arguments",
-            '{"name":"a b"}',
-            "--port",
-            "8422",
-        ]
-    )
-    assert args.port == 8422
-    assert args.rest == [
-        "invoke",
-        "blender",
-        "--agent",
-        "alice@project",
-        "--operation",
-        "tools/call",
-        "--arguments",
-        '{"name":"a b"}',
-    ]
-
-
-def test_operation_schema_parses_string_enums_without_json_quotes():
-    result = _operation_arguments(
-        {"parameters": {"properties": {"operation": {"enum": ["tools/call"]}}}},
-        ["--operation", "tools/call"],
-    )
-    assert result == {"operation": "tools/call"}
-
-
-def test_secret_operation_requires_standard_input():
-    with pytest.raises(ValueError):
-        _operation_arguments({"secret": True, "parameters": {}}, ["--value", "do-not-print"])
-
-
-def test_standard_input_decodes_utf8_without_echo(monkeypatch):
-    monkeypatch.setattr("cli.extensions_management.sys.stdin", io.StringIO('{"value":"ä-secret"}'))
-    assert _operation_arguments({"secret": True, "parameters": {}}, ["--stdin"]) == {
-        "value": "ä-secret"
-    }
-
-
-def test_dynamic_help_is_forwarded_to_the_extension():
-    args = parse_args(["extensions", "mcp", "save", "--help"])
-    assert args.rest == ["save", "--help"]
-
-
-def test_catalog_is_bounded_and_exact_help_keeps_the_complete_schema(monkeypatch):
-    operation = {
-        "name": "save",
-        "description": "Replace the saved connection.",
+def _operation(name: str, properties: dict[str, Any], **fields: Any) -> dict[str, Any]:
+    return {
+        "name": name,
+        "description": f"Run {name}.",
         "secret": False,
-        "parameters": {"type": "object", "properties": {"connection": {"type": "object"}}},
-    }
-    calls = []
-
-    def rpc(instance, method, params):
-        calls.append(params)
-        return SimpleNamespace(ok=True, data={"operations": [operation]})
-
-    monkeypatch.setattr(extensions_management, "_rpc_call", rpc)
-    catalog = extensions_management.extensions_operation(None, "mcp", ["operations"])
-    detail = extensions_management.extensions_operation(None, "mcp", ["save", "--help"])
-    assert catalog.ok and detail.ok
-    summary = json.loads(catalog.message)
-    assert "parameters" not in summary["operations"][0]
-    assert summary["operations"][0]["name"] == "save"
-    assert json.loads(detail.message) == operation
-    assert all(call["operation"] == "describe" for call in calls)
+        "parameters": {"type": "object", "properties": properties},
+    } | fields
 
 
-def test_unknown_operation_suggests_only_catalog_names_without_invoking(monkeypatch):
-    calls = []
+def _operation_calls(rpc: FakeRpc) -> list[str]:
+    return [params["operation"] for method, params in rpc.calls if method == "extensions.operation"]
 
-    def rpc(instance, method, params):
-        calls.append(params)
-        return SimpleNamespace(
-            ok=True, data={"operations": [{"name": "inspect"}, {"name": "invoke"}]}
-        )
 
-    monkeypatch.setattr(extensions_management, "_rpc_call", rpc)
-    result = extensions_management.extensions_operation(None, "mcp", ["insepct"])
-    assert not result.ok
-    assert json.loads(result.message)["suggestions"] == ["inspect"]
-    assert [call["operation"] for call in calls] == ["describe"]
+def test_dynamic_arguments_reach_the_operation_while_target_options_select_the_server(
+    rpc: FakeRpc, instance: ServerInstance, capsys: pytest.CaptureFixture[str]
+) -> None:
+    invoke = _operation(
+        "invoke",
+        {
+            "id": {"type": "string"},
+            "agent": {"type": "string"},
+            "operation": {"enum": ["tools/call", "tools/list"]},
+            "arguments": {"type": "object"},
+        },
+    )
+    rpc.reply("extensions.operation", {"operations": [invoke]})
+    rpc.reply("extensions.operation", {"state": "completed"})
+    targets: list[dict[str, Any]] = []
+
+    def resolve(**target: Any) -> ServerInstance:
+        targets.append(target)
+        return instance
+
+    code = cli_main.run(
+        [
+            "extensions", "mcp", "invoke", "blender",
+            "--agent", "alice@project",
+            "--operation", "tools/call",
+            "--arguments", '{"name":"a b"}',
+            "--port", "8422",
+        ],
+        resolve=resolve,
+    )  # fmt: skip
+
+    assert code == 0
+    assert [target["port"] for target in targets] == [8422]
+    assert rpc.calls == [
+        ("extensions.operation", {"name": "mcp", "operation": "describe"}),
+        (
+            "extensions.operation",
+            {
+                "name": "mcp",
+                "operation": "invoke",
+                # A string enum is taken verbatim, without JSON quotes.
+                "arguments": {
+                    "id": "blender",
+                    "agent": "alice@project",
+                    "operation": "tools/call",
+                    "arguments": {"name": "a b"},
+                },
+            },
+        ),
+    ]
+    assert json.loads(capsys.readouterr().out) == {"state": "completed"}
+
+
+def test_explicit_run_keeps_target_named_operation_fields_opaque(
+    rpc: FakeRpc, run_cli: RunCli
+) -> None:
+    rpc.reply(
+        "extensions.operation", {"operations": [_operation("export", {"port": {"type": "string"}})]}
+    )
+    rpc.reply("extensions.operation", {"state": "completed"})
+
+    code, _out, _err = run_cli("extensions", "run", "demo", "export", "--port", "payload-port")
+
+    assert code == 0
+    assert rpc.calls[-1] == (
+        "extensions.operation",
+        {"name": "demo", "operation": "export", "arguments": {"port": "payload-port"}},
+    )
+
+
+def test_catalog_is_bounded_and_operation_help_keeps_the_complete_schema(
+    rpc: FakeRpc, run_cli: RunCli
+) -> None:
+    save = _operation(
+        "save", {"connection": {"type": "object"}}, description="Replace the saved connection."
+    )
+    rpc.reply("extensions.operation", {"operations": [save]})
+
+    catalog = run_cli("extensions", "mcp", "operations")
+    detail = run_cli("extensions", "mcp", "save", "--help")
+
+    assert (catalog[0], detail[0]) == (0, 0)
+    summary = json.loads(catalog[1])
+    assert summary["operations"] == [
+        {"name": "save", "description": "Replace the saved connection.", "secret": False}
+    ]
+    assert json.loads(detail[1]) == save
+    assert _operation_calls(rpc) == ["describe", "describe"]
 
 
 @pytest.mark.parametrize(
-    "tokens", [["--requset-id", "secret-sentinel"], ["--request-id=secret-sentinel"]]
+    ("tokens", "shown"),
+    [
+        pytest.param(("insepct",), '"suggestions": ["inspect"]', id="unknown-operation"),
+        pytest.param(("configure", "--mode", "acitve"), "active", id="invalid-enum-value"),
+        pytest.param(("inspect", "--value", "do-not-print"), "--stdin", id="secret-in-arguments"),
+    ],
 )
-def test_unknown_operation_argument_suggests_schema_flag_without_echo(tokens):
-    operation = {"parameters": {"properties": {"request_id": {"type": "string"}}}}
-    with pytest.raises(ValueError) as error:
-        _operation_arguments(operation, tokens)
-    assert "--request-id" in str(error.value)
-    assert "secret-sentinel" not in str(error.value)
+def test_invalid_operation_input_never_invokes_the_extension(
+    rpc: FakeRpc, run_cli: RunCli, tokens: tuple[str, ...], shown: str
+) -> None:
+    rpc.reply(
+        "extensions.operation",
+        {
+            "operations": [
+                _operation("inspect", {"value": {"type": "string"}}, secret=True),
+                _operation("invoke", {}),
+                _operation("configure", {"mode": {"enum": ["active", "paused"]}}),
+            ]
+        },
+    )
+
+    code, out, err = run_cli("extensions", "demo", *tokens)
+
+    assert code == 1
+    assert _operation_calls(rpc) == ["describe"]
+    assert shown in out
+    assert "do-not-print" not in out + err
 
 
-def test_dynamic_operation_target_named_fields_remain_opaque():
-    args = parse_args(["extensions", "run", "demo", "export", "--port", "payload-port"])
-    assert args.rest == ["export", "--port", "payload-port"]
+@pytest.mark.parametrize(
+    "tokens",
+    [
+        pytest.param(("--requset-id", "secret-sentinel"), id="separate-value"),
+        pytest.param(("--request-id=secret-sentinel",), id="inline-value"),
+    ],
+)
+def test_unknown_argument_suggests_the_schema_flag_without_echoing_the_value(
+    rpc: FakeRpc, run_cli: RunCli, tokens: tuple[str, ...]
+) -> None:
+    rpc.reply(
+        "extensions.operation",
+        {"operations": [_operation("cancel", {"request_id": {"type": "string"}})]},
+    )
+
+    code, out, err = run_cli("extensions", "demo", "cancel", *tokens)
+
+    assert code == 1
+    assert _operation_calls(rpc) == ["describe"]
+    assert "--request-id" in out
+    assert "secret-sentinel" not in out + err
 
 
-def test_bad_enum_does_not_invoke_extension(monkeypatch):
-    calls = []
+def test_secret_operation_reads_utf8_json_from_stdin_without_echo(
+    rpc: FakeRpc, run_cli: RunCli, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sys, "stdin", io.StringIO('{"value":"ä-secret"}'))
+    login = _operation("login", {"value": {"type": "string"}}, secret=True)
+    rpc.reply("extensions.operation", {"operations": [login]})
+    rpc.reply("extensions.operation", {"state": "completed"})
 
-    def rpc(instance, method, params):
-        calls.append(params)
-        return SimpleNamespace(
-            ok=True,
-            data={
-                "operations": [
-                    {
-                        "name": "set",
-                        "parameters": {"properties": {"mode": {"enum": ["active", "paused"]}}},
-                    }
-                ]
-            },
-        )
+    code, out, err = run_cli("extensions", "mcp", "login", "--stdin")
 
-    monkeypatch.setattr(extensions_management, "_rpc_call", rpc)
-    result = extensions_management.extensions_operation(None, "demo", ["set", "--mode", "acitve"])
-    assert not result.ok
-    assert "active" in result.message  # Allowed schema value.
-    assert [call["operation"] for call in calls] == ["describe"]
+    assert code == 0
+    assert rpc.calls[-1][1]["arguments"] == {"value": "ä-secret"}
+    assert "ä-secret" not in out + err

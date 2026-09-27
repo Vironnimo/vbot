@@ -1,28 +1,12 @@
-"""Tests for vBot CLI agent management commands."""
+"""Tests for the ``vbot agent`` commands: option mapping, RPC requests and output."""
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
-import httpx
 import pytest
 
-from cli import agent_management
-from cli import main as cli_main
-from cli.server_management import ServerInstance
-from core.utils.logging import resolve_daily_log_path
-
-
-def make_instance(tmp_path: Path) -> ServerInstance:
-    data_dir = tmp_path / "data"
-    return ServerInstance(
-        host="127.0.0.1",
-        port=8420,
-        data_dir=data_dir,
-        url="http://127.0.0.1:8420",
-        log_path=resolve_daily_log_path(data_dir),
-    )
+from tests.cli.cli_test_support import FakeRpc, RunCli
 
 
 def agent_payload(agent_id: str = "coder") -> dict[str, Any]:
@@ -46,62 +30,29 @@ def agent_payload(agent_id: str = "coder") -> dict[str, Any]:
     }
 
 
-def test_agent_list_posts_rpc_and_formats_rows(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    instance = make_instance(tmp_path)
+def test_agent_list_prints_one_row_per_agent(rpc: FakeRpc, run_cli: RunCli) -> None:
+    rpc.reply("agent.list", {"agents": [agent_payload("writer"), agent_payload()]})
 
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        assert url == f"{instance.url}/api/rpc"
-        assert json == {"method": "agent.list", "params": {}}
-        assert timeout == 10.0
-        return httpx.Response(
-            200,
-            json={
-                "ok": True,
-                "result": {
-                    "agents": [agent_payload("writer"), agent_payload()],
-                    "order_revision": 3,
-                },
-            },
-        )
+    code, out, _err = run_cli("agent", "list")
 
-    monkeypatch.setattr(agent_management.httpx, "post", fake_post)
-
-    result = agent_management.agent_list(instance)
-
-    assert result.ok is True
-    assert result.message.splitlines()[1:] == [
-        "- id=writer name=Coder model=openai/gpt-5.2 "
-        "fallback_models=anthropic/claude-sonnet-4 temperature=0.4 "
-        "thinking_effort=high current_session_id=session-one context_window=256000",
-        "- id=coder name=Coder model=openai/gpt-5.2 "
-        "fallback_models=anthropic/claude-sonnet-4 temperature=0.4 "
-        "thinking_effort=high current_session_id=session-one context_window=256000",
-    ]
+    assert code == 0
+    assert rpc.calls == [("agent.list", {})]
+    row = (
+        "name=Coder model=openai/gpt-5.2 fallback_models=anthropic/claude-sonnet-4 "
+        "temperature=0.4 thinking_effort=high current_session_id=session-one "
+        "context_window=256000"
+    )
+    assert out.splitlines()[1:] == [f"- id=writer {row}", f"- id=coder {row}"]
 
 
-def test_agent_show_posts_rpc_and_formats_detail(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    instance = make_instance(tmp_path)
+def test_agent_show_prints_every_agent_field(rpc: FakeRpc, run_cli: RunCli) -> None:
+    rpc.reply("agent.get", agent_payload())
 
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        assert json == {"method": "agent.get", "params": {"id": "coder"}}
-        return httpx.Response(200, json={"ok": True, "result": agent_payload()})
+    code, out, _err = run_cli("agent", "show", "coder")
 
-    monkeypatch.setattr(agent_management.httpx, "post", fake_post)
-
-    result = agent_management.agent_show(instance, "coder")
-
-    assert result.ok is True
-    assert result.message.splitlines()[1:] == [
+    assert code == 0
+    assert rpc.calls == [("agent.get", {"id": "coder"})]
+    assert out.splitlines()[1:] == [
         "id: coder",
         "name: Coder",
         "model: openai/gpt-5.2",
@@ -121,58 +72,122 @@ def test_agent_show_posts_rpc_and_formats_detail(
     ]
 
 
-def test_agent_create_posts_mutable_fields(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    instance = make_instance(tmp_path)
+def test_agent_create_sends_the_given_fields(rpc: FakeRpc, run_cli: RunCli) -> None:
+    rpc.reply("agent.create", {"id": "writer"})
 
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        assert json == {
-            "method": "agent.create",
-            "params": {
+    code, out, _err = run_cli(
+        "agent", "create", "writer", "Writer",
+        "--model", "openai/gpt-5.2",
+        "--tool-access-mode", "selected",
+        "--tool-allow", "read_file",
+        "--allowed-skills", "debugging",
+    )  # fmt: skip
+
+    assert code == 0
+    assert rpc.calls == [
+        (
+            "agent.create",
+            {
                 "id": "writer",
                 "name": "Writer",
                 "model": "openai/gpt-5.2",
                 "tool_access": {"mode": "selected", "allowed": ["read_file"]},
                 "allowed_skills": ["debugging"],
             },
-        }
-        return httpx.Response(200, json={"ok": True, "result": {"id": "writer"}})
-
-    monkeypatch.setattr(agent_management.httpx, "post", fake_post)
-
-    result = agent_management.agent_create(
-        instance,
-        "writer",
-        "Writer",
-        {
-            "model": "openai/gpt-5.2",
-            "tool_access": {"mode": "selected", "allowed": ["read_file"]},
-            "allowed_skills": ["debugging"],
-        },
-    )
-
-    assert result.ok is True
-    assert result.instance is instance
-    assert "writer" in result.message
+        )
+    ]
+    assert "writer" in out
 
 
-def test_agent_update_posts_null_and_lists(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+LIBRARIAN = {
+    "id": "librarian",
+    "name": "Librarian",
+    "fallback_models": [],
+    "workspace": "C:/agents/librarian/workspace",
+    "memory_prompt_mode": "full",
+    "allowed_skills": [],
+    "current_session_id": "session-1",
+    "created_at": "now",
+    "updated_at": "now",
+}
+MODEL_HINTS = ("vbot model list --task chat", "vbot agent update librarian --model <model-id>")
+
+
+@pytest.mark.parametrize(
+    ("saved", "shown", "hidden"),
+    [
+        pytest.param(
+            {
+                "model": "openai/gpt-5",
+                "default_workspace": "C:/agents/librarian/workspace",
+                "root_project_id": "second-brain",
+                "temperature": 0.2,
+                "thinking_effort": "high",
+                "custom_system_prompt_enabled": True,
+                "tool_access": {"mode": "selected", "allowed": ["read"]},
+                "tools": {"subagent": {"allowed_agents": []}},
+                "compaction_policy": None,
+                "effective_compaction_policy": {"enabled": True},
+                "effective": {"model": {"value": "openai/gpt-5", "source": "agent"}},
+                "context_window": 128000,
+            },
+            (
+                "workspace: C:/agents/librarian/workspace",
+                "project: second-brain",
+                'effective_sources: {"model":"agent"}',
+            ),
+            MODEL_HINTS[:1],
+            id="saved-state",
+        ),
+        pytest.param(
+            {
+                "model": "",
+                "root_project_id": None,
+                "temperature": None,
+                "thinking_effort": None,
+                "custom_system_prompt_enabled": False,
+                "tool_access": {"mode": "none"},
+                "context_window": None,
+            },
+            MODEL_HINTS,
+            (),
+            id="no-effective-model",
+        ),
+    ],
+)
+def test_agent_create_confirms_the_saved_agent(
+    rpc: FakeRpc,
+    run_cli: RunCli,
+    saved: dict[str, Any],
+    shown: tuple[str, ...],
+    hidden: tuple[str, ...],
 ) -> None:
-    instance = make_instance(tmp_path)
+    rpc.reply("agent.create", LIBRARIAN | saved)
 
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        assert json == {
-            "method": "agent.update",
-            "params": {
-                "id": "coder",
+    code, out, _err = run_cli("agent", "create", "librarian", "Librarian")
+
+    assert code == 0
+    assert rpc.calls == [("agent.create", {"id": "librarian", "name": "Librarian"})]
+    for text in shown:
+        assert text in out
+    for text in hidden:
+        assert text not in out
+
+
+@pytest.mark.parametrize(
+    ("options", "changes"),
+    [
+        pytest.param(
+            (
+                "--clear-temperature",
+                "--thinking-effort", "none",
+                "--tool-access-mode", "none",
+                "--allowed-skills", "vbot-cli",
+                "--workspace", "C:/agents/coder",
+                "--copy-workspace-files",
+                "--project", "vbot",
+            ),
+            {
                 "temperature": None,
                 "thinking_effort": "none",
                 "tool_access": {"mode": "none"},
@@ -181,334 +196,152 @@ def test_agent_update_posts_null_and_lists(
                 "copy_workspace_identity_files": True,
                 "root_project_id": "vbot",
             },
-        }
-        return httpx.Response(200, json={"ok": True, "result": {"id": "coder"}})
+            id="values-nulls-and-lists",
+        ),
+        pytest.param(
+            (
+                "--clear-model",
+                "--clear-fallback-models",
+                "--subagent-allow", "reviewer", "librarian",
+                "--compaction-policy", '{"enabled":false}',
+            ),
+            {
+                "model": "",
+                "fallback_models": [],
+                "tools": {"subagent": {"allowed_agents": ["reviewer", "librarian"]}},
+                "compaction_policy": {"enabled": False},
+            },
+            id="clears-delegation-and-policy",
+        ),
+    ],
+)  # fmt: skip
+def test_agent_update_sends_only_the_given_changes(
+    rpc: FakeRpc, run_cli: RunCli, options: tuple[str, ...], changes: dict[str, Any]
+) -> None:
+    rpc.reply("agent.update", {"id": "coder"})
 
-    monkeypatch.setattr(agent_management.httpx, "post", fake_post)
+    code, out, _err = run_cli("agent", "update", "coder", *options)
 
-    result = agent_management.agent_update(
-        instance,
-        "coder",
+    assert code == 0
+    assert rpc.calls == [("agent.update", {"id": "coder", **changes})]
+    assert "coder" in out
+
+
+@pytest.mark.parametrize(
+    ("options", "named_options"),
+    [
+        pytest.param(
+            (),
+            (
+                "--name",
+                "--model",
+                "--fallback-models",
+                "--temperature",
+                "--thinking-effort",
+                "--memory-prompt-mode",
+                "--tool-access-mode",
+                "--tool-allow",
+                "--tool-deny",
+                "--allowed-skills",
+                "--workspace",
+                "--project",
+                "--current-session-id",
+            ),
+            id="no-changes",
+        ),
+        pytest.param(
+            ("--copy-workspace-files",),
+            ("--copy-workspace-files", "--workspace", "--default-workspace"),
+            id="copy-without-workspace-target",
+        ),
+    ],
+)
+def test_agent_update_rejects_incomplete_changes_before_any_request(
+    rpc: FakeRpc, run_cli: RunCli, options: tuple[str, ...], named_options: tuple[str, ...]
+) -> None:
+    code, out, _err = run_cli("agent", "update", "coder", *options)
+
+    assert code == 1
+    assert rpc.calls == []
+    for option in named_options:
+        assert option in out
+
+
+def test_agent_delete_deletes_the_agent(rpc: FakeRpc, run_cli: RunCli) -> None:
+    rpc.reply("agent.delete", {"agent_id": "writer"})
+
+    code, out, _err = run_cli("agent", "delete", "writer")
+
+    assert code == 0
+    assert rpc.calls == [("agent.delete", {"id": "writer"})]
+    assert "writer" in out
+
+
+def test_agent_rename_renames_the_agent(rpc: FakeRpc, run_cli: RunCli) -> None:
+    rpc.reply("agent.rename", {"id": "researcher"})
+
+    code, out, _err = run_cli("agent", "rename", "writer", "researcher")
+
+    assert code == 0
+    assert rpc.calls == [("agent.rename", {"id": "writer", "new_id": "researcher"})]
+    assert "writer" in out and "researcher" in out
+
+
+def test_agent_rename_to_the_same_id_sends_nothing(rpc: FakeRpc, run_cli: RunCli) -> None:
+    code, out, _err = run_cli("agent", "rename", "writer", "writer")
+
+    assert code == 1
+    assert out.strip()
+    assert rpc.calls == []
+
+
+def test_agent_reorder_reads_the_revision_and_appends_unlisted_agents(
+    rpc: FakeRpc, run_cli: RunCli
+) -> None:
+    rpc.reply(
+        "agent.list",
         {
-            "temperature": None,
-            "thinking_effort": "none",
-            "tool_access": {"mode": "none"},
-            "allowed_skills": ["vbot-cli"],
-            "workspace": "C:/agents/coder",
-            "copy_workspace_identity_files": True,
-            "root_project_id": "vbot",
+            "agents": [{"id": "assistant"}, {"id": "coder"}, {"id": "researcher"}],
+            "order_revision": 4,
         },
     )
+    rpc.reply("agent.reorder", {"agents": [], "order_revision": 5})
 
-    assert result.ok is True
-    assert result.instance is instance
-    assert "coder" in result.message
+    code, out, _err = run_cli("agent", "reorder", "researcher", "assistant")
+
+    assert code == 0
+    assert rpc.params("agent.reorder") == {
+        "agent_ids": ["researcher", "assistant", "coder"],
+        "expected_revision": 4,
+    }
+    assert out.startswith("agent roster reordered (revision 5): ")
+    assert out.rstrip().endswith("researcher, assistant, coder")
 
 
-def test_agent_update_rejects_empty_changes(tmp_path: Path) -> None:
-    instance = make_instance(tmp_path)
+def test_agent_reorder_rejects_duplicate_ids_before_any_request(
+    rpc: FakeRpc, run_cli: RunCli
+) -> None:
+    code, out, _err = run_cli("agent", "reorder", "assistant", "assistant")
 
-    result = agent_management.agent_update(instance, "coder", {})
+    assert code == 1
+    assert "duplicate" in out
+    assert rpc.calls == []
 
-    assert result.ok is False
-    assert result.instance is instance
-    for option in (
-        "--name",
-        "--model",
-        "--fallback-models",
-        "--temperature",
-        "--thinking-effort",
-        "--memory-prompt-mode",
-        "--tool-access-mode",
-        "--tool-allow",
-        "--tool-deny",
-        "--allowed-skills",
-        "--workspace",
-        "--project",
-        "--current-session-id",
+
+def test_agent_reorder_suggests_a_close_match_for_an_unknown_id(
+    rpc: FakeRpc, run_cli: RunCli
+) -> None:
+    rpc.reply(
+        "agent.list", {"agents": [{"id": "assistant"}, {"id": "researcher"}], "order_revision": 2}
+    )
+
+    code, out, _err = run_cli("agent", "reorder", "assistent")
+
+    assert code == 1
+    assert rpc.methods == ["agent.list"]
+    for text in (
+        "unknown agent id: assistent",
+        "did you mean: assistant",
+        "available agents: assistant, researcher",
     ):
-        assert option in result.message
-
-
-def test_agent_update_requires_workspace_target_when_copying_files(tmp_path: Path) -> None:
-    instance = make_instance(tmp_path)
-
-    result = agent_management.agent_update(
-        instance,
-        "coder",
-        {"copy_workspace_identity_files": True},
-    )
-
-    assert result.ok is False
-    assert result.instance is instance
-    assert "--copy-workspace-files" in result.message
-    assert "--workspace" in result.message
-    assert "--default-workspace" in result.message
-
-
-def test_agent_delete_posts_rpc(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    instance = make_instance(tmp_path)
-
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        assert json == {"method": "agent.delete", "params": {"id": "writer"}}
-        return httpx.Response(200, json={"ok": True, "result": {"agent_id": "writer"}})
-
-    monkeypatch.setattr(agent_management.httpx, "post", fake_post)
-
-    result = agent_management.agent_delete(instance, "writer")
-
-    assert result.ok is True
-    assert result.instance is instance
-    assert "writer" in result.message
-
-
-def test_agent_rename_posts_rpc(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    instance = make_instance(tmp_path)
-
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        assert json == {
-            "method": "agent.rename",
-            "params": {"id": "writer", "new_id": "researcher"},
-        }
-        return httpx.Response(200, json={"ok": True, "result": {"id": "researcher"}})
-
-    monkeypatch.setattr(agent_management.httpx, "post", fake_post)
-
-    result = agent_management.agent_rename(instance, "writer", "researcher")
-
-    assert result.ok is True
-    assert result.instance is instance
-    assert "writer" in result.message
-    assert "researcher" in result.message
-
-
-def test_agent_rename_rejects_same_id_without_rpc(tmp_path: Path) -> None:
-    instance = make_instance(tmp_path)
-
-    result = agent_management.agent_rename(instance, "writer", "writer")
-
-    assert result.ok is False
-    assert result.instance is instance
-    assert result.message.strip()
-
-
-def test_agent_update_maps_clear_delegation_and_policy_flags() -> None:
-    args = cli_main.parse_args(
-        [
-            "agent",
-            "update",
-            "coder",
-            "--clear-model",
-            "--clear-fallback-models",
-            "--subagent-allow",
-            "reviewer",
-            "librarian",
-            "--compaction-policy",
-            '{"enabled":false}',
-        ]
-    )
-
-    assert cli_main._agent_changes_from_args(args) == {
-        "model": "",
-        "fallback_models": [],
-        "tools": {"subagent": {"allowed_agents": ["reviewer", "librarian"]}},
-        "compaction_policy": {"enabled": False},
-    }
-
-
-def test_agent_create_full_response_confirms_saved_state(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    instance = make_instance(tmp_path)
-
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        return httpx.Response(
-            200,
-            json={
-                "ok": True,
-                "result": {
-                    "id": "librarian",
-                    "name": "Librarian",
-                    "model": "openai/gpt-5",
-                    "fallback_models": [],
-                    "workspace": "C:/agents/librarian/workspace",
-                    "default_workspace": "C:/agents/librarian/workspace",
-                    "root_project_id": "second-brain",
-                    "temperature": 0.2,
-                    "thinking_effort": "high",
-                    "memory_prompt_mode": "full",
-                    "custom_system_prompt_enabled": True,
-                    "tool_access": {"mode": "selected", "allowed": ["read"]},
-                    "allowed_skills": ["vbot-cli"],
-                    "tools": {"subagent": {"allowed_agents": []}},
-                    "compaction_policy": None,
-                    "effective_compaction_policy": {"enabled": True},
-                    "effective": {"model": {"value": "openai/gpt-5", "source": "agent"}},
-                    "current_session_id": "session-1",
-                    "context_window": 128000,
-                    "created_at": "now",
-                    "updated_at": "now",
-                },
-            },
-        )
-
-    monkeypatch.setattr(agent_management.httpx, "post", fake_post)
-
-    result = agent_management.agent_create(instance, "librarian", "Librarian", {})
-
-    assert result.ok is True
-    assert "workspace: C:/agents/librarian/workspace" in result.message
-    assert "project: second-brain" in result.message
-    assert 'effective_sources: {"model":"agent"}' in result.message
-    assert "vbot model list --task chat" not in result.message
-
-
-def test_agent_create_warns_and_gives_recovery_when_no_model_is_effective(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    instance = make_instance(tmp_path)
-
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        return httpx.Response(
-            200,
-            json={
-                "ok": True,
-                "result": {
-                    "id": "librarian",
-                    "name": "Librarian",
-                    "model": "",
-                    "fallback_models": [],
-                    "workspace": "C:/agents/librarian/workspace",
-                    "root_project_id": None,
-                    "temperature": None,
-                    "thinking_effort": None,
-                    "memory_prompt_mode": "full",
-                    "custom_system_prompt_enabled": False,
-                    "tool_access": {"mode": "none"},
-                    "allowed_skills": [],
-                    "current_session_id": "session-1",
-                    "context_window": None,
-                    "created_at": "now",
-                    "updated_at": "now",
-                },
-            },
-        )
-
-    monkeypatch.setattr(agent_management.httpx, "post", fake_post)
-
-    result = agent_management.agent_create(instance, "librarian", "Librarian", {})
-
-    assert result.ok is True
-    assert "vbot model list --task chat" in result.message
-    assert "vbot agent update librarian --model <model-id>" in result.message
-
-
-def test_agent_reorder_reads_revision_and_appends_unlisted(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    instance = make_instance(tmp_path)
-    calls: list[dict[str, Any]] = []
-
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        calls.append(json)
-        if json["method"] == "agent.list":
-            return httpx.Response(
-                200,
-                json={
-                    "ok": True,
-                    "result": {
-                        "agents": [{"id": "assistant"}, {"id": "coder"}, {"id": "researcher"}],
-                        "order_revision": 4,
-                    },
-                },
-            )
-        assert json["method"] == "agent.reorder"
-        return httpx.Response(
-            200,
-            json={"ok": True, "result": {"agents": [], "order_revision": 5}},
-        )
-
-    monkeypatch.setattr(agent_management.httpx, "post", fake_post)
-
-    result = agent_management.agent_reorder(instance, ["researcher", "assistant"])
-
-    assert result.ok is True
-    assert result.message.startswith("agent roster reordered (revision 5): ")
-    assert result.message.endswith("researcher, assistant, coder")
-    assert calls[1] == {
-        "method": "agent.reorder",
-        "params": {
-            "agent_ids": ["researcher", "assistant", "coder"],
-            "expected_revision": 4,
-        },
-    }
-
-
-def test_agent_reorder_rejects_duplicate_ids_locally(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    instance = make_instance(tmp_path)
-
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        raise AssertionError("no RPC expected for duplicate ids")
-
-    monkeypatch.setattr(agent_management.httpx, "post", fake_post)
-
-    result = agent_management.agent_reorder(instance, ["assistant", "assistant"])
-
-    assert result.ok is False
-    assert "duplicate" in result.message
-
-
-def test_parse_args_supports_agent_reorder() -> None:
-    args = cli_main.parse_args(["agent", "reorder", "researcher", "assistant"])
-
-    assert args.area == "agent"
-    assert args.command == "reorder"
-    assert args.ids == ["researcher", "assistant"]
-
-
-def test_agent_reorder_suggests_close_match_for_unknown_id(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    instance = make_instance(tmp_path)
-    methods: list[str] = []
-
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        methods.append(json["method"])
-        if json["method"] == "agent.list":
-            return httpx.Response(
-                200,
-                json={
-                    "ok": True,
-                    "result": {
-                        "agents": [{"id": "assistant"}, {"id": "researcher"}],
-                        "order_revision": 2,
-                    },
-                },
-            )
-        raise AssertionError("reorder RPC must not run for unknown ids")
-
-    monkeypatch.setattr(agent_management.httpx, "post", fake_post)
-
-    result = agent_management.agent_reorder(instance, ["assistent"])
-
-    assert result.ok is False
-    assert "unknown agent id: assistent" in result.message
-    assert "did you mean: assistant" in result.message
-    assert "available agents: assistant, researcher" in result.message
-    assert methods == ["agent.list"]
+        assert text in out
