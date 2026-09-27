@@ -15,7 +15,6 @@ from core.chat import ChatMessage, ToolCall
 from core.models.models import Model, ModelRegistry
 from core.providers.adapter import ProviderAdapter
 from core.providers.anthropic_compatible import AnthropicCompatibleAdapter
-from core.providers.github_copilot_policy import RESPONSES_ENDPOINT, copilot_model_policy
 from core.providers.github_copilot_responses import build_responses_payload
 from core.providers.mistral import MistralAdapter
 from core.providers.ollama import OLLAMA_CLOUD_MODE, OllamaAdapter, OllamaCloudAdapter
@@ -35,6 +34,7 @@ from tests.core.providers.openai_test_support import (
     codex_sse_response,
     jwt_with_account,
 )
+from tests.core.providers.responses_test_support import responses_policy
 
 RESOURCES = Path(__file__).resolve().parents[3] / "resources"
 
@@ -75,25 +75,6 @@ def _provider_config(
             )
         ],
         defaults=defaults,
-    )
-
-
-def _responses_policy(model_id: str = "gpt-5.4"):
-    return copilot_model_policy(
-        model_id,
-        {
-            "github_copilot": {
-                "vendor": "OpenAI",
-                "family": model_id,
-                "version": model_id,
-                "supported_endpoints": [RESPONSES_ENDPOINT],
-                "reasoning_efforts": ["low", "medium", "high", "xhigh"],
-                "tool_calls": True,
-                "parallel_tool_calls": True,
-                "streaming": True,
-                "structured_outputs": True,
-            }
-        },
     )
 
 
@@ -221,7 +202,7 @@ async def _render_responses(messages: list[dict[str, Any]]) -> dict[str, Any]:
     return build_responses_payload(
         messages,
         model_id="gpt-5.4",
-        policy=_responses_policy(),
+        policy=responses_policy(),
     )
 
 
