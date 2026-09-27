@@ -731,18 +731,15 @@ class StubCompactionService:
         *,
         should_auto: bool,
         has_compactable_context: bool = True,
-        estimated_tokens: int = 0,
         checkpoint: ChatMessage | None = None,
         compact_error: Exception | None = None,
     ) -> None:
         self._should_auto = should_auto
         self._has_compactable_context = has_compactable_context
-        self._estimated_tokens = estimated_tokens
         self._checkpoint = checkpoint
         self._compact_error = compact_error
         self.compactable_context_calls: list[tuple[list[str], Any]] = []
         self.should_auto_calls: list[tuple[int, int, float]] = []
-        self.estimate_calls: list[list[JsonObject]] = []
         self.compact_calls: list[JsonObject] = []
 
     def has_new_compactable_context(
@@ -763,10 +760,6 @@ class StubCompactionService:
     ) -> bool:
         self.should_auto_calls.append((input_tokens, context_window, threshold))
         return self._should_auto
-
-    def estimate_messages_tokens(self, messages: list[JsonObject]) -> int:
-        self.estimate_calls.append([dict(message) for message in messages])
-        return self._estimated_tokens
 
     async def compact(
         self,

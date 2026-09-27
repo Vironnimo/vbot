@@ -1,4 +1,4 @@
-"""Tests for chat loop compaction admission."""
+"""Whether an automatic Compaction boundary compacts: Policy, trigger, window and deferral."""
 
 from __future__ import annotations
 
@@ -8,372 +8,208 @@ from typing import Any, cast
 
 import pytest
 
-from core.chat import (
-    ChatMessage,
-    ToolCall,
-)
-from core.runs import (
-    COMPACTION_STARTED_EVENT,
-    Run,
-)
-from core.tools import (
-    tool_success,
-)
+from core.chat import ChatMessage, ToolCall
+from core.providers.providers import GLOBAL_CONTEXT_WINDOW_FLOOR
+from core.runs import COMPACTION_STARTED_EVENT
+from core.tools import tool_success
 from core.utils.tokens import estimate_request_input_tokens
 from tests.core.chat.chat_loop_compaction_test_support import (
     JsonObject,
-    _maybe_auto_compact,
+    auto_compact,
+    compaction_runtime,
 )
 from tests.core.chat.chat_loop_support import (
     StubAdapter,
     StubAgent,
     StubCompactionService,
     StubModels,
-    StubRuntime,
-    StubStorage,
     build_chat_loop,
-    build_request_messages,
+)
+
+_UNUSED_CHECKPOINT = ChatMessage.compaction_checkpoint(
+    summary="unused", projection=[ChatMessage.user("unused")], compacted_token_count=1
 )
 
 
+class WireEstimateAdapter(StubAdapter):
+    """Report fixed selected-wire request estimates in order, repeating the last one."""
+
+    def __init__(self, *estimates: int) -> None:
+        super().__init__([])
+        self._estimates = list(estimates)
+
+    def estimate_request_input_tokens(
+        self,
+        _messages: list[JsonObject],
+        *,
+        model_id: str,
+        tools: list[JsonObject] | None = None,
+    ) -> int:
+        del model_id, tools
+        return self._estimates.pop(0) if len(self._estimates) > 1 else self._estimates[0]
+
+
 @pytest.mark.asyncio
-async def test_compaction_maybe_auto_compact_skips_when_auto_disabled(tmp_path: Path) -> None:
-    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
-    adapter = StubAdapter([])
-    checkpoint = ChatMessage.compaction_checkpoint(
-        summary="unused",
-        projection=[ChatMessage.user("unused")],
-        compacted_token_count=1,
-    )
-    compaction_service = StubCompactionService(should_auto=True, checkpoint=checkpoint)
-    runtime: Any = StubRuntime(
-        data_dir=tmp_path,
-        agent=agent,
-        adapter=adapter,
-        storage=StubStorage(
+@pytest.mark.parametrize(
+    ("settings", "session_policy", "service_kwargs", "evaluated", "context_checks"),
+    [
+        ({"auto": False}, None, {"should_auto": True}, False, 0),
+        (
+            {},
             {
-                "auto": False,
-                "threshold": 0.8,
-                "tail_tokens": 15_000,
-                "summary_model": None,
-            }
+                "enabled": False,
+                "trigger": {"type": "context_ratio", "threshold": 0.8},
+                "strategy": {"type": "summary_tail", "tail_tokens": 15_000},
+            },
+            {"should_auto": True},
+            False,
+            0,
         ),
-        models=StubModels({("openai", "gpt-5.2"): 100}),
-    )
+        ({}, None, {"should_auto": False}, True, 0),
+        ({}, None, {"should_auto": True, "has_compactable_context": False}, True, 1),
+    ],
+    ids=["global-policy-disabled", "session-policy-disabled", "below-trigger", "no-new-context"],
+)
+async def test_automatic_compaction_needs_an_enabled_policy_a_trigger_and_new_context(
+    tmp_path: Path,
+    settings: JsonObject,
+    session_policy: JsonObject | None,
+    service_kwargs: JsonObject,
+    evaluated: bool,
+    context_checks: int,
+) -> None:
+    runtime = compaction_runtime(tmp_path, settings=settings)
     session = runtime.chat_sessions.create("coder", session_id="session-one")
     session.append(ChatMessage.user("Hi"))
-    messages = await build_request_messages(build_chat_loop(runtime), agent, session)
-    run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
+    if session_policy is not None:
+        runtime.chat_sessions.mutate_metadata(
+            session.address,
+            lambda metadata: metadata.__setitem__("compaction_policy", session_policy),
+        )
+    service = StubCompactionService(checkpoint=_UNUSED_CHECKPOINT, **service_kwargs)
+    loop = build_chat_loop(runtime, compaction_service=cast(Any, service))
 
-    loop = build_chat_loop(
-        runtime,
-        compaction_service=cast(Any, compaction_service),
-    )
-    result = await _maybe_auto_compact(
-        loop,
-        agent,
-        adapter,
-        "gpt-5.2",
-        session,
-        messages,
-        usage={"input_tokens": 90},
-        run=run,
+    probe = await auto_compact(
+        loop, runtime.agents.get("coder"), session, usage={"input_tokens": 90}
     )
 
-    assert result == messages
-    assert compaction_service.should_auto_calls == []
-    assert compaction_service.compact_calls == []
+    assert probe.rebuilt == probe.request
+    assert service.should_auto_calls == ([(90, 100, 0.8)] if evaluated else [])
+    assert len(service.compactable_context_calls) == context_checks
+    assert service.compact_calls == []
 
 
 @pytest.mark.asyncio
-async def test_compaction_maybe_auto_compact_skips_when_threshold_not_reached(
-    tmp_path: Path,
+@pytest.mark.parametrize(
+    ("usage", "expected_tokens"),
+    [({"input_tokens": 20}, 20), (None, 95)],
+    ids=["measured-in-this-run", "estimated-for-a-new-run"],
+)
+async def test_trigger_counts_this_runs_measurement_or_the_selected_wire_estimate(
+    tmp_path: Path, usage: JsonObject | None, expected_tokens: int
 ) -> None:
-    agent = StubAgent(id="coder", model="openai/gpt-5.2::subscription", allowed_tools=["*"])
-    adapter = StubAdapter([])
-    checkpoint = ChatMessage.compaction_checkpoint(
-        summary="unused",
-        projection=[ChatMessage.user("unused")],
-        compacted_token_count=1,
-    )
-    compaction_service = StubCompactionService(should_auto=False, checkpoint=checkpoint)
-    runtime: Any = StubRuntime(
-        data_dir=tmp_path,
-        agent=agent,
-        adapter=adapter,
-        storage=StubStorage(
-            {
-                "auto": True,
-                "threshold": 0.95,
-                "tail_tokens": 15_000,
-                "summary_model": None,
-            }
-        ),
-        models=StubModels({("openai", "gpt-5.2"): 100}),
-    )
-    session = runtime.chat_sessions.create("coder", session_id="session-one")
-    session.append(ChatMessage.user("Hi"))
-    messages = await build_request_messages(build_chat_loop(runtime), agent, session)
-    run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
-
-    loop = build_chat_loop(
-        runtime,
-        compaction_service=cast(Any, compaction_service),
-    )
-    result = await _maybe_auto_compact(
-        loop,
-        agent,
-        adapter,
-        "gpt-5.2",
-        session,
-        messages,
-        usage={"input_tokens": 20},
-        run=run,
-    )
-
-    assert result == messages
-    assert compaction_service.should_auto_calls == [(20, 100, 0.95)]
-    assert compaction_service.compact_calls == []
-
-
-@pytest.mark.asyncio
-async def test_compaction_keeps_measured_anchor_despite_higher_wire_estimate(
-    tmp_path: Path,
-) -> None:
-    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
-
-    class HighEstimateAdapter(StubAdapter):
-        def estimate_request_input_tokens(
-            self,
-            _messages: list[JsonObject],
-            *,
-            model_id: str,
-            tools: list[JsonObject] | None = None,
-        ) -> int:
-            del model_id, tools
-            return 95
-
-    adapter = HighEstimateAdapter([])
-    compaction_service = StubCompactionService(
-        should_auto=False,
-        estimated_tokens=95,
-    )
-    runtime: Any = StubRuntime(
-        data_dir=tmp_path,
-        agent=agent,
-        adapter=adapter,
-        storage=StubStorage(
-            {"auto": True, "threshold": 0.8, "tail_tokens": 15_000, "summary_model": None}
-        ),
-        models=StubModels({("openai", "gpt-5.2"): 100}),
-    )
-    session = runtime.chat_sessions.create("coder", session_id="session-one")
-    session.append(ChatMessage.user("Hi"))
-    messages = await build_request_messages(build_chat_loop(runtime), agent, session)
-    run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
-
-    await _maybe_auto_compact(
-        build_chat_loop(runtime, compaction_service=cast(Any, compaction_service)),
-        agent,
-        adapter,
-        "gpt-5.2",
-        session,
-        messages,
-        usage={"input_tokens": 20},
-        run=run,
-    )
-
-    assert compaction_service.should_auto_calls == [(20, 100, 0.8)]
-    assert compaction_service.estimate_calls == []
-
-
-@pytest.mark.asyncio
-async def test_compaction_new_run_estimates_selected_wire_instead_of_reusing_old_measurement(
-    tmp_path: Path,
-) -> None:
-    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
-
-    class WireEstimateAdapter(StubAdapter):
-        def estimate_request_input_tokens(
-            self,
-            _messages: list[JsonObject],
-            *,
-            model_id: str,
-            tools: list[JsonObject] | None = None,
-        ) -> int:
-            del model_id, tools
-            return 95
-
-    adapter = WireEstimateAdapter([])
-    compaction_service = StubCompactionService(should_auto=False)
-    runtime: Any = StubRuntime(
-        data_dir=tmp_path,
-        agent=agent,
-        adapter=adapter,
-        storage=StubStorage(
-            {"auto": True, "threshold": 0.8, "tail_tokens": 15_000, "summary_model": None}
-        ),
-        models=StubModels({("openai", "gpt-5.2"): 100}),
-    )
+    # A measurement from this Run anchors the trigger even when the selected wire
+    # estimates more; a new Run never reuses an older step's measurement.
+    runtime = compaction_runtime(tmp_path, adapter=WireEstimateAdapter(95))
+    agent = runtime.agents.get("coder")
     session = runtime.chat_sessions.create("coder", session_id="session-one")
     session.append(ChatMessage.user("Earlier"))
     session.append(
         ChatMessage.assistant(
-            model=agent.model,
-            content="x" * 50_000,
-            usage={"input_tokens": 20, "output_tokens": 0},
+            model=agent.model, content="x" * 50_000, usage={"input_tokens": 20, "output_tokens": 0}
         )
     )
     session.append(ChatMessage.user("Current"))
-    loop = build_chat_loop(runtime, compaction_service=cast(Any, compaction_service))
-    messages = await build_request_messages(loop, agent, session)
-    run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
+    service = StubCompactionService(should_auto=False)
 
-    await _maybe_auto_compact(
-        loop,
+    probe = await auto_compact(
+        build_chat_loop(runtime, compaction_service=cast(Any, service)),
         agent,
-        adapter,
-        "gpt-5.2",
         session,
-        messages,
-        usage=None,
-        run=run,
+        usage=usage,
     )
 
-    generic_tokens, _ = estimate_request_input_tokens(messages)
+    generic_tokens, _ = estimate_request_input_tokens(probe.request)
     assert generic_tokens > 95
-    assert compaction_service.should_auto_calls == [(95, 100, 0.8)]
+    assert service.should_auto_calls == [(expected_tokens, 100, 0.8)]
 
 
 @pytest.mark.asyncio
-async def test_compaction_records_post_projection_with_selected_wire_estimator(
+@pytest.mark.parametrize(
+    ("model", "model_window", "expected_window"),
+    [
+        ("openai/gpt-5.4", 400_000, 1_050_000),
+        ("openai/gpt-5.4::subscription", 400_000, 272_000),
+        ("openai/gpt-5.4::subscription", None, GLOBAL_CONTEXT_WINDOW_FLOOR),
+    ],
+    ids=["api-key-connection", "subscription-connection", "unknown-window-uses-floor"],
+)
+async def test_trigger_uses_the_selected_connections_context_window(
+    tmp_path: Path, model: str, model_window: int | None, expected_window: int
+) -> None:
+    key = ("openai", "gpt-5.4")
+    agent = StubAgent(id="coder", model=model, allowed_tools=["*"])
+    runtime = compaction_runtime(
+        tmp_path,
+        agent=agent,
+        models=StubModels(
+            {key: model_window},
+            connection_context_windows=(
+                {key: {"api-key": 1_050_000, "subscription": 272_000}} if model_window else None
+            ),
+        ),
+    )
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    session.append(ChatMessage.user("Hi"))
+    service = StubCompactionService(should_auto=False)
+
+    await auto_compact(
+        build_chat_loop(runtime, compaction_service=cast(Any, service)),
+        agent,
+        session,
+        usage={"input_tokens": 20},
+    )
+
+    assert service.should_auto_calls == [(20, expected_window, 0.8)]
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_records_both_context_sizes_with_the_selected_wire_estimator(
     tmp_path: Path,
 ) -> None:
-    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
-
-    class SequencedEstimateAdapter(StubAdapter):
-        def __init__(self) -> None:
-            super().__init__([])
-            self.estimates = iter((95, 37))
-
-        def estimate_request_input_tokens(
-            self,
-            _messages: list[JsonObject],
-            *,
-            model_id: str,
-            tools: list[JsonObject] | None = None,
-        ) -> int:
-            del model_id, tools
-            return next(self.estimates)
-
-    adapter = SequencedEstimateAdapter()
+    runtime = compaction_runtime(tmp_path, adapter=WireEstimateAdapter(95, 37))
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    session.append(ChatMessage.user("Head"))
     checkpoint = ChatMessage.compaction_checkpoint(
         summary="Compacted snapshot.",
         projection=[ChatMessage.user("Tail")],
         compacted_token_count=50,
     )
-    compaction_service = StubCompactionService(should_auto=True, checkpoint=checkpoint)
-    runtime: Any = StubRuntime(
-        data_dir=tmp_path,
-        agent=agent,
-        adapter=adapter,
-        storage=StubStorage(
-            {"auto": True, "threshold": 0.8, "tail_tokens": 15_000, "summary_model": None}
-        ),
-        models=StubModels({("openai", "gpt-5.2"): 100}),
-    )
-    session = runtime.chat_sessions.create("coder", session_id="session-one")
-    session.append(ChatMessage.user("Head"))
-    loop = build_chat_loop(runtime, compaction_service=cast(Any, compaction_service))
-    messages = await build_request_messages(loop, agent, session)
-    run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
+    service = StubCompactionService(should_auto=True, checkpoint=checkpoint)
 
-    await _maybe_auto_compact(
-        loop,
-        agent,
-        adapter,
-        "gpt-5.2",
+    probe = await auto_compact(
+        build_chat_loop(runtime, compaction_service=cast(Any, service)),
+        runtime.agents.get("coder"),
         session,
-        messages,
         usage=None,
-        run=run,
     )
 
-    persisted_checkpoint = session.load()[-1]
-    assert persisted_checkpoint.role == "compaction_checkpoint"
-    assert persisted_checkpoint.usage is not None
-    assert persisted_checkpoint.usage["context_tokens_before"] == 95
-    assert persisted_checkpoint.usage["context_tokens_after"] == 37
-    started_event = next(event for event in run.events if event.type == COMPACTION_STARTED_EVENT)
-    assert started_event.payload["context_tokens_before"] == 95
-    assert started_event.payload["context_usage"] == {
-        "tokens": 95,
-        "estimated": True,
-    }
-
-
-@pytest.mark.asyncio
-async def test_compaction_maybe_auto_compact_skips_without_new_compactable_context(
-    tmp_path: Path,
-) -> None:
-    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
-    adapter = StubAdapter([])
-    compaction_service = StubCompactionService(
-        should_auto=True,
-        has_compactable_context=False,
+    persisted = session.load()[-1]
+    assert persisted.role == "compaction_checkpoint"
+    assert persisted.usage is not None
+    assert (persisted.usage["context_tokens_before"], persisted.usage["context_tokens_after"]) == (
+        95,
+        37,
     )
-    runtime: Any = StubRuntime(
-        data_dir=tmp_path,
-        agent=agent,
-        adapter=adapter,
-        storage=StubStorage(
-            {
-                "auto": True,
-                "threshold": 0.8,
-                "tail_tokens": 15_000,
-                "summary_model": None,
-            }
-        ),
-        models=StubModels({("openai", "gpt-5.2"): 100}),
-    )
-    session = runtime.chat_sessions.create("coder", session_id="session-one")
-    session.append(ChatMessage.user("Keep working in this same turn"))
-    messages = await build_request_messages(build_chat_loop(runtime), agent, session)
-    run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
-
-    result = await _maybe_auto_compact(
-        build_chat_loop(
-            runtime,
-            compaction_service=cast(Any, compaction_service),
-        ),
-        agent,
-        adapter,
-        "gpt-5.2",
-        session,
-        messages,
-        usage={"input_tokens": 90},
-        run=run,
-    )
-
-    assert result == messages
-    assert len(compaction_service.compactable_context_calls) == 1
-    assert compaction_service.should_auto_calls == [(90, 100, 0.8)]
-    assert compaction_service.compact_calls == []
+    started = next(event for event in probe.run.events if event.type == COMPACTION_STARTED_EVENT)
+    assert started.payload["context_tokens_before"] == 95
+    assert started.payload["context_usage"] == {"tokens": 95, "estimated": True}
 
 
 @pytest.mark.asyncio
 async def test_summary_tail_waits_until_a_loaded_skill_result_is_consumed(tmp_path: Path) -> None:
-    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
-    adapter = StubAdapter([])
-    runtime: Any = StubRuntime(
-        data_dir=tmp_path,
-        agent=agent,
-        adapter=adapter,
-        storage=StubStorage(
-            {"auto": True, "threshold": 0.8, "tail_tokens": 15_000, "summary_model": None}
-        ),
-        models=StubModels({("openai", "gpt-5.2"): 100}),
-    )
+    runtime = compaction_runtime(tmp_path)
+    agent = runtime.agents.get("coder")
     session = runtime.chat_sessions.create("coder", session_id="session-one")
     session.append(ChatMessage.user("Use the document workflow"))
     session.append(
@@ -389,7 +225,6 @@ async def test_summary_tail_waits_until_a_loaded_skill_result_is_consumed(tmp_pa
             name="skill",
             content=json.dumps(
                 tool_success({"name": "docx", "status": "loaded", "content": "Instructions"}),
-                ensure_ascii=False,
                 separators=(",", ":"),
             ),
         )
@@ -399,78 +234,16 @@ async def test_summary_tail_waits_until_a_loaded_skill_result_is_consumed(tmp_pa
         projection=[ChatMessage.user("Tail")],
         compacted_token_count=20,
     )
-    compaction_service = StubCompactionService(should_auto=True, checkpoint=checkpoint)
-    loop = build_chat_loop(runtime, compaction_service=cast(Any, compaction_service))
-    messages = await build_request_messages(loop, agent, session)
+    service = StubCompactionService(should_auto=True, checkpoint=checkpoint)
+    loop = build_chat_loop(runtime, compaction_service=cast(Any, service))
 
-    first = await _maybe_auto_compact(
-        loop,
-        agent,
-        adapter,
-        "gpt-5.2",
-        session,
-        messages,
-        usage={"input_tokens": 90},
-        run=Run(run_id="run-1", agent_id=agent.id, session_id=session.id),
-    )
+    deferred = await auto_compact(loop, agent, session, usage={"input_tokens": 90})
 
-    assert first == messages
-    assert compaction_service.compact_calls == []
-    assert compaction_service.compactable_context_calls == []
+    assert deferred.rebuilt == deferred.request
+    assert service.compactable_context_calls == []
+    assert service.compact_calls == []
 
     session.append(ChatMessage.assistant(model=agent.model, content="Skill result consumed"))
-    consumed_messages = await build_request_messages(loop, agent, session)
-    await _maybe_auto_compact(
-        loop,
-        agent,
-        adapter,
-        "gpt-5.2",
-        session,
-        consumed_messages,
-        usage={"input_tokens": 90},
-        run=Run(run_id="run-2", agent_id=agent.id, session_id=session.id),
-    )
+    await auto_compact(loop, agent, session, usage={"input_tokens": 90}, run_id="run-2")
 
-    assert len(compaction_service.compact_calls) == 1
-
-
-@pytest.mark.asyncio
-async def test_compaction_resolves_floor_for_null_window_model(tmp_path: Path) -> None:
-    # A model with no context window (None) must still drive auto-compaction:
-    # the read-side default chain resolves the global floor so should_auto_compact
-    # is called with a usable positive window instead of silently disabling.
-    from core.providers.providers import GLOBAL_CONTEXT_WINDOW_FLOOR
-
-    agent = StubAgent(id="coder", model="openai/gpt-5.2::subscription", allowed_tools=["*"])
-    adapter = StubAdapter([])
-    compaction_service = StubCompactionService(should_auto=False)
-    runtime: Any = StubRuntime(
-        data_dir=tmp_path,
-        agent=agent,
-        adapter=adapter,
-        storage=StubStorage(
-            {"auto": True, "threshold": 0.8, "tail_tokens": 15_000, "summary_model": None}
-        ),
-        models=StubModels({("openai", "gpt-5.2"): None}),
-    )
-    session = runtime.chat_sessions.create("coder", session_id="session-one")
-    session.append(ChatMessage.user("Hi"))
-    messages = await build_request_messages(build_chat_loop(runtime), agent, session)
-    run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
-
-    loop = build_chat_loop(
-        runtime,
-        compaction_service=cast(Any, compaction_service),
-    )
-    await _maybe_auto_compact(
-        loop,
-        agent,
-        adapter,
-        "gpt-5.2",
-        session,
-        messages,
-        usage={"input_tokens": 20},
-        run=run,
-    )
-
-    assert compaction_service.should_auto_calls == [(20, GLOBAL_CONTEXT_WINDOW_FLOOR, 0.8)]
+    assert len(service.compact_calls) == 1

@@ -1,4 +1,4 @@
-"""Tests for chat loop compaction prompt epoch."""
+"""A committed checkpoint starts a new prompt epoch with refreshed pinned prompt context."""
 
 from __future__ import annotations
 
@@ -7,14 +7,11 @@ from typing import Any, cast
 
 import pytest
 
-from core.chat import (
-    ChatMessage,
-)
-from core.chat._run_state import (
-    RequestBuildInputs,
-    _RunRequest,
-    create_run_execution_context,
-)
+from core.agents.temporary import TemporaryAgentConfig, TemporaryAgentRegistry
+from core.chat import ChatMessage
+from core.chat._run_state import RequestBuildInputs, _RunRequest
+from core.extensions import ExtensionAPI, ExtensionRecord, ExtensionRegistry
+from core.extensions.extensions import ExtensionDeclarations
 from core.prompts.pinned_context import (
     PINNED_MEMORY_FILES_SLOT,
     PINNED_SKILL_CATALOG_SLOT,
@@ -24,68 +21,38 @@ from core.prompts.pinned_context import (
     pinned_skill_catalog,
     pinned_soul_context,
 )
-from core.runs import (
-    Run,
-)
-from core.tools import (
-    tool_success,
-)
+from core.runs import Run, RunExecutionOwner
+from core.tools import tool_success
+from core.tools.availability import ToolAccess
 from tests.core.chat.chat_loop_compaction_test_support import (
-    _maybe_auto_compact,
+    auto_compact,
+    compact_context,
+    compaction_runtime,
+    run_context,
+    seed_tail,
 )
 from tests.core.chat.chat_loop_support import (
-    StubAdapter,
+    ClosingStubAdapter,
     StubAgent,
     StubCompactionService,
-    StubModels,
     StubProject,
     StubProjects,
-    StubRuntime,
     StubSkill,
     StubSkills,
-    StubStorage,
     build_chat_loop,
-    build_request_messages,
     persisted_roles,
     session_address,
 )
 
 
-@pytest.mark.asyncio
-async def test_compaction_refreshes_pinned_skill_catalog(tmp_path: Path) -> None:
-    # Compaction starts a new prompt epoch: a registry that grew since the Session
-    # was pinned must be rescanned and replace both the catalog and seen-skill set.
-    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
-    adapter = StubAdapter([])
-    runtime: Any = StubRuntime(
-        data_dir=tmp_path,
-        agent=agent,
-        adapter=adapter,
-        storage=StubStorage(
-            {"auto": True, "threshold": 0.8, "tail_tokens": 15_000, "summary_model": None}
-        ),
-        models=StubModels({("openai", "gpt-5.2"): 100}),
-    )
+def _grow_skills_after_pinning(runtime: Any, loop: Any, session: Any) -> None:
+    """Pin a one-Skill catalog as the first build would, then grow the registry."""
     runtime.skills = StubSkills([StubSkill("one", "One.", Path("a"))])
-    session = runtime.chat_sessions.create("coder", session_id="session-one")
-    tail_user = ChatMessage.user("Tail user")
-    session.append(tail_user)
-    session.append(ChatMessage.assistant(model=agent.model, content="Tail assistant"))
-    checkpoint = ChatMessage.compaction_checkpoint(
-        summary="Compacted tail context.",
-        projection=session.load()[-2:],
-        compacted_token_count=42,
-    )
-    compaction_service = StubCompactionService(should_auto=True, checkpoint=checkpoint)
-    loop = build_chat_loop(runtime, compaction_service=cast(Any, compaction_service))
-    run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
-
-    # Pin the session's catalog (as the first build would), then grow the registry.
     pinned_skill_catalog(
         loop._dependencies,
         "coder",
-        "session-one",
-        agent,
+        session.id,
+        runtime.agents.get("coder"),
         runtime.skills,
         None,
         skill_project_id=None,
@@ -93,183 +60,102 @@ async def test_compaction_refreshes_pinned_skill_catalog(tmp_path: Path) -> None
     runtime.skills = StubSkills(
         [StubSkill("one", "One.", Path("a")), StubSkill("two", "Two.", Path("b"))]
     )
-    calls_before = runtime.system_prompts.render_skill_catalog_calls
-    address = session_address("coder", "session-one")
-    affinity_before = runtime.chat_sessions.prompt_cache_affinity_id(address)
-
-    messages = await build_request_messages(loop, agent, session)
-    await _maybe_auto_compact(
-        loop, agent, adapter, "gpt-5.2", session, messages, usage={"input_tokens": 90}, run=run
-    )
-
-    # The checkpoint, the new epoch's pins and seen Skills, and a new prompt-cache
-    # affinity are committed together.
-    catalog_pin = runtime.chat_sessions.prompt_pin(address, PINNED_SKILL_CATALOG_SLOT)
-    assert persisted_roles(session.load())[-1] == "compaction_checkpoint"
-    assert runtime.system_prompts.render_skill_catalog_calls == calls_before + 1
-    assert runtime.refresh_skills_for_calls == [(None, "coder")]
-    assert catalog_pin is not None
-    assert catalog_pin["catalog_text"] == "catalog:2"
-    assert runtime.chat_sessions.seen_skills(address) == frozenset({"one", "two"})
-    assert runtime.chat_sessions.prompt_cache_affinity_id(address) != affinity_before
 
 
 @pytest.mark.asyncio
-async def test_compaction_refreshes_pinned_soul_and_memory(tmp_path: Path) -> None:
-    # Compaction starts a new prompt epoch: SOUL and pinned-memory snapshots are
-    # re-rendered from the workspace so on-disk edits become visible to the model.
-    agent = StubAgent(
-        id="coder",
-        model="openai/gpt-5.2",
-        allowed_tools=["*"],
-        workspace=tmp_path / "workspace",
-    )
-    adapter = StubAdapter([])
-    runtime: Any = StubRuntime(
-        data_dir=tmp_path,
-        agent=agent,
-        adapter=adapter,
-        storage=StubStorage(
-            {"auto": True, "threshold": 0.8, "tail_tokens": 15_000, "summary_model": None}
-        ),
-        models=StubModels({("openai", "gpt-5.2"): 100}),
-    )
+@pytest.mark.parametrize("manual", [False, True], ids=["automatic", "manual"])
+async def test_compaction_rescans_skills_into_the_new_epoch(tmp_path: Path, manual: bool) -> None:
+    # A registry that grew since the Session was pinned is rescanned; the checkpoint,
+    # the new catalog and seen-Skill set, and a new prompt-cache affinity commit together.
+    runtime = compaction_runtime(tmp_path, adapter=ClosingStubAdapter([]))
     session = runtime.chat_sessions.create("coder", session_id="session-one")
-    tail_user = ChatMessage.user("Tail user")
-    session.append(tail_user)
-    session.append(ChatMessage.assistant(model=agent.model, content="Tail assistant"))
-    checkpoint = ChatMessage.compaction_checkpoint(
-        summary="Compacted tail context.",
-        projection=session.load()[-2:],
-        compacted_token_count=42,
-    )
-    compaction_service = StubCompactionService(should_auto=True, checkpoint=checkpoint)
-    loop = build_chat_loop(runtime, compaction_service=cast(Any, compaction_service))
-    run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
+    service = StubCompactionService(should_auto=True, checkpoint=seed_tail(session))
+    loop = build_chat_loop(runtime, compaction_service=cast(Any, service))
+    _grow_skills_after_pinning(runtime, loop, session)
+    renders_before = runtime.system_prompts.render_skill_catalog_calls
+    affinity_before = runtime.chat_sessions.prompt_cache_affinity_id(session.address)
 
-    # Pin the epoch's texts (as the first build would), then observe the refresh.
-    pinned_soul_context(loop._dependencies, "coder", "session-one", agent, None)
-    pinned_memory_files(loop._dependencies, "coder", "session-one", agent, None)
+    if manual:
+        assert await loop.compact_session("coder", session.id) == "Context compacted."
+    else:
+        await auto_compact(loop, runtime.agents.get("coder"), session, usage={"input_tokens": 90})
 
-    context = await create_run_execution_context(
-        loop._dependencies,
-        loop._requests,
-        run,
-        _RunRequest(content="test"),
-        session=session,
-        prior_continuation=None,
-        continuation_reminder=None,
-        continuation_tracker=None,
-    )
-    context.request_state = await loop._requests.build_request_state(
-        agent,
-        session,
-        inputs=RequestBuildInputs.from_context(context, context.primary_target),
-    )
-    runtime.system_prompts.render_soul = lambda *_args, **_kwargs: "NEW_SOUL_SENTINEL"
-    runtime.system_prompts.render_memory_files = lambda *_args, **_kwargs: "NEW_MEMORY_SENTINEL"
-    await loop._compaction_runs.maybe_auto_compact_state(
-        context,
-        context.primary_target,
-        {"input_tokens": 90},
-    )
-    assert context.soul_context == "NEW_SOUL_SENTINEL"
-    assert context.memory_files_context == "NEW_MEMORY_SENTINEL"
-    await loop._requests.build_request_state(
-        agent,
-        session,
-        inputs=RequestBuildInputs.from_context(context, context.primary_target),
-    )
-    assert runtime.system_prompts.build_pin_calls[-1]["soul_context"] == "NEW_SOUL_SENTINEL"
-    assert (
-        runtime.system_prompts.build_pin_calls[-1]["memory_files_context"] == "NEW_MEMORY_SENTINEL"
-    )
-    assert (
-        pinned_memory_files(loop._dependencies, "coder", "session-one", agent, None)
-        == "NEW_MEMORY_SENTINEL"
-    )
-
-    address = session_address("coder", "session-one")
-    assert runtime.chat_sessions.prompt_pin(address, PINNED_SOUL_CONTEXT_SLOT) == {
-        "text": "NEW_SOUL_SENTINEL"
-    }
-    assert runtime.chat_sessions.prompt_pin(address, PINNED_MEMORY_FILES_SLOT) == {
-        "text": "NEW_MEMORY_SENTINEL",
-        "mode": "agent_user",
-    }
+    catalog_pin = runtime.chat_sessions.prompt_pin(session.address, PINNED_SKILL_CATALOG_SLOT)
+    assert persisted_roles(session.load())[-1] == "compaction_checkpoint"
+    assert runtime.system_prompts.render_skill_catalog_calls == renders_before + 1
+    assert runtime.refresh_skills_for_calls == [(None, "coder")]
+    assert catalog_pin is not None and catalog_pin["catalog_text"] == "catalog:2"
+    assert runtime.chat_sessions.seen_skills(session.address) == frozenset({"one", "two"})
+    assert runtime.chat_sessions.prompt_cache_affinity_id(session.address) != affinity_before
 
 
 @pytest.mark.asyncio
 async def test_compaction_refresh_failure_keeps_previous_prompt_snapshot(
-    tmp_path: Path,
-    caplog: pytest.LogCaptureFixture,
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
-    adapter = StubAdapter([])
-    runtime: Any = StubRuntime(
-        data_dir=tmp_path,
-        agent=agent,
-        adapter=adapter,
-        storage=StubStorage(
-            {"auto": True, "threshold": 0.8, "tail_tokens": 15_000, "summary_model": None}
-        ),
-        models=StubModels({("openai", "gpt-5.2"): 100}),
-    )
-    runtime.skills = StubSkills([StubSkill("one", "One.", Path("a"))])
+    runtime = compaction_runtime(tmp_path)
     session = runtime.chat_sessions.create("coder", session_id="session-one")
-    tail_user = ChatMessage.user("Tail user")
-    session.append(tail_user)
-    session.append(ChatMessage.assistant(model=agent.model, content="Tail assistant"))
-    checkpoint = ChatMessage.compaction_checkpoint(
-        summary="Compacted tail context.",
-        projection=session.load()[-2:],
-        compacted_token_count=42,
-    )
-    loop = build_chat_loop(
-        runtime,
-        compaction_service=cast(
-            Any,
-            StubCompactionService(should_auto=True, checkpoint=checkpoint),
-        ),
-    )
-    pinned_skill_catalog(
-        loop._dependencies,
-        "coder",
-        "session-one",
-        agent,
-        runtime.skills,
-        None,
-        skill_project_id=None,
-    )
+    service = StubCompactionService(should_auto=True, checkpoint=seed_tail(session))
+    loop = build_chat_loop(runtime, compaction_service=cast(Any, service))
+    _grow_skills_after_pinning(runtime, loop, session)
 
     def fail_refresh(_project_id: str | None, _agent_id: str | None) -> Any:
         raise RuntimeError("scan failed")
 
     runtime.refresh_skills_for = fail_refresh
-    messages = await build_request_messages(loop, agent, session)
-    run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
 
-    await _maybe_auto_compact(
-        loop,
-        agent,
-        adapter,
-        "gpt-5.2",
-        session,
-        messages,
-        usage={"input_tokens": 90},
-        run=run,
-    )
+    await auto_compact(loop, runtime.agents.get("coder"), session, usage={"input_tokens": 90})
 
-    catalog_pin = runtime.chat_sessions.prompt_pin(
-        session_address("coder", "session-one"), PINNED_SKILL_CATALOG_SLOT
-    )
-    assert catalog_pin is not None
-    assert catalog_pin["catalog_text"] == "catalog:1"
+    # The checkpoint still commits, with the previous epoch's pins.
+    catalog_pin = runtime.chat_sessions.prompt_pin(session.address, PINNED_SKILL_CATALOG_SLOT)
+    assert catalog_pin is not None and catalog_pin["catalog_text"] == "catalog:1"
     assert persisted_roles(session.load())[-1] == "compaction_checkpoint"
     assert any(
         "Prompt context refresh failed after automatic Compaction" in record.message
         for record in caplog.records
     )
+
+
+@pytest.mark.asyncio
+async def test_compaction_refreshes_pinned_soul_and_memory(tmp_path: Path) -> None:
+    # SOUL and pinned-memory snapshots re-render from the workspace so on-disk edits
+    # reach the active Run and the persisted pins.
+    agent = StubAgent(
+        id="coder", model="openai/gpt-5.2", allowed_tools=["*"], workspace=tmp_path / "workspace"
+    )
+    runtime = compaction_runtime(tmp_path, agent=agent)
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    service = StubCompactionService(should_auto=True, checkpoint=seed_tail(session))
+    loop = build_chat_loop(runtime, compaction_service=cast(Any, service))
+    pinned_soul_context(loop._dependencies, "coder", "session-one", agent, None)
+    pinned_memory_files(loop._dependencies, "coder", "session-one", agent, None)
+    context = await run_context(
+        loop, Run(run_id="run-1", agent_id="coder", session_id=session.id), session
+    )
+    runtime.system_prompts.render_soul = lambda *_args, **_kwargs: "NEW_SOUL_SENTINEL"
+    runtime.system_prompts.render_memory_files = lambda *_args, **_kwargs: "NEW_MEMORY_SENTINEL"
+
+    await compact_context(loop, context)
+
+    assert context.soul_context == "NEW_SOUL_SENTINEL"
+    assert context.memory_files_context == "NEW_MEMORY_SENTINEL"
+    await loop._requests.build_request_state(
+        agent, session, inputs=RequestBuildInputs.from_context(context, context.primary_target)
+    )
+    last_pin_build = runtime.system_prompts.build_pin_calls[-1]
+    assert last_pin_build["soul_context"] == "NEW_SOUL_SENTINEL"
+    assert last_pin_build["memory_files_context"] == "NEW_MEMORY_SENTINEL"
+    assert (
+        pinned_memory_files(loop._dependencies, "coder", "session-one", agent, None)
+        == "NEW_MEMORY_SENTINEL"
+    )
+    assert runtime.chat_sessions.prompt_pin(session.address, PINNED_SOUL_CONTEXT_SLOT) == {
+        "text": "NEW_SOUL_SENTINEL"
+    }
+    assert runtime.chat_sessions.prompt_pin(session.address, PINNED_MEMORY_FILES_SLOT) == {
+        "text": "NEW_MEMORY_SENTINEL",
+        "mode": "agent_user",
+    }
 
 
 @pytest.mark.asyncio
@@ -281,111 +167,56 @@ async def test_compaction_refreshes_rooted_working_project_files_and_auto_load(
     agents_file = repo / "AGENTS.md"
     agents_file.write_text("Original rules", encoding="utf-8")
     project = StubProject("proj", str(repo), ["AGENTS.md"], display_name="Project")
-    agent = StubAgent(
-        id="coder",
-        model="openai/gpt-5.2",
-        allowed_tools=["*"],
-        root_project_id="proj",
-    )
-    adapter = StubAdapter([])
-    runtime: Any = StubRuntime(
-        data_dir=tmp_path,
-        agent=agent,
-        adapter=adapter,
-        projects=StubProjects({"proj": project}),
-        storage=StubStorage(
-            {"auto": True, "threshold": 0.8, "tail_tokens": 15_000, "summary_model": None}
+    runtime = compaction_runtime(
+        tmp_path,
+        agent=StubAgent(
+            id="coder", model="openai/gpt-5.2", allowed_tools=["*"], root_project_id="proj"
         ),
-        models=StubModels({("openai", "gpt-5.2"): 100}),
+        projects=StubProjects({"proj": project}),
     )
     session = runtime.chat_sessions.create("coder", session_id="session-one")
-    tail_user = ChatMessage.user("Tail user")
-    session.append(tail_user)
-    session.append(ChatMessage.assistant(model=agent.model, content="Tail assistant"))
-    checkpoint = ChatMessage.compaction_checkpoint(
-        summary="Compacted tail context.",
-        projection=session.load()[-2:],
-        compacted_token_count=42,
-    )
-    loop = build_chat_loop(
-        runtime,
-        compaction_service=cast(
-            Any,
-            StubCompactionService(should_auto=True, checkpoint=checkpoint),
-        ),
-    )
-    run = Run(
-        run_id="run-1",
-        agent_id=agent.id,
-        session_id=session.id,
-        working_project_id="proj",
-    )
-    context = await create_run_execution_context(
-        loop._dependencies,
-        loop._requests,
-        run,
-        _RunRequest(content="test"),
-        session=session,
-        prior_continuation=None,
-        continuation_reminder=None,
-        continuation_tracker=None,
-    )
-    context.request_state = await loop._requests.build_request_state(
-        agent,
+    service = StubCompactionService(should_auto=True, checkpoint=seed_tail(session))
+    loop = build_chat_loop(runtime, compaction_service=cast(Any, service))
+    context = await run_context(
+        loop,
+        Run(run_id="run-1", agent_id="coder", session_id=session.id, working_project_id="proj"),
         session,
-        inputs=RequestBuildInputs.from_context(context, context.primary_target),
     )
-
     agents_file.write_text("Updated rules", encoding="utf-8")
     (repo / "CONTEXT.md").write_text("New context", encoding="utf-8")
     project.auto_load.append("CONTEXT.md")
 
-    rebuilt = await loop._compaction_runs.maybe_auto_compact_state(
-        context,
-        context.primary_target,
-        {"input_tokens": 90},
-    )
+    rebuilt = await compact_context(loop, context)
 
     system_prompt = str(rebuilt.messages[0]["content"])
     project_pin = runtime.chat_sessions.prompt_pin(
-        session_address("coder", "session-one"), PINNED_WORKING_PROJECT_CONTEXT_SLOT
+        session.address, PINNED_WORKING_PROJECT_CONTEXT_SLOT
     )
-    assert "Updated rules" in system_prompt
-    assert "New context" in system_prompt
+    assert "Updated rules" in system_prompt and "New context" in system_prompt
     assert "Original rules" not in system_prompt
     assert runtime.refresh_skills_for_calls == [("proj", "coder")]
     assert len(runtime.system_prompts.render_working_project_context_calls) == 2
     assert project_pin is not None
-    assert "Updated rules" in project_pin["text"]
-    assert "New context" in project_pin["text"]
+    assert "Updated rules" in project_pin["text"] and "New context" in project_pin["text"]
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("project_id", [None, "proj"])
-@pytest.mark.parametrize("child", [False, True])
+@pytest.mark.parametrize(
+    ("project_id", "child"),
+    [(None, False), ("proj", False), ("proj", True)],
+    ids=["own-session", "own-project-session", "child-project-session"],
+)
 async def test_temporary_compaction_refreshes_epoch_without_identity_lookup(
-    tmp_path, project_id, child
-):
-    from core.agents.temporary import TemporaryAgentConfig, TemporaryAgentRegistry
-    from core.extensions import ExtensionAPI, ExtensionRecord, ExtensionRegistry
-    from core.extensions.extensions import ExtensionDeclarations
-    from core.runs import RunExecutionOwner
-    from core.tools.availability import ToolAccess
-
+    tmp_path: Path, project_id: str | None, child: bool
+) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     rules = repo / "AGENTS.md"
     rules.write_text("OLD_RULES_SENTINEL", encoding="utf-8")
-    adapter = StubAdapter([])
-    runtime: Any = StubRuntime(
-        data_dir=tmp_path,
+    runtime = compaction_runtime(
+        tmp_path,
         agent=StubAgent(id="ordinary", model="openai/gpt-5.2"),
-        adapter=adapter,
         projects=StubProjects({"proj": StubProject("proj", str(repo), ["AGENTS.md"])}),
-        storage=StubStorage(
-            {"auto": True, "threshold": 0.8, "tail_tokens": 15000, "summary_model": None}
-        ),
-        models=StubModels({("openai", "gpt-5.2"): 100}),
     )
     declarations = ExtensionDeclarations()
     api = ExtensionAPI("test", declarations, config={}, logger=None)
@@ -450,7 +281,7 @@ async def test_temporary_compaction_refreshes_epoch_without_identity_lookup(
         project_id=project_id,
         working_project_id=project_id,
         execution_owner=RunExecutionOwner(
-            epoch=1,
+            epoch="epoch",
             extension="test",
             group_id="group",
             participant_id="participant",
@@ -462,27 +293,13 @@ async def test_temporary_compaction_refreshes_epoch_without_identity_lookup(
         if child
         else _RunRequest(content="test", temporary_binding=binding)
     )
-    context = await create_run_execution_context(
-        loop._dependencies,
-        loop._requests,
-        run,
-        request,
-        session=session,
-        prior_continuation=None,
-        continuation_reminder=None,
-        continuation_tracker=None,
-    )
-    context.request_state = await loop._requests.build_request_state(
-        context.agent,
-        session,
-        inputs=RequestBuildInputs.from_context(context, context.primary_target),
-    )
+    context = await run_context(loop, run, session, request)
     old_project_context = context.working_project_context
     rules.write_text("NEW_RULES_SENTINEL", encoding="utf-8")
     runtime.skills = StubSkills([StubSkill("new", "NEW_SKILL_SENTINEL", Path("new"))])
-    rebuilt = await loop._compaction_runs.maybe_auto_compact_state(
-        context, context.primary_target, {"input_tokens": 90}
-    )
+
+    rebuilt = await compact_context(loop, context)
+
     address = session_address(run.agent_id, session.id, project_id)
     prompt_pin = runtime.chat_sessions.prompt_pin
     assert persisted_roles(session.load())[-1] == "compaction_checkpoint"
