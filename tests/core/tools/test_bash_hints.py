@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from core.tools import bash_hints
 from core.tools.bash_hints import annotate_failure
 
 _NOT_RECOGNIZED = (
@@ -370,6 +371,42 @@ def test_parser_errors_from_bash_syntax(command, expected):
         assert hint is None
     else:
         assert hint is not None and hint.startswith(expected)
+
+
+@pytest.mark.parametrize(
+    ("command", "error", "expected"),
+    [
+        # PowerShell ends the string at \", so Python reads a cut-off line.
+        (
+            'python -c "import json; print(json.dumps({\\"a\\": 1}))"',
+            "SyntaxError: '{' was never closed",
+            'In PowerShell, \\" does not escape a quote.',
+        ),
+        (
+            'python -c @"\nimport json\nprint(json.dumps({\\"a\\": 1}))\n"@',
+            "SyntaxError: unexpected character after line continuation character",
+            'Inside a @"..."@ here-string, \\" stays a backslash and a quote.',
+        ),
+        (
+            "python -c @'\nprint(''hello'')\n'@",
+            "SyntaxError: invalid syntax. Is this intended to be part of the string?",
+            "Inside a @'...'@ here-string, '' stays two quotes.",
+        ),
+        # Quotes a here-string keeps literal and empty strings explain nothing.
+        ("@'\nprint(''.join(parts))\nprint(\"a\\\"b\"\n'@ | python -", "SyntaxError: x", None),
+    ],
+)
+def test_quote_escapes_that_break_code_passed_in_powershell(monkeypatch, command, error, expected):
+    monkeypatch.setattr(bash_hints, "_POWERSHELL", True)
+    output = f'  File "<string>", line 1\n    code\n    ^\n{error}'
+    hint = annotate_failure(command, 1, output)
+    if expected is None:
+        assert hint is None
+    else:
+        assert hint is not None and hint.startswith(expected)
+    # In bash, \" is an escape, so a SyntaxError there is the code's own.
+    monkeypatch.setattr(bash_hints, "_POWERSHELL", False)
+    assert annotate_failure(command, 1, output) is None
 
 
 def test_dev_null_on_windows_names_null_redirection():

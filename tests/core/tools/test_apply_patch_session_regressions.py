@@ -203,6 +203,29 @@ def test_context_constraints_cannot_be_ignored_or_choose_ambiguous_target(tmp_pa
         assert "the first occurrence after that line is changed." in text(result)
 
 
+def test_repeated_context_line_places_lines_that_occur_once_after_it(tmp_path):
+    # Session shape: the @@ line names a method that two classes define, and the
+    # lines to replace follow only the second one.
+    path = tmp_path / "file.py"
+    path.write_bytes(
+        b"class Reader:\n    def close(self):\n        self.handle.close()\n\n\n"
+        b"class Pool:\n    def close(self):\n        self.pool.release()\n"
+    )
+    result = apply(
+        tmp_path,
+        update(
+            "@@ def close(self):\n-        self.pool.release()\n+        self.pool.stop()",
+            "file.py",
+        ),
+    )
+    assert result["ok"], text(result)
+    assert path.read_bytes() == (
+        b"class Reader:\n    def close(self):\n        self.handle.close()\n\n\n"
+        b"class Pool:\n    def close(self):\n        self.pool.stop()\n"
+    )
+    assert "occur" not in text(result)
+
+
 @pytest.mark.parametrize(
     ("body", "expected", "note"),
     [

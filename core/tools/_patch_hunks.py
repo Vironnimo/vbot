@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import replace
+from difflib import SequenceMatcher
 from os.path import commonprefix
 from typing import Literal
 
@@ -50,6 +51,10 @@ _FIRST_AFTER_PREVIOUS_NOTE = (
     "The lines to replace occur {occurrences} times; the first after the previous change "
     "in this file, at line {line}, was changed."
 )
+# A line this similar to the file's line is a copy of it with a typo, not new text.
+_NEAR_COPY = 0.8
+# A patch line this similar to a file line is a reworded copy of it.
+_SIMILAR_LINE = 0.5
 _BREAK = TEXT_LINE_BREAK
 _GUTTER = re.compile(r"^\s*[1-9][0-9]*(?::[1-9][0-9]*)?\|")
 _ESCAPE = re.compile(r"\\(n|r|t|\\|\"|')")
@@ -177,10 +182,10 @@ def _not_found(content: str, old: str, *, source: Literal["patch", "old_string"]
     if part is not None and not details["candidates"]:
         details["part_of"] = part
     if details["candidates"]:
-        start = details["candidates"][0]["line"]
         file_lines = split_text_lines(content)
         wanted_lines = split_text_lines(old)
         first = next((index for index, line in enumerate(wanted_lines) if line.strip()), 0)
+        start = _aligned_start(file_lines, details["candidates"][0]["line"], wanted_lines, first)
         for position, wanted in enumerate(wanted_lines[first:], first):
             number = start + position - first
             if number > len(file_lines):
@@ -204,6 +209,45 @@ def _not_found(content: str, old: str, *, source: Literal["patch", "old_string"]
                 }
                 break
     return details
+
+
+def _aligned_start(file_lines: list[str], start: int, wanted_lines: list[str], first: int) -> int:
+    """Return the file line where patch line ``first`` belongs.
+
+    A candidate window starts where its best-matching lines put it, so every line
+    the copy added or dropped before them shifts it. The first patch line the
+    file holds near the window fixes the alignment instead; the lines before it
+    belong directly above it. Lines without a word, such as a closing quote or
+    bracket, occur too often to fix it. When the file holds none of the patch
+    lines, patch line ``first`` belongs at the nearby file line most like its
+    start: a reworded copy resembles its line, and a copy that joins lines
+    starts like the first of them.
+    """
+    span = len(wanted_lines) - first
+    for position in range(first, len(wanted_lines)):
+        text = _loose(wanted_lines[position])
+        if not re.search(r"\w", text):
+            continue
+        expected = start - 1 + position - first
+        near = [
+            index
+            for index in range(max(0, expected - span), min(len(file_lines), expected + span + 1))
+            if _loose(file_lines[index]) == text
+        ]
+        if near:
+            index = min(near, key=lambda index: (abs(index - expected), index))
+            return max(1, index + 1 - (position - first))
+    text = _loose(wanted_lines[first])
+    expected = start - 1
+    scores = [
+        (SequenceMatcher(None, text[: len(line)], line).ratio(), index)
+        for index in range(max(0, expected - span), min(len(file_lines), expected + span + 1))
+        if len(line := _loose(file_lines[index])) >= 4 and re.search(r"\w", line)
+    ]
+    if not scores:
+        return start
+    similarity, index = max(scores, key=lambda score: (score[0], -abs(score[1] - expected)))
+    return index + 1 if similarity >= _SIMILAR_LINE else start
 
 
 def _line_list(numbers: list[int]) -> str:
@@ -379,13 +423,13 @@ def _unmarked_runs(lines: list[tuple[str, str]]) -> list[range]:
     return runs
 
 
-def _unmarked_readings(content: str, hunk: _Hunk) -> list[tuple[_Hunk, list[str]]]:
+def _unmarked_readings(content: str, hunk: _Hunk) -> list[tuple[_Hunk, list[int]]]:
     """Return readings of a parsed hunk that add its unprefixed lines between + lines.
 
     Models leave the + off some added lines, often a statement's continuation
     lines; such a line parses as unchanged. Each reading is the hunk with the
     lines of some such runs added as the patch wrote them, paired with their
-    texts: first the runs holding a line the file lacks, then all runs. A
+    positions: first the runs holding a line the file lacks, then all runs. A
     reading keeps at least one unchanged or removed line to place it.
     """
     lines = hunk.lines
@@ -408,8 +452,48 @@ def _unmarked_readings(content: str, hunk: _Hunk) -> list[tuple[_Hunk, list[str]
         read = [("+", texts[i]) if i in texts else line for i, line in enumerate(lines)]
         if any(prefix in " -" for prefix, _ in read):
             reading = replace(hunk, lines=read, written=[], precise_only=True)
-            readings.append((reading, [texts[i] for i in added]))
+            readings.append((reading, added))
     return readings
+
+
+def _repeats_neighbors(content: str, edited: str, reading: _Hunk, added: list[int]) -> bool:
+    """Tell whether a reading adds lines the file already has beside the change.
+
+    Unchanged or removed lines on both sides of an added run place it, so the
+    file cannot hold the run there. With no such line after the run (or before
+    it), one side stays open. When the file continues on that side with the
+    run's lines or near copies of them, the run was mistyped unchanged text, and
+    adding it would repeat those lines.
+    """
+    kept = [i for i, (prefix, _) in enumerate(reading.lines) if prefix in " -"]
+    after = [reading.lines[i][1] for i in added if i > kept[-1]]
+    before = [reading.lines[i][1] for i in added if i < kept[0]]
+    if not after and not before:
+        return False
+    old_lines, new_lines = split_text_lines(content), split_text_lines(edited)
+    limit = min(len(old_lines), len(new_lines))
+    start = 0
+    while start < limit and old_lines[start] == new_lines[start]:
+        start += 1
+    end = 0
+    while end < limit - start and old_lines[-1 - end] == new_lines[-1 - end]:
+        end += 1
+    following = old_lines[len(old_lines) - end :][: len(after) + 1] if after else []
+    preceding = old_lines[:start][-len(before) - 1 :] if before else []
+    return any(
+        _resembles(text, line)
+        for texts, lines in ((after, following), (before, preceding))
+        for text in texts
+        for line in lines
+    )
+
+
+def _resembles(text: str, line: str) -> bool:
+    """Tell whether ``text`` is the file ``line`` or a near copy, ignoring spacing."""
+    text, line = _loose(text), _loose(line)
+    if len(text) < 4 or not re.search(r"\w", text):
+        return False
+    return text == line or SequenceMatcher(None, text, line).ratio() >= _NEAR_COPY
 
 
 def _unmarked_note(texts: list[str]) -> str:
@@ -613,11 +697,15 @@ def _apply_hunk(
     copied = False
     offset = 0
     hint_start = 0
+    # A repeated @@ line is read from its first occurrence, as Codex does. The
+    # lines to replace must then occur once after it: that one place is right
+    # whichever occurrence was meant. Otherwise this error is raised.
+    repeated_hint: _PatchError | None = None
     for hint in hunk.hints:
         found = _match(content[offset:], hint, hint)
         if isinstance(found, AmbiguousFuzzyMatch):
             details, values = _ambiguity(content, found, offset)
-            raise _PatchError(
+            repeated_hint = repeated_hint or _PatchError(
                 "ambiguous_context",
                 path=path,
                 label=hunk.label,
@@ -625,7 +713,8 @@ def _apply_hunk(
                 details=details,
                 **values,
             )
-        if found is None:
+            found = _match(content[offset:], hint, hint, first=True)
+        if not isinstance(found, FuzzyReplacement):
             raise _PatchError(
                 "context_not_found",
                 path=path,
@@ -641,6 +730,8 @@ def _apply_hunk(
     window = content[offset:]
     old, new = _hunk_text(hunk, " -"), _hunk_text(hunk, " +")
     if not any(prefix in " -" for prefix, _ in hunk.lines):
+        if repeated_hint is not None:
+            raise repeated_hint
         position = offset if hunk.hints else len(content)
         if hunk.no_newline and position != len(content):
             raise _PatchError(
@@ -718,7 +809,8 @@ def _apply_hunk(
         context = "".join(text.strip() for prefix, text in hunk.lines if prefix == " ")
         poststate = _match(window, new, new, eof=hunk.eof or hunk.no_newline) if new else None
         if (
-            (len(context) >= 4 or _inline_context_identifies(window, old, new))
+            repeated_hint is None
+            and (len(context) >= 4 or _inline_context_identifies(window, old, new))
             and isinstance(poststate, FuzzyReplacement)
             and (not hunk.no_newline or poststate.before_spans[0][1] == len(window))
         ):
@@ -734,6 +826,10 @@ def _apply_hunk(
         # Old text copied with errors is placed and merged by ``copy_match``.
         if not hunk.precise_only and (not new or _match(window, new, new) is None):
             found, copied = match_copied_edit(window, hunk.lines, at_eof=hunk.eof), True
+    if repeated_hint is not None and (
+        isinstance(found, AmbiguousFuzzyMatch) or (copied and found is not None)
+    ):
+        raise repeated_hint
     if isinstance(found, AmbiguousFuzzyMatch):
         # As in Codex, an @@ line or the file's previous change orders the
         # occurrences, and the first after it is meant (Sessions: 60 of 61 such
@@ -773,8 +869,8 @@ def _apply_hunk(
                 edited, notes = _apply_hunk(content, reading, path, previous)
             except _PatchError:
                 continue
-            if edited != content:
-                return edited, [*notes, _unmarked_note(added)]
+            if edited != content and not _repeats_neighbors(content, edited, reading, added):
+                return edited, [*notes, _unmarked_note([reading.lines[i][1] for i in added])]
     if found is None and hunk.eof:
         # The marker only claims where the lines are; the lines alone may still place
         # them. Text found elsewhere never proves the change was made earlier.

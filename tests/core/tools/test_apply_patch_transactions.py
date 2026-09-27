@@ -192,16 +192,17 @@ def test_missing_hunk_without_close_candidate_offers_no_excerpt_promise(tmp_path
 
 def test_ambiguous_hint_reports_actual_locations_including_offset(tmp_path):
     path = tmp_path / "file.txt"
-    path.write_bytes(b"intro\nsection\nrepeated\nleft\nrepeated\nright\n")
+    # The lines to replace follow both occurrences of the @@ line.
+    path.write_bytes(b"intro\nsection\nrepeated\nleft\nrepeated\nleft\n")
     result = apply(tmp_path, update("@@ section\n@@ repeated\n-left\n+changed"))
     assert result["error"]["code"] == "ambiguous_context"
     assert result["error"]["message"] == (
         'file.txt: the @@ line "repeated" occurs 2 times (lines 3, 5). Put a line after @@ '
         "that occurs once, or add a second @@ line below it to narrow the place.\n"
-        "Where it occurs:\n2| section\n3| repeated\n4| left\n5| repeated\n6| right\n"
+        "Where it occurs:\n2| section\n3| repeated\n4| left\n5| repeated\n6| left\n"
         "No file was changed."
     )
-    assert path.read_bytes() == b"intro\nsection\nrepeated\nleft\nrepeated\nright\n"
+    assert path.read_bytes() == b"intro\nsection\nrepeated\nleft\nrepeated\nleft\n"
 
 
 @pytest.mark.asyncio
@@ -226,13 +227,20 @@ async def test_move_metadata_position_preserves_operation_through_dispatch(tmp_p
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("hint", "code"), [("value", "context_not_found"), ("marker", "ambiguous_context")]
+    ("hint", "code", "third"),
+    [
+        ("value", "context_not_found", "value=1"),
+        # The lines to replace follow both occurrences of "marker".
+        ("marker", "ambiguous_context", "value=2"),
+    ],
 )
-async def test_context_failure_returns_candidates_without_substituting_target(tmp_path, hint, code):
+async def test_context_failure_returns_candidates_without_substituting_target(
+    tmp_path, hint, code, third
+):
     registry = ToolRegistry()
     register_apply_patch_tool(registry, file_state=FileReadState())
     path = tmp_path / "file.txt"
-    before = b"first\nmarker\nvalue=1\nsecond\nmarker\nvalue=2\n"
+    before = f"first\nmarker\n{third}\nsecond\nmarker\nvalue=2\n".encode()
     path.write_bytes(before)
     result = await registry.dispatch(
         context(tmp_path),
@@ -241,7 +249,7 @@ async def test_context_failure_returns_candidates_without_substituting_target(tm
     )
     assert result["error"]["code"] == code
     # Every place the @@ line could mean is shown with line numbers; none is picked.
-    assert "3| value=1" in result["error"]["message"]
+    assert f"3| {third}" in result["error"]["message"]
     assert "6| value=2" in result["error"]["message"]
     assert path.read_bytes() == before
     corrected = await registry.dispatch(
@@ -250,7 +258,7 @@ async def test_context_failure_returns_candidates_without_substituting_target(tm
         ["apply_patch"],
     )
     assert corrected["data"]["status"] == "applied"
-    assert path.read_bytes() == b"first\nmarker\nvalue=1\nsecond\nmarker\nvalue=3\n"
+    assert path.read_bytes() == f"first\nmarker\n{third}\nsecond\nmarker\nvalue=3\n".encode()
 
 
 @pytest.mark.asyncio

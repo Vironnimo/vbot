@@ -145,9 +145,15 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
 - `Move to` is operation metadata and may precede, separate, or follow Update
   hunks. Repeated identical destinations are harmless, including after Move File;
   conflicting destinations fail before any writes. Prefixed content remains literal.
-- `@@ context` hints select successive unique whole lines at the hunk's section.
+- `@@ context` hints select successive whole lines at the hunk's section.
   The final hint may also appear as the first context/removal line. Multiple
-  hints can narrow a section. Lines a precise strategy finds several times are
+  hints can narrow a section. A hint that occurs several times is read from its
+  first occurrence, as in Codex, but only while the hunk's lines then match once
+  through a precise strategy (not `copy_match`, not an already-applied
+  post-state, not an addition-only hunk); otherwise it fails with
+  `ambiguous_context`. That one place is right whichever occurrence was meant.
+  Evidence: in all 4 `ambiguous_context` failures of one Swarm, the hunk's lines
+  occurred once in the file (Sessions, 2026-09). Lines a precise strategy finds several times are
   ordered as in Codex: after a hint, the first occurrence from the hint on is
   changed; a hunk without hints takes the first occurrence from the line where
   the same Update's last completed change ended (`_apply_hunks`,
@@ -170,7 +176,22 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   (`The closest text in the file, lines A-B:`); touching or overlapping excerpts
   merge. Missing targets use similarity-ranked diagnostics plus `First difference,
   line N: the file has '...' where the patch has '...'` (`where old_string
-  has` for `old_string` edits). Long differing lines show <=240-character windows
+  has` for `old_string` edits). Candidate windows come from the three longest
+  copied lines and from distinctive copied lines (at most 3 occurrences) the file
+  holds exactly; a window at least 2 such lines place is shown even below the
+  0.60 similarity floor (`find_closest_candidates`). The line-by-line comparison
+  starts at the first copied line with a word the file holds near the window
+  (`_aligned_start`), because a window starts wherever its best-matching lines
+  put it, shifted by every line the copy added or dropped before them. Closing
+  quotes and brackets occur too often to align by; when the file holds no other
+  copied line there, the nearby file line most similar (>= 0.50) to the start of
+  the first copied line starts it (a reworded copy resembles its line; a copy
+  that joins lines starts like the first of them, which whole-line similarity
+  missed once in a replay), else the window start does. Evidence:
+  the longest lines were often added text copied without `+`, so 43 of 133 failed
+  hunks in one Swarm said `No similar text` although most copied lines were in
+  the file, and 10 of 76 checkable first differences named a line one to seven
+  lines too early (Sessions, 2026-09). Long differing lines show <=240-character windows
   centered on the first substantive mismatch, with 1-based file/copied-line
   character coordinates and explicit truncation. Truncated candidate excerpts
   name a callable `read(path=..., offset="line:character", limit=...)` continuation;
@@ -314,7 +335,14 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   runs holding a nonblank line the file lacks, then all runs. A reading needs at
   least one remaining context/removal line and applies only through precise
   matching (`precise_only`), so the file must hold the surrounding lines
-  adjacent; a failing reading falls back to the original error. Success adds a
+  adjacent; a failing reading falls back to the original error. A re-read run
+  with no context/removal line after it (or before it) is placed on one side
+  only, so the reading is dropped when the file continues on that side with one
+  of the run's lines or a near copy (similarity >= 0.80, `_repeats_neighbors`):
+  the run was context that differs from the file, and adding it would repeat
+  those lines one space deeper. Evidence: in a replay of one Swarm's last 18
+  minutes, 2 of 5 such hunks applied with duplicated lines before this check
+  (Sessions, 2026-09). Success adds a
   note naming the lines and asking for `+` on every added line. Runs at a hunk
   edge are never re-read: a typo in edge context would otherwise duplicate the
   line. Evidence: one Model family often left the `+` off statement continuation
@@ -325,8 +353,9 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   with +.` (difference key `unprefixed`), since identical retries followed the
   bare difference.
 - Context-only blocks before another `@@` become ordered precise locator hints
-  for that next hunk, including multiline context. Missing or ambiguous anchors
-  fail without falling back to a different location; duplicate matches after
+  for that next hunk, including multiline context. Missing anchors fail without
+  falling back to a different location, and repeated anchors follow the hint
+  rule above; duplicate matches after
   the anchor resolve to the first (see the `@@ context` rule above). Anchors do
   not leak into subsequent edits or files.
   An entirely context-only patch fails with `no_changes`, says that without a

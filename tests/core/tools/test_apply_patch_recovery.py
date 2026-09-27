@@ -293,6 +293,52 @@ def test_unprefixed_lines_are_added_only_where_unchanged_lines_place_them(tmp_pa
     assert b"lien" not in path.read_bytes() and b"missing" not in path.read_bytes()
 
 
+def test_unprefixed_lines_after_the_last_unchanged_line_are_added_when_new_there(tmp_path):
+    path = tmp_path / "file.py"
+    path.write_bytes(b"def f(seed):\n    produced = gen(seed)\n    return produced\n")
+    body = (
+        "@@\n     produced = gen(seed)\n+    if not produced:\n        raise ValueError(\n"
+        "            seed)\n+    log(seed)"
+    )
+    result = apply(tmp_path, update(body, "file.py"))
+    assert result["ok"], text(result)
+    assert path.read_bytes() == (
+        b"def f(seed):\n    produced = gen(seed)\n    if not produced:\n"
+        b"        raise ValueError(\n            seed)\n    log(seed)\n    return produced\n"
+    )
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        # Session shape: after the last unchanged line the file holds, unchanged
+        # lines differ from the file in one line. Added, they would repeat the
+        # loop body one space deeper.
+        "@@\n     total = 0\n+    unordered = []\n     for seed in SEEDS:\n"
+        "         produced = gen(seed)\n+        unordered.extend(produced)\n"
+        "         for entry in produced:\n             skipped = False\n"
+        "             record(entry)\n+    assert unordered",
+        # The same before the first unchanged line.
+        "@@\n+import os\n import sys\n SEED = 4\n+import json\n \n \n def check():",
+    ],
+)
+def test_unprefixed_lines_are_not_added_where_the_file_has_them(tmp_path, body):
+    path = tmp_path / "file.py"
+    before = (
+        b"import sys\nimport time\n\n\ndef check():\n    total = 0\n    for seed in SEEDS:\n"
+        b"        produced = gen(seed)\n        for entry in produced:\n"
+        b"            total += entry.size\n            record(entry)\n    return total\n"
+    )
+    path.write_bytes(before)
+    result = apply(tmp_path, update(body, "file.py"))
+    assert result["error"]["code"] == "text_not_found"
+    assert (
+        "That patch line has no + prefix, so it must already be in the file there; "
+        "if it is new, start it with +.\n"
+    ) in text(result)
+    assert path.read_bytes() == before
+
+
 def test_first_difference_on_an_unprefixed_line_between_additions_names_the_prefix(tmp_path):
     path = tmp_path / "file.py"
     before = (
@@ -316,6 +362,113 @@ def test_first_difference_on_an_unprefixed_line_between_additions_names_the_pref
     assert path.read_bytes() == before
     marked = body.replace('\n            "values', '\n+            "values')
     assert "no + prefix" not in text(apply(tmp_path, update(marked, "file.py")))
+
+
+def test_first_difference_is_found_where_new_lines_without_prefix_shift_the_copy(tmp_path):
+    path = tmp_path / "file.py"
+    before = "".join(f"line_{index:02d} = {index}\n" for index in range(1, 12)).encode() + (
+        b"\nPATTERNS = {\n    'a': 1,\n    'b': 2,\n}\n\n\ndef check(rows):\n    return rows\n"
+    )
+    path.write_bytes(before)
+    # The copied block holds a line the file lacks before its longest line, and a
+    # typo keeps it from being added, so the closest text starts one line early.
+    body = (
+        "@@\n PATTERNS = {\n     'a': 1,\n"
+        "+    # a long explanatory comment about the new pattern entry\n"
+        "     # and its continuation line that the Agent forgot to mark as added text\n"
+        "+    'c': 3,\n     'b': 2,\n }\n \n \n-def check(rows):\n+def check(rowz):\n"
+        "     return rowz"
+    )
+    result = apply(tmp_path, update(body, "file.py"))
+    assert result["error"]["code"] == "text_not_found"
+    assert (
+        "First difference, line 15: the file has \"    'b': 2,\" where the patch has "
+        "'    # and its continuation line that the Agent forgot to mark as added text'.\n"
+        "That patch line has no + prefix, so it must already be in the file there; "
+        "if it is new, start it with +.\n"
+    ) in text(result)
+    assert path.read_bytes() == before
+
+
+def test_first_difference_of_reworded_lines_is_their_counterpart_not_a_quote_line(tmp_path):
+    path = tmp_path / "file.py"
+    filler = "".join(f"value_{index:02d} = compute({index})\n" for index in range(1, 21))
+    before = (
+        f'{filler}\n\ndef describe():\n    """Describe the table.\n\n'
+        "    Each row lists the owner and the date it was last checked.\n"
+        "    Rows without an owner are skipped.\n    The order follows the file.\n"
+        '    """\n    return rows\n'
+    ).encode()
+    path.write_bytes(before)
+    # The copy rewords the docstring and drops a line, so only the closing quotes,
+    # which occur everywhere, match exactly.
+    body = (
+        "@@ def describe():\n"
+        "     Each record names its owner and the time of the last review.\n"
+        '     Records that have no owner are left out.\n     """\n+    rows = load()'
+    )
+    result = apply(tmp_path, update(body, "file.py"))
+    assert result["error"]["code"] == "text_not_found"
+    assert (
+        "First difference, line 26: the file has '    Each row lists the owner and the date "
+        "it was last checked.' where the patch has '    Each record names its owner and the "
+        "time of the last review.'.\n"
+    ) in text(result)
+    assert path.read_bytes() == before
+
+
+def test_first_difference_of_joined_lines_is_the_first_of_them(tmp_path):
+    path = tmp_path / "file.py"
+    filler = "".join(f"value_{index:02d} = compute({index})\n" for index in range(1, 21))
+    before = (
+        f"{filler}\n\ndef owners(table, owner):\n"
+        "    query = select(table.c.name, table.c.owner,\n"
+        "                   from_=table, limit=100)\n"
+        "    rows = run(query)\n    return [row.name for row in rows]\n"
+    ).encode()
+    path.write_bytes(before)
+    # The copy joins lines 24 and 25 into one; the closest text starts at line 25.
+    body = (
+        "@@ def owners(table, owner):\n"
+        "     query = select(table.c.title, from_=table, limit=100)\n"
+        "     rows = execute(query)\n-    return [row.title for row in rows]\n"
+        "+    return sorted(row.title for row in rows)"
+    )
+    result = apply(tmp_path, update(body, "file.py"))
+    assert result["error"]["code"] == "text_not_found"
+    assert "First difference, line 24: the file has '    query = select(" in text(result)
+    assert path.read_bytes() == before
+
+
+def test_closest_text_is_shown_when_long_new_lines_hide_the_copied_ones(tmp_path):
+    path = tmp_path / "file.py"
+    filler = "".join(f"value_{index:02d} = compute({index})\n" for index in range(1, 40))
+    before = (
+        filler
+        + "\n\ndef parse(tokens):\n    head = tokens[0]\n    rest = tokens[1:]\n"
+        + "    return head, rest\n"
+        + filler.replace("value_", "other_")
+    ).encode()
+    path.write_bytes(before)
+    # The three longest lines are new text without "+"; the typo in the last line
+    # keeps them from being added.
+    body = (
+        "@@\n def parse(tokens):\n     head = tokens[0]\n"
+        "+    # Validate the token stream before splitting it into head and rest parts.\n"
+        "     # An empty stream has no head, so it is rejected here with a clear message\n"
+        "     # instead of failing later with an IndexError deep inside the parser code.\n"
+        "+    if not tokens:\n+        raise ValueError('empty')\n"
+        "     rest = tokens[1:]\n     return head, rst"
+    )
+    result = apply(tmp_path, update(body, "file.py"))
+    assert result["error"]["code"] == "text_not_found"
+    assert "No similar text" not in text(result)
+    assert "The closest text in the file, lines 42-47:\n42| def parse(tokens):\n" in text(result)
+    assert (
+        "First difference, line 44: the file has '    rest = tokens[1:]' where the patch has "
+        "'    # An empty stream has no head, so it is rejected here with a clear message'.\n"
+    ) in text(result)
+    assert path.read_bytes() == before
 
 
 def sharing_error(code: int = 5) -> OSError:

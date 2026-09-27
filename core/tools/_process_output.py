@@ -11,6 +11,7 @@ _TEXT_CONTROL = re.compile(r"[\x1b\x80-\x9f]")
 # Longer unterminated sequences are treated as garbage so they cannot hide output.
 _MAX_STRING_CHARACTERS = 4096
 _MAX_SEQUENCE_CHARACTERS = 64
+_VISIBLE_ESCAPE = "\\x1b"
 
 
 class ProcessOutputDecoder:
@@ -21,6 +22,11 @@ class ProcessOutputDecoder:
     ``ESC [``) ends it and is then processed as ordinary output, and control
     strings end at a line break or after a bounded length. Dropped sequence
     characters never reach the output, so no terminal control is exposed.
+
+    An ESC that cannot start a terminal control is shown as the text ``\\x1b``
+    instead of being dropped together with the next character. Such an ESC is
+    usually data: PowerShell writes one for ```e`` inside double quotes, so a
+    Markdown code span such as ```expected``` becomes ESC plus ``xpected``.
     """
 
     def __init__(self) -> None:
@@ -41,11 +47,11 @@ class ProcessOutputDecoder:
                 index = stop
                 if match is None:
                     break
-            if self._consume(text[index]):
+            if self._consume(text[index], output):
                 index += 1
         return "".join(output).encode("utf-8")
 
-    def _consume(self, char: str) -> bool:
+    def _consume(self, char: str, output: list[str]) -> bool:
         """Advance the parser; ``False`` means the character is processed again."""
         if self._state == "string":
             if char == "\x9c" or (self._osc and char == "\x07"):
@@ -81,8 +87,14 @@ class ProcessOutputDecoder:
                 self._start("string", osc=char == "]")
             elif "\x20" <= char <= "\x2f" and self._length < _MAX_SEQUENCE_CHARACTERS:
                 self._length += 1
-            elif "\x30" <= char <= "\x7e":
+            elif "\x30" <= char <= "\x5f" or (self._length and "\x60" <= char <= "\x7e"):
                 self._state = "text"
+            elif not self._length:
+                # Terminals practically never send ESC before a lowercase letter,
+                # a control character or non-ASCII text, so this ESC is data.
+                self._state = "text"
+                output.append(_VISIBLE_ESCAPE)
+                return False
             else:
                 self._state = "text"
                 return False
