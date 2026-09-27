@@ -131,7 +131,7 @@ Windows binary artifacts require configured release signing, and publication is 
 
 ## Testing
 
-Backend: pytest with `--import-mode=importlib`; frontend: Vitest, optionally jsdom when helper assertions cannot cover rendered components. Tests mirror source: `tests/<package>/<module>/test_<file>.py` and `webui/src/<module>/__tests__/`.
+Backend: pytest with `--import-mode=importlib`; frontend: Vitest, optionally jsdom when helper assertions cannot cover rendered components. Test directories mirror source packages (`tests/<package>/<module>/`, `webui/src/<module>/__tests__/`), so an owner's tests are easy to find. Inside a directory, backend test modules follow owners and behaviors, not source files: one module for an owner's public interface (`test_<owner>.py`), split by behavior area (`test_<owner>_<behavior>.py`) once it grows beyond about 1,000 lines.
 
 **Text assertions:** Exact strings only for stable contracts (protocol tokens, persisted formats, accessibility names, forbidden internal values) or test-owned transport sentinels. For editable prose, errors, and help, assert exception types, codes, structured fields, DOM roles, or security invariants instead. Evaluate wording in scenarios, not substring tests.
 
