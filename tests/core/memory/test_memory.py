@@ -1,4 +1,4 @@
-"""Tests for pinned memory file backend."""
+"""Pinned memory: bullet-entry files per scope, budgets, text edits and prompt rendering."""
 
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -16,57 +16,72 @@ from core.memory import (
     MemoryBudgetError,
     MemoryError,
     MemoryMatchError,
+    MemoryPromptMode,
+    MemoryScope,
     MemoryService,
     MemoryTextChange,
     memory_block_definition,
     memory_prompt_file_paths,
     read_memory_files,
 )
-from core.memory.memory import _MAX_ENTRY_LENGTH, _MAX_SCOPE_BUDGET
 
 
-def test_memory_service_stores_entries_as_bare_bullets(tmp_path: Path) -> None:
-    # The file holds only the entries now (bare "- " bullets) — no preamble, no
-    # "## Entries" heading. Any freeform prose already in the file is dropped on the
-    # first write; the memory tool fully owns the file's content.
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    user_file = workspace / "USER.md"
-    user_file.write_text("# User Profile\n\nExisting prose.\n", encoding="utf-8")
-    service = MemoryService()
-
-    first = service.add_entry(workspace, "user", "Prefers concise answers.")
-    second = service.add_entry(workspace, "user", "Uses Windows.")
-
-    assert first.id == 1
-    assert second.id == 2
-    assert [entry.content for entry in service.list_entries(workspace, "user")] == [
-        "Prefers concise answers.",
-        "Uses Windows.",
-    ]
-    content = user_file.read_text(encoding="utf-8")
-    assert content == "- Prefers concise answers.\n- Uses Windows.\n"
-    assert "Existing prose." not in content
-    assert "## Entries" not in content
-    assert "# User Profile" not in content
+@pytest.fixture
+def service() -> MemoryService:
+    return MemoryService()
 
 
-def test_memory_service_reads_hand_written_bullets_as_entries(tmp_path: Path) -> None:
-    # Entries are "- " bullet lines with optional indentation; there is no origin
-    # tracking, so a bullet typed into the file by hand is a real entry,
-    # indistinguishable from a tool-added one. A non-bullet line is ignored.
-    workspace = tmp_path / "workspace"
+@pytest.fixture
+def workspace(tmp_path: Path) -> Path:
+    return tmp_path / "workspace"
+
+
+def _contents(service: MemoryService, workspace: Path, scope: MemoryScope) -> list[str]:
+    return [entry.content for entry in service.list_entries(workspace, scope)]
+
+
+@pytest.mark.parametrize(
+    ("scope", "filename", "existing"),
+    [
+        ("user", "USER.md", "# User Profile\n\nExisting prose.\n"),
+        ("agent", "MEMORY.md", None),
+    ],
+    ids=["prose-is-dropped", "missing-file-is-created"],
+)
+def test_add_entry_owns_the_file_as_bare_bullets(
+    service: MemoryService,
+    workspace: Path,
+    scope: MemoryScope,
+    filename: str,
+    existing: str | None,
+) -> None:
+    # The memory tool fully owns the file: only "- " bullets, no preamble or heading.
+    if existing is not None:
+        workspace.mkdir()
+        (workspace / filename).write_text(existing, encoding="utf-8")
+
+    first = service.add_entry(workspace, scope, "Prefers concise answers.")
+    second = service.add_entry(workspace, scope, "Uses Windows.")
+
+    assert (first.id, second.id) == (1, 2)
+    assert _contents(service, workspace, scope) == ["Prefers concise answers.", "Uses Windows."]
+    assert (workspace / filename).read_text(encoding="utf-8") == (
+        "- Prefers concise answers.\n- Uses Windows.\n"
+    )
+
+
+def test_hand_written_bullets_are_entries_and_other_lines_are_ignored(
+    service: MemoryService, workspace: Path
+) -> None:
+    # There is no origin tracking: a bullet typed into the file by hand is a real entry.
     workspace.mkdir()
     memory_file = workspace / "MEMORY.md"
     memory_file.write_text(
         "- sonne ist toll\n  - eingerueckt bleibt\n\t- tab bleibt\nloose prose\n",
         encoding="utf-8",
     )
-    service = MemoryService()
 
-    entries = service.list_entries(workspace, "agent")
-
-    assert [entry.content for entry in entries] == [
+    assert _contents(service, workspace, "agent") == [
         "sonne ist toll",
         "eingerueckt bleibt",
         "tab bleibt",
@@ -79,23 +94,19 @@ def test_memory_service_reads_hand_written_bullets_as_entries(tmp_path: Path) ->
     )
 
 
-def test_memory_service_creates_missing_agent_memory_file(tmp_path: Path) -> None:
-    workspace = tmp_path / "workspace"
-    service = MemoryService()
+def test_entries_keep_literal_backslash_and_leading_dash(
+    service: MemoryService, workspace: Path
+) -> None:
+    service.add_entry(workspace, "agent", "pass \\-v for verbose output")
+    service.add_entry(workspace, "agent", "-leading dash survives")
 
-    entry = service.add_entry(workspace, "agent", "Check session_search before guessing.")
-
-    assert entry.id == 1
-    memory_file = workspace / "MEMORY.md"
-    assert memory_file.exists()
-    content = memory_file.read_text(encoding="utf-8")
-    assert content == "- Check session_search before guessing.\n"
-    assert "# Agent Memory" not in content
+    assert _contents(service, workspace, "agent") == [
+        "pass \\-v for verbose output",
+        "-leading dash survives",
+    ]
 
 
-def test_memory_service_replace_and_remove_entries(tmp_path: Path) -> None:
-    workspace = tmp_path / "workspace"
-    service = MemoryService()
+def test_entries_are_replaced_and_removed_by_id(service: MemoryService, workspace: Path) -> None:
     service.add_entry(workspace, "agent", "old fact")
     service.add_entry(workspace, "agent", "second fact")
 
@@ -104,26 +115,18 @@ def test_memory_service_replace_and_remove_entries(tmp_path: Path) -> None:
 
     assert replaced.content == "new fact"
     assert removed.content == "second fact"
-    assert [entry.content for entry in service.list_entries(workspace, "agent")] == ["new fact"]
+    assert _contents(service, workspace, "agent") == ["new fact"]
+    with pytest.raises(MemoryError):
+        service.remove_entry(workspace, "agent", 2)
 
 
-def test_memory_service_preserves_literal_backslash_dash(tmp_path: Path) -> None:
-    workspace = tmp_path / "workspace"
-    service = MemoryService()
-
-    service.add_entry(workspace, "agent", "pass \\-v for verbose output")
-    service.add_entry(workspace, "agent", "-leading dash survives")
-
-    contents = [entry.content for entry in service.list_entries(workspace, "agent")]
-    assert contents == ["pass \\-v for verbose output", "-leading dash survives"]
-
-
-def test_memory_service_concurrent_adds_do_not_lose_entries(tmp_path: Path) -> None:
-    workspace = tmp_path / "workspace"
+@pytest.mark.parametrize(
+    "worker_count", [8, pytest.param(40, marks=[pytest.mark.stress, pytest.mark.timeout(120)])]
+)
+def test_concurrent_adds_do_not_lose_entries(
+    service: MemoryService, workspace: Path, worker_count: int
+) -> None:
     workspace.mkdir()
-    service = MemoryService()
-
-    worker_count = 40
     barrier = threading.Barrier(worker_count)
 
     def add(index: int) -> None:
@@ -136,224 +139,64 @@ def test_memory_service_concurrent_adds_do_not_lose_entries(tmp_path: Path) -> N
         for future in [executor.submit(add, index) for index in range(worker_count)]:
             future.result()
 
-    entries = service.list_entries(workspace, "agent")
-    assert {entry.content for entry in entries} == {
+    assert sorted(_contents(service, workspace, "agent")) == sorted(
         f"fact number {index}" for index in range(worker_count)
-    }
-    assert len(entries) == worker_count
+    )
 
 
-def test_memory_service_rejects_invalid_entry_id(tmp_path: Path) -> None:
-    service = MemoryService()
+def test_full_scope_rejects_growth_until_an_entry_is_removed(
+    service: MemoryService, workspace: Path
+) -> None:
+    scopes: tuple[MemoryScope, ...] = ("agent", "user")
+    budgets = {scope: service.scope_usage(workspace, scope)[1] for scope in scopes}
+    for scope, budget in budgets.items():
+        service.add_entry(workspace, scope, "a" * (budget // 2))
+        service.add_entry(workspace, scope, "b" * (budget - budget // 2))
+    agent_budget = budgets["agent"]
+    half = agent_budget // 2
 
-    with pytest.raises(MemoryError):
-        service.remove_entry(tmp_path, "user", 1)
-
-
-def test_read_prompt_files_renders_scope_heading_and_entries(tmp_path: Path) -> None:
-    # The producer's data half: each selected scope under its heading label with its
-    # "- " bullet entries — no <file> wrapper, no <memory> wrapper, and no guidance
-    # (those live in the declared memory:guidance block). Agent scope renders first.
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    (workspace / "MEMORY.md").write_text("- Agent fact\n", encoding="utf-8")
-    (workspace / "USER.md").write_text("- User fact\n", encoding="utf-8")
-    service = MemoryService()
-
-    agent_only = service.read_prompt_files(workspace, MEMORY_PROMPT_MODE_AGENT)
-    agent_and_user = service.read_prompt_files(workspace, MEMORY_PROMPT_MODE_AGENT_USER)
-    disabled = service.read_prompt_files(workspace, MEMORY_PROMPT_MODE_OFF)
-
-    assert "Agent fact" in agent_only
-    assert "User fact" not in agent_only
-    assert "<memory>" not in agent_only
-    assert "<file name=" not in agent_only
-    assert agent_and_user.index("Agent fact") < agent_and_user.index("User fact")
-    assert disabled == ""
-
-
-def test_read_prompt_files_renders_placeholder_for_missing_file(tmp_path: Path) -> None:
-    # Lazy ownership: a not-yet-created file is not omitted — its scope renders the
-    # empty-scope placeholder (identical to an emptied on-disk file), so the model
-    # always sees the scope, and reading never creates the file.
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    (workspace / "MEMORY.md").write_text("- Agent fact\n", encoding="utf-8")
-    service = MemoryService()
-
-    missing = service.read_prompt_files(workspace, MEMORY_PROMPT_MODE_AGENT_USER)
-
-    assert not (workspace / "USER.md").exists()
-    (workspace / "USER.md").write_text("", encoding="utf-8")
-    empty = service.read_prompt_files(workspace, MEMORY_PROMPT_MODE_AGENT_USER)
-    assert missing == empty
-    assert "Agent fact" in missing
-
-
-def test_read_prompt_files_renders_placeholders_when_no_files_exist(tmp_path: Path) -> None:
-    # With no memory files on disk, an enabled mode still renders both selected scopes
-    # via the empty-scope placeholder; only off reads nothing. Rendering never creates
-    # a file as a side effect.
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    service = MemoryService()
-
-    missing = read_memory_files(workspace, MEMORY_PROMPT_MODE_AGENT_USER, provider=service)
-
-    assert missing
-    assert read_memory_files(workspace, MEMORY_PROMPT_MODE_OFF, provider=service) == ""
-    assert not (workspace / "MEMORY.md").exists()
-    assert not (workspace / "USER.md").exists()
-    (workspace / "MEMORY.md").write_text("", encoding="utf-8")
-    (workspace / "USER.md").write_text("", encoding="utf-8")
-    assert read_memory_files(workspace, MEMORY_PROMPT_MODE_AGENT_USER, provider=service) == missing
-
-
-def test_read_prompt_files_missing_matches_empty_on_disk_file(tmp_path: Path) -> None:
-    # The lazy-ownership guarantee: the prompt is identical whether a memory file
-    # exists but is empty or has not been created yet.
-    virtual_workspace = tmp_path / "virtual"
-    virtual_workspace.mkdir()
-    real_workspace = tmp_path / "real"
-    real_workspace.mkdir()
-    service = MemoryService()
-    entry = service.add_entry(real_workspace, "agent", "temporary")
-    service.remove_entry(real_workspace, "agent", entry.id)
-    assert (real_workspace / "MEMORY.md").exists()
-
-    virtual = service.read_prompt_files(virtual_workspace, MEMORY_PROMPT_MODE_AGENT)
-    real = service.read_prompt_files(real_workspace, MEMORY_PROMPT_MODE_AGENT)
-
-    assert virtual == real
-
-
-def test_memory_prompt_file_paths_returns_existing_selected_files(tmp_path: Path) -> None:
-    # The read-before-write stamping source: resolved absolute paths of the memory
-    # files a mode injects that exist on disk, in mode order.
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    (workspace / "MEMORY.md").write_text("Agent memory", encoding="utf-8")
-    (workspace / "USER.md").write_text("User memory", encoding="utf-8")
-
-    agent_only = memory_prompt_file_paths(workspace, MEMORY_PROMPT_MODE_AGENT)
-    agent_and_user = memory_prompt_file_paths(workspace, MEMORY_PROMPT_MODE_AGENT_USER)
-
-    assert agent_only == [(workspace / "MEMORY.md").resolve()]
-    assert agent_and_user == [
-        (workspace / "MEMORY.md").resolve(),
-        (workspace / "USER.md").resolve(),
-    ]
-
-
-def test_memory_prompt_file_paths_skips_absent_files(tmp_path: Path) -> None:
-    # A not-yet-created memory file (rendered as default content, no bytes on disk)
-    # has nothing to stamp, so it is omitted.
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    (workspace / "MEMORY.md").write_text("Agent memory", encoding="utf-8")
-
-    paths = memory_prompt_file_paths(workspace, MEMORY_PROMPT_MODE_AGENT_USER)
-
-    assert paths == [(workspace / "MEMORY.md").resolve()]
-
-
-def test_memory_prompt_file_paths_off_mode_is_empty(tmp_path: Path) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    (workspace / "MEMORY.md").write_text("Agent memory", encoding="utf-8")
-
-    assert memory_prompt_file_paths(workspace, MEMORY_PROMPT_MODE_OFF) == []
-
-
-def test_memory_block_definition_declares_guidance_and_embedded_marker() -> None:
-    # The declared memory:guidance block ships the guidance prose plus the embedded
-    # {generated:memory_files} marker inside a <memory> wrapper, owner "memory".
-    definition = memory_block_definition()
-
-    assert definition.id == MEMORY_BLOCK_ID
-    assert definition.owner == MEMORY_BLOCK_OWNER
-    assert definition.kind == "text"  # static, editable
-    assert definition.editable is True
-    assert definition.default_text is not None
-    assert definition.default_text.startswith("<memory>")
-    assert definition.default_text.endswith("</memory>")
-    assert f"{{generated:{MEMORY_FILES_PRODUCER_NAME}}}" in definition.default_text
-
-
-def test_memory_service_rejects_add_exceeding_scope_budget(tmp_path: Path) -> None:
-    workspace = tmp_path / "workspace"
-    service = MemoryService()
-    entry_len = _MAX_ENTRY_LENGTH
-    fill_count = _MAX_SCOPE_BUDGET["agent"] // entry_len
-
-    for index in range(fill_count):
-        service.add_entry(workspace, "agent", chr(ord("a") + index) * entry_len)
-
-    with pytest.raises(MemoryError):
-        service.add_entry(workspace, "agent", "z" * entry_len)
-
-    assert len(service.list_entries(workspace, "agent")) == fill_count
-
-
-def test_memory_service_remove_frees_scope_budget(tmp_path: Path) -> None:
-    workspace = tmp_path / "workspace"
-    service = MemoryService()
-    entry_len = _MAX_ENTRY_LENGTH
-    fill_count = _MAX_SCOPE_BUDGET["agent"] // entry_len
-
-    for index in range(fill_count):
-        service.add_entry(workspace, "agent", chr(ord("a") + index) * entry_len)
-    with pytest.raises(MemoryError):
-        service.add_entry(workspace, "agent", "z" * entry_len)
-
+    with pytest.raises(MemoryBudgetError):
+        service.add_entry(workspace, "agent", "z")
     service.remove_entry(workspace, "agent", 1)
-    added = service.add_entry(workspace, "agent", "z" * entry_len)
+    added = service.add_entry(workspace, "agent", "z" * half)
 
-    assert added.content == "z" * entry_len
-    assert len(service.list_entries(workspace, "agent")) == fill_count
-
-
-def test_memory_service_scope_budgets_are_independent(tmp_path: Path) -> None:
-    workspace = tmp_path / "workspace"
-    service = MemoryService()
-    entry_len = _MAX_ENTRY_LENGTH
-    agent_count = _MAX_SCOPE_BUDGET["agent"] // entry_len
-    user_count = _MAX_SCOPE_BUDGET["user"] // entry_len
-
-    for index in range(agent_count):
-        service.add_entry(workspace, "agent", chr(ord("a") + index) * entry_len)
-    # The agent scope is now full; the user scope has its own independent budget.
-    for index in range(user_count):
-        service.add_entry(workspace, "user", chr(ord("a") + index) * entry_len)
-
-    assert len(service.list_entries(workspace, "agent")) == agent_count
-    assert len(service.list_entries(workspace, "user")) == user_count
+    assert added.content == "z" * half
+    # Each scope has its own budget.
+    assert service.scope_usage(workspace, "agent") == (agent_budget, agent_budget)
+    assert service.scope_usage(workspace, "user") == (budgets["user"], budgets["user"])
 
 
-def test_memory_service_replace_respects_scope_budget(tmp_path: Path) -> None:
-    workspace = tmp_path / "workspace"
-    service = MemoryService()
-    budget = _MAX_SCOPE_BUDGET["user"]
+def test_replace_may_grow_an_entry_exactly_to_the_budget(
+    service: MemoryService, workspace: Path
+) -> None:
+    _used, budget = service.scope_usage(workspace, "user")
     first = budget // 2
-    second = budget - first  # first + second fills exactly to the budget
-
+    second = budget - first
     service.add_entry(workspace, "user", "a" * first)
     service.add_entry(workspace, "user", "b" * (second - 100))
 
-    # Growing the second entry one char past the budget is rejected; the
-    # original entry is preserved because the write never happened.
+    # One character past the budget is rejected and the entry stays unchanged.
     with pytest.raises(MemoryError):
         service.replace_entry(workspace, "user", 2, "c" * (second + 1))
-    assert service.list_entries(workspace, "user")[1].content == "b" * (second - 100)
+    assert _contents(service, workspace, "user")[1] == "b" * (second - 100)
 
-    # Growing it to exactly the budget is allowed (total == budget, not over).
     replaced = service.replace_entry(workspace, "user", 2, "c" * second)
     assert replaced.content == "c" * second
 
 
-def test_text_addressed_changes_write_lf_and_report_previous_text(tmp_path: Path) -> None:
-    workspace = tmp_path / "workspace"
-    service = MemoryService()
+def test_budget_error_reports_resulting_total(service: MemoryService, workspace: Path) -> None:
+    service.add_entry(workspace, "user", "a" * 2000)
+
+    with pytest.raises(MemoryBudgetError) as error:
+        service.add_entry(workspace, "user", "b" * 1500)
+
+    assert (error.value.scope, error.value.total, error.value.budget) == ("user", 3500, 3000)
+    assert "free at least 500 characters" in str(error.value)
+
+
+def test_text_addressed_changes_write_lf_and_report_previous_text(
+    service: MemoryService, workspace: Path
+) -> None:
     service.add_entry(workspace, "agent", "Uses pytest.")
     service.add_entry(workspace, "agent", "Deploys from main.")
 
@@ -363,25 +206,23 @@ def test_text_addressed_changes_write_lf_and_report_previous_text(tmp_path: Path
     assert replaced == MemoryTextChange("agent", "Uses pytest.", "Uses pytest with xdist.")
     assert removed == MemoryTextChange("agent", "Deploys from main.", None)
     assert (workspace / "MEMORY.md").read_bytes() == b"- Uses pytest with xdist.\n"
-    assert service.scope_usage(workspace, "agent") == (23, _MAX_SCOPE_BUDGET["agent"])
+    assert service.scope_usage(workspace, "agent") == (23, 4000)
 
 
-def test_replace_matching_folds_into_an_identical_existing_entry(tmp_path: Path) -> None:
-    workspace = tmp_path / "workspace"
-    service = MemoryService()
+def test_replace_matching_folds_into_an_identical_existing_entry(
+    service: MemoryService, workspace: Path
+) -> None:
     service.add_entry(workspace, "user", "Prefers short answers.")
     service.add_entry(workspace, "user", "Prefers concise answers.")
 
     service.replace_matching(workspace, "user", "short", "Prefers concise answers.")
 
-    assert [entry.content for entry in service.list_entries(workspace, "user")] == [
-        "Prefers concise answers."
-    ]
+    assert _contents(service, workspace, "user") == ["Prefers concise answers."]
 
 
-def test_match_errors_carry_matches_and_current_entries(tmp_path: Path) -> None:
-    workspace = tmp_path / "workspace"
-    service = MemoryService()
+def test_match_errors_carry_matches_and_current_entries(
+    service: MemoryService, workspace: Path
+) -> None:
     service.add_entry(workspace, "agent", "Host A needs VPN.")
     service.add_entry(workspace, "agent", "Host B needs VPN.")
 
@@ -396,13 +237,75 @@ def test_match_errors_carry_matches_and_current_entries(tmp_path: Path) -> None:
     assert len(service.list_entries(workspace, "agent")) == 2
 
 
-def test_budget_error_reports_resulting_total(tmp_path: Path) -> None:
-    workspace = tmp_path / "workspace"
-    service = MemoryService()
-    service.add_entry(workspace, "user", "a" * 2000)
+def test_prompt_renders_selected_scopes_in_mode_order(
+    service: MemoryService, workspace: Path
+) -> None:
+    # The producer's data half: scope headings and bullets only; the <memory> wrapper
+    # and the guidance live in the declared memory:guidance block.
+    workspace.mkdir()
+    (workspace / "MEMORY.md").write_text("- Agent fact\n", encoding="utf-8")
+    (workspace / "USER.md").write_text("- User fact\n", encoding="utf-8")
 
-    with pytest.raises(MemoryBudgetError) as error:
-        service.add_entry(workspace, "user", "b" * 1500)
+    agent_only = service.read_prompt_files(workspace, MEMORY_PROMPT_MODE_AGENT)
+    agent_and_user = service.read_prompt_files(workspace, MEMORY_PROMPT_MODE_AGENT_USER)
 
-    assert (error.value.scope, error.value.total, error.value.budget) == ("user", 3500, 3000)
-    assert "free at least 500 characters" in str(error.value)
+    assert "Agent fact" in agent_only
+    assert "User fact" not in agent_only
+    assert "<memory>" not in agent_only
+    assert "<file name=" not in agent_only
+    assert agent_and_user.index("Agent fact") < agent_and_user.index("User fact")
+    assert service.read_prompt_files(workspace, MEMORY_PROMPT_MODE_OFF) == ""
+
+
+def test_missing_memory_files_render_like_empty_ones_without_being_created(
+    service: MemoryService, workspace: Path
+) -> None:
+    # Lazy ownership: a not-yet-created scope renders the empty-scope placeholder, so
+    # the Model always sees the scope, and rendering never creates a file.
+    workspace.mkdir()
+
+    missing = read_memory_files(workspace, MEMORY_PROMPT_MODE_AGENT_USER, provider=service)
+
+    assert "No entries yet." in missing
+    assert read_memory_files(workspace, MEMORY_PROMPT_MODE_OFF, provider=service) == ""
+    assert list(workspace.iterdir()) == []
+    entry = service.add_entry(workspace, "agent", "temporary")
+    service.remove_entry(workspace, "agent", entry.id)
+    (workspace / "USER.md").write_text("", encoding="utf-8")
+    assert (workspace / "MEMORY.md").exists()
+    assert service.read_prompt_files(workspace, MEMORY_PROMPT_MODE_AGENT_USER) == missing
+
+
+@pytest.mark.parametrize(
+    ("mode", "existing", "expected"),
+    [
+        (MEMORY_PROMPT_MODE_AGENT, ["MEMORY.md", "USER.md"], ["MEMORY.md"]),
+        (MEMORY_PROMPT_MODE_AGENT_USER, ["MEMORY.md", "USER.md"], ["MEMORY.md", "USER.md"]),
+        (MEMORY_PROMPT_MODE_AGENT_USER, ["MEMORY.md"], ["MEMORY.md"]),
+        (MEMORY_PROMPT_MODE_OFF, ["MEMORY.md"], []),
+    ],
+)
+def test_memory_prompt_file_paths_lists_existing_selected_files(
+    workspace: Path, mode: MemoryPromptMode, existing: list[str], expected: list[str]
+) -> None:
+    # The read-before-write stamping source: absent files have nothing to stamp.
+    workspace.mkdir()
+    for name in existing:
+        (workspace / name).write_text("- fact\n", encoding="utf-8")
+
+    assert memory_prompt_file_paths(workspace, mode) == [
+        (workspace / name).resolve() for name in expected
+    ]
+
+
+def test_memory_block_definition_declares_guidance_and_embedded_marker() -> None:
+    definition = memory_block_definition()
+
+    assert definition.id == MEMORY_BLOCK_ID
+    assert definition.owner == MEMORY_BLOCK_OWNER
+    assert definition.kind == "text"
+    assert definition.editable is True
+    assert definition.default_text is not None
+    assert definition.default_text.startswith("<memory>")
+    assert definition.default_text.endswith("</memory>")
+    assert f"{{generated:{MEMORY_FILES_PRODUCER_NAME}}}" in definition.default_text
