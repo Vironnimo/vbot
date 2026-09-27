@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -624,6 +625,112 @@ def test_dev_webui_reuses_installed_packages_while_their_inputs_are_unchanged(
     assert npm_calls == [npm_ci, npm_build, npm_build]
 
 
+def _write_build(root: Path, content: str) -> None:
+    """Write a WebUI build and the build of one Extension page."""
+
+    dist = root / "webui" / "dist"
+    dist.mkdir(parents=True, exist_ok=True)
+    (dist / "index.html").write_text(content, encoding="utf-8")
+    page = root / "resources" / "extensions" / "swarm"
+    (page / "ui").mkdir(parents=True, exist_ok=True)
+    (page / "ui" / "page.html").write_text("page source", encoding="utf-8")
+    (page / "web").mkdir(exist_ok=True)
+    (page / "web" / "index.html").write_text(content, encoding="utf-8")
+
+
+def _break_build(root: Path) -> None:
+    """Leave every output tree the way a build failing part-way does."""
+
+    pages = (root / "resources" / "extensions").glob("*/ui/page.html")
+    for tree in [root / "webui" / "dist", *(page.parent.parent / "web" for page in pages)]:
+        shutil.rmtree(tree, ignore_errors=True)
+        tree.mkdir(parents=True)
+        (tree / "partial.js").write_text("partial", encoding="utf-8")
+
+
+def _checkout_files(root: Path) -> dict[str, str]:
+    return {
+        path.relative_to(root).as_posix(): path.read_text(encoding="utf-8")
+        for path in root.rglob("*")
+        if path.is_file() and ".previous-build" not in path.parts
+    }
+
+
+def test_dev_webui_build_failure_keeps_the_previous_build(tmp_path: Path) -> None:
+    _write_build(tmp_path, "old")
+    added = tmp_path / "resources" / "extensions" / "added" / "ui"
+    added.mkdir(parents=True)
+    (added / "page.html").write_text("new page source", encoding="utf-8")
+    before = _checkout_files(tmp_path)
+
+    def runner(command: list[str], cwd: Path) -> CommandRun:
+        if command[:3] == ["git", "diff", "--quiet"]:
+            return _err()
+        if command == _update_assets._npm_command(["run", "build"]):
+            _break_build(tmp_path)
+            return _err("render failed")
+        return _ok()
+
+    result = _update_assets._refresh_dev_webui(runner, tmp_path, "old", "new")
+
+    assert not result.ok
+    assert result.message == "webui build failed: render failed\nthe previous WebUI was kept"
+    assert _checkout_files(tmp_path) == before
+    assert not (tmp_path / "webui" / ".previous-build").exists()
+
+
+def test_dev_webui_interrupted_build_is_restored_before_the_next_build(tmp_path: Path) -> None:
+    _write_build(tmp_path, "old")
+    before = _checkout_files(tmp_path)
+
+    def interrupted(command: list[str], cwd: Path) -> CommandRun:
+        if command[:3] == ["git", "diff", "--quiet"]:
+            return _err()
+        if command == _update_assets._npm_command(["run", "build"]):
+            _break_build(tmp_path)
+            raise KeyboardInterrupt
+        return _ok()
+
+    with pytest.raises(KeyboardInterrupt):
+        _update_assets._refresh_dev_webui(interrupted, tmp_path, "old", "new")
+    assert _checkout_files(tmp_path) != before
+    seen_by_build: list[dict[str, str]] = []
+
+    def resumed(command: list[str], cwd: Path) -> CommandRun:
+        if command[:3] == ["git", "diff", "--quiet"]:
+            return _err()
+        if command == _update_assets._npm_command(["run", "build"]):
+            seen_by_build.append(_checkout_files(tmp_path))
+            _write_build(tmp_path, "new")
+        return _ok()
+
+    result = _update_assets._refresh_dev_webui(resumed, tmp_path, "old", "new")
+
+    assert result.ok, result.message
+    assert seen_by_build == [before]
+    assert (tmp_path / "webui" / "dist" / "index.html").read_text(encoding="utf-8") == "new"
+    assert not (tmp_path / "webui" / ".previous-build").exists()
+
+
+@pytest.mark.parametrize("leftover", ["other_revision", "incomplete"])
+def test_dev_webui_discards_a_copy_it_cannot_trust(tmp_path: Path, leftover: str) -> None:
+    _write_build(tmp_path, "older")
+    _update_assets._save_previous_build(
+        tmp_path, "older" if leftover == "other_revision" else "current"
+    )
+    if leftover == "incomplete":
+        (tmp_path / "webui" / ".previous-build" / "trees.json").unlink()
+    _write_build(tmp_path, "current")
+
+    result = _update_assets._refresh_dev_webui(
+        lambda _command, _cwd: _ok(), tmp_path, "current", "current"
+    )
+
+    assert result.ok, result.message
+    assert (tmp_path / "webui" / "dist" / "index.html").read_text(encoding="utf-8") == "current"
+    assert not (tmp_path / "webui" / ".previous-build").exists()
+
+
 def test_dev_webui_reports_which_npm_step_failed(tmp_path: Path) -> None:
     def runner(command: list[str], cwd: Path) -> CommandRun:
         if command == _update_assets._npm_command(["ci"]):
@@ -633,7 +740,9 @@ def test_dev_webui_reports_which_npm_step_failed(tmp_path: Path) -> None:
     result = _update_assets._refresh_dev_webui(runner, tmp_path, None, "target")
 
     assert not result.ok
-    assert result.message == "webui dependency install failed: lock mismatch"
+    assert result.message == (
+        "webui dependency install failed: lock mismatch\nthe previous WebUI was kept"
+    )
 
 
 def test_dev_webui_build_failure_preserves_revision_for_retry(tmp_path: Path) -> None:
