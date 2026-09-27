@@ -3,42 +3,46 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Iterator
+from contextlib import closing
 from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
-from typing import cast
 
 import pytest
 
 from core.runs import Run, RunExecutionOwner
 from core.sessions import ChatSessionManager, SessionAddress
-from core.statistics import AgentDirectory, StatisticsService
+from core.statistics import StatisticsService
 from core.statistics._projection import CALL_COLUMNS
+from core.statistics.index import StatisticsIndex
 from core.usage import UsageRecorder
 from core.utils.timestamps import format_canonical_timestamp
 from tests.core.sessions.history_fixtures import complete_run
 from tests.core.statistics.statistics_test_support import (
     BASE,
+    StatisticsFactory,
     _assistant,
     _compaction,
-    _FakeAgents,
     _run_summary,
     _write_session,
 )
 
 
 @pytest.fixture
-def accounting(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    manager = ChatSessionManager(tmp_path)
+def accounting(
+    tmp_path: Path,
+    manager: ChatSessionManager,
+    index: StatisticsIndex,
+    statistics: StatisticsFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Iterator[tuple[StatisticsService, ChatSessionManager, UsageRecorder]]:
+    """A service over ``index`` whose durable Usage ledger starts every call at BASE."""
     recorder = UsageRecorder(tmp_path / "model-usage.db")
-    service = StatisticsService(
-        manager, cast(AgentDirectory, _FakeAgents(["main"])), usage_recorder=recorder
-    )
     monkeypatch.setattr(
         "core.usage.usage.utc_now_timestamp", lambda: format_canonical_timestamp(BASE)
     )
-    yield service, manager, recorder
-    service._index.close()
+    yield statistics(usage_recorder=recorder, index=index), manager, recorder
     recorder.close()
 
 
@@ -92,7 +96,9 @@ async def test_standalone_task_and_auxiliary_calls_count_without_fake_sessions(a
 
 
 @pytest.mark.asyncio
-async def test_history_deduplicates_and_usage_survives_archive_delete_and_rebuild(accounting):
+async def test_history_deduplicates_and_usage_survives_archive_delete_and_rebuild(
+    accounting, index: StatisticsIndex
+):
     service, manager, recorder = accounting
     session = manager.create("main").start_run("run")
     call = await recorder.start(
@@ -111,7 +117,7 @@ async def test_history_deduplicates_and_usage_survives_archive_delete_and_rebuil
         replace(
             checkpoint,
             usage={
-                **checkpoint.usage,
+                **(checkpoint.usage or {}),
                 "model_call": {"model": "summary/m", "usage": compaction_usage},
             },
         )
@@ -142,14 +148,16 @@ async def test_history_deduplicates_and_usage_survives_archive_delete_and_rebuil
     assert archived.usage.totals.assistant_messages == 0
     assert archived.usage.totals.model_calls == 3
     assert archived.costs.totals == report.costs.totals
-    service._index.discard()
+    index.discard()
     assert service.report().costs.totals == report.costs.totals
     manager.restore(session.address)
     assert service.report().usage.totals.model_calls == 3
 
 
 @pytest.mark.asyncio
-async def test_cumulative_updates_replace_counters_and_unchanged_reads_do_not_write(accounting):
+async def test_cumulative_updates_replace_counters_and_unchanged_reads_do_not_write(
+    accounting, index: StatisticsIndex
+):
     service, _manager, recorder = accounting
     call = await recorder.start(model="voice/m", kind="live_voice")
     assert service.report().usage.totals.unreported_calls == 1
@@ -161,7 +169,7 @@ async def test_cumulative_updates_replace_counters_and_unchanged_reads_do_not_wr
     assert report.usage.totals.measured_input_tokens == 16
     assert report.usage.totals.measured_output_tokens == 5
     assert report.costs.totals.reported_usd == 0
-    with sqlite3.connect(service._index.index_path) as observer:
+    with closing(sqlite3.connect(index.index_path)) as observer:
         before = observer.execute("PRAGMA data_version").fetchone()[0]
         assert service.report().costs == report.costs
         service.warm_index()
@@ -169,12 +177,14 @@ async def test_cumulative_updates_replace_counters_and_unchanged_reads_do_not_wr
 
 
 @pytest.mark.asyncio
-async def test_ledger_failure_propagates_without_discarding_index(accounting, monkeypatch):
+async def test_ledger_failure_propagates_without_discarding_index(
+    accounting, index: StatisticsIndex, monkeypatch
+):
     service, _manager, recorder = accounting
     call = await recorder.start(model="task/m", kind="decision")
     await recorder.finish(call, {"input_tokens": 1, "output_tokens": 1})
     service.report()
-    original = service._index.index_path.read_bytes()
+    original = index.index_path.read_bytes()
 
     def broken(_revision):
         raise sqlite3.DatabaseError("canonical usage unavailable")
@@ -182,7 +192,7 @@ async def test_ledger_failure_propagates_without_discarding_index(accounting, mo
     monkeypatch.setattr(recorder, "read_since", broken)
     with pytest.raises(sqlite3.DatabaseError, match="canonical usage unavailable"):
         service.report()
-    assert service._index.index_path.read_bytes() == original
+    assert index.index_path.read_bytes() == original
 
 
 @pytest.mark.asyncio
@@ -261,7 +271,9 @@ async def test_run_activity_counts_unsaved_and_auxiliary_attempts(accounting):
 
 
 @pytest.mark.asyncio
-async def test_group_usage_includes_tasks_only_in_the_owned_run_with_bounded_work(accounting):
+async def test_group_usage_includes_tasks_only_in_the_owned_run_with_bounded_work(
+    accounting, index: StatisticsIndex
+):
     service, manager, recorder = accounting
     binding = manager.create_bound_temporary_session(
         SessionAddress(None, "temporary", "participant"),
@@ -294,7 +306,7 @@ async def test_group_usage_includes_tasks_only_in_the_owned_run_with_bounded_wor
     # Count actual SQLite work, rather than timing or planner-specific text.
     # The index is disposable: seed unrelated projected requests directly so
     # this regression does not need thousands of canonical fsyncs.
-    database = service._index._database.get()
+    database = index._database.get()
     connection = database.writer
 
     async def measured_report():
@@ -472,7 +484,7 @@ async def test_windowed_extension_activity_includes_requests_without_saved_outpu
 
 @pytest.mark.asyncio
 async def test_new_recorder_lifetime_reconciles_a_restored_revision_that_caught_up(
-    accounting, monkeypatch
+    accounting, index: StatisticsIndex, statistics: StatisticsFactory, monkeypatch
 ):
     service, _manager, recorder = accounting
     for model in ("task/a", "task/b"):
@@ -486,9 +498,10 @@ async def test_new_recorder_lifetime_reconciles_a_restored_revision_that_caught_
     replacement = UsageRecorder(path)
     try:
         assert replacement.projection_epoch != epoch
-        service._usage_recorder = replacement
-        # A stopped-store restore retains database identity. New work can
-        # catch up numerically before the first report of the new Runtime.
+        # The new Runtime's service reads the same index. A stopped-store restore
+        # retains database identity; new work can catch up numerically before
+        # its first report.
+        service = statistics(usage_recorder=replacement, index=index)
         restored = (records[0], replace(records[1], id="restored-new", model="task/c"))
         monkeypatch.setattr(
             replacement,

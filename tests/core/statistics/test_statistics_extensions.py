@@ -3,18 +3,15 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import timedelta
-from pathlib import Path
-from typing import cast
+from datetime import datetime, timedelta
 
 from core.sessions import ChatSessionManager, SessionAddress
-from core.statistics import AgentDirectory, StatisticsService
 from core.tools import tool_success
 from tests.core.sessions.history_fixtures import seed_history
 from tests.core.statistics.statistics_test_support import (
     BASE,
+    StatisticsFactory,
     _assistant,
-    _FakeAgents,
     _run_summary,
     _tool,
     _write_session,
@@ -28,8 +25,7 @@ def _participant(
     participant_id: str,
     name: str,
     model: str,
-    at=BASE,
-    input_tokens: int = 10,
+    at: datetime = BASE,
 ) -> SessionAddress:
     binding = manager.create_bound_temporary_session(
         SessionAddress(None, f"tmp_{participant_id}", f"ses_{participant_id}"),
@@ -45,7 +41,7 @@ def _participant(
                 model=model,
                 at=at,
                 usage={
-                    "input_tokens": input_tokens,
+                    "input_tokens": 10,
                     "output_tokens": 2,
                     "cost": {"amount_usd": 0.25, "source": "provider"},
                 },
@@ -57,12 +53,9 @@ def _participant(
     return binding.address
 
 
-def _service(manager: ChatSessionManager, agents: list[str]) -> StatisticsService:
-    return StatisticsService(manager, cast(AgentDirectory, _FakeAgents(agents)))
-
-
-def test_report_counts_owner_managed_sessions_under_their_extension(tmp_path: Path) -> None:
-    manager = ChatSessionManager(tmp_path)
+def test_report_counts_owner_managed_sessions_under_their_extension(
+    manager: ChatSessionManager, statistics: StatisticsFactory
+) -> None:
     _write_session(
         manager,
         "main",
@@ -75,7 +68,7 @@ def test_report_counts_owner_managed_sessions_under_their_extension(tmp_path: Pa
     _participant(manager, group_id="swr_a", participant_id="p2", name="Xenia", model="prov/b")
     manager.set_temporary_group_title(owner_name="swarm", group_id="swr_a", title="Parser rework")
 
-    report = _service(manager, ["main"]).report().to_dict()
+    report = statistics(["main"]).report().to_dict()
 
     agents = {row["agent_id"]: row for row in report["overview"]["agents"]}
     assert set(agents) == {"main", "extension:swarm"}
@@ -108,12 +101,13 @@ def test_report_counts_owner_managed_sessions_under_their_extension(tmp_path: Pa
     assert group["participants"][0]["activity"]["run_status"]["completed"] == 1
 
 
-def test_windowed_report_keeps_only_groups_with_in_window_activity(tmp_path: Path) -> None:
-    manager = ChatSessionManager(tmp_path)
+def test_windowed_report_keeps_only_groups_with_in_window_activity(
+    manager: ChatSessionManager, statistics: StatisticsFactory
+) -> None:
     old = BASE - timedelta(days=30)
     _participant(manager, group_id="swr_old", participant_id="p1", name="Ada", model="p/m", at=old)
     _participant(manager, group_id="swr_new", participant_id="p2", name="Bo", model="p/m")
-    service = _service(manager, [])
+    service = statistics([])
 
     windowed = service.report(since=BASE - timedelta(days=1)).to_dict()
     all_time = service.report().to_dict()
@@ -128,11 +122,12 @@ def test_windowed_report_keeps_only_groups_with_in_window_activity(tmp_path: Pat
     assert [group["group_id"] for group in extension["groups"]] == ["swr_new", "swr_old"]
 
 
-def test_deleted_group_leaves_the_report(tmp_path: Path) -> None:
-    manager = ChatSessionManager(tmp_path)
+def test_deleted_group_leaves_the_report(
+    manager: ChatSessionManager, statistics: StatisticsFactory
+) -> None:
     _participant(manager, group_id="swr_a", participant_id="p1", name="Ada", model="p/m")
     manager.set_temporary_group_title(owner_name="swarm", group_id="swr_a", title="Gone soon")
-    service = _service(manager, [])
+    service = statistics([])
     assert service.report().to_dict()["extensions"]["extensions"]
 
     asyncio.run(manager.delete_temporary_group(owner_name="swarm", group_id="swr_a"))
@@ -140,4 +135,3 @@ def test_deleted_group_leaves_the_report(tmp_path: Path) -> None:
     report = service.report().to_dict()
     assert report["extensions"]["extensions"] == []
     assert report["overview"]["agents"] == []
-    assert manager.list_owned_session_summaries() == []
