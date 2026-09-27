@@ -1,4 +1,4 @@
-"""Homeassistant: service listing and service calls through production dispatch."""
+"""Home Assistant: service listing and service calls through production dispatch."""
 
 from __future__ import annotations
 
@@ -8,19 +8,16 @@ import httpx
 import pytest
 import respx
 
-from tests.resources.extensions.homeassistant_helpers import (
-    _HASS_URL,
+from tests.resources.extensions.homeassistant.homeassistant_test_support import (
     HA_CALL_SERVICE_NAME,
     HA_LIST_SERVICES_NAME,
-    _dispatch,
-    _tools_with_token,
+    HASS_URL,
     assert_failure_envelope,
     assert_success_envelope,
+    dispatch,
     model_text,
     request_body,
-)
-from tests.resources.extensions.homeassistant_helpers import (
-    _clean_extension_modules as _clean_extension_modules,
+    tools_with_token,
 )
 
 _SERVICES: list[dict[str, Any]] = [
@@ -93,7 +90,7 @@ _KITCHEN = {"entity_id": "light.kitchen", "state": "on", "attributes": {"friendl
 
 
 def _mock_services() -> respx.Route:
-    return respx.get(f"{_HASS_URL}/api/services").mock(
+    return respx.get(f"{HASS_URL}/api/services").mock(
         return_value=httpx.Response(200, json=_SERVICES)
     )
 
@@ -103,9 +100,9 @@ def _mock_services() -> respx.Route:
 @pytest.mark.asyncio
 async def test_list_services_without_domain_names_services_per_domain() -> None:
     _mock_services()
-    tools = _tools_with_token()
+    tools = tools_with_token()
 
-    result = await _dispatch(tools, HA_LIST_SERVICES_NAME, {})
+    result = await dispatch(tools, HA_LIST_SERVICES_NAME, {})
 
     data = assert_success_envelope(result)
     assert data["count"] == 4
@@ -121,16 +118,16 @@ async def test_list_services_without_domain_names_services_per_domain() -> None:
 @pytest.mark.asyncio
 async def test_list_services_with_domain_shows_compact_fields() -> None:
     _mock_services()
-    tools = _tools_with_token()
+    tools = tools_with_token()
 
     light = assert_success_envelope(
-        await _dispatch(tools, HA_LIST_SERVICES_NAME, {"domain": " Light "})
+        await dispatch(tools, HA_LIST_SERVICES_NAME, {"domain": " Light "})
     )
     climate = assert_success_envelope(
-        await _dispatch(tools, HA_LIST_SERVICES_NAME, {"domain": "climate"})
+        await dispatch(tools, HA_LIST_SERVICES_NAME, {"domain": "climate"})
     )
     weather = assert_success_envelope(
-        await _dispatch(tools, HA_LIST_SERVICES_NAME, {"domain": "weather"})
+        await dispatch(tools, HA_LIST_SERVICES_NAME, {"domain": "weather"})
     )
 
     assert light["count"] == 2
@@ -156,9 +153,9 @@ async def test_list_services_shows_one_service_with_field_descriptions(
     arguments: dict[str, Any],
 ) -> None:
     _mock_services()
-    tools = _tools_with_token()
+    tools = tools_with_token()
 
-    data = assert_success_envelope(await _dispatch(tools, HA_LIST_SERVICES_NAME, arguments))
+    data = assert_success_envelope(await dispatch(tools, HA_LIST_SERVICES_NAME, arguments))
 
     assert data["content"].splitlines() == [
         "light.turn_on: Turns on one or more lights. Adjusts their properties as well.",
@@ -189,9 +186,9 @@ async def test_list_services_unknown_names_list_close_ones(
     arguments: dict[str, Any], message: str
 ) -> None:
     _mock_services()
-    tools = _tools_with_token()
+    tools = tools_with_token()
 
-    result = await _dispatch(tools, HA_LIST_SERVICES_NAME, arguments)
+    result = await dispatch(tools, HA_LIST_SERVICES_NAME, arguments)
 
     assert assert_failure_envelope(result, "service_not_found")["message"] == message
 
@@ -200,7 +197,7 @@ async def test_list_services_unknown_names_list_close_ones(
 @respx.mock
 @pytest.mark.asyncio
 async def test_call_service_reports_changed_states_as_lines() -> None:
-    route = respx.post(f"{_HASS_URL}/api/services/light/turn_on").mock(
+    route = respx.post(f"{HASS_URL}/api/services/light/turn_on").mock(
         return_value=httpx.Response(
             200,
             json=[
@@ -213,9 +210,9 @@ async def test_call_service_reports_changed_states_as_lines() -> None:
             ],
         )
     )
-    tools = _tools_with_token()
+    tools = tools_with_token()
 
-    result = await _dispatch(
+    result = await dispatch(
         tools,
         HA_CALL_SERVICE_NAME,
         {
@@ -304,15 +301,15 @@ async def test_call_service_reports_changed_states_as_lines() -> None:
 async def test_call_service_reads_other_call_shapes_exactly(
     arguments: dict[str, Any], path: str, body: dict[str, Any]
 ) -> None:
-    route = respx.post(url__startswith=f"{_HASS_URL}/api/services/").mock(
+    route = respx.post(url__startswith=f"{HASS_URL}/api/services/").mock(
         return_value=httpx.Response(200, json=[_KITCHEN])
     )
-    respx.get(url__startswith=f"{_HASS_URL}/api/states/").mock(
+    respx.get(url__startswith=f"{HASS_URL}/api/states/").mock(
         return_value=httpx.Response(200, json=_KITCHEN)
     )
-    tools = _tools_with_token()
+    tools = tools_with_token()
 
-    result = await _dispatch(tools, HA_CALL_SERVICE_NAME, arguments)
+    result = await dispatch(tools, HA_CALL_SERVICE_NAME, arguments)
 
     assert result["ok"], result["error"]
     assert route.call_count == 1
@@ -371,14 +368,18 @@ async def test_call_service_reads_other_call_shapes_exactly(
         ({"domain": "42", "service": "turn_on"}, "is not a Home Assistant domain name"),
         ({"domain": "light", "service": "turn/on"}, "is not a Home Assistant service name"),
         ({"action": "light.turn_on", "target": {"floor": "1"}}, "target cannot hold floor"),
+        (
+            {"domain": "light", "service": "turn_on", "data": {"entity_id": "light/../sensor"}},
+            "Find ids with ha_list_entities {}.",
+        ),
     ],
 )
 async def test_call_service_refuses_unclear_calls_before_any_request(
     arguments: dict[str, Any], fragment: str
 ) -> None:
-    tools = _tools_with_token()
+    tools = tools_with_token()
 
-    result = await _dispatch(tools, HA_CALL_SERVICE_NAME, arguments)
+    result = await dispatch(tools, HA_CALL_SERVICE_NAME, arguments)
 
     error = assert_failure_envelope(result, "invalid_arguments")
     assert error["message"].startswith("ha_call_service was not run: ")
@@ -388,41 +389,22 @@ async def test_call_service_refuses_unclear_calls_before_any_request(
 
 @respx.mock
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "arguments",
-    [
+async def test_call_service_refuses_blocked_domains_in_any_spelling() -> None:
+    tools = tools_with_token()
+    calls = [
         {"domain": "shell_command", "service": "run"},
         {"service": "SHELL_COMMAND.RUN"},
-        {"domain": "command_line", "service": "run"},
-        {"domain": "python_script", "service": "run"},
-        {"domain": "pyscript", "service": "run"},
-        {"domain": "hassio", "service": "run"},
-        {"domain": "rest_command", "service": "run"},
-    ],
-)
-async def test_call_service_blocked_domain(arguments: dict[str, Any]) -> None:
-    tools = _tools_with_token()
+        *(
+            {"domain": domain, "service": "run"}
+            for domain in ("command_line", "python_script", "pyscript", "hassio", "rest_command")
+        ),
+    ]
 
-    result = await _dispatch(tools, HA_CALL_SERVICE_NAME, arguments)
-
-    error = assert_failure_envelope(result, "blocked_domain")
-    assert "was not called. Tell the user if they need it." in error["message"]
-    assert not respx.calls
-
-
-@respx.mock
-@pytest.mark.asyncio
-async def test_call_service_refuses_unsafe_entity_ids_without_any_request() -> None:
-    tools = _tools_with_token()
-
-    result = await _dispatch(
-        tools,
-        HA_CALL_SERVICE_NAME,
-        {"domain": "light", "service": "turn_on", "data": {"entity_id": "light/../sensor"}},
-    )
-
-    error = assert_failure_envelope(result, "invalid_arguments")
-    assert "Find ids with ha_list_entities {}." in error["message"]
+    for arguments in calls:
+        error = assert_failure_envelope(
+            await dispatch(tools, HA_CALL_SERVICE_NAME, arguments), "blocked_domain"
+        )
+        assert "was not called. Tell the user if they need it." in error["message"]
     assert not respx.calls
 
 
@@ -447,11 +429,11 @@ async def test_call_service_refuses_unsafe_entity_ids_without_any_request() -> N
 async def test_call_service_names_candidates_instead_of_acting_on_a_name(
     entity_id: str, fragment: str
 ) -> None:
-    post = respx.post(url__startswith=f"{_HASS_URL}/api/services/")
-    respx.get(f"{_HASS_URL}/api/states").mock(return_value=httpx.Response(200, json=[_KITCHEN]))
-    tools = _tools_with_token()
+    post = respx.post(url__startswith=f"{HASS_URL}/api/services/")
+    respx.get(f"{HASS_URL}/api/states").mock(return_value=httpx.Response(200, json=[_KITCHEN]))
+    tools = tools_with_token()
 
-    result = await _dispatch(
+    result = await dispatch(
         tools,
         HA_CALL_SERVICE_NAME,
         {"domain": "light", "service": "turn_on", "entity_id": entity_id},
@@ -465,15 +447,15 @@ async def test_call_service_names_candidates_instead_of_acting_on_a_name(
 @respx.mock
 @pytest.mark.asyncio
 async def test_call_service_without_change_reports_the_current_state() -> None:
-    respx.post(f"{_HASS_URL}/api/services/light/turn_on").mock(
+    respx.post(f"{HASS_URL}/api/services/light/turn_on").mock(
         return_value=httpx.Response(200, json=[])
     )
-    respx.get(f"{_HASS_URL}/api/states/light.kitchen").mock(
+    respx.get(f"{HASS_URL}/api/states/light.kitchen").mock(
         return_value=httpx.Response(200, json=_KITCHEN)
     )
-    tools = _tools_with_token()
+    tools = tools_with_token()
 
-    result = await _dispatch(
+    result = await dispatch(
         tools,
         HA_CALL_SERVICE_NAME,
         {"domain": "light", "service": "turn_on", "entity_id": "light.kitchen"},
@@ -490,16 +472,16 @@ async def test_call_service_without_change_reports_the_current_state() -> None:
 @respx.mock
 @pytest.mark.asyncio
 async def test_call_service_on_a_missing_entity_names_close_entities() -> None:
-    respx.post(f"{_HASS_URL}/api/services/light/turn_on").mock(
+    respx.post(f"{HASS_URL}/api/services/light/turn_on").mock(
         return_value=httpx.Response(200, json=[])
     )
-    respx.get(f"{_HASS_URL}/api/states/light.kitchn").mock(
+    respx.get(f"{HASS_URL}/api/states/light.kitchn").mock(
         return_value=httpx.Response(404, json={"message": "Entity not found."})
     )
-    respx.get(f"{_HASS_URL}/api/states").mock(return_value=httpx.Response(200, json=[_KITCHEN]))
-    tools = _tools_with_token()
+    respx.get(f"{HASS_URL}/api/states").mock(return_value=httpx.Response(200, json=[_KITCHEN]))
+    tools = tools_with_token()
 
-    result = await _dispatch(
+    result = await dispatch(
         tools,
         HA_CALL_SERVICE_NAME,
         {"domain": "light", "service": "turn_on", "entity_id": "light.kitchn"},
@@ -516,15 +498,15 @@ async def test_call_service_on_a_missing_entity_names_close_entities() -> None:
 @respx.mock
 @pytest.mark.asyncio
 async def test_call_service_with_one_missing_entity_of_several_reports_both() -> None:
-    respx.post(f"{_HASS_URL}/api/services/light/turn_off").mock(
+    respx.post(f"{HASS_URL}/api/services/light/turn_off").mock(
         return_value=httpx.Response(200, json=[{**_KITCHEN, "state": "off"}])
     )
-    respx.get(f"{_HASS_URL}/api/states/light.hall").mock(
+    respx.get(f"{HASS_URL}/api/states/light.hall").mock(
         return_value=httpx.Response(404, json={"message": "Entity not found."})
     )
-    tools = _tools_with_token()
+    tools = tools_with_token()
 
-    result = await _dispatch(
+    result = await dispatch(
         tools,
         HA_CALL_SERVICE_NAME,
         {"domain": "light", "service": "turn_off", "entity_id": "light.kitchen,light.hall"},
@@ -567,13 +549,13 @@ async def test_call_service_with_one_missing_entity_of_several_reports_both() ->
 async def test_rejected_service_calls_name_the_next_call(
     arguments: dict[str, Any], code: str, message: str
 ) -> None:
-    respx.post(url__startswith=f"{_HASS_URL}/api/services/").mock(
+    respx.post(url__startswith=f"{HASS_URL}/api/services/").mock(
         return_value=httpx.Response(400, json={"message": "expected int"})
     )
     _mock_services()
-    tools = _tools_with_token()
+    tools = tools_with_token()
 
-    result = await _dispatch(tools, HA_CALL_SERVICE_NAME, arguments)
+    result = await dispatch(tools, HA_CALL_SERVICE_NAME, arguments)
 
     error = assert_failure_envelope(result, code)
     assert error["message"] == message
@@ -583,13 +565,13 @@ async def test_rejected_service_calls_name_the_next_call(
 @respx.mock
 @pytest.mark.asyncio
 async def test_bare_bad_request_names_the_service_fields() -> None:
-    respx.post(f"{_HASS_URL}/api/services/light/turn_on").mock(
+    respx.post(f"{HASS_URL}/api/services/light/turn_on").mock(
         return_value=httpx.Response(400, text="400: Bad Request")
     )
     _mock_services()
-    tools = _tools_with_token()
+    tools = tools_with_token()
 
-    result = await _dispatch(
+    result = await dispatch(
         tools, HA_CALL_SERVICE_NAME, {"domain": "light", "service": "turn_on", "data": {"x": 1}}
     )
 
@@ -607,15 +589,15 @@ async def test_data_only_service_is_asked_for_its_response_once() -> None:
         "Add ?return_response to query parameters."
     }
     forecast = {"weather.home": {"forecast": [{"condition": "sunny"}]}}
-    route = respx.post(url__startswith=f"{_HASS_URL}/api/services/weather/get_forecasts").mock(
+    route = respx.post(url__startswith=f"{HASS_URL}/api/services/weather/get_forecasts").mock(
         side_effect=[
             httpx.Response(400, json=refusal),
             httpx.Response(200, json={"changed_states": [], "service_response": forecast}),
         ]
     )
-    tools = _tools_with_token()
+    tools = tools_with_token()
 
-    result = await _dispatch(
+    result = await dispatch(
         tools,
         HA_CALL_SERVICE_NAME,
         {"action": "weather.get_forecasts", "data": {"type": "daily"}},
@@ -634,7 +616,7 @@ async def test_data_only_service_is_asked_for_its_response_once() -> None:
 @respx.mock
 @pytest.mark.asyncio
 async def test_return_response_on_a_service_without_data_says_to_drop_it() -> None:
-    route = respx.post(url__startswith=f"{_HASS_URL}/api/services/light/turn_on").mock(
+    route = respx.post(url__startswith=f"{HASS_URL}/api/services/light/turn_on").mock(
         return_value=httpx.Response(
             400,
             json={
@@ -643,9 +625,9 @@ async def test_return_response_on_a_service_without_data_says_to_drop_it() -> No
             },
         )
     )
-    tools = _tools_with_token()
+    tools = tools_with_token()
 
-    result = await _dispatch(
+    result = await dispatch(
         tools,
         HA_CALL_SERVICE_NAME,
         {"domain": "light", "service": "turn_on", "return_response": "true"},
