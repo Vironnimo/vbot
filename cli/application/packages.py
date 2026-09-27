@@ -11,9 +11,10 @@ import re
 import shutil
 import stat
 import zipfile
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, TypeVar
 
 import httpx
 
@@ -24,7 +25,13 @@ MAX_PAYLOAD_BYTES = 12 * 1024**3
 MAX_FILES = 100_000
 # CPython's bytecode cache files and the temporaries of its atomic cache writes.
 _BYTECODE_CACHE = re.compile(r"[^/]+\.pyc(?:\.[0-9]+)?")
+#: Concurrent readers for payload files. Windows scans every newly written file
+#: on its first open; overlapping those scans cuts hashing a fresh 11k-file
+#: version from about 45 s to 7 s. Reads and hashing release the GIL.
+FILE_WORKERS = 16
 _LOGGER = logging.getLogger("vbot.application.packages")
+_Item = TypeVar("_Item")
+_Result = TypeVar("_Result")
 
 
 def version_label(manifest: dict[str, Any]) -> str:
@@ -45,6 +52,29 @@ def version_label(manifest: dict[str, Any]) -> str:
 def digest(path: Path) -> str:
     with path.open("rb") as handle:
         return hashlib.file_digest(handle, "sha256").hexdigest()
+
+
+def _concurrently(function: Callable[[_Item], _Result], items: Iterable[_Item]) -> list[_Result]:
+    """Apply ``function`` to payload files concurrently; the first failure is raised."""
+    items = list(items)
+    if len(items) < 2:
+        return [function(item) for item in items]
+    pool = ThreadPoolExecutor(max_workers=min(FILE_WORKERS, len(items)))
+    try:
+        return list(pool.map(function, items))
+    finally:
+        # After a failure, queued files are skipped instead of processed.
+        pool.shutdown(cancel_futures=True)
+
+
+def digest_files(paths: Iterable[Path]) -> list[str]:
+    """Return the SHA256 digests of ``paths`` in order."""
+    return _concurrently(digest, paths)
+
+
+def copy_files(pairs: Iterable[tuple[Path, Path]]) -> None:
+    """Copy each ``(source, destination)`` file with its metadata; parents must exist."""
+    _concurrently(lambda pair: shutil.copy2(*pair), pairs)
 
 
 def relative_path(name: str) -> str:
@@ -193,7 +223,11 @@ def validate_release(
         if name.casefold() in folded:
             raise ApplicationError("Case-colliding release filenames")
         folded.add(name.casefold())
-        if not isinstance(expected, str) or len(expected) != 64 or digest(actual[name]) != expected:
+        if not isinstance(expected, str) or len(expected) != 64:
+            raise ApplicationError(f"Release file verification failed: {name}")
+    digests = digest_files(actual[name] for name in files)
+    for name, actual_digest in zip(files, digests, strict=True):
+        if actual_digest != files[name]:
             raise ApplicationError(f"Release file verification failed: {name}")
     required = {"app/cli/main.py", "app/pyproject.toml"}
     if release.get("install_shape") != "desktop-client":

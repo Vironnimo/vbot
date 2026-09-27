@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import shutil
 import socket
@@ -12,7 +13,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from cli.application.packages import digest, validate_release
+from cli.application.packages import copy_files, digest, digest_files, validate_release
 from cli.application.runtime_sqlite import RuntimeSQLiteError, provision_runtime_sqlite
 from cli.application.state import (
     ApplicationError,
@@ -26,6 +27,7 @@ from cli.application.state import (
 from core.utils.ids import new_id
 from core.utils.processes import subprocess_creation_flags
 
+_LOGGER = logging.getLogger("vbot.application.customize")
 _TEST_ENVIRONMENT_KEYS = frozenset(
     {
         "PATH",
@@ -218,13 +220,86 @@ def _ensure_candidate_environment(install: Installation, source: Path) -> Path:
     return python
 
 
+def _node_modules_identity(webui: Path) -> str | None:
+    """Fingerprint what ``npm ci`` installs from: the lock, the manifest and Node itself."""
+    node = shutil.which("node")
+    if node is None:
+        return None
+    try:
+        version = subprocess.run(
+            [node, "--version"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=True,
+            creationflags=subprocess_creation_flags(),
+        ).stdout.strip()
+        manifests = [(webui / name).read_bytes() for name in ("package-lock.json", "package.json")]
+    except (OSError, subprocess.SubprocessError):
+        return None
+    value = hashlib.sha256(b"vbot-npm-ci-1\0" + version.encode() + b"\0")
+    for contents in manifests:
+        value.update(hashlib.sha256(contents).digest())
+    return value.hexdigest()
+
+
 def _build_web_assets(install: Installation, source: Path) -> None:
+    """Build the WebUI and Extension pages, reinstalling packages only when their inputs changed.
+
+    ``npm ci`` deletes ``node_modules`` first, which also removes the marker of the
+    previous install, so an interrupted install is never reused.
+    """
     npm = shutil.which("npm.cmd" if os.name == "nt" else "npm")
     if npm is None:
         raise ApplicationError("Source updates require Node.js/npm to build the WebUI")
     log = contained(install.root, "development/source-update.log")
-    _checked_command(source / "webui", [npm, "ci"], log)
-    _checked_command(source / "webui", [npm, "run", "build"], log)
+    webui = source / "webui"
+    identity = _node_modules_identity(webui)
+    marker = webui / "node_modules" / ".vbot-npm-ci"
+
+    def install_packages() -> None:
+        _checked_command(webui, [npm, "ci"], log)
+        if identity is None:
+            return
+        try:
+            marker.write_text(identity, encoding="ascii")
+        except OSError as exc:
+            # Only reuse is lost: the next update installs the packages again.
+            _LOGGER.warning("Could not record the installed WebUI packages: %s", exc)
+
+    try:
+        reused = identity is not None and marker.read_text(encoding="ascii") == identity
+    except (OSError, UnicodeError):
+        reused = False
+    if not reused:
+        install_packages()
+    try:
+        _checked_command(webui, [npm, "run", "build"], log)
+    except ApplicationError:
+        if not reused:
+            raise
+        # Reused packages may have been damaged outside npm; a clean install decides.
+        install_packages()
+        _checked_command(webui, [npm, "run", "build"], log)
+
+
+def _copy_runtime(base: Path, destination: Path, *, dependencies: bool) -> None:
+    """Copy a verified runtime tree, leaving out every ``site-packages`` unless reused."""
+    files: list[tuple[Path, Path]] = []
+    pending = [(base, destination)]
+    while pending:
+        origin, target = pending.pop()
+        target.mkdir(parents=True)
+        with os.scandir(origin) as entries:
+            for entry in entries:
+                if not dependencies and entry.name.casefold() == "site-packages":
+                    continue
+                child = (Path(entry.path), target / entry.name)
+                if entry.is_dir(follow_symlinks=False):
+                    pending.append(child)
+                else:
+                    files.append(child)
+    copy_files(files)
 
 
 def _working_tree_digest(working: Path) -> str:
@@ -314,11 +389,7 @@ def _candidate(
                 if reuse_runtime
                 else "Installing the application dependencies"
             )
-        shutil.copytree(
-            base / "runtime",
-            candidate / "runtime",
-            ignore=None if reuse_runtime else shutil.ignore_patterns("site-packages"),
-        )
+        _copy_runtime(base / "runtime", candidate / "runtime", dependencies=reuse_runtime)
         try:
             provision_runtime_sqlite(candidate / "runtime", source)
         except (OSError, RuntimeSQLiteError) as error:
@@ -426,10 +497,10 @@ def _candidate(
             ):
                 raise ApplicationError("Invalid native source digest")
             manifest["native_source_digest"] = native_source_digest
+        payload = [path for path in candidate.rglob("*") if path.is_file()]
         manifest["files"] = {
-            path.relative_to(candidate).as_posix(): digest(path)
-            for path in candidate.rglob("*")
-            if path.is_file()
+            path.relative_to(candidate).as_posix(): file_digest
+            for path, file_digest in zip(payload, digest_files(payload), strict=True)
         }
         write_json(candidate / "release.json", manifest)
         validate_release(candidate, shape=install.install_shape)

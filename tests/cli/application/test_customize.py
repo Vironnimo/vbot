@@ -6,6 +6,7 @@ import hashlib
 import io
 import json
 import os
+import shutil
 import subprocess
 import zipfile
 from pathlib import Path
@@ -218,6 +219,81 @@ def test_candidate_copies_source_and_resolves_dependencies_only_into_new_runtime
             assert Path(commands[0][-1]).name == "requirements-server.lock"
     manifest = json.loads((candidate / "release.json").read_text(encoding="utf-8"))
     assert manifest.get("build_inputs") == inputs
+
+
+def _web_source(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[Path, list[str], SimpleNamespace]:
+    """A WebUI source whose npm commands are recorded; ``npm ci`` recreates node_modules."""
+    webui = root / "webui"
+    webui.mkdir(parents=True)
+    (webui / "package.json").write_text('{"name": "webui"}', encoding="utf-8")
+    (webui / "package-lock.json").write_text('{"lock": 1}', encoding="utf-8")
+    commands: list[str] = []
+    state = SimpleNamespace(node="v22.0.0", failing_builds=0)
+
+    def checked(working: Path, arguments: list[str], _log: Path) -> None:
+        assert working == webui
+        commands.append(arguments[-1])
+        if arguments[-1] == "ci":
+            shutil.rmtree(webui / "node_modules", ignore_errors=True)
+            (webui / "node_modules").mkdir()
+        elif state.failing_builds:
+            state.failing_builds -= 1
+            raise ApplicationError("build failed")
+
+    def run(arguments: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        assert arguments[1:] == ["--version"]
+        return subprocess.CompletedProcess(arguments, 0, f"{state.node}\n", "")
+
+    monkeypatch.setattr(customize.shutil, "which", lambda name: name)
+    monkeypatch.setattr(customize.subprocess, "run", run)
+    monkeypatch.setattr(customize, "_checked_command", checked)
+    return webui, commands, state
+
+
+def test_web_build_reinstalls_packages_only_when_their_inputs_change(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    install = _server_install(tmp_path / "install")
+    source = tmp_path / "source"
+    webui, commands, state = _web_source(source, monkeypatch)
+
+    def build() -> list[str]:
+        commands.clear()
+        customize._build_web_assets(install, source)
+        return list(commands)
+
+    assert build() == ["ci", "build"]
+    assert build() == ["build"]
+    (webui / "package-lock.json").write_text('{"lock": 2}', encoding="utf-8")
+    assert build() == ["ci", "build"]
+    state.node = "v24.0.0"
+    assert build() == ["ci", "build"]
+    shutil.rmtree(webui / "node_modules")
+    assert build() == ["ci", "build"]
+    assert build() == ["build"]
+
+
+@pytest.mark.parametrize("installed", [False, True])
+def test_web_build_failure_with_reused_packages_retries_after_a_clean_install(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, installed: bool
+) -> None:
+    install = _server_install(tmp_path / "install")
+    source = tmp_path / "source"
+    _webui, commands, state = _web_source(source, monkeypatch)
+    if installed:
+        customize._build_web_assets(install, source)
+        commands.clear()
+    state.failing_builds = 1
+
+    if installed:
+        customize._build_web_assets(install, source)
+        assert commands == ["build", "ci", "build"]
+    else:
+        with pytest.raises(ApplicationError):
+            customize._build_web_assets(install, source)
+        assert commands == ["ci", "build"]
 
 
 def test_checked_command_runs_windowless_and_retains_failure_log(

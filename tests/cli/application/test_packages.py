@@ -15,7 +15,7 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from cli.application.packages import stage_package, validate_release
+from cli.application.packages import digest_files, stage_package, validate_release
 from cli.application.state import ApplicationError, Installation
 
 _VERSION = "rel_example"
@@ -148,6 +148,29 @@ def _write(root: Path, name: str, data: bytes = b"bytecode") -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(data)
     return path
+
+
+def test_concurrent_verification_names_the_first_changed_file_in_inventory_order(
+    tmp_path: Path,
+):
+    root = _staged(tmp_path)
+    (root / "app" / "webui" / "dist" / "index.html").write_bytes(b"changed")
+    (root / "app" / "cli" / "main.py").write_bytes(b"changed")
+
+    with pytest.raises(ApplicationError) as failure:
+        validate_release(root, shape="server")
+
+    assert str(failure.value).endswith(": app/cli/main.py")
+
+
+def test_file_digests_keep_input_order_and_fail_on_an_unreadable_file(tmp_path: Path):
+    paths = [_write(tmp_path, f"file{index}", bytes([index]) * index) for index in range(40)]
+
+    assert digest_files(paths) == [
+        hashlib.sha256(bytes([index]) * index).hexdigest() for index in range(40)
+    ]
+    with pytest.raises(FileNotFoundError):
+        digest_files([*paths, tmp_path / "missing"])
 
 
 def test_inventory_mismatch_names_a_bounded_sample_of_differing_paths(tmp_path: Path):
