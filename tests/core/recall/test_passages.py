@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 import pytest
 
 from core.chat import ChatMessage
+from core.chat.messages import ToolCall
 from core.recall.passages import build_session_passages
 
 
@@ -51,6 +52,16 @@ def test_passage_ids_and_boundaries_are_deterministic() -> None:
             name="session_search", content="earlier hit", tool_call_id="c2", timestamp=timestamp(1)
         ),
         ChatMessage.note("internal note", timestamp=timestamp(1)),
+        # Operational errors need an explicit diagnostic read, not ordinary Recall.
+        ChatMessage.error("provider", "provider failed", timestamp=timestamp(1)),
+        # Reasoning and Tool-call arguments are not conversation text.
+        ChatMessage.assistant(
+            model="test",
+            content=None,
+            reasoning="hidden reasoning",
+            tool_calls=[ToolCall(id="c3", name="bash", arguments={"command": "hidden"})],
+            timestamp=timestamp(1),
+        ),
         ChatMessage.run_summary(
             run_id="r1",
             status="completed",
@@ -62,7 +73,7 @@ def test_passage_ids_and_boundaries_are_deterministic() -> None:
             iteration_count=1,
         ),
     ],
-    ids=["tool", "recall-result", "note", "run-summary"],
+    ids=["tool", "recall-result", "note", "error", "assistant-metadata", "run-summary"],
 )
 def test_passages_contain_only_conversation_text(excluded: ChatMessage) -> None:
     user = ChatMessage.user("user text", timestamp=timestamp(2))

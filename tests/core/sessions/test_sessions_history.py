@@ -1,4 +1,4 @@
-"""Session history writes: appends, cursors, journals, stored Message shapes."""
+"""Session history: appends, cursors, journals, stored Message shapes, Recall context."""
 
 from __future__ import annotations
 
@@ -476,3 +476,31 @@ def test_role_specific_relational_message_storage_round_trips(
         session_id=forked.address.session_id,
     ).hits
     assert [(hit.message_id, hit.address) for hit in fork_hits] == [(user.id, forked.address)]
+
+
+def test_recall_context_is_bounded_and_a_missing_anchor_has_none(manager) -> None:
+    session = manager.create("coder", session_id="long")
+    question = ChatMessage.user("Q" * 10000)
+    answer = ChatMessage.assistant(model="test", content="answer")
+    session.append_many([question, answer])
+
+    context = manager.recall_context(session.address, answer.id)
+
+    assert len(context[0]["text"]) == 800
+    assert context[0]["truncated"] is True
+    # A missing anchor does not borrow a neighbouring block.
+    assert manager.recall_context(session.address, "missing") == []
+
+
+def test_recall_context_excludes_superseded_history(manager) -> None:
+    session = manager.create("coder", session_id="edited")
+    old_question = ChatMessage.user("Old question")
+    obsolete = ChatMessage.assistant(model="test", content="Obsolete answer")
+    question = ChatMessage.user("Question")
+    replacement = ChatMessage.assistant(model="test", content="New answer")
+    session.append_many([old_question, obsolete])
+    session.apply_edit(old_question.id, [question, replacement])
+
+    assert manager.recall_context(session.address, obsolete.id) == []
+    context = manager.recall_context(session.address, question.id)
+    assert [item["message_id"] for item in context] == [replacement.id]
