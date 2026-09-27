@@ -1,8 +1,22 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ensureSessionState } from '../chatState.js';
-import { deferred, setup } from './chatState.controller.support.js';
+import {
+  AGENT_ACTIVITY_IDLE,
+  AGENT_ACTIVITY_RUNNING,
+  AGENT_ACTIVITY_UNREAD,
+  CHAT_STATUS_RUNNING,
+  agentActivityStatus,
+  agentUnreadResults,
+  appendRunEvent,
+  createChatState,
+  ensureSessionState,
+  isRunActive,
+  newestUnreadSessionForAgent,
+  startRun,
+  visibleTimelineItemsForRender,
+} from '../chatState.js';
+import { deferred, setupController } from './chatState.support.js';
 
-describe('chat controller', () => {
+describe('Agent roster', () => {
   it.each(['resolve', 'reject'])(
     'ignores an older roster %s after a silent refresh completes initial loading',
     async (outcome) => {
@@ -11,8 +25,8 @@ describe('chat controller', () => {
       const loadChatHistory = vi
         .fn()
         .mockResolvedValue({ messages: [], active_run: null });
-      const { chatState, controller, onAgentsChanged, onAgentSelected } = setup(
-        {
+      const { chatState, controller, onAgentsChanged, onAgentSelected } =
+        setupController({
           operationOverrides: {
             listAgents: vi
               .fn()
@@ -20,8 +34,7 @@ describe('chat controller', () => {
               .mockReturnValueOnce(newer.promise),
             loadChatHistory,
           },
-        },
-      );
+        });
       const initial = controller.loadAgents();
       const refresh = controller.loadAgents({ silent: true });
       expect(chatState.loadingAgents).toBe(true);
@@ -50,7 +63,7 @@ describe('chat controller', () => {
   it('does not clear a newer roster loading state when an older request finishes', async () => {
     const older = deferred();
     const newer = deferred();
-    const { chatState, controller } = setup({
+    const { chatState, controller } = setupController({
       operationOverrides: {
         listAgents: vi
           .fn()
@@ -72,11 +85,10 @@ describe('chat controller', () => {
     'ignores pending roster %s after disposal',
     async (outcome) => {
       const response = deferred();
-      const { chatState, controller, onAgentsChanged, onAgentSelected } = setup(
-        {
+      const { chatState, controller, onAgentsChanged, onAgentSelected } =
+        setupController({
           operationOverrides: { listAgents: vi.fn(() => response.promise) },
-        },
-      );
+        });
       const loading = controller.loadAgents();
       controller.destroy();
       if (outcome === 'resolve')
@@ -90,12 +102,10 @@ describe('chat controller', () => {
       expect(onAgentSelected).not.toHaveBeenCalled();
     },
   );
-  it('loads the roster, current history, Run truth, and Queue as one lifecycle', async () => {
-    const loadChatHistory = vi.fn().mockResolvedValue({
-      active_run: null,
-      has_more: false,
-      messages: [{ id: 'message-one', role: 'user', content: 'Hello' }],
-    });
+
+  it('loads the roster, current History, Run truth, and Queue as one lifecycle', async () => {
+    const history = deferred();
+    const loadChatHistory = vi.fn(() => history.promise);
     const listAgents = vi.fn().mockResolvedValue({
       agents: [
         {
@@ -105,54 +115,33 @@ describe('chat controller', () => {
         },
       ],
     });
-    const { chatState, controller, listQueue, runStream } = setup({
+    const { chatState, controller, listQueue, runStream } = setupController({
       isDisplayedSession: (agentId, sessionId) =>
         agentId === 'alpha' && sessionId === 'session-one',
-      operationOverrides: { listAgents, loadChatHistory },
-    });
-
-    await controller.loadAgents();
-
-    const sessionState = ensureSessionState(chatState, 'alpha', 'session-one');
-    expect(chatState.selectedAgentId).toBe('alpha');
-    expect(sessionState.messages).toMatchObject([
-      { id: 'message-one', content: 'Hello' },
-    ]);
-    expect(listQueue).toHaveBeenCalledWith('alpha', 'session-one');
-    expect(runStream.attachRunStream).toHaveBeenCalledWith(sessionState, null);
-    expect(chatState.loadingHistory).toBe(false);
-  });
-
-  it('stops the Agent loading state before current History settles', async () => {
-    let resolveHistory;
-    const loadChatHistory = vi.fn(
-      () =>
-        new Promise((resolve) => {
-          resolveHistory = resolve;
-        }),
-    );
-    const listAgents = vi.fn().mockResolvedValue({
-      agents: [
-        {
-          id: 'alpha',
-          name: 'Alpha',
-          current_session_id: 'session-one',
-        },
-      ],
-    });
-    const { chatState, controller } = setup({
-      isDisplayedSession: () => true,
       operationOverrides: { listAgents, loadChatHistory },
     });
 
     const loading = controller.loadAgents();
     await vi.waitFor(() => expect(loadChatHistory).toHaveBeenCalledOnce());
 
+    // The Agent loading state ends before current History settles.
+    expect(chatState.selectedAgentId).toBe('alpha');
     expect(chatState.loadingAgents).toBe(false);
     expect(chatState.loadingHistory).toBe(true);
 
-    resolveHistory({ active_run: null, messages: [], has_more: false });
+    history.resolve({
+      active_run: null,
+      has_more: false,
+      messages: [{ id: 'message-one', role: 'user', content: 'Hello' }],
+    });
     await expect(loading).resolves.toBe(true);
+
+    const sessionState = ensureSessionState(chatState, 'alpha', 'session-one');
+    expect(sessionState.messages).toMatchObject([
+      { id: 'message-one', content: 'Hello' },
+    ]);
+    expect(listQueue).toHaveBeenCalledWith('alpha', 'session-one');
+    expect(runStream.attachRunStream).toHaveBeenCalledWith(sessionState, null);
     expect(chatState.loadingHistory).toBe(false);
   });
 
@@ -171,7 +160,7 @@ describe('chat controller', () => {
         },
       ],
     });
-    const { chatState, controller } = setup({
+    const { chatState, controller } = setupController({
       isDisplayedSession: () => true,
       operationOverrides: { listAgents, loadChatHistory },
     });
@@ -182,61 +171,9 @@ describe('chat controller', () => {
     expect(chatState.agents).toHaveLength(1);
     expect(loadChatHistory).not.toHaveBeenCalled();
   });
+});
 
-  it.each(['response', 'error'])(
-    'ignores a stale roster %s after a newer refresh loads the current Session',
-    async (outcome) => {
-      const old = deferred();
-      const loadChatHistory = vi.fn().mockResolvedValue({ messages: [] });
-      const { chatState, controller } = setup({
-        isDisplayedSession: () => true,
-        operationOverrides: {
-          listAgents: vi
-            .fn()
-            .mockReturnValueOnce(old.promise)
-            .mockResolvedValueOnce({
-              agents: [
-                { id: 'alpha', name: 'Renamed', current_session_id: 'new' },
-              ],
-            }),
-          loadChatHistory,
-        },
-      });
-      const initial = controller.loadAgents();
-      await controller.loadAgents({ silent: true });
-      expect(chatState.loadingAgents).toBe(false);
-      expect(loadChatHistory).toHaveBeenCalledWith(
-        expect.objectContaining({ session_id: 'new' }),
-      );
-      if (outcome === 'error') old.reject(new Error('outdated failure'));
-      else
-        old.resolve({
-          agents: [{ id: 'alpha', name: 'Old', current_session_id: 'old' }],
-        });
-      await initial;
-      expect(chatState.agents).toMatchObject([
-        { name: 'Renamed', current_session_id: 'new' },
-      ]);
-      expect(chatState.agentsError).toBeNull();
-      expect(loadChatHistory).toHaveBeenCalledOnce();
-    },
-  );
-
-  it('retires a roster request when its Chat controller is destroyed', async () => {
-    const response = deferred();
-    const { chatState, controller } = setup({
-      operationOverrides: { listAgents: vi.fn(() => response.promise) },
-    });
-    const pending = controller.loadAgents();
-    controller.destroy();
-    response.resolve({
-      agents: [{ id: 'obsolete', current_session_id: 'old' }],
-    });
-    await expect(pending).resolves.toBe(false);
-    expect(chatState.agents).toEqual([]);
-    expect(chatState.loadingAgents).toBe(false);
-  });
-
+describe('command suggestions', () => {
   it('normalizes command suggestions inside the controller', async () => {
     const listChatCommands = vi.fn().mockResolvedValue({
       items: [
@@ -244,7 +181,7 @@ describe('chat controller', () => {
         { name: 'review', type: 'skill', description: 'Review code' },
       ],
     });
-    const { chatState, controller } = setup({
+    const { chatState, controller } = setupController({
       operationOverrides: { listChatCommands },
     });
 
@@ -270,7 +207,7 @@ describe('chat controller', () => {
       .mockResolvedValueOnce({
         items: [{ name: 'review', type: 'skill', description: 'Review code' }],
       });
-    const { chatState, controller } = setup({
+    const { chatState, controller } = setupController({
       operationOverrides: { listChatCommands },
     });
 
@@ -284,7 +221,9 @@ describe('chat controller', () => {
       { name: 'review', type: 'skill' },
     ]);
   });
+});
 
+describe('completion activity', () => {
   it('refreshes durable completion activity for every listed Agent Session', async () => {
     const listSessionActivity = vi.fn(async () => ({
       agents: [
@@ -304,7 +243,7 @@ describe('chat controller', () => {
         { agent_id: 'beta', project_id: null, sessions: [] },
       ],
     }));
-    const { chatState, controller } = setup({
+    const { chatState, controller } = setupController({
       operationOverrides: { listSessionActivity },
     });
 
@@ -341,7 +280,7 @@ describe('chat controller', () => {
         },
       ],
     }));
-    const { chatState, controller } = setup({
+    const { chatState, controller } = setupController({
       operationOverrides: { listSessionActivity },
     });
 
@@ -367,7 +306,7 @@ describe('chat controller', () => {
       unread_run_status: null,
       unread_run_at: null,
     });
-    const { chatState, controller } = setup({
+    const { chatState, controller } = setupController({
       operationOverrides: { markSessionRead },
     });
     const sessionState = ensureSessionState(
@@ -405,7 +344,7 @@ describe('chat controller', () => {
       unread_run_status: null,
       unread_run_at: null,
     });
-    const { chatState, controller } = setup({
+    const { chatState, controller } = setupController({
       operationOverrides: { listSessionActivity, markSessionRead },
     });
     const sessionState = ensureSessionState(chatState, 'alpha', 'session-one');
@@ -441,7 +380,7 @@ describe('chat controller', () => {
     const listSessionActivity = vi
       .fn()
       .mockRejectedValue(new Error('activity unavailable'));
-    const { chatState, controller } = setup({
+    const { chatState, controller } = setupController({
       operationOverrides: { listSessionActivity },
     });
     const sessionState = ensureSessionState(chatState, 'alpha', 'session-one');
@@ -469,6 +408,7 @@ describe('scoped completion activity', () => {
     unread_run_status: 'completed',
     unread_run_at: at,
   });
+
   const activityResponse = (addresses, rows = {}) => ({
     agents: addresses.map((address) => ({
       agent_id: address,
@@ -476,6 +416,7 @@ describe('scoped completion activity', () => {
       sessions: rows[address] ?? [],
     })),
   });
+
   const entry = (id, scope) => ({ id, scope });
 
   function activitySetup(rows = {}) {
@@ -484,7 +425,7 @@ describe('scoped completion activity', () => {
     );
     return {
       listSessionActivity,
-      ...setup({ operationOverrides: { listSessionActivity } }),
+      ...setupController({ operationOverrides: { listSessionActivity } }),
     };
   }
 
@@ -683,7 +624,7 @@ describe('scoped completion activity', () => {
   it('keeps a completion that arrived while the read was in flight', async () => {
     const pending = deferred();
     const listSessionActivity = vi.fn(() => pending.promise);
-    const { chatState, controller } = setup({
+    const { chatState, controller } = setupController({
       operationOverrides: { listSessionActivity },
     });
     const stale = ensureSessionState(chatState, 'alpha', 'stale');
@@ -704,4 +645,216 @@ describe('scoped completion activity', () => {
     expect(fresh.unreadRunId).toBe('run-live');
     expect(stale.latestCompletionRunId).toBe('');
   });
+
+  // A listed completion and a local terminal event can report the same or
+  // different Runs in either order; the exact read state and the newer
+  // completion win.
+  describe('merging listed and local completions', () => {
+    const readRow = (runId, at = '2026-07-20T10:00:00+00:00') => ({
+      id: 'one',
+      last_active_at: at,
+      latest_completion_run_id: runId,
+      has_unread_completion: false,
+      unread_run_id: null,
+      unread_run_status: null,
+      unread_run_at: null,
+    });
+    const listed = (row) => ({ listed: row });
+    const completed = (runId, at = '2026-07-20T10:00:00+00:00') => ({
+      completed: { runId, at },
+    });
+    const later = '2026-07-20T10:05:00+00:00';
+
+    it.each([
+      {
+        name: 'accepts the exact backend read state after a local terminal event',
+        steps: [completed('run-one'), listed(readRow('run-one'))],
+        unreadRunId: '',
+      },
+      {
+        name: 'keeps the exact backend read state when its terminal event replays',
+        steps: [listed(readRow('run-one')), completed('run-one')],
+        unreadRunId: '',
+      },
+      {
+        name: 'keeps the exact backend read state against a stale unread listing',
+        steps: [
+          listed(readRow('run-one')),
+          listed(unreadRow('one', 'run-one')),
+        ],
+        unreadRunId: '',
+      },
+      {
+        name: 'keeps a newer local completion against an older read listing',
+        steps: [completed('run-new', later), listed(readRow('run-old'))],
+        unreadRunId: 'run-new',
+      },
+      {
+        name: 'keeps a local completion against a different listing with the same time',
+        steps: [
+          completed('run-local', later),
+          listed(unreadRow('one', 'run-listing', later)),
+        ],
+        unreadRunId: 'run-local',
+      },
+      {
+        name: 'accepts a genuinely newer unread listing',
+        steps: [
+          listed(readRow('run-old')),
+          listed(unreadRow('one', 'run-new', later)),
+        ],
+        unreadRunId: 'run-new',
+      },
+    ])('$name', async ({ steps, unreadRunId }) => {
+      const rows = { alpha: [] };
+      const { chatState, controller } = activitySetup(rows);
+      const sessionState = ensureSessionState(chatState, 'alpha', 'one');
+      let sequence = 0;
+      for (const step of steps) {
+        if (step.listed) {
+          rows.alpha = [step.listed];
+          await controller.refreshAgentActivity(['alpha']);
+        } else {
+          sequence += 1;
+          appendRunEvent(sessionState, {
+            type: 'run_completed',
+            run_id: step.completed.runId,
+            sequence,
+            timestamp: step.completed.at,
+            payload: { status: 'completed' },
+          });
+        }
+      }
+
+      expect(sessionState.hasUnreadCompletion).toBe(Boolean(unreadRunId));
+      expect(sessionState.unreadRunId).toBe(unreadRunId);
+      controller.destroy();
+    });
+  });
+});
+
+describe('Agent activity projection', () => {
+  it('prioritizes a running Session over unread results and finds the newest unread Session', () => {
+    const chatState = createChatState();
+    const runningSession = ensureSessionState(
+      chatState,
+      'alpha',
+      'session-running',
+    );
+    const olderUnread = ensureSessionState(chatState, 'alpha', 'session-older');
+    const newerUnread = ensureSessionState(chatState, 'alpha', 'session-newer');
+    olderUnread.hasUnreadCompletion = true;
+    olderUnread.unreadRunId = 'run-old';
+    olderUnread.unreadRunAt = '2026-07-20T10:00:00+00:00';
+    newerUnread.hasUnreadCompletion = true;
+    newerUnread.unreadRunId = 'run-new';
+    newerUnread.unreadRunAt = '2026-07-20T10:05:00+00:00';
+    startRun(runningSession, {
+      run_id: 'run-live',
+      status: CHAT_STATUS_RUNNING,
+    });
+
+    expect(agentActivityStatus(chatState, 'alpha')).toBe(
+      AGENT_ACTIVITY_RUNNING,
+    );
+    expect(newestUnreadSessionForAgent(chatState, 'alpha')).toBe(newerUnread);
+  });
+
+  it('does not project the displayed Session unread while preserving other unread results', () => {
+    const chatState = createChatState();
+    const displayed = ensureSessionState(chatState, 'alpha', 'session-shown');
+    const background = ensureSessionState(
+      chatState,
+      'alpha',
+      'session-background',
+    );
+    displayed.hasUnreadCompletion = true;
+
+    expect(agentActivityStatus(chatState, 'alpha', displayed.key)).toBe(
+      AGENT_ACTIVITY_IDLE,
+    );
+
+    background.hasUnreadCompletion = true;
+    expect(agentActivityStatus(chatState, 'alpha', displayed.key)).toBe(
+      AGENT_ACTIVITY_UNREAD,
+    );
+  });
+
+  it('counts an Agent unread results with the newest result time, excluding the displayed Session', () => {
+    const chatState = createChatState();
+    const displayed = ensureSessionState(chatState, 'alpha', 'session-shown');
+    const older = ensureSessionState(chatState, 'alpha', 'session-older');
+    const newer = ensureSessionState(chatState, 'alpha', 'session-newer');
+    const withoutRun = ensureSessionState(chatState, 'alpha', 'session-norun');
+    const otherAgent = ensureSessionState(chatState, 'beta', 'session-beta');
+    for (const [sessionState, runId, at] of [
+      [displayed, 'run-shown', '2026-07-20T10:09:00+00:00'],
+      [older, 'run-old', '2026-07-20T10:00:00+00:00'],
+      [newer, 'run-new', '2026-07-20T10:05:00+00:00'],
+      [otherAgent, 'run-beta', '2026-07-20T10:07:00+00:00'],
+    ]) {
+      sessionState.hasUnreadCompletion = true;
+      sessionState.unreadRunId = runId;
+      sessionState.unreadRunAt = at;
+    }
+    // Navigation cannot land on an unread flag without its Run id.
+    withoutRun.hasUnreadCompletion = true;
+
+    expect(agentUnreadResults(chatState, 'alpha', displayed.key)).toEqual({
+      count: 2,
+      latestAt: Date.parse('2026-07-20T10:05:00+00:00'),
+    });
+    expect(agentUnreadResults(chatState, 'alpha').count).toBe(3);
+    expect(agentUnreadResults(chatState, 'gamma')).toEqual({
+      count: 0,
+      latestAt: 0,
+    });
+  });
+
+  it.each([
+    ['run_completed', 'completed'],
+    ['run_interrupted', 'interrupted'],
+  ])(
+    'keeps an excluded Run out of Agent activity through %s while retaining its timeline',
+    (terminalType, terminalStatus) => {
+      const chatState = createChatState();
+      const sessionState = ensureSessionState(
+        chatState,
+        'alpha',
+        'session-system',
+      );
+
+      appendRunEvent(sessionState, {
+        type: 'run_started',
+        run_id: 'run-system',
+        sequence: 1,
+        contributes_to_agent_activity: false,
+        payload: { status: CHAT_STATUS_RUNNING },
+      });
+
+      expect(isRunActive(sessionState)).toBe(true);
+      expect(sessionState.currentRun?.contributesToAgentActivity).toBe(false);
+      expect(agentActivityStatus(chatState, 'alpha')).toBe(AGENT_ACTIVITY_IDLE);
+
+      appendRunEvent(sessionState, {
+        type: terminalType,
+        run_id: 'run-system',
+        sequence: 2,
+        contributes_to_agent_activity: false,
+        payload: { status: terminalStatus },
+      });
+
+      expect(sessionState.status).toBe(terminalStatus);
+      expect(sessionState.hasUnreadCompletion).toBe(false);
+      expect(sessionState.latestCompletionRunId).toBe('');
+      expect(agentActivityStatus(chatState, 'alpha')).toBe(AGENT_ACTIVITY_IDLE);
+      expect(visibleTimelineItemsForRender(sessionState)).toEqual([
+        expect.objectContaining({
+          type: 'assistant_run',
+          runId: 'run-system',
+          status: terminalStatus,
+        }),
+      ]);
+    },
+  );
 });

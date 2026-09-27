@@ -1,4 +1,80 @@
-import { appendRunEvent } from '../chatState.js';
+import { vi } from 'vitest';
+import {
+  appendRunEvent,
+  createChatController,
+  createChatState,
+} from '../chatState.js';
+
+// Chat controller over fake operations and a fake Run stream. `translate`
+// returns the i18n key, so messages are asserted through their key.
+export function setupController({
+  operationOverrides = {},
+  isDisplayedSession = () => false,
+  shouldLoadCurrentHistory = () => true,
+} = {}) {
+  const chatState = createChatState();
+  const runStream = {
+    applyConnectionSnapshot: vi.fn(),
+    attachRunStream: vi.fn(),
+    closeSubscriptionFor: vi.fn(),
+    closeSubscriptions: vi.fn(),
+    closeSubscriptionsExcept: vi.fn(),
+    handleServerEvents: vi.fn(),
+    mergeRunResponse: vi.fn(),
+    subscribeToRun: vi.fn(),
+  };
+  const listQueue = vi.fn().mockResolvedValue({
+    items: [{ id: 'queued-one', content: 'Next', editable: true }],
+  });
+  const onRestartQueueDiscarded = vi.fn();
+  const onAgentsChanged = vi.fn();
+  const onAgentSelected = vi.fn();
+  const controller = createChatController({
+    chatState,
+    runStream,
+    operations: {
+      listQueue,
+      loadReflectionRuns: vi.fn().mockResolvedValue({ reflection_runs: [] }),
+      ...operationOverrides,
+    },
+    translate: (key) => key,
+    isDisplayedSession,
+    shouldLoadCurrentHistory,
+    onRestartQueueDiscarded,
+    onAgentsChanged,
+    onAgentSelected,
+  });
+  return {
+    chatState,
+    controller,
+    listQueue,
+    onRestartQueueDiscarded,
+    onAgentsChanged,
+    onAgentSelected,
+    runStream,
+  };
+}
+
+export function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+// A Reflection Run row as History and reflection reads report it.
+export function reflectionRun(status = 'completed', runId = 'review-one') {
+  return {
+    run_id: runId,
+    session_id: 'review-session',
+    run_kind: 'memory_reflection',
+    status,
+    started_at: '2026-09-05T10:00:00Z',
+  };
+}
 
 export function countTimelineTextOccurrences(timelineItems, text) {
   let count = 0;
@@ -16,6 +92,8 @@ export function countTimelineTextOccurrences(timelineItems, text) {
   return count;
 }
 
+// A reported two-Tool Run (glob, then read, then a final answer) as persisted
+// History; appendReportedLiveRunEvents streams the same Run live.
 export function reportedMultiStepMessages() {
   return [
     {
@@ -82,118 +160,72 @@ export function appendReportedLiveRunEvents(
   runId,
   startSequence = 1,
 ) {
-  const sequence = (offset) => startSequence + offset;
-
-  appendRunEvent(sessionState, {
-    type: 'reasoning_delta',
-    run_id: runId,
-    sequence: sequence(0),
-    payload: { reasoning_delta: 'Find candidate files.' },
-  });
-  appendRunEvent(sessionState, {
-    type: 'tool_call_started',
-    run_id: runId,
-    sequence: sequence(1),
-    payload: {
-      tool_call: {
-        id: 'call-glob',
-        index: 0,
-        name: 'glob',
-        arguments: { pattern: 'webui/src/**/*.js' },
+  const glob = { id: 'call-glob', index: 0, name: 'glob' };
+  const read = { id: 'call-read', index: 0, name: 'read' };
+  const readArguments = { path: 'webui/src/lib/chatState.js' };
+  const events = [
+    ['reasoning_delta', { reasoning_delta: 'Find candidate files.' }],
+    [
+      'tool_call_started',
+      { tool_call: { ...glob, arguments: { pattern: 'webui/src/**/*.js' } } },
+    ],
+    [
+      'tool_call_result',
+      {
+        tool_call: glob,
+        result: { ok: true, data: { content: 'webui/src/lib/chatState.js' } },
       },
-    },
-  });
-  appendRunEvent(sessionState, {
-    type: 'tool_call_result',
-    run_id: runId,
-    sequence: sequence(2),
-    payload: {
-      tool_call: { id: 'call-glob', index: 0, name: 'glob' },
-      result: {
-        ok: true,
-        data: { content: 'webui/src/lib/chatState.js' },
+    ],
+    ['reasoning_delta', { reasoning_delta: 'Read the selected file.' }],
+    [
+      'assistant_output_delta',
+      { content_delta: 'I found the timeline helper; now I will read it.' },
+    ],
+    ['tool_call_started', { tool_call: { ...read, arguments: readArguments } }],
+    [
+      'tool_call_result',
+      {
+        tool_call: read,
+        result: { ok: true, data: { content: 'timeline code' } },
       },
-    },
-  });
-  appendRunEvent(sessionState, {
-    type: 'reasoning_delta',
-    run_id: runId,
-    sequence: sequence(3),
-    payload: { reasoning_delta: 'Read the selected file.' },
-  });
-  appendRunEvent(sessionState, {
-    type: 'assistant_output_delta',
-    run_id: runId,
-    sequence: sequence(4),
-    payload: {
-      content_delta: 'I found the timeline helper; now I will read it.',
-    },
-  });
-  appendRunEvent(sessionState, {
-    type: 'tool_call_started',
-    run_id: runId,
-    sequence: sequence(5),
-    payload: {
-      tool_call: {
-        id: 'call-read',
-        index: 0,
-        name: 'read',
-        arguments: { path: 'webui/src/lib/chatState.js' },
+    ],
+    [
+      'assistant_output',
+      {
+        message: {
+          id: 'assistant-read',
+          role: 'assistant',
+          content: 'I found the timeline helper; now I will read it.',
+          reasoning: 'Read the selected file.',
+          tool_calls: [
+            { id: 'call-read', name: 'read', arguments: readArguments },
+          ],
+        },
       },
-    },
-  });
-  appendRunEvent(sessionState, {
-    type: 'tool_call_result',
-    run_id: runId,
-    sequence: sequence(6),
-    payload: {
-      tool_call: { id: 'call-read', index: 0, name: 'read' },
-      result: { ok: true, data: { content: 'timeline code' } },
-    },
-  });
-  appendRunEvent(sessionState, {
-    type: 'assistant_output',
-    run_id: runId,
-    sequence: sequence(7),
-    payload: {
-      message: {
-        id: 'assistant-read',
-        role: 'assistant',
-        content: 'I found the timeline helper; now I will read it.',
-        reasoning: 'Read the selected file.',
-        tool_calls: [
-          {
-            id: 'call-read',
-            name: 'read',
-            arguments: { path: 'webui/src/lib/chatState.js' },
-          },
-        ],
+    ],
+    ['reasoning_delta', { reasoning_delta: 'Summarize the result.' }],
+    [
+      'assistant_output_delta',
+      { content_delta: 'The timeline is in chatState.js.' },
+    ],
+    [
+      'assistant_output',
+      {
+        message: {
+          id: 'assistant-final',
+          role: 'assistant',
+          content: 'The timeline is in chatState.js.',
+          reasoning: 'Summarize the result.',
+        },
       },
-    },
-  });
-  appendRunEvent(sessionState, {
-    type: 'reasoning_delta',
-    run_id: runId,
-    sequence: sequence(8),
-    payload: { reasoning_delta: 'Summarize the result.' },
-  });
-  appendRunEvent(sessionState, {
-    type: 'assistant_output_delta',
-    run_id: runId,
-    sequence: sequence(9),
-    payload: { content_delta: 'The timeline is in chatState.js.' },
-  });
-  appendRunEvent(sessionState, {
-    type: 'assistant_output',
-    run_id: runId,
-    sequence: sequence(10),
-    payload: {
-      message: {
-        id: 'assistant-final',
-        role: 'assistant',
-        content: 'The timeline is in chatState.js.',
-        reasoning: 'Summarize the result.',
-      },
-    },
+    ],
+  ];
+  events.forEach(([type, payload], offset) => {
+    appendRunEvent(sessionState, {
+      type,
+      run_id: runId,
+      sequence: startSequence + offset,
+      payload: structuredClone(payload),
+    });
   });
 }
