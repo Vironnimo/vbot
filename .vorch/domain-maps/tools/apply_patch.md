@@ -304,7 +304,11 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   edge are never re-read: a typo in edge context would otherwise duplicate the
   line. Evidence: one Model family often left the `+` off statement continuation
   lines; in 16 of its 34 failed calls with such runs, the first difference was
-  one of those lines (Sessions, 2026-09).
+  one of those lines (Sessions, 2026-09). When no reading applies and the
+  reported first difference is such a line, the report adds `That patch line has
+  no + prefix, so it must already be in the file there; if it is new, start it
+  with +.` (difference key `unprefixed`), since identical retries followed the
+  bare difference.
 - Context-only blocks before another `@@` become ordered precise locator hints
   for that next hunk, including multiline context. Missing or ambiguous anchors
   fail without falling back to a different location; duplicate matches after

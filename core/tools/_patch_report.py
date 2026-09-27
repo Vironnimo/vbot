@@ -191,10 +191,21 @@ def _excerpts(candidates: list[JsonObject], path: str | None = None) -> list[str
 
 def _difference_text(difference: JsonObject) -> list[str]:
     source = "old_string" if difference["source"] == "old_string" else "the patch"
+    # A line between + lines without a + prefix reads as unchanged; the report
+    # names that reading, since the copy is often an added line missing its +.
+    unprefixed = (
+        [
+            "That patch line has no + prefix, so it must already be in the file there; "
+            "if it is new, start it with +."
+        ]
+        if difference.get("unprefixed")
+        else []
+    )
     if not difference.get("truncated"):
         return [
             f"First difference, line {difference['line']}: the file has "
-            f"{difference['file']!r} where {source} has {difference['copy']!r}."
+            f"{difference['file']!r} where {source} has {difference['copy']!r}.",
+            *unprefixed,
         ]
     lines = [
         f"First difference, file line {difference['line']}, "
@@ -209,7 +220,7 @@ def _difference_text(difference: JsonObject) -> list[str]:
             if difference[key]
             else f"{label} character {start}: end of line."
         )
-    return lines
+    return [*lines, *unprefixed]
 
 
 def failure_text(error: JsonObject) -> str:

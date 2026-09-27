@@ -355,6 +355,20 @@ def _replace_within_line(window: str, hunk: _Hunk) -> tuple[str, int] | None:
     ) + 1
 
 
+def _unmarked_runs(lines: list[tuple[str, str]]) -> list[range]:
+    """Return the runs of unchanged lines that sit between two + lines."""
+    runs: list[range] = []
+    start = 0
+    while start < len(lines):
+        end = start
+        while end < len(lines) and lines[end][0] == " ":
+            end += 1
+        if 0 < start < end < len(lines) and lines[start - 1][0] == lines[end][0] == "+":
+            runs.append(range(start, end))
+        start = end + 1
+    return runs
+
+
 def _unmarked_readings(content: str, hunk: _Hunk) -> list[tuple[_Hunk, list[str]]]:
     """Return readings of a parsed hunk that add its unprefixed lines between + lines.
 
@@ -367,15 +381,7 @@ def _unmarked_readings(content: str, hunk: _Hunk) -> list[tuple[_Hunk, list[str]
     lines = hunk.lines
     if len(hunk.written) != len(lines):
         return []
-    runs: list[range] = []
-    start = 0
-    while start < len(lines):
-        end = start
-        while end < len(lines) and lines[end][0] == " ":
-            end += 1
-        if 0 < start < end < len(lines) and lines[start - 1][0] == lines[end][0] == "+":
-            runs.append(range(start, end))
-        start = end + 1
+    runs = _unmarked_runs(lines)
     present = {_loose(line) for line in split_text_lines(content)}
     missing = [
         run
@@ -717,12 +723,16 @@ def _apply_hunk(content: str, hunk: _Hunk, path: object) -> tuple[str, list[str]
                 label=hunk.label,
                 details=_candidates(content, old),
             )
-        raise _PatchError(
-            "text_not_found",
-            path=path,
-            label=hunk.label,
-            details=_not_found(content, old, source="patch"),
-        )
+        details = _not_found(content, old, source="patch")
+        difference = details.get("difference")
+        if difference:
+            # Number the hunk's unchanged and removed lines as the report counts them.
+            copied = [i for i, (prefix, _) in enumerate(hunk.lines) if prefix in " -"]
+            unmarked = {i for run in _unmarked_runs(hunk.lines) for i in run}
+            position = difference["copy_line"] - 1
+            if position < len(copied) and copied[position] in unmarked:
+                difference["unprefixed"] = True
+        raise _PatchError("text_not_found", path=path, label=hunk.label, details=details)
     if [t for p, t in hunk.lines if p in " -"] == [t for p, t in hunk.lines if p in " +"]:
         return content, warnings
     start, end = found.before_spans[0]

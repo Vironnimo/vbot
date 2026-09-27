@@ -293,6 +293,31 @@ def test_unprefixed_lines_are_added_only_where_unchanged_lines_place_them(tmp_pa
     assert b"lien" not in path.read_bytes() and b"missing" not in path.read_bytes()
 
 
+def test_first_difference_on_an_unprefixed_line_between_additions_names_the_prefix(tmp_path):
+    path = tmp_path / "file.py"
+    before = (
+        b"def total(values):\n    result = 0\n    for value in values:\n"
+        b"        result += value\n    return result\n\n\ndef other():\n    pass\n"
+    )
+    path.write_bytes(before)
+    body = (
+        "@@\n     result = 0\n+    if not values:\n+        raise ValueError(\n"
+        '            "values must not be empty")\n+    checked = True\n'
+        "     for value in values:\n         result += value\n     return result_value"
+    )
+    result = apply(tmp_path, update(body, "file.py"))
+    assert result["error"]["code"] == "text_not_found"
+    assert (
+        "First difference, line 3: the file has '    for value in values:' where the patch "
+        "has '           \"values must not be empty\")'.\n"
+        "That patch line has no + prefix, so it must already be in the file there; "
+        "if it is new, start it with +.\n"
+    ) in text(result)
+    assert path.read_bytes() == before
+    marked = body.replace('\n            "values', '\n+            "values')
+    assert "no + prefix" not in text(apply(tmp_path, update(marked, "file.py")))
+
+
 def sharing_error(code: int = 5) -> OSError:
     error = PermissionError("replace temporarily unavailable")
     error.winerror = code
