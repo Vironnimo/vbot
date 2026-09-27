@@ -5,8 +5,8 @@ import { flushSync, mount, unmount } from 'svelte';
 
 import { init } from '../../lib/i18n.js';
 import { TOOLTIP_SHOW_DELAY_MS } from '../../lib/tooltip.js';
-import { reactiveProps } from './_reactiveProps.svelte.js';
-import { rpcBackedApiMock } from './apiMock.js';
+import { reactiveProps } from './reactiveProps.support.svelte.js';
+import { rpcBackedApiMock } from './apiMock.support.js';
 
 const debugStatusMock = vi.fn();
 const debugTraceListMock = vi.fn();

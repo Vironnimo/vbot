@@ -5,7 +5,7 @@ import { flushSync, mount, unmount } from 'svelte';
 
 import { init } from '../i18n.js';
 import { createSettingsPayload } from './settingsView.support.js';
-import { rpcBackedApiMock } from '../../components/__tests__/apiMock.js';
+import { rpcBackedApiMock } from '../../components/__tests__/apiMock.support.js';
 
 const rpcMock = vi.fn();
 

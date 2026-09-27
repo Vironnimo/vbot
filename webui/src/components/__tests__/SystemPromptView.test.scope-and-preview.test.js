@@ -29,7 +29,7 @@ import {
   setupSystemPromptViewSuite,
 } from './SystemPromptView.support.js';
 
-import { reactiveProps } from './_reactiveProps.svelte.js';
+import { reactiveProps } from './reactiveProps.support.svelte.js';
 
 describe('SystemPromptView', () => {
   const suite = setupSystemPromptViewSuite();

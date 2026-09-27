@@ -18,7 +18,7 @@ vi.mock('$lib/api.js', () => ({
   subscribeRunEvents: vi.fn(),
 }));
 const { default: ExtensionPageHost } =
-  await import('./ExtensionPageHost.svelte');
+  await import('./ExtensionPageHost.support.svelte');
 
 const descriptor = {
   extension: 'alpha',

@@ -4,7 +4,7 @@ import { vi } from 'vitest';
 import { flushSync, unmount } from 'svelte';
 
 import { init } from '../lib/i18n.js';
-import { rpcBackedApiMock } from '../components/__tests__/apiMock.js';
+import { rpcBackedApiMock } from '../components/__tests__/apiMock.support.js';
 
 export const rpcMock = vi.fn();
 export const listClientsMock = vi.fn(() => Promise.resolve({ clients: [] }));

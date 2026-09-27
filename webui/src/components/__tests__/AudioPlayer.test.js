@@ -10,7 +10,7 @@ import {
   visibleTimelineItemsForRender,
 } from '../../lib/chatState.js';
 import { t } from '../../lib/i18n.js';
-import { reactiveProps } from './reactiveProps.svelte.js';
+import { reactiveProps } from './reactiveProps.support.svelte.js';
 
 vi.mock(
   'svelte',

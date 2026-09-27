@@ -3,7 +3,7 @@ const { mount, flushSync, unmount } = await import('svelte');
 import { afterEach, beforeEach, vi } from 'vitest';
 
 import { init, t } from '../../lib/i18n.js';
-import { rpcBackedApiMock } from './apiMock.js';
+import { rpcBackedApiMock } from './apiMock.support.js';
 
 const rpcMock = vi.fn();
 

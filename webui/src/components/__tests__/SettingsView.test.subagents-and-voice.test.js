@@ -26,7 +26,7 @@ vi.mock('svelte', async () => {
 });
 
 const { default: AutosaveContextHost } =
-  await import('./AutosaveContextHost.svelte');
+  await import('./AutosaveContextHost.support.svelte');
 
 describe('SettingsView', () => {
   let mountedComponent;

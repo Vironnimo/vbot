@@ -8,7 +8,7 @@ import {
   HOVER_CARD_SHOW_DELAY_MS,
   TOOLTIP_SHOW_DELAY_MS,
 } from '../../lib/tooltip.js';
-import { rpcBackedApiMock } from './apiMock.js';
+import { rpcBackedApiMock } from './apiMock.support.js';
 
 export const rpcMock = vi.fn();
 export const subscribeRunEventsMock = vi.fn(() => ({
