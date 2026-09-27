@@ -1,4 +1,9 @@
-"""Shared fixtures and fakes for agent methods behavior tests."""
+"""A recording Session-store fake for Session RPC tests.
+
+``stub_session_state`` returns a server state whose Session store, resolver and
+Agent store record what the Session RPCs hand them, so a test can check the
+RPC-to-store contract without a database.
+"""
 
 from __future__ import annotations
 
@@ -15,7 +20,7 @@ from core.sessions import (
 from server.events import ServerEventBus
 
 
-class _FakeResolver:
+class FakeResolver:
     def __init__(self) -> None:
         self.resolved: list[tuple[str | None, str]] = []
 
@@ -27,7 +32,7 @@ class _FakeResolver:
         return self.resolve_agent(project_id, agent_id)
 
 
-class _FakeSessions:
+class FakeSessions:
     def __init__(self) -> None:
         self.created: list[dict[str, Any]] = []
         self.listed: list[tuple[str, str | None]] = []
@@ -205,7 +210,7 @@ class _FakeSessions:
         return self.set_title(address, title)
 
 
-class _FakeTerminalManager:
+class FakeTerminalManager:
     def __init__(self) -> None:
         self.closed_scopes: list[Any] = []
         self.closed_agents: list[tuple[str, str | None]] = []
@@ -217,9 +222,9 @@ class _FakeTerminalManager:
         self.closed_agents.append((agent_id, project_id))
 
 
-def _make_state() -> tuple[SimpleNamespace, _FakeResolver, _FakeSessions]:
-    resolver = _FakeResolver()
-    sessions = _FakeSessions()
+def stub_session_state() -> tuple[SimpleNamespace, FakeResolver, FakeSessions]:
+    resolver = FakeResolver()
+    sessions = FakeSessions()
     updates: list[dict[str, Any]] = []
     resets: list[tuple[str, str]] = []
     recall_removals: list[tuple[str, str, str | None]] = []
@@ -240,7 +245,7 @@ def _make_state() -> tuple[SimpleNamespace, _FakeResolver, _FakeSessions]:
     runtime = SimpleNamespace(
         agent_resolver=resolver,
         chat_sessions=sessions,
-        terminal_manager=_FakeTerminalManager(),
+        terminal_manager=FakeTerminalManager(),
         agents=SimpleNamespace(
             update=lambda agent_id, **k: updates.append({agent_id: k}),
             reset_current_after_session_removed=_reset_current,
@@ -272,9 +277,3 @@ def _make_state() -> tuple[SimpleNamespace, _FakeResolver, _FakeSessions]:
     state._recall_removals = recall_removals  # type: ignore[attr-defined]
     state._agent_current = agent_current  # type: ignore[attr-defined]
     return state, resolver, sessions
-
-
-def _sessions_resource_events(state: SimpleNamespace) -> list[dict[str, Any]]:
-    return [
-        event["payload"] for event in state.event_bus.events if event["type"] == "resource_changed"
-    ]

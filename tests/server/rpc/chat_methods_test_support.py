@@ -16,9 +16,11 @@ from core.chat import (
 )
 from core.runs import ActiveRunError, ChatRunManager, QueuedRunItem, Run, RunKind
 from server.events import ServerEventBus
-from server.rpc.methods import dispatch_rpc
+from tests.server.rpc_test_support import call, resource_changes
 
 JsonObject = dict[str, Any]
+
+__all__ = ["call", "resource_changes"]
 
 
 class _FakeRun:
@@ -176,20 +178,6 @@ def chat_state(
         event_bus=ServerEventBus(),
         runtime=SimpleNamespace(chat_sessions=_InlineSessionPool(), **runtime),
     )
-
-
-async def call(state: Any, method: str, **params: Any) -> JsonObject:
-    """Dispatch one RPC exactly as the transport does."""
-    return await dispatch_rpc(state, {"method": method, "params": params})
-
-
-def resource_changes(state: Any, kind: str) -> list[JsonObject]:
-    """Payloads of the ``resource_changed`` events of one kind on the state's bus."""
-    return [
-        event["payload"]
-        for event in state.event_bus.events
-        if event["type"] == "resource_changed" and event["payload"]["kind"] == kind
-    ]
 
 
 async def bridged_run_ids(state: Any) -> set[str]:

@@ -1,4 +1,8 @@
-"""Tests for project methods."""
+"""Project RPCs: add, detect, show, list and set, plus the per-Project skill cache.
+
+Team payloads and per-Agent Overrides live in ``test_project_methods_team.py``;
+removal lives in ``test_project_methods_delete.py``.
+"""
 
 from __future__ import annotations
 
@@ -11,21 +15,12 @@ from typing import Any
 
 import pytest
 
+from core.projects.projects import PROJECT_DEFAULT_ALLOWED_TOOLS
 from core.runtime.runtime import Runtime
+from core.skills import SKILL_ORIGIN_BUNDLED, SKILL_ORIGIN_GLOBAL
 from core.utils.config import Config
-from server.rpc.errors import RpcError
-from server.rpc.project_methods import (
-    _add_project,
-    _detect_project,
-    _list_projects,
-    _set_project,
-    _show_project,
-)
-from tests.server.rpc.project_methods_test_support import (
-    _make_repo,
-    _make_state,
-    _write_agent,
-)
+from tests.server.rpc.project_methods_test_support import _make_repo, _make_state, _write_agent
+from tests.server.rpc_test_support import JsonObject, rpc_error, rpc_result
 
 
 def _write_claude_agent(repo: Path, filename: str, name: str) -> None:
@@ -34,19 +29,6 @@ def _write_claude_agent(repo: Path, filename: str, name: str) -> None:
     (agents_dir / filename).write_text(
         f"---\nname: {name}\ndescription: A Claude agent.\n---\nBody.\n", encoding="utf-8"
     )
-
-
-def _build_started_runtime(tmp_path: Path) -> Runtime:
-    """Start a real Runtime so the per-project skill cache is exercised end-to-end.
-
-    The minimal ``_make_state`` runtime has no skill seam, so the skill-cache half
-    of the open-time refresh needs the real runtime cache behind
-    ``project_skill_names`` / ``invalidate_project_skills``.
-    """
-    logging.getLogger("vbot").handlers = []
-    runtime = Runtime(Config(data_dir=tmp_path / "data"))
-    runtime.start()
-    return runtime
 
 
 def _write_project_skill(repo: Path, name: str, description: str) -> None:
@@ -59,275 +41,366 @@ def _write_project_skill(repo: Path, name: str, description: str) -> None:
     )
 
 
-@pytest.mark.parametrize("field", ["skills_project_disabled", "skills_global_enabled"])
-def test_project_settings_refresh_rooted_identity_skill_permissions(tmp_path: Path, field: str):
-    runtime = _build_started_runtime(tmp_path)
-    try:
-        repo = _make_repo(tmp_path, "repo")
-        _write_project_skill(repo, "project-playbook", "Project instructions")
-        global_root = runtime.global_skills_dir / "global-playbook"
-        global_root.mkdir(parents=True)
-        (global_root / "SKILL.md").write_text(
-            "---\nname: global-playbook\ndescription: Global instructions\n---\nBody.\n",
-            encoding="utf-8",
-        )
-        runtime.reload_skills()
-        project = runtime.projects.create("p", "P", repo)
-        before = runtime.skills_for(project.project_id, "main")
-        assert {skill.name for skill in before.filter_allowed([])} == {"project-playbook"}
+def _team(result: JsonObject) -> list[str]:
+    return [member["agent_id"] for member in result["scan"]["team"]]
 
-        selected_name = (
-            "project-playbook" if field == "skills_project_disabled" else "global-playbook"
-        )
-        _set_project(SimpleNamespace(runtime=runtime), {"project_id": "p", field: [selected_name]})
 
-        current = runtime.skills_for(project.project_id, "main")
-        expected = (
-            set() if field == "skills_project_disabled" else {"project-playbook", "global-playbook"}
-        )
-        assert {skill.name for skill in current.filter_allowed([])} == expected
-    finally:
-        runtime.stop()
+async def _vbot_state(tmp_path: Path, *agents: str, **fields: Any) -> tuple[SimpleNamespace, Path]:
+    state = _make_state(tmp_path)
+    repo = _make_repo(tmp_path, "vbot", *agents)
+    await rpc_result(state, "project.add", cwd=str(repo), display_name="vBot", **fields)
+    return state, repo
 
 
 # ---------------------------------------------------------------------------
-# add: create + scan preview.
+# project.add / project.detect
 # ---------------------------------------------------------------------------
-def test_add_creates_project_and_returns_scan_preview(tmp_path: Path) -> None:
+
+
+@pytest.mark.asyncio
+async def test_add_creates_the_project_with_seeded_defaults_and_a_scan_preview(
+    tmp_path: Path,
+) -> None:
     state = _make_state(tmp_path)
     repo = _make_repo(tmp_path, "vbot", "builder.md")
 
-    result = _add_project(state, {"cwd": str(repo), "display_name": "vBot"})
+    result = await rpc_result(
+        state,
+        "project.add",
+        cwd=str(repo),
+        display_name="vBot",
+        default_temperature=0.4,
+        default_thinking_effort="high",
+    )
 
-    assert result["project"]["project_id"] == "vbot"
-    assert result["project"]["cwd_exists"] is True
-    assert [member["agent_id"] for member in result["scan"]["team"]] == ["builder"]
+    project = result["project"]
+    assert project["project_id"] == "vbot"
+    assert project["cwd_exists"] is True
+    # AGENTS.md is the first auto-load entry, so the convention file loads with
+    # no extra configuration.
+    assert project["auto_load"] == ["AGENTS.md"]
+    assert project["allowed_tools"] == list(PROJECT_DEFAULT_ALLOWED_TOOLS)
+    assert project["skills_bundled_enabled"] == []
+    assert project["skills_global_enabled"] == []
+    assert project["skills_project_disabled"] == []
+    assert project["default_temperature"] == 0.4
+    assert project["default_thinking_effort"] == "high"
+    assert _team(result) == ["builder"]
     assert result["scan"]["report"]["clean"] is True
     assert state.runtime.projects.exists("vbot")
 
 
-def test_add_seeds_agents_file_into_auto_load(tmp_path: Path) -> None:
-    # project.add seeds AGENTS.md as the first auto-load entry, so a freshly added
-    # project loads the convention file with no extra configuration.
-    state = _make_state(tmp_path)
-    repo = _make_repo(tmp_path, "vbot", "builder.md")
-
-    result = _add_project(state, {"cwd": str(repo), "display_name": "vBot"})
-
-    assert result["project"]["auto_load"] == ["AGENTS.md"]
-
-
-def test_add_derives_project_id_from_cwd_when_no_display_name(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_add_derives_the_project_id_from_the_cwd_of_a_bare_repo(tmp_path: Path) -> None:
     state = _make_state(tmp_path)
     repo = _make_repo(tmp_path, "my-repo")
 
-    result = _add_project(state, {"cwd": str(repo)})
+    result = await rpc_result(state, "project.add", cwd=str(repo))
 
     assert result["project"]["project_id"] == "my-repo"
+    # Neither Agent format is present: the non-interactive default is opencode.
+    assert result["project"]["source_format"] == "opencode"
     assert result["scan"]["team"] == []
     assert result["scan"]["report"]["clean"] is True
 
 
-def test_add_report_flags_unconfigured_model(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_add_report_flags_unconfigured_model(tmp_path: Path) -> None:
     state = _make_state(tmp_path)
     repo = _make_repo(tmp_path, "vbot")
     _write_agent(repo, "weird.md", model="ghost/model-x")
 
-    result = _add_project(state, {"cwd": str(repo), "display_name": "vBot"})
+    result = await rpc_result(state, "project.add", cwd=str(repo), display_name="vBot")
 
-    findings = result["scan"]["report"]["findings"]
     assert result["scan"]["report"]["clean"] is False
-    assert any(finding["type"] == "bad_model" for finding in findings)
-
-
-def test_add_rejects_missing_cwd(tmp_path: Path) -> None:
-    state = _make_state(tmp_path)
-    missing = tmp_path / "nope"
-
-    with pytest.raises(RpcError) as exc_info:
-        _add_project(state, {"cwd": str(missing), "display_name": "vBot"})
-
-    assert exc_info.value.code == "invalid_request"
-    assert str(missing) in exc_info.value.message
-
-
-def test_add_rejects_duplicate_cwd(tmp_path: Path) -> None:
-    state = _make_state(tmp_path)
-    repo = _make_repo(tmp_path, "vbot")
-    _add_project(state, {"cwd": str(repo), "display_name": "vBot"})
-
-    with pytest.raises(RpcError) as exc_info:
-        _add_project(state, {"cwd": str(repo), "display_name": "vBot Two"})
-
-    assert exc_info.value.code == "project_already_exists"
-
-
-def test_add_rejects_unslugifiable_display_name(tmp_path: Path) -> None:
-    state = _make_state(tmp_path)
-    repo = _make_repo(tmp_path, "vbot")
-
-    with pytest.raises(RpcError) as exc_info:
-        _add_project(state, {"cwd": str(repo), "display_name": "!!!"})
-
-    assert exc_info.value.code == "invalid_request"
-
-
-def test_add_rejects_unknown_field(tmp_path: Path) -> None:
-    state = _make_state(tmp_path)
-    repo = _make_repo(tmp_path, "vbot")
-
-    with pytest.raises(RpcError) as exc_info:
-        _add_project(state, {"cwd": str(repo), "bogus": 1})
-    assert exc_info.value.code == "invalid_request"
-    assert "bogus" in exc_info.value.message
-
-
-# ---------------------------------------------------------------------------
-# source format: auto-detection at add, explicit set, switch, detect.
-# ---------------------------------------------------------------------------
-def test_add_auto_detects_claude_only_repo(tmp_path: Path) -> None:
-    # No explicit source_format + exactly one format present → that one, silently.
-    state = _make_state(tmp_path)
-    repo = _make_repo(tmp_path, "claude-repo")
-    _write_claude_agent(repo, "reviewer.md", "reviewer")
-
-    result = _add_project(state, {"cwd": str(repo)})
-
-    assert result["project"]["source_format"] == "claude"
-    assert [member["agent_id"] for member in result["scan"]["team"]] == ["reviewer"]
-    assert state.runtime.projects.get("claude-repo").source_format == "claude"
-
-
-def test_add_defaults_to_opencode_when_both_formats_present(tmp_path: Path) -> None:
-    # Deterministic non-interactive default (decision 2): both present → opencode.
-    state = _make_state(tmp_path)
-    repo = _make_repo(tmp_path, "mixed", "builder.md")
-    _write_claude_agent(repo, "reviewer.md", "reviewer")
-
-    result = _add_project(state, {"cwd": str(repo)})
-
-    assert result["project"]["source_format"] == "opencode"
-    assert [member["agent_id"] for member in result["scan"]["team"]] == ["builder"]
-
-
-def test_add_defaults_to_opencode_when_neither_format_present(tmp_path: Path) -> None:
-    state = _make_state(tmp_path)
-    repo = _make_repo(tmp_path, "bare")
-
-    result = _add_project(state, {"cwd": str(repo)})
-
-    assert result["project"]["source_format"] == "opencode"
-
-
-def test_add_accepts_explicit_source_format(tmp_path: Path) -> None:
-    # An explicit choice wins over auto-detection.
-    state = _make_state(tmp_path)
-    repo = _make_repo(tmp_path, "mixed", "builder.md")
-    _write_claude_agent(repo, "reviewer.md", "reviewer")
-
-    result = _add_project(state, {"cwd": str(repo), "source_format": "claude"})
-
-    assert result["project"]["source_format"] == "claude"
-    assert [member["agent_id"] for member in result["scan"]["team"]] == ["reviewer"]
-
-
-def test_add_rejects_unknown_source_format(tmp_path: Path) -> None:
-    state = _make_state(tmp_path)
-    repo = _make_repo(tmp_path, "vbot")
-
-    with pytest.raises(RpcError) as exc_info:
-        _add_project(state, {"cwd": str(repo), "source_format": "cursor"})
-
-    assert exc_info.value.code == "invalid_request"
-    assert "source_format" in exc_info.value.message
+    assert any(finding["type"] == "bad_model" for finding in result["scan"]["report"]["findings"])
 
 
 @pytest.mark.asyncio
-async def test_set_source_format_switches_team_without_restart(tmp_path: Path) -> None:
-    # A format switch invalidates like a cwd change, so the returned scan (and any
-    # later show) reflects the other format's team immediately.
+@pytest.mark.parametrize(
+    ("opencode", "explicit", "source_format", "team"),
+    [
+        # Exactly one format present: that one, silently.
+        pytest.param(False, None, "claude", ["reviewer"], id="claude-only"),
+        # Both present: the deterministic default is opencode.
+        pytest.param(True, None, "opencode", ["builder"], id="both-default"),
+        # An explicit choice wins over detection.
+        pytest.param(True, "claude", "claude", ["reviewer"], id="both-explicit"),
+    ],
+)
+async def test_add_detects_or_accepts_the_source_format(
+    tmp_path: Path, opencode: bool, explicit: str | None, source_format: str, team: list[str]
+) -> None:
     state = _make_state(tmp_path)
-    repo = _make_repo(tmp_path, "mixed", "builder.md")
+    repo = _make_repo(tmp_path, "repo", *(["builder.md"] if opencode else []))
     _write_claude_agent(repo, "reviewer.md", "reviewer")
-    _add_project(state, {"cwd": str(repo)})
+    params = {"source_format": explicit} if explicit else {}
 
-    switched = _set_project(state, {"project_id": "mixed", "source_format": "claude"})
+    result = await rpc_result(state, "project.add", cwd=str(repo), **params)
 
-    assert switched["project"]["source_format"] == "claude"
-    assert [member["agent_id"] for member in switched["scan"]["team"]] == ["reviewer"]
-    shown = await _show_project(state, {"project_id": "mixed"})
-    assert [member["agent_id"] for member in shown["scan"]["team"]] == ["reviewer"]
+    assert result["project"]["source_format"] == source_format
+    assert _team(result) == team
+    assert state.runtime.projects.get("repo").source_format == source_format
 
 
-def test_detect_reports_formats_and_context_files(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_detect_reports_formats_and_context_files(tmp_path: Path) -> None:
     state = _make_state(tmp_path)
     repo = _make_repo(tmp_path, "mixed", "builder.md")
     _write_claude_agent(repo, "reviewer.md", "reviewer")
     _write_claude_agent(repo, "helper.md", "helper")
     (repo / "CLAUDE.md").write_text("# Claude\n", encoding="utf-8")
 
-    result = _detect_project(state, {"cwd": str(repo)})
+    found = await rpc_result(state, "project.detect", cwd=str(repo))
+    # The add dialog calls this while the user types: never an error envelope.
+    missing = await rpc_result(state, "project.detect", cwd=str(tmp_path / "nope"))
 
-    assert result["cwd_exists"] is True
-    assert result["formats"]["opencode"] == {"agents": 1, "skills": 0}
-    assert result["formats"]["claude"] == {"agents": 2, "skills": 0}
-    assert result["context_files"] == {"agents_md": False, "claude_md": "CLAUDE.md"}
-
-
-def test_detect_nonexistent_cwd_is_success_with_empty_data(tmp_path: Path) -> None:
-    # The add dialog calls this while the user types — never an error envelope.
-    state = _make_state(tmp_path)
-
-    result = _detect_project(state, {"cwd": str(tmp_path / "nope")})
-
-    assert result == {
+    assert found["cwd_exists"] is True
+    assert found["formats"]["opencode"] == {"agents": 1, "skills": 0}
+    assert found["formats"]["claude"] == {"agents": 2, "skills": 0}
+    assert found["context_files"] == {"agents_md": False, "claude_md": "CLAUDE.md"}
+    assert missing == {
         "cwd_exists": False,
         "formats": {},
         "context_files": {"agents_md": False, "claude_md": None},
     }
 
 
-def test_detect_rejects_unknown_field(tmp_path: Path) -> None:
-    state = _make_state(tmp_path)
-
-    with pytest.raises(RpcError) as exc_info:
-        _detect_project(state, {"cwd": str(tmp_path), "bogus": 1})
-    assert exc_info.value.code == "invalid_request"
-    assert "bogus" in exc_info.value.message
-
-
-# ---------------------------------------------------------------------------
-# show / list.
-# ---------------------------------------------------------------------------
 @pytest.mark.asyncio
-async def test_show_returns_config_team_and_report(tmp_path: Path) -> None:
-    state = _make_state(tmp_path)
-    repo = _make_repo(tmp_path, "vbot", "builder.md", "tester.md")
-    _add_project(state, {"cwd": str(repo), "display_name": "vBot"})
+@pytest.mark.parametrize(
+    ("method", "params", "code", "named"),
+    [
+        (
+            "project.add",
+            {"cwd": "{repo}", "display_name": "vBot Two"},
+            "project_already_exists",
+            "",
+        ),
+        ("project.add", {"cwd": "{missing}"}, "invalid_request", "{missing}"),
+        ("project.add", {"cwd": "{fresh}", "display_name": "!!!"}, "invalid_request", ""),
+        ("project.add", {"cwd": "{fresh}", "bogus": 1}, "invalid_request", "bogus"),
+        (
+            "project.add",
+            {"cwd": "{fresh}", "source_format": "cursor"},
+            "invalid_request",
+            "source_format",
+        ),
+        ("project.add", {"cwd": "{fresh}", "default_temperature": 3.0}, "invalid_request", ""),
+        ("project.detect", {"cwd": "{fresh}", "bogus": 1}, "invalid_request", "bogus"),
+        ("project.show", {"project_id": "ghost"}, "project_not_found", ""),
+        # Ids are exact even where the filesystem would open ``vbot`` for ``VBOT``.
+        ("project.show", {"project_id": "VBOT"}, "project_not_found", ""),
+        ("project.set", {"project_id": "vbot"}, "invalid_request", ""),
+        ("project.set", {"project_id": "vbot", "cwd": "{missing}"}, "invalid_request", ""),
+        (
+            "project.set",
+            {"project_id": "vbot", "allowed_tools": ["read", 7]},
+            "invalid_request",
+            "",
+        ),
+        (
+            "project.set",
+            {"project_id": "vbot", "allowed_tools": ["read", "*"]},
+            "invalid_request",
+            "",
+        ),
+        (
+            "project.set",
+            {"project_id": "vbot", "allowed_tools": ["read", "missing_extension_tool"]},
+            "invalid_request",
+            "missing_extension_tool",
+        ),
+        # Registered, but not eligible for Projects.
+        (
+            "project.set",
+            {"project_id": "vbot", "allowed_tools": ["read", "memory"]},
+            "invalid_request",
+            "memory",
+        ),
+        (
+            "project.set",
+            {"project_id": "vbot", "default_thinking_effort": "ultra"},
+            "invalid_request",
+            "",
+        ),
+        ("project.set", {"project_id": "vbot", "default_temperature": 3.0}, "invalid_request", ""),
+        # The retired override method is gone from the method table.
+        (
+            "project.clear_model_override",
+            {"project_id": "vbot", "agent_id": "builder"},
+            "method_not_found",
+            "",
+        ),
+    ],
+)
+async def test_a_refused_project_request_leaves_the_projects_unchanged(
+    tmp_path: Path, method: str, params: JsonObject, code: str, named: str
+) -> None:
+    state, repo = await _vbot_state(tmp_path, "builder.md")
+    paths = {
+        "repo": str(repo),
+        "fresh": str(_make_repo(tmp_path, "fresh")),
+        "missing": str(tmp_path / "nope"),
+    }
+    params = {
+        key: value.format(**paths) if isinstance(value, str) else value
+        for key, value in params.items()
+    }
+    before = state.runtime.projects.list()
 
-    result = await _show_project(state, {"project_id": "vbot"})
+    error = await rpc_error(state, method, **params)
 
-    assert result["project"]["project_id"] == "vbot"
-    assert [member["agent_id"] for member in result["scan"]["team"]] == ["builder", "tester"]
+    assert error["code"] == code
+    assert named.format(**paths) in error["message"]
+    assert state.runtime.projects.list() == before
+
+
+# ---------------------------------------------------------------------------
+# project.set
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("changes", "expected"),
+    [
+        pytest.param(
+            {"default_model": "openai/gpt-mini"}, {"default_model": "openai/gpt-mini"}, id="model"
+        ),
+        pytest.param({"display_name": None}, {"display_name": "vbot"}, id="clear-display-name"),
+        pytest.param(
+            {
+                "allowed_tools": ["read", "search_files"],
+                "skills_bundled_enabled": ["frontend-design"],
+                "skills_global_enabled": ["pdf"],
+                "skills_project_disabled": ["debugging"],
+            },
+            {
+                "allowed_tools": ["read", "search_files"],
+                "skills_bundled_enabled": ["frontend-design"],
+                "skills_global_enabled": ["pdf"],
+                "skills_project_disabled": ["debugging"],
+            },
+            id="whitelists",
+        ),
+        pytest.param({"allowed_tools": []}, {"allowed_tools": []}, id="empty-tool-whitelist"),
+        pytest.param(
+            {"allowed_tools": ["read", "extension_tool"]},
+            {"allowed_tools": ["read", "extension_tool"]},
+            id="registered-extension-tool",
+        ),
+        pytest.param(
+            {"default_temperature": 0.2, "default_thinking_effort": "low"},
+            {"default_temperature": 0.2, "default_thinking_effort": "low"},
+            id="temperature-and-thinking",
+        ),
+        # "" (provider default) is a real value, distinct from null.
+        pytest.param(
+            {"default_thinking_effort": ""}, {"default_thinking_effort": ""}, id="provider-default"
+        ),
+        pytest.param(
+            {"default_thinking_effort": None},
+            {"default_thinking_effort": None},
+            id="clear-thinking",
+        ),
+    ],
+)
+async def test_set_changes_project_fields(
+    tmp_path: Path, changes: JsonObject, expected: JsonObject
+) -> None:
+    state, _repo = await _vbot_state(tmp_path, default_thinking_effort="high")
+    state.runtime.tools.names.add("extension_tool")
+
+    updated = await rpc_result(state, "project.set", project_id="vbot", **changes)
+    shown = await rpc_result(state, "project.show", project_id="vbot")
+
+    for field, value in expected.items():
+        assert updated["project"][field] == value
+        assert shown["project"][field] == value
+
+
+@pytest.mark.asyncio
+async def test_a_stored_unavailable_tool_is_kept_and_reported_but_not_rejected(
+    tmp_path: Path,
+) -> None:
+    state, _repo = await _vbot_state(tmp_path)
+    state.runtime.projects.update("vbot", allowed_tools=["read", "disabled_extension_tool"])
+
+    shown = await rpc_result(state, "project.show", project_id="vbot")
+    edited = await rpc_result(
+        state,
+        "project.set",
+        project_id="vbot",
+        allowed_tools=["read", "search_files", "disabled_extension_tool"],
+    )
+
+    assert shown["project"]["allowed_tools"] == ["read", "disabled_extension_tool"]
+    assert shown["scan"]["report"] == {
+        "clean": False,
+        "findings": [
+            {
+                "type": "unavailable_tool",
+                "detail": (
+                    "Tool Whitelist entry 'disabled_extension_tool' is not a currently "
+                    "registered Project tool. It remains stored but grants no access "
+                    "unless the tool becomes available again."
+                ),
+                "agent_id": "",
+                "source_path": None,
+            }
+        ],
+    }
+    assert edited["project"]["allowed_tools"] == [
+        "read",
+        "search_files",
+        "disabled_extension_tool",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_set_cwd_rescans_team(tmp_path: Path) -> None:
+    state, _repo = await _vbot_state(tmp_path, "builder.md")
+    moved = _make_repo(tmp_path, "vbot-moved", "builder.md", "tester.md")
+
+    result = await rpc_result(state, "project.set", project_id="vbot", cwd=str(moved))
+
+    assert _team(result) == ["builder", "tester"]
+
+
+@pytest.mark.asyncio
+async def test_set_source_format_switches_team_without_restart(tmp_path: Path) -> None:
+    # A format switch invalidates like a cwd change, so the returned scan (and any
+    # later show) reflects the other format's team immediately.
+    state, repo = await _vbot_state(tmp_path, "builder.md")
+    _write_claude_agent(repo, "reviewer.md", "reviewer")
+
+    switched = await rpc_result(state, "project.set", project_id="vbot", source_format="claude")
+    shown = await rpc_result(state, "project.show", project_id="vbot")
+
+    assert switched["project"]["source_format"] == "claude"
+    assert _team(switched) == ["reviewer"]
+    assert _team(shown) == ["reviewer"]
+
+
+# ---------------------------------------------------------------------------
+# project.show / project.list
+# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_show_rescans_repo_changes(tmp_path: Path) -> None:
-    state = _make_state(tmp_path)
-    repo = _make_repo(tmp_path, "vbot", "builder.md")
-    _add_project(state, {"cwd": str(repo), "display_name": "vBot"})
+    state, repo = await _vbot_state(tmp_path, "builder.md")
     _write_agent(repo, "tester.md")
 
-    result = await _show_project(state, {"project_id": "vbot"})
+    result = await rpc_result(state, "project.show", project_id="vbot")
 
-    assert [member["agent_id"] for member in result["scan"]["team"]] == ["builder", "tester"]
+    assert result["project"]["project_id"] == "vbot"
+    assert _team(result) == ["builder", "tester"]
 
 
 @pytest.mark.asyncio
 async def test_show_scans_the_repo_off_the_event_loop(tmp_path: Path) -> None:
-    state = _make_state(tmp_path)
-    repo = _make_repo(tmp_path, "vbot", "builder.md")
-    _add_project(state, {"cwd": str(repo), "display_name": "vBot"})
+    state, _repo = await _vbot_state(tmp_path, "builder.md")
     resolver = state.runtime.agent_resolver
     scan_project_report = resolver.scan_project_report
     entered = threading.Event()
@@ -341,7 +414,7 @@ async def test_show_scans_the_repo_off_the_event_loop(tmp_path: Path) -> None:
         return scan_project_report(*args, **kwargs)
 
     resolver.scan_project_report = blocked_scan
-    showing = asyncio.create_task(_show_project(state, {"project_id": "vbot"}))
+    showing = asyncio.create_task(rpc_result(state, "project.show", project_id="vbot"))
     try:
         assert await asyncio.to_thread(entered.wait, 5)
         loop = asyncio.get_running_loop()
@@ -354,45 +427,8 @@ async def test_show_scans_the_repo_off_the_event_loop(tmp_path: Path) -> None:
         release.set()
 
     result = await asyncio.wait_for(showing, timeout=5)
-    assert [member["agent_id"] for member in result["scan"]["team"]] == ["builder"]
+    assert _team(result) == ["builder"]
     assert threads and threading.get_ident() not in threads
-
-
-@pytest.mark.asyncio
-async def test_show_reflects_a_newly_added_repo_skill(tmp_path: Path) -> None:
-    # Open re-scans the Team on every call; the skill pool must keep pace. A skill
-    # newly added under <cwd>/.opencode/skills surfaces after project.show in both
-    # the editor pool and the resolver's effective-skills input — not only after a
-    # cwd change or a restart.
-    runtime = _build_started_runtime(tmp_path)
-    try:
-        state = SimpleNamespace(runtime=runtime)
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        _write_project_skill(repo, "alpha", "Alpha playbook.")
-        runtime.projects.create("p", "P", repo)
-
-        # The first open primes the per-project skill cache against the current repo.
-        primed = await _show_project(state, {"project_id": "p"})
-        assert primed["scan"]["skills"]["project"] == [
-            {"name": "alpha", "description": "Alpha playbook."},
-        ]
-
-        # A new project skill lands in the repo after that first open.
-        _write_project_skill(repo, "beta", "Beta playbook.")
-
-        refreshed = await _show_project(state, {"project_id": "p"})
-
-        # The editor pool reflects the new skill (name + description carried per entry)...
-        assert refreshed["scan"]["skills"]["project"] == [
-            {"name": "alpha", "description": "Alpha playbook."},
-            {"name": "beta", "description": "Beta playbook."},
-        ]
-        # ...and so does project_skill_names, which is exactly what the resolver feeds
-        # into a config agent's effective skills, so the next resolve sees it too.
-        assert runtime.project_skill_names("p") == frozenset({"alpha", "beta"})
-    finally:
-        await runtime.aclose()
 
 
 @pytest.mark.asyncio
@@ -400,102 +436,126 @@ async def test_show_drops_team_cache_so_a_new_repo_agent_resolves(tmp_path: Path
     # Open drops the Team cache together with the skill cache, so an agent added to
     # the repo after an earlier run resolves on the next run instead of being
     # rejected by a stale Team cache.
-    state = _make_state(tmp_path)
-    repo = _make_repo(tmp_path, "vbot", "builder.md")
-    _add_project(state, {"cwd": str(repo), "display_name": "vBot"})
+    state, repo = await _vbot_state(tmp_path, "builder.md")
     resolver = state.runtime.agent_resolver
-    # An earlier run caches the Team (builder only).
     resolver.resolve_agent("vbot", "builder")
-    # A new agent is added to the repo afterwards.
     _write_agent(repo, "tester.md")
 
-    await _show_project(state, {"project_id": "vbot"})
+    await rpc_result(state, "project.show", project_id="vbot")
 
     assert resolver.resolve_agent("vbot", "tester").id == "tester"
 
 
 @pytest.mark.asyncio
-async def test_show_unknown_project_errors(tmp_path: Path) -> None:
-    state = _make_state(tmp_path)
+async def test_show_reloads_skills_and_reports_the_editor_skill_pool(tmp_path: Path) -> None:
+    state, _repo = await _vbot_state(tmp_path, "builder.md")
+    reload_calls: list[bool] = []
 
-    with pytest.raises(RpcError) as exc_info:
-        await _show_project(state, {"project_id": "ghost"})
+    async def reload_skills_async() -> None:
+        reload_calls.append(True)
 
-    assert exc_info.value.code == "project_not_found"
+    state.runtime.reload_skills_async = reload_skills_async
+    state.runtime.project_skill_names = lambda _project_id: frozenset({"refactoring", "glossary"})
+    state.runtime.project_own_skills = lambda _project_id: [
+        SimpleNamespace(name="refactoring", description="Refactor code safely."),
+        SimpleNamespace(name="glossary", description="Maintain the glossary."),
+    ]
+    state.runtime.skills = SimpleNamespace(
+        list_all=lambda: [
+            SimpleNamespace(name="glossary", description="", origin=SKILL_ORIGIN_BUNDLED),
+            SimpleNamespace(name="pdf", description="Work with PDFs.", origin=SKILL_ORIGIN_BUNDLED),
+            SimpleNamespace(
+                name="deploy", description="Deploy the app.", origin=SKILL_ORIGIN_GLOBAL
+            ),
+        ]
+    )
 
+    result = await rpc_result(state, "project.show", project_id="vbot")
 
-@pytest.mark.asyncio
-async def test_show_case_variant_project_id_is_not_found(tmp_path: Path) -> None:
-    # Ids are exact even where the filesystem would open ``vbot`` for ``VBOT``.
-    state = _make_state(tmp_path)
-    repo = _make_repo(tmp_path, "vbot", "builder.md")
-    _add_project(state, {"cwd": str(repo), "display_name": "vBot"})
-
-    with pytest.raises(RpcError) as exc_info:
-        await _show_project(state, {"project_id": "VBOT"})
-
-    assert exc_info.value.code == "project_not_found"
+    # A show reloads the global registry, so a hand-dropped global skill surfaces
+    # without a restart.
+    assert reload_calls == [True]
+    assert result["scan"]["skills"] == {
+        "project": [
+            {"name": "glossary", "description": "Maintain the glossary."},
+            {"name": "refactoring", "description": "Refactor code safely."},
+        ],
+        # "glossary" is shadowed by the project skill of the same name.
+        "bundled": [{"name": "pdf", "description": "Work with PDFs."}],
+        # Global-home skills are a separate opt-in pool, split out by origin.
+        "global": [{"name": "deploy", "description": "Deploy the app."}],
+    }
 
 
 @pytest.mark.asyncio
 async def test_list_returns_projects(tmp_path: Path) -> None:
     state = _make_state(tmp_path)
-    _add_project(state, {"cwd": str(_make_repo(tmp_path, "alpha")), "display_name": "Alpha"})
-    _add_project(state, {"cwd": str(_make_repo(tmp_path, "beta")), "display_name": "Beta"})
+    await rpc_result(
+        state, "project.add", cwd=str(_make_repo(tmp_path, "alpha")), display_name="Alpha"
+    )
+    await rpc_result(
+        state, "project.add", cwd=str(_make_repo(tmp_path, "beta")), display_name="Beta"
+    )
 
-    result = await _list_projects(state, {})
+    result = await rpc_result(state, "project.list")
 
     assert [project["project_id"] for project in result["projects"]] == ["alpha", "beta"]
 
 
 # ---------------------------------------------------------------------------
-# set: mutate + re-scan on cwd change.
+# Per-Project skill cache over a real Runtime
 # ---------------------------------------------------------------------------
-def test_set_changes_default_model(tmp_path: Path) -> None:
-    state = _make_state(tmp_path)
-    repo = _make_repo(tmp_path, "vbot", "builder.md")
-    _add_project(state, {"cwd": str(repo), "display_name": "vBot"})
-
-    result = _set_project(state, {"project_id": "vbot", "default_model": "openai/gpt-mini"})
-
-    assert result["project"]["default_model"] == "openai/gpt-mini"
 
 
-def test_set_clears_display_name_to_project_id(tmp_path: Path) -> None:
-    state = _make_state(tmp_path)
-    repo = _make_repo(tmp_path, "vbot")
-    _add_project(state, {"cwd": str(repo), "display_name": "vBot"})
+@pytest.mark.asyncio
+async def test_project_skill_cache_follows_settings_and_repo_changes(tmp_path: Path) -> None:
+    # The minimal ``_make_state`` runtime has no skill seam, so this one test starts
+    # a real Runtime (about a second) to exercise the per-Project skill cache
+    # behind ``skills_for`` and ``project_skill_names`` end to end.
+    logging.getLogger("vbot").handlers = []
+    runtime = Runtime(Config(data_dir=tmp_path / "data"))
+    runtime.start()
+    try:
+        state = SimpleNamespace(runtime=runtime)
+        repo = _make_repo(tmp_path, "repo")
+        _write_project_skill(repo, "project-playbook", "Project instructions")
+        global_root = runtime.global_skills_dir / "global-playbook"
+        global_root.mkdir(parents=True)
+        (global_root / "SKILL.md").write_text(
+            "---\nname: global-playbook\ndescription: Global instructions\n---\nBody.\n",
+            encoding="utf-8",
+        )
+        runtime.reload_skills()
+        runtime.projects.create("p", "P", repo)
 
-    result = _set_project(state, {"project_id": "vbot", "display_name": None})
+        def allowed() -> set[str]:
+            return {skill.name for skill in runtime.skills_for("p", "main").filter_allowed([])}
 
-    assert result["project"]["display_name"] == "vbot"
+        initial = allowed()
+        await rpc_result(
+            state, "project.set", project_id="p", skills_project_disabled=["project-playbook"]
+        )
+        disabled = allowed()
+        await rpc_result(
+            state,
+            "project.set",
+            project_id="p",
+            skills_project_disabled=[],
+            skills_global_enabled=["global-playbook"],
+        )
+        opted_in = allowed()
+        # A skill added to the repo after the cache was primed surfaces on the next
+        # open, in both the editor pool and the resolver's skill input.
+        _write_project_skill(repo, "beta", "Beta playbook.")
+        shown = await rpc_result(state, "project.show", project_id="p")
 
-
-def test_set_cwd_rescans_team(tmp_path: Path) -> None:
-    state = _make_state(tmp_path)
-    old_repo = _make_repo(tmp_path, "vbot", "builder.md")
-    new_repo = _make_repo(tmp_path, "vbot-moved", "builder.md", "tester.md")
-    _add_project(state, {"cwd": str(old_repo), "display_name": "vBot"})
-
-    result = _set_project(state, {"project_id": "vbot", "cwd": str(new_repo)})
-
-    assert [member["agent_id"] for member in result["scan"]["team"]] == ["builder", "tester"]
-
-
-def test_set_rejects_missing_cwd(tmp_path: Path) -> None:
-    state = _make_state(tmp_path)
-    _add_project(state, {"cwd": str(_make_repo(tmp_path, "vbot")), "display_name": "vBot"})
-
-    with pytest.raises(RpcError) as exc_info:
-        _set_project(state, {"project_id": "vbot", "cwd": str(tmp_path / "nope")})
-
-    assert exc_info.value.code == "invalid_request"
-
-
-def test_set_requires_a_change(tmp_path: Path) -> None:
-    state = _make_state(tmp_path)
-    _add_project(state, {"cwd": str(_make_repo(tmp_path, "vbot")), "display_name": "vBot"})
-
-    with pytest.raises(RpcError) as exc_info:
-        _set_project(state, {"project_id": "vbot"})
-    assert exc_info.value.code == "invalid_request"
+        assert initial == {"project-playbook"}
+        assert disabled == set()
+        assert opted_in == {"project-playbook", "global-playbook"}
+        assert shown["scan"]["skills"]["project"] == [
+            {"name": "beta", "description": "Beta playbook."},
+            {"name": "project-playbook", "description": "Project instructions"},
+        ]
+        assert runtime.project_skill_names("p") == frozenset({"project-playbook", "beta"})
+    finally:
+        await runtime.aclose()

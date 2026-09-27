@@ -36,8 +36,42 @@ from core.tools.availability import ToolAccess
 from server.rpc import (
     model_methods,
 )
+from server.rpc.methods import dispatch_rpc
 
 JsonObject = dict[str, Any]
+
+
+async def call(state: Any, method: str, **params: Any) -> JsonObject:
+    """Dispatch one RPC exactly as the transport does and return its envelope."""
+    return await dispatch_rpc(state, {"method": method, "params": params})
+
+
+async def rpc_result(state: Any, method: str, **params: Any) -> JsonObject:
+    """Dispatch one RPC that must succeed and return its result."""
+    response = await call(state, method, **params)
+    assert response["ok"] is True, response
+    result: JsonObject = response["result"]
+    return result
+
+
+async def rpc_error(state: Any, method: str, **params: Any) -> JsonObject:
+    """Dispatch one RPC that must fail and return its ``{code, message}`` error."""
+    response = await call(state, method, **params)
+    assert response["ok"] is False, response
+    error: JsonObject = response["error"]
+    return error
+
+
+def resource_changes(state: Any, kind: str | None = None) -> list[JsonObject]:
+    """Payloads of the ``resource_changed`` events on the state's bus, optionally of one kind."""
+    return [
+        event["payload"]
+        for event in state.event_bus.events
+        if event["type"] == "resource_changed"
+        and (kind is None or event["payload"]["kind"] == kind)
+    ]
+
+
 SettingsUpdateResult = TypeVar("SettingsUpdateResult")
 STUB_SUBAGENT_SETTING_FIELDS = (
     "max_subagent_depth",

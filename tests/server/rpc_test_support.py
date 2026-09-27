@@ -16,9 +16,13 @@ from tests.server.rpc_test_support_common import (
     StubProjects,
     StubProviders,
     _no_models_dev_fetch,
+    call,
     fake_refresh_models,
     openrouter_provider,
     openrouter_provider_with_secondary_connection,
+    resource_changes,
+    rpc_error,
+    rpc_result,
 )
 from tests.server.rpc_test_support_runtime import (
     RecordingCompactionService,
@@ -58,8 +62,12 @@ __all__ = [
     "StubSkills",
     "StubStorage",
     "_no_models_dev_fetch",
+    "call",
     "fake_refresh_models",
     "make_state",
     "openrouter_provider",
     "openrouter_provider_with_secondary_connection",
+    "resource_changes",
+    "rpc_error",
+    "rpc_result",
 ]
