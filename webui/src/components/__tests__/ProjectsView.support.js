@@ -83,14 +83,63 @@ function member(overrides = {}) {
   };
 }
 
+function cleanScan(overrides = {}) {
+  return { team: [], report: { clean: true, findings: [] }, ...overrides };
+}
+
+// Serve one listed Project `demo` and its scan; returns the stored record.
+function serveProject(fields = {}, scan = {}) {
+  const record = project({
+    project_id: 'demo',
+    display_name: 'Demo',
+    ...fields,
+  });
+  listProjectsMock.mockResolvedValue({ projects: [record] });
+  showProjectMock.mockResolvedValue({ project: record, scan: cleanScan(scan) });
+  return record;
+}
+
+// Answer the catalog RPCs the view loads on mount. `tools` entries may be bare
+// names or partial tool objects.
+function mockCatalogs({
+  models = [],
+  connections = [],
+  settings = { defaults: { agent: {} } },
+  tools = [],
+  defaultProjectTools = [],
+} = {}) {
+  rpcMock.mockImplementation((method) => {
+    if (method === 'model.list') {
+      return Promise.resolve({ models });
+    }
+    if (method === 'connection.list') {
+      return Promise.resolve({ connections });
+    }
+    if (method === 'settings.get') {
+      return Promise.resolve(settings);
+    }
+    if (method === 'tool.list') {
+      return Promise.resolve({
+        tools: tools.map((tool) =>
+          typeof tool === 'string'
+            ? { name: tool, description: '' }
+            : { description: '', ...tool },
+        ),
+        default_project_tools: defaultProjectTools,
+      });
+    }
+    return Promise.resolve({});
+  });
+}
+
 function buttonByTestId(testId) {
   const button = document.querySelector(`[data-testid="${testId}"]`);
   expect(button, testId).toBeTruthy();
   return button;
 }
 
-function buttonWithTextContent(label) {
-  const button = Array.from(document.querySelectorAll('button')).find(
+function buttonWithTextContent(label, root = document) {
+  const button = Array.from(root.querySelectorAll('button')).find(
     (item) => item.textContent.trim() === label,
   );
   expect(button, `button not found: ${label}`).toBeTruthy();
@@ -100,11 +149,7 @@ function buttonWithTextContent(label) {
 function confirmDialog(label) {
   const footer = document.querySelector('.modal-footer');
   expect(footer, 'confirm dialog not open').toBeTruthy();
-  const button = Array.from(footer.querySelectorAll('button')).find(
-    (item) => item.textContent.trim() === label,
-  );
-  expect(button, `confirm button not found: ${label}`).toBeTruthy();
-  button.click();
+  buttonWithTextContent(label, footer).click();
 }
 
 function submitButtonInDialog(label) {
@@ -127,6 +172,12 @@ function inputById(id) {
 function optionByText(text) {
   return Array.from(document.querySelectorAll('[role="option"]')).find(
     (item) => item.textContent?.trim() === text,
+  );
+}
+
+function optionLabels() {
+  return Array.from(document.querySelectorAll('[role="option"]')).map((item) =>
+    item.textContent.trim(),
   );
 }
 
@@ -168,33 +219,6 @@ async function waitForCondition(condition, maxAttempts = 20) {
   throw new Error('Timed out waiting for condition');
 }
 
-// Stub the tool-catalog RPC for the whitelist editor while keeping the model/
-// connection/defaults catalogs the settings form needs.
-function mockToolCatalog(toolNames, defaultProjectTools) {
-  rpcMock.mockImplementation((method) => {
-    if (method === 'model.list') {
-      return Promise.resolve({ models: [] });
-    }
-    if (method === 'connection.list') {
-      return Promise.resolve({ connections: [] });
-    }
-    if (method === 'settings.get') {
-      return Promise.resolve({ defaults: { agent: {} } });
-    }
-    if (method === 'tool.list') {
-      return Promise.resolve({
-        tools: toolNames.map((tool) =>
-          typeof tool === 'string'
-            ? { name: tool, description: '' }
-            : { description: '', ...tool },
-        ),
-        default_project_tools: defaultProjectTools,
-      });
-    }
-    return Promise.resolve({});
-  });
-}
-
 // Select the `demo` project in the list pane, opening its detail pane.
 async function selectDemo() {
   await waitForCondition(() =>
@@ -202,6 +226,20 @@ async function selectDemo() {
   );
   buttonByTestId('project-toggle-demo').click();
   flushSync();
+}
+
+// Expand a Team member row and wait for its detail.
+async function expandMember(agentId) {
+  await waitForCondition(() =>
+    document.querySelector(`[data-testid="project-team-toggle-${agentId}"]`),
+  );
+  buttonByTestId(`project-team-toggle-${agentId}`).click();
+  flushSync();
+  await waitForCondition(() =>
+    document.querySelector(
+      `[data-testid="project-team-member-${agentId}"] .projects-team-detail`,
+    ),
+  );
 }
 
 function toggleByAriaLabel(label) {
@@ -223,42 +261,19 @@ function setupProjectsViewSuite() {
     setOverrideMock.mockReset();
     clearOverrideMock.mockReset();
     rpcMock.mockReset();
+    mockCatalogs();
 
-    rpcMock.mockImplementation((method) => {
-      if (method === 'model.list') {
-        return Promise.resolve({ models: [] });
-      }
-      if (method === 'connection.list') {
-        return Promise.resolve({ connections: [] });
-      }
-      if (method === 'settings.get') {
-        return Promise.resolve({ defaults: { agent: {} } });
-      }
-      return Promise.resolve({});
-    });
-
+    const saved = {
+      project: project({ project_id: 'demo' }),
+      scan: cleanScan(),
+    };
     listProjectsMock.mockResolvedValue({ projects: [] });
-    addProjectMock.mockResolvedValue({
-      project: project({ project_id: 'demo' }),
-      scan: { team: [], report: { clean: true, findings: [] } },
-    });
-    showProjectMock.mockResolvedValue({
-      project: project({ project_id: 'demo' }),
-      scan: { team: [], report: { clean: true, findings: [] } },
-    });
-    setProjectMock.mockResolvedValue({
-      project: project({ project_id: 'demo' }),
-      scan: { team: [], report: { clean: true, findings: [] } },
-    });
+    addProjectMock.mockResolvedValue(saved);
+    showProjectMock.mockResolvedValue(saved);
+    setProjectMock.mockResolvedValue(saved);
     removeProjectMock.mockResolvedValue({ project_id: 'demo', archived: true });
-    setOverrideMock.mockResolvedValue({
-      project: project({ project_id: 'demo' }),
-      scan: { team: [], report: { clean: true, findings: [] } },
-    });
-    clearOverrideMock.mockResolvedValue({
-      project: project({ project_id: 'demo' }),
-      scan: { team: [], report: { clean: true, findings: [] } },
-    });
+    setOverrideMock.mockResolvedValue(saved);
+    clearOverrideMock.mockResolvedValue(saved);
   });
   afterEach(async () => {
     if (mountedComponent) {
@@ -269,11 +284,11 @@ function setupProjectsViewSuite() {
     vi.restoreAllMocks();
   });
   return {
-    get mountedComponent() {
+    // Mount the view into the document; the suite unmounts it after the test.
+    mount(props = {}) {
+      mountedComponent = mount(ProjectsView, { target: document.body, props });
+      flushSync();
       return mountedComponent;
-    },
-    set mountedComponent(value) {
-      mountedComponent = value;
     },
   };
 }
@@ -287,24 +302,27 @@ export {
   setOverrideMock,
   clearOverrideMock,
   rpcMock,
-  ProjectsView,
   AUTO_SAVE_WAIT_MS,
   project,
   member,
+  cleanScan,
+  serveProject,
+  mockCatalogs,
   buttonByTestId,
   buttonWithTextContent,
   confirmDialog,
   submitButtonInDialog,
   inputById,
   optionByText,
+  optionLabels,
   expectSectionOrder,
   setInputValue,
   wait,
   waitForCondition,
-  mockToolCatalog,
   selectDemo,
+  expandMember,
   toggleByAriaLabel,
   setupProjectsViewSuite,
 };
 
-export { flushSync, mount };
+export { flushSync };
