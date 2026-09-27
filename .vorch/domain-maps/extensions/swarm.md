@@ -113,7 +113,11 @@ recent changes and excerpts; content and history reads are bounded. List/history
 continuations bind their query and revision watermark; content continuations pin
 the requested revision. Search matches Unicode-casefolded titles and content; the
 folding runs in Python over the latest revisions because kernel read connections
-carry no custom SQL functions.
+carry no custom SQL functions. An Agent `read` with `query` (Sessions, 2026-09)
+reads the page as asked and adds `found`, before `content`: up to 5 lines of the
+whole read revision containing the casefolded query, each with its line number and
+starting character (the `offset` unit), or the `list` call that searches all pages
+(`_wiki_tool.py::WikiCall._find`).
 
 Create, update, delete and restore preserve full versions with author and timestamp.
 Update supports title/content replacement or one unique `old_text`/`new_text` edit.

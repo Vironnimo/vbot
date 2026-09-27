@@ -35,6 +35,11 @@ _DIFF_CHARS = 3000
 _AMBIGUOUS_LINES = 10
 
 
+# A read with a query names at most this many matching lines, each cut to this length.
+_FOUND_LINES = 5
+_FOUND_LINE_CHARS = 200
+
+
 class WikiCall:
     """One swarm_wiki action for a bound participant."""
 
@@ -53,6 +58,8 @@ class WikiCall:
         self.pid = participant_id
         self.epoch = epoch
         self.notes = notes
+        # Text a read call asked to find in its page.
+        self.find: str | None = None
 
     async def run(self, arguments: Json) -> tuple[Json, bool]:
         """Run the call; return its rendered result and whether the Wiki changed."""
@@ -76,7 +83,13 @@ class WikiCall:
             self.notes.append(REPLAYED)
         changed = action in MUTATIONS and not data.get("replayed") and not data.get("unchanged")
         if action == "read":
-            return self._read(data), changed
+            rendered = self._read(data)
+            if self.find:
+                content = rendered.pop("content", None)
+                rendered["found"] = await self._find(data, self.find)
+                if content is not None:
+                    rendered["content"] = content
+            return rendered, changed
         if action == "list":
             rendered = self._list(data, arguments)
             unfiltered = not {"query", "include_deleted", "cursor"} & arguments.keys()
@@ -113,12 +126,9 @@ class WikiCall:
                     del arguments[field]
                     self.notes.append(FIELD_IGNORED.format(field=field, action=action))
         if action == "read" and "query" in arguments:
-            raise AgentCallError(
-                "invalid_arguments",
-                text.WIKI_READ_QUERY.format(
-                    call=call_text({"action": "list", "query": arguments["query"]})
-                ),
-            )
+            # A query on one page asks where its text occurs there.
+            query = arguments.pop("query")
+            self.find = query if isinstance(query, str) and query.strip() else None
         # create decides about a page_id once it knows whether that page exists.
         accepted = _FIELDS[action] | {"action", "request_id"}
         if action == "create":
@@ -336,6 +346,34 @@ class WikiCall:
             offset=arguments.get("offset"), total=data["total_chars"]
         )
         return rendered
+
+    async def _find(self, data: Json, query: str) -> str:
+        """Name the lines of the read revision that contain ``query``, ignoring case."""
+
+        content = data["content"]
+        if data["offset"] or len(content) < data["total_chars"]:
+            contents = await self.store.wiki_contents(self.sid, data["page_id"], [data["revision"]])
+            content = contents.get(data["revision"], "")
+        wanted = query.casefold()
+        hits: list[str] = []
+        offset = 0
+        for number, line in enumerate(content.split("\n"), 1):
+            if wanted in line.casefold():
+                clipped = (
+                    line if len(line) <= _FOUND_LINE_CHARS else line[:_FOUND_LINE_CHARS] + "..."
+                )
+                hits.append(
+                    text.WIKI_READ_FOUND_LINE.format(line=number, offset=offset, text=clipped)
+                )
+            offset += len(line) + 1
+        if not hits:
+            return text.WIKI_READ_FOUND_NONE.format(
+                query=query, call=call_text({"action": "list", "query": query})
+            )
+        shown = [text.WIKI_READ_FOUND.format(query=query), *hits[:_FOUND_LINES]]
+        if len(hits) > _FOUND_LINES:
+            shown.append(text.WIKI_READ_FOUND_MORE.format(count=len(hits) - _FOUND_LINES))
+        return "\n".join(shown)
 
     def _read(self, data: Json) -> Json:
         author = data["author"]["name"]

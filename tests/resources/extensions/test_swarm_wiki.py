@@ -761,11 +761,37 @@ async def test_wiki_reading_calls_run_with_a_note(board):
         "Nothing to show after character 500; the page has 22 characters."
     )
     assert "more" not in past["data"] and "content" not in past["data"]
-    query = await invoke(board, {"action": "read", "page_id": page_id, "query": "x"})
-    assert visible(query) == (
-        "Error (invalid_arguments): read shows one page and has no query. To search pages, use "
-        '{"action": "list", "query": "x"}; to read the page, repeat the call without query.'
+    missing = await invoke(board, {"action": "read", "page_id": page_id, "query": "x"})
+    assert missing["data"]["found"] == (
+        'No line of this revision contains "x". To search all pages, use '
+        '{"action": "list", "query": "x"}'
     )
+    assert missing["data"]["content"] == "Findings about parsers"
+
+
+@pytest.mark.asyncio
+async def test_wiki_read_with_query_names_the_lines_that_contain_it(board):
+    lines = ["# Modules", *(f"- module {number}: notes" for number in range(1, 40))]
+    lines[3] = "- errors.py holds MiniError"
+    lines[30] = "- see ERRORS.PY for the codes"
+    page_id = await create(board, "\n".join(lines))
+    offset = len("\n".join(lines[:30])) + 1
+
+    # The query is found in the whole revision, beyond the window the read shows.
+    result = await invoke(
+        board, {"action": "read", "page_id": page_id, "query": "errors.py", "limit": 100}
+    )
+
+    assert result["ok"], result
+    assert result["data"]["found"] == (
+        'Lines containing "errors.py", ignoring case:\n'
+        f"line 4, character {len(chr(10).join(lines[:3])) + 1}: - errors.py holds MiniError\n"
+        f"line 31, character {offset}: - see ERRORS.PY for the codes"
+    )
+    assert list(result["data"]).index("found") < list(result["data"]).index("content")
+    assert result["data"]["content"] == "\n".join(lines)[:100]
+    listed = await invoke(board, {"action": "list", "query": "errors.py"})
+    assert listed["data"]["pages"].startswith('Pages containing "errors.py"')
 
 
 @pytest.mark.asyncio

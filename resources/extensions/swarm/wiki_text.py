@@ -184,9 +184,11 @@ WIKI_NEEDS = {
 }
 WIKI_FIELD_ELSEWHERE = "{field} is used by {users}, not by {action}. Repeat the call without it."
 WIKI_FIELD_UNKNOWN = "swarm_wiki has no field {field}. Repeat the call without it."
-WIKI_READ_QUERY = (
-    "read shows one page and has no query. To search pages, use {call}; to read the page, "
-    "repeat the call without query."
+WIKI_READ_FOUND = 'Lines containing "{query}", ignoring case:'
+WIKI_READ_FOUND_LINE = "line {line}, character {offset}: {text}"
+WIKI_READ_FOUND_MORE = "{count} more lines contain it."
+WIKI_READ_FOUND_NONE = (
+    'No line of this revision contains "{query}". To search all pages, use {call}'
 )
 WIKI_NOT_FOUND = "old_text does not occur in the current page (revision {current})."
 WIKI_NOT_FOUND_STALE = (
