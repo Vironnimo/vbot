@@ -417,6 +417,8 @@ class FakeVoiceServer:
             self.methods.append(method)
         if method == "task_model.status":
             return _ok(self.speech)
+        if method == "speech.prepare_transcription":
+            return _ok({"state": "loading"})
         if method == "agent.get":
             agent = self.agents.get(params["id"])
             if agent is None:

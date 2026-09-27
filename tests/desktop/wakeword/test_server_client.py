@@ -158,6 +158,23 @@ def test_speech_readiness_reports_an_unreachable_server_after_retries(
     assert len(server.requests) == MAX_ATTEMPTS
 
 
+@pytest.mark.parametrize(
+    ("reply", "state"),
+    [
+        (_ok({"state": "loading"}), "loading"),
+        (_rpc_error("method_not_found"), None),
+        (_connect_error(), None),
+    ],
+)
+def test_speech_preparation_is_a_single_best_effort_request(
+    make_client: Callable[..., Any], reply: Reply, state: str | None
+) -> None:
+    server = ScriptedServer(reply)
+
+    assert make_client(server).prepare_transcription() == state
+    assert server.rpc_calls == [("speech.prepare_transcription", {})]
+
+
 # -- Agents and Sessions -----------------------------------------------------------
 
 
@@ -504,6 +521,7 @@ def test_a_cancelled_client_sends_nothing(
         client.upload_budget_bytes()
     with pytest.raises(VoiceRequestCancelled):
         client.speech_readiness()
+    assert client.prepare_transcription() is None
     assert server.requests == []
 
 

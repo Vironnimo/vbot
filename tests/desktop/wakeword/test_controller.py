@@ -298,6 +298,8 @@ def test_a_spoken_command_is_recorded_transcribed_and_sent(
     assert [(params["session_id"], params["content"]) for params in rig.server.sent] == [
         ("s-main", "turn on the lights")
     ]
+    # The recording start asks the server to load its speech model meanwhile.
+    wait_until(lambda: "speech.prepare_transcription" in rig.server.methods)
     rate, samples = uploaded_wav(rig.server.uploads[0])
     assert rate == 16000
     assert int(np.abs(samples.astype(np.int32)).max()) >= 1500

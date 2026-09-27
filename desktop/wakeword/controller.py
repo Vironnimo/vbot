@@ -902,6 +902,7 @@ class VoiceController:
                 )
                 self._recording = recording
                 self._emit_recording_locked(EVENT_RECORDING_STARTED, recording)
+                self._prepare_transcription_locked(session)
             self._commit_locked()
         if live_mode is not None:
             self._live_requests(live_mode, LIVE_REQUEST_SOURCE)
@@ -1038,6 +1039,18 @@ class VoiceController:
     def _readiness_stale_locked(self) -> bool:
         checked_at = self._readiness.checked_at
         return checked_at is None or self._clock() - checked_at > READINESS_STALE_SECONDS
+
+    def _prepare_transcription_locked(self, session: _Session) -> None:
+        """Let the server load its speech-to-text model while the command is spoken."""
+        client = session.client
+        if client is None or session.stop_event.is_set():
+            return
+        thread = threading.Thread(
+            target=client.prepare_transcription, name="vbot-voice-prepare", daemon=True
+        )
+        session.threads = [known for known in session.threads if known.is_alive()]
+        session.threads.append(thread)
+        thread.start()
 
     def _request_readiness_locked(self, session: _Session) -> None:
         if session.client is None or session.stop_event.is_set():

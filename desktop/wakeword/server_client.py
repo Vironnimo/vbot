@@ -2,9 +2,9 @@
 
 :class:`VoiceServerClient` wraps the server's JSON RPC endpoint
 (``POST /api/rpc``) and speech upload endpoint (``POST
-/api/speech/transcribe``) behind typed operations: speech-to-text readiness,
-Agent lookup, Session resolution, transcription, sending the command text, and
-the speech upload budget.
+/api/speech/transcribe``) behind typed operations: speech-to-text readiness and
+preparation, Agent lookup, Session resolution, transcription, sending the
+command text, and the speech upload budget.
 
 Failures raise typed errors whose ``error_code`` is the stable code a Voice
 status or ``command_failed`` event carries:
@@ -27,7 +27,8 @@ Retries: idempotent reads (``agent.get``, ``session.list``,
 ``settings.get_path``, ``task_model.status``) and transcription make up to
 :data:`MAX_ATTEMPTS` attempts on transport failures and retryable statuses.
 Mutations (``session.create``, ``chat.stream``) make exactly one attempt: after
-a lost response the server may already have committed a Session or Run.
+a lost response the server may already have committed a Session or Run. The
+best-effort ``speech.prepare_transcription`` hint also makes one attempt.
 Environment proxies are ignored (``trust_env=False``).
 """
 
@@ -194,6 +195,31 @@ class VoiceServerClient:
             logger.warning("Speech-to-text readiness result omitted its readiness fields")
             return ERROR_SPEECH_TO_TEXT_READINESS_FAILED
         return None
+
+    def prepare_transcription(self) -> str | None:
+        """Ask the server to start loading its local speech-to-text model now.
+
+        A best-effort hint sent when a command recording starts, so a model that
+        is not loaded yet loads while the user speaks. Returns the server's state
+        (``loading``, ``loaded``, ``not_local``, ``unavailable``), or ``None``
+        when the request failed or was cancelled. Never raises.
+        """
+        try:
+            result = self._rpc(
+                "speech.prepare_transcription",
+                {},
+                error_code=ERROR_TRANSCRIPTION_FAILED,
+                attempts=1,
+            )
+        except VoiceRequestCancelled:
+            return None
+        except VoiceServerError as exc:
+            logger.warning("Speech-to-text preparation failed: %s", exc)
+            return None
+        state = result.get("state")
+        if state == "loading":
+            logger.info("Server started loading its speech-to-text model")
+        return state if isinstance(state, str) else None
 
     def get_agent(self, agent_id: str) -> dict[str, Any]:
         """Return the server's ``agent.get`` result for one Agent.
