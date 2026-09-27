@@ -483,6 +483,11 @@ _TTS_BINDING = {"target": "openai/gpt-4o-mini-tts::api-key", "options": {"voice"
             "params.recall.backend must be one of: hybrid, sqlite_fts, vector",
         ),
         (
+            "settings.patch",
+            _patch(_set("recall.backend", "unknown_backend")),
+            "params.recall.backend must be one of: hybrid, sqlite_fts, vector",
+        ),
+        (
             "settings.update",
             _extension_config({"unknown": 1}),
             "invalid extension config for 'homeassistant'",
@@ -586,15 +591,19 @@ _NO_EFFECTS: JsonObject = {
     "skills_reloaded": False,
     "recall_reloads": 0,
     "keep_awake": [],
-    "timezone": [],
     "commands": False,
 }
 
 
-def _extensions(disabled: list[str], config: JsonObject | None = None) -> JsonObject:
-    return {"extensions": {"disabled": disabled, "config": config or {}}}
+def _extensions(disabled: list[str]) -> JsonObject:
+    return {"extensions": {"disabled": disabled, "config": {}}}
 
 
+# Which live services a Settings change refreshes is the Runtime's decision
+# (tests/core/runtime/test_runtime_settings.py). These rows cover the RPC
+# wiring: both methods hand over the persisted before/after Settings, an
+# explicit section save requests its refresh, and a changed Command catalog
+# publishes a resource change.
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("seed", "method", "params", "effects"),
@@ -604,29 +613,7 @@ def _extensions(disabled: list[str], config: JsonObject | None = None) -> JsonOb
             "settings.patch",
             _patch(_set("extensions.directories", ["~/extra-extensions"])),
             {"extension_reloads": 1, "commands": True},
-            id="extension-directories",
-        ),
-        pytest.param(
-            {},
-            "settings.patch",
-            _patch(_set("skills.directories", ["~/extra-skills"])),
-            {"skills_reloaded": True},
-            id="skill-directories",
-        ),
-        pytest.param(
-            {},
-            "settings.patch",
-            _patch(_set("recall.backend", "sqlite_fts")),
-            {"recall_reloads": 1},
-            id="recall-backend",
-        ),
-        # Re-saving the Recall section through the Settings page rebuilds the backend.
-        pytest.param(
-            {"recall": {"backend": "sqlite_fts"}},
-            "settings.update",
-            {"recall": {"backend": "sqlite_fts"}},
-            {"recall_reloads": 1},
-            id="recall-resave",
+            id="patch-extension-directories",
         ),
         # A patch elsewhere neither re-validates nor reloads an extension-provided backend.
         pytest.param(
@@ -634,61 +621,44 @@ def _extensions(disabled: list[str], config: JsonObject | None = None) -> JsonOb
             "settings.patch",
             _patch(_set("web_search.provider", "searxng")),
             {},
-            id="unrelated-patch",
+            id="patch-unrelated",
         ),
-        # Disabling takes the surgical live-disable path, without a full reload.
         pytest.param(
             {},
             "settings.update",
             _extensions(["homeassistant"]),
             {"disabled_changes": [{"homeassistant"}], "commands": True},
-            id="disable-update",
+            id="update-disable",
         ),
-        pytest.param(
-            {},
-            "settings.patch",
-            _patch(_set("extensions.disabled", ["homeassistant"])),
-            {"disabled_changes": [{"homeassistant"}], "commands": True},
-            id="disable-patch",
-        ),
-        # Enabling rebuilds the whole Extension layer.
+        # A valid config passes the Extension's schema and applies live through
+        # its config reader.
         pytest.param(
             {"extensions": {"disabled": ["homeassistant"]}},
             "settings.update",
-            _extensions([]),
-            {"extension_reloads": 1, "commands": True},
-            id="enable",
-        ),
-        # A save that enables any name only reloads; the reload also applies the disable.
-        pytest.param(
-            {"extensions": {"disabled": ["one"]}},
-            "settings.update",
-            _extensions(["two"]),
-            {"extension_reloads": 1, "commands": True},
-            id="enable-and-disable",
-        ),
-        # A config-only save applies live through the Extension's config reader.
-        pytest.param(
-            {"extensions": {"disabled": ["homeassistant"]}},
-            "settings.update",
-            _extensions(["homeassistant"], {"homeassistant": {"url": "http://y"}}),
+            {
+                "extensions": {
+                    "disabled": ["homeassistant"],
+                    "config": {"homeassistant": {"url": "http://y"}},
+                }
+            },
             {},
-            id="config-only",
+            id="update-extension-config",
         ),
+        # Re-saving the Recall section through the Settings page rebuilds the backend.
+        pytest.param(
+            {"recall": {"backend": "sqlite_fts"}},
+            "settings.update",
+            {"recall": {"backend": "sqlite_fts"}},
+            {"recall_reloads": 1},
+            id="update-recall-resave",
+        ),
+        # Live effects run after the write, so they read the saved value.
         pytest.param(
             {},
             "settings.update",
             {"server": {"keep_awake": True}},
             {"keep_awake": [True]},
-            id="keep-awake",
-        ),
-        pytest.param({}, "settings.update", {"server": {}}, {}, id="server-unchanged"),
-        pytest.param(
-            {},
-            "settings.update",
-            {"server": {"timezone": "America/New_York"}},
-            {"timezone": ["America/New_York"]},
-            id="timezone",
+            id="update-keep-awake",
         ),
     ],
 )
@@ -700,11 +670,9 @@ async def test_saved_settings_apply_their_live_effects(
     runtime.storage.save_settings(seed)
     previous_skills = runtime.skills
     keep_awake: list[bool] = []
-    timezone: list[str] = []
     runtime.reload_keep_awake = lambda: keep_awake.append(
         runtime.storage.load_settings()["keep_awake"]
     )
-    runtime.reload_timezone = lambda: timezone.append(runtime.storage.load_settings()["timezone"])
 
     await rpc_result(state, method, **params)
 
@@ -714,35 +682,8 @@ async def test_saved_settings_apply_their_live_effects(
         "skills_reloaded": runtime.skills is not previous_skills,
         "recall_reloads": runtime.recall_reload_count,
         "keep_awake": keep_awake,
-        "timezone": timezone,
         "commands": resource_changes(state) == [{"kind": "commands"}],
     } == {**_NO_EFFECTS, **effects}
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("method", ["settings.patch", "settings.update"])
-async def test_disabling_extension_does_not_skip_simultaneous_recall_change(
-    tmp_path: Path, method: str
-) -> None:
-    state = make_state(tmp_path, StubAdapter())
-    state.runtime.storage.save_settings(
-        {"extensions": {"disabled": []}, "recall": {"backend": "vector"}}
-    )
-    observed_backends: list[str] = []
-    state.runtime.reload_recall_backend = lambda: observed_backends.append(
-        state.runtime.storage.load_recall_settings()["backend"]
-    )
-    params = (
-        _patch(_set("extensions.disabled", ["example"]), _set("recall.backend", "sqlite_fts"))
-        if method == "settings.patch"
-        else {"extensions": {"disabled": ["example"]}, "recall": {"backend": "sqlite_fts"}}
-    )
-
-    await rpc_result(state, method, **params)
-
-    assert state.runtime.extension_disabled_changes == [{"example"}]
-    assert state.runtime.extension_reload_count == 0
-    assert observed_backends == ["sqlite_fts"]
 
 
 @pytest.mark.asyncio

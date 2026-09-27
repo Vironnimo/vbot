@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from unittest.mock import Mock
+from typing import Any
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -62,37 +63,134 @@ def test_extension_change_also_applies_recall_and_skill_changes(
         runtime.stop()
 
 
-def test_only_changed_settings_refresh_their_live_services(
-    config: Config, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    runtime = Runtime(config, safe_startup_mode="test")
-    runtime.start()
-    try:
-        skills = runtime.skills_for(None)
-        recall = runtime.recall_backend
-        keep_awake = Mock()
-        timezone = Mock()
-        speech_preload = Mock()
-        monkeypatch.setattr(runtime, "reload_keep_awake", keep_awake)
-        monkeypatch.setattr(runtime, "reload_timezone", timezone)
-        monkeypatch.setattr(runtime.speech, "preload_configured", speech_preload)
-        settings = runtime.storage.load_settings()
-        assert asyncio.run(runtime.apply_settings_change(settings, settings)) is False
-        assert runtime.skills_for(None) is skills
-        assert runtime.recall_backend is recall
-        keep_awake.assert_not_called()
-        timezone.assert_not_called()
-        speech_preload.assert_not_called()
+_NO_EFFECTS: dict[str, Any] = {
+    "extension_reloads": 0,
+    "disabled_changes": [],
+    "skills_reloads": 0,
+    "recall_reloads": 0,
+    "keep_awake_reloads": 0,
+    "timezone_reloads": 0,
+    "speech_preloads": 0,
+    "commands_changed": False,
+}
+_SKILLS: dict[str, Any] = {"skill_directories": ["~/extra-skills"]}
+_RECALL: dict[str, Any] = {"recall": {"backend": "sqlite_fts"}}
 
+
+def _extensions(*disabled: str, config: dict[str, Any] | None = None) -> dict[str, Any]:
+    return {"extensions": {"disabled": list(disabled), "config": config or {}}}
+
+
+@pytest.mark.parametrize(
+    ("previous", "current", "refresh_sections", "effects"),
+    [
+        pytest.param({}, {}, (), {}, id="unchanged"),
+        pytest.param({}, {"web_search": {"provider": "searxng"}}, (), {}, id="unrelated"),
+        pytest.param(
+            {},
+            {"extension_directories": ["~/extra-extensions"]},
+            (),
+            {"extension_reloads": 1, "commands_changed": True},
+            id="extension-directories",
+        ),
+        pytest.param({}, _SKILLS, (), {"skills_reloads": 1}, id="skill-directories"),
+        # An explicit section save refreshes even when its values are unchanged.
+        pytest.param({}, {}, ("skills",), {"skills_reloads": 1}, id="skills-resave"),
+        pytest.param({}, _RECALL, (), {"recall_reloads": 1}, id="recall"),
+        pytest.param({}, {}, ("recall",), {"recall_reloads": 1}, id="recall-resave"),
+        # Disabling takes the surgical path, which refreshes Skills itself but
+        # not an independently changed Recall selection.
+        pytest.param(
+            {},
+            _extensions("one"),
+            (),
+            {"disabled_changes": [{"one"}], "commands_changed": True},
+            id="disable",
+        ),
+        pytest.param(
+            {},
+            {**_extensions("one"), **_SKILLS, **_RECALL},
+            (),
+            {"disabled_changes": [{"one"}], "recall_reloads": 1, "commands_changed": True},
+            id="disable-with-skills-and-recall",
+        ),
+        # Enabling any name rebuilds the whole Extension layer, which applies
+        # the complete disabled set and refreshes Skills and Recall itself.
+        pytest.param(
+            _extensions("one"),
+            _extensions(),
+            (),
+            {"extension_reloads": 1, "commands_changed": True},
+            id="enable",
+        ),
+        pytest.param(
+            _extensions("one"),
+            {**_extensions("two"), **_SKILLS, **_RECALL},
+            ("skills", "recall"),
+            {"extension_reloads": 1, "commands_changed": True},
+            id="enable-and-disable-with-skills-and-recall",
+        ),
+        # Extension config applies live through the Extension's config reader.
+        pytest.param(
+            _extensions("one"),
+            _extensions("one", config={"two": {"url": "http://y"}}),
+            (),
+            {},
+            id="config-only",
+        ),
+        # Raw Settings accept null as the default empty disabled set.
+        pytest.param({"extensions": {"disabled": None}}, _extensions(), (), {}, id="null-disabled"),
+        pytest.param({}, {"keep_awake": True}, (), {"keep_awake_reloads": 1}, id="keep-awake"),
+        pytest.param(
+            {}, {"timezone": "America/New_York"}, (), {"timezone_reloads": 1}, id="timezone"
+        ),
         # A new speech-to-text binding may ask for its local model to preload.
-        binding = {"target": "local/parakeet", "options": {"preload": True}}
-        changed = {**settings, "model_tasks": {"speech_to_text": binding}}
-        assert asyncio.run(runtime.apply_settings_change(settings, changed)) is False
-        speech_preload.assert_called_once_with()
-        keep_awake.assert_not_called()
-        timezone.assert_not_called()
-    finally:
-        runtime.stop()
+        pytest.param(
+            {},
+            {"model_tasks": {"speech_to_text": {"target": "local/parakeet"}}},
+            (),
+            {"speech_preloads": 1},
+            id="speech-to-text-binding",
+        ),
+    ],
+)
+def test_settings_changes_refresh_only_their_live_services(
+    shared_runtime: Runtime,
+    monkeypatch: pytest.MonkeyPatch,
+    previous: dict[str, Any],
+    current: dict[str, Any],
+    refresh_sections: tuple[str, ...],
+    effects: dict[str, Any],
+) -> None:
+    extension_reload = AsyncMock()
+    disabled_change = AsyncMock()
+    skills_reload = AsyncMock()
+    recall_reload = Mock()
+    keep_awake_reload = Mock()
+    timezone_reload = Mock()
+    speech_preload = Mock()
+    monkeypatch.setattr(shared_runtime, "reload_extensions", extension_reload)
+    monkeypatch.setattr(shared_runtime, "apply_extension_disabled_change", disabled_change)
+    monkeypatch.setattr(shared_runtime, "reload_skills_async", skills_reload)
+    monkeypatch.setattr(shared_runtime, "reload_recall_backend", recall_reload)
+    monkeypatch.setattr(shared_runtime, "reload_keep_awake", keep_awake_reload)
+    monkeypatch.setattr(shared_runtime, "reload_timezone", timezone_reload)
+    monkeypatch.setattr(shared_runtime.speech, "preload_configured", speech_preload)
+
+    commands_changed = asyncio.run(
+        shared_runtime.apply_settings_change(previous, current, refresh_sections=refresh_sections)
+    )
+
+    assert {
+        "extension_reloads": extension_reload.await_count,
+        "disabled_changes": [call.args[0] for call in disabled_change.await_args_list],
+        "skills_reloads": skills_reload.await_count,
+        "recall_reloads": recall_reload.call_count,
+        "keep_awake_reloads": keep_awake_reload.call_count,
+        "timezone_reloads": timezone_reload.call_count,
+        "speech_preloads": speech_preload.call_count,
+        "commands_changed": commands_changed,
+    } == {**_NO_EFFECTS, **effects}
 
 
 def test_session_search_periods_follow_the_current_timezone_setting(config: Config) -> None:
