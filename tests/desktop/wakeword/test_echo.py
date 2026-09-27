@@ -77,12 +77,14 @@ class FakeStream:
         self._name = name
         self.active = True
         self.closed = False
+        self.checks = 0
 
     @property
     def name(self) -> str:
         return self._name
 
     def is_active(self) -> bool:
+        self.checks += 1
         return self.active
 
     def close(self) -> None:
@@ -99,6 +101,7 @@ class FakeLoopback:
         self.sinks: list[ReferenceBlockCallback] = []
         self.streams: list[FakeStream] = []
         self.open_attempts = 0
+        self.polls = 0
         self.started = 0
         self.stopped = 0
 
@@ -106,6 +109,7 @@ class FakeLoopback:
         self.started += 1
 
     def default_endpoint(self) -> str | None:
+        self.polls += 1
         if self.detection_error is not None:
             raise self.detection_error
         return self.endpoint
@@ -862,8 +866,8 @@ def test_missing_loopback_endpoint_reports_no_reference_and_passes_audio_through
         wait_for(lambda: subject.stage.state == STATE_NO_REFERENCE)
         mic = noise(1000, seed=20)
         assert np.array_equal(subject.stage.process(mic, T0), mic)
-        attempts = loopback.open_attempts
-        time.sleep(0.05)
+        attempts, polls = loopback.open_attempts, loopback.polls
+        wait_for(lambda: loopback.polls >= polls + 3)
         assert loopback.open_attempts == attempts  # no retry until the device changes
 
         loopback.open_error = None
@@ -910,7 +914,7 @@ def test_undetectable_device_changes_keep_the_first_loopback() -> None:
     subject.stage.open(RATE)
     try:
         wait_for(lambda: len(loopback.streams) == 1)
-        time.sleep(0.05)
+        wait_for(lambda: loopback.streams[0].checks >= 3)  # several polls later
         assert len(loopback.streams) == 1
         assert subject.stage.state == STATE_ACTIVE
     finally:

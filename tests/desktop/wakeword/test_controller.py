@@ -26,7 +26,7 @@ import pytest
 from desktop import settings as desktop_settings
 from desktop.wakeword.config import PhraseConfig, VoiceConfigError
 from desktop.wakeword.controller import VoiceControlError, VoiceController, VoiceRuntime
-from tests.desktop.voice_fakes import (
+from tests.desktop.wakeword.voice_test_support import (
     AmplitudeVad,
     FakeEchoStage,
     FakeSoundDevice,
@@ -309,6 +309,10 @@ def test_a_spoken_command_is_recorded_transcribed_and_sent(
     assert list(dict.fromkeys(stages)) == ["transcribing", "sending"]
     assert rig.voice.status()["commands"] == []
     assert rig.voice.status()["recording"] is None
+    # Status snapshots and events share one gap-free sequence.
+    sequences = [payload["sequence"] for _, payload in rig.sink.pushes]
+    assert sequences == list(range(1, len(sequences) + 1))
+    assert rig.voice.status()["sequence"] == sequences[-1]
 
 
 def test_a_cancel_phrase_discards_the_command(voice_rig: Callable[..., Rig]) -> None:
@@ -918,20 +922,7 @@ def test_a_slow_echo_stage_does_not_delay_listening(voice_rig: Callable[..., Rig
     assert uploaded_wav(rig.server.uploads[0])[0] == 48000
 
 
-# -- Status and events -------------------------------------------------------------------------
-
-
-def test_status_and_events_share_one_increasing_sequence(
-    voice_rig: Callable[..., Rig],
-) -> None:
-    rig = voice_rig()
-    rig.wait_ready()
-    rig.say_command()
-    rig.sink.wait_for_event("sent")
-
-    sequences = [payload["sequence"] for _, payload in rig.sink.pushes]
-    assert sequences == list(range(1, len(sequences) + 1))
-    assert rig.voice.status()["sequence"] == sequences[-1]
+# -- Status snapshot -------------------------------------------------------------------------
 
 
 def test_the_status_snapshot_has_the_bridge_shape(voice_rig: Callable[..., Rig]) -> None:

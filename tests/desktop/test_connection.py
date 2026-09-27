@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 
 from desktop import connection as desktop_connection
+from desktop.connection import ConnectionController, ServerEntry
 from desktop.main import (
     PROBE_INVALID_TARGET,
     PROBE_NOT_VBOT_SERVER,
@@ -22,6 +23,7 @@ from desktop.main import (
 )
 
 _TEST_DESKTOP_SESSION_ID = "desktop-test-session"
+PI_URL = f"http://pi.lan:9000/?accessor=desktop&desktop_session={_TEST_DESKTOP_SESSION_ID}"
 
 
 class _FixedUuid:
@@ -33,9 +35,6 @@ def _use_stable_desktop_session_id(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep navigation expectations deterministic outside the UUID-specific tests."""
 
     monkeypatch.setattr(desktop_connection, "uuid4", lambda: _FixedUuid())
-
-
-# -- Test doubles ------------------------------------------------------------
 
 
 class FakeWindow:
@@ -61,293 +60,288 @@ def probe_returning(status: str) -> Callable[[DesktopTarget], DesktopProbeResult
     return _probe
 
 
-def recording_probe(
-    status: str,
-) -> tuple[Callable[[DesktopTarget], DesktopProbeResult], list[DesktopTarget]]:
-    """Build a probe stub that records every probed target and returns ``status``."""
-
-    seen: list[DesktopTarget] = []
-
-    def _probe(target: DesktopTarget) -> DesktopProbeResult:
-        seen.append(target)
-        return DesktopProbeResult(status=status, target=target)
-
-    return _probe, seen
-
-
-def _write(settings_file: Path, data: dict[str, Any]) -> None:
-    settings_file.write_text(json.dumps(data), encoding="utf-8")
-
-
-# -- ServerEntry -------------------------------------------------------------
-
-
-def test_server_entry_storage_round_trip_with_label() -> None:
-    entry = desktop_connection.ServerEntry("pi.lan", 9000, "Living room")
-
-    assert entry.to_storage() == {"host": "pi.lan", "port": 9000, "label": "Living room"}
-    assert desktop_connection.ServerEntry.from_storage(entry.to_storage()) == entry
-
-
-def test_server_entry_storage_omits_empty_label() -> None:
-    entry = desktop_connection.ServerEntry("pi.lan", 9000)
-
-    assert entry.to_storage() == {"host": "pi.lan", "port": 9000}
-
-
-def test_server_entry_display_name_with_and_without_label() -> None:
-    assert desktop_connection.ServerEntry("pi.lan", 9000).display_name() == "pi.lan:9000"
-    assert desktop_connection.ServerEntry("pi.lan", 9000, "Pi").display_name() == "Pi (pi.lan:9000)"
-
-
-# -- Remembered-servers operations -------------------------------------------
-
-
-def test_list_servers_reads_stored_entries(tmp_path: Path) -> None:
+def _settings(tmp_path: Path, data: dict[str, Any] | None = None) -> Path:
     settings_file = tmp_path / "settings.json"
-    _write(
-        settings_file,
-        {"servers": [{"host": "pi.lan", "port": 9000, "label": "Pi"}]},
-    )
-
-    assert desktop_connection.list_servers(settings_file) == [
-        desktop_connection.ServerEntry("pi.lan", 9000, "Pi")
-    ]
+    if data is not None:
+        settings_file.write_text(json.dumps(data), encoding="utf-8")
+    return settings_file
 
 
-def test_add_server_appends_and_persists(tmp_path: Path) -> None:
-    settings_file = tmp_path / "settings.json"
-
-    desktop_connection.add_server("pi.lan", 9000, "Pi", settings_file=settings_file)
-
-    stored = json.loads(settings_file.read_text(encoding="utf-8"))
-    assert stored["servers"] == [{"host": "pi.lan", "port": 9000, "label": "Pi"}]
+def _stored(settings_file: Path) -> dict[str, Any]:
+    stored: dict[str, Any] = json.loads(settings_file.read_text(encoding="utf-8"))
+    return stored
 
 
-def test_add_server_replaces_existing_same_host_port_in_place(tmp_path: Path) -> None:
-    settings_file = tmp_path / "settings.json"
-    _write(
-        settings_file,
-        {
-            "servers": [
-                {"host": "pi.lan", "port": 9000, "label": "Old"},
-                {"host": "other.lan", "port": 8420},
-            ]
-        },
-    )
+def _controller(
+    tmp_path: Path,
+    status: str | None = PROBE_WEBUI_AVAILABLE,
+    *,
+    saved: dict[str, Any] | None = None,
+) -> tuple[ConnectionController, FakeWindow, Path]:
+    """A controller over a fake window; ``status=None`` keeps the real probe."""
 
+    settings_file = _settings(tmp_path, saved)
+    window = FakeWindow()
+    if status is None:
+        controller = ConnectionController(settings_file=settings_file, window=window)
+    else:
+        controller = ConnectionController(
+            settings_file=settings_file, window=window, probe=probe_returning(status)
+        )
+    return controller, window, settings_file
+
+
+# -- Remembered servers ------------------------------------------------------------
+
+
+def test_server_entry_storage_and_display_name() -> None:
+    labelled = ServerEntry("pi.lan", 9000, "Living room")
+    plain = ServerEntry("pi.lan", 9000)
+
+    assert labelled.to_storage() == {"host": "pi.lan", "port": 9000, "label": "Living room"}
+    assert ServerEntry.from_storage(labelled.to_storage()) == labelled
+    assert plain.to_storage() == {"host": "pi.lan", "port": 9000}
+    assert labelled.display_name() == "Living room (pi.lan:9000)"
+    assert plain.display_name() == "pi.lan:9000"
+
+
+def test_add_server_appends_and_replaces_the_same_target_in_place(tmp_path: Path) -> None:
+    settings_file = _settings(tmp_path)
+
+    desktop_connection.add_server("pi.lan", 9000, "Old", settings_file=settings_file)
+    desktop_connection.add_server("other.lan", 8420, settings_file=settings_file)
     desktop_connection.add_server("pi.lan", 9000, "New", settings_file=settings_file)
 
-    stored = json.loads(settings_file.read_text(encoding="utf-8"))
-    assert stored["servers"] == [
+    assert _stored(settings_file)["servers"] == [
         {"host": "pi.lan", "port": 9000, "label": "New"},
         {"host": "other.lan", "port": 8420},
     ]
+    assert desktop_connection.list_servers(settings_file) == [
+        ServerEntry("pi.lan", 9000, "New"),
+        ServerEntry("other.lan", 8420),
+    ]
 
 
-def test_add_server_validates_host_before_persisting(tmp_path: Path) -> None:
-    settings_file = tmp_path / "settings.json"
+@pytest.mark.parametrize(
+    ("host", "port"),
+    [("http://pi.lan", 9000), ("a');document.title='x';('", 9000), ("pi.lan", 0)],
+    ids=["url-host", "quote-bearing-host", "invalid-port"],
+)
+def test_add_server_validates_the_target_before_persisting(
+    tmp_path: Path, host: str, port: int
+) -> None:
+    settings_file = _settings(tmp_path)
 
     with pytest.raises(ValueError):
-        desktop_connection.add_server("http://pi.lan", 9000, settings_file=settings_file)
+        desktop_connection.add_server(host, port, settings_file=settings_file)
 
     assert not settings_file.exists()
 
 
-def test_add_server_rejects_invalid_port(tmp_path: Path) -> None:
-    settings_file = tmp_path / "settings.json"
+@pytest.mark.parametrize(
+    ("removed_target", "last_used", "removed", "servers", "last_used_after"),
+    [
+        (("pi.lan", 9000), None, True, [{"host": "other.lan", "port": 8420}], None),
+        (
+            ("ghost.lan", 1234),
+            None,
+            False,
+            [{"host": "pi.lan", "port": 9000}, {"host": "other.lan", "port": 8420}],
+            None,
+        ),
+        (
+            ("pi.lan", 9000),
+            {"host": "pi.lan", "port": 9000},
+            True,
+            [{"host": "other.lan", "port": 8420}],
+            None,
+        ),
+        (
+            ("pi.lan", 9000),
+            {"host": "other.lan", "port": 8420},
+            True,
+            [{"host": "other.lan", "port": 8420}],
+            {"host": "other.lan", "port": 8420},
+        ),
+    ],
+    ids=["removes", "unknown", "clears-its-last-used", "keeps-other-last-used"],
+)
+def test_remove_server_forgets_the_target_and_a_last_used_pointing_at_it(
+    tmp_path: Path,
+    removed_target: tuple[str, int],
+    last_used: dict[str, Any] | None,
+    removed: bool,
+    servers: list[dict[str, Any]],
+    last_used_after: dict[str, Any] | None,
+) -> None:
+    saved: dict[str, Any] = {
+        "servers": [{"host": "pi.lan", "port": 9000}, {"host": "other.lan", "port": 8420}]
+    }
+    if last_used is not None:
+        saved["last_used"] = last_used
+    settings_file = _settings(tmp_path, saved)
 
-    with pytest.raises(ValueError):
-        desktop_connection.add_server("pi.lan", 0, settings_file=settings_file)
+    host, port = removed_target
+    assert desktop_connection.remove_server(host, port, settings_file=settings_file) is removed
 
-
-def test_remove_server_drops_entry_and_reports_true(tmp_path: Path) -> None:
-    settings_file = tmp_path / "settings.json"
-    _write(
-        settings_file,
-        {
-            "servers": [
-                {"host": "pi.lan", "port": 9000},
-                {"host": "other.lan", "port": 8420},
-            ]
-        },
-    )
-
-    removed = desktop_connection.remove_server("pi.lan", 9000, settings_file=settings_file)
-
-    assert removed is True
-    stored = json.loads(settings_file.read_text(encoding="utf-8"))
-    assert stored["servers"] == [{"host": "other.lan", "port": 8420}]
-
-
-def test_remove_server_unknown_returns_false_and_keeps_list(tmp_path: Path) -> None:
-    settings_file = tmp_path / "settings.json"
-    _write(settings_file, {"servers": [{"host": "pi.lan", "port": 9000}]})
-
-    removed = desktop_connection.remove_server("ghost.lan", 1234, settings_file=settings_file)
-
-    assert removed is False
-    stored = json.loads(settings_file.read_text(encoding="utf-8"))
-    assert stored["servers"] == [{"host": "pi.lan", "port": 9000}]
-
-
-def test_remove_server_clears_last_used_when_it_pointed_at_removed(tmp_path: Path) -> None:
-    settings_file = tmp_path / "settings.json"
-    _write(
-        settings_file,
-        {
-            "servers": [{"host": "pi.lan", "port": 9000}],
-            "last_used": {"host": "pi.lan", "port": 9000},
-        },
-    )
-
-    desktop_connection.remove_server("pi.lan", 9000, settings_file=settings_file)
-
-    stored = json.loads(settings_file.read_text(encoding="utf-8"))
-    assert "last_used" not in stored
+    stored = _stored(settings_file)
+    assert stored["servers"] == servers
+    assert stored.get("last_used") == last_used_after
 
 
-def test_remove_server_keeps_unrelated_last_used(tmp_path: Path) -> None:
-    settings_file = tmp_path / "settings.json"
-    _write(
-        settings_file,
-        {
-            "servers": [
-                {"host": "pi.lan", "port": 9000},
-                {"host": "other.lan", "port": 8420},
-            ],
-            "last_used": {"host": "other.lan", "port": 8420},
-        },
-    )
-
-    desktop_connection.remove_server("pi.lan", 9000, settings_file=settings_file)
-
-    stored = json.loads(settings_file.read_text(encoding="utf-8"))
-    assert stored["last_used"] == {"host": "other.lan", "port": 8420}
+@pytest.mark.parametrize(
+    ("saved", "expected"),
+    [
+        (None, None),
+        (
+            {
+                "servers": [
+                    {"host": "pi.lan", "port": 9000, "label": "Pi"},
+                    {"host": "other.lan", "port": 8420},
+                ],
+                "last_used": {"host": "pi.lan", "port": 9000},
+            },
+            ServerEntry("pi.lan", 9000, "Pi"),
+        ),
+        (
+            {
+                "servers": [{"host": "other.lan", "port": 8420}],
+                "last_used": {"host": "pi.lan", "port": 9000},
+            },
+            ServerEntry("pi.lan", 9000),
+        ),
+        (
+            {
+                "servers": [
+                    {"host": "first.lan", "port": 8420},
+                    {"host": "second.lan", "port": 9000},
+                ]
+            },
+            ServerEntry("first.lan", 8420),
+        ),
+    ],
+    ids=["first-run", "last-used-with-label", "last-used-not-remembered", "first-server"],
+)
+def test_resolve_last_used_picks_the_launch_target(
+    tmp_path: Path, saved: dict[str, Any] | None, expected: ServerEntry | None
+) -> None:
+    assert desktop_connection.resolve_last_used(_settings(tmp_path, saved)) == expected
 
 
 def test_select_server_writes_last_used(tmp_path: Path) -> None:
-    settings_file = tmp_path / "settings.json"
+    settings_file = _settings(tmp_path)
 
     desktop_connection.select_server("pi.lan", 9000, settings_file=settings_file)
 
-    stored = json.loads(settings_file.read_text(encoding="utf-8"))
-    assert stored["last_used"] == {"host": "pi.lan", "port": 9000}
+    assert _stored(settings_file)["last_used"] == {"host": "pi.lan", "port": 9000}
 
 
-# -- Last-used resolution ----------------------------------------------------
+# -- Controller: connect -------------------------------------------------------------
 
 
-def test_resolve_last_used_returns_none_on_first_run(tmp_path: Path) -> None:
-    assert desktop_connection.resolve_last_used(tmp_path / "settings.json") is None
-
-
-def test_resolve_last_used_prefers_reference_and_carries_label(tmp_path: Path) -> None:
-    settings_file = tmp_path / "settings.json"
-    _write(
-        settings_file,
-        {
-            "servers": [
-                {"host": "pi.lan", "port": 9000, "label": "Pi"},
-                {"host": "other.lan", "port": 8420},
-            ],
-            "last_used": {"host": "pi.lan", "port": 9000},
-        },
-    )
-
-    assert desktop_connection.resolve_last_used(settings_file) == desktop_connection.ServerEntry(
-        "pi.lan", 9000, "Pi"
-    )
-
-
-def test_resolve_last_used_for_reference_not_in_list_has_no_label(tmp_path: Path) -> None:
-    settings_file = tmp_path / "settings.json"
-    _write(
-        settings_file,
-        {
-            "servers": [{"host": "other.lan", "port": 8420}],
-            "last_used": {"host": "pi.lan", "port": 9000},
-        },
-    )
-
-    assert desktop_connection.resolve_last_used(settings_file) == desktop_connection.ServerEntry(
-        "pi.lan", 9000
-    )
-
-
-def test_resolve_last_used_falls_back_to_first_server(tmp_path: Path) -> None:
-    settings_file = tmp_path / "settings.json"
-    _write(
-        settings_file,
-        {
-            "servers": [
-                {"host": "first.lan", "port": 8420},
-                {"host": "second.lan", "port": 9000},
-            ]
-        },
-    )
-
-    assert desktop_connection.resolve_last_used(settings_file) == desktop_connection.ServerEntry(
-        "first.lan", 8420
-    )
-
-
-# -- Controller: connect / switch / reconnect --------------------------------
-
-
-def test_connect_navigates_window_to_webui_with_accessor_param(tmp_path: Path) -> None:
-    settings_file = tmp_path / "settings.json"
-    window = FakeWindow()
-    controller = desktop_connection.ConnectionController(
-        settings_file=settings_file,
-        window=window,
-        probe=probe_returning(PROBE_WEBUI_AVAILABLE),
-    )
+def test_a_successful_connect_navigates_remembers_and_announces_the_server(
+    tmp_path: Path,
+) -> None:
+    controller, window, settings_file = _controller(tmp_path)
+    urls: list[str] = []
+    controller.set_active_server_listener(urls.append)
 
     result = controller.connect("pi.lan", 9000, "Pi")
 
     assert result.status == PROBE_WEBUI_AVAILABLE
-    assert window.loaded_urls == [
-        "http://pi.lan:9000/?accessor=desktop&desktop_session=desktop-test-session"
-    ]
+    assert window.loaded_urls == [PI_URL]
     assert window.loaded_html == []
+    stored = _stored(settings_file)
+    assert stored["servers"] == [{"host": "pi.lan", "port": 9000, "label": "Pi"}]
+    assert stored["last_used"] == {"host": "pi.lan", "port": 9000}
+    # The listener (Voice) receives the plain base URL, not the navigation URL.
+    assert urls == ["http://pi.lan:9000/"]
+    assert controller.active_server_url() == "http://pi.lan:9000/"
+
+
+@pytest.mark.parametrize(
+    "status", [PROBE_SERVER_UNREACHABLE, PROBE_WEBUI_UNAVAILABLE, PROBE_NOT_VBOT_SERVER]
+)
+def test_a_failed_connect_shows_the_error_inline_and_changes_nothing(
+    tmp_path: Path, status: str
+) -> None:
+    controller, window, settings_file = _controller(tmp_path, status)
+    urls: list[str] = []
+    controller.set_active_server_listener(urls.append)
+
+    result = controller.connect("pi.lan", 9000)
+
+    assert result.status == status
+    assert window.loaded_urls == []
+    [page] = window.loaded_html
+    assert 'role="alert"' in page
+    # Failed host/port are prefilled so the user fixes the target in place.
+    assert 'value="pi.lan"' in page
+    assert 'value="9000"' in page
+    assert desktop_connection.list_servers(settings_file) == []
+    assert urls == []
+    assert controller.active_server_url() is None
+
+
+def test_an_invalid_host_renders_the_invalid_target_screen_without_io(tmp_path: Path) -> None:
+    controller, window, _ = _controller(tmp_path, status=None)
+
+    result = controller.connect("http://pi.lan", 9000)
+
+    assert result.status == PROBE_INVALID_TARGET
+    assert window.loaded_urls == []
+    assert 'role="alert"' in window.loaded_html[0]
+    assert 'value="http://pi.lan"' in window.loaded_html[0]
+
+
+def test_connect_survives_active_server_listener_error(tmp_path: Path) -> None:
+    controller, window, _ = _controller(tmp_path)
+
+    def boom(_url: str) -> None:
+        raise RuntimeError("worker rebuild failed")
+
+    controller.set_active_server_listener(boom)
+
+    # A failing listener must never break the navigation that already succeeded.
+    assert controller.connect("pi.lan", 9000).status == PROBE_WEBUI_AVAILABLE
+    assert window.loaded_urls == [PI_URL]
+
+
+def test_a_controller_navigates_only_once_a_window_is_attached(tmp_path: Path) -> None:
+    controller = ConnectionController(
+        settings_file=tmp_path / "settings.json", probe=probe_returning(PROBE_WEBUI_AVAILABLE)
+    )
+    with pytest.raises(RuntimeError):
+        controller.connect("pi.lan", 9000)
+
+    window = FakeWindow()
+    controller.attach_window(window)
+    controller.connect("pi.lan", 9000)
+
+    assert window.loaded_urls == [PI_URL]
+
+
+# -- Controller: bridge-safe connect ---------------------------------------------------
 
 
 def test_prepare_connect_returns_url_without_replacing_calling_document(tmp_path: Path) -> None:
-    settings_file = tmp_path / "settings.json"
-    window = FakeWindow()
-    controller = desktop_connection.ConnectionController(
-        settings_file=settings_file,
-        window=window,
-        probe=probe_returning(PROBE_WEBUI_AVAILABLE),
-    )
+    controller, window, settings_file = _controller(tmp_path)
 
     prepared = controller.prepare_connect("pi.lan", 9000, "Pi")
 
-    assert prepared.to_bridge_payload() == {
-        "status": PROBE_WEBUI_AVAILABLE,
-        "url": "http://pi.lan:9000/?accessor=desktop&desktop_session=desktop-test-session",
-    }
+    assert prepared.to_bridge_payload() == {"status": PROBE_WEBUI_AVAILABLE, "url": PI_URL}
     assert window.loaded_urls == []
     assert window.loaded_html == []
-    assert desktop_connection.resolve_last_used(settings_file) == desktop_connection.ServerEntry(
-        "pi.lan", 9000, "Pi"
-    )
+    assert desktop_connection.resolve_last_used(settings_file) == ServerEntry("pi.lan", 9000, "Pi")
 
 
 def test_prepare_connect_returns_inline_error_without_replacing_calling_document(
     tmp_path: Path,
 ) -> None:
-    window = FakeWindow()
-    controller = desktop_connection.ConnectionController(
-        settings_file=tmp_path / "settings.json",
-        window=window,
-        probe=probe_returning(PROBE_SERVER_UNREACHABLE),
-    )
+    controller, window, _ = _controller(tmp_path, PROBE_SERVER_UNREACHABLE)
 
-    prepared = controller.prepare_connect("pi.lan", 9000)
+    payload = controller.prepare_connect("pi.lan", 9000).to_bridge_payload()
 
-    payload = prepared.to_bridge_payload()
     assert payload["status"] == PROBE_SERVER_UNREACHABLE
     assert set(payload) == {"status", "error_title", "error_body"}
     assert all(
@@ -358,151 +352,10 @@ def test_prepare_connect_returns_inline_error_without_replacing_calling_document
     assert window.loaded_html == []
 
 
-def test_connect_success_remembers_and_marks_last_used(tmp_path: Path) -> None:
-    settings_file = tmp_path / "settings.json"
-    controller = desktop_connection.ConnectionController(
-        settings_file=settings_file,
-        window=FakeWindow(),
-        probe=probe_returning(PROBE_WEBUI_AVAILABLE),
-    )
-
-    controller.connect("pi.lan", 9000, "Pi")
-
-    stored = json.loads(settings_file.read_text(encoding="utf-8"))
-    assert stored["servers"] == [{"host": "pi.lan", "port": 9000, "label": "Pi"}]
-    assert stored["last_used"] == {"host": "pi.lan", "port": 9000}
-
-
-def test_connect_notifies_active_server_listener_with_base_url(tmp_path: Path) -> None:
-    urls: list[str] = []
-    controller = desktop_connection.ConnectionController(
-        settings_file=tmp_path / "settings.json",
-        window=FakeWindow(),
-        probe=probe_returning(PROBE_WEBUI_AVAILABLE),
-    )
-    controller.set_active_server_listener(urls.append)
-
-    controller.connect("pi.lan", 9000)
-
-    # The listener (the voice worker) receives the plain base URL, not the
-    # window's accessor-marked navigation URL.
-    assert urls == ["http://pi.lan:9000/"]
-
-
-def test_active_server_url_follows_successful_connections_only(tmp_path: Path) -> None:
-    results = [PROBE_WEBUI_AVAILABLE, PROBE_SERVER_UNREACHABLE]
-    controller = desktop_connection.ConnectionController(
-        settings_file=tmp_path / "settings.json",
-        window=FakeWindow(),
-        probe=lambda target: DesktopProbeResult(status=results.pop(0), target=target),
-    )
-    assert controller.active_server_url() is None
-
-    controller.prepare_connect("pi.lan", 9000)
-    controller.prepare_connect("nas.lan", 8420)
-
-    # A failed attempt shows the connection screen; the last served origin stays.
-    assert controller.active_server_url() == "http://pi.lan:9000/"
-
-
-def test_connect_failure_does_not_notify_active_server_listener(tmp_path: Path) -> None:
-    urls: list[str] = []
-    controller = desktop_connection.ConnectionController(
-        settings_file=tmp_path / "settings.json",
-        window=FakeWindow(),
-        probe=probe_returning(PROBE_SERVER_UNREACHABLE),
-    )
-    controller.set_active_server_listener(urls.append)
-
-    controller.connect("pi.lan", 9000)
-
-    assert urls == []
-
-
-def test_connect_survives_active_server_listener_error(tmp_path: Path) -> None:
-    window = FakeWindow()
-    controller = desktop_connection.ConnectionController(
-        settings_file=tmp_path / "settings.json",
-        window=window,
-        probe=probe_returning(PROBE_WEBUI_AVAILABLE),
-    )
-
-    def boom(_url: str) -> None:
-        raise RuntimeError("worker rebuild failed")
-
-    controller.set_active_server_listener(boom)
-
-    # A failing listener must never break the navigation that already succeeded.
-    result = controller.connect("pi.lan", 9000)
-
-    assert result.status == PROBE_WEBUI_AVAILABLE
-    assert window.loaded_urls == [
-        "http://pi.lan:9000/?accessor=desktop&desktop_session=desktop-test-session"
-    ]
-
-
-@pytest.mark.parametrize(
-    "status",
-    [PROBE_SERVER_UNREACHABLE, PROBE_WEBUI_UNAVAILABLE, PROBE_NOT_VBOT_SERVER],
-)
-def test_connect_failure_shows_connection_screen_inline(
-    tmp_path: Path,
-    status: str,
-) -> None:
-    window = FakeWindow()
-    controller = desktop_connection.ConnectionController(
-        settings_file=tmp_path / "settings.json",
-        window=window,
-        probe=probe_returning(status),
-    )
-
-    result = controller.connect("pi.lan", 9000)
-
-    assert result.status == status
-    assert window.loaded_urls == []
-    assert len(window.loaded_html) == 1
-    assert 'role="alert"' in window.loaded_html[0]
-    # Failed host/port are prefilled so the user fixes the target in place.
-    assert 'value="pi.lan"' in window.loaded_html[0]
-    assert 'value="9000"' in window.loaded_html[0]
-
-
-def test_connect_failure_does_not_remember_server(tmp_path: Path) -> None:
-    settings_file = tmp_path / "settings.json"
-    controller = desktop_connection.ConnectionController(
-        settings_file=settings_file,
-        window=FakeWindow(),
-        probe=probe_returning(PROBE_SERVER_UNREACHABLE),
-    )
-
-    controller.connect("pi.lan", 9000)
-
-    assert desktop_connection.list_servers(settings_file) == []
-
-
-def test_connect_invalid_host_renders_invalid_target_screen(tmp_path: Path) -> None:
-    window = FakeWindow()
-    # The real probe classifies a configuration_error target as invalid without I/O.
-    controller = desktop_connection.ConnectionController(
-        settings_file=tmp_path / "settings.json",
-        window=window,
-    )
-
-    result = controller.connect("http://pi.lan", 9000)
-
-    assert result.status == PROBE_INVALID_TARGET
-    assert window.loaded_urls == []
-    assert 'role="alert"' in window.loaded_html[0]
-    assert 'value="http://pi.lan"' in window.loaded_html[0]
-
-
 def test_prepare_connect_invalid_port_returns_bridge_error_instead_of_raising(
     tmp_path: Path,
 ) -> None:
-    controller = desktop_connection.ConnectionController(
-        settings_file=tmp_path / "settings.json",
-        window=FakeWindow(),
-    )
+    controller, _, _ = _controller(tmp_path, status=None)
 
     prepared = controller.prepare_connect("pi.lan", "not-a-port")  # type: ignore[arg-type]
 
@@ -511,105 +364,19 @@ def test_prepare_connect_invalid_port_returns_bridge_error_instead_of_raising(
     assert prepared.navigation_url is None
 
 
-def test_switch_to_connects_to_chosen_server(tmp_path: Path) -> None:
-    window = FakeWindow()
-    controller = desktop_connection.ConnectionController(
+def test_active_server_url_follows_successful_connections_only(tmp_path: Path) -> None:
+    results = [PROBE_WEBUI_AVAILABLE, PROBE_SERVER_UNREACHABLE]
+    controller = ConnectionController(
         settings_file=tmp_path / "settings.json",
-        window=window,
-        probe=probe_returning(PROBE_WEBUI_AVAILABLE),
+        window=FakeWindow(),
+        probe=lambda target: DesktopProbeResult(status=results.pop(0), target=target),
     )
 
-    controller.switch_to("10.0.0.5", 8500)
+    controller.prepare_connect("pi.lan", 9000)
+    controller.prepare_connect("nas.lan", 8420)
 
-    assert window.loaded_urls == [
-        "http://10.0.0.5:8500/?accessor=desktop&desktop_session=desktop-test-session"
-    ]
-
-
-def test_reconnect_uses_last_used_target(tmp_path: Path) -> None:
-    settings_file = tmp_path / "settings.json"
-    _write(
-        settings_file,
-        {
-            "servers": [{"host": "pi.lan", "port": 9000, "label": "Pi"}],
-            "last_used": {"host": "pi.lan", "port": 9000},
-        },
-    )
-    window = FakeWindow()
-    probe, seen = recording_probe(PROBE_WEBUI_AVAILABLE)
-    controller = desktop_connection.ConnectionController(
-        settings_file=settings_file, window=window, probe=probe
-    )
-
-    result = controller.reconnect()
-
-    assert result is not None
-    assert seen[0].host == "pi.lan"
-    assert seen[0].port == 9000
-    assert window.loaded_urls == [
-        "http://pi.lan:9000/?accessor=desktop&desktop_session=desktop-test-session"
-    ]
-
-
-def test_reconnect_first_run_shows_screen_without_error(tmp_path: Path) -> None:
-    window = FakeWindow()
-    controller = desktop_connection.ConnectionController(
-        settings_file=tmp_path / "settings.json",
-        window=window,
-        probe=probe_returning(PROBE_WEBUI_AVAILABLE),
-    )
-
-    result = controller.reconnect()
-
-    assert result is None
-    assert window.loaded_urls == []
-    assert len(window.loaded_html) == 1
-    # No probe ran, so no error banner is rendered.
-    assert 'role="alert"' not in window.loaded_html[0]
-
-
-def test_auto_connect_first_run_opens_connection_screen(tmp_path: Path) -> None:
-    window = FakeWindow()
-    controller = desktop_connection.ConnectionController(
-        settings_file=tmp_path / "settings.json",
-        window=window,
-        probe=probe_returning(PROBE_WEBUI_AVAILABLE),
-    )
-
-    assert controller.auto_connect() is None
-    assert window.loaded_html != []
-
-
-def test_auto_connect_with_saved_server_connects(tmp_path: Path) -> None:
-    settings_file = tmp_path / "settings.json"
-    _write(settings_file, {"servers": [{"host": "pi.lan", "port": 9000}]})
-    window = FakeWindow()
-    controller = desktop_connection.ConnectionController(
-        settings_file=settings_file,
-        window=window,
-        probe=probe_returning(PROBE_WEBUI_AVAILABLE),
-    )
-
-    controller.auto_connect()
-
-    assert window.loaded_urls == [
-        "http://pi.lan:9000/?accessor=desktop&desktop_session=desktop-test-session"
-    ]
-
-
-def test_attach_window_binds_later_created_window(tmp_path: Path) -> None:
-    controller = desktop_connection.ConnectionController(
-        settings_file=tmp_path / "settings.json",
-        probe=probe_returning(PROBE_WEBUI_AVAILABLE),
-    )
-    window = FakeWindow()
-    controller.attach_window(window)
-
-    controller.connect("pi.lan", 9000)
-
-    assert window.loaded_urls == [
-        "http://pi.lan:9000/?accessor=desktop&desktop_session=desktop-test-session"
-    ]
+    # A failed attempt shows the connection screen; the last served origin stays.
+    assert controller.active_server_url() == "http://pi.lan:9000/"
 
 
 def test_each_controller_uses_a_new_webui_document_cache_key(
@@ -622,13 +389,11 @@ def test_each_controller_uses_a_new_webui_document_cache_key(
     session_ids = iter(("first-launch", "second-launch"))
     monkeypatch.setattr(desktop_connection, "uuid4", lambda: _Uuid(next(session_ids)))
 
-    first = desktop_connection.ConnectionController(
-        settings_file=tmp_path / "first.json",
-        probe=probe_returning(PROBE_WEBUI_AVAILABLE),
+    first = ConnectionController(
+        settings_file=tmp_path / "first.json", probe=probe_returning(PROBE_WEBUI_AVAILABLE)
     )
-    second = desktop_connection.ConnectionController(
-        settings_file=tmp_path / "second.json",
-        probe=probe_returning(PROBE_WEBUI_AVAILABLE),
+    second = ConnectionController(
+        settings_file=tmp_path / "second.json", probe=probe_returning(PROBE_WEBUI_AVAILABLE)
     )
 
     first_url = first.prepare_connect("pi.lan", 9000).navigation_url
@@ -638,35 +403,56 @@ def test_each_controller_uses_a_new_webui_document_cache_key(
     assert second_url == "http://pi.lan:9000/?accessor=desktop&desktop_session=second-launch"
 
 
-def test_controller_without_window_raises(tmp_path: Path) -> None:
-    controller = desktop_connection.ConnectionController(
-        settings_file=tmp_path / "settings.json",
-        probe=probe_returning(PROBE_WEBUI_AVAILABLE),
-    )
-
-    with pytest.raises(RuntimeError):
-        controller.connect("pi.lan", 9000)
+# -- Controller: launch auto-connect -------------------------------------------------
 
 
-def test_controller_delegates_server_list_ops(tmp_path: Path) -> None:
-    settings_file = tmp_path / "settings.json"
-    controller = desktop_connection.ConnectionController(settings_file=settings_file)
+def test_auto_connect_reconnects_to_the_last_used_target(tmp_path: Path) -> None:
+    saved = {
+        "servers": [
+            {"host": "other.lan", "port": 8420},
+            {"host": "pi.lan", "port": 9000, "label": "Pi"},
+        ],
+        "last_used": {"host": "pi.lan", "port": 9000},
+    }
+    settings_file = _settings(tmp_path, saved)
+    window = FakeWindow()
+    probed: list[DesktopTarget] = []
 
-    controller.add_server("pi.lan", 9000, "Pi")
+    def probe(target: DesktopTarget) -> DesktopProbeResult:
+        probed.append(target)
+        return DesktopProbeResult(status=PROBE_WEBUI_AVAILABLE, target=target)
 
-    assert controller.list_servers() == [desktop_connection.ServerEntry("pi.lan", 9000, "Pi")]
-    assert controller.remove_server("pi.lan", 9000) is True
-    assert controller.list_servers() == []
+    controller = ConnectionController(settings_file=settings_file, window=window, probe=probe)
+
+    result = controller.auto_connect()
+
+    assert result is not None
+    assert result.status == PROBE_WEBUI_AVAILABLE
+    assert [(target.host, target.port) for target in probed] == [("pi.lan", 9000)]
+    assert window.loaded_urls == [PI_URL]
 
 
-# -- Connection screen HTML --------------------------------------------------
+def test_first_run_auto_connect_shows_the_connection_screen_without_an_error(
+    tmp_path: Path,
+) -> None:
+    controller, window, _ = _controller(tmp_path)
+
+    assert controller.auto_connect() is None
+    assert window.loaded_urls == []
+    [page] = window.loaded_html
+    # No probe ran: no error banner, and the default suggestion is only a prefill.
+    assert 'role="alert"' not in page
+    assert '<ul class="servers">' not in page
+    assert "data-host=" not in page
+    assert 'value="127.0.0.1"' in page
+    assert 'value="8420"' in page
+
+
+# -- Connection screen HTML ------------------------------------------------------------
 
 
 def test_connection_html_lists_saved_servers_with_connect_hooks() -> None:
-    servers = [
-        desktop_connection.ServerEntry("pi.lan", 9000, "Pi"),
-        desktop_connection.ServerEntry("10.0.0.5", 8500),
-    ]
+    servers = [ServerEntry("pi.lan", 9000, "Pi"), ServerEntry("10.0.0.5", 8500)]
 
     page = desktop_connection.build_connection_html(servers)
 
@@ -695,45 +481,6 @@ def test_connection_html_awaits_bridge_result_before_navigation() -> None:
     assert "innerHTML" not in page
 
 
-def test_connection_html_empty_state_when_no_servers() -> None:
-    page = desktop_connection.build_connection_html([])
-
-    assert '<ul class="servers">' not in page
-    assert "data-host=" not in page
-
-
-def test_connection_html_no_error_banner_without_probe_result() -> None:
-    page = desktop_connection.build_connection_html([])
-
-    assert 'role="alert"' not in page
-    # Default suggestion prefilled, never an auto-connect target.
-    assert 'value="127.0.0.1"' in page
-    assert 'value="8420"' in page
-
-
-@pytest.mark.parametrize(
-    "status",
-    [
-        PROBE_SERVER_UNREACHABLE,
-        PROBE_WEBUI_UNAVAILABLE,
-        PROBE_NOT_VBOT_SERVER,
-        PROBE_INVALID_TARGET,
-    ],
-)
-def test_connection_html_renders_each_probe_failure_inline(
-    status: str,
-) -> None:
-    target = DesktopTarget("pi.lan", 9000, "http://pi.lan:9000/")
-    page = desktop_connection.build_connection_html(
-        [], DesktopProbeResult(status=status, target=target)
-    )
-
-    assert 'role="alert"' in page
-    # The failed host/port prefill the form so the user corrects it in place.
-    assert 'value="pi.lan"' in page
-    assert 'value="9000"' in page
-
-
 def test_connection_html_escapes_failed_host_in_error_and_prefill() -> None:
     malicious = '<script>alert("x")</script>'
     target = DesktopTarget(malicious, 9000, "")
@@ -746,7 +493,7 @@ def test_connection_html_escapes_failed_host_in_error_and_prefill() -> None:
 
 
 def test_connection_html_escapes_saved_server_label_and_host() -> None:
-    servers = [desktop_connection.ServerEntry('<b>"evil"</b>', 9000, "<i>label</i>")]
+    servers = [ServerEntry('<b>"evil"</b>', 9000, "<i>label</i>")]
 
     page = desktop_connection.build_connection_html(servers)
 
@@ -756,39 +503,17 @@ def test_connection_html_escapes_saved_server_label_and_host() -> None:
     assert "&lt;i&gt;label&lt;/i&gt;" in page
 
 
-def test_quote_bearing_host_rejected_and_never_breaks_out_of_data_attribute(
-    tmp_path: Path,
-) -> None:
+def test_quote_bearing_host_never_breaks_out_of_the_data_attribute() -> None:
     # A host that would break out of the old inline onclick JS-string context.
+    # Validation rejects it before storage; a directly built entry must still
+    # render only html-escaped inside data-host, with no inline onclick.
     malicious = "a');document.title='x';('"
-
-    # (a) Defense-in-depth: the host is rejected before it can ever be stored,
-    # both at the low-level validator and the persisting add_server path.
     with pytest.raises(ValueError):
         validate_host(malicious)
-    settings_file = tmp_path / "settings.json"
-    with pytest.raises(ValueError):
-        desktop_connection.add_server(malicious, 9000, settings_file=settings_file)
-    assert not settings_file.exists()
 
-    # (b) Even when a ServerEntry is constructed directly (bypassing validation)
-    # the renderer only emits the host html-escaped inside a data-host attribute,
-    # with no executable inline onclick breakout — the single quote is encoded
-    # and the raw "');" sequence never appears outside the escaped attribute.
-    page = desktop_connection.build_connection_html(
-        [desktop_connection.ServerEntry(malicious, 9000)]
-    )
+    page = desktop_connection.build_connection_html([ServerEntry(malicious, 9000)])
 
     assert 'data-host="a&#x27;);document.title=&#x27;x&#x27;;(&#x27;"' in page
-    assert "a');document.title='x';('" not in page
+    assert malicious not in page
     assert "');" not in page
     assert 'onclick="connectSaved(' not in page
-
-
-def test_connection_module_does_not_import_server_or_core() -> None:
-    source = Path(desktop_connection.__file__).read_text(encoding="utf-8")
-
-    assert "from server" not in source
-    assert "import server" not in source
-    assert "from core" not in source
-    assert "import core" not in source

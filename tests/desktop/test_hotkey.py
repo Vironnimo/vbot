@@ -1,4 +1,4 @@
-"""Live voice hotkey validation, registration thread, and controller contract."""
+"""Live voice hotkey validation and the controller's registration contract."""
 
 from __future__ import annotations
 
@@ -12,6 +12,9 @@ import pytest
 
 from desktop import hotkey
 from desktop.settings import DEFAULT_LIVE_HOTKEY_SETTINGS, read_live_hotkey_settings
+
+CTRL_ALT = hotkey.MOD_NOREPEAT | hotkey.MOD_CONTROL | hotkey.MOD_ALT
+BARE = {"ctrl": False, "alt": False, "shift": False, "win": False}
 
 
 def _setting(**changes: Any) -> dict[str, Any]:
@@ -58,34 +61,44 @@ class FakeHotkeyApi:
         return [args for name, args in self.calls if name == "register"]
 
 
-# -- Pure validation -----------------------------------------------------------
+# -- Combination validation ----------------------------------------------------
 
 
 @pytest.mark.parametrize(
-    ("key", "virtual_key"),
+    ("changes", "virtual_key"),
     [
-        ("KeyA", 0x41),
-        ("KeyZ", 0x5A),
-        ("Digit0", 0x30),
-        ("Digit9", 0x39),
-        ("F1", 0x70),
-        ("F24", 0x87),
-        ("Space", 0x20),
+        ({"key": "KeyA"}, 0x41),
+        ({"key": "KeyZ"}, 0x5A),
+        ({"key": "Digit0"}, 0x30),
+        ({"key": "Digit9"}, 0x39),
+        ({"key": "F1"}, 0x70),
+        ({"key": "F24"}, 0x87),
+        ({"key": "Space"}, 0x20),
+        ({**BARE, "key": "F13"}, 0x7C),
+        ({**BARE, "key": "F24"}, 0x87),
     ],
 )
-def test_supported_keys_map_to_windows_virtual_keys(key: str, virtual_key: int) -> None:
-    spec = hotkey.parse_hotkey(_setting(key=key))
+def test_supported_combinations_map_to_windows_virtual_keys(
+    changes: dict[str, Any], virtual_key: int
+) -> None:
+    spec = hotkey.parse_hotkey(_setting(**changes))
 
     assert spec is not None
     assert spec.virtual_key == virtual_key
 
 
 @pytest.mark.parametrize(
-    "key",
-    ["Enter", "KeyAA", "Keya", "Digit10", "F0", "F25", "F01", "ArrowUp", "", "Numpad1"],
+    "changes",
+    [
+        *({"key": key} for key in ("Enter", "KeyAA", "Keya", "Digit10", "F0", "F25", "F01")),
+        *({"key": key} for key in ("ArrowUp", "", "Numpad1")),
+        {**BARE, "key": "Space"},  # ordinary keys need a modifier
+        {**BARE, "key": "F12"},
+        {"ctrl": "yes"},
+    ],
 )
-def test_unsupported_keys_are_rejected(key: str) -> None:
-    assert hotkey.parse_hotkey(_setting(key=key)) is None
+def test_unsupported_combinations_are_rejected(changes: dict[str, Any]) -> None:
+    assert hotkey.parse_hotkey(_setting(**changes)) is None
 
 
 def test_modifier_mask_always_disables_auto_repeat() -> None:
@@ -95,98 +108,6 @@ def test_modifier_mask_always_disables_auto_repeat() -> None:
     assert spec.modifiers == (
         hotkey.MOD_NOREPEAT | hotkey.MOD_CONTROL | hotkey.MOD_SHIFT | hotkey.MOD_WIN
     )
-
-
-def test_ordinary_keys_require_a_modifier_but_f13_to_f24_may_stand_alone() -> None:
-    bare = {"ctrl": False, "alt": False, "shift": False, "win": False}
-
-    assert hotkey.parse_hotkey(_setting(**bare, key="Space")) is None
-    assert hotkey.parse_hotkey(_setting(**bare, key="F12")) is None
-    assert hotkey.parse_hotkey(_setting(**bare, key="F13")) is not None
-    assert hotkey.parse_hotkey(_setting(**bare, key="F24")) is not None
-
-
-def test_non_boolean_modifier_is_rejected() -> None:
-    assert hotkey.parse_hotkey(_setting(ctrl="yes")) is None
-
-
-# -- Registration thread -------------------------------------------------------
-
-
-def test_registration_thread_owns_register_loop_and_unregister() -> None:
-    api = FakeHotkeyApi()
-    pressed = threading.Event()
-    thread = hotkey._HotkeyThread(
-        hotkey.parse_hotkey(_setting(key="Space")),  # type: ignore[arg-type]
-        pressed.set,
-        api,
-    )
-
-    assert thread.start() is None
-    api.messages.put((0x0100, 0))  # unrelated message
-    api.messages.put((hotkey.WM_HOTKEY, 1))
-    assert pressed.wait(timeout=2)
-    thread.stop()
-
-    assert api.unregistered.wait(timeout=2)
-    assert api.thread_ids["prepare"] == api.thread_ids["register"] == api.thread_ids["unregister"]
-    assert api.thread_ids["register"] != threading.get_native_id()
-    assert api.registrations() == [
-        (1, hotkey.MOD_NOREPEAT | hotkey.MOD_CONTROL | hotkey.MOD_ALT, 0x20)
-    ]
-
-
-def test_letter_follows_the_active_keyboard_layout() -> None:
-    # A German layout reports VK_Z for the physical key that US calls KeyY.
-    api = FakeHotkeyApi(layout_keys={0x15: 0x5A})
-    thread = hotkey._HotkeyThread(
-        hotkey.parse_hotkey(_setting(key="KeyY")),  # type: ignore[arg-type]
-        lambda: None,
-        api,
-    )
-
-    assert thread.start() is None
-    thread.stop()
-
-    assert api.registrations()[0][2] == 0x5A
-
-
-@pytest.mark.parametrize(
-    ("error", "code"),
-    [(1409, hotkey.HOTKEY_ERROR_IN_USE), (5, hotkey.HOTKEY_ERROR_FAILED)],
-)
-def test_registration_errors_are_reported_without_a_loop(error: int, code: str) -> None:
-    api = FakeHotkeyApi(register_error=error)
-    thread = hotkey._HotkeyThread(
-        hotkey.parse_hotkey(_setting()),  # type: ignore[arg-type]
-        lambda: None,
-        api,
-    )
-
-    assert thread.start() == code
-    thread.stop()
-
-    assert ("unregister", 1) not in api.calls
-    assert not any(name == "wake" for name, _ in api.calls)
-
-
-def test_press_handler_failure_keeps_the_hotkey_registered() -> None:
-    api = FakeHotkeyApi()
-    presses: list[int] = []
-
-    def fail_once() -> None:
-        presses.append(1)
-        if len(presses) == 1:
-            raise RuntimeError("boom")
-
-    thread = hotkey._HotkeyThread(hotkey.parse_hotkey(_setting()), fail_once, api)  # type: ignore[arg-type]
-    assert thread.start() is None
-    api.messages.put((hotkey.WM_HOTKEY, 1))
-    api.messages.put((hotkey.WM_HOTKEY, 1))
-    api.messages.put(None)
-    assert api.unregistered.wait(timeout=2)
-
-    assert len(presses) == 2
 
 
 # -- Controller ----------------------------------------------------------------
@@ -230,7 +151,7 @@ def test_default_status_is_disabled_ctrl_alt_space(tmp_path: Path) -> None:
     controller.stop()
 
 
-def test_enabling_before_start_persists_and_registers_on_start(tmp_path: Path) -> None:
+def test_enabling_before_start_persists_and_registers_on_its_own_thread(tmp_path: Path) -> None:
     controller, created = _controller(tmp_path)
 
     status = controller.update({"enabled": True})
@@ -238,13 +159,27 @@ def test_enabling_before_start_persists_and_registers_on_start(tmp_path: Path) -
     assert created == []
 
     controller.start()
-    assert len(created) == 1
-    assert created[0].registrations()
+    api = created[0]
+    assert api.registrations() == [(1, CTRL_ALT, 0x20)]
     controller.stop()
 
-    assert created[0].unregistered.wait(timeout=2)
+    assert api.unregistered.wait(timeout=2)
+    # Win32 binds a hotkey to the registering thread, so one thread owns its lifetime.
+    assert api.thread_ids["prepare"] == api.thread_ids["register"] == api.thread_ids["unregister"]
+    assert api.thread_ids["register"] != threading.get_native_id()
     stored = json.loads((tmp_path / "settings.json").read_text(encoding="utf-8"))
     assert stored["live_voice"]["hotkey"]["enabled"] is True
+
+
+def test_letters_follow_the_active_keyboard_layout(tmp_path: Path) -> None:
+    # A German layout reports VK_Z for the physical key that US calls KeyY.
+    controller, created = _controller(tmp_path, FakeHotkeyApi(layout_keys={0x15: 0x5A}))
+    controller.start()
+
+    controller.update({"enabled": True, "key": "KeyY"})
+
+    assert created[0].registrations() == [(1, CTRL_ALT, 0x5A)]
+    controller.stop()
 
 
 def test_changing_the_combination_replaces_the_registration(tmp_path: Path) -> None:
@@ -263,17 +198,26 @@ def test_changing_the_combination_replaces_the_registration(tmp_path: Path) -> N
     assert created[1].unregistered.wait(timeout=2)
 
 
-def test_in_use_combination_keeps_the_saved_setting_and_reports_error(tmp_path: Path) -> None:
-    controller, created = _controller(tmp_path, FakeHotkeyApi(register_error=1409))
+@pytest.mark.parametrize(
+    ("error", "code"),
+    [(1409, hotkey.HOTKEY_ERROR_IN_USE), (5, hotkey.HOTKEY_ERROR_FAILED)],
+)
+def test_a_failed_registration_keeps_the_saved_setting_and_reports_its_error(
+    tmp_path: Path, error: int, code: str
+) -> None:
+    api = FakeHotkeyApi(register_error=error)
+    controller, _created = _controller(tmp_path, api)
     controller.start()
 
     status = controller.update({"enabled": True, "key": "KeyK"})
 
-    assert status["error_code"] == hotkey.HOTKEY_ERROR_IN_USE
-    assert controller.status()["error_code"] == hotkey.HOTKEY_ERROR_IN_USE
+    assert status["error_code"] == code
+    assert controller.status()["error_code"] == code
     assert read_live_hotkey_settings(tmp_path / "settings.json")["key"] == "KeyK"
     assert read_live_hotkey_settings(tmp_path / "settings.json")["enabled"] is True
     controller.stop()
+    assert ("unregister", 1) not in api.calls
+    assert not any(name == "wake" for name, _ in api.calls)
 
 
 @pytest.mark.parametrize(
@@ -335,16 +279,49 @@ def test_unsupported_platform_persists_without_registering(tmp_path: Path) -> No
     controller.stop()
 
 
-def test_press_reaches_the_controller_callback(tmp_path: Path) -> None:
-    pressed = threading.Event()
-    controller, created = _controller(tmp_path, on_press=pressed.set)
+def test_each_press_reaches_the_callback_even_after_a_failing_one(tmp_path: Path) -> None:
+    presses: list[int] = []
+    second_press = threading.Event()
+
+    def fail_once() -> None:
+        presses.append(1)
+        if len(presses) == 1:
+            raise RuntimeError("boom")
+        second_press.set()
+
+    controller, created = _controller(tmp_path, on_press=fail_once)
     controller.update({"enabled": True})
     controller.start()
 
+    created[0].messages.put((0x0100, 0))  # an unrelated message is ignored
+    created[0].messages.put((hotkey.WM_HOTKEY, 1))
     created[0].messages.put((hotkey.WM_HOTKEY, 1))
 
-    assert pressed.wait(timeout=2)
+    assert second_press.wait(timeout=2)
+    assert len(presses) == 2
+    assert controller.status()["error_code"] is None
     controller.stop()
+    assert created[0].unregistered.wait(timeout=2)
+
+
+def test_a_message_loop_that_fails_unregisters_and_stops_harmlessly_later(
+    tmp_path: Path,
+) -> None:
+    controller, created = _controller(tmp_path)
+    controller.update({"enabled": True})
+    controller.start()
+
+    created[0].messages.put(None)  # GetMessage failed: the loop ends on its own
+
+    assert created[0].unregistered.wait(timeout=2)
+    for thread in _hotkey_threads():
+        thread.join(timeout=2)
+    controller.stop()
+    assert [name for name, _ in created[0].calls].count("unregister") == 1
+
+
+def _hotkey_threads() -> list[threading.Thread]:
+    return [thread for thread in threading.enumerate() if thread.name == "vbot-live-hotkey"]
 
 
 def test_start_and_stop_are_idempotent(tmp_path: Path) -> None:

@@ -7,15 +7,15 @@ import threading
 import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
 import pytest
 
 from desktop.wakeword._microphones import (
+    CaptureFormat,
     MicrophoneUnavailableError,
-    _candidate_device_indices,
-    _select_capture_format,
     close_input_stream,
     list_microphones,
     open_input_stream,
@@ -31,7 +31,7 @@ from desktop.wakeword.capture import (
     EchoStagePool,
 )
 from desktop.wakeword.config import MicrophoneSelection
-from tests.desktop.voice_fakes import (
+from tests.desktop.wakeword.voice_test_support import (
     FakeEchoStage,
     FakeSoundDevice,
     Overflow,
@@ -750,30 +750,39 @@ def test_the_echo_reference_closes_before_portaudio_refreshes(
 # -- Microphone selection ----------------------------------------------------------------
 
 
-class _HostApiSoundDevice:
-    """Two host APIs exposing the same headset; WDM-KS is the default input."""
-
-    host_apis = [
-        {"name": "Windows WDM-KS", "default_input_device": 0},
-        {"name": "Windows WASAPI", "default_input_device": 1},
+def _sound_device(
+    devices: list[tuple[str, int]],
+    host_apis: list[tuple[str, int]],
+    *,
+    default_input: int = 0,
+) -> FakeSoundDevice:
+    """A FakeSoundDevice with ``(name, host API)`` inputs and ``(name, default input)`` APIs."""
+    sd = FakeSoundDevice(default_samplerate=48000)
+    sd.devices = [
+        {"name": name, "hostapi": api, "max_input_channels": 1, "default_samplerate": 48000}
+        for name, api in devices
     ]
-    devices = [
-        {"name": "Headset", "hostapi": 0, "max_input_channels": 1, "default_samplerate": 48000},
-        {"name": "Headset", "hostapi": 1, "max_input_channels": 1, "default_samplerate": 48000},
-        {"name": "Speakers", "hostapi": 1, "max_input_channels": 0, "default_samplerate": 48000},
-    ]
+    sd.host_apis = [{"name": name, "default_input_device": index} for name, index in host_apis]
+    sd.default = SimpleNamespace(device=(default_input, -1))
+    return sd
 
-    class default:  # noqa: N801 - mirrors sounddevice.default
-        device = (0, 2)
 
-    def query_devices(self, device: int | None = None) -> Any:
-        return list(self.devices) if device is None else self.devices[device]
+def _headset() -> FakeSoundDevice:
+    """One headset on two host APIs; the exclusive WDM-KS one is the default input."""
+    sd = _sound_device(
+        [("Headset", 0), ("Headset", 1)], [("Windows WDM-KS", 0), ("Windows WASAPI", 1)]
+    )
+    sd.devices.append(
+        {"name": "Speakers", "hostapi": 1, "max_input_channels": 0, "default_samplerate": 48000}
+    )
+    return sd
 
-    def query_hostapis(self, index: int | None = None) -> Any:
-        return list(self.host_apis) if index is None else self.host_apis[index]
 
-    def check_input_settings(self, **_kwargs: Any) -> None:
-        return
+def _opened_format(sd: FakeSoundDevice, requested: dict[str, Any] | None) -> CaptureFormat:
+    stream, capture_format = open_input_stream(sd, requested)
+    close_input_stream(stream)
+    assert (stream.device, stream.samplerate) == (capture_format.device, capture_format.sample_rate)
+    return capture_format
 
 
 def test_list_microphones_is_empty_without_sounddevice(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -827,59 +836,55 @@ def test_capture_prefers_the_device_rate(
 ) -> None:
     sd = FakeSoundDevice(default_samplerate=default_rate, rates=supported)
 
-    assert _select_capture_format(sd, None).sample_rate == expected
+    assert _opened_format(sd, None).sample_rate == expected
 
 
-def test_saved_microphone_identity_survives_device_reordering() -> None:
-    class ReorderedSoundDevice:
-        @staticmethod
-        def query_devices() -> list[dict[str, object]]:
-            return [
-                {"name": "Webcam mic", "hostapi": 0, "max_input_channels": 1},
-                {"name": "Studio mic", "hostapi": 1, "max_input_channels": 1},
-            ]
-
-        @staticmethod
-        def query_hostapis(index: int) -> dict[str, object]:
-            return {"name": ["WASAPI", "ASIO"][index]}
-
-    requested = {"index": 0, "name": "Studio mic", "host_api": "ASIO"}
-
-    assert _candidate_device_indices(ReorderedSoundDevice(), requested) == [1]
+_STUDIO = {"index": 0, "name": "Studio mic", "host_api": "ASIO"}
 
 
-def test_saved_microphone_never_uses_a_recycled_index() -> None:
-    class RecycledSoundDevice:
-        @staticmethod
-        def query_devices() -> list[dict[str, object]]:
-            return [{"name": "Webcam mic", "hostapi": 0, "max_input_channels": 1}]
+@pytest.mark.parametrize(
+    ("sd_factory", "requested", "expected"),
+    [
+        pytest.param(
+            lambda: _sound_device(
+                [("Webcam mic", 0), ("Studio mic", 1)], [("WASAPI", -1), ("ASIO", -1)]
+            ),
+            _STUDIO,
+            (1, "ASIO"),
+            id="saved-identity-survives-reordering",
+        ),
+        pytest.param(
+            lambda: _sound_device([("Webcam mic", 0)], [("WASAPI", -1), ("ASIO", -1)]),
+            _STUDIO,
+            None,
+            id="saved-identity-never-uses-a-recycled-index",
+        ),
+        pytest.param(_headset, None, (1, "Windows WASAPI"), id="automatic-skips-exclusive-wdm-ks"),
+        pytest.param(
+            _headset,
+            {"index": 0, "name": "Headset", "host_api": "Windows WDM-KS"},
+            None,
+            id="saved-wdm-ks-is-unavailable",
+        ),
+    ],
+)
+def test_open_input_stream_only_uses_a_shared_microphone_matching_its_identity(
+    sd_factory: Callable[[], FakeSoundDevice],
+    requested: dict[str, Any] | None,
+    expected: tuple[int, str] | None,
+) -> None:
+    sd = sd_factory()
 
-        @staticmethod
-        def query_hostapis(_index: int) -> dict[str, object]:
-            return {"name": "WASAPI"}
-
-    requested = {"index": 0, "name": "Studio mic", "host_api": "ASIO"}
-
-    assert _candidate_device_indices(RecycledSoundDevice(), requested) == []
-
-
-def test_automatic_selection_never_uses_exclusive_wdm_ks_devices() -> None:
-    sd = _HostApiSoundDevice()
-
-    assert _candidate_device_indices(sd, None) == [1]
-    assert _select_capture_format(sd, None).host_api == "Windows WASAPI"
-
-
-def test_a_saved_wdm_ks_microphone_is_unavailable() -> None:
-    sd = _HostApiSoundDevice()
-    requested = {"index": 0, "name": "Headset", "host_api": "Windows WDM-KS"}
-
-    assert _candidate_device_indices(sd, requested) == []
-    with pytest.raises(MicrophoneUnavailableError):
-        _select_capture_format(sd, requested)
+    if expected is None:
+        with pytest.raises(MicrophoneUnavailableError):
+            open_input_stream(sd, requested)
+        assert sd.streams == []
+    else:
+        capture_format = _opened_format(sd, requested)
+        assert (capture_format.device, capture_format.host_api) == expected
 
 
 def test_the_microphone_list_hides_wdm_ks_devices() -> None:
-    devices = list_microphones(_HostApiSoundDevice())
+    devices = list_microphones(_headset())
 
     assert [(device["index"], device["host_api"]) for device in devices] == [(1, "Windows WASAPI")]

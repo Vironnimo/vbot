@@ -5,7 +5,6 @@ from __future__ import annotations
 import wave
 from pathlib import Path
 from typing import cast
-from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
@@ -22,7 +21,7 @@ _SAMPLE_RATE = 16000
 _SLICE_BYTES = 320  # 10 ms of 16 kHz PCM16
 _RECORDING_FRAME = b"\x10\x00" * 512  # one 32 ms endpointing frame
 _DETECTION_CHUNK = b"\x10\x00" * 1280  # one 80 ms detection chunk
-_FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "wakeword" / "okay_nabu.wav"
+_FIXTURE = Path(__file__).resolve().parents[2] / "fixtures" / "wakeword" / "okay_nabu.wav"
 
 
 class StrictVad:
@@ -56,103 +55,84 @@ class ScriptedSession:
         )
 
 
-# -- Endpointing fallback (frame_is_speech) ----------------------------------------
+# -- WebRTC fallback judgement -----------------------------------------------------
+#
+# WebRTC VAD accepts only 10, 20 or 30 ms frames, so both judgements slice their
+# audio into 10 ms frames. A 32 ms recording frame once crashed the VAD and
+# failed open as speech; StrictVad raises on any other frame size.
 
-
-def test_recording_fallback_judges_a_silent_frame_as_silence() -> None:
-    """Regression: a 32 ms frame used to crash WebRTC VAD and fail open as speech."""
-    vad = StrictVad()
-
-    assert frame_is_speech(_RECORDING_FRAME, None, vad) is False
-    assert [len(frame) for frame in vad.frames] == [_SLICE_BYTES] * 3
+_SINGLE_SLICE = b"\x10\x00" * 160
 
 
 @pytest.mark.parametrize(
-    ("speech_slices", "expected"),
-    [({0, 2}, True), ({1, 2}, True), ({1}, False), (set(), False)],
+    ("frame", "speech_slices", "expected"),
+    [
+        (_RECORDING_FRAME, set(), False),
+        (_RECORDING_FRAME, {1}, False),
+        (_RECORDING_FRAME, {0, 2}, True),
+        (_RECORDING_FRAME, {1, 2}, True),
+        (_SINGLE_SLICE, {0}, True),
+        (_SINGLE_SLICE, set(), False),
+    ],
 )
-def test_recording_fallback_needs_two_speech_slices(
+def test_recording_fallback_needs_two_speech_slices_of_a_frame(
+    frame: bytes, speech_slices: set[int], expected: bool
+) -> None:
+    vad = StrictVad(speech_slices)
+
+    assert frame_is_speech(frame, None, vad) is expected
+    assert {len(slice_) for slice_ in vad.frames} == {_SLICE_BYTES}
+
+
+@pytest.mark.parametrize(
+    ("speech_slices", "expected"), [(set(), False), ({0}, False), ({0, 3}, True)]
+)
+def test_detection_gate_needs_two_speech_slices_of_a_chunk(
     speech_slices: set[int], expected: bool
 ) -> None:
-    assert frame_is_speech(_RECORDING_FRAME, None, StrictVad(speech_slices)) is expected
+    vad = StrictVad(speech_slices)
+
+    assert chunk_contains_speech(_DETECTION_CHUNK, None, vad) is expected
+    assert {len(slice_) for slice_ in vad.frames} == {_SLICE_BYTES}
 
 
-def test_recording_fallback_fails_open_when_it_cannot_judge() -> None:
-    class BrokenVad:
-        def is_speech(self, _frame: bytes, _sample_rate: int) -> bool:
-            raise RuntimeError("vad exploded")
+class RaisingVad:
+    @staticmethod
+    def is_speech(_frame: bytes, _sample_rate: int) -> bool:
+        raise RuntimeError("vad exploded")
 
-    assert frame_is_speech(_RECORDING_FRAME, None, BrokenVad()) is True
-    assert frame_is_speech(b"\x10\x00" * 100, None, StrictVad()) is True
+
+def test_both_judgements_fail_open_when_they_cannot_judge() -> None:
+    assert frame_is_speech(_RECORDING_FRAME, None, RaisingVad()) is True
+    assert frame_is_speech(b"\x10\x00" * 100, None, StrictVad()) is True  # no whole slice
     assert frame_is_speech(_RECORDING_FRAME, None, None) is True
-
-
-def test_a_single_slice_needs_one_speech_verdict() -> None:
-    single_slice = b"\x10\x00" * 160
-
-    assert frame_is_speech(single_slice, None, StrictVad({0})) is True
-    assert frame_is_speech(single_slice, None, StrictVad()) is False
-
-
-def test_real_webrtc_vad_judges_a_silent_recording_frame() -> None:
-    webrtcvad = pytest.importorskip("webrtcvad")
-
-    assert frame_is_speech(b"\x00\x00" * 512, None, webrtcvad.Vad(1)) is False
-
-
-# -- Detection gate (chunk_contains_speech) ----------------------------------------
-
-
-def test_detection_gate_feeds_only_valid_slices_to_the_vad() -> None:
-    vad = StrictVad()
-
-    assert chunk_contains_speech(_DETECTION_CHUNK, None, vad) is False
-    assert [len(frame) for frame in vad.frames] == [_SLICE_BYTES] * 8
-
-
-def test_detection_gate_requires_two_speech_slices_per_chunk() -> None:
-    assert chunk_contains_speech(_DETECTION_CHUNK, None, StrictVad({0})) is False
-    assert chunk_contains_speech(_DETECTION_CHUNK, None, StrictVad({0, 3})) is True
-
-
-def test_detection_gate_fails_open_when_it_cannot_judge() -> None:
-    class RaisingVad:
-        @staticmethod
-        def is_speech(_frame: bytes, _sample_rate: int) -> bool:
-            raise RuntimeError("vad exploded")
-
     assert chunk_contains_speech(_DETECTION_CHUNK, None, None) is True
     assert chunk_contains_speech(b"\x10\x20" * 10, None, RaisingVad()) is True
     assert chunk_contains_speech(_DETECTION_CHUNK, None, RaisingVad()) is True
 
 
-def test_detection_gate_uses_the_neural_probability_when_available() -> None:
-    detector = MagicMock()
-
-    detector.speech_probability.return_value = 0.9
-    assert chunk_contains_speech(_DETECTION_CHUNK, detector, None) is True
-
-    detector.speech_probability.return_value = 0.1
-    assert chunk_contains_speech(_DETECTION_CHUNK, detector, None) is False
-
-
-def test_detection_gate_falls_back_to_webrtc_when_neural_scoring_fails() -> None:
+def test_detection_gate_prefers_the_neural_probability_and_falls_back_to_webrtc() -> None:
     class ExplodingDetector:
         @staticmethod
         def speech_probability(_chunk: bytes) -> float:
             raise RuntimeError("model exploded")
 
+    confident = cast(SpeechDetector, ScriptedChunkDetector([0.9]))
+    unsure = cast(SpeechDetector, ScriptedChunkDetector([0.1]))
     exploding = cast(SpeechDetector, ExplodingDetector())
 
+    assert chunk_contains_speech(_DETECTION_CHUNK, confident, StrictVad()) is True
+    assert chunk_contains_speech(_DETECTION_CHUNK, unsure, StrictVad({0, 1})) is False
     assert chunk_contains_speech(_DETECTION_CHUNK, exploding, None) is True
     assert chunk_contains_speech(_DETECTION_CHUNK, exploding, StrictVad()) is False
 
 
-def test_detection_gate_separates_silence_and_speech_with_the_real_fallback_vad() -> None:
+def test_the_real_fallback_vad_separates_silence_and_speech() -> None:
     pytest.importorskip("webrtcvad")
     vad = create_fallback_vad()
 
     assert vad is not None
+    assert frame_is_speech(b"\x00\x00" * 512, None, vad) is False
     assert chunk_contains_speech(b"\x00\x00" * 1280, None, vad) is False
     assert chunk_contains_speech(np.full(1280, 1000, np.int16).tobytes(), None, vad) is True
 

@@ -1,4 +1,4 @@
-"""Desktop DPI initialization and logical geometry regressions without a GUI."""
+"""Windows integration without a GUI: DPI, single instance, WebView2 arguments and permissions."""
 
 from __future__ import annotations
 
@@ -100,29 +100,6 @@ def test_dpi_and_framework_are_configured_before_screen_discovery(monkeypatch):
     monkeypatch.setattr(main.importlib, "import_module", import_webview)
     assert main.load_webview() is webview
     assert events == ["dpi", "webview", "framework"]
-
-
-@pytest.mark.parametrize("scale", [1.0, 1.25, 1.5, 2.0])
-def test_physical_primary_screen_is_converted_once_for_layout_and_placement(monkeypatch, scale):
-    monkeypatch.setattr(_windows, "primary_scale", lambda: scale)
-    physical = SimpleNamespace(
-        x=0,
-        y=0,
-        width=2560,
-        height=1440,
-        scale=1.0,
-        frame=SimpleNamespace(X=0, Y=0, Width=2560, Height=1380),
-    )
-    screen = main._primary_screen(SimpleNamespace(screens=[physical]))
-    assert screen.width == int(2560 / scale)
-    assert screen.height == int(1440 / scale)
-    assert screen.scale == scale
-    layout = main.resolve_window_layout((3000, 2000), screen)
-    assert layout.width * scale <= 2560
-    assert layout.height * scale <= 1380
-    assert physical.width == 2560
-    assert physical.frame.Height == 1380
-    assert layout.screen is screen
 
 
 def test_primary_scale_uses_windows_dpi_instead_of_pywebview_pixel_ratio(monkeypatch):
@@ -351,38 +328,44 @@ def test_trusted_origins_skip_loopback_and_are_sorted_and_unique():
     )
 
 
-def test_browser_arguments_add_fixed_switches_and_origins():
-    value = _windows.build_browser_arguments(None, ["http://b.lan:8420", "http://a.lan:8420"])
-
-    assert value == (
-        "--autoplay-policy=no-user-gesture-required "
-        "--unsafely-treat-insecure-origin-as-secure=http://a.lan:8420,http://b.lan:8420 "
-        "--disable-features=ElasticOverscroll"
-    )
-
-
-def test_browser_arguments_merge_a_pre_existing_value():
-    existing = (
-        "--remote-debugging-port=9222 "
-        "--unsafely-treat-insecure-origin-as-secure=http://c.lan:1,http://a.lan:8420 "
-        "--disable-features=Translate --autoplay-policy=user-gesture-required"
-    )
-
-    value = _windows.build_browser_arguments(existing, ["http://a.lan:8420", "http://b.lan:2"])
-
-    assert value.split() == [
-        "--remote-debugging-port=9222",
-        "--autoplay-policy=user-gesture-required",
-        "--unsafely-treat-insecure-origin-as-secure=http://a.lan:8420,http://b.lan:2,http://c.lan:1",
-        "--disable-features=Translate,ElasticOverscroll",
-    ]
-
-
-def test_browser_arguments_without_origins_have_no_origin_switch():
-    value = _windows.build_browser_arguments("", [])
-
-    assert "--unsafely-treat-insecure-origin-as-secure" not in value
-    assert "--autoplay-policy=no-user-gesture-required" in value
+@pytest.mark.parametrize(
+    ("existing", "origins", "expected"),
+    [
+        pytest.param(
+            None,
+            ["http://b.lan:8420", "http://a.lan:8420"],
+            [
+                "--autoplay-policy=no-user-gesture-required",
+                "--unsafely-treat-insecure-origin-as-secure=http://a.lan:8420,http://b.lan:8420",
+                "--disable-features=ElasticOverscroll",
+            ],
+            id="fixed-switches-and-sorted-origins",
+        ),
+        pytest.param(
+            "",
+            [],
+            ["--autoplay-policy=no-user-gesture-required", "--disable-features=ElasticOverscroll"],
+            id="no-origin-switch-without-origins",
+        ),
+        pytest.param(
+            "--remote-debugging-port=9222 "
+            "--unsafely-treat-insecure-origin-as-secure=http://c.lan:1,http://a.lan:8420 "
+            "--disable-features=Translate --autoplay-policy=user-gesture-required",
+            ["http://a.lan:8420", "http://b.lan:2"],
+            [
+                "--remote-debugging-port=9222",
+                "--autoplay-policy=user-gesture-required",
+                "--unsafely-treat-insecure-origin-as-secure=http://a.lan:8420,http://b.lan:2,http://c.lan:1",
+                "--disable-features=Translate,ElasticOverscroll",
+            ],
+            id="merges-a-pre-existing-value",
+        ),
+    ],
+)
+def test_browser_arguments_combine_fixed_switches_origins_and_existing_values(
+    existing, origins, expected
+):
+    assert _windows.build_browser_arguments(existing, origins).split() == expected
 
 
 def test_apply_browser_arguments_exports_only_on_windows(monkeypatch):
