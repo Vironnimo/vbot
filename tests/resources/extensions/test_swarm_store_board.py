@@ -71,12 +71,8 @@ async def test_discussion_announcements_have_actionable_text_and_verified_human_
     ).entries[0]
     with pytest.raises(json.JSONDecodeError):
         json.loads(announcement["text"])
-    for value in (
-        author["display_name"],
-        arguments["title"],
-        created["discussion_id"],
-        created["opening_post_id"],
-    ):
+    # The announcement names the discussion and its opening post by their numbers.
+    for value in (author["display_name"], arguments["title"], "(d2)", "post #1"):
         assert value in announcement["text"]
     assert "discussion_announcement" not in announcement
     await store.bind_participant_session(

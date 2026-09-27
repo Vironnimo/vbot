@@ -192,11 +192,12 @@ def _clamped_limit(arguments: Json, notes: list[str], maximum: int = 100) -> int
 
 
 def _initial_message(swarm: Json) -> str:
+    from ._store_values import post_ref
     from .agent_text import INITIAL_MESSAGE
 
     denied = swarm["profile_snapshot"]["tool_access"].get("denied", [])
     if "swarm_board" not in denied:
-        return INITIAL_MESSAGE.format(goal_post_id=swarm["goal_post_id"])
+        return INITIAL_MESSAGE.format(goal_post=post_ref(swarm["goal_post_sequence"]))
     guidance = (
         "Use your available shared collaboration Tools to discuss and examine the request "
         "with your peers before implementation. Decide together when you are ready to work."

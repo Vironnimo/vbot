@@ -212,7 +212,7 @@ class Received(NamedTuple):
 
 
 _MESSAGE = re.compile(
-    r"\[(?P<id>pst_[A-Za-z0-9]+)\] (?P<author>[^\n(]*?)(?: \((?P<details>[^\n]*)\))?:\n"
+    r"\[(?P<id>#\d+)\] (?P<author>[^\n(]*?)(?: \((?P<details>[^\n]*)\))?:\n"
     r"(?P<text>.*)",
     re.DOTALL,
 )
@@ -230,6 +230,13 @@ def received(content):
                 Received(discussion, match["id"], match["author"], match["details"], match["text"])
             )
     return messages
+
+
+async def post_ref(board, post_id):
+    """Return the reference participants read for a stored post ID, such as "#3"."""
+
+    post = (await board.store.read_human_posts(board.swarm["id"], message_id=post_id)).entries[0]
+    return f"#{post['sequence']}"
 
 
 def deny_inbox(board, monkeypatch):
@@ -318,10 +325,9 @@ async def test_swarm_get_projects_canonical_run_activity(board, monkeypatch):
 @pytest.mark.asyncio
 async def test_registered_board_public_posts_pages_and_durable_read_receipt(board):
     result, _ = await call(board, {"action": "list"})
-    main = board.swarm["main_discussion_id"]
-    goal = board.swarm["goal_post_id"]
-    assert f'- {main} "Main": main discussion, joined' in result["data"]["content"]
-    assert continuation(result["data"]["user_request"]) == {"action": "read", "message_id": goal}
+    # Participants see discussions and posts by their numbers; the request is post #0.
+    assert '- d1 "Main": main discussion, joined' in result["data"]["content"]
+    assert continuation(result["data"]["user_request"]) == {"action": "read", "message_id": "#0"}
     peer = board.bindings[1].participant_id
     posted, posted_context = await call(
         board,
@@ -372,6 +378,7 @@ async def test_board_discussion_join_leave_reply_and_exact_pagination(board):
     created, _ = await call(board, {"action": "create", "title": "Topic", "text": "opening"})
     discussion = created["data"]["discussion_id"]
     opening = created["data"]["opening_post_id"]
+    assert (discussion, opening) == ("d2", "#1")
     first, _ = await call(board, {"action": "list", "limit": 1})
     next_page, _ = await call(board, continuation(first["data"]["more"]))
     assert f'- {discussion} "Topic": joined, members: 1' in next_page["data"]["content"]
@@ -415,7 +422,7 @@ async def test_board_discussion_join_leave_reply_and_exact_pagination(board):
         for row in (
             await board.store.list_discussions(board.swarm["id"], board.bindings[1].participant_id)
         ).entries
-        if row["id"] == discussion
+        if row["sequence"] == 2
     )["joined"]
     again, _ = await call(board, {"action": "leave", "discussion_id": discussion}, peer=1)
     assert again["data"]["status"] == "You were not a member; nothing changed."
@@ -540,7 +547,7 @@ async def test_create_pings_opening_atomically_without_joining_recipients(board)
     assert created["ok"]
     data = created["data"]
     inbox = await board.store.prepare_inbox_delivery(board.swarm["id"], peer)
-    assert [entry["id"] for entry in inbox["entries"]][:1] == [data["opening_post_id"]]
+    assert [f"#{entry['sequence']}" for entry in inbox["entries"]][:1] == [data["opening_post_id"]]
     announcement = inbox["entries"][1]
     assert announcement["discussion_id"] == board.swarm["main_discussion_id"]
     assert announcement["text"] == (
@@ -548,9 +555,9 @@ async def test_create_pings_opening_atomically_without_joining_recipients(board)
         f"{data['opening_post_id']}. Read or join it with swarm_board and this discussion_id."
     )
     discussions = await board.store.list_discussions(board.swarm["id"], peer)
-    assert not next(row for row in discussions.entries if row["id"] == data["discussion_id"])[
-        "joined"
-    ]
+    assert not next(
+        row for row in discussions.entries if f"d{row['sequence']}" == data["discussion_id"]
+    )["joined"]
     replay, _ = await call(board, arguments, tool_call_id=created_context.tool_call_id)
     assert replay["data"]["discussion_id"] == data["discussion_id"]
     assert replay["data"]["replayed"]
@@ -595,9 +602,8 @@ async def test_reply_uses_owned_message_discussion_and_rejects_contradiction(boa
     assert mismatch["error"]["message"] == (
         f'reply_to {topic["opening_post_id"]} belongs to discussion "Topic" '
         f"({topic['discussion_id']}), but discussion_id names the main discussion "
-        f"({board.swarm['main_discussion_id']}). Omit discussion_id to reply in discussion "
-        f'"Topic" ({topic["discussion_id"]}), or omit reply_to to post a new message in the '
-        f"main discussion ({board.swarm['main_discussion_id']}). Nothing was saved."
+        f'(d1). Omit discussion_id to reply in discussion "Topic" ({topic["discussion_id"]}), '
+        "or omit reply_to to post a new message in the main discussion (d1). Nothing was saved."
     )
     missing, _ = await call(board, {**arguments, "reply_to": "foreign"}, peer=1)
     assert missing["error"]["code"] == "message_not_found"
@@ -677,12 +683,13 @@ async def test_status_delivery_policy_and_pending_messages_enable_direct_receivi
         actor="test",
     )
     result, _ = await dispatch(board, {}, name="swarm_state")
+    # Participants know one another by name only.
     roster = "\n".join(
-        f"- {_name(board, peer)} ({binding.participant_id}{', you' if peer == 0 else ''}): idle"
-        for peer, binding in enumerate(board.bindings)
+        f"- {_name(board, peer)}{' (you)' if peer == 0 else ''}: idle"
+        for peer in range(len(board.bindings))
     )
     assert visible(result) == (
-        f"you: {_name(board, 0)} ({board.bindings[0].participant_id}), idle\n"
+        f"you: {_name(board, 0)}, idle\n"
         "pending: 1 message for you; receive it with swarm_inbox.\n"
         "delivery: Posts that address or answer you reach you automatically, also while you are "
         "running. Posts in discussions you joined reach you automatically when you are idle. "
@@ -766,14 +773,12 @@ async def test_status_pages_only_report_automatic_activity(board):
     first = (await board.tools.dispatch(context, {"limit": 1}, allowed_tools=["swarm_state"]))[
         "data"
     ]
-    you = board.bindings[0].participant_id
-    assert first["content"] == f"Participants:\n- {_name(board, 0)} ({you}, you): idle"
+    assert first["content"] == f"Participants:\n- {_name(board, 0)} (you): idle"
     assert first["more"].startswith("More participants exist. Continue with ")
     follow = continuation(first["more"])
     assert set(follow) == {"limit", "cursor"} and follow["limit"] == 1
     second = (await board.tools.dispatch(context, follow, allowed_tools=["swarm_state"]))["data"]
-    other = board.bindings[1].participant_id
-    assert second["content"] == f"Participants:\n- {_name(board, 1)} ({other}): idle"
+    assert second["content"] == f"Participants:\n- {_name(board, 1)}: idle"
     changed = await board.service.state(context, {**follow, "limit": 2})
     assert changed["error"]["code"] == "invalid_cursor"
     clamped = (await board.tools.dispatch(context, {"limit": 500}, allowed_tools=["swarm_state"]))[
@@ -1001,13 +1006,12 @@ async def test_board_runs_clear_intent_after_repairing_the_call_shape(board):
     assert created["data"]["status"] == "You joined it, and the main discussion announces it."
     read, _ = await dispatch(board, {"action": "history", "post_id": first}, peer=2)
     assert read["data"]["content"] == (
-        f"[{first}] {_name(board, 0)} (in the main discussion "
-        f"{board.swarm['main_discussion_id']}):\ninferred post"
+        f"[{first}] {_name(board, 0)} (in the main discussion d1):\ninferred post"
     )
     posts = await board_posts(board)
     assert [(post["text"], post["reply_to"]) for post in posts[:2]] == [
         ("inferred post", None),
-        ("answer", first),
+        ("answer", posts[0]["id"]),
     ]
     topic = await board_posts(board, discussion_id=created["data"]["discussion_id"])
     assert [post["text"] for post in topic] == ["opening"]
@@ -1058,6 +1062,10 @@ async def test_board_addresses_participants_its_text_names_after_at_or_answers(b
 
 @pytest.mark.asyncio
 async def test_board_accepts_explicit_recipients_and_never_guesses_one(board):
+    # Agents address with @Name; explicit recipients and reply_to stay accepted unadvertised.
+    names = ["swarm_board"]
+    definition = board.tools.provider_definitions(names, session_grants=names)[0]
+    assert not {"recipients", "reply_to"} & set(definition["parameters"]["properties"])
     ids = _ids(board)
     named, _ = await dispatch(board, {"text": "to one", "recipients": [f"@{_name(board, 1)}"]})
     assert named["data"]["delivery"] == f"Queued for 2 participants. {_reaches(_name(board, 1))}"
@@ -1089,17 +1097,16 @@ async def test_board_accepts_explicit_recipients_and_never_guesses_one(board):
     near = ids[1][:-1] + ("x" if ids[1][-1] != "x" else "y")
     corrected, _ = await dispatch(board, {"text": "typo", "recipients": [near, _name(board, 2)]})
     assert corrected["error"]["code"] == "invalid_recipient"
-    assert (
-        f'Did you mean {_name(board, 1)} ({ids[1]}) for "{near}"?'
-        in (corrected["error"]["message"])
-    )
+    assert f'Did you mean {_name(board, 1)} for "{near}"?' in (corrected["error"]["message"])
     assert corrected["error"]["message"].endswith(
-        f'Repeat the call with recipients ["{ids[1]}", "{_name(board, 2)}"]. Names also work, '
-        'and "all" addresses every other participant. Nothing was saved.'
+        f'Repeat the call with recipients ["{_name(board, 1)}", "{_name(board, 2)}"]; "all" '
+        "addresses every other participant. Nothing was saved."
     )
     unknown, _ = await dispatch(board, {"text": "typo", "recipients": ["Nobody"]})
     assert unknown["error"]["code"] == "invalid_recipient"
-    assert f"{_name(board, 0)} ({ids[0]}, you)" in unknown["error"]["message"]
+    assert (
+        f"Participants: {_name(board, 0)} (you), {_name(board, 1)}" in (unknown["error"]["message"])
+    )
     assert (
         "Repeat the call with recipients chosen from these participants"
         in (unknown["error"]["message"])
@@ -1109,49 +1116,60 @@ async def test_board_accepts_explicit_recipients_and_never_guesses_one(board):
 
 @pytest.mark.asyncio
 async def test_board_corrects_read_references_but_never_write_targets(board):
-    main = board.swarm["main_discussion_id"]
     created, _ = await dispatch(board, {"title": "Topic", "text": "opening"})
     topic = created["data"]["discussion_id"]
     posted, _ = await dispatch(board, {"text": "first main post"})
     first = posted["data"]["post_id"]
-    number = next(post for post in await board_posts(board) if post["id"] == first)["sequence"]
+    assert (topic, first) == ("d2", "#3")
+    stored = next(post for post in await board_posts(board) if post["sequence"] == 3)["id"]
 
-    by_number, _ = await dispatch(board, {"action": "read", "message_id": f"pst_{number}"})
+    # A number is an exact reference, with or without "#", for reads and writes alike.
+    by_number, _ = await dispatch(board, {"action": "read", "message_id": "3"})
     assert by_number["data"]["content"].endswith(":\nfirst main post")
-    assert by_number["data"]["note"] == (
-        f'message_id "pst_{number}" is not a post ID; this uses post {first}, which has that '
-        "number."
+    assert "note" not in by_number["data"]
+    answer, _ = await dispatch(board, {"text": "answer", "reply_to": first}, peer=1)
+    assert answer["ok"] and _reaches(_name(board, 0)) in answer["data"]["delivery"]
+
+    near_post = stored[:-1] + ("x" if stored[-1] != "x" else "y")
+    close_message, _ = await dispatch(board, {"action": "read", "message_id": near_post})
+    assert close_message["data"]["note"] == (
+        f'message_id "{near_post}" does not exist; this uses post {first}, its only close match.'
     )
-    reply, _ = await dispatch(board, {"text": "answer", "reply_to": f"pst_{number}"})
+    reply, _ = await dispatch(board, {"text": "misreplied", "reply_to": near_post})
     assert reply["error"]["code"] == "message_not_found"
-    assert reply["error"]["message"].startswith(f'reply_to "pst_{number}" is not a post ID')
+    assert reply["error"]["message"].startswith(f'reply_to "{near_post}" is not a post ID')
     assert reply["error"]["message"].endswith(
         f'Repeat the call with reply_to "{first}". Nothing was saved.'
     )
 
-    near = topic[:-1] + ("x" if topic[-1] != "x" else "y")
+    topic_id = next(
+        row["id"]
+        for row in (
+            await board.store.list_discussions(board.swarm["id"], board.bindings[0].participant_id)
+        ).entries
+        if row["sequence"] == 2
+    )
+    near = topic_id[:-1] + ("x" if topic_id[-1] != "x" else "y")
     close_read, _ = await dispatch(board, {"action": "read", "discussion_id": near})
     assert close_read["data"]["content"].endswith(":\nopening")
     assert close_read["data"]["note"] == (
-        f'discussion_id "{near}" does not exist; this shows discussion "Topic" ({topic}), its '
-        "only close match."
+        f'discussion_id "{near}" does not exist; this shows discussion "Topic" (d2), its only '
+        "close match."
     )
     close_post, _ = await dispatch(board, {"text": "misaddressed", "discussion_id": near})
     assert close_post["error"]["code"] == "discussion_not_found"
-    assert f'Repeat the call with discussion_id "{topic}".' in close_post["error"]["message"]
+    assert 'Repeat the call with discussion_id "d2".' in close_post["error"]["message"]
 
     older, _ = await dispatch(board, {"action": "read", "cursor": first})
-    assert (
-        older["data"]["note"] == f"cursor {first} is a post ID, so this shows the posts before it."
-    )
-    assert older["data"]["page"].startswith(f"Posts before {first} in the main discussion ({main})")
+    assert older["data"]["note"] == "cursor #3 is a post ID, so this shows the posts before it."
+    assert older["data"]["page"].startswith("Posts before #3 in the main discussion (d1)")
     conflict, _ = await dispatch(board, {"action": "read", "discussion_id": topic, "before": first})
     assert conflict["error"]["message"].startswith(
-        f"before {first} belongs to the main discussion ({main}), but discussion_id names "
-        f'discussion "Topic" ({topic}).'
+        'before #3 belongs to the main discussion (d1), but discussion_id names discussion "Topic" '
+        "(d2)."
     )
     texts = [post["text"] for post in await board_posts(board)]
-    assert "answer" not in texts
+    assert "misreplied" not in texts
     assert "misaddressed" not in texts
 
 
@@ -1185,9 +1203,10 @@ async def test_board_extra_targets_run_only_when_they_change_nothing(board):
     only_message, _ = await dispatch(
         board, {"action": "post", "message_id": target, "text": "answer"}
     )
-    assert only_message["error"]["message"].startswith(
-        f"message_id selects a post to read. To answer post {target}, repeat the call with "
-        f'reply_to "{target}"'
+    assert only_message["error"]["message"] == (
+        f"post does not use message_id, which selects a post to read. To answer post {target}, "
+        "repeat the call without message_id and write @ before its author's name in text. "
+        "Nothing was saved."
     )
     differing, _ = await dispatch(
         board, {"action": "post", "message_id": main, "reply_to": target, "text": "answer"}
@@ -1200,7 +1219,9 @@ async def test_board_extra_targets_run_only_when_they_change_nothing(board):
     replies = [
         post for post in await board_posts(board, discussion_id=existing) if post["reply_to"]
     ]
-    assert [(post["text"], post["reply_to"]) for post in replies] == [("answer", target)]
+    assert [(post["text"], f"#{post['reply_sequence']}") for post in replies] == [
+        ("answer", target)
+    ]
 
 
 @pytest.mark.asyncio
@@ -1219,19 +1240,16 @@ async def test_board_clamps_page_size_and_drops_paging_fields_it_cannot_use(boar
 
 @pytest.mark.asyncio
 async def test_board_results_read_as_plain_text(board):
-    main = board.swarm["main_discussion_id"]
     posted, _ = await dispatch(board, {"text": "line one\nline two", "recipients": ["all"]})
-    first = posted["data"]["post_id"]
     assert visible(posted) == (
-        f"post_id: {first}\ndiscussion: the main discussion ({main})\n"
+        "post_id: #1\ndiscussion: the main discussion (d1)\n"
         f"delivery: Queued for 2 participants. {_reaches(_name(board, 1), _name(board, 2))}"
     )
     await dispatch(board, {"text": "second"}, peer=1)
     read, _ = await dispatch(board, {"action": "read", "limit": 1}, peer=2)
-    second = (await board_posts(board))[-1]["id"]
     assert visible(read) == (
-        f"page: Newest posts of the main discussion ({main}), oldest first (1 shown).\n"
+        "page: Newest posts of the main discussion (d1), oldest first (1 shown).\n"
         "older: Older posts exist. Continue with "
-        f'{{"action": "read", "discussion_id": "{main}", "before": "{second}", "limit": 1}}\n\n'
-        f"[{second}] {_name(board, 1)}:\nsecond"
+        '{"action": "read", "discussion_id": "d1", "before": "#2", "limit": 1}\n\n'
+        f"[#2] {_name(board, 1)}:\nsecond"
     )

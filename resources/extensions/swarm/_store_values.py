@@ -27,6 +27,32 @@ from core.utils.ids import new_id
 
 Json = dict[str, Any]
 
+# Participants refer to a post by its Board number ("#42") and to a discussion by
+# its number ("d2"); both are exact within one Swarm. Stored IDs stay valid too.
+_POST_NUMBER = re.compile(r"#?(\d+)")
+_DISCUSSION_NUMBER = re.compile(r"[dD]?(\d+)")
+
+
+def post_ref(sequence: int) -> str:
+    return f"#{sequence}"
+
+
+def discussion_ref(sequence: int) -> str:
+    return f"d{sequence}"
+
+
+def post_number(value: str) -> int | None:
+    """Return the Board number ``value`` names ("#42" or "42"), or None."""
+    match = _POST_NUMBER.fullmatch(value.strip())
+    return int(match.group(1)) if match else None
+
+
+def discussion_number(value: str) -> int | None:
+    """Return the discussion number ``value`` names ("d2" or "2"), or None."""
+    match = _DISCUSSION_NUMBER.fullmatch(value.strip())
+    return int(match.group(1)) if match else None
+
+
 _PROFILE_SLUG = re.compile(r"[a-z0-9][a-z0-9_-]*\Z")
 
 _MAX_LIMIT = 100
@@ -354,6 +380,7 @@ def _post(row: sqlite3.Row) -> Json:
     columns = row.keys()
     if "route_class" in columns and row["route_class"] is not None:
         value["route_class"] = row["route_class"]
-    if "discussion_title" in columns:
-        value["discussion_title"] = row["discussion_title"]
+    for name in ("discussion_title", "discussion_sequence", "reply_sequence"):
+        if name in columns:
+            value[name] = row[name]
     return value

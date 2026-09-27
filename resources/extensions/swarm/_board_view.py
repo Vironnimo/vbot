@@ -17,6 +17,7 @@ from typing import Any
 from core.tools._call_vocabulary import spelling
 
 from . import agent_text as text
+from ._store_values import discussion_ref, post_ref
 from ._wake_pacing import ADDRESSED_ROUTES, QUIET_SECONDS
 
 Json = dict[str, Any]
@@ -35,16 +36,33 @@ def call_text(arguments: Mapping[str, Any]) -> str:
     return json.dumps(dict(arguments), ensure_ascii=False)
 
 
-def discussion_label(discussion_id: str, title: str | None, main_id: str) -> str:
-    if discussion_id == main_id:
-        return text.BOARD_MAIN_LABEL.format(discussion_id=discussion_id)
-    return text.BOARD_DISCUSSION_LABEL.format(title=title or "", discussion_id=discussion_id)
+def discussion_label(sequence: int, title: str | None, *, main: bool) -> str:
+    """Name a discussion by the number participants use for it, with its title."""
+
+    if main:
+        return text.BOARD_MAIN_LABEL.format(discussion_id=discussion_ref(sequence))
+    return text.BOARD_DISCUSSION_LABEL.format(
+        title=title or "", discussion_id=discussion_ref(sequence)
+    )
 
 
-def header_discussion(discussion_id: str, title: str | None, main_id: str) -> str:
-    if discussion_id == main_id:
-        return text.POST_HEADER_MAIN.format(discussion_id=discussion_id)
-    return text.POST_HEADER_DISCUSSION.format(title=title or "", discussion_id=discussion_id)
+def post_discussion_label(post: Json, main_id: str) -> str:
+    """Name the discussion of a post that carries its discussion's number and title."""
+
+    return discussion_label(
+        post["discussion_sequence"],
+        post.get("discussion_title"),
+        main=post["discussion_id"] == main_id,
+    )
+
+
+def _header_discussion(post: Json, main_id: str) -> str:
+    reference = discussion_ref(post["discussion_sequence"])
+    if post["discussion_id"] == main_id:
+        return text.POST_HEADER_MAIN.format(discussion_id=reference)
+    return text.POST_HEADER_DISCUSSION.format(
+        title=post.get("discussion_title") or "", discussion_id=reference
+    )
 
 
 def spoken_list(items: Sequence[str]) -> str:
@@ -88,7 +106,7 @@ class Roster:
 
     def listing(self) -> str:
         return ", ".join(
-            f"{name} ({participant_id}{', you' if participant_id == self.self_id else ''})"
+            name + (text.STATE_ROSTER_YOU if participant_id == self.self_id else "")
             for participant_id, name in self.names.items()
         )
 
@@ -136,14 +154,25 @@ def resolve_recipients(values: Sequence[str], roster: Roster) -> Recipients:
 def unknown_recipients_message(
     values: Sequence[str], recipients: Recipients, roster: Roster
 ) -> str:
-    """Explain unknown recipients with any unique close ID, the roster, and the retry."""
+    """Explain unknown recipients with any unique close name, the roster, and the retry."""
 
     suggestions: dict[str, str] = {}
-    ids = list(roster.names)
+    spelled = {spelling(name): name for name in roster.names.values()}
     for value in recipients.unknown:
-        close = get_close_matches(value.strip(), ids, n=2, cutoff=_CLOSE_MATCH)
+        close = {
+            *(
+                roster.name(match)
+                for match in get_close_matches(
+                    value.strip(), list(roster.names), cutoff=_CLOSE_MATCH
+                )
+            ),
+            *(
+                spelled[match]
+                for match in get_close_matches(spelling(value), list(spelled), cutoff=_CLOSE_MATCH)
+            ),
+        }
         if len(close) == 1:
-            suggestions[value] = close[0]
+            suggestions[value] = close.pop()
     quoted = ", ".join(json.dumps(value, ensure_ascii=False) for value in recipients.unknown)
     parts = [
         text.RECIPIENT_UNKNOWN.format(
@@ -154,8 +183,8 @@ def unknown_recipients_message(
         parts.append(
             text.RECIPIENT_SUGGESTIONS.format(
                 suggestions=", ".join(
-                    f"{roster.name(pid)} ({pid}) for {json.dumps(value, ensure_ascii=False)}"
-                    for value, pid in suggestions.items()
+                    f"{name} for {json.dumps(value, ensure_ascii=False)}"
+                    for value, name in suggestions.items()
                 )
             )
         )
@@ -170,11 +199,9 @@ def unknown_recipients_message(
 
 def post_suggestion(candidate: Json, main_id: str) -> str:
     return text.POST_SUGGESTION.format(
-        post_id=candidate["id"],
+        post_id=post_ref(candidate["sequence"]),
         author=candidate["author_name"],
-        discussion=discussion_label(
-            candidate["discussion_id"], candidate["discussion_title"], main_id
-        ),
+        discussion=post_discussion_label(candidate, main_id),
         excerpt=excerpt(candidate["text"]),
     )
 
@@ -182,7 +209,8 @@ def post_suggestion(candidate: Json, main_id: str) -> str:
 def discussion_choices(discussions: Iterable[Json], main_id: str) -> str:
     return text.DISCUSSION_CHOICES.format(
         discussions=", ".join(
-            discussion_label(row["id"], row["title"], main_id) for row in discussions
+            discussion_label(row["sequence"], row["title"], main=row["id"] == main_id)
+            for row in discussions
         )
     )
 
@@ -205,22 +233,16 @@ def post_block(
 
     details = []
     if with_discussion:
-        details.append(
-            text.POST_HEADER_IN.format(
-                discussion=header_discussion(
-                    post["discussion_id"], post.get("discussion_title"), main_id
-                )
-            )
-        )
-    if post.get("reply_to"):
-        details.append(text.POST_HEADER_REPLY.format(post_id=post["reply_to"]))
+        details.append(text.POST_HEADER_IN.format(discussion=_header_discussion(post, main_id)))
+    if post.get("reply_sequence") is not None:
+        details.append(text.POST_HEADER_REPLY.format(post_id=post_ref(post["reply_sequence"])))
     addressed = [
         text.POST_YOU if recipient == roster.self_id else roster.name(recipient)
         for recipient in roster.ordered(post.get("recipients") or [])
     ]
     if addressed:
         details.append(text.POST_HEADER_TO.format(names=spoken_list(addressed)))
-    header = f"[{post['id']}] {post['author']['name']}"
+    header = f"[{post_ref(post['sequence'])}] {post['author']['name']}"
     if details:
         header += f" ({'; '.join(details)})"
     return f"{header}:\n{_body(post, opening=opening)}"
@@ -238,7 +260,7 @@ def _body(post: Json, *, opening: bool) -> str:
         start = _opening(body)
         body = f"{start} ...\n" + text.POST_SHORTENED.format(
             count=len(body) - len(start),
-            call=call_text({"action": "read", "message_id": post["id"]}),
+            call=call_text({"action": "read", "message_id": post_ref(post["sequence"])}),
         )
     return body
 
@@ -279,8 +301,7 @@ def messages_text(posts: Iterable[Json], roster: Roster, main_id: str) -> str:
     for post in posts:
         if post["discussion_id"] != current:
             current = post["discussion_id"]
-            label = discussion_label(current, post.get("discussion_title"), main_id)
-            blocks.append(text.MESSAGES_IN.format(discussion=label))
+            blocks.append(text.MESSAGES_IN.format(discussion=post_discussion_label(post, main_id)))
         blocks.append(post_block(post, roster, main_id, with_discussion=False, opening=True))
     return "\n\n".join(blocks)
 
@@ -321,9 +342,7 @@ def status_data(status: Json, roster: Roster, *, inbox: bool) -> Json:
         )
     totals = status["state_totals"]
     data: Json = {
-        "you": text.STATE_YOU.format(
-            name=roster.name(you["id"]), participant_id=you["id"], state=you["state"]
-        ),
+        "you": text.STATE_YOU.format(name=roster.name(you["id"]), state=you["state"]),
         "pending": pending,
         "delivery": delivery,
         "wake": wake_text or text.STATE_NO_WAKE,
@@ -336,7 +355,6 @@ def status_data(status: Json, roster: Roster, *, inbox: bool) -> Json:
     lines.extend(
         text.STATE_ROSTER_LINE.format(
             name=row["name"],
-            participant_id=row["id"],
             you=text.STATE_ROSTER_YOU if row["id"] == roster.self_id else "",
             state=row["state"],
         )
@@ -365,7 +383,9 @@ def discussions_text(entries: Iterable[Json], main_id: str) -> str:
             details.append(text.BOARD_PENDING_DETAIL.format(count=entry["pending_count"]))
         lines.append(
             text.BOARD_DISCUSSION_LINE.format(
-                discussion_id=entry["id"], title=entry["title"], details=", ".join(details)
+                discussion_id=discussion_ref(entry["sequence"]),
+                title=entry["title"],
+                details=", ".join(details),
             )
         )
     return "\n".join(lines)
@@ -405,6 +425,7 @@ __all__ = [
     "excerpt",
     "messages_text",
     "post_block",
+    "post_discussion_label",
     "post_suggestion",
     "posts_text",
     "queued_text",

@@ -394,9 +394,16 @@ def _get_swarm(db: SwarmDatabase, swarm_id: str) -> Json:
                 ).fetchone()[0]
             ),
             "main_discussion_id": main["id"],
-            "goal_post_id": (lambda goal: goal[0] if goal else None)(
+            **(
+                lambda goal: {
+                    "goal_post_id": goal[0] if goal else None,
+                    "goal_post_sequence": goal[1] if goal else None,
+                }
+            )(
                 connection.execute(
-                    "SELECT post_id FROM swarm_goals WHERE swarm_id=?", (swarm_id,)
+                    "SELECT g.post_id,p.sequence FROM swarm_goals g JOIN posts p ON p.id=g.post_id "
+                    "WHERE g.swarm_id=?",
+                    (swarm_id,),
                 ).fetchone()
             ),
             "epoch": int(

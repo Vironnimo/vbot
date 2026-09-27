@@ -10,7 +10,12 @@ import sqlite3
 from core.utils.timestamps import utc_now_timestamp
 
 from ._board_view import delivered_chars
-from ._store_database import ALIASED_POST_COLUMNS, DISCUSSION_COLUMNS, PARTICIPANT_COLUMNS
+from ._store_database import (
+    ALIASED_POST_COLUMNS,
+    DISCUSSION_COLUMNS,
+    PARTICIPANT_COLUMNS,
+    POST_CONTEXT_COLUMNS,
+)
 from ._store_values import (
     _MUTABLE_SWARM_STATES,
     Json,
@@ -18,6 +23,8 @@ from ._store_values import (
     _dump,
     _load,
     _post,
+    discussion_number,
+    post_number,
 )
 
 
@@ -96,7 +103,7 @@ def _pending_rows(
     # Keep ordered reads on outstanding deliveries; scanning posts in sequence
     # can otherwise revisit the entire delivered history before reaching LIMIT.
     candidates = connection.execute(
-        f"SELECT {ALIASED_POST_COLUMNS},r.route_class,d.title AS discussion_title "
+        f"SELECT {ALIASED_POST_COLUMNS},r.route_class,{POST_CONTEXT_COLUMNS} "
         "FROM recipients r INDEXED BY recipients_pending_participant JOIN posts p ON p.id=r.post_id "
         "JOIN discussions d ON d.id=p.discussion_id "
         "WHERE p.swarm_id=? AND r.participant_id=? AND r.delivered_at IS NULL ORDER BY p.sequence LIMIT ?",
@@ -182,6 +189,28 @@ def _discussion(connection: sqlite3.Connection, swarm_id: str, discussion_id: st
     if row is None:
         raise SwarmStoreError("discussion_not_found")
     return row
+
+
+def _discussion_id(connection: sqlite3.Connection, swarm_id: str, reference: str) -> str:
+    """Return the ID of the discussion ``reference`` numbers ("d2"); any other value unchanged."""
+    number = discussion_number(reference)
+    if number is None:
+        return reference
+    row = connection.execute(
+        "SELECT id FROM discussions WHERE swarm_id=? AND sequence=?", (swarm_id, number)
+    ).fetchone()
+    return reference if row is None else str(row["id"])
+
+
+def _post_id(connection: sqlite3.Connection, swarm_id: str, reference: str) -> str:
+    """Return the ID of the post ``reference`` numbers ("#42"); any other value unchanged."""
+    number = post_number(reference)
+    if number is None:
+        return reference
+    row = connection.execute(
+        "SELECT id FROM posts WHERE swarm_id=? AND sequence=?", (swarm_id, number)
+    ).fetchone()
+    return reference if row is None else str(row["id"])
 
 
 def _main(connection: sqlite3.Connection, swarm_id: str) -> str:

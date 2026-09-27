@@ -17,6 +17,7 @@ from core.tools._argument_repair import normalize_call_arguments
 from core.tools._call_vocabulary import SpellingAliases, is_placeholder, spelling
 from core.tools.contracts import ToolContract
 
+from ._store_values import post_number
 from .agent_text import BOARD_FOREIGN_ACTIONS, INBOX_ONLY_RECEIVE, STATE_ONLY_STATUS
 
 Json = dict[str, Any]
@@ -216,9 +217,12 @@ def normalize_board(contract: ToolContract, arguments: Any) -> Any:
     if not isinstance(value, dict):
         return value
     if "message" in value and "message" not in contract.input_schema["properties"]:
-        # A post ID names a post to read; any other text is a message body.
+        # A post ID ("#42" or a stored ID) names a post to read; other text is a message body.
         message = value.pop("message")
-        is_post = isinstance(message, str) and message.strip().startswith("pst_")
+        reference = message.strip() if isinstance(message, str) else ""
+        is_post = reference.startswith("pst_") or (
+            reference.startswith("#") and post_number(reference) is not None
+        )
         value["message_id" if is_post else "text"] = message
     normalized = _normalize(
         contract,

@@ -329,6 +329,7 @@ describe('SwarmPage', () => {
           entries: [
             {
               id: 'post-time',
+              sequence: 7,
               author: { name: 'Alpha' },
               text: 'test-owned board text',
               created_at: '2026-09-08T09:15:00+00:00',
@@ -368,6 +369,8 @@ describe('SwarmPage', () => {
     expect(document.querySelector('.post-header strong').textContent).toBe(
       'Alpha',
     );
+    // The post number is the reference participants use for this post.
+    expect(document.querySelector('.post-number').textContent).toBe('#7');
     expect(document.querySelector('.board time').dateTime).toBe(
       '2026-09-08T09:15:00+00:00',
     );

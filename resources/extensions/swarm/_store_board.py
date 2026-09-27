@@ -20,9 +20,11 @@ from ._store_records import (
     _assert_epoch,
     _assert_mutable,
     _discussion,
+    _discussion_id,
     _main,
     _participant,
     _pending_count,
+    _post_id,
 )
 from ._store_values import (
     Json,
@@ -30,7 +32,9 @@ from ._store_values import (
     _dump,
     _hash,
     _load,
+    discussion_ref,
     mentioned_participants,
+    post_ref,
 )
 from .agent_text import DISCUSSION_ANNOUNCEMENT
 
@@ -62,22 +66,27 @@ def _post_message(
         sender = (
             _participant(connection, swarm_id, sender_id) if author_kind == "participant" else None
         )
+        reply_id = None if reply_to is None else _post_id(connection, swarm_id, reply_to)
         target = None
-        if reply_to is not None:
+        if reply_id is not None:
             target = connection.execute(
                 "SELECT discussion_id,author_kind,author_id FROM posts WHERE id=? AND swarm_id=?",
-                (reply_to, swarm_id),
+                (reply_id, swarm_id),
             ).fetchone()
             if target is None:
                 raise SwarmStoreError("message_not_found", field="reply_to")
-        discussion_id_value = discussion_id or (
-            target["discussion_id"] if target is not None else _main(connection, swarm_id)
+        discussion_id_value = (
+            _discussion_id(connection, swarm_id, discussion_id)
+            if discussion_id
+            else target["discussion_id"]
+            if target is not None
+            else _main(connection, swarm_id)
         )
         _discussion(connection, swarm_id, discussion_id_value)
         payload = {
             "discussion_id": discussion_id_value,
             "text": text,
-            "reply_to": reply_to,
+            "reply_to": reply_id,
             "recipients": recipients,
             "author_kind": author_kind,
         }
@@ -133,7 +142,7 @@ def _post_message(
                 sender_id,
                 name,
                 text,
-                reply_to,
+                reply_id,
                 _dump(addressed),
                 utc_now_timestamp(),
             ),
@@ -228,8 +237,12 @@ def _create_discussion(
             DISCUSSION_ANNOUNCEMENT.format(
                 author_name=_participant(connection, swarm_id, participant_id)["display_name"],
                 title=title,
-                discussion_id=discussion_id,
-                opening_post_id=opening_id,
+                discussion_id=discussion_ref(sequence),
+                opening_post_id=post_ref(
+                    connection.execute(
+                        "SELECT sequence FROM posts WHERE id=?", (opening_id,)
+                    ).fetchone()[0]
+                ),
             ),
             None,
             (),
@@ -344,37 +357,40 @@ def _membership(
         if expected_epoch is not None:
             _assert_epoch(connection, swarm_id, expected_epoch)
         _participant(connection, swarm_id, participant_id)
-        discussion = _discussion(connection, swarm_id, discussion_id)
+        discussion = _discussion(
+            connection, swarm_id, _discussion_id(connection, swarm_id, discussion_id)
+        )
+        resolved = discussion["id"]
         if not joining and discussion["is_main"]:
             raise SwarmStoreError("main_membership_required")
         already = (
             connection.execute(
                 "SELECT 1 FROM memberships WHERE discussion_id=? AND participant_id=?",
-                (discussion_id, participant_id),
+                (resolved, participant_id),
             ).fetchone()
             is not None
         ) == joining
         if joining:
             connection.execute(
                 "INSERT OR IGNORE INTO memberships(discussion_id,participant_id) VALUES(?,?)",
-                (discussion_id, participant_id),
+                (resolved, participant_id),
             )
         else:
             connection.execute(
                 "DELETE FROM memberships WHERE discussion_id=? AND participant_id=?",
-                (discussion_id, participant_id),
+                (resolved, participant_id),
             )
         if not joining:
             return {
-                "discussion_id": discussion_id,
+                "discussion_id": resolved,
                 "title": discussion["title"],
                 "joined": False,
                 "already": already,
                 "pending_count": _pending_count(connection, swarm_id, participant_id),
             }
-        recent = _post_page(db, connection, swarm_id, participant_id, discussion_id, None, 20)
+        recent = _post_page(db, connection, swarm_id, participant_id, resolved, None, 20)
         return {
-            "discussion_id": discussion_id,
+            "discussion_id": resolved,
             "title": discussion["title"],
             "joined": True,
             "already": already,
