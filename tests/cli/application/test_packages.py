@@ -10,6 +10,7 @@ import re
 import stat
 import zipfile
 from pathlib import Path
+from typing import Any
 
 import pytest
 from cryptography.hazmat.primitives import serialization
@@ -264,7 +265,9 @@ def test_undeletable_bytecode_cache_fails_with_an_actionable_error(
     assert cache.is_file()
 
 
-def test_remote_archives_require_a_valid_signature(tmp_path: Path):
+def test_an_unsigned_or_forged_archive_stages_only_in_explicit_local_mode(
+    tmp_path: Path,
+) -> None:
     archive = _archive(tmp_path / "release.zip")
     install = _install(tmp_path / "install", public_key=base64.b64encode(b"x" * 32).decode())
 
@@ -273,39 +276,32 @@ def test_remote_archives_require_a_valid_signature(tmp_path: Path):
     archive.with_suffix(".zip.sig").write_bytes(b"not-a-signature")
     with pytest.raises(ApplicationError, match="signature"):
         stage_package(install, archive)
+    assert stage_package(install, archive, local=True) == _VERSION
 
 
 @pytest.mark.parametrize(
-    ("additions", "symlink", "message"),
+    ("archive_options", "message"),
     [
-        ({"../escape": b"x"}, None, "Unsafe"),
-        ({"app/cli/main.py": b"duplicate"}, None, "Duplicate"),
-        ({"app/CLI/main.py": b"case"}, None, "Duplicate"),
-        ({"unexpected.txt": b"x"}, None, "inventory"),
-        (None, "app/link", "special"),
+        pytest.param({"additions": {"../escape": b"x"}}, "Unsafe", id="path-escape"),
+        pytest.param({"additions": {"app/cli/main.py": b"duplicate"}}, "Duplicate", id="duplicate"),
+        pytest.param({"additions": {"app/CLI/main.py": b"case"}}, "Duplicate", id="case-collision"),
+        pytest.param({"additions": {"unexpected.txt": b"x"}}, "inventory", id="not-inventoried"),
+        pytest.param({"symlink": "app/link"}, "special", id="link"),
+        pytest.param(
+            {"hash_override": {"runtime/vBot.Python.exe": "0" * 64}},
+            "verification",
+            id="digest-mismatch",
+        ),
+        pytest.param({"shape": "desktop-client"}, "shape", id="other-shape"),
     ],
 )
 def test_local_archive_rejects_unsafe_or_non_exact_payloads(
-    tmp_path: Path, additions: dict[str, bytes] | None, symlink: str | None, message: str
-):
-    archive = _archive(tmp_path / "release.zip", additions=additions, symlink=symlink)
+    tmp_path: Path, archive_options: dict[str, Any], message: str
+) -> None:
+    archive = _archive(tmp_path / "release.zip", **archive_options)
 
     with pytest.raises(ApplicationError, match=message):
         stage_package(_install(tmp_path / "install"), archive, local=True)
-
-
-def test_manifest_hash_and_shape_are_checked_for_local_archives(tmp_path: Path):
-    archive = _archive(
-        tmp_path / "release.zip",
-        marker=b"first",
-        hash_override={"runtime/vBot.Python.exe": "0" * 64},
-    )
-    with pytest.raises(ApplicationError, match="verification"):
-        stage_package(_install(tmp_path / "install"), archive, local=True)
-
-    mismatch = _archive(tmp_path / "client.zip", shape="desktop-client")
-    with pytest.raises(ApplicationError, match="shape"):
-        stage_package(_install(tmp_path / "other"), mismatch, local=True)
 
 
 @pytest.mark.parametrize("protocol", [None, True, 2])
@@ -345,12 +341,3 @@ def test_same_identity_is_idempotent_only_for_the_exact_same_payload(tmp_path: P
     assert not cache.exists()
     with pytest.raises(ApplicationError, match="different payload"):
         stage_package(install, changed, local=True)
-
-
-def test_only_explicit_local_mode_allows_an_unsigned_archive(tmp_path: Path):
-    archive = _archive(tmp_path / "release.zip")
-    install = _install(tmp_path / "install")
-
-    with pytest.raises(ApplicationError, match="signature"):
-        stage_package(install, archive)
-    assert stage_package(install, archive, local=True) == _VERSION

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import threading
+from collections.abc import Callable
 from contextlib import ExitStack
 from pathlib import Path
 from types import SimpleNamespace
@@ -381,99 +382,81 @@ def test_a_candidate_that_changed_nothing_needs_no_restore(
     assert read_incident(data_dir, "notes") is None
 
 
-def test_a_server_running_on_the_data_after_the_failure_blocks_the_restore(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
+def _foreign_server_opens_the_data(data_dir: Path, stack: ExitStack) -> dict[str, int]:
+    # Another server on another port opened the same data directory.
+    stack.enter_context(server_control_claim(data_dir, 9999))
+    return {}
+
+
+def _tamper_with_a_snapshot_document(data_dir: Path, _stack: ExitStack) -> dict[str, int]:
+    snapshot_id = find_update_snapshot(data_dir, "upd_refused")
+    assert snapshot_id is not None
+    copy = snapshot_root(data_dir) / snapshot_id / "documents" / "settings.json"
+    copy.write_bytes(copy.read_bytes().replace(b"dark", b"pale"))
+    return {}
+
+
+def _alter_a_recorded_owner_fact(data_dir: Path, _stack: ExitStack) -> dict[str, int]:
+    snapshot_id = find_update_snapshot(data_dir, "upd_refused")
+    assert snapshot_id is not None
+    manifest_path = snapshot_root(data_dir) / snapshot_id / SNAPSHOT_MANIFEST_NAME
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    facts = manifest["members"]["decisions"]["facts"]
+    recorded = dict(facts)
+    # A recorded fact the copy disagrees with is caught only by the declaration.
+    facts["experiment_count"] += 1
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    return recorded
+
+
+@pytest.mark.parametrize(
+    ("interfere", "reason", "recorded_facts"),
+    [
+        pytest.param(_foreign_server_opens_the_data, "port 9999", {}, id="foreign-server"),
+        pytest.param(_tamper_with_a_snapshot_document, "", {}, id="tampered-document"),
+        # The snapshot records and verifies the facts of core owners.
+        pytest.param(
+            _alter_a_recorded_owner_fact,
+            "",
+            {"evaluation_count": 0, "experiment_count": 0},
+            id="altered-owner-fact",
+        ),
+    ],
+)
+def test_a_restore_that_cannot_be_proven_safe_keeps_the_candidate_data(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    interfere: Callable[[Path, ExitStack], dict[str, int]],
+    reason: str,
+    recorded_facts: dict[str, int],
+) -> None:
     install = _install(tmp_path)
     data_dir = _server_data(install)
+    open_database(decision_database_spec(canonical_database_path(data_dir, "decisions"))).close()
     operation = Operation(
-        id="upd_foreign", previous_version="rel_old", package="release.zip", local_package=True
+        id="upd_refused", previous_version="rel_old", package="release.zip", local_package=True
     )
     _patch_server_update(monkeypatch, install)
     monkeypatch.setattr(worker, "_CLAIM_SETTLE_SECONDS", 0.0)
-    with ExitStack() as foreign:
+    recorded: dict[str, int] = {}
+    with ExitStack() as stack:
 
         def start(_install, *, version_id=None, verification=False, breakaway=True):
             if version_id == "rel_new":
                 _candidate_writes(data_dir)
-                # Another server on another port opened the same data directory.
-                foreign.enter_context(server_control_claim(data_dir, 9999))
+                recorded.update(interfere(data_dir, stack))
                 return SimpleNamespace(ok=False, message="candidate failed")
             return _ok()
 
         monkeypatch.setattr(worker.processes, "start", start)
         worker.execute(install, operation)
 
+    assert recorded == recorded_facts
     assert operation.phase == "rolled_back"
     assert "was not restored automatically" in operation.message
-    assert "port 9999" in operation.message
+    assert reason in operation.message
     assert "written by the candidate" in stored_bodies(notes_spec(data_dir))
     assert read_incident(data_dir, "notes") is None
-
-
-def test_a_snapshot_that_no_longer_verifies_is_not_restored(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
-    install = _install(tmp_path)
-    data_dir = _server_data(install)
-    operation = Operation(
-        id="upd_tampered", previous_version="rel_old", package="release.zip", local_package=True
-    )
-    _patch_server_update(monkeypatch, install)
-
-    def start(_install, *, version_id=None, verification=False, breakaway=True):
-        if version_id == "rel_new":
-            _candidate_writes(data_dir)
-            snapshot_id = find_update_snapshot(data_dir, "upd_tampered")
-            assert snapshot_id is not None
-            copy = snapshot_root(data_dir) / snapshot_id / "documents" / "settings.json"
-            copy.write_bytes(copy.read_bytes().replace(b"dark", b"pale"))
-            return SimpleNamespace(ok=False, message="candidate failed")
-        return _ok()
-
-    monkeypatch.setattr(worker.processes, "start", start)
-    worker.execute(install, operation)
-
-    assert operation.phase == "rolled_back"
-    assert "was not restored automatically" in operation.message
-    assert "written by the candidate" in stored_bodies(notes_spec(data_dir))
-    assert read_maintenance(data_dir) is None
-
-
-def test_the_update_snapshot_records_and_verifies_core_owner_facts(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
-    install = _install(tmp_path)
-    data_dir = _server_data(install)
-    open_database(decision_database_spec(canonical_database_path(data_dir, "decisions"))).close()
-    operation = Operation(
-        id="upd_facts", previous_version="rel_old", package="release.zip", local_package=True
-    )
-    _patch_server_update(monkeypatch, install)
-    recorded: dict[str, int] = {}
-
-    def start(_install, *, version_id=None, verification=False, breakaway=True):
-        if version_id == "rel_new":
-            _candidate_writes(data_dir)
-            snapshot_id = find_update_snapshot(data_dir, "upd_facts")
-            assert snapshot_id is not None
-            manifest_path = snapshot_root(data_dir) / snapshot_id / SNAPSHOT_MANIFEST_NAME
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            facts = manifest["members"]["decisions"]["facts"]
-            recorded.update(facts)
-            # A recorded fact the copy disagrees with is caught only by the declaration.
-            facts["experiment_count"] += 1
-            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
-            return SimpleNamespace(ok=False, message="candidate failed")
-        return _ok()
-
-    monkeypatch.setattr(worker.processes, "start", start)
-    worker.execute(install, operation)
-
-    assert recorded == {"evaluation_count": 0, "experiment_count": 0}
-    assert operation.phase == "rolled_back"
-    assert "was not restored automatically" in operation.message
-    assert "written by the candidate" in stored_bodies(notes_spec(data_dir))
     assert read_maintenance(data_dir) is None
 
 
@@ -517,75 +500,24 @@ def test_an_interrupted_restore_needs_attention_with_the_repeat_command(
     assert install.version().name == "rel_old"
 
 
-def test_a_failed_snapshot_after_the_stop_restarts_the_previous_version(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
-    install = _install(tmp_path)
-    operation = Operation(
-        id="upd_no_snapshot", previous_version="rel_old", package="release.zip", local_package=True
-    )
-    starts: list[tuple[str | None, bool]] = []
-    _patch_server_update(monkeypatch, install)
-
+def _snapshot_fails(monkeypatch: pytest.MonkeyPatch, _data_dir: Path) -> None:
     def failed_snapshot(*_args, **_kwargs):
         raise DatabaseUnavailableError("insufficient snapshot reserve")
 
-    def start(_install, *, version_id=None, verification=False, breakaway=True):
-        starts.append((version_id, verification))
-        return _ok()
-
     monkeypatch.setattr(worker, "create_update_snapshot", failed_snapshot)
-    monkeypatch.setattr(worker.processes, "start", start)
-    worker.execute(install, operation)
-
-    assert operation.phase == "failed"
-    assert "insufficient snapshot reserve" in operation.message
-    assert "previous version is still active" in operation.message
-    assert starts == [("rel_old", False)]
-    assert install.version().name == "rel_old"
 
 
-def test_an_unverifiable_server_check_keeps_the_previous_version(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
-    install = _install(tmp_path)
-    _server_data(install)
-    operation = Operation(
-        id="upd_probe", previous_version="rel_old", package="release.zip", local_package=True
-    )
-    starts: list[tuple[str | None, bool]] = []
-    _patch_server_update(monkeypatch, install)
-
+def _server_claims_cannot_be_read(monkeypatch: pytest.MonkeyPatch, _data_dir: Path) -> None:
     def unreadable(_data_dir):
         raise PermissionError("access denied")
-
-    def start(_install, *, version_id=None, verification=False, breakaway=True):
-        starts.append((version_id, verification))
-        return _ok()
 
     monkeypatch.setattr(worker, "live_server_ports", unreadable)
     monkeypatch.setattr(
         worker, "create_update_snapshot", lambda *_a, **_k: pytest.fail("no snapshot")
     )
-    monkeypatch.setattr(worker.processes, "start", start)
-    worker.execute(install, operation)
-
-    assert operation.phase == "failed"
-    assert "could not be checked" in operation.message
-    assert starts == [("rel_old", False)]
-    assert install.version().name == "rel_old"
 
 
-def test_a_write_after_the_snapshot_keeps_the_candidate_from_starting(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
-    install = _install(tmp_path)
-    data_dir = _server_data(install)
-    operation = Operation(
-        id="upd_fenced", previous_version="rel_old", package="release.zip", local_package=True
-    )
-    starts: list[tuple[str | None, bool]] = []
-    _patch_server_update(monkeypatch, install)
+def _data_changes_after_the_snapshot(monkeypatch: pytest.MonkeyPatch, data_dir: Path) -> None:
     real_snapshot = worker.create_update_snapshot
 
     def snapshot_then_foreign_write(*args, **kwargs):
@@ -593,19 +525,55 @@ def test_a_write_after_the_snapshot_keeps_the_candidate_from_starting(
         _write_document(data_dir, "settings.json", '{"format_version": 1, "theme": "light"}\n')
         return taken
 
+    monkeypatch.setattr(worker, "create_update_snapshot", snapshot_then_foreign_write)
+
+
+@pytest.mark.parametrize(
+    ("arrange", "reasons", "theme"),
+    [
+        pytest.param(
+            _snapshot_fails,
+            ["insufficient snapshot reserve", "previous version is still active"],
+            "dark",
+            id="snapshot-fails",
+        ),
+        pytest.param(
+            _server_claims_cannot_be_read, ["could not be checked"], "dark", id="claims-unknown"
+        ),
+        pytest.param(
+            _data_changes_after_the_snapshot, ["settings.json changed"], "light", id="data-changed"
+        ),
+    ],
+)
+def test_a_failed_data_fence_restarts_the_previous_version_without_activation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    arrange: Callable[[pytest.MonkeyPatch, Path], None],
+    reasons: list[str],
+    theme: str,
+) -> None:
+    install = _install(tmp_path)
+    data_dir = _server_data(install)
+    operation = Operation(
+        id="upd_fenced", previous_version="rel_old", package="release.zip", local_package=True
+    )
+    starts: list[tuple[str | None, bool]] = []
+    _patch_server_update(monkeypatch, install)
+    arrange(monkeypatch, data_dir)
+
     def start(_install, *, version_id=None, verification=False, breakaway=True):
         starts.append((version_id, verification))
         return _ok()
 
-    monkeypatch.setattr(worker, "create_update_snapshot", snapshot_then_foreign_write)
     monkeypatch.setattr(worker.processes, "start", start)
     worker.execute(install, operation)
 
     assert operation.phase == "failed"
-    assert "settings.json changed" in operation.message
+    assert all(reason in operation.message for reason in reasons)
     assert starts == [("rel_old", False)]
     assert install.version().name == "rel_old"
-    assert "light" in (data_dir / "settings.json").read_text(encoding="utf-8")
+    # The fence never rolls data back, not even a foreign write.
+    assert f'"theme": "{theme}"' in (data_dir / "settings.json").read_text(encoding="utf-8")
 
 
 def test_post_pointer_normal_start_failure_needs_attention_without_data_restore(

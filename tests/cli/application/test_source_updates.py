@@ -1,57 +1,27 @@
-"""Bound source updates preserve Git work and the active native payload."""
+"""Bound source updates preserve Git work and the active native payload.
+
+Preparation runs real Git, about fifteen processes per update, because fetch,
+fast-forward, divergence and cleanliness semantics are the contract under test.
+"""
 
 from __future__ import annotations
 
 import json
 import logging
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any, NoReturn
 
 import pytest
 
 from cli.application import source_updates
 from cli.application.state import ApplicationError, Installation
+from tests.cli.application.git_repositories import SourceRepositories
+from tests.cli.application.git_repositories import git as _git
 
-
-def _git(directory: Path, *args: str) -> str:
-    result = subprocess.run(
-        ["git", *args],
-        cwd=directory,
-        check=True,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-    )
-    return result.stdout.strip()
-
-
-@pytest.fixture
-def tracked_checkout(tmp_path: Path) -> tuple[Path, Path]:
-    remote = tmp_path / "remote.git"
-    checkout = tmp_path / "checkout"
-    publisher = tmp_path / "publisher"
-    remote.mkdir()
-    _git(remote, "init", "--bare", "--initial-branch=main")
-    checkout.mkdir()
-    _git(checkout, "init", "--initial-branch=main")
-    _git(checkout, "config", "user.name", "Source Test")
-    _git(checkout, "config", "user.email", "source@example.invalid")
-    (checkout / "tracked.txt").write_text("one\n", encoding="utf-8")
-    (checkout / "pyproject.toml").write_text(
-        '[project]\nname = "fixture"\nversion = "1.2.3"\n', encoding="utf-8"
-    )
-    locks = checkout / "scripts" / "windows"
-    locks.mkdir(parents=True)
-    for shape in ("server", "desktop-client"):
-        (locks / f"requirements-{shape}.lock").write_text("# test-owned lock\n", encoding="utf-8")
-    _git(checkout, "add", ".")
-    _git(checkout, "commit", "-m", "initial")
-    _git(checkout, "remote", "add", "origin", str(remote))
-    _git(checkout, "push", "-u", "origin", "main")
-    _git(tmp_path, "clone", str(remote), str(publisher))
-    _git(publisher, "config", "user.name", "Publisher")
-    _git(publisher, "config", "user.email", "publisher@example.invalid")
-    return checkout, publisher
+NATIVE_DIGEST = "d" * 64
+BUILD_STEPS = ("_ensure_candidate_environment", "_build_native_hosts", "_build_web_assets")
 
 
 def _install(root: Path, *, shape: str = "server") -> Installation:
@@ -69,12 +39,52 @@ def _install(root: Path, *, shape: str = "server") -> Installation:
     return install
 
 
+def _bound_install(tmp_path: Path, checkout: Path, *, shape: str = "server") -> Installation:
+    install = _install(tmp_path / "install", shape=shape)
+    source_updates.bind_checkout(install, checkout)
+    return install
+
+
+def _forbidden(reason: str) -> Callable[..., NoReturn]:
+    def fail(*_args: object, **_kwargs: object) -> NoReturn:
+        pytest.fail(reason)
+
+    return fail
+
+
+def _stub_build(monkeypatch: pytest.MonkeyPatch, **steps: Callable[..., Any]) -> None:
+    """Replace the candidate build; steps not named succeed without doing work."""
+
+    monkeypatch.setattr("cli.application.payload.native_source_digest", lambda _: NATIVE_DIGEST)
+    for name in BUILD_STEPS:
+        monkeypatch.setattr(
+            f"cli.application.customize.{name}", steps.get(name, lambda *_a, **_k: None)
+        )
+    monkeypatch.setattr(
+        "cli.application.customize._candidate",
+        steps.get("_candidate", lambda *_a, **_k: "local_candidate"),
+    )
+
+
+def _publish(repositories: SourceRepositories, content: str) -> str:
+    publisher = repositories.publisher
+    (publisher / "tracked.txt").write_text(content, encoding="utf-8")
+    _git(publisher, "commit", "--quiet", "-am", "upstream change")
+    _git(publisher, "push", "--quiet", "origin", "main")
+    return _git(publisher, "rev-parse", "HEAD")
+
+
+def _commit_locally(checkout: Path) -> str:
+    (checkout / "local-feature.txt").write_text("local commit\n", encoding="utf-8")
+    _git(checkout, "add", "local-feature.txt")
+    _git(checkout, "commit", "--quiet", "-m", "local feature")
+    return _git(checkout, "rev-parse", "HEAD")
+
+
 def test_inspect_and_bind_record_exact_tracking_branch(
-    tmp_path: Path,
-    tracked_checkout: tuple[Path, Path],
-    caplog: pytest.LogCaptureFixture,
-):
-    checkout, _publisher = tracked_checkout
+    tmp_path: Path, source_repositories: SourceRepositories, caplog: pytest.LogCaptureFixture
+) -> None:
+    checkout = source_repositories.checkout
     install = _install(tmp_path / "install")
 
     with caplog.at_level(logging.INFO, logger="vbot.application.source_updates"):
@@ -101,20 +111,15 @@ def test_inspect_and_bind_record_exact_tracking_branch(
 
 
 def test_prepare_refuses_dirty_checkout_before_fetch_or_build(
-    tmp_path: Path,
-    tracked_checkout: tuple[Path, Path],
-    monkeypatch: pytest.MonkeyPatch,
-):
-    checkout, _publisher = tracked_checkout
-    install = _install(tmp_path / "install")
-    source_updates.bind_checkout(install, checkout)
+    tmp_path: Path, source_repositories: SourceRepositories, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    checkout = source_repositories.checkout
+    install = _bound_install(tmp_path, checkout)
     (checkout / "local.txt").write_text("preserve me\n", encoding="utf-8")
-    monkeypatch.setattr(
-        "cli.application.customize._candidate",
-        lambda *_args, **_kwargs: pytest.fail("must not build"),
-    )
+    must_not_build = _forbidden("a dirty checkout must not build")
+    _stub_build(monkeypatch, **dict.fromkeys((*BUILD_STEPS, "_candidate"), must_not_build))
 
-    with pytest.raises(ApplicationError):
+    with pytest.raises(ApplicationError, match="uncommitted changes"):
         source_updates.prepare_update(install, "upd_dirty")
 
     assert (checkout / "local.txt").read_text(encoding="utf-8") == "preserve me\n"
@@ -122,122 +127,125 @@ def test_prepare_refuses_dirty_checkout_before_fetch_or_build(
 
 
 def test_prepare_fast_forwards_recorded_branch_and_builds_exact_revision(
-    tmp_path: Path,
-    tracked_checkout: tuple[Path, Path],
-    monkeypatch: pytest.MonkeyPatch,
-):
-    checkout, publisher = tracked_checkout
-    install = _install(tmp_path / "install")
-    source_updates.bind_checkout(install, checkout)
-    (publisher / "tracked.txt").write_text("two\n", encoding="utf-8")
-    _git(publisher, "add", "tracked.txt")
-    _git(publisher, "commit", "-m", "update")
-    _git(publisher, "push", "origin", "main")
-    expected_revision = _git(publisher, "rev-parse", "HEAD")
-    captured: dict[str, object] = {}
+    tmp_path: Path, source_repositories: SourceRepositories, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    checkout = source_repositories.checkout
+    install = _bound_install(tmp_path, checkout)
+    expected_revision = _publish(source_repositories, "two\n")
+    captured: dict[str, Any] = {}
     steps: list[str] = []
-    monkeypatch.setattr("cli.application.customize._ensure_candidate_environment", lambda *_: None)
-    monkeypatch.setattr(
-        "cli.application.customize._build_web_assets", lambda *_: steps.append("web")
-    )
-    monkeypatch.setattr("cli.application.payload.native_source_digest", lambda _source: "d" * 64)
 
-    def build_native_hosts(_install, source, output, *, version):
+    def build_native_hosts(_install: object, source: Path, output: Path, *, version: str) -> None:
         steps.append("native")
         assert source == checkout.resolve()
         assert version == "1.2.3"
         (output / "vBot.Server.exe").write_bytes(b"compiled")
 
-    def candidate(*args, **kwargs):
+    def candidate(*args: object, **kwargs: Any) -> str:
         steps.append("candidate")
         captured["args"] = args
         captured["kwargs"] = kwargs
         captured["hosts"] = sorted(path.name for path in kwargs["native_hosts"].iterdir())
         return "local_candidate"
 
-    monkeypatch.setattr("cli.application.customize._build_native_hosts", build_native_hosts)
-
-    monkeypatch.setattr("cli.application.customize._candidate", candidate)
+    _stub_build(
+        monkeypatch,
+        _build_native_hosts=build_native_hosts,
+        _build_web_assets=lambda *_: steps.append("web"),
+        _candidate=candidate,
+    )
 
     assert source_updates.prepare_update(install, "upd_source") == "local_candidate"
     assert _git(checkout, "rev-parse", "HEAD") == expected_revision
     assert _git(checkout, "symbolic-ref", "--short", "HEAD") == "main"
-    assert captured["args"][3] == expected_revision  # type: ignore[index]
+    assert captured["args"][3] == expected_revision
     options = captured["kwargs"]
-    assert isinstance(options, dict)
     assert steps == ["native", "web", "candidate"]
     assert captured["hosts"] == ["vBot.Server.exe"]
     assert not options["native_hosts"].exists()
     assert options["source_version"] == "1.2.3"
-    assert options["native_source_digest"] == "d" * 64
+    assert options["native_source_digest"] == NATIVE_DIGEST
     assert options["build_inputs"] == source_updates.build_inputs(checkout, "server")
     assert install.version().name == "rel_old"
 
 
-def test_candidate_failure_keeps_active_payload_and_clean_tracking_state(
-    tmp_path: Path,
-    tracked_checkout: tuple[Path, Path],
-    monkeypatch: pytest.MonkeyPatch,
-):
-    checkout, _publisher = tracked_checkout
-    install = _install(tmp_path / "install")
-    source_updates.bind_checkout(install, checkout)
-    original_branch = _git(checkout, "symbolic-ref", "--short", "HEAD")
-    monkeypatch.setattr("cli.application.customize._ensure_candidate_environment", lambda *_: None)
-    monkeypatch.setattr("cli.application.customize._build_native_hosts", lambda *_a, **_k: None)
-    monkeypatch.setattr("cli.application.customize._build_web_assets", lambda *_: None)
-    monkeypatch.setattr("cli.application.payload.native_source_digest", lambda _source: "d" * 64)
-    monkeypatch.setattr(
-        "cli.application.customize._candidate",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(ApplicationError("candidate failed")),
-    )
+def _launchers_need_llvm(*_args: object, **_kwargs: object) -> NoReturn:
+    raise ApplicationError("launchers need LLVM")
 
-    with pytest.raises(ApplicationError, match="candidate failed"):
+
+def _candidate_fails(*_args: object, **_kwargs: object) -> NoReturn:
+    raise ApplicationError("candidate failed")
+
+
+@pytest.mark.parametrize(
+    ("failing_steps", "message"),
+    [
+        pytest.param(
+            {
+                "_build_native_hosts": _launchers_need_llvm,
+                # A missing compiler fails before the WebUI and dependency work.
+                "_build_web_assets": _forbidden("the launcher build must fail first"),
+                "_candidate": _forbidden("the launcher build must fail first"),
+            },
+            "launchers need LLVM",
+            id="launcher-build",
+        ),
+        pytest.param({"_candidate": _candidate_fails}, "candidate failed", id="candidate"),
+    ],
+)
+def test_a_failed_build_keeps_the_active_version_and_a_clean_checkout(
+    tmp_path: Path,
+    source_repositories: SourceRepositories,
+    monkeypatch: pytest.MonkeyPatch,
+    failing_steps: dict[str, Callable[..., Any]],
+    message: str,
+) -> None:
+    checkout = source_repositories.checkout
+    install = _bound_install(tmp_path, checkout)
+    _stub_build(monkeypatch, **failing_steps)
+
+    with pytest.raises(ApplicationError, match=message):
         source_updates.prepare_update(install, "upd_failed")
 
     assert install.version().name == "rel_old"
-    assert _git(checkout, "symbolic-ref", "--short", "HEAD") == original_branch
+    assert _git(checkout, "symbolic-ref", "--short", "HEAD") == "main"
     assert _git(checkout, "status", "--porcelain") == ""
 
 
-def test_clean_local_commits_are_preserved_and_built(
+@pytest.mark.parametrize("upstream_changed", [False, True], ids=["local-ahead", "diverged"])
+def test_local_commits_are_built_and_never_discarded(
     tmp_path: Path,
-    tracked_checkout: tuple[Path, Path],
+    source_repositories: SourceRepositories,
     monkeypatch: pytest.MonkeyPatch,
-):
-    checkout, _publisher = tracked_checkout
-    install = _install(tmp_path / "install")
-    source_updates.bind_checkout(install, checkout)
-    (checkout / "local-feature.txt").write_text("local commit\n", encoding="utf-8")
-    _git(checkout, "add", "local-feature.txt")
-    _git(checkout, "commit", "-m", "local feature")
-    local_revision = _git(checkout, "rev-parse", "HEAD")
-    captured: dict[str, object] = {}
-    monkeypatch.setattr("cli.application.customize._ensure_candidate_environment", lambda *_: None)
-    monkeypatch.setattr("cli.application.customize._build_native_hosts", lambda *_a, **_k: None)
-    monkeypatch.setattr("cli.application.customize._build_web_assets", lambda *_: None)
-    monkeypatch.setattr("cli.application.payload.native_source_digest", lambda _source: "d" * 64)
+    upstream_changed: bool,
+) -> None:
+    checkout = source_repositories.checkout
+    install = _bound_install(tmp_path, checkout)
+    local_revision = _commit_locally(checkout)
+    if upstream_changed:
+        _publish(source_repositories, "upstream\n")
+    built: list[object] = []
 
-    def candidate(*args, **_kwargs):
-        captured["revision"] = args[3]
+    def candidate(*args: object, **_kwargs: object) -> str:
+        built.append(args[3])
         return "local_candidate"
 
-    monkeypatch.setattr("cli.application.customize._candidate", candidate)
+    _stub_build(monkeypatch, _candidate=candidate)
 
-    assert source_updates.prepare_update(install, "upd_local") == "local_candidate"
+    if upstream_changed:
+        with pytest.raises(ApplicationError, match="has diverged from origin/main"):
+            source_updates.prepare_update(install, "upd_local")
+    else:
+        assert source_updates.prepare_update(install, "upd_local") == "local_candidate"
     assert _git(checkout, "rev-parse", "HEAD") == local_revision
-    assert captured["revision"] == local_revision
+    assert built == ([] if upstream_changed else [local_revision])
 
 
 def test_default_main_binding_clones_into_installation_owned_source(
-    tmp_path: Path,
-    tracked_checkout: tuple[Path, Path],
-    monkeypatch: pytest.MonkeyPatch,
-):
-    checkout, _publisher = tracked_checkout
-    remote = Path(_git(checkout, "remote", "get-url", "origin"))
+    tmp_path: Path, source_repositories: SourceRepositories, monkeypatch: pytest.MonkeyPatch
+) -> None:
     install = _install(tmp_path / "install")
-    monkeypatch.setattr(source_updates, "CANONICAL_REPOSITORY", str(remote))
+    monkeypatch.setattr(source_updates, "CANONICAL_REPOSITORY", str(source_repositories.remote))
 
     binding = source_updates.bind_main_source(install)
 
@@ -249,9 +257,9 @@ def test_default_main_binding_clones_into_installation_owned_source(
 
 
 def test_release_selection_removes_binding_but_preserves_source_checkout(
-    tmp_path: Path, tracked_checkout: tuple[Path, Path]
-):
-    checkout, _publisher = tracked_checkout
+    tmp_path: Path, source_repositories: SourceRepositories
+) -> None:
+    checkout = source_repositories.checkout
     install = _install(tmp_path / "install")
     source_updates.select_source(install, "main", from_checkout=checkout)
     revision = _git(checkout, "rev-parse", "HEAD")
@@ -270,7 +278,7 @@ def test_release_selection_removes_binding_but_preserves_source_checkout(
 
 def test_failed_clone_keeps_unique_staging_evidence_for_each_retry(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     install = _install(tmp_path / "install")
     options: list[dict[str, object]] = []
 
@@ -279,11 +287,7 @@ def test_failed_clone_keeps_unique_staging_evidence_for_each_retry(
         return subprocess.CompletedProcess(["git", "clone"], 1, "", "clone failed")
 
     monkeypatch.setattr(source_updates, "subprocess_creation_flags", lambda: 789)
-    monkeypatch.setattr(
-        source_updates.subprocess,
-        "run",
-        failed_clone,
-    )
+    monkeypatch.setattr(source_updates.subprocess, "run", failed_clone)
 
     for _attempt in range(2):
         with pytest.raises(ApplicationError, match="source-clones"):
@@ -319,84 +323,37 @@ def test_git_runs_windowless_and_retains_captured_failure(
     assert result.stderr == "captured error"
 
 
-def test_launcher_build_failure_stops_before_webui_and_dependency_work(
-    tmp_path: Path,
-    tracked_checkout: tuple[Path, Path],
-    monkeypatch: pytest.MonkeyPatch,
-):
-    checkout, _publisher = tracked_checkout
-    install = _install(tmp_path / "install")
-    source_updates.bind_checkout(install, checkout)
-    monkeypatch.setattr("cli.application.customize._ensure_candidate_environment", lambda *_: None)
-    monkeypatch.setattr("cli.application.payload.native_source_digest", lambda _source: "d" * 64)
-
-    def missing_compiler(*_args, **_kwargs):
-        raise ApplicationError("launchers need LLVM")
-
-    monkeypatch.setattr("cli.application.customize._build_native_hosts", missing_compiler)
-    for name in ("_build_web_assets", "_candidate"):
-        monkeypatch.setattr(
-            f"cli.application.customize.{name}",
-            lambda *_a, **_k: pytest.fail("the launcher build must fail first"),
-        )
-
-    with pytest.raises(ApplicationError, match="launchers need LLVM"):
-        source_updates.prepare_update(install, "upd_launchers")
-
-    assert install.version().name == "rel_old"
-    assert _git(checkout, "status", "--porcelain") == ""
-
-
 def test_desktop_client_source_update_skips_webui_build(
-    tmp_path: Path,
-    tracked_checkout: tuple[Path, Path],
-    monkeypatch: pytest.MonkeyPatch,
-):
-    checkout, _publisher = tracked_checkout
-    install = _install(tmp_path / "install", shape="desktop-client")
-    source_updates.bind_checkout(install, checkout)
-    monkeypatch.setattr("cli.application.customize._ensure_candidate_environment", lambda *_: None)
-    monkeypatch.setattr(
-        "cli.application.customize._build_web_assets",
-        lambda *_: pytest.fail("Desktop Client must not build WebUI assets"),
-    )
-    monkeypatch.setattr("cli.application.customize._build_native_hosts", lambda *_a, **_k: None)
-    monkeypatch.setattr("cli.application.payload.native_source_digest", lambda _source: "d" * 64)
-    monkeypatch.setattr(
-        "cli.application.customize._candidate", lambda *_args, **_kwargs: "local_candidate"
+    tmp_path: Path, source_repositories: SourceRepositories, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    install = _bound_install(tmp_path, source_repositories.checkout, shape="desktop-client")
+    _stub_build(
+        monkeypatch, _build_web_assets=_forbidden("Desktop Client must not build WebUI assets")
     )
 
     assert source_updates.prepare_update(install, "upd_client") == "local_candidate"
 
 
 def test_same_verified_revision_is_a_noop_without_build_tools(
-    tmp_path, tracked_checkout, monkeypatch
-):
-    checkout, _ = tracked_checkout
-    install = _install(tmp_path / "install")
-    source_updates.bind_checkout(install, checkout)
+    tmp_path: Path, source_repositories: SourceRepositories, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    checkout = source_repositories.checkout
+    install = _bound_install(tmp_path, checkout)
+    revision = _git(checkout, "rev-parse", "HEAD")
     manifest = {
         "version": "1.2.3",
-        "revision": _git(checkout, "rev-parse", "HEAD"),
+        "revision": revision,
         "build_inputs": source_updates.build_inputs(checkout, "server"),
-        "native_source_digest": "d" * 64,
+        "native_source_digest": NATIVE_DIGEST,
     }
     (install.version() / "release.json").write_text(json.dumps(manifest), encoding="utf-8")
-    monkeypatch.setattr("cli.application.payload.native_source_digest", lambda _: "d" * 64)
-    validated = []
+    validated: list[Path] = []
     monkeypatch.setattr(
         "cli.application.packages.validate_release", lambda *a, **kw: validated.append(a[0])
     )
-    for name in (
-        "_candidate",
-        "_ensure_candidate_environment",
-        "_build_native_hosts",
-        "_build_web_assets",
-    ):
-        monkeypatch.setattr(
-            f"cli.application.customize.{name}", lambda *a, **kw: pytest.fail("no build needed")
-        )
-    targets = []
+    no_build = _forbidden("no build needed")
+    _stub_build(monkeypatch, **dict.fromkeys((*BUILD_STEPS, "_candidate"), no_build))
+    targets: list[str | None] = []
 
     assert (
         source_updates.prepare_update(
@@ -405,89 +362,105 @@ def test_same_verified_revision_is_a_noop_without_build_tools(
         == "rel_old"
     )
     assert validated == [install.version()]
-    assert f"1.2.3 ({manifest['revision'][:8]})" in targets
+    assert f"1.2.3 ({revision[:8]})" in targets
+
+
+def _optional_group(group: str) -> str:
+    return f'\n[project.optional-dependencies]\n{group} = ["test-owned-dependency==1.0"]\n'
 
 
 @pytest.mark.parametrize(
-    "path,changed",
+    ("path", "addition", "changed"),
     [
-        ("tracked.txt", set()),
-        ("webui/src/App.svelte", {"web"}),
-        ("resources/extensions/demo/ui/page.html", {"web"}),
-        ("resources/extensions/demo/backend.py", set()),
-        ("tests/fixtures/extension-pages/demo/ui/page.html", {"web"}),
-        ("scripts/windows/requirements-server.lock", {"dependencies"}),
+        pytest.param("tracked.txt", "changed\n", set(), id="unrelated-file"),
+        pytest.param("webui/src/App.svelte", "changed\n", {"web"}, id="webui"),
+        pytest.param(
+            "resources/extensions/demo/ui/page.html", "changed\n", {"web"}, id="extension-page"
+        ),
+        pytest.param(
+            "resources/extensions/demo/backend.py", "changed\n", set(), id="extension-backend"
+        ),
+        pytest.param(
+            "tests/fixtures/extension-pages/demo/ui/page.html",
+            "changed\n",
+            {"web"},
+            id="fixture-extension-page",
+        ),
+        pytest.param(
+            "scripts/windows/requirements-server.lock",
+            "changed\n",
+            {"dependencies"},
+            id="runtime-lock",
+        ),
+        # Only the dependency groups a server runtime installs count.
+        pytest.param("pyproject.toml", _optional_group("dev"), set(), id="dev-group"),
+        pytest.param("pyproject.toml", _optional_group("desktop"), set(), id="desktop-group"),
+        pytest.param(
+            "pyproject.toml", _optional_group("server"), {"dependencies"}, id="server-group"
+        ),
+        pytest.param(
+            "pyproject.toml",
+            _optional_group("windows-app"),
+            {"dependencies"},
+            id="windows-app-group",
+        ),
     ],
 )
-def test_build_inputs_invalidate_only_affected_components(tracked_checkout, path, changed):
-    checkout, _ = tracked_checkout
+def test_build_inputs_change_only_for_the_components_they_affect(
+    tmp_path: Path,
+    plain_repository: Callable[[Path], str],
+    path: str,
+    addition: str,
+    changed: set[str],
+) -> None:
+    checkout = tmp_path / "checkout"
+    plain_repository(checkout)
     before = source_updates.build_inputs(checkout, "server")
     target = checkout / path
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text("changed\n", encoding="utf-8")
+    with target.open("a", encoding="utf-8") as file:
+        file.write(addition)
     _git(checkout, "add", ".")
+
     after = source_updates.build_inputs(checkout, "server")
+
     assert {key for key in before if before[key] != after[key]} == changed
     if "web" in changed:
+        # The WebUI fingerprint follows content, not history.
         target.unlink()
         _git(checkout, "add", ".")
         assert source_updates.build_inputs(checkout, "server") == before
 
 
 def test_backend_update_reuses_web_assets_and_announces_target_before_build(
-    tmp_path, tracked_checkout, monkeypatch
-):
-    checkout, _ = tracked_checkout
-    install = _install(tmp_path / "install")
-    source_updates.bind_checkout(install, checkout)
+    tmp_path: Path, source_repositories: SourceRepositories, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    checkout = source_repositories.checkout
+    install = _bound_install(tmp_path, checkout)
     manifest = {
         "build_inputs": source_updates.build_inputs(checkout, "server"),
         "revision": "a" * 40,
-        "native_source_digest": "d" * 64,
+        "native_source_digest": NATIVE_DIGEST,
     }
     (install.version() / "release.json").write_text(json.dumps(manifest), encoding="utf-8")
-    monkeypatch.setattr("cli.application.payload.native_source_digest", lambda _: "d" * 64)
-    monkeypatch.setattr(
-        "cli.application.customize._build_native_hosts",
-        lambda *_a, **_k: pytest.fail("unchanged launchers need no compiler"),
-    )
-    monkeypatch.setattr("cli.application.customize._ensure_candidate_environment", lambda *a: None)
-    monkeypatch.setattr(
-        "cli.application.customize._build_web_assets",
-        lambda *a: pytest.fail("reuse verified assets"),
-    )
-    targets = []
+    targets: list[str | None] = []
 
-    def candidate(*args, **kwargs):
+    def candidate(*args: object, **kwargs: Any) -> str:
         assert any(target and "1.2.3" in target for target in targets)
         assert kwargs["build_inputs"] == manifest["build_inputs"]
         assert kwargs["native_hosts"] is None
         return "local_new"
 
-    monkeypatch.setattr("cli.application.customize._candidate", candidate)
+    _stub_build(
+        monkeypatch,
+        _build_native_hosts=_forbidden("unchanged launchers need no compiler"),
+        _build_web_assets=_forbidden("reuse verified assets"),
+        _candidate=candidate,
+    )
+
     assert (
         source_updates.prepare_update(
             install, "upd_backend", progress=lambda message, target: targets.append(target)
         )
         == "local_new"
     )
-
-
-@pytest.mark.parametrize(
-    "group, changes_server_runtime",
-    [("dev", False), ("desktop", False), ("server", True), ("windows-app", True)],
-)
-def test_uninstalled_dependency_groups_do_not_invalidate_runtime(
-    tracked_checkout, group, changes_server_runtime
-):
-    checkout, _ = tracked_checkout
-    before = source_updates.build_inputs(checkout, "server")
-    project = checkout / "pyproject.toml"
-    project.write_text(
-        project.read_text(encoding="utf-8")
-        + f'\n[project.optional-dependencies]\n{group} = ["test-owned-dependency==1.0"]\n',
-        encoding="utf-8",
-    )
-    after = source_updates.build_inputs(checkout, "server")
-    assert (before["dependencies"] != after["dependencies"]) is changes_server_runtime
-    assert before["web"] == after["web"]

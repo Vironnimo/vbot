@@ -24,22 +24,34 @@ def _runtime_interpreter(root: Path, version_id: str, role: str) -> Path:
 
 
 @pytest.mark.parametrize(
-    ("command", "verification", "expected"),
+    ("version_id", "command", "verification", "expected"),
     [
-        (["-m", "server.main"], False, True),
-        (["-m", "server.main", "--verification-only"], True, True),
-        (["-m", "server.main", "--verification-only"], False, False),
+        pytest.param("rel_one", ["-m", "server.main"], False, True, id="normal"),
+        pytest.param(
+            "rel_one", ["-m", "server.main", "--verification-only"], True, True, id="verification"
+        ),
+        pytest.param(
+            "rel_one",
+            ["-m", "server.main", "--verification-only"],
+            False,
+            False,
+            id="verification-is-not-normal",
+        ),
+        pytest.param("rel_other", ["-m", "server.main"], False, False, id="other-version"),
     ],
 )
 def test_running_server_match_proves_executable_process_and_mode(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    version_id: str,
     command: list[str],
     verification: bool,
     expected: bool,
 ) -> None:
     install = _install(tmp_path)
-    executable = install.interpreter("rel_one", "Server")
+    executable = _runtime_interpreter(tmp_path, version_id, "Server")
+    executable.parent.mkdir(parents=True, exist_ok=True)
+    executable.write_bytes(b"")
     monkeypatch.setattr(processes, "probe_health", lambda _instance: SimpleNamespace(is_vbot=True))
     monkeypatch.setattr(
         processes,
@@ -60,32 +72,6 @@ def test_running_server_match_proves_executable_process_and_mode(
         processes.running_server_matches(install, version_id="rel_one", verification=verification)
         is expected
     )
-
-
-def test_running_server_match_rejects_other_version_executable(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    install = _install(tmp_path)
-    other = _runtime_interpreter(tmp_path, "rel_other", "Server")
-    other.parent.mkdir(parents=True)
-    other.write_bytes(b"")
-    monkeypatch.setattr(processes, "probe_health", lambda _instance: SimpleNamespace(is_vbot=True))
-    monkeypatch.setattr(
-        processes,
-        "read_server_control",
-        lambda *_args: SimpleNamespace(pid=12, process_create_time=34.0),
-    )
-    monkeypatch.setattr(
-        processes.psutil,
-        "Process",
-        lambda _pid: SimpleNamespace(
-            create_time=lambda: 34.0,
-            exe=lambda: str(other),
-            cmdline=lambda: [str(other), "-m", "server.main"],
-        ),
-    )
-
-    assert not processes.running_server_matches(install, version_id="rel_one")
 
 
 @pytest.mark.parametrize("independent_parent", [False, True])
