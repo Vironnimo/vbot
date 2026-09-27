@@ -22,6 +22,7 @@ Models arrive trained on a few widely used Tool dialects: Claude Code (`Read`/`E
 
 - Choose names, parameter names and formats that match the dominant habit for the capability. Novel interfaces must earn their unfamiliarity with a clear gain.
 - Accept the other common dialects as aliases (principle 2); the schema advertises one canonical form.
+- A borrowed format brings its trained semantics: Agents also rely on how the source harness resolves edge cases and ambiguity. Match those rules or state the difference, and judge whether a call is ambiguous under the conventions of the format the Agent wrote. apply_patch now orders repeated lines as Codex does (`apply_patch.md`); in 60 of 61 earlier refusals the Agent had meant exactly the occurrence Codex picks (Sessions, 2026-09).
 - Names must be honest about the platform. A Tool named `bash` primes bash syntax; if it runs PowerShell, Agents write `export`, `2>/dev/null` and heredocs that fail. vBot therefore offers its shell Tool as `powershell` on Windows while the registry keeps `bash` (`tools.md` -> Model Tool names).
 - Formats handed between Tools must survive copying: text an Agent copies out of one result (read output, error candidates) must be accepted verbatim as input by the next Tool.
 
@@ -37,6 +38,8 @@ The test: would a competent colleague who receives this request know exactly wha
 | Plausible readings with different effects, or a missing decision | Refuse before side effects, name the problem and give the corrected call | patch removes `"earth"` but the file says `"world"`; `memory(action="add")` without scope |
 
 Never write to a guessed target, silently drop a requested effect, or resolve contradictory instructions by picking one. Similarity alone (edit distance, a single close schema match) does not establish intent for a mutation or an explicit target; domain evidence does.
+
+An effect needs a deliberate signal. Never trigger one from text the Agent writes for another purpose, such as names in a message or keywords in prose: Agents mention names, paths and terms for many reasons, and each mention would trigger the effect. Use a parameter, or a marker Agents write only for that effect, such as `@Name` on the Swarm Board (`../extensions/swarm.md`).
 
 Text an Agent copied with errors is such evidence when it is strong enough: Agents misspell and misremember when copying, and demanding an exact copy wastes a round trip whenever the target is clear. An edit's old text therefore still identifies its passage when enough of it is copied correctly and exactly one passage qualifies:
 - Grade the evidence by length: short text must be exact, and each deviation needs several correctly copied words.
