@@ -1,537 +1,577 @@
-"""Tests for GitHubCopilotAdapter behavior."""
+"""GitHub Copilot Adapter routing: endpoint selection, request shaping, headers and limits."""
 
 from __future__ import annotations
 
-import json
+from dataclasses import replace
+from typing import Any
 
-import httpx
 import pytest
 import respx
 
-from core.providers.adapter import IMAGE_WIRE_MEDIA_TYPES
-from core.providers.errors import ProviderError
-from core.providers.github_copilot import (
-    GitHubCopilotAdapter,
+from core.providers.adapter import (
+    IMAGE_WIRE_MEDIA_TYPES,
+    TERMINAL_OUTCOME_STOP,
+    TERMINAL_OUTCOME_UNKNOWN,
 )
-from core.providers.github_copilot_policy import RESPONSES_ENDPOINT
-from core.providers.providers import ProviderConfig
+from core.providers.errors import ProviderError
+from core.providers.github_copilot_policy import (
+    CHAT_COMPLETIONS_ENDPOINT,
+    MESSAGES_ENDPOINT,
+    RESPONSES_ENDPOINT,
+)
+from core.providers.github_copilot_responses import REASONING_ENCRYPTED_CONTENT_INCLUDE
+from core.providers.reasoning import REASONING_REPLAY_FULL_HISTORY
 from tests.core.providers.github_copilot_test_support import (
     API_KEY,
     COPILOT_CONFIG,
-    COPILOT_URL,
-    MESSAGES_URL,
-    RESPONSES_URL,
-    SAMPLE_MESSAGES,
-    SUCCESS_RESPONSE,
-    _copilot_metadata_lookup,
-    _copilot_model,
-    _copilot_model_with_metadata,
-)
-from tests.core.providers.github_copilot_test_support import (
-    copilot_adapter as _copilot_adapter_fixture,
-)
-from tests.core.providers.github_copilot_test_support import (
-    metadata_copilot_adapter as _metadata_copilot_adapter_fixture,
+    ENDPOINT_URLS,
+    copilot_metadata,
+    make_adapter,
+    send_exchange,
+    stream_deltas,
 )
 
-copilot_adapter = _copilot_adapter_fixture
-metadata_copilot_adapter = _metadata_copilot_adapter_fixture
+_SEARCH_TOOL: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "search",
+        "description": "Search docs",
+        "parameters": {
+            "type": "object",
+            "properties": {"q": {"type": "string"}},
+            "required": ["q"],
+        },
+    },
+}
+_OPENAI_METADATA = copilot_metadata(
+    "OpenAI",
+    "gpt-5.2",
+    [CHAT_COMPLETIONS_ENDPOINT, RESPONSES_ENDPOINT],
+    reasoning_efforts=["low", "medium", "high", "xhigh"],
+    tool_calls=True,
+    parallel_tool_calls=True,
+    streaming=True,
+    structured_outputs=True,
+)
+_IMAGE = {"type": "media", "media_type": "image/png", "base64": "aW1hZ2VkYXRh"}
 
 
-@respx.mock
-@pytest.mark.asyncio
-async def test_send_omits_reasoning_effort_for_safe_default_copilot_model(
-    copilot_adapter: GitHubCopilotAdapter,
-) -> None:
-    route = respx.post(COPILOT_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
-
-    await copilot_adapter.send(
-        SAMPLE_MESSAGES,
-        model_id="claude-haiku-4.5",
-        thinking_effort="high",
-    )
-
-    request_body = json.loads(route.calls.last.request.content)
-    assert request_body["model"] == "claude-haiku-4.5"
-    assert "reasoning_effort" not in request_body
+# ---------------------------------------------------------------------------
+# Endpoint selection
+# ---------------------------------------------------------------------------
 
 
-@respx.mock
-@pytest.mark.asyncio
-async def test_send_preserves_reasoning_effort_for_allowed_copilot_model(
-    copilot_adapter: GitHubCopilotAdapter,
-) -> None:
-    route = respx.post(COPILOT_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
-
-    await copilot_adapter.send(
-        SAMPLE_MESSAGES,
-        model_id="gpt-5-mini",
-        thinking_effort="high",
-    )
-
-    request_body = json.loads(route.calls.last.request.content)
-    assert request_body["reasoning_effort"] == "high"
-
-
-@respx.mock
-@pytest.mark.asyncio
-async def test_send_routes_gpt_5_mini_to_responses_from_metadata(
-    metadata_copilot_adapter: GitHubCopilotAdapter,
-) -> None:
-    route = respx.post(RESPONSES_URL).mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "id": "resp-1",
-                "output": [{"type": "message", "content": [{"type": "output_text", "text": "Hi"}]}],
-                "usage": {"input_tokens": 3, "output_tokens": 4},
+@pytest.mark.parametrize(
+    ("model_id", "adapter_kwargs", "expected_endpoint"),
+    [
+        pytest.param("gpt-5.2", {"metadata": _OPENAI_METADATA}, RESPONSES_ENDPOINT, id="openai"),
+        pytest.param(
+            "claude-sonnet-4.6",
+            {
+                "metadata": copilot_metadata(
+                    "Anthropic", "claude-sonnet-4.6", [CHAT_COMPLETIONS_ENDPOINT, MESSAGES_ENDPOINT]
+                )
             },
-        )
+            MESSAGES_ENDPOINT,
+            id="anthropic",
+        ),
+        pytest.param(
+            "gemini-3.1-pro-preview",
+            {
+                "metadata": copilot_metadata(
+                    "Google",
+                    "gemini-3.1-pro-preview",
+                    [CHAT_COMPLETIONS_ENDPOINT, RESPONSES_ENDPOINT],
+                )
+            },
+            CHAT_COMPLETIONS_ENDPOINT,
+            id="google-stays-chat-first",
+        ),
+        pytest.param(
+            "gemini-2.5-pro", {}, CHAT_COMPLETIONS_ENDPOINT, id="catalog-without-endpoints"
+        ),
+        pytest.param("unknown-copilot-model", {}, CHAT_COMPLETIONS_ENDPOINT, id="unknown-model"),
+        pytest.param(
+            "gpt-5-mini", {"lookup": None}, CHAT_COMPLETIONS_ENDPOINT, id="static-fallback"
+        ),
+        pytest.param(
+            "gpt-5-mini",
+            {"metadata": copilot_metadata("OpenAI", "gpt-5-mini", [RESPONSES_ENDPOINT])},
+            RESPONSES_ENDPOINT,
+            id="metadata-wins-over-static-fallback",
+        ),
+        pytest.param(
+            "copilot-model",
+            {
+                "metadata": copilot_metadata(
+                    "", "", [CHAT_COMPLETIONS_ENDPOINT, MESSAGES_ENDPOINT]
+                ),
+                "family": "claude-sonnet-4.6",
+            },
+            MESSAGES_ENDPOINT,
+            id="model-family-with-blank-metadata",
+        ),
+        pytest.param(
+            "gpt-5.2",
+            {
+                "metadata": copilot_metadata(
+                    "", "stale-metadata-family", [CHAT_COMPLETIONS_ENDPOINT, MESSAGES_ENDPOINT]
+                ),
+                "family": "claude-sonnet-4.6",
+            },
+            MESSAGES_ENDPOINT,
+            id="model-family-overrides-metadata-family",
+        ),
+        pytest.param(
+            "copilot-model",
+            {
+                "metadata": copilot_metadata(
+                    "", "claude-sonnet-4.6", [CHAT_COMPLETIONS_ENDPOINT, MESSAGES_ENDPOINT]
+                )
+            },
+            MESSAGES_ENDPOINT,
+            id="metadata-family-without-model-family",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_send_selects_the_endpoint_from_model_facts(
+    model_id: str, adapter_kwargs: dict[str, Any], expected_endpoint: str
+) -> None:
+    exchange = await send_exchange(make_adapter(**adapter_kwargs), model_id=model_id)
+
+    assert exchange.endpoint == expected_endpoint
+    assert exchange.payload["model"] == model_id
+
+
+# ---------------------------------------------------------------------------
+# /chat/completions shaping
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("model_id", "adapter_kwargs", "request_kwargs", "expected", "absent"),
+    [
+        pytest.param(
+            "unknown-copilot-model",
+            {},
+            {
+                "thinking_effort": "high",
+                "tools": [_SEARCH_TOOL],
+                "response_format": {"type": "json_object"},
+                "temperature": 0.2,
+                "max_output_tokens": 2048,
+            },
+            {"temperature": 0.2},
+            {"reasoning_effort", "tools", "response_format", "max_output_tokens"},
+            id="unknown-model-omits-optional-controls",
+        ),
+        pytest.param(
+            "gpt-5-mini",
+            {"lookup": None},
+            {
+                "thinking_effort": "high",
+                "tools": [_SEARCH_TOOL],
+                "temperature": 0.4,
+                "top_p": 0.9,
+                "max_output_tokens": 2048,
+            },
+            {"reasoning_effort": "high", "temperature": 0.4, "top_p": 0.9},
+            {"max_output_tokens"},
+            id="static-fallback-keeps-validated-controls",
+        ),
+        pytest.param(
+            "gemini-3.1-pro-preview",
+            {
+                "metadata": copilot_metadata(
+                    "Google",
+                    "gemini-3.1-pro-preview",
+                    [CHAT_COMPLETIONS_ENDPOINT, RESPONSES_ENDPOINT],
+                    reasoning_efforts=["low", "medium", "high"],
+                    tool_calls=True,
+                    structured_outputs=True,
+                )
+            },
+            {
+                "thinking_effort": "high",
+                "temperature": 0.2,
+                "response_format": {"type": "json_object"},
+            },
+            {"temperature": 0.2, "response_format": {"type": "json_object"}},
+            {"reasoning_effort"},
+            id="gemini-override-clears-efforts",
+        ),
+        pytest.param(
+            "gemini-2.5-pro",
+            {},
+            {
+                "thinking_budget": 4096,
+                "thinking": {"type": "enabled", "budget_tokens": 4096},
+                "output_config": {"effort": "high"},
+            },
+            {},
+            {"thinking_budget", "thinking", "output_config", "reasoning_effort"},
+            id="endpoint-specific-thinking-is-stripped",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_chat_route_forwards_only_controls_the_model_supports(
+    model_id: str,
+    adapter_kwargs: dict[str, Any],
+    request_kwargs: dict[str, Any],
+    expected: dict[str, Any],
+    absent: set[str],
+) -> None:
+    exchange = await send_exchange(
+        make_adapter(**adapter_kwargs), model_id=model_id, **request_kwargs
     )
 
-    response = await metadata_copilot_adapter.send(
-        SAMPLE_MESSAGES,
-        model_id="gpt-5-mini",
-        thinking_effort="high",
-        response_format={"type": "json_object"},
-    )
+    assert exchange.endpoint == CHAT_COMPLETIONS_ENDPOINT
+    assert {key: exchange.payload.get(key) for key in expected} == expected
+    if "tools" in request_kwargs and "tools" not in absent:
+        assert [tool["function"]["name"] for tool in exchange.payload["tools"]] == ["search"]
+    assert not absent & exchange.payload.keys()
 
-    request_body = json.loads(route.calls.last.request.content)
-    assert request_body["model"] == "gpt-5-mini"
-    assert request_body["reasoning"] == {"effort": "high", "summary": "auto"}
-    assert request_body["max_output_tokens"] == 64000
-    assert request_body["text"] == {"format": {"type": "json_object"}}
-    assert metadata_copilot_adapter.normalize_response(response) == {
-        "terminal_outcome": "unknown",
+
+_REASONING_DETAILS = [{"type": "reasoning.text", "text": "Need docs lookup."}]
+
+
+def test_chat_normalize_response_surfaces_visible_reasoning_details() -> None:
+    response = {
+        "id": "chatcmpl-gemini-1",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "Gemini reply",
+                    "reasoning_details": _REASONING_DETAILS,
+                },
+                "finish_reason": "stop",
+            }
+        ],
+    }
+
+    assert make_adapter(lookup=None).normalize_response(response) == {
         "role": "assistant",
-        "content": "Hi",
-        "reasoning": None,
+        "content": "Gemini reply",
+        "reasoning": "Need docs lookup.",
+        "reasoning_meta": {"reasoning_details": _REASONING_DETAILS},
+        "tool_calls": None,
+        "terminal_outcome": TERMINAL_OUTCOME_STOP,
+    }
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_backfills_visible_reasoning_from_reasoning_details() -> None:
+    body = (
+        'data: {"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.text",'
+        '"text":"Need docs lookup."}]}}]}\n\n'
+        'data: {"choices":[{"finish_reason":"stop"}]}\n\n'
+        "data: [DONE]\n\n"
+    )
+
+    deltas = await stream_deltas(
+        make_adapter(), body, model_id="gemini-3.1-pro-preview", thinking_effort="high"
+    )
+
+    assert deltas == [
+        {"type": "reasoning_delta", "text": "Need docs lookup."},
+        {"type": "reasoning_meta", "reasoning_meta": {"reasoning_details": _REASONING_DETAILS}},
+        {"type": "finish", "reason": TERMINAL_OUTCOME_STOP},
+    ]
+
+
+# ---------------------------------------------------------------------------
+# /responses shaping
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_responses_route_sends_exact_payload_and_normalizes_the_reply() -> None:
+    reasoning_item = {
+        "type": "reasoning",
+        "id": "rs_1",
+        "summary": [{"type": "summary_text", "text": "Need docs lookup."}],
+        "encrypted_content": "opaque",
+    }
+    function_call = {
+        "type": "function_call",
+        "call_id": "call_1",
+        "function": {"name": "search", "arguments": '{"q":"docs"}'},
+    }
+    reply = {
+        "id": "resp-1",
+        "output": [reasoning_item, function_call],
+        "usage": {"input_tokens": 3, "output_tokens": 4},
+    }
+    adapter = make_adapter()
+
+    exchange = await send_exchange(
+        adapter,
+        [{"role": "user", "content": "Look up docs"}],
+        model_id="gpt-5-mini",
+        reply=reply,
+        thinking_effort="high",
+        tools=[_SEARCH_TOOL],
+        response_format={"type": "json_object"},
+        temperature=0.25,
+    )
+
+    assert exchange.endpoint == RESPONSES_ENDPOINT
+    assert exchange.payload == {
+        "model": "gpt-5-mini",
+        "input": [{"role": "user", "content": [{"type": "input_text", "text": "Look up docs"}]}],
+        "tools": [
+            {
+                "type": "function",
+                "name": "search",
+                "description": "Search docs",
+                "parameters": _SEARCH_TOOL["function"]["parameters"],
+                "strict": False,
+            }
+        ],
+        "reasoning": {"effort": "high", "summary": "auto"},
+        "include": [REASONING_ENCRYPTED_CONTENT_INCLUDE],
+        "text": {"format": {"type": "json_object"}},
+        # The catalog output ceiling wins over the Provider default.
+        "max_output_tokens": 64000,
+    }
+    assert adapter.normalize_response(exchange.response) == {
+        "terminal_outcome": TERMINAL_OUTCOME_UNKNOWN,
+        "role": "assistant",
+        "content": None,
+        "reasoning": "Need docs lookup.",
+        "reasoning_summary": ["Need docs lookup."],
         "reasoning_meta": {
             "response_id": "resp-1",
-            "response_output": [
-                {"type": "message", "content": [{"type": "output_text", "text": "Hi"}]}
-            ],
+            "response_output": [reasoning_item, function_call],
+            "reasoning_items": [reasoning_item],
+            "encrypted_content": ["opaque"],
         },
-        "tool_calls": None,
+        "tool_calls": [{"id": "call_1", "name": "search", "arguments": {"q": "docs"}}],
         "usage": {"input_tokens": 3, "output_tokens": 4},
     }
 
 
-@respx.mock
-@pytest.mark.asyncio
-async def test_send_routes_claude_to_messages_from_metadata(
-    metadata_copilot_adapter: GitHubCopilotAdapter,
-) -> None:
-    route = respx.post(MESSAGES_URL).mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "content": [{"type": "text", "text": "Claude reply"}],
-                "usage": {"input_tokens": 5, "output_tokens": 6},
+@pytest.mark.parametrize(
+    ("model_id", "adapter_kwargs", "request_kwargs", "expected_controls"),
+    [
+        pytest.param(
+            "gpt-5.4-partial",
+            {},
+            {"thinking_effort": "high", "temperature": 0.25, "top_p": 0.9},
+            {"max_output_tokens": 4096, "top_p": 0.9},
+            id="partial-metadata-stays-conservative",
+        ),
+        pytest.param(
+            "gpt-5-mini",
+            {
+                "metadata": copilot_metadata(
+                    "OpenAI", "gpt-5-mini", [RESPONSES_ENDPOINT], reasoning_efforts=["low"]
+                )
             },
-        )
+            {"thinking_effort": "high", "reasoning_effort": "max", "max_output_tokens": 2048},
+            {
+                "reasoning": {"effort": "low", "summary": "auto"},
+                "include": [REASONING_ENCRYPTED_CONTENT_INCLUDE],
+                "max_output_tokens": 2048,
+            },
+            id="effort-maps-to-nearest-allowed",
+        ),
+        pytest.param(
+            "gpt-5.2",
+            {
+                "metadata": copilot_metadata(
+                    "OpenAI",
+                    "gpt-5.2",
+                    [CHAT_COMPLETIONS_ENDPOINT, RESPONSES_ENDPOINT],
+                    reasoning_efforts=["low", "medium", "high", "xhigh"],
+                    tool_calls=True,
+                    parallel_tool_calls=False,
+                    structured_outputs=False,
+                )
+            },
+            {
+                "thinking_effort": "xhigh",
+                "parallel_tool_calls": True,
+                "response_format": {"type": "json_object"},
+            },
+            {
+                "reasoning": {"effort": "xhigh", "summary": "auto"},
+                "include": [REASONING_ENCRYPTED_CONTENT_INCLUDE],
+                "max_output_tokens": 4096,
+            },
+            id="unsupported-features-are-dropped",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_responses_route_forwards_only_controls_the_metadata_allows(
+    model_id: str,
+    adapter_kwargs: dict[str, Any],
+    request_kwargs: dict[str, Any],
+    expected_controls: dict[str, Any],
+) -> None:
+    exchange = await send_exchange(
+        make_adapter(**adapter_kwargs), model_id=model_id, **request_kwargs
     )
 
-    response = await metadata_copilot_adapter.send(
-        SAMPLE_MESSAGES,
-        model_id="claude-sonnet-4.6",
-        thinking_effort="high",
-        response_format={"type": "json_object"},
-    )
-
-    request_body = json.loads(route.calls.last.request.content)
-    assert request_body["model"] == "claude-sonnet-4.6"
-    assert request_body["thinking"] == {"type": "adaptive", "display": "summarized"}
-    assert request_body["output_config"] == {"effort": "high"}
-    assert "response_format" not in request_body
-    assert metadata_copilot_adapter.normalize_response(response) == {
-        "role": "assistant",
-        "content": "Claude reply",
-        "reasoning": None,
-        "reasoning_meta": None,
-        "tool_calls": None,
-        "usage": {"input_tokens": 5, "output_tokens": 6},
+    assert exchange.endpoint == RESPONSES_ENDPOINT
+    assert exchange.payload == {
+        "model": model_id,
+        "input": [{"role": "user", "content": [{"type": "input_text", "text": "Hello"}]}],
+        **expected_controls,
     }
+
+
+# ---------------------------------------------------------------------------
+# Headers and local limits
+# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
-    ("model_id", "expected_policy"),
+    ("model_id", "expected_endpoint"),
     [
-        ("gpt-5-mini", "full_history"),
-        ("claude-sonnet-4.6", "full_history"),
-        ("gpt-5.4", "full_history"),
-        ("claude-haiku-4.5", "full_history"),
-        ("gemini-3.1-pro-preview", "full_history"),
+        ("unknown-copilot-model", CHAT_COMPLETIONS_ENDPOINT),
+        ("gpt-5-mini", RESPONSES_ENDPOINT),
+        ("claude-sonnet-4.6", MESSAGES_ENDPOINT),
     ],
 )
-def test_reasoning_replay_policy_defaults_to_full_history(
-    metadata_copilot_adapter: GitHubCopilotAdapter,
-    model_id: str,
-    expected_policy: str,
-) -> None:
-    assert metadata_copilot_adapter.reasoning_replay_policy(model_id) == expected_policy
-
-
-def test_reasoning_replay_policy_defaults_to_full_history_without_metadata(
-    copilot_adapter: GitHubCopilotAdapter,
-) -> None:
-    assert copilot_adapter.reasoning_replay_policy("unknown-model") == "full_history"
-
-
-@pytest.mark.parametrize("model_id", ["gpt-5.4", "claude-haiku-4.5", "gemini-3.1-pro-preview"])
-def test_wire_media_support_is_image_only_across_endpoint_families(
-    metadata_copilot_adapter: GitHubCopilotAdapter,
-    model_id: str,
-) -> None:
-    """Every Copilot endpoint family carries images only — no native audio."""
-    assert metadata_copilot_adapter.wire_media_support(model_id) == IMAGE_WIRE_MEDIA_TYPES
-
-
-@pytest.mark.parametrize("model_id", ["claude-sonnet-4.6", "claude-haiku-4.5"])
-@respx.mock
 @pytest.mark.asyncio
-async def test_messages_models_send_exact_on_wire_payload(
-    metadata_copilot_adapter: GitHubCopilotAdapter,
-    model_id: str,
+async def test_every_endpoint_sends_auth_extra_headers_and_user_initiator(
+    model_id: str, expected_endpoint: str
 ) -> None:
-    route = respx.post(MESSAGES_URL).mock(return_value=httpx.Response(200, json={"content": []}))
+    config = replace(COPILOT_CONFIG, extra_headers={"Editor-Version": "vBot/test"})
 
-    await metadata_copilot_adapter.send(
-        SAMPLE_MESSAGES,
-        model_id=model_id,
-        thinking_effort="high",
-        response_format={"type": "json_object"},
-        temperature=0.25,
-    )
+    exchange = await send_exchange(make_adapter(config), model_id=model_id)
 
-    request_body = json.loads(route.calls.last.request.content)
-    assert request_body == {
-        "model": model_id,
-        "messages": [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}],
-        "thinking": {"type": "adaptive", "display": "summarized"},
-        **({"output_config": {"effort": "high"}} if model_id == "claude-sonnet-4.6" else {}),
-        "max_tokens": 32000 if model_id == "claude-sonnet-4.6" else 4096,
-        **({} if model_id == "claude-sonnet-4.6" else {"temperature": 0.25}),
-    }
+    assert exchange.endpoint == expected_endpoint
+    headers = exchange.request.headers
+    assert headers["Authorization"] == f"Bearer {API_KEY}"
+    assert headers["Editor-Version"] == "vBot/test"
+    assert headers["x-initiator"] == "user"
+    assert "Copilot-Vision-Request" not in headers
 
 
-@pytest.mark.parametrize("model_id", ["gpt-5.4", "gpt-5-mini"])
-@respx.mock
 @pytest.mark.asyncio
-async def test_responses_models_send_exact_on_wire_payload_without_temperature(
-    metadata_copilot_adapter: GitHubCopilotAdapter,
-    model_id: str,
-) -> None:
-    route = respx.post(RESPONSES_URL).mock(return_value=httpx.Response(200, json={"output": []}))
+async def test_request_after_tool_result_is_agent_initiated() -> None:
+    messages: list[dict[str, Any]] = [
+        {"role": "user", "content": "Run it"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{"id": "call_1", "type": "function", "name": "run", "arguments": "{}"}],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": "ok"},
+    ]
 
-    await metadata_copilot_adapter.send(
-        SAMPLE_MESSAGES,
-        model_id=model_id,
-        thinking_effort="high",
-        response_format={"type": "json_object"},
-        temperature=0.25,
+    exchange = await send_exchange(make_adapter(), messages, model_id="unknown-copilot-model")
+
+    assert exchange.request.headers["x-initiator"] == "agent"
+
+
+def _vision_metadata(**vision: Any) -> dict[str, Any]:
+    return copilot_metadata(
+        "OpenAI", "gpt-5.4", [RESPONSES_ENDPOINT], tool_calls=True, vision=vision
     )
 
-    request_body = json.loads(route.calls.last.request.content)
-    assert request_body == {
-        "model": model_id,
-        "input": [{"role": "user", "content": [{"type": "input_text", "text": "Hello"}]}],
-        "reasoning": {"effort": "high", "summary": "auto"},
-        "include": ["reasoning.encrypted_content"],
-        "text": {"format": {"type": "json_object"}},
-        "max_output_tokens": 64000 if model_id == "gpt-5-mini" else 4096,
-    }
 
-
-@respx.mock
 @pytest.mark.asyncio
-async def test_partial_openai_like_metadata_still_omits_temperature_on_responses(
-    metadata_copilot_adapter: GitHubCopilotAdapter,
-) -> None:
-    route = respx.post(RESPONSES_URL).mock(return_value=httpx.Response(200, json={"output": []}))
-
-    await metadata_copilot_adapter.send(
-        SAMPLE_MESSAGES,
-        model_id="gpt-5.4-partial",
-        temperature=0.25,
-        top_p=0.9,
+async def test_image_within_catalog_limits_is_sent_with_the_vision_header() -> None:
+    adapter = make_adapter(
+        metadata=_vision_metadata(max_prompt_images=1, max_prompt_image_size=1024)
     )
 
-    request_body = json.loads(route.calls.last.request.content)
-    assert request_body == {
-        "model": "gpt-5.4-partial",
-        "input": [{"role": "user", "content": [{"type": "input_text", "text": "Hello"}]}],
-        "max_output_tokens": 4096,
-        "top_p": 0.9,
-    }
-
-
-@respx.mock
-@pytest.mark.asyncio
-async def test_messages_alias_override_wins_over_provider_default_on_wire(
-    metadata_copilot_adapter: GitHubCopilotAdapter,
-) -> None:
-    route = respx.post(MESSAGES_URL).mock(return_value=httpx.Response(200, json={"content": []}))
-
-    await metadata_copilot_adapter.send(
-        SAMPLE_MESSAGES,
-        model_id="claude-haiku-4.5",
-        max_output_tokens=2048,
-        temperature=0.25,
-    )
-
-    request_body = json.loads(route.calls.last.request.content)
-    assert request_body == {
-        "model": "claude-haiku-4.5",
-        "messages": [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}],
-        "max_tokens": 2048,
-        "temperature": 0.25,
-    }
-
-
-@respx.mock
-@pytest.mark.asyncio
-async def test_messages_max_completion_tokens_alias_maps_to_max_tokens_on_wire(
-    metadata_copilot_adapter: GitHubCopilotAdapter,
-) -> None:
-    route = respx.post(MESSAGES_URL).mock(return_value=httpx.Response(200, json={"content": []}))
-
-    await metadata_copilot_adapter.send(
-        SAMPLE_MESSAGES,
-        model_id="claude-haiku-4.5",
-        max_completion_tokens=1024,
-        temperature=0.25,
-    )
-
-    request_body = json.loads(route.calls.last.request.content)
-    assert request_body == {
-        "model": "claude-haiku-4.5",
-        "messages": [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}],
-        "max_tokens": 1024,
-        "temperature": 0.25,
-    }
-
-
-@respx.mock
-@pytest.mark.asyncio
-async def test_gemini_3_1_preview_stays_chat_when_metadata_advertises_only_chat(
-    metadata_copilot_adapter: GitHubCopilotAdapter,
-) -> None:
-    route = respx.post(COPILOT_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
-
-    await metadata_copilot_adapter.send(
-        SAMPLE_MESSAGES,
-        model_id="gemini-3.1-pro-preview",
-        thinking_effort="high",
-    )
-
-    request_body = json.loads(route.calls.last.request.content)
-    assert request_body["model"] == "gemini-3.1-pro-preview"
-    assert "reasoning_effort" not in request_body
-
-
-@respx.mock
-@pytest.mark.asyncio
-async def test_gemini_2_5_pro_without_endpoint_metadata_stays_conservative_chat(
-    metadata_copilot_adapter: GitHubCopilotAdapter,
-) -> None:
-    route = respx.post(COPILOT_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
-
-    await metadata_copilot_adapter.send(
-        SAMPLE_MESSAGES,
-        model_id="gemini-2.5-pro",
-        thinking_budget=4096,
-    )
-
-    request_body = json.loads(route.calls.last.request.content)
-    assert request_body["model"] == "gemini-2.5-pro"
-    assert "thinking_budget" not in request_body
-    assert "reasoning_effort" not in request_body
-
-
-@respx.mock
-@pytest.mark.asyncio
-async def test_unknown_model_uses_chat_fallback_and_omits_optional_controls(
-    metadata_copilot_adapter: GitHubCopilotAdapter,
-) -> None:
-    route = respx.post(COPILOT_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
-
-    await metadata_copilot_adapter.send(
-        SAMPLE_MESSAGES,
-        model_id="unknown-copilot-model",
-        thinking_effort="high",
-        tools=[{"name": "search", "description": "Search", "parameters": {"type": "object"}}],
-        response_format={"type": "json_object"},
-    )
-
-    request_body = json.loads(route.calls.last.request.content)
-    assert request_body["model"] == "unknown-copilot-model"
-    assert "reasoning_effort" not in request_body
-    assert "tools" not in request_body
-    assert "response_format" not in request_body
-
-
-@respx.mock
-@pytest.mark.asyncio
-async def test_static_fallback_applies_only_when_metadata_missing() -> None:
-    fallback_adapter = GitHubCopilotAdapter(COPILOT_CONFIG, API_KEY)
-    metadata_adapter = GitHubCopilotAdapter(
-        COPILOT_CONFIG,
-        API_KEY,
-        model_lookup=lambda model_id: _copilot_model(model_id),
-    )
-    chat_route = respx.post(COPILOT_URL).mock(
-        return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
-    )
-    responses_route = respx.post(RESPONSES_URL).mock(
-        return_value=httpx.Response(200, json={"output": []})
-    )
-
-    await fallback_adapter.send(SAMPLE_MESSAGES, model_id="gpt-5-mini", thinking_effort="high")
-    await metadata_adapter.send(SAMPLE_MESSAGES, model_id="gpt-5-mini", thinking_effort="high")
-
-    chat_body = json.loads(chat_route.calls.last.request.content)
-    responses_body = json.loads(responses_route.calls.last.request.content)
-    assert chat_body["reasoning_effort"] == "high"
-    assert responses_body["reasoning"] == {"effort": "high", "summary": "auto"}
-
-
-@respx.mock
-@pytest.mark.asyncio
-async def test_headers_include_auth_and_extra_headers_for_all_endpoint_families() -> None:
-    custom_config = ProviderConfig(
-        id="github-copilot",
-        name="GitHub Copilot",
-        adapter="github_copilot",
-        base_url="https://api.githubcopilot.com",
-        connections=COPILOT_CONFIG.connections,
-        defaults={"max_tokens": 4096},
-        extra_headers={"Editor-Version": "vBot/test"},
-    )
-    adapter = GitHubCopilotAdapter(
-        custom_config,
-        API_KEY,
-        model_lookup=_copilot_metadata_lookup,
-    )
-    chat_route = respx.post(COPILOT_URL).mock(
-        return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
-    )
-    responses_route = respx.post(RESPONSES_URL).mock(
-        return_value=httpx.Response(200, json={"output": []})
-    )
-    messages_route = respx.post(MESSAGES_URL).mock(
-        return_value=httpx.Response(200, json={"content": []})
-    )
-
-    await adapter.send(SAMPLE_MESSAGES, model_id="unknown-copilot-model")
-    await adapter.send(SAMPLE_MESSAGES, model_id="gpt-5-mini")
-    await adapter.send(SAMPLE_MESSAGES, model_id="claude-sonnet-4.6")
-
-    for route in (chat_route, responses_route, messages_route):
-        headers = route.calls.last.request.headers
-        assert headers["Authorization"] == f"Bearer {API_KEY}"
-        assert headers["Editor-Version"] == "vBot/test"
-        assert headers["x-initiator"] == "user"
-
-
-@respx.mock
-@pytest.mark.asyncio
-async def test_copilot_vision_headers_and_media_limits_follow_catalog_metadata() -> None:
-    metadata = {
-        "github_copilot": {
-            "vendor": "OpenAI",
-            "family": "gpt-5.4",
-            "supported_endpoints": [RESPONSES_ENDPOINT],
-            "tool_calls": True,
-            "vision": {
-                "max_prompt_image_size": 4,
-                "max_prompt_images": 1,
-                "supported_media_types": ["image/png"],
-            },
-        }
-    }
-    adapter = GitHubCopilotAdapter(
-        COPILOT_CONFIG,
-        API_KEY,
-        model_lookup=lambda model_id: _copilot_model_with_metadata(model_id, metadata),
-    )
-    route = respx.post(RESPONSES_URL).mock(return_value=httpx.Response(200, json={"output": []}))
-    image = {"type": "media", "media_type": "image/png", "base64": "aW1n"}
-
-    await adapter.send(
-        [{"role": "user", "content": [{"type": "text", "text": "Look"}, image]}],
+    exchange = await send_exchange(
+        adapter,
+        [{"role": "user", "content": [{"type": "text", "text": "Look"}, _IMAGE]}],
         model_id="gpt-5.4",
     )
 
-    assert route.calls.last.request.headers["Copilot-Vision-Request"] == "true"
-    assert adapter.wire_media_support("gpt-5.4") == frozenset({"image/png"})
-    assert adapter.image_size_limit("gpt-5.4") == 4
-
-    with pytest.raises(ProviderError, match="image-count limit exceeded"):
-        await adapter.send(
-            [{"role": "user", "content": [image, image]}],
-            model_id="gpt-5.4",
-        )
+    assert exchange.request.headers["Copilot-Vision-Request"] == "true"
 
 
 @pytest.mark.parametrize(
-    "value,expected",
-    [(None, None), (0, None), (-1, None), (True, None), ("2048", None), (2048, 2048)],
+    ("metadata", "content", "limit_field"),
+    [
+        pytest.param(
+            copilot_metadata("OpenAI", "gpt-5.4", [RESPONSES_ENDPOINT], max_prompt_tokens=1),
+            "Hello",
+            "max_prompt_tokens=1",
+            id="prompt-tokens",
+        ),
+        pytest.param(
+            _vision_metadata(max_prompt_images=1),
+            [_IMAGE, _IMAGE],
+            "max_prompt_images=1",
+            id="image-count",
+        ),
+        pytest.param(
+            _vision_metadata(max_prompt_image_size=4),
+            [_IMAGE],
+            "max_prompt_image_size=4",
+            id="image-size",
+        ),
+    ],
 )
-def test_copilot_exposes_only_known_positive_image_byte_limits(value, expected):
-    metadata = {"github_copilot": {"vision": {"max_prompt_image_size": value}}}
-    adapter = GitHubCopilotAdapter(
-        COPILOT_CONFIG,
-        API_KEY,
-        model_lookup=lambda model_id: _copilot_model_with_metadata(model_id, metadata),
-    )
+@pytest.mark.asyncio
+async def test_catalog_prompt_limits_fail_locally_before_any_request(
+    metadata: dict[str, Any], content: Any, limit_field: str
+) -> None:
+    adapter = make_adapter(metadata=metadata)
+
+    with respx.mock:
+        routes = [respx.post(url) for url in ENDPOINT_URLS.values()]
+        with pytest.raises(ProviderError) as caught:
+            await adapter.send([{"role": "user", "content": content}], model_id="gpt-5.4")
+
+    assert caught.value.retryable is False
+    assert limit_field in str(caught.value)
+    assert not any(route.called for route in routes)
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        pytest.param(2048, 2048, id="positive"),
+        pytest.param(0, None, id="non-positive"),
+        pytest.param(True, None, id="bool"),
+        pytest.param("2048", None, id="string"),
+    ],
+)
+def test_image_size_limit_exposes_only_positive_integer_byte_limits(
+    value: Any, expected: int | None
+) -> None:
+    adapter = make_adapter(metadata=_vision_metadata(max_prompt_image_size=value))
+
     assert adapter.image_size_limit("vision-model") == expected
 
 
-@respx.mock
-@pytest.mark.asyncio
-async def test_copilot_tool_followup_is_marked_as_agent_initiated() -> None:
-    route = respx.post(COPILOT_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
-    adapter = GitHubCopilotAdapter(COPILOT_CONFIG, API_KEY)
+@pytest.mark.parametrize(
+    ("adapter_kwargs", "expected"),
+    [
+        pytest.param({}, IMAGE_WIRE_MEDIA_TYPES, id="without-vision-metadata"),
+        pytest.param(
+            {"metadata": _vision_metadata(supported_media_types=["image/png", "audio/wav"])},
+            frozenset({"image/png"}),
+            id="advertised-image-types",
+        ),
+    ],
+)
+def test_wire_media_support_carries_only_catalog_image_types(
+    adapter_kwargs: dict[str, Any], expected: frozenset[str]
+) -> None:
+    assert make_adapter(**adapter_kwargs).wire_media_support("gpt-5.4") == expected
 
-    await adapter.send(
-        [
-            {"role": "user", "content": "Run it"},
-            {
-                "role": "assistant",
-                "content": "",
-                "tool_calls": [
-                    {
-                        "id": "call_1",
-                        "type": "function",
-                        "name": "run",
-                        "arguments": "{}",
-                    }
-                ],
-            },
-            {"role": "tool", "tool_call_id": "call_1", "content": "ok"},
-        ],
-        model_id="unknown-copilot-model",
+
+def test_reasoning_replay_keeps_full_history_on_every_endpoint() -> None:
+    model_ids = ("gpt-5-mini", "claude-sonnet-4.6", "claude-haiku-4.5", "gemini-3.1-pro-preview")
+
+    assert {
+        model_id: make_adapter().reasoning_replay_policy(model_id) for model_id in model_ids
+    } == dict.fromkeys(model_ids, REASONING_REPLAY_FULL_HISTORY)
+    assert make_adapter(lookup=None).reasoning_replay_policy("unknown-model") == (
+        REASONING_REPLAY_FULL_HISTORY
     )
-
-    assert route.calls.last.request.headers["x-initiator"] == "agent"
-
-
-@pytest.mark.asyncio
-async def test_copilot_prompt_limit_fails_locally_before_request() -> None:
-    metadata = {
-        "github_copilot": {
-            "vendor": "OpenAI",
-            "family": "gpt-5.4",
-            "supported_endpoints": [RESPONSES_ENDPOINT],
-            "max_prompt_tokens": 1,
-        }
-    }
-    adapter = GitHubCopilotAdapter(
-        COPILOT_CONFIG,
-        API_KEY,
-        model_lookup=lambda model_id: _copilot_model_with_metadata(model_id, metadata),
-    )
-
-    with pytest.raises(ProviderError, match="prompt limit"):
-        await adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.4")
