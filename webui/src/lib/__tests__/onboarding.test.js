@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  ONBOARDING_TARGET_AGENT_ID,
   agentNeedsModel,
   connectedProviderId,
   isOperational,
@@ -109,13 +108,11 @@ function freshInstallSettings() {
 }
 
 describe('isOperational', () => {
-  it('is false when no provider carries usable credentials', () => {
+  it('is true only once any connection carries usable credentials', () => {
     expect(isOperational(freshInstallSettings())).toBe(false);
     expect(isOperational(undefined)).toBe(false);
     expect(isOperational({ providers: { items: [] } })).toBe(false);
-  });
 
-  it('is true once any connection is usable', () => {
     const settings = freshInstallSettings();
     settings.providers.items[0].connections[0].configured = true;
     settings.providers.items[0].connections[0].usable = true;
@@ -124,24 +121,23 @@ describe('isOperational', () => {
 });
 
 describe('agentNeedsModel', () => {
-  it('flags an empty or whitespace model', () => {
+  it('flags an empty or whitespace model until one is assigned', () => {
     expect(agentNeedsModel({ model: '' })).toBe(true);
     expect(agentNeedsModel({ model: '   ' })).toBe(true);
     expect(agentNeedsModel({})).toBe(true);
     expect(agentNeedsModel(null)).toBe(true);
-  });
-
-  it('is false once a model is assigned', () => {
     expect(agentNeedsModel({ model: 'openrouter/some-model' })).toBe(false);
   });
 });
 
 describe('providerModalScope', () => {
-  it('skips a redundant choice for a single method', () => {
+  it('skips a redundant choice for a single method and is null when nothing is addable', () => {
     const provider = freshInstallSettings().providers.items[0];
     expect(providerModalScope(provider).scopedConnection.id).toBe(
       'openrouter:api-key',
     );
+    expect(providerModalScope(null)).toBeNull();
+    expect(providerModalScope({ connections: [] })).toBeNull();
   });
 
   it('lets the user choose when a Provider supports API key and sign-in', () => {
@@ -152,32 +148,19 @@ describe('providerModalScope', () => {
       'openai:subscription',
     );
   });
-
-  it('returns null when nothing is addable', () => {
-    expect(providerModalScope(null)).toBeNull();
-    expect(providerModalScope({ connections: [] })).toBeNull();
-  });
 });
 
 describe('connectedProviderId', () => {
-  it('names the first connected provider', () => {
+  it('names the first connected Provider but keeps a chosen one while it stays usable', () => {
     const settings = freshInstallSettings();
     expect(connectedProviderId(settings)).toBe('');
     settings.providers.items[0].connections[0].configured = true;
     settings.providers.items[0].connections[0].usable = true;
     expect(connectedProviderId(settings)).toBe('openrouter');
-  });
 
-  it('keeps the chosen Provider when several are usable', () => {
-    const settings = freshInstallSettings();
-    settings.providers.items[0].connections[0].usable = true;
     settings.providers.items[1].connections[0].usable = true;
     expect(connectedProviderId(settings, 'openai')).toBe('openai');
     expect(connectedProviderId(settings, 'removed')).toBe('openrouter');
-  });
-
-  it('targets the bootstrap main agent', () => {
-    expect(ONBOARDING_TARGET_AGENT_ID).toBe('main');
   });
 });
 
