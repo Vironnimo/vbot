@@ -327,15 +327,21 @@ def check_frontend(root: Path, staged: list[str], dirty: set[str]) -> list[StepR
 @contextmanager
 def _exclusive(lock_path: Path) -> Iterator[None]:
     """Hold an OS file lock; concurrent commits in one checkout run tests one at a time."""
+    notice = "Commit check: waiting for the tests of another commit in this checkout..."
     with lock_path.open("a+b") as handle:
         if sys.platform == "win32":
             import msvcrt
 
+            handle.seek(0)
+            waiting = False
             while True:
                 try:
                     msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
                     break
                 except OSError:
+                    if not waiting:
+                        print(notice, flush=True)
+                        waiting = True
                     time.sleep(0.5)
             try:
                 yield
@@ -345,7 +351,11 @@ def _exclusive(lock_path: Path) -> Iterator[None]:
         else:
             import fcntl
 
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                print(notice, flush=True)
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
             try:
                 yield
             finally:
