@@ -15,13 +15,14 @@ from core.skills import SkillRegistry
 from core.tools import JsonObject as ToolJsonObject
 from core.tools import ToolContext, ToolRegistry, tool_success
 from core.tools.skill import register_skill_tool
-from tests.core.chat.chat_loop_support import build_chat_loop, session_address
-from tests.core.chat.test_chat_loop import (
+from tests.core.chat.chat_loop_support import (
     StubAdapter,
     StubAgent,
     StubProject,
     StubProjects,
     StubRuntime,
+    build_chat_loop,
+    session_address,
 )
 
 

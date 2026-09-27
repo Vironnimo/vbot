@@ -513,15 +513,16 @@ class StubSkills:
 
 
 class StubProcessManager:
+    """Record Run process-scope cleanup in call order."""
+
     def __init__(self) -> None:
-        self.cancelled_scopes: list[str] = []
-        self.released_scopes: list[str] = []
+        self.scope_events: list[tuple[str, str]] = []
 
     async def cancel_scope_async(self, run_id: str) -> None:
-        self.cancelled_scopes.append(run_id)
+        self.scope_events.append(("cancel", run_id))
 
     def release_scope(self, run_id: str) -> None:
-        self.released_scopes.append(run_id)
+        self.scope_events.append(("release", run_id))
 
 
 class StubRuntime:
@@ -819,25 +820,6 @@ class StubCompactionService:
         if self._checkpoint is None:
             raise AssertionError("StubCompactionService requires checkpoint for successful compact")
         return self._checkpoint
-
-
-def _write_test_skill(tmp_path: Path, name: str) -> Path:
-    skill_dir = tmp_path / "skills" / name
-    skill_dir.mkdir(parents=True, exist_ok=True)
-    skill_file = skill_dir / "SKILL.md"
-    skill_file.write_text(
-        f"""---
-name: {name}
-description: Test skill.
----
-
-# {name}
-
-Use this skill content.
-""",
-        encoding="utf-8",
-    )
-    return skill_file
 
 
 class RecordingReflection:

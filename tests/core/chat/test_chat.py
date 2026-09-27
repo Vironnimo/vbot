@@ -155,7 +155,7 @@ async def test_cancel_during_tool_dispatch_persists_all_sibling_tool_results(
     # yields back to the outer agentic loop. The persist loop must record
     # every sibling result before honoring the cancel, so a later request
     # never sees a dangling tool_calls turn in the session history.
-    from tests.core.chat.test_chat_loop import StubAdapter, StubAgent, StubRuntime
+    from tests.core.chat.chat_loop_support import StubAdapter, StubAgent, StubRuntime
 
     siblings_started: set[str] = set()
     all_siblings_started = asyncio.Event()
@@ -268,7 +268,7 @@ def _project_runtime(
     ``unresolvable_agents`` drive the resolver's config branch so a test can prove
     a project run resolves a config agent (or fails cleanly) through the one seam.
     """
-    from tests.core.chat.test_chat_loop import StubRuntime
+    from tests.core.chat.chat_loop_support import StubRuntime
 
     runtime: Any = StubRuntime(
         data_dir=tmp_path,
@@ -287,7 +287,7 @@ async def test_skill_catalog_is_pinned_for_the_session(tmp_path: Path) -> None:
     # The catalog snapshot is taken once on a session's first build and reused, so a
     # skill written mid-session never changes the session's pinned catalog.
     from core.prompts.pinned_context import PINNED_SKILL_CATALOG_SLOT
-    from tests.core.chat.test_chat_loop import (
+    from tests.core.chat.chat_loop_support import (
         StubAdapter,
         StubAgent,
         StubRuntime,
@@ -327,7 +327,7 @@ async def test_new_session_pins_a_fresh_catalog(tmp_path: Path) -> None:
     # A different session pins its own snapshot from the then-current registry, so a
     # skill added before it starts is included.
     from core.prompts.pinned_context import PINNED_SKILL_CATALOG_SLOT
-    from tests.core.chat.test_chat_loop import (
+    from tests.core.chat.chat_loop_support import (
         StubAdapter,
         StubAgent,
         StubRuntime,
@@ -367,7 +367,7 @@ async def test_project_session_is_created_and_opened_under_project_anchor(
     tmp_path: Path,
 ) -> None:
     # Arrange: a project whose anchor lives under projects/<pid>/agents/<id>/.
-    from tests.core.chat.test_chat_loop import StubAdapter, StubAgent
+    from tests.core.chat.chat_loop_support import StubAdapter, StubAgent
 
     repo_dir = tmp_path / "repo"
     repo_dir.mkdir()
@@ -397,7 +397,7 @@ async def test_project_run_carries_project_id_and_dedups_per_session(tmp_path: P
     # identity scope does not, and a second start in the same project session is
     # rejected as already active.
     from core.runs import ActiveRunError
-    from tests.core.chat.test_chat_loop import BlockingStubAdapter, StubAgent
+    from tests.core.chat.chat_loop_support import BlockingStubAdapter, StubAgent
 
     repo_dir = tmp_path / "repo"
     repo_dir.mkdir()
@@ -441,7 +441,7 @@ async def test_project_session_tool_resolves_relative_path_against_project_cwd(
     # The plan risk this addresses: a file tool in a project session must write
     # into the repo, not the agent workspace. End-to-end through the chat loop:
     # a write with a relative path lands under the project cwd.
-    from tests.core.chat.test_chat_loop import StubAdapter, StubAgent
+    from tests.core.chat.chat_loop_support import StubAdapter, StubAgent
 
     repo_dir = tmp_path / "repo"
     repo_dir.mkdir()
@@ -484,7 +484,7 @@ async def test_project_session_tool_resolves_relative_path_against_project_cwd(
 async def test_project_run_persists_relative_assistant_output_file_reference(
     tmp_path: Path,
 ) -> None:
-    from tests.core.chat.test_chat_loop import StubAdapter, StubAgent
+    from tests.core.chat.chat_loop_support import StubAdapter, StubAgent
 
     repo_dir = tmp_path / "repo"
     repo_dir.mkdir()
@@ -520,7 +520,7 @@ async def test_project_run_persists_relative_assistant_output_file_reference(
 async def test_identity_session_unchanged_path_and_workspace_cwd(tmp_path: Path) -> None:
     # With project_id=None the Session keeps the identity scope and the tool cwd
     # stays the agent workspace — today's behavior, exactly unchanged.
-    from tests.core.chat.test_chat_loop import StubAdapter, StubAgent
+    from tests.core.chat.chat_loop_support import StubAdapter, StubAgent
 
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
     adapter = StubAdapter(
@@ -559,7 +559,7 @@ async def test_identity_session_unchanged_path_and_workspace_cwd(tmp_path: Path)
 async def test_project_run_threads_project_id_to_tool_context(tmp_path: Path) -> None:
     # End-to-end: a run scoped to a project must set ToolContext.project_id on
     # every tool call, so the subagent tool can inherit the parent run's project.
-    from tests.core.chat.test_chat_loop import StubAdapter, StubAgent
+    from tests.core.chat.chat_loop_support import StubAdapter, StubAgent
 
     repo_dir = tmp_path / "repo"
     repo_dir.mkdir()
@@ -594,7 +594,7 @@ async def test_project_run_threads_project_id_to_tool_context(tmp_path: Path) ->
 @pytest.mark.asyncio
 async def test_identity_run_leaves_tool_context_project_id_none(tmp_path: Path) -> None:
     # The identity path (project_id=None) keeps ToolContext.project_id None.
-    from tests.core.chat.test_chat_loop import StubAdapter, StubAgent
+    from tests.core.chat.chat_loop_support import StubAdapter, StubAgent
 
     seen: list[str | None] = []
 
@@ -625,7 +625,7 @@ async def test_identity_run_leaves_tool_context_project_id_none(tmp_path: Path) 
 async def test_project_run_resolves_config_agent_through_resolver(tmp_path: Path) -> None:
     # A project run must resolve the project's config agent (not the identity
     # store agent) through the one resolver seam, and run on its resolved model.
-    from tests.core.chat.test_chat_loop import StubAdapter, StubAgent
+    from tests.core.chat.chat_loop_support import StubAdapter, StubAgent
 
     repo_dir = tmp_path / "repo"
     repo_dir.mkdir()
@@ -658,7 +658,7 @@ async def test_project_run_resolves_config_agent_through_resolver(tmp_path: Path
 async def test_identity_run_resolves_store_agent_unchanged(tmp_path: Path) -> None:
     # The identity path resolves with project_id=None and runs the store agent's
     # model exactly as before — no project profile involved.
-    from tests.core.chat.test_chat_loop import StubAdapter, StubAgent
+    from tests.core.chat.chat_loop_support import StubAdapter, StubAgent
 
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
     adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
@@ -678,7 +678,7 @@ async def test_identity_run_resolves_store_agent_unchanged(tmp_path: Path) -> No
 async def test_unresolvable_project_agent_raises_clear_error(tmp_path: Path) -> None:
     # A project agent that the resolver cannot resolve (off-Team / no usable model)
     # surfaces a clear AgentResolutionError instead of crashing the run path.
-    from tests.core.chat.test_chat_loop import StubAdapter, StubAgent
+    from tests.core.chat.chat_loop_support import StubAdapter, StubAgent
 
     repo_dir = tmp_path / "repo"
     repo_dir.mkdir()
@@ -707,7 +707,7 @@ async def test_tool_restriction_denies_at_dispatch_without_changing_definitions(
     # fails through the tool_not_allowed path. The provider tool definitions
     # offered on the wire stay byte-identical to an unrestricted run — the
     # restriction is dispatch-only, so the prompt/tool-definition cache is intact.
-    from tests.core.chat.test_chat_loop import StubAdapter, StubAgent, StubRuntime
+    from tests.core.chat.chat_loop_support import StubAdapter, StubAgent, StubRuntime
 
     def make_recording_tool(ran: list[str], label: str):
         async def handler(_context: ToolContext, _arguments: dict) -> dict:
@@ -791,7 +791,7 @@ async def test_tool_restriction_denies_at_dispatch_without_changing_definitions(
 async def test_same_scope_fork_reuses_cache_affinity_but_not_session_context(
     tmp_path: Path,
 ) -> None:
-    from tests.core.chat.test_chat_loop import StubAdapter, StubAgent, StubRuntime
+    from tests.core.chat.chat_loop_support import StubAdapter, StubAgent, StubRuntime
 
     class RequestContextAdapter(StubAdapter):
         def __init__(self) -> None:
@@ -850,7 +850,7 @@ async def test_same_scope_fork_reuses_cache_affinity_but_not_session_context(
 async def test_skill_catalog_call_uses_stable_definition_during_restriction(
     tmp_path: Path,
 ) -> None:
-    from tests.core.chat.test_chat_loop import StubAdapter, StubAgent, StubRuntime
+    from tests.core.chat.chat_loop_support import StubAdapter, StubAgent, StubRuntime
 
     def build(session_id: str, *, invoke: bool = False) -> tuple[Any, StubAdapter, list[str]]:
         ran: list[str] = []
@@ -921,7 +921,7 @@ async def test_skill_catalog_call_uses_stable_definition_during_restriction(
 async def test_checkpoint_granted_history_stays_advertised_when_run_restricts_dispatch(
     tmp_path: Path,
 ) -> None:
-    from tests.core.chat.test_chat_loop import StubAdapter, StubAgent, StubRuntime
+    from tests.core.chat.chat_loop_support import StubAdapter, StubAgent, StubRuntime
 
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=[])
     adapter = StubAdapter(

@@ -43,24 +43,11 @@ class SteeringAdapter(StubAdapter):
         return await super().send(messages, model_id=model_id, **kwargs)
 
 
-class PausedAdapter(StubAdapter):
+class PausedAdapter(PolicyStubAdapter):
+    """Hold the first request until released; reasoning replays only within the Run."""
+
     def __init__(self, responses: list[Any]) -> None:
-        super().__init__(responses)
-        self.entered = asyncio.Event()
-        self.release = asyncio.Event()
-
-    async def send(
-        self, messages: list[dict[str, Any]], *, model_id: str, **kwargs: Any
-    ) -> dict[str, Any]:
-        if not self.requests:
-            self.entered.set()
-            await self.release.wait()
-        return await super().send(messages, model_id=model_id, **kwargs)
-
-
-class PausedPolicyAdapter(PolicyStubAdapter):
-    def __init__(self, responses: list[Any], *, policy: Any) -> None:
-        super().__init__(responses, policy=policy)
+        super().__init__(responses, policy="current_run")
         self.entered = asyncio.Event()
         self.release = asyncio.Event()
 
@@ -161,8 +148,9 @@ async def test_rejects_stale_run_and_keeps_input_on_cancel(tmp_path: Path) -> No
 
 
 @pytest.mark.asyncio
-async def test_each_steered_step_gets_a_fresh_recovery_budget(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setattr("core.chat.recovery.compute_retry_delay", lambda *a, **kw: (0, False))
+async def test_each_steered_step_gets_a_fresh_recovery_budget(
+    tmp_path: Path, recovery_waits: list[float]
+) -> None:
     failures: list[Any] = [NetworkError("temporarily unavailable") for _ in range(8)]
     answers = [{"content": f"Answer {index}", "tool_calls": None} for index in range(10)]
     # The first answer needs the ninth attempt; nine steered answers follow it.
@@ -188,6 +176,7 @@ async def test_each_steered_step_gets_a_fresh_recovery_budget(tmp_path: Path, mo
     ]
     # Only the initial step failed; no steered request waits for a backoff.
     assert retries == list(range(2, 10))
+    assert len(recovery_waits) == 8
     history = runtime.chat_sessions.get(session_address("coder", "one")).load()
     assert len([m for m in history if m.role == "user"]) == 10
 
@@ -244,9 +233,7 @@ async def test_steering_keeps_current_run_reasoning(tmp_path: Path, steer: bool)
         "tool_calls": [{"id": "a", "name": "probe", "arguments": {}}],
         "terminal_outcome": "tool_calls",
     }
-    adapter = PausedPolicyAdapter(
-        [first, {"content": "After", "tool_calls": None}], policy="current_run"
-    )
+    adapter = PausedAdapter([first, {"content": "After", "tool_calls": None}])
     tools = ToolRegistry()
     tools.register(
         "probe", "Probe", {"type": "object"}, lambda _ctx, _args: tool_success({"done": True})

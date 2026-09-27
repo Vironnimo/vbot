@@ -418,8 +418,11 @@ async def test_real_run_cancel_during_parallel_tools_repairs_the_next_request(
 
     after_cancel = history(runtime)
     assert cancel_callbacks == ["call_slow"]
-    assert runtime.process_manager.cancelled_scopes == [cancelled_run.id]
-    assert runtime.process_manager.released_scopes == [cancelled_run.id]
+    # The settled Run releases its process scope only after cancelling it.
+    assert runtime.process_manager.scope_events == [
+        ("cancel", cancelled_run.id),
+        ("release", cancelled_run.id),
+    ]
     assert persisted_roles(after_cancel) == ["user", "assistant"]
     assert [m.status for m in after_cancel if m.role == "run_summary"] == ["cancelled"]
 

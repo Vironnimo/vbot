@@ -24,8 +24,7 @@ from core.runs import ChatRunManager
 from core.skills.skills import SkillRegistry
 from core.tools import ToolAccess, ToolRegistry, tool_success
 from core.tools.file_state import FileReadState
-from tests.core.chat.chat_loop_support import build_chat_loop
-from tests.core.chat.test_chat_loop import StubModels, StubProjects
+from tests.core.chat.chat_loop_support import StubModels, StubProjects, build_chat_loop
 
 JsonObject = dict[str, Any]
 
@@ -38,7 +37,7 @@ JsonObject = dict[str, Any]
 class DebugTrackingStubAdapter:
     """Stub adapter that records set_debug_context() calls.
 
-    This is separate from the test_chat_loop.py StubAdapter so we can
+    This is separate from the chat_loop_support StubAdapter so we can
     add debug context tracking without modifying existing test stubs.
     """
 
@@ -527,9 +526,9 @@ async def test_no_debug_context_for_adapters_without_set_debug_context(
     tmp_path: Path,
 ) -> None:
     """The chat loop does not crash when the adapter lacks set_debug_context."""
-    from tests.core.chat.test_chat_loop import StubAdapter as BaseStubAdapter
-    from tests.core.chat.test_chat_loop import StubAgent as BaseStubAgent
-    from tests.core.chat.test_chat_loop import StubRuntime as BaseStubRuntime
+    from tests.core.chat.chat_loop_support import StubAdapter as BaseStubAdapter
+    from tests.core.chat.chat_loop_support import StubAgent as BaseStubAgent
+    from tests.core.chat.chat_loop_support import StubRuntime as BaseStubRuntime
 
     agent = BaseStubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
     adapter = BaseStubAdapter([{"content": "Hello", "tool_calls": None}])
@@ -548,9 +547,9 @@ async def test_no_debug_context_for_streaming_without_set_debug_context(
 ) -> None:
     """The streaming chat loop does not crash when the adapter lacks
     set_debug_context."""
-    from tests.core.chat.test_chat_loop import StubAdapter as BaseStubAdapter
-    from tests.core.chat.test_chat_loop import StubAgent as BaseStubAgent
-    from tests.core.chat.test_chat_loop import StubRuntime as BaseStubRuntime
+    from tests.core.chat.chat_loop_support import StubAdapter as BaseStubAdapter
+    from tests.core.chat.chat_loop_support import StubAgent as BaseStubAgent
+    from tests.core.chat.chat_loop_support import StubRuntime as BaseStubRuntime
 
     agent = BaseStubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
     adapter = BaseStubAdapter(

@@ -466,9 +466,9 @@ async def test_rereading_overwritten_image_delivers_each_calls_own_pixels(
                 for message in messages
                 if message.get("role") == "tool" and TOOL_RESULT_CONTENT_BLOCKS_FIELD in message
             ]
-            assert [message["tool_call_id"] for message in results] == [
-                f"read-{index}" for index in range(step)
-            ]
+            # Id-less streams name every call tool_call_0, so each result is
+            # matched to its own pixels by its Tool message, not its call id.
+            assert [message["tool_call_id"] for message in results] == ["tool_call_0"] * step
             for index, result in enumerate(results):
                 media = [
                     part
@@ -494,10 +494,10 @@ async def test_rereading_overwritten_image_delivers_each_calls_own_pixels(
             {
                 "content": None,
                 "tool_calls": [
-                    {"id": f"read-{index}", "name": "read", "arguments": {"path": "front.png"}}
+                    {"id": "tool_call_0", "name": "read", "arguments": {"path": "front.png"}}
                 ],
             }
-            for index in range(len(frames))
+            for _ in frames
         ]
         + [{"content": "done", "tool_calls": None}]
     )
