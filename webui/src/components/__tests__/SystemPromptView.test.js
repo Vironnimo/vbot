@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from 'vitest';
+import { t } from '../../lib/i18n.js';
 import {
   flushSync,
   mount,
@@ -17,22 +18,46 @@ import {
   createDataTransfer,
   dragEvent,
   waitForCondition,
+  clickTab,
   setupSystemPromptViewSuite,
 } from './SystemPromptView.support.js';
 
-describe('SystemPromptView', () => {
+function hasCall(method) {
+  return rpcMock.mock.calls.some((call) => call[0] === method);
+}
+
+function editBlock(blockId, value) {
+  const textarea = blockElement(blockId).querySelector('textarea');
+  textarea.value = value;
+  textarea.dispatchEvent(new Event('input', { bubbles: true }));
+  flushSync();
+}
+
+async function advanceAutosave() {
+  await vi.advanceTimersByTimeAsync(800);
+  await Promise.resolve();
+  await Promise.resolve();
+  flushSync();
+}
+
+describe('SystemPromptView blocks', () => {
   const suite = setupSystemPromptViewSuite();
 
-  it('renders blocks in layout order with the shared view chrome', async () => {
-    rpcMock.mockImplementation(createRpcMock());
-
-    suite.mountedComponent = mount(SystemPromptView, { target: document.body });
+  async function mountView(options = {}, props = {}) {
+    rpcMock.mockImplementation(createRpcMock(options));
+    suite.mountedComponent = mount(SystemPromptView, {
+      target: document.body,
+      props,
+    });
     flushSync();
-
-    await waitForCondition(
-      () => blockIds().length === baseBlocks().length,
-      100,
+    const expectedIds = (options.blocks ?? baseBlocks()).map(
+      (block) => block.id,
     );
+    await waitForCondition(() => blockIds().length === expectedIds.length, 100);
+  }
+
+  it('renders blocks in layout order with editable text blocks and a collapsed data preview', async () => {
+    await mountView();
 
     expect(blockIds()).toEqual([
       'core:intro',
@@ -40,7 +65,6 @@ describe('SystemPromptView', () => {
       'tool:bash',
       'data:soul',
     ]);
-
     expect(document.querySelectorAll('.sp-block-owner')).toHaveLength(4);
     expect(document.querySelector('.sp-scroll.view-frame')).toBeTruthy();
     expect(document.querySelector('.sp-top .sp-navigation')).toBeTruthy();
@@ -49,7 +73,6 @@ describe('SystemPromptView', () => {
       document.querySelector('.sp-blocklist-toolbar.view-toolbar--split'),
     ).toBeTruthy();
     const guide = document.querySelector('.sp-blocklist-guide');
-    expect(guide).toBeTruthy();
     expect(guide.getAttribute('aria-labelledby')).toBe(
       'sp-blocklist-guide-title',
     );
@@ -57,120 +80,78 @@ describe('SystemPromptView', () => {
     expect(
       guide.querySelectorAll('.sp-blocklist-guide__details p'),
     ).toHaveLength(2);
-  });
 
-  it('renders an editable textarea for text blocks but not for data blocks', async () => {
-    rpcMock.mockImplementation(createRpcMock());
-
-    suite.mountedComponent = mount(SystemPromptView, { target: document.body });
-    flushSync();
-
-    await waitForCondition(
-      () => blockIds().length === baseBlocks().length,
-      100,
-    );
-
-    // Three editable text blocks → three textareas; the data block has none.
+    // Three editable text blocks get a textarea; the data block has none.
     const textareas = document.body.querySelectorAll(
       'textarea.text-area--inset',
     );
     expect(textareas).toHaveLength(3);
     expect(textareas[0].value).toBe('# Intro');
 
-    // The data block renders the read-only data presentation instead.
+    // The data block renders a read-only presentation whose preview opens on
+    // demand.
     const dataBlock = blockElement('data:soul');
     expect(dataBlock.querySelector('textarea')).toBeNull();
     expect(dataBlock.querySelector('.sp-data-block')).toBeTruthy();
-  });
-
-  it('reveals the collapsed data block preview on demand', async () => {
-    rpcMock.mockImplementation(createRpcMock());
-
-    suite.mountedComponent = mount(SystemPromptView, { target: document.body });
-    flushSync();
-
-    await waitForCondition(
-      () => blockIds().length === baseBlocks().length,
-      100,
-    );
-
-    const dataBlock = blockElement('data:soul');
     expect(dataBlock.querySelector('.sp-data-preview')).toBeNull();
-
     dataBlock.querySelector('.sp-data-toggle').click();
     flushSync();
-
     expect(dataBlock.querySelector('.sp-data-preview').textContent).toContain(
       '<file>SOUL</file>',
     );
   });
 
-  it('toggling a block persists immediately via prompt.set_layout', async () => {
-    rpcMock.mockImplementation(createRpcMock());
-
-    suite.mountedComponent = mount(SystemPromptView, { target: document.body });
+  it('opens a block without changing inclusion or losing edits across tabs', async () => {
+    await mountView();
+    clickTab(t('systemPrompt.tabs.edit', 'Edit blocks'));
+    const block = blockElement('core:intro');
+    const disclosure = block.querySelector('button[aria-expanded]');
+    expect(disclosure.getAttribute('aria-expanded')).toBe('false');
+    disclosure.click();
     flushSync();
+    expect(disclosure.getAttribute('aria-expanded')).toBe('true');
+    expect(lastCall('prompt.set_layout')).toBeUndefined();
+    editBlock('core:intro', 'PRESERVED-DRAFT');
+    clickTab(t('systemPrompt.tabs.tools', 'Tools'));
+    clickTab(t('systemPrompt.tabs.edit', 'Edit blocks'));
+    expect(block.querySelector('textarea').value).toBe('PRESERVED-DRAFT');
+    expect(disclosure.getAttribute('aria-expanded')).toBe('true');
+  });
 
-    await waitForCondition(
-      () => blockIds().length === baseBlocks().length,
-      100,
-    );
+  it('toggling a block persists the full ordered layout immediately', async () => {
+    await mountView();
 
     const toggle = blockElement('tool:bash').querySelector(
       'button[role="switch"]',
     );
     expect(toggle.getAttribute('aria-checked')).toBe('true');
-
     toggle.click();
     flushSync();
 
-    await waitForCondition(
-      () => rpcMock.mock.calls.some((call) => call[0] === 'prompt.set_layout'),
-      100,
+    await waitForCondition(() => hasCall('prompt.set_layout'), 100);
+    const { layout } = lastCall('prompt.set_layout')[1];
+    expect(layout.find((entry) => entry.id === 'tool:bash').enabled).toBe(
+      false,
     );
-
-    const layoutCall = lastCall('prompt.set_layout');
-    const bashEntry = layoutCall[1].layout.find(
-      (entry) => entry.id === 'tool:bash',
-    );
-    expect(bashEntry.enabled).toBe(false);
-    // The full ordered layout is sent, not just the toggled block.
-    expect(layoutCall[1].layout.map((entry) => entry.id)).toEqual(blockIds());
+    expect(layout.map((entry) => entry.id)).toEqual(blockIds());
   });
 
-  it('editing an editable block autosaves via prompt.update after the debounce', async () => {
-    rpcMock.mockImplementation(createRpcMock());
-
-    suite.mountedComponent = mount(SystemPromptView, { target: document.body });
-    flushSync();
-
-    await waitForCondition(
-      () => blockIds().length === baseBlocks().length,
-      100,
-    );
+  it('autosaves an edited block after the debounce and then refreshes the preview', async () => {
+    await mountView();
 
     vi.useFakeTimers();
     const previewCallsBefore = rpcMock.mock.calls.filter(
       (call) => call[0] === 'prompt.preview',
     ).length;
 
-    const textarea = blockElement('core:intro').querySelector('textarea');
-    textarea.value = 'updated intro';
-    textarea.dispatchEvent(new Event('input', { bubbles: true }));
-    flushSync();
-
-    expect(document.body.textContent).toContain('unsaved');
-    expect(rpcMock.mock.calls.some((call) => call[0] === 'prompt.update')).toBe(
-      false,
+    editBlock('core:intro', 'updated intro');
+    expect(document.body.textContent).toContain(
+      t('systemPrompt.fragmentEditor.dirtyIndicator', 'unsaved'),
     );
+    expect(hasCall('prompt.update')).toBe(false);
 
-    await vi.advanceTimersByTimeAsync(800);
-    await Promise.resolve();
-    await Promise.resolve();
-    flushSync();
-
-    const updateCall = lastCall('prompt.update');
-    expect(updateCall[1]).toMatchObject({
+    await advanceAutosave();
+    expect(lastCall('prompt.update')[1]).toMatchObject({
       id: 'core:intro',
       content: 'updated intro',
     });
@@ -183,100 +164,59 @@ describe('SystemPromptView', () => {
     ).toBeGreaterThan(previewCallsBefore);
   });
 
-  it('autosave keys by block id, not array index, after a reorder', async () => {
-    rpcMock.mockImplementation(createRpcMock());
+  it('reorders via the keyboard, announces the position, and autosaves the moved block by id', async () => {
+    await mountView();
 
-    suite.mountedComponent = mount(SystemPromptView, { target: document.body });
-    flushSync();
+    const moveWithKey = async (blockId, key) => {
+      const layoutCalls = rpcMock.mock.calls.filter(
+        (call) => call[0] === 'prompt.set_layout',
+      ).length;
+      const handle = blockHandle(blockId);
+      handle.focus();
+      pressKey(handle, key);
+      flushSync();
+      await waitForCondition(
+        () =>
+          rpcMock.mock.calls.filter((call) => call[0] === 'prompt.set_layout')
+            .length > layoutCalls,
+        100,
+      );
+    };
+    await moveWithKey('core:intro', 'ArrowDown');
+    await moveWithKey('tool:bash', 'ArrowUp');
 
-    await waitForCondition(
-      () => blockIds().length === baseBlocks().length,
-      100,
+    const movedOrder = [
+      'memory:guidance',
+      'tool:bash',
+      'core:intro',
+      'data:soul',
+    ];
+    expect(blockIds()).toEqual(movedOrder);
+    expect(
+      lastCall('prompt.set_layout')[1].layout.map((entry) => entry.id),
+    ).toEqual(movedOrder);
+    expect(
+      document.body.querySelector('[aria-live="polite"]').textContent,
+    ).toContain(
+      t(
+        'systemPrompt.blockList.reorderAnnouncement',
+        'Moved to position {position} of {total}',
+        { position: 2, total: 4 },
+      ),
     );
 
-    // Move the first block (core:intro) down via the keyboard, then edit it: the
-    // autosave must target core:intro by id even though its index changed.
-    const handle = blockHandle('core:intro');
-    handle.focus();
-    pressKey(handle, 'ArrowDown');
-    flushSync();
-    await waitForCondition(
-      () => rpcMock.mock.calls.some((call) => call[0] === 'prompt.set_layout'),
-      100,
-    );
-
+    // The autosave targets core:intro by id even though its index changed.
     vi.useFakeTimers();
-    const textarea = blockElement('core:intro').querySelector('textarea');
-    textarea.value = 'edited after move';
-    textarea.dispatchEvent(new Event('input', { bubbles: true }));
-    flushSync();
-
-    await vi.advanceTimersByTimeAsync(800);
-    await Promise.resolve();
-    await Promise.resolve();
-    flushSync();
-
-    const updateCall = lastCall('prompt.update');
-    expect(updateCall[1]).toMatchObject({
+    editBlock('core:intro', 'edited after move');
+    await advanceAutosave();
+    expect(lastCall('prompt.update')[1]).toMatchObject({
       id: 'core:intro',
       content: 'edited after move',
     });
   });
 
-  it('per-block reset calls prompt.reset after confirm', async () => {
-    rpcMock.mockImplementation(
-      createRpcMock({
-        promptReset: {
-          id: 'core:intro',
-          text: '# Bundled intro',
-          is_modified: false,
-        },
-      }),
-    );
-
-    suite.mountedComponent = mount(SystemPromptView, { target: document.body });
-    flushSync();
-
-    await waitForCondition(
-      () => blockIds().length === baseBlocks().length,
-      100,
-    );
-
-    const resetButton = Array.from(
-      blockElement('core:intro').querySelectorAll('button.btn-secondary'),
-    ).find((button) => button.textContent.trim() === 'Reset');
-    resetButton.click();
-    flushSync();
-
-    // The ConfirmDialog gates the reset; confirming it fires the RPC.
-    confirmDialog('Reset');
-    flushSync();
-
-    await waitForCondition(
-      () => rpcMock.mock.calls.some((call) => call[0] === 'prompt.reset'),
-      100,
-    );
-
-    expect(lastCall('prompt.reset')[1]).toMatchObject({ id: 'core:intro' });
-
-    await waitForCondition(
-      () =>
-        blockElement('core:intro').querySelector('textarea').value ===
-        '# Bundled intro',
-      50,
-    );
-  });
-
   it('reorders via native drag-and-drop and persists the new order', async () => {
-    rpcMock.mockImplementation(createRpcMock());
-
-    suite.mountedComponent = mount(SystemPromptView, { target: document.body });
-    flushSync();
-
-    await waitForCondition(
-      () => blockIds().length === baseBlocks().length,
-      100,
-    );
+    await mountView();
 
     const dataTransfer = createDataTransfer();
     // Drag the first handle (core:intro) onto the third row (tool:bash).
@@ -291,219 +231,137 @@ describe('SystemPromptView', () => {
     blockElement('tool:bash').dispatchEvent(dragEvent('drop', dataTransfer));
     flushSync();
 
-    await waitForCondition(
-      () => rpcMock.mock.calls.some((call) => call[0] === 'prompt.set_layout'),
-      100,
-    );
-
-    // core:intro moved from index 0 to index 2 (where tool:bash was).
-    expect(blockIds()).toEqual([
+    await waitForCondition(() => hasCall('prompt.set_layout'), 100);
+    const movedOrder = [
       'memory:guidance',
       'tool:bash',
       'core:intro',
       'data:soul',
-    ]);
-    expect(lastCall('prompt.set_layout')[1].layout.map((e) => e.id)).toEqual([
-      'memory:guidance',
-      'tool:bash',
-      'core:intro',
-      'data:soul',
-    ]);
-  });
-
-  it('reorders via the keyboard, persists, and announces the new position', async () => {
-    rpcMock.mockImplementation(createRpcMock());
-
-    suite.mountedComponent = mount(SystemPromptView, { target: document.body });
-    flushSync();
-
-    await waitForCondition(
-      () => blockIds().length === baseBlocks().length,
-      100,
-    );
-
-    const handle = blockHandle('memory:guidance');
-    handle.focus();
-    pressKey(handle, 'ArrowUp');
-    flushSync();
-
-    await waitForCondition(
-      () => rpcMock.mock.calls.some((call) => call[0] === 'prompt.set_layout'),
-      100,
-    );
-
-    // memory:guidance moved up above core:intro.
-    expect(blockIds()).toEqual([
-      'memory:guidance',
-      'core:intro',
-      'tool:bash',
-      'data:soul',
-    ]);
-    expect(lastCall('prompt.set_layout')[1].layout[0].id).toBe(
-      'memory:guidance',
-    );
-
-    // The aria-live region announces the new position.
-    const live = document.body.querySelector('[aria-live="polite"]');
-    expect(live.textContent).toContain('position 1');
-  });
-
-  it('creates a custom block through prompt.create_block', async () => {
-    window.prompt = vi.fn(() => 'my-note');
-    rpcMock.mockImplementation(createRpcMock());
-
-    suite.mountedComponent = mount(SystemPromptView, { target: document.body });
-    flushSync();
-
-    await waitForCondition(
-      () => blockIds().length === baseBlocks().length,
-      100,
-    );
-
-    clickToolbarButton('New block');
-    flushSync();
-
-    await waitForCondition(
-      () =>
-        rpcMock.mock.calls.some((call) => call[0] === 'prompt.create_block'),
-      100,
-    );
-
-    expect(lastCall('prompt.create_block')[1]).toMatchObject({
-      slug: 'my-note',
-    });
-  });
-
-  it('surfaces a bad slug as a toast without calling the backend', async () => {
-    const toastMock = vi.fn();
-    window.prompt = vi.fn(() => '1 bad slug!');
-    rpcMock.mockImplementation(createRpcMock());
-
-    suite.mountedComponent = mount(SystemPromptView, {
-      target: document.body,
-      props: { onToast: toastMock },
-    });
-    flushSync();
-
-    await waitForCondition(
-      () => blockIds().length === baseBlocks().length,
-      100,
-    );
-
-    clickToolbarButton('New block');
-    flushSync();
-
-    expect(toastMock).toHaveBeenCalledWith(
-      expect.objectContaining({ variant: 'error' }),
-    );
+    ];
+    expect(blockIds()).toEqual(movedOrder);
     expect(
-      rpcMock.mock.calls.some((call) => call[0] === 'prompt.create_block'),
-    ).toBe(false);
+      lastCall('prompt.set_layout')[1].layout.map((entry) => entry.id),
+    ).toEqual(movedOrder);
   });
 
-  it('surfaces a backend bad-slug rejection as a toast', async () => {
-    const toastMock = vi.fn();
-    window.prompt = vi.fn(() => 'taken');
-    rpcMock.mockImplementation(
-      createRpcMock({
-        createBlockError: new Error('invalid_request'),
-      }),
-    );
-
-    suite.mountedComponent = mount(SystemPromptView, {
-      target: document.body,
-      props: { onToast: toastMock },
+  it('resets a block through prompt.reset after confirmation', async () => {
+    await mountView({
+      promptReset: {
+        id: 'core:intro',
+        text: '# Bundled intro',
+        is_modified: false,
+      },
     });
+
+    Array.from(
+      blockElement('core:intro').querySelectorAll('button.btn-secondary'),
+    )
+      .find(
+        (button) =>
+          button.textContent.trim() ===
+          t('systemPrompt.fragmentEditor.reset', 'Reset'),
+      )
+      .click();
     flushSync();
+    expect(hasCall('prompt.reset')).toBe(false);
 
-    await waitForCondition(
-      () => blockIds().length === baseBlocks().length,
-      100,
-    );
-
-    clickToolbarButton('New block');
+    confirmDialog(t('common.reset', 'Reset'));
     flushSync();
-
+    await waitForCondition(() => hasCall('prompt.reset'), 100);
+    expect(lastCall('prompt.reset')[1]).toMatchObject({ id: 'core:intro' });
     await waitForCondition(
       () =>
-        rpcMock.mock.calls.some((call) => call[0] === 'prompt.create_block'),
-      100,
-    );
-
-    expect(toastMock).toHaveBeenCalledWith(
-      expect.objectContaining({ variant: 'error' }),
+        blockElement('core:intro').querySelector('textarea').value ===
+        '# Bundled intro',
+      50,
     );
   });
 
-  it('removes a custom block through prompt.remove_block after confirm', async () => {
-    rpcMock.mockImplementation(
-      createRpcMock({
-        blocks: [
-          ...baseBlocks(),
-          {
-            id: 'user:my-note',
-            owner: 'always',
-            kind: 'text',
-            source: 'user',
-            editable: true,
-            enabled: true,
-            text: 'custom text',
-            is_modified: true,
-          },
-        ],
-      }),
-    );
+  it.each([
+    ['a valid slug', 'my-note', null, true, false],
+    ['an invalid slug', '1 bad slug!', null, false, true],
+    [
+      'a slug the backend rejects',
+      'taken',
+      new Error('invalid_request'),
+      true,
+      true,
+    ],
+  ])(
+    'creates a custom block from %s',
+    async (_case, slug, createBlockError, expectCreate, expectToast) => {
+      const onToast = vi.fn();
+      window.prompt = vi.fn(() => slug);
+      await mountView({ createBlockError }, { onToast });
 
-    suite.mountedComponent = mount(SystemPromptView, { target: document.body });
-    flushSync();
+      clickToolbarButton(t('systemPrompt.blockList.newBlock', 'New block'));
+      flushSync();
+      await Promise.resolve();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      flushSync();
 
-    await waitForCondition(() => blockIds().includes('user:my-note'), 100);
+      if (expectCreate) {
+        await waitForCondition(() => hasCall('prompt.create_block'), 100);
+        expect(lastCall('prompt.create_block')[1]).toMatchObject({ slug });
+      } else {
+        expect(hasCall('prompt.create_block')).toBe(false);
+      }
+      if (expectToast) {
+        await waitForCondition(() => onToast.mock.calls.length > 0, 100);
+        expect(onToast).toHaveBeenCalledWith(
+          expect.objectContaining({ variant: 'error' }),
+        );
+      } else {
+        expect(onToast).not.toHaveBeenCalled();
+      }
+    },
+  );
 
-    const removeButton = Array.from(
+  it('removes a custom block through prompt.remove_block after confirmation', async () => {
+    await mountView({
+      blocks: [
+        ...baseBlocks(),
+        {
+          id: 'user:my-note',
+          owner: 'always',
+          kind: 'text',
+          source: 'user',
+          editable: true,
+          enabled: true,
+          text: 'custom text',
+          is_modified: true,
+        },
+      ],
+    });
+
+    const removeLabel = t('common.remove', 'Remove');
+    Array.from(
       blockElement('user:my-note').querySelectorAll('button.btn-danger'),
-    ).find((button) => button.textContent.trim() === 'Remove');
-    expect(removeButton).toBeTruthy();
-
-    removeButton.click();
+    )
+      .find((button) => button.textContent.trim() === removeLabel)
+      .click();
     flushSync();
+    expect(hasCall('prompt.remove_block')).toBe(false);
 
-    // The ConfirmDialog gates the removal; confirming it fires the RPC.
-    confirmDialog('Remove');
+    confirmDialog(removeLabel);
     flushSync();
-
-    await waitForCondition(
-      () =>
-        rpcMock.mock.calls.some((call) => call[0] === 'prompt.remove_block'),
-      100,
-    );
-
+    await waitForCondition(() => hasCall('prompt.remove_block'), 100);
     expect(lastCall('prompt.remove_block')[1]).toMatchObject({
       id: 'user:my-note',
     });
   });
 
-  it('resets the layout through prompt.reset_layout', async () => {
-    rpcMock.mockImplementation(createRpcMock());
+  it('resets the layout through prompt.reset_layout after confirmation', async () => {
+    await mountView();
 
-    suite.mountedComponent = mount(SystemPromptView, { target: document.body });
-    flushSync();
-
-    await waitForCondition(
-      () => blockIds().length === baseBlocks().length,
-      100,
+    clickToolbarButton(
+      t('systemPrompt.blockList.resetLayout', 'Reset order & visibility'),
     );
-
-    clickToolbarButton('Reset order & visibility');
     flushSync();
+    expect(hasCall('prompt.reset_layout')).toBe(false);
 
-    // The ConfirmDialog gates the layout reset; confirming it fires the RPC.
-    confirmDialog('Reset');
+    confirmDialog(t('common.reset', 'Reset'));
     flushSync();
-
-    await waitForCondition(
-      () =>
-        rpcMock.mock.calls.some((call) => call[0] === 'prompt.reset_layout'),
-      100,
-    );
+    await waitForCondition(() => hasCall('prompt.reset_layout'), 100);
   });
 });

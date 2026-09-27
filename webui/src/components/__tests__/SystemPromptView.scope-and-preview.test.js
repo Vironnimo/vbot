@@ -1,0 +1,530 @@
+// @vitest-environment jsdom
+import { describe, expect, it, vi } from 'vitest';
+import { t } from '../../lib/i18n.js';
+import {
+  flushSync,
+  mount,
+  rpcMock,
+  listProjectsMock,
+  showProjectMock,
+  SystemPromptView,
+  componentSource,
+  baseBlocks,
+  createRpcMock,
+  inheritedBadges,
+  blockIds,
+  blockElement,
+  buttonByText,
+  lastCall,
+  scopeTrigger,
+  agentTrigger,
+  dropdownOptionButtons,
+  openDropdown,
+  scopeOptionLabels,
+  agentOptionLabels,
+  selectPromptScope,
+  isLoading,
+  waitForCondition,
+  deferred,
+  clickTab,
+  setupSystemPromptViewSuite,
+} from './SystemPromptView.support.js';
+
+import { reactiveProps } from './reactiveProps.support.svelte.js';
+
+const DEFAULT_SCOPE = () => t('systemPrompt.scope.default', 'Default');
+const AGENT_SCOPE = { type: 'agent', agent_id: 'agent-1' };
+
+function hasCall(method, predicate = () => true) {
+  return rpcMock.mock.calls.some(
+    ([called, params]) => called === method && predicate(params ?? {}),
+  );
+}
+
+function selectPreviewAgent(label) {
+  openDropdown(agentTrigger());
+  const option = dropdownOptionButtons().find((button) =>
+    button.textContent.includes(label),
+  );
+  expect(option, `preview agent not found: ${label}`).toBeTruthy();
+  option.click();
+  flushSync();
+}
+
+function documentText() {
+  return document.querySelector('.sp-document')?.textContent ?? '';
+}
+
+describe('SystemPromptView scope and preview', () => {
+  const suite = setupSystemPromptViewSuite();
+
+  function mountView(props) {
+    suite.mountedComponent = mount(SystemPromptView, {
+      target: document.body,
+      props,
+    });
+    flushSync();
+  }
+
+  async function waitForDefaultScope() {
+    await waitForCondition(
+      () => scopeTrigger()?.textContent.includes(DEFAULT_SCOPE()),
+      100,
+    );
+  }
+
+  it('edits an Agent scope with inherited badges and previews that scope', async () => {
+    rpcMock.mockImplementation(
+      createRpcMock({
+        agentBlocks: baseBlocks().map((block) => ({
+          ...block,
+          is_modified: false,
+          inheritance: 'owner_default',
+        })),
+        promptPreview: { text: 'Agent scoped preview', tokens: 77 },
+      }),
+    );
+    mountView();
+    await waitForDefaultScope();
+
+    // Only the scopes the server offers (default and enabled Agents) appear.
+    expect(scopeOptionLabels()).toEqual([DEFAULT_SCOPE(), 'Alpha']);
+
+    selectPromptScope('Alpha');
+    await waitForCondition(
+      () => hasCall('prompt.list', (params) => params.scope),
+      100,
+    );
+    expect(
+      rpcMock.mock.calls.find(
+        ([method, params]) => method === 'prompt.list' && params?.scope,
+      )[1],
+    ).toEqual({ scope: AGENT_SCOPE });
+
+    await waitForCondition(() => inheritedBadges().length > 0, 100);
+    expect(inheritedBadges()).toHaveLength(3);
+    expect(inheritedBadges()[0].textContent.trim()).toBe(
+      t('systemPrompt.blockList.inheritedBadge', 'inherited'),
+    );
+
+    // The Agent picker stays available and the preview carries the scope.
+    await waitForCondition(
+      () =>
+        agentTrigger()?.textContent.includes('Alpha') &&
+        hasCall('prompt.preview', (params) => params.scope),
+      100,
+    );
+    expect(lastCall('prompt.preview')[1]).toMatchObject({
+      agent_id: 'agent-1',
+      scope: AGENT_SCOPE,
+    });
+    await waitForCondition(
+      () => documentText().includes('Agent scoped preview'),
+      100,
+    );
+
+    // Editing an inherited block autosaves the override with the Agent scope.
+    vi.useFakeTimers();
+    const textarea = blockElement('core:intro').querySelector('textarea');
+    textarea.value = 'agent override';
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+    await vi.advanceTimersByTimeAsync(800);
+    await Promise.resolve();
+    await Promise.resolve();
+    flushSync();
+
+    expect(lastCall('prompt.update')[1]).toMatchObject({
+      id: 'core:intro',
+      content: 'agent override',
+      scope: AGENT_SCOPE,
+    });
+  });
+
+  it('keeps the newest scope when an older prompt list settles late', async () => {
+    const staleAgentResponse = deferred();
+    const baseRpc = createRpcMock();
+    rpcMock.mockImplementation((method, params) => {
+      if (method === 'prompt.list' && params?.scope?.agent_id === 'agent-1') {
+        return staleAgentResponse.promise;
+      }
+      return baseRpc(method, params);
+    });
+    mountView();
+    await waitForDefaultScope();
+
+    selectPromptScope('Alpha');
+    await waitForCondition(
+      () =>
+        hasCall(
+          'prompt.list',
+          (params) => params.scope?.agent_id === 'agent-1',
+        ),
+      100,
+    );
+    selectPromptScope(DEFAULT_SCOPE());
+    await waitForCondition(
+      () =>
+        scopeTrigger()?.textContent.includes(DEFAULT_SCOPE()) && !isLoading(),
+      100,
+    );
+
+    staleAgentResponse.resolve({
+      blocks: [
+        {
+          id: 'user:stale',
+          owner: 'always',
+          kind: 'text',
+          source: 'user',
+          editable: true,
+          enabled: true,
+          text: 'stale',
+        },
+      ],
+      scopes: [
+        { type: 'default', label: 'Default' },
+        { type: 'agent', agent_id: 'agent-1', label: 'Alpha' },
+      ],
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    flushSync();
+
+    expect(scopeTrigger().textContent).toContain(DEFAULT_SCOPE());
+    expect(blockIds()).toEqual(baseBlocks().map((block) => block.id));
+  });
+
+  it.each([
+    ['agent-1', 'Alpha', true],
+    // An Agent without a prompt scope leaves the default selected and never
+    // requests a scoped prompt list.
+    ['ghost', null, false],
+  ])(
+    'handles a scope deep-link request for %s',
+    async (agentId, selectedLabel, requestsScope) => {
+      rpcMock.mockImplementation(createRpcMock());
+      const props = reactiveProps({
+        targetScopeAgentId: '',
+        targetScopeRequestId: 0,
+      });
+      mountView(props);
+      await waitForDefaultScope();
+
+      props.targetScopeAgentId = agentId;
+      props.targetScopeRequestId = 1;
+      flushSync();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      flushSync();
+
+      const scopedList = () =>
+        hasCall('prompt.list', (params) => params.scope?.agent_id === agentId);
+      if (requestsScope) {
+        await waitForCondition(
+          () =>
+            scopedList() && scopeTrigger()?.textContent.includes(selectedLabel),
+          100,
+        );
+      } else {
+        expect(scopeTrigger().textContent).toContain(DEFAULT_SCOPE());
+        expect(scopedList()).toBe(false);
+      }
+    },
+  );
+
+  it.each([
+    [
+      'with Tools',
+      { tokens: 1234, tool_tokens: 456, tool_count: 12 },
+      () =>
+        t(
+          'systemPrompt.preview.tokenBreakdown',
+          '~{prompt} prompt + ~{tools} tools = ~{total} tokens',
+          { prompt: 1234, tools: 456, total: 1690 },
+        ),
+    ],
+    [
+      'without Tools',
+      { tokens: 200, tool_tokens: 0, tool_count: 0 },
+      () =>
+        t('systemPrompt.preview.tokenCount', '~{count} tokens', { count: 200 }),
+    ],
+  ])(
+    'loads the first Agent preview on mount and shows its token count %s',
+    async (_case, tokens, expectedCount) => {
+      rpcMock.mockImplementation(
+        createRpcMock({
+          promptPreview: {
+            text: 'You are an agent named Alpha...',
+            estimated: true,
+            ...tokens,
+          },
+        }),
+      );
+      mountView();
+
+      // No Refresh click: the preview loads for the first selected Agent.
+      await waitForCondition(
+        () => document.body.textContent.includes(expectedCount()),
+        100,
+      );
+      expect(lastCall('prompt.preview')[1]).toMatchObject({
+        agent_id: 'agent-1',
+      });
+      expect(document.body.textContent).toContain(
+        t('systemPrompt.preview.heading', 'Preview for'),
+      );
+      expect(documentText()).toContain('You are an agent named Alpha');
+      expect(
+        buttonByText(t('systemPrompt.preview.refresh', 'Refresh')),
+      ).toBeTruthy();
+      if (!tokens.tool_count) {
+        expect(document.body.textContent).not.toContain('= ~');
+      }
+    },
+  );
+
+  it('offers Project Agents in the preview picker and previews by address', async () => {
+    listProjectsMock.mockResolvedValue({ projects: [{ project_id: 'vbot' }] });
+    showProjectMock.mockResolvedValue({
+      project: { display_name: 'vBot' },
+      scan: { team: [{ agent_id: 'builder', display_name: 'Builder' }] },
+    });
+    rpcMock.mockImplementation(
+      createRpcMock({
+        promptPreview: { text: 'Project agent preview', tokens: 88 },
+      }),
+    );
+    mountView();
+
+    await waitForCondition(() => agentTrigger(), 100);
+    await waitForCondition(
+      () => agentOptionLabels().some((label) => label.includes('builder@vbot')),
+      100,
+    );
+
+    openDropdown(agentTrigger());
+    expect(document.body.textContent).toContain(
+      t('systemPrompt.preview.agentGroup.project', 'Project agents'),
+    );
+    agentTrigger().click();
+    flushSync();
+    selectPreviewAgent('builder@vbot');
+
+    // Selecting the Project Agent loads its preview without a Refresh click.
+    await waitForCondition(
+      () =>
+        hasCall(
+          'prompt.preview',
+          (params) => params.agent_id === 'builder@vbot',
+        ),
+      100,
+    );
+    await waitForCondition(
+      () => documentText().includes('Project agent preview'),
+      100,
+    );
+  });
+
+  it('reloads the preview for a newly selected Agent and ignores the older one that finishes late', async () => {
+    const old = deferred();
+    const base = createRpcMock();
+    rpcMock.mockImplementation((method, params) => {
+      if (method !== 'prompt.preview') return base(method, params);
+      return params.agent_id === 'agent-1'
+        ? old.promise
+        : Promise.resolve({ text: 'NEW-AGENT', tools: [], tokens: 5 });
+    });
+    mountView();
+    await waitForCondition(
+      () =>
+        hasCall('prompt.preview', (params) => params.agent_id === 'agent-1'),
+      100,
+    );
+
+    selectPreviewAgent('Beta');
+    await waitForCondition(() => documentText().includes('NEW-AGENT'), 100);
+    expect(lastCall('prompt.preview')[1]).toMatchObject({
+      agent_id: 'agent-2',
+    });
+
+    old.resolve({
+      text: 'STALE-AGENT',
+      tools: [{ definition: { name: 'stale', parameters: {} }, tokens: 5 }],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    flushSync();
+    expect(documentText()).toContain('NEW-AGENT');
+    clickTab(t('systemPrompt.tabs.tools', 'Tools'));
+    expect(document.querySelector('.tool-detail')).toBeNull();
+  });
+
+  it('opens in document view and copies the exact original prompt', async () => {
+    const text =
+      '# Inspection fixture\n\nKeep **all** words.\n<external>literal</external>';
+    const writeText = vi.fn().mockResolvedValue();
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    });
+    rpcMock.mockImplementation(
+      createRpcMock({ promptPreview: { text, tokens: 25, tools: [] } }),
+    );
+    mountView();
+    await waitForCondition(
+      () => document.querySelector('.sp-document h1'),
+      100,
+    );
+    expect(document.querySelector('.sp-editor').hidden).toBe(true);
+    expect(document.querySelector('external')).toBeNull();
+    clickTab(t('systemPrompt.format.original', 'Original text'));
+    expect(document.querySelector('.sp-preview-pre').textContent).toBe(text);
+    document.querySelector('.sp-document-toolbar button.btn-secondary').click();
+    await waitForCondition(() => writeText.mock.calls.length > 0, 100);
+    expect(writeText).toHaveBeenCalledWith(text);
+  });
+
+  it('shows searchable complete Tool definitions separately from the prompt', async () => {
+    const definition = {
+      name: 'mcp_fixture',
+      description: 'TEST-MCP-DESCRIPTION <script>inert</script>',
+      parameters: {
+        type: 'object',
+        properties: { action: { enum: ['search', 'describe'] } },
+      },
+    };
+    rpcMock.mockImplementation(
+      createRpcMock({
+        promptPreview: {
+          text: 'PROMPT-ONLY',
+          tokens: 10,
+          tools: [
+            { definition, tokens: 350 },
+            {
+              definition: {
+                name: 'read',
+                description: 'READ-FIXTURE',
+                parameters: {},
+              },
+              tokens: 100,
+            },
+          ],
+        },
+      }),
+    );
+    mountView();
+    await waitForCondition(() => document.querySelector('.sp-document'), 100);
+    expect(documentText()).not.toContain('TEST-MCP-DESCRIPTION');
+    expect(lastCall('prompt.preview')[1].include_tools).toBe(true);
+    clickTab(t('systemPrompt.tabs.tools', 'Tools'));
+    expect(document.querySelector('.tool-description').textContent).toBe(
+      definition.description,
+    );
+    expect(
+      JSON.parse(document.querySelector('.tool-schema').textContent),
+    ).toEqual(definition.parameters);
+    expect(document.querySelector('.tool-detail script')).toBeNull();
+    const search = document.querySelector('input[type="search"]');
+    search.value = 'READ-FIXTURE';
+    search.dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+    expect(document.querySelector('.tool-detail h3').textContent).toBe('read');
+    expect(document.querySelectorAll('.tool-index-item')).toHaveLength(1);
+    search.value = 'not-found';
+    search.dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+    expect(document.querySelector('.tool-detail')).toBeNull();
+    expect(document.body.textContent).toContain(
+      t('systemPrompt.tools.noMatches', 'No matching Tools'),
+    );
+  });
+
+  it('shows a failed preview and retries without retaining old content', async () => {
+    const base = createRpcMock();
+    let failing = true;
+    rpcMock.mockImplementation((method, params) =>
+      method === 'prompt.preview' && failing
+        ? Promise.reject(new Error('test outage'))
+        : base(method, params),
+    );
+    const retryButton = () => buttonByText(t('common.retry', 'Retry'));
+    mountView();
+    await waitForCondition(retryButton, 100);
+    expect(document.querySelector('.sp-document')).toBeNull();
+    failing = false;
+    retryButton().click();
+    await waitForCondition(() => document.querySelector('.sp-document'), 100);
+    expect(retryButton()).toBeNull();
+  });
+
+  it('all new i18n keys have t() calls in the component source', () => {
+    const source = componentSource();
+
+    const requiredKeys = [
+      'common.saved',
+      'common.alreadySaved',
+      'common.remove',
+      'systemPrompt.title',
+      'systemPrompt.scope.label',
+      'systemPrompt.scope.default',
+      'systemPrompt.fragmentEditor.save',
+      'systemPrompt.fragmentEditor.reset',
+      'systemPrompt.fragmentEditor.dirtyIndicator',
+      'systemPrompt.fragmentEditor.modifiedIndicator',
+      'systemPrompt.fragmentEditor.modifiedHint',
+      'systemPrompt.fragmentEditor.resetConfirm',
+      'systemPrompt.fragmentEditor.resetAgentConfirm',
+      'systemPrompt.fragmentEditor.resetConfirmTitle',
+      'systemPrompt.blockList.guide.label',
+      'systemPrompt.blockList.guide.title',
+      'systemPrompt.blockList.guide.assemblyLabel',
+      'systemPrompt.blockList.guide.assembly',
+      'systemPrompt.blockList.guide.scopeLabel',
+      'systemPrompt.blockList.guide.scope',
+      'systemPrompt.blockList.newBlock',
+      'systemPrompt.blockList.newBlockPrompt',
+      'systemPrompt.blockList.invalidSlug',
+      'systemPrompt.blockList.createFailed',
+      'systemPrompt.blockList.removeConfirm',
+      'systemPrompt.blockList.removeConfirmTitle',
+      'systemPrompt.blockList.removeFailed',
+      'systemPrompt.blockList.resetLayout',
+      'systemPrompt.blockList.resetLayoutConfirm',
+      'systemPrompt.blockList.resetLayoutConfirmTitle',
+      'systemPrompt.blockList.customBadge',
+      'systemPrompt.blockList.dataBadge',
+      'systemPrompt.blockList.dataHint',
+      'systemPrompt.blockList.inheritedBadge',
+      'systemPrompt.blockList.inheritedHint',
+      'systemPrompt.blockList.dataLabel',
+      'systemPrompt.blockList.dataEmpty',
+      'systemPrompt.blockList.showPreview',
+      'systemPrompt.blockList.hidePreview',
+      'systemPrompt.blockList.empty',
+      'systemPrompt.blockList.toggleAria',
+      'systemPrompt.blockList.reorderHandle',
+      'systemPrompt.blockList.reorderAnnouncement',
+      'systemPrompt.blockList.ownerHint.always',
+      'systemPrompt.blockList.ownerHint.memory',
+      'systemPrompt.blockList.ownerHint.channel',
+      'systemPrompt.blockList.ownerHint.tool',
+      'systemPrompt.blockList.ownerHint.extension',
+      'systemPrompt.preview.heading',
+      'systemPrompt.preview.copy',
+      'systemPrompt.preview.tokenCount',
+      'systemPrompt.preview.tokenBreakdown',
+      'systemPrompt.preview.tokenBreakdownHint',
+      'systemPrompt.preview.agentLabel',
+      'systemPrompt.preview.empty',
+      'systemPrompt.error.loadFailed',
+      'systemPrompt.error.saveFailed',
+      'systemPrompt.error.resetFailed',
+      'systemPrompt.error.previewFailed',
+      'systemPrompt.error.copyFailed',
+      'systemPrompt.error.layoutFailed',
+    ];
+
+    for (const key of requiredKeys) {
+      expect(source, `Missing i18n key: ${key}`).toContain(`'${key}'`);
+    }
+  });
+});
