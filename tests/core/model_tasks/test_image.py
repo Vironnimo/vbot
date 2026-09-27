@@ -24,6 +24,7 @@ from core.model_tasks.image import (
 )
 from core.model_tasks.image_types import ImageGenerationResult
 from core.providers.errors import ProviderError, ProviderOutcomeUnknownError
+from core.utils import ids
 from tests.core.model_tasks.image_test_support import (
     _MissingModelTasks,
 )
@@ -120,6 +121,29 @@ async def test_generate_artifacts_stores_each_image_in_the_caller_owned_director
         b"second image",
     ]
     assert list(output_dir.glob("*.json")) == []
+
+
+@pytest.mark.asyncio
+async def test_generate_artifacts_never_overwrite_an_existing_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = ImageService(_MissingModelTasks(), cast(Any, object()))
+
+    async def generate(_prompt: str, **_kwargs: Any) -> ImageGenerationResult:
+        return ImageGenerationResult(images=(b"new",), media_type="image/png", model="m")
+
+    monkeypatch.setattr(service, "generate", generate)
+    existing = tmp_path / "img_000000000001.png"
+    existing.write_bytes(b"keep")
+    # The first generated id collides with the existing file.
+    values = iter((1, 2))
+    monkeypatch.setattr(ids.secrets, "randbits", lambda _bits: next(values))
+
+    [artifact] = await service.generate_artifacts("a cat", output_dir=tmp_path)
+
+    assert artifact.id == "img_000000000002"
+    assert artifact.file_path.read_bytes() == b"new"
+    assert existing.read_bytes() == b"keep"
 
 
 @pytest.mark.asyncio

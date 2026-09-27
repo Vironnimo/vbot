@@ -8,6 +8,7 @@ import io
 import logging
 import random
 import threading
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -32,12 +33,7 @@ from core.model_tasks import (
     TaskModelError,
 )
 from core.model_tasks import image as image_module
-from core.model_tasks.image import (
-    DEFAULT_IMAGE_ANALYSIS_MAX_IMAGES,
-    DEFAULT_IMAGE_ANALYSIS_MAX_TOTAL_BYTES,
-    _ensure_analysis_total_size,
-    _load_image_inputs,
-)
+from core.model_tasks.image import DEFAULT_IMAGE_ANALYSIS_MAX_TOTAL_BYTES
 from core.providers.accounts import ConnectionRef
 from core.providers.errors import ProviderError
 from core.usage import UsageRecorder
@@ -252,94 +248,74 @@ async def test_empty_analysis_preserves_billed_usage_and_caller_scope(
     assert (record.owner_name, record.group_id) == ("extension", "group")
 
 
+@pytest.mark.parametrize(
+    ("binding_usable", "wire_media_types", "resolve_error", "close_error", "available"),
+    [
+        pytest.param(True, {"application/pdf", "image/png"}, None, None, True, id="image-wire"),
+        pytest.param(True, {"application/pdf", "audio/wav"}, None, None, False, id="no-image-wire"),
+        # An unusable binding is decided before any adapter is resolved.
+        pytest.param(
+            False,
+            {"image/png"},
+            RuntimeError("adapter must not be resolved"),
+            None,
+            False,
+            id="unusable-binding",
+        ),
+        pytest.param(
+            True, {"image/png"}, RuntimeError("runtime unavailable"), None, False, id="no-adapter"
+        ),
+        pytest.param(
+            True, {"image/png"}, None, RuntimeError("cleanup failed"), True, id="cleanup-failure"
+        ),
+    ],
+)
 @pytest.mark.asyncio
-async def test_analysis_availability_requires_adapter_image_wire_support() -> None:
-    supported_adapter = _UnderstandingAdapter(
-        wire_media_types=frozenset({"application/pdf", "image/png"})
-    )
-    unsupported_adapter = _UnderstandingAdapter(
-        wire_media_types=frozenset({"application/pdf", "audio/wav"})
-    )
-    supported_runtime = _UnderstandingRuntime(supported_adapter)
-    unsupported_runtime = _UnderstandingRuntime(unsupported_adapter)
-
-    supported = await ImageService(
-        _UnderstandingModelTasks(), cast(Any, supported_runtime)
-    ).analysis_is_available()
-    unsupported = await ImageService(
-        _UnderstandingModelTasks(), cast(Any, unsupported_runtime)
-    ).analysis_is_available()
-
-    assert supported is True
-    assert unsupported is False
-    assert supported_runtime.calls == [("openrouter", "openrouter:api-key")]
-    assert unsupported_runtime.calls == [("openrouter", "openrouter:api-key")]
-    assert supported_adapter.wire_media_models == ["vision-model"]
-    assert unsupported_adapter.wire_media_models == ["vision-model"]
-    assert supported_adapter.closed is True
-    assert unsupported_adapter.closed is True
-
-
-@pytest.mark.asyncio
-async def test_analysis_availability_rejects_unusable_binding_before_adapter_resolution() -> None:
-    runtime = _UnderstandingRuntime(RuntimeError("adapter must not be resolved"))
-    service = ImageService(
-        _UnderstandingModelTasks(binding_usable=False),
-        cast(Any, runtime),
-    )
-
-    assert await service.analysis_is_available() is False
-    assert runtime.calls == []
-
-
-@pytest.mark.asyncio
-async def test_analysis_availability_maps_expected_adapter_resolution_failure_to_false() -> None:
-    runtime = _UnderstandingRuntime(RuntimeError("runtime unavailable"))
-    service = ImageService(_UnderstandingModelTasks(), cast(Any, runtime))
-
-    assert await service.analysis_is_available() is False
-    assert runtime.calls == [("openrouter", "openrouter:api-key")]
-
-
-@pytest.mark.asyncio
-async def test_analysis_availability_ignores_adapter_cleanup_failure(
-    caplog: Any,
+async def test_analysis_availability_requires_an_adapter_with_an_image_wire(
+    caplog: pytest.LogCaptureFixture,
+    binding_usable: bool,
+    wire_media_types: set[str],
+    resolve_error: Exception | None,
+    close_error: Exception | None,
+    available: bool,
 ) -> None:
-    adapter = _UnderstandingAdapter(close_error=RuntimeError("cleanup failed"))
+    adapter = _UnderstandingAdapter(
+        wire_media_types=frozenset(wire_media_types), close_error=close_error
+    )
+    runtime = _UnderstandingRuntime(resolve_error or adapter)
     service = ImageService(
-        _UnderstandingModelTasks(),
-        cast(Any, _UnderstandingRuntime(adapter)),
+        _UnderstandingModelTasks(binding_usable=binding_usable), cast(Any, runtime)
     )
 
     with caplog.at_level(logging.WARNING, logger="vbot.image"):
-        available = await service.analysis_is_available()
+        assert await service.analysis_is_available() is available
 
-    assert available is True
-    assert adapter.closed is True
-    assert "adapter cleanup failed" in caplog.text
-
-
-@pytest.mark.asyncio
-async def test_analyze_revalidates_target_before_loading_images(tmp_path: Path) -> None:
-    adapter = _UnderstandingAdapter()
-    runtime = _UnderstandingRuntime(adapter)
-    service = ImageService(_UnderstandingModelTasks(binding_usable=False), cast(Any, runtime))
-
-    with pytest.raises(ImageUnderstandingUnavailableError):
-        await service.analyze("Describe this", image_paths=[tmp_path / "not-read.png"])
-
-    assert runtime.calls == []
-    assert adapter.requests == []
+    assert runtime.calls == ([("openrouter", "openrouter:api-key")] if binding_usable else [])
+    if resolve_error is None:
+        assert adapter.wire_media_models == ["vision-model"]
+        assert adapter.closed is True
+    assert ("adapter cleanup failed" in caplog.text) is (close_error is not None)
 
 
+@pytest.mark.parametrize(
+    ("recommended", "temperature"),
+    [
+        pytest.param({}, None, id="provider-default-temperature"),
+        pytest.param(
+            {("openrouter", "vision-model"): 1.0}, 1.0, id="model-recommended-temperature"
+        ),
+    ],
+)
 @pytest.mark.asyncio
 async def test_analyze_sends_fixed_isolated_prompt_and_ordered_images(
     tmp_path: Path,
+    recommended: dict[tuple[str, str], float],
+    temperature: float | None,
 ) -> None:
     first = _png(tmp_path / "first.png", b"first")
     second = _png(tmp_path / "second.png", b"second")
     adapter = _UnderstandingAdapter()
-    runtime = _UnderstandingRuntime(adapter)
+    runtime = _UnderstandingRuntime(adapter, models=_UnderstandingModels(recommended))
     service = ImageService(
         _UnderstandingModelTasks(task_types=("chat", "text_output")),
         cast(Any, runtime),
@@ -366,7 +342,7 @@ async def test_analyze_sends_fixed_isolated_prompt_and_ordered_images(
     assert runtime.calls == [("openrouter", "openrouter:api-key")]
     request = adapter.requests[0]
     assert request["model_id"] == "vision-model"
-    assert request["kwargs"] == {"temperature": None, "tools": []}
+    assert request["kwargs"] == {"temperature": temperature, "tools": []}
     assert request["messages"][0]["role"] == "system"
     assert request["messages"][0]["content"]
     user_content = request["messages"][1]["content"]
@@ -499,72 +475,26 @@ async def test_analysis_conversion_growth_fits_actual_total_budget(tmp_path, mon
 
 
 @pytest.mark.asyncio
-async def test_analyze_uses_model_recommended_temperature(tmp_path: Path) -> None:
-    image = _png(tmp_path / "image.png")
-    adapter = _UnderstandingAdapter()
-    runtime = _UnderstandingRuntime(
-        adapter,
-        models=_UnderstandingModels({("openrouter", "vision-model"): 1.0}),
-    )
-    service = ImageService(
-        _UnderstandingModelTasks(task_types=("chat", "text_output")),
-        cast(Any, runtime),
-    )
-
-    await service.analyze("List the ingredients.", image_paths=[image])
-
-    assert adapter.requests[0]["kwargs"]["temperature"] == 1.0
-
-
-@pytest.mark.asyncio
-async def test_analyze_rejects_more_than_six_images_before_reading_files(
-    tmp_path: Path,
-) -> None:
-    runtime = _UnderstandingRuntime(_UnderstandingAdapter())
-    service = ImageService(_UnderstandingModelTasks(), cast(Any, runtime))
-    image_paths = [tmp_path / f"image-{index}.png" for index in range(7)]
-
-    with pytest.raises(ImageTooLargeError) as error:
-        await service.analyze("Compare them", image_paths=image_paths)
-
-    assert DEFAULT_IMAGE_ANALYSIS_MAX_IMAGES == 6
-    assert error.value.code == "image_too_large"
-    assert runtime.calls == []
-
-
-@pytest.mark.asyncio
 async def test_analyze_rejects_inputs_above_the_total_byte_limit(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    first = _png(tmp_path / "first.png", b"first")
-    second = _png(tmp_path / "second.png", b"second")
-    total_bytes = first.stat().st_size + second.stat().st_size
-    test_limit = total_bytes - 1
+    # The documented cumulative ceiling is 100 MiB; a 1 MiB stand-in keeps the files small.
+    assert DEFAULT_IMAGE_ANALYSIS_MAX_TOTAL_BYTES == 100 * 1024 * 1024
+    monkeypatch.setattr(image_module, "DEFAULT_IMAGE_ANALYSIS_MAX_TOTAL_BYTES", 1024 * 1024)
+    first = _png(tmp_path / "first.png", b"x" * 600_000)
+    second = _png(tmp_path / "second.png", b"x" * 600_000)
     runtime = _UnderstandingRuntime(_UnderstandingAdapter())
     service = ImageService(_UnderstandingModelTasks(), cast(Any, runtime))
-    monkeypatch.setattr(
-        image_module,
-        "DEFAULT_IMAGE_ANALYSIS_MAX_TOTAL_BYTES",
-        test_limit,
-    )
 
-    with pytest.raises(ImageTooLargeError) as error:
+    with pytest.raises(
+        ImageTooLargeError,
+        match=r"exceeding the 1 MiB \(1048576 bytes\) limit\. Pass fewer or smaller images",
+    ) as error:
         await service.analyze("Compare them", image_paths=[first, second])
 
     assert error.value.code == "image_too_large"
     assert runtime.calls == []
-
-
-def test_default_analysis_total_limit_has_actionable_error() -> None:
-    with pytest.raises(ImageTooLargeError) as error:
-        _ensure_analysis_total_size(
-            DEFAULT_IMAGE_ANALYSIS_MAX_TOTAL_BYTES + 1,
-            DEFAULT_IMAGE_ANALYSIS_MAX_TOTAL_BYTES,
-        )
-
-    assert DEFAULT_IMAGE_ANALYSIS_MAX_TOTAL_BYTES == 100 * 1024 * 1024
-    assert error.value.code == "image_too_large"
 
 
 @pytest.mark.asyncio
@@ -578,11 +508,12 @@ async def test_analyze_offloads_file_loading_and_base64_encoding(
     event_loop_thread = threading.get_ident()
     load_threads: list[int] = []
     content_threads: list[int] = []
+    original_load = image_module._load_image_inputs
     original_content = image_module._analysis_content
 
     def tracked_load(*args: Any, **kwargs: Any) -> Any:
         load_threads.append(threading.get_ident())
-        return _load_image_inputs(*args, **kwargs)
+        return original_load(*args, **kwargs)
 
     def tracked_content(*args: Any, **kwargs: Any) -> Any:
         content_threads.append(threading.get_ident())
@@ -659,110 +590,172 @@ async def test_analyze_rejects_non_understanding_model_and_unsupported_wire(
     assert pinned_target not in str(text_only_error.value)
 
 
-@pytest.mark.asyncio
-async def test_analyze_rejects_missing_non_image_and_oversize_input(
-    tmp_path: Path,
-) -> None:
-    runtime = _UnderstandingRuntime(_UnderstandingAdapter())
-    service = ImageService(
-        _UnderstandingModelTasks(),
-        cast(Any, runtime),
-        max_input_bytes=12,
-    )
-    text_file = tmp_path / "notes.txt"
-    text_file.write_text("plain text", encoding="utf-8")
-    oversize = _png(tmp_path / "large.png", b"too-many-pixels")
+def _one_png(tmp_path: Path) -> list[Path]:
+    return [_png(tmp_path / "source.png")]
+
+
+def _unread(tmp_path: Path) -> list[Path]:
+    return [tmp_path / f"image-{index}.png" for index in range(7)]
+
+
+def _directory(tmp_path: Path) -> list[Path]:
     directory = tmp_path / "directory"
     directory.mkdir()
+    return [directory]
 
-    with pytest.raises(ImageNotFoundError):
-        await service.analyze("Describe it", image_paths=[tmp_path / "missing.png"])
-    with pytest.raises(ImageReadError):
-        await service.analyze("Describe it", image_paths=[directory])
-    with pytest.raises(ImageUnsupportedMediaTypeError):
-        await service.analyze("Describe it", image_paths=[text_file])
-    with pytest.raises(ImageTooLargeError):
-        await service.analyze("Describe it", image_paths=[oversize])
 
+def _text_file(tmp_path: Path) -> list[Path]:
+    text_file = tmp_path / "notes.txt"
+    text_file.write_text("plain text", encoding="utf-8")
+    return [text_file]
+
+
+@pytest.mark.parametrize(
+    ("binding", "prompt", "images", "error", "match"),
+    [
+        pytest.param(
+            "missing",
+            "Describe it",
+            _one_png,
+            ImageUnderstandingUnavailableError,
+            None,
+            id="missing-binding",
+        ),
+        # The target is revalidated before any file is read.
+        pytest.param(
+            "unusable",
+            "Describe it",
+            lambda tmp_path: _unread(tmp_path)[:1],
+            ImageUnderstandingUnavailableError,
+            None,
+            id="unusable-target",
+        ),
+        pytest.param("usable", "  ", _one_png, ImageConfigurationError, None, id="blank-prompt"),
+        pytest.param("usable", "Describe it", lambda _: [], ImageInputError, None, id="no-images"),
+        # The documented six-image limit applies before any file is read.
+        pytest.param(
+            "usable",
+            "Compare them",
+            _unread,
+            ImageTooLargeError,
+            "at most 6 images per call, but received 7. Pass fewer images",
+            id="seven-images",
+        ),
+        pytest.param(
+            "usable",
+            "Describe it",
+            lambda tmp_path: [tmp_path / "missing.png"],
+            ImageNotFoundError,
+            None,
+            id="missing-file",
+        ),
+        pytest.param("usable", "Describe it", _directory, ImageReadError, None, id="directory"),
+        pytest.param(
+            "usable",
+            "Describe it",
+            _text_file,
+            ImageUnsupportedMediaTypeError,
+            None,
+            id="not-an-image",
+        ),
+        # Any PNG exceeds the 12-byte input ceiling of this service.
+        pytest.param("usable", "Describe it", _one_png, ImageTooLargeError, None, id="oversize"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_analyze_rejects_unusable_requests_before_resolving_an_adapter(
+    tmp_path: Path,
+    binding: str,
+    prompt: str,
+    images: Callable[[Path], list[Path]],
+    error: type[Exception],
+    match: str | None,
+) -> None:
+    runtime = _UnderstandingRuntime(_UnderstandingAdapter())
+    model_tasks = (
+        _MissingModelTasks()
+        if binding == "missing"
+        else _UnderstandingModelTasks(binding_usable=binding == "usable")
+    )
+    service = ImageService(model_tasks, cast(Any, runtime), max_input_bytes=12)
+
+    with pytest.raises(error, match=match) as caught:
+        await service.analyze(prompt, image_paths=images(tmp_path))
+
+    assert type(caught.value) is error
     assert runtime.calls == []
 
 
+def _retried_provider_error() -> ProviderError:
+    error = ProviderError("rate limited", retryable=True)
+    error.attempts_made = 4
+    return error
+
+
+@pytest.mark.parametrize(
+    ("response", "error", "match", "attributes"),
+    [
+        pytest.param(
+            _retried_provider_error,
+            ImageExecutionError,
+            "rate limited",
+            {"code": "provider_error", "retryable": True, "attempts_made": 4},
+            id="provider-error",
+        ),
+        pytest.param(lambda: {"content": "   "}, ImageExecutionError, None, {}, id="empty-output"),
+        # An unexpected adapter failure is a bug and is not masked.
+        pytest.param(
+            lambda: RuntimeError("adapter bug"), RuntimeError, "adapter bug", {}, id="adapter-bug"
+        ),
+    ],
+)
 @pytest.mark.asyncio
-async def test_analyze_maps_provider_failure_and_empty_output_and_closes_adapter(
+async def test_analyze_maps_send_failures_and_closes_the_adapter(
     tmp_path: Path,
+    response: Callable[[], object],
+    error: type[Exception],
+    match: str | None,
+    attributes: dict[str, object],
 ) -> None:
-    source = _png(tmp_path / "source.png")
-    provider_error = ProviderError("rate limited", retryable=True)
-    provider_error.attempts_made = 4
-    failing_adapter = _UnderstandingAdapter(provider_error)
-    failing = ImageService(
-        _UnderstandingModelTasks(),
-        cast(Any, _UnderstandingRuntime(failing_adapter)),
-    )
-    empty_adapter = _UnderstandingAdapter({"content": "   "})
-    empty = ImageService(
-        _UnderstandingModelTasks(),
-        cast(Any, _UnderstandingRuntime(empty_adapter)),
-    )
+    adapter = _UnderstandingAdapter(response())
+    service = ImageService(_UnderstandingModelTasks(), cast(Any, _UnderstandingRuntime(adapter)))
 
-    with pytest.raises(ImageExecutionError, match="rate limited") as error:
-        await failing.analyze("Describe it", image_paths=[source])
-    with pytest.raises(ImageExecutionError):
-        await empty.analyze("Describe it", image_paths=[source])
+    with pytest.raises(error, match=match) as caught:
+        await service.analyze("Describe it", image_paths=[_png(tmp_path / "source.png")])
 
-    assert failing_adapter.closed is True
-    assert empty_adapter.closed is True
-    assert error.value.code == "provider_error"
-    assert error.value.retryable is True
-    assert error.value.attempts_made == 4
+    assert {name: getattr(caught.value, name) for name in attributes} == attributes
+    assert adapter.closed is True
 
 
+@pytest.mark.parametrize("send_error", [None, ProviderError("primary provider failure")])
 @pytest.mark.asyncio
-async def test_analyze_preserves_success_when_adapter_cleanup_fails(
+async def test_adapter_cleanup_failure_never_replaces_the_outcome(
     tmp_path: Path,
-    caplog: Any,
+    caplog: pytest.LogCaptureFixture,
+    send_error: ProviderError | None,
 ) -> None:
-    source = _png(tmp_path / "source.png")
-    adapter = _UnderstandingAdapter(close_error=RuntimeError("cleanup failed for private_account"))
+    adapter = _UnderstandingAdapter(
+        send_error, close_error=RuntimeError("cleanup failed for private_account")
+    )
     service = ImageService(
         _UnderstandingModelTasks(target="openrouter/vision-model::api-key:private_account"),
         cast(Any, _UnderstandingRuntime(adapter)),
     )
+    source = _png(tmp_path / "source.png")
 
     with caplog.at_level(logging.WARNING, logger="vbot.image"):
-        result = await service.analyze("Describe it", image_paths=[source])
+        if send_error is None:
+            result = await service.analyze("Describe it", image_paths=[source])
+            assert result.content == "Visible ingredients: flour and salt."
+        else:
+            with pytest.raises(ImageExecutionError, match="primary provider failure") as caught:
+                await service.analyze("Describe it", image_paths=[source])
+            assert "cleanup failed" not in str(caught.value)
 
-    assert result.content == "Visible ingredients: flour and salt."
     assert adapter.closed is True
     assert "adapter cleanup failed" in caplog.text
+    assert "cleanup failed for [REDACTED]" in caplog.text
     assert "private_account" not in caplog.text
-    assert "[REDACTED]" in caplog.text
-
-
-@pytest.mark.asyncio
-async def test_analyze_preserves_primary_error_when_adapter_cleanup_fails(
-    tmp_path: Path,
-    caplog: Any,
-) -> None:
-    source = _png(tmp_path / "source.png")
-    adapter = _UnderstandingAdapter(
-        ProviderError("primary provider failure"),
-        close_error=RuntimeError("secondary cleanup failure"),
-    )
-    service = ImageService(
-        _UnderstandingModelTasks(),
-        cast(Any, _UnderstandingRuntime(adapter)),
-    )
-
-    with (
-        caplog.at_level(logging.WARNING, logger="vbot.image"),
-        pytest.raises(ImageExecutionError, match="primary provider failure") as error,
-    ):
-        await service.analyze("Describe it", image_paths=[source])
-
-    assert "secondary cleanup failure" not in str(error.value)
-    assert "secondary cleanup failure" in caplog.text
-    assert adapter.closed is True
 
 
 @pytest.mark.asyncio
@@ -808,51 +801,3 @@ async def test_analyze_maps_adapter_configuration_failure_to_unavailable(
 
     assert error.value.code == "image_understanding_unavailable"
     assert error.value.retryable is False
-
-
-@pytest.mark.asyncio
-async def test_analyze_does_not_mask_unexpected_adapter_failure(tmp_path: Path) -> None:
-    source = _png(tmp_path / "source.png")
-    adapter = _UnderstandingAdapter(RuntimeError("adapter bug"))
-    service = ImageService(
-        _UnderstandingModelTasks(),
-        cast(Any, _UnderstandingRuntime(adapter)),
-    )
-
-    with pytest.raises(RuntimeError, match="adapter bug"):
-        await service.analyze("Describe it", image_paths=[source])
-
-    assert adapter.closed is True
-
-
-@pytest.mark.asyncio
-async def test_analyze_requires_binding_prompt_and_images(tmp_path: Path) -> None:
-    source = _png(tmp_path / "source.png")
-    missing = ImageService(_MissingModelTasks(), cast(Any, object()))
-    configured = ImageService(
-        _UnderstandingModelTasks(),
-        cast(Any, _UnderstandingRuntime(_UnderstandingAdapter())),
-    )
-
-    with pytest.raises(ImageUnderstandingUnavailableError):
-        await missing.analyze("Describe it", image_paths=[source])
-    with pytest.raises(ImageConfigurationError):
-        await configured.analyze("  ", image_paths=[source])
-    with pytest.raises(ImageInputError):
-        await configured.analyze("Describe it", image_paths=[])
-
-
-def test_image_file_ids_retry_collisions_without_overwriting(tmp_path, monkeypatch):
-    from core.model_tasks.image import _write_image_artifact
-    from core.utils import ids
-
-    existing = tmp_path / "img_000000000001.png"
-    existing.write_bytes(b"keep")
-    values = iter((1, 2))
-    monkeypatch.setattr(ids.secrets, "randbits", lambda _bits: next(values))
-    result = _write_image_artifact(
-        b"new", output_dir=tmp_path, extension="png", media_type="image/png", index=0
-    )
-    assert result.id == "img_000000000002"
-    assert existing.read_bytes() == b"keep"
-    assert result.file_path.read_bytes() == b"new"
