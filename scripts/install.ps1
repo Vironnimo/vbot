@@ -233,6 +233,18 @@ function Get-OfficialRelease {
     }
 }
 
+function Get-ServerHealthUrl {
+    # Mirrors the CLI's server URL: a wildcard bind address is reached through
+    # loopback, and an IPv6 literal needs brackets.
+    param([string]$ServerHost, [int]$ServerPort)
+    $connectHost = $ServerHost
+    if ($connectHost -in @("", "*", "0.0.0.0")) { $connectHost = "127.0.0.1" }
+    elseif ($connectHost -eq "::") { $connectHost = "::1" }
+    $connectHost = $connectHost.TrimStart("[").TrimEnd("]")
+    if ($connectHost.Contains(":")) { $connectHost = "[$connectHost]" }
+    return "http://${connectHost}:$ServerPort/health"
+}
+
 function Invoke-NativeCommand {
     param([string[]]$Arguments)
     $application = Join-Path $InstallDir "vBot.exe"
@@ -347,7 +359,7 @@ function Install-NativeRelease {
         $ready = $false
         for ($attempt = 0; $attempt -lt 30 -and -not $ready; $attempt++) {
             try {
-                $health = Invoke-RestMethod -Uri ("http://{0}:{1}/health" -f $state.server_host, $state.server_port) -TimeoutSec 1
+                $health = Invoke-RestMethod -Uri (Get-ServerHealthUrl -ServerHost $state.server_host -ServerPort $state.server_port) -TimeoutSec 1
                 $ready = $health.status -eq "ok"
             }
             catch {

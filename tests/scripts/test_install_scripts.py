@@ -28,6 +28,37 @@ POWERSHELL_SCRIPTS = (
 )
 
 
+# PowerShell that dot-sources the install.ps1 functions named in $Functions from
+# the script at $Source, so a harness can exercise them without running the
+# installer.
+_LOAD_INSTALLER_FUNCTIONS = r"""
+$ast = [System.Management.Automation.Language.Parser]::ParseFile($Source, [ref]$null, [ref]$null)
+foreach ($name in $Functions) {
+    $node = $ast.FindAll({
+        param($item)
+        $item -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+            $item.Name -eq $name
+    }, $false) | Select-Object -First 1
+    . ([scriptblock]::Create($node.Extent.Text))
+}
+"""
+
+
+def _run_windows_powershell(tmp_path: Path, script: str, *arguments: str) -> object:
+    """Run a harness in Windows PowerShell 5.1 and return its JSON result."""
+    harness = tmp_path / "harness.ps1"
+    harness.write_text(script, encoding="utf-8")
+    result = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-NonInteractive", "-File", str(harness), *arguments],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)
+
+
 def _write_webui_archive(archive_path: Path, members: dict[str, str]) -> None:
     """Create a release-candidate-shaped archive without shelling out to tar."""
     with tarfile.open(archive_path, mode="w:gz") as archive:
@@ -858,6 +889,7 @@ $functions = @(
     "Write-Status",
     "Write-Step",
     "Get-OfficialRelease",
+    "Get-ServerHealthUrl",
     "Invoke-NativeCommand",
     "Install-NativeRelease"
 )
@@ -1192,3 +1224,28 @@ catch { $ok = $false; $detail = $_.Exception.Message }
         assert "autostart enable" in payload["detail"]
         assert str(tmp_path / "output.log") in payload["detail"]
         assert "retrying vbot update" not in payload["detail"]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows PowerShell installer")
+def test_windows_native_install_probes_health_like_the_cli(tmp_path: Path) -> None:
+    from cli._server_target import build_server_base_url
+
+    hosts = ["127.0.0.1", "0.0.0.0", "", "*", "::", "::1", "[::1]", "localhost", "192.0.2.5"]
+    payload = _run_windows_powershell(
+        tmp_path,
+        r"""param($Source, $Hosts)
+$ErrorActionPreference = "Stop"
+$Functions = @("Get-ServerHealthUrl")
+"""
+        + _LOAD_INSTALLER_FUNCTIONS
+        + r"""
+$urls = @(($Hosts | ConvertFrom-Json) | ForEach-Object {
+    Get-ServerHealthUrl -ServerHost $_ -ServerPort 8420
+})
+ConvertTo-Json -InputObject $urls -Compress
+""",
+        str(PROJECT_ROOT / "scripts/install.ps1"),
+        json.dumps(hosts),
+    )
+
+    assert payload == [f"{build_server_base_url(host, 8420)}/health" for host in hosts]
