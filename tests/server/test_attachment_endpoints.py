@@ -1,124 +1,77 @@
-"""Tests for attachment upload and download endpoints."""
+"""Attachment upload and download endpoints."""
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import pytest
 from fastapi import HTTPException, Request  # type: ignore[import-not-found]
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 
 from core.attachments import AttachmentStore
-from core.runs import ChatRunManager
 from server.app import (
     MULTIPART_BODY_OVERHEAD_ALLOWANCE_BYTES,
     _parse_upload_file_with_limit,
     create_app,
 )
+from tests.server.app_test_support import ServerStubRuntime
 
-MAX_ATTACHMENT_SIZE_BYTES = 20_971_520
-
-
-class _AttachmentRuntime:
-    def __init__(self, data_dir: Path) -> None:
-        self.storage = type("Storage", (), {"data_dir": data_dir})()
-        self.attachment_store = AttachmentStore(
-            data_dir,
-            max_size_bytes=MAX_ATTACHMENT_SIZE_BYTES,
-        )
-        self.chat_runs = ChatRunManager()
-        self.chat_run_manager = self.chat_runs
-        self.chat_loop = object()
-        self.streaming_chat_loop = object()
-        self.command_dispatcher = object()
-
-    def start(self) -> None:
-        self.storage.data_dir.mkdir(parents=True, exist_ok=True)
-
-    def stop(self) -> None:
-        return None
+_JPEG = b"\xff\xd8\xff\xe0" + (b"\x00" * 32)
 
 
-class _RejectingAttachmentStore(AttachmentStore):
+class _RecordingAttachmentStore(AttachmentStore):
+    def __init__(self, data_dir: Path, *, max_size_bytes: int) -> None:
+        super().__init__(data_dir, max_size_bytes=max_size_bytes)
+        self.stored: list[str] = []
+
     def store(self, filename: str, data: bytes) -> Any:
-        raise AssertionError("attachment store should not receive oversize uploads")
+        self.stored.append(filename)
+        return super().store(filename, data)
 
 
-def test_upload_valid_jpeg_returns_attachment_metadata(tmp_path: Path) -> None:
-    payload = _jpeg_payload()
-
-    with _create_client(tmp_path) as client:
-        response = client.post(
-            "/api/upload",
-            files={"file": ("photo.jpg", payload, "image/jpeg")},
-        )
-
-    body = response.json()
-    assert response.status_code == 200
-    assert isinstance(body["attachment_id"], str)
-    assert body["attachment_id"]
-    assert body["filename"] == "photo.jpg"
-    assert body["media_type"] == "image/jpeg"
-    assert body["size_bytes"] == len(payload)
-    assert "text_content" not in body
-
-
-def test_upload_text_file_returns_attachment_metadata_only(tmp_path: Path) -> None:
-    payload = b"hello from text file\nsecond line"
-
-    with _create_client(tmp_path) as client:
-        response = client.post(
-            "/api/upload",
-            files={"file": ("note.txt", payload, "text/plain")},
-        )
-
-    body = response.json()
-    assert response.status_code == 200
-    assert isinstance(body["attachment_id"], str)
-    assert body["attachment_id"]
-    assert body["filename"] == "note.txt"
-    assert body["media_type"].startswith("text/")
-    assert body["size_bytes"] == len(payload)
-    assert "text_content" not in body
-
-
-def test_upload_rejects_payload_over_20_mib_limit(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    import server.app as server_app
-
-    payload = b"a" * (MAX_ATTACHMENT_SIZE_BYTES + 1)
-    read_calls = 0
-    original_reader = server_app._read_upload_file_with_limit
-
-    async def track_spooled_file_read(*args: Any, **kwargs: Any) -> bytes:
-        nonlocal read_calls
-        read_calls += 1
-        return await original_reader(*args, **kwargs)
-
-    monkeypatch.setattr(server_app, "_read_upload_file_with_limit", track_spooled_file_read)
-
-    with _create_client(tmp_path) as client:
-        response = client.post(
-            "/api/upload",
-            files={"file": ("too-large.bin", payload, "application/octet-stream")},
-        )
-
-    assert response.status_code == 413
-    assert read_calls == 0
-
-
-def test_upload_rejects_definitely_oversized_content_length_before_parsing(
+def test_upload_returns_metadata_serves_the_original_and_blocks_executables(
     tmp_path: Path,
 ) -> None:
-    runtime = _AttachmentRuntime(tmp_path / "data")
-    runtime.attachment_store = _RejectingAttachmentStore(tmp_path / "data", max_size_bytes=3)
-    app = create_app(runtime=cast(Any, runtime))
+    text = b"hello from text file\nsecond line"
+    executable = b"MZ\x90\x00\x03\x00\x00\x00\x04\x00\x00\x00"
 
-    with TestClient(app) as client:
-        response = client.post(
+    with _client(tmp_path) as client:
+        photo = client.post("/api/upload", files={"file": ("photo.jpg", _JPEG, "image/jpeg")})
+        note = client.post("/api/upload", files={"file": ("note.txt", text, "text/plain")})
+        blocked = client.post(
+            "/api/upload", files={"file": ("payload.exe", executable, "application/octet-stream")}
+        )
+        served = client.get(f"/api/attachments/{photo.json()['attachment_id']}")
+        unknown = client.get("/api/attachments/missing")
+
+    photo_body, note_body = photo.json(), note.json()
+    assert photo_body["attachment_id"] and note_body["attachment_id"]
+    assert {key: photo_body[key] for key in ("filename", "media_type", "size_bytes")} == {
+        "filename": "photo.jpg",
+        "media_type": "image/jpeg",
+        "size_bytes": len(_JPEG),
+    }
+    assert (note_body["filename"], note_body["size_bytes"]) == ("note.txt", len(text))
+    assert note_body["media_type"].startswith("text/")
+    # Uploads return metadata only, never extracted text.
+    assert "text_content" not in photo_body and "text_content" not in note_body
+    assert served.headers["content-type"].startswith("image/jpeg")
+    assert served.headers["content-disposition"] == 'inline; filename="photo.jpg"'
+    assert served.content == _JPEG
+    assert unknown.status_code == 404
+    assert blocked.status_code == 415
+
+
+def test_upload_limit_rejects_before_storing(tmp_path: Path) -> None:
+    store = _RecordingAttachmentStore(tmp_path / "data", max_size_bytes=3)
+
+    with _client(tmp_path, store) as client:
+        exact = client.post("/api/upload", files={"file": ("exact.txt", b"abc", "text/plain")})
+        too_large = client.post("/api/upload", files={"file": ("large.txt", b"abcd", "text/plain")})
+        # A declared length beyond limit plus multipart overhead is refused unread.
+        declared_too_large = client.post(
             "/api/upload",
             content=b"",
             headers={
@@ -127,11 +80,14 @@ def test_upload_rejects_definitely_oversized_content_length_before_parsing(
             },
         )
 
-    assert response.status_code == 413
+    assert (exact.status_code, exact.json()["size_bytes"]) == (200, 3)
+    assert too_large.status_code == declared_too_large.status_code == 413
+    assert store.stored == ["exact.txt"]
 
 
 @pytest.mark.asyncio
 async def test_upload_stops_consuming_chunked_body_after_file_limit() -> None:
+    # TestClient buffers request bodies, so consumption is observed on the parser.
     closing_boundary_consumed = False
     chunks = [
         (
@@ -160,79 +116,10 @@ async def test_upload_stops_consuming_chunked_body_after_file_limit() -> None:
         receive,
     )
     with pytest.raises(HTTPException) as exc_info:
-        await _parse_upload_file_with_limit(
-            request,
-            max_size_bytes=3,
-            upload_kind="Attachment",
-        )
+        await _parse_upload_file_with_limit(request, max_size_bytes=3, upload_kind="Attachment")
 
     assert exc_info.value.status_code == 413
     assert closing_boundary_consumed is False
-
-
-def test_upload_rejects_payload_before_attachment_store_call(tmp_path: Path) -> None:
-    runtime = _AttachmentRuntime(tmp_path / "data")
-    runtime.attachment_store = _RejectingAttachmentStore(tmp_path / "data", max_size_bytes=3)
-    app = create_app(runtime=cast(Any, runtime))
-
-    with TestClient(app) as client:
-        response = client.post(
-            "/api/upload",
-            files={"file": ("too-large.txt", b"abcd", "text/plain")},
-        )
-
-    assert response.status_code == 413
-
-
-def test_upload_accepts_file_exactly_at_configured_limit(tmp_path: Path) -> None:
-    runtime = _AttachmentRuntime(tmp_path / "data")
-    runtime.attachment_store = AttachmentStore(tmp_path / "data", max_size_bytes=3)
-    app = create_app(runtime=cast(Any, runtime))
-
-    with TestClient(app) as client:
-        response = client.post(
-            "/api/upload",
-            files={"file": ("exact.txt", b"abc", "text/plain")},
-        )
-
-    assert response.status_code == 200
-    assert response.json()["size_bytes"] == 3
-
-
-def test_upload_rejects_blocked_mime_type(tmp_path: Path) -> None:
-    payload = b"MZ\x90\x00\x03\x00\x00\x00\x04\x00\x00\x00"
-
-    with _create_client(tmp_path) as client:
-        response = client.post(
-            "/api/upload",
-            files={"file": ("payload.exe", payload, "application/octet-stream")},
-        )
-
-    assert response.status_code == 415
-
-
-def test_get_attachment_streams_existing_blob_with_media_type(tmp_path: Path) -> None:
-    payload = _jpeg_payload()
-
-    with _create_client(tmp_path) as client:
-        upload_response = client.post(
-            "/api/upload",
-            files={"file": ("photo.jpg", payload, "image/jpeg")},
-        )
-        attachment_id = upload_response.json()["attachment_id"]
-        response = client.get(f"/api/attachments/{attachment_id}")
-
-    assert response.status_code == 200
-    assert response.headers["content-type"].startswith("image/jpeg")
-    assert response.headers["content-disposition"] == 'inline; filename="photo.jpg"'
-    assert response.content == payload
-
-
-def test_get_attachment_returns_not_found_for_unknown_id(tmp_path: Path) -> None:
-    with _create_client(tmp_path) as client:
-        response = client.get("/api/attachments/missing")
-
-    assert response.status_code == 404
 
 
 @pytest.mark.parametrize(
@@ -243,13 +130,11 @@ def test_get_attachment_returns_not_found_for_unknown_id(tmp_path: Path) -> None
 def test_get_attachment_with_corrupt_metadata_is_unavailable_not_internal_error(
     tmp_path: Path, metadata_change: dict[str, object] | None
 ) -> None:
-    with _create_client(tmp_path) as client:
-        upload_response = client.post(
-            "/api/upload",
-            files={"file": ("photo.jpg", _jpeg_payload(), "image/jpeg")},
-        )
-        attachment_id = upload_response.json()["attachment_id"]
-        store = AttachmentStore(tmp_path / "data", max_size_bytes=MAX_ATTACHMENT_SIZE_BYTES)
+    store = AttachmentStore(tmp_path / "data", max_size_bytes=1024)
+
+    with _client(tmp_path, store) as client:
+        upload = client.post("/api/upload", files={"file": ("photo.jpg", _JPEG, "image/jpeg")})
+        attachment_id = upload.json()["attachment_id"]
         path = store._sidecar_path(attachment_id)  # noqa: SLF001
         text = (
             "{not json"
@@ -263,11 +148,8 @@ def test_get_attachment_with_corrupt_metadata_is_unavailable_not_internal_error(
     assert "sidecar" not in response.text.lower()
 
 
-def _create_client(tmp_path: Path) -> TestClient:
-    runtime = _AttachmentRuntime(tmp_path / "data")
-    app = create_app(runtime=cast(Any, runtime))
-    return TestClient(app)
-
-
-def _jpeg_payload() -> bytes:
-    return b"\xff\xd8\xff\xe0" + (b"\x00" * 32)
+def _client(tmp_path: Path, store: AttachmentStore | None = None) -> TestClient:
+    data_dir = tmp_path / "data"
+    attachment_store = store or AttachmentStore(data_dir, max_size_bytes=20_971_520)
+    runtime = ServerStubRuntime(data_dir, attachment_store=attachment_store)
+    return TestClient(create_app(runtime=runtime))

@@ -27,122 +27,105 @@ from tests.server.rpc_test_support import StubAdapter, StubRuntime
 _FILE_URL_PATTERN = re.compile(r"\(/api/files/([^\s)]+)(?=[\s)])")
 
 
-def test_browser_and_embedded_preview_share_website_and_download_original(tmp_path: Path) -> None:
+def test_website_preview_serves_the_site_under_an_opaque_origin_capability(
+    tmp_path: Path,
+) -> None:
     site = tmp_path / "site"
     site.mkdir()
     entry = site / "index.html"
     original = b'<!doctype html><link rel="stylesheet" href="style.css"><h1>Website</h1>'
     entry.write_bytes(original)
     (site / "style.css").write_text("h1 { color: red; }")
+    (site / "main.mjs").write_text("export const value = 7;")
+    (site / "sub").mkdir()
+    (site / "sub" / "index.html").write_text("<h1>Subpage</h1>")
     app = create_app(runtime=cast(Any, StubRuntime(tmp_path / "data", StubAdapter())))
+    null_origin = {"Origin": "null"}
+
     with TestClient(app) as client:
         delivery = cast(Any, client.app).state.file_delivery
         url = _only_file_url(delivery.project_message(_assistant_payload(entry))["content"])
         preview = client.post(
             "/api/rpc", json={"method": "file.preview_open", "params": {"source": url}}
         ).json()["result"]
-        redirect = client.get(url, follow_redirects=False)
-        assert redirect.status_code == 307
-        assert redirect.headers["location"] == preview["url"]
-        external = client.get(url)
-        embedded = client.get(preview["url"])
-        assert external.content == embedded.content
-        policy = external.headers["content-security-policy"]
-        assert policy == embedded.headers["content-security-policy"]
-        directives = dict(part.split(" ", 1) for part in policy.split("; "))
-        for kind in ("script-src", "style-src", "img-src", "font-src", "media-src"):
-            assert "https:" in directives[kind]
-        assert "https:" not in directives["connect-src"]
-        assert "allow-same-origin" not in directives["sandbox"]
-        revision_url = preview["url"].rsplit("/", 1)[0] + "/.revision"
-        assert revision_url in external.text
-        assert client.get(revision_url, headers={"Origin": "null"}).json() == {
-            "revision": preview["revision"]
-        }
-        (site / "style.css").write_text("h1 { color: blue; }")
-        changed = client.get(revision_url, headers={"Origin": "null"})
-        assert changed.json()["revision"] != preview["revision"]
-        assert changed.headers["access-control-allow-origin"] == "null"
-        assert changed.headers["cache-control"] == "no-store"
-        assert (
-            client.get(revision_url, headers={"Origin": "https://other.example"}).status_code == 403
-        )
-        assert (
-            client.get(
-                "/api/preview-assets/invalid/.revision", headers={"Origin": "null"}
-            ).status_code
-            == 404
-        )
-        download = client.get(url + "?download=true")
-        assert download.content == original
-        assert download.headers["content-disposition"] == 'attachment; filename="index.html"'
-
-
-def test_website_preview_serves_assets_and_subpages_with_opaque_origin(tmp_path: Path) -> None:
-    site = tmp_path / "site"
-    site.mkdir()
-    entry = site / "index.html"
-    entry.write_text('<!doctype html><link rel="stylesheet" href="style.css"><h1>Sentinel</h1>')
-    (site / "style.css").write_text("h1 { color: red; }")
-    (site / "main.mjs").write_text("export const value = 7;")
-    (site / "sub").mkdir()
-    (site / "sub" / "index.html").write_text("<h1>Subpage</h1>")
-    app = create_app(runtime=cast(Any, StubRuntime(tmp_path / "data", StubAdapter())))
-    with TestClient(app) as client:
-        opened = client.post(
+        opened_by_path = client.post(
             "/api/rpc", json={"method": "file.preview_open", "params": {"source": str(entry)}}
         )
-        assert opened.json()["ok"] is True
-        preview = opened.json()["result"]
         base = preview["url"].rsplit("/", 1)[0]
-        html = client.get(preview["url"])
-        css = client.get(f"{base}/style.css", headers={"Origin": "null"})
-        module = client.get(f"{base}/main.mjs", headers={"Origin": "null"})
-        subpage = client.get(f"{base}/sub/", headers={"Origin": "null"})
-        assert (
-            html.status_code == css.status_code == module.status_code == subpage.status_code == 200
-        )
-        assert "Sentinel" in html.text and "vbot-preview-ready" in html.text
-        assert html.text.startswith("<!doctype html>")
-        assert css.headers["content-type"].startswith("text/css")
-        assert module.headers["content-type"].startswith("text/javascript")
-        assert css.headers["access-control-allow-origin"] == "null"
-        assert "Subpage" in subpage.text
-        redirect = client.get(f"{base}/sub", follow_redirects=False)
-        assert redirect.status_code == 307
-        assert redirect.headers["location"].endswith("/sub/")
-        assert client.get(f"{base}/", follow_redirects=False).status_code == 200
+        revision_url = f"{base}/.revision"
+        redirect = client.get(url, follow_redirects=False)
+        external = client.get(url)
+        embedded = client.get(preview["url"])
+        css = client.get(f"{base}/style.css", headers=null_origin)
+        module = client.get(f"{base}/main.mjs", headers=null_origin)
+        subpage = client.get(f"{base}/sub/", headers=null_origin)
+        subpage_redirect = client.get(f"{base}/sub", follow_redirects=False)
+        site_root = client.get(f"{base}/", follow_redirects=False)
         unavailable = client.get(f"{base}/missing.html")
-        assert unavailable.status_code == 404
-        assert "vbot-preview-unavailable" in unavailable.text
-        assert "sandbox allow-scripts" in unavailable.headers["content-security-policy"]
-        policy = html.headers["content-security-policy"]
-        assert "sandbox allow-scripts" in policy
-        assert "allow-same-origin" not in policy
-        assert "default-src 'none'" in policy and "form-action 'none'" in policy
-        assert f"http://testserver{base}/" in policy
-        assert html.headers["cache-control"] == "no-store"
-        assert html.headers["referrer-policy"] == "no-referrer"
-        assert client.get("/health", headers={"Origin": "null"}).status_code == 403
-        assert (
-            client.post(
-                "/api/rpc", headers={"Origin": "null"}, json={"method": "agent.list"}
-            ).status_code
-            == 403
-        )
-        assert client.post(f"{base}/style.css", headers={"Origin": "null"}).status_code == 403
-        assert (
-            client.get(
-                f"{base}/style.css", headers={"Origin": "https://attacker.example"}
-            ).status_code
-            == 403
-        )
-        assert (
-            client.get(
-                "/api/preview-assets/invalid/style.css", headers={"Origin": "null"}
-            ).status_code
-            == 404
-        )
+        revision = client.get(revision_url, headers=null_origin)
+        (site / "style.css").write_text("h1 { color: blue; }")
+        changed = client.get(revision_url, headers=null_origin)
+        download = client.get(url + "?download=true")
+        # The opaque origin reaches its own website capability and nothing else.
+        refused = [
+            client.get("/health", headers=null_origin),
+            client.post("/api/rpc", headers=null_origin, json={"method": "agent.list"}),
+            client.post(f"{base}/style.css", headers=null_origin),
+            client.get(f"{base}/style.css", headers={"Origin": "https://attacker.example"}),
+            client.get(revision_url, headers={"Origin": "https://other.example"}),
+        ]
+        invalid_capabilities = [
+            client.get(f"/api/preview-assets/{token}/index.html")
+            for token in ["invalid", preview["token"] + "x", url.removeprefix(FILE_URL_PREFIX)]
+        ]
+        invalid_revision = client.get("/api/preview-assets/invalid/.revision", headers=null_origin)
+
+    assert opened_by_path.json()["ok"] is True
+    # Opening the delivered HTML file redirects into the same website capability.
+    assert redirect.status_code == 307
+    assert redirect.headers["location"] == preview["url"]
+    assert external.content == embedded.content
+    assert external.text.startswith("<!doctype html>")
+    assert "Website" in external.text and "vbot-preview-ready" in external.text
+    assert revision_url in external.text
+    policy = external.headers["content-security-policy"]
+    assert policy == embedded.headers["content-security-policy"]
+    directives = dict(part.split(" ", 1) for part in policy.split("; "))
+    for kind in ("script-src", "style-src", "img-src", "font-src", "media-src"):
+        assert "https:" in directives[kind]
+    assert "https:" not in directives["connect-src"]
+    assert "allow-scripts" in directives["sandbox"].split()
+    assert "allow-same-origin" not in directives["sandbox"].split()
+    assert "default-src 'none'" in policy and "form-action 'none'" in policy
+    assert f"http://testserver{base}/" in policy
+    assert embedded.headers["cache-control"] == "no-store"
+    assert embedded.headers["referrer-policy"] == "no-referrer"
+    assert css.status_code == module.status_code == subpage.status_code == 200
+    assert css.headers["content-type"].startswith("text/css")
+    assert module.headers["content-type"].startswith("text/javascript")
+    assert css.headers["access-control-allow-origin"] == "null"
+    assert "Subpage" in subpage.text
+    assert subpage_redirect.status_code == 307
+    assert subpage_redirect.headers["location"].endswith("/sub/")
+    assert site_root.status_code == 200
+    assert unavailable.status_code == 404
+    assert "vbot-preview-unavailable" in unavailable.text
+    assert "sandbox allow-scripts" in unavailable.headers["content-security-policy"]
+    assert revision.json() == {"revision": preview["revision"]}
+    assert changed.json()["revision"] != preview["revision"]
+    assert changed.headers["access-control-allow-origin"] == "null"
+    assert changed.headers["cache-control"] == "no-store"
+    assert download.content == original
+    assert download.headers["content-disposition"] == 'attachment; filename="index.html"'
+    assert [response.status_code for response in refused] == [403] * 5
+    # Invalid capabilities grant no connection scope and reveal nothing of the site.
+    for response in invalid_capabilities:
+        assert response.status_code == 404
+        assert "Website" not in response.text
+        assert "access-control-allow-origin" not in response.headers
+        assert "connect-src 'none'" in response.headers["content-security-policy"]
+        assert "allow-same-origin" not in response.headers["content-security-policy"]
+    assert invalid_revision.status_code == 404
 
 
 @pytest.mark.parametrize("remove_directory", [False, True])
@@ -185,26 +168,6 @@ def test_unavailable_preview_can_probe_and_recover_within_its_signed_scope(
         assert probe.headers["access-control-allow-origin"] == "null"
         assert "Restored page" in client.get(preview["url"]).text
         assert client.get("/api/rpc", headers={"Origin": "null"}).status_code == 403
-
-
-def test_unavailable_preview_grants_no_connection_scope_to_invalid_capabilities(
-    tmp_path: Path,
-) -> None:
-    entry = tmp_path / "index.html"
-    entry.write_text("<h1>Private sentinel</h1>")
-    app = create_app(runtime=cast(Any, StubRuntime(tmp_path / "data", StubAdapter())))
-    with TestClient(app) as client:
-        delivery = cast(Any, client.app).state.file_delivery
-        preview = delivery.open_preview(str(entry))
-        file_url = _only_file_url(delivery.project_message(_assistant_payload(entry))["content"])
-        for token in ["invalid", preview["token"] + "x", file_url.removeprefix(FILE_URL_PREFIX)]:
-            response = client.get(f"/api/preview-assets/{token}/index.html")
-            assert response.status_code == 404
-            assert "Private sentinel" not in response.text
-            assert "access-control-allow-origin" not in response.headers
-            policy = response.headers["content-security-policy"]
-            assert "connect-src 'none'" in policy
-            assert "allow-same-origin" not in policy
 
 
 def test_preview_changes_track_assets_additions_and_removal(tmp_path: Path) -> None:
@@ -299,26 +262,27 @@ def test_preview_rejects_symlink_escape_and_oversized_tree(
         delivery.preview_revision(token)
 
 
-def test_file_endpoint_serves_current_original_and_rejects_tampering(tmp_path: Path) -> None:
+def test_file_url_serves_the_current_original_and_rechecks_its_type(tmp_path: Path) -> None:
     image = tmp_path / "live image.png"
     image.write_bytes(b"\x89PNG\r\n\x1a\nfirst")
-    runtime = StubRuntime(tmp_path / "data", StubAdapter())
-    app = create_app(runtime=cast(Any, runtime))
+    report = tmp_path / "report.html"
+    report.write_bytes(b"<h1>Report</h1>")
+    app = create_app(runtime=cast(Any, StubRuntime(tmp_path / "data", StubAdapter())))
 
     with TestClient(app) as client:
-        projected = cast(Any, client.app).state.file_delivery.project_message(
-            _assistant_payload(image)
-        )
-        url = _only_file_url(cast(str, projected["content"]))
+        delivery = cast(Any, client.app).state.file_delivery
+        url = _only_file_url(delivery.project_message(_assistant_payload(image))["content"])
+        report_url = _only_file_url(delivery.project_message(_assistant_payload(report))["content"])
         first = client.get(url)
-
         image.write_bytes(b"\x89PNG\r\n\x1a\nsecond")
         second = client.get(url)
         tampered = client.get(url[:-1] + ("A" if url[-1] != "A" else "B"))
         image.unlink()
         missing = client.get(url)
+        report_before = client.get(report_url)
+        report.write_bytes(b"\xff\x00")
+        report_after = client.get(report_url)
 
-    assert first.status_code == 200
     assert first.content == b"\x89PNG\r\n\x1a\nfirst"
     assert first.headers["content-type"].startswith("image/png")
     assert first.headers["content-disposition"].startswith("inline;")
@@ -326,30 +290,10 @@ def test_file_endpoint_serves_current_original_and_rejects_tampering(tmp_path: P
     assert first.headers["x-content-type-options"] == "nosniff"
     assert first.headers["cache-control"] == "no-store"
     assert second.content == b"\x89PNG\r\n\x1a\nsecond"
-    assert tampered.status_code == 404
-    assert missing.status_code == 404
-
-
-def test_text_file_is_projected_as_link_and_opens_inline(tmp_path: Path) -> None:
-    report = tmp_path / "report [final].txt"
-    report.write_text("current report", encoding="utf-8")
-    runtime = StubRuntime(tmp_path / "data", StubAdapter())
-    app = create_app(runtime=cast(Any, runtime))
-
-    with TestClient(app) as client:
-        projected = cast(Any, client.app).state.file_delivery.project_message(
-            _assistant_payload(report)
-        )
-        content = cast(str, projected["content"])
-        response = client.get(_only_file_url(content))
-
-    assert content.startswith(r"[report \[final\].txt]")
-    assert _file_link_title(content) == str(report.resolve())
-    assert response.status_code == 200
-    assert response.text == "current report"
-    assert response.headers["content-type"].startswith("text/plain")
-    assert response.headers["content-disposition"].startswith("inline;")
-    assert response.headers["x-content-type-options"] == "nosniff"
+    assert tampered.status_code == missing.status_code == 404
+    assert report_before.headers["content-type"].startswith("text/html")
+    assert report_after.headers["content-type"] == "application/octet-stream"
+    assert report_after.headers["content-disposition"].startswith("attachment;")
 
 
 def _file_link_title(content: str) -> str:
@@ -358,79 +302,94 @@ def _file_link_title(content: str) -> str:
     return unescape(title[1].replace("\\\\", "\\"))
 
 
-def test_file_link_title_preserves_special_characters(tmp_path: Path) -> None:
-    report = tmp_path / "Übersicht [final] &quot; (1).md"
+@pytest.mark.parametrize(
+    ("filename", "link_text"),
+    [
+        ("report [final].txt", r"[report \[final\].txt]"),
+        ("Übersicht [final] &quot; (1).md", r"[Übersicht \[final\] &quot; (1).md]"),
+    ],
+)
+def test_file_links_escape_the_name_and_carry_the_native_path_title(
+    tmp_path: Path, filename: str, link_text: str
+) -> None:
+    report = tmp_path / filename
     report.write_text("# Report", encoding="utf-8")
     delivery = FileDelivery()
-    projected = delivery.project_message(_assistant_payload(report))
-    assert _file_link_title(projected["content"]) == str(report.resolve())
-    token = _only_file_url(projected["content"]).removeprefix(FILE_URL_PREFIX)
-    delivered = delivery.resolve_token(token)
+
+    content = delivery.project_message(_assistant_payload(report))["content"]
+    delivered = delivery.resolve_token(_only_file_url(content).removeprefix(FILE_URL_PREFIX))
+
+    assert content.startswith(link_text)
+    assert _file_link_title(content) == str(report.resolve())
     assert delivered is not None
     assert delivered.path == report.resolve()
 
 
-@pytest.mark.parametrize(
-    ("filename", "body", "media_type", "inline", "image"),
-    [
-        ("report.HTML", b"<!doctype html><h1>Report</h1>", "text/html", True, False),
-        ("report.htm", b"<h1>Report</h1>", "text/html", True, False),
-        ("diagram.svg", b'<svg xmlns="http://www.w3.org/2000/svg"/>', "image/svg+xml", True, False),
-        ("report.pdf", b"%PDF-1.7\nreport", "application/pdf", True, False),
-        ("notes.md", b"# Notes", "text/plain", True, False),
-        ("data.json", b'{"ok":true}', "text/plain", True, False),
-        ("sound.wav", b"RIFF\x00\x00\x00\x00WAVE", "audio/wav", True, False),
-        ("movie.mp4", b"\x00\x00\x00\x18ftypisom\x00\x00\x00\x00", "video/mp4", True, False),
-        ("photo.avif", b"\x00\x00\x00\x18ftypavif\x00\x00\x00\x00", "image/avif", True, True),
-        ("photo.png", b"\x89PNG\r\n\x1a\n", "image/png", True, True),
-        ("archive.zip", b"PK\x03\x04\x00\x00", "application/octet-stream", False, False),
-        ("program.exe", b"MZ\x00\x00", "application/octet-stream", False, False),
-        ("unknown.bin", b"\xff\x00", "application/octet-stream", False, False),
-        ("fake.html", b"\xff\x00", "application/octet-stream", False, False),
-        ("actually-image.html", b"\x89PNG\r\n\x1a\n", "image/png", True, True),
-    ],
-)
-def test_file_browser_delivery_and_explicit_download(
-    tmp_path: Path, filename: str, body: bytes, media_type: str, inline: bool, image: bool
-) -> None:
-    original = tmp_path / filename
-    original.write_bytes(body)
+def test_file_types_choose_inline_delivery_or_download(tmp_path: Path) -> None:
+    table: dict[str, tuple[bytes, str, bool, bool]] = {
+        "report.HTML": (b"<!doctype html><h1>Report</h1>", "text/html", True, False),
+        "report.htm": (b"<h1>Report</h1>", "text/html", True, False),
+        "diagram.svg": (b'<svg xmlns="http://www.w3.org/2000/svg"/>', "image/svg+xml", True, False),
+        "report.pdf": (b"%PDF-1.7\nreport", "application/pdf", True, False),
+        "notes.md": (b"# Notes", "text/plain", True, False),
+        "data.json": (b'{"ok":true}', "text/plain", True, False),
+        "sound.wav": (b"RIFF\x00\x00\x00\x00WAVE", "audio/wav", True, False),
+        "movie.mp4": (b"\x00\x00\x00\x18ftypisom\x00\x00\x00\x00", "video/mp4", True, False),
+        "photo.avif": (b"\x00\x00\x00\x18ftypavif\x00\x00\x00\x00", "image/avif", True, True),
+        "photo.png": (b"\x89PNG\r\n\x1a\n", "image/png", True, True),
+        "archive.zip": (b"PK\x03\x04\x00\x00", "application/octet-stream", False, False),
+        "program.exe": (b"MZ\x00\x00", "application/octet-stream", False, False),
+        "unknown.bin": (b"\xff\x00", "application/octet-stream", False, False),
+        # Only sniffed text is refined by an HTML/SVG suffix.
+        "fake.html": (b"\xff\x00", "application/octet-stream", False, False),
+        "actually-image.html": (b"\x89PNG\r\n\x1a\n", "image/png", True, True),
+    }
+    # HTML originals open as websites, so keep their directory free of runtime data.
+    originals = tmp_path / "originals"
+    originals.mkdir()
+    for filename, (body, *_expected) in table.items():
+        (originals / filename).write_bytes(body)
     app = create_app(runtime=cast(Any, StubRuntime(tmp_path / "data", StubAdapter())))
+
+    observed: dict[str, tuple[bytes, str, bool, bool]] = {}
     with TestClient(app) as client:
-        projected = cast(Any, client.app).state.file_delivery.project_message(
-            _assistant_payload(original)
-        )
-        assert projected["content"].startswith("![" if image else "[")
-        url = _only_file_url(projected["content"])
-        response = client.get(url)
-        download = client.get(url, params={"download": "true"})
-        assert response.status_code == download.status_code == 200
-        assert download.content == body
-        if media_type == "text/html":
-            assert response.content.startswith(body)
-            assert "vbot-preview-ready" in response.text
-        else:
-            assert response.content == body
-        assert response.headers["content-type"].split(";")[0] == media_type
-        assert response.headers["content-disposition"].split(";")[0] == (
-            "inline" if inline else "attachment"
-        )
-        assert download.headers["content-disposition"].startswith("attachment;")
-        assert filename in download.headers["content-disposition"]
-        assert response.headers["referrer-policy"] == "no-referrer"
-        if media_type in {"text/html", "image/svg+xml"}:
-            policy = response.headers["content-security-policy"]
-            directives = dict(directive.strip().split(" ", 1) for directive in policy.split(";"))
-            assert "allow-scripts" in directives["sandbox"].split()
-            assert "allow-same-origin" not in directives["sandbox"].split()
-            for directive in ("frame-src", "object-src", "form-action"):
-                assert directives[directive] == "'none'"
+        delivery = cast(Any, client.app).state.file_delivery
+        for filename, (body, media_type, _inline, _image) in table.items():
+            content = delivery.project_message(_assistant_payload(originals / filename))["content"]
+            url = _only_file_url(content)
+            response = client.get(url)
+            download = client.get(url, params={"download": "true"})
+            observed[filename] = (
+                body,
+                response.headers["content-type"].split(";")[0],
+                response.headers["content-disposition"].split(";")[0] == "inline",
+                content.startswith("!["),
+            )
+            assert response.status_code == download.status_code == 200, filename
+            assert download.content == body, filename
+            assert download.headers["content-disposition"].startswith("attachment;"), filename
+            assert filename in download.headers["content-disposition"], filename
+            assert response.headers["referrer-policy"] == "no-referrer", filename
             if media_type == "text/html":
-                assert "/api/preview-assets/" in directives["connect-src"]
-                assert directives["base-uri"] == directives["connect-src"]
+                assert response.content.startswith(body), filename
+                assert "vbot-preview-ready" in response.text, filename
             else:
-                assert directives["connect-src"] == directives["base-uri"] == "'none'"
-                assert download.headers["content-security-policy"] == policy
+                assert response.content == body, filename
+            if media_type in {"text/html", "image/svg+xml"}:
+                policy = response.headers["content-security-policy"]
+                directives = dict(part.strip().split(" ", 1) for part in policy.split(";"))
+                sandbox = directives["sandbox"].split()
+                assert "allow-scripts" in sandbox and "allow-same-origin" not in sandbox, filename
+                for directive in ("frame-src", "object-src", "form-action"):
+                    assert directives[directive] == "'none'", filename
+                if media_type == "text/html":
+                    assert "/api/preview-assets/" in directives["connect-src"], filename
+                    assert directives["base-uri"] == directives["connect-src"], filename
+                else:
+                    assert directives["connect-src"] == directives["base-uri"] == "'none'"
+                    assert download.headers["content-security-policy"] == policy
+
+    assert observed == table
 
 
 def test_large_html_probe_can_end_inside_utf8_character(tmp_path: Path) -> None:
@@ -442,20 +401,6 @@ def test_large_html_probe_can_end_inside_utf8_character(tmp_path: Path) -> None:
     assert delivered is not None
     assert delivered.inline
     assert delivered.media_type == "text/html"
-
-
-def test_file_type_is_rechecked_after_original_changes(tmp_path: Path) -> None:
-    report = tmp_path / "report.html"
-    report.write_bytes(b"<h1>Report</h1>")
-    app = create_app(runtime=cast(Any, StubRuntime(tmp_path / "data", StubAdapter())))
-    with TestClient(app) as client:
-        delivery = cast(Any, client.app).state.file_delivery
-        url = _only_file_url(delivery.project_message(_assistant_payload(report))["content"])
-        assert client.get(url).headers["content-type"].startswith("text/html")
-        report.write_bytes(b"\xff\x00")
-        response = client.get(url)
-        assert response.headers["content-type"] == "application/octet-stream"
-        assert response.headers["content-disposition"].startswith("attachment;")
 
 
 def test_public_projection_is_fail_closed_and_regenerates_urls(tmp_path: Path) -> None:

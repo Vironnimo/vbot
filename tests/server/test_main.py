@@ -17,142 +17,75 @@ from core.utils.logging import ManagedLoggerProxyHandler, QuietLogsWebSocketLife
 from server import main as server_main
 from server.main import DEFAULT_PORT, main, parse_args, resolve_port, resolve_server_bind
 
-
-def make_websocket_record(
-    logger: logging.Logger,
-    *,
-    level: int = logging.INFO,
-    message: str,
-    path: str,
-    args: tuple[object, ...] = (),
-) -> logging.LogRecord:
-    """Build a websocket log record routed through the managed proxy tests."""
-
-    record = logger.makeRecord(
-        name="websockets.server",
-        level=level,
-        fn=__file__,
-        lno=1,
-        msg=message,
-        args=args,
-        exc_info=None,
-    )
-    record.websocket = SimpleNamespace(request=SimpleNamespace(path=path))
-    return record
+_PORT_SETTINGS = {"format_version": 1, "server_port": 8500}
 
 
-def test_parse_args_accepts_data_dir_and_port() -> None:
+def test_parse_args_accepts_data_dir_port_and_one_safe_startup_mode() -> None:
     args = parse_args(["--data-dir", "dev-data", "--port", "9000"])
 
-    assert args.data_dir == "dev-data"
-    assert args.port == 9000
-
-
-def test_parse_args_accepts_safe_startup_modes() -> None:
+    assert (args.data_dir, args.port) == ("dev-data", 9000)
     assert parse_args(["--verification-only"]).verification_only is True
     assert parse_args(["--test-instance"]).test_instance is True
     with pytest.raises(SystemExit):
         parse_args(["--verification-only", "--test-instance"])
 
 
-def test_resolve_port_priority_explicit_then_environment_then_settings(
+@pytest.mark.parametrize(
+    ("settings", "environment", "explicit_port", "port", "source"),
+    [
+        (_PORT_SETTINGS, {"VBOT_SERVER_PORT": "8600"}, 8700, 8700, "cli"),
+        (_PORT_SETTINGS, {"VBOT_SERVER_PORT": "8600"}, None, 8600, "VBOT_SERVER_PORT"),
+        (_PORT_SETTINGS, {}, None, 8500, "settings.server_port"),
+        (
+            {"format_version": 1, "SERVER_PORT": 8700},
+            {"PORT": "8600", "SERVER_PORT": "8800"},
+            None,
+            8700,
+            "settings.SERVER_PORT",
+        ),
+        (
+            {**_PORT_SETTINGS, "debug": {"enabled": "yes"}},
+            {},
+            None,
+            8500,
+            "settings.server_port",
+        ),
+        (None, {"PORT": "8600", "SERVER_PORT": "8700"}, None, DEFAULT_PORT, "default"),
+        ("{", {}, None, DEFAULT_PORT, "default"),
+    ],
+    ids=[
+        "cli-first",
+        "environment-before-settings",
+        "settings",
+        "settings-uppercase-key-ignores-ambient-environment",
+        "valid-port-next-to-invalid-setting",
+        "default-ignores-ambient-environment",
+        "default-for-unreadable-settings",
+    ],
+)
+def test_server_bind_resolves_cli_then_environment_then_settings_then_default(
     tmp_path: Path,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
+    settings: dict[str, Any] | str | None,
+    environment: dict[str, str],
+    explicit_port: int | None,
+    port: int,
+    source: str,
 ) -> None:
-    settings_path = tmp_path / "settings.json"
-    settings_path.write_text(
-        json.dumps({"format_version": 1, "server_port": 8500}), encoding="utf-8"
-    )
-    monkeypatch.setenv("VBOT_SERVER_PORT", "8600")
+    monkeypatch.delenv("VBOT_SERVER_PORT", raising=False)
+    for name, value in environment.items():
+        monkeypatch.setenv(name, value)
+    if settings is not None:
+        text = settings if isinstance(settings, str) else json.dumps(settings)
+        (tmp_path / "settings.json").write_text(text, encoding="utf-8")
     config = Config(data_dir=tmp_path)
 
-    assert resolve_port(config, 8700) == 8700
-    assert resolve_port(config) == 8600
-
-
-def test_resolve_port_uses_settings_then_default(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.delenv("VBOT_SERVER_PORT", raising=False)
-    settings_path = tmp_path / "settings.json"
-    settings_path.write_text(
-        json.dumps({"format_version": 1, "server_port": 8500}), encoding="utf-8"
-    )
-
-    assert resolve_port(Config(data_dir=tmp_path)) == 8500
-    assert resolve_port(Config(data_dir=tmp_path / "missing")) == DEFAULT_PORT
-
-
-def test_resolve_port_uses_default_when_settings_are_invalid(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.delenv("VBOT_SERVER_PORT", raising=False)
-    (tmp_path / "settings.json").write_text("{", encoding="utf-8")
-
-    assert resolve_port(Config(data_dir=tmp_path)) == DEFAULT_PORT
-
-
-def test_resolve_port_keeps_valid_port_next_to_invalid_settings(
-    tmp_path: Path, monkeypatch
-) -> None:
-    monkeypatch.delenv("VBOT_SERVER_PORT", raising=False)
-    (tmp_path / "settings.json").write_text(
-        json.dumps({"format_version": 1, "server_port": 8500, "debug": {"enabled": "yes"}}),
-        encoding="utf-8",
-    )
-
-    assert resolve_port(Config(data_dir=tmp_path)) == 8500
-
-
-def test_resolve_port_ignores_ambient_port_environment(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    monkeypatch.delenv("VBOT_SERVER_PORT", raising=False)
-    monkeypatch.setenv("PORT", "8600")
-    monkeypatch.setenv("SERVER_PORT", "8700")
-
-    assert resolve_port(Config(data_dir=tmp_path)) == DEFAULT_PORT
-
-
-def test_resolve_port_accepts_port_keys_from_settings(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    monkeypatch.delenv("VBOT_SERVER_PORT", raising=False)
-    monkeypatch.setenv("PORT", "8600")
-    monkeypatch.setenv("SERVER_PORT", "8800")
-    settings_path = tmp_path / "settings.json"
-    settings_path.write_text(
-        json.dumps({"format_version": 1, "SERVER_PORT": 8700}), encoding="utf-8"
-    )
-
-    assert resolve_port(Config(data_dir=tmp_path)) == 8700
-
-
-def test_resolve_server_bind_tracks_host_port_and_source(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.delenv("VBOT_SERVER_PORT", raising=False)
-    (tmp_path / "settings.json").write_text(
-        json.dumps({"format_version": 1, "server_port": 8500}), encoding="utf-8"
-    )
-
-    assert resolve_server_bind(Config(data_dir=tmp_path), host="0.0.0.0") == {
+    assert resolve_server_bind(config, host="0.0.0.0", explicit_port=explicit_port) == {
         "listen_host": "0.0.0.0",
-        "listen_port": 8500,
-        "port_source": "settings.server_port",
+        "listen_port": port,
+        "port_source": source,
     }
-
-
-def test_resolve_server_bind_uses_explicit_port_before_environment_and_settings(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    monkeypatch.setenv("VBOT_SERVER_PORT", "8600")
-    (tmp_path / "settings.json").write_text(
-        json.dumps({"format_version": 1, "server_port": 8500}), encoding="utf-8"
-    )
-
-    assert resolve_server_bind(Config(data_dir=tmp_path), host="127.0.0.1", explicit_port=8700) == {
-        "listen_host": "127.0.0.1",
-        "listen_port": 8700,
-        "port_source": "cli",
-    }
+    assert resolve_port(config, explicit_port) == port
 
 
 @pytest.mark.parametrize("action", ["shutdown", "restart", "restart_failure"])
@@ -285,323 +218,54 @@ def test_main_initializes_only_a_missing_data_directory(
         assert markers[0].databases == {}
 
 
-def test_managed_logger_proxy_handler_routes_records_into_vbot_namespace() -> None:
-    handler = ManagedLoggerProxyHandler("vbot.server.uvicorn")
-    logger = logging.getLogger("uvicorn.error")
-    target_logger = logging.getLogger("vbot.server.uvicorn")
-    captured_records: list[logging.LogRecord] = []
-
-    class CaptureHandler(logging.Handler):
-        def emit(self, record: logging.LogRecord) -> None:
-            captured_records.append(record)
-
-    capture_handler = CaptureHandler()
-    original_target_level = target_logger.level
-    original_target_propagate = target_logger.propagate
-    logger.handlers = []
-    logger.propagate = False
-    logger.addHandler(handler)
-    logger.setLevel(logging.INFO)
-    target_logger.addHandler(capture_handler)
-    target_logger.setLevel(logging.INFO)
-    target_logger.propagate = True
-
-    try:
-        logger.info("Server started")
-    finally:
-        target_logger.removeHandler(capture_handler)
-        target_logger.setLevel(original_target_level)
-        target_logger.propagate = original_target_propagate
-        logger.removeHandler(handler)
-        handler.close()
-        capture_handler.close()
-
-    assert any(
-        record.name == "vbot.server.uvicorn" and record.getMessage() == "Server started"
-        for record in captured_records
-    )
-
-
-def test_managed_logger_proxy_handler_suppresses_logs_websocket_lifecycle_noise() -> None:
+def test_uvicorn_log_proxy_forwards_formatted_records_except_websocket_lifecycle_noise() -> None:
+    # server.main wires this handler and filter into uvicorn's log config.
     handler = ManagedLoggerProxyHandler("vbot.server.uvicorn")
     handler.addFilter(QuietLogsWebSocketLifecycleFilter())
-    logger = logging.getLogger("websockets.server")
     target_logger = logging.getLogger("vbot.server.uvicorn")
-    captured_records: list[logging.LogRecord] = []
+    captured: list[logging.LogRecord] = []
 
     class CaptureHandler(logging.Handler):
         def emit(self, record: logging.LogRecord) -> None:
-            captured_records.append(record)
+            captured.append(record)
 
     capture_handler = CaptureHandler()
-    original_target_level = target_logger.level
-    original_target_propagate = target_logger.propagate
-    logger.handlers = []
-    logger.propagate = False
-    logger.addHandler(handler)
-    logger.setLevel(logging.INFO)
+    original_level, original_propagate = target_logger.level, target_logger.propagate
     target_logger.addHandler(capture_handler)
     target_logger.setLevel(logging.INFO)
     target_logger.propagate = True
-
-    record = make_websocket_record(logger, message="connection open", path="/ws/logs")
-
-    try:
-        logger.handle(record)
-    finally:
-        target_logger.removeHandler(capture_handler)
-        target_logger.setLevel(original_target_level)
-        target_logger.propagate = original_target_propagate
-        logger.removeHandler(handler)
-        handler.close()
-        capture_handler.close()
-
-    assert captured_records == []
-
-
-def test_managed_logger_proxy_handler_suppresses_app_websocket_lifecycle_noise() -> None:
-    handler = ManagedLoggerProxyHandler("vbot.server.uvicorn")
-    handler.addFilter(QuietLogsWebSocketLifecycleFilter())
-    logger = logging.getLogger("websockets.server")
-    target_logger = logging.getLogger("vbot.server.uvicorn")
-    captured_records: list[logging.LogRecord] = []
-
-    class CaptureHandler(logging.Handler):
-        def emit(self, record: logging.LogRecord) -> None:
-            captured_records.append(record)
-
-    capture_handler = CaptureHandler()
-    original_target_level = target_logger.level
-    original_target_propagate = target_logger.propagate
-    logger.handlers = []
-    logger.propagate = False
-    logger.addHandler(handler)
-    logger.setLevel(logging.INFO)
-    target_logger.addHandler(capture_handler)
-    target_logger.setLevel(logging.INFO)
-    target_logger.propagate = True
-
-    record = make_websocket_record(logger, message="connection closed", path="/ws")
+    records: list[tuple[str, int, str, tuple[object, ...], str | None]] = [
+        ("uvicorn.error", logging.INFO, "Server started", (), None),
+        ("websockets.server", logging.INFO, "connection open", (), "/ws/logs"),
+        ("websockets.server", logging.INFO, "connection closed", (), "/ws"),
+        ("uvicorn.error", logging.INFO, "connection open", (), None),
+        ("uvicorn.error", logging.INFO, '127.0.0.1:55090 - "WebSocket /ws" [accepted]', (), None),
+        ("websockets.server", logging.ERROR, "opening handshake failed", (), "/ws/logs"),
+        ("websockets.server", logging.INFO, "keepalive ping timeout", (), "/ws/logs"),
+        (
+            "websockets.server",
+            logging.INFO,
+            '%s - "WebSocket %s" [rejected]',
+            ("127.0.0.1", "/ws"),
+            "/ws",
+        ),
+    ]
 
     try:
-        logger.handle(record)
+        for name, level, message, args, path in records:
+            record = logging.LogRecord(name, level, __file__, 1, message, args, None)
+            if path is not None:
+                record.websocket = SimpleNamespace(request=SimpleNamespace(path=path))
+            handler.handle(record)
     finally:
         target_logger.removeHandler(capture_handler)
-        target_logger.setLevel(original_target_level)
-        target_logger.propagate = original_target_propagate
-        logger.removeHandler(handler)
+        target_logger.setLevel(original_level)
+        target_logger.propagate = original_propagate
         handler.close()
-        capture_handler.close()
 
-    assert captured_records == []
-
-
-def test_managed_logger_proxy_handler_suppresses_runtime_app_websocket_open_noise() -> None:
-    handler = ManagedLoggerProxyHandler("vbot.server.uvicorn")
-    handler.addFilter(QuietLogsWebSocketLifecycleFilter())
-    logger = logging.getLogger("uvicorn.error")
-    target_logger = logging.getLogger("vbot.server.uvicorn")
-    captured_records: list[logging.LogRecord] = []
-
-    class CaptureHandler(logging.Handler):
-        def emit(self, record: logging.LogRecord) -> None:
-            captured_records.append(record)
-
-    capture_handler = CaptureHandler()
-    original_target_level = target_logger.level
-    original_target_propagate = target_logger.propagate
-    logger.handlers = []
-    logger.propagate = False
-    logger.addHandler(handler)
-    logger.setLevel(logging.INFO)
-    target_logger.addHandler(capture_handler)
-    target_logger.setLevel(logging.INFO)
-    target_logger.propagate = True
-
-    try:
-        logger.info("connection open")
-    finally:
-        target_logger.removeHandler(capture_handler)
-        target_logger.setLevel(original_target_level)
-        target_logger.propagate = original_target_propagate
-        logger.removeHandler(handler)
-        handler.close()
-        capture_handler.close()
-
-    assert captured_records == []
-
-
-def test_proxy_handler_suppresses_runtime_accepted_handshake_message() -> None:
-    handler = ManagedLoggerProxyHandler("vbot.server.uvicorn")
-    handler.addFilter(QuietLogsWebSocketLifecycleFilter())
-    logger = logging.getLogger("uvicorn.error")
-    target_logger = logging.getLogger("vbot.server.uvicorn")
-    captured_records: list[logging.LogRecord] = []
-
-    class CaptureHandler(logging.Handler):
-        def emit(self, record: logging.LogRecord) -> None:
-            captured_records.append(record)
-
-    capture_handler = CaptureHandler()
-    original_target_level = target_logger.level
-    original_target_propagate = target_logger.propagate
-    logger.handlers = []
-    logger.propagate = False
-    logger.addHandler(handler)
-    logger.setLevel(logging.INFO)
-    target_logger.addHandler(capture_handler)
-    target_logger.setLevel(logging.INFO)
-    target_logger.propagate = True
-
-    record = logger.makeRecord(
-        name="uvicorn.error",
-        level=logging.INFO,
-        fn=__file__,
-        lno=1,
-        msg='127.0.0.1:55090 - "WebSocket /ws" [accepted]',
-        args=(),
-        exc_info=None,
-    )
-
-    try:
-        logger.handle(record)
-    finally:
-        target_logger.removeHandler(capture_handler)
-        target_logger.setLevel(original_target_level)
-        target_logger.propagate = original_target_propagate
-        logger.removeHandler(handler)
-        handler.close()
-        capture_handler.close()
-
-    assert captured_records == []
-
-
-def test_managed_logger_proxy_handler_keeps_logs_websocket_errors() -> None:
-    handler = ManagedLoggerProxyHandler("vbot.server.uvicorn")
-    handler.addFilter(QuietLogsWebSocketLifecycleFilter())
-    logger = logging.getLogger("websockets.server")
-    target_logger = logging.getLogger("vbot.server.uvicorn")
-    captured_records: list[logging.LogRecord] = []
-
-    class CaptureHandler(logging.Handler):
-        def emit(self, record: logging.LogRecord) -> None:
-            captured_records.append(record)
-
-    capture_handler = CaptureHandler()
-    original_target_level = target_logger.level
-    original_target_propagate = target_logger.propagate
-    logger.handlers = []
-    logger.propagate = False
-    logger.addHandler(handler)
-    logger.setLevel(logging.INFO)
-    target_logger.addHandler(capture_handler)
-    target_logger.setLevel(logging.INFO)
-    target_logger.propagate = True
-
-    record = make_websocket_record(
-        logger,
-        level=logging.ERROR,
-        message="opening handshake failed",
-        path="/ws/logs",
-    )
-
-    try:
-        logger.handle(record)
-    finally:
-        target_logger.removeHandler(capture_handler)
-        target_logger.setLevel(original_target_level)
-        target_logger.propagate = original_target_propagate
-        logger.removeHandler(handler)
-        handler.close()
-        capture_handler.close()
-
-    assert any(
-        record.name == "vbot.server.uvicorn" and record.getMessage() == "opening handshake failed"
-        for record in captured_records
-    )
-
-
-def test_managed_logger_proxy_handler_keeps_non_lifecycle_logs_websocket_info() -> None:
-    handler = ManagedLoggerProxyHandler("vbot.server.uvicorn")
-    handler.addFilter(QuietLogsWebSocketLifecycleFilter())
-    logger = logging.getLogger("websockets.server")
-    target_logger = logging.getLogger("vbot.server.uvicorn")
-    captured_records: list[logging.LogRecord] = []
-
-    class CaptureHandler(logging.Handler):
-        def emit(self, record: logging.LogRecord) -> None:
-            captured_records.append(record)
-
-    capture_handler = CaptureHandler()
-    original_target_level = target_logger.level
-    original_target_propagate = target_logger.propagate
-    logger.handlers = []
-    logger.propagate = False
-    logger.addHandler(handler)
-    logger.setLevel(logging.INFO)
-    target_logger.addHandler(capture_handler)
-    target_logger.setLevel(logging.INFO)
-    target_logger.propagate = True
-
-    record = make_websocket_record(logger, message="keepalive ping timeout", path="/ws/logs")
-
-    try:
-        logger.handle(record)
-    finally:
-        target_logger.removeHandler(capture_handler)
-        target_logger.setLevel(original_target_level)
-        target_logger.propagate = original_target_propagate
-        logger.removeHandler(handler)
-        handler.close()
-        capture_handler.close()
-
-    assert any(
-        record.name == "vbot.server.uvicorn" and record.getMessage() == "keepalive ping timeout"
-        for record in captured_records
-    )
-
-
-def test_managed_logger_proxy_handler_keeps_non_routine_app_websocket_info() -> None:
-    handler = ManagedLoggerProxyHandler("vbot.server.uvicorn")
-    handler.addFilter(QuietLogsWebSocketLifecycleFilter())
-    logger = logging.getLogger("websockets.server")
-    target_logger = logging.getLogger("vbot.server.uvicorn")
-    captured_records: list[logging.LogRecord] = []
-
-    class CaptureHandler(logging.Handler):
-        def emit(self, record: logging.LogRecord) -> None:
-            captured_records.append(record)
-
-    capture_handler = CaptureHandler()
-    original_target_level = target_logger.level
-    original_target_propagate = target_logger.propagate
-    logger.handlers = []
-    logger.propagate = False
-    logger.addHandler(handler)
-    logger.setLevel(logging.INFO)
-    target_logger.addHandler(capture_handler)
-    target_logger.setLevel(logging.INFO)
-    target_logger.propagate = True
-
-    record = make_websocket_record(
-        logger,
-        message='%s - "WebSocket %s" [rejected]',
-        path="/ws",
-        args=("127.0.0.1", "/ws"),
-    )
-
-    try:
-        logger.handle(record)
-    finally:
-        target_logger.removeHandler(capture_handler)
-        target_logger.setLevel(original_target_level)
-        target_logger.propagate = original_target_propagate
-        logger.removeHandler(handler)
-        handler.close()
-        capture_handler.close()
-
-    assert any(
-        record.name == "vbot.server.uvicorn"
-        and record.getMessage() == '127.0.0.1 - "WebSocket /ws" [rejected]'
-        for record in captured_records
-    )
+    assert [(record.name, record.levelno, record.getMessage()) for record in captured] == [
+        ("vbot.server.uvicorn", logging.INFO, "Server started"),
+        ("vbot.server.uvicorn", logging.ERROR, "opening handshake failed"),
+        ("vbot.server.uvicorn", logging.INFO, "keepalive ping timeout"),
+        ("vbot.server.uvicorn", logging.INFO, '127.0.0.1 - "WebSocket /ws" [rejected]'),
+    ]

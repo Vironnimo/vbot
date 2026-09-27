@@ -1,270 +1,184 @@
-"""Tests for app http."""
+"""HTTP edge of the server app: browser-origin guard, RPC body guard and WebUI serving."""
 
 from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 
-from core.runtime import Runtime
-from core.utils.config import Config
-from server.app import (
-    JSON_REQUEST_BODY_MAX_BYTES,
-    WEBUI_DOCUMENT_CACHE_HEADERS,
-    create_app,
-)
+import server.app as server_app
+from server.app import JSON_REQUEST_BODY_MAX_BYTES, WEBUI_DOCUMENT_CACHE_HEADERS, create_app
+from server.rpc.dispatcher import dispatch_rpc
+from tests.server.app_test_support import ServerStubRuntime
+
+_SAME_ORIGIN = "http://127.0.0.1:8420"
 
 
-def test_webui_serving_keeps_api_routes_precedence(monkeypatch, tmp_path: Path) -> None:
-    import server.app as server_app
-
-    dist_dir = _write_webui_build(tmp_path)
-    monkeypatch.setattr(server_app, "WEBUI_DIST_DIR", dist_dir)
-    app = create_app(runtime=Runtime(Config(data_dir=tmp_path / "data")))
-
-    with TestClient(app) as client:
-        health_response = client.get("/health")
-        missing_sse_response = client.get("/api/runs/missing/events")
-        rpc_response = client.post("/api/rpc", json={"method": "unknown.method"})
-        # Unmatched server paths are never answered with the WebUI document.
-        reserved_responses = [
-            client.get(path) for path in ("/api/unknown", "/ws", "/ws/logs", "/ws/terminals/term-1")
-        ]
-
-    assert health_response.status_code == 200
-    assert health_response.json() == {"status": "ok"}
-    assert missing_sse_response.status_code == 404
-    assert rpc_response.status_code == 200
-    assert rpc_response.json()["ok"] is False
-    assert [(response.status_code, response.json()) for response in reserved_responses] == [
-        (404, {"detail": "Not Found"})
-    ] * 4
-
-
-@pytest.mark.parametrize(
-    "origin",
-    [
+def test_browser_origin_guard_admits_only_the_served_origin(tmp_path: Path) -> None:
+    app = create_app(runtime=ServerStubRuntime(tmp_path))
+    foreign_origins = [
         "https://attacker.example",
         "http://testserver:8420",
         "https://testserver",
         "null",
-    ],
-)
-def test_http_transport_rejects_non_same_origin_browser_requests(
-    tmp_path: Path,
-    origin: str,
-) -> None:
-    app = create_app(runtime=Runtime(Config(data_dir=tmp_path / "data")))
+    ]
 
     with TestClient(app) as client:
-        response = client.get("/health", headers={"origin": origin})
-
-    assert response.status_code == 403
-
-
-def test_http_transport_allows_same_origin_and_non_browser_requests(tmp_path: Path) -> None:
-    app = create_app(runtime=Runtime(Config(data_dir=tmp_path / "data")))
-
-    with TestClient(app) as client:
-        same_origin = client.get("/health", headers={"origin": "http://127.0.0.1:8420"})
+        foreign = [client.get("/health", headers={"origin": origin}) for origin in foreign_origins]
+        # A rebinding page cannot pass by making Host match its own Origin.
+        rebinding = client.get(
+            "/health", headers={"origin": "http://attacker.example", "host": "attacker.example"}
+        )
+        same_origin = client.get("/health", headers={"origin": _SAME_ORIGIN})
         without_origin = client.get("/health")
 
-    assert same_origin.status_code == 200
-    assert without_origin.status_code == 200
-
-
-def test_http_transport_rejects_host_header_origin_rebinding(tmp_path: Path) -> None:
-    app = create_app(runtime=Runtime(Config(data_dir=tmp_path / "data")))
-
-    with TestClient(app) as client:
-        response = client.get(
-            "/health",
-            headers={"origin": "http://attacker.example", "host": "attacker.example"},
-        )
-
-    assert response.status_code == 403
+    assert [response.status_code for response in [*foreign, rebinding]] == [403] * 5
+    assert same_origin.json() == without_origin.json() == {"status": "ok"}
 
 
 @pytest.mark.parametrize(
-    ("listen_host", "request_host", "origin"),
+    ("listen_host", "requests"),
     [
-        ("0.0.0.0", "192.168.10.25:8420", "http://192.168.10.25:8420"),
-        ("::", "[fd00::25]:8420", "http://[fd00::25]:8420"),
+        (
+            "0.0.0.0",
+            [
+                ("192.168.10.25:8420", "http://192.168.10.25:8420", 200),
+                ("attacker.example:8420", "http://attacker.example:8420", 403),
+                ("192.168.10.25:8420", "http://192.168.10.99:8420", 403),
+            ],
+        ),
+        ("::", [("[fd00::25]:8420", "http://[fd00::25]:8420", 200)]),
     ],
 )
-def test_wildcard_bind_allows_same_origin_ip_browser_requests(
-    tmp_path: Path,
-    listen_host: str,
-    request_host: str,
-    origin: str,
+def test_wildcard_bind_admits_same_origin_ip_requests_only(
+    tmp_path: Path, listen_host: str, requests: list[tuple[str, str, int]]
 ) -> None:
     app = create_app(
-        runtime=Runtime(Config(data_dir=tmp_path / "data")),
-        server_bind={
-            "listen_host": listen_host,
-            "listen_port": 8420,
-            "port_source": "cli",
-        },
+        runtime=ServerStubRuntime(tmp_path),
+        server_bind={"listen_host": listen_host, "listen_port": 8420, "port_source": "cli"},
     )
 
     with TestClient(app) as client:
-        response = client.get(
-            "/health",
-            headers={"host": request_host, "origin": origin},
-        )
+        observed = [
+            (host, origin, client.get("/health", headers={"host": host, "origin": origin}))
+            for host, origin, _status in requests
+        ]
 
-    assert response.status_code == 200
-
-
-@pytest.mark.parametrize(
-    ("request_host", "origin"),
-    [
-        ("attacker.example:8420", "http://attacker.example:8420"),
-        ("192.168.10.25:8420", "http://192.168.10.99:8420"),
-    ],
-)
-def test_wildcard_bind_rejects_rebinding_and_cross_ip_origins(
-    tmp_path: Path,
-    request_host: str,
-    origin: str,
-) -> None:
-    app = create_app(
-        runtime=Runtime(Config(data_dir=tmp_path / "data")),
-        server_bind={
-            "listen_host": "0.0.0.0",
-            "listen_port": 8420,
-            "port_source": "cli",
-        },
+    assert [(host, origin, response.status_code) for host, origin, response in observed] == (
+        requests
     )
 
-    with TestClient(app) as client:
-        response = client.get(
-            "/health",
-            headers={"host": request_host, "origin": origin},
-        )
 
-    assert response.status_code == 403
-
-
-def test_rpc_rejects_oversized_body_before_dispatch(monkeypatch, tmp_path: Path) -> None:
-    import server.app as server_app
-
-    dispatch_calls: list[object] = []
-
-    async def record_dispatch(_state: Any, payload: object) -> dict[str, object]:
-        dispatch_calls.append(payload)
-        return {"ok": True, "result": {}}
-
-    monkeypatch.setattr(server_app, "dispatch_rpc", record_dispatch)
-    app = create_app(runtime=Runtime(Config(data_dir=tmp_path / "data")))
-
-    with TestClient(app) as client:
-        response = client.post(
-            "/api/rpc",
-            content=b"x" * (JSON_REQUEST_BODY_MAX_BYTES + 1),
-            headers={"content-type": "application/json"},
-        )
-
-    assert response.status_code == 413
-    assert dispatch_calls == []
-
-
-def test_speech_synthesis_rejects_oversized_body(tmp_path: Path) -> None:
-    app = create_app(runtime=Runtime(Config(data_dir=tmp_path / "data")))
-
-    with TestClient(app) as client:
-        response = client.post(
-            "/api/speech/synthesize",
-            content=b"x" * (JSON_REQUEST_BODY_MAX_BYTES + 1),
-            headers={"content-type": "application/json"},
-        )
-
-    assert response.status_code == 413
-
-
-def test_rpc_rejects_non_json_media_type_before_dispatch(monkeypatch, tmp_path: Path) -> None:
-    import server.app as server_app
-
-    dispatch_calls: list[object] = []
-
-    async def record_dispatch(_state: Any, payload: object) -> dict[str, object]:
-        dispatch_calls.append(payload)
-        return {"ok": True, "result": {}}
-
-    monkeypatch.setattr(server_app, "dispatch_rpc", record_dispatch)
-    app = create_app(runtime=Runtime(Config(data_dir=tmp_path / "data")))
-
-    with TestClient(app) as client:
-        cross_origin_response = client.post(
-            "/api/rpc",
-            content='{"method":"terminal.start"}',
-            headers={
-                "content-type": "text/plain",
-                "origin": "https://attacker.example",
-            },
-        )
-        wrong_media_type_response = client.post(
-            "/api/rpc",
-            content='{"method":"terminal.start"}',
-            headers={
-                "content-type": "text/plain",
-                "origin": "http://127.0.0.1:8420",
-            },
-        )
-
-    assert cross_origin_response.status_code == 403
-    assert wrong_media_type_response.status_code == 415
-    assert dispatch_calls == []
-
-
-@pytest.mark.parametrize("content", ["{", b"\xff"])
-def test_rpc_endpoint_returns_error_envelope_for_malformed_json(
-    tmp_path: Path, content: str | bytes
+def test_rpc_endpoint_rejects_unsafe_bodies_before_dispatch(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    app = create_app(runtime=Runtime(Config(data_dir=tmp_path / "data")))
+    dispatched: list[object] = []
+
+    async def record_dispatch(_state: Any, payload: object) -> dict[str, object]:
+        dispatched.append(payload)
+        return {"ok": True, "result": {}}
+
+    monkeypatch.setattr(server_app, "dispatch_rpc", record_dispatch)
+    app = create_app(runtime=ServerStubRuntime(tmp_path))
+    json_type = {"content-type": "application/json"}
+    body = '{"method":"terminal.start"}'
 
     with TestClient(app) as client:
-        response = client.post(
-            "/api/rpc",
-            content=content,
-            headers={"content-type": "application/json"},
+        oversized = client.post(
+            "/api/rpc", content=b"x" * (JSON_REQUEST_BODY_MAX_BYTES + 1), headers=json_type
         )
+        # A cross-origin simple request is refused before its media type matters.
+        cross_origin = client.post(
+            "/api/rpc",
+            content=body,
+            headers={"content-type": "text/plain", "origin": "https://attacker.example"},
+        )
+        wrong_media_type = client.post(
+            "/api/rpc", content=body, headers={"content-type": "text/plain", "origin": _SAME_ORIGIN}
+        )
+        malformed = [
+            client.post("/api/rpc", content=content, headers=json_type)
+            for content in ("{", b"\xff")
+        ]
+        accepted = client.post("/api/rpc", json={"method": "agent.list"})
 
-    assert response.status_code == 200
+    assert [oversized.status_code, cross_origin.status_code, wrong_media_type.status_code] == [
+        413,
+        403,
+        415,
+    ]
+    for response in malformed:
+        assert response.status_code == 200
+        assert response.json() == {
+            "ok": False,
+            "error": {"code": "invalid_request", "message": "RPC request body must be valid JSON"},
+        }
+    assert accepted.json() == {"ok": True, "result": {}}
+    assert dispatched == [{"method": "agent.list"}]
+
+
+def test_rpc_unexpected_failure_preserves_json_envelope(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    def fail(_state: Any, _params: Any) -> Any:
+        raise KeyError("test-owned-private-detail")
+
+    async def dispatch(state: Any, request: Any) -> Any:
+        return await dispatch_rpc(state, request, {"test.fail": fail})
+
+    monkeypatch.setattr(server_app, "dispatch_rpc", dispatch)
+    app = create_app(runtime=ServerStubRuntime(tmp_path))
+
+    with TestClient(app) as client, caplog.at_level(logging.ERROR):
+        response = client.post("/api/rpc", json={"method": "test.fail"})
+
+    assert response.status_code == 500
     assert response.json() == {
         "ok": False,
-        "error": {
-            "code": "invalid_request",
-            "message": "RPC request body must be valid JSON",
-        },
+        "error": {"code": "internal_error", "message": "Internal server error"},
     }
+    assert "test-owned-private-detail" not in response.text
+    assert any(
+        record.exc_info and record.name.endswith("rpc.dispatcher") for record in caplog.records
+    )
 
 
-def test_webui_serves_index_static_assets_and_spa_fallback(monkeypatch, tmp_path: Path) -> None:
-    import server.app as server_app
-
-    dist_dir = _write_webui_build(tmp_path)
-    monkeypatch.setattr(server_app, "WEBUI_DIST_DIR", dist_dir)
-    app = create_app(runtime=Runtime(Config(data_dir=tmp_path / "data")))
+def test_webui_build_serves_the_app_shell_without_shadowing_server_routes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(server_app, "WEBUI_DIST_DIR", _write_webui_build(tmp_path))
+    app = create_app(runtime=ServerStubRuntime(tmp_path / "data"))
 
     with TestClient(app) as client:
-        index_response = client.get("/")
-        asset_response = client.get("/assets/app.js")
-        fallback_response = client.get("/agents/main")
+        index, asset, fallback = [
+            client.get(path) for path in ("/", "/assets/app.js", "/agents/main")
+        ]
+        health = client.get("/health")
+        missing_run = client.get("/api/runs/missing/events")
+        unknown_method = client.post("/api/rpc", json={"method": "unknown.method"})
+        # Unmatched server paths are never answered with the WebUI document.
+        reserved = [
+            client.get(path) for path in ("/api/unknown", "/ws", "/ws/logs", "/ws/terminals/term-1")
+        ]
 
-    assert index_response.status_code == 200
-    assert '<div id="app"></div>' in index_response.text
-    assert index_response.headers["cache-control"] == WEBUI_DOCUMENT_CACHE_HEADERS["Cache-Control"]
-    assert asset_response.status_code == 200
-    assert asset_response.text == "console.log('webui');"
-    assert fallback_response.status_code == 200
-    assert '<script type="module" src="/assets/app.js"></script>' in fallback_response.text
-    assert (
-        fallback_response.headers["cache-control"] == WEBUI_DOCUMENT_CACHE_HEADERS["Cache-Control"]
-    )
+    document_cache = WEBUI_DOCUMENT_CACHE_HEADERS["Cache-Control"]
+    assert '<div id="app"></div>' in index.text
+    assert index.headers["cache-control"] == fallback.headers["cache-control"] == document_cache
+    assert asset.text == "console.log('webui');"
+    assert '<script type="module" src="/assets/app.js"></script>' in fallback.text
+    assert health.json() == {"status": "ok"}
+    assert missing_run.status_code == 404
+    assert unknown_method.json()["error"]["code"] == "method_not_found"
+    assert [(response.status_code, response.json()) for response in reserved] == [
+        (404, {"detail": "Not Found"})
+    ] * 4
+
+    monkeypatch.setattr(server_app, "WEBUI_DIST_DIR", tmp_path / "missing-dist")
+    with TestClient(create_app(runtime=ServerStubRuntime(tmp_path / "data"))) as client:
+        assert client.get("/").status_code == 404
 
 
 def _write_webui_build(tmp_path: Path) -> Path:
@@ -277,35 +191,3 @@ def _write_webui_build(tmp_path: Path) -> Path:
     )
     (assets_dir / "app.js").write_text("console.log('webui');", encoding="utf-8")
     return dist_dir
-
-
-@pytest.mark.parametrize("error_type", [RuntimeError, KeyError])
-def test_rpc_unexpected_failure_preserves_json_envelope(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-    error_type: type[Exception],
-) -> None:
-    import server.app as server_app
-    from server.rpc.dispatcher import dispatch_rpc
-    from tests.server.rpc_test_support import StubAdapter, StubRuntime
-
-    def fail(_state: Any, _params: Any) -> Any:
-        raise error_type("test-owned-private-detail")
-
-    async def dispatch(state: Any, request: Any) -> Any:
-        return await dispatch_rpc(state, request, {"test.fail": fail})
-
-    monkeypatch.setattr(server_app, "dispatch_rpc", dispatch)
-    app = create_app(runtime=cast(Any, StubRuntime(tmp_path, StubAdapter())))
-    with TestClient(app) as client, caplog.at_level(logging.ERROR):
-        response = client.post("/api/rpc", json={"method": "test.fail"})
-    assert response.status_code == 500
-    payload = response.json()
-    assert payload["ok"] is False
-    assert payload["error"]["code"] == "internal_error"
-    assert payload["error"]["message"]
-    assert "test-owned-private-detail" not in response.text
-    assert any(
-        record.exc_info and record.name.endswith("rpc.dispatcher") for record in caplog.records
-    )

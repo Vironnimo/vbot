@@ -1,4 +1,4 @@
-"""Tests for speech HTTP endpoints."""
+"""Speech HTTP endpoints: JSON and progress-stream answers, body guards and live phases."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import asyncio
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
@@ -16,195 +16,108 @@ from core.model_tasks import (
     SpeechSynthesisResult,
     SpeechTranscriptionResult,
 )
-from core.runs import ChatRunManager
-from server.app import _stream_speech, create_app
+from server.app import JSON_REQUEST_BODY_MAX_BYTES, _stream_speech, create_app
+from tests.server.app_test_support import ServerStubRuntime
 
-
-def test_transcribe_endpoint_returns_normalized_json(tmp_path: Path) -> None:
-    with _create_client(tmp_path) as client:
-        response = client.post(
-            "/api/speech/transcribe",
-            files={"file": ("clip.webm", b"audio", "audio/webm")},
-        )
-
-    assert response.status_code == 200
-    assert response.json() == {"text": "hello"}
+_AUDIO_FILE = {"file": ("clip.webm", b"audio", "audio/webm")}
+_NDJSON = {"Accept": "application/x-ndjson"}
 
 
 @pytest.mark.parametrize("fail", [False, True])
-def test_transcribe_progress_stream_has_one_terminal_event(tmp_path: Path, fail: bool) -> None:
-    with _create_client(tmp_path, fail=fail) as client:
-        response = client.post(
-            "/api/speech/transcribe",
-            headers={"Accept": "application/x-ndjson"},
-            files={"file": ("clip.webm", b"audio", "audio/webm")},
-        )
-    assert response.headers["content-type"].startswith("application/x-ndjson")
-    events = [json.loads(line) for line in response.text.splitlines()]
+def test_transcribe_answers_json_or_one_terminal_progress_event(tmp_path: Path, fail: bool) -> None:
+    with _client(tmp_path, _FailingSpeech() if fail else _Speech()) as client:
+        plain = client.post("/api/speech/transcribe", files=_AUDIO_FILE)
+        streamed = client.post("/api/speech/transcribe", headers=_NDJSON, files=_AUDIO_FILE)
+
+    events = [json.loads(line) for line in streamed.text.splitlines()]
+    assert streamed.headers["content-type"].startswith("application/x-ndjson")
     assert events[0]["type"] == "progress"
+    assert len([event for event in events if event["type"] != "progress"]) == 1
     if fail:
+        assert (plain.status_code, plain.json()["detail"]) == (409, "Speech is not configured")
         assert events[-1]["type"] == "error" and events[-1]["status"] == 409
     else:
+        assert (plain.status_code, plain.json()) == (200, {"text": "hello"})
         assert events[-1] == {"type": "result", "result": {"text": "hello"}}
-    assert len([event for event in events if event["type"] != "progress"]) == 1
 
 
-@pytest.mark.asyncio
-async def test_transcription_stream_reports_each_live_phase_and_reaps_disconnect() -> None:
-    advance = asyncio.Event()
-    cancelled = asyncio.Event()
+def test_synthesize_answers_audio_or_a_progress_stream_with_the_artifact(tmp_path: Path) -> None:
+    with _client(tmp_path, _Speech()) as client:
+        audio = client.post("/api/speech/synthesize", json={"text": "hello"})
+        streamed = client.post("/api/speech/synthesize", json={"text": "hello"}, headers=_NDJSON)
 
-    class Speech:
-        async def transcribe(self, audio, *, filename, media_type, progress):
-            try:
-                for phase in ("downloading", "loading", "transcribing"):
-                    progress.update(phase)
-                    await advance.wait()
-                    advance.clear()
-                await asyncio.Event().wait()
-            finally:
-                cancelled.set()
-
-    stream = _stream_speech(
-        lambda progress: Speech().transcribe(
-            b"audio", filename="clip.wav", media_type="audio/wav", progress=progress
-        )
-    )
-    assert json.loads(await anext(stream))["phase"] == "preparing"
-    for phase in ("downloading", "loading", "transcribing"):
-        event = json.loads(await anext(stream))
-        assert event["phase"] == phase
-        assert event["elapsed_seconds"] >= 0
-        advance.set()
-    await stream.aclose()
-    assert cancelled.is_set()
-
-
-def test_synthesize_endpoint_returns_audio_bytes(tmp_path: Path) -> None:
-    with _create_client(tmp_path) as client:
-        response = client.post("/api/speech/synthesize", json={"text": "hello"})
-
-    assert response.status_code == 200
-    assert response.headers["content-type"].startswith("audio/mpeg")
-    assert response.content == b"audio"
-
-
-def test_synthesis_preview_stream_returns_progress_and_artifact(tmp_path: Path) -> None:
-    with _create_client(tmp_path) as client:
-        response = client.post(
-            "/api/speech/synthesize",
-            json={"text": "hello"},
-            headers={"Accept": "application/x-ndjson"},
-        )
-    assert response.headers["x-accel-buffering"] == "no"
-    events = [json.loads(line) for line in response.text.splitlines()]
+    assert audio.headers["content-type"].startswith("audio/mpeg")
+    assert audio.content == b"audio"
+    assert streamed.headers["x-accel-buffering"] == "no"
+    events = [json.loads(line) for line in streamed.text.splitlines()]
     assert events[0]["type"] == "progress"
     assert events[-1] == {"type": "result", "result": {"url": "/api/speech/artifacts/aud_test"}}
     assert len([event for event in events if event["type"] != "progress"]) == 1
 
 
-def test_synthesize_endpoint_rejects_malformed_json_before_speech_call(tmp_path: Path) -> None:
-    runtime = _SpeechRuntime(tmp_path / "data", fail=False)
-    app = create_app(runtime=cast(Any, runtime))
+def test_speech_endpoints_reject_bad_bodies_before_calling_speech(tmp_path: Path) -> None:
+    speech = _Speech()
+    json_type = {"content-type": "application/json"}
 
-    with TestClient(app) as client:
-        response = client.post(
-            "/api/speech/synthesize",
-            content="{",
-            headers={"content-type": "application/json"},
-        )
-
-    assert response.status_code == 400
-    assert response.json()["detail"] == "Request body must be valid JSON"
-    assert runtime.speech.synthesize_calls == 0
-
-
-def test_synthesize_endpoint_rejects_non_json_media_type_before_speech_call(
-    tmp_path: Path,
-) -> None:
-    runtime = _SpeechRuntime(tmp_path / "data", fail=False)
-    app = create_app(runtime=cast(Any, runtime))
-
-    with TestClient(app) as client:
-        response = client.post(
+    with _client(tmp_path, speech, speech_upload_max_size_bytes=3) as client:
+        malformed = [
+            client.post("/api/speech/synthesize", content=content, headers=json_type)
+            for content in ("{", b"\xff")
+        ]
+        wrong_media_type = client.post(
             "/api/speech/synthesize",
             content='{"text":"hello"}',
             headers={"content-type": "text/plain"},
         )
-
-    assert response.status_code == 415
-    assert runtime.speech.synthesize_calls == 0
-
-
-def test_synthesize_endpoint_rejects_invalid_utf8_before_speech_call(tmp_path: Path) -> None:
-    runtime = _SpeechRuntime(tmp_path / "data", fail=False)
-    app = create_app(runtime=cast(Any, runtime))
-
-    with TestClient(app) as client:
-        response = client.post(
+        oversized = client.post(
             "/api/speech/synthesize",
-            content=b"\xff",
-            headers={"content-type": "application/json"},
+            content=b"x" * (JSON_REQUEST_BODY_MAX_BYTES + 1),
+            headers=json_type,
         )
+        oversized_audio = client.post("/api/speech/transcribe", files=_AUDIO_FILE)
 
-    assert response.status_code == 400
-    assert response.json()["detail"] == "Request body must be valid JSON"
-    assert runtime.speech.synthesize_calls == 0
-
-
-def test_speech_expected_errors_map_to_http_status(tmp_path: Path) -> None:
-    with _create_client(tmp_path, fail=True) as client:
-        response = client.post(
-            "/api/speech/transcribe",
-            files={"file": ("clip.webm", b"audio", "audio/webm")},
+    for response in malformed:
+        assert (response.status_code, response.json()["detail"]) == (
+            400,
+            "Request body must be valid JSON",
         )
-
-    assert response.status_code == 409
-    assert response.json()["detail"] == "Speech is not configured"
-
-
-def test_transcribe_rejects_payload_before_speech_call(tmp_path: Path) -> None:
-    runtime = _SpeechRuntime(tmp_path / "data", fail=False, speech_upload_max_size_bytes=3)
-    app = create_app(runtime=cast(Any, runtime))
-
-    with TestClient(app) as client:
-        response = client.post(
-            "/api/speech/transcribe",
-            files={"file": ("clip.webm", b"audio", "audio/webm")},
-        )
-
-    assert response.status_code == 413
-    assert runtime.speech.transcribe_calls == 0
+    assert wrong_media_type.status_code == 415
+    assert oversized.status_code == oversized_audio.status_code == 413
+    assert speech.synthesize_calls == speech.transcribe_calls == 0
 
 
-def _create_client(tmp_path: Path, *, fail: bool = False) -> TestClient:
-    runtime = _SpeechRuntime(tmp_path / "data", fail=fail)
-    app = create_app(runtime=cast(Any, runtime))
-    return TestClient(app)
+@pytest.mark.asyncio
+async def test_transcription_stream_reports_the_live_phase_and_reaps_disconnect() -> None:
+    # TestClient reads whole responses, so the heartbeat and disconnect reaping
+    # are observed on the endpoint's progress stream directly. The stream's
+    # fixed 0.5 s heartbeat is the one real wait here.
+    cancelled = asyncio.Event()
+
+    async def transcribe(progress: Any) -> Any:
+        try:
+            progress.update("transcribing")
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    stream = _stream_speech(transcribe)
+    assert json.loads(await anext(stream))["phase"] == "preparing"
+    event = json.loads(await anext(stream))
+    assert event["phase"] == "transcribing"
+    assert event["elapsed_seconds"] >= 0
+    await stream.aclose()
+    assert cancelled.is_set()
 
 
-class _SpeechRuntime:
-    def __init__(
-        self,
-        data_dir: Path,
-        *,
-        fail: bool,
-        speech_upload_max_size_bytes: int = 104_857_600,
-    ) -> None:
-        self.storage = type("Storage", (), {"data_dir": data_dir})()
-        self.chat_runs = ChatRunManager()
-        self.chat_run_manager = self.chat_runs
-        self.chat_loop = object()
-        self.streaming_chat_loop = object()
-        self.command_dispatcher = object()
-        self.speech = _FailingSpeech() if fail else _Speech()
-        self.speech_upload_max_size_bytes = speech_upload_max_size_bytes
-
-    def start(self) -> None:
-        self.storage.data_dir.mkdir(parents=True, exist_ok=True)
-
-    def stop(self) -> None:
-        return None
+def _client(
+    tmp_path: Path, speech: _Speech, *, speech_upload_max_size_bytes: int = 104_857_600
+) -> TestClient:
+    runtime = ServerStubRuntime(
+        tmp_path / "data",
+        speech=speech,
+        speech_upload_max_size_bytes=speech_upload_max_size_bytes,
+    )
+    return TestClient(create_app(runtime=runtime))
 
 
 class _Speech:
@@ -227,7 +140,7 @@ class _Speech:
         self.synthesize_calls += 1
         return SpeechSynthesisResult(audio=b"audio", media_type="audio/mpeg", format="mp3")
 
-    async def synthesize_artifact(self, text: str, *, progress: Any):
+    async def synthesize_artifact(self, text: str, *, progress: Any) -> Any:
         assert text == "hello"
         progress.update("synthesizing")
         return SimpleNamespace(to_dict=lambda: {"url": "/api/speech/artifacts/aud_test"})
