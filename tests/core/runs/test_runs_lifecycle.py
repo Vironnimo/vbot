@@ -1,17 +1,19 @@
-"""Run lifecycle, event replay, and active-run lookup tests."""
+"""Run lifecycle, event metadata and replay, active-run lookup and admission waits."""
 
 from __future__ import annotations
 
-from core.sessions import SessionAddress
+import asyncio
+from contextlib import aclosing
+from typing import Any
 
-from .runs_test_support import (
+import pytest
+
+from core.runs import (
     ASSISTANT_OUTPUT_DELTA_EVENT,
     REASONING_DELTA_EVENT,
     RUN_AGENT_ACTIVITY_FIELD,
     RUN_KIND_FIELD,
-    RUN_STARTED_EVENT,
     TOOL_CALL_DELTA_EVENT,
-    Any,
     ChatRunManager,
     Run,
     RunAdmission,
@@ -20,100 +22,11 @@ from .runs_test_support import (
     RunKind,
     RunNotFoundError,
     RunStatus,
-    aclosing,
-    asyncio,
-    pytest,
 )
+from core.sessions import SessionAddress
+from tests.core.runs.runs_test_support import SESSION, held
 
 pytestmark = pytest.mark.asyncio
-
-
-async def test_replays_events_to_late_subscriber() -> None:
-    manager = ChatRunManager()
-
-    async def execute(run: Run) -> str:
-        run.emit("visible", {"content": "hello"})
-        return "done"
-
-    run = await manager.start(
-        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
-        execute,
-    )
-    assert await run.wait() == "done"
-
-    events = [event async for event in run.subscribe()]
-
-    assert [event.type for event in events] == ["run_started", "visible", "run_completed"]
-    assert events[1].payload == {"content": "hello"}
-
-
-async def test_run_activity_projection_policy_is_carried_by_every_event() -> None:
-    manager = ChatRunManager()
-
-    async def execute(run: Run) -> str:
-        run.emit("visible", {"content": "system work"})
-        return "done"
-
-    run = await manager.start(
-        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
-        execute,
-        admission=RunAdmission(contributes_to_agent_activity=False),
-    )
-    assert await run.wait() == "done"
-
-    assert run.contributes_to_agent_activity is False
-    assert [event.type for event in run.events] == [
-        "run_started",
-        "visible",
-        "run_completed",
-    ]
-    assert all(event.contributes_to_agent_activity is False for event in run.events)
-    assert all(event.to_dict()[RUN_AGENT_ACTIVITY_FIELD] is False for event in run.events)
-
-
-async def test_run_kind_is_carried_by_run_and_every_event() -> None:
-    manager = ChatRunManager()
-
-    async def execute(_run: Run) -> str:
-        return "done"
-
-    run = await manager.start(
-        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
-        execute,
-        admission=RunAdmission(run_kind=RunKind.CRON),
-    )
-    assert await run.wait() == "done"
-
-    assert run.run_kind is RunKind.CRON
-    assert all(event.run_kind is RunKind.CRON for event in run.events)
-    assert all(event.to_dict()[RUN_KIND_FIELD] == "cron" for event in run.events)
-
-
-async def test_allows_parallel_runs_for_different_sessions() -> None:
-    manager = ChatRunManager()
-    release = asyncio.Event()
-    started: list[str] = []
-
-    async def execute(run: Run) -> str:
-        started.append(run.session_id)
-        await release.wait()
-        return run.session_id
-
-    first_run = await manager.start(
-        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
-        execute,
-    )
-    second_run = await manager.start(
-        SessionAddress(project_id=None, agent_id="coder", session_id="session-two"),
-        execute,
-    )
-    await asyncio.sleep(0)
-
-    release.set()
-
-    assert set(started) == {"session-one", "session-two"}
-    assert await first_run.wait() == "session-one"
-    assert await second_run.wait() == "session-two"
 
 
 async def test_manager_aclose_cancels_active_and_queued_work_and_rejects_new_runs() -> None:
@@ -126,12 +39,12 @@ async def test_manager_aclose_cancels_active_and_queued_work_and_rejects_new_run
         return "unreachable"
 
     active = await manager.start(
-        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        SESSION,
         blocking_executor,
     )
     await started.wait()
     queued = await manager.enqueue(
-        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        SESSION,
         blocking_executor,
         display_content="queued",
     )
@@ -227,14 +140,14 @@ async def test_failed_run_releases_session_lock() -> None:
         return "ok"
 
     failed_run = await manager.start(
-        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        SESSION,
         fail,
     )
     with pytest.raises(RuntimeError, match="boom"):
         await failed_run.wait()
 
     next_run = await manager.start(
-        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        SESSION,
         succeed,
     )
 
@@ -250,14 +163,14 @@ async def test_run_started_callbacks_are_notified_and_removable() -> None:
 
     remove_callback = manager.add_run_started_callback(observed_runs.append)
     first_run = await manager.start(
-        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        SESSION,
         execute,
     )
     await first_run.wait()
     remove_callback()
 
     second_run = await manager.start(
-        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        SESSION,
         execute,
     )
     await second_run.wait()
@@ -291,103 +204,6 @@ async def test_completed_run_lookup_retention_is_bounded() -> None:
         manager.get(first_run.id)
     assert manager.get(second_run.id) is second_run
     assert manager.get(third_run.id) is third_run
-
-
-async def test_active_runs_returns_running_runs_and_omits_terminal_runs() -> None:
-    """active_runs() exposes only RUNNING entries; terminal ones are filtered out."""
-    manager = ChatRunManager()
-    running_release = asyncio.Event()
-    started = asyncio.Event()
-
-    async def running_execute(_run: Run) -> str:
-        started.set()
-        await running_release.wait()
-        return "active"
-
-    async def finishing_execute(_run: Run) -> str:
-        return "done"
-
-    running_run = await manager.start(
-        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
-        running_execute,
-    )
-    await started.wait()
-
-    finishing_run = await manager.start(
-        SessionAddress(project_id=None, agent_id="coder", session_id="session-two"),
-        finishing_execute,
-    )
-    assert await finishing_run.wait() == "done"
-    assert finishing_run.status == RunStatus.COMPLETED
-
-    active = manager.active_runs()
-
-    assert active == [running_run]
-    assert all(run.status == RunStatus.RUNNING for run in active)
-    assert manager.active_run(agent_id="coder", session_id="session-two", project_id=None) is None
-
-    running_release.set()
-    assert await running_run.wait() == "active"
-
-    assert manager.active_runs() == []
-
-
-async def test_active_runs_returns_runs_across_multiple_sessions() -> None:
-    """active_runs() returns the running run from every session that has one."""
-    manager = ChatRunManager()
-    started_events = {
-        "session-one": asyncio.Event(),
-        "session-two": asyncio.Event(),
-        "session-three": asyncio.Event(),
-    }
-    releases = {session: asyncio.Event() for session in started_events}
-
-    async def execute(_run: Run) -> str:
-        started_events[_run.session_id].set()
-        await releases[_run.session_id].wait()
-        return _run.session_id
-
-    runs_by_session: dict[str, Run] = {}
-    for session_id in started_events:
-        runs_by_session[session_id] = await manager.start(
-            SessionAddress(project_id=None, agent_id="coder", session_id=session_id),
-            execute,
-        )
-
-    for _session_id, event in started_events.items():
-        await event.wait()
-
-    active = manager.active_runs()
-
-    assert set(active) == set(runs_by_session.values())
-    assert {run.session_id for run in active} == set(runs_by_session)
-    assert all(run.status == RunStatus.RUNNING for run in active)
-    assert len(active) == len(runs_by_session)
-
-    for session_id, release in releases.items():
-        release.set()
-        assert await runs_by_session[session_id].wait() == session_id
-
-    assert manager.active_runs() == []
-
-
-async def test_start_run_payload_omits_queue_item_id() -> None:
-    """A plain start() call produces a run_started payload without queue_item_id."""
-    manager = ChatRunManager()
-
-    async def execute(_run: Run) -> str:
-        return "done"
-
-    run = await manager.start(
-        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
-        execute,
-    )
-    assert await run.wait() == "done"
-
-    started_events = [event for event in run.events if event.type == RUN_STARTED_EVENT]
-    assert len(started_events) == 1
-    assert started_events[0].payload == {"status": RunStatus.RUNNING.value}
-    assert "queue_item_id" not in started_events[0].payload
 
 
 class _BlockingAdmission:
@@ -425,9 +241,7 @@ async def test_wait_admitted_returns_only_after_the_admission_commits() -> None:
         executed.append(run.id)
         return "done"
 
-    run = await manager.start(
-        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"), execute
-    )
+    run = await manager.start(SESSION, execute)
     waiter = asyncio.create_task(run.wait_admitted())
     await _settle()
     assert not waiter.done()
@@ -452,9 +266,7 @@ async def test_wait_admitted_raises_the_error_of_a_failed_admission() -> None:
         executed.append(run.id)
         return "done"
 
-    run = await manager.start(
-        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"), execute
-    )
+    run = await manager.start(SESSION, execute)
     waiter = asyncio.create_task(run.wait_admitted())
     await _settle()
     persistence.release.set()
@@ -482,11 +294,69 @@ async def test_wait_admitted_returns_at_once_without_session_persistence() -> No
         await release.wait()
         return "done"
 
-    run = await manager.start(
-        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"), execute
-    )
+    run = await manager.start(SESSION, execute)
     await asyncio.wait_for(run.wait_admitted(), timeout=1)
     assert run.status == RunStatus.RUNNING
     release.set()
     assert await run.wait() == "done"
     await manager.aclose()
+
+
+@pytest.mark.parametrize(
+    ("admission", "run_kind", "contributes"),
+    [
+        (RunAdmission(), RunKind.USER, True),
+        (
+            RunAdmission(run_kind=RunKind.CRON, contributes_to_agent_activity=False),
+            RunKind.CRON,
+            False,
+        ),
+    ],
+    ids=["default", "cron-system-work"],
+)
+async def test_every_event_carries_run_metadata_and_replays_to_a_late_subscriber(
+    admission: RunAdmission, run_kind: RunKind, contributes: bool
+) -> None:
+    async def execute(run: Run) -> str:
+        run.emit("visible", {"content": "hello"})
+        return "done"
+
+    run = await ChatRunManager().start(SESSION, execute, admission=admission)
+    assert await run.wait() == "done"
+
+    events = [event async for event in run.subscribe()]
+    assert [event.type for event in events] == ["run_started", "visible", "run_completed"]
+    assert events[0].payload == {"status": RunStatus.RUNNING.value}
+    assert events[1].payload == {"content": "hello"}
+    assert (run.run_kind, run.contributes_to_agent_activity) == (run_kind, contributes)
+    assert all(event.run_kind is run_kind for event in events)
+    assert all(event.to_dict()[RUN_KIND_FIELD] == run_kind.value for event in events)
+    # The wire field appears only for Runs that do not count as Agent activity.
+    assert all(event.contributes_to_agent_activity is contributes for event in events)
+    assert all(
+        event.to_dict().get(RUN_AGENT_ACTIVITY_FIELD, True) is contributes for event in events
+    )
+
+
+async def test_active_runs_lists_running_runs_of_every_session_only() -> None:
+    manager = ChatRunManager()
+    held_runs = {}
+    for session_id in ("session-one", "session-two"):
+        execute, release = held(session_id)
+        address = SessionAddress(project_id=None, agent_id="coder", session_id=session_id)
+        held_runs[session_id] = (await manager.start(address, execute), release)
+    finished = await manager.start(
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-three"),
+        lambda _run: asyncio.sleep(0, result="done"),
+    )
+    assert await finished.wait() == "done"
+    await asyncio.sleep(0)
+
+    assert set(manager.active_runs()) == {run for run, _release in held_runs.values()}
+    assert all(run.status == RunStatus.RUNNING for run in manager.active_runs())
+    assert manager.active_run(agent_id="coder", session_id="session-three", project_id=None) is None
+
+    for session_id, (run, release) in held_runs.items():
+        release.set()
+        assert await run.wait() == session_id
+    assert manager.active_runs() == []

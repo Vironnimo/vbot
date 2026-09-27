@@ -2,22 +2,15 @@
 
 from __future__ import annotations
 
-from core.sessions import SessionAddress
+import asyncio
 
-from .runs_test_support import (
-    ChatRunManager,
-    Run,
-    RunAdmission,
-    RunAdmissionBlockedError,
-    asyncio,
-    pytest,
-)
+import pytest
+
+from core.runs import ChatRunManager, Run, RunAdmission, RunAdmissionBlockedError
+from core.sessions import SessionAddress
+from tests.core.runs.runs_test_support import finish_immediately
 
 pytestmark = pytest.mark.asyncio
-
-
-async def _finish_immediately(_run: Run) -> str:
-    return "done"
 
 
 async def test_session_guard_blocks_source_and_destination_until_release() -> None:
@@ -29,23 +22,23 @@ async def test_session_guard_blocks_source_and_destination_until_release() -> No
         with pytest.raises(RunAdmissionBlockedError):
             await manager.start(
                 SessionAddress(project_id=None, agent_id="builder", session_id="session-one"),
-                _finish_immediately,
+                finish_immediately,
             )
         with pytest.raises(RunAdmissionBlockedError):
             await manager.enqueue(
                 SessionAddress(project_id="vbot", agent_id="planner", session_id="session-one"),
-                _finish_immediately,
+                finish_immediately,
             )
 
         unrelated = await manager.start(
             SessionAddress(project_id=None, agent_id="writer", session_id="session-one"),
-            _finish_immediately,
+            finish_immediately,
         )
         assert await unrelated.wait() == "done"
 
     admitted = await manager.start(
         SessionAddress(project_id=None, agent_id="builder", session_id="session-one"),
-        _finish_immediately,
+        finish_immediately,
     )
     assert await admitted.wait() == "done"
 
@@ -79,7 +72,7 @@ async def test_session_guard_refuses_existing_run_and_releases_after_body_failur
 
     admitted = await manager.start(
         SessionAddress(project_id=None, agent_id="builder", session_id="idle"),
-        _finish_immediately,
+        finish_immediately,
     )
     assert await admitted.wait() == "done"
 
@@ -91,16 +84,16 @@ async def test_agent_guard_is_scoped_to_one_agent_anchor() -> None:
         with pytest.raises(RunAdmissionBlockedError):
             await manager.start(
                 SessionAddress(project_id=None, agent_id="builder", session_id="identity"),
-                _finish_immediately,
+                finish_immediately,
             )
 
         project_run = await manager.start(
             SessionAddress(project_id="vbot", agent_id="builder", session_id="project"),
-            _finish_immediately,
+            finish_immediately,
         )
         other_agent_run = await manager.start(
             SessionAddress(project_id=None, agent_id="writer", session_id="identity"),
-            _finish_immediately,
+            finish_immediately,
         )
         assert await project_run.wait() == "done"
         assert await other_agent_run.wait() == "done"
@@ -113,18 +106,18 @@ async def test_project_guard_covers_anchor_and_working_project() -> None:
         with pytest.raises(RunAdmissionBlockedError):
             await manager.start(
                 SessionAddress(project_id="vbot", agent_id="builder", session_id="project-session"),
-                _finish_immediately,
+                finish_immediately,
             )
         with pytest.raises(RunAdmissionBlockedError):
             await manager.start(
                 SessionAddress(project_id=None, agent_id="identity", session_id="rooted-session"),
-                _finish_immediately,
+                finish_immediately,
                 admission=RunAdmission(working_project_id="vbot"),
             )
 
         unrelated = await manager.start(
             SessionAddress(project_id=None, agent_id="identity", session_id="other-session"),
-            _finish_immediately,
+            finish_immediately,
             admission=RunAdmission(working_project_id="other"),
         )
         assert await unrelated.wait() == "done"

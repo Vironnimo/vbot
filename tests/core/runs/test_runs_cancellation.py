@@ -1,26 +1,26 @@
-"""Run cancellation and cancellation-callback tests."""
+"""Run cancellation, cleanup deadlines and cancellation callbacks."""
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import subprocess
 import sys
 from textwrap import dedent
 
-import core.runs.run as runs_module
-from core.sessions import SessionAddress
+import pytest
 
-from .runs_test_support import (
+import core.runs.run as runs_module
+from core.runs import (
     ASSISTANT_OUTPUT_DELTA_EVENT,
     ChatRunManager,
     Run,
     RunCancelledError,
     RunNotFoundError,
     RunStatus,
-    assert_timing_payload,
-    asyncio,
-    logging,
-    pytest,
 )
+from core.sessions import SessionAddress
+from tests.core.runs.runs_test_support import SESSION, assert_timing_payload, held
 
 pytestmark = pytest.mark.asyncio
 SUBPROCESS_TIMEOUT_SECONDS = 10
@@ -244,37 +244,6 @@ async def test_immediate_async_cleanup_settles_cancel_and_starts_queued_run() ->
     assert result.returncode == 0, result.stderr
 
 
-async def test_cancel_marks_run_cancelled_and_suppresses_late_output() -> None:
-    manager = ChatRunManager()
-    output_started = asyncio.Event()
-    release = asyncio.Event()
-
-    async def execute(run: Run) -> str:
-        run.emit("visible", {"step": "before"})
-        output_started.set()
-        await release.wait()
-        run.emit("visible", {"step": "late"})
-        return "ignored"
-
-    run = await manager.start(
-        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
-        execute,
-    )
-    await output_started.wait()
-    run.request_cancel()
-    release.set()
-
-    with pytest.raises(RunCancelledError):
-        await run.wait()
-
-    assert run.status == RunStatus.CANCELLED
-    assert [event.payload for event in run.events if event.type == "visible"] == [
-        {"step": "before"}
-    ]
-    assert run.events[-1].type == "run_cancelled"
-    assert_timing_payload(run.events[-1].payload)
-
-
 async def test_immediate_cancel_reaches_terminal_and_releases_session() -> None:
     manager = ChatRunManager()
     executor_started = False
@@ -285,7 +254,7 @@ async def test_immediate_cancel_reaches_terminal_and_releases_session() -> None:
         return "must not run"
 
     run = await manager.start(
-        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        SESSION,
         execute,
     )
     run.request_cancel()
@@ -300,45 +269,10 @@ async def test_immediate_cancel_reaches_terminal_and_releases_session() -> None:
     assert manager.active_run(agent_id="coder", session_id="session-one", project_id=None) is None
 
     replacement = await manager.start(
-        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        SESSION,
         execute,
     )
     assert await replacement.wait() == "must not run"
-
-
-async def test_delta_events_obey_cancel_guard() -> None:
-    run = Run(run_id="run-one", agent_id="coder", session_id="session-one")
-
-    first_event = run.emit(ASSISTANT_OUTPUT_DELTA_EVENT, {"content_delta": "before"})
-    run.request_cancel()
-    late_event = run.emit(ASSISTANT_OUTPUT_DELTA_EVENT, {"content_delta": "late"})
-
-    assert first_event is not None
-    assert late_event is None
-    assert [event.payload for event in run.events] == [{"content_delta": "before"}]
-
-
-async def test_cancel_invokes_registered_abort_callback() -> None:
-    manager = ChatRunManager()
-    release = asyncio.Event()
-    callbacks: list[str] = []
-
-    async def execute(run: Run) -> str:
-        run.add_cancel_callback(lambda: callbacks.append("aborted"))
-        await release.wait()
-        run.raise_if_cancelled()
-        return "done"
-
-    run = await manager.start(
-        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
-        execute,
-    )
-    await asyncio.sleep(0)
-    await manager.cancel(run.id)
-    release.set()
-
-    assert callbacks == ["aborted"]
-    assert run.status == RunStatus.CANCELLED
 
 
 async def test_cancel_keeps_session_owned_until_async_cleanup_finishes() -> None:
@@ -363,12 +297,12 @@ async def test_cancel_keeps_session_owned_until_async_cleanup_finishes() -> None
         return "second"
 
     first = await manager.start(
-        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        SESSION,
         first_executor,
     )
     await first_started.wait()
     queued = await manager.enqueue(
-        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        SESSION,
         second_executor,
         display_content="second",
     )
@@ -424,7 +358,7 @@ async def test_cancel_drains_cleanup_registered_by_another_callback(
         completed.append("second")
         return "second"
 
-    address = SessionAddress(project_id=None, agent_id="coder", session_id="session-one")
+    address = SESSION
     first = await manager.start(address, first_executor)
     await started.wait()
     queued = await manager.enqueue(address, second_executor)
@@ -449,139 +383,91 @@ async def test_cancel_drains_cleanup_registered_by_another_callback(
     assert logged_failure == cleanup_fails
 
 
-async def test_cancel_callback_failure_does_not_skip_remaining_callbacks(
+@pytest.mark.parametrize("reason", ["user", None])
+async def test_cancel_suppresses_late_output_and_reports_its_reason(reason: str | None) -> None:
+    manager = ChatRunManager()
+    output_started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def execute(run: Run) -> str:
+        run.emit(ASSISTANT_OUTPUT_DELTA_EVENT, {"content_delta": "before"})
+        output_started.set()
+        await release.wait()
+        run.emit("visible", {"step": "late"})
+        return "ignored"
+
+    run = await manager.start(SESSION, execute)
+    await output_started.wait()
+    run.request_cancel(reason=reason)
+    # Output arriving between the cancel request and the terminal state is dropped.
+    assert run.status == RunStatus.RUNNING
+    assert run.emit(ASSISTANT_OUTPUT_DELTA_EVENT, {"content_delta": "late"}) is None
+    release.set()
+
+    with pytest.raises(RunCancelledError):
+        await run.wait()
+
+    assert run.status == RunStatus.CANCELLED
+    assert [event.type for event in run.events] == [
+        "run_started",
+        ASSISTANT_OUTPUT_DELTA_EVENT,
+        "run_cancelled",
+    ]
+    assert run.cancel_reason == reason
+    terminal = run.events[-1].payload
+    assert terminal.get("reason") == reason
+    assert_timing_payload(terminal)
+
+
+async def test_cancel_by_session_finds_only_the_active_run_of_its_anchor() -> None:
+    manager = ChatRunManager()
+    execute, release = held()
+    address = SessionAddress(project_id="acme", agent_id="coder", session_id="session-one")
+    run = await manager.start(address, execute)
+    await asyncio.sleep(0)
+
+    # The identity scope with the same Agent and Session ids does not reach the project Run.
+    with pytest.raises(RunNotFoundError):
+        manager.cancel_by_session("coder", "session-one", project_id=None)
+    cancelled = manager.cancel_by_session("coder", "session-one", project_id="acme", reason="user")
+
+    assert cancelled is run
+    assert run.cancel_requested is True
+    assert run.cancel_reason == "user"
+    release.set()
+    with pytest.raises(RunCancelledError):
+        await run.wait()
+    with pytest.raises(RunNotFoundError):
+        manager.cancel_by_session("coder", "session-one", project_id="acme")
+
+
+async def test_cancel_callback_failures_are_logged_without_skipping_later_callbacks(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     run = Run(run_id="run-one", agent_id="coder", session_id="session-one")
     callbacks: list[str] = []
+    sync_failure = RuntimeError("cancel callback boom")
+    async_failure = RuntimeError("async cancel callback boom")
 
     def fail() -> None:
         callbacks.append("failed")
-        raise RuntimeError("cancel callback boom")
+        raise sync_failure
 
-    def succeed() -> None:
-        callbacks.append("succeeded")
-
-    run.add_cancel_callback(fail)
-    run.add_cancel_callback(succeed)
-
-    caplog.set_level(logging.WARNING, logger="vbot.runs")
-    run.request_cancel()
-
-    assert callbacks == ["failed", "succeeded"]
-    assert run.cancel_requested is True
-    assert caplog.records
-
-
-async def test_async_cancel_callback_failure_is_observed(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    run = Run(run_id="run-one", agent_id="coder", session_id="session-one")
-
-    async def fail() -> None:
-        raise RuntimeError("async cancel callback boom")
+    async def fail_async() -> None:
+        callbacks.append("async-failed")
+        raise async_failure
 
     run.add_cancel_callback(fail)
+    run.add_cancel_callback(fail_async)
+    run.add_cancel_callback(lambda: callbacks.append("succeeded"))
 
     caplog.set_level(logging.WARNING, logger="vbot.runs")
     run.request_cancel()
     await asyncio.sleep(0)
     await asyncio.sleep(0)
 
-    assert caplog.records
-
-
-async def test_cancel_by_session_requests_cancel_and_returns_run() -> None:
-    manager = ChatRunManager()
-    started = asyncio.Event()
-    release = asyncio.Event()
-
-    async def execute(run: Run) -> str:
-        started.set()
-        await release.wait()
-        run.raise_if_cancelled()
-        return "done"
-
-    run = await manager.start(
-        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
-        execute,
-    )
-    await started.wait()
-
-    cancelled_run = manager.cancel_by_session(
-        "coder",
-        "session-one",
-        project_id=None,
-        reason="user",
-    )
-
-    assert cancelled_run is run
+    assert callbacks == ["failed", "succeeded", "async-failed"]
     assert run.cancel_requested is True
-    assert run.cancel_reason == "user"
-
-    release.set()
-    with pytest.raises(RunCancelledError):
-        await run.wait()
-
-
-async def test_cancel_by_session_without_active_run_raises_not_found() -> None:
-    manager = ChatRunManager()
-
-    with pytest.raises(RunNotFoundError):
-        manager.cancel_by_session("coder", "session-one", project_id=None)
-
-
-async def test_request_cancel_stores_reason_and_surfaces_in_terminal_payload() -> None:
-    """A cancel reason survives into the run_cancelled event payload."""
-    manager = ChatRunManager()
-    release = asyncio.Event()
-
-    async def execute(run: Run) -> str:
-        await release.wait()
-        run.raise_if_cancelled()
-        return "done"
-
-    run = await manager.start(
-        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
-        execute,
-    )
-    await asyncio.sleep(0)
-    run.request_cancel(reason="user")
-    release.set()
-
-    with pytest.raises(RunCancelledError):
-        await run.wait()
-
-    assert run.cancel_reason == "user"
-    cancelled_events = [event for event in run.events if event.type == "run_cancelled"]
-    assert len(cancelled_events) == 1
-    assert cancelled_events[0].payload["reason"] == "user"
-    assert_timing_payload(cancelled_events[0].payload)
-
-
-async def test_request_cancel_omits_reason_from_payload_when_not_provided() -> None:
-    """Default cancel (no reason) produces a run_cancelled payload without a 'reason' key."""
-    manager = ChatRunManager()
-    release = asyncio.Event()
-
-    async def execute(run: Run) -> str:
-        await release.wait()
-        run.raise_if_cancelled()
-        return "done"
-
-    run = await manager.start(
-        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
-        execute,
-    )
-    await asyncio.sleep(0)
-    run.request_cancel()
-    release.set()
-
-    with pytest.raises(RunCancelledError):
-        await run.wait()
-
-    assert run.cancel_reason is None
-    cancelled_events = [event for event in run.events if event.type == "run_cancelled"]
-    assert len(cancelled_events) == 1
-    assert "reason" not in cancelled_events[0].payload
-    assert_timing_payload(cancelled_events[0].payload)
+    logged = [record.exc_info[1] for record in caplog.records if record.exc_info]
+    assert sync_failure in logged
+    assert async_failure in logged
