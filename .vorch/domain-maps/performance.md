@@ -8,7 +8,7 @@ Always-on, low-overhead measurement of the server process plus on-demand Recordi
 
 The domain measures; it never changes behavior. It does not own what is measured: each owner decides its own measurement points (catalog below). Provider wire capture is a separate subsystem (`debug.md`); a performance trace never contains request or response content.
 
-Module split: `performance.py` (public API, sink, service), `_metrics.py` (log-scale histograms, name cap), `_monitor.py` (lag task, samplers, watchdog thread, stack rendering), `_recording.py` (event buffer, lanes, trace/summary files, retention).
+Module split: `performance.py` (public API, sink, service), `_metrics.py` (log-scale histograms, name cap), `_monitor.py` (lag task, samplers, watchdog thread, stack rendering), `_gc.py` (cyclic garbage collection pause observer), `_recording.py` (event buffer, lanes, trace/summary files, retention).
 
 ## Terms
 
@@ -24,7 +24,7 @@ The trace group a measurement belongs to, rendered as one Perfetto process: a Se
 A trace thread inside one Track. A span takes the lowest lane that is free at its start, so concurrent spans of one Track never overlap on a lane. Lane numbers carry no identity (lane 0 is not a particular Run).
 
 ### Stall
-An Event Loop tick overdue by more than the stall threshold (250 ms). The watchdog thread samples the loop thread's Python stack every 50 ms during the stall and aggregates identical stacks; frames are `path:line qualname` only.
+An Event Loop tick overdue by more than the stall threshold (250 ms). The watchdog thread samples the loop thread's Python stack every 50 ms during the stall and aggregates identical stacks; frames are `path:line qualname` only. Few samples over a long stall mean the watchdog could not get the GIL either: a long GIL-holding call, most often a cyclic garbage collection, which `gc_ms` then shows.
 
 ## Interfaces
 
@@ -35,7 +35,7 @@ An Event Loop tick overdue by more than the stall threshold (250 ms). The watchd
 - `PerformanceService(recordings_dir, *, samplers=...)`: `start()`/`stop()`/`aclose()`, `snapshot()`, `start_recording(label=, max_seconds=)`, `stop_recording()`, `recording_status()`, `list_recordings(limit=)`. File and snapshot work runs on its own `performance` worker pool. Errors: `RecordingActiveError`, `RecordingInactiveError` (both `PerformanceError`); an invalid label or `max_seconds` raises `ValueError`.
 
 **RPC contract** (field names are a contract; an external load-test harness consumes them):
-- `performance.snapshot` `{}` -> `{started_at, uptime_seconds, metrics, gauges, stalls, recording}`. `metrics` maps name -> `{count, sum_ms, min_ms, max_ms, p50_ms, p90_ms, p99_ms}`; `gauges` maps name -> latest value; `stalls` is the retained list (max 50, oldest first) of `{started_at, duration_ms, samples: [{count, stack: [frame]}]}` with samples ordered most frequent first; `recording` is the status below or `null`. Values are process-lifetime, not windowed.
+- `performance.snapshot` `{}` -> `{started_at, uptime_seconds, metrics, gauges, stalls, recording}`. `metrics` maps name -> `{count, sum_ms, min_ms, max_ms, p50_ms, p90_ms, p99_ms}`; `gauges` maps name -> latest value; `stalls` is the retained list (max 50, oldest first) of `{started_at, duration_ms, gc_ms, samples: [{count, stack: [frame]}]}` with samples ordered most frequent first; `gc_ms` is the cyclic garbage collection pause time of all threads between the stall's last on-time monitor tick and its end, capped at `duration_ms` (its window opens up to one 100 ms tick early); `recording` is the status below or `null`. Values are process-lifetime, not windowed.
 - `performance.recording_start` `{label?, max_seconds?}` -> status `{recording_id, label, started_at, elapsed_seconds, max_seconds, event_count, truncated}`. `label` is non-blank, <= 200 characters; `max_seconds` is an integer 1..3600, default 300.
 - `performance.recording_stop` `{}` -> `{recording_id, label, started_at, duration_seconds, event_count, truncated, stopped_reason, trace_path, summary: {metrics, gauges_max, stalls}}`. `summary` covers only the Recording window.
 - `performance.recording_list` `{limit?}` (1..100, default 20) -> `{recordings: [...]}` newest first, each the stop result without `summary`.
@@ -44,7 +44,7 @@ An Event Loop tick overdue by more than the stall threshold (250 ms). The watchd
 
 **Files:** `<data_dir>/artifacts/performance/<recording_id>.trace.json` (Chrome Trace Event JSON object format: `{"traceEvents": [...], "displayTimeUnit": "ms"}`, `ts`/`dur` in microseconds from the Recording start) and `<recording_id>.summary.json` (list fields plus `stopped_at` and `summary`). Recording ids use the `perf_` prefix (`core/utils/ids.py`). Both files are atomic; the summary is written last and marks a complete Recording, so listing reads summaries only. The newest 20 Recordings are retained; older pairs are pruned after each write. Placement is owned by Storage (`storage.md`).
 
-**Trace events:** each Track emits a `process_name` metadata event and each Lane a `thread_name` (`lane <n>`); spans are `X` events with `cat` = first metric segment; gauges and `event_loop.lag` are `C` counters; stalls are process-scoped `i` events named `event_loop.stall` with `duration_ms` and `samples` args.
+**Trace events:** each Track emits a `process_name` metadata event and each Lane a `thread_name` (`lane <n>`); spans are `X` events with `cat` = first metric segment; gauges and `event_loop.lag` are `C` counters; stalls are process-scoped `i` events named `event_loop.stall` with `duration_ms`, `gc_ms` and `samples` args; garbage collections of at least 1 ms are `gc gen<n>` spans on the `runtime` Track.
 
 ## Metric Catalog
 
@@ -56,6 +56,7 @@ Durations are milliseconds. Names are dotted lowercase words with low cardinalit
 - On the Session Track, with `run_id` args: `chat.run` (whole Run, `run_kind` arg; `_run_execution.py`), `chat.request_build` (first step: from request-state build to send, or from the loop top when a pre-request Compaction ran; later steps: loop top to send), `provider.response` (each send attempt incl. the too-large retry, `iteration` arg), `provider.first_token` (streaming: first non-heartbeat delta; non-streaming: the whole `adapter.send`), `chat.persist` (spans `persist assistant` / `persist tool results`), `chat.tool_round` (`tool_calls` arg) and `tool.<name>` (one Tool dispatch; discarded for unknown Tool names). Sources: `core/chat/_agentic_progression.py`, `request_runner.py`, `tool_dispatch.py`.
 - `chat.compaction` - whole automatic attempt or manual Compaction Run (`trigger` arg `auto`/`manual`), `core/compaction/run_coordination.py`.
 - `event_loop.lag` - how late each 100 ms monitor tick woke.
+- `gc.gen<n>` - each cyclic garbage collection's pause, in any thread, recorded at the next monitor tick (spans only >= 1 ms, track `runtime`). `n` is CPython's generation: the packaged 3.13 runtime collects generations 0/1/2, where gen 2 is the full stop-the-world traversal of every tracked object; 3.14 reports its incremental collections as gen 1. Collections are counted only while the monitor runs; beyond 4096 unrecorded ones (a very long stall) the oldest are dropped.
 - Gauges sampled about once per second: `event_loop.utilization` (loop-thread CPU / wall time), `process.cpu_percent`, `process.rss_mb`, `process.python_threads` (Python threads only: the OS thread count needs a system-wide process scan on Windows, milliseconds of GIL time per sample), `asyncio.tasks`, and the Runtime-injected `runs.active` / `runs.queued`. `performance.dropped_metrics` counts observations dropped by the name cap.
 
 ## Conventions
@@ -63,7 +64,7 @@ Durations are milliseconds. Names are dotted lowercase words with low cardinalit
 - The sink is the documented exception to constructor injection (`.vorch/PROJECT.md` -> Conventions): it holds only measurements, never state other code reads to decide behavior. The service, monitor and files stay Runtime-owned.
 - Metric names, span names and args never carry content: no prompts, messages, Tool arguments, paths from requests or credentials. Ids and counts are allowed as span args only, never in metric names. Only code-defined or registry-validated names may become metric names (for example registered RPC methods, dispatched Tool names).
 - More than 1000 distinct histogram or gauge names are rejected: the observation is dropped, `performance.dropped_metrics` counts it, and one WARNING is logged.
-- Recording start/stop and a shutdown discard log one INFO event; a stall >= 1 s logs a WARNING with its top frames, at most once per 30 s (suppressed count reported). Sampler failures warn once per gauge.
+- Recording start/stop and a shutdown discard log one INFO event; a stall >= 1 s logs a WARNING with `gc_ms` and its top frames, at most once per 30 s (suppressed count reported). Sampler failures warn once per gauge.
 - Measure at the owner's boundary with `measure` or `record_span`; use `min_span_ms` for high-frequency short waits so they stay histogram-only in traces.
 
 ## Constraints & Gotchas
@@ -74,6 +75,7 @@ Durations are milliseconds. Names are dotted lowercase words with low cardinalit
 - A Recording buffers at most 500,000 events (roughly 75-175 MB in memory) and sets `truncated` when full; histograms continue. Trace JSON is written off the Event Loop in 1000-event chunks.
 - A span appears only if it began inside the Recording; `measure` blocks open when the Recording stops are dropped from the trace but still counted in histograms.
 - Stack sampling uses `sys._current_frames()`; frames are rendered relative to the vBot root or the Python library root.
+- The garbage collection callback runs inside the collector on whatever thread allocated, possibly while that thread holds a lock such as the metric registry's. It must stay lock-free (timestamps, a float total and a bounded deque); histograms and spans are recorded later on the Event Loop.
 - `measure()` costs about 0.7 us per call without a Recording and about 2.4 us with a track while recording (Python 3.14, Windows); keep it out of per-token or per-byte loops.
 
 ## Tests

@@ -19,7 +19,8 @@ The server measures itself all the time with negligible overhead (around a micro
 
 What is measured:
 
-- **Event Loop health:** `event_loop.lag` (how late a 100 ms timer wakes up; Windows timer granularity adds a 0–16 ms baseline, so judge by p99), `event_loop.utilization` (CPU share of the loop thread), and **stalls**: a watchdog thread notices when the loop has not ticked for more than 250 ms and samples the loop thread's Python stack, so each stall comes with the code location that blocked it.
+- **Event Loop health:** `event_loop.lag` (how late a 100 ms timer wakes up; Windows timer granularity adds a 0–16 ms baseline, so judge by p99), `event_loop.utilization` (CPU share of the loop thread), and **stalls**: a watchdog thread notices when the loop has not ticked for more than 250 ms and samples the loop thread's Python stack, so each stall comes with the code location that blocked it and the share of it spent in garbage collection (`gc_ms`).
+- **Garbage collection:** `gc.gen0`/`gc.gen1`/`gc.gen2`, one observation per collection pause in any thread. On the packaged Python 3.13, `gc.gen2` is the full collection that blocks every thread, including the Event Loop.
 - **Worker pools:** `worker_pool.<name>.wait` (queueing for a slot) and `.run`, plus `.active`/`.waiting` gauges for every named `BoundedWorkerPool`.
 - **SQLite:** per database (`sessions`, ...): `sqlite.<database>.write` (one write transaction including commit/fsync), `sqlite.<database>.write_wait` (waiting for that database's single writer), `sqlite.<database>.read`. The load-suite digest and report use the `sqlite.sessions.*` series.
 - **Chat per Model step:** `chat.request_build`, `provider.first_token`, `provider.response`, `chat.persist`, `chat.tool_round`, `tool.<name>`, `chat.compaction`, `chat.run`.
@@ -102,3 +103,4 @@ Some benchmarks reach into private functions (`_build_payload`, request-history 
 - Compare runs from the same machine under similar conditions. Other load (gates, builds, other agents) distorts results; a background virus scanner can slow SQLite commits and process starts noticeably.
 - Look at p99 and max, not only p50: concurrency problems show up as tails and as `*.wait` metrics (waiting for a pool slot or the SQLite writer).
 - A slow phase with low `event_loop.utilization` is waiting (disk, locks, subprocesses); a slow phase with high utilization or stalls is CPU work on the Event Loop.
+- A stall with only a few samples and a high `gc_ms` is a garbage collection pause, not the code in its stack; compare `gc.gen2` max with the stall duration.

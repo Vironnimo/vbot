@@ -174,6 +174,7 @@ def _stall_section(stalls: Sequence[object]) -> list[str]:
         lines.append(
             f"- started_at={_string_or_default(stall.get('started_at'), '-')} "
             f"duration_ms={_value_text(stall.get('duration_ms'))} "
+            f"gc_ms={_value_text(stall.get('gc_ms'))} "
             f"samples={sum(_count(sample) for sample in samples)}"
         )
         if samples:

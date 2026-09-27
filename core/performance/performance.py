@@ -54,6 +54,7 @@ EVENT_LOOP_LAG_METRIC = "event_loop.lag"
 _STALL_WARNING_MS = 1000.0
 _STALL_WARNING_INTERVAL_S = 30.0
 _STALL_WARNING_FRAMES = 5
+_GC_SPAN_MIN_MS = 1.0
 
 
 class PerformanceError(VBotError):
@@ -269,6 +270,7 @@ class PerformanceService:
             samplers=samplers or {},
             record_lag=self._record_lag,
             record_gauge=self._record_gauge,
+            record_gc=self._record_gc,
             on_stall=self._record_stall,
         )
         # Worker pools record their own metrics through this module, so the pool
@@ -454,6 +456,17 @@ class PerformanceService:
     def _record_gauge(name: str, value: float) -> None:
         _SINK.set_gauge(name, value, RUNTIME_TRACK)
 
+    @staticmethod
+    def _record_gc(generation: int, started: float, ended: float) -> None:
+        record_span(
+            f"gc.gen{generation}",
+            started,
+            ended=ended,
+            track=RUNTIME_TRACK,
+            name=f"gc gen{generation}",
+            min_span_ms=_GC_SPAN_MIN_MS,
+        )
+
     def _record_stall(self, stall: StallRecord) -> None:
         record = stall.to_dict()
         with self._stall_lock:
@@ -476,8 +489,10 @@ class PerformanceService:
             self._last_stall_warning = now
         frames = stall.samples[0][1][:_STALL_WARNING_FRAMES] if stall.samples else ()
         _LOGGER.warning(
-            "Event Loop stalled for %d ms (samples=%d suppressed_warnings=%d); top frames: %s",
+            "Event Loop stalled for %d ms (gc_ms=%d samples=%d suppressed_warnings=%d); "
+            "top frames: %s",
             round(stall.duration_ms),
+            round(stall.gc_ms),
             sum(count for count, _stack in stall.samples),
             suppressed,
             " <- ".join(frames) or "-",

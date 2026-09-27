@@ -8,6 +8,10 @@ The watchdog is a daemon thread. When the published deadline is overdue by
 more than the stall threshold, it samples the loop thread's Python stack on
 every cadence tick and aggregates identical stacks until the loop ticks again.
 Stack frames carry only code locations.
+
+While running, the monitor also times cyclic garbage collections: each tick
+records the finished collections, and a stall reports how much of it was
+collection pause.
 """
 
 from __future__ import annotations
@@ -28,6 +32,7 @@ from typing import Any
 
 import psutil  # type: ignore[import-untyped]
 
+from core.performance._gc import GcObserver
 from core.utils.logging import get_logger
 
 _LOGGER = get_logger("performance")
@@ -46,11 +51,13 @@ class StallRecord:
     started_at: datetime
     duration_ms: float
     samples: tuple[tuple[int, tuple[str, ...]], ...]
+    gc_ms: float = 0.0
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "started_at": self.started_at.isoformat(),
             "duration_ms": round(self.duration_ms, 1),
+            "gc_ms": round(self.gc_ms, 1),
             "samples": [{"count": count, "stack": list(stack)} for count, stack in self.samples],
         }
 
@@ -59,6 +66,7 @@ class StallRecord:
 class _StallCapture:
     deadline: float
     started_at: datetime
+    gc_total_s: float
     stacks: dict[tuple[str, ...], int] = field(default_factory=dict)
 
 
@@ -75,6 +83,7 @@ class LoopMonitor:
         samplers: Mapping[str, Callable[[], float]],
         record_lag: Callable[[float, float], None],
         record_gauge: Callable[[str, float], None],
+        record_gc: Callable[[int, float, float], None],
         on_stall: Callable[[StallRecord], None],
     ) -> None:
         self._interval_s = interval_s
@@ -84,13 +93,16 @@ class LoopMonitor:
         self._samplers = dict(samplers)
         self._record_lag = record_lag
         self._record_gauge = record_gauge
+        self._record_gc = record_gc
         self._on_stall = on_stall
+        self._gc = GcObserver()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._task: asyncio.Task[None] | None = None
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
-        # (deadline, previous wake) published by the loop as one atomic reference.
-        self._heartbeat: tuple[float, float] | None = None
+        # (deadline, previous wake, collection seconds so far) published by the
+        # loop as one atomic reference.
+        self._heartbeat: tuple[float, float, float] | None = None
         self._loop_thread_id: int | None = None
         self._failed_samplers: set[str] = set()
 
@@ -107,6 +119,7 @@ class LoopMonitor:
         self._loop_thread_id = threading.get_ident()
         self._heartbeat = None
         self._stop = threading.Event()
+        self._gc.install()
         self._task = loop.create_task(self._run(), name="vbot-performance-monitor")
         self._thread = threading.Thread(
             target=self._watch,
@@ -139,6 +152,7 @@ class LoopMonitor:
         self._stop_watchdog()
 
     def _stop_watchdog(self) -> None:
+        self._gc.uninstall()
         self._stop.set()
         thread, self._thread = self._thread, None
         if thread is not None and thread is not threading.current_thread():
@@ -157,10 +171,12 @@ class LoopMonitor:
         woke = wall_mark
         while True:
             deadline = time.perf_counter() + interval
-            self._heartbeat = (deadline, woke)
+            self._heartbeat = (deadline, woke, self._gc.total_s)
             await asyncio.sleep(interval)
             woke = time.perf_counter()
             self._record_lag(max(0.0, (woke - deadline) * 1000.0), woke)
+            for generation, started, ended in self._gc.drain():
+                self._record_gc(generation, started, ended)
             if woke < next_sample:
                 continue
             cpu_now = time.thread_time()
@@ -213,9 +229,9 @@ class LoopMonitor:
             heartbeat = self._heartbeat
             if heartbeat is None:
                 continue
-            deadline, woke = heartbeat
+            deadline, woke, gc_total_s = heartbeat
             if capture is not None and deadline != capture.deadline:
-                self._finish_stall(capture, woke)
+                self._finish_stall(capture, woke, gc_total_s)
                 capture = None
             now = time.perf_counter()
             overdue = now - deadline
@@ -225,16 +241,22 @@ class LoopMonitor:
                 capture = _StallCapture(
                     deadline=deadline,
                     started_at=datetime.now(UTC) - timedelta(seconds=overdue),
+                    gc_total_s=gc_total_s,
                 )
             self._sample_stack(capture)
 
-    def _finish_stall(self, capture: _StallCapture, resumed: float) -> None:
+    def _finish_stall(self, capture: _StallCapture, resumed: float, gc_total_s: float) -> None:
         samples = sorted(capture.stacks.items(), key=lambda item: item[1], reverse=True)
+        duration_ms = max(0.0, (resumed - capture.deadline) * 1000.0)
+        # Both totals come from heartbeats, so the window opens up to one tick
+        # before the stall; the cap keeps that slack out of the reported share.
+        gc_ms = min(duration_ms, max(0.0, (gc_total_s - capture.gc_total_s) * 1000.0))
         record = StallRecord(
             started_perf=capture.deadline,
             started_at=capture.started_at,
-            duration_ms=max(0.0, (resumed - capture.deadline) * 1000.0),
+            duration_ms=duration_ms,
             samples=tuple((count, stack) for stack, count in samples),
+            gc_ms=gc_ms,
         )
         try:
             self._on_stall(record)

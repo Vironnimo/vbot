@@ -39,6 +39,7 @@ def test_status_shows_slowest_metrics_gauges_stalls_and_recording(
                 {
                     "started_at": "2026-09-24T10:01:00+00:00",
                     "duration_ms": 320.0,
+                    "gc_ms": 250.0,
                     "samples": [
                         {"count": 1, "stack": ["core/a.py:1 other"]},
                         {
@@ -76,7 +77,7 @@ def test_status_shows_slowest_metrics_gauges_stalls_and_recording(
         SQLITE_ROW,
         RPC_CHAT_ROW,
         "recent stalls (newest first, 1 retained):",
-        "- started_at=2026-09-24T10:01:00+00:00 duration_ms=320.0 samples=6",
+        "- started_at=2026-09-24T10:01:00+00:00 duration_ms=320.0 gc_ms=250.0 samples=6",
         "    core/x.py:10 work",
         "    core/y.py:5 caller",
         "    a",

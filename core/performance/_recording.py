@@ -195,7 +195,11 @@ class Recording:
                 return
             self._stalls.append(dict(record))
             pid = self._track(track).pid
-            args = {"duration_ms": record["duration_ms"], "samples": record["samples"]}
+            args = {
+                "duration_ms": record["duration_ms"],
+                "gc_ms": record["gc_ms"],
+                "samples": record["samples"],
+            }
             self._append(("i", pid, 0, self._ts(started), None, "event_loop.stall", "stall", args))
 
     def close(self, ended: float, reason: str) -> bool:
