@@ -15,7 +15,7 @@ import core.tools.change_tracker as change_tracker_module
 from core.chat import ChatSessionError
 from core.chat.continuation import ContinuationCause, ContinuationTracker
 from core.chat.streaming import StreamingChunkTimeoutError
-from core.providers.errors import NetworkError, ProviderTimeoutError
+from core.providers.errors import NetworkError, ProviderError, ProviderTimeoutError
 from core.runs import (
     PROVIDER_REQUEST_STATUS_EVENT,
     RunAdmission,
@@ -339,18 +339,23 @@ async def test_provider_retry_is_visible_before_answer_without_leaking_error(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("expected", [False, True])
+@pytest.mark.parametrize(
+    ("failure", "error_kind", "expected"),
+    [
+        (RuntimeError("private-internal-detail"), "internal_error", False),
+        (ProviderTimeoutError("timeout sentinel"), "timeout", True),
+        (ProviderError("provider failed", retryable=False), "provider_fatal", True),
+    ],
+    ids=["unexpected", "exhausted-retries", "fatal-provider-error"],
+)
 async def test_run_failures_remain_visible_in_history_once(
     tmp_path: Path,
     recovery_waits: list[float],
     caplog: pytest.LogCaptureFixture,
+    failure: Exception,
+    error_kind: str,
     expected: bool,
 ) -> None:
-    failure = (
-        ProviderTimeoutError("timeout sentinel")
-        if expected
-        else RuntimeError("private-internal-detail")
-    )
     runtime = _runtime(tmp_path, [failure] * 9)
 
     run = await build_chat_loop(runtime).start_run("coder", "Hi", session_id="session-one")
@@ -360,7 +365,7 @@ async def test_run_failures_remain_visible_in_history_once(
     assert raised.value is failure
     errors = [message for message in history(runtime) if message.role == "error"]
     assert len(errors) == 1
-    assert errors[0].error_kind == ("timeout" if expected else "internal_error")
+    assert errors[0].error_kind == error_kind
     assert "private-internal-detail" not in str(errors[0].content)
     assert run.events[-1].payload["error_message_id"] == errors[0].id
     diagnostics = [
