@@ -10,9 +10,12 @@ table or builds an automatic index.
 from __future__ import annotations
 
 import asyncio
+import itertools
 import re
+import shutil
 import sqlite3
 from collections.abc import Callable, Iterator
+from pathlib import Path
 from typing import Any, cast
 
 import pytest
@@ -20,6 +23,7 @@ import pytest
 from core.chat.messages import ChatMessage, ToolCall
 from core.runs import RunExecutionOwner
 from core.sessions import (
+    ChatSessionManager,
     _store_history,
     _store_owned,
     _store_queries,
@@ -27,11 +31,15 @@ from core.sessions import (
     _store_timeline,
     _store_values,
 )
-from core.sessions._types import SessionAddress, SessionReadCursor, SessionRunAdmission
+from core.sessions._types import (
+    SessionAddress,
+    SessionListFilters,
+    SessionReadCursor,
+    SessionRunAdmission,
+)
 from core.sessions.errors import SessionNotFoundError
 from core.utils.timestamps import utc_now_timestamp
 from tests.core.sessions.history_fixtures import complete_run
-from tests.core.sessions.sessions_test_support import manager as manager
 
 _ALIAS = re.compile(r"\b(?:FROM|JOIN)\s+([A-Za-z_]\w*)(?:\s+AS\s+([A-Za-z_]\w*))?", re.IGNORECASE)
 
@@ -86,106 +94,117 @@ def _violations(connection: sqlite3.Connection, sql: str, params: tuple[Any, ...
     return found
 
 
-def _assert_indexed(connection: sqlite3.Connection, statements: _Statements) -> None:
-    assert statements
+def _assert_indexed(
+    connection: sqlite3.Connection, statements: _Statements, case: object = None
+) -> None:
+    assert statements, case
     for sql, params in statements:
-        assert _violations(connection, sql, params) == [], sql
+        assert _violations(connection, sql, params) == [], (case, sql)
 
 
 def _plans(connection: sqlite3.Connection, statements: _Statements) -> list[str]:
     return [detail for sql, params in statements for detail in _plan(connection, sql, params)]
 
 
-@pytest.fixture
-def history(manager) -> Iterator[tuple[SessionAddress, str, sqlite3.Connection]]:
+@pytest.fixture(scope="module")
+def history(
+    tmp_path_factory: pytest.TempPathFactory, current_session_store_template: Path
+) -> Iterator[tuple[SessionAddress, str, sqlite3.Connection]]:
     """Two Sessions and a fork whose history fills every view range kind.
 
     Each Session has a completed Run with a Tool call, a Compaction checkpoint
     and an edited draft; the fork of "two" inherits that view and adds its own
-    entry. Returns the fork's address and the id of an inherited answer.
+    entry. Returns the fork's address, the id of an inherited answer and a
+    query-only connection: the tests of this module share the history.
     """
+    directory = tmp_path_factory.mktemp("query-plans")
+    for name in ("data-store.json", "sessions.db"):
+        shutil.copy2(current_session_store_template / name, directory)
+    manager = ChatSessionManager(directory)
     anchor = ""
-    for session_id in ("one", "two"):
-        session = manager.create("agent", session_id=session_id, project_id="project")
-        run = session.start_run(f"run-{session_id}")
-        question = ChatMessage.user("needle question")
-        assistant = ChatMessage.assistant(
-            model="test",
-            content=None,
-            tool_calls=[ToolCall(id="call", name="read", arguments={"path": "x"})],
-        )
-        run.append_many([question, assistant])
-        run.assistant_message_id = assistant.id
-        run.append(ChatMessage.tool(tool_call_id="call", name="read", content="needle result"))
-        answer = ChatMessage.assistant(model="test", content="needle answer")
-        run.append(answer)
-        complete_run(
-            run,
-            ChatMessage.run_summary(
-                run_id=f"run-{session_id}",
-                status="completed",
-                iteration_count=1,
-                timing={
-                    "started_at": "2026-09-19T10:00:00Z",
-                    "completed_at": "2026-09-19T10:00:01Z",
-                    "duration_ms": 1000,
-                },
-            ),
-        )
-        edited = ChatMessage.user("draft")
-        session.append_many(
-            [
-                ChatMessage.compaction_checkpoint(
-                    summary="needle summary", projection=[], compacted_token_count=1
+    try:
+        for session_id in ("one", "two"):
+            session = manager.create("agent", session_id=session_id, project_id="project")
+            run = session.start_run(f"run-{session_id}")
+            question = ChatMessage.user("needle question")
+            assistant = ChatMessage.assistant(
+                model="test",
+                content=None,
+                tool_calls=[ToolCall(id="call", name="read", arguments={"path": "x"})],
+            )
+            run.append_many([question, assistant])
+            run.assistant_message_id = assistant.id
+            run.append(ChatMessage.tool(tool_call_id="call", name="read", content="needle result"))
+            answer = ChatMessage.assistant(model="test", content="needle answer")
+            run.append(answer)
+            complete_run(
+                run,
+                ChatMessage.run_summary(
+                    run_id=f"run-{session_id}",
+                    status="completed",
+                    iteration_count=1,
+                    timing={
+                        "started_at": "2026-09-19T10:00:00Z",
+                        "completed_at": "2026-09-19T10:00:01Z",
+                        "duration_ms": 1000,
+                    },
                 ),
-                edited,
-            ]
+            )
+            edited = ChatMessage.user("draft")
+            session.append_many(
+                [
+                    ChatMessage.compaction_checkpoint(
+                        summary="needle summary", projection=[], compacted_token_count=1
+                    ),
+                    edited,
+                ]
+            )
+            session.apply_edit(edited.id, [ChatMessage.user("needle follow-up")])
+            anchor = answer.id
+        fork = asyncio.run(
+            manager.fork(
+                SessionAddress("project", "agent", "two"),
+                target_project_id="project",
+                title="needle fork",
+            )
         )
-        session.apply_edit(edited.id, [ChatMessage.user("needle follow-up")])
-        anchor = answer.id
-    fork = asyncio.run(
-        manager.fork(
-            SessionAddress("project", "agent", "two"),
-            target_project_id="project",
-            title="needle fork",
-        )
-    )
-    fork.append(ChatMessage.user("needle fork question"))
-    connection = sqlite3.connect(manager._store.path)
+        fork.append(ChatMessage.user("needle fork question"))
+    finally:
+        manager.close()
+    connection = sqlite3.connect(directory / "sessions.db")
     connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA query_only = ON")
     try:
         yield fork.address, anchor, connection
     finally:
         connection.close()
 
 
-@pytest.mark.parametrize(
-    "scope",
-    [
-        {"agent_id": "agent", "session_id": "fork"},
-        {"agent_id": "agent"},
-        {"agent_id": None},
-    ],
+_SEARCH_FILTERS: tuple[dict[str, Any], ...] = (
+    {},
+    {"roles": ("user",)},
+    {"roles": ("user",), "include_subagents": True},
+    {"roles": ("user", "assistant"), "since": "2026-01-01T00:00:00Z"},
+    {"roles": ("tool",), "until": "2100-01-01T00:00:00Z", "excluded_session_ids": ("one",)},
 )
-@pytest.mark.parametrize(
-    "filters",
-    [
-        {},
-        {"roles": ("user",)},
-        {"roles": ("user",), "include_subagents": True},
-        {"roles": ("user", "assistant"), "since": "2026-01-01T00:00:00Z"},
-        {"roles": ("tool",), "until": "2100-01-01T00:00:00Z", "excluded_session_ids": ("one",)},
-    ],
-)
-@pytest.mark.parametrize("use_fts", [True, False])
-@pytest.mark.parametrize("order", ["relevance", "newest", "oldest"])
+
+
+@pytest.mark.parametrize("order", ["relevance", "oldest", "newest"])
+@pytest.mark.parametrize("use_fts", [True, False], ids=["fts", "scan"])
 def test_scoped_search_pushes_the_eligible_sessions_into_every_branch(
-    history, scope, filters, use_fts, order
+    history, use_fts, order
 ) -> None:
     address, _anchor, connection = history
-    if scope.get("session_id") == "fork":
-        scope = {**scope, "session_id": address.session_id}
-    for query in ("needle", "ne", "absent"):
+    scopes = (
+        {"agent_id": "agent", "session_id": address.session_id},
+        {"agent_id": "agent"},
+        {"agent_id": None},
+    )
+    # Whole terms use the trigram index, a short term the standard one, and a
+    # miss of a Tool-inclusive search falls back to a scan.
+    for scope, filters, query in itertools.product(
+        scopes, _SEARCH_FILTERS, ("needle", "ne", "absent")
+    ):
         recorder, statements = _recording(connection)
         result = _store_search.search(
             recorder,
@@ -198,7 +217,7 @@ def test_scoped_search_pushes_the_eligible_sessions_into_every_branch(
         )
         if query == "absent":
             assert result.hits == ()
-        _assert_indexed(connection, statements)
+        _assert_indexed(connection, statements, (scope, filters, query))
 
 
 def test_inherited_search_hits_are_reported_once_for_the_eligible_fork(history) -> None:
@@ -446,6 +465,39 @@ def test_completion_activity_searches_each_scope_by_live_address_index(history) 
         re.match(r"SEARCH s USING INDEX \w+ \(project_id=\? AND agent_id=\?", p) for p in plans
     )
     assert not any(re.match(r"SCAN s\b", plan) for plan in plans)
+
+
+def test_session_list_reads_follow_the_declared_order_indexes(history) -> None:
+    """One scope walks its order index and several the global one; none sorts."""
+    _address, _anchor, connection = history
+
+    def plans(read: Callable[[Any], Any]) -> list[str]:
+        recorder, statements = _recording(connection)
+        read(recorder)
+        return [" ".join(_plan(connection, sql, params)) for sql, params in statements]
+
+    def page(scopes: list[tuple[str | None, str]]) -> Callable[[Any], Any]:
+        return lambda recorder: _store_queries.list_summaries_page(
+            recorder,
+            scopes,
+            limit=20,
+            cursor=None,
+            filters=SessionListFilters(include_cron=False),
+            required_address=None,
+        )()
+
+    (scoped,) = plans(
+        lambda recorder: _store_queries.list_summaries(recorder, "project", "agent")()
+    )
+    scoped_count, scoped_page = plans(page([("project", "agent")]))
+    global_count, global_page = plans(page([("project", "agent"), (None, "other")]))
+
+    assert "sessions_live_scope_order" in scoped
+    assert "sessions_live_scope_order" in scoped_page
+    assert "sessions_live_global_order" in global_page
+    assert "sessions_live_scope_visibility" in scoped_count
+    assert "sessions_live_scope_visibility" in global_count
+    assert not [plan for plan in (scoped, scoped_page, global_page) if "USE TEMP B-TREE" in plan]
 
 
 def test_payload_reads_start_from_the_payload_id(history) -> None:

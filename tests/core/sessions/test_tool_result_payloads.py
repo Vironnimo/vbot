@@ -59,8 +59,7 @@ async def _load(
 
 
 @pytest.mark.asyncio
-async def test_payload_is_visible_to_its_owner_in_its_session_only(tmp_path) -> None:
-    manager = ChatSessionManager(tmp_path)
+async def test_payload_is_visible_to_its_owner_in_its_session_only(manager) -> None:
     session = manager.create("agent", session_id="source")
     other = manager.create("agent", session_id="other")
     _payload_run(session, "run-one", _payload("res_one"), _payload("res_two", value='"text"'))
@@ -78,9 +77,8 @@ async def test_payload_is_visible_to_its_owner_in_its_session_only(tmp_path) -> 
 
 @pytest.mark.asyncio
 async def test_forks_read_inherited_payloads_even_after_the_ancestor_is_deleted(
-    tmp_path,
+    manager,
 ) -> None:
-    manager = ChatSessionManager(tmp_path)
     source = manager.create("agent", session_id="source")
     question = _payload_run(source, "run-one", _payload("res_one"))
     child = await manager.fork(source.address)
@@ -109,8 +107,7 @@ async def test_forks_read_inherited_payloads_even_after_the_ancestor_is_deleted(
         (_payload("res_one", owner=""),),
     ],
 )
-def test_invalid_payloads_are_refused_with_their_tool_result(tmp_path, payloads) -> None:
-    manager = ChatSessionManager(tmp_path)
+def test_invalid_payloads_are_refused_with_their_tool_result(manager, payloads) -> None:
     session = manager.create("agent", session_id="source")
 
     with pytest.raises(ChatSessionError, match="Tool result facts are invalid"):

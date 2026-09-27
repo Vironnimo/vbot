@@ -80,7 +80,7 @@ there is no canonical address alias to link auxiliary requests across a takeover
 and a Run id alone never supplies one.
 Generation checks and own-audit ingestion
 remain in force (`statistics.py`, `index.py`; `test_statistics_groups.py`,
-`tests/core/sessions/test_run_ownership.py`).
+`tests/core/sessions/test_sessions_owner_managed.py`).
 
 ## Conventions
 

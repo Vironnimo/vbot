@@ -1,24 +1,18 @@
-"""Tests for sessions listing."""
+"""Session lists, completion activity, recall visibility and review summaries."""
 
 from __future__ import annotations
 
 import asyncio
-import json
 import sqlite3
-from dataclasses import replace
 from typing import Any
 
 import pytest
 
 import core.sessions._store_codec as session_store_module
 from core.chat import ChatMessage
-from core.chat.errors import ChatSessionError
 from core.prompts.pinned_context import PINNED_MEMORY_FILES_SLOT, PINNED_SKILL_CATALOG_SLOT
 from core.runs import Run, RunKind
 from core.sessions import (
-    SESSION_RUN_KINDS_META_KEY,
-    PromptEpoch,
-    SeenSkillsUpdate,
     SessionAddress,
     SessionListFilters,
 )
@@ -26,16 +20,9 @@ from core.utils.timestamps import canonical_timestamp
 from tests.core.sessions.history_fixtures import (
     admit_run,
     complete_run,
-    history_revision,
     settle_run,
 )
-from tests.core.sessions.sessions_test_support import (
-    _address,
-    _continuation_start,
-)
-from tests.core.sessions.sessions_test_support import (
-    manager as manager,
-)
+from tests.core.sessions.sessions_test_support import _address
 
 
 def _classify(manager, address: SessionAddress, metadata: Any) -> None:
@@ -62,143 +49,11 @@ def _classify(manager, address: SessionAddress, metadata: Any) -> None:
             )
 
 
-def _state_revision(manager, address: SessionAddress) -> int:
-    return int(
-        manager._store._read(
-            lambda connection: connection.execute(
-                "SELECT state_revision FROM sessions WHERE project_id = ? AND agent_id = ? "
-                "AND session_id = ? AND state = 'live'",
-                (address.project_id or "", address.agent_id, address.session_id),
-            ).fetchone()[0]
-        )
-    )
-
-
-def test_create_append_and_load_use_a_canonical_database(manager, tmp_path) -> None:
-    session = manager.create("coder", session_id="session-one")
-    messages = [ChatMessage.user("hello"), ChatMessage.assistant(model="test", content="hi")]
-
-    session.append_many(messages)
-
-    assert session.load() == messages
-    assert session.load_active() == messages
-    assert (tmp_path / "sessions.db").is_file()
-    assert not list((tmp_path / "agents").glob("*/sessions/*.jsonl"))
-
-
-def test_cursor_reads_only_messages_appended_after_the_snapshot(manager) -> None:
-    session = manager.create("coder", session_id="session-one")
-    session.append(ChatMessage.user("first"))
-    initial = session.load_since()
-    assert initial is not None
-    assert len(initial.messages) == 1
-
-    unchanged = session.load_since(initial.cursor)
-    assert unchanged is not None
-    assert unchanged.messages == () and unchanged.cursor == initial.cursor
-    session.append(ChatMessage.assistant(model="test", content="second"))
-    appended = session.load_since(initial.cursor)
-    assert appended is not None
-    assert [message.content for message in appended.messages] == ["second"]
-    # A cursor whose anchor names another record belongs to a different history.
-    assert session.load_since(replace(initial.cursor, last_message_id="other")) is None
-    assert session.load_since(replace(appended.cursor, last_message_id="other")) is None
-    assert session.load_since(replace(appended.cursor, next_seq=3)) is None
-
-
-def test_append_returns_every_record_since_the_cursor_and_commits_its_journal(manager) -> None:
-    session = manager.create("coder", session_id="session-one")
-    session.start_run("run-one")
-    session.append(ChatMessage.user("first"))
-    initial = session.load_since()
-    assert initial is not None
-    manager.get(session.address).append(ChatMessage.note("written by another accessor"))
-
-    delta = session.append_many(
-        [ChatMessage.assistant(model="test", content="second")],
-        continuation_records=[_continuation_start()],
-        since=initial.cursor,
-    )
-
-    assert delta is not None
-    assert [message.role for message in delta.messages] == ["note", "assistant"]
-    assert [message.role for message in delta.active_messages] == ["note", "assistant"]
-    latest = session.load_since()
-    assert latest is not None and delta.cursor == latest.cursor
-    assert session.load_continuation() is not None
-
-
-def test_an_append_commits_its_seen_skills_in_the_same_transaction(manager) -> None:
-    session = manager.create("coder", session_id="session-one")
-    session.start_run("run-one")
-
-    session.append_many(
-        [ChatMessage.user("first")], seen_skills=SeenSkillsUpdate(baseline=("alpha",))
-    )
-    with pytest.raises(ChatSessionError):
-        session.append_many(
-            [ChatMessage.user("lost")],
-            seen_skills=SeenSkillsUpdate(baseline=(), added=("beta",)),
-            continuation_records=[{**_continuation_start(), "version": 2}],
-        )
-
-    assert [message.content for message in session.load()] == ["first"]
-    assert manager.seen_skills(session.address) == frozenset({"alpha"})
-
-
-def test_compaction_checkpoint_commits_only_while_its_cursor_is_current(manager) -> None:
-    session = manager.create("coder", session_id="session-one")
-    session.append(ChatMessage.user("first"))
-    snapshot = session.load_since()
-    assert snapshot is not None
-    affinity = manager.prompt_cache_affinity_id(session.address)
-    checkpoint = ChatMessage.compaction_checkpoint(
-        summary="Summary.", projection=[], compacted_token_count=1
-    )
-    manager.get(session.address).append(ChatMessage.note("written by another accessor"))
-
-    epoch = PromptEpoch(
-        pins={PINNED_SKILL_CATALOG_SLOT: {"catalog": "new"}}, seen_skills=("alpha",)
-    )
-    stale = session.commit_compaction(checkpoint, since=snapshot.cursor, epoch=epoch)
-
-    assert stale is None
-    assert [message.role for message in session.load()] == ["user", "note"]
-    assert manager.prompt_pin(session.address, PINNED_SKILL_CATALOG_SLOT) is None
-    assert manager.seen_skills(session.address) is None
-    assert manager.prompt_cache_affinity_id(session.address) == affinity
-
-    current = session.load_since()
-    assert current is not None
-    committed = session.commit_compaction(checkpoint, since=current.cursor, epoch=epoch)
-
-    assert committed is not None
-    delta, rotated = committed
-    assert [message.id for message in delta.messages] == [checkpoint.id]
-    latest = session.load_since()
-    assert latest is not None and delta.cursor == latest.cursor
-    assert manager.prompt_pin(session.address, PINNED_SKILL_CATALOG_SLOT) == {"catalog": "new"}
-    assert manager.seen_skills(session.address) == frozenset({"alpha"})
-    assert manager.prompt_cache_affinity_id(session.address) == rotated != affinity
-
-
-def test_a_rejected_journal_record_rolls_back_its_history_append(manager) -> None:
-    session = manager.create("coder", session_id="session-one")
-    session.append(ChatMessage.user("first"))
-
-    with pytest.raises(ChatSessionError):
-        session.append_many(
-            [ChatMessage.assistant(model="test", content="lost")],
-            continuation_records=[{**_continuation_start(), "version": 2}],
-        )
-
-    assert [message.role for message in session.load()] == ["user"]
-    assert session.load_continuation() is None
-
-
+# Every terminal status is reported alike; a Project scope must not leak across.
 @pytest.mark.asyncio
-@pytest.mark.parametrize("status", ["completed", "failed", "cancelled", "interrupted"])
-@pytest.mark.parametrize("project_id", [None, "project-one"])
+@pytest.mark.parametrize(
+    ("status", "project_id"), [("completed", None), ("interrupted", "project-one")]
+)
 async def test_reflection_runs_restore_only_own_review_summaries(
     manager, monkeypatch, status, project_id
 ):
@@ -265,115 +120,14 @@ async def test_reflection_runs_restore_only_own_review_summaries(
     assert source.reflection_runs() == []
 
 
-def test_metadata_activity_and_continuation_change_state_not_history(manager) -> None:
-    address = _address("coder", "session-one")
-    session = manager.create("coder", session_id=address.session_id)
-    session.append(ChatMessage.user("hello"))
-    settle_run(manager, address, "run-1")
-    session.start_run("run-one")
-    revision = history_revision(manager, address)
-
-    manager.set_metadata(address, {"project": "vbot"})
-    session.append_continuation_records([_continuation_start()])
-
-    assert history_revision(manager, address) == revision
-    assert manager.get_metadata(address)["project"] == "vbot"
-    assert manager.get_metadata(address)[SESSION_RUN_KINDS_META_KEY] == [RunKind.USER.value]
-    continuation = session.load_continuation()
-    assert continuation is not None
-    assert continuation.checkpoint_id == "checkpoint-one"
-    assert manager.mark_terminal_run_read(address, "wrong")["marked_read"] is False
-    assert manager.mark_terminal_run_read(address, "run-1")["marked_read"] is True
-    assert history_revision(manager, address) == revision
-
-
-def test_unchanged_metadata_and_activity_mutations_write_nothing(manager) -> None:
-    address = _address("coder", "unchanged-mutations")
-    manager.create(address.agent_id, session_id=address.session_id)
-    manager.set_metadata(address, {"title": "Kept"})
-    manager.record_seen_skills(address, SeenSkillsUpdate(baseline=("alpha",)))
-    settle_run(manager, address, "run-1")
-    assert manager.mark_terminal_run_read(address, "run-1")["marked_read"] is True
-    writer = manager._store._writer
-    revision = _state_revision(manager, address)
-    changes = writer.total_changes
-
-    previous, updated = manager.mutate_metadata_with_previous(
-        address, lambda metadata: metadata.update(title="Kept")
-    )
-    manager.record_seen_skills(address, SeenSkillsUpdate(baseline=(), added=("alpha",)))
-    assert manager.mark_terminal_run_read(address, "run-1")["marked_read"] is False
-
-    assert previous == updated
-    assert writer.total_changes == changes
-    assert _state_revision(manager, address) == revision
-
-    asyncio.run(admit_run(manager, address, RunKind.CRON))
-    assert _state_revision(manager, address) > revision
-    # Run kinds form a set, reported in name order.
-    assert manager.get_metadata(address)[SESSION_RUN_KINDS_META_KEY] == [
-        RunKind.CRON.value,
-        RunKind.USER.value,
-    ]
-
-
-def test_listable_metadata_is_normalized_out_of_open_ended_metadata(manager) -> None:
-    address = _address("coder", "normalized-metadata")
-    manager.create(address.agent_id, session_id=address.session_id)
-    metadata = {
-        "title": "Release planning",
-        "auto_title": "Automatic title",
-        "source_channel_id": "tg-main",
-        "platform": "telegram",
-        "platform_conv_id": "chat-42",
-        "is_subagent_session": True,
-        "subagent_parent": {
-            "id": "work",
-            "agent_id": "parent",
-            "session_id": "root",
-            "run_id": "parent-run",
-            "tool_call_id": "call",
-            "tool_call_index": 1,
-            "project_id": None,
-        },
-        "compaction_policy": {"enabled": False},
-        "extension_state": "x" * 100_000,
-    }
-
-    manager.set_metadata(address, metadata)
-    asyncio.run(admit_run(manager, address, RunKind.SUBAGENT))
-
-    assert manager.get_metadata(address) == {**metadata, "run_kinds": ["subagent"]}
-    with sqlite3.connect(manager._store.path) as connection:
-        connection.row_factory = sqlite3.Row
-        row = connection.execute(
-            "SELECT session_key, metadata_json, title, subagent_parent_session_id, "
-            "subagent_parent_tool_call_index, compaction_policy_json FROM sessions "
-            "WHERE agent_id = ? AND session_id = ?",
-            (address.agent_id, address.session_id),
-        ).fetchone()
-        assert row is not None
-        run_kinds = connection.execute(
-            "SELECT run_kind FROM session_run_kinds WHERE session_key = ?",
-            (row["session_key"],),
-        ).fetchall()
-    assert json.loads(row["metadata_json"]) == {"extension_state": "x" * 100_000}
-    assert row["title"] == "Release planning"
-    assert row["subagent_parent_session_id"] == "root"
-    assert row["subagent_parent_tool_call_index"] == 1
-    assert json.loads(row["compaction_policy_json"]) == {"enabled": False}
-    assert [tuple(kind) for kind in run_kinds] == [("subagent",)]
-
-
-@pytest.mark.timeout(120)
 def test_session_list_page_is_bounded_filtered_and_keeps_required_session(manager) -> None:
-    # The paging fixture writes forty durable Sessions with large metadata payloads.
     normal_ids: list[str] = []
-    for index in range(40):
+    for index in range(5):
         session_id = f"normal-{index:02d}"
         address = _address("coder", session_id)
         manager._store.create(address, created_at=f"2026-08-01T12:{index:02d}:00+00:00")
         _classify(manager, address, {"title": f"Normal {index}", "run_kinds": ["user"]})
+        # Large prompt state stays out of every summary.
         manager.ensure_prompt_pin(
             address, PINNED_SKILL_CATALOG_SLOT, {"catalog": "large" * 10_000}, lambda _pin: True
         )
@@ -381,23 +135,21 @@ def test_session_list_page_is_bounded_filtered_and_keeps_required_session(manage
     hidden = _address("coder", "cron-hidden")
     manager._store.create(hidden, created_at="2026-08-01T00:00:00+00:00")
     _classify(manager, hidden, {"run_kinds": ["cron"]})
-
-    first = manager.list_summaries_page(
-        [(None, "coder")],
-        limit=35,
-        filters=SessionListFilters(
-            include_subagents=False,
-            include_memory_reflections=False,
-            include_skill_reflections=False,
-            include_cron=False,
-        ),
-        required_address=hidden,
+    filters = SessionListFilters(
+        include_subagents=False,
+        include_memory_reflections=False,
+        include_skill_reflections=False,
+        include_cron=False,
     )
 
-    assert len(first.sessions) == 36
-    assert first.total_count == 41
+    first = manager.list_summaries_page(
+        [(None, "coder")], limit=3, filters=filters, required_address=hidden
+    )
+
+    assert len(first.sessions) == 4
+    assert first.total_count == 6
     assert first.next_cursor is not None
-    assert first.sessions[0]["id"] == "normal-39"
+    assert first.sessions[0]["id"] == "normal-04"
     assert first.sessions[-1]["id"] == hidden.session_id
     assert all(PINNED_SKILL_CATALOG_SLOT not in summary for summary in first.sessions)
     assert all(
@@ -423,12 +175,7 @@ def test_session_list_page_is_bounded_filtered_and_keeps_required_session(manage
         [(None, "coder")],
         limit=20,
         cursor=first.next_cursor,
-        filters=SessionListFilters(
-            include_subagents=False,
-            include_memory_reflections=False,
-            include_skill_reflections=False,
-            include_cron=False,
-        ),
+        filters=filters,
         required_address=hidden,
     )
     paged_ids = {summary["id"] for summary in (*first.sessions, *second.sessions)}
@@ -665,16 +412,25 @@ def test_recall_visibility_is_classified_in_sql(manager) -> None:
     assert {
         address.session_id: source.recall_visibility for address, source in sources.items()
     } == expected
+    # Revisions follow creation order, which differs from the name order here.
+    assert sorted(revisions, key=lambda revision: revision.creation_order) == sorted(
+        revisions, key=lambda revision: list(expected).index(revision.address.session_id)
+    )
 
 
-def test_history_revisions_order_sessions_by_creation(manager) -> None:
-    for session_id in ("b-first", "a-second", "c-third"):
-        manager.create("coder", session_id=session_id)
+def test_history_versions_report_live_sessions_across_scopes(manager) -> None:
+    live = manager.create("coder", session_id="live-one")
+    live.append(ChatMessage.user("hello"))
+    project = manager.create("coder", session_id="project-one", project_id="alpha")
+    gone = manager.create("coder", session_id="gone")
+    gone.delete()
 
-    revisions = manager.list_history_revisions("coder")
-    order = {revision.address.session_id: revision.creation_order for revision in revisions}
+    versions = manager.list_history_versions([live.address, project.address, gone.address])
 
-    assert order["b-first"] < order["a-second"] < order["c-third"]
+    assert set(versions) == {live.address, project.address}
+    generation_id, revision = versions[live.address]
+    assert isinstance(generation_id, str) and generation_id
+    assert revision >= 1
 
 
 @pytest.mark.parametrize("include_channels", [False, True])

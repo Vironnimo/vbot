@@ -1,4 +1,4 @@
-"""Tests for sessions."""
+"""Session history writes: appends, cursors, journals, stored Message shapes."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import asyncio
 import dataclasses
 import json
 import sqlite3
+from dataclasses import replace
 
 import pytest
 
@@ -15,22 +16,130 @@ from core.chat.content_blocks import FileMentionBlock, TextBlock
 from core.chat.errors import ChatSessionError
 from core.chat.messages import MessageSender, ToolCall, ToolCallRejection
 from core.chat.output_files import AssistantFileReference
+from core.prompts.pinned_context import PINNED_SKILL_CATALOG_SLOT
 from core.sessions import (
-    FORK_SOURCE_META_KEY,
     ChatSession,
+    PromptEpoch,
+    SeenSkillsUpdate,
     ToolResultFacts,
+    editable_session_message_index,
 )
-from core.sessions import _store_values as store_values
 from core.sessions.errors import SessionNotFoundError
 from core.sessions.history import skill_tool_activation
-from tests.core.sessions.history_fixtures import complete_run, settle_run
-from tests.core.sessions.sessions_test_support import (
-    _address,
-    _continuation_start,
-)
-from tests.core.sessions.sessions_test_support import (
-    manager as manager,
-)
+from tests.core.sessions.history_fixtures import complete_run
+from tests.core.sessions.sessions_test_support import _address, _continuation_start
+
+
+def test_cursor_reads_only_messages_appended_after_the_snapshot(manager) -> None:
+    session = manager.create("coder", session_id="session-one")
+    session.append(ChatMessage.user("first"))
+    initial = session.load_since()
+    assert initial is not None
+    assert len(initial.messages) == 1
+
+    unchanged = session.load_since(initial.cursor)
+    assert unchanged is not None
+    assert unchanged.messages == () and unchanged.cursor == initial.cursor
+    session.append(ChatMessage.assistant(model="test", content="second"))
+    appended = session.load_since(initial.cursor)
+    assert appended is not None
+    assert [message.content for message in appended.messages] == ["second"]
+    # A cursor whose anchor names another record belongs to a different history.
+    assert session.load_since(replace(initial.cursor, last_message_id="other")) is None
+    assert session.load_since(replace(appended.cursor, last_message_id="other")) is None
+    assert session.load_since(replace(appended.cursor, next_seq=3)) is None
+
+
+def test_append_returns_every_record_since_the_cursor_and_commits_its_journal(manager) -> None:
+    session = manager.create("coder", session_id="session-one")
+    session.start_run("run-one")
+    session.append(ChatMessage.user("first"))
+    initial = session.load_since()
+    assert initial is not None
+    manager.get(session.address).append(ChatMessage.note("written by another accessor"))
+
+    delta = session.append_many(
+        [ChatMessage.assistant(model="test", content="second")],
+        continuation_records=[_continuation_start()],
+        since=initial.cursor,
+    )
+
+    assert delta is not None
+    assert [message.role for message in delta.messages] == ["note", "assistant"]
+    assert [message.role for message in delta.active_messages] == ["note", "assistant"]
+    latest = session.load_since()
+    assert latest is not None and delta.cursor == latest.cursor
+    assert session.load_continuation() is not None
+
+
+def test_a_rejected_continuation_record_rolls_back_the_whole_append(manager) -> None:
+    session = manager.create("coder", session_id="session-one")
+    session.start_run("run-one")
+    session.append_many(
+        [ChatMessage.user("first")],
+        seen_skills=SeenSkillsUpdate(baseline=("alpha",)),
+        continuation_records=[_continuation_start()],
+    )
+    unsupported_version = {**_continuation_start(), "version": 2}
+    # Continuation steps start at one.
+    step_zero = {
+        "version": 1,
+        "type": "stream_delta",
+        "run_id": "run-one",
+        "timestamp": "2026-08-31T12:00:01+00:00",
+        "step": 0,
+        "content_delta": "lost",
+    }
+
+    for rejected in (unsupported_version, step_zero):
+        with pytest.raises(ChatSessionError):
+            session.append_many(
+                [ChatMessage.user("lost")],
+                seen_skills=SeenSkillsUpdate(baseline=(), added=("beta",)),
+                continuation_records=[rejected],
+            )
+
+    assert [message.content for message in session.load()] == ["first"]
+    assert manager.seen_skills(session.address) == frozenset({"alpha"})
+    state = session.load_continuation()
+    assert state is not None
+    assert state.steps == ()
+
+
+def test_compaction_checkpoint_commits_only_while_its_cursor_is_current(manager) -> None:
+    session = manager.create("coder", session_id="session-one")
+    session.append(ChatMessage.user("first"))
+    snapshot = session.load_since()
+    assert snapshot is not None
+    affinity = manager.prompt_cache_affinity_id(session.address)
+    checkpoint = ChatMessage.compaction_checkpoint(
+        summary="Summary.", projection=[], compacted_token_count=1
+    )
+    manager.get(session.address).append(ChatMessage.note("written by another accessor"))
+
+    epoch = PromptEpoch(
+        pins={PINNED_SKILL_CATALOG_SLOT: {"catalog": "new"}}, seen_skills=("alpha",)
+    )
+    stale = session.commit_compaction(checkpoint, since=snapshot.cursor, epoch=epoch)
+
+    assert stale is None
+    assert [message.role for message in session.load()] == ["user", "note"]
+    assert manager.prompt_pin(session.address, PINNED_SKILL_CATALOG_SLOT) is None
+    assert manager.seen_skills(session.address) is None
+    assert manager.prompt_cache_affinity_id(session.address) == affinity
+
+    current = session.load_since()
+    assert current is not None
+    committed = session.commit_compaction(checkpoint, since=current.cursor, epoch=epoch)
+
+    assert committed is not None
+    delta, rotated = committed
+    assert [message.id for message in delta.messages] == [checkpoint.id]
+    latest = session.load_since()
+    assert latest is not None and delta.cursor == latest.cursor
+    assert manager.prompt_pin(session.address, PINNED_SKILL_CATALOG_SLOT) == {"catalog": "new"}
+    assert manager.seen_skills(session.address) == frozenset({"alpha"})
+    assert manager.prompt_cache_affinity_id(session.address) == rotated != affinity
 
 
 def test_continuation_events_update_one_normalized_current_state(manager) -> None:
@@ -105,30 +214,6 @@ def test_continuation_events_update_one_normalized_current_state(manager) -> Non
         assert connection.execute("SELECT COUNT(*) FROM continuation_operations").fetchone()[0] == 1
 
 
-def test_continuation_steps_start_at_one_and_a_rejected_record_rolls_back_its_append(
-    manager,
-) -> None:
-    session = manager.create("coder", session_id="continuation-steps")
-    session.start_run("run-one")
-    session.append_continuation_records([_continuation_start()])
-    step_zero = {
-        "version": 1,
-        "type": "stream_delta",
-        "run_id": "run-one",
-        "timestamp": "2026-08-31T12:00:01+00:00",
-        "step": 0,
-        "content_delta": "lost",
-    }
-
-    with pytest.raises(ChatSessionError):
-        session.append_many([ChatMessage.user("not committed")], continuation_records=[step_zero])
-
-    assert session.load() == []
-    state = session.load_continuation()
-    assert state is not None
-    assert state.steps == ()
-
-
 def test_skill_activation_cache_follows_checkpoints_and_history_edits(manager, monkeypatch) -> None:
     session = manager.create("coder", session_id="skill-cache")
     session.append(ChatMessage.user("start"))
@@ -177,85 +262,35 @@ def test_skill_activation_cache_follows_checkpoints_and_history_edits(manager, m
     assert manager.get(session.address).activated_skill_contents() == expected
 
 
-def test_fork_inherits_history_but_not_activity_or_continuation(manager) -> None:
-    source = manager.create("coder", session_id="source")
-    source.append_many(
-        [ChatMessage.user("hello"), ChatMessage.assistant(model="test", content="hi")]
-    )
-    source_address = _address("coder", "source")
-    settle_run(manager, source_address, "run-1")
-    source.start_run("run-one")
-    source.append_continuation_record(_continuation_start())
+def test_edit_targets_only_an_own_plain_text_user_message_after_the_latest_takeover() -> None:
+    first = ChatMessage.user("first")
+    replacement = ChatMessage.user("replacement")
 
-    forked = asyncio.run(manager.fork(source_address, target_agent_id="reviewer"))
+    assert editable_session_message_index([first, replacement], replacement.id) == 1
+    with pytest.raises(ChatSessionError, match="non-empty"):
+        editable_session_message_index([first], "")
+    with pytest.raises(ChatSessionError, match="not active"):
+        editable_session_message_index([replacement], first.id)
 
-    # The fork's current view shows the inherited history; its own audit is empty.
-    assert forked.load_active() == source.load_active()
-    assert forked.load() == []
-    assert forked.load_continuation() is None
-    # The latest completion is the source's own; the fork completed no Run, and
-    # an inherited Run's id marks nothing read there.
-    assert manager.list_completion_activity([(None, "reviewer")]) == {(None, "reviewer"): []}
-    assert manager.mark_terminal_run_read(forked.address, "run-1")["marked_read"] is False
-    source_activity = manager.list_completion_activity([(None, "coder")])[(None, "coder")]
-    assert [row["unread_run_id"] for row in source_activity] == ["run-1"]
-    metadata = manager.get_metadata(forked.address)
-    assert metadata[FORK_SOURCE_META_KEY]["session_id"] == "source"
-    # A fork into another Agent's scope starts its own prompt-cache lineage.
-    assert manager.prompt_cache_affinity_id(forked.address) != manager.prompt_cache_affinity_id(
-        source_address
-    )
+    structured = ChatMessage.user([])
+    with pytest.raises(ChatSessionError, match="plain-text"):
+        editable_session_message_index([structured], structured.id)
+
+    takeover = ChatMessage.agent_takeover(from_address="alpha", to_address="beta")
+    with pytest.raises(ChatSessionError, match="takeover"):
+        editable_session_message_index([first, takeover], first.id)
 
 
-def test_metadata_value_reads_one_projected_or_residual_value(manager, monkeypatch) -> None:
-    address = _address("coder", "narrow")
-    manager.create(address.agent_id, session_id=address.session_id)
-    policy = {"enabled": False}
-    manager.set_metadata(address, {"compaction_policy": policy, "title": "Named", "flag": None})
+def test_deferred_notes_keep_their_existing_ordering(manager) -> None:
+    session = manager.create("coder", session_id="session-one")
+    session.begin_defer_notes()
+    session.add_note("first")
+    session.add_note("second")
 
-    def no_metadata_decode(_address):
-        raise AssertionError("a single value must not decode the complete metadata")
+    session.flush_deferred_notes()
 
-    with monkeypatch.context() as patch:
-        patch.setattr(manager._store, "metadata", no_metadata_decode)
-        assert manager.metadata_value(address, "compaction_policy") == policy
-        assert manager.metadata_value(address, "title") == "Named"
-        assert manager.metadata_value(address, "flag") is None
-        assert manager.metadata_value(address, "missing") is None
-    # A projected value must fit its column; a failed write changes nothing.
-    with pytest.raises(ChatSessionError, match="compaction_policy must be an object"):
-        manager.set_metadata(address, {"compaction_policy": "not-an-object"})
-    assert manager.metadata_value(address, "compaction_policy") == policy
-    manager.set_metadata(address, {"flag": True})
-    assert manager.metadata_value(address, "flag") is True
-    assert manager.metadata_value(address, "title") is None
-    with pytest.raises(SessionNotFoundError):
-        manager.metadata_value(_address("coder", "missing"), "title")
-
-
-def test_prompt_cache_affinity_id_is_prompt_state_not_metadata(manager, monkeypatch) -> None:
-    address = _address("coder", "affinity")
-    session = manager.create(address.agent_id, session_id=address.session_id)
-    default = manager.prompt_cache_affinity_id(address)
-    assert manager.prompt_cache_affinity_id(address) == default
-    user = ChatMessage.user("first")
-    session.append(user)
-    edited = session.apply_edit(user.id, [ChatMessage.user("second")])
-
-    def no_metadata_decode(_address):
-        raise AssertionError("the affinity id must not decode the complete metadata")
-
-    with monkeypatch.context() as patch:
-        patch.setattr(manager._store, "metadata", no_metadata_decode)
-        assert manager.prompt_cache_affinity_id(address) == edited.prompt_cache_affinity_id
-    assert edited.prompt_cache_affinity_id != default
-    assert "prompt_cache_affinity_id" not in manager.get_metadata(address)
-    with pytest.raises(ChatSessionError, match="dedicated APIs"):
-        manager.set_metadata(address, {"prompt_cache_affinity_id": "chosen"})
-    with pytest.raises(ChatSessionError, match="dedicated APIs"):
-        manager.set_metadata(address, {"pinned_skill_catalog": {"catalog_text": "x"}})
-    with pytest.raises(SessionNotFoundError):
-        manager.prompt_cache_affinity_id(_address("coder", "missing"))
+    assert [message.content for message in session.load()] == ["first", "second"]
+    assert [message.content for message in session.drain_pending_notes()] == ["first", "second"]
 
 
 def test_tool_result_persisted_needs_the_call_and_its_result_in_that_session(manager) -> None:
@@ -280,77 +315,6 @@ def test_tool_result_persisted_needs_the_call_and_its_result_in_that_session(man
     assert persisted(other.address) is False
     with pytest.raises(SessionNotFoundError):
         persisted(_address("coder", "missing"))
-
-
-def _count_writes(manager, monkeypatch) -> list[object]:
-    database = manager._store.database
-    original = database.write
-    writes: list[object] = []
-
-    def counted(fn, **kwargs):
-        writes.append(fn)
-        return original(fn, **kwargs)
-
-    monkeypatch.setattr(database, "write", counted)
-    return writes
-
-
-def _state_revision(manager, address) -> int:
-    return int(
-        manager._store._read(
-            lambda connection: connection.execute(
-                "SELECT state_revision FROM sessions WHERE project_id = ? AND agent_id = ? "
-                "AND session_id = ? AND state = 'live'",
-                (address.project_id or "", address.agent_id, address.session_id),
-            ).fetchone()[0]
-        )
-    )
-
-
-def test_get_or_create_reads_an_existing_session_without_a_write(manager, monkeypatch) -> None:
-    address = _address("coder", "existing")
-    writes = _count_writes(manager, monkeypatch)
-
-    created = manager.get_or_create(address)
-    assert len(writes) == 1
-    assert manager.get_or_create(address).address == created.address
-    assert len(writes) == 1
-
-
-def test_ensure_metadata_writes_only_a_real_change(manager, monkeypatch) -> None:
-    address = _address("coder", "channel")
-    writes = _count_writes(manager, monkeypatch)
-
-    def route(metadata):
-        metadata["platform"] = "telegram"
-
-    with pytest.raises(SessionNotFoundError):
-        manager.ensure_metadata(address, route)
-    assert writes == []
-
-    previous, updated = manager.ensure_metadata(address, route, create_missing=True)
-    # A missing Session and its metadata commit together.
-    assert len(writes) == 1
-    assert previous == {}
-    assert updated == {"platform": "telegram"}
-    assert manager.get_metadata(address)["platform"] == "telegram"
-
-    revision = _state_revision(manager, address)
-    previous, updated = manager.ensure_metadata(address, route, create_missing=True)
-    assert len(writes) == 1
-    assert previous == updated == manager.get_metadata(address)
-    assert _state_revision(manager, address) == revision
-
-    manager.set_title(address, "Concurrent title")
-    writes.clear()
-    previous, updated = manager.ensure_metadata(
-        address, lambda metadata: metadata.__setitem__("platform", "discord")
-    )
-    # The writer reapplies the mutation to the latest row, keeping other edits.
-    assert len(writes) == 1
-    assert previous["platform"] == "telegram"
-    assert manager.get_metadata(address)["platform"] == "discord"
-    assert manager.get_metadata(address)["title"] == "Concurrent title"
 
 
 def test_role_specific_relational_message_storage_round_trips(
@@ -512,44 +476,3 @@ def test_role_specific_relational_message_storage_round_trips(
         session_id=forked.address.session_id,
     ).hits
     assert [(hit.message_id, hit.address) for hit in fork_hits] == [(user.id, forked.address)]
-
-
-def test_session_list_order_queries_use_declared_indexes(manager, tmp_path) -> None:
-    manager.create("coder", session_id="one", project_id=None)
-    manager.create("reviewer", session_id="two", project_id="project")
-
-    def plan(connection: sqlite3.Connection, sql: str, params: tuple[object, ...]) -> str:
-        return " ".join(
-            str(row[3]) for row in connection.execute("EXPLAIN QUERY PLAN " + sql, params)
-        )
-
-    scopes = ("", "coder", "project", "reviewer", store_values._LIST_VISIBILITY_BACKGROUND)
-    with sqlite3.connect(tmp_path / "sessions.db") as connection:
-        scoped_plan = plan(
-            connection,
-            "SELECT session_id FROM sessions WHERE state = 'live' AND project_id = ? "
-            "AND agent_id = ? ORDER BY last_activity_at DESC, session_id LIMIT 20",
-            ("", "coder"),
-        )
-        global_plan = plan(
-            connection,
-            "WITH candidates AS (SELECT session_id, last_activity_at, project_id, agent_id "
-            "FROM sessions WHERE state = 'live' AND ((project_id = ? AND agent_id = ?) "
-            "OR (project_id = ? AND agent_id = ?)) AND (list_visibility_mask & ?) = 0) "
-            "SELECT session_id FROM candidates ORDER BY last_activity_at DESC, project_id, "
-            "agent_id, session_id LIMIT 20",
-            scopes,
-        )
-        count_plan = plan(
-            connection,
-            "SELECT COUNT(*) FROM sessions WHERE state = 'live' AND ((project_id = ? AND "
-            "agent_id = ?) OR (project_id = ? AND agent_id = ?)) "
-            "AND (list_visibility_mask & ?) = 0",
-            scopes,
-        )
-
-    assert "sessions_live_scope_order" in scoped_plan
-    assert "USE TEMP B-TREE" not in scoped_plan
-    assert "sessions_live_global_order" in global_plan
-    assert "USE TEMP B-TREE" not in global_plan
-    assert "COVERING INDEX sessions_live_scope_visibility" in count_plan

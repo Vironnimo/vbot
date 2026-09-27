@@ -80,181 +80,141 @@ def _rows(connection: sqlite3.Connection, sql: str, *params: object) -> list[tup
 
 
 @pytest.mark.asyncio
-async def test_a_fork_shares_history_until_its_ancestor_is_deleted(tmp_path: Path) -> None:
-    manager = ChatSessionManager(tmp_path)
-    try:
-        source = manager.create("agent", session_id="source")
-        _tool_run(source, "run-one", "needle")
-        child = await manager.fork(source.address)
-        grandchild = await manager.fork(child.address)
-        with sqlite3.connect(manager._store.path) as connection:
-            shared = _rows(connection, "SELECT COUNT(*) FROM entries")
-        assert shared == [(5,)]
-        # Later source work and an edit of the forked question change no fork.
-        source.append(ChatMessage.user("source only"))
-        question = source.load_active()[0]
-        source.apply_edit(question.id, [ChatMessage.user("rewritten")])
-        inherited = source.load()[:5]
-        assert child.load_active() == grandchild.load_active() == inherited
-        revisions = [history_revision(manager, fork.address) for fork in (child, grandchild)]
+async def test_a_fork_shares_history_until_its_ancestor_is_deleted(
+    manager: ChatSessionManager,
+) -> None:
+    source = manager.create("agent", session_id="source")
+    _tool_run(source, "run-one", "needle")
+    child = await manager.fork(source.address)
+    grandchild = await manager.fork(child.address)
+    with sqlite3.connect(manager._store.path) as connection:
+        shared = _rows(connection, "SELECT COUNT(*) FROM entries")
+    assert shared == [(5,)]
+    # Later source work and an edit of the forked question change no fork.
+    source.append(ChatMessage.user("source only"))
+    question = source.load_active()[0]
+    source.apply_edit(question.id, [ChatMessage.user("rewritten")])
+    inherited = source.load()[:5]
+    assert child.load_active() == grandchild.load_active() == inherited
+    revisions = [history_revision(manager, fork.address) for fork in (child, grandchild)]
 
-        manager.delete(source.address)
+    manager.delete(source.address)
 
-        assert child.load_active() == grandchild.load_active() == inherited
-        assert child.load() == grandchild.load() == []
-        assert [history_revision(manager, fork.address) for fork in (child, grandchild)] == [
-            revision + 1 for revision in revisions
-        ]
-        with sqlite3.connect(manager._store.path) as connection:
-            assert _rows(connection, "SELECT COUNT(*) FROM session_lineage") == [(0,)]
-            assert _rows(connection, "PRAGMA foreign_key_check") == []
-            for fork in (child, grandchild):
-                key = _rows(
-                    connection, "SELECT session_key FROM sessions WHERE session_id = ?", fork.id
-                )[0][0]
-                # Each fork holds its own current copy of the five inherited entries.
-                assert _rows(
-                    connection,
-                    "SELECT seq, role FROM entries WHERE session_key = ? "
-                    "AND superseded_at_seq IS NULL ORDER BY seq",
-                    key,
-                ) == [
-                    (0, "user"),
-                    (1, "assistant"),
-                    (2, "tool"),
-                    (3, "assistant"),
-                    (4, "run_summary"),
-                ]
-                # The copied Tool call keeps its outcome and points at the copied result.
-                assert _rows(
-                    connection,
-                    "SELECT c.status, c.result_ok, c.error_code, r.session_key, r.role, "
-                    "p.payload_id, p.payload_json FROM tool_calls AS c "
-                    "JOIN entries AS a ON a.entry_key = c.entry_key "
-                    "JOIN entries AS r ON r.entry_key = c.result_entry_key "
-                    "JOIN tool_result_payloads AS p ON p.call_key = c.call_key "
-                    "WHERE a.session_key = ?",
-                    key,
-                ) == [
-                    ("failed", 0, "boom", key, "tool", "res_run-one", '{"text": "needle payload"}')
-                ]
-                # The copied Run is inherited: it never runs, reports no activity,
-                # and its summary entry is the copied one.
-                assert _rows(
-                    connection,
-                    "SELECT r.run_id, r.status, r.inherited, r.contributes_to_activity, "
-                    "e.session_key, e.role, (SELECT COUNT(*) FROM run_change_paths AS p "
-                    "WHERE p.run_key = r.run_key) FROM runs AS r "
-                    "JOIN entries AS e ON e.entry_key = r.end_entry_key WHERE r.session_key = ?",
-                    key,
-                ) == [("run-one", "completed", 1, 0, key, "run_summary", 1)]
+    assert child.load_active() == grandchild.load_active() == inherited
+    assert child.load() == grandchild.load() == []
+    assert [history_revision(manager, fork.address) for fork in (child, grandchild)] == [
+        revision + 1 for revision in revisions
+    ]
+    with sqlite3.connect(manager._store.path) as connection:
+        assert _rows(connection, "SELECT COUNT(*) FROM session_lineage") == [(0,)]
+        assert _rows(connection, "PRAGMA foreign_key_check") == []
+        for fork in (child, grandchild):
+            key = _rows(
+                connection, "SELECT session_key FROM sessions WHERE session_id = ?", fork.id
+            )[0][0]
+            # Each fork holds its own current copy of the five inherited entries.
             assert _rows(
                 connection,
-                "SELECT COUNT(*) FROM tool_result_payloads WHERE payload_id = ?",
-                "res_run-one",
-            ) == [(2,)]
-        with pytest.raises(ChatSessionError, match="inherited Run"):
-            child.start_run("run-one")
-        # Provenance follows the direct source: the child's is gone, the grandchild's stays.
-        assert FORK_SOURCE_META_KEY not in manager.get_metadata(child.address)
-        assert manager.get_metadata(grandchild.address)[FORK_SOURCE_META_KEY]["session_id"] == (
-            child.id
-        )
-        hits = manager.search_messages("needle", project_id=None, agent_id="agent").hits
-        assert sorted((hit.address.session_id, hit.role) for hit in hits) == sorted(
-            (fork.id, role)
-            for fork in (child, grandchild)
-            for role in ("user", "tool", "assistant")
-        )
-    finally:
-        manager.close()
-
-
-@pytest.mark.asyncio
-async def test_ancestor_delete_preserves_additive_entry_columns(tmp_path: Path) -> None:
-    manager = ChatSessionManager(tmp_path)
-    try:
-        source = manager.create("agent", session_id="source")
-        source.append(ChatMessage.user("retained text"))
-
-        def add_newer_fields(connection: sqlite3.Connection) -> None:
-            connection.execute("ALTER TABLE entries ADD COLUMN future_text TEXT")
-            connection.execute('ALTER TABLE entries ADD COLUMN "references" TEXT')
-            connection.execute(
-                "ALTER TABLE entries ADD COLUMN future_count INTEGER NOT NULL DEFAULT 0"
-            )
-            connection.execute(
-                "UPDATE entries SET future_text = 'durable payload', future_count = 42, "
-                "\"references\" = 'retained reference'"
-            )
-
-        manager.database.write(add_newer_fields)
-        child = await manager.fork(source.address)
-        grandchild = await manager.fork(child.address)
-
-        manager.delete(source.address)
-        manager.delete(child.address)
-
-        assert [message.content for message in grandchild.load_active()] == ["retained text"]
-        with manager.database.read() as connection:
-            assert _rows(
-                connection, 'SELECT future_text, future_count, "references" FROM entries'
-            ) == [("durable payload", 42, "retained reference")]
-            assert _rows(connection, "PRAGMA foreign_key_check") == []
-    finally:
-        manager.close()
-
-
-@pytest.mark.asyncio
-async def test_ancestor_delete_preserves_additive_run_change_path_columns(tmp_path: Path) -> None:
-    manager = ChatSessionManager(tmp_path)
-    try:
-        source = manager.create("agent", session_id="source")
-        run = source.start_run("run-one")
-        run.append(ChatMessage.user("retained text"))
-        complete_run(run, _summary("run-one"))
-        inherited = source.load_active()
-
-        def add_newer_fields(connection: sqlite3.Connection) -> None:
-            connection.execute("ALTER TABLE run_change_paths ADD COLUMN future_text TEXT")
-            connection.execute('ALTER TABLE run_change_paths ADD COLUMN "references" TEXT')
-            connection.execute(
-                "ALTER TABLE run_change_paths ADD COLUMN future_count INTEGER NOT NULL DEFAULT 0"
-            )
-            connection.execute(
-                "UPDATE run_change_paths SET future_text = 'durable path payload', "
-                "future_count = 42, \"references\" = 'retained path reference'"
-            )
-
-        manager.database.write(add_newer_fields)
-        child = await manager.fork(source.address)
-        manager.delete(source.address)
-        grandchild = await manager.fork(child.address)
-        manager.delete(child.address)
-
-        assert grandchild.load_active() == inherited
-        with manager.database.read() as connection:
-            assert _rows(
-                connection,
-                'SELECT p.ordinal, p.path, p.future_text, p.future_count, p."references", '
-                "r.run_id, r.inherited, s.session_id FROM run_change_paths AS p "
-                "JOIN runs AS r ON r.run_key = p.run_key "
-                "JOIN sessions AS s ON s.session_key = r.session_key",
+                "SELECT seq, role FROM entries WHERE session_key = ? "
+                "AND superseded_at_seq IS NULL ORDER BY seq",
+                key,
             ) == [
-                (
-                    0,
-                    "notes.md",
-                    "durable path payload",
-                    42,
-                    "retained path reference",
-                    "run-one",
-                    1,
-                    grandchild.id,
-                )
+                (0, "user"),
+                (1, "assistant"),
+                (2, "tool"),
+                (3, "assistant"),
+                (4, "run_summary"),
             ]
-            assert _rows(connection, "PRAGMA foreign_key_check") == []
-    finally:
-        manager.close()
+            # The copied Tool call keeps its outcome and points at the copied result.
+            assert _rows(
+                connection,
+                "SELECT c.status, c.result_ok, c.error_code, r.session_key, r.role, "
+                "p.payload_id, p.payload_json FROM tool_calls AS c "
+                "JOIN entries AS a ON a.entry_key = c.entry_key "
+                "JOIN entries AS r ON r.entry_key = c.result_entry_key "
+                "JOIN tool_result_payloads AS p ON p.call_key = c.call_key "
+                "WHERE a.session_key = ?",
+                key,
+            ) == [("failed", 0, "boom", key, "tool", "res_run-one", '{"text": "needle payload"}')]
+            # The copied Run is inherited: it never runs, reports no activity,
+            # and its summary entry is the copied one.
+            assert _rows(
+                connection,
+                "SELECT r.run_id, r.status, r.inherited, r.contributes_to_activity, "
+                "e.session_key, e.role, (SELECT COUNT(*) FROM run_change_paths AS p "
+                "WHERE p.run_key = r.run_key) FROM runs AS r "
+                "JOIN entries AS e ON e.entry_key = r.end_entry_key WHERE r.session_key = ?",
+                key,
+            ) == [("run-one", "completed", 1, 0, key, "run_summary", 1)]
+        assert _rows(
+            connection,
+            "SELECT COUNT(*) FROM tool_result_payloads WHERE payload_id = ?",
+            "res_run-one",
+        ) == [(2,)]
+    with pytest.raises(ChatSessionError, match="inherited Run"):
+        child.start_run("run-one")
+    # Provenance follows the direct source: the child's is gone, the grandchild's stays.
+    assert FORK_SOURCE_META_KEY not in manager.get_metadata(child.address)
+    assert manager.get_metadata(grandchild.address)[FORK_SOURCE_META_KEY]["session_id"] == (
+        child.id
+    )
+    hits = manager.search_messages("needle", project_id=None, agent_id="agent").hits
+    assert sorted((hit.address.session_id, hit.role) for hit in hits) == sorted(
+        (fork.id, role) for fork in (child, grandchild) for role in ("user", "tool", "assistant")
+    )
+
+
+@pytest.mark.asyncio
+async def test_ancestor_delete_preserves_additive_columns(manager: ChatSessionManager) -> None:
+    """Columns a newer vBot added survive every materialized copy."""
+    source = manager.create("agent", session_id="source")
+    run = source.start_run("run-one")
+    run.append(ChatMessage.user("retained text"))
+    complete_run(run, _summary("run-one"))
+    inherited = source.load_active()
+
+    def add_newer_fields(connection: sqlite3.Connection) -> None:
+        for table in ("entries", "run_change_paths"):
+            connection.execute(f"ALTER TABLE {table} ADD COLUMN future_text TEXT")
+            connection.execute(f'ALTER TABLE {table} ADD COLUMN "references" TEXT')
+            connection.execute(
+                f"ALTER TABLE {table} ADD COLUMN future_count INTEGER NOT NULL DEFAULT 0"
+            )
+            connection.execute(
+                f"UPDATE {table} SET future_text = 'durable {table}', future_count = 42, "
+                f"\"references\" = 'retained {table}'"
+            )
+
+    manager.database.write(add_newer_fields)
+    child = await manager.fork(source.address)
+    manager.delete(source.address)
+    grandchild = await manager.fork(child.address)
+    manager.delete(child.address)
+
+    assert grandchild.load_active() == inherited
+    with manager.database.read() as connection:
+        assert _rows(
+            connection, 'SELECT DISTINCT future_text, future_count, "references" FROM entries'
+        ) == [("durable entries", 42, "retained entries")]
+        assert _rows(
+            connection,
+            'SELECT p.ordinal, p.path, p.future_text, p.future_count, p."references", '
+            "r.run_id, r.inherited, s.session_id FROM run_change_paths AS p "
+            "JOIN runs AS r ON r.run_key = p.run_key "
+            "JOIN sessions AS s ON s.session_key = r.session_key",
+        ) == [
+            (
+                0,
+                "notes.md",
+                "durable run_change_paths",
+                42,
+                "retained run_change_paths",
+                "run-one",
+                1,
+                grandchild.id,
+            )
+        ]
+        assert _rows(connection, "PRAGMA foreign_key_check") == []
 
 
 def _unread_run_ids(manager: ChatSessionManager) -> dict[str, str | None]:
@@ -264,38 +224,34 @@ def _unread_run_ids(manager: ChatSessionManager) -> dict[str, str | None]:
 
 @pytest.mark.asyncio
 async def test_the_latest_completion_names_an_own_run_across_fork_and_delete(
-    tmp_path: Path,
+    manager: ChatSessionManager,
 ) -> None:
-    manager = ChatSessionManager(tmp_path)
-    try:
-        source = manager.create("agent", session_id="source")
-        _tool_run(source, "run-one", "needle")
-        fork = await manager.fork(source.address)
-        # A fork starts without a completion; an inherited Run's id marks nothing read.
-        assert _unread_run_ids(manager) == {"source": "run-one"}
-        assert manager.mark_terminal_run_read(fork.address, "run-one")["marked_read"] is False
-        _tool_run(fork, "fork-run", "fork")
-        assert _unread_run_ids(manager) == {"source": "run-one", fork.id: "fork-run"}
+    source = manager.create("agent", session_id="source")
+    _tool_run(source, "run-one", "needle")
+    fork = await manager.fork(source.address)
+    # A fork starts without a completion; an inherited Run's id marks nothing read.
+    assert _unread_run_ids(manager) == {"source": "run-one"}
+    assert manager.mark_terminal_run_read(fork.address, "run-one")["marked_read"] is False
+    _tool_run(fork, "fork-run", "fork")
+    assert _unread_run_ids(manager) == {"source": "run-one", fork.id: "fork-run"}
 
-        # Materializing the inherited Run gives it a new key in the fork; the
-        # fork's completion still names its own Run.
-        manager.delete(source.address)
+    # Materializing the inherited Run gives it a new key in the fork; the
+    # fork's completion still names its own Run.
+    manager.delete(source.address)
 
-        assert _unread_run_ids(manager) == {fork.id: "fork-run"}
-        with sqlite3.connect(manager._store.path) as connection:
-            assert _rows(
-                connection,
-                "SELECT r.run_id, r.inherited FROM sessions AS s "
-                "JOIN runs AS r ON r.run_key = s.latest_completion_run_key "
-                "AND r.session_key = s.session_key WHERE s.session_id = ?",
-                fork.id,
-            ) == [("fork-run", 0)]
-            assert _rows(connection, "PRAGMA foreign_key_check") == []
-        assert manager.mark_terminal_run_read(fork.address, "run-one")["marked_read"] is False
-        assert manager.mark_terminal_run_read(fork.address, "fork-run")["marked_read"] is True
-        assert _unread_run_ids(manager) == {fork.id: None}
-    finally:
-        manager.close()
+    assert _unread_run_ids(manager) == {fork.id: "fork-run"}
+    with sqlite3.connect(manager._store.path) as connection:
+        assert _rows(
+            connection,
+            "SELECT r.run_id, r.inherited FROM sessions AS s "
+            "JOIN runs AS r ON r.run_key = s.latest_completion_run_key "
+            "AND r.session_key = s.session_key WHERE s.session_id = ?",
+            fork.id,
+        ) == [("fork-run", 0)]
+        assert _rows(connection, "PRAGMA foreign_key_check") == []
+    assert manager.mark_terminal_run_read(fork.address, "run-one")["marked_read"] is False
+    assert manager.mark_terminal_run_read(fork.address, "fork-run")["marked_read"] is True
+    assert _unread_run_ids(manager) == {fork.id: None}
 
 
 def _populate(manager: ChatSessionManager, session_id: str) -> ChatSession:
@@ -379,41 +335,38 @@ def _table_counts(path: Path) -> dict[str, int]:
     return counts
 
 
-def test_deleting_a_session_removes_exactly_what_it_owns(tmp_path: Path) -> None:
-    manager = ChatSessionManager(tmp_path)
-    try:
-        _populate(manager, "kept")
-        before = _table_counts(manager._store.path)
-        removed = _populate(manager, "removed")
-        populated = _table_counts(manager._store.path)
-        # The second Session owns rows in every Session-owned table the first
-        # one does, and shares one prompt blob with it.
-        shared_tables = {"store_meta", "prompt_blobs"}
-        owned = {
-            table
-            for table, count in before.items()
-            if count and table not in shared_tables and not table.startswith("kernel_")
-        }
-        assert owned <= {table for table, count in populated.items() if count > before[table]}
-        assert {"tool_result_payloads", "continuation_step_chunks", "user_entry_senders"} <= owned
-        assert populated["prompt_blobs"] == before["prompt_blobs"] + 1
+def test_deleting_a_session_removes_exactly_what_it_owns(manager: ChatSessionManager) -> None:
+    _populate(manager, "kept")
+    before = _table_counts(manager._store.path)
+    removed = _populate(manager, "removed")
+    populated = _table_counts(manager._store.path)
+    # The second Session owns rows in every Session-owned table the first
+    # one does, and shares one prompt blob with it.
+    shared_tables = {"store_meta", "prompt_blobs"}
+    owned = {
+        table
+        for table, count in before.items()
+        if count and table not in shared_tables and not table.startswith("kernel_")
+    }
+    assert owned <= {table for table, count in populated.items() if count > before[table]}
+    assert {"tool_result_payloads", "continuation_step_chunks", "user_entry_senders"} <= owned
+    assert populated["prompt_blobs"] == before["prompt_blobs"] + 1
 
-        manager.delete(removed.address)
+    manager.delete(removed.address)
 
-        assert _table_counts(manager._store.path) == before
-        with sqlite3.connect(manager._store.path) as connection:
-            assert _rows(connection, "PRAGMA foreign_key_check") == []
-            assert _rows(connection, "SELECT value_json FROM prompt_blobs ORDER BY blob_key") == [
-                ('{"catalog":"shared"}',),
-                ('{"files":"kept"}',),
-            ]
-    finally:
-        manager.close()
+    assert _table_counts(manager._store.path) == before
+    with sqlite3.connect(manager._store.path) as connection:
+        assert _rows(connection, "PRAGMA foreign_key_check") == []
+        assert _rows(connection, "SELECT value_json FROM prompt_blobs ORDER BY blob_key") == [
+            ('{"catalog":"shared"}',),
+            ('{"files":"kept"}',),
+        ]
 
 
 @pytest.mark.asyncio
-async def test_deleting_an_owner_group_removes_exactly_its_sessions(tmp_path: Path) -> None:
-    manager = ChatSessionManager(tmp_path)
+async def test_deleting_an_owner_group_removes_exactly_its_sessions(
+    manager: ChatSessionManager,
+) -> None:
 
     async def populate(group_id: str) -> None:
         address = SessionAddress(None, "participant", group_id)
@@ -439,22 +392,19 @@ async def test_deleting_an_owner_group_removes_exactly_its_sessions(tmp_path: Pa
             receipts=[(0, f"{group_id}-delivery", "hash", "note", "note")],
         )
 
-    try:
-        await populate("kept")
-        before = _table_counts(manager._store.path)
-        await populate("removed")
-        populated = _table_counts(manager._store.path)
-        assert {
-            "temporary_session_bindings",
-            "temporary_group_titles",
-            "run_execution_owners",
-            "session_delivery_receipts",
-        } <= {table for table, count in populated.items() if count > before[table]}
+    await populate("kept")
+    before = _table_counts(manager._store.path)
+    await populate("removed")
+    populated = _table_counts(manager._store.path)
+    assert {
+        "temporary_session_bindings",
+        "temporary_group_titles",
+        "run_execution_owners",
+        "session_delivery_receipts",
+    } <= {table for table, count in populated.items() if count > before[table]}
 
-        assert await manager.delete_temporary_group(owner_name="swarm", group_id="removed") == 1
+    assert await manager.delete_temporary_group(owner_name="swarm", group_id="removed") == 1
 
-        assert _table_counts(manager._store.path) == before
-        with sqlite3.connect(manager._store.path) as connection:
-            assert _rows(connection, "PRAGMA foreign_key_check") == []
-    finally:
-        manager.close()
+    assert _table_counts(manager._store.path) == before
+    with sqlite3.connect(manager._store.path) as connection:
+        assert _rows(connection, "PRAGMA foreign_key_check") == []

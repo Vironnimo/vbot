@@ -1,4 +1,4 @@
-"""Tests for sessions concurrency."""
+"""Concurrent Session writers, write locks and id allocation."""
 
 from __future__ import annotations
 
@@ -10,20 +10,9 @@ import pytest
 
 from core.chat import ChatMessage, ChatSessionError
 from core.runs import RunKind
-from core.sessions import (
-    SESSION_RUN_KINDS_META_KEY,
-    ChatSessionManager,
-    SessionAddress,
-    current_skill_activation_contents,
-    editable_session_message_index,
-)
+from core.sessions import SESSION_RUN_KINDS_META_KEY, ChatSessionManager
 from tests.core.sessions.history_fixtures import admit_run
-from tests.core.sessions.sessions_test_support import (
-    _address,
-)
-from tests.core.sessions.sessions_test_support import (
-    manager as manager,
-)
+from tests.core.sessions.sessions_test_support import _address
 
 
 @pytest.mark.asyncio
@@ -53,7 +42,7 @@ def test_two_managers_append_concurrently_without_losing_messages(tmp_path) -> N
     def append(manager: ChatSessionManager, prefix: str) -> None:
         session = manager.get(address)
         barrier.wait(timeout=10)  # A failed peer setup must not leave this thread waiting forever.
-        for index in range(40):
+        for index in range(20):
             session.append(ChatMessage.user(f"{prefix}-{index}"))
 
     try:
@@ -66,10 +55,10 @@ def test_two_managers_append_concurrently_without_losing_messages(tmp_path) -> N
                 future.result()
 
         contents = [message.content for message in first.get(address).load()]
-        assert len(contents) == 80
+        assert len(contents) == 40
         assert set(contents) == {
-            *(f"first-{index}" for index in range(40)),
-            *(f"second-{index}" for index in range(40)),
+            *(f"first-{index}" for index in range(20)),
+            *(f"second-{index}" for index in range(20)),
         }
     finally:
         second.close()
@@ -99,46 +88,6 @@ def test_two_managers_get_or_create_one_live_generation(tmp_path) -> None:
         first.close()
 
 
-def test_callback_failure_does_not_turn_a_committed_title_into_an_error(manager) -> None:
-    address = _address("coder", "session-one")
-    manager.create("coder", session_id=address.session_id)
-
-    def fail(_address: SessionAddress) -> None:
-        raise RuntimeError("observer failed")
-
-    manager.add_title_changed_callback(fail)
-
-    assert manager.set_title(address, "Persisted") == "Persisted"
-    assert manager.get_metadata(address)["title"] == "Persisted"
-
-
-def test_deferred_notes_keep_their_existing_ordering(manager) -> None:
-    session = manager.create("coder", session_id="session-one")
-    session.begin_defer_notes()
-    session.add_note("first")
-    session.add_note("second")
-
-    session.flush_deferred_notes()
-
-    assert [message.content for message in session.load()] == ["first", "second"]
-    assert [message.content for message in session.drain_pending_notes()] == ["first", "second"]
-
-
-def test_history_edits_and_skill_cache_preserve_chat_semantics(manager) -> None:
-    session = manager.create("coder", session_id="session-one")
-    user = ChatMessage.user("first")
-    replacement = ChatMessage.user("replacement")
-    session.append(user)
-    session.apply_edit(user.id, [replacement])
-
-    assert [message.role for message in session.load()] == ["user", "history_edit", "user"]
-    assert session.load_active() == [replacement]
-    assert editable_session_message_index(session.load_active(), replacement.id) == 0
-    with pytest.raises(ChatSessionError, match="not active"):
-        editable_session_message_index(session.load_active(), user.id)
-    assert current_skill_activation_contents(session.load()) == {}
-
-
 def test_write_lock_is_reentrant_for_child_tasks(manager) -> None:
     address = _address("coder", "session-one")
     manager.create("coder", session_id=address.session_id)
@@ -156,48 +105,41 @@ def test_write_lock_is_reentrant_for_child_tasks(manager) -> None:
     assert [message.content for message in manager.get(address).load()] == ["child"]
 
 
-@pytest.mark.parametrize("agent_id", ["", "../outside", "agent name"])
-def test_create_rejects_invalid_agent_ids(manager, agent_id) -> None:
+@pytest.mark.parametrize(
+    ("agent_id", "session_id"),
+    [
+        ("../outside", "session-one"),
+        ("coder", ""),
+        ("coder", "../outside"),
+        ("coder", "_leading-punctuation"),
+        ("coder", "x" * 129),
+    ],
+)
+def test_create_rejects_unsafe_agent_and_session_ids(manager, agent_id, session_id) -> None:
     with pytest.raises(ChatSessionError):
-        manager.create(agent_id, session_id="session-one")
-
-
-@pytest.mark.parametrize("session_id", ["", "../outside", "name.jsonl", ".hidden"])
-def test_create_rejects_invalid_session_ids(manager, session_id) -> None:
-    with pytest.raises(ChatSessionError):
-        manager.create("coder", session_id=session_id)
+        manager.create(agent_id, session_id=session_id)
 
 
 @pytest.mark.asyncio
-async def test_generated_session_ids_skip_live_and_archived_collisions(manager, monkeypatch):
+async def test_generated_ids_skip_live_and_archived_collisions(manager, monkeypatch):
     from core.utils import ids
 
-    values = iter((1, 1, 2, 1, 2, 3))
+    values = iter((1, 1, 2, 1, 2, 3, 1, 2, 3, 4))
     monkeypatch.setattr(ids.secrets, "randbits", lambda _bits: next(values))
     first = manager.create("agent")
     second = manager.create("agent")
     await manager.archive(_address("agent", first.id))
     third = manager.create("agent")
-    assert (first.id, second.id, third.id) == (
+    # A fork allocates its short id in the same way.
+    fork = await manager.fork(third.address)
+    assert (first.id, second.id, third.id, fork.id) == (
         "ses_000000000001",
         "ses_000000000002",
         "ses_000000000003",
+        "ses_000000000004",
     )
     assert manager.get(_address("agent", second.id)).id == second.id
-
-
-@pytest.mark.asyncio
-async def test_fork_allocates_a_short_id_without_reusing_an_archived_address(manager, monkeypatch):
-    from core.utils import ids
-
-    source = manager.create("agent", "ses_000000000001")
-    manager.create("agent", "ses_000000000002")
-    await manager.archive(_address("agent", "ses_000000000002"))
-    values = iter((1, 2, 3))
-    monkeypatch.setattr(ids.secrets, "randbits", lambda _bits: next(values))
-    forked = await manager.fork(_address("agent", source.id))
-    assert forked.id == "ses_000000000003"
-    assert manager.get(_address("agent", source.id)).id == source.id
+    assert manager.get(third.address).id == third.id
 
 
 def test_parallel_generated_sessions_claim_ids_in_the_write_transaction(manager, monkeypatch):

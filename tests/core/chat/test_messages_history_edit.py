@@ -5,7 +5,6 @@ from datetime import UTC, datetime
 import pytest
 
 from core.chat import ChatMessage, ChatMessageValidationError
-from core.sessions import ChatSessionError, editable_session_message_index
 
 FIXED_TIMESTAMP = datetime(2026, 5, 3, 14, 30, tzinfo=UTC)
 
@@ -41,24 +40,3 @@ def test_history_edit_requires_only_a_target_message_id() -> None:
                 "content": "hidden mutation",
             }
         )
-
-
-def test_edit_targets_only_an_own_plain_text_user_message_after_the_latest_takeover() -> None:
-    first = ChatMessage.user("first", timestamp=FIXED_TIMESTAMP)
-    replacement = ChatMessage.user("replacement", timestamp=FIXED_TIMESTAMP)
-
-    assert editable_session_message_index([first, replacement], replacement.id) == 1
-    with pytest.raises(ChatSessionError, match="not active"):
-        editable_session_message_index([replacement], first.id)
-
-    structured = ChatMessage.user([], timestamp=FIXED_TIMESTAMP)
-    with pytest.raises(ChatSessionError, match="plain-text"):
-        editable_session_message_index([structured], structured.id)
-
-    takeover = ChatMessage.agent_takeover(
-        from_address="alpha",
-        to_address="beta",
-        timestamp=FIXED_TIMESTAMP,
-    )
-    with pytest.raises(ChatSessionError, match="takeover"):
-        editable_session_message_index([first, takeover], first.id)

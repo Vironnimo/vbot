@@ -1,6 +1,6 @@
 # Extension-owned Session execution
 
-Task-gated detail for `sessions.md` -> Extension-owned execution. Source: `core/sessions/_store_owned.py`, `_store_runs.py` (`admit_run`), `sessions.py`. The owner-bound creation/admission facade is `core/agents/temporary.py`; domain state belongs to the Extension. Tests: `tests/core/sessions/test_sessions_temporary.py`, `test_run_ownership.py`, `test_store_database.py`, `test_store_query_plans.py`, `test_lineage_storage.py`.
+Task-gated detail for `sessions.md` -> Extension-owned execution. Source: `core/sessions/_store_owned.py`, `_store_runs.py` (`admit_run`), `sessions.py`. The owner-bound creation/admission facade is `core/agents/temporary.py`; domain state belongs to the Extension. Tests: `tests/core/sessions/test_sessions_owner_managed.py`, `test_store_database.py`, `test_store_query_plans.py`, `test_lineage_storage.py`.
 
 ## Relations
 
