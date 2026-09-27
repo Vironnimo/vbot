@@ -21,13 +21,13 @@ from core.utils.paths import model_path
 from tests.core.tools.image_test_support import (
     ImageService,
     contract_refusal,
-    dispatch,
     failure,
     generate,
     image_registry,
     make_context,
     write_image,
 )
+from tests.core.tools.tools_test_support import dispatch_as_executor
 
 _TEXT_ONLY_REFUSAL = (
     "The configured image model only generates from text, so it cannot use source_images. "
@@ -67,7 +67,7 @@ async def test_generated_images_are_returned_as_local_file_facts(tmp_path: Path)
     registry = image_registry(service)
     context = make_context(tmp_path, IMAGE_GENERATION_TOOL_NAME)
 
-    result = await dispatch(registry, context, {"prompt": "a red fox"})
+    result = await dispatch_as_executor(registry, context, {"prompt": "a red fox"})
 
     # Model-facing data carries the path and useful file facts, without transport identity.
     assert result == {
@@ -247,7 +247,7 @@ async def test_unusable_calls_are_refused_before_generating(
     service = ImageService()
     context = make_context(tmp_path, IMAGE_GENERATION_TOOL_NAME)
 
-    result = await dispatch(image_registry(service), context, arguments)
+    result = await dispatch_as_executor(image_registry(service), context, arguments)
 
     assert result["ok"] is False
     assert result["error"] == error
@@ -268,8 +268,10 @@ async def test_a_text_only_model_refuses_source_images(tmp_path: Path) -> None:
     arguments = {"prompt": "make it rainy", "source_images": ["photo.png"]}
 
     # The profile contract refuses the field; without it, the Tool still refuses.
-    offered = await dispatch(registry, replace(context, input_contract=contract), arguments)
-    unoffered = await dispatch(registry, context, arguments)
+    offered = await dispatch_as_executor(
+        registry, replace(context, input_contract=contract), arguments
+    )
+    unoffered = await dispatch_as_executor(registry, context, arguments)
 
     assert offered["error"] == contract_refusal(
         "image_generation was not run:\n"

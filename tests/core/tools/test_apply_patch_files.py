@@ -17,7 +17,7 @@ from core.tools import apply_patch as apply_patch_module
 from core.tools import file_state as file_state_module
 from core.tools.change_tracker import ChangeTracker
 from core.tools.file_state import FileReadState
-from tests.core.tools.apply_patch_helpers import apply, call, context, registry, text, update
+from tests.core.tools.apply_patch_test_support import apply, call, context, registry, text, update
 
 BOM = b"\xef\xbb\xbf"
 

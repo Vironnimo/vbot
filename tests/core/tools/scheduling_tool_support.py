@@ -19,8 +19,9 @@ from core.calendar import CalendarEvent, CalendarService
 from core.providers.adapter import tool_result_text
 from core.tools.calendar import CALENDAR_TOOL_NAME, register_calendar_tool
 from core.tools.cron import CRON_TOOL_NAME, register_cron_tool
-from core.tools.tools import ToolContext, ToolRegistry, tool_failure
+from core.tools.tools import ToolContext, ToolRegistry
 from tests.core.automation.cron_test_support import make_service
+from tests.core.tools.tools_test_support import dispatch_as_executor
 
 SERVER_ZONE = "Europe/Berlin"
 JOB_PROMPT = "Lint the wiki and report broken links."
@@ -49,10 +50,7 @@ class _DispatchedTool:
             data_root=self.workspace,
             project_id=project_id,
         )
-        try:
-            envelope = asyncio.run(self.registry.dispatch(context, arguments, [self.tool_name]))
-        except ValueError as error:
-            envelope = tool_failure("invalid_arguments", str(error))
+        envelope = asyncio.run(dispatch_as_executor(self.registry, context, arguments))
         text = str(tool_result_text(json.dumps(envelope, ensure_ascii=False)))
         return envelope, text
 

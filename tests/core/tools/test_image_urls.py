@@ -21,12 +21,12 @@ from core.tools.image import ANALYZE_IMAGE_TOOL_NAME
 from tests.core.tools.image_test_support import (
     PNG,
     ImageService,
-    dispatch,
     failure,
     image_registry,
     make_context,
     write_image,
 )
+from tests.core.tools.tools_test_support import dispatch_as_executor
 from tests.core.tools.web_fetch_test_support import (
     StreamingSession,
     make_result,
@@ -100,7 +100,7 @@ class _Call:
 
     async def __call__(self, images: Any) -> dict[str, Any]:
         arguments = {"prompt": "What animals?", "images": images}
-        return await dispatch(self.registry, self.context, arguments)
+        return await dispatch_as_executor(self.registry, self.context, arguments)
 
     def contents(self) -> list[bytes] | None:
         """The bytes of each image the analysis received, or None when none ran."""

@@ -29,12 +29,12 @@ from tests.core.tools.image_test_support import (
     ImageService,
     analyze,
     contract_refusal,
-    dispatch,
     failure,
     image_registry,
     make_context,
     write_image,
 )
+from tests.core.tools.tools_test_support import dispatch_as_executor
 
 
 @pytest.fixture
@@ -228,7 +228,7 @@ async def test_unusable_local_images_name_the_files_meant_without_substituting(
     service = ImageService()
     context = make_context(photos, ANALYZE_IMAGE_TOOL_NAME)
 
-    result = await dispatch(
+    result = await dispatch_as_executor(
         image_registry(service), context, {"prompt": "Describe", "images": images}
     )
 
@@ -411,7 +411,7 @@ async def test_the_row_keeps_only_the_original_paths_without_writing_files(
     context = make_context(tmp_path, ANALYZE_IMAGE_TOOL_NAME, cwd=project)
     arguments = {"prompt": "Inspect", "images": [image.name]}
 
-    result = await dispatch(registry, context, arguments)
+    result = await dispatch_as_executor(registry, context, arguments)
     display = registry.display_for_call(
         ANALYZE_IMAGE_TOOL_NAME, arguments, context=context, result=result
     )
