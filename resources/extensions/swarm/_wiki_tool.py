@@ -585,20 +585,36 @@ def _miss_message(details: Json, page_id: str) -> str:
         if expected is not None and expected < current
         else text.WIKI_NOT_FOUND.format(current=current)
     ]
-    if len(passages) == 1:
+    # Closest passages often overlap by all but one line; show each line once.
+    distinct: list[Json] = []
+    for passage in passages:
+        if not any(set(_lines(passage)) & set(_lines(shown)) for shown in distinct):
+            distinct.append(passage)
+    if len(distinct) == 1:
         parts.append(
-            f"{text.WIKI_CLOSEST.format(line=passages[0]['line'])}\n{_passage(passages[0])}"
+            f"{text.WIKI_CLOSEST.format(line=distinct[0]['line'])}\n{_passage(distinct[0])}"
         )
-    elif passages:
+    elif distinct:
         parts.append(text.WIKI_CLOSEST_SEVERAL)
         parts.extend(
             f"{text.WIKI_PASSAGE_LINE.format(line=passage['line'])}\n{_passage(passage)}"
-            for passage in passages[:2]
+            for passage in distinct[:2]
         )
+    difference = details.get("difference")
+    if difference:
+        cut = difference["truncated"]
+        template = text.WIKI_FIRST_DIFFERENCE_CUT if cut else text.WIKI_FIRST_DIFFERENCE
+        page, copy = repr(difference["file"]), repr(difference["copy"])
+        parts.append(template.format(line=difference["line"], page=page, copy=copy))
     parts.append(
         text.WIKI_COPY_EXACTLY.format(call=call_text({"action": "read", "page_id": page_id}))
     )
     return "\n".join(parts)
+
+
+def _lines(passage: Json) -> range:
+    """Return the page lines a passage shows."""
+    return range(passage["line"], passage["line"] + passage["text"].count("\n") + 1)
 
 
 def _passage(passage: Json) -> str:

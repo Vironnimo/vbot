@@ -173,7 +173,11 @@ peer's text; each differing line and respelled word returns in the result's
 `test_wiki_old_text_must_not_rest_on_other_text`). Ambiguity is terminal; a copy
 resembling several passages sets `details.similar` and uses
 `WIKI_AMBIGUOUS_SIMILAR`. Misses carry bounded line hints (closest passages, or the line holding
-most of a one-line fragment) in `SwarmStoreError.details`. With an older revision,
+most of a one-line fragment) in `SwarmStoreError.details`, plus the first line where `old_text`
+differs from the closest passage (`fuzzy_match.first_difference`, the diagnosis `apply_patch`
+uses). The error shows each page line once, dropping a closest passage that overlaps a better
+one, and names that first difference: overlapping windows showed two nearly equal passages
+while the differing line lay beyond both excerpts (Sessions, 2026-09). With an older revision,
 only a targeted edit without a title change may proceed. Title changes, delete,
 restore and future revisions otherwise keep strict revision checks. Delete retains
 history, and restore creates a new live revision from the chosen historical content.

@@ -437,6 +437,7 @@ def _mutate(
                             {"line": item.line, "text": item.text, "truncated": item.truncated}
                             for item in edit.passages
                         ],
+                        "difference": edit.difference,
                     },
                 )
             content, line, notes = edit.content, edit.line, list(edit.notes)

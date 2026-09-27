@@ -198,6 +198,13 @@ WIKI_NOT_FOUND_STALE = (
 WIKI_CLOSEST = "Closest passage, at line {line}:"
 WIKI_CLOSEST_SEVERAL = "Closest passages:"
 WIKI_PASSAGE_LINE = "line {line}:"
+WIKI_FIRST_DIFFERENCE = (
+    "First difference, line {line}: the page has {page} where old_text has {copy}."
+)
+WIKI_FIRST_DIFFERENCE_CUT = (
+    "First difference, line {line}, in excerpts around it: the page has {page} where "
+    "old_text has {copy}."
+)
 WIKI_COPY_EXACTLY = "Copy old_text exactly from the page, or read it with {call}."
 WIKI_AMBIGUOUS = (
     "old_text occurs {count} times, {where}. Include neighboring text so it occurs only once."
