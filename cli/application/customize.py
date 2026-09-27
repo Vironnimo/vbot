@@ -201,11 +201,17 @@ def _checked_command(
         raise ApplicationError(f"Application preparation failed. Details: {log}")
 
 
+def _development_python(install: Installation) -> Path:
+    return contained(install.root, "development/environment") / (
+        "Scripts/python.exe" if os.name == "nt" else "bin/python"
+    )
+
+
 def _ensure_candidate_environment(install: Installation, source: Path) -> Path:
     """Create the private build environment without validating or changing source."""
 
     dev = contained(install.root, "development/environment")
-    python = dev / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    python = _development_python(install)
     if not python.is_file():
         from cli.application.dependencies import environment_creation_command
 
@@ -217,6 +223,33 @@ def _ensure_candidate_environment(install: Installation, source: Path) -> Path:
             environment_override=environment,
         )
     return python
+
+
+def _build_native_hosts(install: Installation, source: Path, output: Path, *, version: str) -> None:
+    """Compile the source's native hosts into ``output`` with the source's own recipe.
+
+    Source updates run this before the WebUI and dependency work, so a missing
+    compiler stops them within seconds.  Requires ``_ensure_candidate_environment``.
+    """
+    log = contained(install.root, "development/source-update.log")
+    native_script = (
+        "import sys\n"
+        "from pathlib import Path\n"
+        "from scripts.windows.native_hosts import compile_hosts\n"
+        "compile_hosts(Path(sys.argv[1]), Path(sys.argv[2]), version=sys.argv[3])\n"
+    )
+    python = str(_development_python(install))
+    try:
+        _checked_command(
+            source, [python, "-c", native_script, str(source), str(output), version], log
+        )
+    except ApplicationError as error:
+        raise ApplicationError(
+            "Rebuilding the changed Windows launchers failed. They need LLVM (clang-cl and "
+            "llvm-rc on PATH) and the Visual Studio C++ build tools with the Windows SDK; "
+            "install any that are missing, then run vbot update again. The running version "
+            f"is unchanged. Details: {log}"
+        ) from error
 
 
 def _node_version() -> str | None:
@@ -293,7 +326,7 @@ def _validate(install: Installation, working: Path, *, intent: str) -> str:
         )
     # Separate dev environment: release interpreter/dependencies are never mutated.
     dev = contained(install.root, "development/environment")
-    python = dev / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    python = _development_python(install)
     log = contained(install.root, "development/check.log")
     if not python.is_file():
         from cli.application.dependencies import environment_creation_command
@@ -330,13 +363,17 @@ def _candidate(
     base_version: str,
     revision: str,
     *,
-    rebuild_native_hosts: bool = False,
+    native_hosts: Path | None = None,
     source_version: str | None = None,
     native_source_digest: str | None = None,
     build_inputs: dict[str, str] | None = None,
     progress: Callable[[str], None] | None = None,
 ) -> str:
-    """Build application sources over a fresh copy of the exact selected runtime."""
+    """Build application sources over a fresh copy of the exact selected runtime.
+
+    ``native_hosts`` holds hosts compiled by ``_build_native_hosts``; they replace
+    the base runtime's hosts.
+    """
     from cli.application.payload import copy_application
 
     base = install.version(base_version)
@@ -369,9 +406,7 @@ def _candidate(
             copy_application(source, candidate / "app", install.install_shape)
         # Resolve this source's requirements into the candidate, never the base.
         site = candidate / "runtime" / "Lib" / "site-packages"
-        python = contained(install.root, "development/environment") / (
-            "Scripts/python.exe" if os.name == "nt" else "bin/python"
-        )
+        python = _development_python(install)
         extras = {
             "server": "server,windows-app",
             "server-desktop": "server,windows-app,desktop",
@@ -422,29 +457,9 @@ def _candidate(
             candidate / "runtime" / "vbot-runtime-inventory.json",
             {"schema_version": 1, "packages": inventory},
         )
-        if rebuild_native_hosts:
-            if progress:
-                progress("Building the Windows launchers")
-            if source_version is None:
-                raise ApplicationError("Native source candidates require a source version")
-            native_script = (
-                "import sys\n"
-                "from pathlib import Path\n"
-                "from scripts.windows.native_hosts import compile_hosts\n"
-                "compile_hosts(Path(sys.argv[1]), Path(sys.argv[2]), version=sys.argv[3])\n"
-            )
-            _checked_command(
-                source,
-                [
-                    str(python),
-                    "-c",
-                    native_script,
-                    str(source),
-                    str(candidate / "runtime"),
-                    source_version,
-                ],
-                contained(install.root, "development/source-update.log"),
-            )
+        if native_hosts is not None:
+            for host in native_hosts.iterdir():
+                shutil.copy2(host, candidate / "runtime" / host.name)
         if progress:
             progress("Verifying the prepared application")
         manifest = {

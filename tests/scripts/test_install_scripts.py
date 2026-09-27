@@ -827,6 +827,89 @@ def test_windows_dev_installer_routes_fresh_installs_to_native_main() -> None:
     assert "-Dev selects the native main installation" in script
 
 
+@pytest.mark.parametrize(
+    ("available", "llvm_installed", "expected"),
+    [
+        ("clang-cl,llvm-rc", False, None),
+        ("clang-cl", False, "llvm-rc not found"),
+        ("", True, "add {llvm_bin} to PATH"),
+        ("", False, "install LLVM (winget install LLVM.LLVM)"),
+    ],
+)
+def test_windows_dev_installer_warns_about_missing_launcher_build_tools(
+    tmp_path: Path, available: str, llvm_installed: bool, expected: str | None
+) -> None:
+    powershell = shutil.which("pwsh") or shutil.which("powershell")
+    if powershell is None:
+        pytest.skip("PowerShell is unavailable")
+    program_files = tmp_path / "Program Files"
+    llvm_bin = program_files / "LLVM" / "bin"
+    if llvm_installed:
+        llvm_bin.mkdir(parents=True)
+        (llvm_bin / "clang-cl.exe").write_bytes(b"")
+    harness = tmp_path / "build-tools-harness.ps1"
+    harness.write_text(
+        r"""param($Source, $ProgramFiles, $Available)
+Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
+$env:ProgramFiles = $ProgramFiles
+$statuses = @()
+$tokens = $null; $errors = $null
+$ast = [System.Management.Automation.Language.Parser]::ParseFile(
+    $Source, [ref]$tokens, [ref]$errors
+)
+$node = $ast.FindAll({
+    param($item)
+    $item -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+        $item.Name -eq "Confirm-NativeBuildTools"
+}, $false) | Select-Object -First 1
+. ([scriptblock]::Create($node.Extent.Text))
+function Test-Have { param($Name) return ($Available -split ",") -contains $Name }
+function Write-Status { param($State, $Message) $script:statuses += "${State}:$Message" }
+Confirm-NativeBuildTools
+ConvertTo-Json -Compress -InputObject @($statuses)
+""",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            powershell,
+            "-NoProfile",
+            "-NonInteractive",
+            "-File",
+            str(harness),
+            str(PROJECT_ROOT / "scripts" / "install.ps1"),
+            str(program_files),
+            available,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert result.returncode == 0, result.stderr
+    statuses = json.loads(result.stdout)
+    if expected is None:
+        assert statuses == []
+    else:
+        assert len(statuses) == 1
+        assert statuses[0].startswith("WARN:")
+        assert expected.format(llvm_bin=llvm_bin) in statuses[0]
+        assert "Visual Studio C++ build tools with the Windows SDK" in statuses[0]
+
+
+def test_windows_dev_installer_checks_launcher_build_tools_for_every_shape() -> None:
+    script = (PROJECT_ROOT / "scripts" / "install.ps1").read_text(encoding="utf-8")
+
+    requirements = script[
+        script.index('Write-Step "Checking main build requirements"') : script.index(
+            "Install-NativeRelease -Tag $Version -Shape $shape"
+        )
+    ]
+    assert "\n        Confirm-NativeBuildTools\n" in requirements
+
+
 def test_windows_public_installer_ends_with_verified_lifecycle_summary() -> None:
     script = (PROJECT_ROOT / "scripts" / "install.ps1").read_text(encoding="utf-8")
 

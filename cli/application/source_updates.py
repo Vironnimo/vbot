@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import subprocess
+import tempfile
 import tomllib
 from collections.abc import Callable
 from pathlib import Path
@@ -335,6 +336,7 @@ def prepare_update(
     if not isinstance(source_version, str) or not source_version:
         raise ApplicationError("Source pyproject.toml has no project version")
     from cli.application.customize import (
+        _build_native_hosts,
         _build_web_assets,
         _candidate,
         _ensure_candidate_environment,
@@ -364,25 +366,31 @@ def prepare_update(
         _require_clean(checkout)
         return install.version().name
     _ensure_candidate_environment(install, checkout)
-    reuse_web = base_manifest.get("build_inputs", {}).get("web") == inputs["web"]
-    if install.install_shape != "desktop-client" and not reuse_web:
-        report("Building the WebUI and Extension pages")
-        _build_web_assets(install, checkout)
-    _require_head(checkout, revision)
-    _require_clean(checkout)
-    rebuild_native_hosts = base_manifest.get("native_source_digest") != native_digest
-    report("Preparing the application and its runtime")
-    candidate = _candidate(
-        install,
-        checkout,
-        install.version().name,
-        revision,
-        rebuild_native_hosts=rebuild_native_hosts,
-        source_version=source_version,
-        native_source_digest=native_digest,
-        build_inputs=inputs,
-        progress=lambda message: report(message),
-    )
+    with tempfile.TemporaryDirectory(prefix="vbot-native-hosts-") as compiled:
+        native_hosts = None
+        # First, so a missing compiler fails before the WebUI and dependency work.
+        if base_manifest.get("native_source_digest") != native_digest:
+            report("Building the Windows launchers")
+            native_hosts = Path(compiled)
+            _build_native_hosts(install, checkout, native_hosts, version=source_version)
+        reuse_web = base_manifest.get("build_inputs", {}).get("web") == inputs["web"]
+        if install.install_shape != "desktop-client" and not reuse_web:
+            report("Building the WebUI and Extension pages")
+            _build_web_assets(install, checkout)
+        _require_head(checkout, revision)
+        _require_clean(checkout)
+        report("Preparing the application and its runtime")
+        candidate = _candidate(
+            install,
+            checkout,
+            install.version().name,
+            revision,
+            native_hosts=native_hosts,
+            source_version=source_version,
+            native_source_digest=native_digest,
+            build_inputs=inputs,
+            progress=lambda message: report(message),
+        )
     _require_head(checkout, revision)
     _require_clean(checkout)
     return candidate
