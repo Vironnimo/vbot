@@ -5,6 +5,8 @@ from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from core.utils.logging import (
     DailyFileHandler,
     LogManager,
@@ -17,6 +19,7 @@ from core.utils.logging import (
 
 def make_websocket_record(
     *,
+    name: str = "websockets.server",
     level: int = logging.INFO,
     message: str,
     path: str | None = None,
@@ -25,7 +28,7 @@ def make_websocket_record(
     """Build a websocket-flavored log record for filter tests."""
 
     record = logging.LogRecord(
-        name="websockets.server",
+        name=name,
         level=level,
         pathname=__file__,
         lineno=1,
@@ -53,80 +56,34 @@ class DateSequence:
         return self._values[-1]
 
 
-def test_log_manager_writes_exact_format_to_daily_log_file(tmp_path: Path) -> None:
-    """Managed loggers write the required structured format to the daily file."""
-    logging.getLogger("vbot").handlers = []
-    manager = LogManager(level="INFO", data_dir=tmp_path)
-
-    try:
-        logger = manager.get_logger("core")
-        logger.warning("Structured warning")
-    finally:
-        manager.close()
-
-    log_path = tmp_path / "logs" / f"{date.today().isoformat()}.log"
-    assert log_path.exists()
-    line = log_path.read_text(encoding="utf-8").strip()
-    assert line.endswith("[WARN] vbot.core - Structured warning")
-    assert line[:19].count(":") == 2
-    assert line[4] == "-"
-
-
-def test_log_manager_configures_vbot_namespace_for_direct_loggers(tmp_path: Path) -> None:
-    """Direct vbot loggers inherit the shared handlers and file contract."""
-    logging.getLogger("vbot").handlers = []
-    manager = LogManager(level="INFO", data_dir=tmp_path)
-
-    try:
-        manager.get_logger("core")
-        direct_logger = logging.getLogger("vbot.runtime.direct")
-        direct_logger.info("Inherited handler path")
-    finally:
-        manager.close()
-
-    log_path = tmp_path / "logs" / f"{date.today().isoformat()}.log"
-    contents = log_path.read_text(encoding="utf-8")
-    assert "[INFO] vbot.runtime.direct - Inherited handler path" in contents
-
-
-def test_log_manager_close_restores_vbot_namespace_propagation(tmp_path: Path) -> None:
-    logger = logging.getLogger("vbot")
-    logger.handlers = []
-    manager = LogManager(level="INFO", data_dir=tmp_path)
-
-    manager.get_logger("core")
-    manager.close()
-
-    assert logger.propagate is True
-
-
-def test_resolve_daily_log_path_uses_log_suffix(tmp_path: Path) -> None:
-    """Daily log paths keep the date-based contract and now end with `.log`."""
-
-    assert resolve_daily_log_path(
-        tmp_path,
-        current_date_provider=lambda: date(2026, 5, 10),
-    ) == (tmp_path / "logs" / "2026-05-10.log")
-
-
-def test_log_manager_resolves_daily_log_path_from_current_date(tmp_path: Path) -> None:
-    """The active file path is derived from the provided current date."""
-    logging.getLogger("vbot").handlers = []
-    target_date = date(2026, 5, 10)
+def test_log_manager_writes_every_vbot_logger_to_the_daily_file(tmp_path: Path) -> None:
+    """Managed and direct vbot loggers write the structured format to one daily file."""
+    vbot_logger = logging.getLogger("vbot")
+    vbot_logger.handlers = []
     manager = LogManager(
         level="INFO",
         data_dir=tmp_path,
-        current_date_provider=lambda: target_date,
+        current_date_provider=lambda: date(2026, 5, 10),
     )
 
     try:
-        assert manager.log_file_path == tmp_path / "logs" / "2026-05-10.log"
-        logger = manager.get_logger("core")
-        logger.info("Daily file resolved")
+        manager.get_logger("core").warning("Structured warning")
+        logging.getLogger("vbot.runtime.direct").info("Inherited handler path")
     finally:
         manager.close()
 
-    assert (tmp_path / "logs" / "2026-05-10.log").exists()
+    log_path = tmp_path / "logs" / "2026-05-10.log"
+    assert manager.log_file_path == log_path
+    assert resolve_daily_log_path(tmp_path, current_date_provider=lambda: date(2026, 5, 10)) == (
+        log_path
+    )
+    warning, direct = log_path.read_text(encoding="utf-8").splitlines()
+    assert warning.endswith("[WARN] vbot.core - Structured warning")
+    assert warning[:19].count(":") == 2
+    assert warning[4] == "-"
+    assert direct.endswith("[INFO] vbot.runtime.direct - Inherited handler path")
+    # Closing the manager restores the namespace's propagation.
+    assert vbot_logger.propagate is True
 
 
 def test_daily_file_handler_rotates_when_date_changes(tmp_path: Path) -> None:
@@ -153,75 +110,59 @@ def test_daily_file_handler_rotates_when_date_changes(tmp_path: Path) -> None:
     ).strip() == "second day"
 
 
-def test_logs_websocket_lifecycle_filter_suppresses_info_records_for_log_stream() -> None:
-    record = make_websocket_record(message="connection open", path="/ws/logs?cursor=abc")
-
-    assert is_logs_websocket_lifecycle_record(record) is True
-    assert QuietLogsWebSocketLifecycleFilter().filter(record) is False
+_ACCEPTED = '%s - "WebSocket %s" [accepted]'
 
 
-def test_logs_websocket_lifecycle_filter_suppresses_info_records_for_app_socket() -> None:
-    record = make_websocket_record(message="connection closed", path="/ws?after_sequence=4")
-
-    assert is_logs_websocket_lifecycle_record(record) is True
-    assert QuietLogsWebSocketLifecycleFilter().filter(record) is False
-
-
-def test_logs_websocket_lifecycle_filter_suppresses_accepted_handshake_info_for_log_stream() -> (
-    None
-):
-    record = make_websocket_record(
-        message='%s - "WebSocket %s" [accepted]',
-        args=("127.0.0.1", "/ws/logs?cursor=abc"),
-    )
-
-    assert is_logs_websocket_lifecycle_record(record) is True
-    assert QuietLogsWebSocketLifecycleFilter().filter(record) is False
-
-
-def test_logs_websocket_lifecycle_filter_suppresses_accepted_handshake_info_for_app_socket() -> (
-    None
-):
-    record = make_websocket_record(
-        message='%s - "WebSocket %s" [accepted]',
-        args=("127.0.0.1", "/ws?after_sequence=9"),
-    )
-
-    assert is_logs_websocket_lifecycle_record(record) is True
-    assert QuietLogsWebSocketLifecycleFilter().filter(record) is False
-
-
-def test_logs_websocket_lifecycle_filter_suppresses_runtime_connection_open_without_path() -> None:
-    record = make_websocket_record(message="connection open")
-    record.name = "uvicorn.error"
-
-    assert is_logs_websocket_lifecycle_record(record) is True
-    assert QuietLogsWebSocketLifecycleFilter().filter(record) is False
-
-
-def test_logs_websocket_lifecycle_filter_suppresses_runtime_connection_closed_without_path() -> (
-    None
-):
-    record = make_websocket_record(message="connection closed")
-    record.name = "uvicorn.error"
-
-    assert is_logs_websocket_lifecycle_record(record) is True
-    assert QuietLogsWebSocketLifecycleFilter().filter(record) is False
-
-
-def test_logs_websocket_lifecycle_filter_suppresses_runtime_accepted_handshake_without_args() -> (
-    None
-):
-    record = make_websocket_record(message='127.0.0.1:55090 - "WebSocket /ws" [accepted]')
-    record.name = "uvicorn.error"
-
-    assert is_logs_websocket_lifecycle_record(record) is True
-    assert QuietLogsWebSocketLifecycleFilter().filter(record) is False
+@pytest.mark.parametrize(
+    ("record", "routine"),
+    [
+        (make_websocket_record(message="connection open", path="/ws/logs?cursor=abc"), True),
+        (make_websocket_record(message="connection closed", path="/ws?after_sequence=4"), True),
+        (make_websocket_record(message=_ACCEPTED, args=("127.0.0.1", "/ws/logs?cursor=abc")), True),
+        # Runtime records without a path: the uvicorn logger marks them as websocket records.
+        (make_websocket_record(name="uvicorn.error", message="connection open"), True),
+        (
+            make_websocket_record(
+                name="uvicorn.error", message='127.0.0.1:55090 - "WebSocket /ws" [accepted]'
+            ),
+            True,
+        ),
+        # Only INFO lifecycle records are routine: diagnostics and errors stay.
+        (
+            make_websocket_record(level=logging.DEBUG, message="connection open", path="/ws/logs"),
+            False,
+        ),
+        (
+            make_websocket_record(
+                level=logging.ERROR, message="opening handshake failed", path="/ws/logs"
+            ),
+            False,
+        ),
+        (make_websocket_record(message="keepalive ping timeout", path="/ws"), False),
+        (make_websocket_record(message=_ACCEPTED, args=("127.0.0.1", "/ws/other")), False),
+        (make_websocket_record(name="some.other.logger", message="connection open"), False),
+    ],
+    ids=[
+        "log-stream-open",
+        "app-socket-closed",
+        "log-stream-accepted",
+        "uvicorn-open-without-path",
+        "uvicorn-accepted-without-args",
+        "debug-diagnostic",
+        "error",
+        "non-lifecycle-info",
+        "other-websocket-path",
+        "other-logger-without-path",
+    ],
+)
+def test_websocket_lifecycle_filter_quiets_only_routine_info_records(
+    record: logging.LogRecord, routine: bool
+) -> None:
+    assert is_logs_websocket_lifecycle_record(record) is routine
+    assert QuietLogsWebSocketLifecycleFilter().filter(record) is not routine
 
 
-def test_routine_websocket_lifecycle_matcher_suppresses_persisted_app_socket_accept_message() -> (
-    None
-):
+def test_persisted_websocket_lifecycle_messages_match_by_level_name() -> None:
     assert (
         is_routine_websocket_lifecycle_message(
             level="INFO",
@@ -230,9 +171,6 @@ def test_routine_websocket_lifecycle_matcher_suppresses_persisted_app_socket_acc
         )
         is True
     )
-
-
-def test_routine_websocket_lifecycle_matcher_keeps_persisted_log_socket_error_message() -> None:
     assert (
         is_routine_websocket_lifecycle_message(
             level="ERROR",
@@ -241,53 +179,3 @@ def test_routine_websocket_lifecycle_matcher_keeps_persisted_log_socket_error_me
         )
         is False
     )
-
-
-def test_logs_websocket_lifecycle_filter_keeps_debug_diagnostics_for_log_stream() -> None:
-    record = make_websocket_record(level=logging.DEBUG, message="connection open", path="/ws/logs")
-
-    assert is_logs_websocket_lifecycle_record(record) is False
-    assert QuietLogsWebSocketLifecycleFilter().filter(record) is True
-
-
-def test_logs_websocket_lifecycle_filter_keeps_errors_for_log_stream() -> None:
-    record = make_websocket_record(
-        level=logging.ERROR,
-        message="opening handshake failed",
-        path="/ws/logs",
-    )
-
-    assert is_logs_websocket_lifecycle_record(record) is False
-    assert QuietLogsWebSocketLifecycleFilter().filter(record) is True
-
-
-def test_logs_websocket_lifecycle_filter_keeps_non_lifecycle_info_for_app_socket() -> None:
-    record = make_websocket_record(message="keepalive ping timeout", path="/ws")
-
-    assert is_logs_websocket_lifecycle_record(record) is False
-    assert QuietLogsWebSocketLifecycleFilter().filter(record) is True
-
-
-def test_logs_websocket_lifecycle_filter_keeps_non_lifecycle_info_for_log_stream() -> None:
-    record = make_websocket_record(message="keepalive ping timeout", path="/ws/logs")
-
-    assert is_logs_websocket_lifecycle_record(record) is False
-    assert QuietLogsWebSocketLifecycleFilter().filter(record) is True
-
-
-def test_logs_websocket_lifecycle_filter_keeps_other_websocket_path_info() -> None:
-    record = make_websocket_record(
-        message='%s - "WebSocket %s" [accepted]',
-        args=("127.0.0.1", "/ws/other"),
-    )
-
-    assert is_logs_websocket_lifecycle_record(record) is False
-    assert QuietLogsWebSocketLifecycleFilter().filter(record) is True
-
-
-def test_logs_websocket_lifecycle_filter_keeps_non_websocket_connection_open_info() -> None:
-    record = make_websocket_record(message="connection open")
-    record.name = "some.other.logger"
-
-    assert is_logs_websocket_lifecycle_record(record) is False
-    assert QuietLogsWebSocketLifecycleFilter().filter(record) is True

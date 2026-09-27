@@ -1,8 +1,7 @@
 """Tests for the async retry utility.
 
-Verifies exponential backoff timing, jitter bounds, max-retries
-enforcement, fatal-error propagation, first-attempt success, and
-retry/exhaustion logging.
+Verifies the shared backoff math, which errors are retried, retry exhaustion,
+server Retry-After hints, retry logging, retry observers and caller-owned retries.
 """
 
 import asyncio
@@ -16,18 +15,39 @@ from core.providers.errors import (
     ProviderRateLimitError,
     ProviderTimeoutError,
 )
+from core.utils import retry as retry_module
 from core.utils.errors import ProviderError
 from core.utils.retry import (
     BACKOFF_FACTOR,
     INITIAL_DELAY_SECONDS,
     JITTER_FACTOR,
     MAX_RETRIES,
-    MAX_RETRY_AFTER_SECONDS,
     caller_owns_retries,
     compute_retry_delay,
     observe_retries,
     retry_async,
 )
+
+
+@pytest.fixture
+def sleeps(monkeypatch: pytest.MonkeyPatch) -> list[float]:
+    """Record each retry wait instead of sleeping."""
+    recorded: list[float] = []
+
+    async def record(delay: float) -> None:
+        recorded.append(delay)
+
+    monkeypatch.setattr(retry_module, "_sleep", record)
+    return recorded
+
+
+def _retry_log(caplog: pytest.LogCaptureFixture, text: str) -> list[str]:
+    return [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "vbot.utils.retry" and text in record.getMessage()
+    ]
+
 
 # ----- compute_retry_delay — shared backoff math -----
 
@@ -41,38 +61,20 @@ def test_compute_retry_delay_backoff_without_hint():
         assert honored is False
 
 
-def test_compute_retry_delay_honors_retry_after_as_floor():
-    """A hint above base backoff becomes a jittered floor and is flagged."""
-    delay, honored = compute_retry_delay(0, retry_after=30.0)
-    assert 30.0 <= delay <= 30.0 + INITIAL_DELAY_SECONDS * JITTER_FACTOR
-    assert honored is True
-
-
-def test_compute_retry_delay_ignores_smaller_retry_after():
-    """A hint below the computed backoff never shortens the wait."""
-    delay, honored = compute_retry_delay(2, retry_after=0.001)
-    base = INITIAL_DELAY_SECONDS * (BACKOFF_FACTOR**2)
-    assert delay >= base
-    assert honored is False
-
-
-def test_compute_retry_delay_caps_retry_after():
-    """An excessive hint is clamped to ``MAX_RETRY_AFTER_SECONDS``."""
-    delay, honored = compute_retry_delay(0, retry_after=10_000.0)
-    assert (
-        MAX_RETRY_AFTER_SECONDS
-        <= delay
-        <= (MAX_RETRY_AFTER_SECONDS + INITIAL_DELAY_SECONDS * JITTER_FACTOR)
-    )
-    assert honored is True
-
-
-def test_compute_retry_delay_adds_jitter_above_retry_after_floor():
+@pytest.mark.parametrize(
+    ("attempt", "retry_after", "expected"),
+    [
+        # A hint above the base backoff becomes the floor under the same jitter.
+        (0, 30.0, (30.25, True)),
+        # A hint below the computed backoff never shortens the wait.
+        (2, 0.001, (4.25, False)),
+    ],
+)
+def test_compute_retry_delay_uses_a_larger_retry_after_as_its_floor(
+    attempt: int, retry_after: float, expected: tuple[float, bool]
+):
     with patch("core.utils.retry.random.uniform", return_value=0.25):
-        delay, honored = compute_retry_delay(0, retry_after=30.0)
-
-    assert delay == 30.25
-    assert honored is True
+        assert compute_retry_delay(attempt, retry_after=retry_after) == expected
 
 
 def test_capped_retry_after_cannot_shorten_later_exponential_backoff():
@@ -81,365 +83,99 @@ def test_capped_retry_after_cannot_shorten_later_exponential_backoff():
     assert delays == [60, 60, 60, 60, 60, 60, 64, 128]
 
 
-# ----- Success path -----
+# ----- retry_async -----
 
 
 @pytest.mark.asyncio
-async def test_retry_succeeds_on_first_attempt():
-    """No retries needed when the first call succeeds."""
-    # Arrange
-    mock_fn = AsyncMock(return_value="ok")
-
-    # Act
-    result = await retry_async(mock_fn)
-
-    # Assert
-    assert result == "ok"
-    assert mock_fn.call_count == 1
-
-
-# ----- Fatal (non-retryable) errors -----
-
-
-@pytest.mark.asyncio
-async def test_retry_does_not_retry_auth_error():
-    """ProviderAuthError (retryable=False) is re-raised immediately."""
-    # Arrange
-    mock_fn = AsyncMock(side_effect=ProviderAuthError("Unauthorized"))
-
-    # Act / Assert
-    with pytest.raises(ProviderAuthError, match="Unauthorized") as error:
-        await retry_async(mock_fn)
-
-    assert mock_fn.call_count == 1
-    assert error.value.attempts_made == 1
-
-
-@pytest.mark.asyncio
-async def test_retry_does_not_retry_base_provider_error():
-    """Base ProviderError with retryable=False (the default) is not retried."""
-    # Arrange
-    mock_fn = AsyncMock(side_effect=ProviderError("Something went wrong"))
-
-    # Act / Assert
-    with pytest.raises(ProviderError, match="Something went wrong"):
-        await retry_async(mock_fn)
-
-    assert mock_fn.call_count == 1
-
-
-# ----- Retryable errors: exhaustion -----
-
-
-@pytest.mark.asyncio
-async def test_retry_stops_after_max_retries_rate_limit():
-    """Stops after MAX_RETRIES retries on ProviderRateLimitError."""
-    # Arrange
-    mock_fn = AsyncMock(side_effect=ProviderRateLimitError("Rate limited"))
-
-    # Act / Assert
-    with (
-        patch("core.utils.retry._sleep", new_callable=AsyncMock),
-        pytest.raises(ProviderRateLimitError, match="Rate limited") as error,
-    ):
-        await retry_async(mock_fn)
-
-    assert mock_fn.call_count == MAX_RETRIES + 1
-    assert error.value.attempts_made == MAX_RETRIES + 1
-
-
-@pytest.mark.asyncio
-async def test_retry_stops_after_max_retries_timeout():
-    """Stops after MAX_RETRIES retries on ProviderTimeoutError."""
-    # Arrange
-    mock_fn = AsyncMock(side_effect=ProviderTimeoutError("Connection timed out"))
-
-    # Act / Assert
-    with (
-        patch("core.utils.retry._sleep", new_callable=AsyncMock),
-        pytest.raises(ProviderTimeoutError, match="Connection timed out"),
-    ):
-        await retry_async(mock_fn)
-
-    assert mock_fn.call_count == MAX_RETRIES + 1
-
-
-# ----- Retryable errors: eventual success -----
-
-
-@pytest.mark.asyncio
-async def test_retry_succeeds_after_transient_rate_limit():
-    """Succeeds when a retryable rate-limit error is followed by success."""
-    # Arrange
-    mock_fn = AsyncMock(side_effect=[ProviderRateLimitError("Rate limited"), "ok"])
-
-    # Act
-    with patch("core.utils.retry._sleep", new_callable=AsyncMock):
-        result = await retry_async(mock_fn)
-
-    # Assert
-    assert result == "ok"
-    assert mock_fn.call_count == 2
-
-
-@pytest.mark.asyncio
-async def test_retry_succeeds_after_transient_timeout():
-    """Succeeds when a ProviderTimeoutError is followed by success."""
-    # Arrange
-    mock_fn = AsyncMock(side_effect=[ProviderTimeoutError("Timeout"), "ok"])
-
-    # Act
-    with patch("core.utils.retry._sleep", new_callable=AsyncMock):
-        result = await retry_async(mock_fn)
-
-    # Assert
-    assert result == "ok"
-    assert mock_fn.call_count == 2
-
-
-@pytest.mark.asyncio
-async def test_retry_custom_retryable_provider_error():
-    """Base ProviderError with retryable=True is retried."""
-    # Arrange
-    mock_fn = AsyncMock(side_effect=[ProviderError("Transient", retryable=True), "ok"])
-
-    # Act
-    with patch("core.utils.retry._sleep", new_callable=AsyncMock):
-        result = await retry_async(mock_fn)
-
-    # Assert
-    assert result == "ok"
-    assert mock_fn.call_count == 2
-
-
-# ----- Exponential backoff timing -----
-
-
-@pytest.mark.asyncio
-async def test_retry_exponential_backoff_increases_delay():
-    """Delays grow exponentially across retries when jitter is zero."""
-    # Arrange
-    mock_fn = AsyncMock(side_effect=ProviderRateLimitError("Rate limited"))
-    recorded_delays: list[float] = []
-
-    async def mock_sleep(delay: float) -> None:
-        recorded_delays.append(delay)
-
-    # Act / Assert
-    with (
-        patch("core.utils.retry._sleep", side_effect=mock_sleep),
-        patch("core.utils.retry.random.uniform", return_value=0.0),
-        pytest.raises(ProviderRateLimitError),
-    ):
-        await retry_async(mock_fn)
-
-    assert len(recorded_delays) == MAX_RETRIES
-    assert recorded_delays[0] == pytest.approx(INITIAL_DELAY_SECONDS)
-    assert recorded_delays[1] == pytest.approx(INITIAL_DELAY_SECONDS * BACKOFF_FACTOR)
-    assert recorded_delays[2] == pytest.approx(INITIAL_DELAY_SECONDS * BACKOFF_FACTOR**2)
-
-
-# ----- Jitter bounds -----
-
-
-@pytest.mark.asyncio
-async def test_retry_jitter_is_bounded():
-    """Jitter makes delays non-deterministic but bounded."""
-    # Arrange
-    mock_fn = AsyncMock(side_effect=ProviderRateLimitError("Rate limited"))
-    recorded_delays: list[float] = []
-
-    async def mock_sleep(delay: float) -> None:
-        recorded_delays.append(delay)
-
-    # Act / Assert
-    with (
-        patch("core.utils.retry._sleep", side_effect=mock_sleep),
-        pytest.raises(ProviderRateLimitError),
-    ):
-        await retry_async(mock_fn)
-
-    assert len(recorded_delays) == MAX_RETRIES
-    for attempt, delay in enumerate(recorded_delays):
-        base_delay = INITIAL_DELAY_SECONDS * (BACKOFF_FACTOR**attempt)
-        # delay = base_delay + uniform(0, base_delay * JITTER_FACTOR)
-        # So delay is in [base_delay, base_delay * (1 + JITTER_FACTOR)]
-        assert delay >= base_delay
-        assert delay <= base_delay * (1 + JITTER_FACTOR)
-
-
-# ----- Retry-After honoring -----
-
-
-def _rate_limit_with_retry_after(seconds: float) -> ProviderRateLimitError:
-    """Build a rate-limit error carrying a server ``Retry-After`` hint."""
-    error = ProviderRateLimitError("Rate limited")
-    error.retry_after = seconds
-    return error
-
-
-@pytest.mark.asyncio
-async def test_retry_honors_retry_after_as_floor_over_backoff():
-    """A ``retry_after`` larger than the backoff replaces every computed delay."""
-    # Arrange
-    mock_fn = AsyncMock(side_effect=_rate_limit_with_retry_after(10.0))
-    recorded_delays: list[float] = []
-
-    async def mock_sleep(delay: float) -> None:
-        recorded_delays.append(delay)
-
-    # Act / Assert
-    with (
-        patch("core.utils.retry._sleep", side_effect=mock_sleep),
-        patch("core.utils.retry.random.uniform", return_value=0.0),
-        pytest.raises(ProviderRateLimitError),
-    ):
-        await retry_async(mock_fn)
-
-    # Every attempt's exponential backoff (1s, 2s, 4s) is below 10s, so the
-    # provider hint dominates throughout.
-    assert recorded_delays == [10.0, 10.0, 10.0]
-
-
-@pytest.mark.asyncio
-async def test_retry_after_smaller_than_backoff_keeps_exponential():
-    """A ``retry_after`` below the computed backoff does not shorten the wait."""
-    # Arrange
-    mock_fn = AsyncMock(side_effect=_rate_limit_with_retry_after(0.1))
-    recorded_delays: list[float] = []
-
-    async def mock_sleep(delay: float) -> None:
-        recorded_delays.append(delay)
-
-    # Act / Assert
-    with (
-        patch("core.utils.retry._sleep", side_effect=mock_sleep),
-        patch("core.utils.retry.random.uniform", return_value=0.0),
-        pytest.raises(ProviderRateLimitError),
-    ):
-        await retry_async(mock_fn)
-
-    assert recorded_delays[0] == pytest.approx(INITIAL_DELAY_SECONDS)
-    assert recorded_delays[1] == pytest.approx(INITIAL_DELAY_SECONDS * BACKOFF_FACTOR)
-    assert recorded_delays[2] == pytest.approx(INITIAL_DELAY_SECONDS * BACKOFF_FACTOR**2)
-
-
-@pytest.mark.asyncio
-async def test_retry_after_is_capped_at_maximum():
-    """An excessive ``retry_after`` is clamped to ``MAX_RETRY_AFTER_SECONDS``."""
-    # Arrange
-    mock_fn = AsyncMock(side_effect=_rate_limit_with_retry_after(9999.0))
-    recorded_delays: list[float] = []
-
-    async def mock_sleep(delay: float) -> None:
-        recorded_delays.append(delay)
-
-    # Act / Assert
-    with (
-        patch("core.utils.retry._sleep", side_effect=mock_sleep),
-        patch("core.utils.retry.random.uniform", return_value=0.0),
-        pytest.raises(ProviderRateLimitError),
-    ):
-        await retry_async(mock_fn)
-
-    assert all(delay == MAX_RETRY_AFTER_SECONDS for delay in recorded_delays)
-
-
-@pytest.mark.asyncio
-async def test_retry_logs_when_honoring_retry_after(
+async def test_retry_returns_a_first_attempt_success_without_logging(
     caplog: pytest.LogCaptureFixture,
-) -> None:
-    """Honoring a server hint is noted in the retry log line."""
-    # Arrange
-    mock_fn = AsyncMock(side_effect=[_rate_limit_with_retry_after(10.0), "ok"])
+):
     caplog.set_level(logging.WARNING, logger="vbot.utils.retry")
+    operation = AsyncMock(return_value="ok")
 
-    # Act
-    with (
-        patch("core.utils.retry._sleep", new_callable=AsyncMock),
-        patch("core.utils.retry.random.uniform", return_value=0.0),
-    ):
-        result = await retry_async(mock_fn)
+    assert await retry_async(operation) == "ok"
 
-    # Assert
-    assert result == "ok"
-    retry_records = [
-        record
-        for record in caplog.records
-        if record.name == "vbot.utils.retry" and "Retryable error" in record.getMessage()
-    ]
-    assert len(retry_records) == 1
-    assert "honoring server Retry-After" in retry_records[0].getMessage()
-
-
-# ----- Logging -----
-
-
-@pytest.mark.asyncio
-async def test_retry_logs_warning_on_each_retry_attempt(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """Each retry is logged at WARNING with the error class and message."""
-    # Arrange
-    mock_fn = AsyncMock(side_effect=[ProviderRateLimitError("Rate limited"), "ok"])
-    caplog.set_level(logging.WARNING, logger="vbot.utils.retry")
-
-    # Act
-    with patch("core.utils.retry._sleep", new_callable=AsyncMock):
-        result = await retry_async(mock_fn)
-
-    # Assert
-    assert result == "ok"
-    retry_records = [
-        record
-        for record in caplog.records
-        if record.name == "vbot.utils.retry" and "Retryable error" in record.getMessage()
-    ]
-    assert len(retry_records) == 1
-    message = retry_records[0].getMessage()
-    assert "ProviderRateLimitError" in message
-    assert "Rate limited" in message
-
-
-@pytest.mark.asyncio
-async def test_retry_logs_warning_when_retries_exhausted(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """Exhausting all retries logs a warning right before re-raising."""
-    # Arrange
-    mock_fn = AsyncMock(side_effect=ProviderRateLimitError("Rate limited"))
-    caplog.set_level(logging.WARNING, logger="vbot.utils.retry")
-
-    # Act / Assert
-    with (
-        patch("core.utils.retry._sleep", new_callable=AsyncMock),
-        pytest.raises(ProviderRateLimitError),
-    ):
-        await retry_async(mock_fn)
-
-    exhausted_records = [
-        record
-        for record in caplog.records
-        if record.name == "vbot.utils.retry" and "Retries exhausted" in record.getMessage()
-    ]
-    assert len(exhausted_records) == 1
-    assert "ProviderRateLimitError" in exhausted_records[0].getMessage()
-
-
-@pytest.mark.asyncio
-async def test_retry_does_not_log_on_success_path(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """A first-attempt success logs nothing (hot path stays quiet)."""
-    # Arrange
-    mock_fn = AsyncMock(return_value="ok")
-    caplog.set_level(logging.WARNING, logger="vbot.utils.retry")
-
-    # Act
-    await retry_async(mock_fn)
-
-    # Assert
+    assert operation.call_count == 1
     assert [record for record in caplog.records if record.name == "vbot.utils.retry"] == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error",
+    [ProviderAuthError("Unauthorized"), ProviderError("Something went wrong")],
+    ids=["auth-error", "default-provider-error"],
+)
+async def test_retry_reraises_a_non_retryable_error_at_once(error: ProviderError):
+    operation = AsyncMock(side_effect=error)
+
+    with pytest.raises(type(error)) as raised:
+        await retry_async(operation)
+
+    assert raised.value is error
+    assert operation.call_count == 1
+    assert error.attempts_made == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error",
+    [
+        ProviderRateLimitError("Rate limited"),
+        ProviderTimeoutError("Connection timed out"),
+        ProviderError("Transient", retryable=True),
+    ],
+    ids=["rate-limit", "timeout", "retryable-provider-error"],
+)
+async def test_retry_retries_a_retryable_error_and_logs_the_retry(
+    error: ProviderError, sleeps: list[float], caplog: pytest.LogCaptureFixture
+):
+    caplog.set_level(logging.WARNING, logger="vbot.utils.retry")
+    operation = AsyncMock(side_effect=[error, "ok"])
+
+    assert await retry_async(operation) == "ok"
+
+    assert operation.call_count == 2
+    assert len(sleeps) == 1
+    [message] = _retry_log(caplog, "Retryable error")
+    assert type(error).__name__ in message
+    assert str(error) in message
+
+
+@pytest.mark.asyncio
+async def test_retry_gives_up_after_max_retries_with_exponential_backoff(
+    sleeps: list[float], caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(retry_module.random, "uniform", lambda *_args: 0.0)
+    caplog.set_level(logging.WARNING, logger="vbot.utils.retry")
+    operation = AsyncMock(side_effect=ProviderRateLimitError("Rate limited"))
+
+    with pytest.raises(ProviderRateLimitError, match="Rate limited") as raised:
+        await retry_async(operation)
+
+    assert operation.call_count == MAX_RETRIES + 1
+    assert raised.value.attempts_made == MAX_RETRIES + 1
+    assert sleeps == [INITIAL_DELAY_SECONDS * BACKOFF_FACTOR**attempt for attempt in range(3)]
+    [message] = _retry_log(caplog, "Retries exhausted")
+    assert "ProviderRateLimitError" in message
+
+
+@pytest.mark.asyncio
+async def test_retry_honors_a_server_retry_after_hint_and_logs_it(
+    sleeps: list[float], caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(retry_module.random, "uniform", lambda *_args: 0.0)
+    caplog.set_level(logging.WARNING, logger="vbot.utils.retry")
+    error = ProviderRateLimitError("Rate limited")
+    error.retry_after = 10.0
+
+    with pytest.raises(ProviderRateLimitError):
+        await retry_async(AsyncMock(side_effect=error))
+
+    # Every exponential backoff (1 s, 2 s, 4 s) is below the hint.
+    assert sleeps == [10.0, 10.0, 10.0]
+    messages = _retry_log(caplog, "Retryable error")
+    assert len(messages) == MAX_RETRIES
+    assert all("honoring server Retry-After" in message for message in messages)
 
 
 @pytest.mark.asyncio

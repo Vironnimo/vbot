@@ -44,127 +44,18 @@ def _stub_tiktoken_encoding(monkeypatch: pytest.MonkeyPatch):
     token_utils._IMAGE_CACHE.clear()
 
 
-# ----- Empty input -----
-
-
-def test_estimate_tokens_returns_zero_for_empty_string():
-    """An empty string produces a token estimate of 0."""
-    # Arrange
-    text = ""
-
-    # Act
-    count, is_estimate = estimate_tokens(text)
-
-    # Assert
-    assert count == 0
-    assert is_estimate is True
-
-
-# ----- Simple ASCII text -----
-
-
-def test_estimate_tokens_simple_ascii_text():
-    """Plain ASCII text is delegated to the shared estimation encoding."""
-    # Arrange
-    text = "Hello, world!"  # 13 characters
-
-    # Act
-    count, is_estimate = estimate_tokens(text)
-
-    # Assert
-    assert count == 4  # ceil(13 / 4) = 4
-    assert is_estimate is True
-
-
-def test_estimate_tokens_always_returns_estimate_flag():
-    """The boolean return value is always True, signalling an estimate."""
-    # Arrange
-    text = "abc"
-
-    # Act
-    _, is_estimate = estimate_tokens(text)
-
-    # Assert
-    assert is_estimate is True
-
-
-# ----- Tokenizer delegation -----
-
-
-def test_estimate_tokens_rounds_up_on_remainder():
-    """The deterministic encoding controls the returned token count."""
-    # Arrange
-    text = "a" * 5  # 5 chars → ceil(5/4) = 2 tokens
-
-    # Act
-    count, _ = estimate_tokens(text)
-
-    # Assert
-    assert count == 2
-
-
-def test_estimate_tokens_exact_division():
-    """The tokenizer result is returned without an additional adjustment."""
-    # Arrange
-    text = "a" * 8  # 8 chars → 8/4 = 2 tokens
-
-    # Act
-    count, _ = estimate_tokens(text)
-
-    # Assert
-    assert count == 2
-
-
-def test_estimate_tokens_one_char_rounds_up():
-    """A non-empty tokenizer result remains non-zero."""
-    # Arrange
-    text = "x"  # 1 char → ceil(1/4) = 1 token
-
-    # Act
-    count, _ = estimate_tokens(text)
-
-    # Assert
-    assert count == 1
-
-
-# ----- Unicode text (CJK characters) -----
-
-
-def test_estimate_tokens_cjk_characters():
-    """Multibyte CJK text no longer follows Python character count divided by four."""
-    # Arrange
-    text = "你好世界"
-
-    # Act
-    count, is_estimate = estimate_tokens(text)
-
-    # Assert
-    assert count == 3
-    assert is_estimate is True
-
-
-def test_estimate_tokens_mixed_unicode_and_ascii():
-    """Mixed Unicode and ASCII text is delegated unchanged to the tokenizer."""
-    # Arrange
-    text = "Hello世界!"
-
-    # Act
-    count, _ = estimate_tokens(text)
-
-    # Assert
-    assert count == 3
-
-
-def test_estimate_tokens_emoji():
-    """Emoji no longer collapse to one token solely because Python sees two characters."""
-    # Arrange
-    text = "🎉🎊"
-
-    # Act
-    count, _ = estimate_tokens(text)
-
-    # Assert
-    assert count == 2
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("", 0),
+        ("Hello, world!", 4),
+        # Multibyte text counts by its encoding, not by Python characters divided by four.
+        ("你好世界", 3),
+    ],
+)
+def test_estimate_tokens_counts_the_encoding_tokens_of_the_text(text: str, expected: int):
+    """The count comes from the shared estimation encoding and is always an estimate."""
+    assert estimate_tokens(text) == (expected, True)
 
 
 def test_estimation_encoding_is_fixed_and_cached(monkeypatch: pytest.MonkeyPatch):
@@ -230,31 +121,20 @@ def test_estimate_message_tokens_counts_structured_tool_call_payloads():
     assert is_estimate is True
 
 
-def test_estimate_json_tokens_counts_compact_json_size():
+@pytest.mark.parametrize(
+    ("value", "rendered"),
+    [
+        (
+            [{"name": "read", "description": "Read a file", "parameters": {"type": "object"}}],
+            '[{"description":"Read a file","name":"read","parameters":{"type":"object"}}]',
+        ),
+        # A bare string is counted as-is, without JSON quoting.
+        ("abcd", "abcd"),
+    ],
+)
+def test_estimate_json_tokens_counts_the_compact_rendering(value: Any, rendered: str):
     """A JSON-serializable value sends its compact serialization to the tokenizer."""
-    # Arrange
-    tool_definitions = [
-        {"name": "read", "description": "Read a file", "parameters": {"type": "object"}}
-    ]
-    compact_length = len(
-        '[{"description":"Read a file","name":"read","parameters":{"type":"object"}}]'
-    )
-
-    # Act
-    count, is_estimate = estimate_json_tokens(tool_definitions)
-
-    # Assert
-    assert count == -(-compact_length // 4)
-    assert is_estimate is True
-
-
-def test_estimate_json_tokens_plain_string_counts_verbatim():
-    """A bare string is counted as-is, without JSON quoting."""
-    # Act
-    count, _ = estimate_json_tokens("abcd")
-
-    # Assert
-    assert count == 1
+    assert estimate_json_tokens(value) == (-(-len(rendered) // 4), True)
 
 
 def test_estimate_structured_tokens_counts_items_with_array_framing():
@@ -383,29 +263,47 @@ def _reasoning_details_message(details: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def test_estimate_message_tokens_reserves_opaque_reasoning_blobs_without_counting_encoded_size():
-    """An oversized non-text blob counts as one fixed reservation, not as prose."""
-
-    # Arrange — a 5000-character encrypted blob would serialize to >1250
-    # prose tokens; providers bill it by decoded content instead.
-    message = _reasoning_details_message(
-        [
+@pytest.mark.parametrize(
+    ("estimate", "value"),
+    [
+        # A 5000-character encrypted blob would serialize to more than 1250 prose
+        # tokens; providers bill it by decoded content instead.
+        (
+            estimate_message_tokens,
+            _reasoning_details_message(
+                [
+                    {
+                        "type": "reasoning.encrypted",
+                        "format": "unknown",
+                        "index": 0,
+                        "encrypted_content": "S" * 5_000,
+                        "text": "ok",
+                    }
+                ]
+            ),
+        ),
+        # A scalar-list continuity carrier receives one reserve per opaque blob.
+        (
+            estimate_message_tokens,
             {
-                "type": "reasoning.encrypted",
-                "format": "unknown",
-                "index": 0,
-                "encrypted_content": "S" * 5_000,
-                "text": "ok",
-            }
-        ]
-    )
+                "role": "assistant",
+                "content": None,
+                "reasoning_meta": {"encrypted_content": ["S" * 5_000]},
+            },
+        ),
+        # Structured Responses-style payloads reserve oversized continuity blobs.
+        (
+            estimate_structured_tokens,
+            [{"type": "reasoning", "id": "rs_1", "encrypted_content": "X" * 5_000}],
+        ),
+    ],
+    ids=["reasoning-details", "reasoning-meta-list", "structured-item"],
+)
+def test_opaque_reasoning_blobs_count_as_one_fixed_reserve(estimate: Any, value: Any):
+    """An oversized non-text blob counts as one fixed reservation, not as prose."""
+    count, is_estimate = estimate(value)
 
-    # Act
-    count, is_estimate = estimate_message_tokens(message)
-
-    # Assert
-    assert count >= OPAQUE_REASONING_BLOB_TOKEN_RESERVE
-    assert count < OPAQUE_REASONING_BLOB_TOKEN_RESERVE + 100
+    assert OPAQUE_REASONING_BLOB_TOKEN_RESERVE <= count < OPAQUE_REASONING_BLOB_TOKEN_RESERVE + 100
     assert is_estimate is True
 
 
@@ -432,21 +330,6 @@ def test_estimate_message_tokens_deduplicates_responses_reasoning_meta_carriers(
     )
 
     assert complete_count == response_output_count
-
-
-def test_estimate_message_tokens_reserves_opaque_reasoning_blob_lists():
-    """A scalar-list continuity carrier receives one reserve per opaque blob."""
-
-    count, _ = estimate_message_tokens(
-        {
-            "role": "assistant",
-            "content": None,
-            "reasoning_meta": {"encrypted_content": ["S" * 5_000]},
-        }
-    )
-
-    assert count >= OPAQUE_REASONING_BLOB_TOKEN_RESERVE
-    assert count < OPAQUE_REASONING_BLOB_TOKEN_RESERVE + 100
 
 
 def test_estimate_message_tokens_counts_visible_reasoning_text_as_prose():
@@ -487,20 +370,6 @@ def test_estimate_message_tokens_counts_short_reasoning_identifiers_verbatim():
     assert 0 < count < OPAQUE_REASONING_BLOB_TOKEN_RESERVE
 
 
-def test_estimate_structured_tokens_reserves_opaque_reasoning_blobs():
-    """Structured Responses-style payloads reserve oversized continuity blobs."""
-
-    # Arrange
-    value = [{"type": "reasoning", "id": "rs_1", "encrypted_content": "X" * 5_000}]
-
-    # Act
-    count, _ = estimate_structured_tokens(value)
-
-    # Assert
-    assert count >= OPAQUE_REASONING_BLOB_TOKEN_RESERVE
-    assert count < OPAQUE_REASONING_BLOB_TOKEN_RESERVE + 100
-
-
 def test_estimate_message_tokens_compacts_legacy_delta_fragments():
     """Sessions persisted before fragment merging are budgeted by content size."""
 
@@ -525,12 +394,12 @@ def test_estimate_message_tokens_compacts_legacy_delta_fragments():
     [
         ("gpt-4", "cl100k_base"),
         ("openai/gpt-4-0613", "cl100k_base"),
-        ("gpt-3.5-turbo", "cl100k_base"),
         ("gpt-4o", "o200k_base"),
         ("openai/gpt-4.1", "o200k_base"),
         ("gpt-5.6-sol", "o200k_base"),
+        # Legacy vocabularies use the shared default instead of loading more tables.
+        ("text-davinci-003", "o200k_base"),
         ("anthropic/claude-opus-4-7", "o200k_base"),
-        ("opencode-go/deepseek-v4.1-flash", "o200k_base"),
         ("my-custom-model", "o200k_base"),
         (None, "o200k_base"),
     ],

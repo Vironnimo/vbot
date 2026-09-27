@@ -263,9 +263,23 @@ async def test_recording_seeds_current_gauges_on_their_tracks(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
-async def test_recording_stops_itself_after_max_seconds(tmp_path: Path) -> None:
+async def test_recording_stops_itself_after_max_seconds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     service = _service(tmp_path)
-    status = service.start_recording(max_seconds=1)
+    loop = asyncio.get_running_loop()
+    real_call_later = loop.call_later
+    delays: list[float] = []
+
+    def call_later_now(delay: float, callback: Any, *args: Any) -> asyncio.TimerHandle:
+        # Record the requested limit, then let the limit expire at once.
+        delays.append(delay)
+        return real_call_later(0, callback, *args)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(loop, "call_later", call_later_now)
+        status = service.start_recording(max_seconds=1)
+    assert delays == [1]
 
     deadline = time.monotonic() + 10
     while not (recordings := await service.list_recordings()) and time.monotonic() < deadline:

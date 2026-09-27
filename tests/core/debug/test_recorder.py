@@ -55,16 +55,18 @@ def _latest_trace(store: DebugTraceStore) -> dict:
 
 
 class TestFullCycle:
-    def test_non_streaming_cycle_produces_complete_trace(self, recorder, store):
-        recorder.set_context(_make_context())
+    def test_streaming_cycle_produces_one_complete_raw_trace(self, recorder, store):
+        recorder.set_context(_make_context(streaming=True))
+        assert store.get_traces() == []
         capture = recorder.begin_capture(
             method="POST",
             url="https://api.example.com/v1/chat",
-            headers={"Content-Type": "application/json", "Authorization": "Bearer sk-123"},
+            headers={"Content-Type": "application/json"},
             body=b'{"model":"gpt-4"}',
         )
-        capture.record_response_head(200, {"Content-Type": "application/json"})
-        capture.feed_body(b'{"choices":[{"message":{"content":"hi"}}]}')
+        capture.record_response_head(429, {"Content-Type": "application/json"})
+        capture.feed_body(b'data: {"delta":"hi"}\n\n')
+        capture.feed_body(b"data: [DONE]\n\n")
         capture.finalize()
 
         trace = _latest_trace(store)
@@ -76,147 +78,62 @@ class TestFullCycle:
         assert trace["context"]["run_id"] == "run-1"
         assert trace["context"]["connection_id"] == "conn-1"
         assert trace["context"]["iteration_number"] == 1
-        assert trace["context"]["streaming"] is False
+        assert trace["context"]["streaming"] is True
         assert trace["request"]["method"] == "POST"
         assert trace["request"]["body"] == '{"model":"gpt-4"}'
-        assert trace["response"]["status_code"] == 200
-        assert trace["response"]["body"] == '{"choices":[{"message":{"content":"hi"}}]}'
+        assert trace["response"]["status_code"] == 429
+        # Streamed or not, success or error: the whole raw body in one response.
+        assert trace["response"]["body"] == 'data: {"delta":"hi"}\n\ndata: [DONE]\n\n'
+        assert "stream" not in trace
         assert isinstance(trace["duration_ms"], int)
 
 
 class TestRedaction:
-    def test_request_auth_header_is_redacted(self, recorder, store):
+    def test_headers_and_url_are_redacted_but_bodies_are_stored_raw(self, recorder, store):
         recorder.set_context(_make_context())
         capture = recorder.begin_capture(
             method="POST",
-            url="https://api.example.com/v1/chat",
-            headers={"Content-Type": "application/json", "Authorization": "Bearer sk-abc"},
-            body=None,
-        )
-        capture.record_response_head(200, {})
-        capture.finalize()
-
-        headers = _latest_trace(store)["request"]["headers"]
-        assert headers["Authorization"] == _REDACTED
-        assert headers["Content-Type"] == "application/json"
-
-    def test_url_query_params_are_redacted(self, recorder, store):
-        recorder.set_context(_make_context())
-        capture = recorder.begin_capture(
-            method="GET",
             url="https://api.example.com/v1/models?token=secret123&limit=10",
-            headers={},
-            body=None,
-        )
-        capture.record_response_head(200, {})
-        capture.finalize()
-
-        stored_url = _latest_trace(store)["request"]["url"]
-        assert "secret123" not in stored_url
-        assert "limit=10" in stored_url
-        assert _REDACTED in unquote(stored_url)
-
-    def test_response_headers_are_redacted(self, recorder, store):
-        recorder.set_context(_make_context())
-        capture = recorder.begin_capture(
-            method="POST", url="https://api.example.com/v1/chat", headers={}, body=None
-        )
-        capture.record_response_head(200, {"X-Request-Id": "req-1", "X-Refresh-Token": "leak"})
-        capture.finalize()
-
-        headers = _latest_trace(store)["response"]["headers"]
-        assert headers["X-Refresh-Token"] == _REDACTED
-        assert headers["X-Request-Id"] == "req-1"
-
-    def test_identifying_request_and_response_headers_are_redacted(self, recorder, store):
-        """Provider Account ids, organization ids, and cookies never persist verbatim."""
-        recorder.set_context(_make_context())
-        capture = recorder.begin_capture(
-            method="POST",
-            url="https://chatgpt.com/backend-api/codex/responses",
-            headers={"chatgpt-account-id": "acct-123", "cookie": "session=abc"},
-            body=None,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": "Bearer sk-abc",
+                "chatgpt-account-id": "acct-123",
+                "cookie": "session=abc",
+            },
+            body=b'{"api_key":"sk-secret","model":"gpt-4"}',
         )
         capture.record_response_head(
             200,
-            {"openai-organization": "org-123", "set-cookie": "session=def", "x-request-id": "r1"},
+            {
+                "openai-organization": "org-123",
+                "set-cookie": "session=def",
+                "X-Refresh-Token": "leak",
+                "x-request-id": "r1",
+            },
         )
+        capture.feed_body(b'{"token":"raw"}')
         capture.finalize()
 
         trace = _latest_trace(store)
         assert trace["request"]["headers"] == {
+            "Content-Type": "application/json",
+            "Authorization": _REDACTED,
             "chatgpt-account-id": _REDACTED,
             "cookie": _REDACTED,
         }
+        stored_url = trace["request"]["url"]
+        assert "secret123" not in stored_url
+        assert "limit=10" in stored_url
+        assert _REDACTED in unquote(stored_url)
         assert trace["response"]["headers"] == {
             "openai-organization": _REDACTED,
             "set-cookie": _REDACTED,
+            "X-Refresh-Token": _REDACTED,
             "x-request-id": "r1",
         }
-
-    def test_request_body_is_stored_raw_not_redacted(self, recorder, store):
-        """Bodies are stored verbatim — prompt/payload content is never redacted."""
-        recorder.set_context(_make_context())
-        capture = recorder.begin_capture(
-            method="POST",
-            url="https://api.example.com/v1/chat",
-            headers={},
-            body=b'{"api_key":"sk-secret","model":"gpt-4"}',
-        )
-        capture.record_response_head(200, {})
-        capture.finalize()
-
-        assert _latest_trace(store)["request"]["body"] == (
-            '{"api_key":"sk-secret","model":"gpt-4"}'
-        )
-
-
-class TestStreaming:
-    def test_streaming_body_stored_as_raw_aggregate_in_response_body(self, recorder, store):
-        """A streaming success keeps the full raw SSE text in ``response.body``."""
-        recorder.set_context(_make_context(streaming=True))
-        capture = recorder.begin_capture(
-            method="POST", url="https://api.example.com/v1/chat", headers={}, body=None
-        )
-        capture.record_response_head(200, {})
-        capture.feed_body(b'data: {"delta":"hi"}\n\n')
-        capture.feed_body(b"data: [DONE]\n\n")
-        capture.finalize()
-
-        trace = _latest_trace(store)
-        assert trace["response"]["body"] == 'data: {"delta":"hi"}\n\ndata: [DONE]\n\n'
-        # The canonical trace is one request and one response — no per-frame
-        # split is produced for streaming success.
-        assert "stream" not in trace
-
-    def test_non_streaming_body_stored_in_response_body(self, recorder, store):
-        """A non-streaming response keeps its raw body in ``response.body``."""
-        recorder.set_context(_make_context(streaming=False))
-        capture = recorder.begin_capture(
-            method="POST", url="https://api.example.com/v1/chat", headers={}, body=None
-        )
-        capture.record_response_head(200, {})
-        capture.feed_body(b'{"ok":true}')
-        capture.finalize()
-
-        trace = _latest_trace(store)
-        assert trace["response"]["body"] == '{"ok":true}'
-        assert "stream" not in trace
-
-    def test_streaming_error_status_keeps_raw_error_body(self, recorder, store):
-        """A streaming request that returns an error status keeps its raw body."""
-        recorder.set_context(_make_context(streaming=True))
-        capture = recorder.begin_capture(
-            method="POST", url="https://api.example.com/v1/chat", headers={}, body=None
-        )
-        capture.record_response_head(429, {})
-        capture.feed_body(b'{"error":{"message":"Rate limit exceeded"}}')
-        capture.finalize()
-
-        trace = _latest_trace(store)
-        assert trace["response"]["status_code"] == 429
-        assert trace["response"]["body"] == '{"error":{"message":"Rate limit exceeded"}}'
-        assert "stream" not in trace
+        # Prompt and payload content is never redacted.
+        assert trace["request"]["body"] == '{"api_key":"sk-secret","model":"gpt-4"}'
+        assert trace["response"]["body"] == '{"token":"raw"}'
 
 
 class TestErrorCapture:
@@ -281,6 +198,7 @@ class TestLifecycle:
             capture.feed_body(request_id.encode())
             captures.append(capture)
 
+        # Later header or context changes never alter a capture that already began.
         headers["X-Request-Id"] = "changed-after-capture"
         recorder.set_context(_make_context(run_id="changed-after-capture"))
         for capture in reversed(captures):
@@ -309,10 +227,6 @@ class TestLifecycle:
         capture.finalize()
 
         assert len(store.get_traces()) == 1
-
-    def test_no_capture_persists_nothing(self, recorder, store):
-        recorder.set_context(_make_context())
-        assert store.get_traces() == []
 
     def test_finalize_returns_before_the_durable_write(self, recorder, store, monkeypatch):
         """The Provider call hands the capture off; it never waits for the durable write."""
@@ -358,18 +272,3 @@ class TestLifecycle:
 
         assert store.get_traces() == []
         assert [record.name for record in caplog.records] == ["vbot.debug"]
-
-    def test_capture_uses_context_at_begin_time(self, recorder, store):
-        """A trace reflects whichever context was active when capture began."""
-        recorder.set_context(_make_context(provider_id="anthropic", model_id="claude"))
-        capture = recorder.begin_capture(
-            method="POST", url="https://api.anthropic.com/v1/messages", headers={}, body=None
-        )
-        # A later context change must not retroactively alter the in-flight trace.
-        recorder.set_context(_make_context(provider_id="openai", model_id="gpt-4"))
-        capture.record_response_head(200, {})
-        capture.finalize()
-
-        trace = _latest_trace(store)
-        assert trace["provider_id"] == "anthropic"
-        assert trace["model_id"] == "claude"

@@ -1,9 +1,9 @@
 """Tests for debug-trace redaction utilities.
 
-Covers header redaction, URL query-parameter redaction, and recursive
-JSON-body redaction — including edge cases such as empty containers,
-partial-word exclusion, case-insensitive matching, and free-text
-pass-through.
+Header names, URL query-parameter names and JSON object keys share one rule:
+a name is sensitive when it is ``Authorization``/``x-api-key`` or contains a
+sensitive whole word, split on hyphens, underscores and dots, in any case.
+Values are never scanned for secrets.
 """
 
 import pytest
@@ -13,135 +13,53 @@ from core.debug.redaction import redact_headers, redact_json_body, redact_url
 _REDACTED = "[REDACTED]"
 
 # ---------------------------------------------------------------------------
-# redact_headers
+# The shared name rule, exercised through redact_headers
 # ---------------------------------------------------------------------------
-
-
-def test_redacts_exact_match_authorization():
-    """The Authorization header is redacted regardless of case."""
-    headers = {"Authorization": "Bearer secret-token"}
-    result = redact_headers(headers)
-    assert result["Authorization"] == _REDACTED
-
-
-def test_redacts_exact_match_x_api_key_lowercase():
-    """x-api-key is redacted when lowercase."""
-    headers = {"x-api-key": "sk-abc123"}
-    result = redact_headers(headers)
-    assert result["x-api-key"] == _REDACTED
-
-
-def test_redacts_exact_match_x_api_key_uppercase():
-    """X-API-KEY is redacted when uppercase."""
-    headers = {"X-API-KEY": "sk-abc123"}
-    result = redact_headers(headers)
-    assert result["X-API-KEY"] == _REDACTED
-
-
-def test_redacts_header_containing_sensitive_word_token():
-    """A header whose name contains 'token' as a whole word is redacted."""
-    headers = {"x-access-token": "value"}
-    result = redact_headers(headers)
-    assert result["x-access-token"] == _REDACTED
-
-
-def test_redacts_header_containing_sensitive_word_secret():
-    """A header whose name contains 'secret' is redacted."""
-    headers = {"client-secret": "value"}
-    result = redact_headers(headers)
-    assert result["client-secret"] == _REDACTED
-
-
-def test_redacts_header_containing_sensitive_word_key():
-    """A header containing 'key' as a whole hyphen-delimited word is redacted."""
-    headers = {"api-key": "value"}
-    result = redact_headers(headers)
-    assert result["api-key"] == _REDACTED
-
-
-def test_redacts_header_containing_sensitive_word_password():
-    """'password' is a sensitive word."""
-    headers = {"x-password-hash": "abc"}
-    result = redact_headers(headers)
-    assert result["x-password-hash"] == _REDACTED
-
-
-def test_redacts_header_containing_sensitive_word_credential():
-    """'credential' is a sensitive word."""
-    headers = {"x-credential-id": "abc"}
-    result = redact_headers(headers)
-    assert result["x-credential-id"] == _REDACTED
 
 
 @pytest.mark.parametrize(
     "name",
     [
+        "Authorization",
+        "X-API-KEY",
+        "x-access-token",
+        "client-secret",
+        "api-key",
+        "x-password-hash",
+        "x-credential-id",
+        # Identifying values: account ids, organization ids and cookies.
         "chatgpt-account-id",
         "ChatGPT-Account-Id",
         "openai-organization",
         "cookie",
         "Set-Cookie",
+        # Underscores and dots separate words like hyphens.
+        "x_token_value",
+        "auth.token",
     ],
 )
-def test_redacts_identifying_headers(name: str):
-    """Account ids, organization ids, and cookies never reach a trace verbatim."""
-    headers = {name: "identifying-value", "Content-Type": "application/json"}
-    result = redact_headers(headers)
-    assert result == {name: _REDACTED, "Content-Type": "application/json"}
+def test_names_with_a_sensitive_whole_word_are_redacted(name: str):
+    headers = {name: "sensitive-value", "Content-Type": "application/json"}
+
+    assert redact_headers(headers) == {name: _REDACTED, "Content-Type": "application/json"}
+    assert headers[name] == "sensitive-value"
 
 
-def test_does_not_redact_identifying_word_prefix():
-    """'accounting' contains 'account' only as a fragment, not a whole word."""
-    headers = {"x-accounting-mode": "safe"}
-    result = redact_headers(headers)
-    assert result["x-accounting-mode"] == "safe"
-
-
-def test_does_not_redact_partial_word_match_donkey():
-    """A header like 'donkey' is not redacted — 'key' must be a whole word."""
-    headers = {"donkey": "safe"}
-    result = redact_headers(headers)
-    assert result["donkey"] == "safe"
-
-
-def test_does_not_redact_partial_word_match_mickey():
-    """'mickey' is not redacted — no whole-word boundary for 'key'."""
-    headers = {"mickey": "safe"}
-    result = redact_headers(headers)
-    assert result["mickey"] == "safe"
-
-
-def test_preserves_non_sensitive_headers():
-    """Headers that do not match any pattern are left unchanged."""
-    headers = {"Content-Type": "application/json", "Accept": "*/*"}
-    result = redact_headers(headers)
-    assert result == {"Content-Type": "application/json", "Accept": "*/*"}
-
-
-def test_redact_headers_handles_empty_dict():
-    """An empty headers dict returns an empty dict."""
-    assert redact_headers({}) == {}
-
-
-def test_redacts_underscore_delimited_sensitive_words():
-    """Underscores are treated as word separators like hyphens."""
-    headers = {"x_token_value": "sensitive"}
-    result = redact_headers(headers)
-    assert result["x_token_value"] == _REDACTED
-
-
-def test_redacts_dot_delimited_sensitive_words():
-    """Dots are treated as word separators like hyphens and underscores."""
-    headers = {"auth.token": "sensitive"}
-    result = redact_headers(headers)
-    assert result["auth.token"] == _REDACTED
-
-
-def test_redact_headers_does_not_mutate_original():
-    """The input dict is not modified."""
-    headers = {"Authorization": "secret", "Content-Type": "json"}
-    redact_headers(headers)
-    assert headers["Authorization"] == "secret"
+@pytest.mark.parametrize(
+    "name",
+    [
+        "Content-Type",
+        "Accept",
+        # A sensitive word only as a fragment of a longer word.
+        "x-accounting-mode",
+        "donkey",
+        "monkey_keychain",
+        # Usage counters are observability data, not credential fields.
+        "reasoning_tokens",
+    ],
+)
+def test_names_without_a_sensitive_whole_word_are_kept(name: str):
+    assert redact_headers({name: "safe"}) == {name: "safe"}
 
 
 # ---------------------------------------------------------------------------
@@ -149,91 +67,30 @@ def test_redact_headers_does_not_mutate_original():
 # ---------------------------------------------------------------------------
 
 
-def test_redact_url_redacts_sensitive_param_token():
-    """A query param named 'token' is redacted."""
-    url = "http://example.com/api?token=abc123&user=john"
-    result = redact_url(url)
-    assert "token" in result
-    assert "abc123" not in result
-    assert "user=john" in result
+def test_redact_url_redacts_every_sensitive_query_value_and_keeps_the_rest():
+    url = (
+        "https://api.example.com:8080/v1/chat"
+        "?token=a&token=b&API.Key=secret&account_id=acct-123&user=john#section"
+    )
+
+    assert redact_url(url) == (
+        "https://api.example.com:8080/v1/chat"
+        "?token=%5BREDACTED%5D&token=%5BREDACTED%5D&API.Key=%5BREDACTED%5D"
+        "&account_id=%5BREDACTED%5D&user=john#section"
+    )
 
 
-def test_redact_url_redacts_sensitive_param_key():
-    """A query param named 'key' is redacted."""
-    url = "http://example.com/api?key=secret&page=1"
-    result = redact_url(url)
-    assert "key" in result
-    assert "page=1" in result
-    assert "secret" not in result
-
-
-def test_redact_url_redacts_sensitive_param_secret():
-    """A query param named 'secret' is redacted."""
-    url = "http://example.com/api?secret=value&safe=ok"
-    result = redact_url(url)
-    assert "secret" in result
-    assert "value" not in result
-    assert "safe=ok" in result
-
-
-def test_redact_url_preserves_non_sensitive_params():
-    """Non-sensitive query params are left intact."""
-    url = "http://example.com/api?user=john&page=2&limit=10"
-    result = redact_url(url)
-    assert result == url
-
-
-def test_redact_url_handles_no_query_string():
-    """A URL with no query string is returned unchanged."""
-    url = "http://example.com/api"
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://example.com/api?user=john&page=2&limit=10",
+        "http://example.com/api",
+        # An unparseable URL is returned as it is.
+        "http://[::1/api",
+    ],
+)
+def test_redact_url_returns_a_url_without_sensitive_values_unchanged(url: str):
     assert redact_url(url) == url
-
-
-def test_redact_url_redacts_repeated_sensitive_params():
-    """Multiple values for the same sensitive param are all redacted."""
-    url = "http://example.com/api?token=a&token=b&user=john"
-    result = redact_url(url)
-    assert "user=john" in result
-    # Both token values should be redacted — the literal values "a" and "b"
-    # must not appear as query-param values alongside "token=".
-    assert "token=a" not in result
-    assert "token=b" not in result
-
-
-def test_redact_url_preserves_url_structure():
-    """Scheme, host, path, and fragment are preserved."""
-    url = "https://api.example.com:8080/v1/chat?api_key=secret#section"
-    result = redact_url(url)
-    assert result.startswith("https://api.example.com:8080/v1/chat?")
-    assert result.endswith("#section")
-    assert "secret" not in result
-
-
-def test_redact_url_returns_unparseable_url_unchanged():
-    """A malformed URL that cannot be parsed is returned as-is."""
-    url = "not-a-valid-url::://"
-    assert redact_url(url) == url
-
-
-def test_redact_url_redacts_case_insensitive_param_name():
-    """Query param names are matched case-insensitively."""
-    url = "http://example.com/api?TOKEN=abc"
-    result = redact_url(url)
-    assert "abc" not in result
-
-
-def test_redact_url_redacts_account_id_param():
-    """An account_id query parameter is identifying and redacted."""
-    result = redact_url("https://example.com/api?account_id=acct-123&limit=10")
-    assert "acct-123" not in result
-    assert "limit=10" in result
-
-
-def test_redact_url_redacts_dot_delimited_param_name():
-    """Dotted query keys such as api.key must not leak their values."""
-    result = redact_url("http://example.com/api?api.key=abc&safe=ok")
-    assert "abc" not in result
-    assert "safe=ok" in result
 
 
 # ---------------------------------------------------------------------------
@@ -241,140 +98,33 @@ def test_redact_url_redacts_dot_delimited_param_name():
 # ---------------------------------------------------------------------------
 
 
-def test_redacts_top_level_sensitive_key():
-    """A sensitive key at the top level has its value replaced."""
-    body = {"password": "hunter2", "username": "alice"}
-    result = redact_json_body(body)
-    assert result == {"password": _REDACTED, "username": "alice"}
-
-
-def test_redacts_dot_delimited_json_key():
-    """Dotted structured keys are redacted recursively like other keys."""
-    assert redact_json_body({"auth.token": "abc", "safe": "ok"}) == {
-        "auth.token": _REDACTED,
-        "safe": "ok",
-    }
-
-
-def test_recursively_redacts_nested_dict_keys():
-    """Sensitive keys in nested dicts are redacted."""
+def test_redact_json_body_redacts_sensitive_keys_at_every_depth():
     body = {
-        "auth": {
-            "token": "abc123",
-            "type": "bearer",
-        }
-    }
-    result = redact_json_body(body)
-    assert result == {
-        "auth": {
-            "token": _REDACTED,
-            "type": "bearer",
-        }
-    }
-
-
-def test_preserves_non_secret_usage_counter_keys():
-    """Token counter names are observability data, not credential fields."""
-    body = {"reasoning_tokens": 12, "cache_write_tokens": 3}
-
-    assert redact_json_body(body) == body
-
-
-def test_recursively_redacts_keys_in_list_items():
-    """Sensitive keys inside list elements are redacted."""
-    body = {
+        "password": "hunter2",
+        "username": "alice",
+        "auth": {"TOKEN": "abc123", "type": "bearer"},
         "messages": [
-            {"role": "user", "secret": "x"},
-            {"role": "assistant", "content": "hello"},
-        ]
+            {"role": "user", "client_secret": {"nested": "x"}},
+            {"role": "assistant", "content": "my token is abc123 and secret is xyz"},
+        ],
+        "level1": {"level2": {"level3": {"api.key": "hidden"}}},
     }
-    result = redact_json_body(body)
-    assert result == {
+
+    assert redact_json_body(body) == {
+        "password": _REDACTED,
+        "username": "alice",
+        "auth": {"TOKEN": _REDACTED, "type": "bearer"},
         "messages": [
-            {"role": "user", "secret": _REDACTED},
-            {"role": "assistant", "content": "hello"},
-        ]
+            {"role": "user", "client_secret": _REDACTED},
+            # String values are never inspected for secrets.
+            {"role": "assistant", "content": "my token is abc123 and secret is xyz"},
+        ],
+        "level1": {"level2": {"level3": {"api.key": _REDACTED}}},
     }
+    assert body["password"] == "hunter2"
+    assert body["auth"]["TOKEN"] == "abc123"
 
 
-def test_redact_json_does_not_scan_string_values():
-    """String values are never inspected for secrets."""
-    body = {"data": "my token is abc123 and secret is xyz"}
-    result = redact_json_body(body)
-    assert result == body
-
-
-def test_redact_json_returns_primitive_unchanged():
-    """Non-dict, non-list values are returned as-is."""
-    assert redact_json_body("hello") == "hello"
-    assert redact_json_body(42) == 42
-    assert redact_json_body(None) is None
-    assert redact_json_body(True) is True
-
-
-def test_redact_json_handles_empty_dict():
-    """An empty dict is returned as an empty dict."""
-    assert redact_json_body({}) == {}
-
-
-def test_redact_json_handles_empty_list():
-    """An empty list is returned as an empty list."""
-    assert redact_json_body([]) == []
-
-
-def test_redact_json_handles_deeply_nested():
-    """Deeply nested sensitive keys are recursively redacted."""
-    body = {
-        "level1": {
-            "level2": {
-                "level3": {
-                    "secret": "hidden",
-                }
-            }
-        }
-    }
-    result = redact_json_body(body)
-    assert result == {
-        "level1": {
-            "level2": {
-                "level3": {
-                    "secret": _REDACTED,
-                }
-            }
-        }
-    }
-
-
-def test_redact_json_does_not_mutate_original():
-    """The input dict is not modified."""
-    body = {"token": "abc"}
-    redact_json_body(body)
-    assert body["token"] == "abc"
-
-
-def test_redact_json_case_insensitive_keys():
-    """JSON keys are matched case-insensitively."""
-    body = {"TOKEN": "abc", "Secret": "xyz", "Key": "val"}
-    result = redact_json_body(body)
-    assert result == {"TOKEN": _REDACTED, "Secret": _REDACTED, "Key": _REDACTED}
-
-
-def test_redact_json_hyphenated_keys():
-    """Hyphen-delimited keys containing sensitive words are redacted."""
-    body = {"api-key": "abc", "x-secret-token": "xyz"}
-    result = redact_json_body(body)
-    assert result == {"api-key": _REDACTED, "x-secret-token": _REDACTED}
-
-
-def test_redact_json_underscore_delimited_keys():
-    """Underscore-delimited keys containing sensitive words are redacted."""
-    body = {"api_key": "abc", "client_secret": "xyz"}
-    result = redact_json_body(body)
-    assert result == {"api_key": _REDACTED, "client_secret": _REDACTED}
-
-
-def test_redact_json_partial_word_keys_not_redacted():
-    """Keys like 'donkey' are not redacted — whole-word match only."""
-    body = {"donkey": "value", "monkey_keychain": "value"}
-    result = redact_json_body(body)
-    assert result == body
+@pytest.mark.parametrize("value", ["hello", 42, None, True, {}, []])
+def test_redact_json_body_returns_values_without_sensitive_keys_unchanged(value: object):
+    assert redact_json_body(value) == value
