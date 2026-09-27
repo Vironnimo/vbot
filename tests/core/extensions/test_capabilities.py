@@ -1,21 +1,18 @@
-"""Tests for extension capability surfaces: tools and recall backends.
+"""Extension capability surfaces: Tools, Commands, recall backends, interaction
+prefixes and prompt blocks.
 
-Covers ``api.register_tool`` / ``api.register_recall_backend`` declaration plus
-the registry apply phases (``apply_tools`` / ``apply_recall_backends``):
-extension tools are callable through a real ``ToolRegistry`` dispatch and obey
-allowlists; name collisions are skipped and diagnosed (built-in wins, and
-between two extensions the first-loaded wins with both sides diagnosed); recall
-backends become selectable through ``RecallBackendRegistry`` and duplicate /
-invalid names are diagnosed. Extensions are loaded through the real filesystem
-loader so the whole declare → apply path is exercised.
+Each capability is declared through ``register(api)``, loaded from the real
+filesystem and applied to its live owner (``ToolRegistry``, ``CommandDispatcher``,
+``RecallBackendRegistry``, channel interaction dispatch, prompt definitions).
+Collisions follow one policy: a built-in wins, between Extensions the first
+declarer wins, both sides are diagnosed, and a skipped capability never fails
+its Extension.
 """
 
 from __future__ import annotations
 
 import asyncio
-import sys
 import threading
-from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, cast
 
@@ -29,106 +26,21 @@ from core.chat import (
 )
 from core.database import write_bootstrap_marker
 from core.extensions import ExtensionRegistry
+from core.extensions.extensions import ExtensionAPI, ExtensionDeclarations
 from core.recall.recall import RecallBackendContext, RecallBackendRegistry
 from core.runs import ChatRunManager
 from core.sessions import ChatSessionManager
-from core.tools import ToolContext, ToolContractError, ToolRegistry
-
-
-@pytest.fixture(autouse=True)
-def _clean_extension_modules() -> Iterator[None]:
-    """Drop the synthetic ``vbot_ext`` namespace after each test."""
-    yield
-    for module_name in list(sys.modules):
-        if module_name == "vbot_ext" or module_name.startswith("vbot_ext."):
-            del sys.modules[module_name]
-
-
-def _write_single_file(root: Path, name: str, source: str) -> None:
-    root.mkdir(parents=True, exist_ok=True)
-    (root / f"{name}.py").write_text(source, encoding="utf-8")
-
-
-def _record(registry: ExtensionRegistry, name: str):
-    return next(record for record in registry.records() if record.name == name)
-
-
-def _tool_extension_source(tool_name: str, marker: str) -> str:
-    """Extension that registers one echo tool returning *marker* with the input."""
-    return (
-        "from core.tools import tool_success\n"
-        "def _handler(context, arguments):\n"
-        f"    return tool_success({{'marker': {marker!r}, 'value': arguments.get('value')}})\n"
-        "def register(api):\n"
-        f"    api.register_tool({tool_name!r}, 'desc', {{'type': 'object'}}, _handler)\n"
-    )
-
-
-def _ready_tool_extension_source(tool_name: str, *, ready: bool) -> str:
-    """Extension registering one tool with a fixed readiness predicate."""
-    return (
-        "from core.tools import tool_success\n"
-        "def _handler(context, arguments):\n"
-        "    return tool_success({})\n"
-        "def register(api):\n"
-        f"    api.register_tool({tool_name!r}, 'desc', {{'type': 'object'}}, _handler, "
-        f"ready=lambda: {ready!r})\n"
-    )
-
-
-def _open_tool_extension_source(tool_name: str, *, explicitly_open: bool = False) -> str:
-    extra = ", 'additionalProperties': True" if explicitly_open else ""
-    return (
-        "from core.tools import tool_success\n"
-        "def _handler(context, arguments):\n"
-        "    return tool_success({'arguments': arguments})\n"
-        "def register(api):\n"
-        f"    api.register_tool({tool_name!r}, 'desc', "
-        f"{{'type': 'object', 'properties': {{'value': {{'type': 'string'}}}}{extra}}}, "
-        "_handler, open_input_schema=True)\n"
-    )
-
-
-def _command_extension_source(command_name: str, marker: str) -> str:
-    return (
-        "from core.chat import CommandFeedback, CommandOutcome\n"
-        "def _handler(context, argument):\n"
-        f"    return CommandOutcome(command={command_name!r}, "
-        f"feedback=CommandFeedback(kind='notice', text={marker!r} + ':' + str(argument)))\n"
-        "def register(api):\n"
-        f"    api.register_command({command_name!r}, 'desc', _handler)\n"
-    )
-
-
-def _recall_extension_source(backend_name: str) -> str:
-    """Extension registering a trivial recall backend class as a factory."""
-    return (
-        "class ExtBackend:\n"
-        "    def __init__(self, context):\n"
-        "        self.context = context\n"
-        "    def search_capabilities(self):\n"
-        "        from core.recall import RecallSearchCapabilities\n"
-        "        return RecallSearchCapabilities('message', 'Extension search.')\n"
-        "    async def search_page(self, request):\n"
-        "        from core.recall import RecallSearchPage\n"
-        "        return RecallSearchPage((), 'message', 'extension', 'snapshot', False, 0)\n"
-        "def register(api):\n"
-        f"    api.register_recall_backend({backend_name!r}, ExtBackend)\n"
-    )
-
-
-def _tool_context(tool_name: str, tmp_path: Path) -> ToolContext:
-    return ToolContext(
-        agent_id="a",
-        session_id="s",
-        run_id="r",
-        tool_call_id="c1",
-        tool_name=tool_name,
-        tool_call_index=0,
-        workspace=tmp_path,
-        vbot_root=tmp_path,
-        data_root=tmp_path,
-    )
+from core.tools import ToolContractError, ToolRegistry
+from tests.core.extensions.extension_test_support import (
+    RecordingResponder,
+    command_source,
+    interaction_source,
+    record,
+    tap,
+    tool_context,
+    tool_source,
+    write_extension,
+)
 
 
 def _recall_context(tmp_path: Path) -> RecallBackendContext:
@@ -137,507 +49,182 @@ def _recall_context(tmp_path: Path) -> RecallBackendContext:
     return RecallBackendContext(data_dir=tmp_path, sessions=ChatSessionManager(tmp_path))
 
 
-# --- tools -------------------------------------------------------------------
-
-
-def test_extension_tool_dispatches_through_tool_registry(tmp_path: Path) -> None:
-    root = tmp_path / "extensions"
-    _write_single_file(root, "echo_ext", _tool_extension_source("ext_echo", "from-ext"))
-
+def _loaded_tools(root: Path, *builtins: str) -> tuple[ExtensionRegistry, ToolRegistry]:
+    """Load *root* and apply its Tools over a registry that already owns *builtins*."""
     registry = ExtensionRegistry.load(root)
-    tool_registry = ToolRegistry()
-    registry.apply_tools(tool_registry)
-
-    context = _tool_context("ext_echo", tmp_path)
-    result = asyncio.run(tool_registry.dispatch(context, {"value": "hi"}))
-
-    assert result["ok"] is True
-    assert result["data"] == {"marker": "from-ext", "value": "hi"}
-    assert tool_registry.get("ext_echo").parallel_safe is True
-    assert _record(registry, "echo_ext").capability_errors == []
+    tools = ToolRegistry()
+    for name in builtins:
+        tools.register(name, f"builtin {name}", {"type": "object"}, lambda context, args: {})
+    registry.apply_tools(tools)
+    return registry, tools
 
 
-def test_sync_extension_tool_runs_outside_event_loop_thread(tmp_path: Path) -> None:
+# --- Tools -------------------------------------------------------------------
+
+
+def test_extension_tools_dispatch_off_the_loop_and_obey_allowlists(tmp_path: Path) -> None:
     root = tmp_path / "extensions"
-    _write_single_file(
+    write_extension(
         root,
-        "thread_ext",
+        "echo_ext",
         "import threading\n"
         "from core.tools import tool_success\n"
         "def _handler(context, arguments):\n"
-        "    return tool_success({'thread_id': threading.get_ident()})\n"
+        "    return tool_success({'value': arguments.get('value'),"
+        " 'thread_id': threading.get_ident()})\n"
         "def register(api):\n"
-        "    api.register_tool('ext_thread', 'desc', {'type': 'object'}, _handler)\n",
+        "    api.register_tool('ext_echo', 'desc', {'type': 'object'}, _handler)\n",
     )
-    registry = ExtensionRegistry.load(root)
-    tool_registry = ToolRegistry()
-    registry.apply_tools(tool_registry)
-    loop_thread = threading.get_ident()
+    registry, tools = _loaded_tools(root)
 
-    result = asyncio.run(tool_registry.dispatch(_tool_context("ext_thread", tmp_path), {}))
+    result = asyncio.run(tools.dispatch(tool_context("ext_echo", tmp_path), {"value": "hi"}))
 
-    assert result["data"]["thread_id"] != loop_thread
+    assert result["ok"] is True
+    assert result["data"]["value"] == "hi"
+    # Sync handlers run on a worker thread, never on the event loop thread.
+    assert result["data"]["thread_id"] != threading.get_ident()
+    assert tools.get("ext_echo").parallel_safe is True
+    assert [tool.name for tool in tools.list_tools(allowed_tools=["ext_echo"])] == ["ext_echo"]
+    assert tools.list_tools(allowed_tools=[]) == []
+    assert record(registry, "echo_ext").capability_errors == []
 
 
-def test_extension_tool_respects_allowlist(tmp_path: Path) -> None:
+def test_extension_tool_families_are_namespaced_and_removed_with_their_tools(
+    tmp_path: Path,
+) -> None:
     root = tmp_path / "extensions"
-    _write_single_file(root, "echo_ext", _tool_extension_source("ext_echo", "from-ext"))
-
-    registry = ExtensionRegistry.load(root)
-    tool_registry = ToolRegistry()
-    registry.apply_tools(tool_registry)
-
-    allowed = [tool.name for tool in tool_registry.list_tools(allowed_tools=["ext_echo"])]
-    excluded = [tool.name for tool in tool_registry.list_tools(allowed_tools=[])]
-
-    assert "ext_echo" in allowed
-    assert "ext_echo" not in excluded
-
-
-def test_extension_declares_namespaced_tool_family(tmp_path: Path) -> None:
-    root = tmp_path / "extensions"
-    _write_single_file(
+    write_extension(
         root,
         "weather",
-        (
-            "from core.tools import tool_success\n"
-            "def _handler(context, arguments):\n"
-            "    return tool_success({})\n"
-            "def register(api):\n"
-            "    api.register_tool_family('forecast', 'Weather Forecast')\n"
-            "    api.register_tool('weather_today', 'Today.', {'type': 'object'}, "
-            "_handler, family='forecast')\n"
-            "    api.register_tool('weather_week', 'Week.', {'type': 'object'}, "
-            "_handler, family='forecast')\n"
-        ),
+        "from core.tools import tool_success\n"
+        "def _handler(context, arguments):\n"
+        "    return tool_success({})\n"
+        "def register(api):\n"
+        "    api.register_tool_family('forecast', 'Weather Forecast')\n"
+        "    api.register_tool('weather_today', 'Today.', {'type': 'object'}, "
+        "_handler, family='forecast')\n"
+        "    api.register_tool('weather_week', 'Week.', {'type': 'object'}, "
+        "_handler, family='forecast')\n"
+        "    api.register_tool('weather_alerts', 'Alerts.', {'type': 'object'}, "
+        "_handler, family='missing')\n",
     )
+    registry, tools = _loaded_tools(root)
 
-    registry = ExtensionRegistry.load(root)
-    tool_registry = ToolRegistry()
-    registry.apply_tools(tool_registry)
+    family_id = "extension:weather:forecast"
+    assert tools.get("weather_today").family == family_id
+    assert tools.get("weather_week").family == family_id
+    assert tools.get("weather_today").family_label == "Weather Forecast"
+    assert tools.get_family(family_id).extension == "weather"
+    # A Tool naming an undeclared family stays standalone and is diagnosed.
+    assert tools.get("weather_alerts").family is None
+    errors = record(registry, "weather").capability_errors
+    assert len(errors) == 1
+    assert "undeclared tool family" in errors[0]
 
-    expected_id = "extension:weather:forecast"
-    assert tool_registry.get("weather_today").family == expected_id
-    assert tool_registry.get("weather_week").family == expected_id
-    assert tool_registry.get("weather_today").family_label == "Weather Forecast"
-    assert tool_registry.get_family(expected_id).extension == "weather"
-    assert _record(registry, "weather").capability_errors == []
+    registry.remove_applied_tools(tools)
 
-    registry.remove_applied_tools(tool_registry)
-
-    assert tool_registry.list_tools() == []
+    assert tools.list_tools() == []
     with pytest.raises(ValueError, match="not found"):
-        tool_registry.get_family(expected_id)
+        tools.get_family(family_id)
 
 
-def test_extension_tool_with_undeclared_family_stays_standalone(tmp_path: Path) -> None:
+def test_extension_tool_schemas_can_be_open_or_accept_unknown_arguments(tmp_path: Path) -> None:
     root = tmp_path / "extensions"
-    _write_single_file(
+    declared = "{'type': 'object', 'properties': {'value': {'type': 'string'}}"
+    write_extension(
         root,
-        "weather",
-        (
-            "from core.tools import tool_success\n"
-            "def _handler(context, arguments):\n"
-            "    return tool_success({})\n"
-            "def register(api):\n"
-            "    api.register_tool('weather_today', 'Today.', {'type': 'object'}, "
-            "_handler, family='missing')\n"
-        ),
+        "open_ext",
+        "from core.tools import tool_success\n"
+        "def _handler(context, arguments):\n"
+        "    return tool_success({'arguments': arguments})\n"
+        "def register(api):\n"
+        f"    api.register_tool('ext_open', 'desc', {declared}}}, "
+        "_handler, open_input_schema=True)\n"
+        f"    api.register_tool('ext_any', 'desc', {declared}, 'additionalProperties': True}}, "
+        "_handler, open_input_schema=True)\n",
     )
+    _registry, tools = _loaded_tools(root)
 
-    registry = ExtensionRegistry.load(root)
-    tool_registry = ToolRegistry()
-    registry.apply_tools(tool_registry)
+    def dispatch(name: str, arguments: dict[str, Any]) -> Any:
+        return asyncio.run(tools.dispatch(tool_context(name, tmp_path), arguments))
 
-    assert tool_registry.get("weather_today").family is None
-    assert any(
-        "undeclared tool family" in message
-        for message in _record(registry, "weather").capability_errors
-    )
-
-
-def test_extension_tool_with_readiness_predicate_lands_in_registry(tmp_path: Path) -> None:
-    root = tmp_path / "extensions"
-    _write_single_file(root, "ready_ext", _ready_tool_extension_source("ext_ready", ready=True))
-
-    registry = ExtensionRegistry.load(root)
-    tool_registry = ToolRegistry()
-    registry.apply_tools(tool_registry)
-
-    tool = tool_registry.get("ext_ready")
-    assert tool.ready is not None
-    assert tool.ready() is True
-
-
-def test_extension_tool_can_declare_an_open_model_facing_schema(tmp_path: Path) -> None:
-    root = tmp_path / "extensions"
-    _write_single_file(root, "open_ext", _open_tool_extension_source("ext_open"))
-
-    registry = ExtensionRegistry.load(root)
-    tool_registry = ToolRegistry()
-    registry.apply_tools(tool_registry)
-
-    tool = tool_registry.get("ext_open")
-    assert tool.open_input_schema is True
-    assert "additionalProperties" not in tool.parameters
-    result = asyncio.run(
-        tool_registry.dispatch(_tool_context("ext_open", tmp_path), {"value": "declared"})
-    )
-    assert result["data"] == {"arguments": {"value": "declared"}}
-    # The declared properties are the complete parameter list.
+    assert tools.get("ext_open").open_input_schema is True
+    assert "additionalProperties" not in tools.get("ext_open").parameters
+    assert dispatch("ext_open", {"value": "declared"})["data"] == {
+        "arguments": {"value": "declared"}
+    }
+    # The declared properties are the complete parameter list...
     with pytest.raises(ToolContractError, match='"unknown" is not a parameter'):
-        asyncio.run(
-            tool_registry.dispatch(_tool_context("ext_open", tmp_path), {"unknown": "rejected"})
-        )
+        dispatch("ext_open", {"unknown": "rejected"})
+    # ...unless the schema explicitly admits additional properties.
+    assert dispatch("ext_any", {"unknown": "preserved"})["data"] == {
+        "arguments": {"unknown": "preserved"}
+    }
 
 
-def test_extension_tool_with_explicit_additional_properties_receives_unknown_arguments(
+def test_not_ready_extension_tools_stay_registered_but_hidden_from_providers(
     tmp_path: Path,
 ) -> None:
     root = tmp_path / "extensions"
-    _write_single_file(
-        root, "open_ext", _open_tool_extension_source("ext_open", explicitly_open=True)
+    write_extension(
+        root,
+        "gated_ext",
+        "from core.tools import tool_success\n"
+        "def _handler(context, arguments):\n"
+        "    return tool_success({})\n"
+        "def register(api):\n"
+        "    api.register_tool('ext_ready', 'desc', {'type': 'object'}, _handler, "
+        "ready=lambda: True)\n"
+        "    api.register_tool('ext_gated', 'desc', {'type': 'object'}, _handler, "
+        "ready=lambda: False)\n",
     )
+    _registry, tools = _loaded_tools(root)
 
-    registry = ExtensionRegistry.load(root)
-    tool_registry = ToolRegistry()
-    registry.apply_tools(tool_registry)
-
-    result = asyncio.run(
-        tool_registry.dispatch(_tool_context("ext_open", tmp_path), {"unknown": "preserved"})
-    )
-    assert result["data"] == {"arguments": {"unknown": "preserved"}}
+    ready = tools.get("ext_ready").ready
+    assert ready is not None and ready() is True
+    assert {tool.name for tool in tools.list_tools()} == {"ext_ready", "ext_gated"}
+    definitions = tools.provider_definitions(["ext_ready", "ext_gated"])
+    assert [definition["name"] for definition in definitions] == ["ext_ready"]
 
 
-def test_word_count_example_uses_an_open_schema_and_rejects_unknown_arguments(
+def test_skipped_extension_tools_are_diagnosed_without_failing_the_extension(
     tmp_path: Path,
 ) -> None:
-    examples_root = (
-        Path(__file__).resolve().parents[3]
-        / "resources"
-        / "skills"
-        / "vbot-cli"
-        / "assets"
-        / "extensions"
-    )
-    registry = ExtensionRegistry.load(examples_root)
-    tool_registry = ToolRegistry()
-    registry.apply_tools(tool_registry)
-
-    tool = tool_registry.get("word_count")
-    assert tool.open_input_schema is True
-    assert "additionalProperties" not in tool.parameters
-
-    success = asyncio.run(
-        tool_registry.dispatch(_tool_context("word_count", tmp_path), {"text": "one two"})
-    )
-
-    assert success["data"] == {"word_count": 2}
-    with pytest.raises(ToolContractError, match='"unknown" is not a parameter'):
-        asyncio.run(
-            tool_registry.dispatch(
-                _tool_context("word_count", tmp_path),
-                {"text": "one", "unknown": True},
-            )
-        )
-
-
-def test_extension_not_ready_tool_hidden_from_provider_definitions_but_registered(
-    tmp_path: Path,
-) -> None:
-    root = tmp_path / "extensions"
-    _write_single_file(root, "gated_ext", _ready_tool_extension_source("ext_gated", ready=False))
-
-    registry = ExtensionRegistry.load(root)
-    tool_registry = ToolRegistry()
-    registry.apply_tools(tool_registry)
-
-    # Registered and visible in a plain list, but absent from the model-facing
-    # provider definitions (default ready_only=True).
-    assert [tool.name for tool in tool_registry.list_tools()] == ["ext_gated"]
-    assert tool_registry.provider_definitions(["ext_gated"]) == []
-
-
-def test_extension_tool_colliding_with_builtin_is_skipped_and_diagnosed(tmp_path: Path) -> None:
-    root = tmp_path / "extensions"
-    _write_single_file(root, "shadow_ext", _tool_extension_source("read", "from-ext"))
-
-    registry = ExtensionRegistry.load(root)
-    tool_registry = ToolRegistry()
-    tool_registry.register("read", "builtin read", {"type": "object"}, lambda context, args: {})
-    registry.apply_tools(tool_registry)
-
-    # The built-in is untouched and the extension's tool never took effect.
-    assert tool_registry.get("read").description == "builtin read"
-    errors = _record(registry, "shadow_ext").capability_errors
-    assert any("read" in message and "built-in" in message for message in errors)
-
-
-def test_two_extensions_same_tool_name_first_wins_both_diagnosed(tmp_path: Path) -> None:
     root = tmp_path / "extensions"
     # Load order is sorted by name: alpha applies before zeta.
-    _write_single_file(root, "alpha", _tool_extension_source("dup", "from-alpha"))
-    _write_single_file(root, "zeta", _tool_extension_source("dup", "from-zeta"))
-
-    registry = ExtensionRegistry.load(root)
-    tool_registry = ToolRegistry()
-    registry.apply_tools(tool_registry)
-
-    context = _tool_context("dup", tmp_path)
-    result = asyncio.run(tool_registry.dispatch(context, {"value": "hi"}))
-
-    # First-declared (alpha) won the name.
-    assert result["data"]["marker"] == "from-alpha"
-    alpha_errors = _record(registry, "alpha").capability_errors
-    zeta_errors = _record(registry, "zeta").capability_errors
-    assert any("zeta" in message for message in alpha_errors)
-    assert any("alpha" in message and "skipped" in message for message in zeta_errors)
-
-
-def test_extension_with_skipped_tool_stays_loaded(tmp_path: Path) -> None:
-    root = tmp_path / "extensions"
-    _write_single_file(root, "shadow_ext", _tool_extension_source("read", "from-ext"))
-
-    registry = ExtensionRegistry.load(root)
-    tool_registry = ToolRegistry()
-    tool_registry.register("read", "builtin read", {"type": "object"}, lambda context, args: {})
-    registry.apply_tools(tool_registry)
-
-    record = _record(registry, "shadow_ext")
-    # A skipped capability is non-fatal: the extension still loaded and is not
-    # counted among failed diagnostics.
-    assert record.status == "loaded"
-    assert record not in registry.diagnostics()
-    assert record.capability_errors != []
-
-
-def test_invalid_extension_tool_contract_isolated_from_sibling_capabilities(
-    tmp_path: Path,
-) -> None:
-    root = tmp_path / "extensions"
-    _write_single_file(
+    write_extension(
         root,
-        "mixed_ext",
-        (
-            "from core.tools import tool_success\n"
-            "def register(api):\n"
-            "    handler = lambda context, arguments: tool_success({})\n"
-            "    api.register_tool('broken', 'Broken.', "
-            "{'type': 'object', 'properties': {'value': {'type': 'string'}}}, handler)\n"
-            "    api.register_tool('healthy', 'Healthy.', "
-            "{'type': 'object', 'additionalProperties': False}, handler)\n"
-        ),
+        "alpha",
+        "from core.tools import tool_success\n"
+        "def _handler(context, arguments):\n"
+        "    return tool_success({'marker': 'from-alpha'})\n"
+        "def register(api):\n"
+        "    api.register_tool('dup', 'desc', {'type': 'object'}, _handler)\n"
+        "    api.register_tool('read', 'shadow', {'type': 'object'}, _handler)\n"
+        "    api.register_tool('broken', 'Broken.', "
+        "{'type': 'object', 'properties': {'value': {'type': 'string'}}}, _handler)\n"
+        "    api.register_tool('healthy', 'Healthy.', "
+        "{'type': 'object', 'additionalProperties': False}, _handler)\n",
     )
+    write_extension(root, "zeta", tool_source("dup", "from-zeta"))
+    registry, tools = _loaded_tools(root, "read")
 
-    registry = ExtensionRegistry.load(root)
-    tool_registry = ToolRegistry()
-    registry.apply_tools(tool_registry)
+    result = asyncio.run(tools.dispatch(tool_context("dup", tmp_path), {}))
 
-    record = _record(registry, "mixed_ext")
-    assert record.status == "loaded"
-    assert [tool.name for tool in tool_registry.list_tools()] == ["healthy"]
+    # The built-in keeps its name and the first-declaring Extension wins the rest.
+    assert tools.get("read").description == "builtin read"
+    assert result["data"]["marker"] == "from-alpha"
+    assert {tool.name for tool in tools.list_tools()} == {"read", "dup", "healthy"}
+    alpha, zeta = record(registry, "alpha"), record(registry, "zeta")
+    assert any("zeta" in message for message in alpha.capability_errors)
+    assert any("read" in message and "built-in" in message for message in alpha.capability_errors)
     assert any(
         "broken" in message and "registration failed" in message
-        for message in record.capability_errors
+        for message in alpha.capability_errors
     )
-
-
-# --- commands ----------------------------------------------------------------
-
-
-def test_extension_command_dispatches_through_command_dispatcher(tmp_path: Path) -> None:
-    root = tmp_path / "extensions"
-    _write_single_file(
-        root,
-        "workflow_ext",
-        _command_extension_source("workflow", "from-extension"),
-    )
-    registry = ExtensionRegistry.load(root)
-    dispatcher = CommandDispatcher(ChatRunManager())
-
-    registry.apply_commands(dispatcher)
-    prepared = dispatcher.prepare("/workflow inspect")
-    assert prepared is not None
-    result = asyncio.run(
-        dispatcher.execute(
-            prepared,
-            CommandExecutionContext(
-                agent_id="a",
-                session_id="s",
-                project_id=None,
-                reply_surface=ReplySurface.webui(),
-            ),
-        )
-    )
-
-    assert isinstance(result, CommandOutcome)
-    assert result.feedback is not None
-    assert result.feedback.text == "from-extension:inspect"
-    assert dispatcher.extension_command_owner("workflow") == "workflow_ext"
-
-
-def test_extension_command_colliding_with_builtin_is_skipped_and_diagnosed(
-    tmp_path: Path,
-) -> None:
-    root = tmp_path / "extensions"
-    _write_single_file(root, "ext", _command_extension_source("help", "shadow"))
-    registry = ExtensionRegistry.load(root)
-    dispatcher = CommandDispatcher(ChatRunManager())
-
-    registry.apply_commands(dispatcher)
-
-    record = _record(registry, "ext")
-    assert dispatcher.extension_command_owner("help") is None
-    assert any("Built-in Command" in message for message in record.capability_errors)
-
-
-def test_two_extensions_same_command_first_wins_both_diagnosed(tmp_path: Path) -> None:
-    root = tmp_path / "extensions"
-    _write_single_file(root, "a_first", _command_extension_source("workflow", "first"))
-    _write_single_file(root, "b_second", _command_extension_source("workflow", "second"))
-    registry = ExtensionRegistry.load(root)
-    dispatcher = CommandDispatcher(ChatRunManager())
-
-    registry.apply_commands(dispatcher)
-
-    first = _record(registry, "a_first")
-    second = _record(registry, "b_second")
-    assert dispatcher.extension_command_owner("workflow") == "a_first"
-    assert any("b_second" in message for message in first.capability_errors)
-    assert any("a_first" in message for message in second.capability_errors)
-
-
-def test_invalid_extension_command_is_skipped_without_failing_extension(
-    tmp_path: Path,
-) -> None:
-    root = tmp_path / "extensions"
-    _write_single_file(root, "ext", _command_extension_source("Bad Name", "bad"))
-    registry = ExtensionRegistry.load(root)
-    dispatcher = CommandDispatcher(ChatRunManager())
-
-    registry.apply_commands(dispatcher)
-
-    record = _record(registry, "ext")
-    assert record.status == "loaded"
-    assert dispatcher.extension_command_owner("Bad Name") is None
-    assert any("lowercase" in message for message in record.capability_errors)
-
-
-def test_unhashable_extension_command_metadata_is_diagnosed_nonfatally(
-    tmp_path: Path,
-) -> None:
-    root = tmp_path / "extensions"
-    _write_single_file(
-        root,
-        "ext",
-        _command_extension_source(cast(Any, ["workflow"]), "bad"),
-    )
-    registry = ExtensionRegistry.load(root)
-    dispatcher = CommandDispatcher(ChatRunManager())
-
-    registry.apply_commands(dispatcher)
-
-    record = _record(registry, "ext")
-    assert record.status == "loaded"
-    assert dispatcher.extension_command_owner("workflow") is None
-    assert any("name must be a string" in message for message in record.capability_errors)
-
-
-# --- recall backends ---------------------------------------------------------
-
-
-def test_extension_recall_backend_becomes_selectable(tmp_path: Path) -> None:
-    root = tmp_path / "extensions"
-    _write_single_file(root, "recall_ext", _recall_extension_source("my_backend"))
-
-    registry = ExtensionRegistry.load(root)
-    recall_registry = RecallBackendRegistry.with_builtins()
-    registry.apply_recall_backends(recall_registry)
-
-    assert "my_backend" in recall_registry.names()
-    backend = recall_registry.create("my_backend", _recall_context(tmp_path))
-    assert asyncio.run(backend.search_page(cast(Any, object()))).ranking == "extension"
-    assert _record(registry, "recall_ext").capability_errors == []
-
-
-def test_extension_recall_backend_duplicate_name_is_diagnosed(tmp_path: Path) -> None:
-    root = tmp_path / "extensions"
-    _write_single_file(root, "dup_backend", _recall_extension_source("canonical_scan"))
-
-    registry = ExtensionRegistry.load(root)
-    recall_registry = RecallBackendRegistry.with_builtins()
-    registry.apply_recall_backends(recall_registry)
-
-    # Built-in canonical_scan factory is unchanged; the extension's was skipped.
-    errors = _record(registry, "dup_backend").capability_errors
-    assert any("canonical_scan" in message for message in errors)
-
-
-def test_extension_recall_backend_invalid_name_is_diagnosed(tmp_path: Path) -> None:
-    root = tmp_path / "extensions"
-    _write_single_file(root, "bad_backend", _recall_extension_source("Bad_Name"))
-
-    registry = ExtensionRegistry.load(root)
-    recall_registry = RecallBackendRegistry.with_builtins()
-    registry.apply_recall_backends(recall_registry)
-
-    assert "Bad_Name" not in recall_registry.names()
-    errors = _record(registry, "bad_backend").capability_errors
-    assert any("Bad_Name" in message and "snake_case" in message for message in errors)
-
-
-# --- interaction handlers ----------------------------------------------------
-
-
-def _interaction_extension_source(prefix: str) -> str:
-    """Extension registering one interaction handler for *prefix*."""
-    return (
-        "async def _handler(event, responder):\n"
-        "    await responder.answer()\n"
-        "def register(api):\n"
-        f"    api.register_interaction_handler({prefix!r}, _handler)\n"
-    )
-
-
-def test_extension_interaction_handler_lands_in_prefix_map(tmp_path: Path) -> None:
-    root = tmp_path / "extensions"
-    _write_single_file(root, "chk_ext", _interaction_extension_source("chk"))
-
-    registry = ExtensionRegistry.load(root)
-
-    # The apply phase built the prefix map; the prefix points at this extension.
-    assert registry._interaction_handlers["chk"][0] == "chk_ext"
-    assert _record(registry, "chk_ext").capability_errors == []
-
-
-def test_two_extensions_same_prefix_first_wins_both_diagnosed(tmp_path: Path) -> None:
-    root = tmp_path / "extensions"
-    # Load order is sorted by name: alpha applies before zeta.
-    _write_single_file(root, "alpha", _interaction_extension_source("chk"))
-    _write_single_file(root, "zeta", _interaction_extension_source("chk"))
-
-    registry = ExtensionRegistry.load(root)
-
-    # First-declared (alpha) won the prefix; zeta's copy was skipped.
-    assert registry._interaction_handlers["chk"][0] == "alpha"
-    alpha_errors = _record(registry, "alpha").capability_errors
-    zeta_errors = _record(registry, "zeta").capability_errors
-    assert any("zeta" in message for message in alpha_errors)
-    assert any("alpha" in message and "skipped" in message for message in zeta_errors)
-
-
-def test_extension_with_skipped_interaction_prefix_stays_loaded(tmp_path: Path) -> None:
-    root = tmp_path / "extensions"
-    _write_single_file(root, "alpha", _interaction_extension_source("chk"))
-    _write_single_file(root, "zeta", _interaction_extension_source("chk"))
-
-    registry = ExtensionRegistry.load(root)
-
-    # The loser is non-fatal: still loaded, not in failed diagnostics.
-    loser = _record(registry, "zeta")
-    assert loser.status == "loaded"
-    assert loser not in registry.diagnostics()
-    assert loser.capability_errors != []
+    assert any("alpha" in message and "skipped" in message for message in zeta.capability_errors)
+    assert (alpha.status, zeta.status) == ("loaded", "loaded")
+    assert registry.diagnostics() == []
 
 
 @pytest.mark.asyncio
@@ -646,15 +233,13 @@ async def test_extension_opt_in_is_enforced_in_definitions_and_dispatch(tmp_path
     from core.tools.tools import ToolNotAllowedError
 
     root = tmp_path / "extensions"
-    source = _tool_extension_source("computer_test", "called")
+    source = tool_source("computer_test", "called")
     source = source.replace("}, _handler)", "}, _handler, requires_opt_in=True)")
-    _write_single_file(root, "opt_in", source)
-    extensions = ExtensionRegistry.load(root)
-    tools = ToolRegistry()
-    extensions.apply_tools(tools)
+    write_extension(root, "opt_in", source)
+    _registry, tools = _loaded_tools(root)
     tool = tools.get("computer_test")
     assert tool.requires_opt_in
-    context = _tool_context(tool.name, tmp_path)
+    context = tool_context(tool.name, tmp_path)
     for policy in (ToolAccess(), ToolAccess(mode="selected", allowed=(tool.name,))):
         allowed = resolve_tool_access(policy, tools.list_tools(), "off").allowed_tools
         assert tools.provider_definitions(allowed_tools=allowed) == []
@@ -692,6 +277,96 @@ def test_invalid_opt_in_registration_fails_before_publication(options):
     assert tools.list_tools() == []
 
 
+# --- Commands ----------------------------------------------------------------
+
+
+def test_extension_commands_dispatch_and_skipped_commands_are_diagnosed(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "extensions"
+    write_extension(root, "a_first", command_source("workflow", "first"))
+    write_extension(root, "b_second", command_source("workflow", "second"))
+    write_extension(
+        root,
+        "c_invalid",
+        "def _handler(context, argument):\n"
+        "    return None\n"
+        "def register(api):\n"
+        "    api.register_command('help', 'shadow', _handler)\n"
+        "    api.register_command('Bad Name', 'bad', _handler)\n"
+        "    api.register_command(['listed'], 'unhashable', _handler)\n",
+    )
+    registry = ExtensionRegistry.load(root)
+    dispatcher = CommandDispatcher(ChatRunManager())
+    registry.apply_commands(dispatcher)
+
+    prepared = dispatcher.prepare("/workflow inspect")
+    assert prepared is not None
+    result = asyncio.run(
+        dispatcher.execute(
+            prepared,
+            CommandExecutionContext(
+                agent_id="a",
+                session_id="s",
+                project_id=None,
+                reply_surface=ReplySurface.webui(),
+            ),
+        )
+    )
+
+    assert isinstance(result, CommandOutcome)
+    assert result.feedback is not None
+    assert result.feedback.text == "first:inspect"
+    assert dispatcher.extension_command_owner("workflow") == "a_first"
+    assert any("b_second" in message for message in record(registry, "a_first").capability_errors)
+    assert any("a_first" in message for message in record(registry, "b_second").capability_errors)
+    invalid = record(registry, "c_invalid")
+    assert invalid.status == "loaded"
+    assert dispatcher.extension_command_owner("help") is None
+    assert dispatcher.extension_command_owner("Bad Name") is None
+    assert any("Built-in Command" in message for message in invalid.capability_errors)
+    assert any("lowercase" in message for message in invalid.capability_errors)
+    assert any("name must be a string" in message for message in invalid.capability_errors)
+
+
+# --- Recall backends ---------------------------------------------------------
+
+
+def test_extension_recall_backends_become_selectable_unless_taken_or_invalid(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "extensions"
+    write_extension(
+        root,
+        "recall_ext",
+        "class ExtBackend:\n"
+        "    def __init__(self, context):\n"
+        "        self.context = context\n"
+        "    def search_capabilities(self):\n"
+        "        from core.recall import RecallSearchCapabilities\n"
+        "        return RecallSearchCapabilities('message', 'Extension search.')\n"
+        "    async def search_page(self, request):\n"
+        "        from core.recall import RecallSearchPage\n"
+        "        return RecallSearchPage((), 'message', 'extension', 'snapshot', False, 0)\n"
+        "def register(api):\n"
+        "    for name in ('my_backend', 'canonical_scan', 'Bad_Name'):\n"
+        "        api.register_recall_backend(name, ExtBackend)\n",
+    )
+    registry = ExtensionRegistry.load(root)
+    recall_registry = RecallBackendRegistry.with_builtins()
+
+    registry.apply_recall_backends(recall_registry)
+
+    backend = recall_registry.create("my_backend", _recall_context(tmp_path))
+    assert asyncio.run(backend.search_page(cast(Any, object()))).ranking == "extension"
+    assert "Bad_Name" not in recall_registry.names()
+    errors = record(registry, "recall_ext").capability_errors
+    # The built-in canonical_scan keeps its name; both skipped names are diagnosed.
+    assert len(errors) == 2
+    assert any("canonical_scan" in message for message in errors)
+    assert any("Bad_Name" in message and "snake_case" in message for message in errors)
+
+
 @pytest.mark.parametrize("invalid_capabilities", [False, True])
 def test_recall_registry_rejects_retired_or_invalid_backend(
     tmp_path: Path, invalid_capabilities: bool
@@ -712,3 +387,94 @@ def test_recall_registry_rejects_retired_or_invalid_backend(
     registry.register("obsolete", cast(Any, lambda _context: implementation()))
     with pytest.raises(ValueError, match="search capabilities|search_capabilities"):
         registry.create("obsolete", _recall_context(tmp_path))
+
+
+# --- Interaction prefixes ----------------------------------------------------
+
+
+def test_interaction_prefixes_route_to_the_first_declarer_and_never_claim_reserved_ones(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "extensions"
+    # Load order is sorted by name: alpha applies before zeta.
+    write_extension(root, "alpha", interaction_source("chk", "alpha"))
+    write_extension(root, "hijacker", interaction_source("run", "hijacker"))
+    write_extension(root, "zeta", interaction_source("chk", "zeta"))
+    registry = ExtensionRegistry.load(root)
+
+    chk, run = RecordingResponder(), RecordingResponder()
+    assert asyncio.run(registry.dispatch_channel_interaction(tap("chk:milk"), chk)) is True
+    # The runtime routes reserved prefixes itself; no Extension handler is wired.
+    assert asyncio.run(registry.dispatch_channel_interaction(tap("run:go"), run)) is False
+
+    assert (chk.answers, run.answers) == (["alpha"], [])
+    alpha, zeta = record(registry, "alpha"), record(registry, "zeta")
+    assert any("zeta" in message for message in alpha.capability_errors)
+    assert any("alpha" in message and "skipped" in message for message in zeta.capability_errors)
+    hijacker = record(registry, "hijacker")
+    # Registration stays permissive: the declaration lands but is never applied.
+    assert [item.prefix for item in hijacker.declarations.interaction_handlers] == ["run"]
+    assert any("reserved" in message for message in hijacker.capability_errors)
+    assert registry.diagnostics() == []
+
+
+# --- Prompt blocks -----------------------------------------------------------
+
+
+def test_prompt_blocks_become_definitions_from_loaded_extensions_only(tmp_path: Path) -> None:
+    root = tmp_path / "extensions"
+    write_extension(
+        root,
+        "ext_a",
+        "def register(api):\n"
+        "    api.register_prompt_block('static', default_text='Hello.')\n"
+        "    api.register_prompt_block('dynamic', render=lambda ctx: 'Rendered.')\n"
+        "    api.register_prompt_block('shared', default_text='A wins.')\n",
+    )
+    write_extension(
+        root,
+        "ext_b",
+        "def register(api):\n    api.register_prompt_block('shared', default_text='B loses.')\n",
+    )
+    write_extension(
+        root,
+        "ext_failed",
+        "def register(api):\n"
+        "    api.register_prompt_block('failed', default_text='Hidden.')\n"
+        "    raise RuntimeError('register boom')\n",
+    )
+    write_extension(
+        root,
+        "ext_disabled",
+        "def register(api):\n    api.register_prompt_block('disabled', default_text='Hidden.')\n",
+    )
+    registry = ExtensionRegistry.load(root, disabled={"ext_disabled"})
+
+    definitions = {definition.id: definition for definition in registry.prompt_block_declarations()}
+
+    assert set(definitions) == {"extension:static", "extension:dynamic", "extension:shared"}
+    static, dynamic = definitions["extension:static"], definitions["extension:dynamic"]
+    assert (static.owner, static.default_text, static.editable) == (
+        "extension:ext_a",
+        "Hello.",
+        True,
+    )
+    assert (dynamic.owner, dynamic.render is not None, dynamic.editable) == (
+        "extension:ext_a",
+        True,
+        False,
+    )
+    # A shared slug belongs to the first-loaded Extension; both sides are diagnosed.
+    shared = definitions["extension:shared"]
+    assert (shared.owner, shared.default_text) == ("extension:ext_a", "A wins.")
+    assert any(
+        "also declared" in message for message in record(registry, "ext_a").capability_errors
+    )
+    assert any("skipped" in message for message in record(registry, "ext_b").capability_errors)
+    assert registry.loaded_extension_names() == {"ext_a", "ext_b"}
+
+    api = ExtensionAPI("ext", ExtensionDeclarations(), config={}, logger=None)
+    with pytest.raises(ValueError, match="exactly one"):
+        api.register_prompt_block("both", default_text="x", render=lambda ctx: "y")
+    with pytest.raises(ValueError, match="exactly one"):
+        api.register_prompt_block("neither")

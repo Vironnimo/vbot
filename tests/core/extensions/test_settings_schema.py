@@ -1,13 +1,13 @@
-"""Tests for the extension settings-schema field parser and config validator.
+"""Extension settings schema: field declarations and config validation.
 
-One assert per rejection rule in the field-declaration contract table, a fully
-valid schema round-trip, and ``validate_extension_config`` accept/reject cases
-(including the secret-in-config and required-empty-string rejections).
+Every rejection rule of the field-declaration contract, a fully valid schema
+round trip, and ``validate_extension_config`` accept/reject cases (including the
+secret-in-config and required-empty-string rejections).
 """
 
 from __future__ import annotations
 
-import pytest
+from typing import Any
 
 from core.extensions.settings_schema import (
     SettingsFieldDeclaration,
@@ -22,101 +22,55 @@ def _field(**overrides: object) -> dict:
     return base
 
 
-# --- parse_settings_fields: rejection rules ---------------------------------
+_SECRET = {"key": "token", "type": "secret"}
 
-
-def test_reject_non_list_schema() -> None:
-    with pytest.raises(ValueError):
-        parse_settings_fields({"key": "url"})  # type: ignore[arg-type]
-
-
-def test_reject_non_dict_field() -> None:
-    with pytest.raises(ValueError):
-        parse_settings_fields(["nope"])
-
-
-def test_reject_missing_key() -> None:
-    with pytest.raises(ValueError):
-        parse_settings_fields([{"type": "text", "label": "URL"}])
-
-
-def test_reject_bad_key_pattern() -> None:
-    with pytest.raises(ValueError):
-        parse_settings_fields([_field(key="Bad-Key")])
-
-
-def test_reject_duplicate_key() -> None:
-    with pytest.raises(ValueError):
-        parse_settings_fields([_field(), _field(label="Second")])
-
-
-def test_reject_unknown_attribute() -> None:
-    with pytest.raises(ValueError):
-        parse_settings_fields([_field(placeholder="x")])
-
-
-def test_reject_bad_type() -> None:
-    with pytest.raises(ValueError):
-        parse_settings_fields([_field(type="date")])
-
-
-def test_reject_empty_label() -> None:
-    with pytest.raises(ValueError):
-        parse_settings_fields([_field(label="  ")])
-
-
-def test_reject_non_string_description() -> None:
-    with pytest.raises(ValueError):
-        parse_settings_fields([_field(description=123)])
-
-
-def test_reject_non_bool_required() -> None:
-    with pytest.raises(ValueError):
-        parse_settings_fields([_field(required="yes")])
-
-
-def test_reject_secret_without_env_key() -> None:
-    with pytest.raises(ValueError):
-        parse_settings_fields([_field(key="token", type="secret")])
-
-
-def test_reject_secret_with_bad_env_key() -> None:
-    with pytest.raises(ValueError):
-        parse_settings_fields([_field(key="token", type="secret", env_key="lower_case")])
-
-
-def test_reject_env_key_on_non_secret() -> None:
-    with pytest.raises(ValueError):
-        parse_settings_fields([_field(env_key="HASS_URL")])
-
-
-def test_reject_default_on_secret() -> None:
-    with pytest.raises(ValueError):
-        parse_settings_fields([_field(key="token", type="secret", env_key="TOKEN", default="x")])
-
-
-def test_reject_text_default_wrong_type() -> None:
-    with pytest.raises(ValueError):
-        parse_settings_fields([_field(default=1)])
-
-
-def test_reject_number_default_wrong_type() -> None:
-    with pytest.raises(ValueError):
-        parse_settings_fields([_field(key="port", type="number", default="80")])
-
-
-def test_reject_number_default_bool() -> None:
+# rule -> (schema, expected message fragment)
+_REJECTED_SCHEMAS: dict[str, tuple[Any, str]] = {
+    "schema is not a list": ({"key": "url"}, "must be a list"),
+    "field is not a dict": (["nope"], "must be a dict"),
+    "missing key": ([{"type": "text", "label": "URL"}], "key must match"),
+    "bad key pattern": ([_field(key="Bad-Key")], "key must match"),
+    "duplicate key": ([_field(), _field(label="Second")], "duplicate key"),
+    "unknown attribute": ([_field(placeholder="x")], "unknown attribute"),
+    "unknown type": ([_field(type="date")], "type must be one of"),
+    "empty label": ([_field(label="  ")], "label must be a non-empty string"),
+    "description not a string": ([_field(description=123)], "description must be a string"),
+    "required not a bool": ([_field(required="yes")], "required must be a boolean"),
+    "secret without env_key": ([_field(**_SECRET)], "secret env_key must match"),
+    "secret with bad env_key": ([_field(**_SECRET, env_key="lower_case")], "env_key must match"),
+    "env_key on a non-secret": ([_field(env_key="HASS_URL")], "only valid for a secret"),
+    "default on a secret": (
+        [_field(**_SECRET, env_key="TOKEN", default="x")],
+        "cannot declare a default",
+    ),
+    "text default not a string": ([_field(default=1)], "default must be a string"),
+    "number default not a number": (
+        [_field(key="port", type="number", default="80")],
+        "default must be a number",
+    ),
     # bool is a subclass of int but must not pass as a number default.
-    with pytest.raises(ValueError):
-        parse_settings_fields([_field(key="port", type="number", default=True)])
+    "number default is a bool": (
+        [_field(key="port", type="number", default=True)],
+        "default must be a number",
+    ),
+    "toggle default not a bool": (
+        [_field(key="on", type="toggle", default="true")],
+        "default must be a boolean",
+    ),
+}
 
 
-def test_reject_toggle_default_wrong_type() -> None:
-    with pytest.raises(ValueError):
-        parse_settings_fields([_field(key="on", type="toggle", default="true")])
+def test_every_invalid_field_declaration_is_rejected_with_its_rule() -> None:
+    outcomes: dict[str, str] = {}
+    for rule, (schema, fragment) in _REJECTED_SCHEMAS.items():
+        try:
+            parse_settings_fields(schema)
+        except ValueError as error:
+            outcomes[rule] = "rejected" if fragment in str(error) else f"wrong error: {error}"
+        else:
+            outcomes[rule] = "accepted"
 
-
-# --- parse_settings_fields: valid round-trip --------------------------------
+    assert outcomes == dict.fromkeys(_REJECTED_SCHEMAS, "rejected")
 
 
 def test_valid_schema_round_trip() -> None:
@@ -151,11 +105,8 @@ def test_valid_schema_round_trip() -> None:
     assert fields[3].default is None
 
 
-# --- validate_extension_config ----------------------------------------------
-
-
-def _schema() -> list[SettingsFieldDeclaration]:
-    return parse_settings_fields(
+def test_config_validation_accepts_a_matching_config_and_names_each_violation() -> None:
+    schema = parse_settings_fields(
         [
             {"key": "url", "type": "text", "label": "URL", "required": True},
             {"key": "port", "type": "number", "label": "Port"},
@@ -163,38 +114,19 @@ def _schema() -> list[SettingsFieldDeclaration]:
             {"key": "token", "type": "secret", "label": "Token", "env_key": "HASS_TOKEN"},
         ]
     )
+    rejected: dict[str, tuple[dict[str, Any], str]] = {
+        "unknown key": ({"url": "http://x", "extra": 1}, "unknown settings key"),
+        "secret in config": ({"url": "http://x", "token": "abc"}, "stored in .env"),
+        "text type mismatch": ({"url": 5}, "must be a string"),
+        "number is a bool": ({"url": "http://x", "port": True}, "must be a number"),
+        "toggle type mismatch": ({"url": "http://x", "verbose": "yes"}, "must be a boolean"),
+        "required missing": ({"port": 80}, "is required"),
+        "required empty string": ({"url": "   "}, "is required"),
+    }
 
-
-def test_valid_config_passes() -> None:
-    errors = validate_extension_config(_schema(), {"url": "http://x", "port": 80, "verbose": True})
-    assert errors == []
-
-
-def test_reject_unknown_key() -> None:
-    errors = validate_extension_config(_schema(), {"url": "http://x", "extra": 1})
-    assert any("unknown settings key" in error for error in errors)
-
-
-def test_reject_secret_in_config() -> None:
-    errors = validate_extension_config(_schema(), {"url": "http://x", "token": "abc"})
-    assert any("stored in .env" in error for error in errors)
-
-
-def test_reject_type_mismatch() -> None:
-    errors = validate_extension_config(_schema(), {"url": 5})
-    assert any("must be a string" in error for error in errors)
-
-
-def test_reject_number_bool_mismatch() -> None:
-    errors = validate_extension_config(_schema(), {"url": "http://x", "port": True})
-    assert any("must be a number" in error for error in errors)
-
-
-def test_reject_required_missing() -> None:
-    errors = validate_extension_config(_schema(), {"port": 80})
-    assert any("is required" in error for error in errors)
-
-
-def test_reject_required_empty_string() -> None:
-    errors = validate_extension_config(_schema(), {"url": "   "})
-    assert any("is required" in error for error in errors)
+    assert validate_extension_config(schema, {"url": "http://x", "port": 80, "verbose": True}) == []
+    outcomes = {
+        case: any(fragment in error for error in validate_extension_config(schema, config))
+        for case, (config, fragment) in rejected.items()
+    }
+    assert outcomes == dict.fromkeys(rejected, True)

@@ -1,422 +1,169 @@
-"""Tests for two-phase registration: records, manifest, disable, lifecycle.
+"""Extension registration: async ``register()``, the ``api`` surface and lifecycle.
 
-Covers the packaging layer added on top of dispatch/loader discovery: per
--extension :class:`ExtensionRecord` status, optional ``extension.json`` manifest
-(happy / invalid / ``api_version`` mismatch), disabled extensions never being
-imported, ``api.config`` delivery, deterministic awaiting of async ``register()``
-before hook declarations apply, failure diagnostics, and startup/shutdown
-lifecycle firing (order + fail-open).
+Covers how ``load`` (blocking, bounded worker) and ``aload`` (serving loop) drive
+async ``register()``: awaited before declarations apply, bounded by a deadline,
+cancellation isolated to one Extension and the serving loop kept responsive. Also
+covers what ``register(api)`` reads and declares (config snapshot and live config,
+credentials, pages, settings schema, interaction handlers, Commands) and
+startup/shutdown lifecycle firing.
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
+import inspect
 import logging
 import sys
-from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
 import core.extensions._callbacks as extension_callbacks
 import core.extensions._loading as extension_loading
-from core.extensions import API_VERSION, ExtensionRegistry, HookContext
+from core.extensions import ExtensionRegistry
 from core.extensions.extensions import ExtensionAPI, ExtensionDeclarations
-
-
-@pytest.fixture(autouse=True)
-def _clean_extension_modules() -> Iterator[None]:
-    """Drop the synthetic ``vbot_ext`` namespace after each test."""
-    yield
-    for module_name in list(sys.modules):
-        if module_name == "vbot_ext" or module_name.startswith("vbot_ext."):
-            del sys.modules[module_name]
-
-
-def _marker_lines(marker: Path) -> list[str]:
-    if not marker.exists():
-        return []
-    return marker.read_text(encoding="utf-8").split()
-
-
-def _write_single_file(root: Path, name: str, source: str) -> None:
-    root.mkdir(parents=True, exist_ok=True)
-    (root / f"{name}.py").write_text(source, encoding="utf-8")
-
-
-def _write_package(root: Path, name: str, source: str, manifest: dict | str | None = None) -> Path:
-    package = root / name
-    package.mkdir(parents=True, exist_ok=True)
-    (package / "__init__.py").write_text(source, encoding="utf-8")
-    if manifest is not None:
-        content = manifest if isinstance(manifest, str) else json.dumps(manifest)
-        (package / "extension.json").write_text(content, encoding="utf-8")
-    return package
-
-
-def _import_marker_source(name: str, marker: Path) -> str:
-    """Module that records its name at *import* time (module exec side effect)."""
-    return (
-        "import pathlib\n"
-        f"with pathlib.Path({str(marker)!r}).open('a', encoding='utf-8') as fh:\n"
-        f"    fh.write({name!r} + '\\n')\n"
-        "\n"
-        "def register(api):\n"
-        "    pass\n"
-    )
-
-
-def _config_marker_source(marker: Path) -> str:
-    """Module that writes ``api.config`` to a marker during ``register``."""
-    return (
-        "import json, pathlib\n"
-        "def register(api):\n"
-        f"    pathlib.Path({str(marker)!r}).write_text(json.dumps(api.config), encoding='utf-8')\n"
-    )
-
-
-def test_page_declaration_is_scoped_to_the_live_registry_epoch(tmp_path: Path) -> None:
-    package = _write_package(
-        tmp_path / "extensions",
-        "page_owner",
-        "def register(api):\n    api.register_page('board', 'Board', 'ui/index.html')\n",
-    )
-    entry = package / "ui" / "index.html"
-    entry.parent.mkdir()
-    entry.write_text("<!doctype html>", encoding="utf-8")
-
-    registry = ExtensionRegistry.load(tmp_path / "extensions")
-
-    identity, page, path = registry.page_declarations()[0]
-    assert identity.name == "page_owner"
-    assert page.page_id == "board"
-    assert path == entry.resolve()
-    assert registry.is_registration_current(identity)
-    assert registry.registration_identity("page_owner") == identity
-
-    replacement = ExtensionRegistry.load(tmp_path / "extensions")
-    assert not replacement.is_registration_current(identity)
-
-
-@pytest.mark.parametrize("entry", ["../index.html", "/index.html", "index.js"])
-def test_page_declaration_rejects_unsafe_entry(entry: str) -> None:
-    declarations = ExtensionDeclarations()
-    api = ExtensionAPI("example", declarations, config={}, logger=None)
-
-    with pytest.raises(ValueError):
-        api.register_page("board", "Board", entry)
-
-
-def _lifecycle_source(name: str, marker: Path, *, startup_boom: bool = False) -> str:
-    boom = "        raise RuntimeError('startup boom')\n" if startup_boom else ""
-    return (
-        "import pathlib\n"
-        f"_MARKER = pathlib.Path({str(marker)!r})\n"
-        "\n"
-        "def _write(tag):\n"
-        "    with _MARKER.open('a', encoding='utf-8') as fh:\n"
-        "        fh.write(tag + '\\n')\n"
-        "\n"
-        "def register(api):\n"
-        "    def _startup():\n"
-        f"        _write({name!r} + ':startup')\n"
-        f"{boom}"
-        "    def _shutdown():\n"
-        f"        _write({name!r} + ':shutdown')\n"
-        "    api.on_startup(_startup)\n"
-        "    api.on_shutdown(_shutdown)\n"
-    )
-
-
-def _record(registry: ExtensionRegistry, name: str):
-    return next(record for record in registry.records() if record.name == name)
-
-
-def test_loaded_extension_produces_record(tmp_path: Path) -> None:
-    root = tmp_path / "extensions"
-    _write_single_file(root, "plain", "def register(api):\n    pass\n")
-
-    registry = ExtensionRegistry.load(root)
-
-    record = _record(registry, "plain")
-    assert record.status == "loaded"
-    assert record.error is None
-    assert record.manifest is None
-    assert registry.diagnostics() == []
-
-
-def test_disabled_extension_is_never_imported(tmp_path: Path) -> None:
-    root = tmp_path / "extensions"
-    marker = tmp_path / "imported.txt"
-    _write_single_file(root, "skipme", _import_marker_source("skipme", marker))
-
-    registry = ExtensionRegistry.load(root, disabled={"skipme"})
-
-    # module body never executed: no import-time marker, status disabled
-    assert _marker_lines(marker) == []
-    assert _record(registry, "skipme").status == "disabled"
-
-
-def test_config_reaches_register(tmp_path: Path) -> None:
-    root = tmp_path / "extensions"
-    marker = tmp_path / "config.json"
-    _write_single_file(root, "configured", _config_marker_source(marker))
-
-    ExtensionRegistry.load(root, config={"configured": {"token": "abc", "level": 3}})
-
-    assert json.loads(marker.read_text(encoding="utf-8")) == {"token": "abc", "level": 3}
-
-
-def test_config_defaults_to_empty_dict(tmp_path: Path) -> None:
-    root = tmp_path / "extensions"
-    marker = tmp_path / "config.json"
-    _write_single_file(root, "configless", _config_marker_source(marker))
-
-    ExtensionRegistry.load(root)
-
-    assert json.loads(marker.read_text(encoding="utf-8")) == {}
-
-
-def test_manifest_enriches_record(tmp_path: Path) -> None:
-    root = tmp_path / "extensions"
-    _write_package(
-        root,
-        "manifested",
-        "def register(api):\n    pass\n",
-        manifest={"version": "1.2.0", "description": "demo", "name": "Display Name"},
-    )
-
-    registry = ExtensionRegistry.load(root)
-
-    record = _record(registry, "manifested")
-    assert record.status == "loaded"
-    assert record.manifest is not None
-    assert record.manifest.version == "1.2.0"
-    assert record.manifest.description == "demo"
-    assert record.manifest.display_name == "Display Name"
-
-
-def test_manifest_invalid_json_fails_extension(tmp_path: Path) -> None:
-    root = tmp_path / "extensions"
-    _write_package(
-        root,
-        "broken_manifest",
-        "def register(api):\n    pass\n",
-        manifest="{ not valid json",
-    )
-
-    registry = ExtensionRegistry.load(root)
-
-    record = _record(registry, "broken_manifest")
-    assert record.status == "failed"
-    assert record.error is not None
-    assert "invalid JSON" in record.error
-    assert record in registry.diagnostics()
-
-
-def test_manifest_wrong_field_type_fails_extension(tmp_path: Path) -> None:
-    root = tmp_path / "extensions"
-    _write_package(
-        root,
-        "typed",
-        "def register(api):\n    pass\n",
-        manifest={"version": 123},
-    )
-
-    registry = ExtensionRegistry.load(root)
-
-    record = _record(registry, "typed")
-    assert record.status == "failed"
-    assert "version must be a string" in (record.error or "")
-
-
-def test_manifest_api_version_newer_than_supported_fails(tmp_path: Path) -> None:
-    root = tmp_path / "extensions"
-    marker = tmp_path / "imported.txt"
-    package = _write_package(
-        root,
-        "future",
-        _import_marker_source("future", marker),
-        manifest={"api_version": API_VERSION + 1},
-    )
-    assert package.exists()
-
-    registry = ExtensionRegistry.load(root)
-
-    record = _record(registry, "future")
-    assert record.status == "failed"
-    assert "api_version" in (record.error or "")
-    # api_version mismatch is decided before import: module body never ran
-    assert _marker_lines(marker) == []
-
-
-def test_failed_extension_does_not_block_others(tmp_path: Path) -> None:
-    root = tmp_path / "extensions"
-    root.mkdir(parents=True, exist_ok=True)
-    (root / "boom.py").write_text("raise RuntimeError('import boom')\n", encoding="utf-8")
-    _write_single_file(root, "healthy", "def register(api):\n    pass\n")
-
-    registry = ExtensionRegistry.load(root)
-
-    assert _record(registry, "boom").status == "failed"
-    assert _record(registry, "healthy").status == "loaded"
-    assert [record.name for record in registry.diagnostics()] == ["boom"]
-
-
-def test_register_failure_records_diagnostic(tmp_path: Path) -> None:
-    root = tmp_path / "extensions"
-    _write_single_file(root, "bad_register", "def register(api):\n    raise ValueError('nope')\n")
-
-    registry = ExtensionRegistry.load(root)
-
-    record = _record(registry, "bad_register")
-    assert record.status == "failed"
-    assert "register() raised" in (record.error or "")
-
-
-def test_async_register_awaited_before_apply_no_loop(tmp_path: Path) -> None:
-    root = tmp_path / "extensions"
-    marker = tmp_path / "marker.txt"
-    _write_single_file(
-        root,
-        "async_ext",
-        "import pathlib\n"
-        f"_MARKER = pathlib.Path({str(marker)!r})\n"
-        "async def register(api):\n"
-        "    def handler(ctx, **payload):\n"
-        "        _MARKER.write_text('fired', encoding='utf-8')\n"
-        "    api.on('run_start', handler)\n",
-    )
-
-    registry = ExtensionRegistry.load(root)
-
-    # apply ran after the async register completed: handler is already installed
-    ctx = HookContext(session_id="s", agent_id="a", run_id="r")
-    asyncio.run(registry.dispatch_run_start(ctx, session_id="s", agent_id="a"))
-    assert marker.read_text(encoding="utf-8") == "fired"
+from tests.core.extensions.extension_test_support import (
+    hook_context,
+    marker_lines,
+    marker_source,
+    record,
+    write_extension,
+    write_package,
+)
+
+_LOADERS = ["load", "aload"]
+
+# Suppresses its timeout cancellation until released, recording that it was asked.
+_HANGING_SOURCE = (
+    "import asyncio\n"
+    "import threading\n"
+    "release = threading.Event()\n"
+    "cancelled = threading.Event()\n"
+    "finished = threading.Event()\n"
+    "async def register(api):\n"
+    "    try:\n"
+    "        while not release.is_set():\n"
+    "            try:\n"
+    "                await asyncio.sleep(0.01)\n"
+    "            except asyncio.CancelledError:\n"
+    "                cancelled.set()\n"
+    "    finally:\n"
+    "        finished.set()\n"
+)
+
+
+async def _load(loader: str, root: Path) -> ExtensionRegistry:
+    """Load *root*; the blocking variant runs on a live loop like a server lifespan."""
+    if loader == "aload":
+        return await ExtensionRegistry.aload(root)
+    return ExtensionRegistry.load(root)
 
 
 @pytest.mark.asyncio
-async def test_async_register_awaited_before_apply_within_running_loop(tmp_path: Path) -> None:
-    root = tmp_path / "extensions"
-    marker = tmp_path / "marker.txt"
-    _write_single_file(
-        root,
-        "async_ext",
-        "import pathlib\n"
-        f"_MARKER = pathlib.Path({str(marker)!r})\n"
-        "async def register(api):\n"
-        "    def handler(ctx, **payload):\n"
-        "        _MARKER.write_text('fired', encoding='utf-8')\n"
-        "    api.on('run_start', handler)\n",
-    )
-
-    # load() is sync but called from within a running loop (server lifespan shape):
-    # the async register must still complete and apply before load() returns.
-    registry = ExtensionRegistry.load(root)
-
-    ctx = HookContext(session_id="s", agent_id="a", run_id="r")
-    await registry.dispatch_run_start(ctx, session_id="s", agent_id="a")
-    assert marker.read_text(encoding="utf-8") == "fired"
-
-
-def test_async_register_timeout_without_running_loop_is_isolated(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize("loader", _LOADERS)
+async def test_async_register_completes_before_declarations_apply(
+    tmp_path: Path, loader: str
 ) -> None:
     root = tmp_path / "extensions"
     marker = tmp_path / "marker.txt"
-    monkeypatch.setattr(extension_loading, "_ASYNC_REGISTER_TIMEOUT_SECONDS", 0.05)
-    _write_single_file(
+    write_extension(
         root,
-        "hanging",
-        "import asyncio\n"
-        "import threading\n"
-        "finished = threading.Event()\n"
-        "async def register(api):\n"
-        "    try:\n"
-        "        await asyncio.Event().wait()\n"
-        "    finally:\n"
-        "        finished.set()\n",
+        "a_cancelled",
+        "import asyncio\nasync def register(api):\n    raise asyncio.CancelledError()\n",
     )
-    _write_single_file(
-        root,
-        "healthy",
-        "import pathlib\n"
-        f"_MARKER = pathlib.Path({str(marker)!r})\n"
-        "def register(api):\n"
-        "    def handler(ctx, **payload):\n"
-        "        _MARKER.write_text('fired', encoding='utf-8')\n"
-        "    api.on('run_start', handler)\n",
-    )
+    write_extension(root, "async_ext", marker_source(marker, "async_ext", asynchronous=True))
 
-    registry = ExtensionRegistry.load(root)
+    registry = await _load(loader, root)
 
-    hanging = _record(registry, "hanging")
-    assert hanging.status == "failed"
-    assert hanging.error
-    assert sys.modules["vbot_ext.hanging"].finished.wait(timeout=1)
-    ctx = HookContext(session_id="s", agent_id="a", run_id="r")
-    asyncio.run(registry.dispatch_run_start(ctx, session_id="s", agent_id="a"))
-    assert marker.read_text(encoding="utf-8") == "fired"
+    cancelled = record(registry, "a_cancelled")
+    assert cancelled.status == "failed"
+    assert "async register() raised" in (cancelled.error or "")
+    assert record(registry, "async_ext").status == "loaded"
+    await registry.dispatch_run_start(hook_context(), session_id="s", agent_id="a")
+    assert marker_lines(marker) == ["async_ext"]
 
 
 @pytest.mark.asyncio
-async def test_async_register_timeout_within_running_loop_ignores_cancellation(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize("loader", _LOADERS)
+async def test_register_timeout_fails_only_that_extension_and_detaches_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, loader: str
 ) -> None:
-    root = tmp_path / "extensions"
     monkeypatch.setattr(extension_loading, "_ASYNC_REGISTER_TIMEOUT_SECONDS", 0.05)
-    _write_single_file(
-        root,
-        "hanging",
-        "import asyncio\n"
-        "import threading\n"
-        "release = threading.Event()\n"
-        "finished = threading.Event()\n"
-        "async def register(api):\n"
-        "    try:\n"
-        "        while not release.is_set():\n"
-        "            try:\n"
-        "                await asyncio.sleep(0.01)\n"
-        "            except asyncio.CancelledError:\n"
-        "                continue\n"
-        "    finally:\n"
-        "        finished.set()\n",
-    )
+    root = tmp_path / "extensions"
+    marker = tmp_path / "marker.txt"
+    write_extension(root, "hanging", _HANGING_SOURCE)
+    write_extension(root, "healthy", marker_source(marker, "healthy"))
 
-    registry = ExtensionRegistry.load(root)
-
-    hanging = _record(registry, "hanging")
-    assert hanging.status == "failed"
-    assert "timed out" in (hanging.error or "")
+    registry = await _load(loader, root)
     module = sys.modules["vbot_ext.hanging"]
-    module.release.set()
+    try:
+        hanging = record(registry, "hanging")
+        assert hanging.status == "failed"
+        assert "timed out" in (hanging.error or "")
+        # The deadline requested cancellation; a coroutine that suppresses it keeps
+        # running detached instead of holding the load.
+        assert await asyncio.to_thread(module.cancelled.wait, 1)
+        assert not module.finished.is_set()
+        await registry.dispatch_run_start(hook_context(), session_id="s", agent_id="a")
+        assert marker_lines(marker) == ["healthy"]
+    finally:
+        module.release.set()
     assert await asyncio.to_thread(module.finished.wait, 1)
 
 
 @pytest.mark.asyncio
-async def test_aload_keeps_event_loop_responsive_during_async_register(
-    tmp_path: Path,
+async def test_timed_out_registration_logs_late_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """The live-loop load path must never freeze the loop behind a register."""
+    root = tmp_path / "extensions"
+    monkeypatch.setattr(extension_loading, "_ASYNC_REGISTER_TIMEOUT_SECONDS", 0.01)
+    write_extension(
+        root,
+        "late_failure",
+        "import asyncio\n"
+        "release = asyncio.Event()\n"
+        "async def register(api):\n"
+        "    global task\n"
+        "    task = asyncio.current_task()\n"
+        "    try:\n"
+        "        await asyncio.Event().wait()\n"
+        "    except asyncio.CancelledError:\n"
+        "        await release.wait()\n"
+        "        raise ValueError('late failure sentinel')\n",
+    )
+
+    registry = await ExtensionRegistry.aload(root)
+    assert record(registry, "late_failure").status == "failed"
+    module = sys.modules["vbot_ext.late_failure"]
+    module.release.set()
+    with pytest.raises(ValueError):
+        await module.task
+    await asyncio.sleep(0)
+
+    assert any(
+        entry.name == "vbot.extensions"
+        and entry.exc_info
+        and isinstance(entry.exc_info[1], ValueError)
+        for entry in caplog.records
+    )
+
+
+@pytest.mark.asyncio
+async def test_aload_keeps_event_loop_responsive_during_async_register(tmp_path: Path) -> None:
     root = tmp_path / "extensions"
     marker = tmp_path / "marker.txt"
-    _write_single_file(
+    write_extension(
         root,
         "slow_async",
         "import asyncio\n"
         "import pathlib\n"
         f"_MARKER = pathlib.Path({str(marker)!r})\n"
         "async def register(api):\n"
-        "    await asyncio.sleep(0.15)\n"
+        "    await asyncio.sleep(0.02)\n"
         "    def handler(ctx, **payload):\n"
         "        _MARKER.write_text('fired', encoding='utf-8')\n"
         "    api.on('run_start', handler)\n",
     )
-
     heartbeat_ticks = 0
     heartbeat_done = asyncio.Event()
 
@@ -433,339 +180,17 @@ async def test_aload_keeps_event_loop_responsive_during_async_register(
 
     # The loop serviced other tasks while register() was pending.
     assert heartbeat_ticks > 0
-    slow_record = _record(registry, "slow_async")
-    assert slow_record.status == "loaded"
-    ctx = HookContext(session_id="s", agent_id="a", run_id="r")
-    await registry.dispatch_run_start(ctx, session_id="s", agent_id="a")
+    assert record(registry, "slow_async").status == "loaded"
+    await registry.dispatch_run_start(hook_context(), session_id="s", agent_id="a")
     assert marker.read_text(encoding="utf-8") == "fired"
-
-
-@pytest.mark.asyncio
-async def test_aload_register_timeout_fails_only_that_extension(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    root = tmp_path / "extensions"
-    monkeypatch.setattr(extension_loading, "_ASYNC_REGISTER_TIMEOUT_SECONDS", 0.05)
-    _write_single_file(
-        root,
-        "hanging",
-        "import asyncio\n"
-        "import threading\n"
-        "release = threading.Event()\n"
-        "finished = threading.Event()\n"
-        "async def register(api):\n"
-        "    try:\n"
-        "        while not release.is_set():\n"
-        "            try:\n"
-        "                await asyncio.sleep(0.01)\n"
-        "            except asyncio.CancelledError:\n"
-        "                continue\n"
-        "    finally:\n"
-        "        finished.set()\n",
-    )
-    _write_single_file(
-        root,
-        "healthy",
-        "def register(api):\n    pass\n",
-    )
-
-    registry = await ExtensionRegistry.aload(root)
-
-    hanging = _record(registry, "hanging")
-    assert hanging.status == "failed"
-    assert "timed out" in (hanging.error or "")
-    healthy = _record(registry, "healthy")
-    assert healthy.status == "loaded"
-
-    # The cancelled-but-suppressing coroutine is detached, not awaited forever.
-    module = sys.modules["vbot_ext.hanging"]
-    module.release.set()
-    assert await asyncio.to_thread(module.finished.wait, 1)
-
-
-def test_startup_and_shutdown_fire_in_load_order(tmp_path: Path, monkeypatch, caplog) -> None:
-    monkeypatch.setattr(extension_callbacks, "_SLOW_EXTENSION_HANDLER_SECONDS", 0)
-    caplog.set_level(logging.WARNING, logger="vbot.extensions")
-    root = tmp_path / "extensions"
-    marker = tmp_path / "lifecycle.txt"
-    _write_single_file(root, "alpha", _lifecycle_source("alpha", marker))
-    _write_single_file(root, "zeta", _lifecycle_source("zeta", marker))
-
-    registry = ExtensionRegistry.load(root)
-    asyncio.run(registry.fire_startup())
-    asyncio.run(registry.fire_shutdown())
-
-    assert _marker_lines(marker) == [
-        "alpha:startup",
-        "zeta:startup",
-        "alpha:shutdown",
-        "zeta:shutdown",
-    ]
-    assert not [record for record in caplog.records if record.name == "vbot.extensions"]
-
-
-def test_startup_handler_failure_is_isolated(tmp_path: Path, caplog) -> None:
-    root = tmp_path / "extensions"
-    marker = tmp_path / "lifecycle.txt"
-    _write_single_file(root, "alpha", _lifecycle_source("alpha", marker, startup_boom=True))
-    _write_single_file(root, "zeta", _lifecycle_source("zeta", marker))
-
-    registry = ExtensionRegistry.load(root)
-    asyncio.run(registry.fire_startup())
-
-    # alpha's startup raised after writing nothing useful; zeta still fired
-    assert "zeta:startup" in _marker_lines(marker)
-    errors = [record for record in caplog.records if record.name == "vbot.extensions"]
-    assert len(errors) == 1
-    assert errors[0].levelno == logging.ERROR
-    assert errors[0].exc_info is not None
-
-
-def test_fire_shutdown_blocking_runs_handlers(tmp_path: Path) -> None:
-    root = tmp_path / "extensions"
-    marker = tmp_path / "lifecycle.txt"
-    _write_single_file(root, "alpha", _lifecycle_source("alpha", marker))
-
-    registry = ExtensionRegistry.load(root)
-    registry.fire_shutdown_blocking()
-
-    assert _marker_lines(marker) == ["alpha:shutdown"]
-
-
-def test_disabled_extension_lifecycle_does_not_fire(tmp_path: Path) -> None:
-    root = tmp_path / "extensions"
-    marker = tmp_path / "lifecycle.txt"
-    _write_single_file(root, "alpha", _lifecycle_source("alpha", marker))
-
-    registry = ExtensionRegistry.load(root, disabled={"alpha"})
-    asyncio.run(registry.fire_startup())
-    asyncio.run(registry.fire_shutdown())
-
-    assert _marker_lines(marker) == []
-
-
-# --- Settings schema declaration + live reads --------------------------------
-
-
-_SETTINGS_SCHEMA_SOURCE = (
-    "def register(api):\n"
-    "    api.register_settings([\n"
-    "        {'key': 'url', 'type': 'text', 'label': 'URL'},\n"
-    "        {'key': 'token', 'type': 'secret', 'label': 'Token', 'env_key': 'HASS_TOKEN'},\n"
-    "    ])\n"
-)
-
-
-def test_register_settings_lands_on_record(tmp_path: Path) -> None:
-    root = tmp_path / "extensions"
-    _write_single_file(root, "schemed", _SETTINGS_SCHEMA_SOURCE)
-
-    registry = ExtensionRegistry.load(root)
-
-    record = _record(registry, "schemed")
-    assert record.status == "loaded"
-    schema = record.declarations.settings_schema
-    assert schema is not None
-    assert [field.key for field in schema] == ["url", "token"]
-    assert schema[1].env_key == "HASS_TOKEN"
-
-
-def test_register_settings_invalid_fields_fail_extension(tmp_path: Path) -> None:
-    root = tmp_path / "extensions"
-    _write_single_file(
-        root,
-        "bad_schema",
-        "def register(api):\n"
-        "    api.register_settings([{'key': 'Bad', 'type': 'text', 'label': 'X'}])\n",
-    )
-
-    registry = ExtensionRegistry.load(root)
-
-    record = _record(registry, "bad_schema")
-    assert record.status == "failed"
-    assert "Bad" in (record.error or "")
-
-
-def test_register_interaction_handler_lands_on_record(tmp_path: Path) -> None:
-    root = tmp_path / "extensions"
-    _write_single_file(
-        root,
-        "interactive",
-        "async def _handler(event, responder):\n"
-        "    return None\n"
-        "def register(api):\n"
-        "    api.register_interaction_handler('chk', _handler)\n",
-    )
-
-    registry = ExtensionRegistry.load(root)
-
-    record = _record(registry, "interactive")
-    assert record.status == "loaded"
-    declarations = record.declarations.interaction_handlers
-    assert [declaration.prefix for declaration in declarations] == ["chk"]
-    assert callable(declarations[0].handler)
-
-
-def test_reserved_run_prefix_cannot_be_claimed_by_extension(tmp_path: Path) -> None:
-    root = tmp_path / "extensions"
-    _write_single_file(
-        root,
-        "hijacker",
-        "async def _handler(event, responder):\n"
-        "    raise AssertionError('reserved prefix handler must never run')\n"
-        "def register(api):\n"
-        "    api.register_interaction_handler('run', _handler)\n",
-    )
-
-    registry = ExtensionRegistry.load(root)
-
-    record = _record(registry, "hijacker")
-    # Registration is permissive — the declaration still lands on the record...
-    assert [d.prefix for d in record.declarations.interaction_handlers] == ["run"]
-    # ...but building the prefix map skips the reserved prefix with a diagnostic, so
-    # no extension handler is ever wired for it (the adapter routes such taps instead).
-    assert "run" not in registry._interaction_handlers
-    assert any("reserved" in message for message in record.capability_errors)
-
-
-def test_register_settings_twice_fails_extension(tmp_path: Path) -> None:
-    root = tmp_path / "extensions"
-    _write_single_file(
-        root,
-        "double_schema",
-        "def register(api):\n"
-        "    api.register_settings([{'key': 'a', 'type': 'text', 'label': 'A'}])\n"
-        "    api.register_settings([{'key': 'b', 'type': 'text', 'label': 'B'}])\n",
-    )
-
-    registry = ExtensionRegistry.load(root)
-
-    record = _record(registry, "double_schema")
-    assert record.status == "failed"
-    assert "already declared" in (record.error or "")
-
-
-def test_get_config_reads_live_provider_while_snapshot_is_frozen() -> None:
-    live: dict[str, object] = {"url": "http://one"}
-    api = ExtensionAPI(
-        "ext",
-        ExtensionDeclarations(),
-        config={"url": "http://snapshot"},
-        logger=None,
-        config_provider=lambda: dict(live),
-    )
-
-    assert api.get_config() == {"url": "http://one"}
-    live["url"] = "http://two"
-    assert api.get_config() == {"url": "http://two"}
-    # The register-time snapshot never changes.
-    assert api.config == {"url": "http://snapshot"}
-
-
-def test_get_config_falls_back_to_snapshot_without_provider() -> None:
-    api = ExtensionAPI(
-        "ext",
-        ExtensionDeclarations(),
-        config={"url": "http://snapshot"},
-        logger=None,
-    )
-
-    result = api.get_config()
-    assert result == {"url": "http://snapshot"}
-    # A fresh dict, not the snapshot object.
-    assert result is not api.config
-
-
-def test_resolve_credential_delegates_to_resolver() -> None:
-    api = ExtensionAPI(
-        "ext",
-        ExtensionDeclarations(),
-        config={},
-        logger=None,
-        credential_resolver=lambda key: f"value-for-{key}",
-    )
-
-    assert api.resolve_credential("HASS_TOKEN") == "value-for-HASS_TOKEN"
-
-
-def test_resolve_credential_empty_without_resolver() -> None:
-    api = ExtensionAPI("ext", ExtensionDeclarations(), config={}, logger=None)
-
-    assert api.resolve_credential("HASS_TOKEN") == ""
-
-
-def test_register_command_lands_on_declarations() -> None:
-    declarations = ExtensionDeclarations()
-    api = ExtensionAPI(
-        "workflow_ext",
-        declarations,
-        config={},
-        logger=None,
-    )
-
-    def handler(context: object, argument: str | None) -> object:
-        return context, argument
-
-    api.register_command(
-        "workflow",
-        "Start the workflow.",
-        handler,
-        argument="required",
-        catalog_result="state_change",
-        execution_mode="serialized",
-        unavailable_surfaces={"channel"},
-    )
-
-    assert len(declarations.commands) == 1
-    declaration = declarations.commands[0]
-    assert declaration.name == "workflow"
-    assert declaration.description == "Start the workflow."
-    assert declaration.handler is handler
-    assert declaration.argument == "required"
-    assert declaration.catalog_result == "state_change"
-    assert declaration.execution_mode == "serialized"
-    assert declaration.unavailable_surfaces == frozenset({"channel"})
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("loader", ["load", "aload"])
-@pytest.mark.parametrize("asynchronous", [False, True])
-async def test_cancelled_registration_fails_only_its_extension(
-    tmp_path: Path, loader: str, asynchronous: bool
-) -> None:
-    root = tmp_path / "extensions"
-    declaration = "async def" if asynchronous else "def"
-    _write_single_file(
-        root,
-        "a_cancelled",
-        f"import asyncio\n{declaration} register(api):\n    raise asyncio.CancelledError()\n",
-    )
-    _write_single_file(
-        root,
-        "z_healthy",
-        "async def register(api):\n    api.on('run_start', lambda ctx, **payload: None)\n",
-    )
-
-    registry = (
-        await ExtensionRegistry.aload(root) if loader == "aload" else ExtensionRegistry.load(root)
-    )
-
-    assert _record(registry, "a_cancelled").status == "failed"
-    assert _record(registry, "a_cancelled").error
-    healthy = _record(registry, "z_healthy")
-    assert healthy.status == "loaded"
-    assert healthy.declarations.hooks
 
 
 @pytest.mark.asyncio
 async def test_cancelling_aload_cancels_active_and_closes_pending_registrations(
     tmp_path: Path,
 ) -> None:
-    import inspect
-
     root = tmp_path / "extensions"
-    _write_single_file(
+    write_extension(
         root,
         "a_active",
         "import asyncio\n"
@@ -778,7 +203,7 @@ async def test_cancelling_aload_cancels_active_and_closes_pending_registrations(
         "    finally:\n"
         "        finished.set()\n",
     )
-    _write_single_file(
+    write_extension(
         root,
         "z_pending",
         "async def _register(api):\n"
@@ -807,38 +232,169 @@ async def test_cancelling_aload_cancels_active_and_closes_pending_registrations(
         await asyncio.sleep(0)
 
 
-@pytest.mark.asyncio
-async def test_timed_out_registration_logs_late_failure(
+def test_register_api_reads_a_config_snapshot_live_config_and_credentials() -> None:
+    live: dict[str, object] = {"url": "http://one"}
+    wired = ExtensionAPI(
+        "ext",
+        ExtensionDeclarations(),
+        config={"url": "http://snapshot"},
+        logger=None,
+        config_provider=lambda: dict(live),
+        credential_resolver=lambda key: f"value-for-{key}",
+    )
+
+    assert wired.get_config() == {"url": "http://one"}
+    live["url"] = "http://two"
+    assert wired.get_config() == {"url": "http://two"}
+    # The register-time snapshot never changes.
+    assert wired.config == {"url": "http://snapshot"}
+    assert wired.resolve_credential("HASS_TOKEN") == "value-for-HASS_TOKEN"
+
+    standalone = ExtensionAPI(
+        "ext", ExtensionDeclarations(), config={"url": "http://snapshot"}, logger=None
+    )
+    snapshot = standalone.get_config()
+    assert snapshot == {"url": "http://snapshot"}
+    assert snapshot is not standalone.config
+    assert standalone.resolve_credential("HASS_TOKEN") == ""
+
+
+def test_declarations_land_on_the_loaded_record(tmp_path: Path) -> None:
+    root = tmp_path / "extensions"
+    write_extension(
+        root,
+        "declaring",
+        "async def _tap(event, responder):\n"
+        "    return None\n"
+        "def _workflow(context, argument):\n"
+        "    return None\n"
+        "def register(api):\n"
+        "    api.register_settings([\n"
+        "        {'key': 'url', 'type': 'text', 'label': 'URL'},\n"
+        "        {'key': 'token', 'type': 'secret', 'label': 'Token', 'env_key': 'HASS_TOKEN'},\n"
+        "    ])\n"
+        "    api.register_interaction_handler('chk', _tap)\n"
+        "    api.register_command(\n"
+        "        'workflow', 'Start the workflow.', _workflow, argument='required',\n"
+        "        catalog_result='state_change', execution_mode='serialized',\n"
+        "        unavailable_surfaces={'channel'},\n"
+        "    )\n",
+    )
+
+    registry = ExtensionRegistry.load(root)
+
+    declared = record(registry, "declaring")
+    module = sys.modules["vbot_ext.declaring"]
+    assert declared.status == "loaded"
+    schema = declared.declarations.settings_schema
+    assert schema is not None
+    assert [(field.key, field.env_key) for field in schema] == [
+        ("url", None),
+        ("token", "HASS_TOKEN"),
+    ]
+    assert [
+        (declaration.prefix, declaration.handler)
+        for declaration in declared.declarations.interaction_handlers
+    ] == [("chk", module._tap)]
+    assert [
+        (
+            command.name,
+            command.description,
+            command.handler,
+            command.argument,
+            command.catalog_result,
+            command.execution_mode,
+            command.unavailable_surfaces,
+        )
+        for command in declared.declarations.commands
+    ] == [
+        (
+            "workflow",
+            "Start the workflow.",
+            module._workflow,
+            "required",
+            "state_change",
+            "serialized",
+            frozenset({"channel"}),
+        )
+    ]
+
+
+def test_page_declarations_are_checked_and_scoped_to_the_live_registry_epoch(
+    tmp_path: Path,
+) -> None:
+    package = write_package(
+        tmp_path / "extensions",
+        "page_owner",
+        "def register(api):\n    api.register_page('board', 'Board', 'ui/index.html')\n",
+    )
+    entry = package / "ui" / "index.html"
+    entry.parent.mkdir()
+    entry.write_text("<!doctype html>", encoding="utf-8")
+
+    registry = ExtensionRegistry.load(tmp_path / "extensions")
+
+    identity, page, path = registry.page_declarations()[0]
+    assert (identity.name, page.page_id, path) == ("page_owner", "board", entry.resolve())
+    assert registry.is_registration_current(identity)
+    assert registry.registration_identity("page_owner") == identity
+    replacement = ExtensionRegistry.load(tmp_path / "extensions")
+    assert not replacement.is_registration_current(identity)
+
+    api = ExtensionAPI("example", ExtensionDeclarations(), config={}, logger=None)
+    for unsafe_entry in ("../index.html", "/index.html", "index.js"):
+        with pytest.raises(ValueError, match="relative HTML asset path"):
+            api.register_page("board", "Board", unsafe_entry)
+
+
+def _lifecycle_source(name: str, marker: Path, *, startup_boom: bool = False) -> str:
+    boom = "        raise RuntimeError('startup boom')\n" if startup_boom else ""
+    return (
+        "import pathlib\n"
+        f"_MARKER = pathlib.Path({str(marker)!r})\n"
+        "def _write(tag):\n"
+        "    with _MARKER.open('a', encoding='utf-8') as fh:\n"
+        "        fh.write(tag + '\\n')\n"
+        "def register(api):\n"
+        "    def _startup():\n"
+        f"        _write({name!r} + ':startup')\n"
+        f"{boom}"
+        "    def _shutdown():\n"
+        f"        _write({name!r} + ':shutdown')\n"
+        "    api.on_startup(_startup)\n"
+        "    api.on_shutdown(_shutdown)\n"
+    )
+
+
+def test_lifecycle_handlers_fire_in_load_order_and_fail_open(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
+    monkeypatch.setattr(extension_callbacks, "_SLOW_EXTENSION_HANDLER_SECONDS", 0)
+    caplog.set_level(logging.WARNING, logger="vbot.extensions")
     root = tmp_path / "extensions"
-    monkeypatch.setattr(extension_loading, "_ASYNC_REGISTER_TIMEOUT_SECONDS", 0.01)
-    _write_single_file(
-        root,
-        "late_failure",
-        "import asyncio\n"
-        "release = asyncio.Event()\n"
-        "async def register(api):\n"
-        "    global task\n"
-        "    task = asyncio.current_task()\n"
-        "    try:\n"
-        "        await asyncio.Event().wait()\n"
-        "    except asyncio.CancelledError:\n"
-        "        await release.wait()\n"
-        "        raise ValueError('late failure sentinel')\n",
-    )
+    marker = tmp_path / "lifecycle.txt"
+    write_extension(root, "alpha", _lifecycle_source("alpha", marker, startup_boom=True))
+    write_extension(root, "dormant", _lifecycle_source("dormant", marker))
+    write_extension(root, "zeta", _lifecycle_source("zeta", marker))
 
-    registry = await ExtensionRegistry.aload(root)
-    assert _record(registry, "late_failure").status == "failed"
-    module = sys.modules["vbot_ext.late_failure"]
-    module.release.set()
-    with pytest.raises(ValueError):
-        await module.task
-    await asyncio.sleep(0)
+    registry = ExtensionRegistry.load(root, disabled={"dormant"})
+    asyncio.run(registry.fire_startup())
+    asyncio.run(registry.fire_shutdown())
+    registry.fire_shutdown_blocking()
 
-    assert any(
-        record.name == "vbot.extensions"
-        and record.exc_info
-        and isinstance(record.exc_info[1], ValueError)
-        for record in caplog.records
-    )
+    # alpha's failing startup does not stop zeta's; the disabled Extension never fires.
+    assert marker_lines(marker) == [
+        "alpha:startup",
+        "zeta:startup",
+        "alpha:shutdown",
+        "zeta:shutdown",
+        "alpha:shutdown",
+        "zeta:shutdown",
+    ]
+    # Only the failed startup is logged, with its traceback; lifecycle handlers are
+    # never reported as slow.
+    assert [
+        (entry.levelno, entry.exc_info is not None)
+        for entry in caplog.records
+        if entry.name == "vbot.extensions"
+    ] == [(logging.ERROR, True)]
