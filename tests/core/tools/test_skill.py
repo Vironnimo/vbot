@@ -1,71 +1,84 @@
-"""Tests for the internal skill activation tool."""
+"""Contracts of the ``skill`` Tool: catalog, activation and package file reads."""
 
-import asyncio
-import re
-from collections.abc import Callable
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import pytest
 
 from core.skills import SkillAuthoringService
 from core.skills.skills import SkillRegistry
-from core.tools import (
-    SKILL_TOOL_NAME,
-    ToolContext,
-    ToolContractError,
-    ToolRegistry,
-    register_skill_tool,
-    tool_failure,
-)
+from core.tools import SKILL_TOOL_NAME, ToolContractError, tool_failure
 from core.tools.model_names import SHELL_MODEL_NAME
-from core.tools.skill import SKILL_TOOL_PARAMETERS, load_skill_content
+from core.tools.skill import load_skill_content
+from tests.core.tools.skill_test_support import SkillTool
+
+GUIDE = "Read the evidence first.\n"
+SCRIPT = "print('debugging')\n"
 
 
-def _fixed_registry(
-    registry: SkillRegistry,
-) -> Callable[[str | None, str | None], SkillRegistry]:
-    """Wrap a fixed registry as the (project, agent)→registry resolver the tool expects."""
-    return lambda _project_id, _agent_id: registry
+def debugging_skills(tmp_path: Path) -> Path:
+    """A skills root holding ``debugging`` with one file in each resource directory."""
+    skill_dir = tmp_path / "skills" / "debugging"
+    for directory in ("scripts", "references", "assets"):
+        (skill_dir / directory).mkdir(parents=True)
+    (skill_dir / "scripts" / "run.py").write_text(SCRIPT, encoding="utf-8")
+    (skill_dir / "references" / "guide.md").write_text(GUIDE, encoding="utf-8")
+    (skill_dir / "assets" / "checklist.txt").write_text("Check everything.\n", encoding="utf-8")
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: debugging\ndescription: Debug failures.\n---\n\n"
+        "# Debugging\n\nInvestigate failures methodically.\n",
+        encoding="utf-8",
+    )
+    return tmp_path / "skills"
 
 
-def _no_refresh() -> None:
-    """Refresh callback for tests whose registry never changes on a rescan."""
+def debugging_directory(tmp_path: Path) -> str:
+    """The debugging Skill's directory as the activation payload reports it."""
+    return (tmp_path / "skills" / "debugging").resolve().as_posix()
 
 
-def test_skill_tool_describes_activation_and_file_path_contract() -> None:
-    properties = cast(dict[str, Any], SKILL_TOOL_PARAMETERS["properties"])
-
-    assert set(properties) == {"name", "file_path"}
-    assert properties["name"]["type"] == "string"
-    assert properties["name"]["minLength"] == 1
-    assert properties["file_path"]["type"] == "string"
-    assert SKILL_TOOL_PARAMETERS["required"] == []
-    assert "additionalProperties" not in SKILL_TOOL_PARAMETERS
+def debugging_tool(tmp_path: Path) -> SkillTool:
+    return SkillTool(tmp_path, SkillRegistry.load(debugging_skills(tmp_path)))
 
 
-def test_skill_tool_result_separates_instructions_and_resource_files(tmp_path: Path) -> None:
-    registry = SkillRegistry.load(_skills_dir(tmp_path))
-    tools = ToolRegistry()
-    register_skill_tool(tools, _fixed_registry(registry), _no_refresh)
-    registered: dict[str, str] = {}
+def write_skill(root: Path, directory: str, document: str) -> None:
+    (root / directory).mkdir(parents=True)
+    (root / directory / "SKILL.md").write_text(document, encoding="utf-8")
 
-    def activate(name: str, content: str) -> bool:
-        registered[name] = content
-        return True
 
-    result = asyncio.run(async_dispatch(tools, _context(tmp_path, activate), {"name": "debugging"}))
-    data = cast(dict[str, Any], result["data"])
-    skill_directory = _skill_directory(tmp_path)
+class ActivationRecorder:
+    def __init__(self, accept: bool = True) -> None:
+        self.accept = accept
+        self.activations: dict[str, str] = {}
 
+    def __call__(self, name: str, content: str) -> bool:
+        self.activations[name] = content
+        return self.accept
+
+
+def test_registration_exposes_one_tool_with_name_and_file_path(tmp_path: Path) -> None:
+    [definition] = debugging_tool(tmp_path).tools.provider_definitions(["*"])
+    parameters = definition["parameters"]
+
+    assert definition["name"] == SKILL_TOOL_NAME
+    assert set(parameters["properties"]) == {"name", "file_path"}
+    assert parameters["properties"]["name"]["type"] == "string"
+    assert parameters["properties"]["name"]["minLength"] == 1
+    assert parameters["properties"]["file_path"]["type"] == "string"
+    assert parameters["required"] == []
+    assert "additionalProperties" not in parameters
+
+
+def test_activation_separates_instructions_and_resource_files(tmp_path: Path) -> None:
+    recorder = ActivationRecorder()
+
+    result = debugging_tool(tmp_path).call({"name": "debugging"}, activation_hook=recorder)
+
+    skill_directory = debugging_directory(tmp_path)
+    data = result["data"]
     assert result["ok"] is True
-    assert data["name"] == "debugging"
-    assert data["status"] == "loaded"
-    content = cast(str, data["content"])
-    assert content == "# Debugging\n\nInvestigate failures methodically."
-    assert "<skill_content" not in content
-    assert "<resources>" not in content
-    assert "frontmatter" not in content
+    assert (data["name"], data["status"]) == ("debugging", "loaded")
+    assert data["content"] == "# Debugging\n\nInvestigate failures methodically."
     assert data["resource_files"] == {
         "guidance": (
             f"Files of this Skill. Run a scripts/ file by its absolute path with "
@@ -78,50 +91,32 @@ def test_skill_tool_result_separates_instructions_and_resource_files(tmp_path: P
             "assets/checklist.txt",
         ],
     }
-    activation_content = registered["debugging"]
+    activation_content = recorder.activations["debugging"]
     assert activation_content.startswith('<skill_content name="debugging">')
     assert f"- {skill_directory}/scripts/run.py" in activation_content
     assert "- references/guide.md" in activation_content
     assert "- assets/checklist.txt" in activation_content
-    assert content in activation_content
+    assert data["content"] in activation_content
 
 
-def test_skill_with_env_requirements_prepends_bash_usage_guidance(tmp_path: Path) -> None:
-    skill_dir = tmp_path / "skills" / "provider-probe"
-    skill_dir.mkdir(parents=True)
-    (skill_dir / "SKILL.md").write_text(
-        """---
-name: provider-probe
-description: Probe provider APIs.
-metadata:
-  vbot:
-    requirements:
-      all:
-        - env: OPENAI_API_KEY
-        - env: OPENROUTER_API_KEY
----
-
-# Provider Probe
-
-Call the provider API.
-""",
-        encoding="utf-8",
+def test_env_requirements_add_environment_access_guidance(tmp_path: Path) -> None:
+    write_skill(
+        tmp_path / "skills",
+        "provider-probe",
+        "---\nname: provider-probe\ndescription: Probe provider APIs.\n"
+        "metadata:\n  vbot:\n    requirements:\n      all:\n"
+        "        - env: OPENAI_API_KEY\n        - env: OPENROUTER_API_KEY\n---\n\n"
+        "# Provider Probe\n\nCall the provider API.\n",
     )
     registry = SkillRegistry.load(
         tmp_path / "skills",
-        environment={
-            "OPENAI_API_KEY": "available",
-            "OPENROUTER_API_KEY": "available",
-        },
+        environment={"OPENAI_API_KEY": "available", "OPENROUTER_API_KEY": "available"},
     )
-    tools = ToolRegistry()
-    register_skill_tool(tools, _fixed_registry(registry), _no_refresh)
 
-    result = asyncio.run(async_dispatch(tools, _context(tmp_path), {"name": "provider-probe"}))
+    result = SkillTool(tmp_path, registry).call({"name": "provider-probe"})
 
-    data = cast(dict[str, Any], result["data"])
-    assert data["content"] == "# Provider Probe\n\nCall the provider API."
-    guidance = cast(str, data["environment_access"])
+    assert result["data"]["content"] == "# Provider Probe\n\nCall the provider API."
+    guidance = result["data"]["environment_access"]
     assert "Loading this Skill makes these additional environment credentials" in guidance
     assert "- `OPENAI_API_KEY`" in guidance
     assert "- `OPENROUTER_API_KEY`" in guidance
@@ -129,122 +124,86 @@ Call the provider API.
     assert "<environment_access>" not in guidance
 
 
-def test_skill_tool_rejects_unknown_arguments_before_the_handler(tmp_path: Path) -> None:
-    tools = ToolRegistry()
-    register_skill_tool(
-        tools, _fixed_registry(SkillRegistry.load(_skills_dir(tmp_path))), _no_refresh
+def test_unknown_arguments_are_rejected_before_the_handler(tmp_path: Path) -> None:
+    with pytest.raises(ToolContractError, match='"unexpected" is not a parameter'):
+        debugging_tool(tmp_path).call({"name": "debugging", "unexpected": True})
+
+
+def test_unknown_skill_rescans_once_then_fails(tmp_path: Path) -> None:
+    # A name hand-dropped just before the call gets one rescan before the miss is final.
+    refreshes: list[None] = []
+    tool = SkillTool(
+        tmp_path,
+        SkillRegistry.load(debugging_skills(tmp_path)),
+        lambda: refreshes.append(None),
     )
 
-    with pytest.raises(ToolContractError, match='"unexpected" is not a parameter'):
-        asyncio.run(
-            async_dispatch(
-                tools,
-                _context(tmp_path),
-                {"name": "debugging", "unexpected": True},
-            )
-        )
-
-
-def test_skill_tool_without_activation_hook_still_returns_content(tmp_path: Path) -> None:
-    registry = SkillRegistry.load(_skills_dir(tmp_path))
-    tools = ToolRegistry()
-    register_skill_tool(tools, _fixed_registry(registry), _no_refresh)
-
-    result = asyncio.run(async_dispatch(tools, _context(tmp_path), {"name": "debugging"}))
-    data = cast(dict[str, Any], result["data"])
-
-    assert result["ok"] is True
-    assert data["status"] == "loaded"
-    assert data["content"] == "# Debugging\n\nInvestigate failures methodically."
-    assert "<skill_content" not in cast(str, data["content"])
-
-
-def test_skill_tool_unknown_skill_rescans_once_then_fails(tmp_path: Path) -> None:
-    # A genuine miss (no such skill on disk) still fails — but only after one rescan,
-    # so a name that was hand-dropped just before the call still gets a chance.
-    refresh_calls = {"count": 0}
-
-    def refresh() -> None:
-        refresh_calls["count"] += 1
-
-    tools = ToolRegistry()
-    register_skill_tool(tools, _fixed_registry(SkillRegistry.load(_skills_dir(tmp_path))), refresh)
-
-    result = asyncio.run(async_dispatch(tools, _context(tmp_path), {"name": "missing"}))
+    result = tool.call({"name": "missing"})
 
     assert result == tool_failure(
         "skill_not_found", "Skill not found: missing. Available Skills: debugging."
     )
-    assert refresh_calls["count"] == 1
+    assert len(refreshes) == 1
 
 
-def test_skill_tool_rescans_disk_on_miss_then_activates(tmp_path: Path) -> None:
-    # A skill dropped into a skill directory after the run's registry was cached is
-    # absent from the first lookup; the rescan makes it live, so the retry activates.
+def test_rescan_makes_a_newly_dropped_skill_loadable(tmp_path: Path) -> None:
     skills_dir = tmp_path / "skills"
     skills_dir.mkdir()
     state = {"registry": SkillRegistry.load(skills_dir)}
 
     def refresh() -> None:
-        _skills_dir(tmp_path)  # the hand-dropped skill now exists on disk
+        debugging_skills(tmp_path)
         state["registry"] = SkillRegistry.load(skills_dir)
 
-    tools = ToolRegistry()
-    register_skill_tool(tools, lambda _project_id, _agent_id: state["registry"], refresh)
+    tool = SkillTool(tmp_path, lambda _project_id, _agent_id: state["registry"], refresh)
 
-    result = asyncio.run(async_dispatch(tools, _context(tmp_path), {"name": "debugging"}))
-    data = cast(dict[str, Any], result["data"])
+    result = tool.call({"name": "debugging"})
 
-    assert result["ok"] is True
-    assert data["status"] == "loaded"
-    assert data["name"] == "debugging"
+    assert (result["data"]["name"], result["data"]["status"]) == ("debugging", "loaded")
 
 
-def test_skill_tool_passes_identity_agent_only_for_identity_runs(tmp_path: Path) -> None:
-    # Private skill homes are identity-only: an identity run resolves with its agent
-    # id (own skills apply), while a project run's config-agent slug must reach the
-    # resolver as ``None`` so a same-named identity agent's private home never leaks
-    # past the project skill whitelist.
+def test_registry_is_resolved_per_project_and_only_identity_runs_pass_their_agent(
+    tmp_path: Path,
+) -> None:
+    # A project run's config-agent slug must reach the resolver as None, so a
+    # same-named identity Agent's private home never leaks past the project whitelist.
+    global_registry = SkillRegistry.load(debugging_skills(tmp_path))
+    write_skill(
+        tmp_path / "project-skills",
+        "proj-skill",
+        "---\nname: proj-skill\ndescription: Project scoped.\n---\n\nBody.\n",
+    )
+    project_registry = SkillRegistry.load(tmp_path / "project-skills")
     calls: list[tuple[str | None, str | None]] = []
-    registry = SkillRegistry.load(_skills_dir(tmp_path))
 
     def resolver(project_id: str | None, identity_agent_id: str | None) -> SkillRegistry:
         calls.append((project_id, identity_agent_id))
-        return registry
+        return project_registry if project_id == "vbot" else global_registry
 
-    tools = ToolRegistry()
-    register_skill_tool(tools, resolver, _no_refresh)
+    tool = SkillTool(tmp_path, resolver)
 
-    asyncio.run(async_dispatch(tools, _context(tmp_path), {"name": "debugging"}))
-    asyncio.run(async_dispatch(tools, _context(tmp_path, project_id="vbot"), {"name": "debugging"}))
+    project_result = tool.call({"name": "proj-skill"}, project_id="vbot")
+    identity_result = tool.call({"name": "proj-skill"})
 
-    assert calls == [(None, "coder"), ("vbot", None)]
-
-
-def test_skill_tool_unavailable_skill_fails_with_missing_requirements(tmp_path: Path) -> None:
-    skills_dir = tmp_path / "skills"
-    skill_dir = skills_dir / "openai-helper"
-    skill_dir.mkdir(parents=True)
-    (skill_dir / "SKILL.md").write_text(
-        """---
-name: openai-helper
-description: Use OpenAI.
-metadata:
-  vbot:
-    requirements:
-      env: OPENAI_API_KEY
----
-
-# OpenAI Helper
-""",
-        encoding="utf-8",
+    assert project_result["ok"] is True
+    assert identity_result == tool_failure(
+        "skill_not_found", "Skill not found: proj-skill. Available Skills: debugging."
     )
-    tools = ToolRegistry()
-    register_skill_tool(
-        tools, _fixed_registry(SkillRegistry.load(skills_dir, environment={})), _no_refresh
-    )
+    # The identity miss resolves again after its one rescan.
+    assert calls == [("vbot", None), (None, "coder"), (None, "coder")]
 
-    result = asyncio.run(async_dispatch(tools, _context(tmp_path), {"name": "openai-helper"}))
+
+def test_unavailable_skill_fails_with_missing_requirements(tmp_path: Path) -> None:
+    write_skill(
+        tmp_path / "skills",
+        "openai-helper",
+        "---\nname: openai-helper\ndescription: Use OpenAI.\n"
+        "metadata:\n  vbot:\n    requirements:\n      env: OPENAI_API_KEY\n---\n\n"
+        "# OpenAI Helper\n",
+    )
+    registry = SkillRegistry.load(tmp_path / "skills", environment={})
+
+    result = SkillTool(tmp_path, registry).call({"name": "openai-helper"})
 
     assert result == tool_failure(
         "skill_unavailable",
@@ -252,18 +211,13 @@ metadata:
     )
 
 
-def test_skill_tool_dedup_uses_session_activation_hook(tmp_path: Path) -> None:
-    tools = ToolRegistry()
-    register_skill_tool(
-        tools, _fixed_registry(SkillRegistry.load(_skills_dir(tmp_path))), _no_refresh
+def test_already_active_skill_is_not_loaded_again(tmp_path: Path) -> None:
+    result = debugging_tool(tmp_path).call(
+        {"name": "debugging"}, activation_hook=ActivationRecorder(accept=False)
     )
 
-    context = _context(tmp_path, lambda _name, _content: False)
-    actual = asyncio.run(async_dispatch(tools, context, {"name": "debugging"}))
-    data = cast(dict[str, Any], actual["data"])
-
-    assert actual["ok"] is True
-    assert data == {
+    assert result["ok"] is True
+    assert result["data"] == {
         "name": "debugging",
         "status": "already_active",
         "message": (
@@ -271,536 +225,45 @@ def test_skill_tool_dedup_uses_session_activation_hook(tmp_path: Path) -> None:
             "its instructions are already in context."
         ),
     }
-    assert "<skill_content" not in str(actual)
-
-
-def test_skill_tool_reads_relative_support_file_without_activation(tmp_path: Path) -> None:
-    registry = SkillRegistry.load(_skills_dir(tmp_path))
-    tools = ToolRegistry()
-    register_skill_tool(tools, _fixed_registry(registry), _no_refresh)
-    activations: list[str] = []
-
-    def activate(name: str, _content: str) -> bool:
-        activations.append(name)
-        return True
-
-    result = asyncio.run(
-        async_dispatch(
-            tools,
-            _context(tmp_path, activate),
-            {"name": "debugging", "file_path": "references/guide.md"},
-        )
-    )
-
-    assert result["ok"] is True
-    assert result["data"] == {
-        "name": "debugging",
-        "status": "file_loaded",
-        "file_path": "references/guide.md",
-        "content": "Read the evidence first.\n",
-    }
-    assert activations == []
-    assert str(_skill_directory(tmp_path)) not in str(result)
-
-
-def test_skill_tool_reads_script_source_by_relative_file_path(tmp_path: Path) -> None:
-    registry = SkillRegistry.load(_skills_dir(tmp_path))
-    tools = ToolRegistry()
-    register_skill_tool(tools, _fixed_registry(registry), _no_refresh)
-
-    result = asyncio.run(
-        async_dispatch(
-            tools,
-            _context(tmp_path),
-            {"name": "debugging", "file_path": "scripts/run.py"},
-        )
-    )
-
-    assert result["ok"] is True
-    assert result["data"] == {
-        "name": "debugging",
-        "status": "file_loaded",
-        "file_path": "scripts/run.py",
-        "content": "print('debugging')\n",
-    }
-    assert str(_skill_directory(tmp_path)) not in str(result)
-
-
-def test_skill_tool_file_path_requires_name(tmp_path: Path) -> None:
-    tools = ToolRegistry()
-    register_skill_tool(
-        tools,
-        _fixed_registry(SkillRegistry.load(_skills_dir(tmp_path))),
-        _no_refresh,
-    )
-
-    result = asyncio.run(
-        async_dispatch(
-            tools,
-            _context(tmp_path),
-            {"file_path": "references/guide.md"},
-        )
-    )
-
-    assert result == tool_failure(
-        "invalid_arguments",
-        "file_path needs the Skill's name: call skill with name and file_path.",
-    )
-
-
-def test_skill_tool_rejects_missing_relative_file(tmp_path: Path) -> None:
-    tools = ToolRegistry()
-    register_skill_tool(
-        tools,
-        _fixed_registry(SkillRegistry.load(_skills_dir(tmp_path))),
-        _no_refresh,
-    )
-
-    result = asyncio.run(
-        async_dispatch(
-            tools,
-            _context(tmp_path),
-            {"name": "debugging", "file_path": "references/missing.md"},
-        )
-    )
-
-    assert result == tool_failure(
-        "skill_read_error",
-        "Skill 'debugging' file not found: references/missing.md",
-    )
-
-
-def test_skill_tool_file_read_error(tmp_path: Path) -> None:
-    skills_dir = _skills_dir(tmp_path)
-    skill_file = skills_dir / "debugging" / "SKILL.md"
-    registry = SkillRegistry.load(skills_dir)
-    skill_file.unlink()
-    tools = ToolRegistry()
-    register_skill_tool(tools, _fixed_registry(registry), _no_refresh)
-
-    result = asyncio.run(async_dispatch(tools, _context(tmp_path), {"name": "debugging"}))
-    error = cast(dict[str, Any], result["error"])
-
-    assert result["ok"] is False
-    assert error["code"] == "skill_read_error"
-
-
-def test_skill_tool_resolves_registry_from_project_id(tmp_path: Path) -> None:
-    # The handler picks its registry per call from the run's project_id: a
-    # project-only skill is loadable in the project run, the global registry is used
-    # for the identity run.
-    global_registry = SkillRegistry.load(_skills_dir(tmp_path))
-    project_skills = tmp_path / "project-skills"
-    project_skill_dir = project_skills / "proj-skill"
-    project_skill_dir.mkdir(parents=True)
-    (project_skill_dir / "SKILL.md").write_text(
-        "---\nname: proj-skill\ndescription: Project scoped.\n---\n\nBody.\n",
-        encoding="utf-8",
-    )
-    project_registry = SkillRegistry.load(project_skills)
-    registries: dict[str | None, SkillRegistry] = {"vbot": project_registry}
-    tools = ToolRegistry()
-    register_skill_tool(
-        tools,
-        lambda project_id, _agent_id: registries.get(project_id, global_registry),
-        _no_refresh,
-    )
-
-    project_result = asyncio.run(
-        async_dispatch(tools, _context(tmp_path, project_id="vbot"), {"name": "proj-skill"})
-    )
-    identity_result = asyncio.run(async_dispatch(tools, _context(tmp_path), {"name": "proj-skill"}))
-
-    assert project_result["ok"] is True
-    # The project-only skill is not in the global registry, so the identity run fails.
-    assert identity_result == tool_failure(
-        "skill_not_found", "Skill not found: proj-skill. Available Skills: debugging."
-    )
-
-
-def test_skill_tool_without_arguments_returns_grouped_live_catalog(tmp_path: Path) -> None:
-    # The same Tool that loads a Skill lists the live, agent-aware catalog when
-    # called without arguments.
-    agent_dir = tmp_path / "agent"
-    (agent_dir / "mine").mkdir(parents=True)
-    (agent_dir / "mine" / "SKILL.md").write_text(
-        "---\nname: mine\ndescription: Mine.\n---\n\nBody.\n", encoding="utf-8"
-    )
-    registry = SkillRegistry.load(
-        agent_dir, extra_dirs=[_skills_dir(tmp_path)], origins=["agent", "global"]
-    )
-    tools = ToolRegistry()
-    register_skill_tool(tools, _fixed_registry(registry), _no_refresh)
-
-    context = _context(tmp_path)
-    result = asyncio.run(async_dispatch(tools, context, {}))
-    data = cast(dict[str, Any], result["data"])
-
-    assert result["ok"] is True
-    # Same groups, order and labels as the System Prompt catalog.
-    assert data == {
-        "count": 2,
-        "content": (
-            "Your global skills:\n- debugging: Debug failures.\nYour own skills:\n- mine: Mine."
-        ),
-    }
-    display = tools.display_for_call(SKILL_TOOL_NAME, {}, result=result)
-    assert display["facts"] == [{"kind": "count", "value": 2, "unit": "results", "at_least": False}]
-
-
-def test_skill_tool_blank_optional_name_lists_available_skills(tmp_path: Path) -> None:
-    registry = SkillRegistry.load(_skills_dir(tmp_path), origins=["global"])
-    tools = ToolRegistry()
-    register_skill_tool(tools, _fixed_registry(registry), _no_refresh)
-
-    result = asyncio.run(async_dispatch(tools, _context(tmp_path), {"name": "  "}))
-    assert result["ok"] is True
-    assert cast(dict[str, Any], result["data"])["count"] == 1
-
-
-def test_skill_registration_exposes_one_configurable_tool(tmp_path: Path) -> None:
-    tools = ToolRegistry()
-    register_skill_tool(
-        tools,
-        _fixed_registry(SkillRegistry.load(_skills_dir(tmp_path))),
-        _no_refresh,
-    )
-
-    assert [definition["name"] for definition in tools.provider_definitions(["*"])] == [
-        SKILL_TOOL_NAME
-    ]
-
-
-def test_skill_tool_loads_agent_own_skill_bypassing_allowlist(tmp_path: Path) -> None:
-    # An agent's own private skill is always-allowed for it: the skill tool loads it
-    # even when the agent's allow-list would otherwise exclude everything.
-    agent_home = tmp_path / "agent-skills"
-    skill_dir = agent_home / "private"
-    skill_dir.mkdir(parents=True)
-    (skill_dir / "SKILL.md").write_text(
-        "---\nname: private\ndescription: Agent only.\n---\n\nSecret steps.\n",
-        encoding="utf-8",
-    )
-    registry = SkillRegistry.load(agent_home, always_allowed=frozenset({"private"}))
-    tools = ToolRegistry()
-    register_skill_tool(tools, _fixed_registry(registry), _no_refresh)
-
-    result = asyncio.run(
-        async_dispatch(tools, _context(tmp_path, allowed_skills=[]), {"name": "private"})
-    )
-
-    assert result["ok"] is True
-    assert cast(dict[str, Any], result["data"])["name"] == "private"
-
-
-def test_load_skill_content_keeps_wrapper_out_of_content(tmp_path: Path) -> None:
-    skill_dir = tmp_path / "skills" / "unsafe"
-    skill_dir.mkdir(parents=True)
-    skill_file = skill_dir / "SKILL.md"
-    skill_file.write_text(
-        """---
-name: unsafe
-description: Unsafe name.
----
-
-Body.
-""",
-        encoding="utf-8",
-    )
-
-    result = load_skill_content('bad" name><tag', skill_file)
-
-    assert result["content"] == "Body."
-    assert "resource_files" not in result
-    assert "environment_access" not in result
-    assert result["activation_content"] == (
-        '<skill_content name="bad&quot; name&gt;&lt;tag">\nBody.\n</skill_content>'
-    )
-
-
-def test_load_skill_content_substitutes_base_dir_marker(tmp_path: Path) -> None:
-    skill_dir = tmp_path / "skills" / "deploy"
-    (skill_dir / "scripts").mkdir(parents=True)
-    (skill_dir / "scripts" / "ship.py").write_text("", encoding="utf-8")
-    skill_file = skill_dir / "SKILL.md"
-    skill_file.write_text(
-        """---
-name: deploy
-description: Ship it.
----
-
-Run `python {baseDir}/scripts/ship.py` to deploy.
-""",
-        encoding="utf-8",
-    )
-
-    result = load_skill_content("deploy", skill_file)
-
-    directory = skill_file.resolve().parent.as_posix()
-    content = cast(str, result["content"])
-    assert "{baseDir}" not in content
-    assert f"Run `python {directory}/scripts/ship.py` to deploy." in content
-    resource_files = cast(dict[str, Any], result["resource_files"])
-    assert resource_files["files"] == [f"{directory}/scripts/ship.py"]
-
-
-def test_load_skill_content_uses_full_body_without_front_matter(tmp_path: Path) -> None:
-    skill_dir = tmp_path / "skills" / "deploy"
-    skill_dir.mkdir(parents=True)
-    skill_file = skill_dir / "SKILL.md"
-    skill_file.write_text("# Deploy\n\nRun the deploy steps.\n", encoding="utf-8")
-
-    result = load_skill_content("deploy", skill_file)
-
-    content = cast(str, result["content"])
-    assert "# Deploy\n\nRun the deploy steps." in content
-
-
-async def async_dispatch(
-    tools: ToolRegistry,
-    context: ToolContext,
-    arguments: dict[str, object],
-    *,
-    tool_name: str = SKILL_TOOL_NAME,
-) -> dict[str, object]:
-    return await tools.dispatch(context, arguments, [tool_name])
-
-
-def _skills_dir(tmp_path: Path) -> Path:
-    skill_dir = tmp_path / "skills" / "debugging"
-    (skill_dir / "scripts").mkdir(parents=True)
-    (skill_dir / "references").mkdir()
-    (skill_dir / "assets").mkdir()
-    (skill_dir / "scripts" / "run.py").write_text(
-        "print('debugging')\n",
-        encoding="utf-8",
-    )
-    (skill_dir / "references" / "guide.md").write_text(
-        "Read the evidence first.\n",
-        encoding="utf-8",
-    )
-    (skill_dir / "assets" / "checklist.txt").write_text(
-        "Check everything.\n",
-        encoding="utf-8",
-    )
-    (skill_dir / "SKILL.md").write_text(
-        """---
-name: debugging
-description: Debug failures.
----
-
-# Debugging
-
-Investigate failures methodically.
-""",
-        encoding="utf-8",
-    )
-    return tmp_path / "skills"
-
-
-def _skill_directory(tmp_path: Path) -> str:
-    """The debugging fixture skill's directory as the activation payload reports it."""
-    return (tmp_path / "skills" / "debugging").resolve().as_posix()
-
-
-def _context(
-    tmp_path: Path,
-    activation_hook: object | None = None,
-    *,
-    project_id: str | None = None,
-    allowed_skills: list[str] | None = None,
-    tool_name: str = SKILL_TOOL_NAME,
-    session_tool_grants: tuple[str, ...] = (),
-) -> ToolContext:
-    return ToolContext(
-        agent_id="coder",
-        session_id="session-one",
-        run_id="run-one",
-        tool_call_id="call-one",
-        tool_name=tool_name,
-        tool_call_index=0,
-        workspace=tmp_path,
-        vbot_root=tmp_path,
-        data_root=tmp_path,
-        project_id=project_id,
-        # The tool resolves against the effective skill project; outside the rooted
-        # case it equals project_id, so mirror it here.
-        skill_project_id=project_id,
-        skill_activation_hook=activation_hook,  # type: ignore[arg-type]
-        allowed_skills=["*"] if allowed_skills is None else allowed_skills,
-        session_tool_grants=session_tool_grants,
-    )
-
-
-def test_bundled_playwright_activation_and_each_reference(tmp_path: Path) -> None:
-    root = Path(__file__).resolve().parents[3]
-    registry = SkillRegistry.load(root / "resources/skills")
-    tools = ToolRegistry()
-    register_skill_tool(tools, _fixed_registry(registry), _no_refresh)
-    context = _context(tmp_path)
-    result = asyncio.run(async_dispatch(tools, context, {"name": "playwright-cli"}))
-    assert result["ok"] is True
-    data = cast(dict[str, Any], result["data"])
-    assert data["status"] == "loaded"
-    package = root / "resources/skills/playwright-cli"
-    expected = sorted(
-        path.relative_to(package).as_posix() for path in (package / "references").glob("*.md")
-    )
-    expected.extend(["LICENSE", "UPSTREAM.json"])
-    assert data["resource_files"]["files"] == expected
-    for relative in expected:
-        result = asyncio.run(
-            async_dispatch(tools, context, {"name": "playwright-cli", "file_path": relative})
-        )
-        assert result["ok"] is True
-        file_data = cast(dict[str, Any], result["data"])
-        assert file_data["status"] == "file_loaded"
-        assert file_data["content"] == (package / relative).read_text(encoding="utf-8")
-
-
-def test_vbot_skill_exposes_extension_templates_without_loading_their_skill(tmp_path: Path) -> None:
-    root = Path(__file__).resolve().parents[3]
-    package = root / "resources/skills/vbot-cli"
-    registry = SkillRegistry.load(root / "resources/skills")
-    assert "workflow" not in {skill.name for skill in registry.list_all()}
-    tools = ToolRegistry()
-    register_skill_tool(tools, _fixed_registry(registry), _no_refresh)
-    context = _context(tmp_path)
-
-    result = asyncio.run(async_dispatch(tools, context, {"name": "vbot-cli"}))
-    assert result["ok"] is True
-    data = cast(dict[str, Any], result["data"])
-    assert data["status"] == "loaded"
-    resources = {
-        "references/extensions.md",
-        "references/extension-usage.md",
-        "assets/extensions/guard_bash.py",
-        "assets/extensions/word_count.py",
-        "assets/extensions/workflow_command/extension.py",
-        "assets/extensions/workflow_command/extension.json",
-        "assets/extensions/workflow_command/skills/workflow/SKILL.md",
-    }
-    assert resources <= set(data["resource_files"]["files"])
-    for relative in sorted(resources):
-        result = asyncio.run(
-            async_dispatch(tools, context, {"name": "vbot-cli", "file_path": relative})
-        )
-        assert result["ok"] is True
-        file_data = cast(dict[str, Any], result["data"])
-        assert file_data["status"] == "file_loaded"
-        assert file_data["file_path"] == relative
-        assert file_data["content"] == (package / relative).read_text(encoding="utf-8")
-
-
-def test_vbot_skill_extension_links_resolve_inside_the_package() -> None:
-    package = Path(__file__).resolve().parents[3] / "resources/skills/vbot-cli"
-    for relative in ("SKILL.md", "references/extensions.md", "references/extension-usage.md"):
-        source = package / relative
-        for link in re.findall(r"\]\(([^)]+)\)", source.read_text(encoding="utf-8")):
-            target = link.split("#", 1)[0]
-            if not target or "://" in target:
-                continue
-            resolved = (source.parent / target).resolve()
-            assert resolved.is_relative_to(package), (relative, link)
-            assert resolved.exists(), (relative, link)
-
-
-def test_installed_package_exposes_nonconventional_resources_through_dispatch(tmp_path):
-    source = tmp_path / "source"
-    source.mkdir()
-    (source / "SKILL.md").write_text(
-        "---\nname: imported\ndescription: Imported guide\n---\n"
-        "Read GUIDE.md and templates/example.md.\n"
-    )
-    (source / "GUIDE.md").write_text("The complete guide.")
-    (source / "templates").mkdir()
-    (source / "templates/example.md").write_text("Example text.")
-    target = tmp_path / "skills"
-    SkillAuthoringService().install(target, str(source))
-    registry = SkillRegistry.load(target)
-    tools = ToolRegistry()
-    register_skill_tool(tools, _fixed_registry(registry), _no_refresh)
-    context = _context(tmp_path)
-    activated = asyncio.run(async_dispatch(tools, context, {"name": "imported"}))
-    assert activated["ok"]
-    assert activated["data"]["resource_files"]["files"] == ["GUIDE.md", "templates/example.md"]
-    for relative, text in [
-        ("GUIDE.md", "The complete guide."),
-        ("templates/example.md", "Example text."),
-    ]:
-        result = asyncio.run(
-            async_dispatch(tools, context, {"name": "imported", "file_path": relative})
-        )
-        assert result["ok"]
-        assert result["data"]["status"] == "file_loaded"
-        assert result["data"]["content"] == text
 
 
 @pytest.mark.parametrize(
-    "relative",
+    ("arguments", "file_path"),
     [
-        "../outside",
-        "/absolute",
-        "references/../../outside",
-        "C:/outside",
-        ".vbot-install.json",
-        ".git/config",
-        "templates/NUL.txt",
+        ({"name": "debugging", "file_path": "references/guide.md"}, "references/guide.md"),
+        ({"name": "debugging", "file_path": "scripts/run.py"}, "scripts/run.py"),
+        # The absolute script path from the activation's resource list.
+        ({"name": "debugging", "file_path": "{directory}/scripts/run.py"}, "scripts/run.py"),
+        ({"name": "debugging/references/guide.md"}, "references/guide.md"),
+        ({"file_path": "debugging/references/guide.md"}, "references/guide.md"),
+        (
+            {"name": "debugging", "file_path": "debugging/references/guide.md"},
+            "references/guide.md",
+        ),
+        ({"name": "debugging", "file_path": "./references/guide.md"}, "references/guide.md"),
+        ({"skill": "debugging", "path": "references\\guide.md"}, "references/guide.md"),
     ],
 )
-def test_extended_package_reads_keep_containment_and_internal_file_boundary(tmp_path, relative):
-    registry = SkillRegistry.load(_skills_dir(tmp_path))
-    tools = ToolRegistry()
-    register_skill_tool(tools, _fixed_registry(registry), _no_refresh)
-    result = asyncio.run(
-        async_dispatch(tools, _context(tmp_path), {"name": "debugging", "file_path": relative})
-    )
-    assert result["ok"] is False
-
-
-@pytest.mark.parametrize("name", ["Daily Review", "my.skill", "ümlaut", "long-" * 20])
-def test_loaded_nontriggerable_name_is_addressable_through_dispatch(
-    tmp_path: Path, name: str
+def test_file_reads_return_the_named_file_without_activation(
+    tmp_path: Path, arguments: dict[str, str], file_path: str
 ) -> None:
-    package = tmp_path / "skills" / "package"
-    package.mkdir(parents=True)
-    (package / "SKILL.md").write_text(
-        f"---\nname: {name}\ndescription: A test Skill.\n---\nUse the sentinel procedure.",
-        encoding="utf-8",
-    )
-    (package / "reference.txt").write_text("Reference sentinel", encoding="utf-8")
-    registry = SkillRegistry.load(package.parent)
-    tools = ToolRegistry()
-    register_skill_tool(tools, _fixed_registry(registry), _no_refresh)
-    context = _context(tmp_path)
+    tool = debugging_tool(tmp_path)
+    directory = debugging_directory(tmp_path)
+    recorder = ActivationRecorder()
+    call: dict[str, object] = {
+        key: value.format(directory=directory) for key, value in arguments.items()
+    }
 
-    activated = asyncio.run(async_dispatch(tools, context, {"name": name}))
-    reference = asyncio.run(
-        async_dispatch(tools, context, {"name": name, "file_path": "reference.txt"})
-    )
-    denied = asyncio.run(
-        async_dispatch(tools, _context(tmp_path, allowed_skills=[]), {"name": name})
-    )
+    result = tool.call(call, activation_hook=recorder)
 
-    assert activated["ok"] is True
-    assert isinstance(activated["data"], dict)
-    assert isinstance(reference["data"], dict)
-    assert activated["data"]["name"] == name
-    assert activated["data"]["content"] == "Use the sentinel procedure."
-    assert reference["data"]["content"] == "Reference sentinel"
-    assert denied["ok"] is False
-
-
-def _dispatch_debugging(
-    tmp_path: Path, arguments: dict[str, object], **context: Any
-) -> dict[str, Any]:
-    registry = SkillRegistry.load(_skills_dir(tmp_path))
-    tools = ToolRegistry()
-    register_skill_tool(tools, _fixed_registry(registry), _no_refresh)
-    return cast(
-        dict[str, Any],
-        asyncio.run(async_dispatch(tools, _context(tmp_path, **context), arguments)),
-    )
+    assert result["data"] == {
+        "name": "debugging",
+        "status": "file_loaded",
+        "file_path": file_path,
+        "content": {"references/guide.md": GUIDE, "scripts/run.py": SCRIPT}[file_path],
+    }
+    assert recorder.activations == {}
+    assert directory not in str(result)
 
 
 @pytest.mark.parametrize(
@@ -818,46 +281,14 @@ def _dispatch_debugging(
 def test_skill_names_differing_only_in_form_load_the_skill(
     tmp_path: Path, arguments: dict[str, object]
 ) -> None:
-    result = _dispatch_debugging(tmp_path, arguments)
+    result = debugging_tool(tmp_path).call(arguments)
 
-    assert result["ok"] is True
-    assert result["data"]["name"] == "debugging"
-    assert result["data"]["status"] == "loaded"
+    assert (result["data"]["name"], result["data"]["status"]) == ("debugging", "loaded")
     assert "note" not in result["data"]
 
 
-@pytest.mark.parametrize(
-    "arguments",
-    [
-        {"name": "debugging/references/guide.md"},
-        {"file_path": "debugging/references/guide.md"},
-        {"name": "debugging", "file_path": "debugging/references/guide.md"},
-        {"name": "debugging", "file_path": "./references/guide.md"},
-        {"skill": "debugging", "path": "references\\guide.md"},
-    ],
-)
-def test_package_paths_read_the_named_file(tmp_path: Path, arguments: dict[str, object]) -> None:
-    result = _dispatch_debugging(tmp_path, arguments)
-
-    assert result["data"] == {
-        "name": "debugging",
-        "status": "file_loaded",
-        "file_path": "references/guide.md",
-        "content": "Read the evidence first.\n",
-    }
-
-
-def test_absolute_script_path_from_the_resource_list_reads_the_script(tmp_path: Path) -> None:
-    script = f"{_skill_directory(tmp_path)}/scripts/run.py"
-
-    result = _dispatch_debugging(tmp_path, {"name": "debugging", "file_path": script})
-
-    assert result["data"]["file_path"] == "scripts/run.py"
-    assert result["data"]["content"] == "print('debugging')\n"
-
-
 def test_skill_arguments_from_another_harness_are_noted(tmp_path: Path) -> None:
-    result = _dispatch_debugging(tmp_path, {"skill": "debugging", "args": "the flaky test"})
+    result = debugging_tool(tmp_path).call({"skill": "debugging", "args": "the flaky test"})
 
     assert result["data"]["status"] == "loaded"
     assert result["data"]["note"] == (
@@ -866,12 +297,12 @@ def test_skill_arguments_from_another_harness_are_noted(tmp_path: Path) -> None:
 
 
 def test_contradictory_skill_addresses_are_refused(tmp_path: Path) -> None:
-    with pytest.raises(ToolContractError, match="Conflicting values for name"):
-        _dispatch_debugging(tmp_path / "one", {"name": "debugging", "skill": "other"})
+    tool = debugging_tool(tmp_path)
 
-    result = _dispatch_debugging(
-        tmp_path / "two",
-        {"name": "debugging/references/guide.md", "file_path": "assets/checklist.txt"},
+    with pytest.raises(ToolContractError, match="Conflicting values for name"):
+        tool.call({"name": "debugging", "skill": "other"})
+    result = tool.call(
+        {"name": "debugging/references/guide.md", "file_path": "assets/checklist.txt"}
     )
 
     assert result == tool_failure(
@@ -882,49 +313,70 @@ def test_contradictory_skill_addresses_are_refused(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    ("name", "message"),
+    ("arguments", "allowed_skills", "code", "message"),
     [
         (
-            "cdebugging",
+            {"file_path": "references/guide.md"},
+            None,
+            "invalid_arguments",
+            "file_path needs the Skill's name: call skill with name and file_path.",
+        ),
+        (
+            {"name": "debugging", "file_path": "references/missing.md"},
+            None,
+            "skill_read_error",
+            "Skill 'debugging' file not found: references/missing.md",
+        ),
+        (
+            {"name": "cdebugging"},
+            None,
+            "skill_not_found",
             'Skill not found: cdebugging. Did you mean "debugging"? Load it with name "debugging".',
         ),
         (
-            "debug",
+            {"name": "debug"},
+            None,
+            "skill_not_found",
             'Skill not found: debug. Did you mean "debugging"? Load it with name "debugging".',
         ),
-        ("zzz", "Skill not found: zzz. Available Skills: debugging."),
+        (
+            {"name": "zzz"},
+            None,
+            "skill_not_found",
+            "Skill not found: zzz. Available Skills: debugging.",
+        ),
+        # Disallowed Skills are neither resolved nor suggested.
+        (
+            {"name": "Debugging"},
+            [],
+            "skill_not_found",
+            "Skill not found: Debugging. No Skills are available to you.",
+        ),
     ],
 )
-def test_unknown_skill_names_suggest_close_names_without_loading(
-    tmp_path: Path, name: str, message: str
+def test_failed_lookups_explain_the_miss_without_activation(
+    tmp_path: Path,
+    arguments: dict[str, object],
+    allowed_skills: list[str] | None,
+    code: str,
+    message: str,
 ) -> None:
-    activated: list[str] = []
+    recorder = ActivationRecorder()
 
-    def activate(skill: str, _content: str) -> bool:
-        activated.append(skill)
-        return True
+    result = debugging_tool(tmp_path).call(
+        arguments, activation_hook=recorder, allowed_skills=allowed_skills
+    )
 
-    registry = SkillRegistry.load(_skills_dir(tmp_path))
-    tools = ToolRegistry()
-    register_skill_tool(tools, _fixed_registry(registry), _no_refresh)
-
-    result = asyncio.run(async_dispatch(tools, _context(tmp_path, activate), {"name": name}))
-
-    assert result == tool_failure("skill_not_found", message)
-    assert activated == []
+    assert result == tool_failure(code, message)
+    assert recorder.activations == {}
 
 
 def test_names_matching_several_skills_in_form_are_not_guessed(tmp_path: Path) -> None:
     root = tmp_path / "skills"
     for directory, name in (("one", "deploy-app"), ("two", "deploy_app")):
-        (root / directory).mkdir(parents=True)
-        (root / directory / "SKILL.md").write_text(
-            f"---\nname: {name}\ndescription: Deploy.\n---\n\nBody.\n", encoding="utf-8"
-        )
-    tools = ToolRegistry()
-    register_skill_tool(tools, _fixed_registry(SkillRegistry.load(root)), _no_refresh)
+        write_skill(root, directory, f"---\nname: {name}\ndescription: Deploy.\n---\n\nBody.\n")
 
-    result = asyncio.run(async_dispatch(tools, _context(tmp_path), {"name": "Deploy-App"}))
+    result = SkillTool(tmp_path, SkillRegistry.load(root)).call({"name": "Deploy-App"})
 
     assert result == tool_failure(
         "skill_not_found",
@@ -932,9 +384,163 @@ def test_names_matching_several_skills_in_form_are_not_guessed(tmp_path: Path) -
     )
 
 
-def test_disallowed_skills_are_neither_resolved_nor_suggested(tmp_path: Path) -> None:
-    result = _dispatch_debugging(tmp_path, {"name": "Debugging"}, allowed_skills=[])
+@pytest.mark.parametrize(
+    "relative",
+    [
+        "../outside",
+        "/absolute",
+        "references/../../outside",
+        "C:/outside",
+        ".vbot-install.json",
+        ".git/config",
+        "templates/NUL.txt",
+    ],
+)
+def test_file_reads_stay_inside_the_package_and_skip_internal_files(
+    tmp_path: Path, relative: str
+) -> None:
+    result = debugging_tool(tmp_path).call({"name": "debugging", "file_path": relative})
 
-    assert result == tool_failure(
-        "skill_not_found", "Skill not found: Debugging. No Skills are available to you."
+    assert result["ok"] is False
+
+
+def test_skill_document_removed_after_loading_is_a_read_error(tmp_path: Path) -> None:
+    skills_dir = debugging_skills(tmp_path)
+    tool = SkillTool(tmp_path, SkillRegistry.load(skills_dir))
+    (skills_dir / "debugging" / "SKILL.md").unlink()
+
+    result = tool.call({"name": "debugging"})
+
+    assert (result["ok"], result["error"]["code"]) == (False, "skill_read_error")
+
+
+@pytest.mark.parametrize("arguments", [{}, {"name": "  "}])
+def test_call_without_a_name_lists_the_live_grouped_catalog(
+    tmp_path: Path, arguments: dict[str, object]
+) -> None:
+    write_skill(tmp_path / "agent", "mine", "---\nname: mine\ndescription: Mine.\n---\n\nBody.\n")
+    registry = SkillRegistry.load(
+        tmp_path / "agent", extra_dirs=[debugging_skills(tmp_path)], origins=["agent", "global"]
+    )
+    tool = SkillTool(tmp_path, registry)
+
+    result = tool.call(arguments)
+
+    # Same groups, order and labels as the System Prompt catalog.
+    assert result["data"] == {
+        "count": 2,
+        "content": (
+            "Your global skills:\n- debugging: Debug failures.\nYour own skills:\n- mine: Mine."
+        ),
+    }
+    display = tool.tools.display_for_call(SKILL_TOOL_NAME, arguments, result=result)
+    assert display["facts"] == [{"kind": "count", "value": 2, "unit": "results", "at_least": False}]
+
+
+def test_agent_own_skill_loads_despite_an_empty_allowlist(tmp_path: Path) -> None:
+    write_skill(
+        tmp_path / "agent-skills",
+        "private",
+        "---\nname: private\ndescription: Agent only.\n---\n\nSecret steps.\n",
+    )
+    registry = SkillRegistry.load(tmp_path / "agent-skills", always_allowed=frozenset({"private"}))
+
+    result = SkillTool(tmp_path, registry).call({"name": "private"}, allowed_skills=[])
+
+    assert result["data"]["name"] == "private"
+
+
+@pytest.mark.parametrize("name", ["Daily Review", "my.skill", "ümlaut", "long-" * 20])
+def test_loaded_nontriggerable_name_is_addressable_through_dispatch(
+    tmp_path: Path, name: str
+) -> None:
+    package = tmp_path / "skills" / "package"
+    write_skill(
+        package.parent,
+        "package",
+        f"---\nname: {name}\ndescription: A test Skill.\n---\nUse the sentinel procedure.",
+    )
+    (package / "reference.txt").write_text("Reference sentinel", encoding="utf-8")
+    tool = SkillTool(tmp_path, SkillRegistry.load(package.parent))
+
+    activated = tool.call({"name": name})
+    reference = tool.call({"name": name, "file_path": "reference.txt"})
+    denied = tool.call({"name": name}, allowed_skills=[])
+
+    assert activated["data"]["name"] == name
+    assert activated["data"]["content"] == "Use the sentinel procedure."
+    assert reference["data"]["content"] == "Reference sentinel"
+    assert denied["ok"] is False
+
+
+def test_installed_package_exposes_nonconventional_resources(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    (source / "templates").mkdir(parents=True)
+    (source / "SKILL.md").write_text(
+        "---\nname: imported\ndescription: Imported guide\n---\n"
+        "Read GUIDE.md and templates/example.md.\n"
+    )
+    (source / "GUIDE.md").write_text("The complete guide.")
+    (source / "templates/example.md").write_text("Example text.")
+    SkillAuthoringService().install(tmp_path / "skills", str(source))
+    tool = SkillTool(tmp_path, SkillRegistry.load(tmp_path / "skills"))
+
+    activated = tool.call({"name": "imported"})
+
+    assert activated["data"]["resource_files"]["files"] == ["GUIDE.md", "templates/example.md"]
+    for relative, text in [
+        ("GUIDE.md", "The complete guide."),
+        ("templates/example.md", "Example text."),
+    ]:
+        result = tool.call({"name": "imported", "file_path": relative})
+        assert (result["data"]["status"], result["data"]["content"]) == ("file_loaded", text)
+
+
+def test_load_skill_content_resolves_base_dir_and_lists_package_files(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "skills" / "deploy"
+    files = [
+        "scripts/ship.py",
+        "scripts/nested/helper.py",
+        "scripts/__pycache__/ship.pyc",
+        "references/guide.md",
+        "assets/template.html",
+        "notes/guide.md",
+    ]
+    for relative in files:
+        (skill_dir / relative).parent.mkdir(parents=True, exist_ok=True)
+        (skill_dir / relative).write_text("", encoding="utf-8")
+    skill_file = skill_dir / "SKILL.md"
+    skill_file.write_text(
+        "---\nname: deploy\ndescription: Ship it.\n---\n\n"
+        "Run `python {baseDir}/scripts/ship.py` to deploy.\n",
+        encoding="utf-8",
+    )
+
+    result = load_skill_content("deploy", skill_file)
+
+    directory = skill_dir.resolve().as_posix()
+    assert result["content"] == f"Run `python {directory}/scripts/ship.py` to deploy."
+    assert result["resource_files"]["files"] == [
+        f"{directory}/scripts/nested/helper.py",
+        f"{directory}/scripts/ship.py",
+        "references/guide.md",
+        "assets/template.html",
+        "notes/guide.md",
+    ]
+
+
+def test_load_skill_content_keeps_the_wrapper_out_of_the_content(tmp_path: Path) -> None:
+    # Without front matter the whole document is the instructions.
+    skill_file = tmp_path / "skills" / "unsafe" / "SKILL.md"
+    skill_file.parent.mkdir(parents=True)
+    skill_file.write_text("# Deploy\n\nRun the deploy steps.\n", encoding="utf-8")
+
+    result: dict[str, Any] = load_skill_content('bad" name><tag', skill_file)
+
+    assert result["content"] == "# Deploy\n\nRun the deploy steps."
+    assert "resource_files" not in result
+    assert "environment_access" not in result
+    assert result["activation_content"] == (
+        '<skill_content name="bad&quot; name&gt;&lt;tag">\n'
+        "# Deploy\n\nRun the deploy steps.\n</skill_content>"
     )

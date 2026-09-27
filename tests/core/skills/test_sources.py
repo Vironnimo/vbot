@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import io
 import json
+import time
 import zipfile
 
 import httpx
 import pytest
 import respx
 
-from core.skills import SkillAuthoringError, SkillAuthoringService, _sources
+from core.skills import SkillAuthoringError, SkillAuthoringService
 
 SHA = "a" * 40
 
@@ -185,18 +186,21 @@ def test_failed_or_unsafe_download_does_not_publish(tmp_path, response):
 
 
 @respx.mock
-def test_actual_download_bytes_are_bounded_without_content_length(tmp_path, monkeypatch):
+def test_received_bytes_are_bounded_without_content_length(tmp_path):
+    # Repository metadata is limited to 1 MiB, however the server streams it.
     class Stream(httpx.SyncByteStream):
         def __iter__(self):
-            yield b"x" * 100
+            yield b"{" + b" " * 1024 * 1024
 
-    respx.get("https://downloads.example/package").respond(stream=Stream())
-    with pytest.raises(_sources.PackageError):
-        _sources._download("https://downloads.example/package", limit=10)
+    respx.get("https://api.github.com/repos/owner/repo/commits/HEAD").respond(stream=Stream())
+    target = tmp_path / "skills"
+    with pytest.raises(SkillAuthoringError, match="size limit"):
+        SkillAuthoringService().install(target, "https://github.com/owner/repo")
+    assert not target.exists()
 
 
 @respx.mock
-def test_slow_small_chunks_cannot_evade_the_download_deadline(monkeypatch):
+def test_slow_small_chunks_cannot_evade_the_download_deadline(tmp_path, monkeypatch):
     elapsed = 0
 
     class Stream(httpx.SyncByteStream):
@@ -206,10 +210,12 @@ def test_slow_small_chunks_cannot_evade_the_download_deadline(monkeypatch):
                 elapsed += 30
                 yield b"x"
 
-    monkeypatch.setattr(_sources.time, "monotonic", lambda: elapsed)
+    monkeypatch.setattr(time, "monotonic", lambda: elapsed)
     respx.get("https://downloads.example/slow").respond(stream=Stream())
-    with pytest.raises(_sources.PackageError, match="time limit"):
-        _sources._download("https://downloads.example/slow")
+    target = tmp_path / "skills"
+    with pytest.raises(SkillAuthoringError, match="time limit"):
+        SkillAuthoringService().install(target, "https://downloads.example/slow")
+    assert not target.exists()
 
 
 @pytest.mark.parametrize("url", ["https://user:secret@example.com/a.skill", "https:///no-host"])

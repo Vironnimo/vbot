@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import shutil
 import stat
 import tarfile
 import zipfile
@@ -91,6 +92,20 @@ def test_installs_complete_package_without_rewriting_it(tmp_path, tar, prefix):
     assert receipt["sha256"] == result.sha256
     assert receipt["installed_at"].endswith("+00:00")
     assert SkillRegistry.load(target).get("research").description == "Research a topic."
+
+
+def test_directory_hard_link_is_rejected_before_target_creation(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "SKILL.md").write_bytes(DOCUMENT)
+    outside = tmp_path / "outside.txt"
+    outside.write_text("External content")
+    os.link(outside, source / "linked.txt")
+    target = tmp_path / "installed"
+    with pytest.raises(SkillAuthoringError):
+        SkillAuthoringService().install(target, str(source))
+    assert not target.exists()
+    assert outside.read_text() == "External content"
 
 
 def test_directory_install_preserves_files_but_not_generated_state(tmp_path):
@@ -208,22 +223,36 @@ def test_repeat_is_unchanged_and_overwrite_requires_explicit_replace(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "bad",
+    ("bad", "tar"),
     [
-        "../escaped.txt",
-        "/absolute.txt",
-        "C:/escaped.txt",
-        "folder\\escaped.txt",
-        "assets/../escaped.txt",
-        "assets/a:stream",
-        "assets/NUL.txt",
-        "assets/trailing.",
-        "assets/trailing ",
-        "assets//empty.txt",
+        *[
+            (name, False)
+            for name in [
+                "../escaped.txt",
+                "/absolute.txt",
+                "C:/escaped.txt",
+                "folder\\escaped.txt",
+                "assets/../escaped.txt",
+                "assets/a:stream",
+                "assets/trailing.",
+                "assets/trailing ",
+                "assets//empty.txt",
+                # Every Windows device alias, including superscript digits and consoles.
+                "assets/NUL.txt",
+                "assets/COM¹.txt",
+                "assets/LPT².log",
+                "assets/COM³",
+                "assets/CONIN$",
+                "assets/CONOUT$",
+                "assets/CON .txt",
+            ]
+        ],
+        # A tar member name that is not UTF-8.
+        ("assets/invalid-\udcff.bin", True),
     ],
 )
-def test_rejects_unsafe_archive_names_without_partial_writes(tmp_path, bad):
-    source = archive(tmp_path, {"SKILL.md": DOCUMENT, bad: b"x"}, prefix="")
+def test_rejects_unsafe_archive_names_without_partial_writes(tmp_path, bad, tar):
+    source = archive(tmp_path, {"SKILL.md": DOCUMENT, bad: b"x"}, prefix="", tar=tar)
     if "\\" in bad:
         # ZipInfo normalizes separators when creating an archive on Windows.
         source.write_bytes(
@@ -342,15 +371,13 @@ def test_failed_restore_retains_old_package_for_recovery(tmp_path, monkeypatch):
 
 
 def test_cleanup_failure_does_not_report_successful_publication_as_failed(tmp_path, monkeypatch):
-    from core.skills import _installation
-
     source = archive(tmp_path, FILES)
     target = tmp_path / "skills"
 
     def fail_cleanup(*args, **kwargs):
         raise OSError("temporary file locked")
 
-    monkeypatch.setattr(_installation.shutil, "rmtree", fail_cleanup)
+    monkeypatch.setattr(shutil, "rmtree", fail_cleanup)
     result = SkillAuthoringService().install(target, str(source))
     assert result.operation == "installed"
     assert result.warnings
