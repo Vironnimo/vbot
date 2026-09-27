@@ -33,8 +33,11 @@ _DOCX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessing
 def _build_ooxml_payload(content_types_xml: bytes) -> bytes:
     """Build a minimal ZIP carrying one ``[Content_Types].xml`` entry."""
     buffer = io.BytesIO()
-    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
-        archive.writestr("[Content_Types].xml", content_types_xml)
+    # A fixed timestamp keeps the bytes, and the test ids derived from them, identical
+    # across collections; xdist workers collect independently and must agree.
+    entry = zipfile.ZipInfo("[Content_Types].xml", date_time=(2020, 1, 1, 0, 0, 0))
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr(entry, content_types_xml, compress_type=zipfile.ZIP_DEFLATED)
     return buffer.getvalue()
 
 
