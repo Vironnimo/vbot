@@ -66,7 +66,7 @@ OpenAI subscription image execution is selected by provider `openai` plus connec
 
 When response entries omit their MIME type, local result metadata uses the `output_format` from the final request payload or multipart form, including values supplied through `extra_options`. Artifact extensions therefore match that effective format.
 
-`generate_artifacts()` persists each returned image directly into its explicit `output_dir`. An `output_format` of `svg` maps to `image/svg+xml` and a `.svg` filename when response entries omit MIME metadata; explicit response MIME still takes precedence (`test_image_openai_provider.py`):
+`generate_artifacts()` persists each returned image directly into its explicit `output_dir`. An `output_format` of `svg` maps to `image/svg+xml` and a `.svg` filename when response entries omit MIME metadata; explicit response MIME still takes precedence (`test_image_providers.py::test_generate_decodes_every_image_with_its_media_type`; the `.svg` filename in `test_image.py::test_generate_artifacts_stores_each_image_in_the_caller_owned_directory`):
 
 ```text
 <caller-owned-root>/image-gen/

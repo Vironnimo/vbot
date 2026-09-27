@@ -1,8 +1,15 @@
-"""Tests for provider-backed speech HTTP clients."""
+"""Wire-contract tests for provider-backed speech clients.
+
+Speech-to-text sends base64 JSON to OpenRouter and multipart form data to
+OpenAI-compatible Providers; text-to-speech sends the same JSON body to both.
+"""
 
 from __future__ import annotations
 
 import json
+from email.parser import BytesParser
+from email.policy import default as default_policy
+from typing import cast
 
 import httpx
 import pytest
@@ -11,6 +18,9 @@ import respx
 from core.model_tasks.speech_providers import ProviderSpeechClient, audio_format_from
 from core.providers.errors import ProviderError, ProviderOutcomeUnknownError
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
+
+OPENROUTER_BASE = "https://openrouter.ai/api/v1"
+OPENAI_BASE = "https://api.openai.com/v1"
 
 
 def test_audio_format_from_prefers_browser_mime_type() -> None:
@@ -21,288 +31,221 @@ def test_audio_format_from_prefers_browser_mime_type() -> None:
 @pytest.mark.asyncio
 @respx.mock
 async def test_openrouter_transcription_sends_base64_json() -> None:
-    route = respx.post("https://openrouter.ai/api/v1/audio/transcriptions").mock(
+    route = respx.post(f"{OPENROUTER_BASE}/audio/transcriptions").mock(
         return_value=httpx.Response(200, json={"text": "hello", "usage": {"seconds": 1.2}})
     )
-    client = _openrouter_client("openai/gpt-4o-transcribe")
 
-    result = await client.transcribe(
+    result = await _client("openrouter", "openai/gpt-4o-transcribe").transcribe(
         b"abc",
         filename="clip.webm",
         media_type="audio/webm",
-        options={"language": "auto", "temperature": 0},
+        options={"language": "auto", "temperature": 0, "extra_options": {"beam": 4}},
     )
 
-    payload = json.loads(route.calls[0].request.content)
-    assert payload == {
+    request = route.calls.last.request
+    # "auto" language is left to the Provider; extra options join the body.
+    assert json.loads(request.content) == {
         "model": "openai/gpt-4o-transcribe",
         "input_audio": {"data": "YWJj", "format": "webm"},
         "temperature": 0.0,
+        "beam": 4,
     }
-    assert route.calls[0].request.headers["authorization"] == "Bearer sk-test"
-    assert result.text == "hello"
-    assert result.usage == {"seconds": 1.2}
+    assert request.headers["authorization"] == "Bearer sk-test"
+    assert (result.text, result.usage) == ("hello", {"seconds": 1.2})
 
 
-@pytest.mark.asyncio
-@respx.mock
-async def test_openrouter_tts_returns_audio_bytes() -> None:
-    route = respx.post("https://openrouter.ai/api/v1/audio/speech").mock(
-        return_value=httpx.Response(
-            200,
-            content=b"audio",
-            headers={"content-type": "audio/mpeg", "x-generation-id": "gen_1"},
-        )
-    )
-    client = _openrouter_client("openai/gpt-4o-mini-tts-2025-12-15")
-
-    result = await client.synthesize(
-        "hello",
-        options={
-            "voice": "nova",
-            "response_format": "mp3",
-            "speed": 1,
-            "instructions": "Warm tone.",
-        },
-    )
-
-    payload = json.loads(route.calls[0].request.content)
-    assert payload["model"] == "openai/gpt-4o-mini-tts-2025-12-15"
-    assert payload["input"] == "hello"
-    assert payload["voice"] == "nova"
-    assert payload["provider"]["options"]["openai"]["instructions"] == "Warm tone."
-    assert result.audio == b"audio"
-    assert result.media_type == "audio/mpeg"
-    assert result.generation_id == "gen_1"
-
-
-@pytest.mark.asyncio
-@respx.mock
-async def test_openrouter_tts_does_not_retry_ambiguous_502() -> None:
-    route = respx.post("https://openrouter.ai/api/v1/audio/speech").mock(
-        return_value=httpx.Response(502, text="invalid upstream response")
-    )
-    client = _openrouter_client("openai/gpt-4o-mini-tts")
-
-    with pytest.raises(ProviderOutcomeUnknownError, match="HTTP 502"):
-        await client.synthesize("hello", options={"voice": "alloy"})
-
-    assert route.call_count == 1
-
-
-@pytest.mark.asyncio
-@respx.mock
-async def test_openrouter_tts_does_not_retry_empty_success_response() -> None:
-    route = respx.post("https://openrouter.ai/api/v1/audio/speech").mock(
-        return_value=httpx.Response(200, content=b"")
-    )
-    client = _openrouter_client("openai/gpt-4o-mini-tts")
-
-    with pytest.raises(ProviderOutcomeUnknownError):
-        await client.synthesize("hello", options={"voice": "alloy"})
-
-    assert route.call_count == 1
-
-
-@pytest.mark.asyncio
-@respx.mock
-async def test_openrouter_tts_forwards_model_specific_voice_verbatim() -> None:
-    # Kokoro advertises 54 voice ids via ``supported_voices``; ``af_aoede`` is
-    # not in the OpenAI canonical list and is the kind of value an OpenRouter
-    # TTS target would surface through the model-aware schema. The wire must
-    # forward whatever the user/model picked without rewriting it.
-    route = respx.post("https://openrouter.ai/api/v1/audio/speech").mock(
-        return_value=httpx.Response(
-            200,
-            content=b"audio",
-            headers={"content-type": "audio/mpeg"},
-        )
-    )
-    client = _openrouter_client("hexgrad/kokoro-82m")
-
-    result = await client.synthesize(
-        "hello",
-        options={
-            "voice": "af_aoede",
-            "response_format": "pcm",
-            "speed": 1.25,
-        },
-    )
-
-    payload = json.loads(route.calls[0].request.content)
-    assert payload["model"] == "hexgrad/kokoro-82m"
-    assert payload["input"] == "hello"
-    assert payload["voice"] == "af_aoede"
-    assert payload["response_format"] == "pcm"
-    assert payload["speed"] == 1.25
-    # No provider-options wrapper should leak in when no ``instructions`` are
-    # set — the model-specific voice path must not be polluted by other keys.
-    assert "provider" not in payload
-    assert result.audio == b"audio"
-    assert result.media_type == "audio/mpeg"
-    assert result.format == "pcm"
-
-
-def _openrouter_client(model_id: str) -> ProviderSpeechClient:
-    provider = ProviderConfig(
-        id="openrouter",
-        name="OpenRouter",
-        adapter="openrouter",
-        base_url="https://openrouter.ai/api/v1",
-        connections=[],
-        extra_headers={"X-Title": "vBot"},
-    )
-    connection = ConnectionConfig(
-        id="api-key",
-        type="api_key",
-        label="API Key",
-        auth=AuthConfig(
-            header="Authorization", prefix="Bearer ", credential_key="OPENROUTER_API_KEY"
+@pytest.mark.parametrize(
+    "response",
+    [
+        pytest.param(httpx.Response(200, json={"text": "hallo"}), id="json-response"),
+        # Text response formats come back as the body itself.
+        pytest.param(
+            httpx.Response(200, text="hallo", headers={"content-type": "text/plain"}),
+            id="text-response",
         ),
-    )
-    return ProviderSpeechClient(
-        provider=provider,
-        connection=connection,
-        credential="sk-test",
-        model_id=model_id,
-    )
+    ],
+)
+@pytest.mark.asyncio
+@respx.mock
+async def test_multipart_transcription_sends_every_field_as_a_string(
+    response: httpx.Response,
+) -> None:
+    route = respx.post(f"{OPENAI_BASE}/audio/transcriptions").mock(return_value=response)
 
-
-# ---------------------------------------------------------------------------
-# extra_options escape hatch
-# ---------------------------------------------------------------------------
-
-
-def test_multipart_extra_options_stringifies_values() -> None:
-    """Multipart form values must be strings: scalars stringify, booleans
-    become JSON literals, containers JSON-encode, empties drop."""
-
-    from core.model_tasks.speech_providers import _multipart_extra_options
-
-    rendered = _multipart_extra_options(
-        {
+    result = await _client("openai", "whisper-1").transcribe(
+        b"recording",
+        filename="",
+        media_type="audio/wav",
+        options={
+            "language": "de",
+            "prompt": " Names: vBot ",
+            "response_format": "text",
+            "temperature": 0,
             "extra_options": {
                 "chunking_strategy": {"type": "server_vad"},
                 "stream": False,
                 "temperature_boost": 1.5,
                 "note": "hi",
                 "empty": "",
-            }
-        }
+            },
+        },
     )
 
-    assert rendered == {
+    assert _form_parts(route.calls.last.request) == {
+        "model": "whisper-1",
+        "language": "de",
+        "prompt": "Names: vBot",
+        "response_format": "text",
+        "temperature": "0.0",
         "chunking_strategy": json.dumps({"type": "server_vad"}),
         "stream": "false",
         "temperature_boost": "1.5",
         "note": "hi",
+        # A missing filename is derived from the media type.
+        "file": ("recording.wav", "audio/wav", b"recording"),
     }
+    assert result.text == "hallo"
 
 
-def test_multipart_extra_options_rejects_authored_field_collision() -> None:
-    from core.model_tasks.speech_providers import _multipart_extra_options
-
-    with pytest.raises(ProviderError, match="model"):
-        _multipart_extra_options(
-            {"extra_options": {"model": "redirected-model"}},
-            protected_fields={"model"},
-        )
-
-
+@pytest.mark.parametrize(
+    ("provider_id", "model_id", "field"),
+    [
+        pytest.param("openrouter", "openai/gpt-4o-transcribe", "model", id="json-model"),
+        pytest.param("openai", "whisper-1", "model", id="multipart-model"),
+        pytest.param("openai", "whisper-1", "file", id="multipart-file"),
+    ],
+)
 @pytest.mark.asyncio
 @respx.mock
-async def test_openrouter_transcribe_merges_extra_options() -> None:
-    """The OpenRouter STT JSON payload adds non-conflicting extra fields."""
+async def test_transcription_extra_options_cannot_override_request_fields(
+    provider_id: str, model_id: str, field: str
+) -> None:
+    route = respx.post(url__regex=r".*/audio/transcriptions").respond(200, json={"text": "x"})
 
-    route = respx.post("https://openrouter.ai/api/v1/audio/transcriptions").mock(
-        return_value=httpx.Response(200, json={"text": "hello"})
-    )
-    client = _openrouter_client("openai/gpt-4o-transcribe")
-
-    await client.transcribe(
-        b"audio-bytes",
-        filename="clip.webm",
-        media_type="audio/webm",
-        options={"temperature": 0.2, "extra_options": {"beam": 4}},
-    )
-
-    payload = json.loads(route.calls[0].request.content)
-    assert payload["temperature"] == 0.2
-    assert payload["beam"] == 4
-    assert "extra_options" not in payload
-
-
-@pytest.mark.asyncio
-async def test_openrouter_transcribe_rejects_extra_options_model_override() -> None:
-    client = _openrouter_client("openai/gpt-4o-transcribe")
-
-    with pytest.raises(ProviderError, match="model"):
-        await client.transcribe(
-            b"audio-bytes",
-            filename="clip.webm",
-            media_type="audio/webm",
-            options={"extra_options": {"model": "redirected-model"}},
-        )
-
-
-@pytest.mark.asyncio
-@respx.mock
-async def test_tts_synthesize_merges_extra_options() -> None:
-    """The TTS JSON payload carries extra_options keys at the top level."""
-
-    route = respx.post("https://openrouter.ai/api/v1/audio/speech").mock(
-        return_value=httpx.Response(
-            200, content=b"mp3-bytes", headers={"content-type": "audio/mpeg"}
-        )
-    )
-    client = _openrouter_client("openai/gpt-4o-mini-tts")
-
-    await client.synthesize(
-        "hello world",
-        options={
-            "voice": "alloy",
-            "response_format": "mp3",
-            "extra_options": {"sample_rate": 44100},
-        },
-    )
-
-    payload = json.loads(route.calls[0].request.content)
-    assert payload["sample_rate"] == 44100
-    assert payload["voice"] == "alloy"
-    assert "extra_options" not in payload
-
-
-@pytest.mark.asyncio
-@respx.mock
-async def test_multipart_transcription_rejects_extra_file_before_send() -> None:
-    client = ProviderSpeechClient(
-        provider=ProviderConfig(
-            id="openai",
-            name="OpenAI",
-            adapter="openai",
-            base_url="https://api.openai.com/v1",
-            connections=[],
-        ),
-        connection=ConnectionConfig(
-            id="key",
-            type="api_key",
-            label="Key",
-            auth=AuthConfig(header="Authorization", prefix="Bearer "),
-        ),
-        credential="test-key",
-        model_id="whisper-1",
-    )
-    route = respx.post("https://api.openai.com/v1/audio/transcriptions").respond(
-        200, json={"text": "hello"}
-    )
-
-    with pytest.raises(ProviderError) as caught:
-        await client.transcribe(
+    with pytest.raises(ProviderError, match=field) as caught:
+        await _client(provider_id, model_id).transcribe(
             b"recording",
             filename="recording.wav",
             media_type="audio/wav",
-            options={"extra_options": {"file": "replacement"}},
+            options={"extra_options": {field: "replacement"}},
         )
 
     assert caught.value.retryable is False
-    assert not route.called
+    assert route.call_count == 0
+
+
+@pytest.mark.parametrize(
+    ("model_id", "options", "headers", "body", "result"),
+    [
+        # OpenRouter forwards speaking instructions as OpenAI provider options.
+        pytest.param(
+            "openai/gpt-4o-mini-tts-2025-12-15",
+            {
+                "voice": "nova",
+                "response_format": "mp3",
+                "speed": 1,
+                "instructions": "Warm tone.",
+                "extra_options": {"sample_rate": 44100},
+            },
+            {"content-type": "audio/mpeg", "x-generation-id": "gen_1"},
+            {
+                "voice": "nova",
+                "response_format": "mp3",
+                "speed": 1.0,
+                "provider": {"options": {"openai": {"instructions": "Warm tone."}}},
+                "sample_rate": 44100,
+            },
+            ("audio/mpeg", "mp3", "gen_1"),
+            id="instructions-and-extra-options",
+        ),
+        # A model-specific voice outside the OpenAI list is forwarded verbatim.
+        pytest.param(
+            "hexgrad/kokoro-82m",
+            {"voice": "af_aoede", "response_format": "pcm", "speed": 1.25},
+            {"content-type": "audio/mpeg"},
+            {"voice": "af_aoede", "response_format": "pcm", "speed": 1.25},
+            ("audio/mpeg", "pcm", None),
+            id="model-specific-voice",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+@respx.mock
+async def test_openrouter_tts_sends_json_and_returns_audio_bytes(
+    model_id: str,
+    options: dict[str, object],
+    headers: dict[str, str],
+    body: dict[str, object],
+    result: tuple[str, str, str | None],
+) -> None:
+    route = respx.post(f"{OPENROUTER_BASE}/audio/speech").mock(
+        return_value=httpx.Response(200, content=b"audio", headers=headers)
+    )
+
+    synthesized = await _client("openrouter", model_id).synthesize("hello", options=options)
+
+    assert json.loads(route.calls.last.request.content) == {
+        "model": model_id,
+        "input": "hello",
+        **body,
+    }
+    assert synthesized.audio == b"audio"
+    assert (synthesized.media_type, synthesized.format, synthesized.generation_id) == result
+
+
+@pytest.mark.parametrize(
+    ("response", "message"),
+    [
+        pytest.param(
+            httpx.Response(502, text="invalid upstream response"), "HTTP 502", id="ambiguous-502"
+        ),
+        pytest.param(httpx.Response(200, content=b""), "no audio", id="empty-success"),
+    ],
+)
+@pytest.mark.asyncio
+@respx.mock
+async def test_openrouter_tts_never_replays_an_unknown_outcome(
+    response: httpx.Response, message: str
+) -> None:
+    route = respx.post(f"{OPENROUTER_BASE}/audio/speech").mock(return_value=response)
+
+    with pytest.raises(ProviderOutcomeUnknownError, match=message):
+        await _client("openrouter", "openai/gpt-4o-mini-tts").synthesize(
+            "hello", options={"voice": "alloy"}
+        )
+
+    assert route.call_count == 1
+
+
+def _form_parts(request: httpx.Request) -> dict[str, object]:
+    message = BytesParser(policy=default_policy).parsebytes(
+        f"Content-Type: {request.headers['content-type']}\r\n\r\n".encode() + request.content
+    )
+    parts: dict[str, object] = {}
+    for part in message.iter_parts():
+        name = part.get_param("name", header="content-disposition")
+        payload = cast(bytes, part.get_payload(decode=True))
+        filename = part.get_filename()
+        parts[str(name)] = (
+            (filename, part.get_content_type(), payload) if filename else payload.decode()
+        )
+    return parts
+
+
+def _client(provider_id: str, model_id: str) -> ProviderSpeechClient:
+    provider = ProviderConfig(
+        id=provider_id,
+        name=provider_id,
+        adapter=provider_id,
+        base_url=OPENROUTER_BASE if provider_id == "openrouter" else OPENAI_BASE,
+        connections=[],
+    )
+    connection = ConnectionConfig(
+        id="api-key",
+        type="api_key",
+        label="API Key",
+        auth=AuthConfig(header="Authorization", prefix="Bearer "),
+    )
+    return ProviderSpeechClient(
+        provider=provider, connection=connection, credential="sk-test", model_id=model_id
+    )

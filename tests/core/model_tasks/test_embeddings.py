@@ -1,11 +1,16 @@
-"""Tests for the provider-neutral ``EmbeddingService``."""
+"""Tests for the provider-neutral ``EmbeddingService``.
+
+The Provider client is replaced by a recording fake; its wire behavior is
+covered in ``test_embeddings_providers.py``.
+"""
 
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterator
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -20,495 +25,32 @@ from core.model_tasks.embeddings_providers import (
     EmbeddingUsage,
     ProviderEmbeddingResponse,
 )
-from core.providers.accounts import ConnectionRef
-from core.providers.token_getter import TokenGetter
+from core.providers.errors import ProviderAuthError
 
-# ---------------------------------------------------------------------------
-# Configuration: no binding / malformed binding / unsupported target
-# ---------------------------------------------------------------------------
+OPENROUTER_TARGET = "openrouter/google/gemini-embedding-2::api-key"
 
 
-@pytest.mark.asyncio
-async def test_embed_without_configured_binding_raises_configuration_error() -> None:
-    """A missing ``text_embedding`` binding is an expected configuration error."""
+class _ModelTasks:
+    """Stand-in for ``TaskModelService`` with one ``text_embedding`` binding."""
 
-    service = EmbeddingService(_MissingModelTasks(), _RuntimeStub())
-
-    with pytest.raises(EmbeddingConfigurationError):
-        await service.embed(["a", "b"])
-
-
-@pytest.mark.asyncio
-async def test_embed_with_local_target_raises_unsupported_target_error() -> None:
-    """A local embedding target is out of scope for this iteration."""
-
-    service = EmbeddingService(
-        _BindingModelTasks(target="local/whisper", options={}),
-        _RuntimeStub(),
-    )
-
-    with pytest.raises(EmbeddingUnsupportedTargetError):
-        await service.embed(["a", "b"])
-
-
-@pytest.mark.asyncio
-async def test_embed_with_malformed_target_raises_configuration_error() -> None:
-    """A target that does not parse (e.g. wrong shape) is a configuration error."""
-
-    service = EmbeddingService(
-        _BindingModelTasks(target="not-a-valid-target", options={}),
-        _RuntimeStub(),
-    )
-
-    with pytest.raises(EmbeddingConfigurationError):
-        await service.embed(["a"])
-
-
-@pytest.mark.asyncio
-async def test_embed_with_empty_input_raises_configuration_error() -> None:
-    """An empty input list is a configuration error — there is nothing to embed."""
-
-    service = EmbeddingService(
-        _BindingModelTasks(target="openrouter/google/gemini-embedding-2::api-key", options={}),
-        _RuntimeStub(),
-    )
-
-    with pytest.raises(EmbeddingConfigurationError):
-        await service.embed([])
-
-
-@pytest.mark.asyncio
-async def test_embed_with_non_list_input_raises_configuration_error() -> None:
-    """A non-list input is rejected as a configuration error."""
-
-    service = EmbeddingService(
-        _BindingModelTasks(target="openrouter/google/gemini-embedding-2::api-key", options={}),
-        _RuntimeStub(),
-    )
-
-    with pytest.raises(EmbeddingConfigurationError):
-        await service.embed("not-a-list")  # type: ignore[arg-type]
-
-
-@pytest.mark.asyncio
-async def test_embed_with_non_string_element_raises_configuration_error() -> None:
-    """A non-string element in the input list is rejected as a configuration error."""
-
-    service = EmbeddingService(
-        _BindingModelTasks(target="openrouter/google/gemini-embedding-2::api-key", options={}),
-        _RuntimeStub(),
-    )
-
-    mixed_inputs: list[Any] = ["ok", 42, "also-ok"]
-    with pytest.raises(EmbeddingConfigurationError):
-        await service.embed(mixed_inputs)
-
-
-# ---------------------------------------------------------------------------
-# Happy path: vectors returned in input order, model id surfaced
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_embed_returns_vectors_in_input_order_and_resolves_model_id() -> None:
-    """A successful embed returns vectors in input order, with the
-    resolved ``(provider_id, model_id)`` for the recall store to pin.
-    """
-
-    vectors = [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]]
-    service = EmbeddingService(
-        _BindingModelTasks(target="openrouter/google/gemini-embedding-2::api-key", options={}),
-        _RuntimeStub(),
-    )
-
-    with patch(
-        "core.model_tasks.embeddings.ProviderEmbeddingClient.from_runtime",
-        return_value=_FakeProviderClient(vectors=vectors),
-    ) as factory:
-        result = await service.embed(["alpha", "beta"])
-
-    assert result.vectors == ([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
-    assert result.provider_id == "openrouter"
-    assert result.model_id == "google/gemini-embedding-2"
-    assert result.dimension == 3
-    assert result.space_fingerprint == service.resolve_space().fingerprint
-    assert (result.provider_id, result.actual_model_id) == (
-        "openrouter",
-        "google/gemini-embedding-2",
-    )
-
-    # The factory was called with the parsed target reference and the
-    # runtime (the service does not pass the binding or options into
-    # the factory — those are forwarded into the embed call instead).
-    factory.assert_called_once()
-    runtime_arg, target_ref = factory.call_args.args
-    assert target_ref.provider_id == "openrouter"
-    assert target_ref.model_id == "google/gemini-embedding-2"
-    assert target_ref.connection_id == "openrouter:api-key"
-    assert target_ref.local_connection_id == "api-key"
-
-
-@pytest.mark.asyncio
-async def test_embed_merges_schema_defaults_with_stored_options() -> None:
-    """Stored options are merged over backend schema defaults before the
-    wire call. The recall store passes the schema default for
-    ``dimensions``; the user can override it from settings."""
-
-    service = EmbeddingService(
-        _BindingModelTasks(
-            target="openrouter/google/gemini-embedding-2::api-key",
-            options={"dimensions": 2},
-        ),
-        _RuntimeStub(),
-    )
-
-    fake_client = _FakeProviderClient(vectors=[[0.1, 0.2]])
-    with patch(
-        "core.model_tasks.embeddings.ProviderEmbeddingClient.from_runtime",
-        return_value=fake_client,
-    ):
-        await service.embed(["alpha"])
-
-    # The fake client records every (inputs, options) pair it was
-    # asked to embed. The stored options dict is merged over the
-    # schema default; the resulting ``{"dimensions": 2}`` reaches the
-    # provider client.
-    assert fake_client.embed_calls == [(["alpha"], {"dimensions": 2}, None)]
-
-
-@pytest.mark.asyncio
-async def test_embed_forwards_input_batch_verbatim() -> None:
-    """The service forwards the input list verbatim to the provider client.
-
-    The recall store relies on input order — the wire layer sorts
-    vectors by ``index`` defensively, but the contract here is that
-    the service does not reorder inputs.
-    """
-
-    fake_client = _FakeProviderClient(vectors=[[0.1], [0.2], [0.3]])
-    service = EmbeddingService(
-        _BindingModelTasks(target="openrouter/google/gemini-embedding-2::api-key", options={}),
-        _RuntimeStub(),
-    )
-
-    with patch(
-        "core.model_tasks.embeddings.ProviderEmbeddingClient.from_runtime",
-        return_value=fake_client,
-    ):
-        await service.embed(["x", "y", "z"])
-
-    assert fake_client.embed_calls[0][0] == ["x", "y", "z"]
-
-
-@pytest.mark.asyncio
-async def test_embed_surfaces_actual_model_usage_and_purpose() -> None:
-    usage = EmbeddingUsage(
-        requests=1,
-        token_reports=1,
-        cost_reports=1,
-        input_tokens=9,
-        total_tokens=9,
-        cost=0.0002,
-    )
-    fake_client = _FakeProviderClient(
-        vectors=[[0.1, 0.2]],
-        model_id="google/gemini-embedding-2-202607",
-        usage=usage,
-    )
-    service = EmbeddingService(
-        _BindingModelTasks(
-            target="openrouter/google/gemini-embedding-2::api-key",
-            options={},
-        ),
-        _RuntimeStub(),
-    )
-
-    with patch(
-        "core.model_tasks.embeddings.ProviderEmbeddingClient.from_runtime",
-        return_value=fake_client,
-    ):
-        result = await service.embed(["query"], purpose="query")
-
-    assert result.model_id == "google/gemini-embedding-2"
-    assert result.response_model_id == "google/gemini-embedding-2-202607"
-    assert (result.provider_id, result.actual_model_id) == (
-        "openrouter",
-        "google/gemini-embedding-2-202607",
-    )
-    assert result.usage == usage
-    assert fake_client.embed_calls == [(["query"], {"dimensions": None}, "query")]
-
-
-@pytest.mark.asyncio
-async def test_embed_rejects_unknown_purpose_before_provider_execution() -> None:
-    fake_client = _FakeProviderClient(vectors=[[0.1]])
-    service = EmbeddingService(
-        _BindingModelTasks(target="openrouter/google/gemini-embedding-2::api-key", options={}),
-        _RuntimeStub(),
-    )
-
-    with (
-        patch(
-            "core.model_tasks.embeddings.ProviderEmbeddingClient.from_runtime",
-            return_value=fake_client,
-        ),
-        pytest.raises(EmbeddingConfigurationError),
-    ):
-        await service.embed(["query"], purpose="classification")  # type: ignore[arg-type]
-
-    assert fake_client.embed_calls == []
-
-
-# ---------------------------------------------------------------------------
-# Error mapping: provider failures become EmbeddingExecutionError
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_embed_maps_provider_auth_error_to_execution_error() -> None:
-    """A :class:`ProviderError` (auth, rate limit, …) is wrapped as
-    :class:`EmbeddingExecutionError` by the service.
-    """
-
-    from core.providers.errors import ProviderAuthError
-
-    fake_client = _FakeProviderClient(embed_exception=ProviderAuthError("Unauthorized"))
-    service = EmbeddingService(
-        _BindingModelTasks(target="openrouter/google/gemini-embedding-2::api-key", options={}),
-        _RuntimeStub(),
-    )
-
-    with (
-        patch(
-            "core.model_tasks.embeddings.ProviderEmbeddingClient.from_runtime",
-            return_value=fake_client,
-        ),
-        pytest.raises(EmbeddingExecutionError, match="Unauthorized"),
-    ):
-        await service.embed(["alpha"])
-
-
-@pytest.mark.asyncio
-async def test_embed_logs_provider_error_at_warning_without_traceback(caplog: Any) -> None:
-    """An expected :class:`VBotError` provider failure logs at warning, no traceback."""
-
-    from core.providers.errors import ProviderAuthError
-
-    fake_client = _FakeProviderClient(embed_exception=ProviderAuthError("Unauthorized"))
-    service = EmbeddingService(
-        _BindingModelTasks(target="openrouter/google/gemini-embedding-2::api-key", options={}),
-        _RuntimeStub(),
-    )
-
-    with (
-        patch(
-            "core.model_tasks.embeddings.ProviderEmbeddingClient.from_runtime",
-            return_value=fake_client,
-        ),
-        caplog.at_level(logging.WARNING, logger="vbot.embeddings"),
-        pytest.raises(EmbeddingExecutionError),
-    ):
-        await service.embed(["alpha"])
-
-    relevant = [r for r in caplog.records if "Embedding request failed" in r.getMessage()]
-    assert relevant, "expected a log record for the failed embedding request"
-    assert all(r.levelno == logging.WARNING for r in relevant)
-    assert all(r.exc_info is None for r in relevant)
-
-
-@pytest.mark.asyncio
-async def test_embed_maps_unexpected_exception_to_execution_error() -> None:
-    """A non-:class:`VBotError` exception is also wrapped as
-    :class:`EmbeddingExecutionError` so callers see one error type.
-    """
-
-    fake_client = _FakeProviderClient(embed_exception=RuntimeError("kaboom"))
-    service = EmbeddingService(
-        _BindingModelTasks(target="openrouter/google/gemini-embedding-2::api-key", options={}),
-        _RuntimeStub(),
-    )
-
-    with (
-        patch(
-            "core.model_tasks.embeddings.ProviderEmbeddingClient.from_runtime",
-            return_value=fake_client,
-        ),
-        pytest.raises(EmbeddingExecutionError, match="kaboom"),
-    ):
-        await service.embed(["alpha"])
-
-
-@pytest.mark.asyncio
-async def test_embed_raises_execution_error_when_no_vectors_returned() -> None:
-    """A successful HTTP call that yields zero vectors surfaces as
-    :class:`EmbeddingExecutionError` — the recall store would silently
-    record a corrupt batch otherwise.
-    """
-
-    fake_client = _FakeProviderClient(vectors=[])
-    service = EmbeddingService(
-        _BindingModelTasks(target="openrouter/google/gemini-embedding-2::api-key", options={}),
-        _RuntimeStub(),
-    )
-
-    with (
-        patch(
-            "core.model_tasks.embeddings.ProviderEmbeddingClient.from_runtime",
-            return_value=fake_client,
-        ),
-        pytest.raises(EmbeddingExecutionError, match="no vectors"),
-    ):
-        await service.embed(["alpha"])
-
-
-# ---------------------------------------------------------------------------
-# resolve_space: identity pinning for the recall store
-# ---------------------------------------------------------------------------
-
-
-def test_resolve_space_returns_provider_and_model_id() -> None:
-    """``resolve_space`` returns the complete embedding identity
-    for the configured binding without executing a request.
-    """
-
-    service = EmbeddingService(
-        _BindingModelTasks(target="openrouter/google/gemini-embedding-2::api-key", options={}),
-        _RuntimeStub(),
-    )
-
-    identity = service.resolve_space()
-    assert (identity.provider_id, identity.model_id) == ("openrouter", "google/gemini-embedding-2")
-
-
-def test_resolve_space_fingerprint_covers_target_and_effective_options() -> None:
-    baseline = EmbeddingService(
-        _BindingModelTasks(
-            target="openrouter/google/gemini-embedding-2::api-key:work",
-            options={"dimensions": 768, "extra_options": {"user": "recall"}},
-        ),
-        _RuntimeStub(),
-    ).resolve_space()
-    same = EmbeddingService(
-        _BindingModelTasks(
-            target="openrouter/google/gemini-embedding-2::api-key:work",
-            options={"extra_options": {"user": "recall"}, "dimensions": 768},
-        ),
-        _RuntimeStub(),
-    ).resolve_space()
-    other_connection = EmbeddingService(
-        _BindingModelTasks(
-            target="openrouter/google/gemini-embedding-2::oauth:work",
-            options={"dimensions": 768, "extra_options": {"user": "recall"}},
-        ),
-        _RuntimeStub(),
-    ).resolve_space()
-    other_options = EmbeddingService(
-        _BindingModelTasks(
-            target="openrouter/google/gemini-embedding-2::api-key:work",
-            options={"dimensions": 256, "extra_options": {"user": "recall"}},
-        ),
-        _RuntimeStub(),
-    ).resolve_space()
-
-    assert baseline.fingerprint == same.fingerprint
-    assert baseline.fingerprint != other_connection.fingerprint
-    assert baseline.fingerprint != other_options.fingerprint
-
-
-def test_resolve_space_without_binding_raises_configuration_error() -> None:
-    """``resolve_space`` raises the same configuration error as
-    :meth:`embed` when the binding is missing.
-    """
-
-    service = EmbeddingService(_MissingModelTasks(), _RuntimeStub())
-
-    with pytest.raises(EmbeddingConfigurationError):
-        service.resolve_space()
-
-
-def test_resolve_space_with_local_target_raises_unsupported_target_error() -> None:
-    """A local target is rejected at ``resolve_space`` time too —
-    the recall store uses the result to pin identity, and a local
-    engine is not a real provider binding for this iteration.
-    """
-
-    service = EmbeddingService(
-        _BindingModelTasks(target="local/embedding", options={}),
-        _RuntimeStub(),
-    )
-
-    with pytest.raises(EmbeddingUnsupportedTargetError):
-        service.resolve_space()
-
-
-# ---------------------------------------------------------------------------
-# Test doubles
-# ---------------------------------------------------------------------------
-
-
-class _MissingModelTasks:
-    """Stand-in for ``TaskModelService`` with no configured binding."""
-
-    def binding_for(self, _task_type: str) -> Any:
-        raise TaskModelError("No task model configured for text_embedding")
-
-    def validate_execution_target(self, _binding: object) -> None:
-        pass
-
-    def options_with_defaults(self, _binding: Any) -> dict[str, Any]:
-        return {}
-
-
-class _BindingModelTasks:
-    """Stand-in for ``TaskModelService`` with a fixed binding payload."""
-
-    def __init__(self, *, target: str, options: dict[str, Any]) -> None:
+    def __init__(self, target: str | None, options: dict[str, Any] | None = None) -> None:
         self._target = target
-        self._options = options
+        self._options = options or {}
 
     def binding_for(self, task_type: str) -> Any:
+        if self._target is None:
+            raise TaskModelError("No task model configured for text_embedding")
         return SimpleNamespace(task_type=task_type, target=self._target, options=self._options)
 
     def validate_execution_target(self, _binding: object) -> None:
         pass
 
     def options_with_defaults(self, _binding: Any) -> dict[str, Any]:
-        # The embedding option schema currently has a single field
-        # (``dimensions``) that defaults to ``None``. The wire layer
-        # drops ``None`` before sending, so the stored options dict
-        # arrives here with ``None`` for the unset case and the
-        # user's integer when overridden.
         return {"dimensions": None, **self._options}
 
 
-class _RuntimeStub:
-    """Minimal runtime double.
-
-    The service does not call any methods on the runtime directly —
-    it forwards the instance to ``ProviderEmbeddingClient.from_runtime``,
-    which we patch out in the tests below. The attributes here are
-    only what ``from_runtime`` would read; the stub keeps the type
-    surface minimal because the production code path is mocked.
-    """
-
-    providers: Any = None
-    provider_credentials: Any = None
-
-    def get_connection_token_getter(self, connection: ConnectionRef) -> TokenGetter:
-        async def _get_token() -> str:
-            return "unused-token"
-
-        return _get_token
-
-
 class _FakeProviderClient:
-    """Stand-in for ``ProviderEmbeddingClient``.
-
-    Records every ``embed`` call and returns the configured vectors
-    (or raises the configured exception). The service uses this in
-    place of the real client so the test does not need respx mocks
-    and can exercise the error mapping paths directly.
-    """
+    """Records every ``embed`` call and returns or raises the configured result."""
 
     def __init__(
         self,
@@ -518,17 +60,14 @@ class _FakeProviderClient:
         model_id: str | None = None,
         usage: EmbeddingUsage | None = None,
     ) -> None:
-        self._vectors = list(vectors or [])
+        self._vectors = vectors if vectors is not None else [[0.1]]
         self._embed_exception = embed_exception
         self._model_id = model_id
         self._usage = usage or EmbeddingUsage(requests=1)
         self.embed_calls: list[tuple[list[str], dict[str, Any], str | None]] = []
 
     async def embed(
-        self,
-        inputs: list[str],
-        options: dict[str, Any],
-        purpose: str | None = None,
+        self, inputs: list[str], options: dict[str, Any], purpose: str | None = None
     ) -> ProviderEmbeddingResponse:
         self.embed_calls.append((list(inputs), dict(options), purpose))
         if self._embed_exception is not None:
@@ -538,3 +77,166 @@ class _FakeProviderClient:
             model_id=self._model_id,
             usage=self._usage,
         )
+
+
+def _service(target: str | None = OPENROUTER_TARGET, **options: Any) -> EmbeddingService:
+    return EmbeddingService(_ModelTasks(target, options), MagicMock(name="runtime"))
+
+
+@pytest.fixture
+def provider_factory() -> Iterator[MagicMock]:
+    with patch("core.model_tasks.embeddings.ProviderEmbeddingClient.from_runtime") as factory:
+        factory.return_value = _FakeProviderClient()
+        yield factory
+
+
+@pytest.mark.parametrize(
+    ("texts", "purpose"),
+    [
+        pytest.param([], None, id="empty-list"),
+        pytest.param("not-a-list", None, id="not-a-list"),
+        pytest.param(["ok", 42, "also-ok"], None, id="non-string-element"),
+        pytest.param(["query"], "classification", id="unknown-purpose"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_invalid_embed_request_fails_before_provider_execution(
+    provider_factory: MagicMock, texts: Any, purpose: Any
+) -> None:
+    with pytest.raises(EmbeddingConfigurationError):
+        await _service().embed(texts, purpose=purpose)
+
+    assert provider_factory.return_value.embed_calls == []
+
+
+@pytest.mark.parametrize(
+    ("target", "error_type"),
+    [
+        pytest.param(None, EmbeddingConfigurationError, id="no-binding"),
+        pytest.param("not-a-valid-target", EmbeddingConfigurationError, id="malformed-target"),
+        pytest.param("local/embedding", EmbeddingUnsupportedTargetError, id="local-target"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_unusable_binding_fails_embedding_and_space_resolution(
+    provider_factory: MagicMock, target: str | None, error_type: type[Exception]
+) -> None:
+    service = _service(target)
+
+    with pytest.raises(error_type):
+        await service.embed(["alpha"])
+    with pytest.raises(error_type):
+        service.resolve_space()
+    assert provider_factory.return_value.embed_calls == []
+
+
+@pytest.mark.parametrize(
+    ("response_model_id", "actual_model_id"),
+    [
+        pytest.param(None, "google/gemini-embedding-2", id="configured-model"),
+        pytest.param(
+            "google/gemini-embedding-2-202607",
+            "google/gemini-embedding-2-202607",
+            id="provider-reported-model",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_embed_returns_ordered_vectors_with_the_resolved_identity(
+    provider_factory: MagicMock, response_model_id: str | None, actual_model_id: str
+) -> None:
+    usage = EmbeddingUsage(requests=1, token_reports=1, input_tokens=9, total_tokens=9)
+    client = _FakeProviderClient(
+        vectors=[[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]], model_id=response_model_id, usage=usage
+    )
+    provider_factory.return_value = client
+    service = _service(dimensions=3)
+
+    result = await service.embed(["alpha", "beta"], purpose="query")
+
+    assert result.vectors == ([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
+    assert (result.provider_id, result.model_id, result.dimension) == (
+        "openrouter",
+        "google/gemini-embedding-2",
+        3,
+    )
+    assert result.actual_model_id == actual_model_id
+    assert result.usage == usage
+    assert result.space_fingerprint == service.resolve_space().fingerprint
+    # Inputs travel verbatim, with the binding's effective options and the purpose.
+    assert client.embed_calls == [(["alpha", "beta"], {"dimensions": 3}, "query")]
+    _runtime, target_ref = provider_factory.call_args.args
+    assert (
+        target_ref.provider_id,
+        target_ref.model_id,
+        target_ref.connection_id,
+        target_ref.local_connection_id,
+    ) == ("openrouter", "google/gemini-embedding-2", "openrouter:api-key", "api-key")
+
+
+@pytest.mark.parametrize(
+    ("client", "message", "log_level", "logs_traceback"),
+    [
+        pytest.param(
+            _FakeProviderClient(embed_exception=ProviderAuthError("Unauthorized")),
+            "Unauthorized",
+            logging.WARNING,
+            False,
+            id="expected-provider-failure",
+        ),
+        pytest.param(
+            _FakeProviderClient(embed_exception=RuntimeError("kaboom")),
+            "kaboom",
+            logging.ERROR,
+            True,
+            id="unexpected-failure",
+        ),
+        pytest.param(_FakeProviderClient(vectors=[]), "no vectors", None, False, id="no-vectors"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_failed_provider_execution_is_an_execution_error(
+    provider_factory: MagicMock,
+    caplog: pytest.LogCaptureFixture,
+    client: _FakeProviderClient,
+    message: str,
+    log_level: int | None,
+    logs_traceback: bool,
+) -> None:
+    provider_factory.return_value = client
+
+    with (
+        caplog.at_level(logging.WARNING, logger="vbot.embeddings"),
+        pytest.raises(EmbeddingExecutionError, match=message),
+    ):
+        await _service().embed(["alpha"])
+
+    logged = [
+        (record.levelno, record.exc_info is not None)
+        for record in caplog.records
+        if record.getMessage().startswith("Embedding request")
+    ]
+    assert logged == ([] if log_level is None else [(log_level, logs_traceback)])
+
+
+def test_space_fingerprint_covers_target_and_effective_options() -> None:
+    def space(target: str, **options: Any) -> Any:
+        return _service(target, **options).resolve_space()
+
+    api_key = "openrouter/google/gemini-embedding-2::api-key:work"
+    baseline = space(api_key, dimensions=768, extra_options={"user": "recall"})
+
+    assert (baseline.provider_id, baseline.model_id) == ("openrouter", "google/gemini-embedding-2")
+    assert space(api_key, extra_options={"user": "recall"}, dimensions=768) == baseline
+    assert (
+        space(
+            "openrouter/google/gemini-embedding-2::oauth:work",
+            dimensions=768,
+            extra_options={"user": "recall"},
+        ).fingerprint
+        != baseline.fingerprint
+    )
+    assert (
+        space(api_key, dimensions=256, extra_options={"user": "recall"}).fingerprint
+        != baseline.fingerprint
+    )

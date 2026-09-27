@@ -1,9 +1,16 @@
-"""Tests for the provider-backed embeddings HTTP client and payload shaping."""
+"""Model tasks: the OpenAI-compatible embeddings client over the wire.
+
+Every case goes through the public ``ProviderEmbeddingClient.embed`` against a
+mocked ``POST /embeddings`` endpoint: the request body the Provider receives,
+the vectors and usage the caller gets back, and how malformed responses fail.
+Retryable parse failures are retried like transient HTTP errors.
+"""
 
 from __future__ import annotations
 
 import json
-from unittest.mock import AsyncMock, patch
+from typing import Any
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -11,724 +18,27 @@ import respx
 
 from core.model_tasks.embeddings_providers import (
     DEFAULT_EMBEDDING_TIMEOUT,
-    EMBEDDINGS_ENDPOINT,
+    EmbeddingUsage,
     ProviderEmbeddingClient,
-    _build_embeddings_payload,
-    _coerce_vector,
-    _parse_embeddings_response,
 )
-from core.providers.errors import ProviderError
+from core.providers.errors import ProviderAuthError, ProviderError
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
+from core.utils.retry import MAX_RETRIES
 
-# ---------------------------------------------------------------------------
-# Payload builder — the heart of the wire-shaping contract
-# ---------------------------------------------------------------------------
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+OPENROUTER_EMBEDDINGS_URL = f"{OPENROUTER_BASE_URL}/embeddings"
+GENERIC_BASE_URL = "https://example.test/v1"
+MODEL_ID = "google/gemini-embedding-2"
 
 
-def test_build_payload_always_sets_encoding_format_float() -> None:
-    """The OpenAI/OpenRouter embeddings contract uses ``encoding_format="float"``.
+@pytest.fixture
+def no_retry_delay(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("core.utils.retry._sleep", AsyncMock())
 
-    The catalog does not surface a base64 mode for embeddings, so the
-    wire always pins ``float`` — this iteration does not decode
-    base64 vectors because the recall store wants Python floats.
-    """
 
-    payload = _build_embeddings_payload("google/gemini-embedding-2", ["a", "b"], {})
-
-    assert payload == {
-        "model": "google/gemini-embedding-2",
-        "input": ["a", "b"],
-        "encoding_format": "float",
-    }
-    assert payload["encoding_format"] == "float"
-
-
-def test_build_payload_drops_dimensions_when_absent() -> None:
-    """When ``dimensions`` is not in options, the wire omits the field.
-
-    The non-Matryoshka default is to send no ``dimensions`` — the
-    provider's catalog dimension is used. We must not invent a value
-    from a missing key.
-    """
-
-    payload = _build_embeddings_payload("google/gemini-embedding-2", ["a"], {})
-
-    assert "dimensions" not in payload
-
-
-def test_build_payload_drops_dimensions_when_none() -> None:
-    """A ``None`` ``dimensions`` (the schema default for an unset number) is dropped.
-
-    Sending ``"dimensions": null`` would be rejected by the provider,
-    so the wire never carries it. The schema-level default is
-    therefore harmless.
-    """
-
-    payload = _build_embeddings_payload("google/gemini-embedding-2", ["a"], {"dimensions": None})
-
-    assert "dimensions" not in payload
-
-
-def test_build_payload_rejects_zero_dimensions() -> None:
-    with pytest.raises(ProviderError):
-        _build_embeddings_payload("google/gemini-embedding-2", ["a"], {"dimensions": 0})
-
-
-def test_build_payload_forwards_positive_integer_dimensions() -> None:
-    """A positive integer ``dimensions`` (Matryoshka truncation) is forwarded."""
-
-    payload = _build_embeddings_payload(
-        "google/gemini-embedding-2", ["a", "b"], {"dimensions": 256}
-    )
-
-    assert payload["dimensions"] == 256
-    assert isinstance(payload["dimensions"], int)
-
-
-def test_build_payload_rejects_float_dimensions() -> None:
-    with pytest.raises(ProviderError):
-        _build_embeddings_payload(
-            "google/gemini-embedding-2",
-            ["a"],
-            {"dimensions": 256.0},
-        )
-
-
-def test_build_payload_keeps_input_as_array_even_for_single_text() -> None:
-    """A single-input batch is sent as a one-element array.
-
-    The OpenAI-compatible contract accepts a string or an array; we
-    always send the array form so the wire shape is consistent for
-    batching, and the response parser does not need a per-call branch.
-    """
-
-    payload = _build_embeddings_payload("google/gemini-embedding-2", ["only"], {})
-
-    assert payload["input"] == ["only"]
-
-
-def test_build_payload_sets_system_owned_input_type() -> None:
-    payload = _build_embeddings_payload(
-        "google/gemini-embedding-2",
-        ["query"],
-        {},
-        input_type="search_query",
-    )
-
-    assert payload["input_type"] == "search_query"
-
-
-# ---------------------------------------------------------------------------
-# Response parsing — vectors are returned in input order
-# ---------------------------------------------------------------------------
-
-
-def test_parse_response_returns_vectors_in_input_order() -> None:
-    """When the response is already in input order, vectors are returned as-is."""
-
-    payload = {
-        "object": "list",
-        "data": [
-            {"object": "embedding", "index": 0, "embedding": [0.1, 0.2, 0.3]},
-            {"object": "embedding", "index": 1, "embedding": [0.4, 0.5, 0.6]},
-        ],
-        "model": "google/gemini-embedding-2",
-        "usage": {"prompt_tokens": 2, "total_tokens": 2},
-    }
-
-    response = _parse_embeddings_response(payload, expected_count=2)
-
-    assert response.vectors == ([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
-    assert response.model_id == "google/gemini-embedding-2"
-    assert response.usage.input_tokens == 2
-    assert response.usage.total_tokens == 2
-
-
-def test_parse_response_sorts_by_index_when_out_of_order() -> None:
-    """An out-of-order ``data`` array is sorted by ``index`` so the caller
-    sees vectors in input order.
-
-    The OpenAI/OpenRouter contract documents input-ordered responses,
-    but the wire format carries explicit ``index`` fields. We rely on
-    them so a reordered response cannot silently land vectors in the
-    wrong order in the recall store.
-    """
-
-    payload = {
-        "data": [
-            {"index": 1, "embedding": [0.4, 0.5, 0.6]},
-            {"index": 0, "embedding": [0.1, 0.2, 0.3]},
-        ],
-    }
-
-    response = _parse_embeddings_response(payload, expected_count=2)
-
-    assert response.vectors == ([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
-
-
-def test_parse_response_coerces_int_values_to_floats() -> None:
-    """Vector entries that arrive as ints are coerced to floats.
-
-    The OpenAI contract documents ``embedding`` as a float array, but
-    providers may JSON-encode whole-number components as ints. The
-    downstream store records ``dimension`` from ``len(vectors[0])`` and
-    compares floats element-wise, so the type must be uniform.
-    """
-
-    payload = {"data": [{"index": 0, "embedding": [1, 2, 3]}]}
-
-    response = _parse_embeddings_response(payload, expected_count=1)
-
-    assert response.vectors == ([1.0, 2.0, 3.0],)
-    assert all(isinstance(component, float) for component in response.vectors[0])
-
-
-def test_parse_response_rejects_booleans_inside_embedding() -> None:
-    """A boolean value inside an embedding is non-numeric and is rejected.
-
-    Python treats booleans as ints, so without the explicit guard a
-    ``True``/``False`` could land in a vector. The wire layer
-    short-circuits with a non-retryable :class:`ProviderError`.
-    """
-
-    from core.providers.errors import ProviderError
-
-    payload = {"data": [{"index": 0, "embedding": [True, False]}]}
-
-    with pytest.raises(ProviderError):
-        _parse_embeddings_response(payload, expected_count=1)
-
-
-def test_parse_response_rejects_string_values_inside_embedding() -> None:
-    """A string value inside an embedding is rejected as non-numeric."""
-
-    from core.providers.errors import ProviderError
-
-    payload = {"data": [{"index": 0, "embedding": ["0.1", "0.2"]}]}
-
-    with pytest.raises(ProviderError):
-        _parse_embeddings_response(payload, expected_count=1)
-
-
-def test_parse_response_rejects_empty_data_array() -> None:
-    """An empty ``data`` array is a malformed response and surfaces as a
-    retryable :class:`ProviderError` — the next attempt may return a
-    complete batch.
-    """
-
-    from core.providers.errors import ProviderError
-
-    with pytest.raises(ProviderError):
-        _parse_embeddings_response({"data": []}, expected_count=2)
-
-
-def test_parse_response_rejects_missing_data_key() -> None:
-    """A response without a ``data`` key is malformed.
-
-    A 200 with no ``data`` array is a provider bug; we treat it the
-    same as an empty data array.
-    """
-
-    from core.providers.errors import ProviderError
-
-    with pytest.raises(ProviderError):
-        _parse_embeddings_response({}, expected_count=2)
-
-
-def test_parse_response_surfaces_openrouter_error_object() -> None:
-    """A 200 carrying an OpenRouter ``error`` object surfaces its message
-    and is non-retryable.
-
-    OpenRouter reports routing/credit/availability failures as
-    ``{"error": {"message": ..., "code": ...}}`` with an HTTP 200, so
-    the ``data`` array is absent. The real reason must reach the log,
-    and retrying a definitive error only burns attempts.
-    """
-
-    from core.providers.errors import ProviderError
-
-    payload = {"error": {"message": "No endpoints found for baai/bge-m3.", "code": 404}}
-
-    with pytest.raises(ProviderError, match="No endpoints found for baai/bge-m3") as exc_info:
-        _parse_embeddings_response(payload, expected_count=1)
-
-    assert exc_info.value.retryable is False
-    assert "code=404" in str(exc_info.value)
-
-
-def test_parse_response_keeps_empty_data_retryable_without_error() -> None:
-    """An empty ``data`` array with no ``error`` object stays retryable —
-    it may be a transient blip rather than a definitive failure.
-    """
-
-    from core.providers.errors import ProviderError
-
-    with pytest.raises(ProviderError) as exc_info:
-        _parse_embeddings_response({"data": []}, expected_count=2)
-
-    assert exc_info.value.retryable is True
-
-
-def test_parse_response_rejects_non_dict_payload() -> None:
-    """A non-dict response (a bare array, a string) is rejected as a wire
-    shape problem — non-retryable because the next attempt will
-    receive the same shape.
-    """
-
-    from core.providers.errors import ProviderError
-
-    with pytest.raises(ProviderError):
-        _parse_embeddings_response(["nope"], expected_count=1)
-
-
-def test_parse_response_rejects_count_mismatch() -> None:
-    """When the response has fewer vectors than inputs, retrying may
-    succeed — the wire surfaces a retryable :class:`ProviderError`.
-    """
-
-    from core.providers.errors import ProviderError
-
-    payload = {
-        "data": [
-            {"index": 0, "embedding": [0.1, 0.2]},
-        ],
-    }
-
-    with pytest.raises(ProviderError):
-        _parse_embeddings_response(payload, expected_count=2)
-
-
-def test_parse_response_rejects_missing_embedding_field() -> None:
-    """A ``data`` entry with no ``embedding`` field is malformed and
-    surfaces as a retryable :class:`ProviderError`.
-    """
-
-    from core.providers.errors import ProviderError
-
-    payload = {"data": [{"index": 0}, {"index": 1, "embedding": [0.1]}]}
-
-    with pytest.raises(ProviderError):
-        _parse_embeddings_response(payload, expected_count=2)
-
-
-def test_parse_response_rejects_non_object_data_entry() -> None:
-    """A non-object ``data`` entry is a wire shape problem — the next
-    attempt will receive the same shape, so it is non-retryable.
-    """
-
-    from core.providers.errors import ProviderError
-
-    with pytest.raises(ProviderError):
-        _parse_embeddings_response({"data": ["not-a-dict"]}, expected_count=1)
-
-
-@pytest.mark.parametrize(
-    "payload",
-    [
-        {
-            "data": [
-                {"index": 0, "embedding": [0.1, 0.2]},
-                {"index": 0, "embedding": [0.3, 0.4]},
-            ]
-        },
-        {
-            "data": [
-                {"index": 0, "embedding": [0.1, 0.2]},
-                {"index": 2, "embedding": [0.3, 0.4]},
-            ]
-        },
-    ],
-)
-def test_parse_response_rejects_non_bijective_indices(payload: object) -> None:
-    with pytest.raises(ProviderError):
-        _parse_embeddings_response(payload, expected_count=2)
-
-
-def test_parse_response_accepts_all_entries_without_indices_in_wire_order() -> None:
-    payload = {
-        "data": [
-            {"embedding": [0.1, 0.2]},
-            {"embedding": [0.3, 0.4]},
-        ]
-    }
-
-    assert _parse_embeddings_response(payload, expected_count=2).vectors == (
-        [0.1, 0.2],
-        [0.3, 0.4],
-    )
-
-
-def test_parse_response_rejects_mixed_index_presence() -> None:
-    payload = {
-        "data": [
-            {"index": 0, "embedding": [0.1, 0.2]},
-            {"embedding": [0.3, 0.4]},
-        ]
-    }
-
-    with pytest.raises(ProviderError):
-        _parse_embeddings_response(payload, expected_count=2)
-
-
-def test_parse_response_rejects_inconsistent_vector_dimensions() -> None:
-    payload = {
-        "data": [
-            {"index": 0, "embedding": [0.1, 0.2]},
-            {"index": 1, "embedding": [0.3]},
-        ]
-    }
-
-    with pytest.raises(ProviderError):
-        _parse_embeddings_response(payload, expected_count=2)
-
-
-@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
-def test_parse_response_rejects_non_finite_vector_values(value: float) -> None:
-    with pytest.raises(ProviderError):
-        _parse_embeddings_response(
-            {"data": [{"index": 0, "embedding": [value]}]},
-            expected_count=1,
-        )
-
-
-def test_parse_response_normalizes_cost_and_token_usage() -> None:
-    response = _parse_embeddings_response(
-        {
-            "data": [{"index": 0, "embedding": [0.1]}],
-            "model": "served/model-v2",
-            "usage": {
-                "prompt_tokens": 7,
-                "total_tokens": 7,
-                "cost": "0.00014",
-            },
-        },
-        expected_count=1,
-    )
-
-    assert response.model_id == "served/model-v2"
-    assert response.usage.requests == 1
-    assert response.usage.token_reports == 1
-    assert response.usage.cost_reports == 1
-    assert response.usage.input_tokens == 7
-    assert response.usage.total_tokens == 7
-    assert response.usage.cost == pytest.approx(0.00014)
-
-
-def test_parse_response_marks_missing_usage_as_unreported() -> None:
-    response = _parse_embeddings_response(
-        {"data": [{"index": 0, "embedding": [0.1]}]},
-        expected_count=1,
-    )
-
-    assert response.usage.requests == 1
-    assert response.usage.token_reports == 0
-    assert response.usage.cost_reports == 0
-
-
-def test_unrepresentable_cost_does_not_invalidate_vectors() -> None:
-    response = _parse_embeddings_response(
-        {
-            "data": [{"index": 0, "embedding": [0.1]}],
-            "usage": {"prompt_tokens": 7, "cost": 10**400},
-        },
-        expected_count=1,
-    )
-    assert response.vectors == ([0.1],)
-    assert response.usage.input_tokens == 7
-    assert response.usage.cost_reports == 0
-
-
-def test_unrepresentable_vector_component_is_a_provider_error() -> None:
-    with pytest.raises(ProviderError) as raised:
-        _parse_embeddings_response(
-            {"data": [{"index": 0, "embedding": [10**400]}]}, expected_count=1
-        )
-    assert raised.value.retryable is False
-
-
-@pytest.mark.parametrize("second_entry", [{"index": None}, {}])
-def test_null_index_is_not_treated_as_omitted(second_entry: dict) -> None:
-    with pytest.raises(ProviderError) as raised:
-        _parse_embeddings_response(
-            {
-                "data": [
-                    {"index": None, "embedding": [0.1]},
-                    {**second_entry, "embedding": [0.2]},
-                ]
-            },
-            expected_count=2,
-        )
-    assert raised.value.retryable is False
-
-
-@pytest.mark.parametrize("model", ["", 123, False])
-def test_parse_response_rejects_invalid_advertised_model(model: object) -> None:
-    with pytest.raises(ProviderError):
-        _parse_embeddings_response(
-            {
-                "data": [{"index": 0, "embedding": [0.1]}],
-                "model": model,
-            },
-            expected_count=1,
-        )
-
-
-def test_coerce_vector_passes_through_real_floats() -> None:
-    """The private helper accepts floats unchanged."""
-
-    vector = _coerce_vector([0.1, 0.2, 0.3])
-
-    assert vector == [0.1, 0.2, 0.3]
-
-
-# ---------------------------------------------------------------------------
-# End-to-end OpenRouter call — the payload reaches the wire correctly
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-@respx.mock
-async def test_openrouter_embed_posts_to_api_v1_embeddings() -> None:
-    """A successful two-text batch hits ``POST /api/v1/embeddings`` and
-    returns two vectors in input order."""
-
-    route = respx.post("https://openrouter.ai/api/v1/embeddings").mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "object": "list",
-                "data": [
-                    {"object": "embedding", "index": 0, "embedding": [0.1, 0.2, 0.3]},
-                    {"object": "embedding", "index": 1, "embedding": [0.4, 0.5, 0.6]},
-                ],
-                "model": "google/gemini-embedding-2",
-                "usage": {"prompt_tokens": 4, "total_tokens": 4},
-            },
-        )
-    )
-    client = _openrouter_embedding_client("google/gemini-embedding-2")
-
-    response = await client.embed(["alpha", "beta"], options={})
-
-    payload = json.loads(route.calls[0].request.content)
-    assert payload == {
-        "model": "google/gemini-embedding-2",
-        "input": ["alpha", "beta"],
-        "encoding_format": "float",
-    }
-    assert route.calls[0].request.headers["authorization"] == "Bearer sk-test"
-    assert response.vectors == ([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
-    assert response.model_id == "google/gemini-embedding-2"
-    assert response.usage.requests == 1
-    assert response.usage.token_reports == 1
-    assert response.usage.input_tokens == 4
-
-
-@pytest.mark.asyncio
-@respx.mock
-async def test_openrouter_embed_forwards_dimensions_when_set() -> None:
-    """When the user pins ``dimensions`` in options, the wire carries it
-    as an integer (Matryoshka truncation knob)."""
-
-    route = respx.post("https://openrouter.ai/api/v1/embeddings").mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "data": [
-                    {"index": 0, "embedding": [0.1, 0.2]},
-                ],
-            },
-        )
-    )
-    client = _openrouter_embedding_client("google/gemini-embedding-2")
-
-    await client.embed(["alpha"], options={"dimensions": 256})
-
-    payload = json.loads(route.calls[0].request.content)
-    assert payload["dimensions"] == 256
-    assert isinstance(payload["dimensions"], int)
-
-
-@pytest.mark.parametrize(
-    ("purpose", "input_type"),
-    [("query", "search_query"), ("document", "search_document")],
-)
-@pytest.mark.asyncio
-@respx.mock
-async def test_openrouter_embed_maps_recall_purpose_to_input_type(
-    purpose: str,
-    input_type: str,
-) -> None:
-    route = respx.post("https://openrouter.ai/api/v1/embeddings").mock(
-        return_value=httpx.Response(
-            200,
-            json={"data": [{"index": 0, "embedding": [0.1]}]},
-        )
-    )
-    client = _openrouter_embedding_client("google/gemini-embedding-2")
-
-    await client.embed(["alpha"], options={}, purpose=purpose)
-
-    assert json.loads(route.calls[0].request.content)["input_type"] == input_type
-
-
-@pytest.mark.asyncio
-@respx.mock
-async def test_non_openrouter_embed_omits_unverified_input_type() -> None:
-    route = respx.post("https://example.test/v1/embeddings").mock(
-        return_value=httpx.Response(
-            200,
-            json={"data": [{"index": 0, "embedding": [0.1]}]},
-        )
-    )
-    client = _embedding_client(
-        provider_id="generic",
-        base_url="https://example.test/v1",
-        model_id="vendor/embed",
-    )
-
-    await client.embed(["alpha"], options={}, purpose="query")
-
-    assert "input_type" not in json.loads(route.calls[0].request.content)
-
-
-@pytest.mark.asyncio
-@respx.mock
-async def test_openrouter_embed_retries_529_overload() -> None:
-    route = respx.post("https://openrouter.ai/api/v1/embeddings")
-    route.side_effect = [
-        httpx.Response(529, text="overloaded"),
-        httpx.Response(
-            200,
-            json={"data": [{"index": 0, "embedding": [0.1, 0.2]}]},
-        ),
-    ]
-    client = _openrouter_embedding_client("google/gemini-embedding-2")
-
-    with patch("core.utils.retry._sleep", new_callable=AsyncMock):
-        response = await client.embed(["alpha"], options={})
-
-    assert response.vectors == ([0.1, 0.2],)
-    assert route.call_count == 2
-
-
-@pytest.mark.asyncio
-@respx.mock
-async def test_openrouter_embed_uses_bearer_auth_header() -> None:
-    """The ``Authorization`` header is built from the connection's auth config."""
-
-    respx.post("https://openrouter.ai/api/v1/embeddings").mock(
-        return_value=httpx.Response(
-            200,
-            json={"data": [{"index": 0, "embedding": [0.1, 0.2, 0.3]}]},
-        )
-    )
-    client = _openrouter_embedding_client("google/gemini-embedding-2")
-
-    await client.embed(["alpha"], options={})
-
-    route = respx.post("https://openrouter.ai/api/v1/embeddings")
-    assert route.call_count >= 1
-    assert route.calls[0].request.headers["authorization"] == "Bearer sk-test"
-
-
-@pytest.mark.asyncio
-@respx.mock
-async def test_openrouter_embed_reorders_vectors_by_index() -> None:
-    """An out-of-order response is sorted by ``index`` so vectors are
-    returned in input order.
-    """
-
-    respx.post("https://openrouter.ai/api/v1/embeddings").mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "data": [
-                    {"index": 1, "embedding": [0.4, 0.5, 0.6]},
-                    {"index": 0, "embedding": [0.1, 0.2, 0.3]},
-                ],
-            },
-        )
-    )
-    client = _openrouter_embedding_client("google/gemini-embedding-2")
-
-    response = await client.embed(["alpha", "beta"], options={})
-
-    assert response.vectors == ([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
-
-
-@pytest.mark.asyncio
-@respx.mock
-async def test_openrouter_embed_raises_provider_error_on_4xx() -> None:
-    """A 4xx response is mapped to a ``ProviderError`` via the shared
-    HTTP classifier — auth errors are not retryable, the rest may be.
-    """
-
-    from core.providers.errors import ProviderAuthError
-
-    respx.post("https://openrouter.ai/api/v1/embeddings").mock(
-        return_value=httpx.Response(401, text="Unauthorized")
-    )
-    client = _openrouter_embedding_client("google/gemini-embedding-2")
-
-    with pytest.raises(ProviderAuthError):
-        await client.embed(["alpha"], options={})
-
-
-@pytest.mark.asyncio
-@respx.mock
-async def test_openrouter_embed_uses_default_timeout() -> None:
-    """The embeddings HTTP timeout is the project default for short
-    non-streaming requests (60s connect/write/pool, no read cap).
-    """
-
-    respx.post("https://openrouter.ai/api/v1/embeddings").mock(
-        return_value=httpx.Response(
-            200,
-            json={"data": [{"index": 0, "embedding": [0.1, 0.2, 0.3]}]},
-        )
-    )
-    client = _openrouter_embedding_client("google/gemini-embedding-2")
-
-    # Sanity: the constant is the one the client uses.
-    assert DEFAULT_EMBEDDING_TIMEOUT == 60.0
-
-    await client.embed(["alpha"], options={})
-
-
-# ---------------------------------------------------------------------------
-# HTTP endpoint and constants
-# ---------------------------------------------------------------------------
-
-
-def test_embeddings_endpoint_is_api_v1_embeddings() -> None:
-    """The wire path matches the OpenAI/OpenRouter ``/api/v1/embeddings`` shape."""
-
-    assert EMBEDDINGS_ENDPOINT == "/embeddings"
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _openrouter_embedding_client(model_id: str) -> ProviderEmbeddingClient:
-    """Build a ``ProviderEmbeddingClient`` wired to a mockable OpenRouter endpoint."""
-
-    return _embedding_client(
-        provider_id="openrouter",
-        base_url="https://openrouter.ai/api/v1",
-        model_id=model_id,
-    )
-
-
-def _embedding_client(
-    *,
-    provider_id: str,
-    base_url: str,
-    model_id: str,
+def _client(
+    provider_id: str = "openrouter", base_url: str = OPENROUTER_BASE_URL
 ) -> ProviderEmbeddingClient:
-
     provider = ProviderConfig(
         id=provider_id,
         name=provider_id,
@@ -742,41 +52,367 @@ def _embedding_client(
         type="api_key",
         label="API Key",
         auth=AuthConfig(
-            header="Authorization",
-            prefix="Bearer ",
-            credential_key="OPENROUTER_API_KEY",
+            header="Authorization", prefix="Bearer ", credential_key="OPENROUTER_API_KEY"
         ),
     )
     return ProviderEmbeddingClient(
-        provider=provider,
-        connection=connection,
-        credential="sk-test",
-        model_id=model_id,
+        provider=provider, connection=connection, credential="sk-test", model_id=MODEL_ID
     )
 
 
-def test_build_payload_merges_non_reserved_extra_options() -> None:
+def _vectors_for(inputs: list[str]) -> dict[str, Any]:
+    return {"data": [{"index": i, "embedding": [0.1 * (i + 1)]} for i in range(len(inputs))]}
 
-    payload = _build_embeddings_payload(
-        "openai/text-embedding-3-small",
-        ["hello"],
-        {"dimensions": 256, "extra_options": {"user": "abc", "empty": ""}},
-    )
 
-    assert payload["dimensions"] == 256
-    assert payload["user"] == "abc"
-    assert "empty" not in payload
-    assert "extra_options" not in payload
+_BASE_BODY = {"model": MODEL_ID, "encoding_format": "float"}
 
 
 @pytest.mark.parametrize(
-    "field",
-    ["model", "input", "encoding_format", "dimensions", "input_type"],
+    ("provider_id", "inputs", "options", "purpose", "expected_fields"),
+    [
+        pytest.param("openrouter", ["a", "b"], {}, None, {}, id="defaults"),
+        # A single text still travels as a one-element array.
+        pytest.param("openrouter", ["only"], {"dimensions": None}, None, {}, id="unset-dimensions"),
+        pytest.param(
+            "openrouter", ["a"], {"dimensions": 256}, None, {"dimensions": 256}, id="dimensions"
+        ),
+        pytest.param(
+            "openrouter",
+            ["a"],
+            {"dimensions": 256, "extra_options": {"user": "abc", "empty": ""}},
+            None,
+            {"dimensions": 256, "user": "abc"},
+            id="extra-options-merged-without-empty-values",
+        ),
+        pytest.param(
+            "openrouter", ["a"], {}, "query", {"input_type": "search_query"}, id="query-purpose"
+        ),
+        pytest.param(
+            "openrouter",
+            ["a"],
+            {},
+            "document",
+            {"input_type": "search_document"},
+            id="document-purpose",
+        ),
+        # ``input_type`` is verified for OpenRouter only.
+        pytest.param("generic", ["a"], {}, "query", {}, id="other-provider-omits-input-type"),
+    ],
 )
-def test_build_payload_rejects_reserved_extra_option(field: str) -> None:
-    with pytest.raises(ProviderError):
-        _build_embeddings_payload(
-            "openai/text-embedding-3-small",
-            ["hello"],
-            {"extra_options": {field: "override"}},
+@respx.mock
+@pytest.mark.asyncio
+async def test_embed_sends_the_expected_request(
+    provider_id: str,
+    inputs: list[str],
+    options: dict[str, Any],
+    purpose: str | None,
+    expected_fields: dict[str, Any],
+) -> None:
+    base_url = OPENROUTER_BASE_URL if provider_id == "openrouter" else GENERIC_BASE_URL
+    route = respx.post(f"{base_url}/embeddings").mock(
+        return_value=httpx.Response(200, json=_vectors_for(inputs))
+    )
+
+    await _client(provider_id, base_url).embed(inputs, options=options, purpose=purpose)
+
+    request = route.calls.last.request
+    assert json.loads(request.content) == {**_BASE_BODY, "input": inputs, **expected_fields}
+    assert request.headers["Authorization"] == "Bearer sk-test"
+    assert request.extensions["timeout"]["read"] == DEFAULT_EMBEDDING_TIMEOUT
+
+
+@pytest.mark.parametrize(
+    ("options", "purpose"),
+    [
+        pytest.param({"dimensions": 0}, None, id="zero-dimensions"),
+        pytest.param({"dimensions": 256.0}, None, id="float-dimensions"),
+        *(
+            pytest.param({"extra_options": {field: "override"}}, None, id=f"reserved-{field}")
+            for field in ("model", "input", "encoding_format", "dimensions", "input_type")
+        ),
+        pytest.param({}, "classification", id="unknown-purpose"),
+    ],
+)
+@respx.mock
+@pytest.mark.asyncio
+async def test_invalid_request_options_fail_before_any_request(
+    options: dict[str, Any], purpose: str | None
+) -> None:
+    route = respx.post(OPENROUTER_EMBEDDINGS_URL).mock(
+        return_value=httpx.Response(200, json=_vectors_for(["a"]))
+    )
+
+    with pytest.raises(ProviderError) as raised:
+        await _client().embed(["a"], options=options, purpose=purpose)
+
+    assert raised.value.retryable is False
+    assert route.call_count == 0
+
+
+@pytest.mark.parametrize(
+    ("body", "vectors", "model_id", "usage"),
+    [
+        pytest.param(
+            {
+                "object": "list",
+                "data": [
+                    {"object": "embedding", "index": 0, "embedding": [0.1, 0.2]},
+                    {"object": "embedding", "index": 1, "embedding": [0.3, 0.4]},
+                ],
+                "model": "served/model-v2",
+                "usage": {"prompt_tokens": 4, "total_tokens": 5, "cost": "0.00014"},
+            },
+            ([0.1, 0.2], [0.3, 0.4]),
+            "served/model-v2",
+            EmbeddingUsage(
+                requests=1,
+                token_reports=1,
+                cost_reports=1,
+                input_tokens=4,
+                total_tokens=5,
+                cost=0.00014,
+                input_token_reports=1,
+            ),
+            id="indexed-with-model-and-usage",
+        ),
+        pytest.param(
+            {
+                "data": [
+                    {"index": 1, "embedding": [0.3, 0.4]},
+                    {"index": 0, "embedding": [0.1, 0.2]},
+                ],
+                "usage": {"input_tokens": 7},
+            },
+            ([0.1, 0.2], [0.3, 0.4]),
+            None,
+            EmbeddingUsage(
+                requests=1,
+                token_reports=1,
+                input_tokens=7,
+                total_tokens=7,
+                input_token_reports=1,
+            ),
+            id="out-of-order-indices-are-sorted",
+        ),
+        pytest.param(
+            {"data": [{"embedding": [1, 2]}, {"embedding": [3, 4]}]},
+            ([1.0, 2.0], [3.0, 4.0]),
+            None,
+            EmbeddingUsage(requests=1),
+            id="unindexed-entries-keep-wire-order-and-ints-become-floats",
+        ),
+        pytest.param(
+            {
+                "data": [{"index": 0, "embedding": [0.1]}, {"index": 1, "embedding": [0.2]}],
+                "usage": {"prompt_tokens": 7, "cost": 10**400},
+            },
+            ([0.1], [0.2]),
+            None,
+            EmbeddingUsage(
+                requests=1,
+                token_reports=1,
+                input_tokens=7,
+                total_tokens=7,
+                input_token_reports=1,
+            ),
+            id="unrepresentable-cost-is-unreported",
+        ),
+        # A reported zero is a report; malformed counters are not.
+        pytest.param(
+            {**_vectors_for(["alpha", "beta"]), "usage": {"prompt_tokens": 0, "cost": 0}},
+            ([0.1], [0.2]),
+            None,
+            EmbeddingUsage(requests=1, token_reports=1, cost_reports=1, input_token_reports=1),
+            id="zero-counters-are-reported",
+        ),
+        pytest.param(
+            {**_vectors_for(["alpha", "beta"]), "usage": {"total_tokens": 7}},
+            ([0.1], [0.2]),
+            None,
+            EmbeddingUsage(requests=1, token_reports=1, total_tokens=7),
+            id="total-tokens-only",
+        ),
+        pytest.param(
+            {**_vectors_for(["alpha", "beta"]), "usage": {"prompt_tokens": True, "cost": -1}},
+            ([0.1], [0.2]),
+            None,
+            EmbeddingUsage(requests=1),
+            id="malformed-counters-are-unreported",
+        ),
+    ],
+)
+@respx.mock
+@pytest.mark.asyncio
+async def test_embed_returns_vectors_in_input_order_with_normalized_usage(
+    body: dict[str, Any],
+    vectors: tuple[list[float], ...],
+    model_id: str | None,
+    usage: EmbeddingUsage,
+) -> None:
+    respx.post(OPENROUTER_EMBEDDINGS_URL).mock(return_value=httpx.Response(200, json=body))
+
+    response = await _client().embed(["alpha", "beta"], options={})
+
+    assert response.vectors == vectors
+    assert all(type(component) is float for vector in response.vectors for component in vector)
+    assert response.model_id == model_id
+    assert response.usage == usage
+
+
+def _entries(*embeddings: Any, indices: tuple[Any, ...] = (0, 1)) -> dict[str, Any]:
+    return {
+        "data": [
+            {"index": index, "embedding": embedding}
+            for index, embedding in zip(indices, embeddings, strict=True)
+        ]
+    }
+
+
+@pytest.mark.parametrize(
+    ("response", "error_type", "retryable"),
+    [
+        pytest.param(httpx.Response(401, text="Unauthorized"), ProviderAuthError, False, id="401"),
+        pytest.param(httpx.Response(200, json=["nope"]), ProviderError, False, id="not-an-object"),
+        # A 200 without data is transient unless it carries a definitive error.
+        pytest.param(httpx.Response(200, json={"data": []}), ProviderError, True, id="empty-data"),
+        pytest.param(
+            httpx.Response(200, json=_entries([0.1], indices=(0,))),
+            ProviderError,
+            True,
+            id="fewer-vectors-than-inputs",
+        ),
+        pytest.param(
+            httpx.Response(200, json={"data": [{"index": 0}, {"index": 1, "embedding": [0.1]}]}),
+            ProviderError,
+            True,
+            id="missing-embedding",
+        ),
+        pytest.param(
+            httpx.Response(200, json={"data": ["a", "b"]}),
+            ProviderError,
+            False,
+            id="entry-not-an-object",
+        ),
+        pytest.param(
+            httpx.Response(200, json=_entries([0.1], [0.2], indices=(None, 1))),
+            ProviderError,
+            False,
+            id="null-index",
+        ),
+        pytest.param(
+            httpx.Response(
+                200, json={"data": [{"index": 0, "embedding": [0.1]}, {"embedding": [0.2]}]}
+            ),
+            ProviderError,
+            False,
+            id="mixed-index-presence",
+        ),
+        pytest.param(
+            httpx.Response(200, json=_entries([0.1], [0.2], indices=(0, 0))),
+            ProviderError,
+            False,
+            id="duplicate-indices",
+        ),
+        pytest.param(
+            httpx.Response(200, json=_entries([0.1], [0.2], indices=(0, 2))),
+            ProviderError,
+            False,
+            id="index-out-of-range",
+        ),
+        pytest.param(
+            httpx.Response(200, json=_entries([0.1, 0.2], [0.3])),
+            ProviderError,
+            False,
+            id="inconsistent-dimensions",
+        ),
+        pytest.param(
+            httpx.Response(200, json=_entries([True], [False])),
+            ProviderError,
+            False,
+            id="boolean-component",
+        ),
+        pytest.param(
+            httpx.Response(200, json=_entries(["0.1"], ["0.2"])),
+            ProviderError,
+            False,
+            id="string-component",
+        ),
+        pytest.param(
+            httpx.Response(
+                200,
+                content=b'{"data": [{"index": 0, "embedding": [NaN]}, '
+                b'{"index": 1, "embedding": [0.2]}]}',
+            ),
+            ProviderError,
+            False,
+            id="non-finite-component",
+        ),
+        pytest.param(
+            httpx.Response(200, json=_entries([10**400], [0.2])),
+            ProviderError,
+            False,
+            id="unrepresentable-component",
+        ),
+        pytest.param(
+            httpx.Response(200, json={**_entries([0.1], [0.2]), "model": ""}),
+            ProviderError,
+            False,
+            id="blank-model",
+        ),
+        pytest.param(
+            httpx.Response(200, json={**_entries([0.1], [0.2]), "model": 123}),
+            ProviderError,
+            False,
+            id="non-string-model",
+        ),
+    ],
+)
+@respx.mock
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("no_retry_delay")
+async def test_unusable_response_fails_and_only_transient_ones_are_retried(
+    response: httpx.Response, error_type: type[ProviderError], retryable: bool
+) -> None:
+    route = respx.post(OPENROUTER_EMBEDDINGS_URL).mock(return_value=response)
+
+    with pytest.raises(ProviderError) as raised:
+        await _client().embed(["alpha", "beta"], options={})
+
+    assert type(raised.value) is error_type
+    assert raised.value.retryable is retryable
+    assert route.call_count == (MAX_RETRIES + 1 if retryable else 1)
+
+
+@respx.mock
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("no_retry_delay")
+async def test_provider_error_object_in_a_200_is_final_and_passes_its_message_through() -> None:
+    route = respx.post(OPENROUTER_EMBEDDINGS_URL).mock(
+        return_value=httpx.Response(
+            200, json={"error": {"message": "No endpoints found for baai/bge-m3.", "code": 404}}
         )
+    )
+
+    with pytest.raises(ProviderError, match="No endpoints found for baai/bge-m3") as raised:
+        await _client().embed(["alpha"], options={})
+
+    assert raised.value.retryable is False
+    assert "code=404" in str(raised.value)
+    assert route.call_count == 1
+
+
+@respx.mock
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("no_retry_delay")
+async def test_overloaded_provider_is_retried() -> None:
+    route = respx.post(OPENROUTER_EMBEDDINGS_URL).mock(
+        side_effect=[
+            httpx.Response(529, text="overloaded"),
+            httpx.Response(200, json=_vectors_for(["alpha"])),
+        ]
+    )
+
+    response = await _client().embed(["alpha"], options={})
+
+    assert response.vectors == ([0.1],)
+    assert route.call_count == 2

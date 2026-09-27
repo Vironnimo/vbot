@@ -57,15 +57,23 @@ class _Stream(httpx.AsyncByteStream):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "reason", ["length", "content_filter", "error", "tool_calls", "unknown", [], {}]
+    ("finish_reason", "native_finish_reason"),
+    [
+        # Any finish other than "stop" is unsuccessful, whatever its type.
+        pytest.param("length", None, id="length"),
+        pytest.param([], None, id="non-string-reason"),
+        # A native failure cannot be overridden by "stop".
+        pytest.param("stop", "network_error", id="native-network-error"),
+        pytest.param("stop", "server_error", id="native-server-error"),
+    ],
 )
 @respx.mock
-async def test_explicit_unsuccessful_finish_rejects_partial_audio(
-    client: ProviderMusicClient, reason: object
+async def test_unsuccessful_finish_rejects_partial_audio(
+    client: ProviderMusicClient, finish_reason: object, native_finish_reason: str | None
 ) -> None:
     stream = _Stream(
         _event({"delta": {"audio": {"data": "YWJj"}}})
-        + _event({"finish_reason": reason})
+        + _event({"finish_reason": finish_reason, "native_finish_reason": native_finish_reason})
         + b"data: [DONE]\n\n"
     )
     route = respx.post("https://openrouter.ai/api/v1/chat/completions").respond(200, stream=stream)
@@ -74,26 +82,6 @@ async def test_explicit_unsuccessful_finish_rejects_partial_audio(
         await client.generate("Music", options={})
 
     assert not exc.value.retryable
-    assert stream.closed
-    assert route.call_count == 1
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("reason", ["network_error", "server_error"])
-@respx.mock
-async def test_native_failure_cannot_be_overridden_by_stop(
-    client: ProviderMusicClient, reason: str
-) -> None:
-    stream = _Stream(
-        _event({"delta": {"audio": {"data": "YWJj"}}})
-        + _event({"finish_reason": "stop", "native_finish_reason": reason})
-        + b"data: [DONE]\n\n"
-    )
-    route = respx.post("https://openrouter.ai/api/v1/chat/completions").respond(200, stream=stream)
-
-    with pytest.raises(ProviderError):
-        await client.generate("Music", options={})
-
     assert stream.closed
     assert route.call_count == 1
 
@@ -134,7 +122,8 @@ async def test_stop_without_done_cannot_return_audio(client: ProviderMusicClient
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("data", [123, True, [], {}, "!invalid!", "YQ"])
+# A non-string fragment and an undecodable one fail on different checks.
+@pytest.mark.parametrize("data", [123, "!invalid!"])
 @respx.mock
 async def test_malformed_audio_fragment_cannot_be_silently_dropped(
     client: ProviderMusicClient, data: object
