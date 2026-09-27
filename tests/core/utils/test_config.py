@@ -9,7 +9,6 @@ import pytest
 from core.utils.config import (
     Config,
     _find_worktree_file_from_cwd,
-    _read_worktree_data_dir,
     _resolve_default_data_dir,
     parse_env_lines,
     read_env_file,
@@ -72,6 +71,21 @@ def test_unreadable_utf8_env_file_is_ignored(
     assert str(env_path) in caplog.text
 
 
+def test_config_reads_the_data_directory_env_file_below_the_process_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / ".env").write_text(
+        "VBOT_TEST_FROM_FILE=20\nVBOT_TEST_OVERRIDDEN=file\n", encoding="utf-8"
+    )
+    monkeypatch.setenv("VBOT_TEST_OVERRIDDEN", "environment")
+
+    config = Config(data_dir=tmp_path)
+
+    # Values from either source are coerced alike.
+    assert config.get("VBOT_TEST_FROM_FILE") == 20
+    assert config.get("VBOT_TEST_OVERRIDDEN") == "environment"
+
+
 def test_default_data_dir_is_home_vbot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """No env var, no worktree file -> ~/.vbot."""
     monkeypatch.delenv("VBOT_DATA_DIR", raising=False)
@@ -80,16 +94,6 @@ def test_default_data_dir_is_home_vbot(tmp_path: Path, monkeypatch: pytest.Monke
     # file does not exist -> falls to default
     assert os.environ.get("VBOT_DATA_DIR") is None
     assert _resolve_default_data_dir() == Path.home() / ".vbot"
-    assert Config().data_dir == Path.home() / ".vbot"
-
-
-def test_vbot_data_dir_env_var_sets_data_dir(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """VBOT_DATA_DIR env var -> uses that path."""
-    monkeypatch.setenv("VBOT_DATA_DIR", str(tmp_path / "custom"))
-    monkeypatch.setattr("core.utils.config._WORKTREE_FILE", tmp_path / ".vbot-worktree")
-    assert Config().data_dir == tmp_path / "custom"
 
 
 def test_worktree_file_sets_data_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -171,7 +175,7 @@ def test_explicit_data_dir_arg_wins_over_worktree_file(
 
 
 def test_env_var_wins_over_worktree_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """VBOT_DATA_DIR env var takes priority over the worktree file."""
+    """VBOT_DATA_DIR sets the data directory, even when a worktree file exists."""
     env_dir = tmp_path / "env-data"
     monkeypatch.setenv("VBOT_DATA_DIR", str(env_dir))
     worktree_file = tmp_path / ".vbot-worktree"
@@ -180,44 +184,30 @@ def test_env_var_wins_over_worktree_file(tmp_path: Path, monkeypatch: pytest.Mon
     assert Config().data_dir == env_dir
 
 
-def test_malformed_json_in_worktree_file_falls_to_default(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Malformed JSON in .vbot-worktree falls through to the default."""
-    monkeypatch.delenv("VBOT_DATA_DIR", raising=False)
-    worktree_file = tmp_path / ".vbot-worktree"
-    worktree_file.write_text("not valid json", encoding="utf-8")
-    result = _read_worktree_data_dir(worktree_file)
-    assert result is None
-
-
-def test_non_utf8_worktree_file_falls_to_default(
+@pytest.mark.parametrize(
+    ("content", "warned"),
+    [
+        (b"not valid json", True),
+        (b"\xff\xfe", True),
+        (json.dumps(["not", "an", "object"]).encode(), False),
+        (json.dumps({"other_key": "value"}).encode(), False),
+    ],
+    ids=["malformed-json", "not-utf8", "not-an-object", "no-data-dir"],
+)
+def test_an_unusable_worktree_file_falls_to_the_default(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
+    content: bytes,
+    warned: bool,
 ) -> None:
-    worktree_file = tmp_path / ".vbot-worktree"
-    worktree_file.write_bytes(b"\xff\xfe")
+    monkeypatch.delenv("VBOT_DATA_DIR", raising=False)
+    monkeypatch.setattr("core.utils.config._WORKTREE_FILE", tmp_path / "missing/.vbot-worktree")
+    marker = tmp_path / ".vbot-worktree"
+    marker.write_bytes(content)
+    monkeypatch.chdir(tmp_path)
 
     with caplog.at_level("WARNING", logger="vbot.config"):
-        result = _read_worktree_data_dir(worktree_file)
+        assert _resolve_default_data_dir() == Path.home() / ".vbot"
 
-    assert result is None
-    assert str(worktree_file) in caplog.text
-
-
-def test_non_object_json_in_worktree_file_falls_to_default(tmp_path: Path) -> None:
-    """Valid non-object JSON in .vbot-worktree -> treated as absent marker data."""
-    worktree_file = tmp_path / ".vbot-worktree"
-    worktree_file.write_text(json.dumps(["not", "an", "object"]), encoding="utf-8")
-
-    result = _read_worktree_data_dir(worktree_file)
-
-    assert result is None
-
-
-def test_missing_data_dir_key_in_worktree_file_falls_to_default(tmp_path: Path) -> None:
-    """Missing data_dir key -> _read_worktree_data_dir returns None."""
-    worktree_file = tmp_path / ".vbot-worktree"
-    worktree_file.write_text(json.dumps({"other_key": "value"}), encoding="utf-8")
-    result = _read_worktree_data_dir(worktree_file)
-    assert result is None
+    assert (str(marker) in caplog.text) is warned
