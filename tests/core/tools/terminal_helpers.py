@@ -4,15 +4,15 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
-from typing import cast
 
 import pytest_asyncio
 
 from core.projects import ProjectStore
 from core.tools.terminal import TERMINAL_TOOL_NAME, register_terminal_tool
 from core.tools.terminal_manager import TerminalManager
-from core.tools.tools import JsonObject, ToolContext, ToolRegistry, tool_failure
+from core.tools.tools import JsonObject, ToolContext, ToolRegistry
 from tests.core.tools.terminal_manager_helpers import AdapterFactory
+from tests.core.tools.tools_test_support import dispatch_as_executor
 
 
 @pytest_asyncio.fixture
@@ -68,7 +68,4 @@ async def call(
     register_terminal_tool(
         registry, manager, projects if projects is not None else ProjectStore(context.data_root)
     )
-    try:
-        return cast(JsonObject, await registry.dispatch(context, arguments, [TERMINAL_TOOL_NAME]))
-    except ValueError as error:
-        return tool_failure("invalid_arguments", str(error))
+    return await dispatch_as_executor(registry, context, arguments)

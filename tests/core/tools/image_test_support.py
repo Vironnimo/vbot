@@ -19,7 +19,8 @@ from core.tools.image import (
     register_analyze_image_tool,
     register_image_generation_tool,
 )
-from core.tools.tools import ToolContext, ToolRegistry, tool_failure
+from core.tools.tools import ToolContext, ToolRegistry
+from tests.core.tools.tools_test_support import dispatch_as_executor
 
 PNG = b"\x89PNG\r\n\x1a\nimage"
 ANALYSIS = "Visible details"
@@ -112,18 +113,11 @@ def image_registry(service: ImageService, *, attachment_store: Any = None) -> To
     return registry
 
 
-async def dispatch(registry: ToolRegistry, context: ToolContext, arguments: Any) -> dict[str, Any]:
-    try:
-        return await registry.dispatch(context, arguments)
-    except ValueError as error:
-        return tool_failure("invalid_arguments", str(error))
-
-
 async def generate(
     root: Path, arguments: Any, service: ImageService, **context: Any
 ) -> dict[str, Any]:
     """Dispatch one image_generation call from an Agent whose Workspace is ``root``."""
-    return await dispatch(
+    return await dispatch_as_executor(
         image_registry(service),
         make_context(root, IMAGE_GENERATION_TOOL_NAME, **context),
         arguments,
@@ -134,7 +128,7 @@ async def analyze(
     root: Path, arguments: Any, service: ImageService, **context: Any
 ) -> dict[str, Any]:
     """Dispatch one analyze_image call from an Agent whose Workspace is ``root``."""
-    return await dispatch(
+    return await dispatch_as_executor(
         image_registry(service), make_context(root, ANALYZE_IMAGE_TOOL_NAME, **context), arguments
     )
 

@@ -8,7 +8,7 @@ import re
 import pytest
 
 from core.tools.file_state import FileReadState
-from tests.core.tools.apply_patch_helpers import apply, call, registry, text, update
+from tests.core.tools.apply_patch_test_support import apply, call, registry, text, update
 
 
 def test_long_line_preview_shows_the_change_and_surrounding_lines(tmp_path):

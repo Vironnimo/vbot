@@ -8,7 +8,7 @@ import pytest
 
 from core.tools.apply_patch import APPLY_PATCH_TOOL_PARAMETERS
 from core.tools.file_state import FileReadState
-from tests.core.tools.apply_patch_helpers import apply, call, context, registry, text
+from tests.core.tools.apply_patch_test_support import apply, call, context, registry, text
 
 
 def test_the_example_in_the_patch_description_applies(tmp_path):

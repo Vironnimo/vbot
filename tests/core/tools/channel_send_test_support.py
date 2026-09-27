@@ -24,6 +24,7 @@ from core.tools.tools import (
     is_tool_result_envelope,
     tool_failure,
 )
+from tests.core.tools.tools_test_support import dispatch_as_executor
 
 MAX_ATTACHMENT_BYTES = 1000
 OUTBOUND_SESSION = RouteFacts(agent_id="agent-1", session_id="ch-tg-main-111")
@@ -113,10 +114,7 @@ class ChannelSend:
             [] if definition is None else [definition]
         )
         tool_context = replace(tool_context, input_contract=contracts.get(CHANNEL_SEND_TOOL_NAME))
-        try:
-            return await self.registry.dispatch(tool_context, arguments, [CHANNEL_SEND_TOOL_NAME])
-        except ValueError as error:
-            return tool_failure("invalid_arguments", str(error))
+        return await dispatch_as_executor(self.registry, tool_context, arguments)
 
     def call(self, arguments: Any, **context: Any) -> dict[str, Any]:
         return asyncio.run(self.dispatch(arguments, **context))

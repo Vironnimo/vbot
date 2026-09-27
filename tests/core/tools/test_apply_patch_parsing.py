@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from core.tools.file_state import FileReadState
-from tests.core.tools.apply_patch_helpers import apply, text, update
+from tests.core.tools.apply_patch_test_support import apply, text, update
 
 
 @pytest.mark.parametrize(

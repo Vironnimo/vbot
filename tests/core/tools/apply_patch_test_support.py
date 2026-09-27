@@ -1,4 +1,4 @@
-"""Shared helpers for apply_patch Tool tests.
+"""Shared helpers for the apply_patch Tool tests.
 
 ``apply`` runs a patch through the Tool handler. ``call`` runs any call shape
 through the Tool executor, as a Run does: argument repair and refusals included,

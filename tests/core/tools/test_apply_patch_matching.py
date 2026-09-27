@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from core.tools.file_state import FileReadState
-from tests.core.tools.apply_patch_helpers import apply, call, registry, text, update
+from tests.core.tools.apply_patch_test_support import apply, call, registry, text, update
 
 GUTTER_NOTE = "Note: Removed read-output line-number prefixes"
 
