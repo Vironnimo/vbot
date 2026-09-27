@@ -158,7 +158,7 @@ async def test_unexpected_scheduler_task_failure_restarts_active_recurring_job(
 
 
 @pytest.mark.asyncio
-async def test_run_once_job_fires_and_marks_completed(
+async def test_run_once_job_fires_in_its_project_and_marks_completed(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
@@ -170,6 +170,7 @@ async def test_run_once_job_fires_and_marks_completed(
         prompt="Once prompt",
         schedule_type="once",
         run_at=(datetime.now(UTC) + timedelta(minutes=15)).isoformat(),
+        project_id="vbot",
     )
     monkeypatch.setattr(cron_timing, "_sleep_until_utc", AsyncMock())
 
@@ -182,7 +183,7 @@ async def test_run_once_job_fires_and_marks_completed(
         "agent-one",
         "Once prompt",
         None,
-        project_id=None,
+        project_id="vbot",
         run_kind=RunKind.CRON,
         contributes_to_agent_activity=False,
     )
@@ -292,7 +293,7 @@ async def test_recurring_job_stops_after_consecutive_run_failures(
 
 
 @pytest.mark.asyncio
-async def test_pre_admission_trigger_failures_do_not_stop_a_recurring_job(
+async def test_pre_admission_trigger_failures_neither_stop_nor_consume_a_recurring_job(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A fire that never admitted a Run is not a job execution failure.
@@ -310,6 +311,7 @@ async def test_pre_admission_trigger_failures_do_not_stop_a_recurring_job(
         prompt="Health check",
         schedule_type="cron",
         cron_expression="0 9 * * *",
+        remaining_runs=2,
     )
 
     for _ in range(5):
@@ -317,6 +319,7 @@ async def test_pre_admission_trigger_failures_do_not_stop_a_recurring_job(
 
         updated = service.get_job(job.id)
         assert updated.status == "active"
+        assert updated.remaining_runs == 2
         assert updated.consecutive_failures == 0
         assert updated.last_outcome == "failed"
         assert updated.last_error == "queue limit reached"

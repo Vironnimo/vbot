@@ -21,6 +21,7 @@ from tests.resources.extensions.test_swarm_board import (
     deny_inbox,
     dispatch,
     persist_carriers,
+    post_ref,
     received,
     visible,
 )
@@ -120,7 +121,7 @@ async def test_inbox_delivers_oldest_pending_entries_with_a_durable_receipt(boar
         assert result["ok"]
     context = replace(board.contexts[1], tool_name="swarm_inbox", tool_call_id="inbox")
     result = await board.tools.get("swarm_inbox").handler(context, {"limit": 1})
-    main = f"the main discussion ({board.swarm['main_discussion_id']})"
+    main = "the main discussion (d1)"
     [first] = received(result["data"]["content"])
     assert first._replace(post_id="") == Received(main, "", _name(board, 0), "to you", "first")
     assert result["data"]["more"] == (
@@ -342,30 +343,37 @@ async def test_delivery_preserves_message_context_across_batches(board, delivery
         )
         assert await board.store.reconcile_delivery(receipt[1])
     author = _name(board, 0)
-    topic = f'discussion "Discussion title sentinel" ({did})'
-    main = f"the main discussion ({board.swarm['main_discussion_id']})"
+    topic = 'discussion "Discussion title sentinel" (d2)'
+    main = "the main discussion (d1)"
+    opening_ref = await post_ref(board, opening["opening_post_id"])
     announcement = DISCUSSION_ANNOUNCEMENT.format(
         author_name=author,
         title="Discussion title sentinel",
-        discussion_id=did,
-        opening_post_id=opening["opening_post_id"],
+        discussion_id="d2",
+        opening_post_id=opening_ref,
     )
     assert batches == [
         [
-            Received(topic, opening["opening_post_id"], author, "to you", "Opening"),
-            Received(main, opening["main_announcement_id"], author, None, announcement),
+            Received(topic, opening_ref, author, "to you", "Opening"),
+            Received(
+                main,
+                await post_ref(board, opening["main_announcement_id"]),
+                author,
+                None,
+                announcement,
+            ),
         ],
         [
-            Received(topic, normal["post_id"], author, None, "Ordinary discussion post"),
+            Received(topic, f"#{normal['sequence']}", author, None, "Ordinary discussion post"),
             Received(
                 topic,
-                reply["post_id"],
+                f"#{reply['sequence']}",
                 author,
-                f"reply to {normal['post_id']}; to you",
+                f"reply to #{normal['sequence']}; to you",
                 "Reply ping",
             ),
         ],
-        [Received(main, human["post_id"], "User", None, "Human post")],
+        [Received(main, f"#{human['sequence']}", "User", None, "Human post")],
     ]
     assert remaining == (
         [
@@ -410,9 +418,9 @@ async def test_delayed_board_message_keeps_original_order_and_context(board):
     )
     prepared = await board.service._before_request(context)
     [text] = prepared.entries
-    main = f"the main discussion ({board.swarm['main_discussion_id']})"
+    main = "the main discussion (d1)"
     author = _name(board, 0)
-    assert received(text) == [Received(main, newer["post_id"], author, "to you", "Newer")]
+    assert received(text) == [Received(main, f"#{newer['sequence']}", author, "to you", "Newer")]
     await persist_carriers(
         board.sessions,
         binding.address,
@@ -424,7 +432,7 @@ async def test_delayed_board_message_keeps_original_order_and_context(board):
     assert await board.store.reconcile_delivery(prepared.delivery_id)
     inbox = await board.service.inbox(board.contexts[1], {})
     assert received(inbox["data"]["content"]) == [
-        Received(main, older["post_id"], author, None, "Older")
+        Received(main, f"#{older['sequence']}", author, None, "Older")
     ]
 
 
@@ -530,8 +538,8 @@ async def test_long_main_posts_reach_unaddressed_readers_as_their_opening(board)
         count=len(long_text) - len(start), call=call
     )
     assert delivered[addressed["data"]["post_id"]] == f"@{reader}: {long_text}"
-    assert delivered[human["post_id"]] == long_text
-    assert delivered[discussion["post_id"]] == long_text
+    assert delivered[f"#{human['sequence']}"] == long_text
+    assert delivered[f"#{discussion['sequence']}"] == long_text
     # The call named in the delivery returns the whole post.
     read, _ = await dispatch(board, json.loads(call), peer=1)
     assert long_text in read["data"]["content"]

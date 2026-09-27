@@ -22,11 +22,15 @@ def _degraded(_connection: sqlite3.Connection) -> DatabaseHealth:
     return DatabaseHealth("degraded", "search index is rebuilding", {"indexed": 3})
 
 
-def test_a_snapshotted_data_directory_is_healthy(data_dir: Path) -> None:
-    snapshot = snapshot_with_notes(data_dir, "saved")
+def test_a_data_directory_is_healthy_once_a_verified_snapshot_exists(data_dir: Path) -> None:
+    open_database(notes_spec(data_dir)).close()
 
+    unprotected = data_store_status(data_dir)
+    snapshot = snapshot_with_notes(data_dir, "saved")
     status = data_store_status(data_dir)
 
+    assert unprotected["state"] == "snapshot_degraded"
+    assert unprotected["reason"] == "no verified data snapshot is available"
     assert status["state"] == "healthy"
     assert status["reason"] is None
     assert status["maintenance"] is None
@@ -34,17 +38,6 @@ def test_a_snapshotted_data_directory_is_healthy(data_dir: Path) -> None:
     assert status["databases"]["notes"]["state"] == "healthy"
     assert status["databases"]["notes"]["format_generation"] == 1
     assert [item["snapshot_id"] for item in status["snapshots"]] == [snapshot.name]
-
-
-def test_without_a_verified_snapshot_the_data_directory_is_snapshot_degraded(
-    data_dir: Path,
-) -> None:
-    open_database(notes_spec(data_dir)).close()
-
-    status = data_store_status(data_dir)
-
-    assert status["state"] == "snapshot_degraded"
-    assert status["reason"] == "no verified data snapshot is available"
 
 
 def test_owner_health_is_reported_for_open_and_closed_databases(data_dir: Path) -> None:
@@ -90,20 +83,16 @@ def test_a_missing_or_foreign_registered_database_is_unavailable(data_dir: Path)
     assert foreign["databases"]["notes"]["reason"] == "the database file has another identity"
 
 
-def test_a_data_directory_without_a_marker_names_the_converter(tmp_path: Path) -> None:
-    status = data_store_status(tmp_path)
+def test_a_data_directory_without_a_marker_is_unavailable(tmp_path: Path) -> None:
+    unconverted = data_store_status(tmp_path)
+    absent = data_store_status(tmp_path / "absent")
 
-    assert status["state"] == "unavailable"
-    assert f"`{GENERATION_1_CONVERTER_COMMAND} {tmp_path}`" in status["reason"]
-    assert status["databases"] == {}
-
-
-def test_a_missing_data_directory_is_unavailable_without_a_conversion(tmp_path: Path) -> None:
-    status = data_store_status(tmp_path / "absent")
-
-    assert status["state"] == "unavailable"
-    assert GENERATION_1_CONVERTER_COMMAND not in status["reason"]
-    assert status["databases"] == {}
+    for status in (unconverted, absent):
+        assert status["state"] == "unavailable"
+        assert status["databases"] == {}
+    # Only an existing directory can hold older data that needs the converter.
+    assert f"`{GENERATION_1_CONVERTER_COMMAND} {tmp_path}`" in unconverted["reason"]
+    assert GENERATION_1_CONVERTER_COMMAND not in absent["reason"]
 
 
 def test_incomplete_maintenance_outranks_every_other_state(data_dir: Path) -> None:

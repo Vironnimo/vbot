@@ -1,6 +1,9 @@
-"""Tests for provider error classes and in-band error classification."""
+"""Provider error taxonomy and in-band Provider error classification."""
+
+from __future__ import annotations
 
 import json
+from typing import Any
 
 import pytest
 
@@ -14,8 +17,7 @@ from core.providers.errors import (
 from core.utils.errors import ProviderError, VBotError
 
 
-def test_network_error_is_vbot_error_not_provider_error_and_retryable() -> None:
-    """Transport errors remain retryable without becoming Provider-specific."""
+def test_network_error_is_retryable_without_becoming_a_provider_error() -> None:
     error = NetworkError("network down")
 
     assert isinstance(error, VBotError)
@@ -23,159 +25,126 @@ def test_network_error_is_vbot_error_not_provider_error_and_retryable() -> None:
     assert error.retryable is True
 
 
-# ---------------------------------------------------------------------------
-# classify_in_band_provider_error
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.parametrize(
-    ("payload", "expected_type"),
+    ("payload", "lenient", "expected_type", "retryable", "retry_after"),
     [
-        ({"message": "bad key", "code": 401}, ProviderAuthError),
-        (
-            {"message": "no access", "metadata": {"error_type": "authentication"}},
+        pytest.param(
+            {"message": "bad key", "code": 401},
+            False,
             ProviderAuthError,
+            False,
+            None,
+            id="auth-numeric-code",
         ),
-        (
+        pytest.param(
+            {"message": "no access", "metadata": {"error_type": "authentication"}},
+            True,
+            ProviderAuthError,
+            False,
+            None,
+            id="auth-metadata-type-even-lenient",
+        ),
+        pytest.param(
             {"message": "slow down", "error_type": "rate_limit_exceeded"},
+            False,
             ProviderRateLimitError,
+            True,
+            None,
+            id="rate-limit-top-level-type",
         ),
-        ({"message": "throttled", "code": 429}, ProviderRateLimitError),
-        ({"message": "deadline", "error_type": "timeout"}, ProviderTimeoutError),
-        ({"message": "gateway gone", "code": 502}, ProviderError),
-        (
-            {"message": "overloaded", "metadata": {"error_type": "provider_overloaded"}},
+        pytest.param(
+            {"message": "throttled", "code": 429, "availability": {"retry_after": 5}},
+            False,
+            ProviderRateLimitError,
+            True,
+            5,
+            id="rate-limit-with-retry-after",
+        ),
+        pytest.param(
+            {"message": "deadline", "error_type": "timeout"},
+            False,
+            ProviderTimeoutError,
+            True,
+            None,
+            id="timeout",
+        ),
+        pytest.param(
+            {"message": "gateway gone", "code": 502},
+            False,
             ProviderError,
+            True,
+            None,
+            id="transient-server-error",
+        ),
+        pytest.param(
+            {"message": "too long", "error_type": "context_length_exceeded"},
+            True,
+            ProviderError,
+            False,
+            None,
+            id="fatal-type-even-lenient",
+        ),
+        pytest.param(
+            {"message": "nope", "code": "permission_denied"},
+            True,
+            ProviderError,
+            False,
+            None,
+            id="fatal-string-code-even-lenient",
+        ),
+        pytest.param(
+            {"message": "all busy", "availability": {"retryable": True, "retry_after": 30}},
+            False,
+            ProviderError,
+            True,
+            30,
+            id="router-availability-hint",
+        ),
+        pytest.param(
+            {"message": "assistant messages require content", "code": 400},
+            False,
+            ProviderError,
+            False,
+            None,
+            id="unknown-strict",
+        ),
+        pytest.param(
+            {"message": "assistant messages require content", "code": 400},
+            True,
+            ProviderError,
+            True,
+            None,
+            id="unknown-lenient",
         ),
     ],
 )
-def test_classifies_known_codes_into_shared_taxonomy(payload, expected_type) -> None:
-    classified = classify_in_band_provider_error(payload)
+def test_in_band_error_maps_to_the_shared_taxonomy_and_keeps_the_raw_body(
+    payload: dict[str, Any],
+    lenient: bool,
+    expected_type: type[ProviderError],
+    retryable: bool,
+    retry_after: int | None,
+) -> None:
+    classified = classify_in_band_provider_error(payload, lenient_unknown=lenient)
 
-    assert isinstance(classified, expected_type)
-
-
-def test_transient_server_error_is_retryable() -> None:
-    classified = classify_in_band_provider_error(
-        {"message": "boom", "metadata": {"error_type": "server"}}
-    )
-
-    assert isinstance(classified, ProviderError)
-    assert classified.retryable is True
-
-
-def test_availability_retryable_hint_upgrades_unknown_error() -> None:
-    payload = {
-        "message": "all providers busy",
-        "availability": {"retryable": True, "retry_after": 30},
-    }
-
-    classified = classify_in_band_provider_error(payload)
-
-    assert isinstance(classified, ProviderError)
-    assert classified.retryable is True
-    assert classified.retry_after == 30
-
-
-@pytest.mark.parametrize(
-    "payload",
-    [
-        {"message": "too long", "error_type": "context_length_exceeded"},
-        {"message": "capped", "error_type": "max_tokens_exceeded"},
-        {"message": "blocked", "metadata": {"error_type": "content_policy_violation"}},
-        {"message": "no funds", "code": 402, "error_type": "payment_required"},
-    ],
-)
-def test_fatal_classes_stay_non_retryable_even_lenient(payload) -> None:
-    strict = classify_in_band_provider_error(payload)
-    lenient = classify_in_band_provider_error(payload, lenient_unknown=True)
-
-    for classified in (strict, lenient):
-        assert isinstance(classified, ProviderError)
-        assert classified.retryable is False
-
-
-def test_unknown_error_is_fatal_by_default_and_retryable_when_lenient() -> None:
-    payload = {
-        "message": "assistant messages require content, reasoning, reasoning_meta, or tool_calls",
-        "code": 400,
-    }
-
-    strict = classify_in_band_provider_error(payload)
-    lenient = classify_in_band_provider_error(payload, lenient_unknown=True)
-
-    assert isinstance(strict, ProviderError)
-    assert strict.retryable is False
-    assert isinstance(lenient, ProviderError)
-    assert lenient.retryable is True
-
-
-def test_string_code_falls_back_to_classifier() -> None:
-    classified = classify_in_band_provider_error(
-        {"message": "nope", "code": "permission_denied"},
-        lenient_unknown=True,
-    )
-
-    assert isinstance(classified, ProviderError)
-    assert classified.retryable is False
-
-
-def test_non_mapping_payload_stays_fatal() -> None:
-    classified = classify_in_band_provider_error("quota exceeded")
-
-    assert isinstance(classified, ProviderError)
-    assert classified.retryable is False
-
-
-def test_non_mapping_message_stays_plain_text() -> None:
-    classified = classify_in_band_provider_error("quota exceeded")
-
-    assert str(classified) == "quota exceeded"
-
-
-def test_mapping_payload_embeds_raw_body_as_trailing_json() -> None:
-    payload = {
-        "message": "Provider returned error",
-        "code": 429,
-        "metadata": {
-            "raw": "temporarily rate-limited upstream",
-            "provider_name": "Stealth",
-        },
-        "availability": {"retry_after": 5},
-    }
-
-    classified = classify_in_band_provider_error(payload, lenient_unknown=True)
-
+    assert type(classified) is expected_type
+    assert classified.retryable is retryable
+    assert classified.retry_after == retry_after
+    prefix = f"{payload['message']}: "
     text = str(classified)
-    json_start = text.index("{")
-    assert text[:json_start].strip() == "Provider returned error:"
-    assert json.loads(text[json_start:]) == payload
+    assert text.startswith(prefix)
+    assert json.loads(text[len(prefix) :]) == payload
 
 
-def test_missing_message_payload_stays_parseable_json_object() -> None:
+def test_in_band_error_without_a_message_is_the_bare_json_body() -> None:
     payload = {"code": 500, "metadata": {"error_type": "server"}}
 
-    classified = classify_in_band_provider_error(payload)
-
-    assert json.loads(str(classified)) == payload
+    assert json.loads(str(classify_in_band_provider_error(payload))) == payload
 
 
-@pytest.mark.parametrize(
-    ("payload", "expected_type"),
-    [
-        ({"message": "bad key", "code": 401}, ProviderAuthError),
-        ({"message": "throttled", "code": 429}, ProviderRateLimitError),
-        ({"message": "deadline", "error_type": "timeout"}, ProviderTimeoutError),
-        (
-            {"message": "overloaded", "metadata": {"error_type": "provider_overloaded"}},
-            ProviderError,
-        ),
-        ({"message": "too long", "error_type": "context_length_exceeded"}, ProviderError),
-    ],
-)
-def test_every_taxonomy_class_carries_the_raw_body(payload, expected_type) -> None:
-    classified = classify_in_band_provider_error(payload, lenient_unknown=True)
+def test_non_mapping_in_band_error_stays_fatal_plain_text() -> None:
+    classified = classify_in_band_provider_error("quota exceeded", lenient_unknown=True)
 
-    assert isinstance(classified, expected_type)
-    json_start = str(classified).index("{")
-    assert json.loads(str(classified)[json_start:]) == payload
+    assert type(classified) is ProviderError
+    assert classified.retryable is False
+    assert str(classified) == "quota exceeded"

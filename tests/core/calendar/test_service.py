@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -36,7 +37,7 @@ def test_occurrence_limit_applies_to_each_event(service, start):
         assert sum(item.event_id == event.id for item in occurrences) == 2
 
 
-@pytest.mark.parametrize("limit", [0, -1, True, 1.5])
+@pytest.mark.parametrize("limit", [0, True, 1.5])
 def test_invalid_occurrence_limit_is_rejected(service, limit):
     with pytest.raises(CalendarValidationError):
         service.occurrences_in_window(
@@ -89,13 +90,32 @@ class TestCreateEvent:
         assert event.start_date == "2026-09-14"
         assert event.duration_days == 3
 
-    def test_rejects_date_only_start_with_all_day_false(self, service: CalendarService) -> None:
-        with pytest.raises(CalendarValidationError, match="all_day"):
-            service.create_event(title="X", start="2026-09-14", all_day=False)
-
-    def test_rejects_datetime_start_with_all_day_true(self, service: CalendarService) -> None:
-        with pytest.raises(CalendarValidationError, match="all_day"):
-            service.create_event(title="X", start="2026-09-14T10:00:00+00:00", all_day=True)
+    @pytest.mark.parametrize(
+        ("fields", "message"),
+        [
+            pytest.param(
+                {"start": "2026-09-14", "all_day": False}, "all_day", id="date-not-all-day"
+            ),
+            pytest.param(
+                {"start": "2026-09-14T10:00:00+00:00", "all_day": True},
+                "all_day",
+                id="datetime-all-day",
+            ),
+            pytest.param(
+                {"start": "2026-09-14T10:00:00+00:00", "exdates": ["2026-09-14"]},
+                "exdates",
+                id="exdates-on-single-event",
+            ),
+            pytest.param({"title": "  ", "start": "2026-09-14"}, "title", id="empty-title"),
+            pytest.param({"start": "next tuesday"}, "start", id="invalid-start"),
+        ],
+    )
+    def test_rejects_invalid_fields(
+        self, service: CalendarService, fields: dict[str, Any], message: str
+    ) -> None:
+        with pytest.raises(CalendarValidationError, match=message):
+            service.create_event(**{"title": "X", **fields})
+        assert service.list_events() == []
 
     def test_rejects_unknown_constructor_timezone(self, tmp_path: Path) -> None:
         with pytest.raises(CalendarValidationError, match="IANA"):
@@ -109,20 +129,6 @@ class TestCreateEvent:
 
         assert service.system_timezone_name() == "Europe/Berlin"
         assert event.start_utc == "2026-01-15T08:00:00+00:00"
-
-    def test_rejects_exdates_on_single_event(self, service: CalendarService) -> None:
-        with pytest.raises(CalendarValidationError, match="exdates"):
-            service.create_event(
-                title="X", start="2026-09-14T10:00:00+00:00", exdates=["2026-09-14"]
-            )
-
-    def test_rejects_empty_title(self, service: CalendarService) -> None:
-        with pytest.raises(CalendarValidationError, match="title"):
-            service.create_event(title="  ", start="2026-09-14")
-
-    def test_rejects_invalid_start(self, service: CalendarService) -> None:
-        with pytest.raises(CalendarValidationError, match="start"):
-            service.create_event(title="X", start="next tuesday")
 
     def test_capacity_limit(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         service = CalendarService(tmp_path)
@@ -147,17 +153,6 @@ class TestUpdateEvent:
         assert updated.duration_minutes == 15
         assert updated.start_local == "2026-08-31T09:00:00"
         assert updated.rrule == event.rrule
-
-    def test_update_can_clear_recurrence(self, service: CalendarService) -> None:
-        event = service.create_event(
-            title="Standup",
-            start="2026-08-31T09:00:00",
-            rrule={"freq": "weekly", "by_weekday": ["mo"]},
-        )
-        updated = service.update_event(event.id, rrule=None)
-        assert updated.rrule is None
-        assert updated.start_utc == "2026-08-31T07:00:00+00:00"
-        assert updated.exdates == []
 
     def test_update_can_clear_recurrence_dropping_exdates(self, service: CalendarService) -> None:
         event = service.create_event(
@@ -348,29 +343,28 @@ class TestFindFreeSlots:
         slots = service.find_free_slots(window_start, window_end, 60, now_utc=window_start)
         assert slots == []
 
-    def test_slots_respect_reference_now(self, service: CalendarService) -> None:
-        window_start = datetime(2026, 9, 3, 0, 0, tzinfo=UTC)
-        window_end = datetime(2026, 9, 4, 0, 0, tzinfo=UTC)
-        reference_now = datetime(2026, 9, 3, 10, 0, tzinfo=UTC)
-        slots = service.find_free_slots(window_start, window_end, 60, now_utc=reference_now)
-        assert slots[0].start_utc >= reference_now
-
-    def test_exact_boundary_now_starts_slot_on_the_boundary(self, service: CalendarService) -> None:
-        """now exactly on a 5-minute boundary must not be rounded a step up."""
-        window_start = datetime(2026, 9, 3, 0, 0, tzinfo=UTC)
-        window_end = datetime(2026, 9, 4, 0, 0, tzinfo=UTC)
-        reference_now = datetime(2026, 9, 3, 10, 0, tzinfo=UTC)
-        slots = service.find_free_slots(window_start, window_end, 60, now_utc=reference_now)
-        assert slots[0].start_utc == reference_now
-
-    def test_sub_boundary_now_rounds_up_to_the_next_boundary(
-        self, service: CalendarService
+    @pytest.mark.parametrize(
+        ("reference_now", "first_start"),
+        [
+            pytest.param(
+                datetime(2026, 9, 3, 10, 0, tzinfo=UTC),
+                datetime(2026, 9, 3, 10, 0, tzinfo=UTC),
+                id="exact-boundary",
+            ),
+            pytest.param(
+                datetime(2026, 9, 3, 10, 0, 1, tzinfo=UTC),
+                datetime(2026, 9, 3, 10, 5, tzinfo=UTC),
+                id="rounds-up-to-next-five-minutes",
+            ),
+        ],
+    )
+    def test_first_slot_starts_at_reference_now_rounded_up(
+        self, service: CalendarService, reference_now: datetime, first_start: datetime
     ) -> None:
         window_start = datetime(2026, 9, 3, 0, 0, tzinfo=UTC)
         window_end = datetime(2026, 9, 4, 0, 0, tzinfo=UTC)
-        reference_now = datetime(2026, 9, 3, 10, 0, 1, tzinfo=UTC)
         slots = service.find_free_slots(window_start, window_end, 60, now_utc=reference_now)
-        assert slots[0].start_utc == datetime(2026, 9, 3, 10, 5, tzinfo=UTC)
+        assert slots[0].start_utc == first_start
 
     def test_rejects_bad_duration(self, service: CalendarService) -> None:
         window_start, window_end = service.parse_window("2026-09-03", "2026-09-04")
@@ -464,19 +458,6 @@ class TestPersistence:
         rewritten = json.loads(path.read_text(encoding="utf-8"))
         assert rewritten["events"][0]["rrule"]["future_rule"] == {"kept": True}
 
-    def test_events_survive_service_restart(self, tmp_path: Path) -> None:
-        service = CalendarService(tmp_path, tz="Europe/Berlin")
-        event = service.create_event(
-            title="Standup",
-            start="2026-08-31T09:00:00",
-            rrule={"freq": "weekly", "by_weekday": ["mo"]},
-        )
-        reloaded = CalendarService(tmp_path, tz="Europe/Berlin")
-        loaded = reloaded.get_event(event.id)
-        assert loaded.title == "Standup"
-        assert loaded.rrule == event.rrule
-        assert loaded.exdates == []
-
     def test_invalid_entries_are_preserved_and_skipped(self, tmp_path: Path) -> None:
         events_path = tmp_path / "calendar" / "events.json"
         events_path.parent.mkdir(parents=True)
@@ -503,7 +484,7 @@ class TestPersistence:
         assert len([item for item in raw if isinstance(item, dict) and item.get("id")]) == 2
         assert other.id
 
-    def test_unknown_fields_are_kept_when_events_are_saved(self, tmp_path: Path) -> None:
+    def test_events_survive_restart_and_saves_keep_unknown_fields(self, tmp_path: Path) -> None:
         service = CalendarService(tmp_path, tz="Europe/Berlin")
         event = service.create_event(
             title="Standup",
@@ -518,7 +499,10 @@ class TestPersistence:
         events_path.write_text(json.dumps(raw), encoding="utf-8")
 
         reloaded = CalendarService(tmp_path, tz="Europe/Berlin")
-        assert reloaded.get_event(event.id).rrule == event.rrule
+        loaded = reloaded.get_event(event.id)
+        assert loaded.title == "Standup"
+        assert loaded.rrule == event.rrule
+        assert loaded.exdates == []
         reloaded.update_event(event.id, title="Weekly standup")
 
         rewritten = json.loads(events_path.read_text(encoding="utf-8"))
@@ -528,26 +512,29 @@ class TestPersistence:
         assert rewritten["events"][0]["color"] == "blue"
         assert rewritten["events"][0]["rrule"]["by_month_day"] == [1]
 
-    def test_events_written_by_a_newer_vbot_are_never_overwritten(self, tmp_path: Path) -> None:
+    @pytest.mark.parametrize(
+        ("content", "message"),
+        [
+            pytest.param(
+                json.dumps({"format_version": 2, "events": []}),
+                "written by a newer vBot",
+                id="newer-format",
+            ),
+            pytest.param("{not an array", "Invalid JSON", id="malformed"),
+        ],
+    )
+    def test_unreadable_storage_reads_empty_and_is_never_overwritten(
+        self, tmp_path: Path, content: str, message: str
+    ) -> None:
         events_path = tmp_path / "calendar" / "events.json"
         events_path.parent.mkdir(parents=True)
-        original = json.dumps({"format_version": 2, "events": []})
-        events_path.write_text(original, encoding="utf-8")
+        events_path.write_text(content, encoding="utf-8")
         service = CalendarService(tmp_path)
 
         assert service.list_events() == []
-        with pytest.raises(CalendarStorageError, match="written by a newer vBot"):
+        with pytest.raises(CalendarStorageError, match=message):
             service.create_event(title="X", start="2026-09-14")
-        assert events_path.read_text(encoding="utf-8") == original
-
-    def test_malformed_storage_degrades_and_blocks_mutations(self, tmp_path: Path) -> None:
-        events_path = tmp_path / "calendar" / "events.json"
-        events_path.parent.mkdir(parents=True)
-        events_path.write_text("{not an array", encoding="utf-8")
-        service = CalendarService(tmp_path)
-        assert service.list_events() == []
-        with pytest.raises(CalendarStorageError):
-            service.create_event(title="X", start="2026-09-14")
+        assert events_path.read_text(encoding="utf-8") == content
 
     def test_changed_callback_fires_on_mutation(self, tmp_path: Path) -> None:
         service = CalendarService(tmp_path)

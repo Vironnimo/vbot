@@ -193,4 +193,10 @@ def qualified(columns: str, alias: str) -> str:
 
 ALIASED_DISCUSSION_COLUMNS = qualified(DISCUSSION_COLUMNS, "d")
 ALIASED_POST_COLUMNS = qualified(POST_COLUMNS, "p")
+# Where a post appears and which post it answers, by the numbers participants use.
+# The query must join the post's discussion as ``d``.
+POST_CONTEXT_COLUMNS = (
+    "d.title AS discussion_title,d.sequence AS discussion_sequence,"
+    "(SELECT q.sequence FROM posts q WHERE q.id=p.reply_to) AS reply_sequence"
+)
 ALIASED_WIKI_REVISION_COLUMNS = qualified(WIKI_REVISION_COLUMNS, "r")

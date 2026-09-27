@@ -18,7 +18,7 @@ from core.providers.openai import (
     OpenAIAdapter,
 )
 
-from .openai_helpers import (
+from .openai_test_support import (
     ACCOUNT_ID,
     API_KEY,
     CHAT_COMPLETIONS_URL,
@@ -26,16 +26,16 @@ from .openai_helpers import (
     OPENAI_SUBSCRIPTION_URL,
     PLATFORM_RESPONSES_URL,
     SAMPLE_MESSAGES,
-    _codex_sse_response,
-    _jwt_with_account,
-    _subscription_config,
     bundled_model_lookup,
     codex_adapter,
     codex_payload,
+    codex_sse_response,
+    jwt_with_account,
     ladder_model_lookup,
     platform_adapter,
     platform_payload,
     send_codex_request,
+    subscription_config,
     wire_policy_model,
 )
 
@@ -220,14 +220,14 @@ def test_wire_media_support_follows_the_selected_wire(adapter_factory, expected)
 async def test_codex_send_posts_responses_payload_with_account_and_beta_headers() -> None:
     """Codex send() targets ``/codex/responses`` with only the adapter-owned headers."""
 
-    access_token = _jwt_with_account()
-    config = replace(_subscription_config(), extra_headers={"X-Injected": "leak"})
+    access_token = jwt_with_account()
+    config = replace(subscription_config(), extra_headers={"X-Injected": "leak"})
     adapter = codex_adapter(access_token, config=config)
     output = [{"type": "message", "content": [{"type": "output_text", "text": "Hi"}]}]
 
     with respx.mock:
         route = respx.post(OPENAI_SUBSCRIPTION_URL).mock(
-            return_value=_codex_sse_response(
+            return_value=codex_sse_response(
                 {
                     "id": "resp_1",
                     "status": "completed",
@@ -375,7 +375,7 @@ async def test_codex_sse_cache_scope_headers_follow_the_request_context(
 
 def test_codex_discovery_headers_add_account_routing_and_beta_headers() -> None:
     headers = OpenAIAdapter.discovery_headers(
-        _subscription_config(), _jwt_with_account(), {"User-Agent": "vbot-test"}
+        subscription_config(), jwt_with_account(), {"User-Agent": "vbot-test"}
     )
 
     assert headers == {
@@ -384,7 +384,7 @@ def test_codex_discovery_headers_add_account_routing_and_beta_headers() -> None:
         **CODEX_EXTRA_HEADERS,
     }
     with pytest.raises(ProviderAuthError):
-        OpenAIAdapter.discovery_headers(_subscription_config(), "not-a-jwt", {})
+        OpenAIAdapter.discovery_headers(subscription_config(), "not-a-jwt", {})
 
 
 # ---------------------------------------------------------------------------

@@ -291,6 +291,18 @@ body {
   white-space: nowrap;
 }
 :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .post-meta {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .post-number {
+  color: var(--text-med);
+  font: 600 var(--fs-label-sm) var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
   .board
   .msg-markdown {
   overflow-wrap: anywhere;

@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import re
 import sqlite3
 from difflib import get_close_matches
 
@@ -13,16 +12,19 @@ from ._store_database import (
     ALIASED_DISCUSSION_COLUMNS,
     ALIASED_POST_COLUMNS,
     POST_COLUMNS,
+    POST_CONTEXT_COLUMNS,
     SwarmDatabase,
 )
 from ._store_records import (
     _budgeted_rows,
     _discussion,
     _discussion_high_water,
+    _discussion_id,
     _human_posts,
     _main,
     _participant,
     _post_high_water,
+    _post_id,
 )
 from ._store_values import (
     Json,
@@ -31,6 +33,11 @@ from ._store_values import (
     _load,
     _page,
     _post,
+)
+
+# The number of the post a human-read post answers, for the Board page.
+_HUMAN_REPLY_SEQUENCE = (
+    "(SELECT q.sequence FROM posts q WHERE q.id=posts.reply_to) AS reply_sequence"
 )
 
 
@@ -58,6 +65,7 @@ def _list_discussions(
         entries = [
             {
                 "id": r["id"],
+                "sequence": r["sequence"],
                 "title": r["title"],
                 "joined": bool(r["joined"]),
                 "member_count": r["member_count"],
@@ -121,9 +129,12 @@ def _read_posts(
 ) -> Page:
     with db._read() as connection:
         _participant(connection, swarm_id, participant_id)
+        if discussion_id is not None:
+            discussion_id = _discussion_id(connection, swarm_id, discussion_id)
         if message_id is not None:
+            message_id = _post_id(connection, swarm_id, message_id)
             row = connection.execute(
-                f"SELECT {ALIASED_POST_COLUMNS},d.title AS discussion_title,r.route_class FROM posts p "
+                f"SELECT {ALIASED_POST_COLUMNS},{POST_CONTEXT_COLUMNS},r.route_class FROM posts p "
                 "JOIN discussions d ON d.id=p.discussion_id "
                 "LEFT JOIN recipients r ON r.post_id=p.id AND r.participant_id=? "
                 "WHERE p.id=? AND p.swarm_id=?",
@@ -134,6 +145,7 @@ def _read_posts(
             return Page((_post(row),), False, None)
         before_sequence = None
         if before is not None:
+            before = _post_id(connection, swarm_id, before)
             anchor = connection.execute(
                 "SELECT discussion_id,sequence FROM posts WHERE id=? AND swarm_id=?",
                 (before, swarm_id),
@@ -159,36 +171,28 @@ def _read_posts(
 
 
 def _post_suggestions(db: SwarmDatabase, swarm_id: str, value: str) -> list[Json]:
-    """Return posts a mistyped post reference may mean; callers decide whether to use them.
-
-    A number, "#number", or "pst_number" names the post with that Board sequence
-    number. Otherwise post IDs close to the value qualify.
-    """
+    """Return posts whose IDs are close to a post reference that matched nothing."""
 
     with db._read() as connection:
-        number = re.fullmatch(r"(?:pst_)?#?(\d+)", value.strip())
-        parameters: list[int | str]
-        if number is not None:
-            where, parameters = "p.sequence=?", [int(number.group(1))]
-        else:
-            ids = [
-                str(row[0])
-                for row in connection.execute("SELECT id FROM posts WHERE swarm_id=?", (swarm_id,))
-            ]
-            close = get_close_matches(value.strip(), ids, n=3, cutoff=0.85)
-            if not close:
-                return []
-            where, parameters = f"p.id IN ({','.join('?' * len(close))})", list(close)
+        ids = [
+            str(row[0])
+            for row in connection.execute("SELECT id FROM posts WHERE swarm_id=?", (swarm_id,))
+        ]
+        close = get_close_matches(value.strip(), ids, n=3, cutoff=0.85)
+        if not close:
+            return []
         rows = connection.execute(
-            "SELECT p.id,p.sequence,p.discussion_id,p.author_name,p.text,d.title AS discussion_title "
-            f"FROM posts p JOIN discussions d ON d.id=p.discussion_id WHERE p.swarm_id=? AND {where}",
-            (swarm_id, *parameters),
+            "SELECT p.id,p.sequence,p.discussion_id,p.author_name,p.text,d.title AS discussion_title,"
+            "d.sequence AS discussion_sequence "
+            f"FROM posts p JOIN discussions d ON d.id=p.discussion_id WHERE p.swarm_id=? AND p.id IN ({','.join('?' * len(close))})",
+            (swarm_id, *close),
         ).fetchall()
         return [
             {
                 "id": row["id"],
-                "by_number": number is not None,
+                "sequence": row["sequence"],
                 "discussion_id": row["discussion_id"],
+                "discussion_sequence": row["discussion_sequence"],
                 "discussion_title": row["discussion_title"],
                 "author_name": row["author_name"],
                 "text": row["text"],
@@ -210,13 +214,17 @@ def _read_human_posts(
             raise SwarmStoreError("swarm_not_found")
         if message_id is not None:
             row = connection.execute(
-                f"SELECT {POST_COLUMNS} FROM posts WHERE id=? AND swarm_id=?",
-                (message_id, swarm_id),
+                f"SELECT {POST_COLUMNS},{_HUMAN_REPLY_SEQUENCE} FROM posts WHERE id=? AND swarm_id=?",
+                (_post_id(connection, swarm_id, message_id), swarm_id),
             ).fetchone()
             if row is None:
                 raise SwarmStoreError("message_not_found")
             return Page(tuple(_human_posts(connection, [row])), False, None)
-        discussion_id = discussion_id or _main(connection, swarm_id)
+        discussion_id = (
+            _discussion_id(connection, swarm_id, discussion_id)
+            if discussion_id
+            else _main(connection, swarm_id)
+        )
         _discussion(connection, swarm_id, discussion_id)
         return _human_post_page(db, connection, swarm_id, discussion_id, cursor, limit)
 
@@ -250,7 +258,7 @@ def _post_page(
         ).fetchone()[0]
     )["batch_chars"]
     rows = connection.execute(
-        f"SELECT {ALIASED_POST_COLUMNS},d.title AS discussion_title,r.route_class "
+        f"SELECT {ALIASED_POST_COLUMNS},{POST_CONTEXT_COLUMNS},r.route_class "
         "FROM posts p INDEXED BY posts_discussion_page "
         "JOIN discussions d ON d.id=p.discussion_id "
         "LEFT JOIN recipients r ON r.post_id=p.id AND r.participant_id=? "
@@ -291,7 +299,7 @@ def _human_post_page(
         ).fetchone()[0]
     )["batch_chars"]
     rows = connection.execute(
-        f"SELECT {POST_COLUMNS} FROM posts INDEXED BY posts_discussion_page "
+        f"SELECT {POST_COLUMNS},{_HUMAN_REPLY_SEQUENCE} FROM posts INDEXED BY posts_discussion_page "
         "WHERE swarm_id=? AND discussion_id=? AND sequence>0 AND sequence<=? "
         "ORDER BY sequence DESC LIMIT ? OFFSET ?",
         (swarm_id, discussion_id, high_water, limit + 1, offset),

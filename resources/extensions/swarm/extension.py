@@ -99,8 +99,13 @@ UNADVERTISED_PARAMETERS: dict[str, Json] = {
     name: {
         **({"action": {"type": "string", "enum": [action]}} if action else {}),
         **{field: {"type": "string"} for field in ("swarm_id", "participant_id", "sender")},
+        # Agents address participants with @Name; explicit recipients and reply_to stay
+        # accepted for callers that send them.
         **(
-            {"recipients": {"type": "array", "items": {"type": "string"}}}
+            {
+                "recipients": {"type": "array", "items": {"type": "string"}},
+                "reply_to": {"type": "string"},
+            }
             if name == "swarm_board"
             else {}
         ),

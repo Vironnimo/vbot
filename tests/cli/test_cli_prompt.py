@@ -1,350 +1,166 @@
-"""Tests for prompt CLI commands."""
+"""Tests for the ``vbot prompt`` commands: block requests, scopes and printed output."""
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
-from typing import Any
 
-import httpx
 import pytest
 
-from cli import main as cli_main
-from cli import prompt_management
-from cli.server_management import CommandResult, ServerInstance
-from core.utils.logging import resolve_daily_log_path
+from tests.cli.cli_test_support import FakeRpc, RunCli
+
+AGENT_SCOPE = {"type": "agent", "agent_id": "librarian"}
 
 
-def make_instance(tmp_path: Path) -> ServerInstance:
-    data_dir = tmp_path / "data"
-    return ServerInstance(
-        host="127.0.0.1",
-        port=8420,
-        data_dir=data_dir,
-        url="http://127.0.0.1:8420",
-        log_path=resolve_daily_log_path(data_dir),
+def test_prompt_list_prints_one_row_per_block_and_the_scopes(rpc: FakeRpc, run_cli: RunCli) -> None:
+    text_block = {"owner": "always", "kind": "text", "editable": True, "enabled": True}
+    rpc.reply(
+        "prompt.list",
+        {
+            "blocks": [
+                {
+                    **text_block,
+                    "id": "core:tools",
+                    "rank": 0,
+                    "source": "core",
+                    "is_modified": False,
+                },
+                {
+                    **text_block,
+                    "id": "user:my-rules",
+                    "rank": 1,
+                    "source": "user",
+                    "is_modified": True,
+                },
+                {
+                    "id": "memory:guidance",
+                    "owner": "memory",
+                    "kind": "data",
+                    "editable": False,
+                    "enabled": False,
+                    "rank": 2,
+                    "source": "memory",
+                },
+            ],
+            "scopes": [{"type": "default", "label": "Default"}],
+        },
     )
 
+    code, out, _err = run_cli("prompt", "list")
 
-def test_prompt_list_posts_rpc_and_formats_rows(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    instance = make_instance(tmp_path)
-
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        assert url == f"{instance.url}/api/rpc"
-        assert json == {"method": "prompt.list", "params": {}}
-        assert timeout == 10.0
-        return httpx.Response(
-            200,
-            json={
-                "ok": True,
-                "result": {
-                    "blocks": [
-                        {
-                            "id": "core:tools",
-                            "owner": "always",
-                            "kind": "text",
-                            "editable": True,
-                            "enabled": True,
-                            "rank": 0,
-                            "source": "core",
-                            "text": "# Tools",
-                            "is_modified": False,
-                        },
-                        {
-                            "id": "user:my-rules",
-                            "owner": "always",
-                            "kind": "text",
-                            "editable": True,
-                            "enabled": True,
-                            "rank": 1,
-                            "source": "user",
-                            "text": "# Rules",
-                            "is_modified": True,
-                        },
-                        {
-                            "id": "memory:guidance",
-                            "owner": "memory",
-                            "kind": "data",
-                            "editable": False,
-                            "enabled": False,
-                            "rank": 2,
-                            "source": "memory",
-                        },
-                    ],
-                    "scopes": [{"type": "default", "label": "Default"}],
-                },
-            },
-        )
-
-    monkeypatch.setattr(prompt_management.httpx, "post", fake_post)
-
-    result = prompt_management.prompt_list(instance)
-
-    assert result.ok
-    assert result.instance == instance
-    assert result.message.splitlines()[3:] == [
+    assert code == 0
+    assert rpc.calls == [("prompt.list", {})]
+    assert out.splitlines()[3:] == [
         "- core:tools owner=always kind=text enabled=yes editable=yes source=core modified=no",
         "- user:my-rules owner=always kind=text enabled=yes editable=yes source=user modified=yes",
         "- memory:guidance owner=memory kind=data enabled=no editable=no source=memory modified=-",
     ]
-    assert "default" in result.message
+    assert "default" in out
 
 
-def test_prompt_list_reports_empty_block_list(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+def test_prompt_list_reports_an_empty_block_list(rpc: FakeRpc, run_cli: RunCli) -> None:
+    rpc.reply("prompt.list", {"blocks": [], "scopes": []})
+
+    code, out, _err = run_cli("prompt", "list")
+
+    assert code == 0
+    assert out.strip()
+
+
+def test_prompt_show_prints_only_the_requested_block_in_the_exact_scope(
+    rpc: FakeRpc, run_cli: RunCli
 ) -> None:
-    instance = make_instance(tmp_path)
+    expected = {"id": "user:long", "text": "sentinel line\n" * 80, "editable": True}
+    rpc.reply("prompt.list", {"blocks": [expected, {"id": "other", "text": "excluded"}]})
 
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        return httpx.Response(200, json={"ok": True, "result": {"blocks": [], "scopes": []}})
+    code, out, _err = run_cli("prompt", "show", "user:long", "--scope", "agent:assistant")
 
-    monkeypatch.setattr(prompt_management.httpx, "post", fake_post)
-
-    result = prompt_management.prompt_list(instance)
-
-    assert result.ok is True
-    assert result.instance is instance
-    assert result.message.strip()
+    assert code == 0
+    assert rpc.calls == [("prompt.list", {"scope": {"type": "agent", "agent_id": "assistant"}})]
+    assert json.loads(out) == {"scope": "agent:assistant", **expected}
 
 
-def test_prompt_update_posts_rpc(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+def test_prompt_update_sends_the_file_content_to_the_default_scope(
+    rpc: FakeRpc, run_cli: RunCli, tmp_path: Path
 ) -> None:
-    instance = make_instance(tmp_path)
-    calls: list[dict[str, Any]] = []
-
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        calls.append(json)
-        return httpx.Response(
-            200,
-            json={
-                "ok": True,
-                "result": {"id": "core:tools", "text": "# Custom tools", "is_modified": True},
-            },
-        )
-
-    monkeypatch.setattr(prompt_management.httpx, "post", fake_post)
-
-    result = prompt_management.prompt_update(instance, "core:tools", "# Custom tools")
-
-    assert result.ok is True
-    assert result.instance is instance
-    assert "core:tools" in result.message
-    assert calls == [
-        {"method": "prompt.update", "params": {"id": "core:tools", "content": "# Custom tools"}}
-    ]
-
-
-def test_prompt_reset_posts_rpc(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    instance = make_instance(tmp_path)
-
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        assert json == {"method": "prompt.reset", "params": {"id": "core:skills"}}
-        return httpx.Response(
-            200,
-            json={
-                "ok": True,
-                "result": {"id": "core:skills", "text": "# Skills", "is_modified": False},
-            },
-        )
-
-    monkeypatch.setattr(prompt_management.httpx, "post", fake_post)
-
-    result = prompt_management.prompt_reset(instance, "core:skills")
-
-    assert result.ok is True
-    assert result.instance is instance
-    assert "core:skills" in result.message
-
-
-def test_prompt_preview_posts_rpc_and_includes_rendered_text(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    instance = make_instance(tmp_path)
-
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        assert json == {"method": "prompt.preview", "params": {"agent_id": "coder"}}
-        return httpx.Response(
-            200,
-            json={
-                "ok": True,
-                "result": {"text": "System for coder", "tokens": 12, "estimated": True},
-            },
-        )
-
-    monkeypatch.setattr(prompt_management.httpx, "post", fake_post)
-
-    result = prompt_management.prompt_preview(instance, "coder")
-
-    assert result.ok
-    assert result.instance == instance
-    assert "12" in result.message
-    assert "estimated=yes" in result.message
-    assert result.message.endswith("System for coder")
-
-
-def test_parse_args_supports_prompt_update_file() -> None:
-    args = cli_main.parse_args(["prompt", "update", "core:tools", "--file", "tools.txt"])
-
-    assert args.area == "prompt"
-    assert args.command == "update"
-    assert args.block_id == "core:tools"
-    assert args.content_file == "tools.txt"
-
-
-def test_run_dispatches_prompt_update_file(
-    tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    instance = make_instance(tmp_path)
     content_file = tmp_path / "tools.txt"
     content_file.write_text("# Custom tools", encoding="utf-8")
-    calls: list[tuple[str, Any]] = []
+    rpc.reply("prompt.update", {"id": "core:tools", "text": "# Custom tools", "is_modified": True})
 
-    def fake_resolve(*, host: str, port: int | None, data_dir: str | None) -> ServerInstance:
-        return instance
+    code, out, _err = run_cli("prompt", "update", "core:tools", "--file", str(content_file))
 
-    def fake_update(
-        resolved_instance: ServerInstance,
-        block_id: str,
-        content: str,
-        scope: str,
-    ) -> CommandResult:
-        calls.append(
-            (
-                "update",
-                {
-                    "instance": resolved_instance,
-                    "block_id": block_id,
-                    "content": content,
-                    "scope": scope,
-                },
-            )
-        )
-        return CommandResult(ok=True, message="updated core:tools", instance=resolved_instance)
-
-    exit_code = cli_main.run(
-        ["prompt", "update", "core:tools", "--file", str(content_file)],
-        resolve=fake_resolve,
-        update_prompt_fn=fake_update,
-    )
-
-    assert exit_code == 0
-    assert calls == [
-        (
-            "update",
-            {
-                "instance": instance,
-                "block_id": "core:tools",
-                "content": "# Custom tools",
-                "scope": "default",
-            },
-        )
-    ]
+    assert code == 0
+    assert rpc.calls == [("prompt.update", {"id": "core:tools", "content": "# Custom tools"})]
+    assert "core:tools" in out
 
 
-def test_prompt_agent_scope_and_layout_mutations_post_scope_objects(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_prompt_reset_restores_the_block(rpc: FakeRpc, run_cli: RunCli) -> None:
+    rpc.reply("prompt.reset", {"id": "core:skills", "text": "# Skills", "is_modified": False})
+
+    code, out, _err = run_cli("prompt", "reset", "core:skills")
+
+    assert code == 0
+    assert rpc.calls == [("prompt.reset", {"id": "core:skills"})]
+    assert "core:skills" in out
+
+
+def test_prompt_preview_prints_the_token_estimate_and_the_rendered_text(
+    rpc: FakeRpc, run_cli: RunCli
 ) -> None:
-    instance = make_instance(tmp_path)
-    calls: list[dict[str, Any]] = []
+    rpc.reply("prompt.preview", {"text": "System for coder", "tokens": 12, "estimated": True})
 
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        calls.append(json)
-        if json["method"] == "prompt.create_block":
-            result = {
-                "id": "user:catalog-rules",
-                "owner": "always",
-                "kind": "text",
-                "enabled": True,
-                "editable": True,
-                "source": "user",
-                "is_modified": True,
-            }
-        else:
-            result = {"layout": [{"id": "user:catalog-rules", "enabled": True, "source": "user"}]}
-        return httpx.Response(200, json={"ok": True, "result": result})
+    code, out, _err = run_cli("prompt", "preview", "coder")
 
-    monkeypatch.setattr(prompt_management.httpx, "post", fake_post)
+    assert code == 0
+    assert rpc.calls == [("prompt.preview", {"agent_id": "coder"})]
+    assert "12" in out and "estimated=yes" in out
+    assert out.rstrip().endswith("System for coder")
 
-    created = prompt_management.prompt_create(
-        instance,
-        "catalog-rules",
-        "Keep the index current.",
-        0,
-        "agent:librarian",
-    )
-    layout = prompt_management.prompt_set_layout(
-        instance,
-        [{"id": "user:catalog-rules", "enabled": True}],
-        "agent:librarian",
-    )
-    removed = prompt_management.prompt_remove(instance, "user:catalog-rules", "agent:librarian")
 
-    assert "user:catalog-rules" in created.message
-    assert "agent:librarian" in layout.message
-    assert "user:catalog-rules" in removed.message
-    expected_scope = {"type": "agent", "agent_id": "librarian"}
-    assert calls[0] == {
-        "method": "prompt.create_block",
-        "params": {
-            "slug": "catalog-rules",
-            "scope": expected_scope,
-            "content": "Keep the index current.",
-            "position": 0,
-        },
+def test_prompt_agent_scope_mutations_send_the_scope_object(rpc: FakeRpc, run_cli: RunCli) -> None:
+    created = {
+        "id": "user:catalog-rules",
+        "owner": "always",
+        "kind": "text",
+        "enabled": True,
+        "editable": True,
+        "source": "user",
+        "is_modified": True,
     }
-    assert calls[1]["params"]["scope"] == expected_scope
-    assert calls[2]["params"]["scope"] == expected_scope
+    rpc.reply("prompt.create_block", created)
+    rpc.reply(
+        "prompt.set_layout",
+        {"layout": [{"id": "user:catalog-rules", "enabled": True, "source": "user"}]},
+    )
+    rpc.reply("prompt.remove_block", {"id": "user:catalog-rules"})
+    scope = ("--scope", "agent:librarian")
+
+    content = ("--content", "Keep the index current.", "--position", "0")
+    layout_json = ("--layout-json", '[{"id": "user:catalog-rules", "enabled": true}]')
+
+    create = run_cli("prompt", "create", "catalog-rules", *content, *scope)
+    layout = run_cli("prompt", "set-layout", *layout_json, *scope)
+    remove = run_cli("prompt", "remove", "user:catalog-rules", *scope)
+
+    assert [code for code, _out, _err in (create, layout, remove)] == [0, 0, 0]
+    assert "user:catalog-rules" in create[1]
+    assert "agent:librarian" in layout[1]
+    assert "user:catalog-rules" in remove[1]
+    assert rpc.params("prompt.create_block") == {
+        "slug": "catalog-rules",
+        "scope": AGENT_SCOPE,
+        "content": "Keep the index current.",
+        "position": 0,
+    }
+    assert rpc.params("prompt.set_layout")["scope"] == AGENT_SCOPE
+    assert rpc.params("prompt.remove_block")["scope"] == AGENT_SCOPE
 
 
-def test_parse_args_rejects_non_array_prompt_layout(
-    capsys: pytest.CaptureFixture[str],
+def test_prompt_set_layout_rejects_a_layout_that_is_not_an_array(
+    rpc: FakeRpc, run_cli: RunCli
 ) -> None:
     with pytest.raises(SystemExit) as exc_info:
-        cli_main.parse_args(["prompt", "set-layout", "--layout-json", '{"id":"core:tools"}'])
+        run_cli("prompt", "set-layout", "--layout-json", '{"id":"core:tools"}')
 
     assert exc_info.value.code == 2
-
-
-def test_prompt_show_returns_only_requested_block_in_exact_scope(tmp_path, monkeypatch):
-    import json
-
-    expected = {"id": "user:long", "text": "sentinel line\n" * 80, "editable": True}
-    calls = []
-
-    def post(url, **kwargs):
-        calls.append(kwargs["json"])
-        return httpx.Response(
-            200,
-            json={
-                "ok": True,
-                "result": {"blocks": [expected, {"id": "other", "text": "excluded"}]},
-            },
-        )
-
-    monkeypatch.setattr(prompt_management.httpx, "post", post)
-    result = prompt_management.prompt_show(make_instance(tmp_path), "user:long", "agent:assistant")
-    assert result.ok
-    assert json.loads(result.message) == {"scope": "agent:assistant", **expected}
-    assert calls[0]["params"] == {"scope": {"type": "agent", "agent_id": "assistant"}}
+    assert rpc.calls == []

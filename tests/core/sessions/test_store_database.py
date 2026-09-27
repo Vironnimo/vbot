@@ -6,8 +6,6 @@ import json
 import re
 import shutil
 import sqlite3
-import threading
-import time
 from contextlib import closing
 from pathlib import Path
 
@@ -25,12 +23,8 @@ from core.database import (
     DatabaseUnavailableError,
     create_data_snapshot,
     data_store_status,
-    list_data_snapshots,
     read_marker,
-    read_snapshot_health,
 )
-from core.database import _connections as connections_module
-from core.database._connections import readonly_sqlite_uri
 from core.database.snapshots import SNAPSHOT_MANIFEST_NAME
 from core.sessions import ChatSessionManager, SessionAddress, _store_schema
 from core.sessions._store_schema import session_database_spec
@@ -320,109 +314,3 @@ def test_search_index_health_is_reported_as_owner_details(tmp_path: Path) -> Non
     assert member["state"] == "degraded"
     assert member["reason"].startswith("Session search: ")
     assert member["details"]["fts"]["state"] == "degraded"
-
-
-@pytest.fixture(params=["delete", "wal"])
-def pinned_journal_mode(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> str:
-    """Open databases in one journal mode regardless of the SQLite build.
-
-    Forcing WAL on a WAL-reset-vulnerable build is safe here: the Runtime's single
-    writer is the only connection that writes or checkpoints.
-    """
-    mode = str(request.param)
-    monkeypatch.setattr(connections_module, "is_wal_reset_vulnerable", lambda _version: False)
-    monkeypatch.setattr(connections_module, "required_journal_mode", lambda _version: mode)
-    return mode
-
-
-def test_online_snapshot_completes_while_runs_keep_committing(
-    tmp_path: Path, pinned_journal_mode: str
-) -> None:
-    # Generous budgets below the 30 s pytest timeout keep a hang readable on a loaded box.
-    deadline = time.monotonic() + 18.0
-
-    def remaining() -> float:
-        return max(0.0, deadline - time.monotonic())
-
-    manager = ChatSessionManager(tmp_path)
-    address = _address("busy")
-    commits = 0
-    failures: list[BaseException] = []
-    progressed = threading.Condition()
-    stop = threading.Event()
-
-    def fill(connection: sqlite3.Connection) -> None:
-        # About 24 MB, so commits overlap the copy and its verification.
-        connection.execute("CREATE TABLE snapshot_filler(value BLOB NOT NULL) STRICT")
-        connection.execute(
-            "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 6000) "
-            "INSERT INTO snapshot_filler SELECT randomblob(4000) FROM n"
-        )
-
-    def write() -> None:
-        nonlocal commits
-        index = 0
-        while not stop.wait(0.1):
-            index += 1
-            try:
-                manager.get(address).append(ChatMessage.user(f"message {index}"))
-                # Marking a completion read has the shortest busy budget (0.5 s).
-                manager.mark_terminal_run_read(address, f"run-{index}")
-            except BaseException as exc:
-                with progressed:
-                    failures.append(exc)
-                    progressed.notify_all()
-                return
-            with progressed:
-                commits += 1
-                progressed.notify_all()
-
-    def wait_for_more_commits(count: int) -> tuple[int, int]:
-        with progressed:
-            before = commits
-            progressed.wait_for(
-                lambda: commits >= before + count or bool(failures), timeout=remaining()
-            )
-            return before, commits
-
-    outcome: list[Path | BaseException | None] = []
-
-    def snapshot() -> None:
-        try:
-            outcome.append(
-                create_data_snapshot(tmp_path, reason="test", databases=(manager.database,))
-            )
-        except BaseException as exc:
-            outcome.append(exc)
-
-    writer = threading.Thread(target=write, daemon=True)
-    snapshotter = threading.Thread(target=snapshot, daemon=True)
-    try:
-        manager.create("coder", session_id=address.session_id)
-        manager._store._execute_write(fill)
-        with closing(
-            sqlite3.connect(readonly_sqlite_uri(tmp_path / "sessions.db"), uri=True)
-        ) as probe:
-            assert probe.execute("PRAGMA journal_mode").fetchone()[0] == pinned_journal_mode
-        writer.start()
-        _, started = wait_for_more_commits(1)
-        snapshotter.start()
-        snapshotter.join(remaining())
-        snapshot_finished = not snapshotter.is_alive()
-        after_snapshot, finished = wait_for_more_commits(2)
-    finally:
-        stop.set()
-        writer.join(4.0)
-        snapshotter.join(4.0)
-        manager.close()
-
-    assert snapshot_finished, "the online snapshot did not finish while Runs kept committing"
-    assert failures == []
-    assert finished >= after_snapshot + 2, "writes stopped committing after the snapshot"
-    published = outcome[0]
-    assert isinstance(published, Path), (published, read_snapshot_health(tmp_path))
-    assert list_data_snapshots(tmp_path) == [published]
-    # A standalone rollback-journal file: verification leaves no WAL sidecars behind.
-    assert {path.name for path in published.iterdir()} == {"sessions.db", SNAPSHOT_MANIFEST_NAME}
-    manifest = json.loads((published / SNAPSHOT_MANIFEST_NAME).read_text(encoding="utf-8"))
-    assert started <= manifest["members"]["sessions"]["facts"]["entry_count"] <= commits

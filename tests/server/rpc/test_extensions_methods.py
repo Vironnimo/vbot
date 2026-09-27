@@ -1,37 +1,48 @@
-"""Tests for extension visibility RPC handlers.
+"""Extension RPCs: the catalog, reload, secret fields, operations and page-scoped Run access.
 
-Coverage:
-- ``extensions.list``: payload for loaded / failed / disabled records, capability
-  summary, persisted-config merge, empty when no registry, rejects params.
-- ``extensions.reload``: rejects params, drives the runtime rebuild, returns the
-  ``extensions.list`` shape.
-- ``settings.update`` ``extensions`` section: round-trip persistence plus the live
-  reload / live-disable routing of the disabled-set delta.
+The ``settings.update`` ``extensions`` section tests at the end route the
+disabled-set delta to a live reload or live disable.
 """
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import Mock
 
 import pytest
 
+from core.chat import ChatMessage
 from core.extensions.extensions import (
     CommandDeclaration,
     ExtensionDeclarations,
     ExtensionManifest,
     ExtensionRecord,
     ExtensionRegistrationIdentity,
+    ExtensionStatus,
+    ExtensionUnavailableError,
     RecallBackendDeclaration,
+    SessionCapabilityExpiredError,
     ToolDeclaration,
 )
 from core.extensions.interactions import InteractionHandlerDeclaration
 from core.extensions.settings_schema import parse_settings_fields
-from server.rpc.methods import dispatch_rpc
-from tests.server.test_rpc import StubAdapter, make_state
+from core.runs import Run
+from core.utils.errors import ConfigError
+from server.events import ServerEventBus
+from tests.server.rpc_test_support import (
+    JsonObject,
+    call,
+    resource_changes,
+    rpc_error,
+    rpc_result,
+)
 
-JsonObject = dict[str, Any]
+_PAGE = {"id": "main", "epoch": "epoch-a"}
+_UNAVAILABLE = "Extension page is unavailable; refresh the page"
 
 
 def _noop_handler(*_args: Any, **_kwargs: Any) -> None:
@@ -52,7 +63,6 @@ class _Storage:
     def __init__(self, config: dict[str, dict[str, Any]]) -> None:
         self._config = config
         self.credentials: dict[str, str] = {}
-        self.removed: list[str] = []
 
     def load_extensions_settings(self) -> JsonObject:
         return {"disabled": [], "config": self._config}
@@ -64,23 +74,18 @@ class _Storage:
         self.credentials[key] = value
 
     def remove_data_dir_credential(self, key: str) -> bool:
-        self.removed.append(key)
         return self.credentials.pop(key, None) is not None
 
 
 class _ToolRegistry:
     """Minimal ``ToolRegistry`` stand-in with per-name readiness predicates.
 
-    ``ready`` maps a tool name to its predicate; a name absent from ``ready`` is
-    always ready. A name never added at all raises on ``get`` — the "declared but
-    unregistered" case.
+    ``ready`` maps a tool name to its predicate; ``None`` is always ready. A name
+    never added raises on ``get``: the "declared but unregistered" case.
     """
 
     def __init__(self, ready: dict[str, Any] | None = None) -> None:
         self._ready = ready or {}
-
-    def add(self, name: str, *, ready: Any = None) -> None:
-        self._ready[name] = ready
 
     def get(self, name: str) -> Any:
         if name not in self._ready:
@@ -97,33 +102,56 @@ class _CommandDispatcher:
 
 
 class _Runtime(SimpleNamespace):
-    """Runtime stub exposing the credential seam the handlers touch."""
+    """Runtime stub: live credential resolution sees saved values only after a reload."""
 
-    def __init__(self, **kwargs: Any) -> None:
+    def __init__(self, credentials: dict[str, str] | None = None, **kwargs: Any) -> None:
         super().__init__(**kwargs)
-        self.reloaded = 0
+        self.storage.credentials.update(credentials or {})
+        self._live: dict[str, str] = dict(self.storage.credentials)
+        self.extension_reloads = 0
+        self.reload_error: Exception | None = None
 
     def resolve_environment_credential(self, key: str) -> str:
-        value: str = self.storage.credentials.get(key, "")
-        return value
+        return self._live.get(key, "")
 
     def reload_environment_credentials(self) -> None:
-        self.reloaded += 1
+        self._live = dict(self.storage.credentials)
+
+    async def reload_extensions(self) -> None:
+        if self.reload_error is not None:
+            raise self.reload_error
+        self.extension_reloads += 1
 
 
 def _state_with_records(
     records: list[ExtensionRecord],
+    *,
     config: dict[str, dict[str, Any]] | None = None,
     tools: _ToolRegistry | None = None,
     command_dispatcher: _CommandDispatcher | None = None,
+    credentials: dict[str, str] | None = None,
 ) -> SimpleNamespace:
     runtime = _Runtime(
+        credentials,
         extensions=_Registry(records),
         storage=_Storage(config or {}),
         tools=tools if tools is not None else _ToolRegistry(),
+    )
+    return SimpleNamespace(
+        runtime=runtime,
+        event_bus=ServerEventBus(),
         command_dispatcher=command_dispatcher or _CommandDispatcher(),
     )
-    return SimpleNamespace(runtime=runtime)
+
+
+def _record(name: str, status: ExtensionStatus = "loaded", **fields: Any) -> ExtensionRecord:
+    return ExtensionRecord(
+        name=name,
+        root_path=Path(f"/ext/{name}"),
+        entry_path=Path(f"/ext/{name}/__init__.py"),
+        status=status,
+        **fields,
+    )
 
 
 def _loaded_record() -> ExtensionRecord:
@@ -137,11 +165,8 @@ def _loaded_record() -> ExtensionRecord:
     declarations.recall_backends.append(RecallBackendDeclaration("my_backend", _noop_handler))
     declarations.interaction_handlers.append(InteractionHandlerDeclaration("chk", _noop_handler))
     declarations.startup.append(_noop_handler)
-    return ExtensionRecord(
-        name="guard_bash",
-        root_path=Path("/ext/guard_bash"),
-        entry_path=Path("/ext/guard_bash/__init__.py"),
-        status="loaded",
+    return _record(
+        "guard_bash",
         manifest=ExtensionManifest(
             version="1.2.0",
             description="Guards dangerous bash",
@@ -152,37 +177,59 @@ def _loaded_record() -> ExtensionRecord:
     )
 
 
+def _schemed_record(
+    name: str = "homeassistant", status: ExtensionStatus = "loaded"
+) -> ExtensionRecord:
+    declarations = ExtensionDeclarations()
+    declarations.settings_schema = parse_settings_fields(
+        [
+            {
+                "key": "url",
+                "type": "text",
+                "label": "URL",
+                "description": "Server URL",
+                "default": "http://homeassistant.local:8123",
+            },
+            {"key": "token", "type": "secret", "label": "Token", "env_key": "HASS_TOKEN"},
+        ]
+    )
+    return _record(name, status, declarations=declarations)
+
+
+def _tooled_record() -> ExtensionRecord:
+    declarations = ExtensionDeclarations()
+    declarations.tools.append(
+        ToolDeclaration("ha_call_service", "Call a service", {"type": "object"}, _noop_handler)
+    )
+    return _record("homeassistant", declarations=declarations)
+
+
+# ---------------------------------------------------------------------------
+# extensions.list / extensions.reload
+# ---------------------------------------------------------------------------
+
+
 @pytest.mark.asyncio
-async def test_extensions_list_returns_loaded_failed_disabled_records() -> None:
-    failed = ExtensionRecord(
-        name="broken",
-        root_path=Path("/ext/broken.py"),
-        entry_path=Path("/ext/broken.py"),
-        status="failed",
-        error="import failed: boom",
-    )
-    disabled = ExtensionRecord(
-        name="off",
-        root_path=Path("/ext/off.py"),
-        entry_path=Path("/ext/off.py"),
-        status="disabled",
-    )
-    tools = _ToolRegistry()
-    tools.add("word_count")  # registered and ready (no predicate)
+async def test_extensions_list_projects_every_record_state() -> None:
+    # A failed record keeps its declared schema hidden: only a loaded one has a form.
+    failed = _schemed_record("broken", status="failed")
+    failed.error = "import failed: boom"
+    overridden_by = str(Path("/data/extensions/homeassistant/__init__.py"))
     state = _state_with_records(
-        [_loaded_record(), failed, disabled],
+        [
+            _loaded_record(),
+            failed,
+            _record("off", status="disabled"),
+            _record("homeassistant", status="overridden", overridden_by=overridden_by),
+        ],
         config={"guard_bash": {"deny": ["rm -rf"]}},
-        tools=tools,
+        tools=_ToolRegistry({"word_count": None}),
         command_dispatcher=_CommandDispatcher({"workflow": "guard_bash"}),
     )
 
-    result = await dispatch_rpc(state, {"method": "extensions.list", "params": {}})
+    result = await rpc_result(state, "extensions.list")
 
-    assert result["ok"] is True
-    extensions = result["result"]["extensions"]
-    assert [item["name"] for item in extensions] == ["guard_bash", "broken", "off"]
-
-    loaded, failed_item, disabled_item = extensions
+    loaded, failed_item, disabled_item, overridden_item = result["extensions"]
     assert loaded == {
         "name": "guard_bash",
         "status": "loaded",
@@ -212,149 +259,215 @@ async def test_extensions_list_returns_loaded_failed_disabled_records() -> None:
     assert failed_item["status"] == "failed"
     assert failed_item["error"] == "import failed: boom"
     assert failed_item["config"] == {}
+    assert failed_item["settings_schema"] is None
     assert failed_item["capabilities"]["tools"] == []
     assert failed_item["capabilities"]["commands"] == []
-    assert disabled_item["status"] == "disabled"
-    assert disabled_item["disabled"] is True
+    assert (disabled_item["status"], disabled_item["disabled"]) == ("disabled", True)
+    assert overridden_item["status"] == "overridden"
+    assert overridden_item["disabled"] is False
+    assert overridden_item["overridden_by"] == overridden_by
 
 
 @pytest.mark.asyncio
-async def test_extensions_list_round_trips_overridden_record() -> None:
-    overridden = ExtensionRecord(
-        name="homeassistant",
-        root_path=Path("/bundled/homeassistant"),
-        entry_path=Path("/bundled/homeassistant/__init__.py"),
-        status="overridden",
-        overridden_by=str(Path("/data/extensions/homeassistant/__init__.py")),
-    )
-    state = _state_with_records([overridden])
+@pytest.mark.parametrize(
+    ("tools", "record", "ready_state", "tool_states"),
+    [
+        (_ToolRegistry({"ha_call_service": lambda: False}), _tooled_record(), "waiting", [False]),
+        (_ToolRegistry({"ha_call_service": lambda: True}), _tooled_record(), "ready", [True]),
+        # A declared name that never registered (e.g. skipped on a collision) is not ready.
+        (_ToolRegistry(), _tooled_record(), "waiting", [False]),
+        (_ToolRegistry(), _record("hooks_only"), "ready", []),
+    ],
+    ids=["tool-not-ready", "tool-ready", "tool-unregistered", "no-tools"],
+)
+async def test_extension_ready_state_follows_declared_tool_readiness(
+    tools: _ToolRegistry, record: ExtensionRecord, ready_state: str, tool_states: list[bool]
+) -> None:
+    result = await rpc_result(_state_with_records([record], tools=tools), "extensions.list")
 
-    result = await dispatch_rpc(state, {"method": "extensions.list", "params": {}})
-
-    assert result["ok"] is True
-    (item,) = result["result"]["extensions"]
-    assert item["status"] == "overridden"
-    assert item["disabled"] is False
-    assert item["overridden_by"] == str(Path("/data/extensions/homeassistant/__init__.py"))
-
-
-def _tooled_record(name: str = "homeassistant") -> ExtensionRecord:
-    declarations = ExtensionDeclarations()
-    declarations.tools.append(
-        ToolDeclaration("ha_call_service", "Call a service", {"type": "object"}, _noop_handler)
-    )
-    return ExtensionRecord(
-        name=name,
-        root_path=Path(f"/bundled/{name}"),
-        entry_path=Path(f"/bundled/{name}/__init__.py"),
-        status="loaded",
-        declarations=declarations,
-    )
+    [item] = result["extensions"]
+    assert item["ready_state"] == ready_state
+    assert [tool["ready"] for tool in item["capabilities"]["tools"]] == tool_states
 
 
 @pytest.mark.asyncio
-async def test_ready_state_waiting_when_a_declared_tool_is_not_ready() -> None:
-    tools = _ToolRegistry()
-    tools.add("ha_call_service", ready=lambda: False)
-    state = _state_with_records([_tooled_record()], tools=tools)
-
-    result = await dispatch_rpc(state, {"method": "extensions.list", "params": {}})
-
-    (item,) = result["result"]["extensions"]
-    assert item["ready_state"] == "waiting"
-    assert item["capabilities"]["tools"] == [{"name": "ha_call_service", "ready": False}]
-
-
-@pytest.mark.asyncio
-async def test_ready_state_ready_when_all_declared_tools_are_ready() -> None:
-    tools = _ToolRegistry()
-    tools.add("ha_call_service", ready=lambda: True)
-    state = _state_with_records([_tooled_record()], tools=tools)
-
-    result = await dispatch_rpc(state, {"method": "extensions.list", "params": {}})
-
-    (item,) = result["result"]["extensions"]
-    assert item["ready_state"] == "ready"
-    assert item["capabilities"]["tools"] == [{"name": "ha_call_service", "ready": True}]
-
-
-@pytest.mark.asyncio
-async def test_ready_state_waiting_when_a_declared_tool_is_unregistered() -> None:
-    # An empty registry: the declared name never registered (e.g. a collision
-    # skipped it) → reported not ready → the extension is waiting.
-    state = _state_with_records([_tooled_record()], tools=_ToolRegistry())
-
-    result = await dispatch_rpc(state, {"method": "extensions.list", "params": {}})
-
-    (item,) = result["result"]["extensions"]
-    assert item["ready_state"] == "waiting"
-    assert item["capabilities"]["tools"] == [{"name": "ha_call_service", "ready": False}]
-
-
-@pytest.mark.asyncio
-async def test_ready_state_ready_for_a_loaded_extension_with_no_tools() -> None:
-    record = ExtensionRecord(
-        name="hooks_only",
-        root_path=Path("/ext/hooks_only.py"),
-        entry_path=Path("/ext/hooks_only.py"),
-        status="loaded",
-    )
-    state = _state_with_records([record])
-
-    result = await dispatch_rpc(state, {"method": "extensions.list", "params": {}})
-
-    (item,) = result["result"]["extensions"]
-    assert item["ready_state"] == "ready"
-
-
-@pytest.mark.asyncio
-async def test_extensions_list_empty_without_registry() -> None:
-    runtime = _Runtime(extensions=None, storage=_Storage({}))
-    state = SimpleNamespace(runtime=runtime)
-
-    result = await dispatch_rpc(state, {"method": "extensions.list", "params": {}})
-
-    assert result == {"ok": True, "result": {"extensions": []}}
-
-
-@pytest.mark.asyncio
-async def test_extensions_list_rejects_params() -> None:
+async def test_extensions_list_is_empty_without_registry() -> None:
     state = _state_with_records([])
+    state.runtime.extensions = None
 
-    result = await dispatch_rpc(state, {"method": "extensions.list", "params": {"name": "x"}})
-
-    assert result["ok"] is False
-    assert result["error"]["code"] == "invalid_request"
+    assert await rpc_result(state, "extensions.list") == {"extensions": []}
 
 
 @pytest.mark.asyncio
-async def test_extension_page_run_rejects_unscoped_or_invalid_cursor_requests() -> None:
-    state = _state_with_records([])
+@pytest.mark.parametrize("credential_set", [True, False])
+async def test_extensions_list_carries_settings_schema_and_secret_state(
+    credential_set: bool,
+) -> None:
+    state = _state_with_records(
+        [_schemed_record()], credentials={"HASS_TOKEN": "abc"} if credential_set else None
+    )
 
-    missing_scope = await dispatch_rpc(
-        state,
+    result = await rpc_result(state, "extensions.list")
+
+    [item] = result["extensions"]
+    assert item["settings_schema"] == [
         {
-            "method": "extensions.page_run",
-            "params": {"name": "alpha", "group_id": "group", "run_id": "run"},
+            "key": "url",
+            "type": "text",
+            "label": "URL",
+            "description": "Server URL",
+            "required": False,
+            "default": "http://homeassistant.local:8123",
         },
-    )
-    invalid_cursor = await dispatch_rpc(
-        state,
         {
-            "method": "extensions.page_run",
-            "params": {
+            "key": "token",
+            "type": "secret",
+            "label": "Token",
+            "description": None,
+            "required": False,
+            "default": None,
+            "env_key": "HASS_TOKEN",
+            "set": credential_set,
+        },
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("closing", [False, True])
+async def test_extensions_reload_rebuilds_then_returns_the_catalog(closing: bool) -> None:
+    state = _state_with_records([_loaded_record()])
+    if closing:
+        state.runtime.reload_error = ExtensionUnavailableError("Extension runtime is closing")
+
+    response = await call(state, "extensions.reload")
+
+    if closing:
+        assert response["error"]["code"] == "domain_error"
+        assert resource_changes(state) == []
+        return
+    assert state.runtime.extension_reloads == 1
+    assert [item["name"] for item in response["result"]["extensions"]] == ["guard_bash"]
+    assert resource_changes(state) == [{"kind": "commands"}, {"kind": "extensions"}]
+
+
+# ---------------------------------------------------------------------------
+# extensions.set_secret
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("previous", "value", "is_set", "logged"),
+    [
+        (None, "super-secret-value", True, ["saved"]),
+        ("old-secret-value", "", False, ["removed"]),
+        # Saving the same value again changes nothing worth logging.
+        ("same-secret-value", "same-secret-value", True, []),
+    ],
+    ids=["save", "clear", "unchanged"],
+)
+async def test_set_secret_saves_or_clears_the_credential_without_logging_it(
+    caplog: pytest.LogCaptureFixture,
+    previous: str | None,
+    value: str,
+    is_set: bool,
+    logged: list[str],
+) -> None:
+    state = _state_with_records(
+        [_schemed_record()], credentials={"HASS_TOKEN": previous} if previous else None
+    )
+    caplog.set_level(logging.DEBUG)
+
+    result = await rpc_result(
+        state, "extensions.set_secret", name="homeassistant", key="token", value=value
+    )
+    listed = await rpc_result(state, "extensions.list")
+
+    assert result == {"name": "homeassistant", "key": "token", "set": is_set}
+    assert state.runtime.storage.credentials == ({"HASS_TOKEN": value} if value else {})
+    # Live credential resolution sees the change without a restart.
+    assert listed["extensions"][0]["settings_schema"][1]["set"] is is_set
+    messages = [record.getMessage() for record in caplog.records]
+    assert [message for message in messages if message.startswith("Extension secret")] == [
+        f"Extension secret {action} (extension=homeassistant field=token)" for action in logged
+    ]
+    secrets = [secret for secret in (previous, value) if secret]
+    assert not [message for message in messages if any(secret in message for secret in secrets)]
+
+
+# ---------------------------------------------------------------------------
+# Refusals
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method", "params", "named"),
+    [
+        ("extensions.list", {"name": "x"}, "does not accept params"),
+        ("extensions.reload", {"name": "guard_bash"}, "does not accept params"),
+        (
+            "extensions.page_run",
+            {"name": "alpha", "group_id": "group", "run_id": "run"},
+            "page must be an object",
+        ),
+        (
+            "extensions.page_run",
+            {
                 "name": "alpha",
-                "page": {"id": "overview", "epoch": "epoch"},
+                "page": _PAGE,
                 "group_id": "group",
                 "run_id": "run",
                 "after_sequence": -1,
             },
-        },
+            "after_sequence",
+        ),
+        (
+            "extensions.set_secret",
+            {"name": "nope", "key": "token", "value": "x"},
+            "unknown extension",
+        ),
+        (
+            "extensions.set_secret",
+            {"name": "homeassistant", "key": "missing", "value": "x"},
+            "unknown settings field",
+        ),
+        (
+            "extensions.set_secret",
+            {"name": "homeassistant", "key": "url", "value": "x"},
+            "is not a secret",
+        ),
+        (
+            "extensions.set_secret",
+            {"name": "broken", "key": "token", "value": "x"},
+            "is not loaded",
+        ),
+        (
+            "extensions.set_secret",
+            {"name": "plain", "key": "token", "value": "x"},
+            "declares no settings schema",
+        ),
+    ],
+)
+async def test_extension_refusals_change_nothing(
+    method: str, params: JsonObject, named: str
+) -> None:
+    state = _state_with_records(
+        [_schemed_record(), _schemed_record("broken", status="failed"), _record("plain")]
     )
 
-    assert missing_scope["ok"] is False
-    assert invalid_cursor["ok"] is False
-    assert invalid_cursor["error"]["code"] == "invalid_request"
+    error = await rpc_error(state, method, **params)
+
+    assert error["code"] == "invalid_request"
+    assert named in error["message"]
+    assert state.runtime.storage.credentials == {}
+    assert state.runtime.extension_reloads == 0
+    assert resource_changes(state) == []
+
+
+# ---------------------------------------------------------------------------
+# extensions.operation
+# ---------------------------------------------------------------------------
 
 
 class _PageRegistry:
@@ -375,6 +488,70 @@ class _PageRegistry:
         return self._host
 
 
+def _page_state(temporary_agents: Any, registry: _PageRegistry | None = None) -> SimpleNamespace:
+    state = _state_with_records([])
+    state.runtime.extensions = registry or _PageRegistry(
+        SimpleNamespace(temporary_agents=temporary_agents)
+    )
+    return state
+
+
+@pytest.mark.asyncio
+async def test_extension_page_operation_rechecks_registration_after_await() -> None:
+    registry = _PageRegistry(SimpleNamespace(temporary_agents=None))
+
+    class Management:
+        async def invoke(self, operation: str, arguments: JsonObject) -> JsonObject:
+            assert (operation, arguments) == ("refresh", {})
+            registry.current = False
+            return {"stale": True}
+
+    registry.management = lambda name: Management()  # type: ignore[attr-defined]
+
+    error = await rpc_error(
+        _page_state(None, registry),
+        "extensions.operation",
+        name="alpha",
+        operation="refresh",
+        arguments={},
+        page=_PAGE,
+    )
+
+    assert error == {"code": "invalid_request", "message": _UNAVAILABLE}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["expired", "domain", "unexpected", "cancelled"])
+async def test_extension_operation_error_boundary(kind: str) -> None:
+    errors: dict[str, BaseException] = {
+        "expired": SessionCapabilityExpiredError("test-owned-expiry"),
+        "domain": ConfigError("test-owned-domain"),
+        "unexpected": RuntimeError("test-owned-bug"),
+        "cancelled": asyncio.CancelledError(),
+    }
+    error = errors[kind]
+
+    async def invoke(_operation: str, _arguments: JsonObject) -> JsonObject:
+        raise error
+
+    registry = SimpleNamespace(management=lambda _name: SimpleNamespace(invoke=invoke))
+    state = SimpleNamespace(runtime=SimpleNamespace(extensions=registry))
+    if kind in {"unexpected", "cancelled"}:
+        # A bug or a cancellation is not an expected domain outcome: it propagates.
+        with pytest.raises(type(error)):
+            await call(state, "extensions.operation", name="test", operation="run")
+        return
+    response = await rpc_error(state, "extensions.operation", name="test", operation="run")
+    assert response["code"] == (
+        "session_capability_expired" if kind == "expired" else "domain_error"
+    )
+
+
+# ---------------------------------------------------------------------------
+# extensions.page_history
+# ---------------------------------------------------------------------------
+
+
 class _ProjectedMessage:
     def __init__(self, role: str, payload: JsonObject) -> None:
         self.role = role
@@ -388,17 +565,25 @@ class _HistoryDelivery:
     def project_message(self, message: JsonObject) -> JsonObject:
         if message.get("role") != "assistant":
             return dict(message)
-        return {
-            **message,
-            "content": "[report](/api/files/capability.signature)",
-        }
+        return {**message, "content": "[report](/api/files/capability.signature)"}
 
     def resolve_token(self, token: str) -> object | None:
         return object() if token == "capability.signature" else None
 
 
+_CONTEXT_USAGE = {
+    "tokens": 150,
+    "estimated": True,
+    "provider_input_tokens": 120,
+    "provider_output_tokens": 30,
+}
+
+
 @pytest.mark.asyncio
-async def test_extension_page_history_projects_only_bound_visible_history() -> None:
+@pytest.mark.parametrize("before_cursor", [None, "older"])
+async def test_extension_page_history_projects_only_bound_visible_history(
+    before_cursor: str | None,
+) -> None:
     snapshot = SimpleNamespace(
         runs=(),
         generation_id="generation",
@@ -420,11 +605,20 @@ async def test_extension_page_history_projects_only_bound_visible_history() -> N
                 ),
                 _ProjectedMessage("note", {"role": "note", "content": "private"}),
             ),
-            has_more=False,
-            before_cursor=None,
+            has_more=before_cursor is not None,
+            before_cursor=before_cursor,
         ),
-        session_usage={"input_tokens": 2},
-        context_messages=(),
+        session_usage={"input_tokens": 5000},
+        # Context usage comes from the canonical tail, outside the visible page.
+        context_messages=(
+            ChatMessage(
+                id="context-anchor",
+                timestamp="2026-09-08T09:00:00+00:00",
+                role="assistant",
+                content="measured",
+                usage={"input_tokens": 120, "output_tokens": 30, "context_usage": _CONTEXT_USAGE},
+            ),
+        ),
     )
 
     class Groups:
@@ -432,27 +626,22 @@ async def test_extension_page_history_projects_only_bound_visible_history() -> N
             assert (group_id, participant_id, query) == ("group-a", "participant-a", {"limit": 1})
             return snapshot
 
-    registry = _PageRegistry(SimpleNamespace(temporary_agents=Groups()))
-    state = _state_with_records([])
-    state.runtime.extensions = registry
+    state = _page_state(Groups())
     state.file_delivery = _HistoryDelivery()
 
-    result = await dispatch_rpc(
+    result = await rpc_result(
         state,
-        {
-            "method": "extensions.page_history",
-            "params": {
-                "name": "alpha",
-                "page": {"id": "main", "epoch": "epoch-a"},
-                "group_id": "group-a",
-                "participant_id": "participant-a",
-                "query": {"limit": 1},
-            },
-        },
+        "extensions.page_history",
+        name="alpha",
+        page=_PAGE,
+        group_id="group-a",
+        participant_id="participant-a",
+        query={"limit": 1},
     )
 
-    assert result["ok"] is True
-    assert result["result"] == {
+    # Only an older page to read adds the ``next_before`` cursor.
+    older = {"next_before": before_cursor} if before_cursor is not None else {}
+    assert result == {
         "messages": [
             {
                 "role": "assistant",
@@ -464,11 +653,12 @@ async def test_extension_page_history_projects_only_bound_visible_history() -> N
         "runs": [],
         "history_generation": "generation",
         "next_after": "after",
+        **older,
         "incremental": False,
         "has_newer": False,
-        "has_more": False,
-        "session_usage": {"input_tokens": 2},
-        "context_usage": None,
+        "has_more": before_cursor is not None,
+        "session_usage": {"input_tokens": 5000},
+        "context_usage": _CONTEXT_USAGE,
         "file_urls": ["/api/files/capability.signature"],
     }
 
@@ -484,487 +674,37 @@ async def test_extension_page_history_rejects_stale_page_and_foreign_participant
                 session_usage={},
             )
 
-    registry = _PageRegistry(SimpleNamespace(temporary_agents=Groups()))
-    state = _state_with_records([])
-    state.runtime.extensions = registry
+    state = _page_state(Groups())
     state.file_delivery = _HistoryDelivery()
-    params: JsonObject = {
-        "name": "alpha",
-        "page": {"id": "main", "epoch": "epoch-a"},
-        "group_id": "group-a",
-        "participant_id": "foreign",
-        "query": {},
-    }
+    params: JsonObject = {"name": "alpha", "page": _PAGE, "group_id": "group-a", "query": {}}
 
-    foreign = await dispatch_rpc(state, {"method": "extensions.page_history", "params": params})
-    registry.current = False
-    stale = await dispatch_rpc(
-        state,
-        {
-            "method": "extensions.page_history",
-            "params": {**params, "participant_id": "participant-a"},
-        },
+    foreign = await rpc_error(state, "extensions.page_history", participant_id="foreign", **params)
+    state.runtime.extensions.current = False
+    stale = await rpc_error(
+        state, "extensions.page_history", participant_id="participant-a", **params
     )
 
-    assert foreign["ok"] is False
-    assert stale["ok"] is False
+    assert foreign == {"code": "invalid_request", "message": "participant is not owned"}
+    assert stale == {"code": "invalid_request", "message": _UNAVAILABLE}
 
 
-@pytest.mark.asyncio
-async def test_extension_page_operation_rechecks_registration_after_await() -> None:
-    registry = _PageRegistry(SimpleNamespace(temporary_agents=None))
-
-    class Management:
-        async def invoke(self, operation: str, arguments: JsonObject) -> JsonObject:
-            assert (operation, arguments) == ("refresh", {})
-            registry.current = False
-            return {"stale": True}
-
-    registry.management = lambda name: Management()  # type: ignore[attr-defined]
-    state = _state_with_records([])
-    state.runtime.extensions = registry
-
-    result = await dispatch_rpc(
-        state,
-        {
-            "method": "extensions.operation",
-            "params": {
-                "name": "alpha",
-                "operation": "refresh",
-                "arguments": {},
-                "page": {"id": "main", "epoch": "epoch-a"},
-            },
-        },
-    )
-
-    assert result["ok"] is False
-
-
-def _schemed_record(name: str = "homeassistant") -> ExtensionRecord:
-    declarations = ExtensionDeclarations()
-    declarations.settings_schema = parse_settings_fields(
-        [
-            {
-                "key": "url",
-                "type": "text",
-                "label": "URL",
-                "description": "Server URL",
-                "default": "http://homeassistant.local:8123",
-            },
-            {"key": "token", "type": "secret", "label": "Token", "env_key": "HASS_TOKEN"},
-        ]
-    )
-    return ExtensionRecord(
-        name=name,
-        root_path=Path(f"/bundled/{name}"),
-        entry_path=Path(f"/bundled/{name}/__init__.py"),
-        status="loaded",
-        declarations=declarations,
-    )
-
-
-@pytest.mark.asyncio
-async def test_extensions_list_carries_settings_schema_and_secret_state() -> None:
-    state = _state_with_records([_schemed_record()])
-    state.runtime.storage.credentials["HASS_TOKEN"] = "abc"
-
-    result = await dispatch_rpc(state, {"method": "extensions.list", "params": {}})
-
-    (item,) = result["result"]["extensions"]
-    schema = item["settings_schema"]
-    assert schema == [
-        {
-            "key": "url",
-            "type": "text",
-            "label": "URL",
-            "description": "Server URL",
-            "required": False,
-            "default": "http://homeassistant.local:8123",
-        },
-        {
-            "key": "token",
-            "type": "secret",
-            "label": "Token",
-            "description": None,
-            "required": False,
-            "default": None,
-            "env_key": "HASS_TOKEN",
-            "set": True,
-        },
-    ]
-
-
-@pytest.mark.asyncio
-async def test_extensions_list_secret_set_flag_flips_with_resolver() -> None:
-    state = _state_with_records([_schemed_record()])
-
-    result = await dispatch_rpc(state, {"method": "extensions.list", "params": {}})
-    (item,) = result["result"]["extensions"]
-    secret_field = item["settings_schema"][1]
-    assert secret_field["set"] is False
-
-
-@pytest.mark.asyncio
-async def test_extensions_list_no_schema_for_unloaded_record() -> None:
-    record = _schemed_record()
-    record.status = "failed"
-    state = _state_with_records([record])
-
-    result = await dispatch_rpc(state, {"method": "extensions.list", "params": {}})
-    (item,) = result["result"]["extensions"]
-    assert item["settings_schema"] is None
-
-
-@pytest.mark.asyncio
-async def test_set_secret_writes_and_reloads() -> None:
-    state = _state_with_records([_schemed_record()])
-
-    result = await dispatch_rpc(
-        state,
-        {
-            "method": "extensions.set_secret",
-            "params": {"name": "homeassistant", "key": "token", "value": "s3cret"},
-        },
-    )
-
-    assert result["ok"] is True
-    assert result["result"] == {"name": "homeassistant", "key": "token", "set": True}
-    assert state.runtime.storage.credentials["HASS_TOKEN"] == "s3cret"
-    assert state.runtime.reloaded == 1
-
-
-@pytest.mark.asyncio
-async def test_set_secret_empty_value_clears() -> None:
-    state = _state_with_records([_schemed_record()])
-    state.runtime.storage.credentials["HASS_TOKEN"] = "old"
-
-    result = await dispatch_rpc(
-        state,
-        {
-            "method": "extensions.set_secret",
-            "params": {"name": "homeassistant", "key": "token", "value": ""},
-        },
-    )
-
-    assert result["result"] == {"name": "homeassistant", "key": "token", "set": False}
-    assert "HASS_TOKEN" in state.runtime.storage.removed
-    assert "HASS_TOKEN" not in state.runtime.storage.credentials
-    assert state.runtime.reloaded == 1
-
-
-@pytest.mark.asyncio
-async def test_set_secret_does_not_log_the_value(caplog: pytest.LogCaptureFixture) -> None:
-    import logging
-
-    state = _state_with_records([_schemed_record()])
-    caplog.set_level(logging.DEBUG)
-
-    await dispatch_rpc(
-        state,
-        {
-            "method": "extensions.set_secret",
-            "params": {"name": "homeassistant", "key": "token", "value": "super-secret-value"},
-        },
-    )
-
-    assert all("super-secret-value" not in record.getMessage() for record in caplog.records)
-    messages = [
-        record.getMessage()
-        for record in caplog.records
-        if record.name == "vbot.server.rpc.extensions"
-    ]
-    assert len(messages) == 1
-    assert "extension=homeassistant" in messages[0]
-    assert "field=token" in messages[0]
-
-
-@pytest.mark.asyncio
-async def test_set_secret_same_value_does_not_log(caplog: pytest.LogCaptureFixture) -> None:
-    import logging
-
-    state = _state_with_records([_schemed_record()])
-    state.runtime.storage.credentials["HASS_TOKEN"] = "unchanged"
-    caplog.set_level(logging.INFO, logger="vbot.server.rpc.extensions")
-
-    await dispatch_rpc(
-        state,
-        {
-            "method": "extensions.set_secret",
-            "params": {"name": "homeassistant", "key": "token", "value": "unchanged"},
-        },
-    )
-
-    assert not [record for record in caplog.records if record.name == "vbot.server.rpc.extensions"]
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("name", "key", "value"),
-    [
-        ("nope", "token", "x"),  # unknown extension
-        ("homeassistant", "missing", "x"),  # unknown field
-        ("homeassistant", "url", "x"),  # field is not a secret
-    ],
-)
-async def test_set_secret_error_cases_return_invalid_request(
-    name: str, key: str, value: str
-) -> None:
-    state = _state_with_records([_schemed_record()])
-
-    result = await dispatch_rpc(
-        state,
-        {"method": "extensions.set_secret", "params": {"name": name, "key": key, "value": value}},
-    )
-
-    assert result["ok"] is False
-    assert result["error"]["code"] == "invalid_request"
-
-
-@pytest.mark.asyncio
-async def test_set_secret_not_loaded_returns_invalid_request() -> None:
-    record = _schemed_record()
-    record.status = "failed"
-    state = _state_with_records([record])
-
-    result = await dispatch_rpc(
-        state,
-        {
-            "method": "extensions.set_secret",
-            "params": {"name": "homeassistant", "key": "token", "value": "x"},
-        },
-    )
-
-    assert result["ok"] is False
-    assert result["error"]["code"] == "invalid_request"
-
-
-@pytest.mark.asyncio
-async def test_set_secret_no_schema_returns_invalid_request() -> None:
-    record = ExtensionRecord(
-        name="plain",
-        root_path=Path("/ext/plain.py"),
-        entry_path=Path("/ext/plain.py"),
-        status="loaded",
-    )
-    state = _state_with_records([record])
-
-    result = await dispatch_rpc(
-        state,
-        {
-            "method": "extensions.set_secret",
-            "params": {"name": "plain", "key": "token", "value": "x"},
-        },
-    )
-
-    assert result["ok"] is False
-    assert result["error"]["code"] == "invalid_request"
-
-
-@pytest.mark.asyncio
-async def test_settings_update_extensions_disable_applies_live(tmp_path: Path) -> None:
-    # Disabling takes the surgical live-disable path: the section persists, the
-    # disabled name is applied live, and no full reload runs.
-    state = make_state(tmp_path, StubAdapter())
-
-    result = await dispatch_rpc(
-        state,
-        {
-            "method": "settings.update",
-            "params": {
-                "extensions": {
-                    "disabled": ["legacy"],
-                    "config": {"guard_bash": {"deny": ["rm -rf"]}},
-                }
-            },
-        },
-    )
-
-    assert result["ok"] is True
-    assert state.runtime.extension_disabled_changes == [{"legacy"}]
-    assert state.runtime.extension_reload_count == 0
-    assert state.event_bus.events[-1]["payload"] == {"kind": "commands"}
-    assert state.runtime.storage.load_extensions_settings() == {
-        "disabled": ["legacy"],
-        "config": {"guard_bash": {"deny": ["rm -rf"]}},
-    }
-
-
-@pytest.mark.asyncio
-async def test_settings_update_extensions_enable_reloads_layer(tmp_path: Path) -> None:
-    # Enabling (removing a name from the persisted disabled set) rebuilds the whole
-    # extension layer live — no restart signal anymore.
-    state = make_state(tmp_path, StubAdapter())
-    state.runtime.storage.update_settings_sections(
-        {"extensions": {"disabled": ["legacy"], "config": {}}}
-    )
-
-    result = await dispatch_rpc(
-        state,
-        {"method": "settings.update", "params": {"extensions": {"disabled": [], "config": {}}}},
-    )
-
-    assert result["ok"] is True
-    assert state.runtime.extension_reload_count == 1
-    assert state.runtime.extension_disabled_changes == []
-    assert state.event_bus.events[-1]["payload"] == {"kind": "commands"}
-    assert state.runtime.storage.load_extensions_settings() == {"disabled": [], "config": {}}
-
-
-@pytest.mark.asyncio
-async def test_settings_update_without_extensions_touches_no_extension_seam(
-    tmp_path: Path,
-) -> None:
-    state = make_state(tmp_path, StubAdapter())
-
-    result = await dispatch_rpc(
-        state,
-        {"method": "settings.update", "params": {"appearance": {"language": "en"}}},
-    )
-
-    assert result["ok"] is True
-    assert state.runtime.extension_reload_count == 0
-    assert state.runtime.extension_disabled_changes == []
-
-
-@pytest.mark.asyncio
-async def test_reload_extensions_rejects_params() -> None:
-    state = _state_with_records([_loaded_record()])
-
-    result = await dispatch_rpc(
-        state, {"method": "extensions.reload", "params": {"name": "guard_bash"}}
-    )
-
-    assert result["ok"] is False
-    assert result["error"]["code"] == "invalid_request"
-
-
-@pytest.mark.asyncio
-async def test_reload_extensions_drives_runtime_and_returns_list_shape(tmp_path: Path) -> None:
-    # The handler awaits the runtime rebuild, then returns the same payload shape as
-    # extensions.list (one entry per discovered record).
-    state = make_state(tmp_path, StubAdapter())
-    state.runtime.extensions = _Registry([_loaded_record()])
-
-    result = await dispatch_rpc(state, {"method": "extensions.reload", "params": {}})
-
-    assert result["ok"] is True
-    assert state.runtime.extension_reload_count == 1
-    assert [event["payload"] for event in state.event_bus.events[-2:]] == [
-        {"kind": "commands"},
-        {"kind": "extensions"},
-    ]
-    names = [extension["name"] for extension in result["result"]["extensions"]]
-    assert names == ["guard_bash"]
-
-
-@pytest.mark.asyncio
-async def test_reload_extensions_while_shutting_down_is_a_domain_error(tmp_path: Path) -> None:
-    from core.extensions.extensions import ExtensionUnavailableError
-
-    state = make_state(tmp_path, StubAdapter())
-    state.runtime.extensions = _Registry([_loaded_record()])
-
-    async def closing() -> None:
-        raise ExtensionUnavailableError("Extension runtime is closing")
-
-    state.runtime.reload_extensions = closing
-
-    result = await dispatch_rpc(state, {"method": "extensions.reload", "params": {}})
-
-    assert result["ok"] is False
-    assert result["error"]["code"] == "domain_error"
-
-
-def test_temporary_history_context_uses_canonical_tail_outside_visible_page():
-    from core.chat import ChatMessage
-    from server.rpc.extensions_methods import _temporary_history_projection
-
-    snapshot = SimpleNamespace(
-        runs=(),
-        generation_id="generation",
-        after_cursor="after",
-        incremental=False,
-        has_newer=False,
-        page=SimpleNamespace(messages=(), has_more=True, before_cursor="older"),
-        session_usage={"input_tokens": 5000},
-        context_messages=(
-            ChatMessage(
-                id="context-anchor",
-                timestamp="2026-09-08T09:00:00+00:00",
-                role="assistant",
-                content="measured",
-                usage={
-                    "input_tokens": 120,
-                    "output_tokens": 30,
-                    "context_usage": {
-                        "tokens": 150,
-                        "estimated": True,
-                        "provider_input_tokens": 120,
-                        "provider_output_tokens": 30,
-                    },
-                },
-            ),
-        ),
-    )
-    result = _temporary_history_projection(snapshot, None)
-    assert result["context_usage"] == {
-        "tokens": 150,
-        "estimated": True,
-        "provider_input_tokens": 120,
-        "provider_output_tokens": 30,
-    }
-    assert result["messages"] == []
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("kind", ["expired", "domain", "unexpected", "cancelled"])
-async def test_extension_operation_error_boundary(kind: str) -> None:
-    import asyncio
-
-    from core.extensions.extensions import SessionCapabilityExpiredError
-    from core.utils.errors import ConfigError
-
-    errors: dict[str, BaseException] = {
-        "expired": SessionCapabilityExpiredError("test-owned-expiry"),
-        "domain": ConfigError("test-owned-domain"),
-        "unexpected": RuntimeError("test-owned-bug"),
-        "cancelled": asyncio.CancelledError(),
-    }
-    error = errors[kind]
-
-    async def invoke(_operation: str, _arguments: JsonObject) -> JsonObject:
-        raise error
-
-    registry = SimpleNamespace(management=lambda _name: SimpleNamespace(invoke=invoke))
-    state = SimpleNamespace(runtime=SimpleNamespace(extensions=registry))
-    request = {"method": "extensions.operation", "params": {"name": "test", "operation": "run"}}
-    if kind in {"unexpected", "cancelled"}:
-        with pytest.raises(type(error)):
-            await dispatch_rpc(state, request)
-    else:
-        result = await dispatch_rpc(state, request)
-        assert result["ok"] is False
-        assert result["error"]["code"] == (
-            "session_capability_expired" if kind == "expired" else "domain_error"
-        )
+# ---------------------------------------------------------------------------
+# extensions.page_cancel_tool / extensions.page_run
+# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "scenario", ["active", "foreign", "stale", "reloaded", "finished", "unknown"]
 )
-async def test_extension_page_cancel_tool_is_owner_scoped_and_call_local(scenario):
-    from unittest.mock import Mock
-
-    from core.runs import Run
-
+async def test_extension_page_cancel_tool_is_owner_scoped_and_call_local(scenario: str) -> None:
     run = Run(run_id="run-a", agent_id="agent-a", session_id="session-a")
     callback = Mock()
     run.begin_tool_call("call-a")
     run.register_tool_cancel("call-a", callback)
 
     class Groups:
-        async def owned_run(self, group_id, run_id):
+        async def owned_run(self, group_id: str, run_id: str) -> Any:
             assert (group_id, run_id) == ("group-a", "run-a")
             if scenario == "foreign":
                 raise ValueError("test-owned foreign Run")
@@ -974,22 +714,18 @@ async def test_extension_page_cancel_tool_is_owner_scoped_and_call_local(scenari
 
     registry = _PageRegistry(SimpleNamespace(temporary_agents=Groups()))
     registry.current = scenario != "stale"
-    state = _state_with_records([])
-    state.runtime.extensions = registry
-    result = await dispatch_rpc(
-        state,
-        {
-            "method": "extensions.page_cancel_tool",
-            "params": {
-                "name": "alpha",
-                "page": {"id": "main", "epoch": "epoch-a"},
-                "group_id": "group-a",
-                "run_id": "run-a",
-                "tool_call_id": "missing" if scenario == "unknown" else "call-a",
-            },
-        },
+
+    response = await call(
+        _page_state(None, registry),
+        "extensions.page_cancel_tool",
+        name="alpha",
+        page=_PAGE,
+        group_id="group-a",
+        run_id="run-a",
+        tool_call_id="missing" if scenario == "unknown" else "call-a",
     )
-    assert result["ok"] is (scenario == "active")
+
+    assert response["ok"] is (scenario == "active")
     assert run.tool_call_cancelled("call-a") is (scenario == "active")
     assert not run.cancel_requested
     assert callback.call_count == (1 if scenario == "active" else 0)
@@ -1027,28 +763,24 @@ async def test_extension_page_run_reports_verified_replay_watermark(scenario: st
 
     groups = Groups()
     registry = Registry(SimpleNamespace(temporary_agents=groups))
-    state = _state_with_records([])
-    state.runtime.extensions = registry
+    state = _page_state(None, registry)
     state.file_delivery = Delivery()
-    result = await dispatch_rpc(
+
+    response = await call(
         state,
-        {
-            "method": "extensions.page_run",
-            "params": {
-                "name": "alpha",
-                "page": {"id": "main", "epoch": "epoch-a"},
-                "group_id": "group-a",
-                "run_id": "run-a",
-                "after_sequence": 3,
-            },
-        },
+        "extensions.page_run",
+        name="alpha",
+        page=_PAGE,
+        group_id="group-a",
+        run_id="run-a",
+        after_sequence=3,
     )
+
     assert groups.reads == 1
     if scenario == "retired":
-        assert result["ok"] is False
-        assert result["error"]["message"] == "Extension page is unavailable; refresh the page"
+        assert response["error"]["message"] == _UNAVAILABLE
         return
-    assert result == {
+    assert response == {
         "ok": True,
         "result": {
             "stream": {"url": "/api/extension-runs/test"},

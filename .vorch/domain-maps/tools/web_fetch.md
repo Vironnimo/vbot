@@ -49,5 +49,5 @@ Read public HTTP(S) pages and documents without flooding Context. The same Tool 
 
 - `tests/core/tools/test_web_fetch*.py`: direct transport (`_public_http.py`)/media compatibility, SSRF, retries and failure classification, argument repair and harness dialects (`test_web_fetch_arguments.py`), content retention, paging/search bounds, snapshot ownership/expiry, service wire contracts, opt-in/fallback routing and cancellation.
 - `scripts/tool_lab/cases/web_media.json`: offline production-dispatch cases for the family (aliases, blocked targets, refs).
-- `tests/core/test_fetch_config.py`, Settings/Storage suites and `tests/server/rpc/test_settings_methods_web_fetch.py`: defaults, sparse persistence, public paths and secret-free setup projection.
+- `tests/core/test_fetch_config.py`, Settings/Storage suites and `tests/server/rpc/test_settings_methods_update.py`: defaults, sparse persistence, public paths and secret-free setup projection.
 - `webui/src/components/__tests__/SettingsWebFetchPanel.test.js`: opt-in controls, cost/setup information, autosave, edits during save and failure recovery.

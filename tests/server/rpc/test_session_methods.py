@@ -207,6 +207,9 @@ async def test_session_list_scopes_one_agent_and_resolves_the_effective_policy(
     assert session["compaction_policy_override"] is None
     assert session["compaction_policy_effective"]["enabled"] is True
     assert sessions.listed == [scope]
+    # Without a limit the page is bounded to the default size.
+    [page_call] = sessions.list_page_calls
+    assert page_call["limit"] == 100
 
 
 @pytest.mark.asyncio
@@ -521,6 +524,35 @@ async def test_session_policy_resolution_failure_does_not_persist_override(
 
     assert "missing Agent" in error["message"]
     assert sessions.saved_metadata == {}
+
+
+@pytest.mark.asyncio
+async def test_session_link_channel_records_the_reply_target_for_the_channel_agent_only() -> None:
+    state, _resolver, sessions = stub_session_state()
+    config = ChannelConfig(id="tg-assistant", platform="telegram", agent_id="assistant")
+    state.runtime.channel_service = SimpleNamespace(list_channels=lambda: [config])
+    key = ("assistant", "s1", None)
+    sessions.saved_metadata[key] = {"persisted": "value"}
+    link = {"session_id": "s1", "channel_id": "tg-assistant", "platform_conv_id": "12345"}
+
+    refused = await rpc_error(state, "session.link_channel", agent_id="writer", **link)
+    assert refused["code"] == "channel_config_error"
+    assert "tg-assistant" in refused["message"]
+    assert sessions.saved_metadata == {key: {"persisted": "value"}}
+
+    result = await rpc_result(state, "session.link_channel", agent_id="assistant", **link)
+
+    assert result == {"ok": True}
+    assert sessions.saved_metadata[key] == {
+        "persisted": "value",
+        "source_channel_id": "tg-assistant",
+        "platform": "telegram",
+        "platform_conv_id": "12345",
+        "last_reply_target": {"channel_id": "tg-assistant", "platform_target": "12345"},
+    }
+    # Linking changes metadata only: the Session itself is never loaded, so no
+    # note or reminder is written into it.
+    assert sessions.got == []
 
 
 @pytest.mark.asyncio

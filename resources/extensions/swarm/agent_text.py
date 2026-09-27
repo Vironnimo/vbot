@@ -9,8 +9,8 @@ OPENING_CHARS = 400
 BOARD_DESCRIPTION = (
     "Read and contribute to your group's shared Board. Use the main discussion for shared "
     "conversation and coordination. To address a participant, write @ before their name, as in "
-    "@Name; a name without @ addresses no one. A post reaches the participants it addresses or "
-    "answers in full. Other participants receive a main-discussion post longer than "
+    "@Name; a name without @ addresses no one. A post reaches the participants it addresses in "
+    "full. Other participants receive a main-discussion post longer than "
     f"{FULL_POST_CHARS} characters as its opening lines with the call to read the rest, so "
     "state the main point first. Create an "
     "additional discussion when several Agents need to work through a specific problem "
@@ -77,14 +77,13 @@ BOARD_PARAMETERS: dict[str, Any] = {
         },
         "discussion_id": {
             "type": "string",
-            "description": "Discussion to read, post in, join, or leave; required for join and "
-            "leave. When omitted, read and post use the main discussion, and a reply uses the "
-            "discussion of its post.",
+            "description": 'Discussion to read, post in, join, or leave, such as "d2"; required '
+            "for join and leave. When omitted, read and post use the main discussion.",
         },
         "message_id": {
             "type": "string",
-            "description": "Post ID for read: show only that post. Omit to read the newest "
-            "posts of a discussion, oldest first.",
+            "description": 'Post ID for read, such as "#42": show only that post. Omit to read '
+            "the newest posts of a discussion, oldest first.",
         },
         "before": {
             "type": "string",
@@ -112,10 +111,6 @@ BOARD_PARAMETERS: dict[str, Any] = {
             "maxLength": 120,
             "description": "Discussion title. Required for create.",
         },
-        "reply_to": {
-            "type": "string",
-            "description": "Post ID to answer with post. Omit for a new message.",
-        },
     },
     "required": ["action"],
 }
@@ -134,7 +129,7 @@ RESUME_REMINDER = (
 )
 INITIAL_MESSAGE = (
     "Read the user's request on the Board with swarm_board "
-    '{{"action": "read", "message_id": "{goal_post_id}"}}, then discuss it there with the '
+    '{{"action": "read", "message_id": "{goal_post}"}}, then discuss it there with the '
     "other Agents before starting implementation.\n\n"
     "Take time to understand the request together and explore how to achieve the best possible "
     "result. Respond to one another, ask follow-up questions, compare alternatives, and work "
@@ -177,7 +172,7 @@ ERRORS = {
     "message_not_found": "This post is unavailable in your group. Read its discussion "
     "to find an available post.",
     "invalid_recipient": "A recipient is not a participant in your group. swarm_state lists "
-    "the participants' names and IDs.",
+    "the participants' names.",
     "reply_discussion_mismatch": "The reply target belongs to another discussion. Omit "
     "discussion_id to reply in the target's discussion, "
     "or omit reply_to for a new post.",
@@ -223,7 +218,7 @@ DELIVERY_MORE = {
 }
 
 # swarm_state results.
-STATE_YOU = "{name} ({participant_id}), {state}"
+STATE_YOU = "{name}, {state}"
 STATE_PENDING = {
     "none": "No pending messages.",
     "one": "1 message for you; receive it with swarm_inbox.",
@@ -252,8 +247,8 @@ STATE_WAKE_PACED = (
 STATE_WAKE_ADDRESSED = " and posts that address or answer you"
 STATE_PARTICIPANTS = "{count} ({totals})"
 STATE_ROSTER_HEADER = "Participants:"
-STATE_ROSTER_LINE = "- {name} ({participant_id}{you}): {state}"
-STATE_ROSTER_YOU = ", you"
+STATE_ROSTER_LINE = "- {name}{you}: {state}"
+STATE_ROSTER_YOU = " (you)"
 STATE_MORE = "More participants exist. Continue with {call}"
 
 # Notes on a call that ran after a repair the Agent should know about.
@@ -269,9 +264,6 @@ MESSAGE_DISCUSSION_IGNORED = (
 )
 USER_RECIPIENT = (
     "The user is not a participant and sees every Board post, so the user needs no recipient entry."
-)
-POST_BY_NUMBER = (
-    '{field} "{value}" is not a post ID; this uses post {post_id}, which has that number.'
 )
 POST_CLOSE_MATCH = (
     '{field} "{value}" does not exist; this uses post {post_id}, its only close match.'
@@ -333,12 +325,12 @@ RECIPIENT_UNKNOWN = "recipients: {values} {verb} not a participant in your group
 RECIPIENT_SUGGESTIONS = "Did you mean {suggestions}?"
 RECIPIENT_ROSTER = "Participants: {roster}."
 RECIPIENT_RETRY = (
-    'Repeat the call with recipients {corrected}. Names also work, and "all" addresses every '
-    "other participant. Nothing was saved."
+    'Repeat the call with recipients {corrected}; "all" addresses every other participant. '
+    "Nothing was saved."
 )
 RECIPIENT_CHOOSE = (
-    'Repeat the call with recipients chosen from these participants; names also work, and "all" '
-    "addresses every other participant. Nothing was saved."
+    'Repeat the call with recipients chosen from these participants; "all" addresses every other '
+    "participant. Nothing was saved."
 )
 REPLY_NOT_FOUND = 'reply_to "{value}" is not a post ID in your group.'
 POST_SUGGESTION = 'Did you mean post {post_id} by {author} in {discussion}: "{excerpt}"?'
@@ -372,8 +364,9 @@ CREATE_IN_DISCUSSION = (
     "Nothing was saved."
 )
 POST_WITH_MESSAGE_ID = (
-    "message_id selects a post to read. To answer post {post_id}, repeat the call with reply_to "
-    '"{post_id}" instead of message_id; to post a new message, omit message_id. Nothing was saved.'
+    "post does not use message_id, which selects a post to read. To answer post {post_id}, "
+    "repeat the call without message_id and write @ before its author's name in text. Nothing "
+    "was saved."
 )
 POST_WITH_TWO_TARGETS = (
     "message_id is only for read, and it differs from reply_to. Repeat the call with only "

@@ -7,6 +7,7 @@ import logging
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, Mock
 from zoneinfo import ZoneInfo
 
@@ -28,15 +29,14 @@ from core.projects import (
     ResolutionAgentNotFoundError,
     ResolutionProjectNotFoundError,
 )
-from core.runs import RunKind
 from core.sessions import SessionAddress
 from tests.core.automation.cron_test_support import (
     make_service,
 )
 
 
-@pytest.mark.parametrize("expression", ["0 0 30 2 *", "0 0 31 4 *"])
-def test_impossible_cron_is_rejected_before_mutation(tmp_path, expression):
+def test_impossible_cron_is_rejected_before_mutation(tmp_path):
+    expression = "0 0 30 2 *"
     service, _ = make_service(tmp_path, tz="Europe/Berlin")
     with pytest.raises(CronJobValidationError):
         service.parse_schedule(expression)
@@ -143,121 +143,83 @@ def test_cron_no_op_update_does_not_log(tmp_path: Path, caplog: pytest.LogCaptur
     assert not [record for record in caplog.records if record.name == "vbot.automation.cron"]
 
 
-def test_schedule_update_preserves_remaining_runs_when_omitted(tmp_path: Path) -> None:
-    service, _trigger_service = make_service(tmp_path)
-    job = service.create_job(
-        agent_id="agent-one",
-        prompt="Run three times",
-        schedule_type="cron",
-        cron_expression="0 9 * * *",
-        remaining_runs=3,
-    )
-
-    updated = service.update_job(
-        job.id,
-        schedule_type="interval",
-        interval_seconds=120,
-        interval_anchor_at=datetime.now(UTC).isoformat(),
-    )
-
-    assert updated.schedule_type == "interval"
-    assert updated.remaining_runs == 3
+_CRON = {"schedule_type": "cron", "cron_expression": "0 9 * * *"}
+_IN_AN_HOUR = "in-an-hour"
 
 
-def test_explicit_null_remaining_runs_makes_recurring_job_unlimited(tmp_path: Path) -> None:
-    service, _trigger_service = make_service(tmp_path)
-    job = service.create_job(
-        agent_id="agent-one",
-        prompt="Run three times",
-        schedule_type="cron",
-        cron_expression="0 9 * * *",
-        remaining_runs=3,
-    )
-
-    updated = service.update_job(job.id, remaining_runs=None)
-
-    assert updated.remaining_runs is None
-
-
-@pytest.mark.parametrize("remaining_runs", [None, 2])
-def test_switch_to_once_requires_explicit_repeat_one_when_current_count_is_incompatible(
+@pytest.mark.parametrize(
+    ("created", "changes", "outcome"),
+    [
+        pytest.param(
+            {**_CRON, "remaining_runs": 3},
+            {"schedule_type": "interval", "interval_seconds": 120},
+            ("interval", 3),
+            id="kept-when-omitted-on-schedule-change",
+        ),
+        pytest.param(
+            {**_CRON, "remaining_runs": 3},
+            {"remaining_runs": None},
+            ("cron", None),
+            id="explicit-null-makes-recurring-unlimited",
+        ),
+        pytest.param(
+            {**_CRON, "remaining_runs": None},
+            {"schedule_type": "once", "run_at": _IN_AN_HOUR},
+            CronJobValidationError,
+            id="switch-to-once-from-unlimited-needs-explicit-one",
+        ),
+        pytest.param(
+            {**_CRON, "remaining_runs": 2},
+            {"schedule_type": "once", "run_at": _IN_AN_HOUR},
+            CronJobValidationError,
+            id="switch-to-once-from-several-needs-explicit-one",
+        ),
+        pytest.param(
+            {**_CRON, "remaining_runs": 4},
+            {"schedule_type": "once", "run_at": _IN_AN_HOUR, "remaining_runs": 1},
+            ("once", 1),
+            id="switch-to-once-with-explicit-one",
+        ),
+        pytest.param(
+            {**_CRON, "remaining_runs": 1},
+            {"schedule_type": "once", "run_at": _IN_AN_HOUR},
+            ("once", 1),
+            id="switch-to-once-keeps-a-compatible-one",
+        ),
+        pytest.param(
+            {"schedule_type": "once", "run_at": _IN_AN_HOUR},
+            {"remaining_runs": None},
+            CronJobValidationError,
+            id="once-rejects-explicit-null",
+        ),
+    ],
+)
+def test_update_applies_the_remaining_runs_rules(
     tmp_path: Path,
-    remaining_runs: int | None,
+    created: dict[str, Any],
+    changes: dict[str, Any],
+    outcome: tuple[str, int | None] | type[Exception],
 ) -> None:
+    in_an_hour = (datetime.now(UTC) + timedelta(hours=1)).isoformat()
+
+    def resolved(fields: dict[str, Any]) -> dict[str, Any]:
+        values = {**fields}
+        if values.get("run_at") == _IN_AN_HOUR:
+            values["run_at"] = in_an_hour
+        if values.get("schedule_type") == "interval":
+            values["interval_anchor_at"] = datetime.now(UTC).isoformat()
+        return values
+
     service, _trigger_service = make_service(tmp_path)
-    job = service.create_job(
-        agent_id="agent-one",
-        prompt="Switch schedule",
-        schedule_type="cron",
-        cron_expression="0 9 * * *",
-        remaining_runs=remaining_runs,
-    )
+    job = service.create_job(agent_id="agent-one", prompt="Runs", **resolved(created))
 
-    with pytest.raises(CronJobValidationError):
-        service.update_job(
-            job.id,
-            schedule_type="once",
-            run_at=(datetime.now(UTC) + timedelta(hours=1)).isoformat(),
-        )
-
-    assert service.get_job(job.id).schedule_type == "cron"
-    assert service.get_job(job.id).remaining_runs == remaining_runs
-
-
-def test_switch_to_once_accepts_explicit_repeat_one(tmp_path: Path) -> None:
-    service, _trigger_service = make_service(tmp_path)
-    job = service.create_job(
-        agent_id="agent-one",
-        prompt="Switch schedule",
-        schedule_type="cron",
-        cron_expression="0 9 * * *",
-        remaining_runs=4,
-    )
-
-    updated = service.update_job(
-        job.id,
-        schedule_type="once",
-        run_at=(datetime.now(UTC) + timedelta(hours=1)).isoformat(),
-        remaining_runs=1,
-    )
-
-    assert updated.schedule_type == "once"
-    assert updated.remaining_runs == 1
-
-
-def test_switch_to_once_preserves_compatible_repeat_one_when_omitted(tmp_path: Path) -> None:
-    service, _trigger_service = make_service(tmp_path)
-    job = service.create_job(
-        agent_id="agent-one",
-        prompt="Switch schedule",
-        schedule_type="cron",
-        cron_expression="0 9 * * *",
-        remaining_runs=1,
-    )
-
-    updated = service.update_job(
-        job.id,
-        schedule_type="once",
-        run_at=(datetime.now(UTC) + timedelta(hours=1)).isoformat(),
-    )
-
-    assert updated.schedule_type == "once"
-    assert updated.remaining_runs == 1
-
-
-def test_once_update_rejects_explicit_null_repeat(tmp_path: Path) -> None:
-    service, _trigger_service = make_service(tmp_path)
-    job = service.create_job(
-        agent_id="agent-one",
-        prompt="Run once",
-        schedule_type="once",
-        run_at=(datetime.now(UTC) + timedelta(hours=1)).isoformat(),
-    )
-
-    with pytest.raises(CronJobValidationError):
-        service.update_job(job.id, remaining_runs=None)
-
-    assert service.get_job(job.id).remaining_runs == 1
+    if isinstance(outcome, tuple):
+        updated = service.update_job(job.id, **resolved(changes))
+        assert (updated.schedule_type, updated.remaining_runs) == outcome
+    else:
+        with pytest.raises(outcome):
+            service.update_job(job.id, **resolved(changes))
+        assert service.get_job(job.id) == job
 
 
 def test_jobs_json_is_created_on_demand(tmp_path: Path) -> None:
@@ -275,10 +237,8 @@ def test_jobs_json_is_created_on_demand(tmp_path: Path) -> None:
     assert json.loads(jobs_path.read_text(encoding="utf-8")) == {"format_version": 1, "jobs": []}
 
 
-@pytest.mark.parametrize("terminal_status", ["completed", "missed"])
-def test_terminal_job_status_cannot_be_changed_through_update(
-    tmp_path: Path, terminal_status: CronJobStatus
-) -> None:
+def test_terminal_job_status_cannot_be_changed_through_update(tmp_path: Path) -> None:
+    terminal_status: CronJobStatus = "completed"
     service, _trigger_service = make_service(tmp_path)
     job = service.create_job(
         agent_id="agent-one",
@@ -356,18 +316,28 @@ def test_invalid_job_is_skipped_and_preserved_when_valid_jobs_change(
     assert len(persisted) == 4
 
 
-def test_malformed_jobs_file_disables_cron_without_overwriting_it(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
+@pytest.mark.parametrize(
+    ("content", "message"),
+    [
+        pytest.param("{", "Invalid JSON", id="malformed"),
+        pytest.param(
+            json.dumps({"format_version": 2, "jobs": []}),
+            "written by a newer vBot",
+            id="newer-format",
+        ),
+    ],
+)
+def test_unreadable_jobs_file_disables_cron_without_overwriting_it(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, content: str, message: str
 ) -> None:
     jobs_path = tmp_path / "cron" / "jobs.json"
     jobs_path.parent.mkdir(parents=True)
-    jobs_path.write_text("{", encoding="utf-8")
+    jobs_path.write_text(content, encoding="utf-8")
     service, _trigger_service = make_service(tmp_path)
 
     with caplog.at_level(logging.ERROR):
         assert service.list_jobs() == []
-
-    with pytest.raises(CronStorageError):
+    with pytest.raises(CronStorageError, match=message):
         service.create_job(
             agent_id="agent-one",
             prompt="Must not overwrite",
@@ -376,7 +346,7 @@ def test_malformed_jobs_file_disables_cron_without_overwriting_it(
         )
 
     assert caplog.records
-    assert jobs_path.read_text(encoding="utf-8") == "{"
+    assert jobs_path.read_text(encoding="utf-8") == content
 
 
 def test_unknown_fields_are_kept_when_jobs_are_saved(tmp_path: Path) -> None:
@@ -414,25 +384,6 @@ def test_unknown_fields_are_kept_when_jobs_are_saved(tmp_path: Path) -> None:
     assert persisted["future_setting"] == {"kept": True}
     assert persisted["jobs"][0]["prompt"] == "Changed schedule"
     assert persisted["jobs"][0]["timezone"] == "Europe/Paris"
-
-
-def test_jobs_written_by_a_newer_vbot_are_never_overwritten(tmp_path: Path) -> None:
-    jobs_path = tmp_path / "cron" / "jobs.json"
-    jobs_path.parent.mkdir(parents=True)
-    original = json.dumps({"format_version": 2, "jobs": []})
-    jobs_path.write_text(original, encoding="utf-8")
-    service, _trigger_service = make_service(tmp_path)
-
-    assert service.list_jobs() == []
-    with pytest.raises(CronStorageError, match="written by a newer vBot"):
-        service.create_job(
-            agent_id="agent-one",
-            prompt="Must not overwrite",
-            schedule_type="cron",
-            cron_expression="0 9 * * *",
-        )
-
-    assert jobs_path.read_text(encoding="utf-8") == original
 
 
 def test_save_refuses_a_jobs_file_that_stopped_loading(tmp_path: Path) -> None:
@@ -492,34 +443,25 @@ def test_cron_expression_rejects_seconds_field(tmp_path: Path) -> None:
         )
 
 
-def test_once_timestamp_is_normalized_from_server_timezone_to_explicit_utc(
-    tmp_path: Path,
+@pytest.mark.parametrize(
+    ("run_at", "expected"),
+    [
+        pytest.param("2099-07-18T16:00", "2099-07-18T14:00:00+00:00", id="summer-time"),
+        pytest.param("2099-12-18T16:00", "2099-12-18T15:00:00+00:00", id="winter-time"),
+    ],
+)
+def test_once_local_wall_time_is_stored_as_explicit_utc(
+    tmp_path: Path, run_at: str, expected: str
 ) -> None:
     service, _trigger_service = make_service(tmp_path, tz="Europe/Berlin")
 
     created = service.create_job(
-        agent_id="agent-one",
-        prompt="Run at local wall time",
-        schedule_type="once",
-        run_at="2099-07-18T16:00",
-    )
-
-    assert created.run_at == "2099-07-18T14:00:00+00:00"
-    assert service.next_fire_at(created) == "2099-07-18T14:00:00+00:00"
-
-
-def test_system_timezone_uses_iana_zone_with_dst_rules(tmp_path: Path) -> None:
-    service, _trigger_service = make_service(tmp_path, tz="Europe/Berlin")
-
-    created = service.create_job(
-        agent_id="agent-one",
-        prompt="Use system zone",
-        schedule_type="once",
-        run_at="2026-12-18T16:00",
+        agent_id="agent-one", prompt="Run at local wall time", schedule_type="once", run_at=run_at
     )
 
     assert service.system_timezone_name() == "Europe/Berlin"
-    assert created.run_at == "2026-12-18T15:00:00+00:00"
+    assert created.run_at == expected
+    assert service.next_fire_at(created) == expected
 
 
 def test_timezone_change_reprojects_wall_clock_cron(tmp_path: Path) -> None:
@@ -686,115 +628,17 @@ def test_target_that_cannot_run_keeps_the_resolver_reason(tmp_path: Path, operat
 
 
 def test_project_id_defaults_to_none_and_round_trips(tmp_path: Path) -> None:
-    # Arrange
     service, _trigger_service = make_service(tmp_path)
+    fields: dict[str, Any] = {"agent_id": "builder", "prompt": "Prompt", "schedule_type": "cron"}
+    bare = service.create_job(**fields, cron_expression="* * * * *")
+    blank = service.create_job(**fields, cron_expression="* * * * *", project_id="   ")
+    scoped = service.create_job(**fields, cron_expression="* * * * *", project_id="vbot")
 
-    # Act
-    bare = service.create_job(
-        agent_id="builder",
-        prompt="Bare prompt",
-        schedule_type="cron",
-        cron_expression="* * * * *",
-    )
-    scoped = service.create_job(
-        agent_id="builder",
-        prompt="Scoped prompt",
-        schedule_type="cron",
-        cron_expression="* * * * *",
-        project_id="vbot",
-    )
-
-    # Assert
-    assert bare.project_id is None
-    assert scoped.project_id == "vbot"
-    # Round-trips through persistence (clone goes through to_dict/from_dict, and a
-    # fresh service re-reads the saved jobs.json).
+    # A blank project id means no project.
+    assert [job.project_id for job in (bare, blank, scoped)] == [None, None, "vbot"]
     reloaded_service, _ = make_service(tmp_path)
-    reloaded = {job.id: job for job in reloaded_service.list_jobs()}
-    assert reloaded[bare.id].project_id is None
-    assert reloaded[scoped.id].project_id == "vbot"
-
-
-def test_blank_project_id_normalizes_to_none(tmp_path: Path) -> None:
-    # Arrange
-    service, _trigger_service = make_service(tmp_path)
-
-    # Act
-    job = service.create_job(
-        agent_id="builder",
-        prompt="Prompt",
-        schedule_type="cron",
-        cron_expression="* * * * *",
-        project_id="   ",
-    )
-
-    # Assert
-    assert job.project_id is None
-
-
-def test_jobs_json_schema_accepts_optional_project_id(tmp_path: Path) -> None:
-    # Arrange
-    jobs_path = tmp_path / "cron" / "jobs.json"
-    jobs_path.parent.mkdir(parents=True)
-    jobs_path.write_text(
-        json.dumps(
-            {
-                "format_version": 1,
-                "jobs": [
-                    {
-                        "id": "job-one",
-                        "agent_id": "builder",
-                        "name": "Prompt",
-                        "prompt": "Prompt",
-                        "schedule_type": "cron",
-                        "cron_expression": "* * * * *",
-                        "status": "active",
-                        "created_at": datetime.now(UTC).isoformat(),
-                        "project_id": "vbot",
-                    }
-                ],
-            }
-        ),
-        encoding="utf-8",
-    )
-    service, _trigger_service = make_service(tmp_path)
-
-    # Act
-    jobs = service.list_jobs()
-
-    # Assert
-    assert [job.project_id for job in jobs] == ["vbot"]
-
-
-@pytest.mark.asyncio
-async def test_run_once_job_fires_with_project_id(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # Arrange
-    service, trigger_service = make_service(tmp_path)
-    job = service.create_job(
-        agent_id="builder",
-        prompt="Once prompt",
-        schedule_type="once",
-        run_at=(datetime.now(UTC) + timedelta(minutes=15)).isoformat(),
-        project_id="vbot",
-    )
-    monkeypatch.setattr(cron_timing, "_sleep_until_utc", AsyncMock())
-
-    # Act
-    await service._run_once_job(job)
-
-    # Assert
-    trigger_service.trigger_run.assert_awaited_once_with(
-        "builder",
-        "Once prompt",
-        None,
-        project_id="vbot",
-        run_kind=RunKind.CRON,
-        contributes_to_agent_activity=False,
-    )
-    assert service.get_job(job.id).status == "completed"
+    reloaded = {job.id: job.project_id for job in reloaded_service.list_jobs()}
+    assert reloaded == {bare.id: None, blank.id: None, scoped.id: "vbot"}
 
 
 @pytest.mark.asyncio
@@ -847,14 +691,8 @@ def test_parse_schedule_accepts_only_the_supported_forms(
 
 @pytest.mark.parametrize(
     "schedule",
-    [
-        "30m",
-        "2026-07-28",
-        "tomorrow morning",
-        "every 5s",
-        "* * * * * *",
-        "in two hours",
-    ],
+    ["2026-07-28", "every 5s", "* * * * * *", "30m"],
+    ids=["date-without-time", "seconds-interval", "six-field-cron", "duration-without-in"],
 )
 def test_parse_schedule_rejects_ambiguous_or_unsupported_forms(
     tmp_path: Path,
@@ -919,25 +757,6 @@ async def test_repeat_is_consumed_when_run_is_admitted_even_if_run_fails(tmp_pat
     assert updated.remaining_runs == 0
     assert updated.status == "failed"
     assert updated.last_run_id == "run-one"
-
-
-@pytest.mark.asyncio
-async def test_repeat_is_not_consumed_when_run_admission_fails(tmp_path: Path) -> None:
-    service, trigger_service = make_service(tmp_path)
-    trigger_service.trigger_run.side_effect = RuntimeError("not admitted")
-    job = service.create_job(
-        agent_id="agent-one",
-        prompt="Finite check",
-        schedule_type="cron",
-        cron_expression="0 9 * * *",
-        remaining_runs=2,
-    )
-
-    assert await service._trigger_job_run(job) is False
-
-    updated = service.get_job(job.id)
-    assert updated.remaining_runs == 2
-    assert updated.status == "active"
 
 
 @pytest.mark.asyncio

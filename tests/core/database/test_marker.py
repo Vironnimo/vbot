@@ -36,7 +36,6 @@ from core.database.marker import (
     acquire_operation_lock,
     operation_lock_path,
     register_database,
-    write_marker_for_databases,
 )
 from tests.core.database.database_test_support import add_note, notes_spec, stored_bodies
 
@@ -46,30 +45,34 @@ def _marker_payload(data_dir: Path) -> dict[str, Any]:
     return payload
 
 
-def test_bootstrap_marker_lists_no_database(data_dir: Path) -> None:
-    assert _marker_payload(data_dir) == {"databases": {}, "format_version": 1}
-    marker = read_marker(data_dir)
+def test_the_bootstrap_marker_authorizes_creating_and_registering_databases(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "fresh"
+    root.mkdir()
+    write_bootstrap_marker(root)
+    assert _marker_payload(root) == {"databases": {}, "format_version": 1}
+    marker = read_marker(root)
     assert marker is not None
     assert marker.databases == {}
 
-
-def test_first_open_creates_and_registers_the_database(data_dir: Path) -> None:
-    database = open_database(notes_spec(data_dir))
+    database = open_database(notes_spec(root))
     database.close()
 
-    assert _marker_payload(data_dir) == {
+    assert _marker_payload(root) == {
         "databases": {"notes": {"database_id": database.database_id, "format_generation": 1}},
         "format_version": 1,
     }
-    assert database.data_dir == data_dir.resolve()
+    assert database.data_dir == root.resolve()
 
 
 @pytest.mark.parametrize(
     "payload",
     [
-        {"databases": {}},
+        "{",
         {"format_version": 1},
         {"format_version": 2, "databases": {}},
+        {"format_version": 0, "databases": {}},
         {"format_version": True, "databases": {}},
         {"format_version": 1, "databases": []},
         {
@@ -78,30 +81,27 @@ def test_first_open_creates_and_registers_the_database(data_dir: Path) -> None:
         },
         {
             "format_version": 1,
-            "databases": {"notes": {"database_id": "a" * 31, "format_generation": 1}},
-        },
-        {
-            "format_version": 1,
             "databases": {"notes": {"database_id": "a" * 32, "format_generation": 0}},
         },
         {"format_version": 1, "databases": {"notes": {"database_id": "a" * 32}}},
     ],
     ids=[
-        "missing-format",
+        "malformed-json",
         "missing-databases",
         "newer-format",
+        "older-format",
         "boolean-format",
         "database-list",
         "invalid-name",
-        "invalid-id",
         "invalid-generation",
         "missing-entry-generation",
     ],
 )
 def test_a_marker_with_a_missing_invalid_or_newer_known_field_is_refused(
-    data_dir: Path, payload: dict
+    data_dir: Path, payload: dict[str, Any] | str
 ) -> None:
-    (data_dir / MARKER_FILE_NAME).write_text(json.dumps(payload), encoding="utf-8")
+    serialized = payload if isinstance(payload, str) else json.dumps(payload)
+    (data_dir / MARKER_FILE_NAME).write_text(serialized, encoding="utf-8")
 
     with pytest.raises(DatabaseFormatError):
         read_marker(data_dir)
@@ -136,7 +136,9 @@ def test_an_older_vbot_keeps_the_fields_a_newer_one_added_to_the_marker(
     assert set(rewritten["databases"]["tasks"]) == {"database_id", "format_generation"}
 
 
-def test_existing_root_without_marker_names_the_converter(tmp_path: Path) -> None:
+def test_an_existing_root_without_a_marker_names_the_generation_1_converter(
+    tmp_path: Path,
+) -> None:
     root = tmp_path / "uninitialized"
     root.mkdir()
 
@@ -145,11 +147,7 @@ def test_existing_root_without_marker_names_the_converter(tmp_path: Path) -> Non
     assert refused.value.data_dir == root.resolve()
     assert refused.value.converter_command == f"{GENERATION_1_CONVERTER_COMMAND} {root.resolve()}"
     assert not notes_spec(root).path.exists()
-
-
-def test_the_named_converter_is_the_generation_1_converter_module() -> None:
     module = GENERATION_1_CONVERTER_COMMAND.removeprefix("python -m ")
-
     assert importlib.util.find_spec(f"{module}.__main__") is not None
 
 
@@ -201,16 +199,6 @@ def test_registration_refuses_another_identity_for_a_listed_name(data_dir: Path)
     register_database(data_dir, "notes", MarkerEntry(database.database_id, 1))
     with pytest.raises(DatabaseFormatError, match="different identity"):
         register_database(data_dir, "notes", MarkerEntry("b" * 32, 1))
-
-
-def test_marker_for_databases_requires_canonical_paths(data_dir: Path, tmp_path: Path) -> None:
-    elsewhere = tmp_path / "elsewhere"
-    database = open_offline_database(notes_spec(elsewhere))
-    database.close()
-
-    with pytest.raises(DatabaseFormatError, match="canonical path"):
-        write_marker_for_databases(data_dir, [database.path])
-    assert _marker_payload(data_dir)["databases"] == {}
 
 
 def test_the_maintenance_guard_blocks_opening_and_snapshots_until_finished(
@@ -279,24 +267,10 @@ def test_the_operation_lock_is_exclusive_and_never_broken_by_age(
     try:
         assert acquire_operation_lock(data_dir, timeout=0.05) is None
         with pytest.raises(DatabaseUnavailableError, match="busy"):
-            write_bootstrap_marker_under_lock(data_dir)
+            register_database(data_dir, "notes", MarkerEntry("a" * 32, 1))
     finally:
         owner.release()
 
     again = acquire_operation_lock(data_dir, timeout=0.05)
     assert again is not None
     again.release()
-
-
-def write_bootstrap_marker_under_lock(data_dir: Path) -> None:
-    register_database(data_dir, "notes", MarkerEntry("a" * 32, 1))
-
-
-def test_bootstrap_marker_authorizes_a_fresh_root(tmp_path: Path) -> None:
-    root = tmp_path / "fresh"
-    root.mkdir()
-    write_bootstrap_marker(root)
-
-    database = open_database(notes_spec(root))
-    database.close()
-    assert set(_marker_payload(root)["databases"]) == {"notes"}

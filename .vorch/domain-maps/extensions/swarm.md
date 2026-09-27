@@ -10,7 +10,10 @@ Swarm Activity uses live `run_active` as authoritative over an older persisted S
 ## Terms
 
 ### Addressed participant
-A participant a Board post names after `@` in its text (display name or participant id, any case), whose post it answers (`reply_to`), or whom a caller lists in explicit `recipients`; never the author. A name without `@` is only a mention. The Store saves them in `recipients_json` and gives them the `ping` route. "Ping" survives only as that route and settings key; the UI calls it "Direct mentions".
+A participant a Board post names after `@` in its text (display name or participant id, any case), whose post it answers (`reply_to`, an unadvertised caller option), or whom a caller lists in explicit `recipients`; never the author. A name without `@` is only a mention. The Store saves them in `recipients_json` and gives them the `ping` route. "Ping" survives only as that route and settings key; the UI calls it "Direct mentions".
+
+### Post number, discussion number
+The short references participants see and send: `#N` is a post's Swarm-wide `sequence` (the goal post is `#0`), `dN` a discussion's `sequence` (the main discussion is `d1`). The Store resolves them to the stored `pst_`/`dsc_` ids inside each operation, so saved rows and the schema keep those ids, and exact stored ids stay accepted.
 
 ### Opening
 The first ~400 characters (`OPENING_CHARS`, cut at a word boundary) of a main-discussion post longer than 1000 characters (`FULL_POST_CHARS`) by a participant. Automatic delivery and Inbox show only the opening plus the `swarm_board` read call to readers on the `main` route; Board reads always show whole posts.
@@ -105,7 +108,8 @@ the profile transaction; omission on an update retains the existing shortcut.
 Explicit shortcuts remain validated and collision-checked (`store.py`).
 
 New Swarms atomically retain the original user request as an immutable user-authored
-Board post at sequence zero. `goal_post_id` identifies it in the Swarm snapshot. The
+Board post at sequence zero. `goal_post_id` identifies it in the Swarm snapshot, and
+`goal_post_sequence` gives its post number. The
 page pins it separately; chronological discussion pages exclude it, while
 exact-message reads return it. The Board Tool's list result, and main-discussion
 reads that reach the start, carry a `user_request` line with the copyable read call. It creates no delivery audience: the initial
@@ -200,12 +204,16 @@ addressed someone, 4.3 participants on average, and about 70% of those names
 were credits, possessives or ownership notes rather than direct address; 44% of
 full deliveries of long posts and 28 of 42 cut-short Quiet periods came only
 from such names. No post used `@` then, while 39% did in the Run before, when
-`@Name` was the convention (Sessions, 2026-09). The `recipients` field is
-unadvertised: it stays accepted and validated for callers that send it, and the
-human compose form uses it, but Agents address by writing `@Name`. Replies derive their discussion from the exact same-Swarm message
+`@Name` was the convention (Sessions, 2026-09). The `recipients` and
+`reply_to` fields are unadvertised: they stay accepted and validated for callers
+that send them, and the human compose form uses them, but Agents address by
+writing `@Name`. `reply_to` added little for Agents: in one Run 79 of 585 Agent
+posts used it and 57 of those also wrote `@` before the author's name, 577 posts
+were in the main discussion, and its 16-character ids drew typos (Sessions,
+2026-09). Replies derive their discussion from the exact same-Swarm message
 unless an explicit, matching discussion is supplied. Reads start with newest
 posts, chronological within each page. The Tool continues to older posts with
-`before` (the oldest shown post id); Store read cursors remain accepted.
+`before` (the oldest shown post number); Store read cursors remain accepted.
 The Board UI reverses each page for newest-first display and appends older pages
 below it; this presentation does not change the Store or Tool read order.
 Ordinary post bodies use the shared `MarkdownContent.svelte` renderer and Chat
@@ -224,23 +232,26 @@ Swarm Tool calls follow the Tool error-tolerance rules (`../tools.md`). Owners:
   as paging fields on post, with a `note`. It clamps `limit` above 100 with a note.
   It rejects a field that another action would use, naming those actions. It
   corrects a read-only reference with a note when exactly one candidate exists:
-  a post number (`pst_N`), a close post id, a close discussion id, or a post id
-  passed as `cursor`. It never corrects a write target (`reply_to`, a post's
-  `discussion_id`, recipients); those fail before any effect with the exact
-  corrected call.
+  a close stored post id (`pst_...`), a close stored discussion id (`dsc_...`),
+  or a post reference passed as `cursor`. Post numbers (`#42` or `42`) and
+  discussion numbers (`d2` or `2`) are exact references, not corrections. It
+  never corrects a write target (`reply_to`, a post's `discussion_id`,
+  recipients); those fail before any effect with the exact corrected call.
 - `_board_view.py` renders results as plain text: one header line per post
-  (`[post_id] Author (in ...; reply to ...; to ...)`), then its verbatim
+  (`[#N] Author (in ...; reply to #M; to ...)`), then its verbatim
   text, or its Opening in delivered text. Copyable continuation calls follow as
   JSON. A post result states who receives it in full because it addresses them
   and how many readers receive only its Opening.
 
-The Store keeps its exact-id contracts; `post_suggestions` only feeds these
-corrections and errors.
+The Store resolves exact post and discussion numbers to stored ids inside each
+operation (`_store_records._post_id`, `_discussion_id`); a value that is no
+existing number passes through unchanged, so the existing not-found errors
+apply. `post_suggestions` only feeds the corrections and errors above.
 
 The Board Tool description guides participants toward
 the main discussion for shared conversation and coordination; additional discussions
 are for several Agents working through a specific problem. New announcements carry
-readable text, exact discussion/opening-post IDs and read/join guidance. Human Board
+readable text, the discussion and opening-post numbers (`d2`, `#N`) and read/join guidance. Human Board
 reads additionally resolve the discussion target from its creation request outcome,
 so the page can render a localized navigation action without parsing message text.
 Ordinary posts cannot acquire that action by copying an announcement's content.
@@ -286,7 +297,7 @@ the route only for participants in the original audience. A post request's repla
 hash still covers only the explicit recipients it sent. The receipt content
 hash covers these entries, not their rendering. Agents read deliveries as plain
 text (`_board_view.py`): a heading per run of one discussion ("In the main
-discussion (id):" or the titled discussion), then one block per post with its id,
+discussion (d1):" or the titled discussion), then one block per post with its number,
 author name, reply target and addressed names ("to you and Name") followed by the
 verbatim text, or by its Opening and the read call on the `main` route
 (`_board_view.shortened`). Sequence, timestamps and route names stay out of the
@@ -316,11 +327,12 @@ delivery, so checking right after posting is unnecessary: in session evidence ~1
 of Inbox calls were empty, most of them directly after a post.
 
 `swarm_state` is read-only, with optional cursor and limit (above 100 runs as 100
-with a note). It returns readable fields: `you` (name, id, state), `pending`
+with a note). It returns readable fields: `you` (name, state), `pending`
 (count and how to receive it), `delivery` and `wake` (the route policies as
 sentences), `participants` (count by state), `more` with a copyable continuation,
-and a roster listing "- Name (id): state" that marks the reader; cursors bind page
-size (`test_swarm_board.py`). Participants cannot rename themselves. The Store shuffles a pool of 300 modern
+and a roster listing "- Name: state" that marks the reader "(you)"; cursors bind
+page size (`test_swarm_board.py`). Participant ids stay out of all Agent text,
+since names are unique within a Swarm. Participants cannot rename themselves. The Store shuffles a pool of 300 modern
 first names (`_participant_names.py`) once per new Swarm, assigning without
 replacement across formation rows. Larger Swarms use numbered suffixes after the
 pool is exhausted. So that a name in post text reads unmistakably as a
@@ -334,8 +346,9 @@ recipients remain participant ids (`test_swarm_store.py`). For explicit
 `recipients` the Board Tool also resolves exact display names, `all`/`*` (every
 other participant), and words meaning the user. The user is not a participant,
 so that recipient is dropped with a note. Values
-matching no participant fail with the roster and any unique close id; the Tool
-never guesses between participants (`test_swarm_board.py`). Progress, results and requests for help belong on the
+matching no participant fail with the roster and any unique participant whose
+name or id is close, named by display name; the Tool never guesses between
+participants (`test_swarm_board.py`). Progress, results and requests for help belong on the
 Board, not in participant lifecycle fields. There is no participant-owned wait, blocked, finishing or done state,
 completion reservation, structured participant summary field or automatic group completion.
 
@@ -496,7 +509,9 @@ hover/focus tooltips. The roster filters by each participant's current
 `discussion_ids` from the Store snapshot, including join/leave invalidations and
 discussions outside the selector's loaded page. Being addressed does not join a peer.
 Posts list their addressed participants by display name ("To: ..."); the compose
-form's optional recipient field takes participant IDs.
+form's optional recipient field takes participant IDs. Each post header shows the
+post number (`#N`) beside its time, a reply shows its target's number, and the
+compose form's reply field takes a post number.
 Post backgrounds and left borders share the stable author color. The Swarm id
 stays under Usage (`SwarmPage.test.js`, `test_swarm_store_board.py`).
 Usage totals and participant Model rows abbreviate large counts with k/mio/mrd
@@ -613,7 +628,10 @@ reasons yet. Evidence comes from eight analyzed Runs (Sessions, 2026-09); counts
 
 | Text | Reason |
 |---|---|
-| `swarm_board`: `To address a participant, write @ before their name, as in @Name; a name without @ addresses no one. A post reaches the participants it addresses or answers in full.` | Agents set `recipients` on only 10-70% of posts but wrote `@Name` in 39% when it was the convention, so `@` replaces the field (F2, F6). Plain names addressed for one Run and turned 96% of posts into addressed ones, mostly through credits (F3); the condition leads the sentence so Agents do not put `@` before every name, and the second clause stops a vocative without `@` from seeming to address. `without delay` was dropped: delivery settings can hold addressed posts, and for running Agents every post arrives at the next Model request anyway. |
+| `swarm_board`: `To address a participant, write @ before their name, as in @Name; a name without @ addresses no one. A post reaches the participants it addresses in full.` | Agents set `recipients` on only 10-70% of posts but wrote `@Name` in 39% when it was the convention, so `@` replaces the field (F2, F6). Plain names addressed for one Run and turned 96% of posts into addressed ones, mostly through credits (F3); the condition leads the sentence so Agents do not put `@` before every name, and the second clause stops a vocative without `@` from seeming to address. `without delay` was dropped: delivery settings can hold addressed posts, and for running Agents every post arrives at the next Model request anyway. `or answers` was dropped with the advertised `reply_to`. |
+| `discussion_id`: `such as "d2"`; `message_id`: `Post ID for read, such as "#42"` | Results show posts as `[#42]` and discussions as `(d2)`; the example pins the form the field takes (F2). The 16-character stored ids drew typos and were cited in about 28 post texts of one Run (Sessions, 2026-09). |
+| `POST_WITH_MESSAGE_ID`: `post does not use message_id, which selects a post to read. To answer post {post_id}, repeat the call without message_id and write @ before its author's name in text.` | Agents that pass `message_id` to answer a post learn the advertised way, `@Name` (F5). |
+| Roster `- {name}: {state}`, `(you)`; `invalid_recipient`: `swarm_state lists the participants' names.` | Names are unique within a Swarm and are what Agents address with; showing ids invited copying them (F3, F6). |
 | `swarm_board`: `Other participants receive a main-discussion post longer than 1000 characters as its opening lines with the call to read the rest, so state the main point first.` | Tells the author what readers see, so the opening carries the point (F4). Board text was ~48% of input; median post length reached 2,458 characters in one Run (F6). |
 | `swarm_board`: `joining one makes its future posts reach you in full` | Joining is the way to get discussion posts whole; the added `in full` contrasts with Openings (F4). |
 | `swarm_board` foreign `check_inbox` action: `Use {"action": "read"} to read the newest posts of the main discussion. If swarm_inbox is among your Tools, it receives all your pending Board messages.` | Under default delivery the Session has no `swarm_inbox`; the old text named only that Tool (F5). |

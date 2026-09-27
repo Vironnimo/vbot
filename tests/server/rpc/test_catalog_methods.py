@@ -16,6 +16,7 @@ from core.tools import ToolRegistry, tool_success
 from server.rpc.catalog_methods import _list_commands, _list_files, _list_tools
 from server.rpc.errors import RpcError
 from tests.server.rpc.chat_methods_test_support import _InlineSessionPool
+from tests.server.rpc_test_support import StubAdapter, make_state, rpc_result
 
 
 class _Skill:
@@ -452,6 +453,94 @@ def test_tool_list_surfaces_ready_hint_and_extension_fields() -> None:
 
 def _raise_ready() -> bool:
     raise RuntimeError("readiness probe blew up")
+
+
+@pytest.mark.asyncio
+async def test_tool_list_returns_public_tools_sorted_with_their_full_projection(
+    tmp_path: Path,
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    registry = state.runtime.tools
+    for name, description in (("z_tool", "Last tool"), ("a_tool", "First tool")):
+        registry.register(
+            name,
+            description,
+            {"type": "object", "properties": {}, "additionalProperties": False},
+            lambda _context, _arguments: tool_success({}),
+        )
+    # The internal Skill loader is not a user-selectable Tool.
+    registry.register(
+        "skill",
+        "Load skills",
+        {"type": "object", "properties": {}, "additionalProperties": False},
+        lambda _context, _arguments: tool_success({}),
+        internal=True,
+    )
+
+    result = await rpc_result(state, "tool.list")
+
+    assert result == {
+        "tools": [
+            {
+                "name": name,
+                "description": description,
+                "ready": True,
+                "readiness_hint": None,
+                "family": None,
+                "family_label": None,
+                "activation": "configurable",
+                "requires_opt_in": False,
+                "activation_source": None,
+                "constraints": [],
+                "session_scoped": False,
+                "extension": None,
+                "schema_fingerprint": registry.schema_fingerprint(name),
+                "parallel_safe": True,
+                "project_configurable": True,
+                "project_configurability_reason": None,
+            }
+            for name, description in (("a_tool", "First tool"), ("z_tool", "Last tool"))
+        ],
+        "default_project_tools": list(PROJECT_DEFAULT_ALLOWED_TOOLS),
+    }
+
+
+@pytest.mark.asyncio
+async def test_skill_list_returns_loadable_and_invalid_diagnostics(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+
+    result = await rpc_result(state, "skill.list")
+
+    assert result == {
+        "skills": [
+            {
+                "name": "debugging",
+                "description": "Debug failures.",
+                "origin": None,
+                "valid": True,
+                "warnings": [],
+                "state": "available",
+                "requirements": {"missing": [], "optional_missing": []},
+            },
+            {
+                "name": "warned",
+                "description": "Loads with warnings.",
+                "origin": None,
+                "valid": False,
+                "warnings": ["Name does not match directory."],
+                "state": "available",
+                "requirements": {"missing": [], "optional_missing": []},
+            },
+        ],
+        "invalid_skills": [
+            {
+                "name": "broken",
+                "path": str(Path("/skills/broken/SKILL.md")),
+                "valid": False,
+                "warnings": ["missing description"],
+            }
+        ],
+    }
 
 
 # ---------------------------------------------------------------------------

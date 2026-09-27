@@ -1,25 +1,22 @@
-"""Tests for the shared HTTP helpers in :mod:`core.providers._http_shared`.
-
-Covers ``wrap_network_error`` mapping (any non-timeout
-``httpx.TransportError`` becomes ``NetworkError``; only
-``httpx.TimeoutException`` becomes ``ProviderTimeoutError``),
-``parse_sse_json_data`` (malformed JSON becomes a non-retryable
-``ProviderError``), and ``decode_response_json`` (non-object or
-malformed JSON becomes a non-retryable ``ProviderError``).
-"""
+"""Shared Provider HTTP transport: timeouts, error classification, establishment retry,
+stream line framing and the debug capture of the exact wire exchange."""
 
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
+import respx
 
+from core.debug.recorder import DebugContext, ProviderDebugRecorder
+from core.debug.store import DebugTraceStore
 from core.providers._http_shared import (
     PROVIDER_NON_STREAMING_READ_TIMEOUT_SECONDS,
     build_async_client,
@@ -36,7 +33,6 @@ from core.providers._http_shared import (
     provider_chat_timeout,
     provider_streaming_timeout,
     split_stream_lines,
-    unsupported_sampling_parameter,
     wrap_network_error,
 )
 from core.providers.errors import (
@@ -46,393 +42,178 @@ from core.providers.errors import (
     ProviderRateLimitError,
     ProviderTimeoutError,
 )
+from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.utils.retry import caller_owns_retries
 
-
-def test_provider_chat_timeout_bounds_every_non_streaming_phase() -> None:
-    """The shared client default cannot wait forever for response bytes."""
-
-    timeout = provider_chat_timeout()
-
-    assert timeout.connect == 60.0
-    assert timeout.read == PROVIDER_NON_STREAMING_READ_TIMEOUT_SECONDS == 180.0
-    assert timeout.write == 60.0
-    assert timeout.pool == 60.0
-
-
-def test_provider_streaming_timeout_disables_only_the_read_timeout() -> None:
-    """Open streams leave reads to higher-level stream liveness clocks."""
-
-    timeout = provider_streaming_timeout()
-
-    assert timeout.connect == 60.0
-    assert timeout.read is None
-    assert timeout.write == 60.0
-    assert timeout.pool == 60.0
+from .adapter_test_support import TOKEN, bearer_config
 
 
 @pytest.mark.asyncio
-async def test_streaming_requests_override_the_bounded_client_default() -> None:
-    """The shared stream builder opts out of the client's finite read timeout."""
-
+async def test_non_streaming_reads_are_bounded_and_stream_reads_are_left_to_chat_clocks() -> None:
+    chat = provider_chat_timeout()
+    streaming = provider_streaming_timeout()
     client = build_async_client(base_url="https://example.com")
     try:
-        non_streaming = client.build_request("POST", "/response")
-        streaming = build_streaming_request(client, "POST", "/stream")
+        non_streaming_request = client.build_request("POST", "/response")
+        streaming_request = build_streaming_request(client, "POST", "/stream")
     finally:
         await client.aclose()
 
-    assert non_streaming.extensions["timeout"]["read"] == 180.0
-    assert streaming.extensions["timeout"]["read"] is None
-
-
-# ---------------------------------------------------------------------------
-# wrap_network_error — exhaustive mapping table
-# ---------------------------------------------------------------------------
-
-
-def test_wrap_network_error_timeout_exception_is_provider_timeout_error() -> None:
-    """A bare ``httpx.TimeoutException`` becomes ``ProviderTimeoutError``."""
-
-    wrapped = wrap_network_error(httpx.TimeoutException("timed out"))
-
-    assert isinstance(wrapped, ProviderTimeoutError)
-    assert wrapped.retryable is True
-    assert "timed out" in str(wrapped)
-
-
-def test_wrap_network_error_connect_timeout_is_provider_timeout_error() -> None:
-    """``httpx.ConnectTimeout`` (subclass of TimeoutException) → ``ProviderTimeoutError``."""
-
-    wrapped = wrap_network_error(httpx.ConnectTimeout("connect timed out"))
-
-    assert isinstance(wrapped, ProviderTimeoutError)
-    assert wrapped.retryable is True
-
-
-def test_wrap_network_error_read_timeout_is_provider_timeout_error() -> None:
-    """``httpx.ReadTimeout`` (subclass of TimeoutException) → ``ProviderTimeoutError``."""
-
-    wrapped = wrap_network_error(httpx.ReadTimeout("read timed out"))
-
-    assert isinstance(wrapped, ProviderTimeoutError)
-    assert wrapped.retryable is True
-
-
-def test_wrap_network_error_pool_timeout_is_provider_timeout_error() -> None:
-    """``httpx.PoolTimeout`` (subclass of TimeoutException) → ``ProviderTimeoutError``."""
-
-    wrapped = wrap_network_error(httpx.PoolTimeout("pool timed out"))
-
-    assert isinstance(wrapped, ProviderTimeoutError)
-    assert wrapped.retryable is True
-
-
-def test_wrap_network_error_connect_error_is_network_error() -> None:
-    """``httpx.ConnectError`` becomes ``NetworkError`` and stays a non-ProviderError."""
-
-    wrapped = wrap_network_error(httpx.ConnectError("connection refused"))
-
-    assert isinstance(wrapped, NetworkError)
-    assert wrapped.retryable is True
-    # ``NetworkError`` must remain a non-``ProviderError`` so it never triggers
-    # model fallback (see ``.vorch/domain-maps/providers.md`` gotchas).
-    assert not isinstance(wrapped, ProviderError)
-    assert "connection refused" in str(wrapped)
-
-
-def test_wrap_network_error_read_error_is_network_error() -> None:
-    """``httpx.ReadError`` becomes ``NetworkError`` (retryable, not a ProviderError)."""
-
-    request = httpx.Request("POST", "https://example.com/")
-    wrapped = wrap_network_error(httpx.ReadError("connection reset", request=request))
-
-    assert isinstance(wrapped, NetworkError)
-    assert wrapped.retryable is True
-    assert not isinstance(wrapped, ProviderError)
-
-
-def test_wrap_network_error_write_error_is_network_error() -> None:
-    """``httpx.WriteError`` becomes ``NetworkError``."""
-
-    request = httpx.Request("POST", "https://example.com/")
-    wrapped = wrap_network_error(httpx.WriteError("write failed", request=request))
-
-    assert isinstance(wrapped, NetworkError)
-    assert not isinstance(wrapped, ProviderError)
-
-
-def test_wrap_network_error_remote_protocol_error_is_network_error() -> None:
-    """``httpx.RemoteProtocolError`` becomes ``NetworkError``."""
-
-    request = httpx.Request("POST", "https://example.com/")
-    wrapped = wrap_network_error(httpx.RemoteProtocolError("server disconnected", request=request))
-
-    assert isinstance(wrapped, NetworkError)
-    assert wrapped.retryable is True
-    assert not isinstance(wrapped, ProviderError)
-    assert "server disconnected" in str(wrapped)
-
-
-def test_wrap_network_error_local_protocol_error_is_network_error() -> None:
-    """``httpx.LocalProtocolError`` is wrapped as ``NetworkError`` (non-ProviderError)."""
-
-    request = httpx.Request("POST", "https://example.com/")
-    wrapped = wrap_network_error(httpx.LocalProtocolError("local protocol error", request=request))
-
-    assert isinstance(wrapped, NetworkError)
-    assert not isinstance(wrapped, ProviderError)
-
-
-def test_wrap_network_error_protocol_error_is_network_error() -> None:
-    """``httpx.ProtocolError`` (subclass of TransportError) → ``NetworkError``."""
-
-    request = httpx.Request("POST", "https://example.com/")
-    wrapped = wrap_network_error(httpx.ProtocolError("protocol error", request=request))
-
-    assert isinstance(wrapped, NetworkError)
-    assert not isinstance(wrapped, ProviderError)
-
-
-def test_wrap_network_error_preserves_cause_via_from_exc() -> None:
-    """The returned exception can be raised with ``from`` to preserve the original cause."""
-
-    original = httpx.ReadError("connection reset")
-    wrapped = wrap_network_error(original)
-
-    try:
-        raise wrapped from original
-    except NetworkError as exc:
-        assert exc.__cause__ is original
-
-
-# ---------------------------------------------------------------------------
-# parse_sse_json_data — malformed JSON classification
-# ---------------------------------------------------------------------------
-
-
-def test_parse_sse_json_data_returns_dict_for_valid_json() -> None:
-    """Valid JSON decodes to a Python object."""
-
-    decoded = parse_sse_json_data('{"id":"1"}', context="test provider")
-
-    assert decoded == {"id": "1"}
-
-
-def test_parse_sse_json_data_raises_non_retryable_provider_error_on_malformed_json() -> None:
-    """Malformed SSE data raises a non-retryable ``ProviderError``."""
-
-    with pytest.raises(ProviderError) as exc_info:
-        parse_sse_json_data('{"id":\n', context="test provider")
-
-    assert exc_info.value.retryable is False
-    assert "test provider" in str(exc_info.value)
-    assert "malformed JSON" in str(exc_info.value)
-
-
-def test_parse_sse_json_data_preserves_cause_via_from_exc() -> None:
-    """The original ``json.JSONDecodeError`` is preserved as ``__cause__``."""
-
-    with pytest.raises(ProviderError) as exc_info:
-        parse_sse_json_data("not-json", context="test provider")
-
-    assert isinstance(exc_info.value.__cause__, json.JSONDecodeError)
-
-
-# ---------------------------------------------------------------------------
-# decode_response_json — non-streaming response body classification
-# ---------------------------------------------------------------------------
-
-
-def _fake_response(payload: str) -> httpx.Response:
-    """Build a synthetic 200 response with a raw JSON body for decode tests."""
-    request = httpx.Request("POST", "https://example.com/")
-    return httpx.Response(200, content=payload.encode("utf-8"), request=request)
-
-
-def test_decode_response_json_returns_dict_for_object_body() -> None:
-    """A JSON object body is returned as a dict."""
-
-    decoded = decode_response_json(_fake_response('{"id":"1","name":"a"}'), context="test provider")
-
-    assert decoded == {"id": "1", "name": "a"}
-
-
-def test_decode_response_json_raises_non_retryable_provider_error_on_malformed_json() -> None:
-    """Malformed JSON raises a non-retryable ``ProviderError`` keyed to *context*."""
-
-    with pytest.raises(ProviderError) as exc_info:
-        decode_response_json(_fake_response('{"id":\n'), context="test provider")
-
-    assert exc_info.value.retryable is False
-    assert "test provider" in str(exc_info.value)
-    assert "malformed JSON" in str(exc_info.value)
-
-
-def test_decode_response_json_raises_non_retryable_provider_error_on_non_object_json() -> None:
-    """A top-level JSON array is rejected as a non-object response."""
-
-    with pytest.raises(ProviderError) as exc_info:
-        decode_response_json(_fake_response("[1, 2, 3]"), context="test provider")
-
-    assert exc_info.value.retryable is False
-    assert "non-object JSON" in str(exc_info.value)
-    assert "test provider" in str(exc_info.value)
-
-
-def test_decode_response_json_raises_non_retryable_provider_error_on_scalar_json() -> None:
-    """A top-level JSON scalar is rejected as a non-object response."""
-
-    with pytest.raises(ProviderError) as exc_info:
-        decode_response_json(_fake_response("42"), context="test provider")
-
-    assert exc_info.value.retryable is False
-    assert "non-object JSON" in str(exc_info.value)
-
-
-def test_decode_response_json_preserves_cause_via_from_exc() -> None:
-    """The original ``json.JSONDecodeError`` is preserved as ``__cause__``."""
-
-    with pytest.raises(ProviderError) as exc_info:
-        decode_response_json(_fake_response("not-json"), context="test provider")
-
-    assert isinstance(exc_info.value.__cause__, json.JSONDecodeError)
-
-
-# ---------------------------------------------------------------------------
-# classify_http_status — Retry-After attachment
-# (``parse_retry_after`` itself lives in core.utils.http_status and is tested
-# in tests/core/utils/test_http_status.py)
-# ---------------------------------------------------------------------------
-
-
-def test_classify_http_status_attaches_retry_after_to_rate_limit() -> None:
-    """A 429 carries the parsed ``Retry-After`` onto the rate-limit error."""
-
-    with pytest.raises(ProviderRateLimitError) as exc_info:
-        classify_http_status(
-            429,
-            idempotent=False,
-            response_headers=httpx.Headers({"Retry-After": "7"}),
-        )
-
-    assert exc_info.value.retry_after == 7.0
-
-
-def test_classify_http_status_attaches_retry_after_to_retryable_error() -> None:
-    """A retryable 503 carries the parsed ``Retry-After`` onto the error."""
-
-    with pytest.raises(ProviderError) as exc_info:
-        classify_http_status(
-            503,
-            idempotent=False,
-            response_headers=httpx.Headers({"retry-after-ms": "2000"}),
-        )
-
-    assert exc_info.value.retryable is True
-    assert exc_info.value.retry_after == 2.0
-
-
-def test_classify_http_status_504_is_retryable_in_provider_path() -> None:
-    """A 504 Gateway Timeout is retryable on the (non-idempotent) provider path."""
-
-    with pytest.raises(ProviderError) as exc_info:
-        classify_http_status(504, idempotent=False)
-
-    assert exc_info.value.retryable is True
-
-
-def test_classify_http_status_500_is_not_retryable_in_provider_path() -> None:
-    """A 500 is not retryable on the non-idempotent provider path."""
-
-    with pytest.raises(ProviderError) as exc_info:
-        classify_http_status(500, idempotent=False)
-
-    assert exc_info.value.retryable is False
-
-
-def test_classify_http_status_500_is_retryable_for_idempotent_request() -> None:
-    """A 500 is retryable when the caller declares the request replay-safe."""
-
-    with pytest.raises(ProviderError) as exc_info:
-        classify_http_status(500, idempotent=True)
-
-    assert exc_info.value.retryable is True
-
-
-def test_classify_http_status_rate_limit_without_headers_has_no_hint() -> None:
-    """With no headers passed, ``retry_after`` stays ``None``."""
-
-    with pytest.raises(ProviderRateLimitError) as exc_info:
-        classify_http_status(429, idempotent=False)
-
-    assert exc_info.value.retry_after is None
-
-
-def test_classify_http_status_does_not_attach_to_non_retryable_error() -> None:
-    """A non-retryable 4xx never carries a retry hint even if the header is present."""
-
-    with pytest.raises(ProviderError) as exc_info:
-        classify_http_status(
-            400,
-            idempotent=False,
-            response_headers=httpx.Headers({"Retry-After": "9"}),
-        )
-
-    assert exc_info.value.retryable is False
-    assert exc_info.value.retry_after is None
-
-
-def test_classify_http_status_auth_error_ignores_retry_after() -> None:
-    """A 401 raises an auth error (not retryable); its hint stays the default ``None``."""
-
-    with pytest.raises(ProviderAuthError) as exc_info:
-        classify_http_status(
-            401,
-            idempotent=False,
-            response_headers=httpx.Headers({"Retry-After": "9"}),
-        )
-
-    assert exc_info.value.retry_after is None
-
-
-def test_unsupported_sampling_parameter_matches_provider_rejection_wordings() -> None:
-    """Marker plus parameter name identifies the blamed sampling parameter."""
-
-    assert (
-        unsupported_sampling_parameter("400 Unsupported parameter: 'temperature'") == "temperature"
+    assert (chat.connect, chat.read, chat.write, chat.pool) == (
+        60.0,
+        PROVIDER_NON_STREAMING_READ_TIMEOUT_SECONDS,
+        60.0,
+        60.0,
     )
-    assert (
-        unsupported_sampling_parameter("400 temperature is not supported when thinking is enabled")
-        == "temperature"
+    assert (streaming.connect, streaming.read, streaming.write, streaming.pool) == (
+        60.0,
+        None,
+        60.0,
+        60.0,
     )
-    assert unsupported_sampling_parameter("400 Unknown parameter: top_k") == "top_k"
-    assert unsupported_sampling_parameter("400 Unrecognized request argument: top_p") == "top_p"
+    assert non_streaming_request.extensions["timeout"]["read"] == (
+        PROVIDER_NON_STREAMING_READ_TIMEOUT_SECONDS
+    )
+    assert streaming_request.extensions["timeout"]["read"] is None
 
 
-def test_unsupported_sampling_parameter_ignores_incomplete_or_foreign_details() -> None:
-    """Neither a marker nor a parameter alone is evidence; other parameters are ignored."""
-
-    assert unsupported_sampling_parameter("") is None
-    assert unsupported_sampling_parameter("400 temperature") is None
-    assert unsupported_sampling_parameter("400 Unsupported parameter: 'max_tokens'") is None
-    assert unsupported_sampling_parameter("Rate limited: too many requests") is None
+# ---------------------------------------------------------------------------
+# Error classification
+# ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize(
+    ("error", "expected_type", "detail"),
+    [
+        (httpx.ReadTimeout("read timed out"), ProviderTimeoutError, "read timed out"),
+        (httpx.ConnectTimeout(""), ProviderTimeoutError, "ConnectTimeout"),
+        (httpx.ConnectError("connection refused"), NetworkError, "connection refused"),
+    ],
+    ids=["timeout", "empty-timeout-names-its-type", "transport-failure"],
+)
+def test_network_failures_stay_retryable_and_only_timeouts_are_provider_errors(
+    error: httpx.TransportError, expected_type: type[Exception], detail: str
+) -> None:
+    wrapped = wrap_network_error(error)
+
+    assert type(wrapped) is expected_type
+    assert wrapped.retryable is True
+    # A NetworkError is not a Provider failure and never advances a Model fallback.
+    assert isinstance(wrapped, ProviderError) is (expected_type is ProviderTimeoutError)
+    assert detail in str(wrapped)
+
+
+def _json_response(body: bytes) -> httpx.Response:
+    return httpx.Response(200, content=body, request=httpx.Request("POST", "https://example.com/"))
+
+
+def test_valid_json_decodes_from_stream_data_and_response_bodies() -> None:
+    assert parse_sse_json_data('{"id":"1"}', context="Stub provider") == {"id": "1"}
+    assert decode_response_json(_json_response(b'{"id":"1"}'), "Stub provider") == {"id": "1"}
+
+
+@pytest.mark.parametrize(
+    ("decode", "cause"),
+    [
+        (lambda: parse_sse_json_data('{"id":\n', context="Stub provider"), json.JSONDecodeError),
+        (
+            lambda: decode_response_json(_json_response(b'{"id":\n'), "Stub provider"),
+            json.JSONDecodeError,
+        ),
+        (lambda: decode_response_json(_json_response(b"[1, 2]"), "Stub provider"), type(None)),
+    ],
+    ids=["malformed-stream-data", "malformed-response", "non-object-response"],
+)
+def test_unusable_provider_json_is_a_fatal_error_naming_the_provider(
+    decode: Callable[[], Any], cause: type
+) -> None:
+    with pytest.raises(ProviderError) as raised:
+        decode()
+
+    assert raised.value.retryable is False
+    assert "Stub provider" in str(raised.value)
+    assert type(raised.value.__cause__) is cause
+
+
+@pytest.mark.parametrize(
+    ("status", "idempotent", "headers", "detail", "expected_type", "retryable", "retry_after"),
+    [
+        (429, False, {"Retry-After": "7"}, "429 slow down", ProviderRateLimitError, True, 7.0),
+        (429, False, None, "", ProviderRateLimitError, True, None),
+        (503, False, {"retry-after-ms": "2000"}, "", ProviderError, True, 2.0),
+        (500, False, None, "500 boom", ProviderError, False, None),
+        (500, True, None, "", ProviderError, True, None),
+        (400, False, {"Retry-After": "9"}, "400 bad request", ProviderError, False, None),
+        (401, False, {"Retry-After": "9"}, "401 bad key", ProviderAuthError, False, None),
+    ],
+    ids=[
+        "rate-limit-retry-after",
+        "rate-limit-without-headers",
+        "retryable-retry-after-ms",
+        "server-error-not-replay-safe",
+        "server-error-replay-safe",
+        "fatal-ignores-hint",
+        "auth-ignores-hint",
+    ],
+)
+def test_error_status_raises_the_classified_error_with_status_detail_and_hint(
+    status: int,
+    idempotent: bool,
+    headers: dict[str, str] | None,
+    detail: str,
+    expected_type: type[ProviderError],
+    retryable: bool,
+    retry_after: float | None,
+) -> None:
+    with pytest.raises(ProviderError) as raised:
+        classify_http_status(
+            status,
+            idempotent=idempotent,
+            detail=detail,
+            response_headers=httpx.Headers(headers) if headers is not None else None,
+        )
+
+    error = raised.value
+    assert type(error) is expected_type
+    assert (error.retryable, error.retry_after, error.status_code) == (
+        retryable,
+        retry_after,
+        status,
+    )
+    assert (detail or str(status)) in str(error)
+
+
+def test_error_detail_is_status_and_body_or_the_bare_status() -> None:
+    assert format_http_error_detail(502, "gateway boom") == "502 gateway boom"
+    assert format_http_error_detail(502, "") == "502"
+    assert format_http_error_detail(502, None) == "502"
+
+
+# ---------------------------------------------------------------------------
+# Sampling-parameter fallback
+# ---------------------------------------------------------------------------
+
+_SAMPLED_PAYLOAD = {"model": "m", "temperature": 0.7, "top_p": 0.9, "top_k": 40}
+
+
+@pytest.mark.parametrize(
+    ("detail", "blamed"),
+    [
+        ("Provider error: 400 Unsupported parameter: 'temperature'", "temperature"),
+        ("Provider error: 400 Unknown parameter: top_k", "top_k"),
+    ],
+)
 @pytest.mark.asyncio
-async def test_execute_with_sampling_fallback_strips_blamed_parameter_and_retries_once() -> None:
-    """A fatal rejection of a sent sampling parameter triggers exactly one stripped retry."""
-
-    payload = {"model": "m", "temperature": 0.7, "top_p": 0.9}
+async def test_sampling_rejection_strips_the_blamed_parameter_and_retries_once(
+    detail: str, blamed: str
+) -> None:
+    payload = dict(_SAMPLED_PAYLOAD)
     attempts: list[dict[str, Any]] = []
 
     async def attempt() -> str:
         attempts.append(dict(payload))
         if len(attempts) == 1:
-            raise ProviderError(
-                "Provider error: 400 Unsupported parameter: 'temperature'",
-                retryable=False,
-            )
+            raise ProviderError(detail, retryable=False)
         return "ok"
 
     result = await execute_with_sampling_fallback(
@@ -441,170 +222,98 @@ async def test_execute_with_sampling_fallback_strips_blamed_parameter_and_retrie
 
     assert result == "ok"
     assert attempts == [
-        {"model": "m", "temperature": 0.7, "top_p": 0.9},
-        {"model": "m", "top_p": 0.9},
+        _SAMPLED_PAYLOAD,
+        {key: value for key, value in _SAMPLED_PAYLOAD.items() if key != blamed},
     ]
 
 
-@pytest.mark.asyncio
-async def test_execute_with_sampling_fallback_reraises_when_parameter_not_sent() -> None:
-    """A rejection of a parameter the payload never carried is not retried."""
-
-    payload = {"model": "m"}
-    attempts: list[dict[str, Any]] = []
-
-    async def attempt() -> str:
-        attempts.append(dict(payload))
-        raise ProviderError(
-            "Provider error: 400 Unsupported parameter: 'temperature'",
-            retryable=False,
-        )
-
-    with pytest.raises(ProviderError):
-        await execute_with_sampling_fallback(
-            attempt, payload, logger=logging.getLogger("test"), provider_label="stub"
-        )
-
-    assert len(attempts) == 1
-
-
-@pytest.mark.asyncio
-async def test_execute_with_sampling_fallback_reraises_unrelated_errors() -> None:
-    """Auth and other errors pass through untouched."""
-
-    payload = {"model": "m", "temperature": 0.7}
-
-    async def attempt() -> str:
-        raise ProviderAuthError("Authentication error: 401 no key")
-
-    with pytest.raises(ProviderAuthError):
-        await execute_with_sampling_fallback(
-            attempt, payload, logger=logging.getLogger("test"), provider_label="stub"
-        )
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "error",
     [
-        ProviderAuthError("Unsupported parameter temperature for this credential"),
-        ProviderRateLimitError("Unsupported parameter temperature: backend overloaded"),
-        ProviderTimeoutError("Unsupported parameter temperature: upstream timed out"),
-        ProviderError("Unsupported parameter temperature: temporary failure", retryable=True),
+        ProviderError("400 Unsupported parameter: 'temperature'", retryable=False),
+        ProviderError("400 Unsupported parameter: 'max_tokens'", retryable=False),
+        ProviderError("400 top_p", retryable=False),
+        ProviderAuthError("Unsupported parameter top_p for this credential"),
+        ProviderRateLimitError("Unsupported parameter top_p: backend overloaded"),
+    ],
+    ids=[
+        "parameter-not-sent",
+        "not-a-sampling-parameter",
+        "no-rejection-marker",
+        "auth-failure",
+        "retryable-failure",
     ],
 )
-async def test_sampling_fallback_preserves_non_validation_failure(error: ProviderError) -> None:
-    payload = {"model": "m", "temperature": 0.7}
+@pytest.mark.asyncio
+async def test_other_failures_pass_through_the_sampling_fallback_unchanged(
+    error: ProviderError,
+) -> None:
+    payload = {"model": "m", "top_p": 0.9}
     attempt = AsyncMock(side_effect=error)
-    with pytest.raises(type(error)) as raised:
+
+    with pytest.raises(ProviderError) as raised:
         await execute_with_sampling_fallback(
             attempt, payload, logger=logging.getLogger("test"), provider_label="stub"
         )
+
     assert raised.value is error
     attempt.assert_awaited_once()
-    assert payload == {"model": "m", "temperature": 0.7}
+    assert payload == {"model": "m", "top_p": 0.9}
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("failure", [httpx.ReadError, httpx.ReadTimeout, asyncio.CancelledError])
-async def test_failed_error_body_read_closes_stream(failure: type[BaseException]) -> None:
-    class BrokenBody(httpx.AsyncByteStream):
-        closed = False
+# ---------------------------------------------------------------------------
+# connect_streaming_with_retry / post_json_with_retry — request establishment
+# ---------------------------------------------------------------------------
 
-        async def __aiter__(self):
-            yield b"partial error"
-            raise failure("body interrupted")
+_Establish = Callable[..., Awaitable[Any]]
 
-        async def aclose(self):
-            self.closed = True
 
-    body = BrokenBody()
-    client = _mock_client(lambda request: httpx.Response(503, stream=body))
-    expected = (
-        asyncio.CancelledError
-        if failure is asyncio.CancelledError
-        else ProviderTimeoutError
-        if failure is httpx.ReadTimeout
-        else NetworkError
-    )
+async def _establish_stream(client: httpx.AsyncClient, **kwargs: Any) -> Any:
+    response = await connect_streaming_with_retry(client, "/v1/chat", {"model": "m"}, **kwargs)
     try:
-        with caller_owns_retries(), pytest.raises(expected):
-            await connect_streaming_with_retry(
-                client,
-                "/stream",
-                {},
-                build_headers=AsyncMock(return_value={}),
-                handle_error_status=_never_expected_error_status,
-            )
+        return json.loads(await response.aread())
     finally:
-        await client.aclose()
-    assert body.closed
+        await response.aclose()
 
 
-# ---------------------------------------------------------------------------
-# connect_streaming_with_retry / post_json_with_retry — establishment
-# ---------------------------------------------------------------------------
+async def _post_json(client: httpx.AsyncClient, **kwargs: Any) -> Any:
+    return await post_json_with_retry(
+        client, "/v1/chat", {"model": "m"}, provider_context="Stub provider", **kwargs
+    )
+
+
+_ESTABLISHERS = pytest.mark.parametrize(
+    "establish", [_establish_stream, _post_json], ids=["streaming", "json"]
+)
+
+
+def _mock_client(handler: Callable[[httpx.Request], httpx.Response]) -> httpx.AsyncClient:
+    return httpx.AsyncClient(base_url="https://example.com", transport=httpx.MockTransport(handler))
 
 
 def _never_expected_error_status(status_code: int, error_body: str, headers: httpx.Headers) -> None:
     raise AssertionError(f"error handler unexpectedly called for {status_code}: {error_body}")
 
 
-def _mock_client(
-    handler: Callable[[httpx.Request], httpx.Response],
-) -> httpx.AsyncClient:
-    return httpx.AsyncClient(base_url="https://example.com", transport=httpx.MockTransport(handler))
+async def _no_headers() -> dict[str, str]:
+    return {}
 
 
+@_ESTABLISHERS
 @pytest.mark.asyncio
-async def test_connect_streaming_with_retry_returns_established_stream() -> None:
-    """A successful POST returns the streamed response with the built headers."""
-
-    seen_requests: list[httpx.Request] = []
+async def test_establishment_retries_with_headers_rebuilt_for_every_attempt(
+    establish: _Establish,
+) -> None:
+    sent: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        seen_requests.append(request)
-        return httpx.Response(200, content=b"stream-bytes")
-
-    async def build_headers() -> dict[str, str]:
-        return {"Authorization": "Bearer t1"}
-
-    client = _mock_client(handler)
-    try:
-        response = await connect_streaming_with_retry(
-            client,
-            "/v1/chat",
-            {"model": "m"},
-            build_headers=build_headers,
-            handle_error_status=_never_expected_error_status,
-        )
-    finally:
-        await client.aclose()
-
-    assert response.status_code == 200
-    assert [request.url.path for request in seen_requests] == ["/v1/chat"]
-    assert json.loads(seen_requests[0].content) == {"model": "m"}
-    assert seen_requests[0].headers["Authorization"] == "Bearer t1"
-
-
-@pytest.mark.asyncio
-async def test_connect_streaming_with_retry_rebuilds_headers_on_every_attempt() -> None:
-    """Each retry re-consults the header builder so refreshed tokens go out."""
-
-    sent_tokens: list[str] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        sent_tokens.append(request.headers["Authorization"])
-        if len(sent_tokens) == 1:
+        sent.append(request)
+        if len(sent) == 1:
             return httpx.Response(429, headers={"Retry-After": "1"})
-        return httpx.Response(200)
-
-    builds: list[str] = []
+        return httpx.Response(200, content=b'{"ok": true}')
 
     async def build_headers() -> dict[str, str]:
-        token = f"t{len(builds) + 1}"
-        builds.append(token)
-        return {"Authorization": f"Bearer {token}"}
+        return {"Authorization": f"Bearer t{len(sent) + 1}"}
 
     def handle_error_status(status_code: int, error_body: str, headers: httpx.Headers) -> None:
         classify_http_status(
@@ -617,46 +326,34 @@ async def test_connect_streaming_with_retry_rebuilds_headers_on_every_attempt() 
     client = _mock_client(handler)
     try:
         with patch("core.utils.retry._sleep", new_callable=AsyncMock):
-            response = await connect_streaming_with_retry(
-                client,
-                "/v1/chat",
-                {},
-                build_headers=build_headers,
-                handle_error_status=handle_error_status,
+            result = await establish(
+                client, build_headers=build_headers, handle_error_status=handle_error_status
             )
     finally:
         await client.aclose()
 
-    assert response.status_code == 200
-    assert builds == ["t1", "t2"]
-    assert sent_tokens == ["Bearer t1", "Bearer t2"]
+    assert result == {"ok": True}
+    assert [request.headers["Authorization"] for request in sent] == ["Bearer t1", "Bearer t2"]
+    assert [request.url.path for request in sent] == ["/v1/chat", "/v1/chat"]
+    assert all(json.loads(request.content) == {"model": "m"} for request in sent)
 
 
+@_ESTABLISHERS
 @pytest.mark.asyncio
-async def test_connect_streaming_with_retry_passes_read_body_to_error_handler() -> None:
-    """The error handler receives the fully-read body of a failed establishment."""
-
+async def test_error_status_handler_receives_the_read_error_body(
+    establish: _Establish,
+) -> None:
     calls: list[tuple[int, str]] = []
 
     def handle_error_status(status_code: int, error_body: str, headers: httpx.Headers) -> None:
         calls.append((status_code, error_body))
         raise ProviderAuthError(f"Authentication error: {error_body}")
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(401, content=b"bad key")
-
-    async def build_headers() -> dict[str, str]:
-        return {}
-
-    client = _mock_client(handler)
+    client = _mock_client(lambda request: httpx.Response(401, content=b"bad key"))
     try:
         with pytest.raises(ProviderAuthError):
-            await connect_streaming_with_retry(
-                client,
-                "/v1/chat",
-                {},
-                build_headers=build_headers,
-                handle_error_status=handle_error_status,
+            await establish(
+                client, build_headers=_no_headers, handle_error_status=handle_error_status
             )
     finally:
         await client.aclose()
@@ -664,125 +361,84 @@ async def test_connect_streaming_with_retry_passes_read_body_to_error_handler() 
     assert calls == [(401, "bad key")]
 
 
+@_ESTABLISHERS
 @pytest.mark.asyncio
-async def test_connect_streaming_with_retry_applies_custom_transport_wrapper() -> None:
-    """An adapter's transport wrapper re-labels connection failures in place."""
-
-    wrapped_errors: list[Exception] = []
-
-    class TerminalTransportError(Exception):
+async def test_adapter_transport_wrapper_relabels_connection_failures(
+    establish: _Establish,
+) -> None:
+    class ProviderOfflineError(Exception):
         pass
 
-    def wrap_transport_error(error: httpx.TransportError) -> Exception:
-        wrapped_errors.append(error)
-        return TerminalTransportError("provider offline")
+    wrapped: list[httpx.TransportError] = []
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def wrap_transport_error(error: httpx.TransportError) -> Exception:
+        wrapped.append(error)
+        return ProviderOfflineError("provider offline")
+
+    def refuse(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("refused")
 
-    async def build_headers() -> dict[str, str]:
-        return {}
-
-    client = _mock_client(handler)
+    client = _mock_client(refuse)
     try:
-        with pytest.raises(TerminalTransportError):
-            await connect_streaming_with_retry(
+        with pytest.raises(ProviderOfflineError):
+            await establish(
                 client,
-                "/v1/chat",
-                {},
-                build_headers=build_headers,
+                build_headers=_no_headers,
                 handle_error_status=_never_expected_error_status,
                 wrap_transport_error=wrap_transport_error,
             )
     finally:
         await client.aclose()
 
-    assert isinstance(wrapped_errors[0], httpx.ConnectError)
+    assert [type(error) for error in wrapped] == [httpx.ConnectError]
 
 
+@pytest.mark.parametrize(
+    ("failure", "expected"),
+    [
+        (httpx.ReadError, NetworkError),
+        (httpx.ReadTimeout, ProviderTimeoutError),
+        (asyncio.CancelledError, asyncio.CancelledError),
+    ],
+)
 @pytest.mark.asyncio
-async def test_post_json_with_retry_decodes_object_reply() -> None:
-    """A 2xx JSON object reply is decoded under the provider context."""
+async def test_failed_error_body_read_closes_the_stream(
+    failure: type[BaseException], expected: type[BaseException]
+) -> None:
+    class BrokenBody(httpx.AsyncByteStream):
+        closed = False
 
-    seen_requests: list[httpx.Request] = []
+        async def __aiter__(self):  # type: ignore[no-untyped-def]
+            yield b"partial error"
+            raise failure("body interrupted")
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        seen_requests.append(request)
-        return httpx.Response(200, content=b'{"ok": true}')
+        async def aclose(self) -> None:
+            self.closed = True
 
-    async def build_headers() -> dict[str, str]:
-        return {"Authorization": "Bearer t1"}
-
-    client = _mock_client(handler)
+    body = BrokenBody()
+    client = _mock_client(lambda request: httpx.Response(503, stream=body))
     try:
-        result = await post_json_with_retry(
-            client,
-            "/v1/responses",
-            {"model": "m"},
-            build_headers=build_headers,
-            handle_error_status=_never_expected_error_status,
-            provider_context="Stub provider",
-        )
-    finally:
-        await client.aclose()
-
-    assert result == {"ok": True}
-    assert json.loads(seen_requests[0].content) == {"model": "m"}
-    assert seen_requests[0].headers["Authorization"] == "Bearer t1"
-
-
-@pytest.mark.asyncio
-async def test_post_json_with_retry_passes_buffered_text_to_error_handler() -> None:
-    """Non-streaming error bodies arrive as buffered text, not raw bytes."""
-
-    calls: list[tuple[int, str]] = []
-
-    def handle_error_status(status_code: int, error_body: str, headers: httpx.Headers) -> None:
-        calls.append((status_code, error_body))
-        raise ProviderError(f"Provider error: {status_code}", retryable=False)
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(400, text="nope")
-
-    async def build_headers() -> dict[str, str]:
-        return {}
-
-    client = _mock_client(handler)
-    try:
-        with pytest.raises(ProviderError):
-            await post_json_with_retry(
+        with caller_owns_retries(), pytest.raises(expected):
+            await connect_streaming_with_retry(
                 client,
-                "/v1/responses",
+                "/stream",
                 {},
-                build_headers=build_headers,
-                handle_error_status=handle_error_status,
-                provider_context="Stub provider",
+                build_headers=_no_headers,
+                handle_error_status=_never_expected_error_status,
             )
     finally:
         await client.aclose()
 
-    assert calls == [(400, "nope")]
+    assert body.closed
 
 
-def test_format_http_error_detail_prefers_body_and_falls_back_to_status() -> None:
-    """Non-empty bodies render after the status; empty bodies leave bare status."""
-
-    assert format_http_error_detail(502, "gateway boom") == "502 gateway boom"
-    assert format_http_error_detail(502, "") == "502"
-    assert format_http_error_detail(502, None) == "502"
-
-
-@pytest.mark.parametrize(
-    "error_type", [httpx.ReadTimeout, httpx.ConnectTimeout, httpx.WriteTimeout, httpx.PoolTimeout]
-)
-def test_empty_timeout_retains_diagnostic_type(error_type):
-    error = wrap_network_error(error_type(""))
-    assert isinstance(error, ProviderTimeoutError)
-    assert error_type.__name__ in str(error)
+# ---------------------------------------------------------------------------
+# Stream line framing
+# ---------------------------------------------------------------------------
 
 
 def _chunked_response(*chunks: bytes) -> httpx.Response:
-    async def body():
+    async def body():  # type: ignore[no-untyped-def]
         for chunk in chunks:
             yield chunk
 
@@ -829,3 +485,199 @@ async def test_iter_sse_events_keeps_unicode_line_separators_inside_json_data() 
         "delta": f"one{_UNICODE_SEPARATORS}two"
     }
     assert events[2].data == "[DONE]"
+
+
+# ---------------------------------------------------------------------------
+# Debug capture of the wire exchange (canonical trace: .vorch/domain-maps/debug.md)
+# ---------------------------------------------------------------------------
+
+_DEBUG_URL = "https://debug.example.test/v1/chat/completions"
+_REDACTED = "[REDACTED]"
+_MESSAGES = [
+    {"role": "system", "content": "You are a helpful assistant."},
+    {"role": "user", "content": "Hello"},
+]
+_COMPLETION = {
+    "id": "chatcmpl-abc123",
+    "object": "chat.completion",
+    "choices": [
+        {"index": 0, "message": {"role": "assistant", "content": "Hello!"}, "finish_reason": "stop"}
+    ],
+    "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+}
+
+
+def _chunk(delta: dict[str, Any], finish_reason: str | None = None) -> str:
+    return json.dumps(
+        {
+            "id": "chatcmpl-123",
+            "object": "chat.completion.chunk",
+            "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}],
+        },
+        separators=(",", ":"),
+    )
+
+
+_SSE_FRAMES = f"data: {_chunk({'content': 'Hello'})}\n\ndata: {_chunk({'content': ' world'})}\n\n"
+_SSE_BODY = f"{_SSE_FRAMES}data: {_chunk({}, 'stop')}\n\ndata: [DONE]\n\n"
+
+
+def _debug_context(*, streaming: bool) -> DebugContext:
+    return DebugContext(
+        run_id="run-debug-1",
+        agent_id="agent-1",
+        session_id="session-1",
+        provider_id="debug",
+        connection_id="debug:api-key",
+        model_id="gpt-5.2",
+        streaming=streaming,
+        iteration_number=1,
+    )
+
+
+@pytest.fixture
+def debug_store(tmp_path: Path) -> DebugTraceStore:
+    return DebugTraceStore(tmp_path, trace_limit=50)
+
+
+@pytest.fixture
+def debug_adapter(debug_store: DebugTraceStore) -> OpenAICompatibleAdapter:
+    """An Adapter built with a recorder, as the Runtime builds it with Debug Mode enabled."""
+
+    return OpenAICompatibleAdapter(
+        bearer_config(
+            "debug", adapter="openai_compatible", extra_headers={"X-Custom-Header": "test-value"}
+        ),
+        TOKEN,
+        debug_recorder=ProviderDebugRecorder(debug_store),
+    )
+
+
+def _traces(store: DebugTraceStore) -> list[dict[str, Any]]:
+    return [store.get_trace(entry["trace_id"]) for entry in store.get_traces()]
+
+
+async def _drain(adapter: OpenAICompatibleAdapter) -> list[dict[str, Any]]:
+    return [delta async for delta in adapter.stream(_MESSAGES, model_id="gpt-5.2")]
+
+
+def _sse(content: str, headers: dict[str, str] | None = None) -> httpx.Response:
+    return httpx.Response(
+        200, content=content, headers={"Content-Type": "text/event-stream", **(headers or {})}
+    )
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_send_persists_one_redacted_trace_of_the_exact_wire_exchange(
+    debug_adapter: OpenAICompatibleAdapter, debug_store: DebugTraceStore
+) -> None:
+    context = _debug_context(streaming=False)
+    route = respx.post(_DEBUG_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json=_COMPLETION,
+            headers={
+                "X-Request-Id": "req-001",
+                "X-Debug-Secret": "do-not-leak",
+                "X-Refresh-Token": "refresh-tkn-xxx",
+                "X-Api-Key": "api-key-val",
+            },
+        )
+    )
+
+    debug_adapter.set_debug_context(context)
+    try:
+        await debug_adapter.send(_MESSAGES, model_id="gpt-5.2")
+    finally:
+        await debug_adapter.aclose()
+
+    [trace] = _traces(debug_store)
+    wire_body = route.calls.last.request.content.decode("utf-8")
+    assert (trace["type"], trace["provider_id"], trace["model_id"]) == (
+        "provider_request",
+        "debug",
+        "gpt-5.2",
+    )
+    assert trace["context"] == {
+        "run_id": context.run_id,
+        "agent_id": context.agent_id,
+        "session_id": context.session_id,
+        "connection_id": context.connection_id,
+        "iteration_number": context.iteration_number,
+        "streaming": False,
+    }
+    request = trace["request"]
+    assert (request["method"], request["url"], request["body"]) == ("POST", _DEBUG_URL, wire_body)
+    assert request["headers"]["authorization"] == _REDACTED
+    assert request["headers"]["x-custom-header"] == "test-value"
+    response = trace["response"]
+    assert response["status_code"] == 200
+    assert json.loads(response["body"]) == _COMPLETION
+    assert {name: response["headers"][name] for name in ("x-request-id", "x-debug-secret")} == {
+        "x-request-id": "req-001",
+        "x-debug-secret": _REDACTED,
+    }
+    assert response["headers"]["x-refresh-token"] == _REDACTED
+    assert response["headers"]["x-api-key"] == _REDACTED
+    assert isinstance(trace["duration_ms"], int) and trace["duration_ms"] >= 0
+    # The debug context never reaches the Provider-bound payload.
+    assert not {*vars(context), "context"} & json.loads(wire_body).keys()
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_stream_persists_the_verbatim_sse_body_as_one_response(
+    debug_adapter: OpenAICompatibleAdapter, debug_store: DebugTraceStore
+) -> None:
+    respx.post(_DEBUG_URL).mock(return_value=_sse(_SSE_BODY, {"X-Debug-Secret": "do-not-leak"}))
+
+    debug_adapter.set_debug_context(_debug_context(streaming=True))
+    assert await _drain(debug_adapter)
+
+    [trace] = _traces(debug_store)
+    assert "stream" not in trace
+    assert trace["context"]["streaming"] is True
+    assert trace["request"]["method"] == "POST"
+    assert (trace["response"]["status_code"], trace["response"]["body"]) == (200, _SSE_BODY)
+    assert trace["response"]["headers"]["x-debug-secret"] == _REDACTED
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_stream_ending_without_done_persists_the_partial_body(
+    debug_adapter: OpenAICompatibleAdapter, debug_store: DebugTraceStore
+) -> None:
+    respx.post(_DEBUG_URL).mock(return_value=_sse(_SSE_FRAMES))
+
+    debug_adapter.set_debug_context(_debug_context(streaming=True))
+    with pytest.raises(NetworkError):
+        await _drain(debug_adapter)
+
+    [trace] = _traces(debug_store)
+    assert "stream" not in trace
+    assert _SSE_FRAMES in trace["response"]["body"]
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_each_retried_error_stream_persists_its_own_trace_with_the_error_body(
+    debug_adapter: OpenAICompatibleAdapter, debug_store: DebugTraceStore
+) -> None:
+    route = respx.post(_DEBUG_URL).mock(
+        return_value=httpx.Response(429, json={"error": {"message": "Rate limit exceeded"}})
+    )
+
+    debug_adapter.set_debug_context(_debug_context(streaming=True))
+    with (
+        patch("core.utils.retry._sleep", new_callable=AsyncMock),
+        pytest.raises(ProviderRateLimitError),
+    ):
+        await _drain(debug_adapter)
+
+    traces = _traces(debug_store)
+    assert route.call_count > 1
+    assert len(traces) == route.call_count
+    assert {trace["response"]["status_code"] for trace in traces} == {429}
+    assert all("Rate limit exceeded" in trace["response"]["body"] for trace in traces)
+    assert all("stream" not in trace for trace in traces)

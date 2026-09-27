@@ -1,4 +1,4 @@
-"""Tests for the per-session read-before-write / stale-file guard registry."""
+"""The per-session read-before-write guard, path locks, and atomic file replacement."""
 
 from __future__ import annotations
 
@@ -19,70 +19,27 @@ from core.tools.file_state import (
 )
 
 
-def test_unread_existing_file_is_never_read(tmp_path: Path) -> None:
+def test_a_session_may_write_only_what_it_read_since_the_last_change(tmp_path: Path) -> None:
     target = tmp_path / "a.txt"
-    target.write_text("x", encoding="utf-8")
+    target.write_text("abc", encoding="utf-8")
     registry = FileReadState()
-
     assert registry.check_stale("session-1", target) is StaleReason.NEVER_READ
 
-
-def test_recorded_read_is_not_stale(tmp_path: Path) -> None:
-    target = tmp_path / "a.txt"
-    target.write_text("x", encoding="utf-8")
-    registry = FileReadState()
-
     registry.record_read("session-1", target)
-
     assert registry.check_stale("session-1", target) is None
-
-
-def test_size_change_flags_modified(tmp_path: Path) -> None:
-    target = tmp_path / "a.txt"
-    target.write_text("short", encoding="utf-8")
-    registry = FileReadState()
-    registry.record_read("session-1", target)
-
-    target.write_text("a much longer body", encoding="utf-8")
-
-    assert registry.check_stale("session-1", target) is StaleReason.MODIFIED
-
-
-def test_mtime_change_with_same_size_flags_modified(tmp_path: Path) -> None:
-    target = tmp_path / "a.txt"
-    target.write_text("abc", encoding="utf-8")
-    registry = FileReadState()
-    registry.record_read("session-1", target)
-
-    # Same byte length, only the modification time moves forward.
-    info = target.stat()
-    os.utime(target, (info.st_atime, info.st_mtime + 5))
-
-    assert registry.check_stale("session-1", target) is StaleReason.MODIFIED
-
-
-def test_scope_is_per_session(tmp_path: Path) -> None:
-    target = tmp_path / "a.txt"
-    target.write_text("x", encoding="utf-8")
-    registry = FileReadState()
-
-    registry.record_read("session-1", target)
-
-    # A different session has its own read history.
+    # Another session has its own read history.
     assert registry.check_stale("session-2", target) is StaleReason.NEVER_READ
-
-
-def test_record_read_restamps_after_a_change(tmp_path: Path) -> None:
-    target = tmp_path / "a.txt"
-    target.write_text("abc", encoding="utf-8")
-    registry = FileReadState()
-    registry.record_read("session-1", target)
 
     target.write_text("abcdef", encoding="utf-8")
     assert registry.check_stale("session-1", target) is StaleReason.MODIFIED
 
     registry.record_read("session-1", target)
     assert registry.check_stale("session-1", target) is None
+
+    # Same byte length, only the modification time moves forward.
+    info = target.stat()
+    os.utime(target, (info.st_atime, info.st_mtime + 5))
+    assert registry.check_stale("session-1", target) is StaleReason.MODIFIED
 
 
 def test_disabled_guard_never_blocks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -110,45 +67,31 @@ def test_eviction_caps_tracked_files(tmp_path: Path, monkeypatch: pytest.MonkeyP
     assert registry.check_stale("session-1", files[2]) is None
 
 
-def test_path_lock_serializes_same_path(tmp_path: Path) -> None:
-    target = tmp_path / "a.txt"
+def test_path_locks_serialize_one_path_but_not_different_paths(tmp_path: Path) -> None:
     registry = FileReadState()
-    waiter_started = threading.Event()
-    waiter_entered = threading.Event()
+    other_entered = threading.Event()
+    same_started = threading.Event()
+    same_entered = threading.Event()
 
-    def wait_for_path() -> None:
-        waiter_started.set()
-        with registry.lock_path(target):
-            waiter_entered.set()
+    def enter(path: Path, started: threading.Event | None, entered: threading.Event) -> None:
+        if started is not None:
+            started.set()
+        with registry.lock_path(path):
+            entered.set()
 
-    with registry.lock_path(target):
-        thread = threading.Thread(target=wait_for_path)
-        thread.start()
-        assert waiter_started.wait(timeout=1)
-        assert waiter_entered.wait(timeout=0.05) is False
+    other = threading.Thread(target=enter, args=(tmp_path / "b.txt", None, other_entered))
+    same = threading.Thread(target=enter, args=(tmp_path / "a.txt", same_started, same_entered))
+    with registry.lock_path(tmp_path / "a.txt"):
+        other.start()
+        assert other_entered.wait(timeout=1)
+        same.start()
+        assert same_started.wait(timeout=1)
+        assert same_entered.wait(timeout=0.05) is False
 
-    assert waiter_entered.wait(timeout=1)
-    thread.join(timeout=1)
-    assert thread.is_alive() is False
-
-
-def test_path_locks_for_different_files_do_not_block_each_other(tmp_path: Path) -> None:
-    first = tmp_path / "a.txt"
-    second = tmp_path / "b.txt"
-    registry = FileReadState()
-    second_entered = threading.Event()
-
-    def lock_second() -> None:
-        with registry.lock_path(second):
-            second_entered.set()
-
-    with registry.lock_path(first):
-        thread = threading.Thread(target=lock_second)
-        thread.start()
-        assert second_entered.wait(timeout=1)
-
-    thread.join(timeout=1)
-    assert thread.is_alive() is False
+    assert same_entered.wait(timeout=1)
+    for thread in (other, same):
+        thread.join(timeout=1)
+        assert thread.is_alive() is False
 
 
 def test_atomic_write_replaces_target_and_preserves_mode(tmp_path: Path) -> None:
@@ -163,26 +106,6 @@ def test_atomic_write_replaces_target_and_preserves_mode(tmp_path: Path) -> None
 
     assert target.read_bytes() == b"after"
     assert stat.S_IMODE(target.stat().st_mode) == original_mode
-    assert list(file_root.iterdir()) == [target]
-
-
-def test_atomic_write_failure_keeps_original_and_removes_temp(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    file_root = tmp_path / "files"
-    file_root.mkdir()
-    target = file_root / "a.txt"
-    target.write_bytes(b"before")
-
-    def fail_replace(_source: Path, _target: Path) -> None:
-        raise PermissionError("replace denied")
-
-    monkeypatch.setattr(file_state_module.os, "replace", fail_replace)
-
-    with pytest.raises(PermissionError, match="replace denied"):
-        atomic_write_bytes(target, b"after")
-
-    assert target.read_bytes() == b"before"
     assert list(file_root.iterdir()) == [target]
 
 
@@ -202,6 +125,79 @@ def test_atomic_write_gives_new_files_the_umask_derived_mode(
     assert list(tmp_path.iterdir()) == [target]
 
 
+# A move destination receives the source's (here read-only) mode, so its
+# temporary copy is read-only too and must still be removed.
+@pytest.mark.parametrize(("existing", "mode"), [(True, None), (False, stat.S_IREAD)])
+def test_failed_replacement_keeps_the_target_and_removes_the_temporary_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, existing: bool, mode: int | None
+) -> None:
+    target = tmp_path / "a.txt"
+    if existing:
+        target.write_bytes(b"before")
+
+    def fail_replace(_source: Path, _target: Path) -> None:
+        raise PermissionError("replace denied")
+
+    monkeypatch.setattr(file_state_module.os, "replace", fail_replace)
+
+    with pytest.raises(PermissionError, match="replace denied"):
+        atomic_write_bytes(target, b"after", mode=mode)
+
+    assert list(tmp_path.iterdir()) == ([target] if existing else [])
+    if existing:
+        assert target.read_bytes() == b"before"
+
+
+@pytest.mark.parametrize(
+    ("code", "precondition", "attempts", "reason"),
+    [
+        (5, True, 7, "permission denied"),
+        (32, True, 7, "another program is using it"),
+        (33, True, 7, "another program has locked part of it"),
+        # Other failures, or a caller without a precondition check, fail at once.
+        (28, True, 1, "permission denied"),
+        (32, False, 1, "another program is using it"),
+    ],
+)
+def test_replace_retries_only_windows_sharing_failures_behind_a_precondition_check(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    code: int,
+    precondition: bool,
+    attempts: int,
+    reason: str,
+) -> None:
+    target = tmp_path / "a.txt"
+    target.write_bytes(b"before")
+    replaces: list[object] = []
+    checks: list[object] = []
+    sleeps: list[float] = []
+
+    def busy_replace(_source: Path, destination: Path) -> None:
+        replaces.append(destination)
+        error = PermissionError(13, "Der Prozess kann nicht zugreifen", str(destination))
+        error.winerror = code  # type: ignore[attr-defined]
+        raise error
+
+    monkeypatch.setattr(file_state_module.os, "replace", busy_replace)
+    monkeypatch.setattr(file_state_module.time, "sleep", sleeps.append)
+    check = (lambda: checks.append(target.read_bytes())) if precondition else None
+
+    with pytest.raises(OSError) as raised:
+        atomic_write_bytes(target, b"after", before_replace=check)
+
+    assert len(replaces) == attempts
+    assert len(checks) == (attempts if precondition else 0)
+    assert len(sleeps) == attempts - 1 and sum(sleeps) < 2
+    assert getattr(raised.value, "attempts_made", None) == (attempts if attempts > 1 else None)
+    if attempts > 1 and os.name != "nt":
+        # Only Windows keeps a Windows error code on a wrapped error.
+        reason = "permission denied"
+    assert os_error_reason(raised.value) == reason
+    assert target.read_bytes() == b"before"
+    assert list(tmp_path.iterdir()) == [target]
+
+
 @pytest.mark.skipif(os.name != "nt", reason="Windows read-only attribute")
 def test_read_only_target_fails_immediately_without_temporary_files(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -213,29 +209,15 @@ def test_read_only_target_fails_immediately_without_temporary_files(
         file_state_module.time, "sleep", lambda _delay: pytest.fail("read-only is not transient")
     )
     try:
-        with pytest.raises(file_state_module.ReadOnlyFileError) as raised:
+        with pytest.raises(ReadOnlyFileError) as raised:
             atomic_write_bytes(target, b"after", before_replace=lambda: None)
 
         assert not hasattr(raised.value, "attempts_made")
+        assert os_error_reason(raised.value) == "the file is read-only"
         assert target.read_bytes() == b"before"
         assert list(tmp_path.iterdir()) == [target]
     finally:
         target.chmod(stat.S_IREAD | stat.S_IWRITE)
-
-
-def test_failed_replacement_removes_a_read_only_temporary_copy(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    def fail_replace(_source: Path, _target: Path) -> None:
-        raise PermissionError("replace denied")
-
-    monkeypatch.setattr(file_state_module.os, "replace", fail_replace)
-
-    with pytest.raises(PermissionError, match="replace denied"):
-        # A move destination receives the source's (here read-only) mode.
-        atomic_write_bytes(tmp_path / "moved.txt", b"after", mode=stat.S_IREAD)
-
-    assert list(tmp_path.iterdir()) == []
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows sharing handles")
@@ -287,25 +269,22 @@ def test_atomic_replace_recovers_from_a_real_reader_without_delete_sharing(tmp_p
     assert list(tmp_path.iterdir()) == [target]
 
 
+def _windows_error(code: int) -> OSError:
+    error = OSError(13, "Der Prozess kann nicht zugreifen", "C:/abs/a.txt")
+    error.winerror = code  # type: ignore[attr-defined]
+    return error
+
+
 @pytest.mark.parametrize(
     ("error", "reason"),
     [
         # Windows reports its messages in the system language and names the absolute path.
         (PermissionError(13, "Zugriff verweigert", "C:/abs/a.txt"), "permission denied"),
         (OSError(28, "Nicht genug Speicher", "C:/abs/a.txt"), "the disk is full"),
-        (ReadOnlyFileError(), "the file is read-only"),
+        (_windows_error(32), "another program is using it"),
+        (_windows_error(123), "the path contains characters that are not allowed in file names"),
         (OSError("the call was cancelled"), "the call was cancelled"),
     ],
 )
 def test_os_error_reason_is_english_and_names_no_absolute_path(error: OSError, reason: str) -> None:
     assert os_error_reason(error) == reason
-
-
-def test_os_error_reason_names_a_file_another_program_uses() -> None:
-    busy = OSError(13, "Der Prozess kann nicht zugreifen", "C:/abs/a.txt")
-    busy.winerror = 32  # type: ignore[attr-defined]
-    exhausted = file_state_module._ReplaceRetriesExhaustedError(busy, 7)
-
-    assert os_error_reason(busy) == "another program is using it"
-    assert os_error_reason(exhausted) == "another program is using it"
-    assert exhausted.attempts_made == 7

@@ -1,571 +1,230 @@
-"""Tests for task-model CLI parsing, RPC commands, and output."""
+"""Tests for the ``vbot task-model`` commands: bindings, options, RPC requests and output."""
 
 from __future__ import annotations
 
 import io
-from pathlib import Path
+import json
+import sys
 from typing import Any
 
-import httpx
 import pytest
 
-from cli import main as cli_main
-from cli import task_model_management
-from cli.server_management import CommandResult, ServerInstance
-from core.utils.logging import resolve_daily_log_path
+from tests.cli.cli_test_support import FakeRpc, RunCli
+
+TTS_TARGET = "openrouter/microsoft/mai-voice-2::api-key"
 
 
-def make_instance(tmp_path: Path, *, port: int = 8420) -> ServerInstance:
-    data_dir = tmp_path / "data"
-    return ServerInstance(
-        host="127.0.0.1",
-        port=port,
-        data_dir=data_dir,
-        url=f"http://127.0.0.1:{port}",
-        log_path=resolve_daily_log_path(data_dir),
-    )
+def _saved(task_type: str, target: str, options: dict[str, Any]) -> dict[str, Any]:
+    return {"model_tasks": {task_type: {"target": target, "options": options}}}
 
 
-def test_parse_args_supports_task_model_set_options() -> None:
-    args = cli_main.parse_args(
-        [
-            "task-model",
-            "set",
-            "text_embedding",
-            "openai/text-embedding-3-small::api-key",
-            "--options",
-            '{"dimensions": 512}',
-        ]
-    )
-
-    assert args.area == "task-model"
-    assert args.command == "set"
-    assert args.task_type == "text_embedding"
-    assert args.target == "openai/text-embedding-3-small::api-key"
-    assert args.options_json == '{"dimensions": 512}'
-
-
-def test_parse_args_supports_task_model_set_option_pairs() -> None:
-    args = cli_main.parse_args(
-        [
-            "task-model",
-            "set",
-            "text_to_speech",
-            "openrouter/microsoft/mai-voice-2::api-key",
-            "--option",
-            "voice",
-            "Harper",
-            "--option",
-            "speed",
-            "1.25",
-        ]
-    )
-
-    assert args.options_json is None
-    assert args.option_pairs == [["voice", "Harper"], ["speed", "1.25"]]
-
-
-def test_parse_args_allows_options_for_current_binding() -> None:
-    args = cli_main.parse_args(["task-model", "options", "text_to_speech"])
-
-    assert args.target is None
-
-
-def test_parse_args_supports_json_option_value_from_stdin() -> None:
-    args = cli_main.parse_args(
-        ["task-model", "set-option", "text_to_speech", "extra_options", "--stdin"]
-    )
-
-    assert args.value is None
-    assert args.stdin is True
-
-
-def test_dispatch_task_model_set_option_reads_json_from_stdin(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    instance = make_instance(tmp_path)
-    args = cli_main.parse_args(
-        ["task-model", "set-option", "text_to_speech", "extra_options", "--stdin"]
-    )
-    calls: list[tuple[str, str, str]] = []
-    monkeypatch.setattr(cli_main.sys, "stdin", io.StringIO('{"style":"friendly"}\n'))
-
-    def fake_set_option(
-        _instance: ServerInstance,
-        task_type: str,
-        name: str,
-        value: str,
-    ) -> CommandResult:
-        calls.append((task_type, name, value))
-        return CommandResult(ok=True, message="saved", instance=instance)
-
-    result = cli_main.dispatch_task_model_command(
-        args,
-        instance,
-        set_option_fn=fake_set_option,
-    )
-
-    assert result.ok is True
-    assert calls == [("text_to_speech", "extra_options", '{"style":"friendly"}')]
-
-
-def test_dispatch_task_model_set_reads_complete_options_from_stdin(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    instance = make_instance(tmp_path)
-    args = cli_main.parse_args(
-        [
-            "task-model",
-            "set",
-            "text_to_speech",
-            "openrouter/microsoft/mai-voice-2::api-key",
-            "--options-stdin",
-        ]
-    )
-    calls: list[str | None] = []
-    monkeypatch.setattr(cli_main.sys, "stdin", io.StringIO('{"voice":"Harper"}\n'))
-
-    def fake_set_binding(
-        _instance: ServerInstance,
-        _task_type: str,
-        _target: str,
-        options_json: str | None,
-        _option_pairs: Any,
-    ) -> CommandResult:
-        calls.append(options_json)
-        return CommandResult(ok=True, message="saved", instance=instance)
-
-    result = cli_main.dispatch_task_model_command(
-        args,
-        instance,
-        set_binding_fn=fake_set_binding,
-    )
-
-    assert result.ok is True
-    assert calls == ['{"voice":"Harper"}']
-
-
-def test_parse_args_rejects_unknown_task_type(capsys: pytest.CaptureFixture[str]) -> None:
-    with pytest.raises(SystemExit) as exc_info:
-        cli_main.parse_args(["task-model", "targets", "audio_effect_generation"])
-
-    assert exc_info.value.code == 2
-
-
-def test_task_model_list_formats_bindings(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    instance = make_instance(tmp_path)
-
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        assert json == {"method": "task_model.settings", "params": {}}
-        return httpx.Response(
-            200,
-            json={
-                "ok": True,
-                "result": {
-                    "model_tasks": {
-                        "text_to_speech": {
-                            "target": "openai/gpt-4o-mini-tts::api-key",
-                            "options": {"voice": "alloy"},
-                        },
-                        "speech_to_text": {
-                            "target": "openai/gpt-4o-transcribe::api-key",
-                            "options": {},
-                        },
-                    }
+def test_task_model_list_prints_one_row_per_binding(rpc: FakeRpc, run_cli: RunCli) -> None:
+    rpc.reply(
+        "task_model.settings",
+        {
+            "model_tasks": {
+                "text_to_speech": {
+                    "target": "openai/gpt-4o-mini-tts::api-key",
+                    "options": {"voice": "alloy"},
                 },
-            },
-        )
+                "speech_to_text": {"target": "openai/gpt-4o-transcribe::api-key", "options": {}},
+            }
+        },
+    )
 
-    monkeypatch.setattr(task_model_management.httpx, "post", fake_post)
+    code, out, _err = run_cli("task-model", "list")
 
-    result = task_model_management.task_model_list(instance)
-
-    assert result.ok is True
-    assert result.message.splitlines()[1:] == [
+    assert code == 0
+    assert rpc.calls == [("task_model.settings", {})]
+    assert out.splitlines()[1:] == [
         "- speech_to_text: target=openai/gpt-4o-transcribe::api-key options={}",
         '- text_to_speech: target=openai/gpt-4o-mini-tts::api-key options={"voice": "alloy"}',
     ]
 
 
-def test_task_model_list_reports_empty_state(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    instance = make_instance(tmp_path)
+def test_task_model_list_reports_the_empty_state(rpc: FakeRpc, run_cli: RunCli) -> None:
+    rpc.reply("task_model.settings", {"model_tasks": {}})
 
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        return httpx.Response(200, json={"ok": True, "result": {"model_tasks": {}}})
+    code, out, _err = run_cli("task-model", "list")
 
-    monkeypatch.setattr(task_model_management.httpx, "post", fake_post)
-
-    result = task_model_management.task_model_list(instance)
-
-    assert result.ok is True
-    assert result.instance is instance
-    assert result.message.strip()
+    assert code == 0
+    assert out.strip()
 
 
-def test_task_model_targets_formats_rows(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    instance = make_instance(tmp_path)
-
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        assert json == {
-            "method": "task_model.list_targets",
-            "params": {"task_type": "speech_to_text"},
-        }
-        return httpx.Response(
-            200,
-            json={
-                "ok": True,
-                "result": {
-                    "targets": [
-                        {
-                            "id": "openai/gpt-4o-transcribe::api-key",
-                            "kind": "provider",
-                            "label": "OpenAI · GPT-4o Transcribe",
-                            "usable": True,
-                        }
-                    ]
-                },
-            },
-        )
-
-    monkeypatch.setattr(task_model_management.httpx, "post", fake_post)
-
-    result = task_model_management.task_model_targets(instance, "speech_to_text")
-
-    assert result.ok is True
-    assert result.message.splitlines()[1:] == [
-        (
-            "- id=openai/gpt-4o-transcribe::api-key kind=provider "
-            "label=OpenAI · GPT-4o Transcribe usable=yes"
-        ),
-    ]
-
-
-def test_task_model_set_posts_sparse_update(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    instance = make_instance(tmp_path)
-    calls: list[dict[str, Any]] = []
-
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        calls.append(json)
-        return httpx.Response(
-            200,
-            json={
-                "ok": True,
-                "result": {
-                    "model_tasks": {
-                        "text_embedding": {
-                            "target": "openai/text-embedding-3-small::api-key",
-                            "options": {"dimensions": 512},
-                        }
-                    }
-                },
-            },
-        )
-
-    monkeypatch.setattr(task_model_management.httpx, "post", fake_post)
-
-    result = task_model_management.task_model_set(
-        instance,
-        "text_embedding",
-        "openai/text-embedding-3-small::api-key",
-        '{"dimensions": 512}',
+def test_task_model_status_reports_configured_and_usable(rpc: FakeRpc, run_cli: RunCli) -> None:
+    rpc.reply(
+        "task_model.status", {"task_type": "text_to_speech", "configured": True, "usable": True}
     )
 
-    assert result == CommandResult(
-        ok=True,
-        message=(
-            "text_embedding: target=openai/text-embedding-3-small::api-key "
-            'options={"dimensions": 512}'
-        ),
-        instance=instance,
-    )
-    assert calls == [
+    code, out, _err = run_cli("task-model", "status", "text_to_speech")
+
+    assert code == 0
+    assert rpc.calls == [("task_model.status", {"task_type": "text_to_speech"})]
+    assert out.splitlines() == ["task-model text_to_speech: configured=yes usable=yes"]
+
+
+def test_task_model_targets_prints_one_row_per_target(rpc: FakeRpc, run_cli: RunCli) -> None:
+    rpc.reply(
+        "task_model.list_targets",
         {
-            "method": "task_model.update",
-            "params": {
-                "model_tasks": {
-                    "text_embedding": {
-                        "target": "openai/text-embedding-3-small::api-key",
-                        "options": {"dimensions": 512},
-                    }
+            "targets": [
+                {
+                    "id": "openai/gpt-4o-transcribe::api-key",
+                    "kind": "provider",
+                    "label": "OpenAI · GPT-4o Transcribe",
+                    "usable": True,
                 }
-            },
-        }
+            ]
+        },
+    )
+
+    code, out, _err = run_cli("task-model", "targets", "speech_to_text")
+
+    assert code == 0
+    assert rpc.calls == [("task_model.list_targets", {"task_type": "speech_to_text"})]
+    assert out.splitlines()[1:] == [
+        "- id=openai/gpt-4o-transcribe::api-key kind=provider "
+        "label=OpenAI · GPT-4o Transcribe usable=yes"
     ]
 
 
-def test_task_model_set_rejects_invalid_options_json(tmp_path: Path) -> None:
-    instance = make_instance(tmp_path)
+def test_task_model_commands_reject_an_unknown_task_type(rpc: FakeRpc, run_cli: RunCli) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        run_cli("task-model", "targets", "audio_effect_generation")
 
-    result = task_model_management.task_model_set(
-        instance, "text_embedding", "local/whisper", "{not json"
-    )
-
-    assert result.ok is False
-    assert "--options" in result.message
+    assert exc_info.value.code == 2
+    assert rpc.calls == []
 
 
-def test_task_model_set_rejects_non_object_options(tmp_path: Path) -> None:
-    instance = make_instance(tmp_path)
-
-    result = task_model_management.task_model_set(
-        instance, "text_embedding", "local/whisper", '["a"]'
-    )
-
-    assert result.ok is False
-    assert result.instance is instance
-    assert "--options" in result.message
-
-
-def test_task_model_clear_posts_empty_target(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    ("target", "params"),
+    [
+        pytest.param(
+            ("openai/tts::api-key",),
+            {"task_type": "text_to_speech", "target": "openai/tts::api-key"},
+            id="explicit-target",
+        ),
+        pytest.param((), {"task_type": "text_to_speech"}, id="current-binding"),
+    ],
+)
+def test_task_model_options_prints_the_option_schema(
+    rpc: FakeRpc, run_cli: RunCli, target: tuple[str, ...], params: dict[str, str]
 ) -> None:
-    instance = make_instance(tmp_path)
-    calls: list[dict[str, Any]] = []
+    schema = {"configured_options": {"voice": "Harper"}, "fields": []}
+    rpc.reply("task_model.options", {"schema": schema})
 
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        calls.append(json)
-        return httpx.Response(200, json={"ok": True, "result": {"model_tasks": {}}})
+    code, out, _err = run_cli("task-model", "options", "text_to_speech", *target)
 
-    monkeypatch.setattr(task_model_management.httpx, "post", fake_post)
+    assert code == 0
+    assert rpc.calls == [("task_model.options", params)]
+    assert json.loads(out) == schema
 
-    result = task_model_management.task_model_clear(instance, "image_generation")
 
-    assert result.ok is True
-    assert result.instance is instance
-    assert "image_generation" in result.message
-    assert calls == [
-        {
-            "method": "task_model.update",
-            "params": {"model_tasks": {"image_generation": {"target": ""}}},
-        }
+@pytest.mark.parametrize(
+    ("options", "stdin", "saved_options"),
+    [
+        pytest.param(("--options", '{"dimensions": 512}'), None, {"dimensions": 512}, id="json"),
+        pytest.param(
+            ("--option", "voice", "Harper", "--option", "speed", "1.25"),
+            None,
+            {"voice": "Harper", "speed": 1.25},
+            id="typed-pairs",
+        ),
+        pytest.param(("--options-stdin",), '{"voice":"Harper"}\n', {"voice": "Harper"}, id="stdin"),
+    ],
+)
+def test_task_model_set_replaces_the_binding_with_the_given_options(
+    rpc: FakeRpc,
+    run_cli: RunCli,
+    monkeypatch: pytest.MonkeyPatch,
+    options: tuple[str, ...],
+    stdin: str | None,
+    saved_options: dict[str, Any],
+) -> None:
+    if stdin is not None:
+        monkeypatch.setattr(sys, "stdin", io.StringIO(stdin))
+    rpc.reply("task_model.update", _saved("text_to_speech", TTS_TARGET, saved_options))
+
+    code, out, _err = run_cli("task-model", "set", "text_to_speech", TTS_TARGET, *options)
+
+    assert code == 0
+    assert rpc.calls == [
+        (
+            "task_model.update",
+            {"model_tasks": {"text_to_speech": {"target": TTS_TARGET, "options": saved_options}}},
+        )
+    ]
+    assert out.splitlines() == [
+        f"text_to_speech: target={TTS_TARGET} options={json.dumps(saved_options, sort_keys=True)}"
     ]
 
 
-def test_task_model_options_dumps_schema_json(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize("options_json", ["{not json", '["a"]'])
+def test_task_model_set_rejects_options_that_are_not_a_json_object(
+    rpc: FakeRpc, run_cli: RunCli, options_json: str
 ) -> None:
-    instance = make_instance(tmp_path)
-
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        assert json == {
-            "method": "task_model.options",
-            "params": {"task_type": "text_to_speech", "target": "openai/tts::api-key"},
-        }
-        return httpx.Response(
-            200,
-            json={"ok": True, "result": {"schema": {"fields": []}}},
-        )
-
-    monkeypatch.setattr(task_model_management.httpx, "post", fake_post)
-
-    result = task_model_management.task_model_options(
-        instance, "text_to_speech", "openai/tts::api-key"
+    code, out, _err = run_cli(
+        "task-model", "set", "text_embedding", "local/whisper", "--options", options_json
     )
 
-    assert result.ok is True
-    assert result.message.splitlines() == ["{", '  "fields": []', "}"]
+    assert code == 1
+    assert "--options" in out
+    assert rpc.calls == []
 
 
-def test_task_model_options_uses_current_binding_when_target_is_omitted(
-    tmp_path: Path,
+def test_task_model_clear_saves_an_empty_target(rpc: FakeRpc, run_cli: RunCli) -> None:
+    rpc.reply("task_model.update", {"model_tasks": {}})
+
+    code, out, _err = run_cli("task-model", "clear", "image_generation")
+
+    assert code == 0
+    assert rpc.calls == [
+        ("task_model.update", {"model_tasks": {"image_generation": {"target": ""}}})
+    ]
+    assert "image_generation" in out
+
+
+@pytest.mark.parametrize(
+    ("argv", "stdin", "patch", "saved_options"),
+    [
+        pytest.param(
+            ("set-option", "text_to_speech", "speed", "1.25"),
+            None,
+            {"set": {"speed": 1.25}},
+            {"voice": "Harper", "speed": 1.25},
+            id="set-typed-value",
+        ),
+        pytest.param(
+            ("set-option", "text_to_speech", "extra_options", "--stdin"),
+            '{"style":"friendly"}\n',
+            {"set": {"extra_options": {"style": "friendly"}}},
+            {"extra_options": {"style": "friendly"}},
+            id="set-json-from-stdin",
+        ),
+        pytest.param(
+            ("unset-option", "text_to_speech", "speed"),
+            None,
+            {"unset": ["speed"]},
+            {"voice": "Harper"},
+            id="unset",
+        ),
+    ],
+)
+def test_task_model_option_commands_patch_one_option_and_print_the_saved_binding(
+    rpc: FakeRpc,
+    run_cli: RunCli,
     monkeypatch: pytest.MonkeyPatch,
+    argv: tuple[str, ...],
+    stdin: str | None,
+    patch: dict[str, Any],
+    saved_options: dict[str, Any],
 ) -> None:
-    instance = make_instance(tmp_path)
+    if stdin is not None:
+        monkeypatch.setattr(sys, "stdin", io.StringIO(stdin))
+    rpc.reply("task_model.patch_options", _saved("text_to_speech", TTS_TARGET, saved_options))
 
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        assert json == {
-            "method": "task_model.options",
-            "params": {"task_type": "text_to_speech"},
-        }
-        return httpx.Response(
-            200,
-            json={
-                "ok": True,
-                "result": {
-                    "schema": {
-                        "configured_options": {"voice": "Harper"},
-                        "effective_options": {
-                            "response_format": "mp3",
-                            "voice": "Harper",
-                        },
-                        "fields": [],
-                    }
-                },
-            },
-        )
+    code, out, _err = run_cli("task-model", *argv)
 
-    monkeypatch.setattr(task_model_management.httpx, "post", fake_post)
-
-    result = task_model_management.task_model_options(instance, "text_to_speech", None)
-
-    assert result.ok is True
-    assert '"voice": "Harper"' in result.message
-
-
-def test_task_model_set_option_posts_typed_patch_and_prints_saved_binding(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    instance = make_instance(tmp_path)
-
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        assert json == {
-            "method": "task_model.patch_options",
-            "params": {
-                "task_type": "text_to_speech",
-                "set": {"speed": 1.25},
-            },
-        }
-        return httpx.Response(
-            200,
-            json={
-                "ok": True,
-                "result": {
-                    "model_tasks": {
-                        "text_to_speech": {
-                            "target": "openrouter/microsoft/mai-voice-2::api-key",
-                            "options": {"voice": "Harper", "speed": 1.25},
-                        }
-                    }
-                },
-            },
-        )
-
-    monkeypatch.setattr(task_model_management.httpx, "post", fake_post)
-
-    result = task_model_management.task_model_set_option(
-        instance,
-        "text_to_speech",
-        "speed",
-        "1.25",
-    )
-
-    assert result.ok is True
-    assert result.message.endswith('options={"speed": 1.25, "voice": "Harper"}')
-
-
-def test_task_model_unset_option_posts_patch(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    instance = make_instance(tmp_path)
-
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        assert json == {
-            "method": "task_model.patch_options",
-            "params": {"task_type": "text_to_speech", "unset": ["speed"]},
-        }
-        return httpx.Response(
-            200,
-            json={
-                "ok": True,
-                "result": {
-                    "model_tasks": {
-                        "text_to_speech": {
-                            "target": "openrouter/microsoft/mai-voice-2::api-key",
-                            "options": {"voice": "Harper"},
-                        }
-                    }
-                },
-            },
-        )
-
-    monkeypatch.setattr(task_model_management.httpx, "post", fake_post)
-
-    result = task_model_management.task_model_unset_option(
-        instance,
-        "text_to_speech",
-        "speed",
-    )
-
-    assert result.ok is True
-    assert result.message.endswith('options={"voice": "Harper"}')
-
-
-def test_run_dispatches_task_model_list(
-    tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    instance = make_instance(tmp_path, port=8765)
-
-    def fake_resolve(*, host: str, port: int | None, data_dir: str | None) -> ServerInstance:
-        return instance
-
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        return httpx.Response(200, json={"ok": True, "result": {"model_tasks": {}}})
-
-    monkeypatch.setattr(task_model_management.httpx, "post", fake_post)
-
-    exit_code = cli_main.run(["task-model", "list", "--port", "8765"], resolve=fake_resolve)
-
-    assert exit_code == 0
-
-
-def test_task_model_status_reports_configured_and_usable(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    instance = make_instance(tmp_path)
-
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        assert json == {"method": "task_model.status", "params": {"task_type": "text_to_speech"}}
-        return httpx.Response(
-            200,
-            json={
-                "ok": True,
-                "result": {"task_type": "text_to_speech", "configured": True, "usable": True},
-            },
-        )
-
-    monkeypatch.setattr(task_model_management.httpx, "post", fake_post)
-
-    result = task_model_management.task_model_status(instance, "text_to_speech")
-
-    assert result.ok is True
-    assert result.message == "task-model text_to_speech: configured=yes usable=yes"
-
-
-def test_parse_args_supports_task_model_status() -> None:
-    args = cli_main.parse_args(["task-model", "status", "image_generation"])
-
-    assert args.area == "task-model"
-    assert args.command == "status"
-    assert args.task_type == "image_generation"
+    assert code == 0
+    assert rpc.calls == [("task_model.patch_options", {"task_type": "text_to_speech", **patch})]
+    assert out.rstrip().endswith(f"options={json.dumps(saved_options, sort_keys=True)}")

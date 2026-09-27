@@ -112,24 +112,6 @@ def test_deadlines_use_start_end_and_post_event_grace(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_fires_once_and_reloads_without_duplicate(tmp_path):
-    service, event, trigger, now = setup(tmp_path)
-    service.actions.add(event.id, when="start - 1h", prompt="prepare", target="main")
-    await service.actions.tick(now)
-    await drain(service)
-    await service.actions.tick(now + timedelta(seconds=1))
-    assert trigger.trigger_run.await_count == 1
-    row = service.actions.project(window(service, now))[0]
-    assert row["status"] == "completed"
-    assert row["session"] == "new-session"
-    assert trigger.trigger_run.call_args.args[2] is None
-    reloaded = CalendarService(tmp_path, tz="Europe/Berlin")
-    reloaded.actions.configure(trigger, Mock(), session_manager())
-    await reloaded.actions.tick(now + timedelta(seconds=2))
-    assert trigger.trigger_run.await_count == 1
-
-
-@pytest.mark.asyncio
 async def test_actions_waiting_for_a_worker_slot_fire_exactly_once(tmp_path):
     service, event, trigger, now = setup(tmp_path)
     for index in range(6):
@@ -211,13 +193,18 @@ async def test_deleted_action_history_is_pruned(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_completed_single_action_rearms_only_after_event_moves(tmp_path):
+async def test_single_action_fires_once_and_rearms_only_after_event_moves(tmp_path):
     service, event, trigger, now = setup(tmp_path)
     service.actions.add(event.id, when="start - 1h", prompt="prepare", target="main")
     await service.actions.tick(now)
     await drain(service)
+    await service.actions.tick(now + timedelta(seconds=1))
+    assert trigger.trigger_run.await_count == 1
+    # Without a selected session the action requests a new one.
+    assert trigger.trigger_run.call_args.args[2] is None
     old = service.actions.project(window(service, now))[0]
     assert old["status"] == "completed"
+    assert old["session"] == "new-session"
     service.update_event(event.id, title="Renamed")
     await service.actions.tick(now)
     assert trigger.trigger_run.await_count == 1
@@ -366,7 +353,7 @@ def test_action_message_shows_timed_span_in_minutes(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_event_delete_withdraws_queued_action(tmp_path):
+async def test_event_delete_withdraws_queued_action_and_its_definition(tmp_path):
     service, event, trigger, now = setup(tmp_path)
     waiting = asyncio.Event()
     cancelled = asyncio.Event()
@@ -389,19 +376,8 @@ async def test_event_delete_withdraws_queued_action(tmp_path):
     await asyncio.sleep(0)
     await service.actions.tick(now + timedelta(seconds=1))
     assert service.actions.list_actions() == []
+    assert json.loads((tmp_path / "calendar" / "actions.json").read_text())["actions"] == []
     assert not service.actions._workers
-
-
-def test_unreadable_store_fails_closed(tmp_path):
-    path = tmp_path / "calendar" / "actions.json"
-    path.parent.mkdir()
-    path.write_text("broken", encoding="utf-8")
-    service = CalendarService(tmp_path, tz="UTC")
-    assert service.actions.list_actions() == []
-    assert service.actions.storage_error
-    with pytest.raises(CalendarStorageError):
-        service.actions.delete("unused")
-    assert path.read_text() == "broken"
 
 
 def test_all_day_deadlines_respect_dst(tmp_path):
@@ -506,15 +482,6 @@ def test_failed_write_rolls_back_action_mutations(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_deleted_events_release_stored_action_capacity(tmp_path):
-    service, event, _, now = setup(tmp_path)
-    service.actions.add(event.id, when="start", prompt="prepare", target="main")
-    service.delete_event(event.id)
-    await service.actions.tick(now)
-    assert json.loads(service.actions._path.read_text())["actions"] == []
-
-
-@pytest.mark.asyncio
 async def test_recurrences_each_request_a_fresh_session(tmp_path, monkeypatch):
     service, event, trigger, now = setup(tmp_path, recurring=True)
     service.actions.add(event.id, when="start - 1h", prompt="prepare", target="main")
@@ -534,25 +501,34 @@ async def test_recurrences_each_request_a_fresh_session(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "payload",
+    "content",
     [
-        {"actions": [], "executions": {}},
-        {"format_version": 2, "actions": [], "executions": {}},
-        {"format_version": 1, "actions": {}, "executions": {}},
-        {"format_version": 1, "actions": []},
-        {"format_version": 1, "actions": [], "executions": []},
+        "broken",
+        json.dumps({"actions": [], "executions": {}}),
+        json.dumps({"format_version": 2, "actions": [], "executions": {}}),
+        json.dumps({"format_version": 1, "actions": {}, "executions": {}}),
+        json.dumps({"format_version": 1, "actions": []}),
+        json.dumps({"format_version": 1, "actions": [], "executions": []}),
+    ],
+    ids=[
+        "not-json",
+        "no-version",
+        "newer-version",
+        "actions-not-a-list",
+        "no-executions",
+        "executions-not-an-object",
     ],
 )
-def test_unreadable_document_root_disables_store(tmp_path, payload):
-    service = CalendarService(tmp_path, tz="UTC")
+def test_unreadable_store_fails_closed(tmp_path, content):
     path = tmp_path / "calendar" / "actions.json"
-    path.parent.mkdir(exist_ok=True)
-    path.write_text(json.dumps(payload))
+    path.parent.mkdir()
+    path.write_text(content, encoding="utf-8")
+    service = CalendarService(tmp_path, tz="UTC")
     assert service.actions.list_actions() == []
     assert service.actions.storage_error
     with pytest.raises(CalendarStorageError):
         service.actions.delete("unused")
-    assert json.loads(path.read_text()) == payload
+    assert path.read_text(encoding="utf-8") == content
 
 
 def test_unknown_action_fields_are_hidden_and_kept_on_save(tmp_path):
@@ -636,7 +612,10 @@ def test_short_action_ids_skip_collisions(tmp_path, monkeypatch):
     second = service.actions.add(event.id, when="end", prompt="second", target="main")
     assert first["id"] == "act_000000000001"
     assert second["id"] == "act_000000000002"
-    assert service.actions._actions[first["id"]]["prompt"] == "first"
+    assert {action["id"]: action["prompt"] for action in service.actions.list_actions()} == {
+        first["id"]: "first",
+        second["id"]: "second",
+    }
 
 
 @pytest.mark.asyncio

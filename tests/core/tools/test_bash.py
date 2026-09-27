@@ -1,11 +1,11 @@
-"""Bash: execution behavior."""
+"""Shell Tool registration, foreground execution, the command environment, and spawning."""
 
 from __future__ import annotations
 
 import asyncio
 import os
 import sys
-from dataclasses import replace
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -14,216 +14,346 @@ import pytest
 import core.tools._bash_environment as bash_environment
 import core.tools._bash_results as bash_results
 import core.tools.bash as bash_module
-from core.tools._bash_update_handoff import (
-    UpdateHandoffs,
-    UpdateHandoffUnavailableError,
-    read_handoff_ticket,
-)
 from core.tools.bash import (
+    BASH_SUBAGENT_TOOL_DESCRIPTION,
+    BASH_SUBAGENT_TOOL_PARAMETERS,
+    BASH_TOOL_DESCRIPTION,
+    BASH_TOOL_PARAMETERS,
     bash_handler,
+    project_bash_tool_definitions,
+    register_bash_tool,
 )
 from core.tools.process_manager import ProcessManager
+from core.tools.tools import (
+    JsonObject,
+    ToolCall,
+    ToolContext,
+    ToolExecutionConfig,
+    ToolExecutor,
+    ToolRegistry,
+    tool_success,
+)
 from core.utils.processes import subprocess_creation_flags
-from tests.core.tools.bash_helpers import (
+from tests.core.tools.bash_test_support import (
     AGENT_ID,
     RUN_ID,
-    delivered_future,
     make_context,
+    make_spool_manager,
     python_command,
 )
-from tests.core.tools.bash_helpers import (
-    manager as manager,
+from tests.core.tools.bash_test_support import manager as manager
+from tests.core.tools.bash_test_support import shell_env_cache as shell_env_cache
+
+# --- Registration ----------------------------------------------------------
+
+
+def test_register_bash_tool() -> None:
+    registry = ToolRegistry()
+    manager = ProcessManager(sweep_interval_seconds=3600)
+
+    register_bash_tool(registry, manager)
+
+    tool = registry.get("bash")
+    assert tool.description == BASH_TOOL_DESCRIPTION
+    assert tool.description
+    assert tool.parameters == BASH_TOOL_PARAMETERS
+    assert "oneOf" not in tool.parameters
+    assert "additionalProperties" not in tool.parameters
+    assert set(tool.parameters["properties"]) == {
+        "mode",
+        "command",
+        "description",
+        "workdir",
+        "timeout",
+        "env_keys",
+    }
+    assert tool.parameters["required"] == ["command"]
+    properties = tool.parameters["properties"]
+    assert properties["description"]["type"] == "string"
+    assert "maxLength" not in tool.parameters["properties"]["description"]
+    assert tool.parameters["properties"]["mode"]["enum"] == [
+        "foreground",
+        "background",
+    ]
+    env_keys = properties["env_keys"]
+    assert env_keys["type"] == "array"
+    assert env_keys["items"] == {"type": "string", "minLength": 1}
+    assert env_keys["minItems"] == 1
+    assert env_keys["uniqueItems"] is True
+    assert all(
+        isinstance(property_schema.get("description"), str) and property_schema["description"]
+        for property_schema in properties.values()
+    )
+    display = registry.display_for_call(
+        "bash",
+        {
+            "description": "Run the frontend tests",
+            "command": "npm test -- --run",
+            "mode": "foreground",
+        },
+    )
+    assert display["primary"][0]["value"] == "Run the frontend tests"
+    assert display["primary"][0]["kind"] == "description"
+    assert tool.parallel_safe is True
+
+
+def test_subagent_projection_exposes_only_non_handoff_bash_modes() -> None:
+    definitions: list[JsonObject] = [
+        {
+            "name": "bash",
+            "description": BASH_TOOL_DESCRIPTION,
+            "parameters": BASH_TOOL_PARAMETERS,
+        },
+        *(
+            {"name": name, "description": "Dedicated Tool.", "parameters": {"type": "object"}}
+            for name in ("read", "search_files", "apply_patch")
+        ),
+    ]
+
+    assert project_bash_tool_definitions(definitions, nesting_depth=0) is definitions
+
+    projected = project_bash_tool_definitions(definitions, nesting_depth=1)
+    bash_definition = projected[0]
+
+    assert bash_definition["description"] == BASH_SUBAGENT_TOOL_DESCRIPTION
+    assert bash_definition["description"]
+    assert bash_definition["parameters"] == BASH_SUBAGENT_TOOL_PARAMETERS
+    parameters = bash_definition["parameters"]
+    assert "oneOf" not in parameters
+    assert "additionalProperties" not in parameters
+    assert parameters["required"] == ["command"]
+    assert "mode" not in parameters["properties"]
+    assert projected[1] is definitions[1]
+    assert definitions[0]["description"] == BASH_TOOL_DESCRIPTION
+    assert definitions[0]["parameters"] == BASH_TOOL_PARAMETERS
+
+
+USUAL_POINTER = "For reading, searching and editing files use read, search_files and apply_patch. "
+
+
+@pytest.mark.parametrize(
+    ("offered", "nesting_depth", "pointer"),
+    [
+        (
+            ("read", "search_files", "apply_patch", "web_fetch"),
+            0,
+            "For reading, searching and editing files use read, search_files and apply_patch; "
+            "for web pages use web_fetch. ",
+        ),
+        (("search_files",), 0, "For searching files use search_files. "),
+        (("read", "apply_patch"), 0, "For reading and editing files use read and apply_patch. "),
+        (("web_fetch",), 0, "For web pages use web_fetch. "),
+        ((), 0, ""),
+        (("read", "web_fetch"), 1, "For reading files use read; for web pages use web_fetch. "),
+        ((), 1, ""),
+    ],
 )
-from tests.core.tools.bash_helpers import (
-    shell_env_cache as shell_env_cache,
-)
+def test_description_points_only_to_the_dedicated_tools_offered(
+    offered: tuple[str, ...], nesting_depth: int, pointer: str
+) -> None:
+    bash_definition = {
+        "name": "bash",
+        "description": BASH_TOOL_DESCRIPTION,
+        "parameters": BASH_TOOL_PARAMETERS,
+    }
+    definitions: list[JsonObject] = [
+        bash_definition,
+        *({"name": name, "description": "Dedicated Tool."} for name in offered),
+        {"name": "web_search", "description": "Search the web."},
+    ]
+
+    projected = project_bash_tool_definitions(definitions, nesting_depth=nesting_depth)
+
+    base = BASH_SUBAGENT_TOOL_DESCRIPTION if nesting_depth else BASH_TOOL_DESCRIPTION
+    assert USUAL_POINTER in base
+    assert projected[0]["description"] == base.replace(USUAL_POINTER, pointer)
+    assert projected[1:] == definitions[1:]
+    assert bash_definition["description"] == BASH_TOOL_DESCRIPTION
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", [None, "foreground"])
-async def test_user_handoff_preserves_process_and_automatic_delivery(
-    manager, tmp_path, monkeypatch, mode
-):
-    from core.runs import Run
+async def test_two_bash_calls_can_run_concurrently_by_default(
+    manager: ProcessManager,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    active_count = 0
+    max_active_count = 0
+    both_started = asyncio.Event()
 
-    monkeypatch.setattr(bash_module, "_shell_argv", python_command)
-    run = Run(run_id=RUN_ID, agent_id=AGENT_ID, session_id="session-a")
-    run.begin_tool_call("call-a")
-    context = make_context(tmp_path)
-    ready = asyncio.Event()
-    delivered = asyncio.Event()
-    notices = []
-    handoffs = []
-    original_handoff_note = bash_results._handoff_note
+    async def fake_bash_handler(
+        context: ToolContext,
+        arguments: dict[str, Any],
+        process_manager: ProcessManager,
+        *,
+        trigger_service: Any | None = None,
+        credential_resolver: Callable[[str], str] | None = None,
+        update_handoffs: Any | None = None,
+    ) -> dict[str, Any]:
+        nonlocal active_count, max_active_count
+        assert process_manager is manager
+        assert trigger_service is None
+        assert credential_resolver is None
+        assert update_handoffs is None
+        assert arguments["command"].startswith("download-")
+        active_count += 1
+        max_active_count = max(max_active_count, active_count)
+        if max_active_count == 2:
+            both_started.set()
+        await asyncio.wait_for(both_started.wait(), timeout=1)
+        active_count -= 1
+        return tool_success({"status": "completed", "call_id": context.tool_call_id})
 
-    def record_handoff(elapsed, *, requested_by_user=False, timeout_seconds=None):
-        handoffs.append((elapsed, requested_by_user))
-        return original_handoff_note(
-            elapsed,
-            requested_by_user=requested_by_user,
-            timeout_seconds=timeout_seconds,
-        )
+    monkeypatch.setattr(bash_module, "bash_handler", fake_bash_handler)
+    registry = ToolRegistry()
+    register_bash_tool(registry, manager)
+    executor = ToolExecutor(registry, per_run_limit=2, global_limit=2)
 
-    monkeypatch.setattr(bash_results, "_handoff_note", record_handoff)
+    results = await executor.execute_many(
+        [
+            ToolCall(
+                id="download-1",
+                name="bash",
+                arguments={"command": "download-one", "mode": "foreground"},
+            ),
+            ToolCall(
+                id="download-2",
+                name="bash",
+                arguments={"command": "download-two", "mode": "foreground"},
+            ),
+        ],
+        ToolExecutionConfig(
+            agent_id=AGENT_ID,
+            session_id="session-a",
+            run_id=RUN_ID,
+            workspace=tmp_path,
+            vbot_root=tmp_path,
+            data_root=tmp_path,
+            allowed_tools=["bash"],
+        ),
+    )
 
-    def register(callback):
-        run.register_tool_background("call-a", callback)
-        ready.set()
+    assert max_active_count == 2
+    assert [result["data"]["call_id"] for result in results] == [
+        "download-1",
+        "download-2",
+    ]
 
-    class Trigger:
-        def submit_completion(self, *args, **kwargs):
-            notices.append(kwargs)
-            delivered.set()
-            return delivered_future()
 
-    context = replace(context, background_registration_hook=register)
-    task = asyncio.create_task(
-        bash_handler(
+@pytest.mark.parametrize(
+    ("seconds", "expected"),
+    [
+        (0.0, "<1s"),
+        (0.4, "<1s"),
+        (0.6, "1s"),
+        (45.2, "45s"),
+        (845.0, "14m 5s"),
+        (3723.0, "1h 2m 3s"),
+    ],
+)
+def test_format_elapsed_duration_renders_compact_durations(seconds: float, expected: str) -> None:
+    """Elapsed abort times render as compact h/m/s strings."""
+    assert bash_results._format_elapsed_duration(seconds) == expected
+
+
+# --- Foreground execution --------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("depth", "script", "exit_code", "stream", "hint"),
+    [
+        # The default mode runs in the foreground with stdin at EOF.
+        (0, "import sys\nassert sys.stdin.read() == ''\nprint('hello')\n", 0, "stdout", None),
+        # A failing exit code is still a successful Tool Result. The hint judges
+        # the import failure against the command's working directory.
+        (
+            1,
+            "import sys\nprint('bad', file=sys.stderr, flush=True)\nimport shop\n",
+            1,
+            "stderr",
+            "Run it as a module from the working directory instead: `python -m tests.test_cart`.",
+        ),
+    ],
+    ids=["success", "subagent-failure"],
+)
+async def test_foreground_command_finishes_inline_with_its_result(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    depth: int,
+    script: str,
+    exit_code: int,
+    stream: str,
+    hint: str | None,
+) -> None:
+    events: list[tuple[str, dict[str, Any]]] = []
+    cancel_callbacks: list[Callable[[], None]] = []
+    watcher_calls: list[Any] = []
+
+    async def emit_hook(event_type: str, payload: dict[str, Any]) -> None:
+        events.append((event_type, payload))
+
+    monkeypatch.setattr(
+        bash_module, "_shell_argv", lambda command: [sys.executable, *command.split()[1:]]
+    )
+    monkeypatch.setattr(
+        bash_module,
+        "_maybe_spawn_completion_watcher",
+        lambda *args, **kwargs: watcher_calls.append(args),
+    )
+    project = tmp_path / "project"
+    (project / "shop").mkdir(parents=True)
+    (project / "tests").mkdir()
+    (project / "tests" / "test_cart.py").write_text(script, encoding="utf-8")
+    context = make_context(
+        tmp_path,
+        emit_hook=emit_hook,
+        nesting_depth=depth,
+        cancel_registration_hook=cancel_callbacks.append,
+        cancel_check_hook=lambda: False,
+    )
+    spool_manager = make_spool_manager(tmp_path)
+    try:
+        result = await bash_handler(
             context,
-            {
-                "command": (
-                    "from pathlib import Path\nimport time\nprint('ready', flush=True)\n"
-                    "while not Path('release').exists():\n    time.sleep(0.01)\n"
-                    "print('finished')"
-                ),
-                **({"mode": mode} if mode is not None else {}),
-            },
-            manager,
-            trigger_service=Trigger(),
+            {"command": "python tests/test_cart.py", "workdir": str(project)},
+            spool_manager,
         )
-    )
-    await asyncio.wait_for(ready.wait(), 5)
-    assert run.background_tool_call("call-a")
-    result = await asyncio.wait_for(task, 5)
-    assert result["ok"] and result["data"]["delivery"] == "automatic"
-    assert len(handoffs) == 1
-    assert handoffs[0][0] >= 0
-    assert handoffs[0][1] is True
-    process_id = result["data"]["process_id"]
-    assert manager.get_process(process_id, AGENT_ID, project_id=None).status == "running"
-    (tmp_path / "release").write_text("continue", encoding="utf-8")
-    await asyncio.wait_for(delivered.wait(), 5)
-    assert len(notices) == 1
-    assert "finished" in notices[0]["body"]
 
-
-@pytest.mark.asyncio
-async def test_subagent_foreground_never_exposes_user_handoff(manager, tmp_path, monkeypatch):
-    monkeypatch.setattr(bash_module, "_shell_argv", python_command)
-    context = make_context(tmp_path, nesting_depth=1)
-    callbacks = []
-    context = replace(context, background_registration_hook=callbacks.append)
-    result = await bash_handler(context, {"command": "print('inline')"}, manager)
-    assert result["data"]["status"] == "completed"
-    assert callbacks == []
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("mode", [None, "foreground", "background"])
-async def test_bash_modes_finish_without_stdin_input(manager, tmp_path, monkeypatch, mode):
-    monkeypatch.setattr(bash_module, "_shell_argv", python_command)
-    arguments = {"command": "import sys; assert sys.stdin.read() == ''; print('eof')"}
-    if mode is not None:
-        arguments["mode"] = mode
-    result = await asyncio.wait_for(bash_handler(make_context(tmp_path), arguments, manager), 5)
-    if mode == "background":
-        tracked = manager.get_process(result["data"]["process_id"], AGENT_ID)
-        assert tracked.wait_task is not None
-        await asyncio.wait_for(asyncio.shield(tracked.wait_task), 5)
-        data = await manager.snapshot(tracked.process_id, AGENT_ID)
-    else:
+        assert result["ok"] is True
         data = result["data"]
-    assert result["ok"] is True
-    assert data["exit_code"] == 0
-    assert data["output"].strip() == "eof"
-
-
-@pytest.mark.asyncio
-@pytest.mark.skipif(sys.platform != "win32", reason="PowerShell-specific stdin contract")
-@pytest.mark.parametrize(
-    "command, expected",
-    [
-        ('Write-Output "x: $input"', "x:"),
-        ('$input | ForEach-Object { $_ }; Write-Output "done"', "done"),
-        ('[Console]::In.ReadToEnd(); Write-Output "done"', "done"),
-        ("'alpha','beta' | ForEach-Object { $_.ToUpper() }", "ALPHA\nBETA"),
-        (
-            "'alpha','beta' | pwsh -NonInteractive -Command "
-            "'$input | ForEach-Object { $_.ToUpper() }'",
-            "ALPHA\nBETA",
-        ),
-    ],
-)
-async def test_windows_shell_eof_and_command_pipelines(manager, tmp_path, command, expected):
-    result = await asyncio.wait_for(
-        bash_handler(make_context(tmp_path), {"command": command}, manager), 10
-    )
-    assert result["ok"] is True
-    assert result["data"]["exit_code"] == 0
-    assert result["data"]["output"].strip().replace("\r\n", "\n") == expected
-
-
-@pytest.mark.asyncio
-@pytest.mark.skipif(sys.platform != "win32", reason="PowerShell exit status")
-@pytest.mark.parametrize(
-    "command, exit_code",
-    [
-        ("python -c 'raise SystemExit(5)'", 5),
-        ("cmd /c exit 4", 4),
-        ("python -c 'raise SystemExit(5)'; Write-Output after", 0),
-        ("Get-Item does-not-exist", 1),
-        ("exit 7", 7),
-        ("Write-Output ok", 0),
-        ('param($code = 3) python -c "raise SystemExit($code)"', 3),
-    ],
-)
-async def test_windows_shell_reports_the_last_program_exit_code(
-    manager, tmp_path, monkeypatch, command, exit_code
-):
-    monkeypatch.setattr(bash_environment, "_cached_shell_env", dict(os.environ))
-
-    result = await asyncio.wait_for(
-        bash_handler(make_context(tmp_path), {"command": command}, manager), 30
-    )
-
-    assert result["ok"] is True
-    assert result["data"]["exit_code"] == exit_code
-
-
-@pytest.mark.asyncio
-@pytest.mark.skipif(sys.platform != "win32", reason="PowerShell console code page")
-@pytest.mark.parametrize(
-    "command, expected",
-    [
-        ("Write-Output 'Jürgen €'", "Jürgen €"),
-        ("Get-ChildItem -Name", "Übersicht €.txt"),
-        ("cmd /c echo ä€", "ä€"),
-        ("$line = cmd /c echo ö; Write-Output $line", "ö"),
-        ("[Console]::Error.WriteLine('fäil')", "fäil"),
-        (
-            "using namespace System.Text\n[StringBuilder]::new('ß').ToString()",
-            "ß",
-        ),
-    ],
-)
-async def test_windows_shell_output_keeps_non_ascii_text(
-    manager, tmp_path, monkeypatch, command, expected
-):
-    monkeypatch.setattr(bash_environment, "_cached_shell_env", dict(os.environ))
-    (tmp_path / "Übersicht €.txt").write_text("x", encoding="utf-8")
-
-    result = await asyncio.wait_for(
-        bash_handler(make_context(tmp_path), {"command": command}, manager), 30
-    )
-
-    assert result["ok"] is True
-    assert result["data"]["exit_code"] == 0
-    assert result["data"]["output"].strip() == expected
+        assert data["status"] == "completed"
+        assert data["exit_code"] == exit_code
+        output = data["output"].replace("\r\n", "\n")
+        if exit_code == 0:
+            assert output == "hello\n"
+        else:
+            assert output.startswith("bad\n")
+        for field in ("mode", "stdout", "stderr", "truncated", "log_file"):
+            assert field not in data
+        if hint is None:
+            assert "hint" not in data
+        else:
+            assert data["hint"].endswith(hint)
+        (process,) = spool_manager.list_processes(AGENT_ID)
+        assert {event for event, _payload in events} == {f"tool_call_{stream}"}
+        assert all(
+            payload["tool_call_id"] == "call-a" and payload["process_id"] == process.process_id
+            for _event, payload in events
+        )
+        assert "".join(payload["data"] for _event, payload in events).replace("\r\n", "\n") == (
+            output
+        )
+        # The user-cancel callback was registered but never fired.
+        assert len(cancel_callbacks) == 1
+        assert process.cancelled_by_user is False
+        assert watcher_calls == []
+    finally:
+        await spool_manager.aclose()
 
 
 @pytest.mark.asyncio
 async def test_shell_pipeline_and_script_owned_input_remain_available(manager, tmp_path):
-
     child = (
         "import sys\nvalue = 0\n"
         "for line in sys.stdin:\n"
@@ -266,43 +396,7 @@ async def test_shell_pipeline_and_script_owned_input_remain_available(manager, t
     assert result["data"]["output"].strip() == "child-dialog-ok"
 
 
-@pytest.mark.asyncio
-async def test_short_command_completes_and_streams_stdout(
-    manager: ProcessManager,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    events: list[tuple[str, dict[str, Any]]] = []
-
-    async def emit_hook(event_type: str, payload: dict[str, Any]) -> None:
-        events.append((event_type, payload))
-
-    monkeypatch.setattr(bash_module, "_shell_argv", python_command)
-    context = make_context(tmp_path, emit_hook=emit_hook)
-
-    result = await bash_handler(
-        context,
-        {"command": "print('hello')", "mode": "foreground"},
-        manager,
-    )
-
-    assert result["ok"] is True
-    assert result["data"]["status"] == "completed"
-    assert result["data"]["exit_code"] == 0
-    assert result["data"]["output"].replace("\r\n", "\n") == "hello\n"
-    assert "stdout" not in result["data"]
-    assert "stderr" not in result["data"]
-    assert events == [
-        (
-            "tool_call_stdout",
-            {
-                "tool_call_id": "call-a",
-                "process_id": events[0][1]["process_id"],
-                "data": events[0][1]["data"],
-            },
-        )
-    ]
-    assert events[0][1]["data"].replace("\r\n", "\n") == "hello\n"
+# --- Command environment ---------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -345,35 +439,20 @@ async def test_granted_env_key_is_resolved_into_only_the_spawned_process(
 
 
 @pytest.mark.asyncio
-async def test_bash_injects_current_run_context(
+@pytest.mark.parametrize(
+    ("project_id", "expected_project"),
+    [
+        ("vbot", "vbot"),
+        # A Run outside a project removes the host's project context.
+        (None, "missing"),
+    ],
+)
+async def test_the_command_sees_the_run_it_belongs_to(
     manager: ProcessManager,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(bash_module, "_shell_argv", python_command)
-    context = make_context(tmp_path, project_id="vbot")
-
-    result = await bash_handler(
-        context,
-        {
-            "command": (
-                "import os; print(os.environ['VBOT_RUN_AGENT_ID']); "
-                "print(os.environ['VBOT_RUN_SESSION_ID']); "
-                "print(os.environ['VBOT_RUN_PROJECT_ID'])"
-            ),
-            "mode": "foreground",
-        },
-        manager,
-    )
-
-    assert result["data"]["output"].replace("\r\n", "\n") == "agent-a\nsession-a\nvbot\n"
-
-
-@pytest.mark.asyncio
-async def test_identity_bash_removes_host_project_context(
-    manager: ProcessManager,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    project_id: str | None,
+    expected_project: str,
 ) -> None:
     monkeypatch.setattr(
         bash_environment,
@@ -383,139 +462,93 @@ async def test_identity_bash_removes_host_project_context(
     monkeypatch.setattr(bash_module, "_shell_argv", python_command)
 
     result = await bash_handler(
-        make_context(tmp_path),
-        {
-            "command": "import os; print(os.environ.get('VBOT_RUN_PROJECT_ID', 'missing'))",
-            "mode": "foreground",
-        },
-        manager,
-    )
-
-    assert result["data"]["output"].strip() == "missing"
-
-
-@pytest.mark.asyncio
-async def test_ungranted_env_key_is_rejected_before_spawn(
-    manager: ProcessManager,
-    tmp_path: Path,
-) -> None:
-    result = await bash_handler(
-        make_context(tmp_path),
-        {
-            "command": "print('must not run')",
-            "mode": "foreground",
-            "env_keys": ["OPENAI_API_KEY"],
-        },
-        manager,
-        credential_resolver=lambda _key: pytest.fail("credential must not be resolved"),
-    )
-
-    assert result["ok"] is False
-    assert result["error"]["code"] == "invalid_arguments"
-    assert "OPENAI_API_KEY" in result["error"]["message"]
-    assert manager.list_processes(AGENT_ID) == []
-
-
-_PRINT_HANDOFF = "import os; print(os.environ.get('VBOT_UPDATE_HANDOFF', 'missing'), flush=True)"
-
-
-@pytest.mark.asyncio
-async def test_bash_exports_update_handoff_token_without_writing_a_ticket(
-    manager: ProcessManager,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.delenv("VBOT_UPDATE_HANDOFF", raising=False)
-    monkeypatch.setattr(bash_module, "_shell_argv", python_command)
-    data_dir = tmp_path / "data"
-    handoffs = UpdateHandoffs(data_dir)
-    persisted: list[Any] = []
-    context = replace(make_context(tmp_path), result_persisted_hook=persisted.append)
-
-    result = await bash_handler(
-        context, {"command": _PRINT_HANDOFF}, manager, update_handoffs=handoffs
-    )
-
-    token = result["data"]["output"].strip()
-    assert token not in {"", "missing"}
-    assert len(persisted) == 1
-    assert not (data_dir / "runtime").exists()
-    # The foreground process has exited: nothing can claim its token any more.
-    with pytest.raises(UpdateHandoffUnavailableError):
-        handoffs.mint(token)
-
-    unpersisted = await bash_handler(
-        make_context(tmp_path), {"command": _PRINT_HANDOFF}, manager, update_handoffs=handoffs
-    )
-    assert unpersisted["data"]["output"].strip() == "missing"
-
-
-@pytest.mark.asyncio
-async def test_background_update_handoff_is_claimable_until_its_process_exits(
-    manager: ProcessManager,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(bash_module, "_shell_argv", python_command)
-    handoffs = UpdateHandoffs(tmp_path / "data")
-    persisted: list[Any] = []
-    context = replace(make_context(tmp_path), result_persisted_hook=persisted.append)
-
-    result = await bash_handler(
-        context,
+        make_context(tmp_path, project_id=project_id),
         {
             "command": (
-                f"{_PRINT_HANDOFF}\nfrom pathlib import Path\nimport time\n"
-                "while not Path('release').exists():\n    time.sleep(0.01)"
+                "import os; print(os.environ['VBOT_RUN_AGENT_ID']); "
+                "print(os.environ['VBOT_RUN_SESSION_ID']); "
+                "print(os.environ.get('VBOT_RUN_PROJECT_ID', 'missing'))"
             ),
-            "mode": "background",
         },
         manager,
-        update_handoffs=handoffs,
     )
-    process_id = result["data"]["process_id"]
-    token = ""
-    for _ in range(500):
-        token = str((await manager.snapshot(process_id, AGENT_ID))["output"]).strip()
-        if token:
-            break
-        await asyncio.sleep(0.01)
 
-    ticket = handoffs.mint(token)
-    assert handoffs.mint(token).path == ticket.path
-    assert read_handoff_ticket(tmp_path / "data", ticket.ticket_id)["acknowledged"] is False
-    persisted[0]()
-    assert read_handoff_ticket(tmp_path / "data", ticket.ticket_id)["acknowledged"] is True
+    assert result["data"]["output"].replace("\r\n", "\n") == (
+        f"agent-a\nsession-a\n{expected_project}\n"
+    )
 
-    (tmp_path / "release").write_text("done", encoding="utf-8")
-    wait_task = manager.get_process(process_id, AGENT_ID).wait_task
-    assert wait_task is not None
-    await asyncio.wait_for(asyncio.shield(wait_task), 5)
-    await asyncio.sleep(0)
-    with pytest.raises(UpdateHandoffUnavailableError):
-        handoffs.mint(token)
+
+# --- Spawning --------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_failed_spawn_releases_its_update_handoff(
+@pytest.mark.parametrize(
+    ("shell", "recovers", "message"),
+    [
+        ("missing-vbot-shell", False, "The shell 'missing-vbot-shell' was not found on this host"),
+        ("pwsh", False, "requires PowerShell 7 (pwsh) on Windows; install it or add it to PATH"),
+        (sys.executable, True, None),
+    ],
+    ids=["missing-shell", "missing-pwsh", "recovers"],
+)
+async def test_a_missing_shell_refreshes_the_environment_once_before_failing(
     manager: ProcessManager,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    shell: str,
+    recovers: bool,
+    message: str | None,
 ) -> None:
-    handoffs = UpdateHandoffs(tmp_path / "data")
-    offered: list[str] = []
+    probes: list[bool] = []
+    spawn_paths: list[str] = []
+    original_spawn = manager.spawn
 
-    async def failing_spawn(*_args: Any, env: dict[str, str], **_kwargs: Any) -> str:
-        offered.append(env["VBOT_UPDATE_HANDOFF"])
-        raise OSError("spawn unavailable")
+    async def probe() -> dict[str, str]:
+        probes.append(True)
+        return {"PATH": "refreshed-path"}
 
-    monkeypatch.setattr(manager, "spawn", failing_spawn)
-    context = replace(make_context(tmp_path), result_persisted_hook=lambda _callback: None)
+    async def spawn(*args: Any, env: dict[str, str], **kwargs: Any) -> str:
+        spawn_paths.append(env["PATH"])
+        if len(spawn_paths) == 1 or not recovers:
+            raise FileNotFoundError(f"no such file: {shell}")
+        return await original_spawn(*args, env=env, **kwargs)
 
-    result = await bash_handler(
-        context, {"command": "print('never')"}, manager, update_handoffs=handoffs
-    )
+    monkeypatch.setattr(bash_environment, "_probe_shell_env", probe)
+    monkeypatch.setattr(bash_module, "_shell_argv", lambda command: [shell, "-c", command])
+    monkeypatch.setattr(manager, "spawn", spawn)
 
-    assert result["error"]["code"] == "process_spawn_failed"
-    with pytest.raises(UpdateHandoffUnavailableError):
-        handoffs.mint(offered[0])
+    result = await bash_handler(make_context(tmp_path), {"command": "print('recovered')"}, manager)
+
+    assert spawn_paths == ["original-path", "refreshed-path"]
+    assert probes == [True]
+    if recovers:
+        assert result["ok"] is True
+        assert result["data"]["output"].strip() == "recovered"
+    else:
+        assert result["error"]["code"] == "process_spawn_failed"
+        assert result["error"]["message"].startswith(
+            f"failed to start process: no such file: {shell}"
+        )
+        assert message in result["error"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_commands_spawn_in_a_windowless_process_group(
+    manager: ProcessManager, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[bool, int]] = []
+
+    def creation_flags(*, new_process_group: bool = False, platform_name: str = os.name) -> int:
+        flags = subprocess_creation_flags(
+            new_process_group=new_process_group, platform_name=platform_name
+        )
+        calls.append((new_process_group, flags))
+        return flags
+
+    monkeypatch.setattr("core.tools.process_manager.subprocess_creation_flags", creation_flags)
+    monkeypatch.setattr(bash_module, "_shell_argv", python_command)
+
+    result = await bash_handler(make_context(tmp_path), {"command": "print('done')"}, manager)
+
+    assert result["ok"] is True
+    assert calls == [(True, subprocess_creation_flags(new_process_group=True))]

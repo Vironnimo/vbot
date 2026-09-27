@@ -1,4 +1,4 @@
-"""Native search resources stay in their worker across completion and cancellation."""
+"""Native search children: worker ownership, cancellation, cleanup, and resource bounds."""
 
 import asyncio
 import contextlib
@@ -7,19 +7,18 @@ import sys
 import threading
 import weakref
 from pathlib import Path
+from types import SimpleNamespace
 
 import psutil  # type: ignore[import-untyped]
 import pytest
 
 from core.tools._search_execution import native_lines
 from core.tools.search import SearchBudget
-from core.tools.search_files import register_search_files_tool
-from core.tools.tools import ToolRegistry, run_tool_worker
-from tests.core.tools.test_search_files import context
-
-pytestmark = pytest.mark.asyncio
+from core.tools.tools import run_tool_worker
+from tests.core.tools.search_files_test_support import context, dispatch
 
 
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "arguments, success, children",
     [
@@ -45,11 +44,7 @@ async def test_native_process_finalizes_in_worker_with_cancel_callback_retained(
         return process
 
     monkeypatch.setattr("core.tools._search_execution.subprocess.Popen", launch)
-    registry = ToolRegistry()
-    register_search_files_tool(registry)
-    result = await registry.dispatch(
-        context(tmp_path, cancel_registration_hook=hooks.append), arguments
-    )
+    result = await dispatch(tmp_path, arguments, cancel_registration_hook=hooks.append)
 
     assert result["ok"] is success, result
     assert len(created) == children
@@ -62,6 +57,7 @@ async def test_native_process_finalizes_in_worker_with_cancel_callback_retained(
         callback()
 
 
+@pytest.mark.asyncio
 async def test_cancellation_before_native_launch_starts_no_process(tmp_path, monkeypatch):
     def unexpected_launch(*args, **kwargs):
         pytest.fail("A cancelled native search must not launch a child")
@@ -76,6 +72,7 @@ async def test_cancellation_before_native_launch_starts_no_process(tmp_path, mon
     )
 
 
+@pytest.mark.asyncio
 @pytest.mark.parametrize("finish", ["close", "error"])
 async def test_retained_generator_or_error_does_not_retain_native_process(
     tmp_path, monkeypatch, finish
@@ -115,6 +112,7 @@ async def test_retained_generator_or_error_does_not_retain_native_process(
     assert created[0] != threading.get_ident()
 
 
+@pytest.mark.asyncio
 @pytest.mark.parametrize("when", ["launch", "silent", "stdout_closed"])
 async def test_native_cancellation_kills_in_worker(tmp_path, monkeypatch, when):
     original = subprocess.Popen
@@ -197,6 +195,7 @@ async def test_native_cancellation_kills_in_worker(tmp_path, monkeypatch, when):
         await task
 
 
+@pytest.mark.asyncio
 @pytest.mark.parametrize("failure", ["monitor", "second_reader"])
 async def test_native_setup_failure_terminates_and_releases_child(tmp_path, monkeypatch, failure):
     original = subprocess.Popen
@@ -242,6 +241,7 @@ async def test_native_setup_failure_terminates_and_releases_child(tmp_path, monk
     assert not psutil.pid_exists(child_ids[0])
 
 
+@pytest.mark.asyncio
 async def test_stdout_eof_does_not_disable_search_timeout(tmp_path, monkeypatch):
     original = subprocess.Popen
     original_wait = original.wait
@@ -278,3 +278,100 @@ async def test_stdout_eof_does_not_disable_search_timeout(tmp_path, monkeypatch)
     assert waiting.is_set()
     assert len(finalized) == 1
     assert finalized[0] != threading.get_ident()
+
+
+def test_a_user_cancellation_kills_a_silent_child(tmp_path, monkeypatch):
+    original = subprocess.Popen
+    children = []
+    hooks = []
+
+    def launch(_command, **kwargs):
+        child = original([sys.executable, "-c", "import time; time.sleep(30)"], **kwargs)
+        children.append(child)
+        return child
+
+    monkeypatch.setattr("core.tools._search_execution.subprocess.Popen", launch)
+    polls_while_running = []
+
+    def cancelled_after_a_silent_wait():
+        # The child never writes a line: the first poll after its launch waits
+        # for output in vain, and the user cancels at the next poll.
+        if children:
+            polls_while_running.append(True)
+        return len(polls_while_running) >= 2
+
+    ctx = context(
+        tmp_path,
+        cancel_registration_hook=hooks.append,
+        cancel_check_hook=cancelled_after_a_silent_wait,
+    )
+    lines = native_lines(Path(sys.executable), [], ctx, SearchBudget(ctx))
+    with contextlib.closing(lines):
+        assert list(lines) == []
+    assert len(hooks) == 1
+    assert children[0].poll() is not None
+
+
+@pytest.mark.parametrize("exit_code", [0, 2])
+def test_finished_child_is_drained_when_process_monitor_misses_it(tmp_path, monkeypatch, exit_code):
+    original = subprocess.Popen
+    children = []
+
+    def launch(_command, **kwargs):
+        child = original(
+            [
+                sys.executable,
+                "-c",
+                f"import sys; print('found'); "
+                f"sys.stderr.write('specific failure' if {exit_code} else ''); "
+                f"sys.exit({exit_code})",
+            ],
+            **kwargs,
+        )
+        child.wait(timeout=5)
+        children.append(child)
+        return child
+
+    def gone(pid):
+        raise psutil.NoSuchProcess(pid)
+
+    monkeypatch.setattr("core.tools._search_execution.subprocess.Popen", launch)
+    monkeypatch.setattr("core.tools._search_execution.psutil.Process", gone)
+    ctx = context(tmp_path)
+    lines = native_lines(Path(sys.executable), [], ctx, SearchBudget(ctx))
+    assert next(lines).strip() == b"found"
+    if exit_code:
+        with pytest.raises(RuntimeError, match="specific failure"):
+            next(lines)
+    else:
+        assert list(lines) == []
+    assert children[0].returncode == exit_code
+    assert children[0].stdout.closed and children[0].stderr.closed
+
+
+def test_child_memory_is_bounded_and_polled_at_an_interval(tmp_path, monkeypatch):
+    original = subprocess.Popen
+    polls: list[int] = []
+
+    class Monitored:
+        rss = 0
+
+        def __init__(self, pid):
+            pass
+
+        def memory_info(self):
+            polls.append(Monitored.rss)
+            return SimpleNamespace(rss=Monitored.rss)
+
+    def launch(_command, **kwargs):
+        return original([sys.executable, "-c", "for i in range(2000): print(i)"], **kwargs)
+
+    monkeypatch.setattr("core.tools._search_execution.subprocess.Popen", launch)
+    monkeypatch.setattr("core.tools._search_execution.psutil.Process", Monitored)
+    ctx = context(tmp_path)
+    assert len(list(native_lines(Path(sys.executable), [], ctx, SearchBudget(ctx)))) == 2000
+    # Polls follow elapsed time, not output volume.
+    assert 1 <= len(polls) < 200
+    Monitored.rss = 513 * 1024 * 1024
+    with pytest.raises(RuntimeError, match="memory bound"):
+        list(native_lines(Path(sys.executable), [], ctx, SearchBudget(ctx)))

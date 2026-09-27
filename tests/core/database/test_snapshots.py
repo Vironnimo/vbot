@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Callable
+from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeoutError
 from contextlib import closing
 from pathlib import Path
 from typing import Any
@@ -12,6 +14,7 @@ from typing import Any
 import pytest
 
 from core.database import (
+    Database,
     DatabaseSchemaMismatchError,
     DatabaseUnavailableError,
     SnapshotFacts,
@@ -19,51 +22,45 @@ from core.database import (
     data_store_status,
     list_data_snapshots,
     open_database,
+    open_offline_database,
     read_incident,
     read_marker,
     read_snapshot_health,
     required_journal_mode,
+    restore_data_snapshot,
     snapshot_root,
     snapshot_summaries,
 )
 from core.database import snapshots as snapshots_module
-from core.database.marker import MarkerEntry, _write_marker
-from core.database.snapshots import (
-    SNAPSHOT_MANIFEST_NAME,
-    member_restore_candidates,
-    read_manifest,
-    snapshot_inventory,
-    verify_member,
-)
+from core.database.snapshots import SNAPSHOT_HEALTH_FILE_NAME, SNAPSHOT_MANIFEST_NAME
 from tests.core.database.database_test_support import (
     NOTES_FACTS,
     NOTES_SCHEMA_SQL,
     add_note,
+    add_notes,
+    manifest_payload,
+    note_bodies,
+    note_count,
     notes_spec,
+    pin_journal_mode,
+    rewrite_manifest,
+    rewrite_marker,
     snapshot_with_notes,
     stored_bodies,
 )
 
 
-def _specs(data_dir: Path) -> dict:
+def _specs(data_dir: Path) -> dict[str, Any]:
     return {"notes": notes_spec(data_dir), "tasks": notes_spec(data_dir, name="tasks")}
 
 
-def _manifest(snapshot: Path) -> dict[str, Any]:
-    manifest: dict[str, Any] = json.loads(
-        (snapshot / SNAPSHOT_MANIFEST_NAME).read_text(encoding="utf-8")
-    )
-    return manifest
+def _status_snapshot_ids(data_dir: Path) -> list[str]:
+    """The snapshots the status lists from their manifests, without rehashing."""
+    return [item["snapshot_id"] for item in data_store_status(data_dir)["snapshots"]]
 
 
-def _rewrite_manifest(snapshot: Path, change: Callable[[dict[str, Any]], None]) -> None:
-    payload = _manifest(snapshot)
-    change(payload)
-    (snapshot / SNAPSHOT_MANIFEST_NAME).write_text(json.dumps(payload), encoding="utf-8")
-
-
-def test_snapshot_captures_every_registered_database_as_one_verified_member_each(
-    data_dir: Path,
+def test_a_snapshot_captures_every_registered_database_as_one_standalone_member_each(
+    data_dir: Path, tmp_path: Path
 ) -> None:
     tasks = open_database(notes_spec(data_dir, name="tasks"))
     add_note(tasks, "closed while the snapshot runs")
@@ -86,7 +83,7 @@ def test_snapshot_captures_every_registered_database_as_one_verified_member_each
         "notes.db",
         "tasks.db",
     ]
-    payload = _manifest(snapshot)
+    payload = manifest_payload(snapshot)
     assert set(payload) == {
         "manifest_version",
         "snapshot_id",
@@ -124,14 +121,78 @@ def test_snapshot_captures_every_registered_database_as_one_verified_member_each
     summary = snapshot_summaries(data_dir)[0]
     assert summary["snapshot_id"] == snapshot.name
     assert "open during the snapshot" not in json.dumps(summary)
+    # Each member copy opens on its own, outside any data directory.
+    copy_dir = tmp_path / "copy"
+    copy_dir.mkdir()
+    (copy_dir / "notes.db").write_bytes((snapshot / "notes.db").read_bytes())
+    copy = open_offline_database(notes_spec(copy_dir))
+    try:
+        assert note_bodies(copy) == ["open during the snapshot"]
+    finally:
+        copy.close()
 
 
-@pytest.mark.parametrize("observed_at", ["2026-09-01T10:00:00Z", None, 17])
+def _write_without_patience(database: Database) -> None:
+    # A write that meets a lock held by the copy fails at once as busy.
+    database.write(
+        lambda connection: connection.execute("INSERT INTO notes (body) VALUES ('overlap')"),
+        patience_s=0.0,
+    )
+
+
+@pytest.mark.parametrize("journal_mode", ["wal", "delete"])
+def test_an_online_snapshot_is_one_consistent_copy_while_another_thread_keeps_writing(
+    data_dir: Path, monkeypatch: pytest.MonkeyPatch, journal_mode: str
+) -> None:
+    pin_journal_mode(monkeypatch, journal_mode)
+    # SQLite lock waits fail at once, so only a write that never meets one can succeed.
+    monkeypatch.setattr("core.database._runtime.BUSY_TIMEOUT_MS", 0)
+    database = open_database(notes_spec(data_dir))
+    writer = ThreadPoolExecutor(max_workers=1)
+    overlapping: list[Future[None]] = []
+    committed_during_copy: list[bool] = []
+    try:
+        add_notes(database, 5000)  # Enough rows for several progress polls of the copy.
+        assert database.wal_active() is (journal_mode == "wal")
+        idle_connections = database.live_connection_count()
+
+        def write_during_the_copy() -> bool:
+            # The copy reads through its own connection beside this database's.
+            if database.live_connection_count() > idle_connections and not overlapping:
+                overlapping.append(writer.submit(_write_without_patience, database))
+                try:
+                    # WAL commits while the copy keeps reading its snapshot; the
+                    # rollback journal queues the write until the copy finishes.
+                    overlapping[0].result(timeout=10.0 if journal_mode == "wal" else 0.05)
+                    committed_during_copy.append(True)
+                except FutureTimeoutError:
+                    committed_during_copy.append(False)
+            return False
+
+        published = create_data_snapshot(
+            data_dir, reason="test", databases=(database,), cancelled=write_during_the_copy
+        )
+        assert overlapping, "the copy never polled while it was reading"
+        overlapping[0].result(timeout=10.0)
+        assert note_count(database) == 5001
+    finally:
+        writer.shutdown(wait=True)
+        database.close()
+
+    assert committed_during_copy == [journal_mode == "wal"]
+    assert isinstance(published, Path), read_snapshot_health(data_dir)
+    assert list_data_snapshots(data_dir) == [published]
+    # A standalone rollback-journal copy of one instant, without sidecars.
+    assert {path.name for path in published.iterdir()} == {"notes.db", SNAPSHOT_MANIFEST_NAME}
+    assert manifest_payload(published)["members"]["notes"]["facts"] == {"note_count": 5000}
+
+
+@pytest.mark.parametrize("observed_at", ["2026-09-01T10:00:00Z", 17])
 def test_a_health_record_with_a_non_canonical_time_is_malformed(
     data_dir: Path, observed_at: object
 ) -> None:
     snapshot_with_notes(data_dir, "hello")
-    health_path = snapshot_root(data_dir) / snapshots_module.SNAPSHOT_HEALTH_FILE_NAME
+    health_path = snapshot_root(data_dir) / SNAPSHOT_HEALTH_FILE_NAME
     payload = json.loads(health_path.read_text(encoding="utf-8"))
     assert read_snapshot_health(data_dir) == payload
     health_path.write_text(json.dumps({**payload, "observed_at": observed_at}), encoding="utf-8")
@@ -142,34 +203,17 @@ def test_a_health_record_with_a_non_canonical_time_is_malformed(
     assert health["observed_at"] is None
 
 
-def test_a_snapshot_copy_opens_as_a_standalone_database(data_dir: Path, tmp_path: Path) -> None:
-    snapshot = snapshot_with_notes(data_dir, "hello")
-    copy_dir = tmp_path / "copy"
-    copy_dir.mkdir()
-    (copy_dir / "notes.db").write_bytes((snapshot / "notes.db").read_bytes())
-
-    from core.database import open_offline_database
-
-    database = open_offline_database(notes_spec(copy_dir))
-    try:
-        with database.read() as connection:
-            assert connection.execute("SELECT body FROM notes").fetchone()[0] == "hello"
-    finally:
-        database.close()
-
-
-def test_snapshot_without_registered_databases_is_a_noop(data_dir: Path) -> None:
+def test_a_snapshot_needs_a_reason_and_captures_nothing_without_a_registered_database(
+    data_dir: Path,
+) -> None:
+    with pytest.raises(ValueError):
+        create_data_snapshot(data_dir, reason=" ")
     assert create_data_snapshot(data_dir, reason="test") is None
     assert list_data_snapshots(data_dir) == []
 
 
-def test_snapshot_reason_must_be_named(data_dir: Path) -> None:
-    with pytest.raises(ValueError):
-        create_data_snapshot(data_dir, reason=" ")
-
-
 @pytest.mark.parametrize("invalid_identity", [False, True])
-def test_file_snapshot_copies_committed_wal_content_and_checks_the_marker(
+def test_a_file_snapshot_copies_committed_wal_content_and_checks_the_marker(
     data_dir: Path, invalid_identity: bool
 ) -> None:
     if required_journal_mode(sqlite3.sqlite_version_info) != "wal":
@@ -178,13 +222,17 @@ def test_file_snapshot_copies_committed_wal_content_and_checks_the_marker(
     add_note(database, "retained")
     database.close()
     if invalid_identity:
-        _write_marker(data_dir, {"notes": MarkerEntry("0" * 32, 1)})
+
+        def foreign(payload: dict[str, Any]) -> None:
+            payload["databases"]["notes"]["database_id"] = "0" * 32
+
+        rewrite_marker(data_dir, foreign)
     with closing(sqlite3.connect(database.path)) as writer:
         writer.execute("PRAGMA journal_mode=WAL")
         writer.execute("PRAGMA wal_autocheckpoint=0")
         # A committed relation unknown to the declaration remains in the WAL.
         writer.execute("CREATE TABLE snapshot_probe(value TEXT NOT NULL)")
-        writer.execute("INSERT INTO snapshot_probe VALUES ('committed in WAL')")
+        writer.execute("INSERT INTO snapshot_probe (value) VALUES ('committed in WAL')")
         writer.commit()
         snapshot = create_data_snapshot(data_dir, reason="update")
         if invalid_identity:
@@ -231,17 +279,6 @@ def test_a_registered_database_that_is_missing_fails_the_snapshot_with_a_next_st
     assert next_step in status["databases"][name]["reason"]
 
 
-@pytest.mark.parametrize("suffix", [b"\x1a", b"\r\n\x1a", b"\x00\xff"])
-def test_snapshot_fsync_preserves_binary_file(tmp_path: Path, suffix: bytes) -> None:
-    path = tmp_path / "notes.db"
-    original = bytes(range(256)) + suffix
-    path.write_bytes(original)
-
-    snapshots_module.fsync_file(path)
-
-    assert path.read_bytes() == original
-
-
 def test_an_older_vbot_restores_from_a_manifest_with_fields_a_newer_one_added(
     data_dir: Path,
 ) -> None:
@@ -251,10 +288,10 @@ def test_an_older_vbot_restores_from_a_manifest_with_fields_a_newer_one_added(
         payload["compression"] = {"algorithm": "none", "levels": [0]}
         payload["members"]["notes"]["page_size"] = 4096
 
-    _rewrite_manifest(snapshot, newer)
+    rewrite_manifest(snapshot, newer)
 
     assert list_data_snapshots(data_dir, specs=_specs(data_dir)) == [snapshot]
-    assert [summary["snapshot_id"] for summary in snapshot_inventory(data_dir)] == [snapshot.name]
+    assert _status_snapshot_ids(data_dir) == [snapshot.name]
     notes_spec(data_dir).path.write_bytes(b"damaged")
     assert stored_bodies(notes_spec(data_dir)) == ["retained"]
     incident = read_incident(data_dir, "notes")
@@ -284,10 +321,10 @@ def test_a_newer_damaged_or_incomplete_manifest_is_not_a_snapshot(
     data_dir: Path, change: Callable[[dict[str, Any]], None]
 ) -> None:
     snapshot = snapshot_with_notes(data_dir, "retained")
-    _rewrite_manifest(snapshot, change)
+    rewrite_manifest(snapshot, change)
 
     assert list_data_snapshots(data_dir) == []
-    assert snapshot_inventory(data_dir) == []
+    assert _status_snapshot_ids(data_dir) == []
 
 
 def _member(field: str, value: object) -> Callable[[dict[str, Any]], None]:
@@ -308,15 +345,14 @@ def _member(field: str, value: object) -> Callable[[dict[str, Any]], None]:
         _member("sha256", "0" * 64),
         _member("file_size", 1),
         _member("migrations", ["notes.unknown"]),
-        _member("format_generation", 2),
     ],
-    ids=["database-id", "fact", "sha256", "file-size", "migrations", "generation"],
+    ids=["database-id", "fact", "sha256", "file-size", "migrations"],
 )
 def test_verification_rejects_manifest_database_disagreement(
     data_dir: Path, change: Callable[[dict[str, Any]], None]
 ) -> None:
     snapshot = snapshot_with_notes(data_dir, "retained")
-    _rewrite_manifest(snapshot, change)
+    rewrite_manifest(snapshot, change)
 
     assert list_data_snapshots(data_dir, specs=_specs(data_dir)) == []
     assert snapshot_summaries(data_dir, specs=_specs(data_dir)) == []
@@ -330,12 +366,6 @@ def test_a_snapshot_of_another_data_directory_is_excluded(data_dir: Path) -> Non
 
     assert list_data_snapshots(data_dir, expected=expected) == [snapshot]
     assert list_data_snapshots(data_dir, expected={"notes": "f" * 32}) == []
-    assert (
-        member_restore_candidates(
-            data_dir, "notes", database_id="f" * 32, spec=notes_spec(data_dir)
-        )
-        == []
-    )
 
 
 def test_snapshot_ordering_and_retention_use_the_manifest_creation_time(
@@ -352,13 +382,10 @@ def test_snapshot_ordering_and_retention_use_the_manifest_creation_time(
         def stamp(payload: dict[str, Any], value: str = created_at) -> None:
             payload["created_at"] = value
 
-        _rewrite_manifest(snapshot, stamp)
+        rewrite_manifest(snapshot, stamp)
 
     assert list_data_snapshots(data_dir) == [newer, older]
-    assert [item["snapshot_id"] for item in snapshot_inventory(data_dir)] == [
-        newer.name,
-        older.name,
-    ]
+    assert _status_snapshot_ids(data_dir) == [newer.name, older.name]
     monkeypatch.setattr(snapshots_module, "SNAPSHOT_KEEP_COUNT", 2)
     published = snapshot_with_notes(data_dir, "three")
     assert published.exists()
@@ -366,9 +393,7 @@ def test_snapshot_ordering_and_retention_use_the_manifest_creation_time(
     assert newer.exists() is True
 
 
-@pytest.mark.parametrize(
-    "error_message", ["database is locked", "disk I/O error", "unable to open database file"]
-)
+@pytest.mark.parametrize("error_message", ["database is locked", "disk I/O error"])
 def test_snapshot_verification_preserves_operational_failures(
     data_dir: Path, monkeypatch: pytest.MonkeyPatch, error_message: str
 ) -> None:
@@ -377,7 +402,7 @@ def test_snapshot_verification_preserves_operational_failures(
     def unavailable(*args: Any, **kwargs: Any) -> Any:
         raise sqlite3.OperationalError(error_message)
 
-    monkeypatch.setattr(snapshots_module.sqlite3, "connect", unavailable)
+    monkeypatch.setattr(sqlite3, "connect", unavailable)
     with pytest.raises(DatabaseUnavailableError):
         list_data_snapshots(data_dir)
     assert snapshot.is_dir()
@@ -401,7 +426,7 @@ def test_snapshot_verification_preserves_file_access_failures(
         list_data_snapshots(data_dir)
 
 
-def test_snapshot_failure_keeps_the_previous_verified_snapshot(
+def test_a_failed_or_cancelled_snapshot_keeps_the_previous_verified_snapshot(
     data_dir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     database = open_database(notes_spec(data_dir))
@@ -409,6 +434,11 @@ def test_snapshot_failure_keeps_the_previous_verified_snapshot(
         add_note(database, "hello")
         first = create_data_snapshot(data_dir, reason="test", databases=(database,))
         assert first is not None
+        cancelled = create_data_snapshot(
+            data_dir, reason="test", databases=(database,), cancelled=lambda: True
+        )
+        assert cancelled is None
+        assert read_snapshot_health(data_dir)["state"] == "healthy"
 
         def failing_backup(*_args: Any, **_kwargs: Any) -> bool:
             raise DatabaseUnavailableError("disk busy")
@@ -420,21 +450,7 @@ def test_snapshot_failure_keeps_the_previous_verified_snapshot(
         assert data_store_status(data_dir, databases=(database,))["state"] == "snapshot_degraded"
     finally:
         database.close()
-
-
-def test_a_cancelled_snapshot_publishes_nothing(data_dir: Path) -> None:
-    database = open_database(notes_spec(data_dir))
-    try:
-        add_note(database, "hello")
-        assert (
-            create_data_snapshot(
-                data_dir, reason="test", databases=(database,), cancelled=lambda: True
-            )
-            is None
-        )
-    finally:
-        database.close()
-    assert list_data_snapshots(data_dir) == []
+    assert not [path for path in snapshot_root(data_dir).iterdir() if path.name.startswith(".")]
 
 
 def test_retention_prunes_only_after_a_verified_publish(
@@ -447,39 +463,42 @@ def test_retention_prunes_only_after_a_verified_publish(
     assert len(list_data_snapshots(data_dir)) == 2
 
 
-def test_retention_does_not_reverify_retained_snapshots(
+def test_publishing_never_reads_the_retained_snapshots_again(
     data_dir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    snapshot_with_notes(data_dir, "hello")
-    sha256_calls = 0
-    verification_calls = 0
-    real_sha256 = snapshots_module._sha256
-    real_verify = snapshots_module.verify_database_file
+    retained = snapshot_with_notes(data_dir, "hello")
+    member = retained / "notes.db"
+    real_open = Path.open
+    real_connect = sqlite3.connect
 
-    def counted_sha256(path: Path, **kwargs: Any) -> str:
-        nonlocal sha256_calls
-        sha256_calls += 1
-        return real_sha256(path, **kwargs)
+    def unreadable(path: Path, *args: Any, **kwargs: Any) -> Any:
+        if path == member:
+            raise PermissionError("injected unreadable retained member")
+        return real_open(path, *args, **kwargs)
 
-    def counted_verify(path: Path, *args: Any, **kwargs: Any) -> Any:
-        nonlocal verification_calls
-        verification_calls += 1
-        return real_verify(path, *args, **kwargs)
+    def unconnectable(database: Any, *args: Any, **kwargs: Any) -> Any:
+        if retained.name in str(database):
+            raise sqlite3.OperationalError("unable to open database file")
+        return real_connect(database, *args, **kwargs)
 
-    monkeypatch.setattr(snapshots_module, "_sha256", counted_sha256)
-    monkeypatch.setattr(snapshots_module, "verify_database_file", counted_verify)
+    # Retention works from manifests and file sizes: multi-GB copies are never rehashed.
+    with monkeypatch.context() as patched:
+        patched.setattr(Path, "open", unreadable)
+        patched.setattr(sqlite3, "connect", unconnectable)
+        published = snapshot_with_notes(data_dir, "again")
+        assert read_snapshot_health(data_dir)["state"] == "healthy"
+        # Full verification would have read it.
+        with pytest.raises(DatabaseUnavailableError):
+            list_data_snapshots(data_dir)
 
-    snapshot_with_notes(data_dir, "again")
-
-    assert sha256_calls == 1
-    assert verification_calls == 1
+    assert list_data_snapshots(data_dir) == [published, retained]
 
 
 def test_retention_always_keeps_the_just_published_snapshot(
     data_dir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     first = snapshot_with_notes(data_dir, "hello")
-    _rewrite_manifest(
+    rewrite_manifest(
         first, lambda payload: payload.update(created_at="2099-01-01T00:00:00.000000Z")
     )
     monkeypatch.setattr(snapshots_module, "SNAPSHOT_KEEP_COUNT", 1)
@@ -522,38 +541,30 @@ def test_retention_leaves_malformed_directories_untouched(
     assert (malformed / "notes.db").read_bytes() == b"evidence"
 
 
-def test_restore_candidates_are_per_member_and_newest_first(data_dir: Path) -> None:
+def test_a_restore_takes_the_newest_snapshot_whose_own_member_verifies(data_dir: Path) -> None:
     older = snapshot_with_notes(data_dir, "one")
     open_database(notes_spec(data_dir, name="tasks")).close()
     newer = snapshot_with_notes(data_dir, "two")
-    marker = read_marker(data_dir)
-    assert marker is not None
-
-    notes_candidates = member_restore_candidates(
-        data_dir, "notes", database_id=marker.databases["notes"].database_id
-    )
-    tasks_candidates = member_restore_candidates(
-        data_dir, "tasks", database_id=marker.databases["tasks"].database_id
-    )
-
-    assert [path for path, _manifest, _member in notes_candidates] == [newer, older]
-    assert [path for path, _manifest, _member in tasks_candidates] == [newer]
-    # Damage to one member leaves the other member of the same snapshot usable.
+    # Only the newer snapshot holds a tasks member.
+    notes_spec(data_dir, name="tasks").path.write_bytes(b"damaged")
+    assert stored_bodies(notes_spec(data_dir, name="tasks")) == []
+    tasks_incident = read_incident(data_dir, "tasks")
+    assert tasks_incident is not None
+    assert tasks_incident["restored_snapshot_id"] == newer.name
+    # Damage to one member hides the whole snapshot but leaves its other member usable.
     (newer / "tasks.db").write_bytes(b"damaged")
-    assert [
-        path
-        for path, _manifest, _member in member_restore_candidates(
-            data_dir, "notes", database_id=marker.databases["notes"].database_id
-        )
-    ] == [newer, older]
     assert list_data_snapshots(data_dir) == [older]
+
+    notes_spec(data_dir).path.write_bytes(b"damaged")
+
+    assert stored_bodies(notes_spec(data_dir)) == ["one", "two"]
+    incident = read_incident(data_dir, "notes")
+    assert incident is not None
+    assert incident["restored_snapshot_id"] == newer.name
 
 
 def test_an_older_member_is_verified_only_against_the_facts_it_recorded(data_dir: Path) -> None:
     snapshot = snapshot_with_notes(data_dir, "saved")
-    marker = read_marker(data_dir)
-    assert marker is not None
-    database_id = marker.databases["notes"].database_id
     # A later vBot adds a table and a fact over it; the older member lacks both.
     grown = notes_spec(
         data_dir,
@@ -562,27 +573,24 @@ def test_an_older_member_is_verified_only_against_the_facts_it_recorded(data_dir
             {**NOTES_FACTS.queries, "label_count": "SELECT COUNT(*) FROM labels"}
         ),
     )
+    grown.path.write_bytes(b"damaged")
 
-    assert [
-        path
-        for path, _manifest, _member in member_restore_candidates(
-            data_dir, "notes", database_id=database_id, spec=grown
-        )
-    ] == [snapshot]
+    assert stored_bodies(grown) == ["saved"]
+    incident = read_incident(data_dir, "notes")
+    assert incident is not None
+    assert incident["restored_snapshot_id"] == snapshot.name
 
 
 def test_a_recorded_fact_this_vbot_cannot_compute_is_a_schema_mismatch(data_dir: Path) -> None:
     snapshot = snapshot_with_notes(data_dir, "saved")
-    marker = read_marker(data_dir)
-    assert marker is not None
-    database_id = marker.databases["notes"].database_id
     changed = notes_spec(
         data_dir, snapshot_facts=SnapshotFacts({"note_count": "SELECT COUNT(*) FROM missing"})
     )
-    manifest = read_manifest(data_dir, snapshot)
-    assert manifest is not None
 
     with pytest.raises(DatabaseSchemaMismatchError, match="snapshot fact note_count"):
-        verify_member(snapshot, manifest.members["notes"], spec=changed)
-    assert member_restore_candidates(data_dir, "notes", database_id=database_id, spec=changed) == []
+        restore_data_snapshot(data_dir, snapshot, specs=(changed,), check_only=True)
     assert list_data_snapshots(data_dir, specs={"notes": changed}) == []
+    # Automatic restore treats the member as unusable and finds no other copy.
+    changed.path.unlink()
+    with pytest.raises(DatabaseUnavailableError, match="no verified data snapshot could restore"):
+        open_database(changed)

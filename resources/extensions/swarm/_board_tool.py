@@ -9,7 +9,7 @@ and renders the result as readable text.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, overload
 
 from core.sessions import TemporarySessionBinding
 from core.tools import ToolContext
@@ -23,11 +23,13 @@ from ._board_view import (
     discussion_label,
     discussions_text,
     post_block,
+    post_discussion_label,
     post_suggestion,
     posts_text,
     queued_text,
 )
 from ._extension_values import AgentCallError, Json, _call_request_id
+from ._store_values import discussion_number, discussion_ref, post_number, post_ref
 from .store import Page, SwarmStoreError
 
 if TYPE_CHECKING:
@@ -161,7 +163,7 @@ class BoardCall:
     async def read(self, arguments: Json) -> Json:
         query = {key: value for key, value in arguments.items() if key != "action"}
         cursor = query.get("cursor")
-        if isinstance(cursor, str) and cursor.startswith("pst_"):
+        if isinstance(cursor, str) and (cursor.startswith("pst_") or post_number(cursor)):
             query["before"] = query.pop("cursor")
             self.notes.append(text.CURSOR_AS_BEFORE.format(value=cursor))
         stated = query.pop("discussion_id", None) if "message_id" in query else None
@@ -169,22 +171,27 @@ class BoardCall:
         await self.service._record_read(self.context, self.binding, page.entries)
         if "message_id" in query:
             post = page.entries[0]
-            if stated is not None and stated != post["discussion_id"]:
-                self.notes.append(text.MESSAGE_DISCUSSION_IGNORED.format(post_id=post["id"]))
+            if stated is not None and not _names(
+                stated, post["discussion_id"], post["discussion_sequence"]
+            ):
+                self.notes.append(
+                    text.MESSAGE_DISCUSSION_IGNORED.format(post_id=post_ref(post["sequence"]))
+                )
             return {"content": post_block(post, self.roster, self.main, with_discussion=True)}
         if page.entries:
-            discussion_id = page.entries[0]["discussion_id"]
+            anchor = page.entries[0]
         elif "before" in query:
-            discussion_id = (await self._post(query["before"]))["discussion_id"]
+            anchor = await self._post(query["before"])
         else:
-            discussion_id = query.get("discussion_id") or self.main
-        label = discussion_label(
-            discussion_id,
-            page.entries[0].get("discussion_title")
-            if page.entries
-            else await self._title(discussion_id),
-            self.main,
-        )
+            anchor = None
+        if anchor is not None:
+            discussion_id = anchor["discussion_id"]
+            number = anchor["discussion_sequence"]
+            label = post_discussion_label(anchor, self.main)
+        else:
+            row = await self._discussion(query.get("discussion_id") or self.main)
+            discussion_id, number = row["id"], row["sequence"]
+            label = discussion_label(number, row["title"], main=discussion_id == self.main)
         count = len(page.entries)
         if "before" in query:
             summary = (
@@ -207,8 +214,8 @@ class BoardCall:
         if page.has_more and page.entries:
             continuation: Json = {
                 "action": "read",
-                "discussion_id": discussion_id,
-                "before": page.entries[0]["id"],
+                "discussion_id": discussion_ref(number),
+                "before": post_ref(page.entries[0]["sequence"]),
             }
             if "limit" in query:
                 continuation["limit"] = query["limit"]
@@ -233,7 +240,7 @@ class BoardCall:
             data["discussion_id"] == self.main and len(values["text"]) > text.FULL_POST_CHARS
         )
         result: Json = {
-            "post_id": data["post_id"],
+            "post_id": post_ref(data["sequence"]),
             "discussion": await self._label(data["discussion_id"]),
             "delivery": queued_text(
                 data["routes"],
@@ -247,14 +254,18 @@ class BoardCall:
 
     async def create(self, arguments: Json) -> Json:
         values = {key: value for key, value in arguments.items() if key != "action"}
-        discussion_id = values.pop("discussion_id", None)
-        if discussion_id is not None and discussion_id != self.main:
-            if any(row["id"] == discussion_id for row in await self._discussions()):
+        stated = values.pop("discussion_id", None)
+        if stated is not None:
+            existing = await self._discussion(stated, required=False)
+            if existing is not None and existing["id"] != self.main:
                 raise AgentCallError(
                     "invalid_arguments",
-                    text.CREATE_IN_DISCUSSION.format(discussion_id=discussion_id),
+                    text.CREATE_IN_DISCUSSION.format(
+                        discussion_id=discussion_ref(existing["sequence"])
+                    ),
                 )
-            self.notes.append(text.CREATE_IGNORES_ID.format(value=discussion_id))
+            if existing is None:
+                self.notes.append(text.CREATE_IGNORES_ID.format(value=stated))
         data = await self.store.create_discussion(
             self.sid,
             self.pid,
@@ -262,9 +273,12 @@ class BoardCall:
             expected_epoch=self.swarm["epoch"],
             **values,
         )
+        self._discussion_rows = None
+        created = await self._discussion(data["discussion_id"])
+        opening = await self._post(data["opening_post_id"])
         result: Json = {
-            "discussion_id": data["discussion_id"],
-            "opening_post_id": data["opening_post_id"],
+            "discussion_id": discussion_ref(created["sequence"]),
+            "opening_post_id": post_ref(opening["sequence"]),
             "status": text.BOARD_CREATED,
         }
         if data.get("replayed"):
@@ -280,8 +294,11 @@ class BoardCall:
             raise await self._write_error(error, arguments) from error
         recent = data["recent"]
         await self.service._record_read(self.context, self.binding, recent["entries"])
+        row = await self._discussion(data["discussion_id"])
         result: Json = {
-            "discussion": discussion_label(data["discussion_id"], data["title"], self.main),
+            "discussion": discussion_label(
+                row["sequence"], row["title"], main=row["id"] == self.main
+            ),
             "status": text.BOARD_ALREADY_JOINED if data["already"] else text.BOARD_JOINED,
         }
         if recent["has_more"] and recent["entries"]:
@@ -289,8 +306,8 @@ class BoardCall:
                 call=call_text(
                     {
                         "action": "read",
-                        "discussion_id": data["discussion_id"],
-                        "before": recent["entries"][0]["id"],
+                        "discussion_id": discussion_ref(row["sequence"]),
+                        "before": post_ref(recent["entries"][0]["sequence"]),
                     }
                 )
             )
@@ -306,7 +323,7 @@ class BoardCall:
         except SwarmStoreError as error:
             raise await self._write_error(error, arguments) from error
         return {
-            "discussion": discussion_label(data["discussion_id"], data["title"], self.main),
+            "discussion": await self._label(data["discussion_id"]),
             "status": text.BOARD_ALREADY_LEFT if data["already"] else text.BOARD_LEFT,
         }
 
@@ -327,9 +344,10 @@ class BoardCall:
             candidates = await self.store.post_suggestions(self.sid, value)
             if len(candidates) == 1:
                 candidate = candidates[0]
-                template = text.POST_BY_NUMBER if candidate["by_number"] else text.POST_CLOSE_MATCH
                 self.notes.append(
-                    template.format(field=error.field, value=value, post_id=candidate["id"])
+                    text.POST_CLOSE_MATCH.format(
+                        field=error.field, value=value, post_id=post_ref(candidate["sequence"])
+                    )
                 )
                 query[error.field] = candidate["id"]
                 return
@@ -344,7 +362,9 @@ class BoardCall:
                 self.notes.append(
                     text.DISCUSSION_CLOSE_MATCH.format(
                         value=value,
-                        discussion=discussion_label(close["id"], close["title"], self.main),
+                        discussion=discussion_label(
+                            close["sequence"], close["title"], main=close["id"] == self.main
+                        ),
                     )
                 )
                 query["discussion_id"] = close["id"]
@@ -364,8 +384,8 @@ class BoardCall:
             raise AgentCallError(
                 "invalid_arguments",
                 text.BEFORE_DISCUSSION_CONFLICT.format(
-                    post_id=query["before"],
-                    before_discussion=await self._label(anchor["discussion_id"]),
+                    post_id=post_ref(anchor["sequence"]),
+                    before_discussion=post_discussion_label(anchor, self.main),
                     discussion=await self._label(query["discussion_id"]),
                 ),
             ) from error
@@ -382,7 +402,7 @@ class BoardCall:
             parts = [text.REPLY_NOT_FOUND.format(value=value)]
             parts.extend(post_suggestion(candidate, self.main) for candidate in candidates)
             parts.append(
-                text.REPLY_RETRY.format(post_id=candidates[0]["id"])
+                text.REPLY_RETRY.format(post_id=post_ref(candidates[0]["sequence"]))
                 if len(candidates) == 1
                 else text.REPLY_CHOOSE
             )
@@ -397,7 +417,9 @@ class BoardCall:
                     (
                         text.DISCUSSION_NOT_FOUND.format(value=value),
                         discussion_choices(discussions, self.main),
-                        text.DISCUSSION_RETRY.format(discussion_id=close["id"])
+                        text.DISCUSSION_RETRY.format(
+                            discussion_id=discussion_ref(close["sequence"])
+                        )
                         if close is not None
                         else text.DISCUSSION_CHOOSE,
                         text.NOTHING_CHANGED,
@@ -409,38 +431,62 @@ class BoardCall:
             return AgentCallError(
                 "reply_discussion_mismatch",
                 text.REPLY_DISCUSSION_CONFLICT.format(
-                    post_id=values["reply_to"],
-                    reply_discussion=await self._label(target["discussion_id"]),
+                    post_id=post_ref(target["sequence"]),
+                    reply_discussion=post_discussion_label(target, self.main),
                     discussion=await self._label(values["discussion_id"]),
                 ),
             )
         return error
 
     def _user_request(self) -> str:
-        goal = self.swarm["goal_post_id"]
+        goal = post_ref(self.swarm["goal_post_sequence"])
         return text.BOARD_USER_REQUEST.format(
             post_id=goal, call=call_text({"action": "read", "message_id": goal})
         )
 
     async def _discussions(self) -> Sequence[Json]:
         if self._discussion_rows is None:
-            page = await self.store.list_discussions(self.sid, self.pid, limit=_MAX_LIMIT)
-            self._discussion_rows = list(page.entries)
+            rows: list[Json] = []
+            cursor = None
+            while True:
+                page = await self.store.list_discussions(
+                    self.sid, self.pid, cursor=cursor, limit=_MAX_LIMIT
+                )
+                rows.extend(page.entries)
+                if not page.has_more:
+                    break
+                cursor = page.cursor
+            self._discussion_rows = rows
         return self._discussion_rows
 
-    async def _title(self, discussion_id: str) -> str | None:
-        if discussion_id == self.main:
-            return None
-        return next(
-            (row["title"] for row in await self._discussions() if row["id"] == discussion_id),
-            None,
-        )
+    @overload
+    async def _discussion(self, reference: str) -> Json: ...
 
-    async def _label(self, discussion_id: str) -> str:
-        return discussion_label(discussion_id, await self._title(discussion_id), self.main)
+    @overload
+    async def _discussion(self, reference: str, *, required: bool) -> Json | None: ...
 
-    async def _post(self, post_id: str) -> Any:
-        return (await self.store.read_posts(self.sid, self.pid, message_id=post_id)).entries[0]
+    async def _discussion(self, reference: str, *, required: bool = True) -> Json | None:
+        """Return the discussion a stored ID or a discussion number names."""
+
+        for row in await self._discussions():
+            if _names(reference, row["id"], row["sequence"]):
+                return row
+        if required:
+            raise SwarmStoreError("discussion_not_found")
+        return None
+
+    async def _label(self, reference: str) -> str:
+        row = await self._discussion(reference)
+        return discussion_label(row["sequence"], row["title"], main=row["id"] == self.main)
+
+    async def _post(self, reference: str) -> Any:
+        return (await self.store.read_posts(self.sid, self.pid, message_id=reference)).entries[0]
+
+
+def _names(reference: str, discussion_id: str, sequence: int) -> bool:
+    """Whether ``reference`` is the discussion's stored ID or its number."""
+
+    return reference == discussion_id or discussion_number(reference) == sequence
 
 
 __all__ = ["BoardCall", "prepare_board_call"]
