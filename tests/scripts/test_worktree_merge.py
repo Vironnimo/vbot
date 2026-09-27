@@ -187,6 +187,32 @@ def test_cmd_merge_reports_conflict_hints(capsys, real_repo, monkeypatch):
     assert "python scripts/worktree.py merge task-b" in captured.out
 
 
+def test_cmd_merge_rejected_by_the_merge_check_keeps_main_intact(capsys, real_repo, monkeypatch):
+    module = _load_worktree_module()
+    _patch_repo_globals(monkeypatch, module, real_repo)
+    hooks = real_repo.parent / "hooks"
+    hooks.mkdir()
+    (hooks / "pre-merge-commit").write_bytes(b"#!/bin/sh\necho 'FAIL: tests' >&2\nexit 1\n")
+    subprocess.run(
+        ["git", "-C", str(real_repo), "config", "core.hooksPath", str(hooks)], check=True
+    )
+    worktree = _create_task_worktree(module, real_repo, "task-a")
+    _commit_file(worktree, "feature.txt", "new\n", "a edit")
+    main_head = _git_output(real_repo, "rev-parse", "HEAD")
+
+    result = module.cmd_merge(argparse.Namespace(name="task-a", message=None, wait_timeout=60))
+    captured = capsys.readouterr()
+
+    assert result == module.MERGE_CONFLICT_EXIT_CODE
+    assert _git_output(real_repo, "rev-parse", "HEAD") == main_head
+    assert not (real_repo / "feature.txt").exists()
+    assert worktree.exists()
+    assert "FAIL: tests" in captured.out + captured.err
+    assert "conflicted:" not in captured.out
+    assert "repair-start" not in captured.out
+    assert "python scripts/worktree.py merge task-a" in captured.out
+
+
 def test_cmd_merge_recovers_unfinished_merge_state(real_repo, monkeypatch):
     module = _load_worktree_module()
     _patch_repo_globals(monkeypatch, module, real_repo)

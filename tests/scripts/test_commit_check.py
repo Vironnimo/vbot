@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import os
+import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 from scripts import commit_check
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 UNFORMATTED = "value  =  {'a':1}\n"
 FORMATTED = 'value = {"a": 1}\n'
@@ -100,3 +105,156 @@ def test_mypy_errors_block_unless_in_unstaged_work_in_progress() -> None:
 )
 def test_frontend_sources_match_the_checked_roots(path: str, expected: bool) -> None:
     assert commit_check.is_frontend_source(path) is expected
+
+
+# The test step drives a real pytest-testmon run in a small project; its selection
+# and the recorded dependencies are the behavior under test, so it cannot be faked.
+IMPACT_PROJECT = {
+    ".gitignore": ".testmondata*\n.testfiledeps\n__pycache__/\n.pytest_cache/\n",
+    "pytest.ini": "[pytest]\n",
+    "conftest.py": 'pytest_plugins = ["tests.file_dependencies"]\n',
+    "calc.py": "def double(x):\n    return x * 2\n",
+    "wip.py": "def triple(x):\n    return x * 3\n",
+    "factor.txt": "2",
+    "test_calc.py": "import calc\n\n\ndef test_double():\n    assert calc.double(2) == 4\n",
+    "test_wip.py": "import wip\n\n\ndef test_triple():\n    assert wip.triple(2) == 6\n",
+    "test_factor.py": (
+        "from pathlib import Path\n"
+        "\n"
+        "\n"
+        "def test_factor():\n"
+        '    assert Path("factor.txt").read_text() == "2"\n'
+    ),
+    "test_git.py": (
+        "import subprocess\n"
+        "\n"
+        "\n"
+        "def test_git_repository(tmp_path):\n"
+        '    subprocess.run(["git", "init", "-q", "--bare"], cwd=tmp_path, check=True)\n'
+    ),
+}
+HARMLESS_CALC = "def double(x):\n    return x * 2\n\n\ndef half(x):\n    return x / 2\n"
+BROKEN_CALC = "def double(x):\n    return x * 3\n"
+BROKEN_WIP = "def triple(x):\n    return x * 4\n"
+
+
+@pytest.fixture(scope="module")
+def seeded_impact_project(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    root = tmp_path_factory.mktemp("impact") / "project"
+    root.mkdir()
+    for name, content in IMPACT_PROJECT.items():
+        (root / name).write_bytes(content.encode("utf-8"))
+    _git(root, "init", "-q")
+    _git(root, "config", "user.email", "test@example.invalid")
+    _git(root, "config", "user.name", "Test")
+    _git(root, "config", "core.autocrlf", "false")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "base", "--no-verify")
+    seed = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "--testmon"],
+        cwd=root,
+        env={**os.environ, "PYTHONPATH": str(REPO_ROOT), "COVERAGE_CORE": "ctrace"},
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert seed.returncode == 0, seed.stdout + seed.stderr
+    return root
+
+
+@pytest.fixture
+def impact_project(
+    seeded_impact_project: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Path:
+    root = tmp_path / "project"
+    shutil.copytree(seeded_impact_project, root)
+    monkeypatch.setenv("PYTHONPATH", str(REPO_ROOT))
+    monkeypatch.setenv("COVERAGE_CORE", "ctrace")
+    return root
+
+
+def _write(root: Path, path: str, content: str) -> None:
+    (root / path).write_bytes(content.encode("utf-8"))
+
+
+def _check_tests(root: Path) -> dict[str, tuple[bool, str]]:
+    changed = sorted({*commit_check.staged_files(root), *commit_check.staged_deletions(root)})
+    results = commit_check.check_tests(root, changed, commit_check.dirty_files(root))
+    return {result.status: (result.blocking, result.details) for result in results}
+
+
+def test_failure_caused_by_the_staged_change_blocks(impact_project: Path) -> None:
+    _write(impact_project, "calc.py", BROKEN_CALC)
+    _git(impact_project, "add", "calc.py")
+
+    results = _check_tests(impact_project)
+
+    blocking, details = results["FAIL: tests affected by this commit"]
+    assert blocking
+    assert "test_calc.py::test_double" in details
+    assert "test_wip.py" not in details
+
+
+def test_failure_in_unstaged_work_of_another_file_does_not_block(impact_project: Path) -> None:
+    _write(impact_project, "calc.py", HARMLESS_CALC)
+    _git(impact_project, "add", "calc.py")
+    _write(impact_project, "wip.py", BROKEN_WIP)
+
+    results = _check_tests(impact_project)
+
+    assert not any(blocking for blocking, _details in results.values())
+    assert "PASS" in results
+    _blocking, details = results["NOT BLOCKING: failures depending on uncommitted work in progress"]
+    assert "test_wip.py::test_triple" in details
+
+
+def test_failure_on_committed_code_blocks_every_commit(impact_project: Path) -> None:
+    _write(impact_project, "wip.py", BROKEN_WIP)
+    _git(impact_project, "commit", "-q", "-am", "unchecked", "--no-verify")
+    _write(impact_project, "calc.py", HARMLESS_CALC)
+    _git(impact_project, "add", "calc.py")
+
+    results = _check_tests(impact_project)
+
+    status = "FAIL: tests failing on committed code; fix them in a separate commit first"
+    blocking, details = results[status]
+    assert blocking
+    assert "test_wip.py::test_triple" in details
+
+
+def test_staged_data_file_runs_the_tests_that_read_it(impact_project: Path) -> None:
+    _write(impact_project, "factor.txt", "3")
+    _git(impact_project, "add", "factor.txt")
+
+    results = _check_tests(impact_project)
+
+    blocking, details = results["FAIL: tests affected by this commit"]
+    assert blocking
+    assert "test_factor.py::test_factor" in details
+
+
+def test_tests_run_by_the_hook_cannot_reach_the_committing_repository(
+    impact_project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A git hook exports these; a test's own git calls must not inherit them.
+    monkeypatch.setenv("GIT_DIR", str(impact_project / ".git"))
+    monkeypatch.setenv("GIT_INDEX_FILE", str(impact_project / ".git" / "index"))
+    # The changed test reports whether its git call stayed in its own directory.
+    probe = (
+        '    head = tmp_path / "HEAD"\n'
+        '    raise AssertionError("isolated" if head.is_file() else "leaked")\n'
+    )
+    _write(impact_project, "test_git.py", IMPACT_PROJECT["test_git.py"] + probe)
+    _git(impact_project, "add", "test_git.py")
+
+    _blocking, details = _check_tests(impact_project)["FAIL: tests affected by this commit"]
+
+    assert "AssertionError: isolated" in details
+    assert _git(impact_project, "config", "core.bare").strip() == "false"
+
+
+def test_unaffected_change_runs_no_tests(impact_project: Path) -> None:
+    _write(impact_project, "notes.txt", "unread")
+    _git(impact_project, "add", "notes.txt")
+
+    assert _check_tests(impact_project) == {}

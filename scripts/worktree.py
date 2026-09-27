@@ -10,6 +10,7 @@ import os
 import re
 import runpy
 import shutil
+import sqlite3
 import stat
 import subprocess
 import sys
@@ -59,6 +60,7 @@ from scripts._worktree_records import (  # noqa: E402
     _read_worktree_marker,
     _read_worktree_registrations,
 )
+from tests import file_dependencies  # noqa: E402
 
 
 def _script_checkout_root() -> Path:
@@ -583,6 +585,12 @@ def cmd_create(args: argparse.Namespace) -> int:
         print_error(str(exc))
         return 1
 
+    try:
+        if file_dependencies.copy_data(PROJECT_ROOT, worktree_path):
+            print("copied the test-impact data of the primary checkout", flush=True)
+    except (OSError, sqlite3.Error) as exc:
+        print(f"warning: test-impact data not copied ({exc}); the first commit runs all tests")
+
     npm_command = shutil.which("npm") or "npm"
     print("installing the verified search engine...", flush=True)
     return_code, stderr = _run_command(
@@ -823,9 +831,17 @@ def _list_conflicted_paths(repo_path: Path) -> list[str]:
 def _print_merge_conflict_hints(name: str, *, window_open: bool) -> None:
     """Print the agent-facing recovery hints after a conflicted merge."""
     print(f"hint: freeze main first: python scripts/worktree.py repair-start {name}")
+    print("hint: bring main into your branch (git rebase main), resolve the conflicts, and commit")
+    print(f"hint: retry the merge: python scripts/worktree.py merge {name}")
+    if window_open:
+        print("note: your protected repair window stays open while you fix this")
+
+
+def _print_merge_check_hints(name: str, *, window_open: bool) -> None:
+    """Print the agent-facing recovery hints after the merge commit failed its check."""
+    print("hint: the commit check rejected the merged result (report above); main is unchanged")
     print(
-        "hint: bring main into your branch (git rebase main), resolve the "
-        "conflicts, commit, and rerun the affected tests"
+        "hint: bring main into your branch (git rebase main), fix the reported problems, and commit"
     )
     print(f"hint: retry the merge: python scripts/worktree.py merge {name}")
     if window_open:
@@ -929,7 +945,8 @@ def _merge_and_cleanup(
         ["git", "-C", str(PROJECT_ROOT), "merge", branch, "--no-ff", "-m", message]
     )
     if return_code != 0:
-        for conflict_path in _list_conflicted_paths(PROJECT_ROOT):
+        conflicted = _list_conflicted_paths(PROJECT_ROOT)
+        for conflict_path in conflicted:
             print(f"conflicted: {conflict_path}")
         _run_command(["git", "-C", str(PROJECT_ROOT), "merge", "--abort"])
         remaining = _list_uncommitted_paths(PROJECT_ROOT)
@@ -937,7 +954,10 @@ def _merge_and_cleanup(
             print(f"uncommitted-after-abort: {line}")
         detail = stderr or "git merge failed"
         print_error(detail)
-        _print_merge_conflict_hints(name, window_open=window_open)
+        if conflicted:
+            _print_merge_conflict_hints(name, window_open=window_open)
+        else:
+            _print_merge_check_hints(name, window_open=window_open)
         return MERGE_CONFLICT_EXIT_CODE
 
     head_result = subprocess.run(

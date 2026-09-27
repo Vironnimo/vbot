@@ -1319,13 +1319,13 @@ npm run preview
 ```
 
 Enable the tracked Git hooks once per clone. Before each commit they format,
-lint and type-check the staged files:
+lint and type-check the staged files and run the tests the commit affects:
 
 ```bash
 git config core.hooksPath .githooks
 ```
 
-Run the tests that cover a change with the test runners directly:
+Run tests with the test runners directly while working:
 
 ```bash
 python -m pytest tests/core/tools
@@ -1333,8 +1333,9 @@ cd webui
 npx vitest run src/lib
 ```
 
-Every push to `main` runs the complete suites on Linux and Windows in CI
-(`.github/workflows/ci.yml`).
+The first commit in a checkout runs the complete Python suite once (about ten
+minutes) to record which files each test depends on. Every release runs the
+complete suites on Linux and Windows in CI (`.github/workflows/ci.yml`).
 
 The Playwright E2E suite under `tests/e2e/` is separate from the regular test runs because it controls a real server and browser environment. Local runs remain explicit opt-in and follow the repository workflow instructions; Release CI calls the same reusable Chromium job as a required pre-publish gate.
 

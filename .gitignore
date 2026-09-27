@@ -26,6 +26,9 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 .coverage
+# Test-impact data of this checkout (scripts/commit_check.py)
+.testmondata*
+.testfiledeps
 
 # Environment / secrets
 .env

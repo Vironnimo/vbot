@@ -9,7 +9,7 @@ The short version:
 - list active managed worktrees when you need orientation
 - work from inside that worktree directory
 - start and stop the complete vBot + fake Provider test instance from inside the worktree with `scripts/test-env.py`
-- merge the finished task branch into `main` with `worktree.py merge` once the affected tests pass and everything is committed
+- merge the finished task branch into `main` with `worktree.py merge` once everything is committed
 - delete the worktree only when abandoning it without merging
 
 ## What the script does
@@ -141,7 +141,7 @@ the worktree. The important boundary is the current working directory.
 
 ### 6. Merge the finished task into `main`
 
-When the affected tests pass and every change is committed (verification stays the agent's responsibility — the merge tooling never runs tests; the commit hook checks formatting, lint and types, and CI runs the complete suite after the push), merge from anywhere:
+When every change is committed, merge from anywhere. Each commit already passed the commit hook, which runs the tests it affects; the merge commit passes the same check against the merged result:
 
 ```bash
 python scripts/worktree.py merge my-task
@@ -224,14 +224,16 @@ worktree.
 
 The command refuses to run when the primary checkout is not on `main` or has uncommitted changes, and it self-heals one crash scenario: if an earlier merge was killed halfway, it aborts that leftover state before doing anything.
 
-On success it prints `status: merged` with the merge commit, removes the worktree, its data dir, and the managed branch (branches borrowed via `--from` are kept), and exits 0. Exit code 2 means conflicts; exit code 1 means refusal, timeout, or cleanup failure.
+On success it prints `status: merged` with the merge commit, removes the worktree, its data dir, and the managed branch (branches borrowed via `--from` are kept), and exits 0. Exit code 2 means conflicts or a merged result the commit check rejected; exit code 1 means refusal, timeout, or cleanup failure.
+
+A rejected merge also rolls back completely and prints the check's report. Bring `main` into your branch (`git rebase main`), fix the reported problems, commit, and retry the merge.
 
 ### Conflicts and the protected repair window
 
 A conflicted merge rolls back completely — `main` stays untouched — and prints the conflicted files plus recovery hints:
 
 1. Open the window with `python scripts/worktree.py repair-start <name>`. A small detached keeper process holds the merge lock on your behalf, so no other session can move `main` while you fix. The window expires after 15 minutes (`--window` to change); expiry is harmless because all fixing happens in your worktree and `main` stays clean until your final merge.
-2. Fix in your own worktree: bring `main` into your branch (`git rebase main`), resolve, commit, rerun the affected tests.
+2. Fix in your own worktree: bring `main` into your branch (`git rebase main`), resolve, and commit.
 3. Retry `python scripts/worktree.py merge <name>`. The command recognizes its own open window and merges under it without waiting again; success closes the window automatically.
 
 Because `main` cannot move during a repair, every conflict is resolved exactly once against a frozen base — concurrent sessions cannot invalidate each other's resolutions into an endless loop. If you abandon the repair, close the window explicitly with `python scripts/worktree.py repair-finish <name>`; closing a window that already ended is a harmless `already-closed`.
@@ -368,7 +370,7 @@ python -m pytest tests/scripts/test_test_env.py
 cd webui && npx vitest run src/lib/__tests__/i18n.test.js
 ```
 
-Commits in the worktree run the tracked pre-commit hook (formatting, lint, type check), because worktrees share the repository's `core.hooksPath` setting.
+Commits in the worktree run the tracked pre-commit hook (formatting, lint, type check, affected tests), because worktrees share the repository's `core.hooksPath` setting. `create` copies the primary checkout's test-impact data (`.testmondata`, `.testfiledeps`), so the first commit runs only the tests it affects.
 
 ## Files generated per worktree
 
@@ -511,7 +513,7 @@ The usual cause is a shell whose working directory is still inside the worktree:
 2. Create one worktree per task with `python scripts/worktree.py create <name>`.
 3. Change into that worktree before running any vBot command.
 4. Use normal relative entrypoints from inside the worktree.
-5. Run the affected tests inside the worktree — they stay the agent's responsibility.
+5. Commit through the commit hook; it runs the tests each commit affects.
 6. Stop the local worktree server when done.
 7. Merge with `python scripts/worktree.py merge <name>` when everything is green; use `delete <name>` only for abandoned tasks.
 

@@ -4,7 +4,7 @@ Run the Playwright E2E suite only when the user explicitly requests E2E test exe
 
 ## Scope and Current Baseline
 
-The suite lives in `tests/e2e/` as its own Node package and exercises the built WebUI against a dedicated vBot server and fake Provider. It is intentionally not part of the regular pytest and Vitest runs. `.github/workflows/e2e.yml` installs its clean CI prerequisites and owns the complete reusable Chromium job: `.github/workflows/ci.yml` calls it for every push to `main` and as a required pre-publish Release gate, while maintainers can still dispatch it independently. Failed runs upload evidence for seven days.
+The suite lives in `tests/e2e/` as its own Node package and exercises the built WebUI against a dedicated vBot server and fake Provider. It is intentionally not part of the regular pytest and Vitest runs. `.github/workflows/e2e.yml` installs its clean CI prerequisites and owns the complete reusable Chromium job: `.github/workflows/ci.yml` calls it as a required pre-publish Release gate, while maintainers can still dispatch it independently. Failed runs upload evidence for seven days.
 
 The suite is expected to be green. Report failures accurately, and do not fix, skip, delete, or rebaseline failing tests unless the user explicitly asks to stabilize or update the E2E suite. An E2E failure blocks a Release but does not broaden unrelated task scope.
 
