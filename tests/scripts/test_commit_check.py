@@ -142,6 +142,20 @@ BROKEN_WIP = "def triple(x):\n    return x * 4\n"
 HARMLESS_WIP = "def triple(x):\n    return x * 3\n\n\ndef third(x):\n    return x / 3\n"
 # Keeps test_calc passing, but doubles a factor above 2 to 10 or more.
 SKEWED_CALC = "def double(x):\n    return x * 2 if x < 3 else x * 3\n"
+# The test step as a pre-merge-commit hook, like .githooks/pre-merge-commit.
+MERGE_HOOK = """\
+import sys
+from pathlib import Path
+
+from scripts import commit_check
+
+root = Path.cwd()
+changed = sorted({*commit_check.staged_files(root), *commit_check.staged_deletions(root)})
+results = commit_check.check_tests(root, changed, commit_check.dirty_files(root))
+for result in results:
+    print(result.status, result.details, sep="\\n")
+sys.exit(any(result.blocking for result in results))
+"""
 
 
 @pytest.fixture(scope="module")
@@ -266,12 +280,14 @@ def test_tests_run_by_the_hook_cannot_reach_the_committing_repository(
     # A git hook exports these; a test's own git calls must not inherit them.
     monkeypatch.setenv("GIT_DIR", str(impact_project / ".git"))
     monkeypatch.setenv("GIT_INDEX_FILE", str(impact_project / ".git" / "index"))
+    monkeypatch.setenv("GIT_REFLOG_ACTION", "merge task")
     # The changed test reports whether its git call stayed in its own directory.
     probe = (
         '    head = tmp_path / "HEAD"\n'
-        '    raise AssertionError("isolated" if head.is_file() else "leaked")\n'
+        '    leaked = not head.is_file() or "GIT_REFLOG_ACTION" in os.environ\n'
+        '    raise AssertionError("leaked" if leaked else "isolated")\n'
     )
-    _write(impact_project, "test_git.py", IMPACT_PROJECT["test_git.py"] + probe)
+    _write(impact_project, "test_git.py", "import os\n" + IMPACT_PROJECT["test_git.py"] + probe)
     _git(impact_project, "add", "test_git.py")
 
     _blocking, details = _check_tests(impact_project)["FAIL: tests affected by this commit"]
@@ -281,45 +297,82 @@ def test_tests_run_by_the_hook_cannot_reach_the_committing_repository(
 
 
 def _merge_after_checked_commits(
-    primary: Path, worktree: Path, main_change: tuple[str, str], branch_change: tuple[str, str]
-) -> None:
+    primary: Path,
+    worktree: Path,
+    main_change: tuple[str, str],
+    branch_change: tuple[str, str],
+    *,
+    rebase: bool = False,
+) -> str:
     """Commit *branch_change* in a new worktree and *main_change* in *primary*, each
-    after a passing commit check, and start merging the worktree's branch."""
+    after a passing commit check, and merge the worktree's branch through the test
+    step as pre-merge-commit hook, as ``scripts/worktree.py merge`` does. Return the
+    merge output; *rebase* first rebases the branch, which runs no hook."""
     _git(primary, "worktree", "add", "-q", "-b", "task", str(worktree))
     for root, (path, content) in ((worktree, branch_change), (primary, main_change)):
         _write(root, path, content)
         _git(root, "add", path)
         assert _check_tests(root) == {"PASS": (False, "")}
         _git(root, "commit", "-q", "-m", path, "--no-verify")
-    _git(primary, "merge", "-q", "--no-ff", "--no-commit", "task")
+    if rebase:
+        _git(worktree, "rebase", "-q", _git(primary, "rev-parse", "HEAD").strip())
+    hooks = primary / ".git" / "test-hooks"
+    hooks.mkdir()
+    (hooks / "check.py").write_text(MERGE_HOOK, encoding="utf-8")
+    hook = hooks / "pre-merge-commit"
+    python = Path(sys.executable).as_posix()
+    hook.write_text(f'#!/bin/sh\nexec "{python}" .git/test-hooks/check.py\n', encoding="utf-8")
+    hook.chmod(0o755)
+    _git(primary, "config", "core.hooksPath", ".git/test-hooks")
+    merge = subprocess.run(
+        ["git", "merge", "--no-ff", "-m", "merge", "task"],
+        cwd=primary,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    return f"exit code {merge.returncode}\n{merge.stdout}{merge.stderr}"
 
 
+# Two commit checks and the merge hook each start pytest in the project; under a
+# loaded commit check that exceeds the default 30 s.
+@pytest.mark.timeout(120)
 def test_merge_commit_reuses_the_test_runs_of_both_sides(
     impact_project: Path, tmp_path: Path
 ) -> None:
-    _merge_after_checked_commits(
+    output = _merge_after_checked_commits(
         impact_project, tmp_path / "worktree", ("wip.py", HARMLESS_WIP), ("calc.py", HARMLESS_CALC)
     )
 
-    assert _check_tests(impact_project) == {"PASS (no test affected)": (False, "")}
+    assert output.startswith("exit code 0\n"), output
+    assert "PASS (no test affected)" in output
 
     # The merged checkout adopted the branch's runs: calc.py is as the branch tested it.
-    _git(impact_project, "commit", "-q", "-m", "merge", "--no-verify")
     _write(impact_project, "notes.py", "NOTE = 1\n")
     _git(impact_project, "add", "notes.py")
     assert _check_tests(impact_project) == {"PASS (no test affected)": (False, "")}
 
 
-def test_merge_commit_runs_a_test_both_sides_changed(impact_project: Path, tmp_path: Path) -> None:
-    # Each side passes alone; merged, test_factor doubles the factor 4 to 12.
-    _merge_after_checked_commits(
-        impact_project, tmp_path / "worktree", ("factor.txt", "4"), ("calc.py", SKEWED_CALC)
+@pytest.mark.timeout(120)
+@pytest.mark.parametrize("rebase", [False, True], ids=["merged", "rebased"])
+def test_merge_commit_runs_a_test_both_sides_changed(
+    impact_project: Path, tmp_path: Path, rebase: bool
+) -> None:
+    # Each side passes alone; merged, test_factor doubles the factor 4 to 12. A
+    # rebased branch holds both changes, but its test runs saw only its own.
+    output = _merge_after_checked_commits(
+        impact_project,
+        tmp_path / "worktree",
+        ("factor.txt", "4"),
+        ("calc.py", SKEWED_CALC),
+        rebase=rebase,
     )
 
-    blocking, details = _check_tests(impact_project)["FAIL: tests affected by this commit"]
-
-    assert blocking
-    assert "test_factor.py::test_factor" in details
+    assert not output.startswith("exit code 0\n")
+    assert "FAIL: tests affected by this commit" in output
+    assert "test_factor.py::test_factor" in output
 
 
 def test_first_commit_in_a_worktree_adopts_the_primary_checkout_data(

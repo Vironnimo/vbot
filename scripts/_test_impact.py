@@ -3,10 +3,15 @@
 ``tests/file_dependencies.py`` records while pytest-testmon collects data; this
 module reads those records and testmon's own database outside pytest, for
 ``scripts/commit_check.py``.
+
+The records describe a tested state: the git tree a commit check last tested, plus
+the paths that differed from it in the working tree then. ``DATA_FILE`` stores it
+beside the file reads, so a copy of the records carries the state they describe.
 """
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
@@ -152,20 +157,22 @@ class Selection:
         return arguments
 
 
-def select(root: Path, changed: Iterable[str], records: Path | None = None) -> Selection:
+def select(root: Path, changed: Iterable[str] | None, records: Path | None = None) -> Selection:
     """Select the tests of *root*'s working tree that *changed* affects.
 
     *records* is the checkout whose test runs describe the tested state (default
-    *root*); *changed* are the paths that differ from that state. Changed Python
-    code selects through pytest-testmon's record of the code each test executed;
-    any other changed file selects the tests that read it. testmon also selects
-    the tests that failed in their last run.
+    *root*); *changed* are the paths that differ from that state, None when that
+    state is unknown. Changed Python code selects through pytest-testmon's record
+    of the code each test executed; any other changed file selects the tests that
+    read it. testmon also selects the tests that failed in their last run.
     """
     records = records or root
-    changed = set(changed)
     rows = _query(records / TESTMON_DATA, "SELECT test_name, duration, failed FROM test_execution")
     durations = {test: duration or 0.0 for test, duration, _failed in rows}
     failed = frozenset(test for test, _duration, test_failed in rows if test_failed)
+    if changed is None:
+        return Selection(frozenset(), failed, durations, complete=True)
+    changed = set(changed)
     data_files = {path for path in changed if not path.endswith(_CODE_SUFFIXES)}
     tests = readers(records, data_files)
     if FULL_SUITE_TRIGGERS & data_files or COLLECTION in tests:
@@ -256,11 +263,40 @@ def adopt(source: Path, target: Path, tests: Iterable[str]) -> None:
         connection.close()
 
 
+def tested_state(checkout: Path) -> tuple[str, frozenset[str]] | None:
+    """Return the tree *checkout*'s records describe and the paths that differed from it.
+
+    None when no commit check recorded one.
+    """
+    rows = _query(checkout / DATA_FILE, "SELECT tree, dirty FROM tested_state")
+    if not rows:
+        return None
+    tree, dirty = rows[0]
+    return tree, frozenset(json.loads(dirty))
+
+
+def record_tested_state(checkout: Path, tree: str, dirty: Iterable[str]) -> None:
+    """Record that *checkout*'s records describe *tree*, except for the *dirty* paths."""
+    connection = sqlite3.connect(checkout / DATA_FILE, timeout=60)
+    try:
+        with connection:
+            connection.execute(
+                "CREATE TABLE IF NOT EXISTS tested_state (tree TEXT NOT NULL, dirty TEXT NOT NULL)"
+            )
+            connection.execute("DELETE FROM tested_state")
+            connection.execute(
+                "INSERT INTO tested_state (tree, dirty) VALUES (?, ?)",
+                (tree, json.dumps(sorted(dirty))),
+            )
+    finally:
+        connection.close()
+
+
 def copy_data(source_root: Path, target_root: Path) -> bool:
     """Copy one checkout's test-impact data into another; return whether any existed.
 
-    A copy stays valid in the target: testmon compares each test's recorded code
-    with the target's files, so data from an older state only selects more tests.
+    A copy stays valid in the target: it carries the tested state it describes,
+    and testmon compares each test's recorded code with the target's files.
     """
     copied = False
     for name in (TESTMON_DATA, DATA_FILE):
