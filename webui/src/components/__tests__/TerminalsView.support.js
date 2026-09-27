@@ -30,6 +30,8 @@ const createAudioRecorderMock = vi.fn();
 
 const transcribeSpeechMock = vi.fn();
 
+const prepareSpeechTranscriptionMock = vi.fn();
+
 const streams = [];
 
 const terminalInstances = [];
@@ -48,6 +50,8 @@ vi.mock('svelte', async () => {
 
 vi.mock('$lib/api.js', () => ({
   transcribeSpeech: (...args) => transcribeSpeechMock(...args),
+  prepareSpeechTranscription: (...args) =>
+    prepareSpeechTranscriptionMock(...args),
   listTerminals: (...args) => listTerminalsMock(...args),
   startTerminal: (...args) => startTerminalMock(...args),
   sendTerminalInput: (...args) => sendTerminalInputMock(...args),
@@ -309,6 +313,9 @@ function setupTerminalsViewSuite() {
     mockHostHeight = 512;
     createAudioRecorderMock.mockReset();
     transcribeSpeechMock.mockReset();
+    prepareSpeechTranscriptionMock
+      .mockReset()
+      .mockResolvedValue({ state: 'loading' });
     listTerminalsMock.mockReset();
     startTerminalMock.mockReset().mockResolvedValue({});
     sendTerminalInputMock.mockReset().mockResolvedValue({});
@@ -359,6 +366,7 @@ export {
   subscribeTerminalEventsMock,
   createAudioRecorderMock,
   transcribeSpeechMock,
+  prepareSpeechTranscriptionMock,
   streams,
   terminalInstances,
   fitAddons,

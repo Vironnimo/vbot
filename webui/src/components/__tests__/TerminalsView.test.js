@@ -11,6 +11,7 @@ import {
   subscribeTerminalEventsMock,
   createAudioRecorderMock,
   transcribeSpeechMock,
+  prepareSpeechTranscriptionMock,
   streams,
   terminalInstances,
   TerminalsView,
@@ -133,6 +134,8 @@ describe('TerminalsView', () => {
     microphone.click();
     await waitFor(() => microphone.getAttribute('aria-pressed') === 'true');
     expect(recorder.start).toHaveBeenCalledOnce();
+    // The server may load its speech model while the user speaks.
+    expect(prepareSpeechTranscriptionMock).toHaveBeenCalledOnce();
     expect(
       document.querySelector(
         '[data-terminal-id="term-2"] button[aria-label="Dictate into terminal"]',

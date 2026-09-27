@@ -4,6 +4,7 @@ import {
   forgetTerminal,
   killTerminal,
   listTerminals,
+  prepareSpeechTranscription,
   renameTerminalGroup,
   resizeTerminal,
   sendTerminalInput,
@@ -66,6 +67,7 @@ export function createTerminalsController({
   onSpeechError = () => {},
   createRecorder = createAudioRecorder,
   transcribe = transcribeSpeech,
+  prepareTranscription = prepareSpeechTranscription,
   api = {
     createTerminalGroup,
     deleteTerminalGroup,
@@ -92,6 +94,7 @@ export function createTerminalsController({
     onSpeechError,
     createRecorder,
     transcribe,
+    prepareTranscription,
     isDestroyed: () => destroyed,
     isUnavailable: () => serverUnavailable,
     streamView,

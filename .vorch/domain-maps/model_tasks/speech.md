@@ -229,7 +229,7 @@ Executable TTS targets send JSON to `/audio/speech` and return raw audio bytes. 
 - `speech.prepare_transcription` takes no parameters and returns
   `{state}` from `SpeechService.prepare_transcription()` without waiting for the
   load. Accessors send it as a best-effort hint when a recording starts (Desktop
-  Voice command recording, Chat microphone) and ignore failures.
+  Voice command recording, Chat microphone, terminal dictation) and ignore failures.
 - With `Accept: application/x-ndjson`, synthesis uses the same progress stream
   and returns a persisted speech artifact projection as its terminal result.
   The Settings preview uses its URL; ordinary clients still receive raw audio.
