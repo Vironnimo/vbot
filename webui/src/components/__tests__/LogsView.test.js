@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 
-import { init } from '../../lib/i18n.js';
+import { init, t } from '../../lib/i18n.js';
 
 const listLogsMock = vi.fn();
 const readLogFileMock = vi.fn();
@@ -54,7 +54,7 @@ describe('LogsView', () => {
     vi.unstubAllGlobals();
   });
 
-  it('loads the newest file by default and subscribes to its live stream', async () => {
+  it('loads the newest file by default, follows it live, and closes the stream on destroy', async () => {
     listLogsMock.mockResolvedValue({
       files: ['2026-05-11', '2026-05-10'],
       default_file: '2026-05-11',
@@ -80,7 +80,7 @@ describe('LogsView', () => {
     );
     expect(document.body.textContent).toContain('Ready');
     expect(simpleTriggerLabel('logs-file')).toContain('2026-05-11');
-    expect(buttonByText('Refresh')).toBeNull();
+    expect(buttonByText(t('common.refresh', 'Refresh'))).toBeNull();
     expect(document.querySelector('.logs-view.view-frame')).toBeTruthy();
     expect(document.querySelector('.logs-view .view-header')).toBeTruthy();
     const toolbar = document.querySelector('.logs-view .view-toolbar--stack');
@@ -90,6 +90,13 @@ describe('LogsView', () => {
     // Wide layouts show every filter inline, without a disclosure.
     expect(toolbar.querySelector('.logs-view__filters-toggle')).toBeNull();
     expect(document.getElementById('logs-filters').hidden).toBe(false);
+
+    await unmount(mountedComponent);
+    mountedComponent = null;
+    expect(streamConnections[0].close).toHaveBeenCalledWith(
+      1000,
+      'logs-view-close',
+    );
   });
 
   it('keeps search visible and folds the other filters behind a disclosure on phone width', async () => {
@@ -120,7 +127,7 @@ describe('LogsView', () => {
     expect(window.matchMedia).toHaveBeenCalledWith('(max-width: 640px)');
     const toggle = document.querySelector('.logs-view__filters-toggle');
     const panel = document.getElementById('logs-filters');
-    expect(toggle.textContent.trim()).toBe('Filters');
+    expect(toggle.textContent.trim()).toBe(t('logs.filters', 'Filters'));
     expect(toggle.getAttribute('aria-controls')).toBe('logs-filters');
     expect(toggle.getAttribute('aria-expanded')).toBe('false');
     expect(toggle.getAttribute('aria-label')).toBeNull();
@@ -144,9 +151,12 @@ describe('LogsView', () => {
     expect(panel.hidden).toBe(false);
 
     openSimpleDropdown('logs-level-filter');
-    selectSimpleOption('logs-level-filter', 'ERROR');
+    selectSimpleOption('logs-level-filter', t('logs.level.error', 'ERROR'));
     openSimpleDropdown('logs-sort-order');
-    selectSimpleOption('logs-sort-order', 'Oldest first');
+    selectSimpleOption(
+      'logs-sort-order',
+      t('logs.sort.oldest', 'Oldest first'),
+    );
     expect(logEntryMessages()).toEqual(['Failed to boot']);
     expect(toggle.getAttribute('aria-label')).toBe('Filters, 2 changed');
     expect(
@@ -166,8 +176,12 @@ describe('LogsView', () => {
     const inlinePanel = document.getElementById('logs-filters');
     expect(inlinePanel.hidden).toBe(false);
     expect(inlinePanel.contains(inputByLabel('Search'))).toBe(true);
-    expect(simpleTriggerLabel('logs-level-filter')).toBe('ERROR');
-    expect(simpleTriggerLabel('logs-sort-order')).toBe('Oldest first');
+    expect(simpleTriggerLabel('logs-level-filter')).toBe(
+      t('logs.level.error', 'ERROR'),
+    );
+    expect(simpleTriggerLabel('logs-sort-order')).toBe(
+      t('logs.sort.oldest', 'Oldest first'),
+    );
 
     await unmount(mountedComponent);
     mountedComponent = null;
@@ -193,17 +207,19 @@ describe('LogsView', () => {
     mountedComponent = mount(LogsView, { target: document.body });
     flushSync();
 
-    await waitForCondition(() => buttonByText('Retry') !== null);
-    expect(buttonByText('Refresh')).toBeNull();
+    await waitForCondition(
+      () => buttonByText(t('common.retry', 'Retry')) !== null,
+    );
+    expect(buttonByText(t('common.refresh', 'Refresh'))).toBeNull();
 
-    buttonByText('Retry').click();
+    buttonByText(t('common.retry', 'Retry')).click();
     flushSync();
 
     await waitForCondition(() =>
       document.body.textContent.includes('Recovered'),
     );
-    expect(buttonByText('Retry')).toBeNull();
-    expect(buttonByText('Refresh')).toBeNull();
+    expect(buttonByText(t('common.retry', 'Retry'))).toBeNull();
+    expect(buttonByText(t('common.refresh', 'Refresh'))).toBeNull();
   });
 
   it('filters and sorts entries locally through simple dropdown controls', async () => {
@@ -248,12 +264,12 @@ describe('LogsView', () => {
 
     openSimpleDropdown('logs-level-filter');
     expect(simpleOptionLabels('logs-level-filter')).toEqual([
-      'All levels',
-      'ERROR',
-      'INFO',
-      'WARN',
+      t('logs.level.all', 'All levels'),
+      t('logs.level.error', 'ERROR'),
+      t('logs.level.info', 'INFO'),
+      t('logs.level.warn', 'WARN'),
     ]);
-    selectSimpleOption('logs-level-filter', 'ERROR');
+    selectSimpleOption('logs-level-filter', t('logs.level.error', 'ERROR'));
 
     await waitForCondition(() => !document.body.textContent.includes('Ready'));
     expect(document.body.textContent).toContain('Failed to boot');
@@ -264,17 +280,20 @@ describe('LogsView', () => {
     flushSync();
 
     openSimpleDropdown('logs-level-filter');
-    selectSimpleOption('logs-level-filter', 'All levels');
+    selectSimpleOption('logs-level-filter', t('logs.level.all', 'All levels'));
     inputByLabel('Search').value = '';
     inputByLabel('Search').dispatchEvent(new Event('input', { bubbles: true }));
     flushSync();
 
     openSimpleDropdown('logs-sort-order');
     expect(simpleOptionLabels('logs-sort-order')).toEqual([
-      'Newest first',
-      'Oldest first',
+      t('logs.sort.newest', 'Newest first'),
+      t('logs.sort.oldest', 'Oldest first'),
     ]);
-    selectSimpleOption('logs-sort-order', 'Oldest first');
+    selectSimpleOption(
+      'logs-sort-order',
+      t('logs.sort.oldest', 'Oldest first'),
+    );
 
     expect(readLogFileMock.mock.calls.length).toBe(initialReadCalls);
     expect(logEntryMessages()).toEqual([
@@ -282,17 +301,24 @@ describe('LogsView', () => {
       'Config drift',
       'Failed to boot',
     ]);
-    expect(simpleTriggerLabel('logs-sort-order')).toBe('Oldest first');
+    expect(simpleTriggerLabel('logs-sort-order')).toBe(
+      t('logs.sort.oldest', 'Oldest first'),
+    );
   });
 
-  it('switches files and resubscribes to the selected file only', async () => {
+  it('switches files, resubscribes to the selected file only, and resets a level it lacks', async () => {
     listLogsMock.mockResolvedValue({
       files: ['2026-05-11', '2026-05-10'],
       default_file: '2026-05-11',
     });
     readLogFileMock.mockImplementation(async (file) => ({
       file,
-      entries: [entry({ message: `Loaded ${file}` })],
+      entries: [
+        entry({
+          level: file === '2026-05-11' ? 'warn' : 'info',
+          message: `Loaded ${file}`,
+        }),
+      ],
       cursor: `cursor-${file}`,
     }));
 
@@ -302,10 +328,14 @@ describe('LogsView', () => {
       () => subscribeLogEventsMock.mock.calls.length === 1,
     );
 
+    const warn = t('logs.level.warn', 'WARN');
+    openSimpleDropdown('logs-level-filter');
+    selectSimpleOption('logs-level-filter', warn);
+    expect(simpleTriggerLabel('logs-level-filter')).toBe(warn);
+
     const firstConnection = streamConnections[0];
     openSimpleDropdown('logs-file');
     selectSimpleOption('logs-file', '2026-05-10');
-
     await waitForCondition(
       () => subscribeLogEventsMock.mock.calls.length === 2,
     );
@@ -317,111 +347,28 @@ describe('LogsView', () => {
       expect.any(Object),
       { cursor: 'cursor-2026-05-10' },
     );
-    expect(document.body.textContent).toContain('Loaded 2026-05-10');
-  });
+    expect(logEntryMessages()).toEqual(['Loaded 2026-05-10']);
 
-  it('resets an invalid level selection when switching to a file with different levels', async () => {
-    listLogsMock.mockResolvedValue({
-      files: ['2026-05-11', '2026-05-10'],
-      default_file: '2026-05-11',
-    });
-    readLogFileMock.mockImplementation(async (file) => {
-      if (file === '2026-05-11') {
-        return {
-          file,
-          entries: [entry({ level: 'warn', message: 'Warn row' })],
-          cursor: 'cursor-2026-05-11',
-        };
-      }
-
-      return {
-        file,
-        entries: [entry({ level: 'info', message: 'Info row' })],
-        cursor: 'cursor-2026-05-10',
-      };
-    });
-
-    mountedComponent = mount(LogsView, { target: document.body });
-    flushSync();
-    await waitForCondition(() =>
-      document.body.textContent.includes('Warn row'),
-    );
-
-    openSimpleDropdown('logs-level-filter');
-    selectSimpleOption('logs-level-filter', 'WARN');
-    await waitForCondition(
-      () => simpleTriggerLabel('logs-level-filter') === 'WARN',
-    );
-
-    openSimpleDropdown('logs-file');
-    selectSimpleOption('logs-file', '2026-05-10');
-
-    await waitForCondition(() =>
-      document.body.textContent.includes('Info row'),
-    );
-
-    expect(simpleTriggerLabel('logs-level-filter')).toBe('All levels');
-
+    const allLevels = t('logs.level.all', 'All levels');
+    expect(simpleTriggerLabel('logs-level-filter')).toBe(allLevels);
     openSimpleDropdown('logs-level-filter');
     expect(simpleOptionLabels('logs-level-filter')).toEqual([
-      'All levels',
-      'INFO',
+      allLevels,
+      t('logs.level.info', 'INFO'),
     ]);
-    expect(logEntryMessages()).toEqual(['Info row']);
   });
 
-  it('uses the read cursor when opening the live log stream', async () => {
+  it('renders dense rows with level tones and applies live append events without extra reads', async () => {
     listLogsMock.mockResolvedValue({
       files: ['2026-05-11'],
       default_file: '2026-05-11',
     });
     readLogFileMock.mockResolvedValue({
       file: '2026-05-11',
-      entries: [entry({ message: 'Ready' })],
-      cursor: 'cursor-live-handoff',
-    });
-
-    mountedComponent = mount(LogsView, { target: document.body });
-    flushSync();
-
-    await waitForCondition(
-      () => subscribeLogEventsMock.mock.calls.length === 1,
-    );
-
-    expect(subscribeLogEventsMock).toHaveBeenCalledWith(
-      '2026-05-11',
-      expect.any(Object),
-      { cursor: 'cursor-live-handoff' },
-    );
-  });
-
-  it('marks critical entries with the error tone', async () => {
-    listLogsMock.mockResolvedValue({
-      files: ['2026-05-11'],
-      default_file: '2026-05-11',
-    });
-    readLogFileMock.mockResolvedValue({
-      file: '2026-05-11',
-      entries: [entry({ level: 'critical', message: 'Halted' })],
-      cursor: 'cursor-critical',
-    });
-
-    mountedComponent = mount(LogsView, { target: document.body });
-    flushSync();
-    await waitForCondition(() => document.body.textContent.includes('Halted'));
-
-    const row = document.querySelector('.logs-entry');
-    expect(row.classList.contains('logs-entry--error')).toBe(true);
-  });
-
-  it('renders dense rows and applies live append events without extra reads', async () => {
-    listLogsMock.mockResolvedValue({
-      files: ['2026-05-11'],
-      default_file: '2026-05-11',
-    });
-    readLogFileMock.mockResolvedValue({
-      file: '2026-05-11',
-      entries: [entry({ message: 'Ready' })],
+      entries: [
+        entry({ message: 'Ready' }),
+        entry({ level: 'critical', message: 'Halted' }),
+      ],
       cursor: 'cursor-reconnect',
     });
 
@@ -447,11 +394,16 @@ describe('LogsView', () => {
     await waitForCondition(() => logEntryMessages().includes('Failed'));
 
     const rows = Array.from(document.querySelectorAll('.logs-entry'));
-    const errorRow = rows.find((row) =>
-      row.classList.contains('logs-entry--error'),
-    );
+    const errorRow = rows[0];
 
-    expect(rows).toHaveLength(2);
+    // Critical entries share the error tone.
+    expect(
+      rows.map((row) =>
+        ['error', 'warn', 'info', 'neutral'].find((tone) =>
+          row.classList.contains(`logs-entry--${tone}`),
+        ),
+      ),
+    ).toEqual(['error', 'error', 'info']);
     expect(
       [...rows[1].querySelectorAll('span[class^="logs-entry__"]')].map(
         (cell) => cell.className.split(' ')[0],
@@ -463,15 +415,19 @@ describe('LogsView', () => {
       'logs-entry__message',
       'logs-entry__summary',
     ]);
-    expect(errorRow).toBeTruthy();
     // A multi-line entry shows its header message and a line count; the
     // continuation stays folded until the row is expanded.
     expect(
-      errorRow.querySelector('.logs-entry__message').textContent.trim(),
-    ).toMatch(/^Failed\s+\+1 line$/);
+      errorRow.querySelector('.logs-entry__summary').textContent.trim(),
+    ).toBe('Failed');
+    expect(errorRow.querySelector('.logs-entry__more').textContent).toBe(
+      t('logs.moreLinesOne', '+1 line'),
+    );
     expect(document.body.textContent).not.toContain('Traceback line');
     expect(document.body.querySelector('select')).toBeNull();
-    expect(document.body.textContent).toContain('Live');
+    expect(document.body.textContent).toContain(
+      t('logs.stream.connected', 'Live'),
+    );
     expect(readLogFileMock.mock.calls.length).toBe(initialReadCalls);
   });
 
@@ -494,7 +450,9 @@ describe('LogsView', () => {
 
     const row = document.querySelector('.logs-entry');
     const toggle = row.querySelector('.logs-entry__toggle');
-    expect(row.querySelector('.logs-entry__more').textContent).toBe('+2 lines');
+    expect(row.querySelector('.logs-entry__more').textContent).toBe(
+      t('logs.moreLines', '+{count} lines', { count: 2 }),
+    );
     expect(toggle.getAttribute('aria-label')).toBe('Entry details');
     expect(toggle.getAttribute('aria-expanded')).toBe('false');
     expect(row.querySelector('.logs-entry__detail')).toBeNull();
@@ -605,28 +563,6 @@ describe('LogsView', () => {
     expect(document.body.textContent).not.toContain('undefined');
   });
 
-  it('cleans up the active stream on destroy', async () => {
-    listLogsMock.mockResolvedValue({
-      files: ['2026-05-11'],
-      default_file: '2026-05-11',
-    });
-    readLogFileMock.mockResolvedValue({
-      file: '2026-05-11',
-      entries: [entry({ message: 'Ready' })],
-    });
-
-    mountedComponent = mount(LogsView, { target: document.body });
-    flushSync();
-    await waitForCondition(() => streamConnections.length === 1);
-
-    const connection = streamConnections[0];
-
-    await unmount(mountedComponent);
-    mountedComponent = null;
-
-    expect(connection.close).toHaveBeenCalledWith(1000, 'logs-view-close');
-  });
-
   it('copies the verbatim log line to the clipboard from the per-row copy button', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, 'clipboard', {
@@ -674,64 +610,16 @@ describe('LogsView', () => {
     );
   });
 
-  it('reconnects after the live stream closes unexpectedly', async () => {
+  it('reconnects with backoff after the live stream closes, also across a failed attempt', async () => {
     vi.useFakeTimers();
-    // Pin reconnect jitter to its midpoint so attempt 0 fires at exactly the
-    // base 1000ms delay this test advances by.
+    // Pin reconnect jitter to its midpoint so the attempts fire at exactly the
+    // base delays of 1000ms and 2000ms this test advances by.
     vi.spyOn(Math, 'random').mockReturnValue(0.5);
-
-    listLogsMock.mockResolvedValue({
-      files: ['2026-05-11'],
-      default_file: '2026-05-11',
-    });
-    readLogFileMock.mockResolvedValue({
-      file: '2026-05-11',
-      entries: [entry({ message: 'Ready' })],
-      cursor: 'cursor-reconnect',
-    });
-
-    mountedComponent = mount(LogsView, { target: document.body });
-    flushSync();
-    await waitForCondition(() => streamConnections.length === 1, 40, true);
-
-    streamConnections[0].emitClose();
-    flushSync();
-
-    expect(document.body.textContent).toContain('Reconnecting…');
-
-    await vi.advanceTimersByTimeAsync(1000);
-    flushSync();
-
-    await waitForCondition(
-      () => subscribeLogEventsMock.mock.calls.length === 2,
-      40,
-      true,
-    );
-    expect(
-      readLogFileMock.mock.calls.filter((call) => call[0] === '2026-05-11'),
-    ).toHaveLength(2);
-    expect(listLogsMock).toHaveBeenCalledTimes(2);
-    expect(subscribeLogEventsMock).toHaveBeenLastCalledWith(
-      '2026-05-11',
-      expect.any(Object),
-      { cursor: 'cursor-reconnect' },
-    );
-  });
-
-  it('keeps reconnecting after a reconnect attempt fails during a server restart', async () => {
-    vi.useFakeTimers();
-    vi.spyOn(Math, 'random').mockReturnValue(0.5);
-
+    const catalog = { files: ['2026-05-11'], default_file: '2026-05-11' };
     listLogsMock
-      .mockResolvedValueOnce({
-        files: ['2026-05-11'],
-        default_file: '2026-05-11',
-      })
+      .mockResolvedValueOnce(catalog)
       .mockRejectedValueOnce(new Error('server unavailable'))
-      .mockResolvedValue({
-        files: ['2026-05-11'],
-        default_file: '2026-05-11',
-      });
+      .mockResolvedValue(catalog);
     readLogFileMock
       .mockResolvedValueOnce({
         file: '2026-05-11',
@@ -748,17 +636,20 @@ describe('LogsView', () => {
     flushSync();
     await waitForCondition(() => streamConnections.length === 1, 40, true);
 
+    const reconnecting = t('logs.stream.reconnecting', 'Reconnecting…');
     streamConnections[0].emitClose();
+    flushSync();
+    expect(document.body.textContent).toContain(reconnecting);
+
     await vi.advanceTimersByTimeAsync(1000);
     flushSync();
     expect(listLogsMock).toHaveBeenCalledTimes(2);
-    expect(document.body.textContent).toContain('Reconnecting…');
+    expect(document.body.textContent).toContain(reconnecting);
 
     await vi.advanceTimersByTimeAsync(2000);
-    flushSync();
     await waitForCondition(() => streamConnections.length === 2, 40, true);
-
     expect(listLogsMock).toHaveBeenCalledTimes(3);
+    expect(readLogFileMock).toHaveBeenCalledTimes(2);
     expect(document.body.textContent).toContain('After restart');
     expect(subscribeLogEventsMock).toHaveBeenLastCalledWith(
       '2026-05-11',
