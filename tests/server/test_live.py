@@ -1,9 +1,11 @@
-"""Live call ownership: one active call, its owner socket, UI requests and shutdown."""
+"""Live call ownership: one active call, its owner socket, UI requests, Run announcements,
+local call records and shutdown."""
 
 from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from collections.abc import AsyncIterator, Callable
 from contextlib import aclosing, suppress
 from datetime import UTC, datetime, timedelta
@@ -39,7 +41,7 @@ FAST = LiveCallLimits(
     attach_timeout_seconds=5.0,
     reattach_grace_seconds=5.0,
     ui_request_timeout_seconds=5.0,
-    shutdown_close_timeout_seconds=0.5,
+    shutdown_close_timeout_seconds=0.1,
     abort_timeout_seconds=0.5,
 )
 
@@ -73,6 +75,7 @@ class FakeCall:
         self.close_calls = 0
         self.abort_calls = 0
         self.close_mode = "finish"
+        self.announce_error: Exception | None = None
         self._closed = asyncio.Event()
 
     async def close(self) -> None:
@@ -88,6 +91,9 @@ class FakeCall:
         self._closed.set()
 
     def announce_run(self, notice: LiveRunNotice) -> None:
+        if self.announce_error is not None:
+            error, self.announce_error = self.announce_error, None
+            raise error
         self.notices.append(notice)
 
     def push_audio(self, pcm: bytes) -> None:
@@ -142,7 +148,7 @@ class FakeRpc:
         if self.error is not None:
             raise self.error
         answers: dict[str, JsonObject] = {
-            "chat.run_result": {"content": "Done.", "truncated": False},
+            "chat.run_result": {"content": "Done.", "truncated": True},
             "agent.list": {"agents": [{"id": "joel", "name": "Joel"}]},
             "project.list": {"projects": []},
             "terminal.list": {"terminals": [], "groups": []},
@@ -177,12 +183,22 @@ class OwnerReader:
 
 
 class Harness:
-    def __init__(self, limits: LiveCallLimits = FAST) -> None:
-        self.bus = ServerEventBus()
+    def __init__(
+        self,
+        limits: LiveCallLimits = FAST,
+        *,
+        bus: ServerEventBus | None = None,
+        recorder: LiveCallRecorder | None = None,
+    ) -> None:
+        self.bus = bus or ServerEventBus()
         self.rpc = FakeRpc()
         self.service = FakeService()
         self.registry = LiveCallRegistry(
-            events=self.bus, rpc=self.rpc, limits=limits, clock=lambda: STARTED_AT
+            events=self.bus,
+            rpc=self.rpc,
+            limits=limits,
+            clock=lambda: STARTED_AT,
+            recorder=recorder,
         )
         self.readers: list[OwnerReader] = []
 
@@ -280,12 +296,6 @@ def test_limits_must_let_an_owner_receive_the_whole_buffer() -> None:
         LiveCallLimits(update_buffer_limit=10, owner_queue_limit=5)
 
 
-@pytest.mark.asyncio
-async def test_start_passes_wake_phrases_to_the_service(live: Harness) -> None:
-    await live.start_relay(wake_phrases=("Hey Nabu", "Hey Jarvis"))
-    assert live.service.starts == [("relay", None, ("Hey Nabu", "Hey Jarvis"))]
-
-
 # -- owner socket ownership ---------------------------------------------------
 
 
@@ -374,8 +384,8 @@ async def test_unknown_calls_cannot_be_attached_stopped_or_answered(live: Harnes
 
 @pytest.mark.asyncio
 async def test_relay_audio_reaches_only_an_attached_owner(live: Harness) -> None:
-    call = await live.start_relay()
-    assert live.service.starts == [("relay", None, ())]
+    call = await live.start_relay(wake_phrases=("Hey Nabu", "Hey Jarvis"))
+    assert live.service.starts == [("relay", None, ("Hey Nabu", "Hey Jarvis"))]
     call.host.publish_audio(b"\x01\x00")
     call.host.publish({"type": "state", "phase": "live"})
     reader = live.attach(call)
@@ -564,71 +574,222 @@ async def test_tools_report_voice_stopped_once_the_call_is_stopping(live: Harnes
     assert live.rpc.calls == []
 
 
+# -- call records -------------------------------------------------------------------
+
+
+class RecordClock:
+    def __init__(self) -> None:
+        self.now = datetime(2026, 9, 25, 23, 59, 30, tzinfo=UTC)
+
+    def __call__(self) -> datetime:
+        return self.now
+
+
+def record_lines(path: Path) -> list[JsonObject]:
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+
 @pytest.mark.asyncio
-async def test_records_are_kept_locally_with_the_call_id(tmp_path: Path) -> None:
-    harness = Harness()
-    harness.registry = LiveCallRegistry(
-        events=harness.bus,
-        rpc=harness.rpc,
-        limits=FAST,
-        clock=lambda: STARTED_AT,
-        recorder=LiveCallRecorder(tmp_path, clock=lambda: STARTED_AT),
-    )
+async def test_records_are_kept_as_json_lines_in_the_file_of_their_utc_day(
+    tmp_path: Path,
+) -> None:
+    clock = RecordClock()
+    harness = Harness(recorder=LiveCallRecorder(tmp_path / "live-calls", clock=clock))
     call = await harness.start()
-    call.host.record({"type": "tool", "tool": "overview", "ok": True})
+    call.host.record({"type": "tool", "tool": "overview", "result": "Agents: Ä."})
+    call.host.record({"type": "delegation", "request": "was läuft?"})
+    clock.now += timedelta(minutes=1)
+    call.host.record({"type": "tool", "tool": "read", "arguments": {"at": clock.now}})
     # Shutdown writes every record handed off before it.
     await harness.close()
-    [line] = (tmp_path / "2026-09-24.jsonl").read_text(encoding="utf-8").splitlines()
-    assert json.loads(line) == {
-        "at": "2026-09-24T12:00:00+00:00",
-        "call_id": "call-1",
-        "type": "tool",
-        "tool": "overview",
-        "ok": True,
+
+    first = tmp_path / "live-calls" / "2026-09-25.jsonl"
+    assert record_lines(first) == [
+        {
+            "at": "2026-09-25T23:59:30+00:00",
+            "call_id": "call-1",
+            "type": "tool",
+            "tool": "overview",
+            "result": "Agents: Ä.",
+        },
+        {
+            "at": "2026-09-25T23:59:30+00:00",
+            "call_id": "call-1",
+            "type": "delegation",
+            "request": "was läuft?",
+        },
+    ]
+    assert b"\r\n" not in first.read_bytes()
+    # Values JSON cannot hold are kept as text.
+    assert record_lines(tmp_path / "live-calls" / "2026-09-26.jsonl")[0]["arguments"] == {
+        "at": "2026-09-26 00:00:30+00:00"
     }
+
+
+@pytest.mark.asyncio
+async def test_record_days_older_than_the_retention_window_are_deleted(tmp_path: Path) -> None:
+    directory = tmp_path / "live-calls"
+    directory.mkdir()
+    for name in ("2026-08-25.jsonl", "2026-08-26.jsonl", "notes.jsonl", "2026-08-01.txt"):
+        (directory / name).write_bytes(b"{}\n")
+    harness = Harness(recorder=LiveCallRecorder(directory, retention_days=30, clock=RecordClock()))
+    call = await harness.start()
+    call.host.record({"type": "tool"})
+    await harness.close()
+
+    assert sorted(path.name for path in directory.iterdir()) == [
+        "2026-08-01.txt",
+        "2026-08-26.jsonl",
+        "2026-09-25.jsonl",
+        "notes.jsonl",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_failing_record_write_is_logged_without_content_and_never_raises(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    blocked = tmp_path / "live-calls"
+    blocked.write_bytes(b"not a directory")
+    harness = Harness(recorder=LiveCallRecorder(blocked, clock=RecordClock()))
+    call = await harness.start()
+    with caplog.at_level(logging.WARNING):
+        call.host.record({"type": "delegation", "request": "secret task"})
+        await harness.close()
+
+    assert "Live call record failed" in caplog.text
+    assert "secret task" not in caplog.text
 
 
 # -- Run announcements ----------------------------------------------------------
 
 
-def finish_run(bus: ServerEventBus, run_id: str) -> None:
+def finish_run(
+    bus: ServerEventBus,
+    run_id: str,
+    *,
+    event_type: str = "run_completed",
+    at: datetime | None = None,
+    **fields: Any,
+) -> None:
     bus.publish(
-        "run_completed",
+        event_type,
         {
             "run_id": run_id,
             "agent_id": "joel",
             "project_id": "vbot",
             "session_id": "s1",
-            "run_event_timestamp": (STARTED_AT + timedelta(seconds=1)).isoformat(),
+            "run_event_timestamp": (at or STARTED_AT + timedelta(seconds=1)).isoformat(),
+            **fields,
         },
     )
 
 
 @pytest.mark.asyncio
-async def test_hands_runs_finishing_during_the_call_to_it(live: Harness) -> None:
+async def test_hands_runs_finishing_during_the_call_to_it_with_their_outcome(
+    live: Harness,
+) -> None:
     call = await live.start()
     finish_run(live.bus, "r1")
-    await settle(lambda: len(call.notices) == 1)
+    finish_run(live.bus, "r2", event_type="run_failed", project_id=None)
+    finish_run(live.bus, "r3", event_type="run_interrupted")
+    await settle(lambda: len(call.notices) == 3)
     assert call.notices[0] == LiveRunNotice(
         kind="completed",
         run_id="r1",
         agent_id="joel@vbot",
         session_id="s1",
         excerpt="Done.",
-        truncated=False,
+        truncated=True,
         session_ref="s1",
+    )
+    assert [(notice.kind, notice.agent_id) for notice in call.notices[1:]] == [
+        ("failed", "joel"),
+        ("interrupted", "joel@vbot"),
+    ]
+    # The excerpt is the exact Run's result, never the Session's newest reply.
+    assert live.rpc.calls[0] == (
+        "chat.run_result",
+        {"agent_id": "joel@vbot", "session_id": "s1", "run_id": "r1"},
     )
 
 
 @pytest.mark.asyncio
-async def test_reports_an_announcement_that_could_not_be_loaded(live: Harness) -> None:
+async def test_announces_each_run_of_the_call_once_and_skips_the_others(live: Harness) -> None:
+    # Published before the call started: not replayed, whatever its timestamp says.
+    finish_run(live.bus, "before-start")
+    call = await live.start()
+    finish_run(live.bus, "cancelled", event_type="run_cancelled")
+    finish_run(live.bus, "background", contributes_to_agent_activity=False)
+    finish_run(live.bus, "earlier", at=STARTED_AT - timedelta(seconds=1))
+    finish_run(live.bus, "no-agent", agent_id="")
+    finish_run(live.bus, "no-session", session_id=None)
+    live.bus.publish("run_started", {"run_id": "started", "agent_id": "joel"})
+    finish_run(live.bus, "r1")
+    finish_run(live.bus, "r1", event_type="run_failed")
+    finish_run(live.bus, "r2")
+    await settle(lambda: len(call.notices) == 2)
+    await drain()
+    assert [notice.run_id for notice in call.notices] == ["r1", "r2"]
+    assert [params["run_id"] for _method, params in live.rpc.calls] == ["r1", "r2"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("error", "logged"),
+    [
+        pytest.param(
+            RpcError("domain_error", "Run result not found"), "code=domain_error", id="unavailable"
+        ),
+        pytest.param(RuntimeError("fixture failure"), "failed unexpectedly", id="unexpected"),
+    ],
+)
+async def test_reports_an_announcement_that_could_not_be_loaded_and_keeps_following(
+    live: Harness, caplog: pytest.LogCaptureFixture, error: Exception, logged: str
+) -> None:
     call = await live.start()
     reader = live.attach(call)
-    live.rpc.error = RpcError("domain_error", "Run result not found")
-    finish_run(live.bus, "r1")
-    await settle(lambda: len(reader.frames) == 1)
+    live.rpc.error = error
+    with caplog.at_level(logging.WARNING, logger="vbot.server.live"):
+        finish_run(live.bus, "gone")
+        await settle(lambda: len(reader.frames) == 1)
     assert reader.frames == [{"type": "error", "code": "notification_failed", "fatal": False}]
+    assert logged in caplog.text
     assert call.notices == []
+    live.rpc.error = None
+    finish_run(live.bus, "r2")
+    await settle(lambda: len(call.notices) == 1)
+
+
+@pytest.mark.asyncio
+async def test_a_rejected_announcement_does_not_stop_the_announcements(live: Harness) -> None:
+    call = await live.start()
+    reader = live.attach(call)
+    call.announce_error = RuntimeError("fixture rejection")
+    finish_run(live.bus, "r1")
+    finish_run(live.bus, "r2")
+    await settle(lambda: len(call.notices) == 1)
+    await drain()
+    assert call.notices[0].run_id == "r2"
+    assert reader.frames == []
+
+
+@pytest.mark.asyncio
+async def test_announcements_resume_after_the_bus_evicts_the_lagging_call(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    harness = Harness(bus=ServerEventBus(subscriber_queue_limit=1))
+    try:
+        call = await harness.start()
+        await drain()
+        with caplog.at_level(logging.WARNING, logger="vbot.server.events"):
+            for index in range(5):
+                finish_run(harness.bus, f"r{index}")
+        assert "Evicted lagging server event subscriber" in caplog.text
+        await settle(lambda: len(call.notices) == 5)
+        assert [notice.run_id for notice in call.notices] == [f"r{index}" for index in range(5)]
+    finally:
+        await harness.close()
 
 
 @pytest.mark.asyncio

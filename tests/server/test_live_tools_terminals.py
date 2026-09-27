@@ -1,11 +1,5 @@
-"""Live Tools through the canonical RPC handlers and a real Terminal manager.
-
-Each Terminal runs an emulated shell that starts emulated coding programs and
-draws screens like the observed ones, so typing, keys and the program guard take
-the production path: ``terminal.start`` / ``terminal.read`` / ``terminal.input``
--> ``TerminalManager`` -> the Terminal's screen renderer. The process guard asks
-the emulator whether the program still runs, as it asks the OS in production.
-"""
+"""Live Tools on coding Terminals: starting Codex and Claude Code with a task, typing,
+keys, the Terminal layout, and the guards that keep text out of a shell or a menu."""
 
 from __future__ import annotations
 
@@ -25,13 +19,317 @@ import core.tools._terminal_input as terminal_input
 import core.tools.terminal_backend as terminal_backend
 import core.tools.terminal_manager as terminal_module
 from core.tools.terminal_manager import TerminalManager
+from server._live_context import LiveUiError
 from server._live_terminals import TerminalTimings
 from server._live_tools import LiveToolExecutor
 from server.rpc.dispatcher import dispatch_method
+from server.rpc.errors import RpcError
 from server.rpc.methods import METHODS
+from tests.server.live_tools_test_support import (
+    CLAUDE_TRUST,
+    CODEX_LOADING,
+    CODEX_READY,
+    CODEX_UPDATE,
+    SHELL,
+    STALE,
+    Fixture,
+    JsonObject,
+)
 from tests.server.rpc_test_support import StubAdapter, make_state
 
-JsonObject = dict[str, Any]
+
+@pytest.fixture
+def fx() -> Fixture:
+    return Fixture()
+
+
+# -- start_coding_terminal ---------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_starts_codex_and_types_the_task_once_it_is_ready(fx: Fixture) -> None:
+    fx.app.screens["term_start1"] = [SHELL, CODEX_LOADING, CODEX_READY]
+    text = await fx.ok("start_coding_terminal", program="codex", task='Fix "a" & 100%')
+    assert "in C:/work/vbot: t1." in text
+    assert "Typed the task into t1 and sent it." in text
+    start = fx.app.params("terminal.start")
+    # The task never becomes part of the command line.
+    assert start == [{"command": "codex", "workdir": "C:\\work\\vbot", "group_id": "grp_new2"}]
+    assert fx.app.params("terminal.group.create") == [{"name": "Codex"}]
+    assert [(data, revision) for _id, data, revision in fx.app.inputs] == [
+        ('\x1b[200~Fix "a" & 100%\x1b[201~', 5),
+        ("\r", 6),
+    ]
+    assert fx.ui.of("terminal_view")[0] == {"op": "show", "terminal_id": "term_start1"}
+
+
+@pytest.mark.asyncio
+async def test_never_types_into_a_program_that_did_not_become_ready(fx: Fixture) -> None:
+    fx.app.screens["term_start1"] = [SHELL]
+    text = await fx.partial("start_coding_terminal", program="codex", task="Fix it")
+    assert fx.app.inputs == []
+    assert (
+        "t1 did not show Codex's input line within 25 seconds, so the task was not typed." in text
+    )
+    assert 'send_message with {"target": "t1", "text": "<the task>"}' in text
+
+
+@pytest.mark.asyncio
+async def test_names_every_terminal_that_needs_the_same_answer(fx: Fixture) -> None:
+    fx.app.screens["term_start1"] = [SHELL, CLAUDE_TRUST]
+    fx.app.screens["term_start2"] = [SHELL, CLAUDE_TRUST]
+    text = await fx.partial("start_coding_terminal", program="claude", task="Fix it", count=2)
+    assert fx.app.inputs == []
+    assert "Claude Code in t1 and t2 asks whether to trust the folder" in text
+    assert text.endswith('"<the task>"}. Do the same for t2.')
+
+
+@pytest.mark.asyncio
+async def test_reports_a_pending_codex_update_question(fx: Fixture) -> None:
+    fx.app.screens["term_start1"] = [SHELL, CODEX_LOADING, CODEX_UPDATE]
+    text = await fx.partial("start_coding_terminal", program="codex", task="Fix it")
+    assert fx.app.inputs == []
+    assert "Codex in t1 offers an update and waits, so the task was not typed." in text
+
+
+@pytest.mark.asyncio
+async def test_starts_several_terminals_in_the_existing_program_group(fx: Fixture) -> None:
+    fx.app.groups.append({"group_id": "grp_codex", "name": "codex", "kind": "user"})
+    text = await fx.ok("start_coding_terminal", program="codex", task="Go", count=2, name="Pair")
+    assert text.endswith("t1, t2. Typed the task into t1 and t2 and sent it.")
+    assert [params["group_id"] for params in fx.app.params("terminal.start")] == ["grp_codex"] * 2
+    assert all(params["name"] == "Pair" for params in fx.app.params("terminal.start"))
+    assert fx.app.count("terminal.group.create") == 0
+    assert len(fx.app.inputs) == 4
+
+
+@pytest.mark.asyncio
+async def test_retypes_after_a_stale_screen_rejection(fx: Fixture) -> None:
+    fx.app.fail("terminal.input", STALE)
+    await fx.ok("start_coding_terminal", program="codex", task="Go")
+    assert [data for _id, data, _revision in fx.app.inputs] == ["\x1b[200~Go\x1b[201~", "\r"]
+    assert fx.app.count("terminal.input") == 3
+
+
+@pytest.mark.asyncio
+async def test_resolves_the_folder_from_a_project_or_an_existing_path(
+    fx: Fixture, tmp_path: Path
+) -> None:
+    fx.app.projects.append({"project_id": "site", "display_name": "Site", "cwd": "C:\\work\\site"})
+    fx.ui.context["projects"].append(
+        {"project_id": "site", "name": "Site", "cwd": "C:\\work\\site"}
+    )
+    await fx.ok("start_coding_terminal", program="codex", folder="site")
+    await fx.ok("start_coding_terminal", program="codex", folder=str(tmp_path))
+    assert [params["workdir"] for params in fx.app.params("terminal.start")] == [
+        "C:\\work\\site",
+        str(tmp_path),
+    ]
+    code, message = await fx.failed(
+        "start_coding_terminal", program="codex", folder=str(tmp_path / "missing")
+    )
+    assert code == "folder_not_found"
+    assert "Projects: vBot, Site. Ask the user which Project or folder to use" in message
+
+
+@pytest.mark.asyncio
+async def test_asks_for_a_folder_when_no_project_is_selected(fx: Fixture) -> None:
+    fx.ui.context["selected_project_id"] = ""
+    code, message = await fx.failed("start_coding_terminal", program="claude", task="Fix it")
+    assert code == "folder_missing"
+    assert message.startswith("No folder was given and no Project is selected in the app.")
+    assert fx.app.effects() == []
+
+
+@pytest.mark.asyncio
+async def test_reports_started_terminals_when_a_later_start_fails(fx: Fixture) -> None:
+    fx.app.fail("terminal.start", None, RpcError("invalid_request", "Too many Terminals."))
+    code, message = await fx.failed("start_coding_terminal", program="codex", task="Go", count=3)
+    assert code == "partial"
+    assert message == (
+        "Started Codex in t1; starting Terminal 2 of 3 failed: Too many Terminals. Nothing was "
+        "retried and no task was typed."
+    )
+    assert fx.app.inputs == []
+
+
+@pytest.mark.asyncio
+async def test_reports_a_program_that_exits_before_it_is_ready(fx: Fixture) -> None:
+    fx.app.screens["term_start1"] = [SHELL]
+
+    def exit_on_read(params: JsonObject) -> JsonObject:
+        terminal = fx.app._terminal(params["terminal_id"])
+        terminal["state"] = "exited"
+        return {"terminal": terminal, "screen": SHELL, "bracketed_paste": False}
+
+    fx.app._terminal_read = exit_on_read  # type: ignore[method-assign]
+    text = await fx.partial("start_coding_terminal", program="codex", task="Go")
+    assert text.endswith("t1 ended before Codex was ready; the task was not typed.")
+
+
+# -- messages, reading and stopping ------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_types_a_message_into_a_coding_terminal(fx: Fixture) -> None:
+    fx.app.add_terminal("term_a", name="Build")
+    text = await fx.ok("send_message", target="Build", text="line one\nline two")
+    assert text == "Sent to t1 (Codex)."
+    assert [data for _id, data, _revision in fx.app.inputs] == [
+        "\x1b[200~line one\nline two\x1b[201~",
+        "\r",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_does_not_type_into_a_shell_a_menu_or_with_control_characters(fx: Fixture) -> None:
+    fx.app.add_terminal("term_shell", "pwsh")
+    fx.app.add_terminal("term_menu")
+    fx.app.screens["term_menu"] = [CODEX_UPDATE]
+    code, message = await fx.failed("send_message", target="term_shell", text="dir")
+    assert code == "not_a_coding_terminal"
+    assert message.startswith("t1 does not run Codex or Claude Code;")
+    code, message = await fx.failed("send_message", target="term_menu", text="yes")
+    assert code == "not_sent"
+    assert "is asking a startup question, so nothing was sent" in message
+    code, _message = await fx.failed("send_message", target="term_menu", text="a\x1b[201~b")
+    assert code == "invalid_text"
+    assert fx.app.inputs == []
+
+
+@pytest.mark.asyncio
+async def test_reads_a_coding_terminal_screen_as_quoted_text(fx: Fixture) -> None:
+    fx.app.add_terminal("term_a", state="working")
+    fx.app.screens["term_a"] = ["x" * 9000 + "\nlast line\n\n"]
+    text = await fx.ok("read", target="term_a")
+    assert text.startswith("t1 (Codex), working. Screen, last part, quoted:\n> ")
+    assert text.endswith("> last line")
+
+
+@pytest.mark.asyncio
+async def test_stops_a_coding_terminal_with_its_interrupt_key(fx: Fixture) -> None:
+    fx.app.add_terminal("term_a", state="working")
+    text = await fx.ok("stop", target="term_a")
+    assert text.startswith("Pressed Escape in t1 to interrupt it.")
+    assert fx.app.inputs == [("term_a", "\x1b", 5)]
+
+
+@pytest.mark.asyncio
+async def test_other_calls_run_while_a_start_waits_but_never_write_into_it(fx: Fixture) -> None:
+    fx.app.add_terminal("term_other")
+    fx.app.screens["term_start2"] = [SHELL] * 20 + [CODEX_READY]
+    start = asyncio.create_task(fx.call("start_coding_terminal", program="codex", task="Go"))
+    while fx.app.count("terminal.read") < 2:
+        await asyncio.sleep(0)
+
+    # The new Terminal got t1 when it started.
+    assert "- t1 Codex" in await fx.ok("overview")
+    await fx.ok("send_message", target="term_other", text="hello")
+    code, message = await fx.failed("send_message", target="t1", text="other text")
+    assert code == "terminal_busy"
+    code, _message = await fx.failed("terminal", action="key", target="t1", key="enter")
+    assert code == "terminal_busy"
+    assert not start.done()
+    assert [terminal for terminal, _data, _revision in fx.app.inputs] == ["term_other"] * 2
+
+    result = await start
+    assert result["ok"] is True, result
+    assert [data for terminal, data, _rev in fx.app.inputs if terminal == "term_start2"] == [
+        "\x1b[200~Go\x1b[201~",
+        "\r",
+    ]
+    # Once the task is sent, the Terminal takes messages again.
+    await fx.ok("send_message", target="t1", text="more")
+
+
+# -- terminal ----------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_arranges_terminals_and_presses_keys(fx: Fixture) -> None:
+    fx.app.add_terminal("term_a")
+    assert await fx.ok("terminal", action="maximize", target="term_a") == (
+        "Maximized t1 in the Terminals view."
+    )
+    assert await fx.ok("terminal", action="restore") == (
+        "Restored the Terminals view to its group layout."
+    )
+    text = await fx.ok("terminal", action="key", target="t1", key="enter")
+    assert text == "Pressed Enter in t1. Call read with t1 to see the result."
+    assert fx.app.inputs == [("term_a", "\r", 5)]
+    code, message = await fx.failed("terminal", action="key", target="t1")
+    assert code == "missing_key"
+    assert '{"action": "key", "target": "t1", "key": "enter"}' in message
+
+
+@pytest.mark.asyncio
+async def test_closes_a_terminal_by_stopping_then_removing_it(fx: Fixture) -> None:
+    fx.app.add_terminal("term_a")
+    assert await fx.ok("terminal", action="close", target="term_a") == (
+        "Closed t1: stopped and removed."
+    )
+    assert fx.app.effects() == ["terminal.kill", "terminal.forget"]
+    assert fx.ui.of("terminal_view")[-1] == {"op": "refresh"}
+
+
+@pytest.mark.asyncio
+async def test_close_reports_a_confirmed_stop_when_removal_fails(fx: Fixture) -> None:
+    fx.app.add_terminal("term_a")
+    fx.app.fail("terminal.forget", RpcError("invalid_request", "Busy."))
+    code, message = await fx.failed("terminal", action="close", target="term_a")
+    assert code == "partial"
+    assert message == (
+        "t1 was stopped but may not have been removed. Busy. Call overview to check before "
+        "closing it again."
+    )
+
+
+@pytest.mark.asyncio
+async def test_manages_editable_groups_only(fx: Fixture) -> None:
+    text = await fx.ok("terminal", action="create_group", name="Review")
+    assert text == 'Created the Terminal group "Review".'
+    text = await fx.ok("terminal", action="rename_group", target="mine", name="Ours")
+    assert text == 'Renamed the group "Mine" to "Ours".'
+    text = await fx.ok("terminal", action="delete_group", target="Mine")
+    assert text == 'Deleted the group "Mine" and stopped 2 Terminals.'
+    code, message = await fx.failed("terminal", action="delete_group", target="Finished")
+    assert code == "group_not_editable"
+    assert fx.app.count("terminal.group.delete") == 1
+
+
+@pytest.mark.asyncio
+async def test_reorders_a_group_by_refs_and_infers_the_group(fx: Fixture) -> None:
+    fx.app.add_terminal("term_a")
+    fx.app.add_terminal("term_b")
+    await fx.ok("overview")
+    text = await fx.ok("terminal", action="reorder", order=["t2", "t1"])
+    assert text == 'Reordered the group "Mine": t2, t1.'
+    assert fx.app.params("terminal.group.order") == [
+        {"group_id": "grp_mine", "order": ["term_b", "term_a"]}
+    ]
+    code, message = await fx.failed("terminal", action="reorder", order=["t2"])
+    assert code == "invalid_order"
+    assert 'every Terminal of the group "Mine" exactly once: t1, t2.' in message
+
+
+@pytest.mark.asyncio
+async def test_keeps_a_completed_change_when_the_layout_refresh_fails(fx: Fixture) -> None:
+    fx.app.add_terminal("term_a")
+    fx.ui.error = LiveUiError("ui_unavailable")
+    text = await fx.ok("terminal", action="close", target="term_a")
+    assert text == (
+        "Closed t1: stopped and removed. The app window did not update its Terminals view."
+    )
+
+
+# -- through the real Terminal manager ---------------------------------------------------
+
+
+# Each Terminal runs an emulated shell that starts emulated coding programs and draws
+# screens like the observed ones, so typing, keys and the program guard take the
+# production path: ``terminal.start`` / ``terminal.read`` / ``terminal.input`` ->
+# ``TerminalManager`` -> the Terminal's screen renderer. The process guard asks the
+# emulator whether the program still runs, as it asks the OS in production.
 
 PASTE_START = "\x1b[200~"
 PASTE_END = "\x1b[201~"
@@ -344,9 +642,6 @@ def _started(terminal: EmulatedTerminal) -> list[str]:
     return terminal.writes[terminal.writes.index("\r") + 1 :]
 
 
-# -- typing a task and a message -----------------------------------------------
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize("program", ["codex", "claude"])
 async def test_start_types_the_task_and_sends_it_once_the_input_line_shows_it(
@@ -369,26 +664,43 @@ async def test_a_message_reaches_the_program_and_is_sent(call: Call) -> None:
     assert terminal.submitted == ["line one\nline two"]
 
 
-# -- the program ended: never type into its shell ------------------------------------
-
-PROMPTS_AFTER_EXIT = {
-    "powershell": "PS C:\\work\\app> ",
-    "cmd": "C:\\work\\app>",
-    "bash": "dev@box:~/app$ ",
-    "zsh": "dev@box ~/app % ",
-    "fish": "dev@box ~/app> ",
-    "starship": "~/app on  main\n❯ ",
-    "oh-my-posh on PowerShell": "  C:\\work\\app   main ❯ ",
-    # A custom prompt no screen rule recognizes: only the process guard knows.
-    "custom": "work ",
-}
-
-
 @pytest.mark.asyncio
-@pytest.mark.parametrize("program", ["codex", "claude"])
-@pytest.mark.parametrize("prompt", PROMPTS_AFTER_EXIT.values(), ids=PROMPTS_AFTER_EXIT.keys())
+@pytest.mark.parametrize(
+    ("program", "prompt", "refusal"),
+    [
+        # A prompt the screen rules recognize ends the input line. Every observed prompt
+        # style is a screen-rule case of tests/core/model_tasks/test__live_programs.py.
+        pytest.param(
+            "codex",
+            "PS C:\\work\\app> ",
+            "t1 does not show Codex's input line",
+            id="codex-recognized-prompt",
+        ),
+        # Starship draws the same marker as Claude Code's input line.
+        pytest.param(
+            "claude",
+            "~/app on  main\n❯ ",
+            "t1 does not show Claude Code's input line",
+            id="claude-starship-prompt",
+        ),
+        # A custom prompt no screen rule recognizes: the stale input line above it looks
+        # typeable, and only the process guard knows the program ended.
+        pytest.param(
+            "codex",
+            "work ",
+            "Codex no longer runs in t1, so nothing was sent.",
+            id="codex-custom-prompt",
+        ),
+        pytest.param(
+            "claude",
+            "work ",
+            "Claude Code no longer runs in t1, so nothing was sent.",
+            id="claude-custom-prompt",
+        ),
+    ],
+)
 async def test_after_the_program_exited_nothing_reaches_the_shell(
-    call: Call, program: str, prompt: str
+    call: Call, program: str, prompt: str, refusal: str
 ) -> None:
     terminal = await call.start(program)
     terminal.exit_program(prompt)
@@ -397,7 +709,7 @@ async def test_after_the_program_exited_nothing_reaches_the_shell(
 
     code, message = await call.failed("send_message", target="t1", text="Remove-Item -Recurse *")
     assert code == "not_sent"
-    assert "nothing was sent" in message
+    assert message.startswith(refusal)
     for tool, arguments in (
         ("terminal", {"action": "key", "target": "t1", "key": "enter"}),
         ("terminal", {"action": "key", "target": "t1", "key": "ctrl-c"}),
@@ -408,21 +720,6 @@ async def test_after_the_program_exited_nothing_reaches_the_shell(
         assert "no longer runs in t1" in message
     assert terminal.writes[before:] == []
 
-
-@pytest.mark.asyncio
-async def test_the_process_guard_stops_what_the_screen_cannot_tell(call: Call) -> None:
-    terminal = await call.start("claude")
-    terminal.exit_program(PROMPTS_AFTER_EXIT["custom"])
-    await call.settled(terminal)
-    before = len(terminal.writes)
-    # The stale input line above the unrecognized prompt looks typeable.
-    code, message = await call.failed("send_message", target="t1", text="dir")
-    assert code == "not_sent"
-    assert message.startswith("Claude Code no longer runs in t1, so nothing was sent.")
-    assert terminal.writes[before:] == []
-
-
-# -- menus and questions -------------------------------------------------------------
 
 APPROVALS = {
     "codex": Menu(
@@ -464,7 +761,7 @@ async def test_enter_is_not_pressed_when_a_menu_replaced_the_typed_text(
 
 
 @pytest.mark.asyncio
-async def test_a_trust_question_is_confirmed_only_on_the_answer_the_guidance_names(
+async def test_a_trust_question_is_left_to_the_user_and_confirmed_only_on_its_answer(
     call: Call,
 ) -> None:
     call.terminals.start_menu = Menu(
@@ -472,18 +769,26 @@ async def test_a_trust_question_is_confirmed_only_on_the_answer_the_guidance_nam
         ["No, exit", "Yes, I trust this folder"],
         numbered=False,
     )
-    # The Terminal runs, but the task is not typed: the call reports a partial result.
+    # The Terminal runs, but the task is not typed: the call reports a partial result
+    # that names the keys to press once the user agrees.
     code, text = await call.failed("start_coding_terminal", program="claude", task="Fix it")
     assert code == "partial"
     assert "Started Claude Code in a Terminal" in text
-    assert '"key": "down"} then {"action": "key", "target": "t1", "key": "enter"}' in text
+    assert (
+        "Claude Code in t1 asks whether to trust the folder, so the task was not typed. Ask the "
+        'user; if they agree, call terminal with {"action": "key", "target": "t1", "key": '
+        '"down"} then {"action": "key", "target": "t1", "key": "enter"}.'
+    ) in text
+    assert text.endswith(
+        'Afterwards, call send_message with {"target": "t1", "text": "<the task>"}.'
+    )
     terminal = call.terminals.all[0]
-    before = len(terminal.writes)
+    assert _started(terminal) == []
 
     code, message = await call.failed("terminal", action="key", target="t1", key="enter")
     assert code == "answer_not_selected"
     assert '"No, exit" selected, not "Yes, I trust this folder"' in message
-    assert terminal.writes[before:] == []
+    assert _started(terminal) == []
 
     await call.ok("terminal", action="key", target="t1", key="down")
     await call.settled(terminal)
