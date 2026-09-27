@@ -9,11 +9,14 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
+import pytest
+
 from core.attachments import AttachmentStore
 from core.channels import (
     ChannelAdapter,
     ChannelConfig,
     ChannelService,
+    ChannelStorage,
 )
 from core.channels.adapter import (
     FileData,
@@ -165,3 +168,20 @@ async def wait_until(predicate: Callable[[], bool], timeout: float = 1.0) -> Non
         if loop.time() >= deadline:
             raise TimeoutError("Timed out waiting for condition")
         await asyncio.sleep(0)
+
+
+async def start_with_adapter(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    adapter: BlockingAdapter,
+    *,
+    chat_sessions: ChatSessionManager | None = None,
+) -> ChannelService:
+    """Save one enabled Channel and start it with ``adapter`` as its platform adapter."""
+    config = make_config(enabled=True)
+    ChannelStorage(tmp_path).save(config)
+    service = make_service(tmp_path, chat_sessions=chat_sessions)
+    monkeypatch.setattr(service, "_create_adapter", lambda _config: adapter)
+    service.start_channel(config.id)
+    await asyncio.wait_for(adapter.started.wait(), timeout=5)
+    return service

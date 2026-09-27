@@ -19,7 +19,7 @@ from core.channels import (
 from core.channels.adapter import RunButtonBinding
 from core.channels.state import ChannelStateStore
 from core.utils.timestamps import utc_now_timestamp
-from tests.core.channels.channels_helpers import (
+from tests.core.channels.channels_test_support import (
     BlockingAdapter,
     DelayedStopAdapter,
     make_config,

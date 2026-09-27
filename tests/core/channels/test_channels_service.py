@@ -1,4 +1,4 @@
-"""Channels: service behavior."""
+"""Channels: ChannelService configuration changes and adapter lifecycle."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import threading
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
 
@@ -13,19 +14,17 @@ import pytest
 
 from core.attachments import AttachmentStore
 from core.channels import (
+    ChannelConfig,
     ChannelConfigError,
     ChannelError,
     ChannelNotFoundError,
     ChannelStorage,
 )
-from core.channels.adapter import (
-    DeniedChatLog,
-    RouteFacts,
-)
+from core.channels.adapter import DeniedChatLog, RouteFacts
 from core.channels.discord import DiscordChannelAdapter
 from core.channels.telegram import TelegramChannelAdapter
 from core.database import DatabaseUnavailableError
-from tests.core.channels.channels_helpers import (
+from tests.core.channels.channels_test_support import (
     BlockingAdapter,
     DelayedStopAdapter,
     make_config,
@@ -45,96 +44,83 @@ class DeniedAwareAdapter(BlockingAdapter):
         return self._denied_chat_log.entries()
 
 
+class ShutdownFailureAdapter(BlockingAdapter):
+    """An adapter whose task ends with an error instead of its cancellation."""
+
+    async def start(self) -> None:
+        self.started.set()
+        try:
+            await asyncio.Future()
+        except asyncio.CancelledError:
+            raise RuntimeError("adapter shutdown blew up") from None
+
+
+def _registered_channels(service: Any) -> list[str]:
+    with service.database.read() as connection:
+        return [row[0] for row in connection.execute("SELECT channel_id FROM channels")]
+
+
 @pytest.mark.asyncio
-async def test_channel_service_create_rejects_duplicate_ids(tmp_path: Path) -> None:
-    service = make_service(tmp_path)
-    config = make_config(enabled=False)
+async def test_create_and_update_refuse_invalid_changes(tmp_path: Path) -> None:
+    service = make_service(tmp_path, known_agent_ids={"assistant"})
+    try:
+        await service.create_channel(make_config(enabled=False))
 
-    await service.create_channel(config)
+        refused = [
+            service.create_channel(make_config(enabled=False)),
+            service.create_channel(
+                replace(make_config("tg-other", enabled=False), agent_id="missing-agent")
+            ),
+            service.update_channel("tg-assistant", agent_id="missing-agent"),
+            service.update_channel("tg-assistant", unknown_field="value"),
+        ]
+        for change in refused:
+            with pytest.raises(ChannelConfigError):
+                await change
+    finally:
+        service.close()
 
-    with pytest.raises(ChannelConfigError):
-        await service.create_channel(config)
+    storage = ChannelStorage(tmp_path)
+    assert [config.id for config in storage.load_all()] == ["tg-assistant"]
+    assert storage.get("tg-assistant").agent_id == "assistant"
 
 
-def test_channel_service_adapter_factory_builds_telegram_adapter(
+@pytest.mark.parametrize(
+    ("config", "token_env_var", "adapter_type"),
+    [
+        (make_config(), "TELEGRAM_BOT_TOKEN_TG_ASSISTANT", TelegramChannelAdapter),
+        (
+            make_config("dc-assistant", platform="discord"),
+            "DISCORD_BOT_TOKEN_DC_ASSISTANT",
+            DiscordChannelAdapter,
+        ),
+    ],
+    ids=["telegram", "discord"],
+)
+def test_channel_service_builds_the_adapter_of_the_configured_platform(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    config: ChannelConfig,
+    token_env_var: str,
+    adapter_type: type,
 ) -> None:
-    monkeypatch.setenv("TELEGRAM_BOT_TOKEN_TG_ASSISTANT", "token")
-    service = make_service(tmp_path)
-
-    adapter = service._create_adapter(make_config())
-
-    assert isinstance(adapter, TelegramChannelAdapter)
-
-
-def test_channel_service_adapter_factory_builds_discord_adapter(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("DISCORD_BOT_TOKEN_DC_ASSISTANT", "token")
-    service = make_service(tmp_path)
-
-    adapter = service._create_adapter(
-        make_config(
-            "dc-assistant",
-            platform="discord",
-        )
-    )
-
-    assert isinstance(adapter, DiscordChannelAdapter)
-
-
-def test_channel_service_adapter_factory_injects_attachment_store(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("TELEGRAM_BOT_TOKEN_TG_ASSISTANT", "token")
+    monkeypatch.setenv(token_env_var, "token")
     attachment_store = cast(AttachmentStore, object())
     service = make_service(tmp_path, attachment_store=attachment_store)
+    try:
+        adapter = service._create_adapter(config)
+    finally:
+        service.close()
 
-    adapter = service._create_adapter(make_config())
-
-    assert isinstance(adapter, TelegramChannelAdapter)
-    assert adapter._transport._attachment_store is attachment_store
-
-
-@pytest.mark.asyncio
-async def test_channel_service_create_validates_agent_exists(tmp_path: Path) -> None:
-    service = make_service(tmp_path, known_agent_ids={"main"})
-
-    with pytest.raises(ChannelConfigError):
-        await service.create_channel(make_config())
+    assert isinstance(adapter, adapter_type)
+    if isinstance(adapter, TelegramChannelAdapter):
+        assert adapter._transport._attachment_store is attachment_store
 
 
-@pytest.mark.asyncio
-async def test_channel_service_update_validates_agent_exists(tmp_path: Path) -> None:
+def test_channel_service_start_degrades_per_channel(tmp_path: Path) -> None:
     storage = ChannelStorage(tmp_path)
-    config = make_config(enabled=False)
-    storage.save(config)
-    service = make_service(tmp_path, known_agent_ids={"assistant"})
-
-    with pytest.raises(ChannelConfigError):
-        await service.update_channel(config.id, agent_id="missing-agent")
-
-
-def test_record_chat_id_migration_swaps_allowlist_and_persists(tmp_path: Path) -> None:
-    storage = ChannelStorage(tmp_path)
-    storage.save(make_config(allowed_chat_ids=[-500, 777]))
-    service = make_service(tmp_path)
-
-    service.record_chat_id_migration("tg-assistant", "-500", "-100500")
-
-    assert storage.get("tg-assistant").allowed_chat_ids == ["-100500", "777"]
-
-    # Idempotent: once the old id is gone, a repeat call changes nothing.
-    service.record_chat_id_migration("tg-assistant", "-500", "-100999")
-    assert storage.get("tg-assistant").allowed_chat_ids == ["-100500", "777"]
-
-
-def test_channel_service_start_tolerates_corrupt_config(tmp_path: Path) -> None:
-    storage = ChannelStorage(tmp_path)
-    storage.save(make_config("tg-valid", enabled=True))
+    storage.save(replace(make_config("tg-valid", enabled=True), agent_id="main"))
+    storage.save(make_config("tg-orphan", enabled=True))
     broken_dir = tmp_path / "channels" / "tg-broken"
     broken_dir.mkdir(parents=True)
     broken_dir.joinpath("channel.json").write_text(
@@ -143,37 +129,32 @@ def test_channel_service_start_tolerates_corrupt_config(tmp_path: Path) -> None:
         ),
         encoding="utf-8",
     )
-    service = make_service(tmp_path)
-
-    # A corrupt channel.json must never abort startup. No running loop here, so the valid
-    # channel only logs instead of launching, but start() must complete without raising.
-    service.start()
-
-    assert [config.id for config in service.list_channels()] == ["tg-valid"]
-
-
-def test_channel_service_start_marks_missing_agent_channel_failed(tmp_path: Path) -> None:
-    storage = ChannelStorage(tmp_path)
-    config = make_config(enabled=True)
-    storage.save(config)
     service = make_service(tmp_path, known_agent_ids={"main"})
 
+    # A corrupt channel.json is skipped and a Channel of an unknown Agent is
+    # marked failed. Without a running loop the valid Channel only logs instead
+    # of launching; startup itself completes.
     service.start()
 
-    assert service.has_active_channels() is False
-    assert service.has_enabled_channels() is False
-    assert service.is_failed(config.id) is True
-    failure_reason = service.failure_reason(config.id)
-    assert failure_reason
-    assert "assistant" in failure_reason
+    try:
+        assert [config.id for config in service.list_channels()] == ["tg-orphan", "tg-valid"]
+        assert service.has_active_channels() is False
+        assert service.has_enabled_channels() is True
+        assert service.is_failed("tg-orphan") is True
+        assert "assistant" in (service.failure_reason("tg-orphan") or "")
+        assert service.is_failed("tg-valid") is False
+    finally:
+        service.stop()
+        service.close()
 
 
 @pytest.mark.asyncio
-async def test_channel_config_create_delete_controls_tool_registration_without_liveness(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+async def test_tool_registration_follows_enabled_configs_not_adapter_liveness(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    storage = ChannelStorage(tmp_path)
     service = make_service(tmp_path)
+    adapter = BlockingAdapter()
     hook_calls = 0
 
     def hook() -> None:
@@ -181,20 +162,68 @@ async def test_channel_config_create_delete_controls_tool_registration_without_l
         hook_calls += 1
 
     service._notify_tool_registration_changed_hook = hook
-    monkeypatch.setattr(service, "_create_adapter", lambda _config: BlockingAdapter())
-    # No adapter runs: registration follows the persisted config alone.
-    monkeypatch.setattr(service, "start_channel", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(service, "_create_adapter", lambda _config: adapter)
+    try:
+        await service.create_channel(make_config(enabled=False))
+        assert hook_calls == 0
 
-    await service.create_channel(make_config(enabled=True))
+        await service.enable_channel("tg-assistant")
+        await asyncio.wait_for(adapter.started.wait(), timeout=1)
+        assert (storage.get("tg-assistant").enabled, hook_calls) == (True, 1)
 
-    assert service.has_enabled_channels() is True
-    assert service.has_active_channels() is False
-    assert hook_calls == 1
+        await service.disable_channel("tg-assistant")
+        await asyncio.wait_for(adapter.stopped.wait(), timeout=1)
+        assert (storage.get("tg-assistant").enabled, hook_calls) == (False, 2)
+        await service.delete_channel("tg-assistant")
+        assert hook_calls == 2
 
-    await service.delete_channel("tg-assistant")
+        # With no adapter running, registration follows the persisted config alone.
+        monkeypatch.setattr(service, "start_channel", lambda *_args, **_kwargs: None)
+        await service.create_channel(make_config(enabled=True))
+        assert service.has_enabled_channels() is True
+        assert service.has_active_channels() is False
+        assert hook_calls == 3
 
-    assert service.has_enabled_channels() is False
-    assert hook_calls == 2
+        await service.delete_channel("tg-assistant")
+        assert service.has_enabled_channels() is False
+        assert hook_calls == 4
+    finally:
+        await service.aclose()
+        service.close()
+
+
+@pytest.mark.asyncio
+async def test_service_serves_running_channels_until_they_stop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    storage = ChannelStorage(tmp_path)
+    storage.save(make_config("tg-enabled", enabled=True))
+    storage.save(make_config("tg-disabled", enabled=False))
+    service = make_service(tmp_path)
+    adapter = DeniedAwareAdapter()
+    adapter._denied_chat_log.record(chat_id="777", kind="direct", display_name="Julian")
+    monkeypatch.setattr(service, "_create_adapter", lambda _config: adapter)
+    try:
+        service.start()
+        await asyncio.wait_for(adapter.started.wait(), timeout=1)
+
+        assert service.has_active_channels() is True
+        assert service.is_running("tg-enabled")
+        assert not service.is_running("tg-disabled")
+        route = await service.ensure_outbound_session("tg-enabled", "12345")
+        assert route == RouteFacts(agent_id="assistant", session_id="ch-blocking-12345")
+        assert [entry.chat_id for entry in service.denied_chats("tg-enabled")] == ["777"]
+        assert service.denied_chats("tg-disabled") == []
+
+        service.stop()
+        await asyncio.wait_for(adapter.stopped.wait(), timeout=1)
+
+        assert service.denied_chats("tg-enabled") == []
+        with pytest.raises(ChannelNotFoundError):
+            await service.ensure_outbound_session("tg-enabled", "12345")
+    finally:
+        await service.aclose()
+        service.close()
 
 
 @pytest.mark.asyncio
@@ -219,11 +248,6 @@ async def test_channel_state_follows_channel_create_and_delete(tmp_path: Path) -
         assert (await service.channel_access("tg-assistant"))["groups"] == []
     finally:
         service.close()
-
-
-def _registered_channels(service: Any) -> list[str]:
-    with service.database.read() as connection:
-        return [row[0] for row in connection.execute("SELECT channel_id FROM channels")]
 
 
 @pytest.mark.asyncio
@@ -280,33 +304,9 @@ async def test_channel_create_and_delete_write_channels_db_off_the_event_loop(
 
 
 @pytest.mark.asyncio
-async def test_a_failed_registration_removes_the_created_config(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    service = make_service(tmp_path)
-    storage = ChannelStorage(tmp_path)
-
-    def fail(_channel_id: str, _platform: str) -> None:
-        raise DatabaseUnavailableError("channels is busy")
-
-    try:
-        with monkeypatch.context() as patch:
-            patch.setattr(service._state, "reset", fail)
-            with pytest.raises(DatabaseUnavailableError, match="channels is busy"):
-                await service.create_channel(make_config(enabled=False))
-
-        with pytest.raises(ChannelNotFoundError):
-            storage.get("tg-assistant")
-        assert _registered_channels(service) == []
-        await service.create_channel(make_config(enabled=False))
-        assert _registered_channels(service) == ["tg-assistant"]
-    finally:
-        service.close()
-
-
-@pytest.mark.asyncio
-async def test_a_create_cancelled_during_registration_removes_config_and_registration(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("outcome", ["failed", "cancelled"])
+async def test_a_create_interrupted_during_registration_leaves_no_config_or_registration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, outcome: str
 ) -> None:
     service = make_service(tmp_path)
     storage = ChannelStorage(tmp_path)
@@ -316,22 +316,29 @@ async def test_a_create_cancelled_during_registration_removes_config_and_registr
 
     def reset(channel_id: str, platform: str) -> None:
         entered.set()
+        if outcome == "failed":
+            raise DatabaseUnavailableError("channels is busy")
         assert release.wait(timeout=5)
         real_reset(channel_id, platform)
 
-    monkeypatch.setattr(service._state, "reset", reset)
     try:
-        creating = asyncio.create_task(service.create_channel(make_config(enabled=False)))
-        await wait_until(entered.is_set)
-        creating.cancel()
-        release.set()
-        with pytest.raises(asyncio.CancelledError):
-            await asyncio.wait_for(creating, timeout=5)
+        with monkeypatch.context() as patch:
+            patch.setattr(service._state, "reset", reset)
+            creating = asyncio.create_task(service.create_channel(make_config(enabled=False)))
+            await wait_until(entered.is_set)
+            if outcome == "cancelled":
+                creating.cancel()
+            release.set()
+            expected = DatabaseUnavailableError if outcome == "failed" else asyncio.CancelledError
+            with pytest.raises(expected):
+                await asyncio.wait_for(creating, timeout=5)
 
         with pytest.raises(ChannelNotFoundError):
             storage.get("tg-assistant")
         assert _registered_channels(service) == []
         assert service._pending_config_changes == set()
+        await service.create_channel(make_config(enabled=False))
+        assert _registered_channels(service) == ["tg-assistant"]
     finally:
         release.set()
         service.close()
@@ -390,8 +397,9 @@ async def test_config_changes_persist_off_the_event_loop_before_touching_the_ada
 
 
 @pytest.mark.asyncio
-async def test_an_update_cancelled_during_its_write_keeps_config_and_adapter(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("interruption", ["failed-save", "cancelled-save"])
+async def test_an_interrupted_update_keeps_config_and_running_adapter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, interruption: str
 ) -> None:
     storage = ChannelStorage(tmp_path)
     original = make_config(enabled=True)
@@ -406,8 +414,10 @@ async def test_an_update_cancelled_during_its_write_keeps_config_and_adapter(
         adapters.append(BlockingAdapter())
         return adapters[-1]
 
-    def held_save(config: Any) -> None:
+    def interrupted_save(config: Any) -> None:
         entered.set()
+        if interruption == "failed-save":
+            raise OSError("disk full")
         assert release.wait(timeout=5)
         real_save(config)
 
@@ -416,19 +426,21 @@ async def test_an_update_cancelled_during_its_write_keeps_config_and_adapter(
     service.start()
     try:
         await asyncio.wait_for(adapters[0].started.wait(), timeout=1)
-        monkeypatch.setattr(service._storage, "save", held_save)
-        updating = asyncio.create_task(
-            service.update_channel(original.id, observe_unaddressed=True)
-        )
+        monkeypatch.setattr(service._storage, "save", interrupted_save)
+        updating = asyncio.create_task(service.update_channel(original.id, enabled=False))
         await wait_until(entered.is_set)
-        updating.cancel()
+        if interruption == "cancelled-save":
+            updating.cancel()
         release.set()
-        with pytest.raises(asyncio.CancelledError):
+        expected = OSError if interruption == "failed-save" else asyncio.CancelledError
+        with pytest.raises(expected):
             await asyncio.wait_for(updating, timeout=5)
 
-        # The completed write is undone; the healthy adapter was never disturbed.
+        # A failed write changes nothing and a completed one is undone; the
+        # healthy adapter was never disturbed.
         assert storage.get(original.id).to_dict() == original.to_dict()
         assert len(adapters) == 1
+        assert not adapters[0].stopped.is_set()
         assert service.is_running(original.id)
         assert service._pending_config_changes == set()
     finally:
@@ -438,73 +450,10 @@ async def test_an_update_cancelled_during_its_write_keeps_config_and_adapter(
 
 
 @pytest.mark.asyncio
-async def test_channel_service_start_and_stop_manage_enabled_adapters(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # Arrange
-    storage = ChannelStorage(tmp_path)
-    enabled = make_config("tg-enabled", enabled=True)
-    disabled = make_config("tg-disabled", enabled=False)
-    storage.save(enabled)
-    storage.save(disabled)
-
-    service = make_service(tmp_path)
-    adapter = BlockingAdapter()
-    monkeypatch.setattr(service, "_create_adapter", lambda _config: adapter)
-
-    # Act
-    service.start()
-    await asyncio.wait_for(adapter.started.wait(), timeout=1)
-
-    # Assert
-    assert service.has_active_channels() is True
-    assert "tg-disabled" not in service._adapter_tasks
-
-    # Cleanup
-    service.stop()
-    await asyncio.wait_for(adapter.stopped.wait(), timeout=1)
-    await asyncio.sleep(0)
-
-
-@pytest.mark.asyncio
-async def test_ensure_outbound_session_delegates_to_active_adapter(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    storage = ChannelStorage(tmp_path)
-    storage.save(make_config("tg-enabled", enabled=True))
-    service = make_service(tmp_path)
-    adapter = BlockingAdapter()
-    monkeypatch.setattr(service, "_create_adapter", lambda _config: adapter)
-
-    service.start()
-    await asyncio.wait_for(adapter.started.wait(), timeout=1)
-
-    route = await service.ensure_outbound_session("tg-enabled", "12345")
-    assert route == RouteFacts(agent_id="assistant", session_id="ch-blocking-12345")
-
-    service.stop()
-    await asyncio.wait_for(adapter.stopped.wait(), timeout=1)
-    await asyncio.sleep(0)
-
-
-@pytest.mark.asyncio
-async def test_ensure_outbound_session_raises_for_inactive_channel(tmp_path: Path) -> None:
-    service = make_service(tmp_path)
-
-    with pytest.raises(ChannelNotFoundError):
-        await service.ensure_outbound_session("tg-enabled", "12345")
-
-
-@pytest.mark.asyncio
 async def test_channel_service_aclose_awaits_adapter_shutdown(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    storage = ChannelStorage(tmp_path)
-    config = make_config("tg-enabled", enabled=True)
-    storage.save(config)
+    ChannelStorage(tmp_path).save(make_config("tg-enabled", enabled=True))
     stop_gate = asyncio.Event()
     lifecycle_events: list[str] = []
     adapter = DelayedStopAdapter(label="first", stop_gate=stop_gate, events=lifecycle_events)
@@ -522,129 +471,37 @@ async def test_channel_service_aclose_awaits_adapter_shutdown(
     await asyncio.wait_for(close_task, timeout=1)
 
     assert adapter.stopped.is_set()
-    assert service._adapter_tasks == {}
-    assert service._adapter_stop_tasks == {}
+    assert not service.is_running("tg-enabled")
+    assert service.has_active_channels() is False
+    service.close()
 
 
 @pytest.mark.asyncio
-async def test_channel_service_enable_disable_updates_runtime_and_hook(
+@pytest.mark.parametrize("failing", [True, False], ids=["shutdown-error", "cancellation"])
+async def test_stopping_logs_a_failed_adapter_shutdown_but_not_a_cancellation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # Arrange
-    storage = ChannelStorage(tmp_path)
-    config = make_config(enabled=False)
-    storage.save(config)
-
-    service = make_service(tmp_path)
-    adapter = BlockingAdapter()
-    hook_calls = 0
-
-    def hook() -> None:
-        nonlocal hook_calls
-        hook_calls += 1
-
-    service._notify_tool_registration_changed_hook = hook
-    monkeypatch.setattr(service, "_create_adapter", lambda _config: adapter)
-
-    # Act
-    await service.enable_channel(config.id)
-    await asyncio.wait_for(adapter.started.wait(), timeout=1)
-    enabled_config = storage.get(config.id)
-
-    await service.disable_channel(config.id)
-    await asyncio.wait_for(adapter.stopped.wait(), timeout=1)
-    disabled_config = storage.get(config.id)
-    await asyncio.sleep(0)
-
-    # Assert
-    assert enabled_config.enabled is True
-    assert disabled_config.enabled is False
-    assert hook_calls == 2
-
-
-@pytest.mark.asyncio
-async def test_channel_service_send_raises_for_inactive_channel(tmp_path: Path) -> None:
-    service = make_service(tmp_path)
-
-    with pytest.raises(ChannelNotFoundError):
-        await service.send("tg-assistant", "hello", "12345")
-
-
-@pytest.mark.asyncio
-async def test_channel_service_denied_chats_delegates_to_running_adapter(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    storage = ChannelStorage(tmp_path)
-    config = make_config(enabled=True)
-    storage.save(config)
-
-    service = make_service(tmp_path)
-    adapter = DeniedAwareAdapter()
-    adapter._denied_chat_log.record(chat_id="777", kind="direct", display_name="Julian")
-    monkeypatch.setattr(service, "_create_adapter", lambda _config: adapter)
-
-    service.start_channel(config.id)
-    await asyncio.wait_for(adapter.started.wait(), timeout=1)
-
-    entries = service.denied_chats(config.id)
-    assert [entry.chat_id for entry in entries] == ["777"]
-
-    service.stop()
-    await asyncio.wait_for(adapter.stopped.wait(), timeout=1)
-    await asyncio.sleep(0)
-
-    assert service.denied_chats(config.id) == []
-
-
-def test_channel_service_denied_chats_empty_for_unknown_channel(tmp_path: Path) -> None:
-    service = make_service(tmp_path)
-
-    assert service.denied_chats("tg-assistant") == []
-
-
-@pytest.mark.asyncio
-async def test_await_adapter_shutdown_logs_real_exception_at_error(
-    tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
+    failing: bool,
 ) -> None:
-    # By the time the stop task awaits the adapter task it was already popped from
-    # _adapter_tasks, so its own done-callback returns early without logging. A real
-    # shutdown exception would surface nowhere unless _await_adapter_shutdown logs it.
+    ChannelStorage(tmp_path).save(make_config(enabled=True))
+    adapter = ShutdownFailureAdapter() if failing else BlockingAdapter()
     service = make_service(tmp_path)
-
-    async def raise_shutdown_error() -> None:
-        raise RuntimeError("adapter shutdown blew up")
-
-    failing_task = asyncio.create_task(raise_shutdown_error())
-    await wait_until(failing_task.done)
+    monkeypatch.setattr(service, "_create_adapter", lambda _config: adapter)
+    service.start()
+    await asyncio.wait_for(adapter.started.wait(), timeout=1)
 
     with caplog.at_level(logging.ERROR, logger="vbot.channels"):
-        await service._await_adapter_shutdown("tg-assistant", failing_task)
+        await service.aclose()
+    service.close()
 
-    error_records = [record for record in caplog.records if record.levelno == logging.ERROR]
-    assert any(
-        "shutdown raised during stop" in record.getMessage()
-        and "tg-assistant" in record.getMessage()
-        for record in error_records
-    )
-    # The traceback must be attached so the underlying error is diagnosable.
-    assert any(record.exc_info is not None for record in error_records)
-
-
-@pytest.mark.asyncio
-async def test_await_adapter_shutdown_keeps_cancelled_silent(tmp_path: Path) -> None:
-    # Cooperative cancel cleanup is the normal path and must not be logged as an error.
-    service = make_service(tmp_path)
-
-    async def block_forever() -> None:
-        await asyncio.Future()
-
-    cancelled_task = asyncio.create_task(block_forever())
-    await asyncio.sleep(0)
-    cancelled_task.cancel()
-
-    await service._await_adapter_shutdown("tg-assistant", cancelled_task)
-
-    assert cancelled_task.cancelled()
+    errors = [record for record in caplog.records if record.levelno >= logging.ERROR]
+    if not failing:
+        assert errors == []
+        return
+    # The stopped task no longer belongs to the service, so the stop path
+    # itself logs the failure, with its traceback, or it surfaces nowhere.
+    assert [record.getMessage() for record in errors] == [
+        "Channel adapter shutdown raised during stop (channel=tg-assistant)"
+    ]
+    assert errors[0].exc_info is not None

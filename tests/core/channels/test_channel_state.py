@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import threading
 from collections.abc import Iterator
 from datetime import datetime
@@ -144,23 +143,6 @@ async def test_reset_gives_a_reused_channel_id_empty_state(store: ChannelStateSt
     assert store.role_for("tg", "-100", "50") == "member"
 
 
-@pytest.mark.asyncio
-async def test_adopting_configured_channels_keeps_their_state(tmp_path: Path) -> None:
-    state = _open(tmp_path)
-    try:
-        state.reset("tg", "telegram")
-        await _fill(state, "tg")
-
-        assert state.adopt({"tg": "telegram", "discord-main": "discord"}) == []
-
-        assert _row_counts(state, "tg") == dict.fromkeys(_STATE_TABLES, 1)
-        assert state.role_for("tg", "-100", "50") == "admin"
-        assert (await state.access_state("discord-main"))["groups"] == []
-        assert _platforms(state) == {"tg": "telegram", "discord-main": "discord"}
-    finally:
-        state.close()
-
-
 def _platforms(state: ChannelStateStore) -> dict[str, str | None]:
     with state.database.read() as connection:
         return dict(connection.execute("SELECT channel_id, platform FROM channels").fetchall())
@@ -215,14 +197,33 @@ async def test_adopt_records_platforms_and_resets_state_recorded_for_another(
             await _fill(state, channel_id)
             state.point_conversation(channel_id, f"ch-{channel_id}-main", "direct", "ses_main")
 
+        # Configured Channels on their recorded platform keep their state; a new
+        # one is registered with empty state.
+        assert state.adopt({"tg": "telegram", "legacy": None, "discord-main": "discord"}) == []
+        assert _row_counts(state, "tg") == {
+            **dict.fromkeys(_STATE_TABLES, 1),
+            "channel_conversations": 2,
+        }
+        assert (await state.access_state("discord-main"))["groups"] == []
+
         # An unreadable config registers its Channel and keeps what was recorded.
         assert state.adopt({"tg": None, "legacy": None, "new": None}) == []
-        assert _platforms(state) == {"tg": "telegram", "legacy": None, "new": None}
+        assert _platforms(state) == {
+            "tg": "telegram",
+            "legacy": None,
+            "discord-main": "discord",
+            "new": None,
+        }
 
         # A first recorded platform keeps the state; another platform resets it.
         assert state.adopt({"tg": "slack", "legacy": "slack", "new": "discord"}) == ["tg"]
 
-        assert _platforms(state) == {"tg": "slack", "legacy": "slack", "new": "discord"}
+        assert _platforms(state) == {
+            "tg": "slack",
+            "legacy": "slack",
+            "discord-main": "discord",
+            "new": "discord",
+        }
         assert _row_counts(state, "tg") == {
             **dict.fromkeys(_STATE_TABLES, 0),
             "channel_conversations": 1,
@@ -308,16 +309,27 @@ async def test_role_checks_read_committed_access_without_storage(
 
 
 @pytest.mark.asyncio
-async def test_run_async_runs_state_work_on_the_channel_pool_until_closed(
-    tmp_path: Path,
-) -> None:
+async def test_async_state_work_runs_on_the_channel_pool_until_closed(tmp_path: Path) -> None:
     state = _open(tmp_path)
     state.reset("tg", "telegram")
+    caller = threading.get_ident()
+    writers: list[int] = []
+    original_write = state.database.write
+
+    def spy(operation, **kwargs):  # type: ignore[no-untyped-def]
+        writers.append(threading.get_ident())
+        return original_write(operation, **kwargs)
 
     def point() -> str:
         state.point_conversation("tg", "anchor", "direct", "active")
         return threading.current_thread().name
 
+    state.database.write = spy  # type: ignore[method-assign]
+    try:
+        assert await state.snapshot_participant_role("tg", "-100", "50", "Alice") == "member"
+    finally:
+        del state.database.write
+    assert writers and caller not in writers
     assert (await state.run_async(point)).startswith("vbot-db-channels")
     assert state.active_session_id("tg", "anchor") == "active"
     state.close()
@@ -497,22 +509,3 @@ def test_polling_watermark_applies_only_to_the_bot_it_names(store: ChannelStateS
     assert store.load_update_offset("tg", _OTHER_BOT) == 0
     store.save_update_offset("tg", _OTHER_BOT, 3)
     assert store.load_update_offset("tg", _OTHER_BOT) == 3
-
-
-def test_async_access_runs_off_the_calling_thread(store: ChannelStateStore) -> None:
-    caller = threading.get_ident()
-    seen: list[int] = []
-    original = store.database.write
-
-    def spy(operation, **kwargs):  # type: ignore[no-untyped-def]
-        seen.append(threading.get_ident())
-        return original(operation, **kwargs)
-
-    store.database.write = spy  # type: ignore[method-assign]
-    try:
-        role = asyncio.run(store.snapshot_participant_role("tg", "-100", "50", "Alice"))
-    finally:
-        del store.database.write
-
-    assert role == "member"
-    assert seen and caller not in seen

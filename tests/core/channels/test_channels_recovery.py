@@ -1,10 +1,12 @@
-"""Channels: recovery behavior."""
+"""Channels: adapter failure recovery, restart backoff and start rollbacks."""
 
 from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -15,12 +17,9 @@ from core.channels import (
     ChannelNotFoundError,
     ChannelStorage,
 )
-from core.channels.adapter import (
-    FileData,
-    RouteFacts,
-)
+from core.channels.adapter import FileData, RouteFacts
 from core.extensions import InteractionButton
-from tests.core.channels.channels_helpers import (
+from tests.core.channels.channels_test_support import (
     BlockingAdapter,
     DelayedStopAdapter,
     make_config,
@@ -31,19 +30,21 @@ from tests.core.channels.channels_helpers import (
 pytestmark = pytest.mark.usefixtures("current_format_data_directory")
 
 
-class FailingAdapter(ChannelAdapter):
+class CrashingAdapter(ChannelAdapter):
+    """Adapter whose task ends with an error once it started."""
+
     platform = "telegram"
 
-    def __init__(self, *, fail_on_start: bool) -> None:
-        self._fail_on_start = fail_on_start
+    def __init__(self, *, while_running: Callable[[], None] | None = None) -> None:
+        self._while_running = while_running
         self.started = asyncio.Event()
         self.stopped = asyncio.Event()
 
     async def start(self) -> None:
         self.started.set()
-        if self._fail_on_start:
-            raise RuntimeError("adapter failed")
-        await asyncio.Future()
+        if self._while_running is not None:
+            self._while_running()
+        raise RuntimeError("adapter failed")
 
     async def stop(self) -> None:
         self.stopped.set()
@@ -65,103 +66,137 @@ class FailingAdapter(ChannelAdapter):
         raise NotImplementedError
 
 
-class RunThenCrashAdapter(ChannelAdapter):
-    """Adapter that starts, runs briefly, and then crashes."""
+def _record_restart_delays(service: object, monkeypatch: pytest.MonkeyPatch) -> list[float]:
+    """Record each restart delay the service chooses and restart at once instead."""
+    delays: list[float] = []
+    original = service._restart_delay_seconds  # type: ignore[attr-defined]
 
-    platform = "telegram"
+    def immediate(attempt: int) -> float:
+        delays.append(original(attempt))
+        return 0.0
 
-    def __init__(self, *, run_seconds: float) -> None:
-        self._run_seconds = run_seconds
-        self.started = asyncio.Event()
-        self.stopped = asyncio.Event()
-
-    async def start(self) -> None:
-        self.started.set()
-        await asyncio.sleep(self._run_seconds)
-        raise RuntimeError("crashed after healthy run")
-
-    async def stop(self) -> None:
-        self.stopped.set()
-
-    async def send(
-        self,
-        message: str | None,
-        platform_target: str,
-        *,
-        files: list[FileData] | None = None,
-        thread_id: str | None = None,
-        buttons: list[list[InteractionButton]] | None = None,
-    ) -> None:
-        return
-
-    async def ensure_outbound_session(
-        self, platform_target: str, *, thread_id: str | None = None
-    ) -> RouteFacts:
-        raise NotImplementedError
+    monkeypatch.setattr(service, "_restart_delay_seconds", immediate)
+    return delays
 
 
 @pytest.mark.asyncio
-async def test_channel_service_adapter_crash_does_not_change_tool_registration(
+@pytest.mark.parametrize(
+    ("failures", "expected_delays", "failed_while_retrying"),
+    [
+        (1, [1.0], [False]),
+        (
+            7,
+            [1.0, 2.0, 4.0, 8.0, 16.0, 30.0, 30.0],
+            [False, False, False, True, True, True, True],
+        ),
+    ],
+    ids=["one-crash", "exhausted-fast-retries"],
+)
+async def test_a_crashing_adapter_restarts_with_capped_backoff_until_it_recovers(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    failures: int,
+    expected_delays: list[float],
+    failed_while_retrying: list[bool],
 ) -> None:
-    storage = ChannelStorage(tmp_path)
-    config = make_config(enabled=True)
-    storage.save(config)
-
+    ChannelStorage(tmp_path).save(make_config(enabled=True))
     service = make_service(tmp_path)
+    recovered = BlockingAdapter()
+    constructions = 0
+    failed_seen: list[bool] = []
     hook_calls = 0
 
     def hook() -> None:
         nonlocal hook_calls
         hook_calls += 1
 
+    def create_adapter(_config: ChannelConfig) -> ChannelAdapter:
+        nonlocal constructions
+        constructions += 1
+        if constructions > 1:
+            failed_seen.append(service.is_failed("tg-assistant"))
+        return CrashingAdapter() if constructions <= failures else recovered
+
+    original_delay = service._restart_delay_seconds
     service._notify_tool_registration_changed_hook = hook
-    monkeypatch.setattr(
-        service, "_create_adapter", lambda _config: FailingAdapter(fail_on_start=True)
-    )
-    monkeypatch.setattr(service, "_schedule_restart", lambda _channel_id: None)
-
+    monkeypatch.setattr(service, "_create_adapter", create_adapter)
+    delays = _record_restart_delays(service, monkeypatch)
     service.start()
-    await wait_until(lambda: config.id not in service._adapter_tasks)
+    try:
+        await asyncio.wait_for(recovered.started.wait(), timeout=5)
 
-    assert service.has_active_channels() is False
-    assert service.has_enabled_channels() is True
-    assert hook_calls == 0
+        # After three fast retries the Channel is marked failed, but recovery
+        # continues at the capped interval: a Channel must self-heal.
+        assert delays == expected_delays
+        assert failed_seen == failed_while_retrying
+        assert service.is_running("tg-assistant")
+        assert not service.is_failed("tg-assistant")
+        assert service.failure_reason("tg-assistant") is None
+        # Crashes never change the Tool registration, which follows config only.
+        assert hook_calls == 0
+        assert service.has_enabled_channels() is True
+        # The exponent is capped before conversion, even after years offline.
+        assert original_delay(1025) == original_delay(1_000_000) == 30.0
+    finally:
+        await service.aclose()
+        service.close()
 
 
 @pytest.mark.asyncio
-async def test_channel_service_start_isolates_unexpected_adapter_construction_error(
+@pytest.mark.parametrize(
+    ("uptime_seconds", "delay_after_the_run"),
+    [(300.0, 1.0), (299.0, 30.0)],
+    ids=["five-minutes-is-healthy", "shorter-run-keeps-counting"],
+)
+async def test_a_crash_after_a_healthy_run_starts_a_fresh_backoff_cycle(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
+    uptime_seconds: float,
+    delay_after_the_run: float,
 ) -> None:
-    storage = ChannelStorage(tmp_path)
-    config = make_config(enabled=True)
-    storage.save(config)
+    # The service measures adapter uptime on a controlled clock; nothing waits.
+    now = [1000.0]
+    monkeypatch.setattr("core.channels.channels.time", SimpleNamespace(monotonic=lambda: now[0]))
+
+    def run_for_uptime() -> None:
+        now[0] += uptime_seconds
+
+    ChannelStorage(tmp_path).save(make_config(enabled=True))
     service = make_service(tmp_path)
+    recovered = BlockingAdapter()
+    constructions = 0
 
-    def fail_adapter_construction(_config: ChannelConfig) -> ChannelAdapter:
-        raise RuntimeError("adapter dependency is broken")
+    def create_adapter(_config: ChannelConfig) -> ChannelAdapter:
+        # Five immediate crashes mark the Channel failed; the sixth adapter is up
+        # for ``uptime_seconds`` before crashing, and the seventh keeps running.
+        nonlocal constructions
+        constructions += 1
+        if constructions <= 5:
+            return CrashingAdapter()
+        if constructions == 6:
+            return CrashingAdapter(while_running=run_for_uptime)
+        return recovered
 
-    monkeypatch.setattr(service, "_create_adapter", fail_adapter_construction)
+    monkeypatch.setattr(service, "_create_adapter", create_adapter)
+    delays = _record_restart_delays(service, monkeypatch)
+    service.start()
+    try:
+        await asyncio.wait_for(recovered.started.wait(), timeout=5)
 
-    with caplog.at_level(logging.ERROR, logger="vbot.channels"):
-        service.start()
-
-    assert config.id in service._failed_channels
-    assert service._failure_reasons[config.id] == "adapter dependency is broken"
-    assert caplog.records
+        assert delays == [1.0, 2.0, 4.0, 8.0, 16.0, delay_after_the_run]
+        assert service.is_running("tg-assistant")
+        assert not service.is_failed("tg-assistant")
+    finally:
+        await service.aclose()
+        service.close()
 
 
 @pytest.mark.asyncio
 async def test_channel_service_ignores_stale_adapter_task_done_callback(
     tmp_path: Path,
 ) -> None:
-    storage = ChannelStorage(tmp_path)
     config = make_config(enabled=True)
-    storage.save(config)
-
+    ChannelStorage(tmp_path).save(config)
     service = make_service(tmp_path)
     adapter = BlockingAdapter()
     stale_task = asyncio.create_task(asyncio.sleep(0))
@@ -179,29 +214,19 @@ async def test_channel_service_ignores_stale_adapter_task_done_callback(
     current_task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await current_task
+    service.close()
 
 
 @pytest.mark.asyncio
-async def test_channel_service_update_rejects_unknown_fields(tmp_path: Path) -> None:
-    storage = ChannelStorage(tmp_path)
-    config = make_config(enabled=False)
-    storage.save(config)
-    service = make_service(tmp_path)
-
-    with pytest.raises(ChannelConfigError):
-        await service.update_channel(config.id, unknown_field="value")
-
-
-@pytest.mark.asyncio
-async def test_channel_service_create_rolls_back_when_start_fails(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize("change", ["create", "update", "enable"])
+async def test_a_failed_adapter_start_rolls_back_the_enabling_change(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change: str
 ) -> None:
     storage = ChannelStorage(tmp_path)
+    original = make_config(enabled=False)
+    if change != "create":
+        storage.save(original)
     service = make_service(tmp_path)
-    config = make_config(enabled=True)
-
-    monkeypatch.setattr(service, "_preflight_adapter_start", lambda _config: None)
 
     def fail_start_channel(
         _channel_id: str,
@@ -211,50 +236,28 @@ async def test_channel_service_create_rolls_back_when_start_fails(
     ) -> None:
         raise ChannelConfigError("start failed")
 
-    monkeypatch.setattr(service, "start_channel", fail_start_channel)
-
-    with pytest.raises(ChannelConfigError, match="start failed"):
-        await service.create_channel(config)
-
-    with pytest.raises(ChannelNotFoundError):
-        storage.get(config.id)
-    # The registration written with the config is removed with it.
-    with service.database.read() as connection:
-        assert connection.execute("SELECT COUNT(*) FROM channels").fetchone()[0] == 0
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("via_enable", [False, True], ids=["update", "enable"])
-async def test_channel_service_enabling_rolls_back_when_start_fails(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    via_enable: bool,
-) -> None:
-    storage = ChannelStorage(tmp_path)
-    original = make_config(enabled=False)
-    storage.save(original)
-    service = make_service(tmp_path)
-
     monkeypatch.setattr(service, "_preflight_adapter_start", lambda _config: None)
-
-    def fail_start_channel(
-        _channel_id: str,
-        *,
-        reset_backoff: bool = True,
-        config_override: ChannelConfig | None = None,
-    ) -> None:
-        raise ChannelConfigError("restart failed")
-
     monkeypatch.setattr(service, "start_channel", fail_start_channel)
+    try:
+        with pytest.raises(ChannelConfigError, match="start failed"):
+            if change == "create":
+                await service.create_channel(make_config(enabled=True))
+            elif change == "update":
+                await service.update_channel(original.id, enabled=True)
+            else:
+                await service.enable_channel(original.id)
 
-    with pytest.raises(ChannelConfigError, match="restart failed"):
-        if via_enable:
-            await service.enable_channel(original.id)
+        if change == "create":
+            with pytest.raises(ChannelNotFoundError):
+                storage.get(original.id)
+            # The registration written with the config is removed with it.
+            with service.database.read() as connection:
+                assert connection.execute("SELECT COUNT(*) FROM channels").fetchone()[0] == 0
         else:
-            await service.update_channel(original.id, enabled=True)
-
-    assert storage.get(original.id).to_dict() == original.to_dict()
-    assert service._pending_config_changes == set()
+            assert storage.get(original.id).to_dict() == original.to_dict()
+        assert service._pending_config_changes == set()
+    finally:
+        service.close()
 
 
 @pytest.mark.asyncio
@@ -306,56 +309,16 @@ async def test_a_failed_adapter_rebuild_restores_the_previous_config_and_adapter
         assert service._pending_config_changes == set()
     finally:
         await service.aclose()
+        service.close()
 
 
 @pytest.mark.asyncio
-async def test_channel_service_update_waits_for_adapter_stop_before_restart(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize("change", ["update", "restart"])
+async def test_a_rebuilt_adapter_starts_only_after_the_old_one_stopped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change: str
 ) -> None:
-    storage = ChannelStorage(tmp_path)
     config = make_config(enabled=True)
-    storage.save(config)
-
-    service = make_service(tmp_path)
-    stop_gate = asyncio.Event()
-    lifecycle_events: list[str] = []
-    created: list[DelayedStopAdapter] = []
-
-    monkeypatch.setattr(service, "_preflight_adapter_start", lambda _config: None)
-
-    def create_adapter(_config: ChannelConfig) -> ChannelAdapter:
-        label = "old" if not created else "new"
-        adapter = DelayedStopAdapter(label=label, stop_gate=stop_gate, events=lifecycle_events)
-        created.append(adapter)
-        return adapter
-
-    monkeypatch.setattr(service, "_create_adapter", create_adapter)
-
-    service.start()
-    await asyncio.wait_for(created[0].started.wait(), timeout=1)
-
-    await service.update_channel(config.id, token_env_var="TELEGRAM_BOT_TOKEN_OTHER")
-    await wait_until(lambda: "stop:old:begin" in lifecycle_events)
-
-    assert "start:new" not in lifecycle_events
-
-    stop_gate.set()
-    await wait_until(lambda: "start:new" in lifecycle_events)
-    assert lifecycle_events.index("stop:old:end") < lifecycle_events.index("start:new")
-
-    service.stop()
-
-
-@pytest.mark.asyncio
-async def test_channel_service_restart_rebuilds_only_after_adapter_stop(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    storage = ChannelStorage(tmp_path)
-    config = make_config(enabled=True)
-    storage.save(config)
-
+    ChannelStorage(tmp_path).save(config)
     service = make_service(tmp_path)
     stop_gate = asyncio.Event()
     lifecycle_events: list[str] = []
@@ -367,296 +330,26 @@ async def test_channel_service_restart_rebuilds_only_after_adapter_stop(
         created.append(adapter)
         return adapter
 
-    monkeypatch.setattr(service, "_create_adapter", create_adapter)
-
-    service.start()
-    await asyncio.wait_for(created[0].started.wait(), timeout=1)
-
-    assert await service.restart_channel(config.id) is True
-    await wait_until(lambda: "stop:old:begin" in lifecycle_events)
-    assert "start:new" not in lifecycle_events
-
-    stop_gate.set()
-    await wait_until(lambda: "start:new" in lifecycle_events)
-    assert lifecycle_events.index("stop:old:end") < lifecycle_events.index("start:new")
-
-    service.stop()
-
-
-@pytest.mark.asyncio
-async def test_channel_service_restarts_failed_adapter_with_backoff(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    storage = ChannelStorage(tmp_path)
-    config = make_config(enabled=True)
-    storage.save(config)
-
-    service = make_service(tmp_path)
-    created: list[FailingAdapter] = []
-    starts = 0
-
-    def create_adapter(_config: ChannelConfig) -> ChannelAdapter:
-        nonlocal starts
-        starts += 1
-        adapter = FailingAdapter(fail_on_start=starts == 1)
-        created.append(adapter)
-        return adapter
-
-    delays: list[float] = []
-    original_restart_delay = service._restart_delay_seconds
-
-    def immediate_restart_delay(attempt: int) -> float:
-        delays.append(original_restart_delay(attempt))
-        return 0.0
-
-    monkeypatch.setattr(service, "_create_adapter", create_adapter)
-    monkeypatch.setattr(service, "_restart_delay_seconds", immediate_restart_delay)
-
-    service.start()
-    await wait_until(lambda: len(created) >= 2)
-    await asyncio.wait_for(created[1].started.wait(), timeout=1)
-
-    assert delays == [1.0]
-    assert service.has_active_channels() is True
-    assert config.id not in service._failed_channels
-
-    service.stop()
-    await asyncio.wait_for(created[-1].stopped.wait(), timeout=1)
-    await asyncio.sleep(0)
-
-
-@pytest.mark.asyncio
-async def test_channel_service_keeps_retrying_failed_adapter_after_max_restart_retries(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    storage = ChannelStorage(tmp_path)
-    config = make_config(enabled=True)
-    storage.save(config)
-
-    service = make_service(tmp_path)
-    created: list[FailingAdapter] = []
-
-    def create_adapter(_config: ChannelConfig) -> ChannelAdapter:
-        adapter = FailingAdapter(fail_on_start=True)
-        created.append(adapter)
-        return adapter
-
-    delays: list[float] = []
-    original_restart_delay = service._restart_delay_seconds
-
-    def immediate_restart_delay(attempt: int) -> float:
-        delays.append(original_restart_delay(attempt))
-        return 0.0
-
-    monkeypatch.setattr(service, "_create_adapter", create_adapter)
-    monkeypatch.setattr(service, "_restart_delay_seconds", immediate_restart_delay)
-
-    service.start()
-    # Exhausting the fast-retry budget marks the channel failed …
-    await wait_until(lambda: config.id in service._failed_channels)
-    # … but recovery attempts continue at the capped backoff interval instead
-    # of giving up (a channel is the operator's lifeline and must self-heal).
-    await wait_until(lambda: len(created) >= 7)
-
-    assert delays[:4] == [1.0, 2.0, 4.0, 8.0]
-    assert all(delay >= 16.0 for delay in delays[4:])
-    assert all(delay <= 30.0 for delay in delays)
-    # The raw failure marker stays set while recovery attempts continue; the
-    # public is_failed() view flaps with the in-flight restart task, so the
-    # deterministic assertion is on the marker itself.
-    assert config.id in service._failed_channels
-    assert service._adapter_restart_attempts[config.id] >= 4
-
-    service.stop()
-
-
-@pytest.mark.asyncio
-async def test_channel_service_recovers_and_clears_failed_marker_after_exhausted_retries(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    storage = ChannelStorage(tmp_path)
-    config = make_config(enabled=True)
-    storage.save(config)
-
-    service = make_service(tmp_path)
-    created: list[FailingAdapter] = []
-    starts = 0
-
-    def create_adapter(_config: ChannelConfig) -> ChannelAdapter:
-        nonlocal starts
-        starts += 1
-        adapter = FailingAdapter(fail_on_start=starts <= 4)
-        created.append(adapter)
-        return adapter
-
-    delays: list[float] = []
-    original_restart_delay = service._restart_delay_seconds
-
-    def immediate_restart_delay(attempt: int) -> float:
-        delays.append(original_restart_delay(attempt))
-        return 0.0
-
-    monkeypatch.setattr(service, "_create_adapter", create_adapter)
-    monkeypatch.setattr(service, "_restart_delay_seconds", immediate_restart_delay)
-
-    service.start()
-    await wait_until(lambda: config.id in service._failed_channels)
-    await wait_until(lambda: len(created) >= 5)
-    await asyncio.wait_for(created[4].started.wait(), timeout=1)
-
-    assert delays == [1.0, 2.0, 4.0, 8.0]
-    assert service._is_running(config.id) is True
-    assert service.is_failed(config.id) is False
-    assert service.failure_reason(config.id) is None
-
-    service.stop()
-    await asyncio.wait_for(created[-1].stopped.wait(), timeout=1)
-    await asyncio.sleep(0)
-
-
-@pytest.mark.asyncio
-async def test_channel_service_resets_restart_attempts_after_healthy_run(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr("core.channels.channels._ADAPTER_HEALTHY_RUN_RESET_SECONDS", 0.02)
-    storage = ChannelStorage(tmp_path)
-    config = make_config(enabled=True)
-    storage.save(config)
-
-    service = make_service(tmp_path)
-    created: list[ChannelAdapter] = []
-    blocking: list[BlockingAdapter] = []
-    mode = {"phase": "chronic"}
-
-    def create_adapter(_config: ChannelConfig) -> ChannelAdapter:
-        if mode["phase"] == "chronic":
-            adapter: ChannelAdapter = FailingAdapter(fail_on_start=True)
-        elif mode["phase"] == "healthy-run":
-            adapter = RunThenCrashAdapter(run_seconds=0.05)
-        else:
-            adapter = BlockingAdapter()
-            blocking.append(adapter)
-        created.append(adapter)
-        return adapter
-
-    delays: list[float] = []
-    original_restart_delay = service._restart_delay_seconds
-
-    def immediate_restart_delay(attempt: int) -> float:
-        delays.append(original_restart_delay(attempt))
-        return 0.0
-
-    monkeypatch.setattr(service, "_create_adapter", create_adapter)
-    monkeypatch.setattr(service, "_restart_delay_seconds", immediate_restart_delay)
-
-    service.start()
-    await wait_until(lambda: config.id in service._failed_channels)
-    # Next adapter runs briefly and crashes: that healthy run must reset the
-    # restart-attempt counter …
-    mode["phase"] = "healthy-run"
-    await wait_until(lambda: any(isinstance(a, RunThenCrashAdapter) for a in created))
-    # … so the following restart starts a fresh cycle (delay 1.0 again) and the
-    # blocking adapter keeps it running, clearing the failed marker.
-    mode["phase"] = "blocking"
-    await wait_until(
-        lambda: any(isinstance(a, BlockingAdapter) and a.started.is_set() for a in created)
-    )
-
-    assert delays[-1] == 1.0
-    assert service._adapter_restart_attempts[config.id] == 1
-    assert service.is_failed(config.id) is False
-    assert service._is_running(config.id) is True
-
-    service.stop()
-    await asyncio.wait_for(blocking[-1].stopped.wait(), timeout=1)
-    await asyncio.sleep(0)
-
-
-@pytest.mark.asyncio
-async def test_channel_service_keeps_attempt_count_without_healthy_run(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr("core.channels.channels._ADAPTER_HEALTHY_RUN_RESET_SECONDS", 3600.0)
-    storage = ChannelStorage(tmp_path)
-    config = make_config(enabled=True)
-    storage.save(config)
-
-    service = make_service(tmp_path)
-    created: list[ChannelAdapter] = []
-    blocking: list[BlockingAdapter] = []
-    mode = {"phase": "chronic"}
-
-    def create_adapter(_config: ChannelConfig) -> ChannelAdapter:
-        if mode["phase"] == "chronic":
-            adapter: ChannelAdapter = FailingAdapter(fail_on_start=True)
-        elif mode["phase"] == "short-run":
-            adapter = RunThenCrashAdapter(run_seconds=0.05)
-        else:
-            adapter = BlockingAdapter()
-            blocking.append(adapter)
-        created.append(adapter)
-        return adapter
-
-    delays: list[float] = []
-    original_restart_delay = service._restart_delay_seconds
-
-    def immediate_restart_delay(attempt: int) -> float:
-        delays.append(original_restart_delay(attempt))
-        return 0.0
-
-    monkeypatch.setattr(service, "_create_adapter", create_adapter)
-    monkeypatch.setattr(service, "_restart_delay_seconds", immediate_restart_delay)
-
-    service.start()
-    await wait_until(lambda: config.id in service._failed_channels)
-    # A crash after only a short run is NOT healthy: no attempt-counter reset,
-    # the backoff continues from the chronic cycle instead of restarting at 1.0s.
-    mode["phase"] = "short-run"
-    await wait_until(lambda: any(isinstance(a, RunThenCrashAdapter) for a in created))
-    mode["phase"] = "blocking"
-    await wait_until(
-        lambda: any(isinstance(a, BlockingAdapter) and a.started.is_set() for a in created)
-    )
-
-    assert delays[-1] >= 8.0
-    assert service._adapter_restart_attempts[config.id] >= 5
-
-    service.stop()
-    await asyncio.wait_for(blocking[-1].stopped.wait(), timeout=1)
-    await asyncio.sleep(0)
-
-
-@pytest.mark.asyncio
-async def test_configuration_save_failure_keeps_existing_adapter_running(tmp_path, monkeypatch):
-    storage = ChannelStorage(tmp_path)
-    original = make_config(enabled=True)
-    storage.save(original)
-    service = make_service(tmp_path)
-    monkeypatch.setattr(service, "_is_running", lambda _id: True)
     monkeypatch.setattr(service, "_preflight_adapter_start", lambda _config: None)
+    monkeypatch.setattr(service, "_create_adapter", create_adapter)
+    service.start()
+    try:
+        await asyncio.wait_for(created[0].started.wait(), timeout=1)
 
-    def forbidden_stop(*args, **kwargs):
-        raise AssertionError("a failed save must not stop the running adapter")
+        if change == "update":
+            await service.update_channel(config.id, token_env_var="TELEGRAM_BOT_TOKEN_OTHER")
+        else:
+            assert await service.restart_channel(config.id) is True
+        await wait_until(lambda: "stop:old:begin" in lifecycle_events)
+        assert "start:new" not in lifecycle_events
 
-    def fail_save(*args, **kwargs):
-        raise OSError("disk full")
-
-    monkeypatch.setattr(service, "stop_channel", forbidden_stop)
-    monkeypatch.setattr(service._storage, "save", fail_save)
-    with pytest.raises(OSError, match="disk full"):
-        await service.update_channel(original.id, enabled=False)
-    assert storage.get(original.id).to_dict() == original.to_dict()
-
-
-def test_restart_delay_remains_bounded_after_many_failures(tmp_path):
-    service = make_service(tmp_path)
-    assert service._restart_delay_seconds(1025) <= 30
-    assert service._restart_delay_seconds(1000000) <= 30
+        stop_gate.set()
+        await wait_until(lambda: "start:new" in lifecycle_events)
+        assert lifecycle_events.index("stop:old:end") < lifecycle_events.index("start:new")
+    finally:
+        stop_gate.set()
+        await service.aclose()
+        service.close()
 
 
 @pytest.mark.asyncio
@@ -664,6 +357,7 @@ def test_restart_delay_remains_bounded_after_many_failures(tmp_path):
 async def test_construction_failure_does_not_end_automatic_recovery(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
     fail_initial_construction: bool,
 ) -> None:
     config = make_config(enabled=True)
@@ -671,26 +365,26 @@ async def test_construction_failure_does_not_end_automatic_recovery(
     service = make_service(tmp_path)
     recovered = BlockingAdapter()
     attempts = 0
-    delays: list[float] = []
-    original_delay = service._restart_delay_seconds
 
     def create_adapter(_config: ChannelConfig) -> ChannelAdapter:
         nonlocal attempts
         attempts += 1
         if attempts == 1 and not fail_initial_construction:
-            return FailingAdapter(fail_on_start=True)
+            return CrashingAdapter()
         if attempts <= 3:
             raise ChannelConfigError("credential temporarily unavailable")
         return recovered
 
-    def immediate_delay(attempt: int) -> float:
-        delays.append(original_delay(attempt))
-        return 0.0
-
     monkeypatch.setattr(service, "_create_adapter", create_adapter)
-    monkeypatch.setattr(service, "_restart_delay_seconds", immediate_delay)
-    service.start()
+    delays = _record_restart_delays(service, monkeypatch)
+    with caplog.at_level(logging.ERROR, logger="vbot.channels"):
+        service.start()
     try:
+        if fail_initial_construction:
+            # A constructor failure at startup marks only that Channel failed.
+            assert service.is_failed(config.id)
+            assert service.failure_reason(config.id) == "credential temporarily unavailable"
+            assert "Cannot start channel adapter during service startup" in caplog.text
         await asyncio.wait_for(recovered.started.wait(), timeout=1)
         assert attempts == 4
         assert delays == [1.0, 2.0, 4.0]
@@ -698,6 +392,7 @@ async def test_construction_failure_does_not_end_automatic_recovery(
         assert not service.is_failed(config.id)
     finally:
         await service.aclose()
+        service.close()
 
 
 @pytest.mark.asyncio
@@ -732,27 +427,46 @@ async def test_queued_construction_failure_recovers_after_old_adapter_stops(
         assert attempts == 3
     finally:
         await service.aclose()
+        service.close()
 
 
 @pytest.mark.asyncio
-async def test_disabling_channel_cancels_construction_failure_recovery(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("ending", ["disable", "service-stop"])
+async def test_ending_a_channel_ends_its_construction_failure_recovery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ending: str
 ) -> None:
     config = make_config(enabled=True)
     ChannelStorage(tmp_path).save(config)
     service = make_service(tmp_path)
+    constructions = 0
 
     def fail_construction(_config: ChannelConfig) -> ChannelAdapter:
+        nonlocal constructions
+        constructions += 1
+        if ending == "service-stop" and constructions == 2:
+            # The service stops just after this retry fails, before the retry's
+            # own completion is processed.
+            asyncio.get_running_loop().call_soon(service.stop)
         raise ChannelConfigError("credential temporarily unavailable")
 
     monkeypatch.setattr(service, "_create_adapter", fail_construction)
+    if ending == "service-stop":
+        monkeypatch.setattr(service, "_restart_delay_seconds", lambda _attempt: 0.0)
     service.start()
     try:
         retry = service._adapter_restart_tasks[config.id]
-        await service.disable_channel(config.id)
-        await asyncio.gather(retry, return_exceptions=True)
+        if ending == "disable":
+            await service.disable_channel(config.id)
+            await asyncio.gather(retry, return_exceptions=True)
+            assert retry.cancelled()
+        else:
+            await wait_until(lambda: constructions == 2)
+            await asyncio.gather(retry, return_exceptions=True)
+            await asyncio.sleep(0)
         assert not service._adapter_restart_tasks
+        assert constructions == (1 if ending == "disable" else 2)
         assert not service.is_running(config.id)
         assert not service.is_failed(config.id)
     finally:
         await service.aclose()
+        service.close()
