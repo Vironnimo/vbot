@@ -36,6 +36,7 @@ The logs subsystem exposes application log files from `<data_dir>/logs/` for ins
   - `listLogs()` / `readLogFile()` / `subscribeLogEvents()` in `webui/src/lib/api.js`
   - `webui/src/lib/logsView.js` owns client-side selection/filter/search/sort helpers
   - `webui/src/components/LogsView.svelte` renders the tab and reconnects its dedicated log stream using the latest read cursor
+  - `webui/src/components/logs/LogsEntry.svelte` renders one entry: a one-line summary of `message` with a line count for `continuation`, expandable in place to the full `message` + `continuation` body; its Copy action copies `raw`
 
 ## Conventions
 

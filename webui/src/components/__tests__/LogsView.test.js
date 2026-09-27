@@ -4,7 +4,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 
 import { init } from '../../lib/i18n.js';
-import { TOOLTIP_SHOW_DELAY_MS } from '../../lib/tooltip.js';
 
 const listLogsMock = vi.fn();
 const readLogFileMock = vi.fn();
@@ -445,9 +444,7 @@ describe('LogsView', () => {
     });
     flushSync();
 
-    await waitForCondition(() =>
-      document.body.textContent.includes('Traceback line'),
-    );
+    await waitForCondition(() => logEntryMessages().includes('Failed'));
 
     const rows = Array.from(document.querySelectorAll('.logs-entry'));
     const errorRow = rows.find((row) =>
@@ -455,21 +452,102 @@ describe('LogsView', () => {
     );
 
     expect(rows).toHaveLength(2);
-    expect(rows[0].querySelectorAll('span')).toHaveLength(4);
+    expect(
+      [...rows[1].querySelectorAll('span[class^="logs-entry__"]')].map(
+        (cell) => cell.className.split(' ')[0],
+      ),
+    ).toEqual([
+      'logs-entry__timestamp',
+      'logs-entry__level',
+      'logs-entry__logger',
+      'logs-entry__message',
+      'logs-entry__summary',
+    ]);
     expect(errorRow).toBeTruthy();
-    expect(errorRow?.textContent).toContain('Failed Traceback line');
-    vi.useFakeTimers();
-    const errorMessage = errorRow.querySelector('.logs-entry__message');
-    errorMessage.dispatchEvent(new Event('pointerenter'));
-    await vi.advanceTimersByTimeAsync(TOOLTIP_SHOW_DELAY_MS);
-    flushSync();
-    expect(document.getElementById('app-tooltip')?.textContent).toBe(
-      'Failed\nTraceback line',
-    );
-    errorMessage.dispatchEvent(new Event('pointerleave'));
+    // A multi-line entry shows its header message and a line count; the
+    // continuation stays folded until the row is expanded.
+    expect(
+      errorRow.querySelector('.logs-entry__message').textContent.trim(),
+    ).toMatch(/^Failed\s+\+1 line$/);
+    expect(document.body.textContent).not.toContain('Traceback line');
     expect(document.body.querySelector('select')).toBeNull();
     expect(document.body.textContent).toContain('Live');
     expect(readLogFileMock.mock.calls.length).toBe(initialReadCalls);
+  });
+
+  it('expands an entry in place and keeps it expanded across live appends', async () => {
+    const continuation =
+      'Traceback (most recent call last):\n  File "app.py", line 3, in run';
+    listLogsMock.mockResolvedValue({
+      files: ['2026-05-11'],
+      default_file: '2026-05-11',
+    });
+    readLogFileMock.mockResolvedValue({
+      file: '2026-05-11',
+      entries: [entry({ level: 'error', message: 'Run failed', continuation })],
+      cursor: 'cursor-expand',
+    });
+
+    mountedComponent = mount(LogsView, { target: document.body });
+    flushSync();
+    await waitForCondition(() => streamConnections.length === 1);
+
+    const row = document.querySelector('.logs-entry');
+    const toggle = row.querySelector('.logs-entry__toggle');
+    expect(row.querySelector('.logs-entry__more').textContent).toBe('+2 lines');
+    expect(toggle.getAttribute('aria-label')).toBe('Entry details');
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(row.querySelector('.logs-entry__detail')).toBeNull();
+
+    toggle.click();
+    flushSync();
+    const detail = row.querySelector('.logs-entry__detail');
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    expect(toggle.getAttribute('aria-controls')).toBe(detail.id);
+    expect(detail.tagName).toBe('PRE');
+    expect(detail.textContent).toBe(`Run failed\n${continuation}`);
+
+    // Clicks inside the expanded text are for reading and selecting.
+    detail.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    flushSync();
+    expect(row.querySelector('.logs-entry__detail')).toBeTruthy();
+
+    // Newest first: a live append lands above without collapsing the row.
+    streamConnections[0].emitEvent({
+      type: 'append',
+      file: '2026-05-11',
+      entries: [entry({ message: 'Recovered' })],
+    });
+    flushSync();
+    expect(logEntryMessages()).toEqual(['Recovered', 'Run failed']);
+    const rows = document.querySelectorAll('.logs-entry');
+    expect(rows[1]).toBe(row);
+    expect(row.querySelector('.logs-entry__detail')).toBeTruthy();
+
+    // A drag that selected text in the row is not a toggle.
+    const timestamp = row.querySelector('.logs-entry__timestamp');
+    vi.spyOn(window, 'getSelection').mockReturnValue({
+      toString: () => '09:00',
+    });
+    timestamp.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    flushSync();
+    expect(row.querySelector('.logs-entry__detail')).toBeTruthy();
+
+    // A plain click anywhere on the row toggles it.
+    window.getSelection.mockReturnValue({ toString: () => '' });
+    timestamp.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    flushSync();
+    expect(row.querySelector('.logs-entry__detail')).toBeNull();
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(toggle.hasAttribute('aria-controls')).toBe(false);
+
+    rows[0]
+      .querySelector('.logs-entry__message')
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    flushSync();
+    expect(rows[0].querySelector('.logs-entry__detail').textContent).toBe(
+      'Recovered',
+    );
   });
 
   it('updates the file catalog live without changing a valid selection', async () => {
@@ -590,6 +668,7 @@ describe('LogsView', () => {
     // The full source line is copied verbatim, not the reconstructed/truncated
     // preview shown in the row.
     expect(writeText).toHaveBeenCalledWith(rawLine);
+    expect(document.querySelector('.logs-entry__detail')).toBeNull();
     await waitForCondition(
       () => copyButton.getAttribute('aria-label') === 'Copied',
     );
@@ -759,7 +838,7 @@ function buttonByText(text) {
 }
 
 function logEntryMessages() {
-  return Array.from(document.querySelectorAll('.logs-entry__message')).map(
+  return Array.from(document.querySelectorAll('.logs-entry__summary')).map(
     (element) => element.textContent.trim(),
   );
 }

@@ -4,13 +4,12 @@
   import Dropdown from './Dropdown.svelte';
   import Banner from './ui/Banner.svelte';
   import Button from './ui/Button.svelte';
-  import CopyButton from './ui/CopyButton.svelte';
   import EmptyState from './ui/EmptyState.svelte';
   import StatusChip from './ui/StatusChip.svelte';
+  import LogsEntry from './logs/LogsEntry.svelte';
   import { listLogs, readLogFile, subscribeLogEvents } from '$lib/api.js';
   import { reconnectBackoffDelay } from '$lib/backoff.js';
   import { t } from '$lib/i18n.js';
-  import { tooltip } from '$lib/tooltip.js';
   import {
     LOGS_STREAM_STATUS_CONNECTED,
     LOGS_STREAM_STATUS_CONNECTING,
@@ -377,50 +376,12 @@
     }
   }
 
-  function levelTone(level) {
-    switch (level) {
-      case 'error':
-      case 'critical':
-        return 'logs-entry--error';
-      case 'warn':
-      case 'warning':
-        return 'logs-entry--warn';
-      case 'info':
-        return 'logs-entry--info';
-      default:
-        return 'logs-entry--neutral';
-    }
-  }
-
   function levelLabel(level) {
     if (!level) {
       return t('logs.level.unknown', 'UNKNOWN');
     }
 
     return t(`logs.level.${level}`, level.toUpperCase());
-  }
-
-  function entryBody(entry) {
-    return entry.continuation
-      ? `${entry.message}\n${entry.continuation}`
-      : entry.message;
-  }
-
-  function entryPreview(entry) {
-    return entryBody(entry).replace(/\s+/g, ' ').trim();
-  }
-
-  function entryKey(entry, index) {
-    return `${entry.timestamp}-${entry.logger_name}-${index}`;
-  }
-
-  function entryCopyText(entry) {
-    // Prefer the verbatim source line(s) the backend captured so the clipboard
-    // gets the entry exactly as written to the file; fall back to the visible
-    // body only if an entry somehow lacks it.
-    return typeof entry?.raw === 'string' && entry.raw
-      ? entry.raw
-      : entryBody(entry);
   }
 
   function errorMessageText(error, fallback) {
@@ -656,35 +617,10 @@
       role="list"
       aria-label={t('logs.entries', 'Log entries')}
     >
-      {#each filteredEntries as entry, index (entryKey(entry, index))}
-        <!-- Clipped cells reveal their full text; the row's Copy action
-             carries the verbatim entry. -->
-        <article class={`logs-entry ${levelTone(entry.level)}`} role="listitem">
-          <span class="logs-entry__timestamp">{entry.timestamp || '—'}</span>
-          <span class="logs-entry__level">{levelLabel(entry.level)}</span>
-          <span
-            class="logs-entry__logger"
-            use:tooltip={{
-              text: entry.logger_name,
-              mono: true,
-              whenTruncated: true,
-            }}>{entry.logger_name || t('common.unknown', 'Unknown')}</span
-          >
-          <span
-            class="logs-entry__message"
-            use:tooltip={{
-              text: entryBody(entry),
-              mono: true,
-              whenTruncated: !entry.continuation,
-            }}>{entryPreview(entry)}</span
-          >
-          <CopyButton
-            class="logs-entry__copy"
-            text={entryCopyText(entry)}
-            label={t('logs.copyEntry', 'Copy log line')}
-            copiedLabel={t('logs.copied', 'Copied')}
-          />
-        </article>
+      <!-- Keyed by entry: appends and order changes keep each row, and so its
+           expanded state, in place. -->
+      {#each filteredEntries as entry (entry)}
+        <LogsEntry {entry} levelLabel={levelLabel(entry.level)} />
       {/each}
     </div>
   {/if}
@@ -695,7 +631,8 @@
     /* Fixed width for the logger/domain column so horizontal growth flows into
        the message column instead of widening the gap before each message. Sized
        to fit the longest real `vbot.<domain>` logger names; rarer longer names
-       truncate (full text stays available via the row tooltip and copy). */
+       truncate (the logger tooltip and Copy keep the full text). Consumed by
+       logs/LogsEntry.svelte. */
     --logs-logger-width: 180px;
     display: flex;
     min-width: 0;
@@ -845,147 +782,9 @@
     padding-right: 4px;
   }
 
-  /* Routine rows carry no marker; only warnings and errors get a thin left
-     marker in their level color, and only errors a faint row tint, so a busy
-     file does not turn the whole list amber. */
-  .logs-entry {
-    display: grid;
-    grid-template-columns:
-      minmax(154px, auto) minmax(60px, auto) var(--logs-logger-width)
-      minmax(0, 1fr) auto;
-    align-items: center;
-    gap: 4px 10px;
-    min-width: 0;
-    padding: 1px 10px;
-    border-left: 2px solid transparent;
-  }
-
-  .logs-entry--warn {
-    border-left-color: var(--amber);
-  }
-
-  .logs-entry--error {
-    border-left-color: var(--red);
-    background: var(--red-dim);
-  }
-
-  .logs-entry__timestamp,
-  .logs-entry__logger,
-  .logs-entry__message {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .logs-entry__timestamp,
-  .logs-entry__logger {
-    color: var(--text-lo);
-    font-family: var(--font-mono);
-    font-size: var(--fs-mono-xs);
-  }
-
-  /* Level color: DEBUG and unknown levels stay quiet, INFO is neutral, and
-     only WARN/ERROR carry status color. */
-  .logs-entry__level {
-    justify-self: start;
-    color: var(--text-lo);
-    font-family: var(--font-mono);
-    font-size: var(--fs-mono-xs);
-    font-weight: 600;
-  }
-
-  .logs-entry--info .logs-entry__level {
-    color: var(--text-med);
-  }
-
-  .logs-entry--warn .logs-entry__level {
-    color: var(--amber);
-  }
-
-  .logs-entry--error .logs-entry__level {
-    color: var(--red);
-  }
-
-  .logs-entry__message {
-    color: var(--text-hi);
-    font-family: var(--font-mono);
-    font-size: var(--fs-mono-xs);
-    line-height: 1.4;
-  }
-
-  /* Override the shared button's minimum height as well as its dimensions so
-     the copy control does not stretch dense log rows, even while hidden. */
-  .logs-entry :global(.logs-entry__copy) {
-    width: 24px;
-    height: 24px;
-    min-height: 24px;
-    padding: 2px;
-    justify-self: end;
-    opacity: 0;
-    transition: opacity 120ms ease;
-  }
-
-  .logs-entry:hover :global(.logs-entry__copy),
-  .logs-entry :global(.logs-entry__copy:focus-visible) {
-    opacity: 1;
-  }
-
-  @media (max-width: 1080px) {
-    .logs-entry {
-      grid-template-columns:
-        minmax(140px, auto) minmax(64px, auto) minmax(0, 1fr)
-        auto;
-    }
-
-    .logs-entry__logger {
-      grid-column: 1 / span 2;
-      grid-row: 2;
-      color: var(--text-med);
-    }
-
-    .logs-entry__message {
-      grid-column: 3;
-      grid-row: 1 / span 2;
-      align-self: center;
-    }
-
-    .logs-entry :global(.logs-entry__copy) {
-      grid-column: 4;
-      grid-row: 1 / span 2;
-      align-self: center;
-    }
-  }
-
   @media (max-width: 960px) {
     .logs-view__filters {
       grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-
-    .logs-entry {
-      grid-template-columns: minmax(0, 1fr);
-      gap: 6px;
-      padding: 6px 10px;
-    }
-
-    .logs-entry__message,
-    .logs-entry__logger {
-      grid-column: auto;
-      grid-row: auto;
-    }
-
-    .logs-entry :global(.logs-entry__copy) {
-      grid-column: auto;
-      grid-row: auto;
-      justify-self: start;
-      opacity: 1;
-    }
-
-    .logs-entry__timestamp,
-    .logs-entry__logger,
-    .logs-entry__message {
-      white-space: normal;
-      text-overflow: clip;
     }
   }
 </style>
