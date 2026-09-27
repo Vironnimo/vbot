@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 
-import { init } from '../../lib/i18n.js';
+import { init, t } from '../../lib/i18n.js';
 import { TOOLTIP_SHOW_DELAY_MS } from '../../lib/tooltip.js';
 
 const listSessionsMock = vi.fn(async () => ({ sessions: [] }));
@@ -65,7 +65,7 @@ describe('SessionListDrawer', () => {
 
   it('reloads the session list when the reload token bumps', async () => {
     const { createChatViewParentHarness } =
-      await import('./chatViewParentHarness.svelte.js');
+      await import('./ChatView.parent.support.svelte.js');
     // The harness exposes a reactive counter (`sessionsRefreshToken`) that maps
     // 1:1 to the drawer's `reloadToken` prop.
     const harness = createChatViewParentHarness();
@@ -100,7 +100,7 @@ describe('SessionListDrawer', () => {
 
   it('does not reload on mount before the token ever changes', async () => {
     const { createChatViewParentHarness } =
-      await import('./chatViewParentHarness.svelte.js');
+      await import('./ChatView.parent.support.svelte.js');
     const harness = createChatViewParentHarness();
 
     mountedComponent = mount(SessionListDrawer, {
@@ -123,7 +123,7 @@ describe('SessionListDrawer', () => {
 
   it('reloads once per burst of Session changes that name a listed Agent', async () => {
     const { createChatViewParentHarness } =
-      await import('./chatViewParentHarness.svelte.js');
+      await import('./ChatView.parent.support.svelte.js');
     const harness = createChatViewParentHarness();
     // A signal that predates the drawer is already reflected by its first load.
     harness.pushSessionInvalidation({ agent_id: 'alpha', session_id: 'old' });
@@ -246,7 +246,7 @@ describe('SessionListDrawer', () => {
 
   it('updates a mounted row from live running to unread activity without reloading', async () => {
     const { createChatViewParentHarness } =
-      await import('./chatViewParentHarness.svelte.js');
+      await import('./ChatView.parent.support.svelte.js');
     const harness = createChatViewParentHarness();
     listSessionsMock.mockResolvedValue({
       sessions: [
@@ -393,7 +393,7 @@ describe('SessionListDrawer', () => {
     'refreshes the current list after a pending %s and a change to %s',
     async (operation, transition) => {
       const { createChatViewParentHarness } =
-        await import('./chatViewParentHarness.svelte.js');
+        await import('./ChatView.parent.support.svelte.js');
       const harness = createChatViewParentHarness();
       const changeAgent = transition === 'Agent selection';
       const mutationAgent = changeAgent ? 'alpha' : 'beta';
@@ -940,6 +940,32 @@ describe('SessionListDrawer', () => {
           marker.textContent.trim() === '' && marker.querySelector('svg'),
       ),
     ).toBe(true);
+  });
+
+  it('points to the filters when every listed Session is hidden by default', async () => {
+    listSessionsMock.mockResolvedValue({
+      sessions: [
+        {
+          id: 'subagent-session',
+          created_at: '2026-05-12T00:00:00+00:00',
+          is_subagent_session: true,
+          subagent_parent: { agent_id: 'alpha', session_id: 'user-session' },
+        },
+      ],
+    });
+    mountedComponent = mount(SessionListDrawer, {
+      target: document.body,
+      props: { agentId: 'alpha', currentSessionId: 'user-session' },
+    });
+    flushSync();
+
+    await waitForCondition(() =>
+      document.body.textContent.includes(t('sessions.noImportantTitle')),
+    );
+    expect(document.body.textContent).toContain(
+      t('sessions.noImportantDescription'),
+    );
+    expect(document.querySelector('.session-row')).toBeNull();
   });
 
   it('labels memory and skill reflection sessions with their own markers', async () => {

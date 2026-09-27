@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from 'vitest';
-import { createComposerScope } from './composerScope.svelte.js';
+import { reactiveProps } from './reactiveProps.support.svelte.js';
 import {
   flushSync,
   mount,
@@ -202,7 +202,7 @@ describe('ChatComposer', () => {
   it.each([false, true])(
     'cancels speech on Session changes and ignores stale completion (%s)',
     async (fail) => {
-      const scope = createComposerScope('agent::first');
+      const scope = reactiveProps({ draftKey: 'agent::first' });
       const onTranscriptionError = vi.fn();
       const recorder = {
         start: vi.fn(),

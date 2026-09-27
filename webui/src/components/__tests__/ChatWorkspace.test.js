@@ -1,9 +1,6 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  describe,
-  expect,
-  it,
   applyConnectionSnapshotMock,
   rpcMock,
   createChatRpcMock,
@@ -16,7 +13,6 @@ import {
   setupChatViewTestSuite,
   testChatStateRefs,
 } from './ChatView.support.js';
-import { unmount } from 'svelte';
 import { resetComposerMemory } from '../../lib/composerMemory.js';
 import ChatWorkspace from '../ChatWorkspace.svelte';
 import { reactiveProps } from './reactiveProps.support.svelte.js';
@@ -110,21 +106,17 @@ describe('ChatWorkspace', () => {
       },
       ChatWorkspace,
     );
-    await waitForCondition(() => pane(0)?.textContent.includes('Hello'), 100);
+    await waitForCondition(() => pane(0)?.textContent.includes('Hello'));
     if (!split) return;
     action(0, 'Split view');
-    await waitForCondition(() => button(pane(1), 'Sessions'), 100);
+    await waitForCondition(() => button(pane(1), 'Sessions'));
     action(1, 'Sessions');
-    await waitForCondition(
-      () => pane(1)?.textContent.includes('Second topic'),
-      100,
-    );
+    await waitForCondition(() => pane(1)?.textContent.includes('Second topic'));
     Array.from(pane(1).querySelectorAll('button'))
       .find((el) => el.textContent.includes('Second topic'))
       .click();
-    await waitForCondition(
-      () => pane(1)?.textContent.includes('Second conversation sentinel'),
-      100,
+    await waitForCondition(() =>
+      pane(1)?.textContent.includes('Second conversation sentinel'),
     );
   }
 
@@ -134,18 +126,16 @@ describe('ChatWorkspace', () => {
       await start(false);
       if (index === 1) {
         action(0, 'Split view');
-        await waitForCondition(() => button(pane(1), 'Sessions'), 100);
+        await waitForCondition(() => button(pane(1), 'Sessions'));
       }
       action(index, 'Sessions');
-      await waitForCondition(
-        () => pane(index).querySelector('.session-row__select'),
-        100,
+      await waitForCondition(() =>
+        pane(index).querySelector('.session-row__select'),
       );
       const drawer = pane(index).querySelector('.session-drawer');
       drawer.querySelector('.session-row__select').click();
-      await waitForCondition(
-        () => pane(index).textContent.includes('Second conversation sentinel'),
-        100,
+      await waitForCondition(() =>
+        pane(index).textContent.includes('Second conversation sentinel'),
       );
       expect(pane(index).querySelector('.session-drawer')).toBe(drawer);
       const selectedRow = drawer.querySelector('.session-row__select--active');
@@ -165,7 +155,7 @@ describe('ChatWorkspace', () => {
       if (route === 'preview') {
         mockPreviewOpening();
         pane(0).querySelector('.msg-markdown a').click();
-        await waitForCondition(() => pane(1)?.querySelector('iframe'), 100);
+        await waitForCondition(() => pane(1)?.querySelector('iframe'));
         expect(testChatStateRefs).toHaveLength(1);
       }
       action(0, 'Sessions');
@@ -188,13 +178,13 @@ describe('ChatWorkspace', () => {
       flushSync();
       if (route === 'split') action(0, 'Split view');
       else action(1, 'Back to chat');
-      await waitForCondition(() => button(pane(1), 'Sessions'), 100);
+      await waitForCondition(() => button(pane(1), 'Sessions'));
       expect(pane(1).querySelector('.session-drawer')).toBeNull();
       expect(pane(0).querySelector('.session-drawer')).toBe(firstDrawer);
 
       listSessionsMock.mockClear();
       action(1, 'Sessions');
-      await waitForCondition(() => listSessionsMock.mock.calls.length > 0, 100);
+      await waitForCondition(() => listSessionsMock.mock.calls.length > 0);
       expect(listSessionsMock).toHaveBeenLastCalledWith(
         ['alpha'],
         expect.objectContaining({
@@ -254,7 +244,7 @@ describe('ChatWorkspace', () => {
     }
     action(0, 'Sessions');
     action(0, 'Split view');
-    await waitForCondition(() => button(pane(1), 'Sessions'), 100);
+    await waitForCondition(() => button(pane(1), 'Sessions'));
     openFilters(1);
     button(pane(1), 'All agents').click();
     flushSync();
@@ -263,7 +253,7 @@ describe('ChatWorkspace', () => {
       flushSync();
     }
 
-    await unmount(harness.mountedComponent);
+    await harness.unmount();
     await start(false);
     listSessionsMock.mockClear();
     openFilters(0);
@@ -271,7 +261,7 @@ describe('ChatWorkspace', () => {
     expect(
       switches().map((toggle) => toggle.getAttribute('aria-checked')),
     ).toEqual(Array(5).fill('true'));
-    await waitForCondition(() => listSessionsMock.mock.calls.length > 0, 100);
+    await waitForCondition(() => listSessionsMock.mock.calls.length > 0);
     expect(listSessionsMock).toHaveBeenLastCalledWith(
       ['alpha'],
       expect.objectContaining({
@@ -284,7 +274,7 @@ describe('ChatWorkspace', () => {
     );
     action(0, 'Sessions');
     action(0, 'Split view');
-    await waitForCondition(() => button(pane(1), 'Sessions'), 100);
+    await waitForCondition(() => button(pane(1), 'Sessions'));
     openFilters(1);
     expect(
       switches().map((toggle) => toggle.getAttribute('aria-checked')),
@@ -302,21 +292,22 @@ describe('ChatWorkspace', () => {
     setInputValue(leftInput, 'Left draft sentinel');
     setInputValue(rightInput, 'Right draft sentinel');
     flushSync();
-    action(1, 'Close area');
-    flushSync();
-    expect(pane(1).hidden).toBe(true);
-    expect(pane(0).querySelector('.msg-input')).toBe(leftInput);
-    action(0, 'Split view');
-    flushSync();
+    action(0, 'Close area');
+    expect(pane(0).hidden).toBe(true);
     expect(pane(1).querySelector('.msg-input')).toBe(rightInput);
+    // Focus moves to the remaining area.
+    await waitForCondition(
+      () => document.activeElement === button(pane(1), 'Split view'),
+    );
+    action(1, 'Split view');
+    expect(pane(0).querySelector('.msg-input')).toBe(leftInput);
     expect(leftInput.value).toBe('Left draft sentinel');
     expect(rightInput.value).toBe('Right draft sentinel');
     expect(testChatStateRefs).toHaveLength(2);
     // A new Session in the second pane cannot re-aim the first pane's landing.
     button(pane(1), 'New session').click();
-    await waitForCondition(
-      () => rpcMock.mock.calls.some(([method]) => method === 'session.create'),
-      100,
+    await waitForCondition(() =>
+      rpcMock.mock.calls.some(([method]) => method === 'session.create'),
     );
     expect(testChatStateRefs[0].agents[0].current_session_id).toBe('session-1');
     expect(leftInput.value).toBe('Left draft sentinel');
@@ -331,13 +322,11 @@ describe('ChatWorkspace', () => {
       setInputValue(pane(index).querySelector('.msg-input'), content);
       flushSync();
       pane(index).querySelector('.btn-primary.btn-icon').click();
-      await waitForCondition(
-        () =>
-          rpcMock.mock.calls.some(
-            ([method, params]) =>
-              method === 'chat.stream' && params.content === content,
-          ),
-        100,
+      await waitForCondition(() =>
+        rpcMock.mock.calls.some(
+          ([method, params]) =>
+            method === 'chat.stream' && params.content === content,
+        ),
       );
     }
     const requests = rpcMock.mock.calls
@@ -360,21 +349,21 @@ describe('ChatWorkspace', () => {
   it('keeps one composer for a duplicated Session and transfers its draft on close', async () => {
     rpcMock.mockImplementation(createChatRpcMock());
     harness.mount({ target: document.body }, ChatWorkspace);
-    await waitForCondition(() => pane(0)?.querySelector('.msg-input'), 100);
+    await waitForCondition(() => pane(0)?.querySelector('.msg-input'));
     const firstInput = pane(0).querySelector('.msg-input');
     setInputValue(firstInput, 'Shared Session draft');
     flushSync();
     action(0, 'Split view');
-    await waitForCondition(() => testChatStateRefs.length === 2, 100);
+    await waitForCondition(() => testChatStateRefs.length === 2);
     expect(pane(1).querySelector('.msg-input')).toBeNull();
     action(0, 'Close area');
-    await waitForCondition(() => pane(1).querySelector('.msg-input'), 100);
+    await waitForCondition(() => pane(1).querySelector('.msg-input'));
     const secondInput = pane(1).querySelector('.msg-input');
     expect(secondInput.value).toBe('Shared Session draft');
     setInputValue(secondInput, 'Continued in the right');
     flushSync();
     action(1, 'Split view');
-    await waitForCondition(() => pane(0).querySelector('.msg-input'), 100);
+    await waitForCondition(() => pane(0).querySelector('.msg-input'));
     expect(pane(0).querySelector('.msg-input').value).toBe(
       'Continued in the right',
     );
@@ -388,12 +377,12 @@ describe('ChatWorkspace', () => {
       }),
     );
     harness.mount({ target: document.body }, ChatWorkspace);
-    await waitForCondition(() => pane(0)?.querySelector('.msg-input'), 100);
+    await waitForCondition(() => pane(0)?.querySelector('.msg-input'));
     action(0, 'Split view');
-    await waitForCondition(() => pane(1)?.querySelector('.chat-view'), 100);
-    await waitForCondition(() => button(pane(1), 'New session'), 100);
+    await waitForCondition(() => pane(1)?.querySelector('.chat-view'));
+    await waitForCondition(() => button(pane(1), 'New session'));
     button(pane(1), 'New session').click();
-    await waitForCondition(() => pane(1).querySelector('.msg-input'), 100);
+    await waitForCondition(() => pane(1).querySelector('.msg-input'));
     expect(testChatStateRefs[0].agents[0].current_session_id).toBe('session-1');
     expect(testChatStateRefs[1].agents[0].current_session_id).toBe(
       'created-alpha',
@@ -458,20 +447,20 @@ describe('ChatWorkspace', () => {
       Array.from(pane(index).querySelectorAll('.agent-chips > button')).map(
         (chip) => chip.getAttribute('aria-label'),
       );
-    await waitForCondition(() => chipLabels(0).includes('Beta: Running'), 100);
+    await waitForCondition(() => chipLabels(0).includes('Beta: Running'));
 
     // Beta's Run ends; later traffic pushes its terminal event out of App's
     // bounded window, and Gamma's Run starts outside the retained window.
     props.runServerEvents = [lifecycle('run_completed', 'R1', 'beta', 'b-1')];
     props.activeRuns = [];
-    await waitForCondition(() => !chipLabels(0).includes('Beta: Running'), 100);
+    await waitForCondition(() => !chipLabels(0).includes('Beta: Running'));
     props.runServerEvents = [];
     props.activeRuns = [
       { run_id: 'R2', agent_id: 'gamma', session_id: 'g-1', status: 'running' },
     ];
 
     action(0, 'Split view');
-    await waitForCondition(() => chipLabels(1).includes('Gamma: Running'), 100);
+    await waitForCondition(() => chipLabels(1).includes('Gamma: Running'));
 
     expect(chipLabels(1)).not.toContain('Beta: Running');
   });
@@ -575,12 +564,10 @@ describe('ChatWorkspace', () => {
 
     async function deleteFromDrawer(index, title) {
       action(index, 'Sessions');
-      await waitForCondition(
-        () =>
-          Array.from(pane(index).querySelectorAll('.session-row')).some((row) =>
-            row.textContent.includes(title),
-          ),
-        100,
+      await waitForCondition(() =>
+        Array.from(pane(index).querySelectorAll('.session-row')).some((row) =>
+          row.textContent.includes(title),
+        ),
       );
       Array.from(pane(index).querySelectorAll('.session-row'))
         .find((row) => row.textContent.includes(title))
@@ -611,11 +598,10 @@ describe('ChatWorkspace', () => {
 
     it('lands on the server landing and never reopens the deleted Session', async () => {
       const props = mountDeletableWorkspace();
-      await waitForCondition(() => deletedHistoryReads() > 0, 100);
+      await waitForCondition(() => deletedHistoryReads() > 0);
       await deleteFromDrawer(0, 'First topic');
-      await waitForCondition(
-        () => pane(0).textContent.includes('Second conversation sentinel'),
-        100,
+      await waitForCondition(() =>
+        pane(0).textContent.includes('Second conversation sentinel'),
       );
       const readsAtDeletion = deletedHistoryReads();
 
@@ -627,7 +613,6 @@ describe('ChatWorkspace', () => {
         () =>
           rpcMock.mock.calls.filter(([method]) => method === 'agent.list')
             .length >= 2,
-        100,
       );
       props.sharedAgents = [createAgent()];
       flushSync();
@@ -645,17 +630,16 @@ describe('ChatWorkspace', () => {
 
     it('releases the deleted Session in the other Chat area too', async () => {
       mountDeletableWorkspace();
-      await waitForCondition(() => deletedHistoryReads() > 0, 100);
+      await waitForCondition(() => deletedHistoryReads() > 0);
       action(0, 'Split view');
-      await waitForCondition(() => testChatStateRefs.length === 2, 100);
-      await waitForCondition(() => deletedHistoryReads() > 1, 100);
+      await waitForCondition(() => testChatStateRefs.length === 2);
+      await waitForCondition(() => deletedHistoryReads() > 1);
 
       await deleteFromDrawer(0, 'First topic');
       await waitForCondition(
         () =>
           pane(0).textContent.includes('Second conversation sentinel') &&
           testChatStateRefs[1].agents[0].current_session_id === 'session-2',
-        100,
       );
       const readsAtDeletion = deletedHistoryReads();
 
@@ -668,10 +652,10 @@ describe('ChatWorkspace', () => {
 
     it('follows a Session another window deleted in every area', async () => {
       const props = mountDeletableWorkspace();
-      await waitForCondition(() => deletedHistoryReads() > 0, 100);
+      await waitForCondition(() => deletedHistoryReads() > 0);
       action(0, 'Split view');
-      await waitForCondition(() => testChatStateRefs.length === 2, 100);
-      await waitForCondition(() => deletedHistoryReads() > 1, 100);
+      await waitForCondition(() => testChatStateRefs.length === 2);
+      await waitForCondition(() => deletedHistoryReads() > 1);
       const navigationReports = props.onSessionNavigation.mock.calls.length;
 
       // Another window archived the Session both areas display.
@@ -679,17 +663,13 @@ describe('ChatWorkspace', () => {
       props.sessionDeletion = serverDeletion();
       flushSync();
 
-      await waitForCondition(
-        () =>
-          [0, 1].every(
-            (index) =>
-              pane(index).textContent.includes(
-                'Second conversation sentinel',
-              ) &&
-              testChatStateRefs[index].agents[0].current_session_id ===
-                'session-2',
-          ),
-        100,
+      await waitForCondition(() =>
+        [0, 1].every(
+          (index) =>
+            pane(index).textContent.includes('Second conversation sentinel') &&
+            testChatStateRefs[index].agents[0].current_session_id ===
+              'session-2',
+        ),
       );
       const readsAtDeletion = deletedHistoryReads();
       await settle();
@@ -723,7 +703,7 @@ describe('ChatWorkspace', () => {
         },
         ChatWorkspace,
       );
-      await waitForCondition(() => deletedHistoryReads() > 0, 100);
+      await waitForCondition(() => deletedHistoryReads() > 0);
       await settle();
 
       expect(testChatStateRefs[0].agents[0].current_session_id).toBe(
@@ -744,13 +724,12 @@ describe('ChatWorkspace', () => {
           // The WebSocket echo overtakes the delete response.
           props.sessionDeletion = serverDeletion();
           flushSync();
-          await waitForCondition(
-            () => pane(0).textContent.includes('Second conversation sentinel'),
-            100,
+          await waitForCondition(() =>
+            pane(0).textContent.includes('Second conversation sentinel'),
           );
         },
       });
-      await waitForCondition(() => deletedHistoryReads() > 0, 100);
+      await waitForCondition(() => deletedHistoryReads() > 0);
       const navigationReports = props.onSessionNavigation.mock.calls.length;
 
       await deleteFromDrawer(0, 'First topic');
@@ -759,7 +738,6 @@ describe('ChatWorkspace', () => {
           props.onSessionNavigation.mock.calls.length > navigationReports &&
           document.activeElement?.tagName === 'TEXTAREA' &&
           pane(0).contains(document.activeElement),
-        100,
       );
       const readsAtDeletion = deletedHistoryReads();
       await settle();
@@ -796,7 +774,7 @@ describe('ChatWorkspace', () => {
     expect(localStorage.getItem('vbot.chat.splitRatio')).toBe('50');
   });
 
-  it('keeps area actions inside existing controls and preserves Chat through manual Preview switching', async () => {
+  it('keeps area actions inside existing controls and opens HTML output in the other area without replacing its Chat', async () => {
     await start();
     const chat = pane(1).querySelector('.chat-view');
     const input = chat.querySelector('.msg-input');
@@ -818,13 +796,22 @@ describe('ChatWorkspace', () => {
     }
     mockPreviewOpening();
     pane(0).querySelector('.msg-markdown a').click();
-    await waitForCondition(() => pane(1).querySelector('iframe'), 100);
+    await waitForCondition(() => pane(1).querySelector('iframe'));
+    expect(rpcMock).toHaveBeenCalledWith('file.preview_open', {
+      source: '/api/files/file-token',
+    });
+    expect(pane(1).querySelector('iframe').getAttribute('sandbox')).toBe(
+      'allow-scripts allow-downloads',
+    );
     expect(chat.hidden).toBe(true);
     expect(
       button(pane(1), 'Back to chat').closest('.html-preview__toolbar'),
     ).not.toBeNull();
     action(1, 'Back to chat');
     expect(chat.hidden).toBe(false);
+    expect(pane(1).querySelector('.chat-view')).toBe(chat);
+    expect(chat.textContent).toContain('Second conversation sentinel');
+    expect(testChatStateRefs).toHaveLength(2);
     expect(chat.querySelector('.msg-input')).toBe(input);
     expect(input.value).toBe('Draft survives the content menu');
     action(1, 'Show preview');
@@ -834,44 +821,13 @@ describe('ChatWorkspace', () => {
     ).toBeNull();
   });
 
-  it('restores focus on the remaining area after closing one', async () => {
-    await start();
-    button(pane(0), 'Close area').click();
-    flushSync();
-    expect(pane(0).hidden).toBe(true);
-    await waitForCondition(
-      () => document.activeElement === button(pane(1), 'Split view'),
-      100,
-    );
-  });
-
-  it('opens an HTML output in the other area without replacing its Chat', async () => {
-    await start();
-    mockPreviewOpening();
-    const anchor = pane(0).querySelector('.msg-markdown a');
-    anchor.click();
-    await waitForCondition(() => pane(1).querySelector('iframe'), 100);
-    expect(rpcMock).toHaveBeenCalledWith('file.preview_open', {
-      source: '/api/files/file-token',
-    });
-    expect(pane(1).querySelector('iframe').getAttribute('sandbox')).toBe(
-      'allow-scripts allow-downloads',
-    );
-    const rightChat = pane(1).querySelector('.chat-view');
-    action(1, 'Back to chat');
-    flushSync();
-    expect(pane(1).querySelector('.chat-view')).toBe(rightChat);
-    expect(rightChat.textContent).toContain('Second conversation sentinel');
-    expect(testChatStateRefs).toHaveLength(2);
-  });
-
   it('opens a rendered Agent file output directly from one Chat without a manual Preview entry', async () => {
     await start(false);
     expect(button(pane(0), 'Split view')).toBeTruthy();
     expect(document.querySelector('[role="menu"]')).toBeNull();
     mockPreviewOpening();
     pane(0).querySelector('.msg-markdown a').click();
-    await waitForCondition(() => pane(1)?.querySelector('iframe'), 100);
+    await waitForCondition(() => pane(1)?.querySelector('iframe'));
     expect(pane(0).querySelector('.chat-view').hidden).toBe(false);
     expect(
       pane(1).querySelector('.html-preview input, .html-preview form'),
@@ -882,7 +838,7 @@ describe('ChatWorkspace', () => {
     });
     action(1, 'Close area');
     pane(0).querySelector('.msg-markdown a').click();
-    await waitForCondition(() => !pane(1).hidden, 100);
+    await waitForCondition(() => !pane(1).hidden);
     expect(testChatStateRefs).toHaveLength(1);
   });
 
@@ -906,7 +862,7 @@ describe('ChatWorkspace', () => {
         clientY: 120,
       }),
     );
-    await waitForCondition(() => document.querySelector('[role="menu"]'), 100);
+    await waitForCondition(() => document.querySelector('[role="menu"]'));
     const items = [...document.querySelectorAll('[role="menuitem"]')];
     expect(items).toHaveLength(3);
     expect(trigger.getAttribute('aria-expanded')).toBe('true');
@@ -969,7 +925,6 @@ describe('ChatWorkspace', () => {
       link.dispatchEvent(event);
       await waitForCondition(
         () => document.activeElement?.getAttribute('role') === 'menuitem',
-        100,
       );
       expect(event.defaultPrevented).toBe(true);
       const items = [...document.querySelectorAll('[role="menuitem"]')];
@@ -979,7 +934,7 @@ describe('ChatWorkspace', () => {
         'Download',
       ]);
       items[0].click();
-      await waitForCondition(() => onToast.mock.calls.length > 0, 100);
+      await waitForCondition(() => onToast.mock.calls.length > 0);
       expect(
         accessor === 'desktop' ? setClipboardText : writeText,
       ).toHaveBeenCalledWith(path);
@@ -1013,7 +968,6 @@ describe('ChatWorkspace', () => {
     );
     await waitForCondition(
       () => document.activeElement?.getAttribute('role') === 'menuitem',
-      100,
     );
     const items = [...document.querySelectorAll('[role="menuitem"]')];
     expect(document.activeElement).toBe(items[0]);
@@ -1034,7 +988,7 @@ describe('ChatWorkspace', () => {
         clientY: 120,
       }),
     );
-    await waitForCondition(() => document.querySelector('[role="menu"]'), 100);
+    await waitForCondition(() => document.querySelector('[role="menu"]'));
     document.body.dispatchEvent(new Event('pointerdown', { bubbles: true }));
     flushSync();
     expect(document.querySelector('[role="menu"]')).toBeNull();
@@ -1048,7 +1002,7 @@ describe('ChatWorkspace', () => {
     );
     flushSync();
     document.querySelector('[role="menuitem"]').click();
-    await waitForCondition(() => pane(1)?.querySelector('iframe'), 100);
+    await waitForCondition(() => pane(1)?.querySelector('iframe'));
     expect(document.querySelector('[role="menu"]')).toBeNull();
     expect(rpcMock).toHaveBeenCalledWith('file.preview_open', {
       source: '/api/files/file-token',
