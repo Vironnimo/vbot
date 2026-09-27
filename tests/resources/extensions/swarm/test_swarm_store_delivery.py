@@ -9,13 +9,7 @@ import pytest
 
 from core.sessions import DeliveryReceipt, SessionAddress, TemporarySessionBinding
 from resources.extensions.swarm.store import SwarmStore, SwarmStoreError
-from tests.resources.extensions.swarm_store_helpers import (
-    _swarm,
-    open_swarm_database,
-)
-from tests.resources.extensions.swarm_store_helpers import (
-    store as store,
-)
+from tests.resources.extensions.swarm.swarm_test_support import _swarm, open_swarm_database
 
 
 @pytest.mark.asyncio

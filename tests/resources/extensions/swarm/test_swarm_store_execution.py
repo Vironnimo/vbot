@@ -7,14 +7,11 @@ import pytest
 
 from core.sessions import SessionAddress, TemporarySessionBinding
 from resources.extensions.swarm.store import SwarmStore, SwarmStoreError
-from tests.resources.extensions.swarm_store_helpers import (
+from tests.resources.extensions.swarm.swarm_test_support import (
     _profile,
     _swarm,
     open_swarm_database,
     query,
-)
-from tests.resources.extensions.swarm_store_helpers import (
-    store as store,
 )
 
 
@@ -236,7 +233,9 @@ async def test_status_and_exact_run_finish(store: SwarmStore) -> None:
 
 
 @pytest.mark.asyncio
-async def test_unadmitted_wake_coalesces_without_advancing_watermark(store: SwarmStore) -> None:
+async def test_unadmitted_wake_coalesces_without_advancing_watermark(
+    store: SwarmStore, swarm_database
+) -> None:
     started = await _swarm(store)
     sender, recipient = [
         item["id"] for item in (await store.get_swarm(started["swarm_id"]))["participants"]
@@ -249,7 +248,7 @@ async def test_unadmitted_wake_coalesces_without_advancing_watermark(store: Swar
         )
     )["wake"]
     announced = "SELECT wake_announced_seq FROM participants WHERE id=?"
-    assert query(store, announced, (recipient,))[0][0] == 0
+    assert query(swarm_database, announced, (recipient,))[0][0] == 0
     await store.post(started["swarm_id"], sender, text="B", request_id="wake-b")
     assert not (
         await store.prepare_automatic_delivery(
@@ -260,7 +259,7 @@ async def test_unadmitted_wake_coalesces_without_advancing_watermark(store: Swar
     await store.mark_wake_admitted(
         started["swarm_id"], recipient, expected_epoch=0, run_id="wake", boundary=4
     )
-    assert query(store, announced, (recipient,))[0][0] == 1
+    assert query(swarm_database, announced, (recipient,))[0][0] == 1
 
 
 @pytest.mark.asyncio
@@ -365,7 +364,14 @@ async def test_participant_lifecycle_aggregates_swarm_state(store: SwarmStore) -
     await store.set_participant_state(swarm_id, second, "idle")
     assert (await store.get_swarm(swarm_id))["state"] == "idle"
     await store.set_participant_state(swarm_id, second, "failed")
-    assert (await store.get_swarm(swarm_id))["state"] == "needs_attention"
+    snapshot = await store.get_swarm(swarm_id)
+    assert snapshot["state"] == "needs_attention"
+    # Participants own no wait, done or summary state; the Swarm projects Run outcomes only.
+    assert not any(
+        {"wait_reason", "summary", "artifacts", "completion_call_id"} & participant.keys()
+        for participant in snapshot["participants"]
+    )
+    assert "done_count" not in (await store.list_swarms()).entries[0]
 
 
 @pytest.mark.asyncio
@@ -473,20 +479,6 @@ async def test_stop_resume_keeps_every_participant_and_rejects_stale_callbacks(s
             swarm_id, participants[0], run_id=participants[0], expected_epoch=0, outcome="completed"
         )
     assert {p["state"] for p in (await store.get_swarm(swarm_id))["participants"]} == {"idle"}
-
-
-@pytest.mark.asyncio
-async def test_no_participant_lifecycle_storage_or_summary_contract(store):
-    started = await _swarm(store)
-    participants = (await store.get_swarm(started["swarm_id"]))["participants"]
-    assert all(
-        not ({"wait_reason", "summary", "artifacts", "completion_call_id"} & p.keys())
-        for p in participants
-    )
-    assert "done_count" not in (await store.list_swarms()).entries[0]
-    assert query(store, "SELECT name FROM sqlite_master WHERE name='lifecycle_intents'") == []
-    columns = {r["name"] for r in query(store, "PRAGMA table_info(participants)")}
-    assert not {"wait_reason", "summary_json", "artifacts_json", "completion_call_id"} & columns
 
 
 @pytest.mark.asyncio

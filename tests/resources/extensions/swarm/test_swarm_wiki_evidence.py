@@ -2,9 +2,12 @@
 
 import pytest
 
-from tests.resources.extensions.test_swarm_board import board as board
-from tests.resources.extensions.test_swarm_board import continuation
-from tests.resources.extensions.test_swarm_wiki import create, invoke, stored
+from tests.resources.extensions.swarm.swarm_test_support import (
+    continuation,
+    create,
+    invoke,
+    stored,
+)
 
 _PROSE = (
     "| A7 | The saved document must contain the complete previous or next version, "

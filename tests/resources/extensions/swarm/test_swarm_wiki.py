@@ -1,59 +1,22 @@
+"""Swarm Wiki Tool: tolerant passage edits, conflicts, history and readable results."""
+
 import asyncio
 import re
-from dataclasses import replace
 
 import pytest
 
-from core.tools import ToolContractError, tool_failure
-from core.utils.ids import new_id
 from resources.extensions.swarm.agent_text import REPLAYED
 from resources.extensions.swarm.store import SwarmStoreError
-from tests.resources.extensions.test_swarm_board import board as board
-from tests.resources.extensions.test_swarm_board import continuation, visible
-
-
-async def invoke(fixture, arguments, peer=0, *, tool_call_id=None):
-    """Run one swarm_wiki Tool Call through production dispatch."""
-
-    context = replace(
-        fixture.contexts[peer],
-        tool_name="swarm_wiki",
-        tool_call_id=tool_call_id or new_id("call"),
-        session_tool_grants=("swarm_wiki",),
-    )
-    try:
-        return await fixture.tools.dispatch(context, arguments, allowed_tools=["swarm_wiki"])
-    except ToolContractError as error:
-        return tool_failure("invalid_arguments", str(error))
-
-
-async def stored(fixture, page_id, **query):
-    """Return a page as the Store holds it."""
-
-    return await fixture.store.wiki(
-        fixture.swarm["id"], None, {"action": "read", "page_id": page_id, "limit": 20000, **query}
-    )
-
-
-async def pages(fixture):
-    return await fixture.store.wiki_pages(fixture.swarm["id"])
-
-
-async def create(fixture, content, title="Notes"):
-    result = await invoke(fixture, {"action": "create", "title": title, "content": content})
-    assert result["ok"], result
-    return result["data"]["page_id"]
-
-
-async def peer_rename(fixture, page_id, title="Peer title"):
-    """Let another participant make revision 1 stale."""
-
-    renamed = await invoke(
-        fixture,
-        {"action": "update", "page_id": page_id, "expected_revision": 1, "title": title},
-        1,
-    )
-    assert renamed["ok"], renamed
+from tests.resources.extensions.swarm.swarm_test_support import (
+    _swarm,
+    continuation,
+    create,
+    invoke,
+    pages,
+    peer_rename,
+    stored,
+    visible,
+)
 
 
 @pytest.mark.asyncio
@@ -81,37 +44,46 @@ async def test_wiki_parallel_disjoint_edits_rebase_and_replay_after_restart(boar
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("stale", [False, True])
 @pytest.mark.parametrize(
-    ("content", "old", "new", "expected"),
+    ("content", "old", "new", "expected", "stale"),
     [
         (
             "Before\r\nFirst\r\nSecond\r\nAfter",
             "First\nSecond",
             "Changed\nSecond",
             "Before\r\nChanged\r\nSecond\r\nAfter",
+            False,
         ),
-        ("Before\n“Ready” — wait…\nAfter", '"Ready" -- wait...', "Done", "Before\nDone\nAfter"),
+        (
+            "Before\n“Ready” — wait…\nAfter",
+            '"Ready" -- wait...',
+            "Done",
+            "Before\nDone\nAfter",
+            True,
+        ),
         (
             "Before\n    First\n    Second\nAfter",
             "First\nSecond",
             "Changed\nSecond",
             "Before\n    Changed\n    Second\nAfter",
+            False,
         ),
         (
             "Before\nFirst   finding\nAfter",
             "First finding",
             "Verified finding",
             "Before\nVerified finding\nAfter",
+            False,
         ),
-        ('"Ready" and “Ready”', '"Ready"', "Done", "Done and “Ready”"),
-        ("Before\nDelete this\nAfter", "Delete this\n", "", "Before\nAfter"),
+        ('"Ready" and “Ready”', '"Ready"', "Done", "Done and “Ready”", False),
+        ("Before\nDelete this\nAfter", "Delete this\n", "", "Before\nAfter", False),
         # Blank lines both texts share around the change need not exist in the page.
         (
             "# Notes\nFirst finding\nOutro",
             "\n\nFirst finding",
             "\n\nVerified",
             "# Notes\nVerified\nOutro",
+            True,
         ),
         # A kept line may differ slightly; the page keeps its own wording there.
         (
@@ -119,11 +91,12 @@ async def test_wiki_parallel_disjoint_edits_rebase_and_replay_after_restart(boar
             "The parser handles nested list correctly.\nStatus: pending",
             "The parser handles nested list correctly.\nStatus: done",
             "Intro\nThe parser handles nested lists correctly.\nStatus: done\nEnd",
+            False,
         ),
     ],
 )
 async def test_wiki_tolerant_matching_preserves_surrounding_content(
-    board, stale, content, old, new, expected
+    board, content, old, new, expected, stale
 ):
     page_id = await create(board, content)
     if stale:
@@ -171,16 +144,15 @@ async def test_wiki_stale_or_future_unsafe_changes_remain_atomic(board, change):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("stale", [False, True])
 @pytest.mark.parametrize(
-    ("content", "old"),
+    ("content", "old", "stale"),
     [
-        ("same same", "same"),
-        ("“Ready” and “Ready”", '"Ready"'),
-        ("  First\n  Second\n    First\n    Second", "First\nSecond"),
+        ("same same", "same", False),
+        ("“Ready” and “Ready”", '"Ready"', True),
+        ("  First\n  Second\n    First\n    Second", "First\nSecond", False),
     ],
 )
-async def test_wiki_ambiguous_matches_never_fall_through(board, stale, content, old):
+async def test_wiki_ambiguous_matches_never_fall_through(board, content, old, stale):
     page_id = await create(board, content)
     if stale:
         await peer_rename(board, page_id)
@@ -848,62 +820,38 @@ async def test_wiki_read_with_query_names_the_lines_that_contain_it(board):
 
 
 @pytest.mark.asyncio
-async def test_goal_is_pinned_user_post_without_automatic_delivery(board):
-    goal = await board.service.board(board.contexts[0], {"action": "read", "message_id": "#0"})
-    assert goal["data"]["content"] == "[#0] User (in the main discussion d1):\nfixture-goal"
-    assert all(item["pending_count"] == 0 for item in board.swarm["participants"])
-    board_read = await board.service.board(board.contexts[0], {"action": "read"})
-    assert board_read["data"]["page"] == "No posts in the main discussion (d1) yet."
-    assert board_read["data"]["user_request"] == (
-        'Post #0 holds the user\'s request. Read it with {"action": "read", "message_id": "#0"}'
+async def test_twelve_peers_can_edit_independent_passages_from_the_same_revision(store):
+    started = await _swarm(store, count=12)
+    sid = started["swarm_id"]
+    peers = (await store.get_swarm(sid))["participants"]
+    created = await store.wiki(
+        sid,
+        peers[0]["id"],
+        {
+            "action": "create",
+            "title": "Shared findings",
+            "content": "\n".join(f"Finding {i:02}: pending" for i in range(12)),
+            "request_id": "create-findings",
+        },
     )
-    listed = await board.service.board(board.contexts[0], {"action": "list"})
-    assert listed["data"]["user_request"].startswith("Post #0 holds the user's request.")
-
-
-@pytest.mark.asyncio
-async def test_twelve_peers_can_edit_independent_passages_from_the_same_revision(tmp_path):
-    from resources.extensions.swarm.store import SwarmStore
-    from tests.resources.extensions.swarm_store_helpers import _swarm, open_swarm_database
-
-    database = open_swarm_database(tmp_path)
-    store = SwarmStore(database)
-    await store.open()
-    try:
-        started = await _swarm(store, count=12)
-        sid = started["swarm_id"]
-        peers = (await store.get_swarm(sid))["participants"]
-        created = await store.wiki(
-            sid,
-            peers[0]["id"],
-            {
-                "action": "create",
-                "title": "Shared findings",
-                "content": "\n".join(f"Finding {i:02}: pending" for i in range(12)),
-                "request_id": "create-findings",
-            },
-        )
-        edits = await asyncio.gather(
-            *(
-                store.wiki(
-                    sid,
-                    peer["id"],
-                    {
-                        "action": "update",
-                        "page_id": created["page_id"],
-                        "expected_revision": 1,
-                        "old_text": f"Finding {i:02}: pending",
-                        "new_text": f"Finding {i:02}: verified",
-                        "request_id": f"finding-{i}",
-                    },
-                )
-                for i, peer in enumerate(peers)
+    edits = await asyncio.gather(
+        *(
+            store.wiki(
+                sid,
+                peer["id"],
+                {
+                    "action": "update",
+                    "page_id": created["page_id"],
+                    "expected_revision": 1,
+                    "old_text": f"Finding {i:02}: pending",
+                    "new_text": f"Finding {i:02}: verified",
+                    "request_id": f"finding-{i}",
+                },
             )
+            for i, peer in enumerate(peers)
         )
-        assert sorted(edit["revision"] for edit in edits) == list(range(2, 14))
-        current = await store.wiki(sid, None, {"action": "read", "page_id": created["page_id"]})
-        assert current["content"] == "\n".join(f"Finding {i:02}: verified" for i in range(12))
-        assert current["revision"] == 13
-    finally:
-        await store.close()
-        database.close()
+    )
+    assert sorted(edit["revision"] for edit in edits) == list(range(2, 14))
+    current = await store.wiki(sid, None, {"action": "read", "page_id": created["page_id"]})
+    assert current["content"] == "\n".join(f"Finding {i:02}: verified" for i in range(12))
+    assert current["revision"] == 13

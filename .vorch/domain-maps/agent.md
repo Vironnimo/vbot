@@ -29,14 +29,15 @@ Owner-managed temporary Agents resolve through `AgentResolver.resolve_temporary_
 `TemporaryExecutionGroups.delete_group` requires a closed group and current
 registration, waits for draining, deletes its bound participant Sessions through
 the Session manager, and releases its in-memory group. Repeated deletion is safe;
-other owners and groups are outside its scope (`test_swarm_board.py`).
+other owners and groups are outside its scope (`test_swarm_operations.py`).
 
 Temporary configurations and persisted bindings carry optional `prompt_blocks`:
 `None` inherits the normal layout; an explicit list selects all allowed System
 Prompt contributions. Prompts owns its assembly semantics. Continuation input may
 be empty so an owner can retain a canonical admission receipt without adding
 guidance to the Model request; initial input must still be non-empty.
-Evidence: `temporary.py`, `test_temporary.py`, `test_swarm_lifecycle.py`.
+Evidence: `temporary.py`, `test_temporary.py`, `test_swarm_start.py`,
+`test_swarm_stop_resume.py`.
 
 They also carry an optional `compaction_policy`: `None` inherits the global
 Compaction Policy; a dict is validated and normalized as one complete Policy by the

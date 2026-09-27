@@ -13,13 +13,10 @@ from core.database import DatabaseUnavailableError
 from core.sessions import SessionAddress, TemporarySessionBinding
 from resources.extensions.swarm._participant_names import _PARTICIPANT_NAMES
 from resources.extensions.swarm.store import SwarmDatabase, SwarmStore, SwarmStoreError
-from tests.resources.extensions.swarm_store_helpers import (
+from tests.resources.extensions.swarm.swarm_test_support import (
     _profile,
     _swarm,
     open_swarm_database,
-)
-from tests.resources.extensions.swarm_store_helpers import (
-    store as store,
 )
 
 

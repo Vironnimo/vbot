@@ -21,7 +21,7 @@ from scripts.converters.persistence_generation_1._context import (
     ConversionError,
 )
 from scripts.converters.persistence_generation_1.swarm import AREA, convert
-from tests.resources.extensions.swarm_store_helpers import _swarm, open_swarm_database
+from tests.resources.extensions.swarm.swarm_test_support import _swarm, open_swarm_database
 from tests.scripts.converters.persistence_generation_1.legacy_schema_support import (
     LEGACY_SWARM_DDL,
     create_legacy_database,
