@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -35,14 +36,29 @@ def _staged_content(root: Path, path: str) -> str:
     return _git(root, "show", f":{path}")
 
 
-def test_fully_staged_file_is_fixed_and_restaged(repo: Path) -> None:
-    (repo / "module.py").write_text(UNFORMATTED)
-    _git(repo, "add", "module.py")
+def test_fixes_are_restaged_only_for_fully_staged_files(
+    impact_project: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # A project with test-impact data: the test step finds no affected test.
+    # Another session's unstaged edit of a committed file must stay as it is.
+    _write(impact_project, "other.py", FORMATTED)
+    _git(impact_project, "add", "other.py")
+    _git(impact_project, "commit", "-q", "-m", "other", "--no-verify")
+    _write(impact_project, "other.py", UNFORMATTED)
+    _write(impact_project, "staged.py", UNFORMATTED)
+    _git(impact_project, "add", "staged.py")
 
-    assert commit_check.main(repo) == 0
+    assert commit_check.main(impact_project) == 0
 
-    assert (repo / "module.py").read_text() == FORMATTED
-    assert _staged_content(repo, "module.py") == FORMATTED
+    assert (impact_project / "staged.py").read_text() == FORMATTED
+    assert _staged_content(impact_project, "staged.py") == FORMATTED
+    assert (impact_project / "other.py").read_text() == UNFORMATTED
+    assert _git(impact_project, "diff", "--cached", "--name-only").split() == ["staged.py"]
+    assert "FIXED and re-staged" in capsys.readouterr().out
+
+    # Checking the fixed commit again finds nothing to fix.
+    assert commit_check.main(impact_project) == 0
+    assert "FIXED" not in capsys.readouterr().out
 
 
 def test_partially_staged_file_is_left_alone_and_blocks(repo: Path) -> None:
@@ -55,21 +71,6 @@ def test_partially_staged_file_is_left_alone_and_blocks(repo: Path) -> None:
 
     assert (repo / "module.py").read_text() == work_in_progress
     assert _staged_content(repo, "module.py") == UNFORMATTED
-
-
-def test_unstaged_work_of_another_file_is_not_touched(repo: Path) -> None:
-    (repo / "staged.py").write_text(FORMATTED)
-    (repo / "other.py").write_text(FORMATTED)
-    _git(repo, "add", ".")
-    _git(repo, "commit", "-q", "-m", "base", "--no-verify")
-    (repo / "staged.py").write_text(FORMATTED + "extra = 1\n")
-    _git(repo, "add", "staged.py")
-    (repo / "other.py").write_text(UNFORMATTED)
-
-    assert commit_check.main(repo) == 0
-
-    assert (repo / "other.py").read_text() == UNFORMATTED
-    assert _git(repo, "diff", "--cached", "--name-only").split() == ["staged.py"]
 
 
 def test_mypy_errors_block_unless_in_unstaged_work_in_progress() -> None:
@@ -186,6 +187,27 @@ def _check_tests(root: Path) -> dict[str, tuple[bool, str]]:
     changed = sorted({*commit_check.staged_files(root), *commit_check.staged_deletions(root)})
     results = commit_check.check_tests(root, changed, commit_check.dirty_files(root))
     return {result.status: (result.blocking, result.details) for result in results}
+
+
+def test_a_checkout_without_test_impact_data_runs_the_complete_suite(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The pytest command is recorded instead of started.
+    commands: list[list[str]] = []
+
+    def run(command: list[str], cwd: Path, env: dict[str, str] | None = None) -> Any:
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(commit_check, "_run", run)
+    _write(repo, "module.py", FORMATTED)
+    _git(repo, "add", "module.py")
+
+    assert _check_tests(repo) == {"PASS": (False, "")}
+
+    [command] = commands
+    assert command[-2:] == ["-n", "auto"]
+    assert "no usable test-impact data" in capsys.readouterr().out
 
 
 def test_failure_caused_by_the_staged_change_blocks(impact_project: Path) -> None:

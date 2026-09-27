@@ -401,6 +401,8 @@ class LegacySessionStore:
         self.path = path
         self.connection = sqlite3.connect(path, isolation_level=None)
         self.connection.row_factory = sqlite3.Row
+        # A source needs no crash durability, and this setting is not stored in the file.
+        self.connection.execute("PRAGMA synchronous = OFF")
         self.connection.execute(f"PRAGMA journal_mode = {journal_mode}")
         self.connection.execute("PRAGMA foreign_keys = ON")
         self.connection.executescript(LEGACY_SESSIONS_DDL)

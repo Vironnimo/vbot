@@ -170,17 +170,20 @@ def data_dir(tmp_path: Path) -> Path:
     return root
 
 
-def test_dry_run_verifies_everything_and_leaves_the_data_directory_unchanged(
-    data_dir: Path,
+def test_a_dry_run_verifies_everything_reports_and_leaves_the_data_directory_unchanged(
+    data_dir: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     _legacy_data_dir(data_dir)
     before = _files(data_dir)
+    report_path = tmp_path / "report.json"
 
-    report = convert_data_directory(data_dir, dry_run=True)
+    assert main([str(data_dir), "--dry-run", "--report", str(report_path)]) == 0
 
     after = _files(data_dir)
     after.pop(_LOCK_FILE, None)
     assert after == before
+    assert str(data_dir) in capsys.readouterr().out
+    report = json.loads(report_path.read_text(encoding="utf-8"))
     assert report["result"] == "verified"
     assert report["areas"]["sessions"]["sessions"] == 2
     assert report["areas"]["sessions"]["usage_provenance_derived"] == 1
@@ -313,18 +316,6 @@ def test_conversion_preserves_oauth_and_relocated_document_permissions(
             assert json.loads(installed.read_text(encoding="utf-8"))["format_version"] == 1
         assert untouched.read_bytes() == original_bytes
         assert stat.S_IMODE(untouched.stat().st_mode) == original_mode
-
-
-def test_the_cli_prints_a_summary_and_writes_the_report(
-    data_dir: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    _legacy_data_dir(data_dir)
-    report_path = tmp_path / "report.json"
-
-    assert main([str(data_dir), "--dry-run", "--report", str(report_path)]) == 0
-
-    assert json.loads(report_path.read_text(encoding="utf-8"))["result"] == "verified"
-    assert str(data_dir) in capsys.readouterr().out
 
 
 def test_a_running_server_is_refused(data_dir: Path) -> None:
@@ -463,16 +454,17 @@ def test_an_interrupted_install_keeps_vbot_out_and_finishes_when_run_again(
     data_dir: Path, monkeypatch: pytest.MonkeyPatch, phase: str
 ) -> None:
     histories = _legacy_data_dir(data_dir)
-    moved_aside = len(convert_data_directory(data_dir, dry_run=True)["install"]["moved_aside"])
-    failing_move = 3 if phase == "moving files aside" else moved_aside + 3
+    backup = data_dir / "pre-generation-1"
     moves = 0
     real_move = _install._move
 
     def move_then_fail(source: Path, target: Path, relative: str) -> None:
+        # Files move aside into the backup first; staged files are installed after.
         nonlocal moves
-        moves += 1
-        if moves == failing_move:
-            raise InstallError(f"{relative} could not be moved: simulated crash")
+        if target.is_relative_to(backup) == (phase == "moving files aside"):
+            moves += 1
+            if moves == 3:
+                raise InstallError(f"{relative} could not be moved: simulated crash")
         real_move(source, target, relative)
 
     monkeypatch.setattr(_install, "_move", move_then_fail)

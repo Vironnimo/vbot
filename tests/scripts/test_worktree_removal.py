@@ -195,9 +195,8 @@ def test_cmd_delete_reports_data_directory_removal_failure(tmp_path, monkeypatch
 
 
 @pytest.mark.parametrize("ownership", ["legacy", "different-token", "different-repository"])
-@pytest.mark.parametrize("force", [False, True])
 def test_cmd_delete_preserves_unowned_data_without_stopping_services(
-    real_repo, monkeypatch, capsys, ownership, force
+    real_repo, monkeypatch, capsys, ownership
 ):
     module = _load_worktree_module()
     _patch_repo_globals(monkeypatch, module, real_repo)
@@ -217,7 +216,8 @@ def test_cmd_delete_preserves_unowned_data_without_stopping_services(
     stop_calls = []
     monkeypatch.setattr(module, "_stop_worktree_services", lambda *args: stop_calls.append(args))
 
-    assert module.cmd_delete(argparse.Namespace(name=name, force=force)) == 0
+    # Even a forced delete, which discards uncommitted work, keeps the data.
+    assert module.cmd_delete(argparse.Namespace(name=name, force=True)) == 0
 
     assert not worktree_path.exists()
     assert sentinel.read_text(encoding="utf-8") == '{"server_port": 8421}'
@@ -282,135 +282,39 @@ def test_cmd_delete_rechecks_ownership_after_git_removal(real_repo, monkeypatch,
     assert "data-status: preserved (ownership unverified)" in capsys.readouterr().out
 
 
-def test_cmd_delete_missing_marker_same_name_branch_skips_branch_delete(tmp_path, monkeypatch):
-    module = _load_worktree_module()
-    monkeypatch.setattr(module, "WORKTREES_DIR", tmp_path / ".worktrees")
-
-    name = "missing-marker"
-    worktree_path = module.WORKTREES_DIR / name
-    _make_checkout(worktree_path)
-
-    commands = []
-
-    def fake_run_command(command, *, cwd=None):
-        commands.append(command)
-        return 0, ""
-
-    monkeypatch.setattr(module, "_run_command", fake_run_command)
-    monkeypatch.setattr(module, "_read_worktree_branch_name", lambda _path: name)
-    monkeypatch.setattr(module.shutil, "rmtree", lambda *_args, **_kwargs: None)
-
-    result = module.cmd_delete(argparse.Namespace(name=name, force=False))
-
-    assert result == 0
-    assert commands == [["git", "worktree", "remove", str(worktree_path)]]
-
-
-def test_cmd_delete_tolerates_non_object_marker_and_skips_branch_delete(tmp_path, monkeypatch):
-    module = _load_worktree_module()
-    monkeypatch.setattr(module, "WORKTREES_DIR", tmp_path / ".worktrees")
-
-    name = "existing-branch"
-    worktree_path = module.WORKTREES_DIR / name
-    _make_checkout(worktree_path)
-
-    (worktree_path / module.WORKTREE_FILE_NAME).write_text(
-        json.dumps(["not", "an", "object"]),
-        encoding="utf-8",
-    )
-
-    commands = []
-
-    def fake_run_command(command, *, cwd=None):
-        commands.append(command)
-        return 0, ""
-
-    monkeypatch.setattr(module, "_run_command", fake_run_command)
-    monkeypatch.setattr(module, "_read_worktree_branch_name", lambda _path: name)
-    monkeypatch.setattr(module.shutil, "rmtree", lambda *_args, **_kwargs: None)
-
-    result = module.cmd_delete(argparse.Namespace(name=name, force=False))
-
-    assert result == 0
-    assert commands == [
-        ["git", "-C", str(worktree_path), "clean", "-f", "--", module.WORKTREE_FILE_NAME],
-        ["git", "worktree", "remove", str(worktree_path)],
-    ]
-
-
-def test_cmd_delete_malformed_marker_same_name_branch_skips_branch_delete(tmp_path, monkeypatch):
-    module = _load_worktree_module()
-    monkeypatch.setattr(module, "WORKTREES_DIR", tmp_path / ".worktrees")
-
-    name = "bad-marker"
-    worktree_path = module.WORKTREES_DIR / name
-    _make_checkout(worktree_path)
-
-    (worktree_path / module.WORKTREE_FILE_NAME).write_text("{not-json", encoding="utf-8")
-
-    commands = []
-
-    def fake_run_command(command, *, cwd=None):
-        commands.append(command)
-        return 0, ""
-
-    monkeypatch.setattr(module, "_run_command", fake_run_command)
-    monkeypatch.setattr(module, "_read_worktree_branch_name", lambda _path: name)
-    monkeypatch.setattr(module.shutil, "rmtree", lambda *_args, **_kwargs: None)
-
-    result = module.cmd_delete(argparse.Namespace(name=name, force=False))
-
-    assert result == 0
-    assert commands == [
-        ["git", "-C", str(worktree_path), "clean", "-f", "--", module.WORKTREE_FILE_NAME],
-        ["git", "worktree", "remove", str(worktree_path)],
-    ]
-
-
-def test_cmd_delete_force_skips_marker_cleanup(tmp_path, monkeypatch):
-    module = _load_worktree_module()
-    monkeypatch.setattr(module, "WORKTREES_DIR", tmp_path / ".worktrees")
-
-    name = "force-remove"
-    worktree_path = module.WORKTREES_DIR / name
-    _make_checkout(worktree_path)
-
-    (worktree_path / module.WORKTREE_FILE_NAME).write_text(
-        json.dumps({"data_dir": f"~/.vbot-{name}", "managed_branch": False}),
-        encoding="utf-8",
-    )
-
-    commands = []
-
-    def fake_run_command(command, *, cwd=None):
-        commands.append(command)
-        return 0, ""
-
-    monkeypatch.setattr(module, "_run_command", fake_run_command)
-    monkeypatch.setattr(module, "_read_worktree_branch_name", lambda _path: "main")
-    monkeypatch.setattr(module.shutil, "rmtree", lambda *_args, **_kwargs: None)
-
-    result = module.cmd_delete(argparse.Namespace(name=name, force=True))
-
-    assert result == 0
-    assert commands == [["git", "worktree", "remove", "--force", str(worktree_path)]]
-
-
-def test_cmd_delete_skips_branch_delete_when_marker_declares_unmanaged_branch(
-    tmp_path, monkeypatch
+@pytest.mark.parametrize(
+    ("marker", "branch", "force", "expected"),
+    [
+        pytest.param(None, "task", False, ["remove"], id="missing-marker"),
+        pytest.param(
+            '["not", "an", "object"]', "task", False, ["clean", "remove"], id="non-object"
+        ),
+        pytest.param("{not-json", "task", False, ["clean", "remove"], id="malformed"),
+        pytest.param(
+            '{"managed_branch": false}', "task", False, ["clean", "remove"], id="unmanaged-branch"
+        ),
+        pytest.param(
+            '{"managed_branch": true}', "other", False, ["clean", "remove"], id="renamed-branch"
+        ),
+        pytest.param(
+            '{"managed_branch": true}',
+            "task",
+            False,
+            ["clean", "remove", "delete-branch"],
+            id="managed-branch",
+        ),
+        pytest.param('{"managed_branch": false}', "task", True, ["force-remove"], id="force"),
+    ],
+)
+def test_cmd_delete_deletes_only_the_branch_a_valid_marker_manages(
+    tmp_path, monkeypatch, marker, branch, force, expected
 ):
     module = _load_worktree_module()
     monkeypatch.setattr(module, "WORKTREES_DIR", tmp_path / ".worktrees")
-
-    name = "from-existing"
-    worktree_path = module.WORKTREES_DIR / name
-    _make_checkout(worktree_path)
-
-    (worktree_path / module.WORKTREE_FILE_NAME).write_text(
-        json.dumps({"data_dir": f"~/.vbot-{name}", "managed_branch": False}),
-        encoding="utf-8",
-    )
-
+    monkeypatch.setattr(module.Path, "home", staticmethod(lambda: tmp_path / "home"))
+    worktree_path = _make_checkout(module.WORKTREES_DIR / "task")
+    if marker is not None:
+        (worktree_path / module.WORKTREE_FILE_NAME).write_text(marker, encoding="utf-8")
     commands = []
 
     def fake_run_command(command, *, cwd=None):
@@ -418,49 +322,18 @@ def test_cmd_delete_skips_branch_delete_when_marker_declares_unmanaged_branch(
         return 0, ""
 
     monkeypatch.setattr(module, "_run_command", fake_run_command)
-    monkeypatch.setattr(module, "_read_worktree_branch_name", lambda _path: name)
+    monkeypatch.setattr(module, "_read_worktree_branch_name", lambda _path: branch)
     monkeypatch.setattr(module.shutil, "rmtree", lambda *_args, **_kwargs: None)
 
-    result = module.cmd_delete(argparse.Namespace(name=name, force=False))
+    assert module.cmd_delete(argparse.Namespace(name="task", force=force)) == 0
 
-    assert result == 0
-    assert commands == [
-        ["git", "-C", str(worktree_path), "clean", "-f", "--", module.WORKTREE_FILE_NAME],
-        ["git", "worktree", "remove", str(worktree_path)],
-    ]
-
-
-def test_cmd_delete_deletes_branch_when_marker_declares_managed_branch(tmp_path, monkeypatch):
-    module = _load_worktree_module()
-    monkeypatch.setattr(module, "WORKTREES_DIR", tmp_path / ".worktrees")
-
-    name = "managed"
-    worktree_path = module.WORKTREES_DIR / name
-    _make_checkout(worktree_path)
-
-    (worktree_path / module.WORKTREE_FILE_NAME).write_text(
-        json.dumps({"data_dir": f"~/.vbot-{name}", "managed_branch": True}),
-        encoding="utf-8",
-    )
-
-    commands = []
-
-    def fake_run_command(command, *, cwd=None):
-        commands.append(command)
-        return 0, ""
-
-    monkeypatch.setattr(module, "_run_command", fake_run_command)
-    monkeypatch.setattr(module, "_read_worktree_branch_name", lambda _path: name)
-    monkeypatch.setattr(module.shutil, "rmtree", lambda *_args, **_kwargs: None)
-
-    result = module.cmd_delete(argparse.Namespace(name=name, force=False))
-
-    assert result == 0
-    assert commands == [
-        ["git", "-C", str(worktree_path), "clean", "-f", "--", module.WORKTREE_FILE_NAME],
-        ["git", "worktree", "remove", str(worktree_path)],
-        ["git", "branch", "-d", name],
-    ]
+    known = {
+        "clean": ["git", "-C", str(worktree_path), "clean", "-f", "--", module.WORKTREE_FILE_NAME],
+        "remove": ["git", "worktree", "remove", str(worktree_path)],
+        "force-remove": ["git", "worktree", "remove", "--force", str(worktree_path)],
+        "delete-branch": ["git", "branch", "-d", "task"],
+    }
+    assert commands == [known[step] for step in expected]
 
 
 def test_remove_directory_tree_clears_readonly_files(tmp_path):
