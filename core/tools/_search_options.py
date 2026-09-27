@@ -486,6 +486,12 @@ OPTIONS = (
         content=True,
     ),
     _option(
+        "--no-filename -N --no-line-number",
+        "display",
+        "Results always name each match's file and line; accepted without changing results.",
+        content=True,
+    ),
+    _option(
         "-r -R --recursive -I",
         "satisfied",
         "Recursive search that skips binary files is the default; accepted without changes.",
@@ -626,6 +632,10 @@ def parse_options(tokens: list[str], *, action: str, kind: str) -> SearchOptions
                         )
                 value = option.value
             _validate_value(option, value)
+            if option.key == "display":
+                result.notes.append(
+                    f"{name} was ignored: results always name each match's file and line."
+                )
             result.entries.append((option, value))
     if (
         action == "paths"

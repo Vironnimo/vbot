@@ -73,7 +73,9 @@ command-line habits when their meaning is exact (`search_files.py` ->
 keep ripgrep's case (`-c` counts, `-C` is context). A `pattern` list becomes
 repeated `-e`. Unclear values (for example `ignore_case: "maybe"`), conflicting
 aliases, and unknown fields reject. Inside `args`, grep spellings keep their
-meaning: `-r`/`-R`/`-I` are accepted defaults, `--include`/`--exclude`/
+meaning: `-r`/`-R`/`-I` are accepted defaults, the display flags
+`--no-filename`, `-N` and `--no-line-number` run the search with a `note` that
+results always name each match's file and line (Sessions, 2026-09), `--include`/`--exclude`/
 `--exclude-dir` become `-g` filters, and `-E` followed by a non-encoding is grep's
 extended-regex flag rather than ripgrep's encoding option. Arguments such as
 `true`, `false`, `rg`, literal quotes, and shell syntax remain search payloads,
