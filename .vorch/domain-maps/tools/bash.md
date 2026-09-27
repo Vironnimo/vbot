@@ -39,7 +39,7 @@ Windows PATH refresh expands registry values marked `REG_EXPAND_SZ` before combi
 
 - Accessors can request handoff of an already-running foreground Bash through its exact Run and Tool Call. The handler advertises this capability only after spawn and only when the existing depth policy permits background work. The foreground loop consumes the request through the existing handoff result, process tracking, timeout, and completion watcher; it never starts another command. Cancellation or a process that already finished wins over handoff. Coverage: `tests/core/tools/test_bash.py`, `tests/core/runs/test_runs_tool_cancellation.py`.
 
-- Combined `output` and the streamed stdout/stderr Run events are ANSI-stripped - terminal color/escape sequences are removed before the text reaches the model or UI. Stripping happens once in `ProcessManager` (shared `core/utils/ansi.strip_ansi`); see `process.md`.
+- Combined `output` and the streamed stdout/stderr Run events are ANSI-stripped - terminal color/escape sequences are removed before the text reaches the model or UI. Stripping happens once per pipe in `ProcessManager` (`core/tools/_process_output.py`); see `process.md`.
 - The shared `get_shell_env()` entry point in `bash.py` also supplies Terminal launches and default-shell selection. A login shell environment is probed and cached with a bounded TTL
   (`SHELL_ENV_CACHE_TTL_SECONDS`, default 300 s). Concurrent first Bash calls
   share one in-flight probe task, and cancelling one waiter does not cancel
