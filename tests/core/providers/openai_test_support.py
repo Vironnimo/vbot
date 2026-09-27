@@ -57,7 +57,7 @@ COMPLETED_RESPONSE: dict[str, Any] = {"id": "resp_1", "status": "completed", "ou
 _RESOURCES_DIR = Path(__file__).resolve().parents[3] / "resources"
 
 
-def _subscription_config(*, include_mode: bool = True) -> ProviderConfig:
+def subscription_config(*, include_mode: bool = True) -> ProviderConfig:
     """Provider config matching the ChatGPT ``subscription`` connection."""
 
     return ProviderConfig(
@@ -102,7 +102,7 @@ def platform_config() -> ProviderConfig:
     )
 
 
-def _jwt_with_account(account_id: str = ACCOUNT_ID) -> str:
+def jwt_with_account(account_id: str = ACCOUNT_ID) -> str:
     payload = {
         "https://api.openai.com/auth": {
             "chatgpt_account_id": account_id,
@@ -123,8 +123,8 @@ def codex_adapter(
     """The Adapter on the ``subscription`` connection (Codex Responses)."""
 
     return OpenAIAdapter(
-        config or _subscription_config(),
-        token_getter or _jwt_with_account(),
+        config or subscription_config(),
+        token_getter or jwt_with_account(),
         connection_mode=CODEX_RESPONSES_MODE,
         **kwargs,
     )
@@ -247,7 +247,7 @@ def sse_response(body: str) -> httpx.Response:
     return httpx.Response(200, text=body, headers={"content-type": "text/event-stream"})
 
 
-def _codex_sse_response(response: dict[str, object]) -> httpx.Response:
+def codex_sse_response(response: dict[str, object]) -> httpx.Response:
     return sse_response(codex_sse({"type": "response.completed", "response": response}))
 
 
@@ -262,7 +262,7 @@ async def send_codex_request(
 
     with respx.mock:
         route = respx.post(OPENAI_SUBSCRIPTION_URL).mock(
-            return_value=_codex_sse_response(COMPLETED_RESPONSE)
+            return_value=codex_sse_response(COMPLETED_RESPONSE)
         )
         await adapter.send(messages, model_id=model_id, **kwargs)
     return route.calls.last.request

@@ -17,13 +17,13 @@ from core.chat.wire_shaping import _assistant_continuation_dict, _assistant_mess
 from core.providers.errors import ProviderTimeoutError
 from core.providers.openai import OpenAIAdapter
 
-from .openai_helpers import (
+from .openai_test_support import (
     OPENAI_SUBSCRIPTION_URL,
     SAMPLE_MESSAGES,
     RotatingTokenGetter,
-    _jwt_with_account,
     codex_adapter,
     codex_sse,
+    jwt_with_account,
     sse_response,
 )
 
@@ -137,7 +137,7 @@ async def test_codex_stream_connect_retry_rebuilds_account_headers() -> None:
     """A retried Codex stream connect re-consults the token getter (OAuth refresh)."""
 
     adapter = codex_adapter(
-        RotatingTokenGetter([_jwt_with_account("acct-stale"), _jwt_with_account("acct-fresh")])
+        RotatingTokenGetter([jwt_with_account("acct-stale"), jwt_with_account("acct-fresh")])
     )
     body = codex_sse(
         {"type": "response.output_text.delta", "delta": "Hi"},

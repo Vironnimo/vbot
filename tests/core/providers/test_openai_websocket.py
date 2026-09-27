@@ -22,15 +22,15 @@ from core.providers.errors import NetworkError
 from core.providers.openai import CODEX_WEBSOCKET_BETA, OpenAIAdapter
 from core.utils.tls import shared_ssl_context
 
-from .openai_helpers import (
+from .openai_test_support import (
     ACCOUNT_ID,
     CODEX_TOOLS,
     OPENAI_SUBSCRIPTION_URL,
     SAMPLE_MESSAGES,
     RotatingTokenGetter,
-    _codex_sse_response,
-    _jwt_with_account,
     codex_adapter,
+    codex_sse_response,
+    jwt_with_account,
 )
 
 MODEL_ID = "gpt-5.6-terra"
@@ -311,7 +311,7 @@ async def test_codex_websocket_never_chains_across_a_route_change(
     second_websocket = _FakeCodexWebSocket([_final_turn("resp_2")])
     connector = _FakeCodexWebSocketConnector([first_websocket, second_websocket])
     adapter = codex_adapter(
-        RotatingTokenGetter([_jwt_with_account(account) for account in accounts]),
+        RotatingTokenGetter([jwt_with_account(account) for account in accounts]),
         codex_websocket_connect=connector,
     )
     shared: dict[str, Any] = {
@@ -352,7 +352,7 @@ async def test_codex_websocket_failure_before_events_disables_route_and_falls_ba
     with respx.mock:
         route = respx.post(OPENAI_SUBSCRIPTION_URL).mock(
             side_effect=[
-                _codex_sse_response(
+                codex_sse_response(
                     {
                         "id": response_id,
                         "status": "completed",
@@ -387,7 +387,7 @@ async def test_codex_websocket_failure_after_event_propagates_and_next_attempt_u
 
     with respx.mock:
         sse_route = respx.post(OPENAI_SUBSCRIPTION_URL).mock(
-            return_value=_codex_sse_response(
+            return_value=codex_sse_response(
                 {"id": "resp_sse", "status": "completed", "output": [dict(_FINAL_MESSAGE_ITEM)]}
             )
         )
