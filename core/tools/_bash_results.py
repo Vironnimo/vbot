@@ -259,15 +259,21 @@ def _handoff_note(
             "including time in the background."
         )
     note = (
-        f"{transition}{limit} Its result will arrive automatically. "
-        "Continue independent work, or finish this Run and wait for the result "
-        "before dependent work."
+        f"{transition}{limit} Its result arrives automatically as a new message when it "
+        "exits. Continue independent work; if your next step needs the result, end your turn."
     )
     if requested_by_user:
         return note
+    if handoff_after is None:
+        # Started in background: typically a server, whose result never arrives while
+        # it serves. A foreground command was expected to finish, so it gets no wait.
+        note += (
+            " For a command that runs until stopped, such as a server, wait for its ready "
+            'line: call process with action "wait", this process_id and a pattern that '
+            "matches that line."
+        )
     return (
-        f"{note} To wait here until it exits or prints an expected line, call process with "
-        'action "wait" and this process_id. Do not start another copy of the command.'
+        f"{note} Do not start another copy of the command, and do not sleep or poll for its result."
     )
 
 

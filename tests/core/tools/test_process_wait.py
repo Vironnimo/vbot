@@ -141,10 +141,28 @@ async def test_wait_that_runs_out_of_time_says_what_to_do(manager, tmp_path):
     data = result["data"]
     assert data["status"] == "running"
     assert "matched" not in data
-    assert data["note"] == (
-        "Still running after 0.3 s. If your next step depends on it, wait again; otherwise "
-        "continue, and vBot delivers the result when it exits."
+    # The result arrives on its own; another wait only spends a round trip.
+    assert data["note"].startswith("Still running after 0.3 s.")
+    assert "end your turn" in data["note"]
+    assert "wait again" not in data["note"]
+
+
+@pytest.mark.asyncio
+async def test_wait_for_a_line_that_never_came_reports_only_the_miss(manager, tmp_path):
+    process_id = await spawn(manager, "import time; time.sleep(30)")
+
+    result = await dispatch(
+        manager,
+        make_context(tmp_path),
+        {"action": "wait", "process_id": process_id, "pattern": "ready", "timeout": 0.3},
     )
+
+    data = result["data"]
+    assert data["status"] == "running"
+    assert "matched" not in data
+    # A server's result never arrives while it serves, so no turn-ending advice.
+    assert data["note"].startswith("No output line matched pattern within 0.3 s")
+    assert "end your turn" not in data["note"]
 
 
 @pytest.mark.asyncio
@@ -197,8 +215,7 @@ async def test_wait_longer_than_the_limit_waits_the_limit(manager, tmp_path, mon
     )
 
     assert result["data"]["note"].startswith(
-        "wait waits at most 0.2 s per call; wait again if the command is still running. "
-        "Still running after 0.2 s."
+        "wait waits at most 0.2 s per call. Still running after 0.2 s."
     )
 
 
@@ -389,19 +406,22 @@ def test_activity_row_shows_the_wait_and_its_pattern() -> None:
     ]
 
 
-def test_handoff_note_names_the_wait_call() -> None:
-    note = bash_results._handoff_note(90)
-    assert note.endswith(
-        "To wait here until it exits or prints an expected line, call process with action "
-        '"wait" and this process_id. Do not start another copy of the command.'
-    )
-    assert '"wait"' not in bash_results._handoff_note(90, requested_by_user=True)
+def test_only_a_command_started_in_background_is_pointed_to_wait() -> None:
+    # A background start is typically a server whose ready line the Agent waits for.
+    background = bash_results._handoff_note(None)
+    assert 'action "wait"' in background
+    assert "pattern" in background
+    # A foreground command was expected to finish: its result arrives on its own.
+    for note in (
+        bash_results._handoff_note(90),
+        bash_results._handoff_note(90, requested_by_user=True),
+    ):
+        assert '"wait"' not in note
+        assert "end your turn" in note
 
 
 def test_description_names_the_shell_tool() -> None:
-    assert (
-        f"Check on, wait for, or stop a `{SHELL_MODEL_NAME}` command that runs in the background."
-    ) == process_module.PROCESS_TOOL_DESCRIPTION
+    assert f"`{SHELL_MODEL_NAME}` command" in process_module.PROCESS_TOOL_DESCRIPTION
 
 
 @pytest.mark.asyncio

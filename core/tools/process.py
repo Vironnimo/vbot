@@ -33,7 +33,8 @@ from core.utils.paths import model_path
 
 PROCESS_TOOL_NAME = "process"
 PROCESS_TOOL_DESCRIPTION = (
-    f"Check on, wait for, or stop a `{SHELL_MODEL_NAME}` command that runs in the background."
+    f"Check on or stop a `{SHELL_MODEL_NAME}` command that runs in the background, or wait "
+    "until it prints an expected line."
 )
 PROCESS_ACTIONS = ("status", "wait", "kill")
 PROCESS_OUTPUT_CAP_CHARS = 8_000
@@ -59,8 +60,8 @@ PROCESS_TOOL_PARAMETERS: JsonObject = {
             "enum": list(PROCESS_ACTIONS),
             "description": (
                 "status: one command's state and recent output, or a list without process_id. "
-                "wait: block until the command exits, prints a line matching pattern, or "
-                "timeout passes. kill: stop the command."
+                "wait: block until the command prints a line matching pattern or exits. "
+                "kill: stop the command."
             ),
         },
         "process_id": {
@@ -84,7 +85,8 @@ PROCESS_TOOL_PARAMETERS: JsonObject = {
             "minLength": 1,
             "description": (
                 "wait: return as soon as an output line matches this regular expression "
-                "(case-insensitive), such as a server's ready line; earlier output counts."
+                "(case-insensitive), such as a server's ready line; earlier output counts. "
+                "Omit to wait until the command exits."
             ),
         },
         "filter": {
@@ -311,10 +313,7 @@ async def _handle_wait(
     if timeout is None:
         timeout = PROCESS_WAIT_DEFAULT_SECONDS
     elif timeout > PROCESS_WAIT_MAX_SECONDS:
-        notes.append(
-            f"wait waits at most {PROCESS_WAIT_MAX_SECONDS} s per call; wait again if the "
-            "command is still running."
-        )
+        notes.append(f"wait waits at most {PROCESS_WAIT_MAX_SECONDS} s per call.")
         timeout = PROCESS_WAIT_MAX_SECONDS
     pattern, pattern_note = _wait_pattern(arguments.get("pattern"))
     if pattern_note:
@@ -361,10 +360,16 @@ async def _handle_wait(
                 "The user ended this wait. The command is still running, and vBot delivers "
                 "its result when it exits."
             )
+        elif outcome == "timed_out" and pattern is not None:
+            notes.append(
+                f"No output line matched pattern within {timeout:g} s; the command is still "
+                "running."
+            )
         elif outcome == "timed_out":
             notes.append(
-                f"Still running after {timeout:g} s. If your next step depends on it, wait "
-                "again; otherwise continue, and vBot delivers the result when it exits."
+                f"Still running after {timeout:g} s. Its result arrives automatically as a new "
+                "message when it exits. Continue independent work; if your next step needs "
+                "the result, end your turn."
             )
         else:
             notes.append("The command is still running; vBot delivers its result when it exits.")

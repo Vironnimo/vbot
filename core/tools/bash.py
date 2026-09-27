@@ -203,8 +203,10 @@ def _bash_tool_parameters(*, subagent: bool) -> JsonObject:
             "type": "string",
             "enum": list(BASH_EXECUTION_MODES),
             "description": (
-                "Start in foreground and hand off a still-running command after 90 seconds, "
-                "or start in background immediately. Background results arrive automatically. "
+                "foreground returns when the command exits, or hands it to the background "
+                f"after {FOREGROUND_HANDOFF_SECONDS:g} seconds. background returns at once; "
+                "use it for servers, watchers and other commands whose result your next "
+                "step does not need. Background results arrive automatically. "
                 "Omit for foreground."
             ),
         }
@@ -444,7 +446,7 @@ def _timeout_message(timeout: float, notes: Sequence[str], *, background: bool) 
         "or timeout: 0 for no limit"
     )
     if background:
-        message += '; start servers and other long-running commands with mode: "background"'
+        message += '; start servers and watchers with mode: "background"'
     message += "."
     if notes:
         message += " Note: " + " ".join(notes)

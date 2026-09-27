@@ -304,7 +304,7 @@ async def test_timeout_message_names_the_next_call(
 def test_timeout_message_repeats_how_the_timeout_was_read() -> None:
     note = "timeout 60000 was read as milliseconds (60 s); timeout takes seconds."
     assert bash_module._timeout_message(60, [note], background=True).endswith(
-        f'; start servers and other long-running commands with mode: "background". Note: {note}'
+        f'; start servers and watchers with mode: "background". Note: {note}'
     )
 
 
