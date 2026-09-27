@@ -1,4 +1,5 @@
-"""Cancelling a streaming Run: what stays durable and how the Run ends."""
+"""Cancelling a Run while its Model step is in flight: what stays durable and how the Run
+ends."""
 
 from __future__ import annotations
 
@@ -23,6 +24,7 @@ from tests.core.chat.chat_loop_streaming_test_support import JsonObject, stream_
 from tests.core.chat.chat_loop_support import (
     BlockingReasoningStreamingStubAdapter,
     BlockingStreamingStubAdapter,
+    BlockingStubAdapter,
     MidStreamCancelledStubAdapter,
     PolicyStubAdapter,
     SilentBlockingStreamingStubAdapter,
@@ -227,18 +229,21 @@ async def test_user_cancel_replays_interrupted_reasoning_only_through_checkpoint
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("streaming", [True, False], ids=["streaming", "non-streaming"])
 async def test_user_cancel_before_visible_output_does_not_persist_assistant(
-    tmp_path: Path,
+    tmp_path: Path, streaming: bool
 ) -> None:
-    adapter = SilentBlockingStreamingStubAdapter()
+    adapter: Any = SilentBlockingStreamingStubAdapter() if streaming else BlockingStubAdapter()
     runtime = stream_runtime(tmp_path, adapter)
     runtime.chat_sessions.create("coder", session_id="session-one")
 
-    run = await build_chat_loop(runtime, streaming=True).start_run(
+    run = await build_chat_loop(runtime, streaming=streaming).start_run(
         "coder", "Hi", session_id="session-one"
     )
-    await adapter.stream_started.wait()
+    await (adapter.stream_started if streaming else adapter.request_started).wait()
     run.request_cancel(reason="user")
+    # Output the Provider delivers after the cancel is discarded.
+    adapter.release.set()
     await asyncio.sleep(0)
 
     with pytest.raises(RunCancelledError):

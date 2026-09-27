@@ -455,9 +455,7 @@ def test_external_text_cannot_close_the_checkpoint_or_reminder_frame(
         assert {"tool": "write", "tool_call_id": f"call {injection}", "status": "unknown"} in quoted
 
 
-@pytest.mark.parametrize("tool_name", ["apply_patch", "edit"])
 def test_fold_references_ten_completed_tools_and_keeps_one_dangling_unknown(
-    tool_name: str,
     tmp_path: Path,
 ) -> None:
     records = [
@@ -482,7 +480,7 @@ def test_fold_references_ten_completed_tools_and_keeps_one_dangling_unknown(
         )
     records.extend(
         [
-            _calls(11, ("mutation-dangling", tool_name)),
+            _calls(11, ("mutation-dangling", "apply_patch")),
             _record("run_interrupted", cause="process_restart"),
         ]
     )

@@ -12,7 +12,8 @@ from typing import Any
 import pytest
 
 import core.tools.change_tracker as change_tracker_module
-from core.chat.continuation import ContinuationTracker
+from core.chat import ChatSessionError
+from core.chat.continuation import ContinuationCause, ContinuationTracker
 from core.chat.streaming import StreamingChunkTimeoutError
 from core.providers.errors import NetworkError, ProviderTimeoutError
 from core.runs import (
@@ -52,13 +53,34 @@ def _answer(content: str = "Done") -> JsonObject:
     return {"content": content, "reasoning": None, "tool_calls": None}
 
 
-async def _interrupted_by_restart(runtime: Any) -> Any:
-    """A Session whose previous Run was interrupted by a process restart."""
+async def _interrupted_by_restart(
+    runtime: Any, cause: ContinuationCause = "process_restart"
+) -> Any:
+    """A Session whose previous Run was interrupted, by default by a process restart."""
     session = runtime.chat_sessions.get(SESSION)
     session.start_run("run-before-restart")
     tracker = ContinuationTracker(session, run_id="run-before-restart", request="update vBot")
-    await tracker.interrupt("process_restart")
+    await tracker.interrupt(cause)
     return session
+
+
+def _sent_text(runtime: Any) -> str:
+    return "\n".join(
+        str(message.get("content") or "") for message in runtime.adapter.requests[0]["messages"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_start_run_without_an_existing_session_sends_and_creates_nothing(
+    tmp_path: Path,
+) -> None:
+    runtime = _runtime(tmp_path, [_answer()])
+
+    with pytest.raises(ChatSessionError):
+        await build_chat_loop(runtime).start_run("coder", "Hi", session_id="missing-session")
+
+    assert runtime.adapter.requests == []
+    assert not runtime.chat_sessions.exists(session_address("coder", "missing-session"))
 
 
 @pytest.mark.asyncio
@@ -146,12 +168,22 @@ async def test_owned_descendant_records_its_admission_and_skips_titles_and_refle
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("resume", [False, True])
-async def test_only_a_resuming_internal_run_consumes_the_restart_continuation(
-    tmp_path: Path, resume: bool
+@pytest.mark.parametrize(
+    ("cause", "resume", "consumed"),
+    [
+        ("process_restart", False, False),
+        ("process_restart", True, True),
+        ("network", True, False),
+    ],
+    ids=["not-resuming", "resuming", "not-a-restart"],
+)
+async def test_only_a_resuming_internal_run_consumes_a_restart_continuation(
+    tmp_path: Path, cause: ContinuationCause, resume: bool, consumed: bool
 ) -> None:
     runtime = _runtime(tmp_path, [_answer("Verified")])
-    session = await _interrupted_by_restart(runtime)
+    session = await _interrupted_by_restart(runtime, cause)
+    before = session.load_continuation()
+    assert before is not None
 
     run = await build_chat_loop(runtime).start_run(
         "coder",
@@ -162,7 +194,17 @@ async def test_only_a_resuming_internal_run_consumes_the_restart_continuation(
     )
     await run.wait()
 
-    assert (session.load_continuation() is None) is resume
+    # Any other internal Run leaves the checkpoint untouched for the next user Run.
+    assert ("<continuation-checkpoint" in _sent_text(runtime)) is consumed
+    after = session.load_continuation()
+    if consumed:
+        assert after is None
+    else:
+        assert after is not None
+        assert (after.checkpoint_id, after.latest_run_id) == (
+            before.checkpoint_id,
+            before.latest_run_id,
+        )
 
 
 @pytest.mark.asyncio

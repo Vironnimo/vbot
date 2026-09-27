@@ -213,22 +213,6 @@ class TenToolsThenBlockingReasoningAdapter(ClosingStubAdapter):
         raise AssertionError("unexpected adapter stream request")
 
 
-class StalledStreamingStubAdapter(StubAdapter):
-    async def stream(
-        self,
-        messages: list[JsonObject],
-        *,
-        model_id: str,
-        **kwargs: Any,
-    ) -> Any:
-        self.stream_requests.append(
-            {"messages": deepcopy(messages), "model_id": model_id, "kwargs": deepcopy(kwargs)}
-        )
-        yield {"type": "content_delta", "text": "partial"}
-        await asyncio.sleep(1)
-        yield {"type": "content_delta", "text": "late"}
-
-
 class SlowStreamingStubAdapter(StubAdapter):
     """Streams visible content, pauses, then completes — to probe the stall guard.
 

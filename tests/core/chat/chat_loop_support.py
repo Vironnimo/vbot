@@ -36,7 +36,6 @@ from tests.core.chat.chat_loop_adapter_support import (
     PolicyStubAdapter,
     SilentBlockingStreamingStubAdapter,
     SlowStreamingStubAdapter,
-    StalledStreamingStubAdapter,
     StubAdapter,
     TenToolsThenBlockingReasoningAdapter,
 )
@@ -50,7 +49,6 @@ __all__ = [
     "PolicyStubAdapter",
     "SilentBlockingStreamingStubAdapter",
     "SlowStreamingStubAdapter",
-    "StalledStreamingStubAdapter",
     "StubAdapter",
     "TenToolsThenBlockingReasoningAdapter",
 ]
