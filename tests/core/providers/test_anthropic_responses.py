@@ -1,589 +1,403 @@
-"""Anthropic responses: responses behavior."""
+"""Anthropic Adapter responses: catalog entries, completed Messages, errors and retry."""
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock, patch
+
+import httpx
+import pytest
+import respx
+
+from core.models.models import (
+    REASONING_CONTROL_BUDGET,
+    REASONING_CONTROL_LEVELS,
+    ReasoningCapabilities,
+)
+from core.providers.anthropic import (
+    ANTHROPIC_METADATA_KEY,
+    SUPPORTS_TEMPERATURE_METADATA_FIELD,
+    AnthropicAdapter,
+)
+from core.providers.errors import (
+    NetworkError,
+    ProviderAuthError,
+    ProviderError,
+    ProviderRateLimitError,
+    ProviderTimeoutError,
+)
+
 from .anthropic_test_support import (
     ANTHROPIC_CONFIG,
-    ANTHROPIC_MULTI_AUTH_CONFIG,
     ANTHROPIC_URL,
     API_KEY,
-    CUSTOM_URL,
-    IMAGE_WIRE_MEDIA_TYPES,
-    REASONING_REPLAY_FULL_HISTORY,
+    MODEL_ID,
     SAMPLE_MESSAGES,
     SUCCESS_RESPONSE,
-    AnthropicAdapter,
-    _anthropic_test_model,
-    _strip_cache_control,
-    httpx,
-    json,
-    pytest,
-    respx,
+    make_adapter,
 )
-from .anthropic_test_support import anthropic_adapter as anthropic_adapter
-from .anthropic_test_support import custom_adapter as custom_adapter
 
-PRIOR_RUN_THINKING_BLOCK = {
-    "type": "thinking",
-    "thinking": "Prior-run reasoning.",
-    "signature": "opaque-prior-run-signature",
-}
+# ---------------------------------------------------------------------------
+# Catalog discovery
+# ---------------------------------------------------------------------------
 
-PRIOR_RUN_REDACTED_BLOCK = {"type": "redacted_thinking", "data": "opaque-prior-run-redacted"}
 
-TWO_RUN_HISTORY = [
-    {"role": "user", "content": "Q1"},
-    {
+def _catalog_entry(
+    model_id: str = "claude-x",
+    *,
+    adaptive: bool,
+    enabled: bool,
+    efforts: tuple[str, ...] = (),
+    thinking: bool = True,
+) -> dict:
+    """A raw ``/models`` entry mirroring the live Anthropic catalog shape."""
+
+    return {
+        "type": "model",
+        "id": model_id,
+        "display_name": f"Display {model_id}",
+        "max_input_tokens": 1000000,
+        "max_tokens": 128000,
+        "capabilities": {
+            "image_input": {"supported": True},
+            "pdf_input": {"supported": True},
+            "structured_outputs": {"supported": True},
+            "thinking": {
+                "supported": thinking,
+                "types": {"enabled": {"supported": enabled}, "adaptive": {"supported": adaptive}},
+            },
+            "effort": {
+                "supported": bool(efforts),
+                **{level: {"supported": True} for level in efforts},
+            },
+        },
+    }
+
+
+def test_catalog_entry_maps_listing_facts_onto_a_model() -> None:
+    model = AnthropicAdapter.normalize_catalog_entry(
+        _catalog_entry("claude-opus-4-8", adaptive=True, enabled=False)
+    )
+
+    assert model.model_id == "claude-opus-4-8"
+    assert model.name == "Display claude-opus-4-8"
+    assert model.context_window == 1000000
+    assert model.max_output_tokens == 128000
+    assert model.capabilities.vision is True
+    assert model.capabilities.tools is True
+    assert model.capabilities.json_mode is True
+    assert model.capabilities.input_modalities == ("text", "image", "pdf")
+
+    unnamed = _catalog_entry(adaptive=True, enabled=False)
+    del unnamed["display_name"]
+    assert AnthropicAdapter.normalize_catalog_entry(unnamed).name == "claude-x"
+
+
+@pytest.mark.parametrize(
+    ("entry", "reasoning", "supports_temperature"),
+    [
+        pytest.param(
+            _catalog_entry(adaptive=True, enabled=False, efforts=("low", "high", "max")),
+            ReasoningCapabilities(
+                supported=True, control=REASONING_CONTROL_LEVELS, levels=("low", "high", "max")
+            ),
+            False,
+            id="adaptive-only-levels",
+        ),
+        pytest.param(
+            _catalog_entry(adaptive=False, enabled=True),
+            ReasoningCapabilities(supported=True, control=REASONING_CONTROL_BUDGET),
+            True,
+            id="native-budget",
+        ),
+        pytest.param(
+            _catalog_entry(adaptive=False, enabled=True, efforts=("low", "medium", "high")),
+            ReasoningCapabilities(supported=True, control=REASONING_CONTROL_BUDGET),
+            True,
+            id="effort-ladder-without-adaptive-is-budget",
+        ),
+        pytest.param(
+            _catalog_entry(adaptive=False, enabled=False),
+            ReasoningCapabilities(supported=True),
+            True,
+            id="thinking-without-control",
+        ),
+        pytest.param(
+            _catalog_entry(adaptive=False, enabled=False, thinking=False),
+            ReasoningCapabilities(supported=False),
+            True,
+            id="non-reasoning",
+        ),
+    ],
+)
+def test_catalog_reasoning_control_and_sampling_follow_live_thinking_caps(
+    entry, reasoning, supports_temperature
+) -> None:
+    model = AnthropicAdapter.normalize_catalog_entry(entry)
+
+    assert model.capabilities.reasoning == reasoning
+    assert (
+        model.metadata[ANTHROPIC_METADATA_KEY][SUPPORTS_TEMPERATURE_METADATA_FIELD]
+        is supports_temperature
+    )
+
+
+def test_catalog_discovery_pages_the_listing_with_the_version_header() -> None:
+    headers = AnthropicAdapter.discovery_headers(ANTHROPIC_CONFIG, API_KEY, {"x-api-key": "secret"})
+
+    assert headers == {"x-api-key": "secret", "anthropic-version": "2023-06-01"}
+    assert AnthropicAdapter.discovery_params() == {"limit": "1000"}
+
+
+# ---------------------------------------------------------------------------
+# Completed response normalization
+# ---------------------------------------------------------------------------
+
+
+def test_normalize_response_maps_blocks_to_canonical_assistant_fields() -> None:
+    thinking = {"type": "thinking", "thinking": "Need weather.", "signature": "opaque"}
+    redacted = {"type": "redacted_thinking", "data": "opaque-redacted"}
+    response = {
+        "content": [
+            thinking,
+            redacted,
+            {"type": "text", "text": "Checking"},
+            {"type": "text", "text": " now."},
+            {
+                "type": "tool_use",
+                "id": "toolu_abc",
+                "name": "get_weather",
+                "input": {"city": "Berlin"},
+            },
+        ]
+    }
+
+    assert make_adapter().normalize_response(response) == {
         "role": "assistant",
-        "model": "anthropic/claude-sonnet-4-20250219",
-        "content": "A1",
-        "reasoning": "Prior-run reasoning.",
-        "reasoning_meta": {"content_blocks": [PRIOR_RUN_THINKING_BLOCK, PRIOR_RUN_REDACTED_BLOCK]},
-    },
-    {"role": "user", "content": "Q2"},
-]
+        "content": "Checking now.",
+        "reasoning": "Need weather.",
+        "reasoning_meta": {"content_blocks": [thinking, redacted]},
+        "tool_calls": [{"id": "toolu_abc", "name": "get_weather", "arguments": {"city": "Berlin"}}],
+        "terminal_outcome": "unknown",
+    }
 
 
-def test_wire_media_support_is_images_plus_pdf(anthropic_adapter):
-    """The Anthropic Messages wire carries images plus native ``application/pdf``."""
-    assert anthropic_adapter.wire_media_support("claude-sonnet-4-20250219") == (
-        IMAGE_WIRE_MEDIA_TYPES | frozenset({"application/pdf"})
+def test_normalize_response_accepts_a_collapsed_single_tool_use_block() -> None:
+    normalized = make_adapter().normalize_response(
+        {
+            "content": {"type": "tool_use", "id": "toolu_one", "name": "get_weather", "input": {}},
+            "stop_reason": "tool_use",
+        }
     )
 
-
-class TestReasoningReplay:
-    """Cross-run thinking replay (full_history policy) and its disabled guard."""
-
-    def test_reasoning_replay_policy_is_full_history(self, anthropic_adapter):
-        assert (
-            anthropic_adapter.reasoning_replay_policy("claude-sonnet-4-20250219")
-            == REASONING_REPLAY_FULL_HISTORY
-        )
-
-    @respx.mock
-    @pytest.mark.asyncio
-    async def test_send_replays_prior_run_thinking_blocks_byte_identical(self, anthropic_adapter):
-        """A two-run same-model history resends persisted thinking unchanged."""
-        route = respx.post(ANTHROPIC_URL).mock(
-            return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
-        )
-
-        await anthropic_adapter.send(
-            TWO_RUN_HISTORY,
-            model_id="claude-sonnet-4-20250219",
-            thinking_effort="high",
-        )
-
-        request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
-        assert request_body["messages"][1]["content"] == [
-            PRIOR_RUN_THINKING_BLOCK,
-            PRIOR_RUN_REDACTED_BLOCK,
-            {"type": "text", "text": "A1"},
-        ]
-
-    @respx.mock
-    @pytest.mark.asyncio
-    async def test_send_strips_replayed_thinking_blocks_when_thinking_disabled(
-        self, anthropic_adapter
-    ):
-        """Disabled thinking must not carry historical thinking blocks."""
-        route = respx.post(ANTHROPIC_URL).mock(
-            return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
-        )
-
-        await anthropic_adapter.send(
-            TWO_RUN_HISTORY,
-            model_id="claude-sonnet-4-20250219",
-            thinking_effort="none",
-        )
-
-        request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
-        assert request_body["thinking"] == {"type": "disabled"}
-        assert request_body["messages"][1]["content"] == [{"type": "text", "text": "A1"}]
-
-    @respx.mock
-    @pytest.mark.asyncio
-    async def test_send_keeps_replayed_thinking_blocks_without_thinking_parameter(
-        self, anthropic_adapter
-    ):
-        """An absent thinking parameter is not 'disabled' — blocks stay."""
-        route = respx.post(ANTHROPIC_URL).mock(
-            return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
-        )
-
-        await anthropic_adapter.send(TWO_RUN_HISTORY, model_id="claude-sonnet-4-20250219")
-
-        request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
-        assert "thinking" not in request_body
-        assert request_body["messages"][1]["content"][:2] == [
-            PRIOR_RUN_THINKING_BLOCK,
-            PRIOR_RUN_REDACTED_BLOCK,
-        ]
-
-    @respx.mock
-    @pytest.mark.asyncio
-    async def test_send_strips_replayed_thinking_blocks_for_non_reasoning_model(self):
-        """Catalog-known non-reasoning models never receive thinking blocks."""
-        route = respx.post(ANTHROPIC_URL).mock(
-            return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
-        )
-        adapter = AnthropicAdapter(
-            ANTHROPIC_CONFIG,
-            API_KEY,
-            model_lookup=lambda model_id: _anthropic_test_model(model_id, reasoning=False),
-        )
-
-        await adapter.send(
-            TWO_RUN_HISTORY,
-            model_id="claude-3-5-haiku-20241022",
-            thinking_effort="high",
-        )
-
-        request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
-        assert "thinking" not in request_body
-        assert request_body["messages"][1]["content"] == [{"type": "text", "text": "A1"}]
-
-    @respx.mock
-    @pytest.mark.asyncio
-    async def test_send_drops_reasoning_only_assistant_turn_when_thinking_disabled(
-        self, anthropic_adapter
-    ):
-        """Stripping must not leave an empty assistant content array on the wire."""
-        route = respx.post(ANTHROPIC_URL).mock(
-            return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
-        )
-        messages = [
-            {"role": "user", "content": "Q1"},
-            {
-                "role": "assistant",
-                "model": "anthropic/claude-sonnet-4-20250219",
-                "content": None,
-                "reasoning": "Thinking-only turn",
-                "reasoning_meta": {"content_blocks": [PRIOR_RUN_THINKING_BLOCK]},
-            },
-            {"role": "user", "content": "Q2"},
-        ]
-
-        await anthropic_adapter.send(
-            messages,
-            model_id="claude-sonnet-4-20250219",
-            thinking_effort="none",
-        )
-
-        request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
-        assert request_body["messages"] == [
-            {"role": "user", "content": [{"type": "text", "text": "Q1"}]},
-            {"role": "user", "content": [{"type": "text", "text": "Q2"}]},
-        ]
+    assert normalized["tool_calls"] == [{"id": "toolu_one", "name": "get_weather", "arguments": {}}]
+    assert normalized["terminal_outcome"] == "tool_calls"
 
 
-# send() — headers and auth
-class TestSendHeaders:
-    """Verify that send() sends the correct auth and Anthropic headers."""
-
-    @respx.mock
-    @pytest.mark.asyncio
-    async def test_send_x_api_key_header(self, anthropic_adapter):
-        """Anthropic config sends x-api-key header with the key directly."""
-        # Arrange
-        route = respx.post(ANTHROPIC_URL).mock(
-            return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
-        )
-
-        # Act
-        await anthropic_adapter.send(SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219")
-
-        # Assert
-        assert route.called
-        api_key_header = route.calls.last.request.headers.get("x-api-key")
-        assert api_key_header == API_KEY  # No "Bearer " prefix
-
-    @respx.mock
-    @pytest.mark.asyncio
-    async def test_send_anthropic_version_header(self, anthropic_adapter):
-        """The anthropic-version header is sent in the request."""
-        # Arrange
-        route = respx.post(ANTHROPIC_URL).mock(
-            return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
-        )
-
-        # Act
-        await anthropic_adapter.send(SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219")
-
-        # Assert
-        version_header = route.calls.last.request.headers.get("anthropic-version")
-        assert version_header == "2023-06-01"
-
-    @respx.mock
-    @pytest.mark.asyncio
-    async def test_send_extra_headers(self, custom_adapter):
-        """Custom config includes extra headers from provider config."""
-        # Arrange
-        route = respx.post(CUSTOM_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
-
-        # Act
-        await custom_adapter.send(SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219")
-
-        # Assert
-        request = route.calls.last.request
-        assert request.headers.get("x-custom-header") == "custom-value"
-
-    @respx.mock
-    @pytest.mark.asyncio
-    async def test_send_no_bearer_prefix(self, anthropic_adapter):
-        """Auth header does not have 'Bearer ' prefix."""
-        # Arrange
-        route = respx.post(ANTHROPIC_URL).mock(
-            return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
-        )
-
-        # Act
-        await anthropic_adapter.send(SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219")
-
-        # Assert
-        api_key_header = route.calls.last.request.headers.get("x-api-key")
-        assert not api_key_header.startswith("Bearer ")
-        assert api_key_header == API_KEY
-
-    @respx.mock
-    @pytest.mark.asyncio
-    async def test_send_uses_selected_connection_auth_header(self):
-        """Selected connection auth metadata controls the request auth header."""
-        # Arrange
-        selected_connection = ANTHROPIC_MULTI_AUTH_CONFIG.get_connection("oauth")
-        adapter = AnthropicAdapter(
-            ANTHROPIC_MULTI_AUTH_CONFIG,
-            API_KEY,
-            auth_config=selected_connection.auth,
-        )
-        route = respx.post(ANTHROPIC_URL).mock(
-            return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
-        )
-
-        # Act
-        await adapter.send(SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219")
-
-        # Assert
-        request_headers = route.calls.last.request.headers
-        assert request_headers.get("authorization") == f"Bearer {API_KEY}"
-        assert request_headers.get("x-api-key") is None
-
-
-# send() — success response
-class TestSendSuccess:
-    """Verify that send() returns the parsed response dict on success."""
-
-    @respx.mock
-    @pytest.mark.asyncio
-    async def test_send_returns_parsed_response(self, anthropic_adapter):
-        """send() returns the full response body as a dict."""
-        # Arrange
-        respx.post(ANTHROPIC_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
-
-        # Act
-        result = await anthropic_adapter.send(SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219")
-
-        # Assert
-        assert result == SUCCESS_RESPONSE
-        assert result["id"] == "msg_01XFDUDYJGAAC8998t2N3v"
-        assert result["content"][0]["text"] == "Hello!"
-
-    def test_normalize_response_extracts_text_tool_calls_and_reasoning(self, anthropic_adapter):
-        """Anthropic response blocks normalize to canonical assistant fields."""
-        response = {
-            "content": [
-                {"type": "thinking", "thinking": "Need weather.", "signature": "opaque"},
-                {"type": "text", "text": "Checking."},
-                {
-                    "type": "tool_use",
-                    "id": "toolu_abc",
-                    "name": "get_weather",
-                    "input": {"city": "Berlin"},
-                },
-            ]
-        }
-
-        normalized = anthropic_adapter.normalize_response(response)
-
-        assert normalized == {
-            "role": "assistant",
-            "content": "Checking.",
-            "reasoning": "Need weather.",
-            "reasoning_meta": {
-                "content_blocks": [
-                    {"type": "thinking", "thinking": "Need weather.", "signature": "opaque"}
-                ]
-            },
-            "tool_calls": [
-                {"id": "toolu_abc", "name": "get_weather", "arguments": {"city": "Berlin"}}
-            ],
-            "terminal_outcome": "unknown",
-        }
-
-    def test_normalize_response_accepts_collapsed_single_tool_use_block(self, anthropic_adapter):
-        normalized = anthropic_adapter.normalize_response(
-            {
-                "content": {
-                    "type": "tool_use",
-                    "id": "toolu_one",
-                    "name": "get_weather",
-                    "input": {"city": "Berlin"},
-                },
-                "stop_reason": "tool_use",
-            }
-        )
-
-        assert normalized["tool_calls"] == [
-            {"id": "toolu_one", "name": "get_weather", "arguments": {"city": "Berlin"}}
-        ]
-
-    @pytest.mark.parametrize(
-        ("stop_reason", "expected_outcome"),
-        [
-            ("end_turn", "stop"),
-            ("tool_use", "tool_calls"),
-            ("max_tokens", "output_truncated"),
-            ("refusal", "content_filtered"),
-            ("pause_turn", "error"),
-            ("provider_added_reason", "unknown"),
-        ],
+@pytest.mark.parametrize(
+    ("stop_reason", "expected_outcome"),
+    [
+        ("end_turn", "stop"),
+        ("tool_use", "tool_calls"),
+        ("max_tokens", "output_truncated"),
+        ("refusal", "content_filtered"),
+        ("pause_turn", "error"),
+        ("provider_added_reason", "unknown"),
+    ],
+)
+def test_normalize_response_preserves_terminal_outcome(stop_reason, expected_outcome) -> None:
+    normalized = make_adapter().normalize_response(
+        {"content": [{"type": "text", "text": "partial"}], "stop_reason": stop_reason}
     )
-    def test_normalize_response_preserves_terminal_outcome(
-        self,
-        anthropic_adapter,
-        stop_reason,
-        expected_outcome,
-    ):
-        response = {
-            "content": [{"type": "text", "text": "partial"}],
-            "stop_reason": stop_reason,
-        }
 
-        normalized = anthropic_adapter.normalize_response(response)
+    assert normalized["terminal_outcome"] == expected_outcome
 
-        assert normalized["terminal_outcome"] == expected_outcome
 
-    def test_normalize_response_preserves_redacted_thinking_block(self, anthropic_adapter):
-        """Opaque redacted thinking metadata is preserved unchanged."""
-        redacted_block = {"type": "redacted_thinking", "data": "opaque"}
-        response = {
-            "content": [
-                {
-                    "type": "thinking",
-                    "thinking": "Visible reasoning",
-                    "signature": "opaque-signature",
-                },
-                redacted_block,
-            ]
-        }
-
-        normalized = anthropic_adapter.normalize_response(response)
-
-        assert normalized["reasoning"] == "Visible reasoning"
-        assert normalized["reasoning_meta"] == {
-            "content_blocks": [
-                {
-                    "type": "thinking",
-                    "thinking": "Visible reasoning",
-                    "signature": "opaque-signature",
-                },
-                redacted_block,
-            ]
-        }
-
-    def test_normalize_response_includes_usage_with_both_fields(self, anthropic_adapter):
-        """Usage with both input and output tokens is included in normalized response."""
-        response = {
-            "content": [{"type": "text", "text": "Hello!"}],
-            "usage": {"input_tokens": 25, "output_tokens": 87},
-        }
-
-        normalized = anthropic_adapter.normalize_response(response)
-
-        assert normalized["usage"] == {"input_tokens": 25, "output_tokens": 87}
-
-    def test_normalize_response_includes_usage_with_zero_output_tokens(self, anthropic_adapter):
-        """Usage with input_tokens and output_tokens=0 (cache read) is included."""
-        response = {
-            "content": [{"type": "text", "text": "Cached."}],
-            "usage": {"input_tokens": 2589, "output_tokens": 0},
-        }
-
-        normalized = anthropic_adapter.normalize_response(response)
-
-        assert normalized["usage"] == {"input_tokens": 2589, "output_tokens": 0}
-
-    def test_normalize_response_folds_cache_tokens_into_input_tokens(self, anthropic_adapter):
-        """Cache read/write tokens are exposed and added onto input_tokens.
-
-        Anthropic reports cache tokens separately from input_tokens; canonical
-        input_tokens means the total prompt including cached tokens.
-        """
-        response = {
-            "content": [{"type": "text", "text": "Hello!"}],
-            "usage": {
+@pytest.mark.parametrize(
+    ("usage", "expected"),
+    [
+        pytest.param(
+            {"input_tokens": 25, "output_tokens": 87},
+            {"input_tokens": 25, "output_tokens": 87},
+            id="primary",
+        ),
+        pytest.param(
+            {"input_tokens": 2589, "output_tokens": 0},
+            {"input_tokens": 2589, "output_tokens": 0},
+            id="zero-output",
+        ),
+        pytest.param(
+            {
                 "input_tokens": 25,
                 "output_tokens": 87,
                 "cache_read_input_tokens": 1000,
                 "cache_creation_input_tokens": 200,
                 "output_tokens_details": {"thinking_tokens": 55},
             },
-        }
-
-        normalized = anthropic_adapter.normalize_response(response)
-
-        assert normalized["usage"] == {
-            "input_tokens": 1225,
-            "output_tokens": 87,
-            "cache_read_tokens": 1000,
-            "cache_write_tokens": 200,
-            "reasoning_tokens": 55,
-        }
-
-    def test_normalize_response_ignores_non_int_cache_tokens(self, anthropic_adapter):
-        """Non-integer cache token values are ignored and input_tokens stays raw."""
-        response = {
-            "content": [{"type": "text", "text": "Hello!"}],
-            "usage": {
-                "input_tokens": 25,
+            {
+                "input_tokens": 1225,
                 "output_tokens": 87,
-                "cache_read_input_tokens": None,
+                "cache_read_tokens": 1000,
+                "cache_write_tokens": 200,
+                "reasoning_tokens": 55,
             },
-        }
+            id="cache-folded-into-input",
+        ),
+        pytest.param(
+            {"input_tokens": True, "output_tokens": 8}, {"output_tokens": 8}, id="boolean-input"
+        ),
+        pytest.param(
+            {"input_tokens": 17, "output_tokens": -1}, {"input_tokens": 17}, id="negative-output"
+        ),
+        pytest.param(
+            {"input_tokens": "17", "output_tokens": 8}, {"output_tokens": 8}, id="string-input"
+        ),
+        pytest.param(
+            {
+                "input_tokens": 17,
+                "output_tokens": 8,
+                "cache_read_input_tokens": True,
+                "cache_creation_input_tokens": -20,
+            },
+            {"input_tokens": 17, "output_tokens": 8},
+            id="unusable-cache-counters",
+        ),
+        pytest.param(
+            {"input_tokens": 17, "output_tokens": 8, "cache_read_input_tokens": None},
+            {"input_tokens": 17, "output_tokens": 8},
+            id="null-cache-counter",
+        ),
+        pytest.param(None, None, id="null"),
+    ],
+)
+def test_normalize_response_keeps_only_usable_usage_counters(usage, expected) -> None:
+    response = {"content": [{"type": "text", "text": "Hello!"}], "usage": usage}
 
-        normalized = anthropic_adapter.normalize_response(response)
-
-        assert normalized["usage"] == {"input_tokens": 25, "output_tokens": 87}
-
-    def test_normalize_response_omits_usage_when_absent(self, anthropic_adapter):
-        """Usage key is omitted when the response has no usage object."""
-        response = {
-            "content": [{"type": "text", "text": "Hello!"}],
-        }
-
-        normalized = anthropic_adapter.normalize_response(response)
-
-        assert "usage" not in normalized
-
-    def test_normalize_response_omits_usage_when_null(self, anthropic_adapter):
-        """Usage key is omitted when the response usage is None."""
-        response = {
-            "content": [{"type": "text", "text": "Hello!"}],
-            "usage": None,
-        }
-
-        normalized = anthropic_adapter.normalize_response(response)
-
-        assert "usage" not in normalized
-
-
-# send() — provider config integration
-class TestSendProviderConfig:
-    """Verify that provider config values are correctly used."""
-
-    @respx.mock
-    @pytest.mark.asyncio
-    async def test_send_uses_base_url_from_config(self, custom_adapter):
-        """The request goes to the base_url from ProviderConfig."""
-        # Arrange
-        route = respx.post(CUSTOM_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
-
-        # Act
-        await custom_adapter.send(SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219")
-
-        # Assert
-        assert route.called
-
-    @respx.mock
-    @pytest.mark.asyncio
-    async def test_send_multiple_defaults_applied(self, custom_adapter):
-        """Multiple defaults from the config are applied."""
-        # Arrange
-        route = respx.post(CUSTOM_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
-
-        # Act
-        await custom_adapter.send(SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219")
-
-        # Assert
-        request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
-        assert 0 < request_body["max_tokens"] < 8192
-        assert request_body["temperature"] == 0.7
+    assert make_adapter().normalize_response(response).get("usage") == expected
+    assert "usage" not in make_adapter().normalize_response({"content": []})
 
 
-# _build_payload() — None-valued caller kwargs
-class TestBuildPayloadNoneKwargs:
-    """``None``-valued caller kwargs are dropped, letting provider defaults win.
+# ---------------------------------------------------------------------------
+# send() errors and retry
+# ---------------------------------------------------------------------------
 
-    Falsy-but-not-None values (e.g. ``0.0``) must survive. Explicit non-None
-    values must still override the default. Covers both ``send()`` and
-    ``stream()`` payload construction (both call ``_build_payload``).
-    """
 
-    @respx.mock
-    @pytest.mark.asyncio
-    async def test_none_kwarg_drops_key_and_provider_default_applies(self, custom_adapter):
-        """``temperature=None`` is absent from the payload; default fills in."""
-        # Arrange — CUSTOM_CONFIG declares defaults.temperature=0.7
-        route = respx.post(CUSTOM_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+def _anthropic_error(status: int, error_type: str, message: str) -> httpx.Response:
+    return httpx.Response(
+        status, json={"type": "error", "error": {"type": error_type, "message": message}}
+    )
 
-        # Act
-        await custom_adapter.send(
-            SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219", temperature=None
+
+@pytest.mark.parametrize(
+    ("response", "expected_type", "retryable", "attempts"),
+    [
+        pytest.param(
+            _anthropic_error(401, "authentication_error", "invalid x-api-key"),
+            ProviderAuthError,
+            False,
+            1,
+            id="401",
+        ),
+        pytest.param(
+            _anthropic_error(403, "permission_error", "Forbidden"),
+            ProviderAuthError,
+            False,
+            1,
+            id="403",
+        ),
+        pytest.param(
+            _anthropic_error(400, "invalid_request_error", "max_tokens is required"),
+            ProviderError,
+            False,
+            1,
+            id="400",
+        ),
+        pytest.param(
+            _anthropic_error(500, "api_error", "Internal server error"),
+            ProviderError,
+            False,
+            1,
+            id="500",
+        ),
+        pytest.param(
+            httpx.Response(200, text="not-valid-json{"),
+            ProviderError,
+            False,
+            1,
+            id="malformed-json",
+        ),
+        pytest.param(
+            _anthropic_error(429, "rate_limit_error", "Too many requests"),
+            ProviderRateLimitError,
+            True,
+            4,
+            id="429",
+        ),
+        pytest.param(httpx.Response(502, text="Bad Gateway"), ProviderError, True, 4, id="502"),
+        pytest.param(
+            _anthropic_error(529, "overloaded_error", "Overloaded"),
+            ProviderError,
+            True,
+            4,
+            id="529",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_send_classifies_error_responses_and_retries_only_transient_ones(
+    response, expected_type, retryable, attempts
+) -> None:
+    with respx.mock, patch("core.utils.retry._sleep", new_callable=AsyncMock):
+        route = respx.post(ANTHROPIC_URL).mock(return_value=response)
+        with pytest.raises(ProviderError) as exc_info:
+            await make_adapter().send(SAMPLE_MESSAGES, model_id=MODEL_ID)
+
+    assert type(exc_info.value) is expected_type
+    assert exc_info.value.retryable is retryable
+    assert route.call_count == attempts
+
+
+@pytest.mark.asyncio
+async def test_send_error_detail_carries_the_provider_error_message() -> None:
+    with respx.mock:
+        respx.post(ANTHROPIC_URL).mock(
+            return_value=_anthropic_error(400, "invalid_request_error", "max_tokens is required")
         )
+        with pytest.raises(ProviderError, match="max_tokens is required"):
+            await make_adapter().send(SAMPLE_MESSAGES, model_id=MODEL_ID)
 
-        # Assert
-        request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
-        assert "temperature" in request_body
-        assert request_body["temperature"] == 0.7  # from defaults
 
-    @respx.mock
-    @pytest.mark.asyncio
-    async def test_explicit_zero_kwarg_survives_through_send(self, custom_adapter):
-        """``temperature=0.0`` (falsy but not None) survives the None filter."""
-        # Arrange
-        route = respx.post(CUSTOM_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+@pytest.mark.parametrize(
+    ("failure", "expected_type"),
+    [
+        (httpx.TimeoutException("timed out"), ProviderTimeoutError),
+        (httpx.ConnectError("connection failed"), NetworkError),
+    ],
+)
+@pytest.mark.asyncio
+async def test_send_wraps_transport_failures_after_retries(failure, expected_type) -> None:
+    with respx.mock, patch("core.utils.retry._sleep", new_callable=AsyncMock):
+        respx.post(ANTHROPIC_URL).mock(side_effect=failure)
+        with pytest.raises(expected_type):
+            await make_adapter().send(SAMPLE_MESSAGES, model_id=MODEL_ID)
 
-        # Act
-        await custom_adapter.send(
-            SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219", temperature=0.0
+
+@pytest.mark.parametrize(
+    "first_attempt",
+    [
+        pytest.param(httpx.Response(429, text="Rate limited"), id="429"),
+        pytest.param(httpx.Response(503, text="Service Unavailable"), id="503"),
+        pytest.param(httpx.Response(529, text="Overloaded"), id="529"),
+        pytest.param(httpx.TimeoutException("Connection timed out"), id="timeout"),
+        pytest.param(httpx.ReadError("connection reset"), id="read-error"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_send_retries_a_transient_failure_and_returns_the_response(first_attempt) -> None:
+    with respx.mock, patch("core.utils.retry._sleep", new_callable=AsyncMock):
+        route = respx.post(ANTHROPIC_URL).mock(
+            side_effect=[first_attempt, httpx.Response(200, json=SUCCESS_RESPONSE)]
         )
+        result = await make_adapter().send(SAMPLE_MESSAGES, model_id=MODEL_ID)
 
-        # Assert
-        request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
-        assert request_body["temperature"] == 0.0
-
-    @respx.mock
-    @pytest.mark.asyncio
-    async def test_explicit_nonzero_kwarg_overrides_default(self, custom_adapter):
-        """Explicit non-None kwargs continue to override the provider default."""
-        # Arrange
-        route = respx.post(CUSTOM_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
-
-        # Act
-        await custom_adapter.send(
-            SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219", temperature=0.3
-        )
-
-        # Assert
-        request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
-        assert request_body["temperature"] == 0.3
-
-    @respx.mock
-    @pytest.mark.asyncio
-    async def test_none_kwarg_drops_key_for_stream(self, custom_adapter):
-        """``stream()`` also drops ``None`` caller kwargs before sending."""
-        sse_body = 'event: message_stop\ndata: {"type":"message_stop"}\n\n'
-        route = respx.post(CUSTOM_URL).mock(
-            return_value=httpx.Response(
-                200, text=sse_body, headers={"content-type": "text/event-stream"}
-            )
-        )
-
-        async for _ in custom_adapter.stream(
-            SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219", temperature=None
-        ):
-            pass
-
-        request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
-        assert request_body["temperature"] == 0.7  # default applied
-        assert request_body["stream"] is True  # stream() still adds stream=true
+    assert result == SUCCESS_RESPONSE
+    assert route.call_count == 2

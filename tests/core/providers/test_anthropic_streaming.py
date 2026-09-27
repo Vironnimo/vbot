@@ -1,33 +1,432 @@
-"""Anthropic streaming transport and SSE protocol tests."""
+"""Anthropic Adapter streaming: SSE decoding, usage deltas, stream failures and retry."""
 
 from __future__ import annotations
 
-from .anthropic_test_support import (
-    ANTHROPIC_CONFIG,
-    ANTHROPIC_URL,
-    CUSTOM_URL,
-    SAMPLE_MESSAGES,
-    SAMPLE_MESSAGES_WITH_SYSTEM,
-    AnthropicAdapter,
-    AsyncMock,
+import json
+from collections.abc import AsyncIterator
+from typing import Any
+from unittest.mock import AsyncMock, patch
+
+import httpx
+import pytest
+import respx
+
+from core.chat.streaming import StreamingAccumulator
+from core.providers.anthropic import AnthropicAdapter
+from core.providers.errors import (
     NetworkError,
     ProviderAuthError,
     ProviderError,
     ProviderRateLimitError,
     ProviderTimeoutError,
-    _strip_cache_control,
-    httpx,
-    json,
-    patch,
-    pytest,
-    respx,
 )
-from .anthropic_test_support import anthropic_adapter as anthropic_adapter
-from .anthropic_test_support import custom_adapter as custom_adapter
+
+from .anthropic_test_support import (
+    ANTHROPIC_URL,
+    CUSTOM_CONFIG,
+    CUSTOM_URL,
+    MODEL_ID,
+    SAMPLE_MESSAGES,
+    make_adapter,
+    sse,
+    sse_response,
+)
+
+TEXT_EVENTS: tuple[dict[str, Any], ...] = (
+    {"type": "message_start", "message": {"id": "msg_01", "usage": {"input_tokens": 25}}},
+    {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+    {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Hello"}},
+    {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": " world"}},
+    {"type": "content_block_stop", "index": 0},
+    {
+        "type": "message_delta",
+        "delta": {"stop_reason": "end_turn"},
+        "usage": {"output_tokens": 10, "output_tokens_details": {"thinking_tokens": 6}},
+    },
+)
+
+
+async def _collect(adapter: AnthropicAdapter, **kwargs: Any) -> list[dict[str, Any]]:
+    return [chunk async for chunk in adapter.stream(SAMPLE_MESSAGES, model_id=MODEL_ID, **kwargs)]
+
+
+async def stream_chunks(body: str) -> list[dict[str, Any]]:
+    """Stream one mocked SSE body through the native Adapter."""
+
+    with respx.mock:
+        respx.post(ANTHROPIC_URL).mock(return_value=sse_response(body))
+        return await _collect(make_adapter())
+
+
+# ---------------------------------------------------------------------------
+# Request and SSE framing
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_stream_request_carries_stream_flag_defaults_and_native_headers() -> None:
+    with respx.mock:
+        route = respx.post(CUSTOM_URL).mock(return_value=sse_response(sse()))
+        await _collect(make_adapter(CUSTOM_CONFIG), temperature=None)
+
+    request = route.calls.last.request
+    payload = json.loads(request.content)
+    assert payload["stream"] is True
+    assert payload["temperature"] == 0.7
+    assert request.headers["anthropic-version"] == "2023-06-01"
+    assert request.headers["x-custom-header"] == "custom-value"
+
+
+@pytest.mark.asyncio
+async def test_stream_yields_text_finish_then_usage_and_skips_bookkeeping_frames() -> None:
+    body = sse({"type": "ping"}, ": keep-alive comment\n\n", *TEXT_EVENTS)
+
+    assert await stream_chunks(body) == [
+        {"type": "content_delta", "text": "Hello"},
+        {"type": "content_delta", "text": " world"},
+        {"type": "finish", "reason": "stop"},
+        {"type": "usage", "input_tokens": 25, "output_tokens": 10, "reasoning_tokens": 6},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_stream_joins_multiline_sse_data_frames() -> None:
+    body = sse(
+        "event: content_block_delta\n"
+        'data: {"type":"content_block_delta","index":0,\n'
+        'data: "delta":{"type":"text_delta","text":"Hello"}}\n\n'
+    )
+
+    assert await stream_chunks(body) == [{"type": "content_delta", "text": "Hello"}]
+
+
+@pytest.mark.asyncio
+async def test_malformed_sse_json_is_a_fatal_provider_error() -> None:
+    with pytest.raises(ProviderError) as exc_info:
+        await stream_chunks(sse('event: content_block_delta\ndata: {"type":\n\n', stop=False))
+
+    assert exc_info.value.retryable is False
+
+
+@pytest.mark.asyncio
+async def test_stream_ending_without_message_stop_is_a_network_error() -> None:
+    with pytest.raises(NetworkError):
+        await stream_chunks(sse(*TEXT_EVENTS, stop=False))
+
+
+# ---------------------------------------------------------------------------
+# Reasoning, Tool calls and terminal outcome
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_thinking_streams_visibly_and_accumulates_opaque_reasoning_blocks() -> None:
+    thinking = {"type": "thinking", "thinking": "Need weather.", "signature": "opaque-signature"}
+    redacted = {"type": "redacted_thinking", "data": "opaque-redacted"}
+    body = sse(
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "thinking", "thinking": ""},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "thinking_delta", "thinking": "Need"},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "thinking_delta", "thinking": " weather."},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "signature_delta", "signature": "opaque-signature"},
+        },
+        {"type": "content_block_stop", "index": 0},
+        {"type": "content_block_start", "index": 1, "content_block": redacted},
+        {"type": "content_block_stop", "index": 1},
+    )
+
+    assert await stream_chunks(body) == [
+        {"type": "reasoning_delta", "text": "Need"},
+        {"type": "reasoning_delta", "text": " weather."},
+        {"type": "reasoning_meta", "reasoning_meta": {"content_blocks": [thinking]}},
+        {"type": "reasoning_meta", "reasoning_meta": {"content_blocks": [thinking, redacted]}},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_tool_use_streams_name_then_argument_fragments_and_finishes_as_tool_calls() -> None:
+    body = sse(
+        {
+            "type": "content_block_start",
+            "index": 2,
+            "content_block": {
+                "type": "tool_use",
+                "id": "toolu_abc",
+                "name": "get_weather",
+                "input": {},
+            },
+        },
+        {
+            "type": "content_block_delta",
+            "index": 2,
+            "delta": {"type": "input_json_delta", "partial_json": '{"city"'},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 2,
+            "delta": {"type": "input_json_delta", "partial_json": ':"Berlin"}'},
+        },
+        {"type": "message_delta", "delta": {"stop_reason": "end_turn"}},
+    )
+
+    assert await stream_chunks(body) == [
+        {
+            "type": "tool_call_delta",
+            "id": "toolu_abc",
+            "name_delta": "get_weather",
+            "arguments_delta": "",
+        },
+        {
+            "type": "tool_call_delta",
+            "id": "toolu_abc",
+            "name_delta": "",
+            "arguments_delta": '{"city"',
+        },
+        {
+            "type": "tool_call_delta",
+            "id": "toolu_abc",
+            "name_delta": "",
+            "arguments_delta": ':"Berlin"}',
+        },
+        {"type": "finish", "reason": "tool_calls"},
+    ]
+
+
+@pytest.mark.parametrize("name", [None, ""])
+@pytest.mark.asyncio
+async def test_tool_call_with_invalid_name_survives_for_canonical_rejection(name) -> None:
+    def tool_use(index: int, call_id: str, tool_name: object) -> tuple[dict, dict]:
+        block = {"type": "tool_use", "id": call_id, "name": tool_name, "input": {}}
+        return (
+            {"type": "content_block_start", "index": index, "content_block": block},
+            {"type": "content_block_stop", "index": index},
+        )
+
+    body = sse(
+        *tool_use(0, "invalid_call", name),
+        *tool_use(1, "valid_call", "status"),
+        {"type": "message_delta", "delta": {"stop_reason": "tool_use"}},
+    )
+    accumulator = StreamingAccumulator()
+    for delta in await stream_chunks(body):
+        accumulator.add_delta(delta)
+
+    result = accumulator.finalize_assistant_fields()
+    assert result.finish_reason == "tool_calls"
+    assert result.tool_calls is not None
+    assert [call["id"] for call in result.tool_calls] == ["invalid_call", "valid_call"]
+    assert result.tool_calls[0]["rejection"]["code"] == "malformed_tool_call"
+    assert "rejection" not in result.tool_calls[1]
+
+
+@pytest.mark.parametrize(
+    ("stop_reason", "expected"),
+    [("max_tokens", "output_truncated"), ({}, "unknown")],
+)
+@pytest.mark.asyncio
+async def test_stream_stop_reason_maps_to_terminal_outcome(stop_reason, expected) -> None:
+    body = sse({"type": "message_delta", "delta": {"stop_reason": stop_reason}})
+
+    assert await stream_chunks(body) == [{"type": "finish", "reason": expected}]
+
+
+# ---------------------------------------------------------------------------
+# Usage deltas
+# ---------------------------------------------------------------------------
+
+_NO_USAGE = object()
+
+
+@pytest.mark.parametrize(
+    ("start_usage", "terminal_usage", "expected"),
+    [
+        pytest.param(
+            {
+                "input_tokens": 25,
+                "cache_read_input_tokens": 1000,
+                "cache_creation_input_tokens": 200,
+            },
+            {"output_tokens": 10},
+            [
+                {
+                    "input_tokens": 1225,
+                    "output_tokens": 10,
+                    "cache_read_tokens": 1000,
+                    "cache_write_tokens": 200,
+                }
+            ],
+            id="cache-folded-into-input",
+        ),
+        pytest.param(
+            {"input_tokens": 0, "output_tokens": 0},
+            {
+                "input_tokens": 648,
+                "output_tokens": 1180,
+                "cache_read_input_tokens": 125568,
+                "output_tokens_details": {"thinking_tokens": 44},
+            },
+            [
+                {
+                    "input_tokens": 126216,
+                    "output_tokens": 1180,
+                    "cache_read_tokens": 125568,
+                    "reasoning_tokens": 44,
+                }
+            ],
+            id="terminal-snapshot-replaces-start",
+        ),
+        pytest.param(
+            _NO_USAGE, {"output_tokens": 10}, [{"output_tokens": 10}], id="output-without-input"
+        ),
+        pytest.param({"input_tokens": 25}, _NO_USAGE, [], id="no-terminal-usage"),
+        pytest.param(
+            {"input_tokens": 2589},
+            {"output_tokens": 0},
+            [{"input_tokens": 2589, "output_tokens": 0}],
+            id="zero-output",
+        ),
+        pytest.param(
+            {"input_tokens": 17}, {}, [{"input_tokens": 17}], id="terminal-without-output"
+        ),
+        pytest.param(
+            {"input_tokens": 17},
+            {"input_tokens": 23},
+            [{"input_tokens": 23}],
+            id="terminal-input-only",
+        ),
+        pytest.param(
+            {
+                "input_tokens": 17,
+                "cache_read_input_tokens": True,
+                "cache_creation_input_tokens": -20,
+            },
+            {"output_tokens": 8},
+            [{"input_tokens": 17, "output_tokens": 8}],
+            id="unusable-cache-counters",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_stream_usage_keeps_only_measured_counters(
+    start_usage, terminal_usage, expected
+) -> None:
+    message: dict[str, Any] = {"id": "msg_01"}
+    if start_usage is not _NO_USAGE:
+        message["usage"] = start_usage
+    terminal: dict[str, Any] = {"type": "message_delta"}
+    if terminal_usage is not _NO_USAGE:
+        terminal["usage"] = terminal_usage
+
+    chunks = await stream_chunks(sse({"type": "message_start", "message": message}, terminal))
+
+    assert chunks == [{"type": "usage", **usage} for usage in expected]
+
+
+# ---------------------------------------------------------------------------
+# Failures and retry
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("error_type", "expected_type", "retryable"),
+    [
+        ("overloaded_error", ProviderError, True),
+        ("rate_limit_error", ProviderRateLimitError, True),
+        ("timeout_error", ProviderTimeoutError, True),
+        ("invalid_request_error", ProviderError, False),
+        ("authentication_error", ProviderAuthError, False),
+        ("future_unknown_error", ProviderError, False),
+    ],
+)
+@pytest.mark.asyncio
+async def test_in_band_error_event_is_classified_by_its_documented_type(
+    error_type, expected_type, retryable
+) -> None:
+    body = sse(
+        {"type": "message_start", "message": {"usage": {"input_tokens": 1}}},
+        {"type": "error", "error": {"type": error_type, "message": "stream failed"}},
+        stop=False,
+    )
+
+    with pytest.raises(ProviderError, match="stream failed") as exc_info:
+        await stream_chunks(body)
+
+    assert type(exc_info.value) is expected_type
+    assert exc_info.value.retryable is retryable
+
+
+@pytest.mark.parametrize(
+    ("attempt", "expected_type", "calls"),
+    [
+        pytest.param(httpx.Response(401, text="Unauthorized"), ProviderAuthError, 1, id="401"),
+        pytest.param(httpx.TimeoutException("timed out"), ProviderTimeoutError, 4, id="timeout"),
+        pytest.param(httpx.ConnectError("connection failed"), NetworkError, 4, id="connect-error"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_stream_connect_failures_are_classified_after_retries(
+    attempt, expected_type, calls
+) -> None:
+    with respx.mock, patch("core.utils.retry._sleep", new_callable=AsyncMock):
+        route = respx.post(ANTHROPIC_URL).mock(side_effect=[attempt] * 4)
+        with pytest.raises(expected_type):
+            await _collect(make_adapter())
+
+    assert route.call_count == calls
+
+
+class _BrokenStream(httpx.AsyncByteStream):
+    """A response body that fails after the connection is established."""
+
+    def __init__(self, failure: Exception) -> None:
+        self._failure = failure
+        self.closed = False
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield b'event: ping\ndata: {"type":"ping"}\n\n'
+        raise self._failure
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected_type"),
+    [
+        (httpx.ReadError("socket closed"), NetworkError),
+        (httpx.TimeoutException("timed out"), ProviderTimeoutError),
+    ],
+)
+@pytest.mark.asyncio
+async def test_mid_stream_failure_is_wrapped_and_closes_the_response(
+    failure, expected_type
+) -> None:
+    body = _BrokenStream(failure)
+
+    with respx.mock:
+        respx.post(ANTHROPIC_URL).mock(return_value=httpx.Response(200, stream=body))
+        with pytest.raises(expected_type):
+            await _collect(make_adapter())
+
+    assert body.closed is True
 
 
 class _RotatingTokenGetter:
-    """Async token getter that yields a fresh token on each call."""
+    """Token getter that yields a fresh token on each call."""
 
     def __init__(self, tokens: list[str]) -> None:
         self._tokens = tokens
@@ -39,921 +438,18 @@ class _RotatingTokenGetter:
         return token
 
 
-class TestStreamConnectRetryRebuildsHeaders:
-    """stream() must re-consult the token getter on each connect attempt."""
+@pytest.mark.asyncio
+async def test_stream_connect_retry_rebuilds_auth_headers() -> None:
+    adapter = make_adapter(token_getter=_RotatingTokenGetter(["stale-token", "fresh-token"]))
 
-    @respx.mock
-    @pytest.mark.asyncio
-    async def test_stream_rebuilds_auth_header_per_connect_attempt(self) -> None:
-        """A retried stream connect uses a token refreshed during the backoff."""
-        token_getter = _RotatingTokenGetter(["stale-token", "fresh-token"])
-        adapter = AnthropicAdapter(ANTHROPIC_CONFIG, token_getter)
-        sse_body = 'event: message_stop\ndata: {"type":"message_stop"}\n\n'
+    with respx.mock, patch("core.utils.retry._sleep", new_callable=AsyncMock):
         route = respx.post(ANTHROPIC_URL).mock(
-            side_effect=[
-                httpx.Response(503, text="Service Unavailable"),
-                httpx.Response(200, text=sse_body, headers={"content-type": "text/event-stream"}),
-            ]
+            side_effect=[httpx.Response(503, text="Service Unavailable"), sse_response(sse())]
         )
-
-        with patch("core.utils.retry._sleep", new_callable=AsyncMock):
-            async for _ in adapter.stream(SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219"):
-                pass
-
-        assert route.call_count == 2
-        assert route.calls[0].request.headers.get("x-api-key") == "stale-token"
-        assert route.calls[1].request.headers.get("x-api-key") == "fresh-token"
-
-    @respx.mock
-    @pytest.mark.asyncio
-    async def test_stream_rejected_temperature_retries_once_without_it(
-        self, anthropic_adapter
-    ) -> None:
-        """A stream-connect 400 blaming temperature strips it and reconnects once."""
-        # Arrange — thinking disabled so the proactive strip does not apply.
-        sse_body = 'event: message_stop\ndata: {"type":"message_stop"}\n\n'
-        route = respx.post(ANTHROPIC_URL).mock(
-            side_effect=[
-                httpx.Response(
-                    400,
-                    json={
-                        "error": {
-                            "type": "invalid_request_error",
-                            "message": "temperature is not supported for this model",
-                        }
-                    },
-                ),
-                httpx.Response(200, text=sse_body, headers={"content-type": "text/event-stream"}),
-            ]
-        )
-
-        # Act
-        async for _ in anthropic_adapter.stream(
-            SAMPLE_MESSAGES,
-            model_id="claude-sonnet-4-20250219",
-            temperature=0.5,
-            thinking_effort="none",
-        ):
-            pass
-
-        # Assert
-        assert route.call_count == 2
-        first_body = _strip_cache_control(json.loads(route.calls[0].request.content))
-        second_body = _strip_cache_control(json.loads(route.calls[1].request.content))
-        assert first_body["temperature"] == 0.5
-        assert "temperature" not in second_body
-
-
-# ---------------------------------------------------------------------------
-# stream() — SSE parsing
-# ---------------------------------------------------------------------------
-
-
-class TestStreamSSE:
-    """Verify that stream() correctly parses Anthropic SSE event chunks."""
-
-    @respx.mock
-    @pytest.mark.asyncio
-    async def test_stream_yields_normalized_content_and_finish_deltas(self, anthropic_adapter):
-        """stream() parses Anthropic SSE lines into normalized content and finish deltas."""
-        # Arrange
-        sse_body = (
-            "event: message_start\n"
-            'data: {"type":"message_start","message":{"id":"msg_01"}}\n'
-            "\n"
-            "event: content_block_start\n"
-            'data: {"type":"content_block_start","index":0,'
-            '"content_block":{"type":"text","text":""}}\n'
-            "\n"
-            "event: content_block_delta\n"
-            'data: {"type":"content_block_delta","index":0,'
-            '"delta":{"type":"text_delta","text":"Hello"}}\n'
-            "\n"
-            "event: content_block_delta\n"
-            'data: {"type":"content_block_delta","index":0,'
-            '"delta":{"type":"text_delta","text":" world"}}\n'
-            "\n"
-            "event: content_block_stop\n"
-            'data: {"type":"content_block_stop","index":0}\n'
-            "\n"
-            "event: message_delta\n"
-            'data: {"type":"message_delta",'
-            '"delta":{"stop_reason":"end_turn"}}\n'
-            "\n"
-            "event: message_stop\n"
-            'data: {"type":"message_stop"}\n'
-            "\n"
-        )
-        route = respx.post(ANTHROPIC_URL).mock(
-            return_value=httpx.Response(
-                200,
-                text=sse_body,
-                headers={"content-type": "text/event-stream"},
-            )
-        )
-
-        # Act
-        chunks = []
-        async for chunk in anthropic_adapter.stream(
-            SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219"
-        ):
-            chunks.append(chunk)
-
-        # Assert — 7 chunks: message_start, content_block_start,
-        # 2x content_block_delta, content_block_stop, message_delta,
-        # message_stop; only visible deltas and finish are yielded.
-        assert chunks == [
-            {"type": "content_delta", "text": "Hello"},
-            {"type": "content_delta", "text": " world"},
-            {"type": "finish", "reason": "stop"},
-        ]
-        assert route.called
-
-    @respx.mock
-    @pytest.mark.asyncio
-    async def test_stream_preserves_max_tokens_as_output_truncation(self, anthropic_adapter):
-        sse_body = (
-            "event: message_delta\n"
-            'data: {"type":"message_delta","delta":{"stop_reason":"max_tokens"}}\n'
-            "\n"
-            "event: message_stop\n"
-            'data: {"type":"message_stop"}\n'
-            "\n"
-        )
-        respx.post(ANTHROPIC_URL).mock(
-            return_value=httpx.Response(
-                200,
-                text=sse_body,
-                headers={"content-type": "text/event-stream"},
-            )
-        )
-
-        chunks = [
-            chunk
-            async for chunk in anthropic_adapter.stream(
-                SAMPLE_MESSAGES,
-                model_id="claude-sonnet-4-20250219",
-            )
-        ]
-
-        assert chunks == [{"type": "finish", "reason": "output_truncated"}]
-
-    @respx.mock
-    @pytest.mark.asyncio
-    async def test_stream_accepts_multiline_sse_data_frames(self, anthropic_adapter):
-        """SSE data fields may be split across multiple data lines."""
-        # Arrange
-        sse_body = (
-            "event: content_block_delta\n"
-            'data: {"type":"content_block_delta","index":0,\n'
-            'data: "delta":{"type":"text_delta","text":"Hello"}}\n'
-            "\n"
-            "event: message_delta\n"
-            'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}\n'
-            "\n"
-            "event: message_stop\n"
-            'data: {"type":"message_stop"}\n'
-            "\n"
-        )
-        respx.post(ANTHROPIC_URL).mock(
-            return_value=httpx.Response(
-                200,
-                text=sse_body,
-                headers={"content-type": "text/event-stream"},
-            )
-        )
-
-        # Act
-        chunks = []
-        async for chunk in anthropic_adapter.stream(
-            SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219"
-        ):
-            chunks.append(chunk)
-
-        # Assert
-        assert chunks == [
-            {"type": "content_delta", "text": "Hello"},
-            {"type": "finish", "reason": "stop"},
-        ]
-
-    @respx.mock
-    @pytest.mark.asyncio
-    async def test_stream_raises_provider_error_on_malformed_sse_json(self, anthropic_adapter):
-        """Malformed SSE JSON is classified as a non-retryable provider error."""
-        # Arrange
-        sse_body = 'event: content_block_delta\ndata: {"type":\n\n'
-        respx.post(ANTHROPIC_URL).mock(
-            return_value=httpx.Response(
-                200,
-                text=sse_body,
-                headers={"content-type": "text/event-stream"},
-            )
-        )
-
-        # Act / Assert
-        with pytest.raises(ProviderError) as exc_info:
-            async for _ in anthropic_adapter.stream(
-                SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219"
-            ):
-                pass
-        assert exc_info.value.retryable is False
-
-    @respx.mock
-    @pytest.mark.asyncio
-    async def test_stream_yields_reasoning_deltas_and_opaque_metadata(self, anthropic_adapter):
-        """Thinking text streams visibly while supported thinking metadata stays opaque."""
-        # Arrange
-        sse_body = (
-            "event: content_block_start\n"
-            'data: {"type":"content_block_start","index":0,'
-            '"content_block":{"type":"thinking","thinking":""}}\n'
-            "\n"
-            "event: content_block_delta\n"
-            'data: {"type":"content_block_delta","index":0,'
-            '"delta":{"type":"thinking_delta","thinking":"Need"}}\n'
-            "\n"
-            "event: content_block_delta\n"
-            'data: {"type":"content_block_delta","index":0,'
-            '"delta":{"type":"thinking_delta","thinking":" weather."}}\n'
-            "\n"
-            "event: content_block_delta\n"
-            'data: {"type":"content_block_delta","index":0,'
-            '"delta":{"type":"signature_delta","signature":"opaque-signature"}}\n'
-            "\n"
-            "event: content_block_stop\n"
-            'data: {"type":"content_block_stop","index":0}\n'
-            "\n"
-            "event: message_stop\n"
-            'data: {"type":"message_stop"}\n'
-            "\n"
-        )
-        respx.post(ANTHROPIC_URL).mock(
-            return_value=httpx.Response(
-                200,
-                text=sse_body,
-                headers={"content-type": "text/event-stream"},
-            )
-        )
-
-        # Act
-        chunks = []
-        async for chunk in anthropic_adapter.stream(
-            SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219"
-        ):
-            chunks.append(chunk)
-
-        # Assert
-        assert chunks == [
-            {"type": "reasoning_delta", "text": "Need"},
-            {"type": "reasoning_delta", "text": " weather."},
-            {
-                "type": "reasoning_meta",
-                "reasoning_meta": {
-                    "content_blocks": [
-                        {
-                            "type": "thinking",
-                            "thinking": "Need weather.",
-                            "signature": "opaque-signature",
-                        }
-                    ]
-                },
-            },
-        ]
-
-    @respx.mock
-    @pytest.mark.asyncio
-    async def test_stream_yields_tool_call_input_fragments_and_finish(self, anthropic_adapter):
-        """Tool-use blocks stream name and input fragments as normalized tool deltas."""
-        # Arrange
-        sse_body = (
-            "event: content_block_start\n"
-            'data: {"type":"content_block_start","index":2,'
-            '"content_block":{"type":"tool_use","id":"toolu_abc","name":"get_weather",'
-            '"input":{}}}\n'
-            "\n"
-            "event: content_block_delta\n"
-            'data: {"type":"content_block_delta","index":2,'
-            '"delta":{"type":"input_json_delta","partial_json":"{\\"city\\""}}\n'
-            "\n"
-            "event: content_block_delta\n"
-            'data: {"type":"content_block_delta","index":2,'
-            '"delta":{"type":"input_json_delta","partial_json":":\\"Berlin\\"}"}}\n'
-            "\n"
-            "event: message_delta\n"
-            'data: {"type":"message_delta","delta":{"stop_reason":"tool_use"}}\n'
-            "\n"
-            "event: message_stop\n"
-            'data: {"type":"message_stop"}\n'
-            "\n"
-        )
-        respx.post(ANTHROPIC_URL).mock(
-            return_value=httpx.Response(
-                200,
-                text=sse_body,
-                headers={"content-type": "text/event-stream"},
-            )
-        )
-
-        # Act
-        chunks = []
-        async for chunk in anthropic_adapter.stream(
-            SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219"
-        ):
-            chunks.append(chunk)
-
-        # Assert
-        assert chunks == [
-            {
-                "type": "tool_call_delta",
-                "id": "toolu_abc",
-                "name_delta": "get_weather",
-                "arguments_delta": "",
-            },
-            {
-                "type": "tool_call_delta",
-                "id": "toolu_abc",
-                "name_delta": "",
-                "arguments_delta": '{"city"',
-            },
-            {
-                "type": "tool_call_delta",
-                "id": "toolu_abc",
-                "name_delta": "",
-                "arguments_delta": ':"Berlin"}',
-            },
-            {"type": "finish", "reason": "tool_calls"},
-        ]
-
-    @respx.mock
-    @pytest.mark.asyncio
-    async def test_stream_preserves_redacted_thinking_metadata(self, anthropic_adapter):
-        """Redacted-thinking blocks are preserved as opaque metadata without visible deltas."""
-        # Arrange
-        sse_body = (
-            "event: content_block_start\n"
-            'data: {"type":"content_block_start","index":0,'
-            '"content_block":{"type":"redacted_thinking","data":"opaque-redacted"}}\n'
-            "\n"
-            "event: content_block_stop\n"
-            'data: {"type":"content_block_stop","index":0}\n'
-            "\n"
-            "event: message_stop\n"
-            'data: {"type":"message_stop"}\n'
-            "\n"
-        )
-        respx.post(ANTHROPIC_URL).mock(
-            return_value=httpx.Response(
-                200,
-                text=sse_body,
-                headers={"content-type": "text/event-stream"},
-            )
-        )
-
-        # Act
-        chunks = []
-        async for chunk in anthropic_adapter.stream(
-            SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219"
-        ):
-            chunks.append(chunk)
-
-        # Assert
-        assert chunks == [
-            {
-                "type": "reasoning_meta",
-                "reasoning_meta": {
-                    "content_blocks": [{"type": "redacted_thinking", "data": "opaque-redacted"}]
-                },
-            }
-        ]
-
-    @respx.mock
-    @pytest.mark.asyncio
-    async def test_stream_ignores_ping_and_message_bookkeeping_events(self, anthropic_adapter):
-        """Ping, message_start, and message_stop do not leak raw provider events."""
-        # Arrange
-        sse_body = (
-            "event: ping\n"
-            'data: {"type":"ping"}\n'
-            "\n"
-            "event: message_start\n"
-            'data: {"type":"message_start","message":{"id":"msg_01"}}\n'
-            "\n"
-            "event: message_stop\n"
-            'data: {"type":"message_stop"}\n'
-            "\n"
-        )
-        respx.post(ANTHROPIC_URL).mock(
-            return_value=httpx.Response(
-                200,
-                text=sse_body,
-                headers={"content-type": "text/event-stream"},
-            )
-        )
-
-        # Act
-        chunks = []
-        async for chunk in anthropic_adapter.stream(
-            SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219"
-        ):
-            chunks.append(chunk)
-
-        # Assert
-        assert chunks == []
-
-    @respx.mock
-    @pytest.mark.asyncio
-    async def test_stream_includes_stream_true_in_payload(self, anthropic_adapter):
-        """stream() sends stream=true in the request payload."""
-        # Arrange
-        sse_body = (
-            "event: message_start\n"
-            'data: {"type":"message_start","message":{"id":"msg_01"}}\n'
-            "\n"
-            "event: message_stop\n"
-            'data: {"type":"message_stop"}\n'
-            "\n"
-        )
-        route = respx.post(ANTHROPIC_URL).mock(
-            return_value=httpx.Response(
-                200,
-                text=sse_body,
-                headers={"content-type": "text/event-stream"},
-            )
-        )
-
-        # Act
-        async for _ in anthropic_adapter.stream(
-            SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219"
-        ):
-            pass
-
-        # Assert
-        request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
-        assert request_body["stream"] is True
-
-    @respx.mock
-    @pytest.mark.asyncio
-    async def test_stream_ignores_comment_lines(self, anthropic_adapter):
-        """stream() skips comment lines, empty lines, and raw bookkeeping events."""
-        # Arrange
-        sse_body = (
-            ": this is a comment\n"
-            "\n"
-            "event: message_start\n"
-            'data: {"type":"message_start","message":{"id":"msg_01"}}\n'
-            "\n"
-            "event: message_stop\n"
-            'data: {"type":"message_stop"}\n'
-            "\n"
-        )
-        respx.post(ANTHROPIC_URL).mock(
-            return_value=httpx.Response(
-                200,
-                text=sse_body,
-                headers={"content-type": "text/event-stream"},
-            )
-        )
-
-        # Act
-        chunks = []
-        async for chunk in anthropic_adapter.stream(
-            SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219"
-        ):
-            chunks.append(chunk)
-
-        # Assert
-        assert chunks == []
-
-    @respx.mock
-    @pytest.mark.asyncio
-    async def test_stream_extracts_system_message(self, anthropic_adapter):
-        """stream() extracts system messages into the system field."""
-        # Arrange
-        sse_body = 'event: message_stop\ndata: {"type":"message_stop"}\n\n'
-        route = respx.post(ANTHROPIC_URL).mock(
-            return_value=httpx.Response(
-                200,
-                text=sse_body,
-                headers={"content-type": "text/event-stream"},
-            )
-        )
-
-        # Act
-        async for _ in anthropic_adapter.stream(
-            SAMPLE_MESSAGES_WITH_SYSTEM,
-            model_id="claude-sonnet-4-20250219",
-        ):
-            pass
-
-        # Assert
-        request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
-        assert request_body["system"] == [{"type": "text", "text": "You are a helpful assistant."}]
-        for msg in request_body["messages"]:
-            assert msg["role"] != "system"
-
-    @respx.mock
-    @pytest.mark.asyncio
-    async def test_stream_raises_network_error_on_eof_without_message_stop(self, anthropic_adapter):
-        """stream() raises NetworkError when the stream ends without message_stop."""
-        # Arrange
-        sse_body = (
-            "event: message_start\n"
-            'data: {"type":"message_start","message":{"id":"msg_01"}}\n'
-            "\n"
-            "event: content_block_start\n"
-            'data: {"type":"content_block_start","index":0,'
-            '"content_block":{"type":"text","text":""}}\n'
-            "\n"
-            "event: content_block_delta\n"
-            'data: {"type":"content_block_delta","index":0,'
-            '"delta":{"type":"text_delta","text":"Hello"}}\n'
-            "\n"
-            "event: content_block_stop\n"
-            'data: {"type":"content_block_stop","index":0}\n'
-            "\n"
-            "event: message_delta\n"
-            'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}\n'
-            "\n"
-        )
-        respx.post(ANTHROPIC_URL).mock(
-            return_value=httpx.Response(
-                200,
-                text=sse_body,
-                headers={"content-type": "text/event-stream"},
-            )
-        )
-
-        # Act / Assert
-        with pytest.raises(NetworkError):
-            async for _ in anthropic_adapter.stream(
-                SAMPLE_MESSAGES,
-                model_id="claude-sonnet-4-20250219",
-            ):
-                pass
-
-    @respx.mock
-    @pytest.mark.asyncio
-    async def test_stream_raises_provider_error_on_in_band_error_event(self, anthropic_adapter):
-        """stream() raises ProviderError when an in-band Anthropic error event arrives."""
-        # Arrange
-        sse_body = (
-            "event: error\n"
-            'data: {"type":"error","error":{"type":"invalid_request_error","message":"bad"}}\n'
-            "\n"
-        )
-        respx.post(ANTHROPIC_URL).mock(
-            return_value=httpx.Response(
-                200,
-                text=sse_body,
-                headers={"content-type": "text/event-stream"},
-            )
-        )
-
-        # Act / Assert
-        with pytest.raises(ProviderError, match="bad"):
-            async for _ in anthropic_adapter.stream(
-                SAMPLE_MESSAGES,
-                model_id="claude-sonnet-4-20250219",
-            ):
-                pass
-
-    @pytest.mark.parametrize(
-        ("error_type", "expected_type", "retryable"),
-        [
-            ("overloaded_error", ProviderError, True),
-            ("api_error", ProviderError, True),
-            ("rate_limit_error", ProviderRateLimitError, True),
-            ("timeout_error", ProviderTimeoutError, True),
-            ("invalid_request_error", ProviderError, False),
-            ("authentication_error", ProviderAuthError, False),
-            ("permission_error", ProviderError, False),
-            ("billing_error", ProviderError, False),
-            ("request_too_large", ProviderError, False),
-            ("future_unknown_error", ProviderError, False),
-        ],
-    )
-    @respx.mock
-    @pytest.mark.asyncio
-    async def test_in_band_error_event_retryability_follows_documented_error_type(
-        self, anthropic_adapter, error_type, expected_type, retryable
-    ):
-        """A mid-stream error after HTTP 200 is classified by its ``error.type``."""
-        error_event = json.dumps(
-            {"type": "error", "error": {"type": error_type, "message": "stream failed"}}
-        )
-        sse_body = (
-            "event: message_start\n"
-            'data: {"type":"message_start","message":{"usage":{"input_tokens":1}}}\n\n'
-            f"event: error\ndata: {error_event}\n\n"
-        )
-        respx.post(ANTHROPIC_URL).mock(
-            return_value=httpx.Response(
-                200,
-                text=sse_body,
-                headers={"content-type": "text/event-stream"},
-            )
-        )
-
-        with pytest.raises(ProviderError, match="stream failed") as exc_info:
-            async for _ in anthropic_adapter.stream(
-                SAMPLE_MESSAGES,
-                model_id="claude-sonnet-4-20250219",
-            ):
-                pass
-
-        assert type(exc_info.value) is expected_type
-        assert exc_info.value.retryable is retryable
-
-    @respx.mock
-    @pytest.mark.asyncio
-    async def test_stream_401_raises_provider_auth_error(self, anthropic_adapter):
-        """stream() raises ProviderAuthError on 401 — no retry."""
-        # Arrange
-        route = respx.post(ANTHROPIC_URL).mock(
-            return_value=httpx.Response(401, text="Unauthorized")
-        )
-
-        # Act / Assert
-        with pytest.raises(ProviderAuthError):
-            async for _ in anthropic_adapter.stream(
-                SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219"
-            ):
-                pass
-
-        assert route.call_count == 1
-
-    @respx.mock
-    @pytest.mark.asyncio
-    async def test_stream_applies_extra_headers(self, custom_adapter):
-        """stream() includes extra_headers from provider config."""
-        # Arrange
-        sse_body = 'event: message_stop\ndata: {"type":"message_stop"}\n\n'
-        route = respx.post(CUSTOM_URL).mock(
-            return_value=httpx.Response(
-                200,
-                text=sse_body,
-                headers={"content-type": "text/event-stream"},
-            )
-        )
-
-        # Act
-        async for _ in custom_adapter.stream(SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219"):
-            pass
-
-        # Assert
-        request = route.calls.last.request
-        assert request.headers.get("x-custom-header") == "custom-value"
-
-    @respx.mock
-    @pytest.mark.asyncio
-    async def test_stream_timeout_raises_provider_timeout_error(self, anthropic_adapter):
-        """stream() raises ProviderTimeoutError on connection timeout."""
-        # Arrange
-        respx.post(ANTHROPIC_URL).mock(side_effect=httpx.TimeoutException("timed out"))
-
-        # Act / Assert
-        with (
-            patch("core.utils.retry._sleep", new_callable=AsyncMock),
-            pytest.raises(ProviderTimeoutError),
-        ):
-            async for _ in anthropic_adapter.stream(
-                SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219"
-            ):
-                pass
-
-    @respx.mock
-    @pytest.mark.asyncio
-    async def test_stream_connect_error_raises_network_error(self, anthropic_adapter):
-        """stream() raises NetworkError on connection failures."""
-        # Arrange
-        respx.post(ANTHROPIC_URL).mock(side_effect=httpx.ConnectError("connection failed"))
-
-        # Act / Assert
-        with (
-            patch("core.utils.retry._sleep", new_callable=AsyncMock),
-            pytest.raises(NetworkError, match="connection failed"),
-        ):
-            async for _ in anthropic_adapter.stream(
-                SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219"
-            ):
-                pass
-
-    @pytest.mark.asyncio
-    async def test_stream_read_error_raises_network_error(self, anthropic_adapter):
-        """stream() wraps mid-stream httpx.ReadError as NetworkError."""
-
-        request = httpx.Request("POST", ANTHROPIC_URL)
-
-        class _BrokenLineIterator:
-            def __aiter__(self):
-                return self
-
-            async def __anext__(self):
-                raise httpx.ReadError("socket closed", request=request)
-
-        class _BrokenStreamResponse:
-            status_code = 200
-
-            def __init__(self) -> None:
-                self.closed = False
-
-            def aiter_bytes(self):
-                return _BrokenLineIterator()
-
-            async def aclose(self) -> None:
-                self.closed = True
-
-        broken_response = _BrokenStreamResponse()
-        with (
-            patch.object(
-                anthropic_adapter._client,
-                "send",
-                new=AsyncMock(return_value=broken_response),
-            ),
-            pytest.raises(NetworkError, match="socket closed"),
-        ):
-            async for _ in anthropic_adapter.stream(
-                SAMPLE_MESSAGES,
-                model_id="claude-sonnet-4-20250219",
-            ):
-                pass
-
-        assert broken_response.closed is True
-
-    @pytest.mark.asyncio
-    async def test_stream_raises_provider_timeout_error_on_mid_stream_timeout(
-        self,
-        anthropic_adapter,
-    ):
-        """stream() wraps mid-stream httpx.TimeoutException as ProviderTimeoutError."""
-
-        request = httpx.Request("POST", ANTHROPIC_URL)
-
-        class _BrokenTimeoutLineIterator:
-            def __aiter__(self):
-                return self
-
-            async def __anext__(self):
-                raise httpx.TimeoutException("timed out", request=request)
-
-        class _BrokenTimeoutStreamResponse:
-            status_code = 200
-
-            def __init__(self) -> None:
-                self.closed = False
-
-            def aiter_bytes(self):
-                return _BrokenTimeoutLineIterator()
-
-            async def aclose(self) -> None:
-                self.closed = True
-
-        broken_response = _BrokenTimeoutStreamResponse()
-        with (
-            patch.object(
-                anthropic_adapter._client,
-                "send",
-                new=AsyncMock(return_value=broken_response),
-            ),
-            pytest.raises(ProviderTimeoutError),
-        ):
-            async for _ in anthropic_adapter.stream(
-                SAMPLE_MESSAGES,
-                model_id="claude-sonnet-4-20250219",
-            ):
-                pass
-
-        assert broken_response.closed is True
-
-    @pytest.mark.asyncio
-    async def test_stream_raises_network_error_on_mid_stream_remote_protocol_error(
-        self,
-        anthropic_adapter,
-    ):
-        """stream() wraps mid-stream httpx.RemoteProtocolError as NetworkError (h11 disconnect)."""
-
-        request = httpx.Request("POST", ANTHROPIC_URL)
-
-        class _BrokenProtocolLineIterator:
-            def __aiter__(self):
-                return self
-
-            async def __anext__(self):
-                raise httpx.RemoteProtocolError("server disconnected", request=request)
-
-        class _BrokenProtocolStreamResponse:
-            status_code = 200
-
-            def __init__(self) -> None:
-                self.closed = False
-
-            def aiter_bytes(self):
-                return _BrokenProtocolLineIterator()
-
-            async def aclose(self) -> None:
-                self.closed = True
-
-        broken_response = _BrokenProtocolStreamResponse()
-        with (
-            patch.object(
-                anthropic_adapter._client,
-                "send",
-                new=AsyncMock(return_value=broken_response),
-            ),
-            pytest.raises(NetworkError, match="server disconnected"),
-        ):
-            async for _ in anthropic_adapter.stream(
-                SAMPLE_MESSAGES,
-                model_id="claude-sonnet-4-20250219",
-            ):
-                pass
-
-        assert broken_response.closed is True
-
-    @respx.mock
-    @pytest.mark.asyncio
-    async def test_stream_retries_on_429_then_succeeds(self, anthropic_adapter):
-        """stream() retries on 429 and succeeds on next attempt."""
-        # Arrange
-        sse_body = 'event: message_stop\ndata: {"type":"message_stop"}\n\n'
-        route = respx.post(ANTHROPIC_URL).mock(
-            side_effect=[
-                httpx.Response(429, text="Rate limited"),
-                httpx.Response(
-                    200,
-                    text=sse_body,
-                    headers={"content-type": "text/event-stream"},
-                ),
-            ]
-        )
-
-        # Act
-        with patch("core.utils.retry._sleep", new_callable=AsyncMock):
-            chunks = []
-            async for chunk in anthropic_adapter.stream(
-                SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219"
-            ):
-                chunks.append(chunk)
-
-        # Assert
-        assert route.call_count == 2
-        assert chunks == []
-
-    @respx.mock
-    @pytest.mark.asyncio
-    async def test_stream_applies_anthropic_version_header(self, anthropic_adapter):
-        """stream() sends the anthropic-version header."""
-        # Arrange
-        sse_body = 'event: message_stop\ndata: {"type":"message_stop"}\n\n'
-        route = respx.post(ANTHROPIC_URL).mock(
-            return_value=httpx.Response(
-                200,
-                text=sse_body,
-                headers={"content-type": "text/event-stream"},
-            )
-        )
-
-        # Act
-        async for _ in anthropic_adapter.stream(
-            SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219"
-        ):
-            pass
-
-        # Assert
-        version_header = route.calls.last.request.headers.get("anthropic-version")
-        assert version_header == "2023-06-01"
-
-    @respx.mock
-    @pytest.mark.asyncio
-    async def test_stream_thinking_kwargs_in_payload(self, anthropic_adapter):
-        """stream() passes through thinking and output_config kwargs."""
-        # Arrange
-        sse_body = 'event: message_stop\ndata: {"type":"message_stop"}\n\n'
-        route = respx.post(ANTHROPIC_URL).mock(
-            return_value=httpx.Response(
-                200,
-                text=sse_body,
-                headers={"content-type": "text/event-stream"},
-            )
-        )
-        thinking = {"type": "adaptive"}
-        output_config = {"effort": "high"}
-
-        # Act
-        async for _ in anthropic_adapter.stream(
-            SAMPLE_MESSAGES,
-            model_id="claude-sonnet-4-20250219",
-            thinking=thinking,
-            output_config=output_config,
-        ):
-            pass
-
-        # Assert
-        request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
-        assert request_body["thinking"] == thinking
-        assert request_body["output_config"] == output_config
-
-
-# ---------------------------------------------------------------------------
-# stream() — usage delta emission
-# ---------------------------------------------------------------------------
+        assert await _collect(adapter) == []
+
+    assert [call.request.headers["x-api-key"] for call in route.calls] == [
+        "stale-token",
+        "fresh-token",
+    ]
+    assert route.calls[1].request.headers["anthropic-version"] == "2023-06-01"
