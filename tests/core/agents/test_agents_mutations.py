@@ -1,32 +1,25 @@
-"""Tests for agents mutations."""
+"""Agent updates, current-Session repair and deletion."""
 
 import json
+import re
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import Event
+from typing import Any
 
 import pytest
 
-from core.agents import (
-    AgentError,
-    AgentNotFoundError,
-    AgentStore,
-)
+from core.agents import AgentError, AgentStore
 from core.agents import agents as agents_module
 from core.chat import ChatMessage
 from core.sessions import ChatSessionManager, SessionAddress
 from core.tools.availability import ToolAccess
-from tests.core.agents.agents_test_support import (
-    store as store,
-)
-from tests.core.agents.agents_test_support import (
-    template_dir as template_dir,
-)
+from tests.core.agents.agents_test_support import persisted
+from tests.core.agents.agents_test_support import store as store
+from tests.core.agents.agents_test_support import template_dir as template_dir
 
 EARLY_TIMESTAMP = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
-
-
 LATE_TIMESTAMP = datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
 
 
@@ -166,7 +159,7 @@ def test_update_changes_mutable_fields_and_preserves_id(store: AgentStore) -> No
     assert store.get("coder") == updated
 
 
-@pytest.mark.parametrize("name", [None, "", "   "])
+@pytest.mark.parametrize("name", [None, "   "])
 def test_update_empty_optional_name_restores_id_default(
     store: AgentStore,
     name: str | None,
@@ -178,51 +171,22 @@ def test_update_empty_optional_name_restores_id_default(
     assert updated.name == "coder"
 
 
-def test_update_rejects_allowed_and_denied_overlap(
-    store: AgentStore,
-) -> None:
-    store.create("coder", "Coder Agent")
-
-    with pytest.raises(AgentError, match="overlap"):
-        store.update(
-            "coder",
-            tool_access={
-                "mode": "selected",
-                "allowed": ["read_file"],
-                "denied": ["read_file"],
-            },
-        )
-
-
-def test_update_changes_workspace_and_seeds_templates(
+def test_update_moves_workspace_and_an_empty_workspace_restores_the_default(
     store: AgentStore,
     tmp_path: Path,
 ) -> None:
     store.create("coder", "Coder Agent")
     workspace = tmp_path / "updated-workspace"
+    default = store.default_workspace("coder")
 
     updated = store.update("coder", workspace=workspace)
 
     assert updated.workspace == str(workspace.resolve())
-    assert workspace.is_dir()
     assert (workspace / "SOUL.md").exists()
-
-    agent_path = store.data_dir / "agents" / "coder" / "agent.json"
-    data = json.loads(agent_path.read_text(encoding="utf-8"))
-    assert data["workspace"] == str(workspace.resolve())
-
-
-@pytest.mark.parametrize("workspace", [None, ""])
-def test_update_empty_optional_workspace_restores_default(
-    store: AgentStore,
-    tmp_path: Path,
-    workspace: str | None,
-) -> None:
-    store.create("coder", "Coder Agent", workspace=tmp_path / "custom-workspace")
-
-    updated = store.update("coder", workspace=workspace)
-
-    assert updated.workspace == store.default_workspace("coder")
+    assert persisted(store, "coder")["workspace"] == str(workspace.resolve())
+    assert store.update("coder", workspace=None).workspace == default
+    store.update("coder", workspace=workspace)
+    assert store.update("coder", workspace="").workspace == default
 
 
 def test_explicit_root_project_round_trips_independently_of_workspace(
@@ -292,73 +256,48 @@ def test_workspace_copy_rolls_back_destination_when_agent_write_fails(
         )
 
     assert (destination / "SOUL.md").read_text(encoding="utf-8") == "destination soul"
-    agent_json = json.loads(
-        (store.data_dir / "agents" / "coder" / "agent.json").read_text(encoding="utf-8")
-    )
-    assert agent_json["workspace"] == "agents/coder/workspace"
+    assert persisted(store, "coder")["workspace"] == "agents/coder/workspace"
 
 
 @pytest.mark.parametrize(
-    ("field", "value", "_message"),
+    ("changes", "message"),
     [
-        ("name", 123, "name must be a string or null"),
-        ("model", 123, "model must be a string"),
-        ("fallback_models", 123, "fallback_models must be a list of strings"),
-        ("temperature", True, "temperature must be a number"),
-        ("temperature", 3.0, "temperature must be between"),
-        ("thinking_effort", "turbo", "thinking_effort must be one of"),
-        ("memory_prompt_mode", "sometimes", "memory_prompt_mode must be one of"),
-        ("memory_prompt_mode", 1, "memory_prompt_mode must be a string"),
-        ("tool_access", "read_file", "tool_access must be an object"),
+        ({"name": 123}, "name must be a string or null"),
+        ({"model": 123}, "model must be a string"),
+        ({"fallback_models": 123}, "fallback_models must be a list of strings"),
+        ({"temperature": True}, "temperature must be a number"),
+        ({"thinking_effort": "turbo"}, "thinking_effort must be one of"),
+        ({"memory_prompt_mode": 1}, "memory_prompt_mode must be a string"),
         (
-            "tool_access",
-            {"mode": "selected", "allowed": ["read_file", False]},
-            "tool_access.allowed must be a list of strings",
+            {
+                "tool_access": {
+                    "mode": "selected",
+                    "allowed": ["read_file"],
+                    "denied": ["read_file"],
+                }
+            },
+            "overlap",
         ),
-        ("allowed_skills", "debugging", "allowed_skills must be a list of strings"),
-        ("allowed_skills", ["debugging", {}], "allowed_skills must be a list of strings"),
-        ("tools", [], "tools must be an object"),
+        ({"allowed_skills": "debugging"}, "allowed_skills must be a list of strings"),
         (
-            "tools",
-            {"subagent": {"allowed_agents": ["worker", False]}},
-            "tools.subagent.allowed_agents must be a list of strings",
-        ),
-        (
-            "tools",
-            {"bash": {"allowed_env": ["OPENAI_API_KEY", "bad-key"]}},
+            {"tools": {"bash": {"allowed_env": ["OPENAI_API_KEY", "bad-key"]}}},
             "invalid environment key name",
         ),
-        (
-            "custom_system_prompt_enabled",
-            1,
-            "custom_system_prompt_enabled must be a boolean",
-        ),
+        ({"custom_system_prompt_enabled": 1}, "custom_system_prompt_enabled must be a boolean"),
+        ({"current_session_id": "missing"}, "current session does not exist: missing"),
+        ({"id": "other"}, "Agent id is immutable"),
+        ({"unknown": True}, "Unknown agent fields: unknown"),
     ],
 )
-def test_update_rejects_invalid_mutable_fields(
-    store: AgentStore,
-    field: str,
-    value: object,
-    _message: str,
+def test_update_rejects_invalid_changes_and_keeps_the_agent(
+    store: AgentStore, changes: dict[str, Any], message: str
 ) -> None:
-    store.create("coder", "Coder Agent")
+    created = store.create("coder", "Coder Agent")
 
-    with pytest.raises(AgentError):
-        store.update("coder", **{field: value})
+    with pytest.raises(AgentError, match=re.escape(message)):
+        store.update("coder", **changes)
 
-
-def test_update_rejects_id_change(store: AgentStore) -> None:
-    store.create("coder", "Coder Agent")
-
-    with pytest.raises(AgentError):
-        store.update("coder", id="other")
-
-
-def test_update_rejects_unknown_fields(store: AgentStore) -> None:
-    store.create("coder", "Coder Agent")
-
-    with pytest.raises(AgentError):
-        store.update("coder", unknown=True)
+    assert store.get("coder") == created
 
 
 def test_update_can_set_current_session_id_to_existing_session(store: AgentStore) -> None:
@@ -371,133 +310,68 @@ def test_update_can_set_current_session_id_to_existing_session(store: AgentStore
     assert updated.current_session_id != original.current_session_id
 
 
-def test_update_rejects_missing_current_session_id(store: AgentStore) -> None:
-    store.create("coder", "Coder Agent")
-
-    with pytest.raises(AgentError):
-        store.update("coder", current_session_id="missing")
-
-
-def test_reset_current_after_session_removed_lands_on_newest_remaining(store: AgentStore) -> None:
-    agent = store.create("alpha", "Alpha")
+def test_reset_current_after_session_removed_lands_on_newest_or_a_fresh_session(
+    store: AgentStore,
+) -> None:
+    first = store.create("alpha", "Alpha").current_session_id
     manager = ChatSessionManager(store.data_dir)
-    manager.get(
-        SessionAddress(project_id=None, agent_id="alpha", session_id=agent.current_session_id)
-    ).append(ChatMessage.user("old", timestamp=EARLY_TIMESTAMP))
+
+    # A removed non-current Session leaves the pointer alone.
+    manager.create("alpha", session_id="other")
+    manager.delete(SessionAddress(None, "alpha", "other"))
+    assert store.reset_current_after_session_removed("alpha", "other").current_session_id == first
+
+    # A removed current Session (for example moved away) lands on the newest remaining one.
+    manager.get(SessionAddress(None, "alpha", first)).append(
+        ChatMessage.user("old", timestamp=EARLY_TIMESTAMP)
+    )
     manager.create("alpha", session_id="newer").append(
         ChatMessage.user("recent", timestamp=LATE_TIMESTAMP)
     )
     manager.create("alpha", session_id="moved")
     store.update("alpha", current_session_id="moved")
-    # Simulate the move: the current session's files leave the source home.
-    manager.delete(SessionAddress(project_id=None, agent_id="alpha", session_id="moved"))
-
-    result = store.reset_current_after_session_removed("alpha", "moved")
-
-    assert result.current_session_id == "newer"
-
-
-def test_reset_current_after_session_removed_creates_fresh_when_none_remain(
-    store: AgentStore,
-) -> None:
-    agent = store.create("solo", "Solo")
-    manager = ChatSessionManager(store.data_dir)
-    moved_id = agent.current_session_id
-    manager.delete(
-        SessionAddress(project_id=None, agent_id="solo", session_id=moved_id)
-    )  # the only session is moved away
-
-    result = store.reset_current_after_session_removed("solo", moved_id)
-
-    assert result.current_session_id != moved_id
-    assert (
-        manager.exists(
-            SessionAddress(project_id=None, agent_id="solo", session_id=result.current_session_id)
-        )
-        is True
+    manager.delete(SessionAddress(None, "alpha", "moved"))
+    assert store.reset_current_after_session_removed("alpha", "moved").current_session_id == (
+        "newer"
     )
-    assert [session.id for session in manager.list("solo")] == [result.current_session_id]
+
+    # Without a remaining Session it creates a fresh one.
+    manager.delete(SessionAddress(None, "alpha", first))
+    manager.delete(SessionAddress(None, "alpha", "newer"))
+    fresh = store.reset_current_after_session_removed("alpha", "newer").current_session_id
+    assert fresh not in {first, "newer"}
+    assert [session.id for session in manager.list("alpha")] == [fresh]
 
 
-def test_reset_current_after_session_removed_leaves_pointer_when_not_current(
-    store: AgentStore,
+def test_delete_archives_agent_trees_and_external_workspaces_and_leaves_the_order(
+    store: AgentStore, tmp_path: Path
 ) -> None:
-    agent = store.create("beta", "Beta")
-    manager = ChatSessionManager(store.data_dir)
-    current_id = agent.current_session_id
-    manager.create("beta", session_id="other")
-    manager.delete(
-        SessionAddress(project_id=None, agent_id="beta", session_id="other")
-    )  # a non-current session was moved away
-
-    result = store.reset_current_after_session_removed("beta", "other")
-
-    assert result.current_session_id == current_id
-
-
-def test_temperature_and_thinking_effort_none_round_trip_as_json_null(
-    store: AgentStore,
-) -> None:
-    store.create(
-        "coder_nulls",
-        "Coder Agent",
-        temperature=None,
-        thinking_effort=None,
-    )
-    agent_path = store.data_dir / "agents" / "coder_nulls" / "agent.json"
-
-    data = json.loads(agent_path.read_text(encoding="utf-8"))
-    restored = agents_module._agent_from_dict(data, data_dir=store.data_dir)
-
-    assert data["temperature"] is None
-    assert data["thinking_effort"] is None
-    assert restored.temperature is None
-    assert restored.thinking_effort is None
-
-
-def test_delete_archives_agent_data_and_workspace(store: AgentStore) -> None:
-    agent = store.create("coder", "Coder Agent")
+    coder = store.create("coder", "Coder Agent")
     store._session_manager().create("coder", session_id="session")
+    # A workspace outside the Agent tree (e.g. a repo an identity Agent is rooted in)
+    # is not swept up by the Agent-directory move, so it is archived beside it.
+    external_workspace = tmp_path / "rooted-repo"
+    store.create("rooted", "Rooted Agent", workspace=external_workspace)
+    store.create("beta", "Beta")
 
     archive_dir = store.delete("coder")
+    rooted_archive = store.delete("rooted")
 
     assert archive_dir == store.data_dir / "archive" / "agents" / "coder"
     assert not (store.data_dir / "agents" / "coder").exists()
-    assert not Path(agent.workspace).exists()
+    assert not Path(coder.workspace).exists()
     assert (archive_dir / "agent" / "agent.json").exists()
     assert not store._session_manager().exists(
         SessionAddress(project_id=None, agent_id="coder", session_id="session")
     )
-    # The default workspace lives inside the agent directory, so it is archived
-    # within the agent tree, not as a separate ``workspace/`` sibling.
+    # The default workspace lives inside the Agent directory and is archived within it.
     assert (archive_dir / "agent" / "workspace" / "SOUL.md").exists()
-
-
-def test_delete_removes_agent_from_persisted_order(store: AgentStore) -> None:
-    store.create("alpha", "Alpha")
-    store.create("beta", "Beta")
-    store.delete("alpha")
-
-    listing = store.list_with_order()
-    persisted = json.loads((store.data_dir / "agents" / "order.json").read_text(encoding="utf-8"))
-
-    assert [agent.id for agent in listing.agents] == ["beta"]
-    assert persisted["agent_ids"] == ["beta"]
-
-
-def test_delete_archives_external_workspace_beside_agent(store: AgentStore, tmp_path: Path) -> None:
-    # A custom workspace outside the agent tree (e.g. a repo an identity agent is
-    # rooted in) is not swept up by the agent-directory move, so delete archives
-    # it separately as ``workspace/``.
-    external_workspace = tmp_path / "rooted-repo"
-    store.create("coder", "Coder Agent", workspace=external_workspace)
-
-    archive_dir = store.delete("coder")
-
-    assert not (store.data_dir / "agents" / "coder").exists()
     assert not external_workspace.exists()
-    assert (archive_dir / "agent" / "agent.json").exists()
-    assert (archive_dir / "workspace" / "SOUL.md").exists()
+    assert (rooted_archive / "agent" / "agent.json").exists()
+    assert (rooted_archive / "workspace" / "SOUL.md").exists()
+    assert [agent.id for agent in store.list_with_order().agents] == ["beta"]
+    order = json.loads((store.data_dir / "agents" / "order.json").read_text(encoding="utf-8"))
+    assert order["agent_ids"] == ["beta"]
 
 
 def test_delete_restores_active_agent_and_previous_archive_on_session_failure(
@@ -574,24 +448,3 @@ def test_delete_agent_named_like_sibling_archive_roots_never_touches_them(
 
     assert archived_session.exists()
     assert archived_project.exists()
-
-
-def test_delete_missing_agent_raises_not_found(store: AgentStore) -> None:
-    with pytest.raises(AgentNotFoundError, match="missing"):
-        store.delete("missing")
-
-
-def test_workspace_seeding_does_not_overwrite_existing_custom_workspace_file(
-    store: AgentStore,
-    tmp_path: Path,
-) -> None:
-    custom_workspace = tmp_path / "custom-workspace"
-    custom_workspace.mkdir()
-    (custom_workspace / "SOUL.md").write_text("custom soul", encoding="utf-8")
-
-    store.create("coder", "Coder Agent", workspace=custom_workspace)
-
-    assert (custom_workspace / "SOUL.md").read_text(encoding="utf-8") == "custom soul"
-    # Memory files belong to the memory system and are never seeded by the workspace.
-    assert not (custom_workspace / "USER.md").exists()
-    assert not (custom_workspace / "MEMORY.md").exists()

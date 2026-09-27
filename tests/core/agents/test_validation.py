@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+from typing import Any
+
+import pytest
+
 from core.agents import validate_agent_data
 
 
-def _valid_agent_data() -> dict[str, object]:
+def _valid_agent_data() -> dict[str, Any]:
     return {
         "format_version": 1,
         "id": "coder",
@@ -30,142 +34,102 @@ def _diagnostics(data: object) -> list[tuple[str, str, str]]:
     ]
 
 
-def test_validate_agent_data_accepts_missing_custom_prompt_toggle() -> None:
-    data = _valid_agent_data()
-    del data["custom_system_prompt_enabled"]
+def _all_optional_fields_null() -> dict[str, Any]:
+    data: dict[str, Any] = dict.fromkeys(
+        [
+            *_valid_agent_data(),
+            "workspace",
+            "root_project_id",
+            "tools",
+            "compaction_policy",
+            "current_session_id",
+        ]
+    )
+    data.update(format_version=1, id="minimal")
+    return data
 
-    assert validate_agent_data(data) == []
 
-
-def test_validate_agent_data_accepts_missing_tool_settings() -> None:
-    data = _valid_agent_data()
-
+@pytest.mark.parametrize(
+    "data",
+    [
+        _valid_agent_data(),
+        {"format_version": 1, "id": "minimal"},
+        # Null optional fields count as missing.
+        _all_optional_fields_null(),
+    ],
+    ids=["complete", "only-id", "null-optional-fields"],
+)
+def test_validate_agent_data_accepts_a_document_that_names_only_its_id(
+    data: dict[str, Any],
+) -> None:
     assert _diagnostics(data) == []
 
 
-def test_validate_agent_data_requires_only_id() -> None:
-    assert _diagnostics({"format_version": 1, "id": "minimal"}) == []
-
-
-def test_validate_agent_data_treats_null_optional_fields_as_missing() -> None:
-    data = dict.fromkeys(_valid_agent_data())
-    data["format_version"] = 1
-    data["id"] = "minimal"
-    data["workspace"] = None
-    data["root_project_id"] = None
-    data["tools"] = None
-    data["compaction_policy"] = None
-    data["current_session_id"] = None
-
-    assert _diagnostics(data) == []
-
-
-def test_validate_agent_data_rejects_missing_id_once() -> None:
-    assert _diagnostics({"format_version": 1}) == [
+@pytest.mark.parametrize(
+    ("changes", "diagnostic"),
+    [
+        ({"id": None}, ("$.id", "must be a non-empty string")),
         (
-            "error",
-            "$.id",
-            "must be a non-empty string",
-        )
-    ]
-
-
-def test_validate_agent_data_validates_optional_subagent_tool_settings() -> None:
-    data = _valid_agent_data()
-    data["tools"] = {"subagent": {"allowed_agents": ["worker", 1]}}
-
-    assert _diagnostics(data) == [
+            {"tools": {"subagent": {"allowed_agents": ["worker", 1]}}},
+            ("$.tools.subagent.allowed_agents[1]", "must be a string"),
+        ),
         (
-            "error",
-            "$.tools.subagent.allowed_agents[1]",
-            "must be a string",
-        )
-    ]
-
-
-def test_validate_agent_data_validates_optional_bash_env_grants() -> None:
-    data = _valid_agent_data()
-    data["tools"] = {"bash": {"allowed_env": ["OPENAI_API_KEY", "bad-key"]}}
-
-    assert _diagnostics(data) == [
+            {"tools": {"bash": {"allowed_env": ["OPENAI_API_KEY", "bad-key"]}}},
+            (
+                "$.tools.bash.allowed_env",
+                "tools.bash.allowed_env has invalid environment key name(s): 'bad-key'",
+            ),
+        ),
         (
-            "error",
-            "$.tools.bash.allowed_env",
-            "tools.bash.allowed_env has invalid environment key name(s): 'bad-key'",
-        )
-    ]
-
-
-def test_validate_agent_data_rejects_non_bool_custom_prompt_toggle() -> None:
-    data = _valid_agent_data()
-    data["custom_system_prompt_enabled"] = "yes"
-
-    assert _diagnostics(data) == [("error", "$.custom_system_prompt_enabled", "must be a boolean")]
-
-
-def test_validate_agent_data_rejects_invalid_memory_prompt_mode() -> None:
-    data = _valid_agent_data()
-    data["memory_prompt_mode"] = "sometimes"
-
-    assert _diagnostics(data) == [
-        ("error", "$.memory_prompt_mode", "must be one of: agent, agent_user, off")
-    ]
-
-
-def test_validate_agent_data_treats_null_memory_prompt_mode_as_missing() -> None:
-    data = _valid_agent_data()
-    data["memory_prompt_mode"] = None
-
-    assert _diagnostics(data) == []
-
-
-def test_validate_agent_data_rejects_non_finite_temperature() -> None:
-    data = _valid_agent_data()
-    data["temperature"] = float("nan")
-
-    assert _diagnostics(data) == [("error", "$.temperature", "must be finite")]
-
-
-def test_validate_agent_data_rejects_out_of_range_temperature() -> None:
-    data = _valid_agent_data()
-    data["temperature"] = 2.5
-
-    assert _diagnostics(data) == [("error", "$.temperature", "must be between 0 and 2")]
-
-
-def test_validate_agent_data_rejects_invalid_thinking_effort() -> None:
-    data = _valid_agent_data()
-    data["thinking_effort"] = "extreme"
-
-    assert _diagnostics(data) == [
+            {"custom_system_prompt_enabled": "yes"},
+            ("$.custom_system_prompt_enabled", "must be a boolean"),
+        ),
         (
-            "error",
-            "$.thinking_effort",
-            "must be one of: '', 'high', 'low', 'max', 'medium', 'minimal', 'none', 'xhigh'",
-        )
-    ]
-
-
-def test_validate_agent_data_rejects_non_string_fallback_models_entry() -> None:
+            {"memory_prompt_mode": "sometimes"},
+            ("$.memory_prompt_mode", "must be one of: agent, agent_user, off"),
+        ),
+        ({"temperature": float("nan")}, ("$.temperature", "must be finite")),
+        ({"temperature": 2.5}, ("$.temperature", "must be between 0 and 2")),
+        (
+            {"thinking_effort": "extreme"},
+            (
+                "$.thinking_effort",
+                "must be one of: '', 'high', 'low', 'max', 'medium', 'minimal', 'none', 'xhigh'",
+            ),
+        ),
+        (
+            {"fallback_models": ["openai/gpt-5.2", 12]},
+            ("$.fallback_models", "must be a list of strings"),
+        ),
+        (
+            {"fallback_models": ["openai/gpt-5.2", "openai/gpt-5.2"]},
+            ("$.fallback_models", "must not contain duplicates: openai/gpt-5.2"),
+        ),
+        (
+            {"fallback_models": [f"openai/model-{index}" for index in range(6)]},
+            ("$.fallback_models", "accepts at most 5 entries, got 6"),
+        ),
+    ],
+    ids=[
+        "missing-id",
+        "subagent-target",
+        "bash-env-key",
+        "custom-prompt-toggle",
+        "memory-mode",
+        "non-finite-temperature",
+        "temperature-range",
+        "thinking-effort",
+        "fallback-entry",
+        "fallback-duplicates",
+        "fallback-length",
+    ],
+)
+def test_validate_agent_data_reports_one_error_per_invalid_field(
+    changes: dict[str, Any], diagnostic: tuple[str, str]
+) -> None:
     data = _valid_agent_data()
-    data["fallback_models"] = ["openai/gpt-5.2", 12]
+    data.update(changes)
+    if data["id"] is None:
+        del data["id"]
 
-    assert _diagnostics(data) == [("error", "$.fallback_models", "must be a list of strings")]
-
-
-def test_validate_agent_data_rejects_duplicate_fallback_models() -> None:
-    data = _valid_agent_data()
-    data["fallback_models"] = ["openai/gpt-5.2", "openai/gpt-5.2"]
-
-    assert _diagnostics(data) == [
-        ("error", "$.fallback_models", "must not contain duplicates: openai/gpt-5.2")
-    ]
-
-
-def test_validate_agent_data_rejects_overlong_fallback_models() -> None:
-    data = _valid_agent_data()
-    data["fallback_models"] = [f"openai/model-{index}" for index in range(6)]
-
-    assert _diagnostics(data) == [
-        ("error", "$.fallback_models", "accepts at most 5 entries, got 6")
-    ]
+    assert _diagnostics(data) == [("error", *diagnostic)]

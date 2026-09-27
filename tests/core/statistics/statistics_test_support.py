@@ -1,23 +1,27 @@
-"""Shared fixtures and fakes for statistics behavior tests."""
+"""Shared fakes and history builders for Statistics behavior tests."""
 
 from __future__ import annotations
 
 import builtins
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import cast
+
+import pytest
 
 from core.chat.messages import ChatMessage
-from core.sessions import ChatSessionManager
-from core.statistics import (
-    AgentDirectory,
-    StatisticsService,
-)
+from core.sessions import ChatSession, ChatSessionManager, SessionReadBatch, SessionReadCursor
+from core.statistics import StatisticsService
 from tests.core.sessions.history_fixtures import seed_history
 
 BASE = datetime(2026, 6, 1, 12, 0, 0, tzinfo=UTC)
+
+# ``statistics(agent_ids=("main",), *, projects=None, index=None, **options)`` from
+# the ``statistics`` fixture: a service over the test's ``manager`` whose index is
+# closed after the test.
+StatisticsFactory = Callable[..., StatisticsService]
 
 
 @dataclass(frozen=True)
@@ -126,13 +130,35 @@ def _compaction(
     )
 
 
-def _write_session(manager: ChatSessionManager, agent_id: str, messages: list[ChatMessage]) -> str:
-    session = manager.create(agent_id)
+def _write_session(
+    manager: ChatSessionManager,
+    agent_id: str,
+    messages: list[ChatMessage],
+    *,
+    project_id: str | None = None,
+    session_id: str | None = None,
+) -> str:
+    session = manager.create(agent_id, session_id=session_id, project_id=project_id)
     seed_history(session, messages)
     return session.id
 
 
-def _service(tmp_path: Path, agent_ids: list[str]) -> tuple[StatisticsService, ChatSessionManager]:
-    manager = ChatSessionManager(tmp_path)
-    service = StatisticsService(manager, cast(AgentDirectory, _FakeAgents(agent_ids)))
-    return service, manager
+def _index_path(data_dir: Path) -> Path:
+    return data_dir / "statistics" / "session-statistics.sqlite"
+
+
+def _record_canonical_reads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> list[tuple[str, SessionReadCursor | None]]:
+    """Record every canonical Session history read as ``(session_id, cursor)``."""
+    reads: list[tuple[str, SessionReadCursor | None]] = []
+    load_since = ChatSession.load_since
+
+    def recording_load_since(
+        self: ChatSession, cursor: SessionReadCursor | None = None
+    ) -> SessionReadBatch | None:
+        reads.append((self.id, cursor))
+        return load_since(self, cursor)
+
+    monkeypatch.setattr(ChatSession, "load_since", recording_load_since)
+    return reads

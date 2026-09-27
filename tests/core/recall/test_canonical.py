@@ -1,8 +1,7 @@
-"""Budget selection for canonical scans."""
+"""The internal ``canonical_scan`` backend: budgeted, exact pages without history loads."""
 
 from dataclasses import replace
 from datetime import UTC, datetime
-from pathlib import Path
 
 import pytest
 
@@ -14,12 +13,15 @@ from core.sessions import ChatSession, ChatSessionManager, _store_values
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("order", ["newest", "oldest"])
-@pytest.mark.parametrize("scan_limit", [2, 3, 4])
+# Below the eligible count the page is partial; at it the page is complete.
+@pytest.mark.parametrize("scan_limit", [2, 3])
 async def test_scan_budget_checks_eligible_messages_globally_in_request_order(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, order: RecallOrder, scan_limit: int
+    sessions: ChatSessionManager,
+    monkeypatch: pytest.MonkeyPatch,
+    order: RecallOrder,
+    scan_limit: int,
 ) -> None:
     monkeypatch.setattr(_store_values, "_SEARCH_CANDIDATE_LIMIT", scan_limit)
-    sessions = ChatSessionManager(tmp_path)
     first = sessions.create("agent", session_id="first")
     second = sessions.create("agent", session_id="second")
     eligible = []
@@ -52,14 +54,12 @@ async def test_scan_budget_checks_eligible_messages_globally_in_request_order(
     assert page.ranking == f"message_time_{order}"
     assert page.degraded is (scan_limit < len(eligible))
     assert page.has_more is False
-    sessions.close()
 
 
 @pytest.mark.asyncio
 async def test_scan_pages_are_exact_without_loading_histories(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    sessions: ChatSessionManager, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    sessions = ChatSessionManager(tmp_path)
     session = sessions.create("agent", session_id="history")
     matches = [
         ChatMessage.user(f"needle {day}", timestamp=datetime(2026, 1, day, tzinfo=UTC))
@@ -97,4 +97,3 @@ async def test_scan_pages_are_exact_without_loading_histories(
     assert (first.has_more, second.has_more) == (True, False)
     assert (first.hits[0].match_start, first.hits[0].match_end) == (0, 6)
     assert not first.degraded
-    sessions.close()

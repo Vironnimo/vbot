@@ -1,4 +1,8 @@
+"""Temporary Agents: immutable configuration, bindings, protected Chat and execution groups."""
+
 import asyncio
+import threading
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
@@ -34,6 +38,31 @@ from tests.core.chat.chat_loop_support import (
 )
 
 
+@pytest.fixture
+def sessions(tmp_path: Path) -> Iterator[ChatSessionManager]:
+    write_bootstrap_marker(tmp_path)
+    manager = ChatSessionManager(tmp_path)
+    yield manager
+    manager.close()
+
+
+def _config(cwd: Path, /, **overrides: Any) -> TemporaryAgentConfig:
+    fields: dict[str, Any] = {
+        "model": "provider/model",
+        "cwd": cwd,
+        "tool_access": ToolAccess(mode="selected", allowed=()),
+        "allowed_skills": [],
+        "tools": {},
+        "name": "Participant",
+        **overrides,
+    }
+    return TemporaryAgentConfig(**fields)
+
+
+def group_config(tmp_path: Path) -> TemporaryAgentConfig:
+    return _config(tmp_path, model="fixture/model", name="Peer")
+
+
 def install_temporary_fixture_extension(runtime, tmp_path, owner_name):
     from core.extensions import ExtensionAPI, ExtensionRecord, ExtensionRegistry
     from core.extensions.extensions import ExtensionDeclarations
@@ -63,17 +92,37 @@ def install_temporary_fixture_extension(runtime, tmp_path, owner_name):
     runtime.extensions.apply_tools(runtime.tools)
 
 
+def _participant_runtime(tmp_path: Path, content: str, **runtime_options: Any) -> StubRuntime:
+    """A Chat runtime whose temporary Agents resolve through a ``swarm`` Extension."""
+    runtime = StubRuntime(
+        data_dir=tmp_path,
+        agent=StubAgent(id="ordinary", model="openai/gpt-5.2"),
+        adapter=StubAdapter([{"content": content}]),
+        **runtime_options,
+    )
+    install_temporary_fixture_extension(runtime, tmp_path, "swarm")
+    runtime.agent_resolver.temporary_agents = TemporaryAgentRegistry(runtime.chat_sessions)
+    return runtime
+
+
+def _bind_participant(runtime: StubRuntime, tmp_path: Path, **config: Any) -> Any:
+    registry = runtime.agent_resolver.temporary_agents
+    assert registry is not None
+    return registry.create(
+        owner_name="swarm",
+        group_id="group",
+        participant_id="participant",
+        config=_config(tmp_path, model="openai/gpt-5.2", **config),
+    )
+
+
 def test_temporary_agent_create_is_idempotent_without_identity_files(tmp_path: Path) -> None:
     write_bootstrap_marker(tmp_path)
     sessions = ChatSessionManager(tmp_path)
     registry = TemporaryAgentRegistry(sessions)
-    config = TemporaryAgentConfig(
-        model="provider/model",
-        cwd=tmp_path,
-        tool_access=ToolAccess(mode="selected", allowed=()),
+    config = _config(
+        tmp_path,
         allowed_skills=["*"],
-        tools={},
-        name="Participant",
         fallback_models=["provider/fallback"],
         instructions="shared",
         prompt_blocks=["core:agent_body", "core:skills"],
@@ -109,14 +158,7 @@ def test_temporary_agent_create_is_idempotent_without_identity_files(tmp_path: P
             owner_name="extension",
             group_id="group",
             participant_id="participant",
-            config=TemporaryAgentConfig(
-                model="provider/other",
-                cwd=tmp_path,
-                tool_access=ToolAccess(mode="selected", allowed=()),
-                allowed_skills=["*"],
-                tools={},
-                name="Participant",
-            ),
+            config=_config(tmp_path, model="provider/other", allowed_skills=["*"]),
         )
     reopened_sessions.close()
 
@@ -125,13 +167,8 @@ def test_temporary_agent_creation_is_race_safe_and_canonicalizes_config(tmp_path
     write_bootstrap_marker(tmp_path)
     first_sessions = ChatSessionManager(tmp_path)
     second_sessions = ChatSessionManager(tmp_path)
-    config = TemporaryAgentConfig(
-        model="provider/model",
-        cwd=tmp_path,
-        tool_access=ToolAccess(mode="selected", allowed=()),
-        allowed_skills=["shared"],
-        tools={"nested": {"first": 1, "second": 2}},
-        name="Participant",
+    config = _config(
+        tmp_path, allowed_skills=["shared"], tools={"nested": {"first": 1, "second": 2}}
     )
     try:
         with ThreadPoolExecutor(max_workers=2) as pool:
@@ -158,50 +195,26 @@ def test_temporary_agent_creation_is_race_safe_and_canonicalizes_config(tmp_path
         first_sessions.close()
 
 
-def test_temporary_agent_config_is_an_immutable_snapshot(tmp_path: Path) -> None:
+def test_temporary_agent_config_is_an_immutable_snapshot(
+    tmp_path: Path, sessions: ChatSessionManager
+) -> None:
     tools = {"nested": {"allowed": ["first"]}}
-    config = TemporaryAgentConfig(
-        model="provider/model",
-        cwd=tmp_path,
-        tool_access=ToolAccess(mode="selected", allowed=()),
-        allowed_skills=["shared"],
-        tools=tools,
-        name="Participant",
-    )
+    config = _config(tmp_path, allowed_skills=["shared"], tools=tools)
     tools["nested"]["allowed"].append("later")
     assert config.tools == {"nested": {"allowed": ["first"]}}
     assert tools == {"nested": {"allowed": ["first", "later"]}}
 
-    write_bootstrap_marker(tmp_path)
-    sessions = ChatSessionManager(tmp_path)
-    try:
-        binding = TemporaryAgentRegistry(sessions).create(
-            owner_name="extension", group_id="group", participant_id="participant", config=config
-        )
-        config.tools["nested"]["allowed"].append("later")
-        assert binding.config == {**binding.config, "tools": {"nested": {"allowed": ["first"]}}}
-    finally:
-        sessions.close()
+    binding = TemporaryAgentRegistry(sessions).create(
+        owner_name="extension", group_id="group", participant_id="participant", config=config
+    )
+    config.tools["nested"]["allowed"].append("later")
+    assert binding.config == {**binding.config, "tools": {"nested": {"allowed": ["first"]}}}
 
 
 def test_temporary_agent_compaction_policy_round_trips_and_absence_inherits(
-    tmp_path: Path,
+    tmp_path: Path, sessions: ChatSessionManager
 ) -> None:
-    write_bootstrap_marker(tmp_path)
-    sessions = ChatSessionManager(tmp_path)
     registry = TemporaryAgentRegistry(sessions)
-
-    def config(policy: dict[str, Any] | None) -> TemporaryAgentConfig:
-        return TemporaryAgentConfig(
-            model="provider/model",
-            cwd=tmp_path,
-            tool_access=ToolAccess(mode="selected", allowed=()),
-            allowed_skills=[],
-            tools={},
-            name="Participant",
-            compaction_policy=policy,
-        )
-
     policy = {
         "enabled": False,
         "trigger": {"type": "context_ratio", "threshold": 1},
@@ -212,106 +225,51 @@ def test_temporary_agent_compaction_policy_round_trips_and_absence_inherits(
         "trigger": {"type": "context_ratio", "threshold": 1.0},
         "strategy": {"type": "summary_tail", "tail_tokens": 9_000, "summary_model": None},
     }
-    try:
-        assert config(policy).compaction_policy == normalized
-        overriding = registry.create(
-            owner_name="extension", group_id="group", participant_id="custom", config=config(policy)
-        )
-        assert overriding.config["compaction_policy"] == normalized
-        agent = registry.resolve(overriding.address, generation_id=overriding.generation_id)
-        assert agent is not None and agent.compaction_policy == normalized
 
-        # Inheriting participants store no key, exactly like bindings written before
-        # the optional key existed, so those resolve as inheriting and still reconcile.
-        inheriting = registry.create(
-            owner_name="extension", group_id="group", participant_id="inherit", config=config(None)
+    def create(participant_id: str, policy: dict[str, Any] | None) -> Any:
+        return registry.create(
+            owner_name="extension",
+            group_id="group",
+            participant_id=participant_id,
+            config=_config(tmp_path, compaction_policy=policy),
         )
-        assert "compaction_policy" not in inheriting.config
-        agent = registry.resolve(inheriting.address, generation_id=inheriting.generation_id)
-        assert agent is not None and agent.compaction_policy is None
-        assert (
-            registry.create(
-                owner_name="extension",
-                group_id="group",
-                participant_id="inherit",
-                config=config(None),
-            )
-            == inheriting
-        )
-        with pytest.raises(ChatSessionError):
-            registry.create(
-                owner_name="extension",
-                group_id="group",
-                participant_id="inherit",
-                config=config(policy),
-            )
-    finally:
-        sessions.close()
+
+    assert _config(tmp_path, compaction_policy=policy).compaction_policy == normalized
+    overriding = create("custom", policy)
+    assert overriding.config["compaction_policy"] == normalized
+    agent = registry.resolve(overriding.address, generation_id=overriding.generation_id)
+    assert agent is not None and agent.compaction_policy == normalized
+
+    # Inheriting participants store no key, exactly like bindings written before the
+    # optional key existed, so those resolve as inheriting and still reconcile.
+    inheriting = create("inherit", None)
+    assert "compaction_policy" not in inheriting.config
+    agent = registry.resolve(inheriting.address, generation_id=inheriting.generation_id)
+    assert agent is not None and agent.compaction_policy is None
+    assert create("inherit", None) == inheriting
+    with pytest.raises(ChatSessionError):
+        create("inherit", policy)
 
 
 @pytest.mark.parametrize(
-    "policy",
+    ("overrides", "message"),
     [
-        "summary_tail",
-        {"enabled": True, "trigger": {"type": "context_ratio", "threshold": 0.8}},
-        {
-            "enabled": True,
-            "trigger": {"type": "context_ratio", "threshold": 1.5},
-            "strategy": {"type": "continuation"},
-        },
+        ({"compaction_policy": "summary_tail"}, "compaction_policy"),
+        ({"cwd": Path("relative")}, "cwd must be absolute"),
     ],
+    ids=["invalid-compaction-policy", "relative-cwd"],
 )
-def test_temporary_agent_config_rejects_invalid_compaction_policy(
-    tmp_path: Path, policy: Any
+def test_temporary_agent_config_rejects_an_invalid_snapshot(
+    tmp_path: Path, overrides: dict[str, Any], message: str
 ) -> None:
-    with pytest.raises(ValueError, match="compaction_policy"):
-        TemporaryAgentConfig(
-            model="provider/model",
-            cwd=tmp_path,
-            tool_access=ToolAccess(),
-            allowed_skills=[],
-            tools={},
-            name="Participant",
-            compaction_policy=policy,
-        )
-
-
-def test_temporary_agent_config_rejects_relative_cwd(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="cwd must be absolute"):
-        TemporaryAgentConfig(
-            model="provider/model",
-            cwd=Path("relative"),
-            tool_access=ToolAccess(),
-            allowed_skills=[],
-            tools={},
-            name="Participant",
-        )
+    with pytest.raises(ValueError, match=message):
+        _config(tmp_path, **overrides)
 
 
 @pytest.mark.asyncio
 async def test_temporary_session_runs_only_through_protected_chat_path(tmp_path: Path) -> None:
-    runtime = StubRuntime(
-        data_dir=tmp_path,
-        agent=StubAgent(id="ordinary", model="openai/gpt-5.2"),
-        adapter=StubAdapter([{"content": "participant result"}]),
-    )
-    install_temporary_fixture_extension(runtime, tmp_path, "swarm")
-    registry = TemporaryAgentRegistry(runtime.chat_sessions)
-    runtime.agent_resolver.temporary_agents = registry
-    binding = registry.create(
-        owner_name="swarm",
-        group_id="group",
-        participant_id="participant",
-        config=TemporaryAgentConfig(
-            model="openai/gpt-5.2",
-            cwd=tmp_path,
-            tool_access=ToolAccess(mode="selected", allowed=()),
-            allowed_skills=[],
-            tools={},
-            name="Participant",
-            instructions="Work only on the shared goal.",
-        ),
-    )
+    runtime = _participant_runtime(tmp_path, "participant result")
+    binding = _bind_participant(runtime, tmp_path, instructions="Work only on the shared goal.")
     loop = build_chat_loop(runtime)
     try:
         with pytest.raises(ChatError, match="managed by an Extension"):
@@ -351,30 +309,13 @@ async def test_temporary_compaction_policy_is_the_participant_agent_policy(
     tmp_path: Path, policy: dict[str, Any] | None, threshold: float
 ) -> None:
     """Automatic Compaction uses the admitted Policy; without one it inherits global."""
-    runtime = StubRuntime(
-        data_dir=tmp_path,
-        agent=StubAgent(id="ordinary", model="openai/gpt-5.2"),
-        adapter=StubAdapter([{"content": "participant result"}]),
+    runtime = _participant_runtime(
+        tmp_path,
+        "participant result",
         storage=StubStorage({"auto": True, "threshold": 0.8, "tail_tokens": 15_000}),
         models=StubModels({("openai", "gpt-5.2"): 1_000_000}),
     )
-    install_temporary_fixture_extension(runtime, tmp_path, "swarm")
-    registry = TemporaryAgentRegistry(runtime.chat_sessions)
-    runtime.agent_resolver.temporary_agents = registry
-    binding = registry.create(
-        owner_name="swarm",
-        group_id="group",
-        participant_id="participant",
-        config=TemporaryAgentConfig(
-            model="openai/gpt-5.2",
-            cwd=tmp_path,
-            tool_access=ToolAccess(mode="selected", allowed=()),
-            allowed_skills=[],
-            tools={},
-            name="Participant",
-            compaction_policy=policy,
-        ),
-    )
+    binding = _bind_participant(runtime, tmp_path, compaction_policy=policy)
     service = StubCompactionService(should_auto=False)
     loop = build_chat_loop(runtime, compaction_service=cast(Any, service))
     try:
@@ -395,33 +336,19 @@ async def test_temporary_self_delegation_uses_parent_configuration_without_priva
     from core.tools import tool_success
     from core.tools.tools import ToolContext
 
-    runtime = StubRuntime(
-        data_dir=tmp_path,
-        agent=StubAgent(id="ordinary", model="openai/gpt-5.2"),
-        adapter=StubAdapter([{"content": "child result"}]),
-    )
+    runtime = _participant_runtime(tmp_path, "child result")
     runtime.tools.register(
         "ordinary_tool",
         "Ordinary tool.",
         {"type": "object", "properties": {}, "additionalProperties": False},
         lambda *_args: tool_success({"ordinary": True}),
     )
-    install_temporary_fixture_extension(runtime, tmp_path, "swarm")
-    registry = TemporaryAgentRegistry(runtime.chat_sessions)
-    runtime.agent_resolver.temporary_agents = registry
-    binding = registry.create(
-        owner_name="swarm",
-        group_id="group",
-        participant_id="participant",
-        config=TemporaryAgentConfig(
-            model="openai/gpt-5.2",
-            cwd=tmp_path,
-            tool_access=ToolAccess(mode="selected", allowed=("ordinary_tool",)),
-            allowed_skills=["private-skill"],
-            tools={},
-            name="Participant",
-            instructions="temporary instructions",
-        ),
+    binding = _bind_participant(
+        runtime,
+        tmp_path,
+        tool_access=ToolAccess(mode="selected", allowed=("ordinary_tool",)),
+        allowed_skills=["private-skill"],
+        instructions="temporary instructions",
     )
     runtime.skills = StubSkills([StubSkill("private-skill", "private", tmp_path / "skill.md")])
     runtime_any = cast(Any, runtime)
@@ -510,22 +437,15 @@ async def test_temporary_self_delegation_uses_parent_configuration_without_priva
 
 
 @pytest.mark.asyncio
-async def test_temporary_group_rejects_stale_registration_and_epoch(tmp_path: Path) -> None:
-    write_bootstrap_marker(tmp_path)
-    sessions = ChatSessionManager(tmp_path)
+async def test_temporary_group_rejects_stale_registration_and_epoch(
+    tmp_path: Path, sessions: ChatSessionManager
+) -> None:
     registry = TemporaryAgentRegistry(sessions)
     binding = registry.create(
         owner_name="extension",
         group_id="group",
         participant_id="participant",
-        config=TemporaryAgentConfig(
-            model="provider/model",
-            cwd=tmp_path,
-            tool_access=ToolAccess(),
-            allowed_skills=[],
-            tools={},
-            name="P",
-        ),
+        config=_config(tmp_path),
     )
 
     class Identity:
@@ -552,15 +472,12 @@ async def test_temporary_group_rejects_stale_registration_and_epoch(tmp_path: Pa
     current["value"] = False
     with pytest.raises(RunAdmissionBlockedError):
         groups.validate(binding.address, RunAdmission(owner=owner))
-    sessions.close()
 
 
 @pytest.mark.asyncio
 async def test_temporary_group_receipt_lookup_requires_its_exact_owner_and_generation(
-    tmp_path: Path,
+    tmp_path: Path, sessions: ChatSessionManager
 ) -> None:
-    write_bootstrap_marker(tmp_path)
-    sessions = ChatSessionManager(tmp_path)
     registry = TemporaryAgentRegistry(sessions)
     binding = registry.create(
         owner_name="fixture",
@@ -603,7 +520,6 @@ async def test_temporary_group_receipt_lookup_requires_its_exact_owner_and_gener
     finally:
         await groups.quiesce()
         await foreign_groups.quiesce()
-        sessions.close()
 
 
 class GroupTestChat:
@@ -633,17 +549,6 @@ class GroupTestChat:
         return await self.manager.start(
             binding.address, execute, admission=RunAdmission(owner=owner, input_id=input_id)
         )
-
-
-def group_config(tmp_path):
-    return TemporaryAgentConfig(
-        model="fixture/model",
-        cwd=tmp_path,
-        tool_access=ToolAccess(mode="selected", allowed=()),
-        allowed_skills=[],
-        tools={},
-        name="Peer",
-    )
 
 
 @pytest.mark.asyncio
@@ -737,10 +642,8 @@ async def test_group_initial_is_durable_idempotent_across_close_and_reopen(tmp_p
 
 @pytest.mark.asyncio
 async def test_group_close_during_receipt_lookup_rejects_before_history_write(
-    tmp_path, monkeypatch
+    tmp_path, sessions, monkeypatch
 ):
-    write_bootstrap_marker(tmp_path)
-    sessions = ChatSessionManager(tmp_path)
     manager = ChatRunManager()
     identity = SimpleNamespace(name="fixture", epoch="registration")
     groups = TemporaryExecutionGroups(
@@ -774,7 +677,6 @@ async def test_group_close_during_receipt_lookup_rejects_before_history_write(
     await stop
     assert sessions.get(binding.address).load() == []
     await manager.aclose()
-    sessions.close()
 
 
 class _SettlementProbe:
@@ -794,9 +696,7 @@ class _SettlementProbe:
 
 
 @pytest.mark.asyncio
-async def test_group_close_cancels_exact_descendant_and_queued_work(tmp_path):
-    write_bootstrap_marker(tmp_path)
-    sessions = ChatSessionManager(tmp_path)
+async def test_group_close_cancels_exact_descendant_and_queued_work(tmp_path, sessions):
     identity = SimpleNamespace(name="fixture", epoch="registration")
     groups = None
     manager = ChatRunManager(
@@ -840,15 +740,12 @@ async def test_group_close_cancels_exact_descendant_and_queued_work(tmp_path):
     with pytest.raises(RunAdmissionBlockedError):
         await manager.enqueue(target, pending, admission=RunAdmission(owner=owner))
     await manager.aclose()
-    sessions.close()
 
 
 @pytest.mark.asyncio
-async def test_quiesce_waits_for_creation_and_permanently_retires_owner(tmp_path, monkeypatch):
-    import threading
-
-    write_bootstrap_marker(tmp_path)
-    sessions = ChatSessionManager(tmp_path)
+async def test_quiesce_waits_for_creation_and_permanently_retires_owner(
+    tmp_path, sessions, monkeypatch
+):
     manager = ChatRunManager()
     registry = TemporaryAgentRegistry(sessions)
     identity = SimpleNamespace(name="fixture", epoch="registration")
@@ -882,7 +779,6 @@ async def test_quiesce_waits_for_creation_and_permanently_retires_owner(tmp_path
     with pytest.raises(RunAdmissionBlockedError):
         await groups.create("other", "peer", group_config(tmp_path))
     await manager.aclose()
-    sessions.close()
 
 
 @pytest.mark.asyncio
@@ -894,13 +790,6 @@ async def test_quiesce_waits_for_creation_and_permanently_retires_owner(tmp_path
 async def test_temporary_participants_use_actual_chat_and_independent_history(
     tmp_path, participants
 ):
-    from tests.core.chat.chat_loop_support import (
-        StubAdapter,
-        StubAgent,
-        StubRuntime,
-        build_chat_loop,
-    )
-
     adapter = StubAdapter([{"content": "fixture result"} for _ in range(participants)])
     runtime = StubRuntime(
         data_dir=tmp_path,
@@ -920,14 +809,8 @@ async def test_temporary_participants_use_actual_chat_and_independent_history(
         identity,
         run_manager=runtime.chat_run_manager,
     )
-    config = TemporaryAgentConfig(
-        model="openai/gpt-5.2",
-        cwd=tmp_path,
-        tool_access=ToolAccess(mode="selected", allowed=()),
-        allowed_skills=[],
-        tools={},
-        name="Peer",
-        instructions="shared-instructions-sentinel",
+    config = _config(
+        tmp_path, model="openai/gpt-5.2", name="Peer", instructions="shared-instructions-sentinel"
     )
     bindings = await asyncio.gather(
         *(groups.create("large-group", f"peer-{index}", config) for index in range(participants))

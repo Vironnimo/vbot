@@ -1,4 +1,4 @@
-"""Tests for compaction tail selection."""
+"""Tail selection: whole steps up to the requested size, counted on the actual request."""
 
 from __future__ import annotations
 
@@ -14,14 +14,9 @@ from core.chat.wire_shaping import (
     _notes_to_request_messages,
     _restore_in_run_assistant_reasoning,
 )
-from core.compaction import (
-    CompactionService,
-    CompactionSettings,
-    find_tail_boundary,
-)
+from core.compaction import CompactionService, CompactionSettings, find_tail_boundary
 from core.compaction.compaction import (
     COMPACTION_SUMMARY_NOTE_PREFIX,
-    COMPACTION_USER_QUOTE_PREFIX,
     TAIL_SOFT_LIMIT_PERCENT,
     _plan_working_tail,
 )
@@ -29,143 +24,93 @@ from core.providers.github_copilot_responses import (
     _messages_to_responses_input,
     estimate_responses_input_tokens,
 )
-from core.sessions import SessionAddress
-from core.utils.tokens import NATIVE_MEDIA_TOKEN_RESERVE, estimate_request_input_tokens
+from core.utils.tokens import estimate_request_input_tokens
 from tests.core.compaction.compaction_test_support import (
     StubAdapter,
-    StubStorage,
     _tail_token_span,
     assistant,
+    compact,
     message,
     provider_request,
+    quoted_user,
+    tool_step,
     user,
+    user_quotes,
 )
 
 
-def test_find_tail_boundary_does_not_anchor_latest_user() -> None:
-    messages = [
-        user("u1", "Keep working"),
-        assistant("a1", "older answer " * 100),
-        assistant("a2", "recent answer"),
-    ]
-
-    assert find_tail_boundary(messages, tail_tokens=1) == "a2"
-
-
-def test_find_tail_boundary_keeps_parallel_tool_cycle_atomic() -> None:
-    messages = [
-        user("u1", "Keep working"),
-        message(
-            "a1",
-            "assistant",
-            "",
-            model="openai/gpt-5",
-            tool_calls=[
-                {"id": "c1", "name": "read", "arguments": {"path": "one"}},
-                {"id": "c2", "name": "read", "arguments": {"path": "two"}},
+@pytest.mark.parametrize(
+    ("messages", "boundary"),
+    [
+        (
+            [
+                user("u1", "Keep working"),
+                assistant("a1", "older answer " * 100),
+                assistant("a2", "recent answer"),
             ],
+            "a2",
         ),
-        message("t1", "tool", "one", tool_call_id="c1", name="read"),
-        message("t2", "tool", "two", tool_call_id="c2", name="read"),
-    ]
-
-    assert find_tail_boundary(messages, tail_tokens=1) == "a1"
-
-
-def test_context_ratio_and_absolute_token_triggers() -> None:
-    service = CompactionService()
-
-    assert service.should_auto_compact(80, 100, 0.8)
-    assert not service.should_auto_compact(79, 100, 0.8)
-    settings = CompactionSettings(trigger="input_tokens", trigger_tokens=100_000)
-    assert service.should_auto_compact(100_000, 1_000_000, 0.8, settings=settings)
-    assert not service.should_auto_compact(99_999, 1_000_000, 0.8, settings=settings)
-
-    capped_ratio = CompactionSettings(threshold=0.8, max_input_tokens=200_000)
-    assert service.should_auto_compact(200_000, 1_000_000, 0.8, settings=capped_ratio)
-    assert not service.should_auto_compact(199_999, 1_000_000, 0.8, settings=capped_ratio)
-    assert service.should_auto_compact(80_000, 100_000, 0.8, settings=capped_ratio)
-
-
-def test_request_estimate_reserves_tool_result_media_without_counting_base64() -> None:
-    encoded = "A" * 100_000
-    messages = [
-        {
-            "role": "tool",
-            "content": '{"ok":true}',
-            "tool_call_id": "call-image",
-            "tool_result_content": [
-                {
-                    "type": "media",
-                    "media_type": "image/png",
-                    "base64": encoded,
-                }
+        (
+            [
+                user("u1", "Keep working"),
+                message(
+                    "a1",
+                    "assistant",
+                    "",
+                    model="openai/gpt-5",
+                    tool_calls=[
+                        {"id": "c1", "name": "read", "arguments": {"path": "one"}},
+                        {"id": "c2", "name": "read", "arguments": {"path": "two"}},
+                    ],
+                ),
+                message("t1", "tool", "one", tool_call_id="c1", name="read"),
+                message("t2", "tool", "two", tool_call_id="c2", name="read"),
             ],
-        }
-    ]
+            "a1",
+        ),
+    ],
+    ids=["latest-user-is-no-anchor", "parallel-tool-cycle-stays-whole"],
+)
+def test_find_tail_boundary_starts_at_a_whole_step(
+    messages: list[ChatMessage], boundary: str
+) -> None:
+    assert find_tail_boundary(messages, tail_tokens=1) == boundary
 
-    estimated_tokens = CompactionService().estimate_messages_tokens(messages)
 
-    assert estimated_tokens >= NATIVE_MEDIA_TOKEN_RESERVE
-    assert estimated_tokens < NATIVE_MEDIA_TOKEN_RESERVE + 100
-
-
-def test_working_tail_fills_backward_across_active_user_anchor() -> None:
-    messages = [
+def test_working_tail_treats_the_latest_user_as_an_ordinary_step() -> None:
+    # Growing backward, the Tail crosses the User message like any other step ...
+    across = [
         assistant("a-before", "Useful work before the latest instruction. " * 200),
         user("u-active", "Finish the same task with these final constraints."),
         assistant("a-after", "I am applying those constraints now."),
     ]
-    target = _tail_token_span(messages)
-
-    plan = _plan_working_tail(messages, target)
-
+    plan = _plan_working_tail(across, _tail_token_span(across))
     assert plan.boundary_id == "a-before"
-    assert list(plan.retained_messages) == messages
+    assert list(plan.retained_messages) == across
+
+    # ... and a User before the cut is summarized with the whole older steps.
+    recent = assistant("a-recent", "recent work " * 100)
+    target = _tail_token_span([recent]) + 20
+    plan = _plan_working_tail(
+        [user("u-active", "Keep working."), assistant("a-old", "older work " * 4_000), recent],
+        target,
+    )
+    assert list(plan.retained_messages) == [recent]
+    assert plan.boundary_index == 2
+    assert _tail_token_span(plan.retained_messages) <= target
 
 
 def test_working_tail_keeps_oversized_active_tool_batch_exact() -> None:
     active_user = user("u-active", "Inspect this large Tool result and continue.")
-    active_arguments = {"query": "Q" * 20_000}
     active_result_content = "active-output-" * 10_000
-    active_carrier = message(
-        "a-active",
-        "assistant",
-        "",
-        model="openai/gpt-5",
-        tool_calls=[{"id": "call-active", "name": "read", "arguments": active_arguments}],
-    )
-    active_result = message(
-        "t-active",
-        "tool",
-        active_result_content,
-        tool_call_id="call-active",
-        name="read",
-    )
+    carrier, result = tool_step("active", active_result_content, arguments={"query": "Q" * 20_000})
 
-    plan = _plan_working_tail(
-        [active_user, active_carrier, active_result],
-        tail_tokens=10,
-    )
+    plan = _plan_working_tail([active_user, carrier, result], tail_tokens=10)
 
     retained = list(plan.retained_messages)
     assert _tail_token_span(retained) > 10
-    assert retained[0].tool_calls == active_carrier.tool_calls
+    assert retained == [carrier, result]
     assert retained[1].content == active_result_content
-    assert active_user not in retained
-
-
-def test_working_tail_summarizes_whole_older_steps_instead_of_anchoring_user() -> None:
-    active_user = user("u-active", "Keep working on this task.")
-    older = assistant("a-old", "older work " * 4_000)
-    recent = assistant("a-recent", "recent work " * 100)
-    target = _tail_token_span([recent]) + 20
-
-    plan = _plan_working_tail([active_user, older, recent], target)
-
-    assert list(plan.retained_messages) == [recent]
-    assert plan.boundary_index == 2
-    assert _tail_token_span(plan.retained_messages) <= target
 
 
 @pytest.mark.parametrize(
@@ -196,17 +141,12 @@ def test_working_tail_takes_first_cut_reaching_the_target(
     assert list(plan.retained_messages) == steps[-retained_steps:]
 
 
-def _tool_step(index: int, output: str) -> list[ChatMessage]:
-    call_id = f"call-{index}"
+def _delivered_review(output_words: int) -> list[ChatMessage]:
     return [
-        message(
-            f"a-{index}",
-            "assistant",
-            "",
-            model="openai/gpt-5",
-            tool_calls=[{"id": call_id, "name": "read", "arguments": {"path": str(index)}}],
-        ),
-        message(f"t-{index}", "tool", output, tool_call_id=call_id, name="read"),
+        user("u", "start"),
+        *tool_step("1", "output " * output_words),
+        message("n-delivery", "note", "New Board messages for you: please review."),
+        assistant("a-reply", "Reviewed; posting my findings."),
     ]
 
 
@@ -217,60 +157,42 @@ def _live_request(messages: list[ChatMessage]) -> list[dict[str, Any]]:
     ]
 
 
-def test_working_tail_keeps_delivered_notes_with_the_step_they_trigger() -> None:
-    delivery = message("n-delivery", "note", "New Board messages for you: please review.")
-    reply = assistant("a-reply", "Reviewed; posting my findings.")
-    messages = [user("u", "start"), *_tool_step(1, "output " * 2_000), delivery, reply]
+@pytest.mark.parametrize("merged", [False, True], ids=["rendered-exactly", "merged-in-request"])
+def test_working_tail_keeps_delivered_notes_only_when_the_request_renders_them_exactly(
+    merged: bool,
+) -> None:
+    messages = _delivered_review(2_000)
+    delivery, reply = messages[-2:]
     live = _live_request(messages)
+    if merged:
+        # The request merged the delivery with other context, so its request
+        # message is not exactly the rendered note: the Tail must not claim it.
+        live[-2] = {"role": "user", "content": live[-2]["content"] + "\nother context"}
 
     plan = _plan_working_tail(messages, 1, request_messages=tuple(live))
 
-    assert plan.boundary_id == "n-delivery"
-    assert list(plan.retained_messages) == [delivery, reply]
-    assert plan.request_start is not None
-    assert live[plan.request_start :] == [
-        *_notes_to_request_messages([delivery]),
-        live[-1],
-    ]
-    assert live[plan.request_start - 1]["id"] == "t-1"
-
-
-def test_working_tail_starts_at_the_step_when_lead_in_notes_do_not_match_request() -> None:
-    delivery = message("n-delivery", "note", "New Board messages for you: please review.")
-    reply = assistant("a-reply", "Reviewed; posting my findings.")
-    messages = [user("u", "start"), *_tool_step(1, "output " * 2_000), delivery, reply]
-    live = _live_request(messages)
-    # The request merged the delivery with other context, so its request message
-    # is not exactly the rendered note: the Tail must not claim it.
-    live[-2] = {"role": "user", "content": live[-2]["content"] + "\nother context"}
-
-    plan = _plan_working_tail(messages, 1, request_messages=tuple(live))
-
-    assert plan.boundary_id == "a-reply"
-    assert list(plan.retained_messages) == [reply]
-    assert plan.request_start == len(live) - 1
+    if merged:
+        assert plan.boundary_id == "a-reply"
+        assert list(plan.retained_messages) == [reply]
+        assert plan.request_start == len(live) - 1
+    else:
+        assert plan.boundary_id == "n-delivery"
+        assert list(plan.retained_messages) == [delivery, reply]
+        assert plan.request_start is not None
+        assert live[plan.request_start :] == [*_notes_to_request_messages([delivery]), live[-1]]
+        assert live[plan.request_start - 1]["id"] == "t-1"
 
 
 @pytest.mark.asyncio
 async def test_summary_tail_summarizes_before_lead_in_notes_and_retains_them() -> None:
-    delivery = message("n-delivery", "note", "New Board messages for you: please review.")
-    reply = assistant("a-reply", "Reviewed; posting my findings.")
-    messages = [
-        user("u", "start"),
-        *_tool_step(1, "output " * 8_000),
-        delivery,
-        reply,
-    ]
+    messages = _delivered_review(8_000)
     live = _live_request(messages)
     adapter = StubAdapter("SUMMARY: reviewed the first output.")
 
-    result = await CompactionService().compact(
+    result = await compact(
         messages,
-        session_address=SessionAddress(project_id=None, agent_id="coder", session_id="session"),
-        prompt_cache_affinity_id="test-affinity",
         summary_adapter=adapter,
         summary_model_id="gpt-5",
-        storage=StubStorage(),
         settings=CompactionSettings(tail_tokens=10),
         request_messages=live,
     )
@@ -281,42 +203,39 @@ async def test_summary_tail_summarizes_before_lead_in_notes_and_retains_them() -
     assert [item.id for item in projection[-2:]] == ["n-delivery", "a-reply"]
 
 
-def test_working_tail_counts_live_reasoning_before_choosing_boundary() -> None:
+def _replayed_reasoning() -> tuple[list[ChatMessage], list[dict[str, Any]], list[ChatMessage]]:
     older = assistant("a-old", "old step " * 20)
     recent = assistant("a-new", "new step " * 80)
     messages = [user("u", "do it"), older, recent]
     live = provider_request(messages)
     live[2]["reasoning"] = "retained reasoning " * 4_000
-    target = _tail_token_span([older, recent])
-    before = json.dumps(live)
-
-    plan = _plan_working_tail(messages, target, request_messages=tuple(live))
-
-    assert list(_plan_working_tail(messages, target).retained_messages) == [older, recent]
-    assert list(plan.retained_messages) == [recent]
-    assert json.dumps(live) == before
+    return messages, live, [older, recent]
 
 
-def test_working_tail_counts_request_only_tool_media() -> None:
-    calls = [{"id": "c", "name": "read", "arguments": {"path": "image.png"}}]
-    carrier = message("a-old", "assistant", "", model="openai/gpt-5", tool_calls=calls)
-    result = message("t", "tool", "image", tool_call_id="c", name="read")
+def _request_only_tool_media() -> tuple[list[ChatMessage], list[dict[str, Any]], list[ChatMessage]]:
+    carrier, result = tool_step("old", "image", arguments={"path": "image.png"})
     recent = assistant("a-new", "image consumed " * 200)
     messages = [user("u", "inspect"), carrier, result, recent]
     live = provider_request(messages)
     live[3]["tool_result_content"] = [
         {"type": "media", "media_type": "image/png", "base64": "A" * 10_000}
     ]
-    target = _tail_token_span([carrier, result, recent])
+    return messages, live, [carrier, result, recent]
+
+
+@pytest.mark.parametrize(
+    "build", [_replayed_reasoning, _request_only_tool_media], ids=["reasoning", "tool-media"]
+)
+def test_working_tail_counts_request_only_payload_before_choosing_boundary(build) -> None:
+    messages, live, stored_tail = build()
+    target = _tail_token_span(stored_tail)
+    before = json.dumps(live)
 
     plan = _plan_working_tail(messages, target, request_messages=tuple(live))
 
-    assert list(_plan_working_tail(messages, target).retained_messages) == [
-        carrier,
-        result,
-        recent,
-    ]
-    assert list(plan.retained_messages) == [recent]
+    assert list(_plan_working_tail(messages, target).retained_messages) == stored_tail
+    assert list(plan.retained_messages) == [messages[-1]]
+    assert json.dumps(live) == before
 
 
 def test_working_tail_uses_selected_wire_estimate_for_opaque_state() -> None:
@@ -417,15 +336,13 @@ async def test_long_run_compaction_budgets_and_replays_the_actual_tail(opaque: b
         active_adapter=adapter,
         active_model_id="gpt-5",
     )
-    result = await service.compact(
+    result = await compact(
         messages,
-        session_address=SessionAddress(project_id=None, agent_id="coder", session_id="session"),
-        prompt_cache_affinity_id="test-affinity",
+        service=service,
         summary_adapter=adapter,
         summary_model_id="gpt-5",
         active_adapter=adapter,
         active_model_id="gpt-5",
-        storage=StubStorage(),
         settings=CompactionSettings(tail_tokens=budget),
         request_messages=live,
     )
@@ -457,10 +374,5 @@ async def test_long_run_compaction_budgets_and_replays_the_actual_tail(opaque: b
         )
     assert json.dumps(live) == snapshot
     assert not any(item.role == "user" for item in effective)
-    quote = next(
-        item for item in effective if str(item.content).startswith(COMPACTION_USER_QUOTE_PREFIX)
-    )
-    assert (
-        json.loads(str(quote.content).removeprefix(COMPACTION_USER_QUOTE_PREFIX))
-        == messages[3].to_dict()
-    )
+    [quote] = user_quotes(effective)
+    assert quoted_user(quote) == messages[3].to_dict()

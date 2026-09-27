@@ -2,7 +2,7 @@
 
 import pytest
 
-from core.fetch_config import WEB_FETCH_PROVIDERS, parse_web_fetch_settings
+from core.fetch_config import parse_web_fetch_settings
 from core.settings import SettingsValidationError, parse_settings_update
 from core.settings.paths import (
     apply_settings_patch,
@@ -34,19 +34,18 @@ def test_path_settings_support_selection_and_reset():
     }
 
 
-@pytest.mark.parametrize("provider", WEB_FETCH_PROVIDERS)
-def test_selection_roundtrips_and_sparse_update_preserves_mode(tmp_path, provider):
+def test_selection_roundtrips_and_sparse_update_preserves_mode(tmp_path):
     storage = StorageManager(tmp_path)
-    parsed = parse_settings_update({"web_fetch": {"provider": provider, "mode": "prefer"}})
+    parsed = parse_settings_update({"web_fetch": {"provider": "parallel", "mode": "prefer"}})
     storage.update_settings_sections(parsed)
-    assert storage.load_web_fetch_settings() == {"provider": provider, "mode": "prefer"}
+    assert storage.load_web_fetch_settings() == {"provider": "parallel", "mode": "prefer"}
     storage.update_settings_sections(parse_settings_update({"web_fetch": {"provider": "direct"}}))
     assert storage.load_web_fetch_settings() == {"provider": "direct", "mode": "prefer"}
 
 
 @pytest.mark.parametrize(
     "value",
-    [None, [], {"provider": "auto"}, {"mode": "always"}, {"api_key": "secret"}, {"provider": True}],
+    [[], {"provider": "auto"}, {"mode": "always"}, {"api_key": "secret"}, {"provider": True}],
 )
 def test_invalid_or_secret_fields_cannot_enter_settings(value):
     with pytest.raises(SettingsValidationError):

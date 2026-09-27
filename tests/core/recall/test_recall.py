@@ -1,6 +1,10 @@
-"""Tests for the recall backend registry."""
+"""Recall backend registry: built-ins, registration rules and the backend contract."""
 
 from __future__ import annotations
+
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -22,124 +26,76 @@ from core.sessions import ChatSessionManager
 
 
 @pytest.fixture
-def registry() -> RecallBackendRegistry:
-    return RecallBackendRegistry.with_builtins()
+def context(tmp_path: Path, sessions: ChatSessionManager) -> RecallBackendContext:
+    return RecallBackendContext(data_dir=tmp_path, sessions=sessions)
 
 
-@pytest.fixture
-def context(tmp_path) -> RecallBackendContext:
-    return RecallBackendContext(
-        data_dir=tmp_path,
-        sessions=ChatSessionManager(tmp_path),
-    )
+def _canonical(context: RecallBackendContext) -> CanonicalSessionRecallBackend:
+    return CanonicalSessionRecallBackend(context.sessions)
 
 
-def test_first_party_recall_backends_include_vector() -> None:
-    """The ``vector`` backend is part of the first-party backend set."""
-
-    assert RECALL_BACKEND_VECTOR in FIRST_PARTY_RECALL_BACKENDS
-    assert (
-        frozenset(
-            {
-                RECALL_BACKEND_SQLITE_FTS,
-                RECALL_BACKEND_VECTOR,
-                RECALL_BACKEND_HYBRID,
-            }
-        )
-        == FIRST_PARTY_RECALL_BACKENDS
-    )
-
-
-def test_registry_with_builtins_registers_all_backends(
-    registry: RecallBackendRegistry,
-) -> None:
-    assert sorted(registry.names()) == sorted(FIRST_PARTY_RECALL_BACKENDS)
-
-
-def test_registry_create_returns_expected_backend_type(
-    registry: RecallBackendRegistry,
+def test_builtins_create_the_first_party_backends_with_session_removal(
     context: RecallBackendContext,
 ) -> None:
-    with pytest.raises(KeyError):
-        registry.create(RECALL_BACKEND_CANONICAL_SCAN, context)
-    assert isinstance(registry.create(RECALL_BACKEND_SQLITE_FTS, context), SqliteFtsRecallBackend)
-    assert isinstance(registry.create(RECALL_BACKEND_VECTOR, context), VectorRecallBackend)
-    assert isinstance(registry.create(RECALL_BACKEND_HYBRID, context), HybridRecallBackend)
+    expected = {
+        RECALL_BACKEND_SQLITE_FTS: SqliteFtsRecallBackend,
+        RECALL_BACKEND_VECTOR: VectorRecallBackend,
+        RECALL_BACKEND_HYBRID: HybridRecallBackend,
+    }
+    registry = RecallBackendRegistry.with_builtins()
+
+    assert frozenset(expected) == FIRST_PARTY_RECALL_BACKENDS
+    assert registry.names() == sorted(expected)
+    for name, backend_type in expected.items():
+        backend = registry.create(name, context)
+        assert isinstance(backend, backend_type)
+        # Runtime Recall cleanup evicts deleted Sessions from every derived index.
+        assert isinstance(backend, SupportsSessionRemoval)
+    # The internal live scan has no index to clean and is not selectable.
+    assert not isinstance(_canonical(context), SupportsSessionRemoval)
+    for name in (RECALL_BACKEND_CANONICAL_SCAN, "missing"):
+        with pytest.raises(KeyError):
+            registry.create(name, context)
 
 
-def test_session_removal_capability_is_opt_in_for_indexed_backends(
+@pytest.mark.parametrize(
+    "name",
+    ["CamelCase", "Mixed_Case", "   ", RECALL_BACKEND_CANONICAL_SCAN, "alpha"],
+    ids=["camel-case", "mixed-case", "blank", "reserved", "duplicate"],
+)
+def test_register_rejects_invalid_reserved_and_duplicate_names(name: str) -> None:
+    registry = RecallBackendRegistry()
+    registry.register("alpha", _canonical)
+
+    with pytest.raises(ValueError):
+        registry.register(name, _canonical)
+
+    assert registry.names() == ["alpha"]
+
+
+class _InvalidCapabilities(CanonicalSessionRecallBackend):
+    def search_capabilities(self) -> Any:
+        return {"result_unit": "message"}
+
+
+@pytest.mark.parametrize(
+    ("factory", "message"),
+    [
+        (lambda context: object(), "must implement search_capabilities and search_page"),
+        (
+            lambda context: _InvalidCapabilities(context.sessions),
+            "returned invalid search capabilities",
+        ),
+    ],
+    ids=["missing-methods", "invalid-capabilities"],
+)
+def test_create_rejects_a_backend_without_the_search_contract(
     context: RecallBackendContext,
+    factory: Callable[[RecallBackendContext], Any],
+    message: str,
 ) -> None:
-    """The runtime's recall cleanup relies on this membership: the live-scan
-    backend has no derived index and opts out, while the FTS, vector, and hybrid
-    backends opt in. ``remove_session_from_recall`` checks ``isinstance`` before
-    calling, so an opt-out backend simply falls back to self-healing."""
-
-    assert not isinstance(CanonicalSessionRecallBackend(context.sessions), SupportsSessionRemoval)
-    assert isinstance(SqliteFtsRecallBackend(context), SupportsSessionRemoval)
-    assert isinstance(VectorRecallBackend(context), SupportsSessionRemoval)
-    assert isinstance(HybridRecallBackend(context), SupportsSessionRemoval)
-
-
-def test_registry_create_unknown_backend_raises_key_error(
-    registry: RecallBackendRegistry,
-    context: RecallBackendContext,
-) -> None:
-    with pytest.raises(KeyError):
-        registry.create("missing", context)
-
-
-def test_registry_rejects_duplicate_registration() -> None:
     registry = RecallBackendRegistry()
-    registry.register("alpha", lambda context: CanonicalSessionRecallBackend(context.sessions))
-    with pytest.raises(ValueError):
-        registry.register("alpha", lambda context: CanonicalSessionRecallBackend(context.sessions))
+    registry.register("extension", factory)
 
-
-def test_registry_rejects_non_lowercase_snake_case_names() -> None:
-    registry = RecallBackendRegistry()
-    with pytest.raises(ValueError):
-        registry.register(
-            "CamelCase", lambda context: CanonicalSessionRecallBackend(context.sessions)
-        )
-    with pytest.raises(ValueError):
-        registry.register(
-            "Mixed_Case", lambda context: CanonicalSessionRecallBackend(context.sessions)
-        )
-
-
-def test_registry_passes_extended_context_to_vector_backend(
-    tmp_path,
-) -> None:
-    """The vector factory receives the full context (embeddings + model registry)."""
-
-    captured: dict[str, object] = {}
-
-    class _StubEmbeddings:
-        pass
-
-    class _StubModels:
-        pass
-
-    def factory(context: RecallBackendContext) -> VectorRecallBackend:
-        captured["embeddings"] = context.embeddings
-        captured["model_registry"] = context.model_registry
-        return VectorRecallBackend(context)
-
-    registry = RecallBackendRegistry()
-    registry.register(RECALL_BACKEND_VECTOR, factory)
-
-    embeddings = _StubEmbeddings()
-    models = _StubModels()
-    context = RecallBackendContext(
-        data_dir=tmp_path,
-        sessions=ChatSessionManager(tmp_path),
-        embeddings=embeddings,
-        model_registry=models,
-    )
-
-    backend = registry.create(RECALL_BACKEND_VECTOR, context)
-
-    assert isinstance(backend, VectorRecallBackend)
-    assert captured["embeddings"] is embeddings
-    assert captured["model_registry"] is models
+    with pytest.raises(ValueError, match=message):
+        registry.create("extension", context)

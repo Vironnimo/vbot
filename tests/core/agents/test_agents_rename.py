@@ -1,6 +1,5 @@
-"""Tests for agents rename."""
+"""Agent rename, its compensation and Sub-Agent reference retargeting."""
 
-import json
 from pathlib import Path
 
 import pytest
@@ -11,12 +10,9 @@ from core.agents import (
     AgentStore,
 )
 from core.sessions import ChatSessionManager, SessionAddress
-from tests.core.agents.agents_test_support import (
-    store as store,
-)
-from tests.core.agents.agents_test_support import (
-    template_dir as template_dir,
-)
+from tests.core.agents.agents_test_support import persisted
+from tests.core.agents.agents_test_support import store as store
+from tests.core.agents.agents_test_support import template_dir as template_dir
 
 
 def test_rename_moves_complete_agent_tree_and_rebases_internal_workspace(
@@ -49,9 +45,9 @@ def test_rename_moves_complete_agent_tree_and_rebases_internal_workspace(
     )
     assert (new_dir / "prompts" / "runtime.md").read_text(encoding="utf-8") == "custom prompt"
     assert (new_dir / "skills" / "private-skill" / "SKILL.md").is_file()
-    persisted = json.loads((new_dir / "agent.json").read_text(encoding="utf-8"))
-    assert persisted["id"] == "researcher"
-    assert persisted["workspace"] == "agents/researcher/homes/primary"
+    data = persisted(store, "researcher")
+    assert data["id"] == "researcher"
+    assert data["workspace"] == "agents/researcher/homes/primary"
 
 
 def test_rename_preserves_external_workspace(store: AgentStore, tmp_path: Path) -> None:

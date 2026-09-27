@@ -1,54 +1,98 @@
-"""Run queue admission, mutation, and FIFO draining tests."""
+"""Run queue admission, waiting-work limits, mutation, FIFO draining and steering delivery."""
 
 from __future__ import annotations
 
-import core.runs.runs as runs_module
-from core.chat.content_blocks import FileBlock
-from core.sessions import SessionAddress
-from tests.core.chat.chat_loop_support import build_chat_loop
+import asyncio
+import logging
+from typing import Any
 
-from .runs_test_support import (
+import pytest
+
+import core.runs.runs as runs_module
+from core.runs import (
     RUN_STARTED_EVENT,
     ActiveRunError,
-    Any,
     ChatRunManager,
-    ChatSessionManager,
-    Path,
     QueuedRunItem,
     Run,
     RunAdmission,
     RunStatus,
-    SimpleNamespace,
     WaitingWorkLimitError,
-    asyncio,
-    logging,
-    pytest,
 )
+from core.sessions import SessionAddress
+from tests.core.runs.runs_test_support import SESSION, held
 
-pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("current_format_data_directory")]
+pytestmark = pytest.mark.asyncio
 
 
-async def test_rejects_second_active_run_for_same_session() -> None:
+async def test_busy_session_rejects_start_and_an_idle_enqueue_starts_at_once() -> None:
     manager = ChatRunManager()
-    release = asyncio.Event()
-
-    async def execute(run: Run) -> str:
-        await release.wait()
-        return run.id
-
-    first_run = await manager.start(
-        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
-        execute,
-    )
-
+    active_execute, active_release = held("active")
+    active_run = await manager.start(SESSION, active_execute)
     with pytest.raises(ActiveRunError):
-        await manager.start(
-            SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
-            execute,
+        await manager.start(SESSION, active_execute)
+    active_release.set()
+    assert await active_run.wait() == "active"
+
+    execute, release = held()
+    item = await manager.enqueue(SESSION, execute, display_content="Queued hello")
+    run = await item.future
+    await asyncio.sleep(0)
+
+    assert run.status == RunStatus.RUNNING
+    assert manager.active_run(agent_id="coder", session_id="session-one", project_id=None) is run
+    assert manager.list_queued("coder", "session-one", project_id=None) == []
+    assert item.to_dict()["content"] == "Queued hello"
+    [started] = [event for event in run.events if event.type == RUN_STARTED_EVENT]
+    assert started.payload == {"status": RunStatus.RUNNING.value, "queue_item_id": item.item_id}
+    release.set()
+    assert await run.wait() == "done"
+
+
+async def test_busy_session_queues_input_and_drains_it_with_its_admission(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    manager = ChatRunManager()
+    active_execute, active_release = held("active")
+    queued_execute, queued_release = held("queued")
+    active_run = await manager.start(SESSION, active_execute)
+    admission = RunAdmission(
+        work_id="sub-work-one", contributes_to_agent_activity=False, source_session_id="source"
+    )
+    with caplog.at_level(logging.INFO, logger="vbot.runs"):
+        item = await manager.enqueue(
+            SESSION, queued_execute, display_content="Queued next", admission=admission
         )
 
-    release.set()
-    assert await first_run.wait() == first_run.id
+    queue_line = next(
+        record.getMessage()
+        for record in caplog.records
+        if record.getMessage().startswith("Run queued for busy session")
+    )
+    assert "agent=coder" in queue_line
+    assert "session=session-one" in queue_line
+    assert "queue_depth=1" in queue_line
+    assert item.future.done() is False
+    assert item.admission is admission
+    assert [
+        queued.item_id for queued in manager.list_queued("coder", "session-one", project_id=None)
+    ] == [item.item_id]
+
+    active_release.set()
+    assert await active_run.wait() == "active"
+    queued_run = await asyncio.wait_for(item.future, timeout=1)
+    await asyncio.sleep(0)
+
+    assert queued_run.status == RunStatus.RUNNING
+    assert queued_run.work_id == "sub-work-one"
+    assert queued_run.source_session_id == "source"
+    assert manager.list_queued("coder", "session-one", project_id=None) == []
+    [started] = [event for event in queued_run.events if event.type == RUN_STARTED_EVENT]
+    assert started.payload == {"status": RunStatus.RUNNING.value, "queue_item_id": item.item_id}
+    queued_release.set()
+    assert await queued_run.wait() == "queued"
+    assert queued_run.contributes_to_agent_activity is False
+    assert all(event.contributes_to_agent_activity is False for event in queued_run.events)
 
 
 async def test_waiting_work_limit_rejects_the_next_queued_run(monkeypatch) -> None:
@@ -68,22 +112,22 @@ async def test_waiting_work_limit_rejects_the_next_queued_run(monkeypatch) -> No
         return "done"
 
     active_run = await manager.start(
-        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        SESSION,
         execute,
     )
     first = await manager.enqueue(
-        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        SESSION,
         execute,
     )
     second = await manager.enqueue(
-        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        SESSION,
         execute,
     )
 
     assert manager.waiting_work_count() == 2
     with pytest.raises(WaitingWorkLimitError):
         await manager.enqueue(
-            SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+            SESSION,
             execute,
         )
 
@@ -104,13 +148,13 @@ async def test_waiting_work_admission_transfers_to_a_queued_run() -> None:
         return "done"
 
     active_run = await manager.start(
-        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        SESSION,
         execute,
     )
     admission = manager.reserve_waiting_work(scope="channel:chat", scope_limit=8)
 
     queued = await manager.enqueue(
-        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        SESSION,
         execute,
         waiting_work_admission=admission,
     )
@@ -140,114 +184,6 @@ async def test_waiting_work_admission_enforces_its_scope_limit() -> None:
     assert manager.release_waiting_work(second) is True
 
 
-async def test_enqueue_when_session_is_idle_starts_run_immediately() -> None:
-    manager = ChatRunManager()
-    started = asyncio.Event()
-    release = asyncio.Event()
-
-    async def execute(_run: Run) -> str:
-        started.set()
-        await release.wait()
-        return "done"
-
-    item = await manager.enqueue(
-        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
-        execute,
-        display_content="Queued hello",
-    )
-    run = await item.future
-
-    assert run.status == RunStatus.RUNNING
-    assert manager.active_run(agent_id="coder", session_id="session-one", project_id=None) is run
-    assert manager.list_queued("coder", "session-one", project_id=None) == []
-    assert item.to_dict()["content"] == "Queued hello"
-
-    await started.wait()
-    release.set()
-
-    assert await run.wait() == "done"
-
-
-async def test_enqueue_when_session_is_busy_queues_and_drains_after_completion() -> None:
-    manager = ChatRunManager()
-    active_release = asyncio.Event()
-    queued_started = asyncio.Event()
-    queued_release = asyncio.Event()
-
-    async def active_execute(_run: Run) -> str:
-        await active_release.wait()
-        return "active"
-
-    async def queued_execute(_run: Run) -> str:
-        queued_started.set()
-        await queued_release.wait()
-        return "queued"
-
-    active_run = await manager.start(
-        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
-        active_execute,
-    )
-    item = await manager.enqueue(
-        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
-        queued_execute,
-        display_content="Queued next",
-        admission=RunAdmission(work_id="sub-work-one"),
-    )
-
-    assert item.future.done() is False
-    assert item.admission.work_id == "sub-work-one"
-    assert [
-        queued_item.item_id
-        for queued_item in manager.list_queued("coder", "session-one", project_id=None)
-    ] == [item.item_id]
-
-    active_release.set()
-    assert await active_run.wait() == "active"
-
-    queued_run = await asyncio.wait_for(item.future, timeout=1)
-
-    assert queued_run.status == RunStatus.RUNNING
-    assert queued_run.work_id == "sub-work-one"
-    assert manager.list_queued("coder", "session-one", project_id=None) == []
-
-    await queued_started.wait()
-    queued_release.set()
-
-    assert await queued_run.wait() == "queued"
-
-
-async def test_queued_run_keeps_agent_activity_projection_policy_when_drained() -> None:
-    manager = ChatRunManager()
-    active_release = asyncio.Event()
-
-    async def active_execute(_run: Run) -> str:
-        await active_release.wait()
-        return "active"
-
-    async def queued_execute(_run: Run) -> str:
-        return "queued"
-
-    active_run = await manager.start(
-        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
-        active_execute,
-    )
-    item = await manager.enqueue(
-        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
-        queued_execute,
-        admission=RunAdmission(contributes_to_agent_activity=False, source_session_id="source"),
-    )
-
-    assert item.admission.contributes_to_agent_activity is False
-    active_release.set()
-    assert await active_run.wait() == "active"
-
-    queued_run = await asyncio.wait_for(item.future, timeout=1)
-    assert await queued_run.wait() == "queued"
-    assert queued_run.contributes_to_agent_activity is False
-    assert queued_run.source_session_id == "source"
-    assert all(event.contributes_to_agent_activity is False for event in queued_run.events)
-
-
 async def test_all_queued_returns_fresh_cross_session_snapshot_in_fifo_order() -> None:
     manager = ChatRunManager()
     release = asyncio.Event()
@@ -257,7 +193,7 @@ async def test_all_queued_returns_fresh_cross_session_snapshot_in_fifo_order() -
         return "done"
 
     identity_run = await manager.start(
-        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        SESSION,
         execute,
     )
     project_run = await manager.start(
@@ -265,7 +201,7 @@ async def test_all_queued_returns_fresh_cross_session_snapshot_in_fifo_order() -
         execute,
     )
     identity_item = await manager.enqueue(
-        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        SESSION,
         execute,
         display_content="identity",
     )
@@ -279,7 +215,7 @@ async def test_all_queued_returns_fresh_cross_session_snapshot_in_fifo_order() -
     snapshot = manager.all_queued()
     assert snapshot == [
         (
-            SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+            SESSION,
             identity_item,
         ),
         (
@@ -290,7 +226,7 @@ async def test_all_queued_returns_fresh_cross_session_snapshot_in_fifo_order() -
     snapshot.clear()
     assert manager.all_queued() == [
         (
-            SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+            SESSION,
             identity_item,
         ),
         (
@@ -304,42 +240,6 @@ async def test_all_queued_returns_fresh_cross_session_snapshot_in_fifo_order() -
     assert await project_run.wait() == "done"
     assert await (await identity_item.future).wait() == "done"
     assert await (await project_item.future).wait() == "done"
-
-
-async def test_enqueue_when_session_is_busy_logs_queue_line(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    manager = ChatRunManager()
-    active_release = asyncio.Event()
-
-    async def execute(_run: Run) -> str:
-        await active_release.wait()
-        return "done"
-
-    active_run = await manager.start(
-        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
-        execute,
-    )
-    with caplog.at_level(logging.INFO, logger="vbot.runs"):
-        item = await manager.enqueue(
-            SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
-            execute,
-            display_content="Queued next",
-        )
-
-    queue_line = next(
-        record.getMessage()
-        for record in caplog.records
-        if record.getMessage().startswith("Run queued for busy session")
-    )
-    assert "agent=coder" in queue_line
-    assert "session=session-one" in queue_line
-    assert "queue_depth=1" in queue_line
-
-    active_release.set()
-    assert await active_run.wait() == "done"
-    queued_run = await asyncio.wait_for(item.future, timeout=1)
-    assert await queued_run.wait() == "done"
 
 
 async def test_multiple_enqueued_items_drain_in_fifo_order() -> None:
@@ -371,21 +271,21 @@ async def test_multiple_enqueued_items_drain_in_fifo_order() -> None:
         return execute
 
     active_run = await manager.start(
-        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        SESSION,
         active_execute,
     )
     first_item = await manager.enqueue(
-        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        SESSION,
         make_executor("first"),
         display_content="first",
     )
     second_item = await manager.enqueue(
-        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        SESSION,
         make_executor("second"),
         display_content="second",
     )
     third_item = await manager.enqueue(
-        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        SESSION,
         make_executor("third"),
         display_content="third",
     )
@@ -433,11 +333,11 @@ async def test_remove_queued_item_cancels_future_and_removes_from_queue() -> Non
         return "queued"
 
     active_run = await manager.start(
-        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        SESSION,
         active_execute,
     )
     item = await manager.enqueue(
-        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        SESSION,
         queued_execute,
         display_content="remove me",
     )
@@ -466,11 +366,11 @@ async def test_cancelling_queue_waiter_removes_item_and_prevents_execution() -> 
         return "queued"
 
     active_run = await manager.start(
-        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        SESSION,
         active_execute,
     )
     item = await manager.enqueue(
-        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        SESSION,
         queued_execute,
         display_content="abandoned",
     )
@@ -513,11 +413,11 @@ async def test_queue_drain_skips_future_cancelled_in_same_tick() -> None:
         return "queued"
 
     active_run = await manager.start(
-        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        SESSION,
         active_execute,
     )
     queued_item = await manager.enqueue(
-        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        SESSION,
         queued_execute,
         display_content="cancel during drain",
     )
@@ -542,7 +442,7 @@ async def test_unexpected_drain_failure_resolves_item_and_keeps_draining(
 
     manager = ChatRunManager(admission_validator=admission_validator)
     active_release = asyncio.Event()
-    address = SessionAddress(project_id=None, agent_id="coder", session_id="session-one")
+    address = SESSION
 
     async def active_execute(_run: Run) -> str:
         await active_release.wait()
@@ -596,11 +496,11 @@ async def test_update_queued_item_replaces_executor_and_display_content() -> Non
         return "updated"
 
     active_run = await manager.start(
-        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        SESSION,
         active_execute,
     )
     item = await manager.enqueue(
-        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        SESSION,
         original_execute,
         display_content="original",
         editable=True,
@@ -639,209 +539,6 @@ async def test_update_queued_item_replaces_executor_and_display_content() -> Non
     assert await queued_run.wait() == "updated"
 
 
-async def test_enqueue_race_condition_session_becomes_idle_between_error_and_enqueue() -> None:
-    manager = ChatRunManager()
-    active_release = asyncio.Event()
-    queued_release = asyncio.Event()
-
-    async def active_execute(_run: Run) -> str:
-        await active_release.wait()
-        return "active"
-
-    async def queued_execute(_run: Run) -> str:
-        await queued_release.wait()
-        return "queued"
-
-    active_run = await manager.start(
-        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
-        active_execute,
-    )
-
-    with pytest.raises(ActiveRunError):
-        await manager.start(
-            SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
-            queued_execute,
-        )
-
-    active_release.set()
-    assert await active_run.wait() == "active"
-
-    item = await manager.enqueue(
-        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
-        queued_execute,
-        display_content="race",
-    )
-    queued_run = await item.future
-
-    assert queued_run.status == RunStatus.RUNNING
-    assert manager.list_queued("coder", "session-one", project_id=None) == []
-
-    queued_release.set()
-    assert await queued_run.wait() == "queued"
-
-
-async def test_chat_loop_queue_run_uses_display_preview_for_busy_session(tmp_path: Path) -> None:
-    session_id = "session-one"
-    active_release = asyncio.Event()
-    agents = SimpleNamespace(
-        get=lambda agent_id: SimpleNamespace(id=agent_id, model="openai/gpt-5.2")
-    )
-
-    async def _resolve_agent(_project_id: str | None, agent_id: str) -> Any:
-        return agents.get(agent_id)
-
-    runtime = SimpleNamespace(
-        agents=agents,
-        agent_resolver=SimpleNamespace(resolve_agent_async=_resolve_agent),
-        providers=SimpleNamespace(
-            get=lambda provider_id: SimpleNamespace(connections=[SimpleNamespace(id="api-key")])
-        ),
-        provider_credentials=SimpleNamespace(
-            has_credentials=lambda _provider_id, connection_id=None: (
-                connection_id == "openai:api-key"
-            ),
-            is_usable=lambda _provider_id, connection_id=None: connection_id == "openai:api-key",
-        ),
-        models=SimpleNamespace(get=lambda _provider_id, _model_id: SimpleNamespace(connections=())),
-        chat_sessions=ChatSessionManager(tmp_path),
-        chat_runs=ChatRunManager(),
-    )
-    runtime.chat_run_manager = runtime.chat_runs
-    runtime.chat_sessions.create("coder", session_id=session_id)
-
-    async def active_execute(_run: Run) -> str:
-        await active_release.wait()
-        return "active"
-
-    active_run = await runtime.chat_runs.start(
-        SessionAddress(project_id=None, agent_id="coder", session_id=session_id),
-        active_execute,
-    )
-
-    item = await build_chat_loop(runtime).queue_run(
-        "coder",
-        "x" * 600,
-        session_id=session_id,
-    )
-
-    assert item.display_content == "x" * 600
-    assert item.editable is True
-    assert runtime.chat_runs.list_queued("coder", session_id, project_id=None)[0] is item
-
-    short_text_item = await build_chat_loop(runtime).queue_run(
-        "coder",
-        "short text",
-        session_id=session_id,
-    )
-
-    assert short_text_item.display_content == "short text"
-    assert short_text_item.editable is True
-
-    attachment_item = await build_chat_loop(runtime).queue_run(
-        "coder",
-        [
-            FileBlock(
-                type="file",
-                attachment_id="attachment-one",
-                filename="report.pdf",
-                media_type="application/pdf",
-            )
-        ],
-        session_id=session_id,
-    )
-
-    assert attachment_item.display_content == "[attachment]"
-    assert attachment_item.editable is False
-
-    assert (
-        runtime.chat_runs.remove_queued("coder", session_id, item.item_id, project_id=None) is True
-    )
-    assert (
-        runtime.chat_runs.remove_queued(
-            "coder", session_id, attachment_item.item_id, project_id=None
-        )
-        is True
-    )
-    assert (
-        runtime.chat_runs.remove_queued(
-            "coder", session_id, short_text_item.item_id, project_id=None
-        )
-        is True
-    )
-    active_release.set()
-    assert await active_run.wait() == "active"
-
-
-async def test_drained_queued_run_started_payload_contains_queue_item_id() -> None:
-    """A queued item that gets drained carries its item id on the run_started payload."""
-    manager = ChatRunManager()
-    active_release = asyncio.Event()
-    queued_release = asyncio.Event()
-
-    async def active_execute(_run: Run) -> str:
-        await active_release.wait()
-        return "active"
-
-    async def queued_execute(_run: Run) -> str:
-        await queued_release.wait()
-        return "queued"
-
-    active_run = await manager.start(
-        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
-        active_execute,
-    )
-    item = await manager.enqueue(
-        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
-        queued_execute,
-        display_content="Queued next",
-    )
-
-    active_release.set()
-    assert await active_run.wait() == "active"
-
-    queued_run = await asyncio.wait_for(item.future, timeout=1)
-    await asyncio.sleep(0)
-
-    started_events = [event for event in queued_run.events if event.type == RUN_STARTED_EVENT]
-    assert len(started_events) == 1
-    assert started_events[0].payload == {
-        "status": RunStatus.RUNNING.value,
-        "queue_item_id": item.item_id,
-    }
-
-    queued_release.set()
-    assert await queued_run.wait() == "queued"
-
-
-async def test_enqueue_idle_session_start_immediately_carries_queue_item_id() -> None:
-    """enqueue on an idle session still tags run_started with the queued item id."""
-    manager = ChatRunManager()
-    release = asyncio.Event()
-
-    async def execute(_run: Run) -> str:
-        await release.wait()
-        return "done"
-
-    item = await manager.enqueue(
-        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
-        execute,
-        display_content="Hello",
-    )
-    run = await item.future
-    await asyncio.sleep(0)
-
-    started_events = [event for event in run.events if event.type == RUN_STARTED_EVENT]
-    assert len(started_events) == 1
-    assert started_events[0].payload == {
-        "status": RunStatus.RUNNING.value,
-        "queue_item_id": item.item_id,
-    }
-
-    release.set()
-    assert await run.wait() == "done"
-
-
-@pytest.mark.asyncio
 async def test_steering_append_failure_retains_input_and_blocks_mid_append_edits() -> None:
     manager = ChatRunManager()
     release = asyncio.Event()
@@ -874,7 +571,6 @@ async def test_steering_append_failure_retains_input_and_blocks_mid_append_edits
         await manager.aclose()
 
 
-@pytest.mark.asyncio
 async def test_removing_second_steer_during_first_append_does_not_deliver_it() -> None:
     manager = ChatRunManager()
     release = asyncio.Event()

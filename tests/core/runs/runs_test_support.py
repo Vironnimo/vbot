@@ -1,38 +1,30 @@
-"""Shared dependencies and assertions for Run tests."""
+"""Shared addresses, executors and assertions for Run tests."""
 
 from __future__ import annotations
 
 import asyncio
-import logging
-from contextlib import aclosing
-from pathlib import Path
-from types import SimpleNamespace
+from collections.abc import Awaitable, Callable
 from typing import Any
 
-import pytest
+from core.runs import Run
+from core.sessions import SessionAddress
 
-from core.chat import ChatLoop, ChatSessionManager
-from core.runs import (
-    ASSISTANT_OUTPUT_DELTA_EVENT,
-    REASONING_DELTA_EVENT,
-    RUN_AGENT_ACTIVITY_FIELD,
-    RUN_KIND_FIELD,
-    RUN_STARTED_EVENT,
-    TOOL_CALL_DELTA_EVENT,
-    ActiveRunError,
-    ChatRunManager,
-    QueuedRunItem,
-    Run,
-    RunAdmission,
-    RunAdmissionBlockedError,
-    RunCancelledError,
-    RunInterruptedError,
-    RunKind,
-    RunNotFoundError,
-    RunStatus,
-    WaitingWorkLimitError,
-)
-from core.utils.errors import VBotError
+SESSION = SessionAddress(project_id=None, agent_id="coder", session_id="session-one")
+
+
+def held(result: Any = "done") -> tuple[Callable[[Run], Awaitable[Any]], asyncio.Event]:
+    """An executor that waits for the returned release event, then returns *result*."""
+    release = asyncio.Event()
+
+    async def execute(_run: Run) -> Any:
+        await release.wait()
+        return result
+
+    return execute, release
+
+
+async def finish_immediately(_run: Run) -> str:
+    return "done"
 
 
 def assert_timing_payload(payload: dict[str, Any]) -> None:
@@ -42,36 +34,3 @@ def assert_timing_payload(payload: dict[str, Any]) -> None:
     assert isinstance(timing.get("completed_at"), str)
     assert isinstance(timing.get("duration_ms"), int)
     assert timing["duration_ms"] >= 0
-
-
-__all__ = [
-    "asyncio",
-    "logging",
-    "aclosing",
-    "Path",
-    "SimpleNamespace",
-    "Any",
-    "pytest",
-    "ChatLoop",
-    "ChatSessionManager",
-    "ASSISTANT_OUTPUT_DELTA_EVENT",
-    "REASONING_DELTA_EVENT",
-    "RUN_AGENT_ACTIVITY_FIELD",
-    "RUN_KIND_FIELD",
-    "RUN_STARTED_EVENT",
-    "TOOL_CALL_DELTA_EVENT",
-    "ActiveRunError",
-    "ChatRunManager",
-    "QueuedRunItem",
-    "Run",
-    "RunAdmission",
-    "RunAdmissionBlockedError",
-    "RunCancelledError",
-    "RunInterruptedError",
-    "RunKind",
-    "RunNotFoundError",
-    "RunStatus",
-    "WaitingWorkLimitError",
-    "VBotError",
-    "assert_timing_payload",
-]

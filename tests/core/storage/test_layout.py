@@ -17,6 +17,7 @@ from core.storage.layout import (
     DataDirectoryLayout,
     initialize_data_directory,
 )
+from core.storage.storage import StorageManager
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 RESOURCE_TEMPLATE = PROJECT_ROOT / "resources" / "data-dir" / ".env.example"
@@ -63,10 +64,13 @@ def test_layout_exposes_every_canonical_named_path(tmp_path: Path) -> None:
     assert layout.settings_file == tmp_path / "settings.json"
 
 
-def test_initialize_creates_exact_canonical_layout(tmp_path: Path) -> None:
+@pytest.mark.parametrize("require_new", [False, True])
+def test_initialize_creates_exact_canonical_layout(tmp_path: Path, require_new: bool) -> None:
     data_dir = tmp_path / "data"
 
-    result = initialize_data_directory(data_dir, resources_dir=PROJECT_ROOT / "resources")
+    result = initialize_data_directory(
+        data_dir, resources_dir=PROJECT_ROOT / "resources", require_new=require_new
+    )
 
     actual_directories = {
         path.relative_to(data_dir) for path in data_dir.rglob("*") if path.is_dir()
@@ -76,17 +80,13 @@ def test_initialize_creates_exact_canonical_layout(tmp_path: Path) -> None:
     assert actual_files == {Path(".env"), Path("settings.json"), Path("data-store.json")}
     assert (data_dir / ".env").read_bytes() == RESOURCE_TEMPLATE.read_bytes()
     assert (data_dir / "settings.json").read_text(encoding="utf-8") == INITIAL_SETTINGS_DOCUMENT
-    assert result.layout.root == data_dir
-
-
-def test_initial_settings_document_is_an_empty_current_settings_document(tmp_path: Path) -> None:
     assert render_json_document({}, version=SETTINGS_FORMAT_VERSION) == INITIAL_SETTINGS_DOCUMENT
-    initialize_data_directory(tmp_path, resources_dir=PROJECT_ROOT / "resources")
-
-    report = validate_settings_file(tmp_path / "settings.json")
-
+    report = validate_settings_file(data_dir / "settings.json")
     assert report.exists
     assert report.diagnostics == ()
+    assert result.layout.root == data_dir
+    assert data_dir in result.created_directories
+    assert data_dir / "data-store.json" in result.created_files
 
 
 def test_initialize_preserves_existing_configuration_bytes(tmp_path: Path) -> None:
@@ -169,19 +169,6 @@ def test_initialize_require_new_leaves_existing_root_untouched(
     assert list(data_dir.iterdir()) == []
 
 
-def test_initialize_require_new_creates_authorized_canonical_layout(tmp_path: Path) -> None:
-    data_dir = tmp_path / "data"
-
-    result = initialize_data_directory(
-        data_dir, resources_dir=PROJECT_ROOT / "resources", require_new=True
-    )
-
-    assert data_dir in result.created_directories
-    assert (data_dir / "data-store.json").is_file()
-    assert (data_dir / "settings.json").read_text(encoding="utf-8") == INITIAL_SETTINGS_DOCUMENT
-    assert all((data_dir / path).is_dir() for path in DATA_DIRECTORY_RELATIVE_PATHS)
-
-
 def test_initialize_tolerates_concurrently_created_canonical_directory(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -237,6 +224,26 @@ def test_initialize_uses_empty_environment_when_template_is_unavailable(
         data_dir / "settings.json",
     )
     assert str(template_path) in caplog.text
+
+
+class _Config:
+    def __init__(self, values: dict[str, str], data_dir: Path | None = None) -> None:
+        self.values = values
+        if data_dir is not None:
+            self.data_dir = data_dir
+
+    def get(self, key: str, default: object = None) -> object:
+        return self.values.get(key, default)
+
+
+@pytest.mark.parametrize("source", ["attribute", "value"])
+def test_storage_manager_resolves_data_dir_from_config(tmp_path: Path, source: str) -> None:
+    data_dir = tmp_path / "configured"
+    config = (
+        _Config({}, data_dir) if source == "attribute" else _Config({"DATA_DIR": str(data_dir)})
+    )
+
+    assert StorageManager(config=config).data_dir == data_dir
 
 
 def test_layout_cli_initializes_data_directory(tmp_path: Path) -> None:

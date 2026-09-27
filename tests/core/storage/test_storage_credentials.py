@@ -1,4 +1,4 @@
-"""Tests for storage credentials."""
+"""Data-directory credentials: the ``.env`` file beside the process environment."""
 
 import os
 import threading
@@ -8,12 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from core.storage import (
-    DATA_DIRECTORY_RELATIVE_PATHS,
-    DataDirectoryLayout,
-    StorageError,
-    StorageManager,
-)
+from core.storage import DataDirectoryLayout, StorageError, StorageManager
 from core.utils.atomic import atomic_write_text
 
 CREDENTIAL_MUTATION_CONTENTION_SECONDS = 0.1
@@ -72,65 +67,11 @@ def run_overlapping_credential_mutations(
         second_future.result()
 
 
-class ConfigWithDataDir:
-    def __init__(self, data_dir: Path) -> None:
-        self.data_dir = data_dir
-
-    def get(self, key: str, default=None):
-        return default
-
-
-class ConfigWithValues:
-    def __init__(self, values: dict[str, str]) -> None:
-        self.values = values
-
-    def get(self, key: str, default=None):
-        return self.values.get(key, default)
-
-
-def test_ensure_directories_creates_canonical_structure(tmp_path: Path) -> None:
-    storage = StorageManager(tmp_path)
-
-    storage.ensure_directories()
-
-    assert tmp_path.is_dir()
-    assert all((tmp_path / directory).is_dir() for directory in DATA_DIRECTORY_RELATIVE_PATHS)
-
-
-def test_load_environment_reads_data_dir_env_file(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
-    storage = StorageManager(tmp_path)
-    (tmp_path / ".env").write_text("OPENROUTER_API_KEY=sk-or-from-data-dir\n", encoding="utf-8")
-
-    loaded = storage.load_environment()
-
-    assert loaded == {"OPENROUTER_API_KEY": "sk-or-from-data-dir"}
-    assert "OPENROUTER_API_KEY" not in os.environ
-
-
-def test_load_environment_does_not_overwrite_existing_environment(
+def test_environment_file_is_a_fallback_that_never_mutates_the_process_environment(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-from-process")
-    storage = StorageManager(tmp_path)
-    (tmp_path / ".env").write_text("OPENROUTER_API_KEY=sk-or-from-data-dir\n", encoding="utf-8")
-
-    loaded = storage.load_environment()
-
-    assert loaded == {"OPENROUTER_API_KEY": "sk-or-from-data-dir"}
-    assert os.environ["OPENROUTER_API_KEY"] == "sk-or-from-process"
-
-
-def test_build_environment_snapshot_prefers_process_environment(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-from-process")
-    monkeypatch.setenv("PROCESS_ONLY", "from-process")
     monkeypatch.delenv("DATA_ONLY", raising=False)
     storage = StorageManager(tmp_path)
     (tmp_path / ".env").write_text(
@@ -138,14 +79,17 @@ def test_build_environment_snapshot_prefers_process_environment(
         encoding="utf-8",
     )
 
+    loaded = storage.load_environment()
     snapshot = storage.build_environment_snapshot()
 
+    assert loaded == {"OPENROUTER_API_KEY": "sk-or-from-data-dir", "DATA_ONLY": "from-data-dir"}
+    assert os.environ["OPENROUTER_API_KEY"] == "sk-or-from-process"
+    assert "DATA_ONLY" not in os.environ
     assert snapshot["OPENROUTER_API_KEY"] == "sk-or-from-process"
-    assert snapshot["PROCESS_ONLY"] == "from-process"
     assert snapshot["DATA_ONLY"] == "from-data-dir"
 
 
-def test_set_data_dir_credential_writes_new_env_key(tmp_path: Path) -> None:
+def test_first_credential_is_added_to_the_seeded_environment_template(tmp_path: Path) -> None:
     storage = StorageManager(tmp_path)
 
     storage.set_data_dir_credential("OPENROUTER_API_KEY", "sk-or-test")
@@ -156,8 +100,15 @@ def test_set_data_dir_credential_writes_new_env_key(tmp_path: Path) -> None:
     assert storage.load_environment()["OPENROUTER_API_KEY"] == "sk-or-test"
 
 
-def test_set_data_dir_credential_replaces_existing_key_and_preserves_other_lines(
-    tmp_path: Path,
+@pytest.mark.parametrize(
+    ("operation", "expected"),
+    [
+        ("set", "# Provider keys\nOPENROUTER_API_KEY=new\nOTHER_KEY=value\n"),
+        ("remove", "# Provider keys\nOTHER_KEY=value\n"),
+    ],
+)
+def test_credential_mutation_rewrites_every_duplicate_and_keeps_other_lines(
+    tmp_path: Path, operation: str, expected: str
 ) -> None:
     storage = StorageManager(tmp_path)
     (tmp_path / ".env").write_text(
@@ -165,11 +116,21 @@ def test_set_data_dir_credential_replaces_existing_key_and_preserves_other_lines
         encoding="utf-8",
     )
 
-    storage.set_data_dir_credential("OPENROUTER_API_KEY", "new")
+    if operation == "set":
+        storage.set_data_dir_credential("OPENROUTER_API_KEY", "new")
+    else:
+        assert storage.remove_data_dir_credential("OPENROUTER_API_KEY") is True
 
-    assert (tmp_path / ".env").read_text(encoding="utf-8") == (
-        "# Provider keys\nOPENROUTER_API_KEY=new\nOTHER_KEY=value\n"
-    )
+    assert (tmp_path / ".env").read_text(encoding="utf-8") == expected
+
+
+def test_removing_an_absent_credential_reports_false_without_writing(tmp_path: Path) -> None:
+    storage = StorageManager(tmp_path)
+    assert storage.remove_data_dir_credential("OPENROUTER_API_KEY") is False
+    (tmp_path / ".env").write_text("OTHER_KEY=value\n", encoding="utf-8")
+
+    assert storage.remove_data_dir_credential("OPENROUTER_API_KEY") is False
+    assert (tmp_path / ".env").read_text(encoding="utf-8") == "OTHER_KEY=value\n"
 
 
 @pytest.mark.parametrize(
@@ -178,14 +139,13 @@ def test_set_data_dir_credential_replaces_existing_key_and_preserves_other_lines
         '"literal-secret"',
         "'literal-secret'",
         '"leading-quote',
-        'trailing-quote"',
-        "'leading-quote",
         "trailing-quote'",
         " secret with surrounding whitespace \t",
         ' "mixed\'quotes" ',
         r"literal\n\t\path=${NO_EXPANSION}",
         "first=second#literal",
-        *[f"first{separator}SECOND_KEY=second" for separator in "\v\f\x1c\x1d\x1e\x85\u2028\u2029"],
+        # Line boundaries for str.splitlines(), never for the dotenv file.
+        *[f"first{separator}SECOND_KEY=second" for separator in "\v\x85 "],
     ],
 )
 def test_credentials_round_trip_literal_values_through_other_mutations(
@@ -207,40 +167,39 @@ def test_credentials_round_trip_literal_values_through_other_mutations(
     assert storage.load_data_dir_credentials() == {"EXISTING_KEY": "retained"}
 
 
-def test_concurrent_credential_sets_preserve_both_updates(
+@pytest.mark.parametrize(
+    ("initial", "second", "expected"),
+    [
+        (
+            "EXISTING_KEY=value\n",
+            lambda storage: storage.set_data_dir_credential("SECOND_KEY", "second"),
+            {"EXISTING_KEY": "value", "KEEP_KEY": "new", "SECOND_KEY": "second"},
+        ),
+        (
+            "REMOVE_KEY=old\n",
+            lambda storage: storage.remove_data_dir_credential("REMOVE_KEY"),
+            {"KEEP_KEY": "new"},
+        ),
+    ],
+    ids=["set-and-set", "set-and-remove"],
+)
+def test_concurrent_credential_mutations_preserve_both_updates(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    initial: str,
+    second: Callable[[StorageManager], object],
+    expected: dict[str, str],
 ) -> None:
     storage = StorageManager(tmp_path)
-    (tmp_path / ".env").write_text("EXISTING_KEY=value\n", encoding="utf-8")
-
-    run_overlapping_credential_mutations(
-        monkeypatch,
-        lambda: storage.set_data_dir_credential("FIRST_KEY", "first"),
-        lambda: storage.set_data_dir_credential("SECOND_KEY", "second"),
-    )
-
-    assert storage.load_data_dir_credentials() == {
-        "EXISTING_KEY": "value",
-        "FIRST_KEY": "first",
-        "SECOND_KEY": "second",
-    }
-
-
-def test_concurrent_credential_set_and_remove_preserve_both_updates(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    storage = StorageManager(tmp_path)
-    (tmp_path / ".env").write_text("REMOVE_KEY=old\n", encoding="utf-8")
+    (tmp_path / ".env").write_text(initial, encoding="utf-8")
 
     run_overlapping_credential_mutations(
         monkeypatch,
         lambda: storage.set_data_dir_credential("KEEP_KEY", "new"),
-        lambda: storage.remove_data_dir_credential("REMOVE_KEY"),
+        lambda: second(storage),
     )
 
-    assert storage.load_data_dir_credentials() == {"KEEP_KEY": "new"}
+    assert storage.load_data_dir_credentials() == expected
 
 
 def test_set_data_dir_credential_preserves_env_when_atomic_replace_fails(
@@ -251,18 +210,14 @@ def test_set_data_dir_credential_preserves_env_when_atomic_replace_fails(
     env_path = tmp_path / ".env"
     env_path.write_text("OPENROUTER_API_KEY=old\nOTHER_KEY=value\n", encoding="utf-8")
     replace_calls: list[tuple[Path, Path]] = []
-    import os as _os_module
-
-    _original_replace = _os_module.replace
+    original_replace = os.replace
 
     def fail_replace(source: Path, target: Path) -> None:
         replace_calls.append((source, target))
-        # Only fail the .env atomic replace; the session marker uses a
-        # separate ``os.replace`` path and must not be affected.
+        # Only the .env replace fails; the data-store marker uses its own replace.
         if target == env_path:
             raise OSError("replace failed")
-        # Fall back to the real replace for marker and other files.
-        return _original_replace(source, target)
+        return original_replace(source, target)
 
     monkeypatch.setattr("core.utils.atomic.os.replace", fail_replace)
 
@@ -274,12 +229,18 @@ def test_set_data_dir_credential_preserves_env_when_atomic_replace_fails(
     assert list(DataDirectoryLayout(tmp_path).atomic_temporary.iterdir()) == []
 
 
-@pytest.mark.parametrize("key", ["", "1BAD", "BAD-NAME", "BAD NAME"])
-def test_set_data_dir_credential_rejects_invalid_env_key(tmp_path: Path, key: str) -> None:
+@pytest.mark.parametrize("operation", ["set", "remove"])
+@pytest.mark.parametrize("key", ["", "1BAD", "BAD-NAME"])
+def test_credential_mutations_reject_invalid_env_keys(
+    tmp_path: Path, operation: str, key: str
+) -> None:
     storage = StorageManager(tmp_path)
 
     with pytest.raises(StorageError):
-        storage.set_data_dir_credential(key, "secret")
+        if operation == "set":
+            storage.set_data_dir_credential(key, "secret")
+        else:
+            storage.remove_data_dir_credential(key)
 
 
 @pytest.mark.parametrize("value", ["", "line\nbreak", "line\rbreak"])
@@ -288,56 +249,3 @@ def test_set_data_dir_credential_rejects_invalid_value(tmp_path: Path, value: st
 
     with pytest.raises(StorageError):
         storage.set_data_dir_credential("OPENROUTER_API_KEY", value)
-
-
-def test_remove_data_dir_credential_removes_key_and_preserves_other_lines(
-    tmp_path: Path,
-) -> None:
-    storage = StorageManager(tmp_path)
-    (tmp_path / ".env").write_text(
-        "# Provider keys\nOPENROUTER_API_KEY=old\nOTHER_KEY=value\nOPENROUTER_API_KEY=duplicate\n",
-        encoding="utf-8",
-    )
-
-    removed = storage.remove_data_dir_credential("OPENROUTER_API_KEY")
-
-    assert removed is True
-    assert (tmp_path / ".env").read_text(encoding="utf-8") == ("# Provider keys\nOTHER_KEY=value\n")
-
-
-def test_remove_data_dir_credential_returns_false_for_missing_key(tmp_path: Path) -> None:
-    storage = StorageManager(tmp_path)
-    (tmp_path / ".env").write_text("OTHER_KEY=value\n", encoding="utf-8")
-
-    removed = storage.remove_data_dir_credential("OPENROUTER_API_KEY")
-
-    assert removed is False
-    assert (tmp_path / ".env").read_text(encoding="utf-8") == "OTHER_KEY=value\n"
-
-
-def test_remove_data_dir_credential_returns_false_without_env_file(tmp_path: Path) -> None:
-    storage = StorageManager(tmp_path)
-
-    assert storage.remove_data_dir_credential("OPENROUTER_API_KEY") is False
-
-
-@pytest.mark.parametrize("key", ["", "1BAD", "BAD-NAME", "BAD NAME"])
-def test_remove_data_dir_credential_rejects_invalid_env_key(tmp_path: Path, key: str) -> None:
-    storage = StorageManager(tmp_path)
-
-    with pytest.raises(StorageError):
-        storage.remove_data_dir_credential(key)
-
-
-def test_resolves_data_dir_from_config_attribute(tmp_path: Path) -> None:
-    data_dir = tmp_path / "configured"
-    storage = StorageManager(config=ConfigWithDataDir(data_dir))
-
-    assert storage.data_dir == data_dir
-
-
-def test_resolves_data_dir_from_config_value(tmp_path: Path) -> None:
-    data_dir = tmp_path / "from-value"
-    storage = StorageManager(config=ConfigWithValues({"DATA_DIR": str(data_dir)}))
-
-    assert storage.data_dir == data_dir

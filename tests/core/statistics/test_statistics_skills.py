@@ -1,35 +1,34 @@
-"""Tests for statistics skills."""
+"""The Statistics Skills section: offered vs. activated, the inventory join and windows.
+
+The accumulator and builder are tested directly for the counting rules; the
+service tests cover the persisted inputs (seen Skills, activation notes) and scopes.
+"""
 
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from datetime import datetime, timedelta
-from pathlib import Path
-from typing import cast
+
+import pytest
 
 from core.chat.messages import ChatMessage
-from core.sessions import ChatSessionManager, SeenSkillsUpdate, SessionAddress
+from core.sessions import ChatSessionManager, SeenSkillsUpdate
 from core.sessions._types import SKILL_CONTEXT_NOTE_PREFIX
-from core.statistics import (
-    AgentDirectory,
-    ProjectDirectory,
-    SkillInventorySource,
-    StatisticsReport,
-    StatisticsService,
+from core.statistics import SkillInventorySource
+from core.statistics.skills import (
+    SkillsSection,
+    SkillUsageAccumulator,
+    SkillUsageStat,
+    offered_skill_names,
+    resolve_inventory,
 )
-from tests.core.statistics.statistics_test_support import (
-    BASE,
-    _FakeAgents,
-    _FakeProjects,
-)
+from core.utils.timestamps import format_canonical_timestamp
+from tests.core.statistics.statistics_test_support import BASE, StatisticsFactory
 
 
-# ---------------------------------------------------------------------------
-# Skills section — end-to-end through the service (offered from the Session's
-# seen Skills, activated from persisted notes, joined against an injected inventory).
-# ---------------------------------------------------------------------------
 class _FakeInventory:
-    """Minimal :class:`SkillInventorySource` for the service-level skills tests."""
+    """Minimal :class:`SkillInventorySource`."""
 
     def __init__(
         self,
@@ -52,6 +51,217 @@ class _FakeInventory:
         return list(self._project.get(project_id, []))
 
 
+def _iso(offset_seconds: int = 0) -> str:
+    return format_canonical_timestamp(BASE + timedelta(seconds=offset_seconds))
+
+
+def _observe(
+    accumulator: SkillUsageAccumulator,
+    *,
+    created: int = 0,
+    offered: Sequence[str] = (),
+    activated: Sequence[tuple[str, int]] = (),
+    agent: str = "main",
+) -> None:
+    """Fold one Session started at second *created* with activations at their seconds."""
+    accumulator.observe_session(
+        display_key=agent,
+        created_at=_iso(created),
+        offered_names=list(offered),
+        activations=[(name, _iso(offset)) for name, offset in activated],
+    )
+
+
+def _build(accumulator: SkillUsageAccumulator, *global_names: str) -> SkillsSection:
+    inventory: SkillInventorySource = _FakeInventory(
+        global_skills=[(name, "global") for name in global_names]
+    )
+    return accumulator.build(
+        resolve_inventory(inventory, agent_ids=frozenset(), project_ids=frozenset())
+    )
+
+
+def _row(section: SkillsSection, name: str) -> SkillUsageStat:
+    return next(row for row in section.skills if row.name == name)
+
+
+# -- Counting rules -----------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("metadata", "names"),
+    [
+        ({"seen_skills": ["deploy", "teach"]}, ["deploy", "teach"]),
+        ({}, []),
+        ({"seen_skills": "deploy"}, []),
+        ({"seen_skills": [1, "", "deploy", None]}, ["deploy"]),
+    ],
+    ids=["list", "absent", "not-a-list", "invalid-entries"],
+)
+def test_offered_skill_names_reads_only_named_entries_of_the_seen_skills_list(
+    metadata: dict[str, object], names: list[str]
+) -> None:
+    assert offered_skill_names(metadata) == names
+
+
+def test_offers_and_activations_count_once_per_session() -> None:
+    accumulator = SkillUsageAccumulator(since=None, until=None)
+    _observe(accumulator, created=0, offered=["deploy", "deploy"], activated=[("deploy", 1)] * 2)
+    _observe(accumulator, created=10, offered=["deploy"], activated=[("deploy", 11)])
+
+    row = _row(_build(accumulator, "deploy"), "deploy")
+
+    assert (row.offered_sessions, row.activated_sessions, row.activated_offered_sessions) == (
+        2,
+        2,
+        2,
+    )
+    assert row.usage_rate == 1.0
+    assert (row.first_offered, row.last_offered) == (_iso(0), _iso(10))
+    assert (row.first_activated, row.last_activated) == (_iso(1), _iso(11))
+
+
+def test_usage_rate_converts_only_offers_that_the_same_session_activated() -> None:
+    accumulator = SkillUsageAccumulator(since=None, until=None)
+    _observe(accumulator, created=0, offered=["deploy"], activated=[("deploy", 1)])
+    _observe(accumulator, created=10, offered=["deploy"])
+    _observe(accumulator, created=20, offered=["deploy"])
+    # An activation without offer metadata stays visible but cannot convert.
+    _observe(accumulator, created=30, activated=[("deploy", 31)])
+    _observe(accumulator, created=40, offered=["teach"])
+
+    section = _build(accumulator, "deploy", "teach")
+    deploy, teach = _row(section, "deploy"), _row(section, "teach")
+
+    assert (deploy.offered_sessions, deploy.activated_sessions) == (3, 2)
+    assert deploy.activated_offered_sessions == 1
+    assert deploy.usage_rate == pytest.approx(1 / 3)
+    # Offered but never activated is a zero rate; null is reserved for no offers.
+    assert teach.usage_rate == 0.0
+    assert section.offered_unactivated_skills == 1
+    assert section.skills_without_offer_data == 0
+
+
+def test_build_joins_the_current_inventory() -> None:
+    accumulator = SkillUsageAccumulator(since=None, until=None)
+    _observe(
+        accumulator,
+        offered=["deploy", "deleted-skill"],
+        activated=[("deploy", 1), ("deleted-skill", 2)],
+    )
+
+    section = _build(accumulator, "deploy", "unused")
+    unused = _row(section, "unused")
+
+    # Usage of a name missing from the inventory is dropped; an unused
+    # inventory Skill is listed with zero counts.
+    assert {row.name for row in section.skills} == {"deploy", "unused"}
+    assert (unused.offered_sessions, unused.activated_sessions) == (0, 0)
+    assert unused.activated_offered_sessions == 0
+    assert unused.usage_rate is None
+    assert (unused.first_offered, unused.first_activated) == (None, None)
+    assert unused.by_agent == []
+    assert (section.total_skills, section.used_skills, section.never_used_skills) == (2, 1, 1)
+    assert section.offered_unactivated_skills == 0
+    assert section.skills_without_offer_data == 1
+
+
+def test_rows_sorted_by_offered_desc_then_name() -> None:
+    accumulator = SkillUsageAccumulator(since=None, until=None)
+    _observe(accumulator, created=0, offered=["b", "b-more"])
+    _observe(accumulator, created=10, offered=["b-more"])
+
+    section = _build(accumulator, "a", "b", "b-more")
+
+    assert [row.name for row in section.skills] == ["b-more", "b", "a"]
+
+
+def test_activations_are_attributed_per_agent_display_key() -> None:
+    accumulator = SkillUsageAccumulator(since=None, until=None)
+    _observe(accumulator, created=0, offered=["deploy"], activated=[("deploy", 1)])
+    for created in (10, 20):
+        _observe(
+            accumulator,
+            created=created,
+            offered=["deploy"],
+            activated=[("deploy", created + 1)],
+            agent="builder@vbot",
+        )
+
+    by_agent = _row(_build(accumulator, "deploy"), "deploy").by_agent
+
+    # Sorted by count, then key.
+    assert [(entry.key, entry.count) for entry in by_agent] == [("builder@vbot", 2), ("main", 1)]
+
+
+def test_window_filters_offers_by_session_start_and_activations_by_note_time() -> None:
+    accumulator = SkillUsageAccumulator(
+        since=BASE + timedelta(seconds=100), until=BASE + timedelta(seconds=300)
+    )
+    # Started before the window; only the activation inside it counts.
+    _observe(
+        accumulator,
+        created=0,
+        offered=["deploy"],
+        activated=[("deploy", 50), ("deploy", 200), ("deploy", 400)],
+    )
+    _observe(accumulator, created=200, offered=["teach"])
+    # Activated only before the window: not used in it, but not "never used".
+    _observe(accumulator, created=0, offered=["old"], activated=[("old", 10)])
+
+    section = _build(accumulator, "deploy", "teach", "old", "fresh")
+    deploy, teach = _row(section, "deploy"), _row(section, "teach")
+
+    assert (deploy.offered_sessions, deploy.activated_sessions) == (0, 1)
+    assert deploy.activated_offered_sessions == 0
+    assert deploy.usage_rate is None
+    assert (deploy.first_activated, deploy.last_activated) == (_iso(200), _iso(200))
+    assert (teach.offered_sessions, teach.first_offered) == (1, _iso(200))
+    assert _row(section, "old").activated_sessions == 0
+    assert section.used_skills == 1
+    # Never-used is window-independent: "teach" and "fresh" were never activated.
+    assert section.never_used_skills == 2
+
+
+def test_a_non_canonical_session_timestamp_is_bad_data() -> None:
+    accumulator = SkillUsageAccumulator(since=BASE + timedelta(seconds=100), until=None)
+
+    # Sessions store canonical timestamps only; an offset form is never guessed.
+    with pytest.raises(ValueError, match="canonical"):
+        accumulator.observe_session(
+            display_key="main",
+            created_at=BASE.isoformat(),
+            offered_names=["deploy"],
+            activations=[],
+        )
+
+
+def test_inventory_merges_scopes_and_one_row_aggregates_colliding_origins() -> None:
+    inventory = _FakeInventory(
+        global_skills=[("bundled-one", "bundled"), ("shared", "global")],
+        agent_skills={"assistant": frozenset({"private"})},
+        project_skills={"vbot": [("proj", "project:vBot"), ("shared", "project:vBot")]},
+    )
+    resolved = resolve_inventory(
+        inventory, agent_ids=frozenset({"assistant"}), project_ids=frozenset({"vbot"})
+    )
+    accumulator = SkillUsageAccumulator(since=None, until=None)
+    _observe(accumulator, offered=["shared"], activated=[("shared", 1)])
+
+    section = accumulator.build(resolved)
+
+    assert resolved.names == frozenset({"bundled-one", "shared", "private", "proj"})
+    assert resolved.origins_for("private") == ["agent:assistant"]
+    assert resolved.origins_for("proj") == ["project:vBot"]
+    assert resolved.origins_for("bundled-one") == ["bundled"]
+    [shared] = [row for row in section.skills if row.name == "shared"]
+    assert shared.origins == ["global", "project:vBot"]
+    assert shared.activated_sessions == 1
+
+
+# -- Through the service ------------------------------------------------------
+
+
 def _skill_note(name: str, at: datetime) -> ChatMessage:
     return ChatMessage.note(
         SKILL_CONTEXT_NOTE_PREFIX + json.dumps({"name": name, "content": f"{name} body"}),
@@ -59,161 +269,80 @@ def _skill_note(name: str, at: datetime) -> ChatMessage:
     )
 
 
-def _skills_row(report: StatisticsReport, name: str):
-    return next(row for row in report.skills.skills if row.name == name)
+def _offer_session(
+    manager: ChatSessionManager,
+    agent_id: str,
+    offered: tuple[str, ...],
+    notes: list[ChatMessage],
+    *,
+    project_id: str | None = None,
+) -> None:
+    session = manager.create(agent_id, project_id=project_id)
+    for note in notes:
+        session.append(note)
+    manager.record_seen_skills(session.address, SeenSkillsUpdate(baseline=offered))
 
 
-def test_skills_offered_from_seen_skills_and_activated_from_notes(tmp_path: Path) -> None:
-    manager = ChatSessionManager(tmp_path)
+def test_report_joins_seen_skills_and_activation_notes_per_agent_key(
+    manager: ChatSessionManager, statistics: StatisticsFactory
+) -> None:
+    _offer_session(manager, "main", ("deploy", "teach"), [_skill_note("deploy", BASE)])
+    _offer_session(
+        manager, "builder", ("deploy",), [_skill_note("deploy", BASE)], project_id="vbot"
+    )
+    # A broken activation note neither fails the report nor counts.
+    _offer_session(
+        manager,
+        "main",
+        ("teach",),
+        [ChatMessage.note(SKILL_CONTEXT_NOTE_PREFIX + "{broken", timestamp=BASE)],
+    )
     inventory = _FakeInventory(global_skills=[("deploy", "bundled"), ("teach", "global")])
-    service = StatisticsService(
-        manager,
-        cast(AgentDirectory, _FakeAgents(["main"])),
-        skill_inventory=cast(SkillInventorySource, inventory),
-    )
-    session = manager.create("main")
-    session.append(ChatMessage.user("hi", timestamp=BASE))
-    session.append(_skill_note("deploy", BASE + timedelta(seconds=1)))
-    manager.record_seen_skills(
-        SessionAddress(project_id=None, agent_id="main", session_id=session.id),
-        SeenSkillsUpdate(baseline=("deploy", "teach")),
-    )
 
-    report = service.report()
+    report = statistics(
+        ["main"], projects={"vbot": ["builder"]}, skill_inventory=inventory
+    ).report()
 
-    deploy = _skills_row(report, "deploy")
-    teach = _skills_row(report, "teach")
-    assert deploy.offered_sessions == 1
-    assert deploy.activated_sessions == 1
-    assert deploy.activated_offered_sessions == 1
+    skills = report.skills
+    deploy = next(row for row in skills.skills if row.name == "deploy")
+    teach = next(row for row in skills.skills if row.name == "teach")
+    assert (deploy.offered_sessions, deploy.activated_sessions) == (2, 2)
     assert deploy.usage_rate == 1.0
-    assert deploy.by_agent == [type(deploy.by_agent[0])(key="main", count=1)]
-    # teach was offered but never activated.
-    assert teach.offered_sessions == 1
-    assert teach.activated_sessions == 0
-    assert report.skills.total_skills == 2
-    assert report.skills.used_skills == 1
-    assert report.skills.never_used_skills == 1
-    assert report.skills.offered_unactivated_skills == 1
-    assert report.skills.skills_without_offer_data == 0
+    # A project Agent is keyed by its address form.
+    assert [(entry.key, entry.count) for entry in deploy.by_agent] == [
+        ("builder@vbot", 1),
+        ("main", 1),
+    ]
+    assert (teach.offered_sessions, teach.activated_sessions) == (2, 0)
+    assert (skills.total_skills, skills.used_skills, skills.never_used_skills) == (2, 1, 1)
+    assert skills.offered_unactivated_skills == 1
 
 
-def test_skills_usage_for_deleted_name_is_dropped(tmp_path: Path) -> None:
-    manager = ChatSessionManager(tmp_path)
-    # Inventory holds only "deploy"; the session used a now-deleted "legacy" skill.
+def test_report_window_filters_offers_by_session_start_and_activations_by_note_time(
+    manager: ChatSessionManager, statistics: StatisticsFactory
+) -> None:
+    # The Session starts now, after the window; its activation note lies inside it.
+    _offer_session(manager, "main", ("deploy",), [_skill_note("deploy", BASE)])
     inventory = _FakeInventory(global_skills=[("deploy", "bundled")])
-    service = StatisticsService(
-        manager,
-        cast(AgentDirectory, _FakeAgents(["main"])),
-        skill_inventory=cast(SkillInventorySource, inventory),
-    )
-    session = manager.create("main")
-    session.append(_skill_note("legacy", BASE + timedelta(seconds=1)))
-    manager.record_seen_skills(
-        SessionAddress(project_id=None, agent_id="main", session_id=session.id),
-        SeenSkillsUpdate(baseline=("legacy", "deploy")),
+
+    report = statistics(skill_inventory=inventory).report(
+        since=BASE - timedelta(hours=1), until=BASE + timedelta(hours=1)
     )
 
-    report = service.report()
-
-    assert {row.name for row in report.skills.skills} == {"deploy"}
-    assert _skills_row(report, "deploy").offered_sessions == 1
-    assert _skills_row(report, "deploy").activated_sessions == 0
+    [deploy] = report.skills.skills
+    assert (deploy.offered_sessions, deploy.activated_sessions) == (0, 1)
+    assert deploy.usage_rate is None
 
 
-def test_skills_default_service_has_empty_section(tmp_path: Path) -> None:
-    # No injected inventory → every usage drops, zero counts, valid section.
-    manager = ChatSessionManager(tmp_path)
-    service = StatisticsService(manager, cast(AgentDirectory, _FakeAgents(["main"])))
-    session = manager.create("main")
-    session.append(_skill_note("deploy", BASE))
-    manager.record_seen_skills(
-        SessionAddress(project_id=None, agent_id="main", session_id=session.id),
-        SeenSkillsUpdate(baseline=("deploy",)),
-    )
+def test_service_without_an_inventory_reports_an_empty_skills_section(
+    manager: ChatSessionManager, statistics: StatisticsFactory
+) -> None:
+    _offer_session(manager, "main", ("deploy",), [_skill_note("deploy", BASE)])
 
-    report = service.report()
+    report = statistics().report()
 
     assert report.skills.skills == []
     assert report.skills.total_skills == 0
     assert report.skills.offered_unactivated_skills == 0
     assert report.skills.skills_without_offer_data == 0
-    # Fully JSON-serializable with the skills section present.
     assert json.loads(json.dumps(report.to_dict()))["skills"]["total_skills"] == 0
-
-
-def test_skills_project_agent_keyed_by_address_form(tmp_path: Path) -> None:
-    manager = ChatSessionManager(tmp_path)
-    inventory = _FakeInventory(global_skills=[("deploy", "bundled")])
-    service = StatisticsService(
-        manager,
-        cast(AgentDirectory, _FakeAgents([])),
-        cast(ProjectDirectory, _FakeProjects({"vbot": ["builder"]})),
-        skill_inventory=cast(SkillInventorySource, inventory),
-    )
-    session = manager.create("builder", project_id="vbot")
-    session.append(_skill_note("deploy", BASE + timedelta(seconds=1)))
-    manager.record_seen_skills(
-        SessionAddress(project_id="vbot", agent_id="builder", session_id=session.id),
-        SeenSkillsUpdate(baseline=("deploy",)),
-    )
-
-    report = service.report()
-    deploy = _skills_row(report, "deploy")
-
-    assert [entry.key for entry in deploy.by_agent] == ["builder@vbot"]
-    assert deploy.by_agent[0].count == 1
-
-
-def test_skills_window_filters_offered_and_activated(tmp_path: Path) -> None:
-    manager = ChatSessionManager(tmp_path)
-    inventory = _FakeInventory(global_skills=[("deploy", "bundled")])
-    service = StatisticsService(
-        manager,
-        cast(AgentDirectory, _FakeAgents(["main"])),
-        skill_inventory=cast(SkillInventorySource, inventory),
-    )
-    # Session created (first message) before the window; an activation note fires
-    # inside it. Offered filters by created_at (excluded); activated by note
-    # timestamp (included) — and never-used is window-independent.
-    address = SessionAddress(project_id=None, agent_id="main", session_id="windowed")
-    manager._store.create(address, created_at=BASE.isoformat())
-    session = manager.get(address)
-    session.append(ChatMessage.user("hi", timestamp=BASE))
-    session.append(_skill_note("deploy", BASE + timedelta(hours=2)))
-    manager.record_seen_skills(
-        SessionAddress(project_id=None, agent_id="main", session_id=session.id),
-        SeenSkillsUpdate(baseline=("deploy",)),
-    )
-
-    report = service.report(since=BASE + timedelta(hours=1))
-    deploy = _skills_row(report, "deploy")
-
-    assert deploy.offered_sessions == 0
-    assert deploy.activated_sessions == 1
-    assert deploy.activated_offered_sessions == 0
-    assert deploy.usage_rate is None
-    assert report.skills.never_used_skills == 0
-
-
-def test_skills_malformed_skill_context_note_is_ignored(tmp_path: Path) -> None:
-    manager = ChatSessionManager(tmp_path)
-    inventory = _FakeInventory(global_skills=[("deploy", "bundled")])
-    service = StatisticsService(
-        manager,
-        cast(AgentDirectory, _FakeAgents(["main"])),
-        skill_inventory=cast(SkillInventorySource, inventory),
-    )
-    session = manager.create("main")
-    # A [skill-context] note with a broken JSON payload must not crash the scan
-    # nor count as an activation.
-    session.append(ChatMessage.note(SKILL_CONTEXT_NOTE_PREFIX + "{broken", timestamp=BASE))
-    manager.record_seen_skills(
-        SessionAddress(project_id=None, agent_id="main", session_id=session.id),
-        SeenSkillsUpdate(baseline=("deploy",)),
-    )
-
-    report = service.report()
-
-    assert _skills_row(report, "deploy").activated_sessions == 0
-    assert _skills_row(report, "deploy").offered_sessions == 1

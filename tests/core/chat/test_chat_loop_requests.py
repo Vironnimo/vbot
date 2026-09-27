@@ -19,6 +19,7 @@ from core.chat import (
     MessageSender,
     ReplySurface,
 )
+from core.chat.content_blocks import ContentBlock, FileBlock
 from core.runs import MODEL_STEP_USAGE_EVENT
 from core.tools import JsonObject as ToolJsonObject
 from core.tools import ToolContext, ToolRegistry, tool_success
@@ -317,6 +318,41 @@ async def test_queued_cross_surface_run_decides_when_it_actually_starts(tmp_path
     assert len(surface_notes) == 2
     assert "webui" in str(surface_notes[0].content)
     assert "telegram" in str(surface_notes[1].content)
+
+
+@pytest.mark.asyncio
+async def test_queued_input_shows_its_full_text_and_only_text_stays_editable(
+    tmp_path: Path,
+) -> None:
+    adapter = BlockingStubAdapter()
+    runtime = _runtime(tmp_path, [], adapter=adapter)
+    loop = build_chat_loop(runtime)
+    run = await loop.start_run("coder", "busy", session_id="session-one")
+    await adapter.request_started.wait()
+    attachment = FileBlock(
+        type="file",
+        attachment_id="attachment-one",
+        filename="report.pdf",
+        media_type="application/pdf",
+    )
+
+    contents: list[str | list[ContentBlock]] = ["x" * 600, [attachment]]
+    items = [
+        await loop.queue_run("coder", content, session_id="session-one") for content in contents
+    ]
+
+    assert [(item.display_content, item.editable) for item in items] == [
+        ("x" * 600, True),
+        ("[attachment]", False),
+    ]
+    queued = runtime.chat_run_manager.list_queued("coder", "session-one", project_id=None)
+    assert queued == items
+    for item in items:
+        assert runtime.chat_run_manager.remove_queued(
+            "coder", "session-one", item.item_id, project_id=None
+        )
+    adapter.release.set()
+    await run.wait()
 
 
 @pytest.mark.asyncio

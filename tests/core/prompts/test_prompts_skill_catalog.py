@@ -1,16 +1,12 @@
 """Prompt Skill catalog and explicit Project Context rendering tests."""
 
-from core.utils.paths import model_path
+from pathlib import Path
+from types import SimpleNamespace
 
-from .prompts_test_support import (
-    MEMORY_PROMPT_MODE_OFF,
-    Path,
-    PinnedSkillCatalog,
-    StubSkill,
-    StubSkills,
-    _agent,
-    _manager,
-)
+from core.memory import MEMORY_PROMPT_MODE_OFF
+from core.prompts.prompts import PinnedSkillCatalog
+from core.utils.paths import model_path
+from tests.core.prompts.prompts_test_support import StubSkill, StubSkills, _agent, _manager
 
 
 def test_build_system_prompt_skill_registry_override_scopes_skills_block(tmp_path: Path) -> None:
@@ -51,8 +47,6 @@ def test_skill_catalog_groups_skills_by_origin(tmp_path: Path) -> None:
 
 
 def test_render_project_skills_lists_only_names_and_descriptions(tmp_path: Path) -> None:
-    from types import SimpleNamespace
-
     manager = _manager(tmp_path)
     deploy_path = Path("/repo/.opencode/skills/deploy/SKILL.md")
     skills = [
@@ -73,10 +67,6 @@ def test_render_project_skills_lists_only_names_and_descriptions(tmp_path: Path)
     assert "SKILL.md" not in rendered
     # Sorted by name: audit before deploy.
     assert rendered.index("audit") < rendered.index("deploy")
-
-
-def test_render_project_skills_empty_is_blank(tmp_path: Path) -> None:
-    manager = _manager(tmp_path)
     assert manager.render_project_skills("vBot", []) == ""
 
 

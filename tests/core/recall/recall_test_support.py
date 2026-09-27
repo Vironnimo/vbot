@@ -1,8 +1,9 @@
-"""Shared fixtures and fakes for vector behavior tests."""
+"""Shared requests, fake embeddings, store readers and loop guards for Recall tests."""
 
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import inspect
 import sqlite3
 import threading
@@ -15,46 +16,44 @@ import pytest
 import sqlite_vec  # type: ignore[import-untyped]
 
 from core.database import Database
-from core.model_tasks import (
-    EmbeddingResult,
-    EmbeddingSpaceIdentity,
-)
-from core.recall import (
-    RecallBackendContext,
-    RecallSearchRequest,
-    VectorRecallBackend,
-)
+from core.model_tasks import EmbeddingResult, EmbeddingSpaceIdentity
+from core.recall import RecallBackendContext, RecallSearchRequest, VectorRecallBackend
 from core.sessions import ChatSessionManager
+
+CONVERSATION_ROLES = ("user", "assistant", "error", "compaction_checkpoint")
+ALL_ROLES = ("user", "assistant", "tool", "error", "compaction_checkpoint")
 
 
 def timestamp(day: int, hour: int = 12) -> datetime:
     return datetime(2026, 5, day, hour, tzinfo=UTC)
 
 
-def request(
-    *,
-    query: str,
-    match_mode: str = "all_terms",
-    roles: tuple[str, ...] = ("user", "assistant", "tool", "error", "compaction_checkpoint"),
-    limit: int = 5,
-) -> RecallSearchRequest:
-    return RecallSearchRequest(
+def request(query: str, **changes: Any) -> RecallSearchRequest:
+    """A relevance-ordered search over Agent ``coder``'s conversation roles."""
+
+    base = RecallSearchRequest(
         agent_id="coder",
         project_id=None,
-        offset=0,
         session_id=None,
         query=query,
         since=None,
         until=None,
-        roles=roles,
-        match_mode=match_mode,  # type: ignore[arg-type]
-        limit=limit,
-        order="newest",
+        roles=CONVERSATION_ROLES,
+        match_mode="all_terms",
+        order="relevance",
+        offset=0,
+        limit=10,
     )
+    return dataclasses.replace(base, **changes)
 
 
-class _StubEmbeddings:
-    """Deterministic stub embedding service for vector recall tests."""
+class StubEmbeddings:
+    """Deterministic embedding service: the same text always maps to the same vector.
+
+    ``car`` text (without ``driving``) is ``[1, 0, 0, 0]``, ``vehicle``/``driving``
+    text is its near neighbour, ``banana``/``fruit`` and ``carrot``/``vegetable``
+    are orthogonal clusters, and everything else shares one default vector.
+    """
 
     def __init__(self, *, dimension: int = 4) -> None:
         self.dimension = dimension
@@ -64,7 +63,6 @@ class _StubEmbeddings:
         self.space_fingerprint = "stub-space-a"
         self.embed_calls: list[list[str]] = []
         self.embed_purposes: list[str | None] = []
-        self.resolve_calls = 0
 
     def inputs(self, purpose: str) -> list[str]:
         """Every text embedded for *purpose*, in call order."""
@@ -80,29 +78,18 @@ class _StubEmbeddings:
     def document_inputs(self) -> list[str]:
         return self.inputs("document")
 
-    @property
-    def query_inputs(self) -> list[str]:
-        return self.inputs("query")
-
     def resolve_space(self) -> EmbeddingSpaceIdentity:
-        self.resolve_calls += 1
         return EmbeddingSpaceIdentity(
             provider_id=self.provider_id,
             model_id=self.model_id,
             fingerprint=self.space_fingerprint,
         )
 
-    async def embed(
-        self,
-        texts: list[str],
-        *,
-        purpose: str | None = None,
-    ) -> EmbeddingResult:
+    async def embed(self, texts: list[str], *, purpose: str | None = None) -> EmbeddingResult:
         self.embed_calls.append(list(texts))
         self.embed_purposes.append(purpose)
-        vectors: list[list[float]] = [self._vector_for(text) for text in texts]
         return EmbeddingResult(
-            vectors=tuple(vectors),
+            vectors=tuple(self.vector_for(text) for text in texts),
             model_id=self.model_id,
             provider_id=self.provider_id,
             dimension=self.dimension,
@@ -110,22 +97,22 @@ class _StubEmbeddings:
             response_model_id=self.response_model_id,
         )
 
-    def _vector_for(self, text: str) -> list[float]:
+    def vector_for(self, text: str) -> list[float]:
         lowered = text.lower()
-        # Deterministic slot assignments — the same text always maps to the
-        # same vector so cosine distance is a stable test signal.
         if "car" in lowered and "driving" not in lowered:
-            return [1.0, 0.0, 0.0, 0.0] + [0.0] * (self.dimension - 4)
-        if "vehicle" in lowered or "driving" in lowered:
-            return [0.9, 0.1, 0.0, 0.0] + [0.0] * (self.dimension - 4)
-        if "banana" in lowered or "fruit" in lowered:
-            return [0.0, 0.0, 1.0, 0.0] + [0.0] * (self.dimension - 4)
-        if "carrot" in lowered or "vegetable" in lowered:
-            return [0.0, 1.0, 0.0, 0.0] + [0.0] * (self.dimension - 4)
-        return [0.5, 0.5, 0.0, 0.0] + [0.0] * (self.dimension - 4)
+            slots = [1.0, 0.0, 0.0, 0.0]
+        elif "vehicle" in lowered or "driving" in lowered:
+            slots = [0.9, 0.1, 0.0, 0.0]
+        elif "banana" in lowered or "fruit" in lowered:
+            slots = [0.0, 0.0, 1.0, 0.0]
+        elif "carrot" in lowered or "vegetable" in lowered:
+            slots = [0.0, 1.0, 0.0, 0.0]
+        else:
+            slots = [0.5, 0.5, 0.0, 0.0]
+        return slots + [0.0] * (self.dimension - 4)
 
 
-def backend(
+def vector_backend(
     tmp_path: Path,
     sessions: ChatSessionManager,
     *,
@@ -134,15 +121,14 @@ def backend(
 ) -> VectorRecallBackend:
     return VectorRecallBackend(
         RecallBackendContext(
-            data_dir=tmp_path,
-            sessions=sessions,
-            embeddings=embeddings,
-            logger=logger,
+            data_dir=tmp_path, sessions=sessions, embeddings=embeddings, logger=logger
         )
     )
 
 
-def _connect_store(store_path: Path) -> sqlite3.Connection:
+def connect_store(store_path: Path) -> sqlite3.Connection:
+    """Open the vector store directly, with sqlite-vec loaded."""
+
     connection = sqlite3.connect(store_path)
     connection.row_factory = sqlite3.Row
     connection.enable_load_extension(True)
@@ -151,13 +137,13 @@ def _connect_store(store_path: Path) -> sqlite3.Connection:
     return connection
 
 
-def _passage_rows(store_path: Path, agent_id: str, session_id: str) -> dict[int, str]:
-    """Return ``{passage_ref: text}`` for the Passages one Session shows that have a vector.
+def passage_rows(store_path: Path, agent_id: str, session_id: str) -> dict[int, str]:
+    """Return ``{passage_ref: text}`` for the vectorized Passages one Session shows.
 
     Covers every scope that holds a Session with this id.
     """
 
-    connection = _connect_store(store_path)
+    connection = connect_store(store_path)
     try:
         rows = connection.execute(
             """
@@ -175,20 +161,14 @@ def _passage_rows(store_path: Path, agent_id: str, session_id: str) -> dict[int,
         connection.close()
 
 
-def _pending_count(store_path: Path) -> int:
+def pending_count(store_path: Path) -> int:
     """Count stored Passages still waiting for a vector."""
 
-    connection = _connect_store(store_path)
+    connection = connect_store(store_path)
     try:
         return int(connection.execute("SELECT COUNT(*) FROM pending_vectors").fetchone()[0])
     finally:
         connection.close()
-
-
-def _count_vec_rows(store_path: Path, agent_id: str, session_id: str) -> int:
-    """Count one Session's indexed Passages that have a vector."""
-
-    return len(_passage_rows(store_path, agent_id, session_id))
 
 
 def forbid_event_loop_calls(monkeypatch: pytest.MonkeyPatch, *targets: object) -> list[str]:

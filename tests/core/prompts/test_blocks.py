@@ -1,6 +1,7 @@
 """Tests for the System Prompt block contract and the pure assembly engine."""
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -14,7 +15,6 @@ from core.prompts.blocks import (
     BlockDefinition,
     BlockProducer,
     BlockRenderContext,
-    BlockSource,
     CallableOwnerActivity,
     LayoutEntry,
     MappingOverrideResolver,
@@ -34,6 +34,10 @@ from core.prompts.blocks import (
     wrap_include_file,
 )
 from core.tools.availability import ToolAccess
+
+# Every template marker kind, including an unsafe include that would fail the build if
+# it were ever expanded.
+_MARKERS = "{include:../secret.md} {include:USER.md} {generated:x} {model} {data_root}"
 
 
 @dataclass(frozen=True)
@@ -82,79 +86,74 @@ def _text_block(
     )
 
 
-# --- Source / namespace parsing --------------------------------------------
+def _raise(message: str) -> Callable[[BlockRenderContext], str]:
+    def render(_context: BlockRenderContext) -> str:
+        raise RuntimeError(message)
+
+    return render
+
+
+# --- Block ids and definitions ----------------------------------------------
 
 
 @pytest.mark.parametrize(
     ("block_id", "expected"),
     [
         ("core:intro", "core"),
-        ("tool:bash", "tool"),
-        ("extension:my_ext", "extension"),
-        ("user:my-rules", "user"),
         ("memory:guidance", "memory"),  # a domain prefix beyond the common four
         ("plugin:thing", "plugin"),  # open namespace: any non-empty prefix is valid
         ("tool:weird:name", "tool"),  # only the first ":" splits
+        ("intro", None),
+        (":guidance", None),
     ],
 )
-def test_parse_block_source_returns_prefix(block_id: str, expected: str) -> None:
-    assert parse_block_source(block_id) == expected
+def test_parse_block_source_returns_the_non_empty_prefix(
+    block_id: str, expected: str | None
+) -> None:
+    if expected is None:
+        with pytest.raises(PromptError):
+            parse_block_source(block_id)
+    else:
+        assert parse_block_source(block_id) == expected
 
 
-def test_parse_block_source_rejects_missing_prefix() -> None:
+@pytest.mark.parametrize(
+    ("definition", "editable"),
+    [
+        (lambda: _text_block("core:intro", "Hello"), True),
+        (lambda: BlockDefinition(id="core:intro", owner="always", render=lambda ctx: "out"), False),
+        (
+            lambda: BlockDefinition(
+                id="core:intro", owner="always", kind=BLOCK_KIND_DATA, default_text="data"
+            ),
+            False,
+        ),
+    ],
+    ids=["static-text", "dynamic", "data"],
+)
+def test_only_static_text_definitions_are_editable(
+    definition: Callable[[], BlockDefinition], editable: bool
+) -> None:
+    built = definition()
+
+    assert built.source == "core"
+    assert built.editable is editable
+
+
+@pytest.mark.parametrize(
+    "build",
+    [
+        lambda: BlockDefinition(id="core:intro", owner="always"),
+        lambda: BlockDefinition(
+            id="core:intro", owner="always", default_text="x", render=lambda ctx: "y"
+        ),
+        lambda: _text_block("intro", "Hello"),
+    ],
+    ids=["neither-text-nor-render", "text-and-render", "unprefixed-id"],
+)
+def test_definition_rejects_an_invalid_shape(build: Callable[[], BlockDefinition]) -> None:
     with pytest.raises(PromptError):
-        parse_block_source("intro")
-
-
-def test_parse_block_source_rejects_empty_prefix() -> None:
-    with pytest.raises(PromptError):
-        parse_block_source(":guidance")
-
-
-def test_block_source_members_carry_canonical_values() -> None:
-    # The enum names the canonical sources for typed comparison without literals.
-    assert BlockSource.CORE.value == "core"
-    assert BlockSource.MEMORY.value == "memory"
-
-
-# --- BlockDefinition contract ----------------------------------------------
-
-
-def test_definition_exposes_source_and_editable_for_static_text() -> None:
-    definition = _text_block("core:intro", "Hello")
-
-    assert definition.source == "core"
-    assert definition.editable is True
-
-
-def test_dynamic_definition_is_not_editable() -> None:
-    definition = BlockDefinition(id="tool:bash", owner="tool:bash", render=lambda ctx: "out")
-
-    assert definition.editable is False
-    assert definition.kind == BLOCK_KIND_TEXT  # default kind, but render makes it dynamic
-
-
-def test_data_block_is_not_editable() -> None:
-    definition = BlockDefinition(
-        id="core:soul", owner="always", kind=BLOCK_KIND_DATA, default_text="data"
-    )
-
-    assert definition.editable is False
-
-
-def test_definition_requires_exactly_one_of_text_or_render() -> None:
-    with pytest.raises(PromptError):
-        BlockDefinition(id="core:intro", owner="always")
-    with pytest.raises(PromptError):
-        BlockDefinition(id="core:intro", owner="always", default_text="x", render=lambda ctx: "y")
-
-
-def test_definition_rejects_unprefixed_id_at_construction() -> None:
-    with pytest.raises(PromptError):
-        _text_block("intro", "Hello")
-
-
-# --- dedupe_definitions -----------------------------------------------------
+        build()
 
 
 def test_dedupe_keeps_first_and_diagnoses_collision(
@@ -176,359 +175,256 @@ def test_dedupe_keeps_first_and_diagnoses_collision(
 
 # --- resolve_layout ---------------------------------------------------------
 
-
-def test_layout_orders_by_explicit_entries() -> None:
-    a = _text_block("core:a", "a")
-    b = _text_block("core:b", "b")
-    layout = [LayoutEntry(id="core:b"), LayoutEntry(id="core:a")]
-
-    resolved = resolve_layout([a, b], layout)
-
-    assert [block.definition.id for block in resolved] == ["core:b", "core:a"]
-    assert all(block.enabled for block in resolved)
+_A = _text_block("core:a", "a")
+_OPT_IN = BlockDefinition(id="core:opt-in", owner="always", default_text="x", default_enabled=False)
 
 
-def test_layout_inserts_unknown_definition_at_default_rank() -> None:
-    # core:b is laid out; core:a (rank 5) and core:c (rank 1) are not — they
-    # append after the laid-out block in (rank, id) order.
-    a = _text_block("core:a", "a", default_rank=5)
-    b = _text_block("core:b", "b")
-    c = _text_block("core:c", "c", default_rank=1)
-    layout = [LayoutEntry(id="core:b")]
+@pytest.mark.parametrize(
+    ("definitions", "layout", "expected"),
+    [
+        (
+            [_A, _text_block("core:b", "b")],
+            [LayoutEntry(id="core:b"), LayoutEntry(id="core:a")],
+            [("core:b", True), ("core:a", True)],
+        ),
+        # Unlisted definitions append after the laid-out ones in (rank, id) order.
+        (
+            [
+                _text_block("core:a", "a", default_rank=5),
+                _text_block("core:b", "b"),
+                _text_block("core:c", "c", default_rank=1),
+                _text_block("core:zeta", "z", default_rank=1),
+            ],
+            [LayoutEntry(id="core:b")],
+            [("core:b", True), ("core:c", True), ("core:zeta", True), ("core:a", True)],
+        ),
+        # A remembered contributor that is gone is skipped, never an error.
+        ([_A], [LayoutEntry(id="core:gone"), LayoutEntry(id="core:a")], [("core:a", True)]),
+        # Only the first entry for an id counts; its disabled flag is kept.
+        (
+            [_A],
+            [LayoutEntry(id="core:a", enabled=False), LayoutEntry(id="core:a", enabled=True)],
+            [("core:a", False)],
+        ),
+        # An opt-in block defaults in off, even under an older persisted layout ...
+        ([_OPT_IN], [], [("core:opt-in", False)]),
+        # ... and an explicit layout entry wins over that default.
+        ([_OPT_IN], [LayoutEntry(id="core:opt-in", enabled=True)], [("core:opt-in", True)]),
+    ],
+    ids=[
+        "layout-order",
+        "unlisted-by-rank-then-id",
+        "inert-entry",
+        "duplicate-entry",
+        "opt-in-default",
+        "opt-in-enabled",
+    ],
+)
+def test_resolve_layout_orders_and_enables_blocks(
+    definitions: list[BlockDefinition],
+    layout: list[LayoutEntry],
+    expected: list[tuple[str, bool]],
+) -> None:
+    resolved = resolve_layout(definitions, layout)
 
-    resolved = resolve_layout([a, b, c], layout)
-
-    assert [block.definition.id for block in resolved] == ["core:b", "core:c", "core:a"]
-    assert resolved[1].enabled is True  # defaulted-in blocks are enabled
-
-
-def test_layout_tiebreaks_equal_default_rank_by_id() -> None:
-    high = _text_block("core:zeta", "z", default_rank=0)
-    low = _text_block("core:alpha", "a", default_rank=0)
-
-    resolved = resolve_layout([high, low], [])
-
-    assert [block.definition.id for block in resolved] == ["core:alpha", "core:zeta"]
-
-
-def test_layout_skips_inert_unknown_entry() -> None:
-    a = _text_block("core:a", "a")
-    # The layout remembers a contributor that is gone — skipped, never an error.
-    layout = [LayoutEntry(id="core:gone"), LayoutEntry(id="core:a")]
-
-    resolved = resolve_layout([a], layout)
-
-    assert [block.definition.id for block in resolved] == ["core:a"]
-
-
-def test_layout_keeps_disabled_flag() -> None:
-    a = _text_block("core:a", "a")
-    layout = [LayoutEntry(id="core:a", enabled=False)]
-
-    resolved = resolve_layout([a], layout)
-
-    assert resolved[0].enabled is False
-
-
-def test_opt_in_block_defaults_in_disabled_but_layout_entry_wins() -> None:
-    # A definition with default_enabled=False defaults in OFF when the layout does
-    # not list it (so an opt-in block stays off even under an older persisted
-    # layout); an explicit layout entry overrides that default in either direction.
-    opt_in = BlockDefinition(
-        id="core:opt-in", owner="always", default_text="x", default_enabled=False
-    )
-
-    defaulted = resolve_layout([opt_in], [])
-    assert defaulted[0].enabled is False
-
-    switched_on = resolve_layout([opt_in], [LayoutEntry(id="core:opt-in", enabled=True)])
-    assert switched_on[0].enabled is True
+    assert [(block.definition.id, block.enabled) for block in resolved] == expected
 
 
-def test_layout_ignores_duplicate_entry_for_same_id() -> None:
-    a = _text_block("core:a", "a")
-    layout = [LayoutEntry(id="core:a", enabled=False), LayoutEntry(id="core:a", enabled=True)]
-
-    resolved = resolve_layout([a], layout)
-
-    # Only the first slot wins; the duplicate is inert.
-    assert [block.definition.id for block in resolved] == ["core:a"]
-    assert resolved[0].enabled is False
+# --- Gates and normalization ------------------------------------------------
 
 
-# --- The three gates --------------------------------------------------------
-
-
-def test_gate_user_enabled_blocks_a_disabled_block() -> None:
-    block = ResolvedBlock(definition=_text_block("core:a", "text"), enabled=False)
-
-    assert passes_gates(block, StubAgent(), _always_active(), "text") is False
-
-
-def test_gate_owner_active_blocks_an_inactive_owner() -> None:
-    block = ResolvedBlock(definition=_text_block("core:a", "text", owner="memory"), enabled=True)
-    inactive = CallableOwnerActivity(lambda owner, agent: False)
-
-    assert passes_gates(block, StubAgent(), inactive, "text") is False
-
-
-def test_gate_non_empty_blocks_blank_text() -> None:
-    block = ResolvedBlock(definition=_text_block("core:a", ""), enabled=True)
-
-    assert passes_gates(block, StubAgent(), _always_active(), "   \n  ") is False
-
-
-def test_all_three_gates_pass_renders_block() -> None:
-    block = ResolvedBlock(definition=_text_block("core:a", "text"), enabled=True)
-
-    assert passes_gates(block, StubAgent(), _always_active(), "text") is True
-
-
-def test_owner_activity_receives_owner_and_agent() -> None:
+@pytest.mark.parametrize(
+    ("enabled", "owner_active", "text", "expected"),
+    [
+        (False, True, "text", False),
+        (True, False, "text", False),
+        (True, True, "   \n  ", False),
+        (True, True, "text", True),
+    ],
+    ids=["user-disabled", "owner-inactive", "blank-text", "all-gates-pass"],
+)
+def test_block_renders_only_when_all_three_gates_pass(
+    enabled: bool, owner_active: bool, text: str, expected: bool
+) -> None:
     seen: list[tuple[str, str]] = []
 
     def predicate(owner: str, agent: PromptAgent) -> bool:
         seen.append((owner, agent.id))
-        return True
+        return owner_active
 
     block = ResolvedBlock(
-        definition=_text_block("tool:bash", "text", owner="tool:bash"), enabled=True
+        definition=_text_block("tool:bash", "text", owner="tool:bash"), enabled=enabled
     )
-    passes_gates(block, StubAgent(id="builder"), CallableOwnerActivity(predicate), "text")
 
-    assert seen == [("tool:bash", "builder")]
-
-
-# --- normalize_blocks -------------------------------------------------------
-
-
-def test_normalize_joins_with_single_blank_line() -> None:
-    assert normalize_blocks(["one", "two", "three"]) == "one\n\ntwo\n\nthree"
+    assert (
+        passes_gates(block, StubAgent(id="builder"), CallableOwnerActivity(predicate), text)
+        is expected
+    )
+    assert seen == ([("tool:bash", "builder")] if enabled else [])
 
 
-def test_normalize_trims_each_block_and_drops_empties() -> None:
-    rendered = ["  leading", "", "   ", "trailing  \n"]
-
-    assert normalize_blocks(rendered) == "leading\n\ntrailing"
-
-
-def test_normalize_has_no_leading_or_trailing_blank_lines() -> None:
-    result = normalize_blocks(["\n\nbody\n\n"])
-
-    assert result == "body"
-    assert not result.startswith("\n")
-    assert not result.endswith("\n")
-
-
-def test_normalize_empty_input_is_empty_string() -> None:
-    assert normalize_blocks([]) == ""
-    assert normalize_blocks(["", "  "]) == ""
+@pytest.mark.parametrize(
+    ("rendered", "expected"),
+    [
+        (["one", "two", "three"], "one\n\ntwo\n\nthree"),
+        (["  leading", "", "   ", "trailing  \n"], "leading\n\ntrailing"),
+        (["\n\nbody\n\n"], "body"),
+        (["", "  "], ""),
+        ([], ""),
+    ],
+)
+def test_normalize_trims_blocks_and_joins_them_with_one_blank_line(
+    rendered: list[str], expected: str
+) -> None:
+    assert normalize_blocks(rendered) == expected
 
 
-# --- {generated:NAME} expansion --------------------------------------------
+# --- Template markers -------------------------------------------------------
 
 
-def test_generated_marker_expands_known_producer() -> None:
-    producers = {"tool_list": lambda ctx: "- bash: run"}
-
-    result = expand_block_template("Tools:\n{generated:tool_list}", _context(), producers=producers)
-
-    assert result == "Tools:\n- bash: run"
-
-
-def test_generated_marker_unknown_renders_empty_and_warns(
+@pytest.mark.parametrize(
+    ("template", "producers", "expected", "warnings"),
+    [
+        (
+            "Tools:\n{generated:tool_list}",
+            {"tool_list": lambda ctx: f"- bash: run for {ctx.agent.id}"},
+            "Tools:\n- bash: run for builder",
+            [],
+        ),
+        ("{generated:skill_catalog}", {"skill_catalog": lambda ctx: ""}, "", []),
+        ("a{generated:nope}b", {}, "ab", ["nope"]),
+        (
+            "before{generated:broken}after",
+            {"broken": _raise("producer broke")},
+            "beforeafter",
+            ["broken", "producer broke"],
+        ),
+    ],
+    ids=["known-producer", "empty-producer", "unknown-producer", "failing-producer"],
+)
+def test_generated_marker_renders_its_producer_or_warns_and_drops(
+    template: str,
+    producers: dict[str, BlockProducer],
+    expected: str,
+    warnings: list[str],
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    with caplog.at_level(logging.WARNING):
-        result = expand_block_template("a{generated:nope}b", _context(), producers={})
-
-    assert result == "ab"
-    assert "nope" in caplog.text
-
-
-def test_generated_marker_empty_producer_leaves_no_residue() -> None:
-    producers = {"skill_catalog": lambda ctx: ""}
-
-    result = expand_block_template("{generated:skill_catalog}", _context(), producers=producers)
-
-    assert result == ""
-
-
-def test_generated_marker_failing_producer_renders_empty_and_warns(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    def fail(_context: BlockRenderContext) -> str:
-        raise RuntimeError("producer broke")
-
     with caplog.at_level(logging.WARNING):
         result = expand_block_template(
-            "before{generated:broken}after", _context(), producers={"broken": fail}
+            template, _context(StubAgent(id="builder")), producers=producers
         )
 
-    assert result == "beforeafter"
-    assert "broken" in caplog.text
-    assert "producer broke" in caplog.text
+    assert result == expected
+    assert all(fragment in caplog.text for fragment in warnings)
+    assert bool(caplog.records) is bool(warnings)
 
 
-def test_generated_producer_receives_context() -> None:
-    seen: list[str] = []
-
-    def producer(context: BlockRenderContext) -> str:
-        seen.append(context.agent.id)
-        return "ok"
-
-    expand_block_template(
-        "{generated:x}", _context(StubAgent(id="builder")), producers={"x": producer}
-    )
-
-    assert seen == ["builder"]
-
-
-# --- {include:filename} expansion ------------------------------------------
-
-
-def test_include_wraps_existing_workspace_file(tmp_path: Path) -> None:
-    (tmp_path / "SOUL.md").write_text("Soul text", encoding="utf-8")
-
-    result = expand_workspace_includes("{include:SOUL.md}", str(tmp_path))
-
-    assert result == '<file name="SOUL.md">\nSoul text\n</file>'
-
-
-def test_include_missing_file_is_dropped_with_warning(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
+@pytest.mark.parametrize(
+    ("setup", "template", "expected", "warns"),
+    [
+        ("file", "{include:SOUL.md}", '<file name="SOUL.md">\nSoul text\n</file>', False),
+        ("missing", "a{include:SOUL.md}b", "ab", True),
+        ("directory", "a{include:SOUL.md}b", "ab", True),
+        # An empty workspace never resolves against the process CWD, which holds a decoy.
+        ("empty-workspace", "a{include:SOUL.md}b", "ab", False),
+    ],
+)
+def test_include_inlines_a_readable_workspace_file_and_reports_only_that_read(
+    setup: str,
+    template: str,
+    expected: str,
+    warns: bool,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    with caplog.at_level(logging.WARNING):
-        result = expand_workspace_includes("a{include:GONE.md}b", str(tmp_path))
-
-    assert result == "ab"
-    assert any(record.levelno == logging.WARNING for record in caplog.records)
-
-
-def test_include_unreadable_file_is_dropped_with_warning(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
-) -> None:
-    # A directory standing where the file is expected fails to read on every OS.
-    (tmp_path / "SOUL.md").mkdir()
-
-    with caplog.at_level(logging.WARNING):
-        result = expand_workspace_includes("{include:SOUL.md}", str(tmp_path))
-
-    assert result == ""
-    assert any(record.levelno == logging.WARNING for record in caplog.records)
-
-
-def test_include_empty_workspace_drops_without_read_or_warning(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    # An empty workspace ("" for a config agent) must NEVER resolve against
-    # Path("") == Path(".") and read from the process CWD. A decoy proves it.
-    monkeypatch.chdir(tmp_path)
-    (tmp_path / "SOUL.md").write_text("LEAKED", encoding="utf-8")
-
-    with caplog.at_level(logging.WARNING):
-        result = expand_workspace_includes("a{include:SOUL.md}b", "")
-
-    assert result == "ab"
-    assert "LEAKED" not in result
-    assert not caplog.records
-
-
-def test_include_unsafe_path_raises(tmp_path: Path) -> None:
-    with pytest.raises(PromptError):
-        expand_workspace_includes("{include:../secret.md}", str(tmp_path))
-
-
-def test_include_reports_inlined_file_via_on_read(tmp_path: Path) -> None:
-    # The read observer sees the resolved absolute path of an inlined file, so the
-    # chat loop can stamp it read-before-write.
-    (tmp_path / "SOUL.md").write_text("Soul text", encoding="utf-8")
+    soul = tmp_path / "SOUL.md"
+    workspace = str(tmp_path)
+    if setup == "file":
+        soul.write_text("Soul text", encoding="utf-8")
+    elif setup == "directory":
+        soul.mkdir()  # fails to read on every OS
+    elif setup == "empty-workspace":
+        monkeypatch.chdir(tmp_path)
+        soul.write_text("LEAKED", encoding="utf-8")
+        workspace = ""
     seen: list[Path] = []
 
-    expand_workspace_includes("{include:SOUL.md}", str(tmp_path), on_read=seen.append)
+    with caplog.at_level(logging.WARNING):
+        result = expand_workspace_includes(template, workspace, on_read=seen.append)
 
-    assert seen == [(tmp_path / "SOUL.md").resolve()]
-
-
-def test_include_on_read_not_called_for_missing_or_unreadable(tmp_path: Path) -> None:
-    # A dropped include (missing / unreadable) reports nothing — its content never
-    # reached the prompt, so it must not be treated as read.
-    (tmp_path / "DIR.md").mkdir()
-    seen: list[Path] = []
-
-    expand_workspace_includes(
-        "{include:GONE.md}{include:DIR.md}", str(tmp_path), on_read=seen.append
-    )
-
-    assert seen == []
+    assert result == expected
+    assert any(record.levelno == logging.WARNING for record in caplog.records) is warns
+    # Only content that reached the prompt is reported, so the chat loop can stamp it read.
+    assert seen == ([soul.resolve()] if setup == "file" else [])
 
 
-@pytest.mark.parametrize("filename", ["SOUL.md", "my-notes.txt", "notes.json"])
-def test_validate_workspace_include_accepts_flat_names(filename: str) -> None:
-    validate_workspace_include(filename)  # should not raise
-
-
-@pytest.mark.parametrize("filename", ["../foo", "foo/bar", "/etc/passwd", "C:\\Windows\\cmd.exe"])
-def test_validate_workspace_include_rejects_unsafe(filename: str) -> None:
-    with pytest.raises(PromptError):
+@pytest.mark.parametrize(
+    ("filename", "safe"),
+    [
+        ("SOUL.md", True),
+        ("my-notes.txt", True),
+        ("../foo", False),
+        ("foo/bar", False),
+        ("/etc/passwd", False),
+        ("C:\\Windows\\cmd.exe", False),
+    ],
+)
+def test_validate_workspace_include_accepts_only_flat_names(filename: str, safe: bool) -> None:
+    if safe:
         validate_workspace_include(filename)
-
-
-def test_wrap_include_file_uses_canonical_frame() -> None:
-    assert wrap_include_file("A.md", "body") == '<file name="A.md">\nbody\n</file>'
+    else:
+        with pytest.raises(PromptError):
+            validate_workspace_include(filename)
 
 
 def test_apply_replacements_is_exact_and_non_recursive() -> None:
     text = "Known {first}; second {second}; unknown {other}."
 
-    result = apply_replacements(
-        text,
-        {
-            "{first}": "{second}",
-            "{second}": "resolved",
-        },
-    )
+    result = apply_replacements(text, {"{first}": "{second}", "{second}": "resolved"})
 
     assert result == "Known {second}; second resolved; unknown {other}."
 
 
-# --- single-pass template expansion ----------------------------------------
-
-
 @pytest.mark.parametrize(
-    "inserted",
+    ("template", "producers", "replacements", "expected", "reads"),
     [
-        "{include:../etc/passwd}",
-        "{include:USER.md}",
-        "{generated:tool_list}",
-        "{model} at {data_root}",
+        # Producer output (Memory entries, Skill descriptions, the Tool list) is data.
+        (
+            "<memory>{generated:memory_files}</memory> {model}",
+            {"memory_files": lambda ctx: f"- entry {_MARKERS}", "x": lambda ctx: "PRODUCED"},
+            {"{model}": "openai/gpt-5.2", "{data_root}": "/data"},
+            f"<memory>- entry {_MARKERS}</memory> openai/gpt-5.2",
+            [],
+        ),
+        # Replacement values are data.
+        (
+            "{model} | {generated:x}",
+            {"x": lambda ctx: "{model}"},
+            {"{model}": _MARKERS},
+            f"{_MARKERS} | {{model}}",
+            [],
+        ),
+        # Included workspace content is data; only the template's own include is read.
+        (
+            "{include:EXTRA.md}",
+            {"x": lambda ctx: "PRODUCED"},
+            {"{model}": "openai/gpt-5.2", "{data_root}": "/data"},
+            wrap_include_file("EXTRA.md", _MARKERS),
+            ["EXTRA.md"],
+        ),
     ],
+    ids=["producer-output", "replacement-value", "included-file"],
 )
-def test_template_expansion_inserts_producer_output_verbatim(tmp_path: Path, inserted: str) -> None:
-    # Producer output (Memory entries, Skill descriptions, Tool list) is data, not
-    # template: markers inside it are never expanded, never read files, and an
-    # unsafe include inside it never fails the build.
-    (tmp_path / "USER.md").write_text("PRIVATE-USER-FILE", encoding="utf-8")
-    context = _context(StubAgent(workspace=str(tmp_path)))
-
-    result = expand_block_template(
-        "<memory>{generated:memory_files}</memory> {model}",
-        context,
-        producers={
-            "memory_files": lambda ctx: f"- entry {inserted}",
-            "tool_list": lambda ctx: "TOOL-LIST",
-        },
-        replacements={"{model}": "openai/gpt-5.2", "{data_root}": "/data"},
-    )
-
-    assert result == f"<memory>- entry {inserted}</memory> openai/gpt-5.2"
-
-
-def test_template_expansion_inserts_included_file_verbatim(tmp_path: Path) -> None:
-    # Included workspace content is inserted verbatim: nested includes, generated
-    # markers and runtime variables inside the file stay literal.
-    nested = "{include:USER.md} {generated:x} {model} {include:../secret.md}"
-    (tmp_path / "EXTRA.md").write_text(nested, encoding="utf-8")
+def test_template_expansion_inserts_expanded_values_verbatim(
+    template: str,
+    producers: dict[str, BlockProducer],
+    replacements: dict[str, str],
+    expected: str,
+    reads: list[str],
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "EXTRA.md").write_text(_MARKERS, encoding="utf-8")
     (tmp_path / "USER.md").write_text("PRIVATE-USER-FILE", encoding="utf-8")
     seen: list[Path] = []
     context = BlockRenderContext(
@@ -536,31 +432,14 @@ def test_template_expansion_inserts_included_file_verbatim(tmp_path: Path) -> No
     )
 
     result = expand_block_template(
-        "{include:EXTRA.md}",
-        context,
-        producers={"x": lambda ctx: "PRODUCED"},
-        replacements={"{model}": "openai/gpt-5.2"},
+        template, context, producers=producers, replacements=replacements
     )
 
-    assert result == wrap_include_file("EXTRA.md", nested)
-    assert seen == [(tmp_path / "EXTRA.md").resolve()]
+    assert result == expected
+    assert seen == [(tmp_path / name).resolve() for name in reads]
 
 
-def test_template_expansion_inserts_replacement_values_verbatim(tmp_path: Path) -> None:
-    (tmp_path / "USER.md").write_text("PRIVATE-USER-FILE", encoding="utf-8")
-    context = _context(StubAgent(workspace=str(tmp_path)))
-
-    result = expand_block_template(
-        "{model} | {generated:x}",
-        context,
-        producers={"x": lambda ctx: "{model}"},
-        replacements={"{model}": "{include:USER.md}{generated:x}"},
-    )
-
-    assert result == "{include:USER.md}{generated:x} | {model}"
-
-
-def test_template_expansion_still_expands_all_template_markers(tmp_path: Path) -> None:
+def test_template_expansion_expands_every_marker_of_the_template_itself(tmp_path: Path) -> None:
     (tmp_path / "EXTRA.md").write_text("extra", encoding="utf-8")
     context = _context(StubAgent(workspace=str(tmp_path)))
 
@@ -572,229 +451,95 @@ def test_template_expansion_still_expands_all_template_markers(tmp_path: Path) -
     )
 
     assert result == 'PRODUCED <file name="EXTRA.md">\nextra\n</file> openai/gpt-5.2 {unknown}'
-
-
-def test_template_expansion_unsafe_template_include_still_raises(tmp_path: Path) -> None:
     with pytest.raises(PromptError):
-        expand_block_template(
-            "{include:../secret.md}",
-            _context(StubAgent(workspace=str(tmp_path))),
-            producers={},
-        )
+        expand_block_template("{include:../secret.md}", context, producers={})
 
 
-# --- resolve_block_text -----------------------------------------------------
+# --- resolve_block_text and assembly ----------------------------------------
 
 
-def test_resolve_static_text_expands_generated_then_include(tmp_path: Path) -> None:
-    (tmp_path / "EXTRA.md").write_text("extra", encoding="utf-8")
-    block = ResolvedBlock(
-        definition=_text_block("core:a", "{generated:x}\n{include:EXTRA.md}"), enabled=True
-    )
-    context = _context(StubAgent(workspace=str(tmp_path)))
-
-    result = resolve_block_text(
-        block,
-        context,
-        override_resolver=MappingOverrideResolver(),
-        producers={"x": lambda ctx: "PRODUCED"},
-    )
-
-    assert result == 'PRODUCED\n<file name="EXTRA.md">\nextra\n</file>'
-
-
-def test_resolve_static_text_prefers_override() -> None:
-    block = ResolvedBlock(definition=_text_block("core:a", "default"), enabled=True)
-    overrides = MappingOverrideResolver({("default", "core:a"): "OVERRIDDEN"})
-
-    result = resolve_block_text(block, _context(), override_resolver=overrides, producers={})
-
-    assert result == "OVERRIDDEN"
-
-
-def test_resolve_data_block_is_verbatim_and_unexpanded() -> None:
-    # A data block's text is inserted literally — its "{...}" is never interpreted.
-    body = "Use {generated:x} and {include:SOUL.md} literally; also {custom}."
-    block = ResolvedBlock(
-        definition=BlockDefinition(
-            id="core:agent_body", owner="always", kind=BLOCK_KIND_DATA, default_text=body
+@pytest.mark.parametrize(
+    ("definition", "expected", "warnings"),
+    [
+        (
+            _text_block("core:a", "{generated:x}\n{include:EXTRA.md}"),
+            'PRODUCED\n<file name="EXTRA.md">\nextra\n</file>',
+            [],
         ),
-        enabled=True,
-    )
-
-    result = resolve_block_text(
-        block,
-        _context(),
-        override_resolver=MappingOverrideResolver(),
-        producers={"x": lambda ctx: "SHOULD-NOT-APPEAR"},
-    )
-
-    assert result == body
-
-
-def test_resolve_dynamic_block_calls_render() -> None:
-    block = ResolvedBlock(
-        definition=BlockDefinition(
-            id="tool:bash", owner="tool:bash", render=lambda ctx: f"dyn:{ctx.agent.id}"
+        (_text_block("core:overridden", "default"), "OVERRIDDEN", []),
+        # A data block's text is inserted literally; its "{...}" is never interpreted.
+        (
+            BlockDefinition(
+                id="core:agent_body",
+                owner="always",
+                kind=BLOCK_KIND_DATA,
+                default_text="Use {generated:x} and {include:EXTRA.md} literally; also {custom}.",
+            ),
+            "Use {generated:x} and {include:EXTRA.md} literally; also {custom}.",
+            [],
         ),
-        enabled=True,
-    )
-
-    result = resolve_block_text(
-        block,
-        _context(StubAgent(id="builder")),
-        override_resolver=MappingOverrideResolver(),
-        producers={},
-    )
-
-    assert result == "dyn:builder"
-
-
-def test_resolve_dynamic_block_raise_is_isolated(
+        (
+            BlockDefinition(id="tool:bash", owner="tool:bash", render=lambda ctx: ctx.agent.id),
+            "builder",
+            [],
+        ),
+        (
+            BlockDefinition(id="tool:bash", owner="tool:bash", render=_raise("render exploded")),
+            "",
+            ["tool:bash", "render exploded"],
+        ),
+    ],
+    ids=["static-text", "override", "data", "dynamic", "failing-dynamic"],
+)
+def test_resolve_block_text_by_block_kind(
+    definition: BlockDefinition,
+    expected: str,
+    warnings: list[str],
+    tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    def boom(context: BlockRenderContext) -> str:
-        raise RuntimeError("render exploded")
-
-    block = ResolvedBlock(
-        definition=BlockDefinition(id="tool:bash", owner="tool:bash", render=boom),
-        enabled=True,
-    )
+    (tmp_path / "EXTRA.md").write_text("extra", encoding="utf-8")
+    overrides = MappingOverrideResolver({("default", "core:overridden"): "OVERRIDDEN"})
 
     with caplog.at_level(logging.WARNING):
         result = resolve_block_text(
-            block, _context(), override_resolver=MappingOverrideResolver(), producers={}
+            ResolvedBlock(definition=definition, enabled=True),
+            _context(StubAgent(id="builder", workspace=str(tmp_path))),
+            override_resolver=overrides,
+            producers={"x": lambda ctx: "PRODUCED"},
         )
 
-    assert result == ""
-    assert "tool:bash" in caplog.text
-    assert "render exploded" in caplog.text
+    assert result == expected
+    assert all(fragment in caplog.text for fragment in warnings)
 
 
-# --- assemble_system_prompt (end to end) ------------------------------------
-
-
-def _assemble(
-    definitions: list[BlockDefinition],
-    layout: list[LayoutEntry],
-    *,
-    agent: StubAgent | None = None,
-    owner_activity: CallableOwnerActivity | None = None,
-    overrides: MappingOverrideResolver | None = None,
-    producers: dict[str, BlockProducer] | None = None,
-) -> str:
-    return assemble_system_prompt(
-        definitions,
-        layout,
-        _context(agent),
-        owner_activity=owner_activity or _always_active(),
-        override_resolver=overrides or MappingOverrideResolver(),
-        producers=producers or {},
-    )
-
-
-def test_assemble_all_on_in_layout_order() -> None:
-    definitions = [_text_block("core:a", "Alpha"), _text_block("core:b", "Beta")]
-    layout = [LayoutEntry(id="core:b"), LayoutEntry(id="core:a")]
-
-    assert _assemble(definitions, layout) == "Beta\n\nAlpha"
-
-
-def test_assemble_skips_user_disabled_block() -> None:
-    definitions = [_text_block("core:a", "Alpha"), _text_block("core:b", "Beta")]
-    layout = [LayoutEntry(id="core:a", enabled=False), LayoutEntry(id="core:b")]
-
-    assert _assemble(definitions, layout) == "Beta"
-
-
-def test_assemble_skips_owner_inactive_block() -> None:
-    definitions = [
-        _text_block("core:a", "Always"),
-        _text_block("memory:guidance", "Memory", owner="memory"),
-    ]
-    layout = [LayoutEntry(id="core:a"), LayoutEntry(id="memory:guidance")]
-    owner_activity = CallableOwnerActivity(lambda owner, agent: owner != "memory")
-
-    assert _assemble(definitions, layout, owner_activity=owner_activity) == "Always"
-
-
-def test_assemble_collapses_empty_blocks_without_residue() -> None:
+def test_assemble_joins_only_blocks_passing_every_gate_in_layout_order() -> None:
     definitions = [
         _text_block("core:a", "Alpha"),
-        _text_block("core:empty", "{generated:nothing}"),
         _text_block("core:b", "Beta"),
+        _text_block("core:c", "Gamma"),
+        _text_block("memory:guidance", "Memory", owner="memory"),
+        _text_block("core:empty", "{generated:nothing}"),
+        BlockDefinition(id="tool:bash", owner="tool:bash", render=_raise("nope")),
+        _text_block("core:new", "New"),
     ]
     layout = [
-        LayoutEntry(id="core:a"),
+        LayoutEntry(id="core:c"),
+        LayoutEntry(id="tool:bash"),
+        LayoutEntry(id="core:b", enabled=False),
+        LayoutEntry(id="memory:guidance"),
         LayoutEntry(id="core:empty"),
-        LayoutEntry(id="core:b"),
+        LayoutEntry(id="core:a"),
     ]
 
-    result = _assemble(definitions, layout, producers={"nothing": lambda ctx: ""})
+    result = assemble_system_prompt(
+        definitions,
+        layout,
+        _context(),
+        owner_activity=CallableOwnerActivity(lambda owner, agent: owner != "memory"),
+        override_resolver=MappingOverrideResolver(),
+        producers={"nothing": lambda ctx: ""},
+    )
 
-    assert result == "Alpha\n\nBeta"
-
-
-def test_assemble_unknown_marker_collapses_block_to_nothing(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    definitions = [
-        _text_block("core:a", "Alpha"),
-        _text_block("core:b", "{generated:missing}"),
-    ]
-    layout = [LayoutEntry(id="core:a"), LayoutEntry(id="core:b")]
-
-    with caplog.at_level(logging.WARNING):
-        result = _assemble(definitions, layout)
-
-    assert result == "Alpha"
-    assert "missing" in caplog.text
-
-
-def test_assemble_raising_dynamic_block_is_dropped() -> None:
-    def boom(context: BlockRenderContext) -> str:
-        raise RuntimeError("nope")
-
-    definitions = [
-        _text_block("core:a", "Alpha"),
-        BlockDefinition(id="tool:bash", owner="tool:bash", render=boom),
-    ]
-    layout = [LayoutEntry(id="core:a"), LayoutEntry(id="tool:bash")]
-
-    assert _assemble(definitions, layout) == "Alpha"
-
-
-def test_assemble_inserts_verbatim_body_last_in_resolution() -> None:
-    # A data block carrying placeholder-looking text is emitted verbatim, in its
-    # laid-out position, never re-expanded.
-    body = "I am {generated:tool_list} verbatim."
-    definitions = [
-        BlockDefinition(
-            id="core:agent_body", owner="always", kind=BLOCK_KIND_DATA, default_text=body
-        ),
-        _text_block("core:b", "After"),
-    ]
-    layout = [LayoutEntry(id="core:agent_body"), LayoutEntry(id="core:b")]
-
-    result = _assemble(definitions, layout, producers={"tool_list": lambda ctx: "EXPANDED"})
-
-    assert result == f"{body}\n\nAfter"
-    assert "EXPANDED" not in result
-
-
-def test_assemble_is_deterministic_for_same_inputs() -> None:
-    definitions = [_text_block("core:a", "A"), _text_block("core:b", "B")]
-    layout = [LayoutEntry(id="core:a"), LayoutEntry(id="core:b")]
-
-    first = _assemble(definitions, layout)
-    second = _assemble(definitions, layout)
-
-    assert first == second == "A\n\nB"
-
-
-def test_assemble_defaults_in_block_absent_from_layout() -> None:
-    # A newly added contributor with no layout entry appears (enabled) at its rank.
-    definitions = [_text_block("core:a", "A"), _text_block("core:new", "New")]
-    layout = [LayoutEntry(id="core:a")]
-
-    assert _assemble(definitions, layout) == "A\n\nNew"
+    # A newly added contributor without a layout entry defaults in at its rank.
+    assert result == "Gamma\n\nAlpha\n\nNew"

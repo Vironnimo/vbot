@@ -1,19 +1,14 @@
-"""Run and queue project-scoping tests."""
+"""Run and queue scoping by project anchor, Agent, Session and Working Project."""
 
 from __future__ import annotations
 
-from core.sessions import SessionAddress
+import asyncio
 
-from .runs_test_support import (
-    ActiveRunError,
-    ChatRunManager,
-    Run,
-    RunAdmission,
-    RunCancelledError,
-    RunNotFoundError,
-    asyncio,
-    pytest,
-)
+import pytest
+
+from core.runs import ActiveRunError, ChatRunManager, Run, RunAdmission, RunCancelledError
+from core.sessions import SessionAddress
+from tests.core.runs.runs_test_support import SESSION, held
 
 pytestmark = pytest.mark.asyncio
 
@@ -27,12 +22,12 @@ async def test_working_project_is_internal_and_snapshotted_through_queue() -> No
         return "done"
 
     active = await manager.start(
-        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        SESSION,
         blocked,
         admission=RunAdmission(working_project_id="vbot"),
     )
     queued = await manager.enqueue(
-        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        SESSION,
         lambda run: asyncio.sleep(0, result=run.working_project_id),
         admission=RunAdmission(working_project_id="other"),
     )
@@ -47,74 +42,6 @@ async def test_working_project_is_internal_and_snapshotted_through_queue() -> No
     assert queued_run.project_id is None
     assert queued_run.working_project_id == "other"
     assert await queued_run.wait() == "other"
-
-
-async def test_has_activity_for_agent_reports_active_and_queued_work() -> None:
-    manager = ChatRunManager()
-    active_release = asyncio.Event()
-
-    async def active_execute(_run: Run) -> str:
-        await active_release.wait()
-        return "active"
-
-    async def queued_execute(_run: Run) -> str:
-        return "queued"
-
-    active_run = await manager.start(
-        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
-        active_execute,
-    )
-    queued_item = await manager.enqueue(
-        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
-        queued_execute,
-        display_content="Queued next",
-    )
-
-    assert manager.has_activity_for_agent("coder", project_id=None) is True
-    assert manager.has_activity_for_agent("writer", project_id=None) is False
-
-    active_release.set()
-    assert await active_run.wait() == "active"
-    queued_run = await queued_item.future
-    assert manager.has_activity_for_agent("coder", project_id=None) is True
-    assert await queued_run.wait() == "queued"
-
-    assert manager.has_activity_for_agent("coder", project_id=None) is False
-
-
-async def test_has_activity_for_session_is_scoped_to_one_session() -> None:
-    manager = ChatRunManager()
-    active_release = asyncio.Event()
-
-    async def active_execute(_run: Run) -> str:
-        await active_release.wait()
-        return "active"
-
-    async def queued_execute(_run: Run) -> str:
-        return "queued"
-
-    active_run = await manager.start(
-        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
-        active_execute,
-    )
-    queued_item = await manager.enqueue(
-        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
-        queued_execute,
-        display_content="Queued next",
-    )
-
-    # Busy on the exact session, but not on the agent's other sessions nor on
-    # the same session id under a different agent.
-    assert manager.has_activity_for_session("coder", "session-one", project_id=None) is True
-    assert manager.has_activity_for_session("coder", "session-two", project_id=None) is False
-    assert manager.has_activity_for_session("writer", "session-one", project_id=None) is False
-
-    active_release.set()
-    assert await active_run.wait() == "active"
-    queued_run = await queued_item.future
-    assert await queued_run.wait() == "queued"
-
-    assert manager.has_activity_for_session("coder", "session-one", project_id=None) is False
 
 
 async def test_project_and_identity_sessions_with_same_ids_never_collide() -> None:
@@ -170,154 +97,85 @@ async def test_project_and_identity_sessions_with_same_ids_never_collide() -> No
     assert await project_run.wait() == project_run.id
 
 
-async def test_identity_run_leaves_project_id_none() -> None:
-    """A run started without a project_id keeps run.project_id None (identity path)."""
+@pytest.mark.parametrize("project_id", [None, "acme"], ids=["identity", "project"])
+async def test_run_and_its_events_carry_the_project_anchor(project_id: str | None) -> None:
+    """The WebSocket backstop rebuilds the outside `agent@project` address from events."""
     manager = ChatRunManager()
     release = asyncio.Event()
 
     async def execute(run: Run) -> str:
+        run.emit("visible", {"content": "hello"})
         await release.wait()
-        return run.id
+        return "done"
 
     run = await manager.start(
-        SessionAddress(project_id=None, agent_id="coder", session_id="sess-uuid"),
-        execute,
+        SessionAddress(project_id=project_id, agent_id="coder", session_id="sess-uuid"), execute
     )
     await asyncio.sleep(0)
 
-    assert run.project_id is None
-    assert manager.active_run(agent_id="coder", session_id="sess-uuid", project_id=None) is run
-
+    assert run.project_id == project_id
+    assert (
+        manager.active_run(agent_id="coder", session_id="sess-uuid", project_id=project_id) is run
+    )
     release.set()
-    await run.wait()
+    assert await run.wait() == "done"
+    assert all(event.project_id == project_id for event in run.events)
+    assert all(event.to_dict()["project_id"] == project_id for event in run.events)
 
 
-async def test_emitted_events_carry_run_project_id() -> None:
-    """Every emitted event (and its to_dict) carries the run's project anchor.
+async def test_activity_lookups_cover_active_and_queued_work_of_one_anchor() -> None:
+    """Activity is keyed by (project, Agent, Session), never by a bare id.
 
-    The WebSocket backstop rebuilds the outside ``agent@projekt`` address from
-    this field, so a project run's events must surface it while an identity
-    run's events keep it ``None`` (the byte-identical identity path).
+    A false positive used to block deleting an unrelated identity Agent or Project.
     """
     manager = ChatRunManager()
-
-    async def execute(run: Run) -> str:
-        run.emit("visible", {"content": "hello"})
-        return "done"
-
-    project_run = await manager.start(
-        SessionAddress(project_id="acme", agent_id="coder", session_id="sess-uuid"),
-        execute,
-    )
-    await project_run.wait()
-    assert all(event.project_id == "acme" for event in project_run.events)
-    visible = next(event for event in project_run.events if event.type == "visible")
-    assert visible.to_dict()["project_id"] == "acme"
-
-    identity_run = await manager.start(
-        SessionAddress(project_id=None, agent_id="coder", session_id="sess-uuid-2"),
-        execute,
-    )
-    await identity_run.wait()
-    assert all(event.project_id is None for event in identity_run.events)
-    assert identity_run.events[0].to_dict()["project_id"] is None
-
-
-async def test_queued_project_run_carries_project_id_when_drained() -> None:
-    """A project_id passed to enqueue rides the Run created when the item drains."""
-    manager = ChatRunManager()
-    active_release = asyncio.Event()
-
-    async def active_execute(_run: Run) -> str:
-        await active_release.wait()
-        return "active"
-
+    address = SessionAddress(project_id="acme", agent_id="coder", session_id="session-one")
+    active_execute, active_release = held("active")
     drained: list[Run] = []
 
     async def queued_execute(run: Run) -> str:
         drained.append(run)
         return "queued"
 
-    active_run = await manager.start(
-        SessionAddress(project_id="acme", agent_id="coder", session_id="sess-uuid"),
-        active_execute,
-    )
-    item = await manager.enqueue(
-        SessionAddress(project_id="acme", agent_id="coder", session_id="sess-uuid"),
-        queued_execute,
-        display_content="queued",
-    )
+    def agent_activity() -> list[bool]:
+        return [
+            manager.has_activity_for_agent(agent_id, project_id=project_id)
+            for agent_id, project_id in [
+                ("coder", "acme"),
+                ("coder", None),
+                ("coder", "other"),
+                ("writer", "acme"),
+            ]
+        ]
 
-    # The session is busy, so the item is queued under the project scope.
-    assert item.future.done() is False
+    def session_activity() -> list[bool]:
+        return [
+            manager.has_activity_for_session(agent_id, session_id, project_id=project_id)
+            for agent_id, session_id, project_id in [
+                ("coder", "session-one", "acme"),
+                ("coder", "session-one", None),
+                ("coder", "session-two", "acme"),
+                ("writer", "session-one", "acme"),
+            ]
+        ]
+
+    active_run = await manager.start(address, active_execute)
+    item = await manager.enqueue(address, queued_execute, display_content="queued")
+
+    assert agent_activity() == [True, False, False, False]
+    assert session_activity() == [True, False, False, False]
     assert [
-        queued.item_id for queued in manager.list_queued("coder", "sess-uuid", project_id="acme")
+        queued.item_id for queued in manager.list_queued("coder", "session-one", project_id="acme")
     ] == [item.item_id]
-    assert manager.list_queued("coder", "sess-uuid", project_id=None) == []
+    assert manager.list_queued("coder", "session-one", project_id=None) == []
 
     active_release.set()
     assert await active_run.wait() == "active"
     queued_run = await asyncio.wait_for(item.future, timeout=1)
+    assert agent_activity()[0] is True
     assert await queued_run.wait() == "queued"
 
-    # The drained run carries the enqueue project anchor on the Run itself.
+    assert drained == [queued_run]
     assert queued_run.project_id == "acme"
-    assert drained and drained[0].project_id == "acme"
-
-
-async def test_cancel_by_session_is_scoped_to_the_project_anchor() -> None:
-    """cancel_by_session needs the run's own project scope to find it."""
-    manager = ChatRunManager()
-    release = asyncio.Event()
-
-    async def execute(run: Run) -> str:
-        await release.wait()
-        run.raise_if_cancelled()
-        return "done"
-
-    project_run = await manager.start(
-        SessionAddress(project_id="acme", agent_id="coder", session_id="sess-uuid"),
-        execute,
-    )
-    await asyncio.sleep(0)
-
-    # The identity scope must not reach the project run.
-    with pytest.raises(RunNotFoundError):
-        manager.cancel_by_session("coder", "sess-uuid", project_id=None)
-
-    cancelled = manager.cancel_by_session("coder", "sess-uuid", project_id="acme")
-    assert cancelled is project_run
-    assert project_run.cancel_requested is True
-
-    release.set()
-    with pytest.raises(RunCancelledError):
-        await project_run.wait()
-
-
-async def test_has_activity_for_agent_is_scoped_to_the_project_anchor() -> None:
-    """Agent activity is checked per (project, agent) pair, not by bare id.
-
-    An active run of project ``coder@acme`` must not read as activity of the
-    same-named identity agent (or another project's ``coder``) — the false
-    positive used to block deleting an unrelated identity agent / project.
-    """
-    manager = ChatRunManager()
-    release = asyncio.Event()
-
-    async def execute(_run: Run) -> str:
-        await release.wait()
-        return "done"
-
-    run = await manager.start(
-        SessionAddress(project_id="acme", agent_id="coder", session_id="sess-uuid"),
-        execute,
-    )
-
-    assert manager.has_activity_for_agent("coder", project_id="acme") is True
-    assert manager.has_activity_for_agent("coder", project_id=None) is False
-    assert manager.has_activity_for_agent("coder", project_id="other") is False
-    assert manager.has_activity_for_agent("writer", project_id="acme") is False
-
-    release.set()
-    await run.wait()
-    assert manager.has_activity_for_agent("coder", project_id="acme") is False
+    assert agent_activity() == [False] * 4
+    assert session_activity() == [False] * 4

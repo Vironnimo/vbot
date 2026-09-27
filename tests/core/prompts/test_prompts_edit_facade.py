@@ -1,14 +1,41 @@
 """System Prompt block-edit facade and scope tests."""
 
-from .prompts_test_support import (
-    LayoutEntry,
-    Path,
-    PromptError,
-    StubBlockStore,
-    _agent,
-    _facade_manager,
-    pytest,
-)
+import json
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from core.prompts.blocks import LayoutEntry
+from core.prompts.prompts import PromptError, SystemPromptManager
+from core.runtime._prompt_blocks import _StorageManagerBlockStore
+from core.storage import StorageError, StorageManager
+from tests.core.prompts.prompts_test_support import StubBlockStore, _agent, _facade_manager
+
+_AGENT_SCOPE = {"type": "agent", "agent_id": "coder"}
+_BUNDLED_LAYOUT = [
+    "core:soul",
+    "memory:guidance",
+    "core:runtime",
+    "core:identity_runtime",
+    "core:tools",
+    "tool:project",
+    "tool:subagent",
+    "core:tools_list",
+    "core:channels",
+    "core:skills",
+    "core:skill_maintenance",
+    "core:agent_body",
+    "core:working_project",
+]
+
+
+def _user_note_store(**layouts: list[LayoutEntry]) -> StubBlockStore:
+    return StubBlockStore(
+        layouts={"default": [LayoutEntry(id="user:note", source="user")], **layouts},
+        overrides={("default", "user:note"): "my note"},
+    )
 
 
 def test_list_blocks_returns_metadata_in_layout_order(tmp_path: Path) -> None:
@@ -16,19 +43,10 @@ def test_list_blocks_returns_metadata_in_layout_order(tmp_path: Path) -> None:
 
     blocks = manager.list_blocks()
 
-    # Layout order follows the bundled default layout (resources/prompts/layout.json).
+    # Layout order follows the bundled default layout; its tool:* entries have no
+    # registered definition here, so they are inert.
     assert [block["id"] for block in blocks] == [
-        "core:soul",
-        "memory:guidance",
-        "core:runtime",
-        "core:identity_runtime",
-        "core:tools",
-        "core:tools_list",
-        "core:channels",
-        "core:skills",
-        "core:skill_maintenance",
-        "core:agent_body",
-        "core:working_project",
+        block_id for block_id in _BUNDLED_LAYOUT if not block_id.startswith("tool:")
     ]
     # Ranks are the layout positions, 0-based and contiguous.
     assert [block["rank"] for block in blocks] == list(range(len(blocks)))
@@ -40,14 +58,17 @@ def test_list_blocks_returns_metadata_in_layout_order(tmp_path: Path) -> None:
     assert tools["source"] == "core"
     assert tools["owner"] == "always"
     assert tools["enabled"] is True
-    # The opt-in tool list ships disabled but stays a normal editable text block.
-    tools_list = by_id["core:tools_list"]
-    assert tools_list["enabled"] is False
-    assert tools_list["editable"] is True
     assert "text" in tools and tools["is_modified"] is False
-    # The default scope omits the inheritance badge (T5 is agent-scope only).
+    # The default scope omits the inheritance badge (agent scope only).
     assert "inheritance" not in tools
-    # A data block: non-editable, no text payload, channel-owner for channels.
+    # The opt-in tool list ships disabled but stays a normal editable text block.
+    assert by_id["core:tools_list"]["enabled"] is False
+    assert by_id["core:tools_list"]["editable"] is True
+    # Skill maintenance is an editable core text block owned by its Tool.
+    maintenance = by_id["core:skill_maintenance"]
+    assert (maintenance["source"], maintenance["owner"]) == ("core", "tool:skill_manage")
+    assert maintenance["editable"] is True
+    # A data block: non-editable, no text payload.
     soul = by_id["core:soul"]
     assert soul["kind"] == "data"
     assert soul["editable"] is False
@@ -56,12 +77,13 @@ def test_list_blocks_returns_metadata_in_layout_order(tmp_path: Path) -> None:
     assert by_id["core:identity_runtime"]["owner"] == "identity"
     assert by_id["core:identity_runtime"]["editable"] is True
     assert by_id["core:working_project"]["editable"] is False
-    # The memory block ships under the memory source/owner.
     assert by_id["memory:guidance"]["source"] == "memory"
     assert by_id["memory:guidance"]["owner"] == "memory"
 
 
-def test_empty_layout_retains_defaults_and_explicit_disable_removes_blocks(tmp_path):
+def test_empty_layout_retains_defaults_and_explicit_disable_removes_blocks(
+    tmp_path: Path,
+) -> None:
     store = StubBlockStore()
     manager = _facade_manager(tmp_path, store=store)
     agent = _agent(tmp_path)
@@ -74,8 +96,6 @@ def test_empty_layout_retains_defaults_and_explicit_disable_removes_blocks(tmp_p
 
 
 def test_list_blocks_agent_scope_carries_inheritance_flags(tmp_path: Path) -> None:
-    # The agent owns an override on the tools block; the default scope overrides the
-    # runtime block; the skills block is untouched → owner default.
     store = StubBlockStore(
         overrides={
             ("agent:coder", "core:tools"): "agent tools text",
@@ -85,9 +105,7 @@ def test_list_blocks_agent_scope_carries_inheritance_flags(tmp_path: Path) -> No
     agent = _agent(tmp_path, custom_system_prompt_enabled=True)
     manager = _facade_manager(tmp_path, store=store, agents=[agent])
 
-    blocks = {
-        block["id"]: block for block in manager.list_blocks({"type": "agent", "agent_id": "coder"})
-    }
+    blocks = {block["id"]: block for block in manager.list_blocks(_AGENT_SCOPE)}
 
     assert blocks["core:tools"]["inheritance"] == "agent_override"
     assert blocks["core:tools"]["text"] == "agent tools text"
@@ -98,33 +116,23 @@ def test_list_blocks_agent_scope_carries_inheritance_flags(tmp_path: Path) -> No
     assert blocks["core:skills"]["is_modified"] is False
 
 
-def test_update_block_writes_override_and_returns_state(tmp_path: Path) -> None:
+def test_update_block_writes_an_override_that_reset_block_removes(tmp_path: Path) -> None:
     store = StubBlockStore()
     manager = _facade_manager(tmp_path, store=store)
 
-    result = manager.update_block("core:tools", "## My Tools")
+    updated = manager.update_block("core:tools", "## My Tools")
 
     assert store.read_block_override("default", "core:tools") == "## My Tools"
-    assert result["id"] == "core:tools"
-    assert result["text"] == "## My Tools"
-    assert result["is_modified"] is True
+    assert (updated["id"], updated["text"], updated["is_modified"]) == (
+        "core:tools",
+        "## My Tools",
+        True,
+    )
 
-
-def test_update_block_rejects_data_block(tmp_path: Path) -> None:
-    manager = _facade_manager(tmp_path)
-
-    with pytest.raises(PromptError):
-        manager.update_block("core:soul", "nope")
-
-
-def test_reset_block_removes_override_back_to_default(tmp_path: Path) -> None:
-    store = StubBlockStore(overrides={("default", "core:tools"): "custom"})
-    manager = _facade_manager(tmp_path, store=store)
-
-    result = manager.reset_block("core:tools")
+    reset = manager.reset_block("core:tools")
 
     assert store.read_block_override("default", "core:tools") is None
-    assert result["is_modified"] is False
+    assert reset["is_modified"] is False
 
 
 def test_reset_block_agent_scope_falls_back_to_inherited(tmp_path: Path) -> None:
@@ -137,136 +145,97 @@ def test_reset_block_agent_scope_falls_back_to_inherited(tmp_path: Path) -> None
     agent = _agent(tmp_path, custom_system_prompt_enabled=True)
     manager = _facade_manager(tmp_path, store=store, agents=[agent])
 
-    result = manager.reset_block("core:tools", {"type": "agent", "agent_id": "coder"})
+    result = manager.reset_block("core:tools", _AGENT_SCOPE)
 
-    # The agent override is gone; the effective text falls back to the inherited
-    # default-scope override (T5 "reset → back to inherited").
     assert store.read_block_override("agent:coder", "core:tools") is None
     assert result["text"] == "default text"
     assert result["inheritance"] == "default_override"
 
 
-def test_reset_block_rejects_user_block(tmp_path: Path) -> None:
-    store = StubBlockStore(
-        layouts={"default": [LayoutEntry(id="user:note", source="user")]},
-        overrides={("default", "user:note"): "my note"},
-    )
-    manager = _facade_manager(tmp_path, store=store)
+@pytest.mark.parametrize(
+    "edit",
+    [
+        lambda manager: manager.update_block("core:soul", "nope"),
+        lambda manager: manager.reset_block("user:note"),
+        lambda manager: manager.create_block("../etc/passwd"),
+        lambda manager: manager.create_block("note"),
+        lambda manager: manager.remove_block("core:tools"),
+        lambda manager: manager.list_blocks({"type": "agent", "agent_id": "plain"}),
+    ],
+    ids=[
+        "update-data-block",
+        "reset-user-block",
+        "create-bad-slug",
+        "create-collision",
+        "remove-core-block",
+        "custom-prompt-disabled-agent",
+    ],
+)
+def test_edit_facade_rejects_an_invalid_edit(
+    tmp_path: Path, edit: Callable[[SystemPromptManager], Any]
+) -> None:
+    plain = _agent(tmp_path, agent_id="plain", custom_system_prompt_enabled=False)
+    manager = _facade_manager(tmp_path, store=_user_note_store(), agents=[plain])
 
     with pytest.raises(PromptError):
-        manager.reset_block("user:note")
+        edit(manager)
 
 
-def test_set_layout_persists_order_and_prunes_inert_id(tmp_path: Path) -> None:
-    store = StubBlockStore()
+def test_set_layout_persists_order_keeps_user_blocks_and_prunes_inert_ids(
+    tmp_path: Path,
+) -> None:
+    store = _user_note_store()
     manager = _facade_manager(tmp_path, store=store)
 
     result = manager.set_layout(
         [
             {"id": "core:skills", "enabled": False},
+            {"id": "user:note", "enabled": True},
             {"id": "core:tools", "enabled": True},
             {"id": "extension:gone", "enabled": True},
         ]
     )
 
-    # The contributor-gone id is pruned (tolerate-and-prune, never an error); the
-    # live entries keep their order + toggles.
+    # A contributor-gone id is pruned, never an error; a custom block has no
+    # contributor definition and is kept.
     persisted = store.read_layout("default")
-    assert [entry.id for entry in persisted] == ["core:skills", "core:tools"]
-    assert persisted[0].enabled is False
-    assert [entry["id"] for entry in result["layout"]] == ["core:skills", "core:tools"]
+    assert [(entry.id, entry.enabled) for entry in persisted] == [
+        ("core:skills", False),
+        ("user:note", True),
+        ("core:tools", True),
+    ]
+    assert [entry["id"] for entry in result["layout"]] == [entry.id for entry in persisted]
 
 
-def test_set_layout_keeps_existing_user_block(tmp_path: Path) -> None:
-    # A custom block has no contributor definition, so set_layout must not prune it.
-    store = StubBlockStore(
-        layouts={"default": [LayoutEntry(id="user:note", source="user")]},
-        overrides={("default", "user:note"): "kept"},
-    )
-    manager = _facade_manager(tmp_path, store=store)
-
-    result = manager.set_layout(
-        [
-            {"id": "user:note", "enabled": True},
-            {"id": "core:tools", "enabled": True},
-        ]
-    )
-
-    assert {entry["id"] for entry in result["layout"]} == {"user:note", "core:tools"}
-
-
-def test_create_block_rejects_bad_slug(tmp_path: Path) -> None:
-    manager = _facade_manager(tmp_path)
-
-    with pytest.raises(PromptError):
-        manager.create_block("../etc/passwd")
-
-
-def test_create_block_rejects_collision(tmp_path: Path) -> None:
-    store = StubBlockStore(layouts={"default": [LayoutEntry(id="user:note", source="user")]})
-    manager = _facade_manager(tmp_path, store=store)
-
-    with pytest.raises(PromptError):
-        manager.create_block("note")
-
-
-def test_create_block_writes_override_and_layout_entry(tmp_path: Path) -> None:
+def test_create_and_remove_manage_custom_user_blocks(tmp_path: Path) -> None:
     store = StubBlockStore()
     manager = _facade_manager(tmp_path, store=store)
 
-    result = manager.create_block("greeting", "Hello.")
+    created = manager.create_block("greeting", "Hello.")
+    manager.create_block("first", position=0)
 
     assert store.read_block_override("default", "user:greeting") == "Hello."
-    assert any(entry.id == "user:greeting" for entry in store.read_layout("default"))
-    assert result["id"] == "user:greeting"
-    assert result["owner"] == "always"
-    assert result["kind"] == "text"
-    assert result["editable"] is True
-
-
-def test_created_empty_custom_block_is_returned_by_list_blocks(tmp_path: Path) -> None:
-    store = StubBlockStore()
-    manager = _facade_manager(tmp_path, store=store)
-
-    manager.create_block("empty-note")
-
-    blocks = {block["id"]: block for block in manager.list_blocks()}
-    custom = blocks["user:empty-note"]
-    assert custom["source"] == "user"
-    assert custom["kind"] == "text"
-    assert custom["editable"] is True
-    assert custom["enabled"] is True
+    assert store.read_layout("default")[0].id == "user:first"
+    assert (created["id"], created["owner"], created["kind"], created["editable"]) == (
+        "user:greeting",
+        "always",
+        "text",
+        True,
+    )
+    custom = {block["id"]: block for block in manager.list_blocks()}["user:first"]
+    assert (custom["source"], custom["kind"], custom["editable"], custom["enabled"]) == (
+        "user",
+        "text",
+        True,
+        True,
+    )
     assert custom["text"] == ""
 
+    removed = manager.remove_block("user:greeting")
 
-def test_create_block_inserts_at_requested_position(tmp_path: Path) -> None:
-    store = StubBlockStore()
-    manager = _facade_manager(tmp_path, store=store)
-
-    manager.create_block("first", "front", position=0)
-
-    assert store.read_layout("default")[0].id == "user:first"
-
-
-def test_remove_block_rejects_non_user_id(tmp_path: Path) -> None:
-    manager = _facade_manager(tmp_path)
-
-    with pytest.raises(PromptError):
-        manager.remove_block("core:tools")
-
-
-def test_remove_block_deletes_override_and_layout_entry(tmp_path: Path) -> None:
-    store = StubBlockStore(
-        layouts={"default": [LayoutEntry(id="user:note", source="user")]},
-        overrides={("default", "user:note"): "my note"},
-    )
-    manager = _facade_manager(tmp_path, store=store)
-
-    result = manager.remove_block("user:note")
-
-    assert store.read_block_override("default", "user:note") is None
-    assert all(entry.id != "user:note" for entry in store.read_layout("default"))
-    assert all(entry["id"] != "user:note" for entry in result["layout"])
+    assert store.read_block_override("default", "user:greeting") is None
+    assert all(entry.id != "user:greeting" for entry in store.read_layout("default"))
+    assert all(entry["id"] != "user:greeting" for entry in removed["layout"])
 
 
 def test_reset_layout_restores_bundled_default(tmp_path: Path) -> None:
@@ -276,102 +245,58 @@ def test_reset_layout_restores_bundled_default(tmp_path: Path) -> None:
     result = manager.reset_layout()
 
     persisted = store.read_layout("default")
-    # The bundled default layout is restored (the disabled-tools custom layout gone).
-    assert [entry.id for entry in persisted] == [
-        "core:soul",
-        "memory:guidance",
-        "core:runtime",
-        "core:identity_runtime",
-        "core:tools",
-        "tool:project",
-        "tool:subagent",
-        "core:tools_list",
-        "core:channels",
-        "core:skills",
-        "core:skill_maintenance",
-        "core:agent_body",
-        "core:working_project",
-    ]
+    assert [entry.id for entry in persisted] == _BUNDLED_LAYOUT
     # Everything ships enabled except the opt-in tool list.
-    disabled_ids = {entry.id for entry in persisted if not entry.enabled}
-    assert disabled_ids == {"core:tools_list"}
-    assert [entry["id"] for entry in result["layout"]] == [entry.id for entry in persisted]
+    assert {entry.id for entry in persisted if not entry.enabled} == {"core:tools_list"}
+    assert [entry["id"] for entry in result["layout"]] == _BUNDLED_LAYOUT
 
 
-def test_list_scopes_includes_enabled_agent_scopes(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("store", "has_customizations"),
+    [
+        (StubBlockStore(), False),
+        (StubBlockStore(layouts={"agent:coder": [LayoutEntry(id="core:tools")]}), True),
+        (StubBlockStore(overrides={("agent:coder", "core:tools"): "agent text"}), True),
+        # A default-scope override is not the Agent scope's own customization.
+        (StubBlockStore(overrides={("default", "core:tools"): "default text"}), False),
+    ],
+    ids=["untouched", "agent-layout", "agent-override", "default-override"],
+)
+def test_list_scopes_lists_custom_prompt_agents_with_their_customization_flag(
+    tmp_path: Path, store: StubBlockStore, has_customizations: bool
+) -> None:
     enabled = _agent(tmp_path, custom_system_prompt_enabled=True)
     disabled = _agent(tmp_path, agent_id="plain", custom_system_prompt_enabled=False)
-    manager = _facade_manager(tmp_path, agents=[disabled, enabled])
+    manager = _facade_manager(tmp_path, store=store, agents=[disabled, enabled])
 
-    # A scope with no saved layout or override reports has_customizations=False.
     assert manager.list_scopes() == [
         {"type": "default", "label": "Default"},
         {
             "type": "agent",
             "agent_id": "coder",
             "label": "Coder Agent",
-            "has_customizations": False,
+            "has_customizations": has_customizations,
         },
     ]
 
 
-def test_list_scopes_flags_agent_scope_with_saved_layout(tmp_path: Path) -> None:
-    enabled = _agent(tmp_path, custom_system_prompt_enabled=True)
-    store = StubBlockStore(layouts={"agent:coder": [LayoutEntry(id="core:tools", enabled=False)]})
-    manager = _facade_manager(tmp_path, store=store, agents=[enabled])
-
-    agent_scope = next(scope for scope in manager.list_scopes() if scope["type"] == "agent")
-    assert agent_scope["has_customizations"] is True
-
-
-def test_list_scopes_flags_agent_scope_with_block_override(tmp_path: Path) -> None:
-    enabled = _agent(tmp_path, custom_system_prompt_enabled=True)
-    store = StubBlockStore(overrides={("agent:coder", "core:tools"): "agent text"})
-    manager = _facade_manager(tmp_path, store=store, agents=[enabled])
-
-    agent_scope = next(scope for scope in manager.list_scopes() if scope["type"] == "agent")
-    assert agent_scope["has_customizations"] is True
-
-
-def test_list_scopes_ignores_default_scope_override_for_agent_flag(tmp_path: Path) -> None:
-    # A default-scope override is not the agent scope's own customization, so it
-    # must not flag the agent scope.
-    enabled = _agent(tmp_path, custom_system_prompt_enabled=True)
-    store = StubBlockStore(overrides={("default", "core:tools"): "default text"})
-    manager = _facade_manager(tmp_path, store=store, agents=[enabled])
-
-    agent_scope = next(scope for scope in manager.list_scopes() if scope["type"] == "agent")
-    assert agent_scope["has_customizations"] is False
-
-
-def test_edit_facade_rejects_disabled_agent_scope(tmp_path: Path) -> None:
-    disabled = _agent(tmp_path, custom_system_prompt_enabled=False)
-    manager = _facade_manager(tmp_path, agents=[disabled])
-
-    with pytest.raises(PromptError):
-        manager.list_blocks({"type": "agent", "agent_id": "coder"})
-
-
-@pytest.mark.parametrize("scope", [None, "coder"])
 @pytest.mark.parametrize(
-    "body",
+    ("scope", "body"),
     [
-        b"{broken",
-        b"{}",
-        b"[null]",
-        b"\xff",
-        b'[{"id":"core:tools","enabled":false}]',
-        b'{"format_version":1,"entries":[{"id":"core:tools","enabled":"false"}]}',
+        (None, b"{broken"),
+        ("coder", b'{"format_version":1,"entries":[{"id":"core:tools","enabled":"false"}]}'),
     ],
+    ids=["default-invalid-json", "agent-invalid-entry"],
 )
-def test_corrupt_persisted_layout_builds_with_defaults(tmp_path, scope, body):
-    from core.runtime._prompt_blocks import _StorageManagerBlockStore
-    from core.storage import StorageManager
-
+def test_corrupt_persisted_layout_builds_with_defaults_until_it_is_reset(
+    tmp_path: Path, scope: str | None, body: bytes
+) -> None:
+    # Storage owns the validation cases; the manager must neither apply a corrupt
+    # layout partially nor overwrite it without an explicit reset.
     storage = StorageManager(data_dir=tmp_path / "data")
-    store = _StorageManagerBlockStore(storage)
     agent = _agent(tmp_path, custom_system_prompt_enabled=scope is not None)
-    manager = _facade_manager(tmp_path, store=store, agents=[agent])
+    manager = _facade_manager(tmp_path, store=_StorageManagerBlockStore(storage), agents=[agent])
+    edit_scope = None if scope is None else _AGENT_SCOPE
     baseline = manager.build_system_prompt(agent)
     path = (
         storage.data_dir / "prompts" / "layout.json"
@@ -380,27 +305,13 @@ def test_corrupt_persisted_layout_builds_with_defaults(tmp_path, scope, body):
     )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(body)
+
     assert manager.build_system_prompt(agent) == baseline
+    with pytest.raises(StorageError, match="Reset the layout of this prompt scope"):
+        manager.set_layout([{"id": "core:tools", "enabled": False}], edit_scope)
     assert path.read_bytes() == body
 
-
-def test_corrupt_persisted_layout_is_kept_until_the_layout_is_reset(tmp_path):
-    import json
-
-    from core.runtime._prompt_blocks import _StorageManagerBlockStore
-    from core.storage import StorageError, StorageManager
-
-    storage = StorageManager(data_dir=tmp_path / "data")
-    manager = _facade_manager(tmp_path, store=_StorageManagerBlockStore(storage))
-    path = storage.data_dir / "prompts" / "layout.json"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(b"{broken")
-
-    with pytest.raises(StorageError, match="Reset the layout of this prompt scope"):
-        manager.set_layout([{"id": "core:tools", "enabled": False}])
-    assert path.read_bytes() == b"{broken"
-
-    result = manager.reset_layout()
+    result = manager.reset_layout(edit_scope)
 
     document = json.loads(path.read_text(encoding="utf-8"))
     assert document["format_version"] == 1

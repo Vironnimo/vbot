@@ -1,6 +1,8 @@
-"""Tests for the shared canonical Passage policy."""
+"""The shared canonical Passage policy."""
 
 from datetime import UTC, datetime
+
+import pytest
 
 from core.chat import ChatMessage
 from core.recall.passages import build_session_passages
@@ -38,16 +40,50 @@ def test_passage_ids_and_boundaries_are_deterministic() -> None:
     assert first[-1].end_message_id == messages[-1].id
 
 
-def test_passages_exclude_tool_messages_by_default() -> None:
-    user = ChatMessage.user("user text", timestamp=timestamp(1))
-    tool = ChatMessage.tool(
-        name="bash",
-        content="tool payload",
-        tool_call_id="call-1",
-        timestamp=timestamp(2),
+@pytest.mark.parametrize(
+    "excluded",
+    [
+        ChatMessage.tool(
+            name="bash", content="tool payload", tool_call_id="call-1", timestamp=timestamp(1)
+        ),
+        # A persisted Recall result must never feed Recall back to itself.
+        ChatMessage.tool(
+            name="session_search", content="earlier hit", tool_call_id="c2", timestamp=timestamp(1)
+        ),
+        ChatMessage.note("internal note", timestamp=timestamp(1)),
+        ChatMessage.run_summary(
+            run_id="r1",
+            status="completed",
+            timing={
+                "started_at": "2026-05-01T12:00:00+00:00",
+                "completed_at": "2026-05-01T12:00:01+00:00",
+                "duration_ms": 1000,
+            },
+            iteration_count=1,
+        ),
+    ],
+    ids=["tool", "recall-result", "note", "run-summary"],
+)
+def test_passages_contain_only_conversation_text(excluded: ChatMessage) -> None:
+    user = ChatMessage.user("user text", timestamp=timestamp(2))
+
+    passages = build_session_passages([excluded, user])
+
+    assert [(passage.text, passage.start_role) for passage in passages] == [("user text", "user")]
+
+
+def test_compaction_summary_is_its_own_passage() -> None:
+    before = ChatMessage.user("before", timestamp=timestamp(1))
+    checkpoint = ChatMessage.compaction_checkpoint(
+        summary="the summary", projection=[], compacted_token_count=1, timestamp=timestamp(2)
     )
+    after = ChatMessage.user("after", timestamp=timestamp(3))
 
-    passages = build_session_passages([user, tool])
+    passages = build_session_passages([before, checkpoint, after])
 
-    assert len(passages) == 1
-    assert passages[0].text == "user text"
+    # Short enough for one window, yet the summary never merges with verbatim text.
+    assert [(passage.text, passage.start_role, passage.end_role) for passage in passages] == [
+        ("before", "user", "user"),
+        ("the summary", "compaction_checkpoint", "compaction_checkpoint"),
+        ("after", "user", "user"),
+    ]
