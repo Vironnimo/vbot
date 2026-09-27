@@ -4,6 +4,7 @@ import {
   RPC_ERROR_HTTP,
   RPC_ERROR_RESPONSE,
   getLocalSpeechMemory,
+  prepareSpeechTranscription,
   unloadLocalSpeech,
   normalizeRpcError,
   transcribeSpeech,
@@ -275,5 +276,25 @@ describe('local speech memory', () => {
     });
     expect(() => unloadLocalSpeech('', options)).toThrow();
     expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('asks the server to prepare transcription without parameters', async () => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(
+          JSON.stringify({ ok: true, result: { state: 'loading' } }),
+        ),
+      );
+    expect(
+      await prepareSpeechTranscription({
+        fetch,
+        baseUrl: 'http://speech.test',
+      }),
+    ).toEqual({ state: 'loading' });
+    expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual({
+      method: 'speech.prepare_transcription',
+      params: {},
+    });
   });
 });

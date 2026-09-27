@@ -298,6 +298,8 @@ def test_a_spoken_command_is_recorded_transcribed_and_sent(
     assert [(params["session_id"], params["content"]) for params in rig.server.sent] == [
         ("s-main", "turn on the lights")
     ]
+    # The recording start asks the server to load its speech model meanwhile.
+    wait_until(lambda: "speech.prepare_transcription" in rig.server.methods)
     rate, samples = uploaded_wav(rig.server.uploads[0])
     assert rate == 16000
     assert int(np.abs(samples.astype(np.int32)).max()) >= 1500
@@ -384,6 +386,12 @@ def test_a_capture_gap_discards_the_recording_and_listening_continues(
     assert rig.server.uploads == []
     assert rig.state() == ("listening", None)
 
+    # Detection may still hold audio from before the gap: a wake phrase matched
+    # there starts a recording that the same gap interrupts. Wait until detection
+    # reached a quiet marker fed after the gap.
+    marker = 1234
+    rig.sd.feed(np.full(1600, marker, dtype=np.int16))
+    wait_until(lambda: marker in rig.engine.peaks, message="detection never passed the gap")
     rig.say_command()
     rig.sink.wait_for_event("sent")
 

@@ -62,7 +62,7 @@ def test_extension_change_also_applies_recall_and_skill_changes(
         runtime.stop()
 
 
-def test_unchanged_settings_do_not_refresh_live_services(
+def test_only_changed_settings_refresh_their_live_services(
     config: Config, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     runtime = Runtime(config, safe_startup_mode="test")
@@ -72,12 +72,23 @@ def test_unchanged_settings_do_not_refresh_live_services(
         recall = runtime.recall_backend
         keep_awake = Mock()
         timezone = Mock()
+        speech_preload = Mock()
         monkeypatch.setattr(runtime, "reload_keep_awake", keep_awake)
         monkeypatch.setattr(runtime, "reload_timezone", timezone)
+        monkeypatch.setattr(runtime.speech, "preload_configured", speech_preload)
         settings = runtime.storage.load_settings()
         assert asyncio.run(runtime.apply_settings_change(settings, settings)) is False
         assert runtime.skills_for(None) is skills
         assert runtime.recall_backend is recall
+        keep_awake.assert_not_called()
+        timezone.assert_not_called()
+        speech_preload.assert_not_called()
+
+        # A new speech-to-text binding may ask for its local model to preload.
+        binding = {"target": "local/parakeet", "options": {"preload": True}}
+        changed = {**settings, "model_tasks": {"speech_to_text": binding}}
+        assert asyncio.run(runtime.apply_settings_change(settings, changed)) is False
+        speech_preload.assert_called_once_with()
         keep_awake.assert_not_called()
         timezone.assert_not_called()
     finally:

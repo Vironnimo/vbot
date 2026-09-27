@@ -651,37 +651,148 @@ async def test_failed_environment_recreation_cannot_reuse_old_completion_receipt
     await setup.aclose()
 
 
-def test_managed_stt_worker_returns_typed_result_and_forwards_progress(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from core.model_tasks.speech_local import _PROGRESS, _ManagedSttEngine
+# Minimal STT source a managed worker child imports instead of the real engines.
+_FAKE_STT_SOURCE = """
+import time
+from contextvars import ContextVar
+from pathlib import Path
 
-    process = MagicMock()
-    process.stdin = io.StringIO()
-    process.stdout = io.StringIO(
-        json.dumps({"phase": "transcribing"})
-        + "\n"
-        + json.dumps({"result": {"text": "hello", "language": "en"}})
-        + "\n"
-    )
-    popen = MagicMock(return_value=process)
-    monkeypatch.setattr("core.model_tasks.speech_local.subprocess.Popen", popen)
-    setup = LocalSpeechSetup(directory=tmp_path)
-    setup.python.parent.mkdir(parents=True)
-    setup.python.touch()
-    engine = _ManagedSttEngine(setup, tmp_path / "app", "qwen3-asr", {})
+_PROGRESS = ContextVar("progress", default=None)
+
+
+class _Result:
+    def __init__(self, text):
+        self.text = text
+
+    def to_dict(self):
+        return {"text": self.text, "language": "en"}
+
+
+class _Model:
+    def __init__(self, options):
+        _PROGRESS.get().update("loading")
+        if options.get("marker"):
+            Path(options["marker"]).touch()
+            time.sleep(60)
+
+    def transcribe(self, samples, options):
+        return _Result(f"{len(samples)} samples in {options['language']}")
+
+
+class _Definition:
+    descriptor = type("Descriptor", (), {"id": "fake"})
+    create = _Model
+
+
+def builtin_speech_engines():
+    return (_Definition(),)
+"""
+
+
+def _fake_stt_app(root: Path) -> tuple[Any, Path]:
+    """Return a setup running this interpreter and an app root with a fake engine."""
+    package = root / "app" / "core" / "model_tasks"
+    package.mkdir(parents=True)
+    (root / "app" / "core" / "__init__.py").touch()
+    (package / "__init__.py").touch()
+    # The isolated child still needs this interpreter's packages, such as numpy.
+    source = f"import sys\nsys.path.extend({sys.path!r})\n{_FAKE_STT_SOURCE}"
+    (package / "speech_local.py").write_text(source, encoding="utf-8")
+    return SimpleNamespace(python=Path(sys.executable)), root / "app"
+
+
+def test_managed_stt_worker_loads_before_transcribing_and_forwards_progress(
+    tmp_path: Path,
+) -> None:
+    from core.model_tasks.speech_local import _PROGRESS, _LoadingProcesses, _ManagedSttEngine
+
+    setup, app = _fake_stt_app(tmp_path)
     progress = SpeechProgress()
     token = _PROGRESS.set(progress)
+    engine = None
     try:
+        # Construction returns only once the child reports the model loaded.
+        engine = _ManagedSttEngine(setup, app, "fake", _LoadingProcesses(), {"language": "en"})
+        assert progress.snapshot()["phase"] == "loading"
         result = engine.transcribe(np.asarray([0.25, -0.5], dtype=np.float32), {"language": "en"})
     finally:
         _PROGRESS.reset(token)
+        if engine is not None:
+            engine.close()
     assert isinstance(result, SpeechTranscriptionResult)
-    assert (result.text, result.language) == ("hello", "en")
+    assert (result.text, result.language) == ("2 samples in en", "en")
     assert progress.snapshot()["phase"] == "transcribing"
-    assert popen.call_args.args[0][:3] == [str(setup.python), "-I", "-B"]
-    request = json.loads(process.stdin.getvalue())
-    assert request["options"] == {"language": "en"}
+
+
+@pytest.mark.asyncio
+async def test_shutdown_during_managed_preload_ends_the_loading_worker(tmp_path: Path) -> None:
+    from core.model_tasks.speech_local import _ManagedSttEngine
+
+    setup, app = _fake_stt_app(tmp_path)
+    marker = tmp_path / "loading"
+    entry = definition("fake", [])
+    executor = LocalSpeechExecutor(
+        engines=[
+            replace(
+                entry,
+                create=lambda _options: _ManagedSttEngine(
+                    setup, app, "fake", executor._loading, {"marker": str(marker)}
+                ),
+            )
+        ]
+    )
+    try:
+        assert executor.prepare("fake", {}) == "loading"
+        async with asyncio.timeout(10):
+            while not marker.exists():
+                await asyncio.sleep(0.02)
+        # The child would load for a minute; shutdown must end it instead of waiting.
+        await asyncio.wait_for(executor.aclose(), 10)
+        assert executor.memory_status()["models"][0]["loaded"] is False
+        assert executor.prepare("fake", {}) == "unavailable"
+    finally:
+        await executor.aclose()
+
+
+@pytest.mark.asyncio
+async def test_prepare_loads_once_in_background_and_transcription_waits_for_it() -> None:
+    events: list[Any] = []
+    gate = threading.Event()
+    gate.set()
+    failures = iter([RuntimeError("private load failure")])
+
+    def create(options: Mapping[str, Any]) -> Engine:
+        events.append(("first", "load", dict(options)))
+        if (failure := next(failures, None)) is not None:
+            raise failure
+        assert gate.wait(5)
+        return Engine("first", events)
+
+    executor = LocalSpeechExecutor(engines=[replace(definition("first", events), create=create)])
+    try:
+        assert executor.prepare("unknown", {}) == "unavailable"
+        assert executor.prepare("first", {"unexpected": "value"}) == "unavailable"
+        # A failed preload is only logged; the next transcription loads again.
+        assert executor.prepare("first", {}) == "loading"
+        await asyncio.sleep(0)
+        assert (await transcribe(executor)).text == "first"
+        assert [event[1] for event in events] == ["load", "load", "transcribe"]
+        assert executor.prepare("first", {}) == "loaded"
+
+        gate.clear()
+        events.clear()
+        assert executor.prepare("first", {"custom": "two"}) == "loading"
+        assert executor.prepare("first", {"custom": "two"}) == "loading"
+        request = asyncio.create_task(transcribe(executor, custom="two"))
+        await asyncio.sleep(0)
+        assert not request.done()
+        gate.set()
+        assert (await request).text == "first"
+        assert [event[1] for event in events] == ["close", "load", "transcribe"]
+    finally:
+        gate.set()
+        await executor.aclose()
+    assert executor.prepare("first", {}) == "unavailable"
 
 
 def test_managed_stt_worker_starts_without_unrelated_image_dependencies(tmp_path: Path) -> None:

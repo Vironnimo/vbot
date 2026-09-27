@@ -343,6 +343,8 @@ class ScriptedEngine:
         self.started = threading.Event()
         self.stopped = threading.Event()
         self.chunks: list[tuple[int, bool]] = []
+        # Peak amplitude per chunk, so a test can see which audio detection reached.
+        self.peaks: list[int] = []
         self._lock = threading.Lock()
         self._pending: deque[WakewordMatch] = deque()
 
@@ -366,6 +368,8 @@ class ScriptedEngine:
     def detect(self, audio_chunk: bytes, *, speech_present: bool = True) -> WakewordMatch | None:
         with self._lock:
             self.chunks.append((len(audio_chunk), speech_present))
+            samples = np.frombuffer(audio_chunk, dtype=np.int16).astype(np.int32)
+            self.peaks.append(int(np.abs(samples).max()) if samples.size else 0)
             match = self._pending.popleft() if self._pending else None
         if self.fail_detect:
             raise RuntimeError("inference failed")
@@ -417,6 +421,8 @@ class FakeVoiceServer:
             self.methods.append(method)
         if method == "task_model.status":
             return _ok(self.speech)
+        if method == "speech.prepare_transcription":
+            return _ok({"state": "loading"})
         if method == "agent.get":
             agent = self.agents.get(params["id"])
             if agent is None:

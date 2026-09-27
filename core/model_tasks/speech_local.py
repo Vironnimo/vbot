@@ -24,7 +24,8 @@ from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
-from threading import Timer
+from threading import Lock, Timer
+from time import monotonic
 from typing import Any, Protocol, cast
 
 from core.model_tasks.constants import TASK_SPEECH_TO_TEXT, TASK_TEXT_TO_SPEECH
@@ -50,6 +51,8 @@ _LOGGER = get_logger("speech.local")
 _SAMPLE_RATE = 16_000
 _CHUNK_SAMPLES = 30 * _SAMPLE_RATE
 _LOAD_OPTIONS = ("model", "model_path", "device", "dtype")
+# Local STT option asking the Runtime to load the engine after startup and binding changes.
+PRELOAD_OPTION = "preload"
 _PROGRESS: ContextVar[SpeechProgress | None] = ContextVar("local_speech_progress", default=None)
 
 
@@ -125,6 +128,15 @@ def builtin_speech_engines() -> tuple[SpeechEngineDefinition, ...]:
             description="Optional directory on the vBot server containing a Transformers model. "
             "Leave empty to download and cache the selected model from Hugging Face.",
         ),
+        TaskModelOptionField(
+            PRELOAD_OPTION,
+            "boolean",
+            "Load at server start",
+            default=False,
+            description="Load the model in the background when the vBot server starts or this "
+            "binding changes, so the first transcription does not wait for loading. "
+            "The model then stays in memory even while unused.",
+        ),
     )
     language = TaskModelOptionField(
         "language",
@@ -193,12 +205,45 @@ class _EngineState:
     engine: LocalTranscriptionEngine | LocalSynthesisEngine | None = None
     key: tuple[Any, ...] | None = None
     pending: int = 0
+    preparing: asyncio.Task[None] | None = None
+    preparing_key: tuple[Any, ...] | None = None
 
     def unload(self) -> None:
         engine, self.engine = self.engine, None
         self.key = None
         if engine is not None:
             engine.close()
+
+
+class _LoadingProcesses:
+    """Managed STT workers still loading, so closing can abort a long load.
+
+    A loading worker blocks its executor thread until the child answers; only
+    killing the child ends that wait before the load finishes.
+    """
+
+    def __init__(self) -> None:
+        self._lock = Lock()
+        self._processes: set[subprocess.Popen[str]] = set()
+        self._closed = False
+
+    def add(self, process: subprocess.Popen[str]) -> None:
+        with self._lock:
+            if not self._closed:
+                self._processes.add(process)
+                return
+        _kill_speech_process(process)
+
+    def discard(self, process: subprocess.Popen[str]) -> None:
+        with self._lock:
+            self._processes.discard(process)
+
+    def close(self) -> None:
+        with self._lock:
+            self._closed = True
+            processes, self._processes = self._processes, set()
+        for process in processes:
+            _kill_speech_process(process)
 
 
 class LocalSpeechExecutor:
@@ -212,6 +257,7 @@ class LocalSpeechExecutor:
         managed_worker: bool = False,
     ) -> None:
         install_lock = asyncio.Lock()
+        self._loading = _LoadingProcesses()
         packaged_app = None if managed_worker else _packaged_app_root()
         self.setup = LocalSpeechSetup(
             directory=engines_dir / "stt" if engines_dir and packaged_app else None,
@@ -240,6 +286,7 @@ class LocalSpeechExecutor:
                         self.setup,
                         packaged_app,
                         entry.descriptor.id,
+                        self._loading,
                     ),
                 )
                 if TASK_SPEECH_TO_TEXT in entry.descriptor.task_types
@@ -324,9 +371,65 @@ class LocalSpeechExecutor:
         finally:
             _PROGRESS.reset(token)
 
-    def _transcribe(
-        self, local_id: str, audio: bytes, options: dict[str, Any]
-    ) -> SpeechTranscriptionResult:
+    def prepare(self, local_id: str, options: Mapping[str, Any]) -> str:
+        """Start loading one STT engine in the background, before its first request.
+
+        Returns ``loaded`` when the engine already runs with these load options,
+        ``loading`` when a load started or is still running, and ``unavailable``
+        when the engine cannot run here. A transcription that arrives meanwhile
+        waits for the load. Failures are logged, never raised. Event Loop only.
+        """
+        state = self._states.get(local_id)
+        try:
+            if state is None:
+                raise LocalSpeechError(f"Local speech-to-text target is not available: {local_id}")
+            _definition, merged, key = self._stt_request(local_id, dict(options))
+        except LocalSpeechError:
+            return "unavailable"
+        if state.engine is not None and state.key == key:
+            return "loaded"
+        if (
+            state.preparing is not None
+            and not state.preparing.done()
+            and state.preparing_key == key
+        ):
+            return "loading"
+        state.preparing_key = key
+        state.preparing = asyncio.get_running_loop().create_task(
+            self._prepare_in_worker(state, local_id, merged)
+        )
+        return "loading"
+
+    async def _prepare_in_worker(
+        self, state: _EngineState, local_id: str, options: dict[str, Any]
+    ) -> None:
+        state.pending += 1
+        try:
+            await state.workers.run(self._prepare, local_id, options)
+        except LocalSpeechError:
+            pass  # Logged by the worker; the next transcription reports it to its caller.
+        except Exception:
+            _LOGGER.error("Local STT preload failed (engine=%s)", local_id, exc_info=True)
+        finally:
+            state.pending -= 1
+
+    def _prepare(self, local_id: str, options: dict[str, Any]) -> None:
+        definition, options, key = self._stt_request(local_id, options)
+        state = self._states[local_id]
+        if key != state.key:
+            state.unload()
+        try:
+            self._loaded_engine(state, definition, options, key)
+        except Exception as error:
+            failure = self._failed(state, local_id, error)
+            if failure is error:
+                raise
+            raise failure from error
+
+    def _stt_request(
+        self, local_id: str, options: dict[str, Any]
+    ) -> tuple[SpeechEngineDefinition, dict[str, Any], tuple[Any, ...]]:
+        """Validate one STT request; return its definition, options and load identity."""
         if self._closed:
             raise LocalSpeechError(
                 "Local speech recognition is closed. Restart the vBot server before retrying."
@@ -356,8 +459,47 @@ class LocalSpeechExecutor:
             if definition.load_options is None
             else {name: options.get(name) for name in definition.load_options}
         )
+        return definition, options, (local_id, json.dumps(load_options, sort_keys=True))
+
+    def _loaded_engine(
+        self,
+        state: _EngineState,
+        definition: SpeechEngineDefinition,
+        options: dict[str, Any],
+        key: tuple[Any, ...],
+    ) -> LocalTranscriptionEngine:
+        if state.engine is None:
+            local_id = definition.descriptor.id
+            if (progress := _PROGRESS.get()) is not None:
+                progress.update("loading")
+            _LOGGER.info("Loading local STT model (engine=%s)", local_id)
+            started = monotonic()
+            state.engine = definition.create(options)
+            state.key = key
+            _LOGGER.info(
+                "Local STT model ready (engine=%s, seconds=%.1f)", local_id, monotonic() - started
+            )
+        return cast(LocalTranscriptionEngine, state.engine)
+
+    def _failed(self, state: _EngineState, local_id: str, error: Exception) -> LocalSpeechError:
+        """Unload after a failure and return the error the caller should see."""
+        state.unload()
+        _LOGGER.warning(
+            "Local STT failed (engine=%s, error_type=%s)", local_id, type(error).__name__
+        )
+        if isinstance(error, LocalSpeechError):
+            return error
+        return LocalSpeechExecutionError(
+            f"Local speech recognition failed ({type(error).__name__}). "
+            "Check the selected device, model directory, available memory, "
+            "and model download access."
+        )
+
+    def _transcribe(
+        self, local_id: str, audio: bytes, options: dict[str, Any]
+    ) -> SpeechTranscriptionResult:
+        definition, options, key = self._stt_request(local_id, options)
         state = self._states[local_id]
-        key = (local_id, json.dumps(load_options, sort_keys=True))
         if key != state.key:
             state.unload()
         try:
@@ -369,16 +511,10 @@ class LocalSpeechExecutor:
                 # Exact digital silence needs no model and must not invent text.
                 if not samples.any():
                     continue
-                if state.engine is None:
-                    if (progress := _PROGRESS.get()) is not None:
-                        progress.update("loading")
-                    _LOGGER.info("Loading local STT model (engine=%s)", local_id)
-                    state.engine = definition.create(options)
-                    state.key = key
-                    _LOGGER.info("Local STT model ready (engine=%s)", local_id)
+                engine = self._loaded_engine(state, definition, options, key)
                 if (progress := _PROGRESS.get()) is not None:
                     progress.update("transcribing")
-                result = cast(LocalTranscriptionEngine, state.engine).transcribe(samples, options)
+                result = engine.transcribe(samples, options)
                 if not isinstance(result.text, str):
                     raise ValueError("Local engine returned a non-text transcription")
                 if result.text.strip():
@@ -399,17 +535,10 @@ class LocalSpeechExecutor:
                 segments=tuple(segments),
             )
         except Exception as error:
-            state.unload()
-            _LOGGER.warning(
-                "Local STT failed (engine=%s, error_type=%s)", local_id, type(error).__name__
-            )
-            if isinstance(error, LocalSpeechError):
+            failure = self._failed(state, local_id, error)
+            if failure is error:
                 raise
-            raise LocalSpeechExecutionError(
-                f"Local speech recognition failed ({type(error).__name__}). "
-                "Check the selected device, model directory, available memory, "
-                "and model download access."
-            ) from error
+            raise failure from error
 
     def memory_status(self) -> dict[str, Any]:
         """Read all engine identities without importing ML packages or loading models."""
@@ -446,7 +575,10 @@ class LocalSpeechExecutor:
         for setup in self.tts_setups.values():
             setup.close()
         self._closed = True
+        self._loading.close()
         for state in self._states.values():
+            if state.preparing is not None:
+                state.preparing.cancel()
             state.workers.shutdown()
             state.unload()
 
@@ -458,6 +590,10 @@ class LocalSpeechExecutor:
             if self._closed:
                 return
             self._closed = True
+            # An unstarted preload never starts; closing aborts a started managed load.
+            for state in self._states.values():
+                if state.preparing is not None:
+                    state.preparing.cancel()
             self._close_task = asyncio.create_task(self._finish_close())
         try:
             await asyncio.shield(self._close_task)
@@ -475,6 +611,12 @@ class LocalSpeechExecutor:
             raise
 
     async def _finish_close(self) -> None:
+        # Killing a process tree blocks, so it must not run on the Event Loop.
+        await asyncio.to_thread(self._loading.close)
+        await asyncio.gather(
+            *(state.preparing for state in self._states.values() if state.preparing is not None),
+            return_exceptions=True,
+        )
         try:
             outcomes = await asyncio.gather(
                 *(state.workers.run(state.unload) for state in self._states.values()),
@@ -782,14 +924,19 @@ def _packaged_app_root() -> Path | None:
 
 
 class _ManagedSttEngine:
-    """Keep the optional ML stack in a managed child interpreter."""
+    """Keep the optional ML stack in a managed child interpreter.
+
+    Construction returns once the child reports the model loaded, so the
+    executor's load boundary (logs, progress, preloading) covers the real load.
+    """
 
     def __init__(
         self,
         setup: LocalSpeechSetup,
         app_root: Path,
         engine: str,
-        _options: Mapping[str, Any],
+        loading: _LoadingProcesses,
+        options: Mapping[str, Any],
     ) -> None:
         from core.utils.processes import subprocess_creation_flags
 
@@ -812,19 +959,35 @@ class _ManagedSttEngine:
             start_new_session=os.name != "nt",
             env={**os.environ, "PYTHONUTF8": "1", "TOKENIZERS_PARALLELISM": "false"},
         )
+        loading.add(self._process)
+        try:
+            self._exchange({"load": True, "options": dict(options)}, "loaded")
+        except BaseException:
+            self.close()
+            raise
+        finally:
+            loading.discard(self._process)
 
     def transcribe(self, samples: Any, options: Mapping[str, Any]) -> SpeechTranscriptionResult:
+        payload = self._exchange(
+            {
+                "samples": base64.b64encode(samples.astype("<f4").tobytes()).decode("ascii"),
+                "options": dict(options),
+            },
+            "result",
+        )
+        return SpeechTranscriptionResult(
+            text=payload["text"],
+            language=payload.get("language"),
+            segments=tuple(payload.get("segments", ())),
+            usage=payload.get("usage"),
+        )
+
+    def _exchange(self, request: Mapping[str, Any], answer: str) -> Any:
+        """Send one request line and return the child's ``answer`` field."""
         process = self._process
         assert process.stdin is not None and process.stdout is not None
-        process.stdin.write(
-            json.dumps(
-                {
-                    "samples": base64.b64encode(samples.astype("<f4").tobytes()).decode("ascii"),
-                    "options": dict(options),
-                }
-            )
-            + "\n"
-        )
+        process.stdin.write(json.dumps(request) + "\n")
         process.stdin.flush()
         while line := process.stdout.readline(4096):
             event = json.loads(line)
@@ -832,20 +995,16 @@ class _ManagedSttEngine:
                 raise RuntimeError(event["error"])
             if event.get("phase") and (progress := _PROGRESS.get()) is not None:
                 progress.update(event["phase"])
-            if (payload := event.get("result")) is not None:
-                return SpeechTranscriptionResult(
-                    text=payload["text"],
-                    language=payload.get("language"),
-                    segments=tuple(payload.get("segments", ())),
-                    usage=payload.get("usage"),
-                )
+            if (payload := event.get(answer)) is not None:
+                return payload
         raise RuntimeError("Speech worker exited")
 
     def close(self) -> None:
         _close_speech_process(self._process)
 
 
-def _close_speech_process(process: subprocess.Popen[str]) -> None:
+def _kill_speech_process(process: subprocess.Popen[str]) -> None:
+    """Kill a speech child's whole process tree; its pipes stay with their owner."""
     from core.utils.processes import windows_taskkill_tree
 
     if process.poll() is None:
@@ -857,6 +1016,10 @@ def _close_speech_process(process: subprocess.Popen[str]) -> None:
             with suppress(ProcessLookupError):
                 cast(Any, os).killpg(process.pid, cast(Any, signal).SIGKILL)
         process.wait()
+
+
+def _close_speech_process(process: subprocess.Popen[str]) -> None:
+    _kill_speech_process(process)
     if process.stdin:
         process.stdin.close()
     if process.stdout:

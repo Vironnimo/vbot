@@ -1,4 +1,4 @@
-"""Standalone TTS child entry point; deliberately imports no vBot modules.
+"""Standalone speech child entry point; imports vBot only for managed STT engines.
 
 The parent owns serialization, paths, timeouts and process lifetime. Libraries
 write diagnostics to stderr; stdout carries only bounded JSON control frames.
@@ -275,7 +275,18 @@ def verify_stt(app_root: str) -> None:
     importlib.import_module("av")
 
 
+class _WireProgress:
+    """Forward the in-process loader's phases to the parent as control frames."""
+
+    def __init__(self, emit: Any) -> None:
+        self._emit = emit
+
+    def update(self, phase: str) -> None:
+        self._emit({"phase": phase})
+
+
 def run_stt(wire: Any, engine_id: str, app_root: str) -> None:
+    """Serve one STT engine: ``load`` requests answer ``loaded``, samples a result."""
     local = _load_stt_source(app_root)
     np = importlib.import_module("numpy")
     definition = next(
@@ -287,15 +298,18 @@ def run_stt(wire: Any, engine_id: str, app_root: str) -> None:
         wire.write(json.dumps(event) + "\n")
         wire.flush()
 
+    local._PROGRESS.set(_WireProgress(emit))
     for line in sys.stdin:
         try:
             request = json.loads(line)
+            if model is None:
+                model = definition.create(request["options"])
+            if request.get("load"):
+                emit({"loaded": True})
+                continue
             samples = np.frombuffer(
                 base64.b64decode(request["samples"], validate=True), dtype="<f4"
             )
-            if model is None:
-                emit({"phase": "loading"})
-                model = definition.create(request["options"])
             emit({"phase": "transcribing"})
             result = model.transcribe(samples, request["options"])
             emit({"result": result.to_dict()})

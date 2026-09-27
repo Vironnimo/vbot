@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -26,6 +27,17 @@ from tests.core.model_tasks.model_tasks_test_support import (
     _Providers,
     _Storage,
 )
+
+
+def _settings_state(model_tasks: Any) -> SimpleNamespace:
+    """RPC state whose Runtime persists Task Model bindings in its Settings."""
+    return SimpleNamespace(
+        runtime=SimpleNamespace(
+            model_tasks=model_tasks,
+            storage=SimpleNamespace(load_settings=lambda: {"model_tasks": model_tasks.settings()}),
+            apply_settings_change=AsyncMock(return_value=False),
+        )
+    )
 
 
 @pytest.mark.asyncio
@@ -142,7 +154,7 @@ async def test_task_model_update_validates_payload() -> None:
 @pytest.mark.parametrize("method", ["update", "options"])
 async def test_unknown_local_task_target_is_an_invalid_request(method: str) -> None:
     service = TaskModelService(_Providers(), _Models(), _Credentials(), _Storage())
-    state = SimpleNamespace(runtime=SimpleNamespace(model_tasks=service))
+    state = _settings_state(service)
     binding = {"target": "local/missing"}
     params = (
         {"model_tasks": {TASK_TEXT_TO_SPEECH: binding}}
@@ -154,6 +166,7 @@ async def test_unknown_local_task_target_is_an_invalid_request(method: str) -> N
 
     assert result["error"]["code"] == "invalid_request"
     assert service.settings() == {}
+    state.runtime.apply_settings_change.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -164,7 +177,7 @@ async def test_overflowing_task_option_is_an_invalid_request() -> None:
         _Credentials(),
         _Storage(),
     )
-    state = SimpleNamespace(runtime=SimpleNamespace(model_tasks=service))
+    state = _settings_state(service)
 
     result = await dispatch_rpc(
         state,
@@ -212,7 +225,8 @@ async def test_task_model_options_uses_current_binding_and_reports_effective_val
 @pytest.mark.asyncio
 async def test_task_model_patch_options_returns_complete_saved_binding() -> None:
     model_tasks = _ModelTasks()
-    state = SimpleNamespace(runtime=SimpleNamespace(model_tasks=model_tasks))
+    state = _settings_state(model_tasks)
+    previous = {"model_tasks": model_tasks.settings()}
 
     result = await dispatch_rpc(
         state,
@@ -236,6 +250,10 @@ async def test_task_model_patch_options_returns_complete_saved_binding() -> None
             }
         },
     }
+    # Live consumers, such as a local speech model preload, see the saved change.
+    state.runtime.apply_settings_change.assert_awaited_once_with(
+        previous, {"model_tasks": result["result"]["model_tasks"]}
+    )
 
 
 @pytest.mark.asyncio
@@ -411,6 +429,17 @@ class _StatusModelTasks:
 
     def binding_is_usable(self, _task_type: str) -> bool:
         return self._usable
+
+
+@pytest.mark.asyncio
+async def test_prepare_transcription_rpc_reports_state_and_rejects_parameters() -> None:
+    speech = SimpleNamespace(prepare_transcription=MagicMock(return_value="loading"))
+    state = SimpleNamespace(runtime=SimpleNamespace(speech=speech))
+    request = {"method": "speech.prepare_transcription", "params": {}}
+    assert await dispatch_rpc(state, request) == {"ok": True, "result": {"state": "loading"}}
+    request["params"] = {"target": "local/parakeet"}
+    assert (await dispatch_rpc(state, request))["error"]["code"] == "invalid_request"
+    speech.prepare_transcription.assert_called_once_with()
 
 
 @pytest.mark.asyncio

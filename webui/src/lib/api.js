@@ -16,6 +16,7 @@ export {
   uploadAttachment,
   installSkillArchive,
   updateTaskModelSettings,
+  prepareSpeechTranscription,
   getLocalSpeechMemory,
   unloadLocalSpeech,
   getLocalSpeechSetup,

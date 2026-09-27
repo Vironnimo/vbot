@@ -8,7 +8,7 @@ import wave
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -99,6 +99,53 @@ async def test_provider_transcription_preserves_independent_local_models(tmp_pat
         executor.release_memory.assert_not_awaited()
     finally:
         await service.aclose()
+
+
+@pytest.mark.parametrize(
+    ("target", "options", "state", "preloads"),
+    [
+        (None, {}, "unavailable", False),
+        ("openrouter/whisper-large-v3::api-key", {"preload": True}, "not_local", False),
+        ("local/parakeet", {}, "loading", False),
+        ("local/parakeet", {"preload": True}, "loading", True),
+    ],
+)
+def test_transcription_preparation_loads_only_the_bound_local_engine(
+    tmp_path: Path, target: str | None, options: dict[str, object], state: str, preloads: bool
+) -> None:
+    executor = LocalSpeechExecutor(engines=[])
+    executor.prepare = MagicMock(return_value="loading")  # type: ignore[method-assign]
+    service = SpeechService(
+        _SttModelTasks(target, options), cast(Any, object()), tmp_path, local_executor=executor
+    )
+    try:
+        assert service.prepare_transcription() == state
+        assert executor.prepare.call_count == (state == "loading")
+        executor.prepare.reset_mock()
+        service.preload_configured()
+        if preloads:
+            executor.prepare.assert_called_once_with("parakeet", options)
+        else:
+            executor.prepare.assert_not_called()
+    finally:
+        executor.close()
+
+
+class _SttModelTasks:
+    def __init__(self, target: str | None, options: dict[str, object]) -> None:
+        self._target = target
+        self._options = options
+
+    def binding_for(self, task_type: str) -> object:
+        if self._target is None:
+            raise TaskModelError("No task model configured")
+        return SimpleNamespace(task_type=task_type, target=self._target, options=self._options)
+
+    def validate_execution_target(self, _binding: object) -> None:
+        pass
+
+    def options_with_defaults(self, _binding: object) -> dict[str, object]:
+        return dict(self._options)
 
 
 class _TtsModelTasks:

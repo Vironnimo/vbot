@@ -16,6 +16,7 @@ from core.model_tasks.constants import (
     TASK_TEXT_TO_SPEECH,
 )
 from core.model_tasks.speech_local import (
+    PRELOAD_OPTION,
     LocalSpeechError,
     LocalSpeechExecutionError,
     LocalSpeechExecutor,
@@ -202,6 +203,34 @@ class SpeechService:
         except Exception as exc:
             _LOGGER.error("Speech transcription failed", exc_info=True)
             raise SpeechExecutionError(str(exc)) from exc
+
+    def prepare_transcription(self) -> str:
+        """Start loading the bound local STT engine because a transcription is coming.
+
+        Returns without waiting: ``loaded`` or ``loading`` for a local engine,
+        ``not_local`` when a Provider transcribes, ``unavailable`` when no
+        usable binding exists. Must run on the Event Loop.
+        """
+        try:
+            _binding, options, target_ref = self._resolver.resolve(TASK_SPEECH_TO_TEXT)
+        except SpeechConfigurationError:
+            return "unavailable"
+        if target_ref.kind != "local":
+            return "not_local"
+        return self._local_executor.prepare(target_ref.local_id, options)
+
+    def preload_configured(self) -> None:
+        """Start loading the bound local STT engine when its binding asks to preload.
+
+        Called after Runtime startup and after the binding changed. A model that
+        is already loaded stays; turning the option off unloads nothing.
+        """
+        try:
+            _binding, options, target_ref = self._resolver.resolve(TASK_SPEECH_TO_TEXT)
+        except SpeechConfigurationError:
+            return
+        if target_ref.kind == "local" and options.get(PRELOAD_OPTION) is True:
+            self._local_executor.prepare(target_ref.local_id, options)
 
     @property
     def local_setup(self) -> LocalSpeechSetup:

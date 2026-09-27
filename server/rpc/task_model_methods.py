@@ -14,6 +14,7 @@ from core.settings import (
     parse_settings_update,
 )
 from core.utils.logging import get_logger
+from server.rpc._mutations import serialized_mutation
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
@@ -36,7 +37,7 @@ def _task_model_settings(state: Any, params: JsonObject) -> JsonObject:
         raise _map_expected_error(exc) from exc
 
 
-def _task_model_update(state: Any, params: JsonObject) -> JsonObject:
+async def _task_model_update(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, {"model_tasks"}, "task_model.update")
     try:
         settings_update = parse_settings_update({"model_tasks": params.get("model_tasks")})
@@ -44,8 +45,12 @@ def _task_model_update(state: Any, params: JsonObject) -> JsonObject:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
 
     try:
+        previous_settings = state.runtime.storage.load_settings()
         previous = state.runtime.model_tasks.settings()
         model_tasks = state.runtime.model_tasks.update(settings_update["model_tasks"])
+        await state.runtime.apply_settings_change(
+            previous_settings, state.runtime.storage.load_settings()
+        )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     changed_tasks = sorted(
@@ -136,7 +141,7 @@ def _task_model_options(state: Any, params: JsonObject) -> JsonObject:
     return {"schema": payload}
 
 
-def _task_model_patch_options(state: Any, params: JsonObject) -> JsonObject:
+async def _task_model_patch_options(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, {"task_type", "set", "unset"}, "task_model.patch_options")
     task_type = _required_string(params, "task_type")
     set_values = params.get("set", {})
@@ -160,11 +165,15 @@ def _task_model_patch_options(state: Any, params: JsonObject) -> JsonObject:
     if not set_values and not normalized_unsets:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "at least one option must be set or unset")
     try:
+        previous_settings = state.runtime.storage.load_settings()
         previous = state.runtime.model_tasks.settings()
         model_tasks = state.runtime.model_tasks.patch_options(
             task_type,
             set_values=set_values,
             unset_names=normalized_unsets,
+        )
+        await state.runtime.apply_settings_change(
+            previous_settings, state.runtime.storage.load_settings()
         )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
@@ -201,6 +210,12 @@ def _local_speech_setup_restart(state: Any, params: JsonObject) -> JsonObject:
         _LOGGER.warning("Local speech setup could not schedule server restart")
         return {"state": "failed", "error": "restart_unavailable"}
     return {"state": "restarting"}
+
+
+def _speech_prepare_transcription(state: Any, params: JsonObject) -> JsonObject:
+    """Start loading the bound local STT model because a transcription is coming."""
+    _reject_unsupported(params, set(), "speech.prepare_transcription")
+    return {"state": state.runtime.speech.prepare_transcription()}
 
 
 def _local_speech_memory_status(state: Any, params: JsonObject) -> JsonObject:
@@ -240,10 +255,15 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "speech.local_setup_status": _local_speech_setup_status,
         "speech.local_setup_install": _local_speech_setup_install,
         "speech.local_setup_restart": _local_speech_setup_restart,
+        "speech.prepare_transcription": _speech_prepare_transcription,
         "task_model.settings": _task_model_settings,
-        "task_model.update": _task_model_update,
+        "task_model.update": serialized_mutation(
+            _task_model_update, lock_attribute="_settings_mutation_lock"
+        ),
         "task_model.list_targets": _task_model_list_targets,
         "task_model.status": _task_model_status,
         "task_model.options": _task_model_options,
-        "task_model.patch_options": _task_model_patch_options,
+        "task_model.patch_options": serialized_mutation(
+            _task_model_patch_options, lock_attribute="_settings_mutation_lock"
+        ),
     }

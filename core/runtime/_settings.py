@@ -47,8 +47,15 @@ async def apply_settings_change(
         runtime.reload_keep_awake()
     if previous.get("timezone") != current.get("timezone"):
         runtime.reload_timezone()
+    if _speech_to_text_binding(previous) != _speech_to_text_binding(current):
+        runtime.speech.preload_configured()
 
     return rebuild_extensions or bool(newly_disabled)
+
+
+def _speech_to_text_binding(settings: Mapping[str, Any]) -> Any:
+    model_tasks = settings.get("model_tasks")
+    return model_tasks.get("speech_to_text") if isinstance(model_tasks, dict) else None
 
 
 def _disabled_names(settings: Mapping[str, Any]) -> set[str]:

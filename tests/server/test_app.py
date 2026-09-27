@@ -8,6 +8,7 @@ import logging
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
+from unittest.mock import Mock
 
 import pytest
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
@@ -179,11 +180,19 @@ def test_startup_tolerates_a_corrupt_cron_store(tmp_path: Path) -> None:
 def test_stub_runtime_lifespan_wires_state_and_closes_services(
     tmp_path: Path, async_close: bool
 ) -> None:
-    runtime = _AsyncCloseRuntime(tmp_path) if async_close else ServerStubRuntime(tmp_path)
+    preload = Mock()
+    speech = SimpleNamespace(preload_configured=preload)
+    runtime = (
+        _AsyncCloseRuntime(tmp_path, speech=speech)
+        if async_close
+        else ServerStubRuntime(tmp_path, speech=speech)
+    )
     app = create_app(runtime=runtime)
     engine = _AsyncCloseDeviceFlowEngine()
 
     with TestClient(app):
+        # A local speech model configured to load at server start begins loading.
+        preload.assert_called_once_with()
         assert app.state.chat_runs is runtime.chat_run_manager
         assert app.state.chat_loop is runtime.chat_loop
         assert app.state.streaming_chat_loop is runtime.streaming_chat_loop
@@ -405,8 +414,8 @@ def _rpc_result(client: TestClient, method: str) -> JsonObject:
 
 
 class _AsyncCloseRuntime(ServerStubRuntime):
-    def __init__(self, data_dir: Path) -> None:
-        super().__init__(data_dir)
+    def __init__(self, data_dir: Path, **services: Any) -> None:
+        super().__init__(data_dir, **services)
         self.aclose_called = False
 
     async def aclose(self) -> None:
