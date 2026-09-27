@@ -1,18 +1,22 @@
-"""Channel group addressing, participants, and permission tests."""
+"""Channel engine: group addressing, observed messages, participants and permissions."""
 
 from __future__ import annotations
 
+from pathlib import Path
+from typing import Any
+from unittest.mock import AsyncMock
+
+import pytest
+
+from core.chat import MessageSender
+from core.runs import RunKind
 from core.sessions import SessionAddress
 
 from .engine_test_support import (
     CHANNEL_GROUP_REPLY_SURFACE,
     CHANNEL_REPLY_SURFACE,
     SESSION_ID,
-    AsyncMock,
     MemoryChannelAccessRegistry,
-    MessageSender,
-    Path,
-    RunKind,
     assert_member_trigger,
     channel_state,
     command_outcome,
@@ -21,40 +25,27 @@ from .engine_test_support import (
     make_completed_run,
     make_conversation,
     make_engine,
-    pytest,
 )
 
 MEMBER_TOOL_DENIAL = (
     "Tool access denied: the current sender is a group member. "
     "Group members may use only web_search and web_fetch."
 )
+_ADDRESS = SessionAddress(project_id=None, agent_id="assistant", session_id=SESSION_ID)
+
+
+def _observed_notes(chat_sessions: Any) -> list[str]:
+    return [
+        message.content
+        for message in chat_sessions.get(_ADDRESS).load()
+        if message.role == "note"
+        and isinstance(message.content, str)
+        and message.content.startswith("[channel-message] ")
+    ]
 
 
 @pytest.mark.asyncio
-async def test_group_message_triggers_run_with_sender(tmp_path: Path) -> None:
-    trigger_mock = AsyncMock(return_value=make_completed_run(output_text="ok"))
-    engine, _sessions, _trigger, _transport = make_engine(
-        tmp_path, trigger_run=trigger_mock, response_mode="all"
-    )
-
-    await engine.handle_inbound_text(
-        make_conversation(kind="group", user_display_name="Alice"),
-        "hello",
-    )
-    await drain(engine, 12345)
-
-    assert_member_trigger(
-        trigger_mock,
-        "assistant",
-        "hello",
-        SESSION_ID,
-        sender=MessageSender(id="50", display_name="Alice"),
-    )
-    await engine.stop()
-
-
-@pytest.mark.asyncio
-async def test_member_tool_access_is_limited_with_exact_live_denial(tmp_path: Path) -> None:
+async def test_member_runs_carry_the_sender_and_keep_member_tool_access(tmp_path: Path) -> None:
     trigger_mock = AsyncMock(return_value=make_completed_run(output_text="ok"))
     access = MemoryChannelAccessRegistry()
     engine, _sessions, _trigger, _transport = make_engine(
@@ -65,8 +56,7 @@ async def test_member_tool_access_is_limited_with_exact_live_denial(tmp_path: Pa
     )
 
     await engine.handle_inbound_text(
-        make_conversation(kind="group", user_display_name="Alice"),
-        "hello",
+        make_conversation(kind="group", user_display_name="Alice"), "hello"
     )
     await drain(engine, 12345)
 
@@ -81,34 +71,8 @@ async def test_member_tool_access_is_limited_with_exact_live_denial(tmp_path: Pa
     assert resolver("web_fetch") is None
     assert resolver("bash") == MEMBER_TOOL_DENIAL
     assert "Do not retry" not in MEMBER_TOOL_DENIAL
-    await engine.stop()
-
-
-@pytest.mark.asyncio
-async def test_grant_after_member_ingress_does_not_upgrade_admitted_run(
-    tmp_path: Path,
-) -> None:
-    trigger_mock = AsyncMock(return_value=make_completed_run(output_text="ok"))
-    access = MemoryChannelAccessRegistry()
-    engine, _sessions, _trigger, _transport = make_engine(
-        tmp_path,
-        trigger_run=trigger_mock,
-        response_mode="all",
-        access_registry=access,
-    )
-
-    await engine.handle_inbound_text(make_conversation(kind="group"), "hello")
-    await drain(engine, 12345)
-    resolver = assert_member_trigger(
-        trigger_mock,
-        "assistant",
-        "hello",
-        SESSION_ID,
-        sender=MessageSender(id="50", display_name="50", role="member"),
-    )
-
+    # A grant after ingress does not upgrade the admitted Run.
     access.admin_user_ids.add("50")
-
     assert resolver("bash") == MEMBER_TOOL_DENIAL
     await engine.stop()
 
@@ -152,44 +116,43 @@ async def test_revoke_before_next_tool_call_limits_active_admin_run(
 
 
 @pytest.mark.asyncio
-async def test_group_role_is_derived_from_sender_id_not_display_name(tmp_path: Path) -> None:
+async def test_group_sender_role_follows_the_user_id_and_names_fall_back_to_it(
+    tmp_path: Path,
+) -> None:
     trigger_mock = AsyncMock(return_value=make_completed_run(output_text="ok"))
-    access = MemoryChannelAccessRegistry(["50"])
     engine, _sessions, _trigger, _transport = make_engine(
         tmp_path,
         trigger_run=trigger_mock,
         response_mode="all",
-        access_registry=access,
+        access_registry=MemoryChannelAccessRegistry(["50"]),
     )
 
-    await engine.handle_inbound_text(
-        make_conversation(kind="group", user_id=50, user_display_name="Same Name"),
-        "admin message",
-    )
-    await drain(engine, 12345)
-    await engine.handle_inbound_text(
-        make_conversation(kind="group", user_id=51, user_display_name="Same Name"),
-        "member message",
-    )
-    await drain(engine, 12345)
+    for user_id, display_name in ((50, "Same Name"), (51, "Same Name"), (52, None)):
+        await engine.handle_inbound_text(
+            make_conversation(kind="group", user_id=user_id, user_display_name=display_name),
+            "message",
+        )
+        await drain(engine, 12345)
 
-    assert trigger_mock.await_args_list[0].kwargs["sender"] == MessageSender(
-        id="50", display_name="Same Name", role="admin"
-    )
-    assert trigger_mock.await_args_list[1].kwargs["sender"] == MessageSender(
-        id="51", display_name="Same Name", role="member"
-    )
+    assert [call.kwargs["sender"] for call in trigger_mock.await_args_list] == [
+        MessageSender(id="50", display_name="Same Name", role="admin"),
+        MessageSender(id="51", display_name="Same Name", role="member"),
+        MessageSender(id="52", display_name="52", role="member"),
+    ]
     await engine.stop()
 
 
 @pytest.mark.asyncio
-async def test_direct_message_triggers_run_without_sender(tmp_path: Path) -> None:
+async def test_direct_message_triggers_without_sender_even_in_mention_mode(
+    tmp_path: Path,
+) -> None:
     trigger_mock = AsyncMock(return_value=make_completed_run(output_text="ok"))
-    engine, _sessions, _trigger, _transport = make_engine(tmp_path, trigger_run=trigger_mock)
+    engine, chat_sessions, _trigger, _transport = make_engine(
+        tmp_path, trigger_run=trigger_mock, observe_unaddressed=True
+    )
 
     await engine.handle_inbound_text(
-        make_conversation(kind="direct", user_display_name="Alice"),
-        "hello",
+        make_conversation(kind="direct", user_display_name="Alice"), "hello"
     )
     await drain(engine, 12345)
 
@@ -201,26 +164,7 @@ async def test_direct_message_triggers_run_without_sender(tmp_path: Path) -> Non
         reply_surface=CHANNEL_REPLY_SURFACE,
         run_kind=RunKind.CHANNEL,
     )
-    await engine.stop()
-
-
-@pytest.mark.asyncio
-async def test_group_sender_display_name_falls_back_to_user_id(tmp_path: Path) -> None:
-    trigger_mock = AsyncMock(return_value=make_completed_run(output_text="ok"))
-    engine, _sessions, _trigger, _transport = make_engine(
-        tmp_path, trigger_run=trigger_mock, response_mode="all"
-    )
-
-    await engine.handle_inbound_text(make_conversation(kind="group"), "hello")
-    await drain(engine, 12345)
-
-    assert_member_trigger(
-        trigger_mock,
-        "assistant",
-        "hello",
-        SESSION_ID,
-        sender=MessageSender(id="50", display_name="50"),
-    )
+    assert _observed_notes(chat_sessions) == []
     await engine.stop()
 
 
@@ -248,14 +192,12 @@ async def test_group_participants_live_in_channel_state_not_session_metadata(
         (participant["user_id"], participant["display_name"], participant["role"])
         for participant in group["participants"]
     ] == [("50", "Alice Renamed", "member"), ("51", "Bob", "member")]
-    metadata = chat_sessions.get_metadata(
-        SessionAddress(project_id=None, agent_id="assistant", session_id=SESSION_ID)
-    )
+    metadata = chat_sessions.get_metadata(_ADDRESS)
     assert not {"participants", "conversation_kind", "active_session_id"} & metadata.keys()
 
 
 @pytest.mark.asyncio
-async def test_routing_a_known_conversation_again_takes_no_writer_transaction(
+async def test_an_observed_message_on_a_known_conversation_writes_only_its_note(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     engine, chat_sessions, _trigger, _transport = make_engine(tmp_path, observe_unaddressed=True)
@@ -263,29 +205,27 @@ async def test_routing_a_known_conversation_again_takes_no_writer_transaction(
     original = database.write
     writes: list[object] = []
 
-    def counted(fn, **kwargs):
+    def counted(fn, **kwargs):  # type: ignore[no-untyped-def]
         writes.append(fn)
         return original(fn, **kwargs)
 
     monkeypatch.setattr(database, "write", counted)
-    conversation = make_conversation(kind="group", user_display_name="Alice")
 
-    engine.prepare_inbound_route(conversation)
-    # Creating the Session and its channel context is one write.
-    assert len(writes) == 1
-    engine.prepare_inbound_route(conversation)
-    assert len(writes) == 1
-    # Participants are Channel state, so a new sender leaves the Session alone.
-    engine.prepare_inbound_route(
-        make_conversation(kind="group", user_id=51, user_display_name="Bob")
+    # The first message creates the Session with its channel context in one write.
+    await engine.handle_inbound_text(
+        make_conversation(kind="group", user_display_name="Alice"), "hello everyone"
     )
-    assert len(writes) == 1
-
-    writes.clear()
-    await engine.handle_inbound_text(conversation, "hello everyone")
     await drain(engine, 12345)
-    # An observed message on a known conversation writes only its note.
-    assert len(writes) == 1
+    assert len(writes) == 2
+    for user_id, display_name in ((50, "Alice"), (51, "Bob")):
+        writes.clear()
+        await engine.handle_inbound_text(
+            make_conversation(kind="group", user_id=user_id, user_display_name=display_name),
+            "hello again",
+        )
+        await drain(engine, 12345)
+        # Participants are Channel state, so even a new sender writes only the note.
+        assert len(writes) == 1
     await engine.stop()
 
 
@@ -303,14 +243,12 @@ async def test_group_unaddressed_text_is_dropped_in_mention_mode(tmp_path: Path)
     command_dispatcher.execute.assert_not_awaited()
     assert transport.sent == []
     # Dropped messages must not create a Session either.
-    assert not chat_sessions.exists(
-        SessionAddress(project_id=None, agent_id="assistant", session_id=SESSION_ID)
-    )
+    assert not chat_sessions.exists(_ADDRESS)
     await engine.stop()
 
 
 @pytest.mark.asyncio
-async def test_group_unaddressed_text_is_observed_as_note(tmp_path: Path) -> None:
+async def test_group_unaddressed_text_is_observed_as_a_sanitized_note(tmp_path: Path) -> None:
     command_dispatcher = make_command_dispatcher()
     engine, chat_sessions, trigger_mock, transport = make_engine(
         tmp_path,
@@ -319,244 +257,97 @@ async def test_group_unaddressed_text_is_observed_as_note(tmp_path: Path) -> Non
     )
 
     await engine.handle_inbound_text(
-        make_conversation(
-            kind="group",
-            user_id="|50]\r",
-            user_display_name="[Alice]\n|",
-        ),
+        make_conversation(kind="group", user_id="|50]\r", user_display_name="[Alice]\n|"),
         "hello\nworld",
     )
     await drain(engine, 12345)
 
-    notes = [
-        message.content
-        for message in chat_sessions.get(
-            SessionAddress(project_id=None, agent_id="assistant", session_id=SESSION_ID)
-        ).load()
-        if message.role == "note"
-    ]
-    assert notes == ["[channel-message] [Alice|50|member]: hello\nworld"]
+    assert _observed_notes(chat_sessions) == ["[channel-message] [Alice|50|member]: hello\nworld"]
     trigger_mock.assert_not_awaited()
     command_dispatcher.execute.assert_not_awaited()
     assert transport.sent == []
-    await engine.stop()
-
-
-@pytest.mark.asyncio
-async def test_observed_group_message_updates_reply_target(tmp_path: Path) -> None:
-    engine, chat_sessions, _trigger, _transport = make_engine(
-        tmp_path,
-        observe_unaddressed=True,
-    )
-
-    await engine.handle_inbound_text(
-        make_conversation(kind="group", user_display_name="Alice"),
-        "hello everyone",
-    )
-    await drain(engine, 12345)
-
-    metadata = chat_sessions.get_metadata(
-        SessionAddress(project_id=None, agent_id="assistant", session_id=SESSION_ID)
-    )
+    metadata = chat_sessions.get_metadata(_ADDRESS)
     assert metadata["last_reply_target"] == {
         "channel_id": "tg-assistant",
         "platform_target": "12345",
     }
-    assert "participants" not in metadata
     await engine.stop()
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("mentioned_bot", "is_reply_to_bot"),
-    [(True, False), (False, True)],
+    ("mentioned_bot", "is_reply_to_bot", "text"),
+    [
+        (True, False, "hello bot"),
+        (False, True, "hello bot"),
+        (False, False, "Hey VBOT, status?"),
+    ],
+    ids=["mention", "reply-to-bot", "wake-word-any-case"],
 )
-async def test_group_addressed_text_triggers_in_mention_mode(
-    tmp_path: Path,
-    mentioned_bot: bool,
-    is_reply_to_bot: bool,
+async def test_addressed_group_text_triggers_a_run_in_mention_mode(
+    tmp_path: Path, mentioned_bot: bool, is_reply_to_bot: bool, text: str
 ) -> None:
     trigger_mock = AsyncMock(return_value=make_completed_run(output_text="ok"))
-    engine, chat_sessions, _trigger, _transport = make_engine(
+    engine, chat_sessions, _trigger, transport = make_engine(
         tmp_path,
         trigger_run=trigger_mock,
+        mention_patterns=[r"\bvbot\b"],
         observe_unaddressed=True,
+        admin_user_ids=["99"],
     )
 
     await engine.handle_inbound_text(
         make_conversation(
             kind="group", mentioned_bot=mentioned_bot, is_reply_to_bot=is_reply_to_bot
         ),
-        "hello bot",
+        text,
     )
     await drain(engine, 12345)
 
+    # A member's addressed message starts a normal Run, not an observation.
     trigger_mock.assert_awaited_once()
-    notes = chat_sessions.get(
-        SessionAddress(project_id=None, agent_id="assistant", session_id=SESSION_ID)
-    ).load()
-    assert not any(
-        message.role == "note"
-        and isinstance(message.content, str)
-        and message.content.startswith("[channel-message] ")
-        for message in notes
-    )
+    assert transport.sent_texts == ["ok"]
+    assert _observed_notes(chat_sessions) == []
     await engine.stop()
 
 
 @pytest.mark.asyncio
-async def test_group_wake_word_pattern_matches_case_insensitively(tmp_path: Path) -> None:
-    trigger_mock = AsyncMock(return_value=make_completed_run(output_text="ok"))
-    engine, chat_sessions, _trigger, _transport = make_engine(
-        tmp_path,
-        trigger_run=trigger_mock,
-        mention_patterns=[r"\bvbot\b"],
-        observe_unaddressed=True,
-    )
-
-    await engine.handle_inbound_text(make_conversation(kind="group"), "Hey VBOT, status?")
-    await drain(engine, 12345)
-
-    trigger_mock.assert_awaited_once()
-    notes = chat_sessions.get(
-        SessionAddress(project_id=None, agent_id="assistant", session_id=SESSION_ID)
-    ).load()
-    assert not any(
-        message.role == "note"
-        and isinstance(message.content, str)
-        and message.content.startswith("[channel-message] ")
-        for message in notes
-    )
-    await engine.stop()
-
-
-@pytest.mark.asyncio
-async def test_direct_message_always_triggers_in_mention_mode(tmp_path: Path) -> None:
-    trigger_mock = AsyncMock(return_value=make_completed_run(output_text="ok"))
-    engine, chat_sessions, _trigger, _transport = make_engine(
-        tmp_path,
-        trigger_run=trigger_mock,
-        observe_unaddressed=True,
-    )
-
-    await engine.handle_inbound_text(make_conversation(kind="direct"), "hello")
-    await drain(engine, 12345)
-
-    trigger_mock.assert_awaited_once()
-    note_contents = [
-        message.content
-        for message in chat_sessions.get(
-            SessionAddress(project_id=None, agent_id="assistant", session_id=SESSION_ID)
-        ).load()
-        if message.role == "note"
-    ]
-    assert not any(
-        isinstance(content, str) and content.startswith("[channel-message] ")
-        for content in note_contents
-    )
-    await engine.stop()
-
-
-@pytest.mark.asyncio
-async def test_group_command_from_admin_is_dispatched(tmp_path: Path) -> None:
-    command_dispatcher = make_command_dispatcher(result=command_outcome("stop", "Run cancelled."))
-    engine, _sessions, trigger_mock, transport = make_engine(
-        tmp_path, command_dispatcher=command_dispatcher, admin_user_ids=["50"]
-    )
-
-    await engine.handle_inbound_text(make_conversation(kind="group"), "/stop")
-    await drain(engine, 12345)
-
-    command_dispatcher.execute.assert_awaited_once()
-    trigger_mock.assert_not_awaited()
-    assert transport.sent_texts == ["Run cancelled."]
-    await engine.stop()
-
-
-@pytest.mark.asyncio
-async def test_group_command_from_member_is_denied_without_dispatch(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("kind", "admin_user_ids", "response_mode", "dispatched"),
+    [
+        ("group", ["50"], "mention", True),
+        ("group", ["99"], "mention", False),
+        ("group", ["99"], "all", False),
+        ("direct", ["99"], "mention", True),
+    ],
+    ids=["group-admin", "group-member", "group-member-all-mode", "direct-message"],
+)
+async def test_group_commands_require_an_admin_sender(
+    tmp_path: Path,
+    kind: str,
+    admin_user_ids: list[str],
+    response_mode: str,
+    dispatched: bool,
+) -> None:
     command_dispatcher = make_command_dispatcher(result=command_outcome("stop", "Run cancelled."))
     engine, chat_sessions, trigger_mock, transport = make_engine(
         tmp_path,
         command_dispatcher=command_dispatcher,
-        admin_user_ids=["99"],
+        admin_user_ids=admin_user_ids,
+        response_mode=response_mode,
         observe_unaddressed=True,
     )
 
-    await engine.handle_inbound_text(make_conversation(kind="group", user_id=50), "/stop")
+    await engine.handle_inbound_text(make_conversation(kind=kind, user_id=50), "/stop")
     await drain(engine, 12345)
 
-    command_dispatcher.execute.assert_not_awaited()
     trigger_mock.assert_not_awaited()
-    assert transport.sent == []
-    assert not chat_sessions.exists(
-        SessionAddress(project_id=None, agent_id="assistant", session_id=SESSION_ID)
-    )
-    await engine.stop()
-
-
-@pytest.mark.asyncio
-async def test_group_mention_from_member_starts_a_normal_run(tmp_path: Path) -> None:
-    trigger_mock = AsyncMock(return_value=make_completed_run(output_text="research complete"))
-    engine, _sessions, _trigger, transport = make_engine(
-        tmp_path,
-        trigger_run=trigger_mock,
-        admin_user_ids=["99"],
-    )
-
-    await engine.handle_inbound_text(
-        make_conversation(kind="group", user_id=50, mentioned_bot=True),
-        "Please research the topic.",
-    )
-    await drain(engine, 12345)
-
-    trigger_mock.assert_awaited_once()
-    assert transport.sent_texts == ["research complete"]
-    await engine.stop()
-
-
-@pytest.mark.asyncio
-async def test_group_command_denied_when_sender_is_not_admin(
-    tmp_path: Path,
-) -> None:
-    command_dispatcher = make_command_dispatcher(result=command_outcome("stop", "Run cancelled."))
-    engine, _sessions, _trigger, transport = make_engine(
-        tmp_path, command_dispatcher=command_dispatcher
-    )
-
-    await engine.handle_inbound_text(make_conversation(kind="group"), "/stop")
-    await drain(engine, 12345)
-
-    command_dispatcher.execute.assert_not_awaited()
-    assert transport.sent == []
-    await engine.stop()
-
-
-@pytest.mark.asyncio
-async def test_group_command_auth_applies_in_all_response_mode(tmp_path: Path) -> None:
-    command_dispatcher = make_command_dispatcher(result=command_outcome("stop", "Run cancelled."))
-    engine, _sessions, _trigger, transport = make_engine(
-        tmp_path, command_dispatcher=command_dispatcher, response_mode="all"
-    )
-
-    await engine.handle_inbound_text(make_conversation(kind="group"), "/stop")
-    await drain(engine, 12345)
-
-    command_dispatcher.execute.assert_not_awaited()
-    assert transport.sent == []
-    await engine.stop()
-
-
-@pytest.mark.asyncio
-async def test_dm_command_is_authorized_without_group_admin(tmp_path: Path) -> None:
-    command_dispatcher = make_command_dispatcher(result=command_outcome("stop", "Run cancelled."))
-    engine, _sessions, _trigger, transport = make_engine(
-        tmp_path, command_dispatcher=command_dispatcher
-    )
-
-    await engine.handle_inbound_text(make_conversation(kind="direct"), "/stop")
-    await drain(engine, 12345)
-
-    command_dispatcher.execute.assert_awaited_once()
-    assert transport.sent_texts == ["Run cancelled."]
+    if dispatched:
+        command_dispatcher.execute.assert_awaited_once()
+        assert transport.sent_texts == ["Run cancelled."]
+    else:
+        # A denied Command is neither dispatched nor observed, and creates no Session.
+        command_dispatcher.execute.assert_not_awaited()
+        assert transport.sent == []
+        assert not chat_sessions.exists(_ADDRESS)
     await engine.stop()

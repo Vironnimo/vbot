@@ -15,7 +15,7 @@ import httpx
 import pytest
 
 from core.channels.config import ChannelConfig, ChannelError
-from tests.core.channels.channels_helpers import make_service
+from tests.core.channels.channels_test_support import make_service
 from tests.core.channels.engine_test_support import channel_state
 from tests.core.channels.test_network_channels import event, make_adapter
 

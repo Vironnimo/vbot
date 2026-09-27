@@ -1,4 +1,4 @@
-"""Telegram migrations sharing configuration ownership with lifecycle changes."""
+"""Channels: Telegram chat-id migrations sharing config ownership with lifecycle changes."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from core.channels import (
     ChannelError,
     ChannelStorage,
 )
-from tests.core.channels.channels_helpers import (
+from tests.core.channels.channels_test_support import (
     BlockingAdapter,
     make_config,
     make_service,
@@ -26,21 +26,31 @@ pytestmark = pytest.mark.usefixtures("current_format_data_directory")
 
 
 @pytest.mark.asyncio
-async def test_a_drained_migration_keeps_access_when_config_no_longer_allows_the_old_chat(
-    tmp_path: Path,
+@pytest.mark.parametrize(
+    ("allowed", "migrated"),
+    [(["-500", "777"], ["-100500", "777"]), (["77"], ["77"])],
+    ids=["allowed-chat", "chat-removed-from-allowlist"],
+)
+async def test_chat_id_migration_swaps_the_allowlist_entry_and_moves_group_access(
+    tmp_path: Path, allowed: list[int | str], migrated: list[str]
 ) -> None:
     storage = ChannelStorage(tmp_path)
-    config = make_config(enabled=False, allowed_chat_ids=["77"])
+    config = make_config(enabled=False, allowed_chat_ids=allowed)
     storage.save(config)
     service = make_service(tmp_path)
     try:
-        # The old adapter admitted migration before a concurrent edit removed
-        # the chat from its allowlist; its stored group access still migrates.
+        # An adapter that admitted the migration before a concurrent edit removed
+        # the chat from its allowlist still migrates the group's stored access.
         await service._state.grant_group_admin(config.id, "-500", "owner")
         await asyncio.to_thread(service.record_chat_id_migration, config.id, "-500", "-100500")
 
-        assert storage.get(config.id).allowed_chat_ids == ["77"]
+        assert storage.get(config.id).allowed_chat_ids == migrated
         assert service._state.role_for(config.id, "-500", "owner") == "member"
+        assert service._state.role_for(config.id, "-100500", "owner") == "admin"
+
+        # Idempotent: once the old id is gone, a repeat changes nothing.
+        await asyncio.to_thread(service.record_chat_id_migration, config.id, "-500", "-100999")
+        assert storage.get(config.id).allowed_chat_ids == migrated
         assert service._state.role_for(config.id, "-100500", "owner") == "admin"
     finally:
         service.close()

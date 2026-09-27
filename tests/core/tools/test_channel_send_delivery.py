@@ -18,10 +18,10 @@ from core.channels.adapter import ConversationFacts, RouteFacts
 from core.channels.telegram import TelegramChannelAdapter
 from core.extensions import InteractionButton
 from core.sessions import ChatSessionManager, SessionAddress
-from tests.core.channels.channels_helpers import (
+from tests.core.channels.channels_test_support import (
     make_config as make_real_channel_config,
 )
-from tests.core.channels.channels_helpers import (
+from tests.core.channels.channels_test_support import (
     make_service as make_channel_service,
 )
 from tests.core.tools.channel_send_test_support import (

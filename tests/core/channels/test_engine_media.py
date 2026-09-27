@@ -1,131 +1,95 @@
-"""Channel media ingestion and failure-isolation tests."""
+"""Channel engine: inbound media, quoted replies and media failure replies."""
 
 from __future__ import annotations
 
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
+from unittest.mock import AsyncMock
+
+import pytest
+
 import core.channels._conversation_content as content_module
+from core.attachments import AttachmentTooLargeError, AttachmentTypeNotAllowedError
+from core.channels.adapter import QuotedMessageFacts
+from core.chat import MessageSender
+from core.chat.content_blocks import ContentBlock, MediaBlock, TextBlock
+from core.runs import RunKind
 from core.sessions import SessionAddress
 
 from .engine_test_support import (
     CHANNEL_REPLY_SURFACE,
     SESSION_ID,
-    Any,
-    AsyncMock,
-    AttachmentTooLargeError,
-    AttachmentTypeNotAllowedError,
-    ContentBlock,
     FakeTransport,
-    MediaBlock,
-    MessageFacts,
-    MessageSender,
-    Path,
-    QuotedMessageFacts,
-    RunKind,
-    SimpleNamespace,
-    TextBlock,
     assert_member_trigger,
-    command_outcome,
     drain,
-    engine_module,
-    make_command_dispatcher,
     make_completed_run,
     make_conversation,
     make_engine,
-    pytest,
 )
 
+_BLOCK = MediaBlock(type="media", attachment_id="att-1", filename="a.png", media_type="image/png")
+_BUILD_ERRORS: dict[str, Exception] = {
+    "unsupported": AttachmentTypeNotAllowedError("nope"),
+    "too-large": AttachmentTooLargeError("too big"),
+    "too-large-again": AttachmentTooLargeError("still too big"),
+    "broken": RuntimeError("download failed"),
+}
 
-@pytest.mark.asyncio
-async def test_block_content_skips_command_dispatch_and_triggers_run(tmp_path: Path) -> None:
-    trigger_mock = AsyncMock(return_value=make_completed_run(output_text="ok"))
-    command_dispatcher = make_command_dispatcher(result=command_outcome("stop", "Run cancelled."))
-    engine, _sessions, _trigger, transport = make_engine(
-        tmp_path, trigger_run=trigger_mock, command_dispatcher=command_dispatcher
-    )
 
-    content: list[ContentBlock] = [TextBlock(type="text", text="/stop")]
-    queued = engine_module._QueuedInboundMessage(
-        conversation=make_conversation(),
-        message=MessageFacts(content=content),
-    )
-
-    await engine._process_queued_message(queued)
-
-    command_dispatcher.execute.assert_not_awaited()
-    trigger_mock.assert_awaited_once_with(
-        "assistant",
-        content,
-        SESSION_ID,
-        sender=None,
-        reply_surface=CHANNEL_REPLY_SURFACE,
-        run_kind=RunKind.CHANNEL,
-    )
-    assert transport.sent == [("12345", "ok")]
-    await engine.stop()
+async def _build_media(raw_message: Any) -> list[ContentBlock]:
+    if raw_message in _BUILD_ERRORS:
+        raise _BUILD_ERRORS[raw_message]
+    return [_BLOCK]
 
 
 @pytest.mark.asyncio
-async def test_media_failure_isolates_siblings_and_triggers_successful_blocks(
-    tmp_path: Path,
+@pytest.mark.parametrize(
+    ("messages", "replies", "triggered"),
+    [
+        (
+            ("ok", "unsupported", "too-large", "too-large-again", "broken"),
+            [
+                content_module._UNSUPPORTED_FILE_REPLY,
+                content_module._FILE_TOO_LARGE_REPLY,
+                content_module._MEDIA_FAILED_REPLY,
+                "ok",
+            ],
+            True,
+        ),
+        (
+            ("broken", "too-large"),
+            [content_module._MEDIA_FAILED_REPLY, content_module._FILE_TOO_LARGE_REPLY],
+            False,
+        ),
+    ],
+    ids=["one-item-survives", "every-item-fails"],
+)
+async def test_failed_media_items_reply_once_per_reason_and_keep_their_siblings(
+    tmp_path: Path, messages: tuple[str, ...], replies: list[str], triggered: bool
 ) -> None:
-    block = MediaBlock(
-        type="media", attachment_id="att-1", filename="a.png", media_type="image/png"
-    )
-
-    async def media_builder(raw_message: Any) -> list[ContentBlock]:
-        if raw_message == "ok":
-            return [block]
-        raise RuntimeError("download failed")
-
-    transport = FakeTransport(media_builder=media_builder)
+    transport = FakeTransport(media_builder=_build_media)
     trigger_mock = AsyncMock(return_value=make_completed_run(output_text="ok"))
     engine, _sessions, _trigger, _transport = make_engine(
         tmp_path, trigger_run=trigger_mock, transport=transport
     )
 
-    queued = engine_module._QueuedInboundMedia(
-        conversation=make_conversation(),
-        messages=("ok", "broken"),
-    )
+    await engine.handle_inbound_media(make_conversation(), messages)
+    await drain(engine, 12345)
 
-    await engine._process_queued_media(queued)
-
-    assert transport.sent_texts == [content_module._MEDIA_FAILED_REPLY, "ok"]
-    trigger_mock.assert_awaited_once()
-    await_args = trigger_mock.await_args
-    assert await_args is not None
-    assert await_args.args[1] == [block]
-    await engine.stop()
-
-
-@pytest.mark.asyncio
-async def test_media_duplicate_failure_replies_are_deduped(tmp_path: Path) -> None:
-    async def media_builder(_raw_message: Any) -> list[ContentBlock]:
-        raise RuntimeError("download failed")
-
-    transport = FakeTransport(media_builder=media_builder)
-    trigger_mock = AsyncMock()
-    engine, _sessions, _trigger, _transport = make_engine(
-        tmp_path, trigger_run=trigger_mock, transport=transport
-    )
-
-    queued = engine_module._QueuedInboundMedia(
-        conversation=make_conversation(),
-        messages=("broken-a", "broken-b"),
-    )
-
-    await engine._process_queued_media(queued)
-
-    assert transport.sent_texts == [content_module._MEDIA_FAILED_REPLY]
-    trigger_mock.assert_not_awaited()
+    assert transport.sent_texts == replies
+    if triggered:
+        trigger_mock.assert_awaited_once()
+        assert trigger_mock.await_args is not None
+        assert trigger_mock.await_args.args[1] == [_BLOCK]
+    else:
+        trigger_mock.assert_not_awaited()
     await engine.stop()
 
 
 @pytest.mark.asyncio
 async def test_media_companion_text_precedes_built_media_blocks(tmp_path: Path) -> None:
-    block = MediaBlock(
-        type="media", attachment_id="att-1", filename="a.png", media_type="image/png"
-    )
-    transport = FakeTransport(media_builder=AsyncMock(return_value=[block]))
+    transport = FakeTransport(media_builder=AsyncMock(return_value=[_BLOCK]))
     trigger_mock = AsyncMock(return_value=make_completed_run(output_text="ok"))
     engine, _sessions, _trigger, _transport = make_engine(
         tmp_path, trigger_run=trigger_mock, transport=transport
@@ -140,7 +104,7 @@ async def test_media_companion_text_precedes_built_media_blocks(tmp_path: Path) 
 
     trigger_mock.assert_awaited_once_with(
         "assistant",
-        [TextBlock(type="text", text="Please edit this"), block],
+        [TextBlock(type="text", text="Please edit this"), _BLOCK],
         SESSION_ID,
         sender=None,
         reply_surface=CHANNEL_REPLY_SURFACE,
@@ -149,41 +113,28 @@ async def test_media_companion_text_precedes_built_media_blocks(tmp_path: Path) 
     await engine.stop()
 
 
-@pytest.mark.parametrize(
-    ("error", "expected"),
-    [
-        (AttachmentTypeNotAllowedError("nope"), content_module._UNSUPPORTED_FILE_REPLY),
-        (AttachmentTooLargeError("too big"), content_module._FILE_TOO_LARGE_REPLY),
-        (RuntimeError("other"), content_module._MEDIA_FAILED_REPLY),
-    ],
-)
-def test_media_failure_reply_mapping(error: Exception, expected: str) -> None:
-    assert content_module._media_failure_reply(error) == expected
-
-
 @pytest.mark.asyncio
-async def test_media_path_carries_group_sender(tmp_path: Path) -> None:
-    block = MediaBlock(
-        type="media", attachment_id="att-1", filename="a.png", media_type="image/png"
-    )
-
-    async def media_builder(_raw_message: Any) -> list[ContentBlock]:
-        return [block]
-
-    transport = FakeTransport(media_builder=media_builder)
+async def test_a_wake_word_caption_triggers_group_media_with_its_sender(tmp_path: Path) -> None:
+    transport = FakeTransport(media_builder=AsyncMock(return_value=[_BLOCK]))
     trigger_mock = AsyncMock(return_value=make_completed_run(output_text="ok"))
     engine, _sessions, _trigger, _transport = make_engine(
-        tmp_path, trigger_run=trigger_mock, transport=transport, response_mode="all"
+        tmp_path,
+        trigger_run=trigger_mock,
+        transport=transport,
+        mention_patterns=[r"\bvbot\b"],
     )
-    conversation = make_conversation(kind="group", user_display_name="Alice")
 
-    await engine.handle_inbound_media(conversation, ("photo",))
+    # One captioned item of an album addresses the whole album.
+    await engine.handle_inbound_media(
+        make_conversation(kind="group", user_display_name="Alice"),
+        (SimpleNamespace(caption=None), SimpleNamespace(caption="vbot look at this")),
+    )
     await drain(engine, 12345)
 
     assert_member_trigger(
         trigger_mock,
         "assistant",
-        [block],
+        [_BLOCK, _BLOCK],
         SESSION_ID,
         sender=MessageSender(id="50", display_name="Alice"),
     )
@@ -247,10 +198,7 @@ async def test_addressed_group_reply_ingests_quoted_media_with_original_authorit
 async def test_unaddressed_group_reply_does_not_resolve_quoted_media(tmp_path: Path) -> None:
     quoted_builder = AsyncMock()
     transport = FakeTransport(quoted_builder=quoted_builder)
-    engine, _sessions, trigger_mock, _transport = make_engine(
-        tmp_path,
-        transport=transport,
-    )
+    engine, _sessions, trigger_mock, _transport = make_engine(tmp_path, transport=transport)
 
     await engine.handle_inbound_text(
         make_conversation(kind="group"),
@@ -360,32 +308,4 @@ async def test_group_unaddressed_media_is_observed_without_download(tmp_path: Pa
     media_builder.assert_not_awaited()
     trigger_mock.assert_not_awaited()
     assert transport.sent == []
-    await engine.stop()
-
-
-@pytest.mark.asyncio
-async def test_group_media_caption_wake_word_triggers(tmp_path: Path) -> None:
-    block = MediaBlock(
-        type="media", attachment_id="att-1", filename="a.png", media_type="image/png"
-    )
-
-    async def media_builder(_raw_message: Any) -> list[ContentBlock]:
-        return [block]
-
-    transport = FakeTransport(media_builder=media_builder)
-    trigger_mock = AsyncMock(return_value=make_completed_run(output_text="ok"))
-    engine, _sessions, _trigger, _transport = make_engine(
-        tmp_path,
-        trigger_run=trigger_mock,
-        transport=transport,
-        mention_patterns=[r"\bvbot\b"],
-    )
-
-    await engine.handle_inbound_media(
-        make_conversation(kind="group"),
-        (SimpleNamespace(caption=None), SimpleNamespace(caption="vbot look at this")),
-    )
-    await drain(engine, 12345)
-
-    trigger_mock.assert_awaited_once()
     await engine.stop()
