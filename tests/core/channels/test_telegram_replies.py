@@ -107,7 +107,6 @@ async def test_a_reply_quotes_the_group_message_on_its_first_chunk_only(
 async def test_a_failed_chunk_is_retried_without_resending_delivered_chunks(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, exhausted: bool
 ) -> None:
-    monkeypatch.setattr("core.utils.retry._sleep", AsyncMock())
     adapter, _sessions, _trigger, bot = make_adapter(
         tmp_path, monkeypatch, allowed_chat_ids=[12345]
     )

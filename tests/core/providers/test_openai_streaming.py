@@ -147,7 +147,7 @@ async def test_codex_stream_connect_retry_rebuilds_account_headers() -> None:
         _completed({"id": "resp_1"}),
     )
 
-    with respx.mock, patch("core.utils.retry._sleep", new_callable=AsyncMock):
+    with respx.mock:
         route = respx.post(OPENAI_SUBSCRIPTION_URL).mock(
             side_effect=[httpx.Response(503, text="Service Unavailable"), sse_response(body)]
         )

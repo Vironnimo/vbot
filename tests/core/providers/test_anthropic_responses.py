@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, patch
-
 import httpx
 import pytest
 import respx
@@ -346,7 +344,7 @@ def _anthropic_error(status: int, error_type: str, message: str) -> httpx.Respon
 async def test_send_classifies_error_responses_and_retries_only_transient_ones(
     response, expected_type, retryable, attempts
 ) -> None:
-    with respx.mock, patch("core.utils.retry._sleep", new_callable=AsyncMock):
+    with respx.mock:
         route = respx.post(ANTHROPIC_URL).mock(return_value=response)
         with pytest.raises(ProviderError) as exc_info:
             await make_adapter().send(SAMPLE_MESSAGES, model_id=MODEL_ID)
@@ -375,7 +373,7 @@ async def test_send_error_detail_carries_the_provider_error_message() -> None:
 )
 @pytest.mark.asyncio
 async def test_send_wraps_transport_failures_after_retries(failure, expected_type) -> None:
-    with respx.mock, patch("core.utils.retry._sleep", new_callable=AsyncMock):
+    with respx.mock:
         respx.post(ANTHROPIC_URL).mock(side_effect=failure)
         with pytest.raises(expected_type):
             await make_adapter().send(SAMPLE_MESSAGES, model_id=MODEL_ID)
@@ -393,7 +391,7 @@ async def test_send_wraps_transport_failures_after_retries(failure, expected_typ
 )
 @pytest.mark.asyncio
 async def test_send_retries_a_transient_failure_and_returns_the_response(first_attempt) -> None:
-    with respx.mock, patch("core.utils.retry._sleep", new_callable=AsyncMock):
+    with respx.mock:
         route = respx.post(ANTHROPIC_URL).mock(
             side_effect=[first_attempt, httpx.Response(200, json=SUCCESS_RESPONSE)]
         )

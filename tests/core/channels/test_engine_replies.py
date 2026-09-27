@@ -156,7 +156,6 @@ async def test_reply_delivery_retries_only_transient_failures_and_logs_lost_repl
     attempts: int,
     delivered: bool,
 ) -> None:
-    monkeypatch.setattr("core.utils.retry._sleep", AsyncMock())
     transport = FakeTransport()
     deliver = transport.send_text
     errors = iter(send_errors)

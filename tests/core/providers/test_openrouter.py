@@ -472,10 +472,7 @@ async def test_routing_options_normalize_global_and_model_catalogs() -> None:
 @respx.mock
 @pytest.mark.asyncio
 async def test_routing_options_retry_http_500(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def _no_sleep(_delay: float) -> None:
-        return None
 
-    monkeypatch.setattr("core.utils.retry._sleep", _no_sleep)
     route = respx.get("https://openrouter.ai/api/v1/providers")
     route.side_effect = [
         httpx.Response(500, text="Internal Server Error"),

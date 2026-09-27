@@ -6,7 +6,6 @@ import asyncio
 import json
 import threading
 from typing import Any
-from unittest.mock import AsyncMock, patch
 
 import httpx
 import httpx._content
@@ -104,7 +103,6 @@ async def test_retries_resend_bytes_encoded_off_loop_once_per_payload_revision(
         with (
             monkeypatch.context() as patched,
             respx.mock as router,
-            patch("core.utils.retry._sleep", new_callable=AsyncMock),
         ):
             patched.setattr(httpx._content, "json_dumps", record_encoding)
             route = router.post(OPENAI_URL).mock(side_effect=replies)

@@ -9,7 +9,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -325,10 +325,9 @@ async def test_establishment_retries_with_headers_rebuilt_for_every_attempt(
 
     client = _mock_client(handler)
     try:
-        with patch("core.utils.retry._sleep", new_callable=AsyncMock):
-            result = await establish(
-                client, build_headers=build_headers, handle_error_status=handle_error_status
-            )
+        result = await establish(
+            client, build_headers=build_headers, handle_error_status=handle_error_status
+        )
     finally:
         await client.aclose()
 
@@ -670,7 +669,6 @@ async def test_each_retried_error_stream_persists_its_own_trace_with_the_error_b
 
     debug_adapter.set_debug_context(_debug_context(streaming=True))
     with (
-        patch("core.utils.retry._sleep", new_callable=AsyncMock),
         pytest.raises(ProviderRateLimitError),
     ):
         await _drain(debug_adapter)

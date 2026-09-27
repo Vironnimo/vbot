@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 from typing import Any
-from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
@@ -142,7 +141,6 @@ async def test_responses_http_uses_router_error_policy(
     adapter = openrouter_adapter()
 
     with (
-        patch("core.utils.retry._sleep", new_callable=AsyncMock),
         pytest.raises(ProviderError) as caught,
     ):
         if streaming:

@@ -10,7 +10,6 @@ import wave
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
-from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -218,7 +217,6 @@ async def test_retry_and_rejected_result_keep_separate_usage_records(
     recorder: UsageRecorder,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("core.utils.retry._sleep", AsyncMock())
     target = parse_task_model_target_id("openrouter/test/model::api-key")
     observer = TaskUsage(recorder, "text_embedding", target)
     client = ProviderTaskClient.from_runtime(_runtime(), target, usage_observer=observer)

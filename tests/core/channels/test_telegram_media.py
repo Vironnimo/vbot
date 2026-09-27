@@ -199,7 +199,6 @@ async def test_a_failed_download_is_retried_or_explained_to_the_sender(
     get_file_count: int,
     reply: str,
 ) -> None:
-    monkeypatch.setattr("core.utils.retry._sleep", AsyncMock())
     trigger = AsyncMock(return_value=make_completed_run(output_text="ok"))
     adapter, _sessions, _trigger, bot = make_adapter(
         tmp_path,

@@ -41,10 +41,6 @@ from .discovery_test_support import (
 )
 
 
-async def _no_sleep(_delay: float) -> None:
-    return None
-
-
 def _capabilities(**changes: Any) -> Capabilities:
     facts: dict[str, Any] = {
         "vision": False,
@@ -283,7 +279,6 @@ async def test_failed_refresh_raises_and_writes_no_projection(
     expected_calls: int,
     raw_dump_kept: bool,
 ) -> None:
-    monkeypatch.setattr("core.utils.retry._sleep", _no_sleep)
     monkeypatch.setitem(discovery_module._DISCOVERY_ADAPTER_MAP, "stub", _StubAdapter)
     route = respx.get(SIMPLE_MODELS_URL).mock(return_value=response)
     resources_dir = tmp_path / "resources"
@@ -312,7 +307,6 @@ async def test_failed_refresh_raises_and_writes_no_projection(
 async def test_transient_failure_is_retried_with_fresh_auth_headers(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, transient_failure: httpx.Response | Exception
 ) -> None:
-    monkeypatch.setattr("core.utils.retry._sleep", _no_sleep)
     tokens = iter(("first-test-token", "second-test-token"))
 
     async def getter() -> str:

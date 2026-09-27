@@ -108,7 +108,6 @@ async def test_responses_wire_leaves_upstream_json_retries_to_the_retry_owner(
     """Go's own Responses route adds no retry loop beyond the caller-owned budget."""
     with (
         respx.mock,
-        patch("core.utils.retry._sleep", new_callable=AsyncMock),
         caller_owns_retries() if caller_owned else nullcontext(),
     ):
         route = respx.post(RESPONSES_URL).mock(
@@ -220,7 +219,7 @@ async def test_subscription_exhaustion_429_is_never_retried(
     """Account exhaustion shares HTTP 429 with throttling but waiting cannot fix it."""
     model_id, url = WIRES[wire]
 
-    with respx.mock, patch("core.utils.retry._sleep", new_callable=AsyncMock):
+    with respx.mock:
         route = respx.post(url).mock(
             return_value=httpx.Response(429, json={"type": "error", "error": error})
         )
@@ -236,7 +235,7 @@ async def test_subscription_exhaustion_429_is_never_retried(
 async def test_transient_rate_limit_retries_with_the_session_header() -> None:
     adapter = go_adapter()
 
-    with respx.mock, patch("core.utils.retry._sleep", new_callable=AsyncMock):
+    with respx.mock:
         route = respx.post(CHAT_URL).mock(
             side_effect=[
                 httpx.Response(

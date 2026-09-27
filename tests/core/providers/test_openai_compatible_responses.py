@@ -6,7 +6,6 @@ import json
 import logging
 from dataclasses import replace
 from typing import Any
-from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
@@ -426,7 +425,7 @@ def test_normalize_response_usage_keeps_only_usable_counters(usage, expected) ->
 async def test_send_classifies_http_errors_and_keeps_the_provider_detail(
     status, body, error_type, retryable, attempts
 ) -> None:
-    with respx.mock, patch("core.utils.retry._sleep", new_callable=AsyncMock):
+    with respx.mock:
         route = respx.post(OPENAI_URL).mock(return_value=httpx.Response(status, text=body))
         with pytest.raises(ProviderError) as exc_info:
             await make_adapter().send(SAMPLE_MESSAGES, model_id=MODEL_ID)
@@ -457,7 +456,7 @@ async def test_send_malformed_json_success_body_is_fatal_with_the_decode_error_c
 )
 @pytest.mark.asyncio
 async def test_send_transport_failures_are_retried_then_wrapped(failure, error_type) -> None:
-    with respx.mock, patch("core.utils.retry._sleep", new_callable=AsyncMock):
+    with respx.mock:
         route = respx.post(OPENAI_URL).mock(side_effect=failure)
         with pytest.raises(error_type):
             await make_adapter().send(SAMPLE_MESSAGES, model_id=MODEL_ID)
@@ -474,7 +473,7 @@ async def test_send_transport_failures_are_retried_then_wrapped(failure, error_t
 )
 @pytest.mark.asyncio
 async def test_send_returns_the_parsed_body_after_a_transient_failure(first_failure) -> None:
-    with respx.mock, patch("core.utils.retry._sleep", new_callable=AsyncMock):
+    with respx.mock:
         route = respx.post(OPENAI_URL).mock(
             side_effect=[first_failure, httpx.Response(200, json=SUCCESS_RESPONSE)]
         )
