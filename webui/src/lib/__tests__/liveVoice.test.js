@@ -1,146 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createLiveVoice, createLiveVoiceState } from '../liveVoice.js';
 
-class Events {
-  constructor() {
-    this.listeners = new Map();
-  }
-  addEventListener(name, callback) {
-    this.listeners.set(name, [...(this.listeners.get(name) || []), callback]);
-  }
-  removeEventListener(name, callback) {
-    this.listeners.set(
-      name,
-      (this.listeners.get(name) || []).filter((fn) => fn !== callback),
-    );
-  }
-  emit(name, value = {}) {
-    for (const callback of this.listeners.get(name) || []) callback(value);
-  }
-}
-
-const flush = async () => {
-  for (let index = 0; index < 20; index += 1) await Promise.resolve();
-};
-
-function deferred() {
-  let resolve;
-  let reject;
-  const promise = new Promise((done, fail) => {
-    resolve = done;
-    reject = fail;
-  });
-  return { promise, resolve, reject };
-}
-
-function liveFixture(overrides = {}) {
-  const track = Object.assign(new Events(), {
-    enabled: true,
-    stop: vi.fn(),
-    getCapabilities: vi.fn(() => ({ echoCancellation: [true, false] })),
-    applyConstraints: vi.fn().mockResolvedValue(undefined),
-  });
-  const microphone = {
-    getTracks: () => [track],
-    getAudioTracks: () => [track],
-  };
-  const channel = Object.assign(new Events(), { close: vi.fn() });
-  const peer = Object.assign(new Events(), {
-    connectionState: 'new',
-    iceGatheringState: 'complete',
-    localDescription: { type: 'offer', sdp: 'offer-sdp' },
-    addTrack: vi.fn(),
-    createDataChannel: vi.fn(() => channel),
-    createOffer: vi.fn().mockResolvedValue({ type: 'offer', sdp: 'offer' }),
-    setLocalDescription: vi.fn().mockResolvedValue(undefined),
-    setRemoteDescription: vi.fn().mockResolvedValue(undefined),
-    close: vi.fn(),
-  });
-  const sockets = [];
-  const api = {
-    getLiveVoiceStatus: vi.fn().mockResolvedValue({
-      configured: true,
-      usable: true,
-      target: 'openai/gpt-live-1::api-key',
-    }),
-    startLiveCall: vi.fn().mockResolvedValue({
-      call_id: 'call-1',
-      media: { type: 'webrtc', sdp: 'answer-sdp' },
-    }),
-    stopLiveCall: vi.fn().mockResolvedValue({ stopping: true }),
-    sendLiveUiResult: vi.fn().mockResolvedValue({ accepted: true }),
-    openLiveCallSocket: vi.fn((callId, handlers) => {
-      const socket = { callId, handlers, close: vi.fn(), sendAudio: vi.fn() };
-      sockets.push(socket);
-      return socket;
-    }),
-  };
-  const relay = {
-    play: vi.fn(),
-    clear: vi.fn(),
-    close: vi.fn(),
-    onFrame: null,
-  };
-  const createAudio = vi.fn(async ({ onFrame }) => {
-    relay.onFrame = onFrame;
-    return relay;
-  });
-  const mediaDevices = { getUserMedia: vi.fn().mockResolvedValue(microphone) };
-  const audio = {
-    srcObject: null,
-    play: vi.fn().mockResolvedValue(undefined),
-    pause: vi.fn(),
-  };
-  const uiActions = {
-    context: vi.fn().mockResolvedValue({ view: 'chat', agents: [] }),
-    open: vi.fn().mockResolvedValue(true),
-    terminalView: vi.fn().mockResolvedValue({ visible_order: ['t1'] }),
-  };
-  const onNotice = vi.fn();
-  const onActive = vi.fn();
-  const state = createLiveVoiceState();
-  const controller = createLiveVoice({
-    state,
-    api,
-    mediaDevices,
-    createPeer: () => peer,
-    audio,
-    createAudio,
-    uiActions,
-    onNotice,
-    onActive,
-    ...overrides,
-  });
-  const socket = () => sockets.at(-1);
-  const frame = (value) => socket().handlers.onEvent(value);
-  const goLive = async () => {
-    await controller.start();
-    frame({ type: 'state', phase: 'live' });
-  };
-  const request = (requestId, action, args) =>
-    frame({ type: 'ui_request', request_id: requestId, action, args });
-  return {
-    api,
-    audio,
-    channel,
-    controller,
-    createAudio,
-    relay,
-    frame,
-    goLive,
-    mediaDevices,
-    microphone,
-    onActive,
-    onNotice,
-    peer,
-    request,
-    socket,
-    sockets,
-    state,
-    track,
-    uiActions,
-  };
-}
+import {
+  deferred,
+  flush,
+  liveFixture,
+  RELAY_RESULT,
+  relayFixture,
+} from './liveVoice.support.js';
 
 afterEach(() => vi.useRealTimers());
 
@@ -222,23 +88,26 @@ describe('Live voice startup', () => {
   });
 
   it.each([
-    [{ name: 'NotAllowedError' }, 'microphone_denied'],
-    [{ name: 'NotFoundError' }, 'microphone_unavailable'],
-  ])('maps a microphone failure %j to %s', async (microphoneError, code) => {
-    const f = liveFixture();
-    f.mediaDevices.getUserMedia.mockRejectedValue(microphoneError);
+    [
+      'a denied permission',
+      { getUserMedia: vi.fn().mockRejectedValue({ name: 'NotAllowedError' }) },
+      'microphone_denied',
+    ],
+    [
+      'a missing device',
+      { getUserMedia: vi.fn().mockRejectedValue({ name: 'NotFoundError' }) },
+      'microphone_unavailable',
+    ],
+    // Insecure pages lack the microphone API.
+    ['no microphone API', {}, 'microphone_unavailable'],
+  ])('reports %s as %s', async (_label, mediaDevices, code) => {
+    const f = liveFixture({ mediaDevices });
     await f.controller.start();
-    expect(f.onNotice).toHaveBeenCalledWith({ code, severity: 'error' });
-    expect(f.api.startLiveCall).not.toHaveBeenCalled();
-  });
-
-  it('needs a microphone API, which insecure pages lack', async () => {
-    const f = liveFixture({ mediaDevices: {} });
-    await f.controller.start();
-    expect(f.onNotice).toHaveBeenCalledWith({
-      code: 'microphone_unavailable',
+    expect(f.onNotice).toHaveBeenCalledExactlyOnceWith({
+      code,
       severity: 'error',
     });
+    expect(f.api.startLiveCall).not.toHaveBeenCalled();
   });
 
   it('offers once ICE gathering completes', async () => {
@@ -354,26 +223,6 @@ describe('Live voice generation guards', () => {
 });
 
 describe('Live voice relay media', () => {
-  const RELAY_RESULT = {
-    call_id: 'call-1',
-    media: {
-      type: 'relay',
-      audio: { encoding: 'pcm16', sample_rate: 24000, channels: 1 },
-    },
-  };
-
-  function relayFixture(overrides = {}) {
-    const f = liveFixture(overrides);
-    f.api.getLiveVoiceStatus.mockResolvedValue({
-      configured: true,
-      usable: true,
-      target: 'xai/grok-voice-think-fast-2.0::subscription',
-      media: 'relay',
-    });
-    f.api.startLiveCall.mockResolvedValue(RELAY_RESULT);
-    return f;
-  }
-
   it('relays audio over the call socket instead of a peer connection', async () => {
     const f = relayFixture();
     await f.controller.start();
@@ -439,11 +288,18 @@ describe('Live voice relay media', () => {
     expect(f.onNotice).not.toHaveBeenCalled();
   });
 
-  it.each(['audio_unsupported', 'playback_blocked'])(
+  it.each([
+    [
+      'playback_blocked',
+      Object.assign(new Error('blocked'), { code: 'playback_blocked' }),
+    ],
+    // A failure without a code means the browser lacks relay audio.
+    ['audio_unsupported', new Error('no audio worklet')],
+  ])(
     'fails with %s before creating a call when relay audio cannot start',
-    async (code) => {
+    async (code, error) => {
       const f = relayFixture();
-      f.createAudio.mockRejectedValue(Object.assign(new Error(code), { code }));
+      f.createAudio.mockRejectedValue(error);
 
       await f.controller.start();
 
@@ -741,189 +597,6 @@ describe('Live call frames', () => {
   });
 });
 
-describe('Live voice UI requests', () => {
-  it('returns the App context and answers each request once', async () => {
-    const f = liveFixture();
-    await f.goLive();
-    f.request('r1', 'context');
-    f.request('r1', 'context');
-    await flush();
-    expect(f.uiActions.context).toHaveBeenCalledOnce();
-    expect(f.api.sendLiveUiResult).toHaveBeenCalledExactlyOnceWith(
-      'call-1',
-      'r1',
-      { result: { view: 'chat', agents: [] } },
-    );
-  });
-
-  it('opens an exact Chat Session and reports whether navigation applied', async () => {
-    const f = liveFixture();
-    await f.goLive();
-    f.request('r1', 'open', {
-      view: 'chat',
-      agent_id: 'joel@vbot',
-      session_id: 's1',
-    });
-    await flush();
-    expect(f.uiActions.open).toHaveBeenCalledWith(
-      { view: 'chat', agent_id: 'joel@vbot', session_id: 's1' },
-      { isCurrent: expect.any(Function) },
-    );
-    expect(f.api.sendLiveUiResult).toHaveBeenLastCalledWith('call-1', 'r1', {
-      result: { applied: true },
-    });
-    f.uiActions.open.mockResolvedValue(false);
-    f.request('r2', 'open', { view: 'terminals', agent_id: null });
-    await flush();
-    expect(f.uiActions.open).toHaveBeenLastCalledWith(
-      { view: 'terminals' },
-      expect.any(Object),
-    );
-    expect(f.api.sendLiveUiResult).toHaveBeenLastCalledWith('call-1', 'r2', {
-      result: { applied: false },
-    });
-  });
-
-  it('opens an Agent page or a Project page by its id', async () => {
-    const f = liveFixture();
-    await f.goLive();
-    f.request('r1', 'open', { view: 'agents', agent_id: 'joel' });
-    f.request('r2', 'open', {
-      view: 'projects',
-      project_id: 'vbot',
-      agent_id: null,
-    });
-    await flush();
-    expect(f.uiActions.open.mock.calls.map(([target]) => target)).toEqual([
-      { view: 'agents', agent_id: 'joel' },
-      { view: 'projects', project_id: 'vbot' },
-    ]);
-  });
-
-  it.each([
-    ['open', { view: 'settings' }, 'invalid_view'],
-    [
-      'open',
-      { view: 'agents', agent_id: 'joel', session_id: 's1' },
-      'invalid_arguments',
-    ],
-    ['open', { view: 'agents', project_id: 'vbot' }, 'invalid_arguments'],
-    ['open', { view: 'projects', project_id: '' }, 'invalid_arguments'],
-    ['open', { view: 'chat', project_id: 'vbot' }, 'invalid_arguments'],
-    [
-      'open',
-      { view: 'terminals', agent_id: 'joel', session_id: 's1' },
-      'invalid_arguments',
-    ],
-    ['open', { view: 'chat', agent_id: 'joel' }, 'invalid_arguments'],
-    ['terminal_view', { op: 'close', terminal_id: 't1' }, 'invalid_arguments'],
-    ['terminal_view', { op: 'show' }, 'invalid_arguments'],
-    ['terminal_view', { op: 'show_group' }, 'invalid_arguments'],
-    ['context', ['unexpected'], 'invalid_arguments'],
-    ['send_message', {}, 'unsupported_action'],
-  ])(
-    'answers an invalid %s request %j with %s without running it',
-    async (action, args, code) => {
-      const f = liveFixture();
-      await f.goLive();
-      f.request('bad', action, args);
-      await flush();
-      expect(f.uiActions.context).not.toHaveBeenCalled();
-      expect(f.uiActions.open).not.toHaveBeenCalled();
-      expect(f.uiActions.terminalView).not.toHaveBeenCalled();
-      expect(f.api.sendLiveUiResult).toHaveBeenCalledExactlyOnceWith(
-        'call-1',
-        'bad',
-        { error: code },
-      );
-      expect(f.onNotice).not.toHaveBeenCalled();
-    },
-  );
-
-  it('runs Terminal layout requests with only their target fields', async () => {
-    const f = liveFixture();
-    await f.goLive();
-    f.request('r1', 'terminal_view', {
-      op: 'maximize',
-      terminal_id: 't1',
-      group_id: 'ignored',
-    });
-    f.request('r2', 'terminal_view', { op: 'show_group', group_id: 'g1' });
-    f.request('r3', 'terminal_view', { op: 'refresh' });
-    await flush();
-    expect(
-      f.uiActions.terminalView.mock.calls.map(([target]) => target),
-    ).toEqual([
-      { op: 'maximize', terminal_id: 't1' },
-      { op: 'show_group', group_id: 'g1' },
-      { op: 'refresh' },
-    ]);
-    expect(f.api.sendLiveUiResult).toHaveBeenCalledWith('call-1', 'r1', {
-      result: { visible_order: ['t1'] },
-    });
-  });
-
-  it.each([
-    [new Error('terminal_not_found'), 'terminal_not_found'],
-    [
-      Object.assign(new Error('Navigation was cancelled'), {
-        code: 'navigation_not_applied',
-      }),
-      'navigation_not_applied',
-    ],
-    [new Error('Cannot read properties of undefined'), 'operation_failed'],
-  ])(
-    'answers a failed UI action with its error code: %s',
-    async (error, code) => {
-      const f = liveFixture();
-      await f.goLive();
-      f.uiActions.terminalView.mockRejectedValue(error);
-      f.request('r1', 'terminal_view', { op: 'show', terminal_id: 't9' });
-      await flush();
-      expect(f.api.sendLiveUiResult).toHaveBeenCalledExactlyOnceWith(
-        'call-1',
-        'r1',
-        { error: code },
-      );
-      expect(f.onNotice).toHaveBeenCalledExactlyOnceWith({
-        code: 'ui_action_failed',
-        severity: 'warn',
-      });
-    },
-  );
-
-  it('drops the result of a request whose call has stopped', async () => {
-    const f = liveFixture();
-    await f.goLive();
-    const pending = deferred();
-    f.uiActions.context.mockReturnValue(pending.promise);
-    f.request('r1', 'context');
-    await flush();
-    const [guard] = f.uiActions.context.mock.calls[0];
-    expect(guard.isCurrent()).toBe(true);
-    f.controller.stop();
-    expect(guard.isCurrent()).toBe(false);
-    f.frame({ type: 'closed', reason: 'stopped', usage: null });
-    pending.resolve({ view: 'chat' });
-    await flush();
-    expect(f.api.sendLiveUiResult).not.toHaveBeenCalled();
-  });
-
-  it('declines requests that arrive while the call is closing', async () => {
-    const f = liveFixture();
-    await f.goLive();
-    f.controller.stop();
-    f.request('r1', 'context');
-    await flush();
-    expect(f.uiActions.context).not.toHaveBeenCalled();
-    expect(f.api.sendLiveUiResult).toHaveBeenCalledExactlyOnceWith(
-      'call-1',
-      'r1',
-      { error: 'call_closing' },
-    );
-  });
-});
-
 describe('Live voice media and connection failures', () => {
   it('ends the call when the microphone disappears', async () => {
     const f = liveFixture();
@@ -1009,35 +682,24 @@ describe('Live voice media and connection failures', () => {
     },
   );
 
-  it('treats a socket closed as ended like a call that ended', async () => {
-    vi.useFakeTimers();
-    const f = liveFixture();
-    await f.goLive();
-    f.socket().handlers.onClose({}, 'ended');
-    await vi.advanceTimersByTimeAsync(1000);
-    expect(f.api.openLiveCallSocket).toHaveBeenCalledOnce();
-    expect(f.api.stopLiveCall).not.toHaveBeenCalled();
-    expect(f.onNotice).toHaveBeenCalledExactlyOnceWith({
-      code: 'ended',
-      severity: 'info',
-    });
-    expect(f.state.phase).toBe('off');
-  });
-
-  it.each(['unknown_call', 'replaced'])(
+  it.each([
+    // A socket closed as ended is a call that ended.
+    ['ended', { code: 'ended', severity: 'info' }, false],
+    ['unknown_call', { code: 'connection_lost', severity: 'error' }, true],
+    ['replaced', { code: 'connection_lost', severity: 'error' }, true],
+  ])(
     'ends the call without reattaching when the socket closes as %s',
-    async (outcome) => {
+    async (outcome, notice, stopsCall) => {
       vi.useFakeTimers();
       const f = liveFixture();
       await f.goLive();
       f.socket().handlers.onClose({}, outcome);
       await vi.advanceTimersByTimeAsync(1000);
       expect(f.api.openLiveCallSocket).toHaveBeenCalledOnce();
-      expect(f.onNotice).toHaveBeenCalledExactlyOnceWith({
-        code: 'connection_lost',
-        severity: 'error',
-      });
-      expect(f.api.stopLiveCall).toHaveBeenCalledWith('call-1');
+      expect(f.onNotice).toHaveBeenCalledExactlyOnceWith(notice);
+      expect(f.api.stopLiveCall.mock.calls).toEqual(
+        stopsCall ? [['call-1']] : [],
+      );
       expect(f.state.phase).toBe('off');
     },
   );
@@ -1077,254 +739,6 @@ describe('Live voice media and connection failures', () => {
     expect(f.track.enabled).toBe(false);
     f.controller.mute();
     expect(f.state.muted).toBe(false);
-    expect(f.track.enabled).toBe(true);
-  });
-});
-
-describe('Live voice microphone access check', () => {
-  function accessFixture(check) {
-    const events = [];
-    const checkMicrophoneAccess = vi.fn(async () => {
-      events.push('check');
-      return check();
-    });
-    const f = liveFixture({ checkMicrophoneAccess });
-    f.mediaDevices.getUserMedia.mockImplementation(async () => {
-      events.push('microphone');
-      return f.microphone;
-    });
-    return { ...f, checkMicrophoneAccess, events };
-  }
-
-  it('checks access after the Live voice binding and before the microphone', async () => {
-    const f = accessFixture(() => null);
-    await f.goLive();
-    expect(f.events).toEqual(['check', 'microphone']);
-    expect(f.api.getLiveVoiceStatus.mock.invocationCallOrder[0]).toBeLessThan(
-      f.checkMicrophoneAccess.mock.invocationCallOrder[0],
-    );
-
-    const unbound = accessFixture(() => null);
-    unbound.api.getLiveVoiceStatus.mockResolvedValue({
-      configured: false,
-      usable: false,
-      target: null,
-    });
-    await unbound.controller.start();
-    expect(unbound.checkMicrophoneAccess).not.toHaveBeenCalled();
-  });
-
-  it('ends the start with the code the check reports, without the microphone', async () => {
-    const f = accessFixture(() => 'desktop_restart_required');
-    await f.controller.start();
-    expect(f.mediaDevices.getUserMedia).not.toHaveBeenCalled();
-    expect(f.onNotice).toHaveBeenCalledExactlyOnceWith({
-      code: 'desktop_restart_required',
-      severity: 'error',
-    });
-    expect(f.state.phase).toBe('off');
-  });
-
-  it('never blocks the call on a failing check', async () => {
-    const f = accessFixture(() => {
-      throw new Error('bridge busy');
-    });
-    await f.goLive();
-    expect(f.state.phase).toBe('live');
-    expect(f.onNotice).not.toHaveBeenCalled();
-  });
-
-  it('opens no microphone when Stop comes during the check', async () => {
-    const answer = deferred();
-    const f = accessFixture(() => answer.promise);
-    const started = f.controller.start();
-    await flush();
-    f.controller.stop();
-    answer.resolve(null);
-    await started;
-    expect(f.mediaDevices.getUserMedia).not.toHaveBeenCalled();
-    expect(f.onNotice).not.toHaveBeenCalled();
-  });
-});
-
-describe('Live voice wake phrases', () => {
-  it('names the current wake phrases with each start request', async () => {
-    let phrases = ['Okay Nabu'];
-    const f = liveFixture({ wakePhrases: () => phrases });
-    await f.goLive();
-    expect(f.api.startLiveCall).toHaveBeenCalledExactlyOnceWith({
-      media: 'webrtc',
-      sdp: 'offer-sdp',
-      wakePhrases: ['Okay Nabu'],
-    });
-    f.controller.stop();
-    f.frame({ type: 'closed', reason: 'stopped', usage: null });
-
-    phrases = ['Hey Jarvis'];
-    f.api.getLiveVoiceStatus.mockResolvedValue({
-      configured: true,
-      usable: true,
-      media: 'relay',
-    });
-    f.api.startLiveCall.mockResolvedValue({
-      call_id: 'call-2',
-      media: {
-        type: 'relay',
-        audio: { encoding: 'pcm16', sample_rate: 24000, channels: 1 },
-      },
-    });
-    await f.controller.start();
-    expect(f.api.startLiveCall).toHaveBeenLastCalledWith({
-      media: 'relay',
-      wakePhrases: ['Hey Jarvis'],
-    });
-  });
-
-  it('starts without wake phrases when they cannot be read', async () => {
-    const f = liveFixture({
-      wakePhrases: () => {
-        throw new Error('no status');
-      },
-    });
-    await f.goLive();
-    expect(f.api.startLiveCall).toHaveBeenCalledExactlyOnceWith({
-      media: 'webrtc',
-      sdp: 'offer-sdp',
-      wakePhrases: [],
-    });
-    expect(f.state.phase).toBe('live');
-  });
-});
-
-describe('holding a Live voice call', () => {
-  const RELAY_STATUS = { configured: true, usable: true, media: 'relay' };
-  const RELAY_RESULT = {
-    call_id: 'call-1',
-    media: {
-      type: 'relay',
-      audio: { encoding: 'pcm16', sample_rate: 24000, channels: 1 },
-    },
-  };
-
-  async function relayCall() {
-    const f = liveFixture();
-    f.api.getLiveVoiceStatus.mockResolvedValue(RELAY_STATUS);
-    f.api.startLiveCall.mockResolvedValue(RELAY_RESULT);
-    await f.goLive();
-    return f;
-  }
-
-  async function webrtcCall() {
-    const f = liveFixture();
-    await f.goLive();
-    f.peer.emit('track', { track: {}, streams: [{ id: 'remote' }] });
-    await flush();
-    return f;
-  }
-
-  it('takes no hold without a running call or a reason', async () => {
-    const f = liveFixture();
-    expect(f.controller.hold('wakeword')).toBe(false);
-    expect(f.controller.held()).toBe(false);
-
-    await f.goLive();
-    expect(f.controller.hold('')).toBe(false);
-    expect(f.controller.hold(null)).toBe(false);
-    expect(f.state.held).toBe(false);
-
-    f.controller.stop();
-    expect(f.controller.hold('wakeword')).toBe(false);
-  });
-
-  it('silences the microphone independently of the mute', async () => {
-    const f = await webrtcCall();
-
-    expect(f.controller.hold('wakeword')).toBe(true);
-    expect(f.state.held).toBe(true);
-    expect(f.controller.held('wakeword')).toBe(true);
-    expect(f.track.enabled).toBe(false);
-
-    // Unmuting during a hold keeps the microphone off.
-    f.controller.mute(true);
-    f.controller.mute(false);
-    expect(f.state.muted).toBe(false);
-    expect(f.track.enabled).toBe(false);
-
-    // Muting during a hold keeps the mute after the release.
-    f.controller.mute(true);
-    f.controller.release('wakeword');
-    expect(f.state.held).toBe(false);
-    expect(f.track.enabled).toBe(false);
-    f.controller.mute(false);
-    expect(f.track.enabled).toBe(true);
-  });
-
-  it('counts holds per reason and releases only after the last one', async () => {
-    const f = await webrtcCall();
-
-    f.controller.hold('wakeword');
-    f.controller.hold('wakeword');
-    f.controller.hold('calibration');
-    f.controller.release('wakeword');
-    f.controller.release('calibration');
-    expect(f.state.held).toBe(true);
-    expect(f.controller.held('calibration')).toBe(false);
-    expect(f.track.enabled).toBe(false);
-
-    f.controller.release('wakeword');
-    expect(f.state.held).toBe(false);
-    expect(f.controller.held()).toBe(false);
-    expect(f.track.enabled).toBe(true);
-
-    // A release without a hold changes nothing.
-    f.controller.release('wakeword');
-    expect(f.track.enabled).toBe(true);
-  });
-
-  it('mutes the WebRTC audio element while held', async () => {
-    const f = await webrtcCall();
-    expect(f.audio.muted).toBeUndefined();
-
-    f.controller.hold('wakeword');
-    expect(f.audio.muted).toBe(true);
-    // Audio that starts playing during a hold stays silent.
-    f.peer.emit('track', { track: {}, streams: [{ id: 'remote-2' }] });
-    expect(f.audio.muted).toBe(true);
-
-    f.controller.release('wakeword');
-    expect(f.audio.muted).toBe(false);
-  });
-
-  it('drops queued and arriving relay audio while held', async () => {
-    const f = await relayCall();
-
-    f.controller.hold('wakeword');
-    expect(f.relay.clear).toHaveBeenCalledOnce();
-    f.socket().handlers.onAudio(new ArrayBuffer(8));
-    expect(f.relay.play).not.toHaveBeenCalled();
-    // The disabled microphone track makes the relay send silence.
-    expect(f.track.enabled).toBe(false);
-
-    f.controller.release('wakeword');
-    const speech = new ArrayBuffer(8);
-    f.socket().handlers.onAudio(speech);
-    expect(f.relay.play).toHaveBeenCalledExactlyOnceWith(speech);
-    expect(f.track.enabled).toBe(true);
-  });
-
-  it('ends every hold with the call and restores the audio element', async () => {
-    const f = await webrtcCall();
-    f.controller.hold('wakeword');
-    f.controller.hold('calibration');
-
-    f.controller.stop();
-    expect(f.audio.muted).toBe(false);
-    f.frame({ type: 'closed', reason: 'stopped', usage: null });
-    expect(f.state.held).toBe(false);
-    expect(f.controller.held()).toBe(false);
-
-    await f.goLive();
-    expect(f.state.held).toBe(false);
     expect(f.track.enabled).toBe(true);
   });
 });

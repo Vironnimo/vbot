@@ -3,7 +3,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, tick, unmount } from 'svelte';
 
-import { init } from '../../lib/i18n.js';
+import { init, t } from '../../lib/i18n.js';
+import { errorMessage } from '../voice/voiceLabels.js';
 import { reactiveProps } from './reactiveProps.support.svelte.js';
 
 vi.mock('svelte', async () => {
@@ -209,6 +210,7 @@ describe('WakewordVoiceSettings', () => {
       await unmount(mountedComponent);
       mountedComponent = null;
     }
+    owner = null;
     document.body.innerHTML = '';
   });
 
@@ -228,31 +230,31 @@ describe('WakewordVoiceSettings', () => {
     await settle();
   }
 
-  afterEach(() => {
-    owner = null;
-  });
-
   describe('availability', () => {
-    it('explains that Voice is set up in the Desktop app', async () => {
-      desktopBridge.isDesktopAccessor.mockReturnValue(false);
-      await mountPanel({ desktopVoice: null, wakewordAvailable: false });
+    it.each([
+      [
+        'outside the Desktop app',
+        'settings.voice.desktopOnly',
+        () => {
+          desktopBridge.isDesktopAccessor.mockReturnValue(false);
+          return { desktopVoice: null, wakewordAvailable: false };
+        },
+      ],
+      [
+        'in a Desktop app with an older Voice bridge',
+        'settings.voice.desktopUpdateRequired',
+        () => {
+          owner = createVoiceOwner(null, { available: false });
+          return {};
+        },
+      ],
+    ])('explains why Voice cannot be set up %s', async (_label, key, setup) => {
+      await mountPanel(setup());
 
-      expect(document.body.textContent).toContain(
-        'Wakeword listening is configured in the vBot Desktop app.',
-      );
-      expect(switchByLabel('Enable wakeword listening')).toBeNull();
-      expect(desktopBridge.listWakewordModels).not.toHaveBeenCalled();
-    });
-
-    it('asks to update a Desktop app with an older Voice bridge', async () => {
-      owner = createVoiceOwner(null, { available: false });
-      await mountPanel();
-
-      expect(document.body.textContent).toContain(
-        'Update the vBot Desktop app to use Voice with this server.',
-      );
+      expect(document.body.textContent).toContain(t(key));
       expect(switchByLabel('Enable wakeword listening')).toBeNull();
       expect(document.querySelector('.voice-model-card')).toBeNull();
+      expect(desktopBridge.listWakewordModels).not.toHaveBeenCalled();
     });
 
     it('waits for the first status and retries loading the lists', async () => {
@@ -264,7 +266,7 @@ describe('WakewordVoiceSettings', () => {
       await mountPanel();
 
       expect(document.body.textContent).toContain(
-        'Desktop Voice status unavailable',
+        t('settings.voice.statusUnavailableTitle'),
       );
       expect(switchByLabel('Enable wakeword listening').disabled).toBe(true);
 
@@ -274,7 +276,7 @@ describe('WakewordVoiceSettings', () => {
 
       expect(desktopBridge.listWakewordModels).toHaveBeenCalledTimes(2);
       expect(document.body.textContent).not.toContain(
-        'Desktop Voice status unavailable',
+        t('settings.voice.statusUnavailableTitle'),
       );
       expect(
         switchByLabel('Enable wakeword listening').getAttribute('aria-checked'),
@@ -315,7 +317,7 @@ describe('WakewordVoiceSettings', () => {
         '.voice-attention-banner.banner--error[role="alert"]',
       );
       expect(banner.textContent).toContain(
-        'Configure a Speech-to-text Model under Settings → Voice',
+        errorMessage('speech_to_text_unconfigured'),
       );
     });
 
@@ -341,7 +343,7 @@ describe('WakewordVoiceSettings', () => {
       expect(warning.getAttribute('role')).toBe('status');
       expect(document.querySelector('.banner--error')).toBeNull();
 
-      buttonByText('Retry listening').click();
+      buttonByText(retryLabel()).click();
       await settle();
 
       expect(desktopBridge.retryVoice).toHaveBeenCalledOnce();
@@ -357,10 +359,8 @@ describe('WakewordVoiceSettings', () => {
       });
 
       const banner = document.querySelector('.banner--error[role="alert"]');
-      expect(banner.textContent).toContain(
-        'The Voice pipeline stopped unexpectedly.',
-      );
-      expect(buttonByText('Retry listening')).not.toBeUndefined();
+      expect(banner.textContent).toContain(errorMessage('pipeline_failed'));
+      expect(buttonByText(retryLabel())).not.toBeUndefined();
     });
 
     it('explains a Desktop without the Voice components', async () => {
@@ -373,9 +373,9 @@ describe('WakewordVoiceSettings', () => {
       });
 
       expect(document.body.textContent).toContain(
-        'The Desktop Voice components are unavailable.',
+        errorMessage('voice_stack_unavailable'),
       );
-      expect(buttonByText('Retry listening')).toBeUndefined();
+      expect(buttonByText(retryLabel())).toBeUndefined();
       expect(switchByLabel('Enable wakeword listening').disabled).toBe(true);
     });
   });
@@ -384,7 +384,9 @@ describe('WakewordVoiceSettings', () => {
     it('bounds the active phrases by the Desktop limit', async () => {
       await mountPanel();
 
-      expect(document.body.textContent).toContain('2 of 2 phrases active');
+      expect(document.body.textContent).toContain(
+        t('settings.voice.phraseLimit', '', { count: 2, max: 2 }),
+      );
       expect(switchByLabel('Listen for Hey Jarvis').disabled).toBe(true);
 
       switchByLabel('Listen for Hey Nabu').click();
@@ -418,7 +420,9 @@ describe('WakewordVoiceSettings', () => {
       });
 
       expect(switchByLabel('Listen for Hey Jarvis').disabled).toBe(true);
-      expect(document.body.textContent).not.toContain('phrases active');
+      expect(document.body.textContent).not.toContain(
+        t('settings.voice.phraseLimit', '', { count: 2, max: 2 }),
+      );
       expect(slider(NABU).disabled).toBe(true);
     });
 
@@ -435,7 +439,7 @@ describe('WakewordVoiceSettings', () => {
       });
       expect(owner.adopt).toHaveBeenCalled();
       expect(document.querySelector('.voice-save-state').textContent).toContain(
-        'Saved',
+        t('common.saved'),
       );
     });
 
@@ -443,14 +447,17 @@ describe('WakewordVoiceSettings', () => {
       await mountPanel();
 
       expect(buttonByLabel('Agent for Okay Nabu').textContent).toContain(
-        'Default Agent',
+        t('settings.voice.agentDefault'),
       );
       await choose('Agent for Okay Nabu', 'Writer');
       expect(desktopBridge.updateVoiceConfig).toHaveBeenLastCalledWith({
         phrase_actions: { [NABU]: { type: 'command', agent_id: 'writer' } },
       });
 
-      await choose('Session for Okay Nabu', 'New Session each time');
+      await choose(
+        'Session for Okay Nabu',
+        t('settings.voice.sessionBehaviorNew'),
+      );
       expect(desktopBridge.updateVoiceConfig).toHaveBeenLastCalledWith({
         phrase_actions: {
           [NABU]: {
@@ -461,14 +468,14 @@ describe('WakewordVoiceSettings', () => {
         },
       });
 
-      await choose('Agent for Okay Nabu', 'Default Agent');
-      await choose('Session for Okay Nabu', 'Default Session behavior');
+      await choose('Agent for Okay Nabu', t('settings.voice.agentDefault'));
+      await choose('Session for Okay Nabu', t('settings.voice.sessionDefault'));
       expect(desktopBridge.updateVoiceConfig).toHaveBeenLastCalledWith({
         phrase_actions: { [NABU]: null },
       });
     });
 
-    it('lets an active phrase whose model is gone be deactivated', async () => {
+    it('lets an active phrase whose model is gone be deactivated unless it is the last one', async () => {
       const GONE = 'custom/gone';
       await mountPanel({
         status: voiceStatus({
@@ -487,10 +494,10 @@ describe('WakewordVoiceSettings', () => {
         GONE,
       );
       expect(card.querySelector('.badge--warn').textContent).toContain(
-        'Not installed',
+        t('settings.voice.phraseUnavailable'),
       );
       expect(card.textContent).toContain(
-        'The selected wakeword model is no longer available.',
+        errorMessage('wakeword_model_unavailable'),
       );
       expect(document.querySelectorAll('.voice-model-card')).toHaveLength(4);
 
@@ -501,16 +508,10 @@ describe('WakewordVoiceSettings', () => {
         active_model_ids: [NABU],
       });
       expect(phraseCard(GONE)).toBeNull();
-    });
 
-    it('keeps the only active phrase even when its model is gone', async () => {
-      await mountPanel({
-        status: voiceStatus({ phrases: [phrase('custom/gone')] }),
-      });
-
-      expect(buttonByLabel('Stop listening for custom/gone').disabled).toBe(
-        true,
-      );
+      owner.status = voiceStatus({ sequence: 10, phrases: [phrase(GONE)] });
+      flushSync();
+      expect(buttonByLabel(`Stop listening for ${GONE}`).disabled).toBe(true);
     });
 
     it('marks a phrase Agent that is not on this server', async () => {
@@ -531,10 +532,10 @@ describe('WakewordVoiceSettings', () => {
         'retired',
       );
       expect(card.querySelector('.badge--warn').textContent).toContain(
-        'Not ready',
+        t('settings.voice.phraseNotReady'),
       );
       expect(card.textContent).toContain(
-        'The chosen Agent no longer exists on this server.',
+        errorMessage('target_agent_unavailable'),
       );
     });
 
@@ -542,20 +543,26 @@ describe('WakewordVoiceSettings', () => {
       await mountPanel();
 
       expect(buttonByLabel('When Hey Nabu is heard').textContent).toContain(
-        'Send a command',
+        t('settings.voice.actionCommand'),
       );
-      await choose('When Hey Nabu is heard', 'Start Live voice');
+      await choose(
+        'When Hey Nabu is heard',
+        t('settings.voice.actionLiveStart'),
+      );
       expect(desktopBridge.updateVoiceConfig).toHaveBeenLastCalledWith({
         phrase_actions: { [HEY_NABU]: { type: 'live_voice', mode: 'start' } },
       });
       expect(buttonByLabel('Agent for Hey Nabu')).toBeNull();
 
-      await choose('When Hey Nabu is heard', 'Start or end Live voice');
+      await choose(
+        'When Hey Nabu is heard',
+        t('settings.voice.actionLiveToggle'),
+      );
       expect(desktopBridge.updateVoiceConfig).toHaveBeenLastCalledWith({
         phrase_actions: { [HEY_NABU]: { type: 'live_voice', mode: 'toggle' } },
       });
 
-      await choose('When Hey Nabu is heard', 'Send a command');
+      await choose('When Hey Nabu is heard', t('settings.voice.actionCommand'));
       expect(desktopBridge.updateVoiceConfig).toHaveBeenLastCalledWith({
         phrase_actions: { [HEY_NABU]: null },
       });
@@ -580,13 +587,19 @@ describe('WakewordVoiceSettings', () => {
       });
 
       expect(phraseCard(NABU).textContent).toContain(
-        '“Okay Nabu” can also be heard as “Hey Nabu”, which does something else.',
+        t('settings.voice.overlapWarning', '', {
+          name: 'Okay Nabu',
+          others: '“Hey Nabu”',
+        }),
       );
       expect(phraseCard(HEY_NABU).textContent).toContain(
-        '“Hey Nabu” can also be heard as “Okay Nabu”',
+        t('settings.voice.overlapWarning', '', {
+          name: 'Hey Nabu',
+          others: '“Okay Nabu”',
+        }),
       );
 
-      await choose('When Hey Nabu is heard', 'Send a command');
+      await choose('When Hey Nabu is heard', t('settings.voice.actionCommand'));
       expect(
         document.querySelector('.voice-model-card__notice--warn'),
       ).toBeNull();
@@ -603,12 +616,15 @@ describe('WakewordVoiceSettings', () => {
         default_agent_id: 'writer',
       });
 
-      await choose('Default Session behavior', 'New Session each time');
+      await choose(
+        'Default Session behavior',
+        t('settings.voice.sessionBehaviorNew'),
+      );
       expect(desktopBridge.updateVoiceConfig).toHaveBeenLastCalledWith({
         default_session_behavior: 'new',
       });
 
-      await choose('Default Agent', 'None');
+      await choose('Default Agent', t('settings.voice.noDefaultAgent'));
       expect(desktopBridge.updateVoiceConfig).toHaveBeenLastCalledWith({
         default_agent_id: null,
       });
@@ -633,30 +649,23 @@ describe('WakewordVoiceSettings', () => {
     });
 
     it.each([
-      ['starting', 'Starting', 'Echo cancellation is still loading'],
-      [
-        'active',
-        'Active',
-        'Speaker output is removed from the microphone signal',
-      ],
-      [
-        'no_reference',
-        'No speaker signal',
-        'cannot capture the speaker output',
-      ],
-      ['unavailable', 'Unavailable', 'Echo cancellation is not installed'],
-    ])(
-      'explains the echo cancellation state %s',
-      async (state, chip, detail) => {
-        await mountPanel({
-          status: voiceStatus({ echo_cancellation: { enabled: true, state } }),
-        });
+      ['starting', 'Starting'],
+      ['active', 'Active'],
+      ['no_reference', 'NoReference'],
+      ['unavailable', 'Unavailable'],
+    ])('explains the echo cancellation state %s', async (state, key) => {
+      await mountPanel({
+        status: voiceStatus({ echo_cancellation: { enabled: true, state } }),
+      });
 
-        const control = document.querySelector('.voice-echo-control');
-        expect(control.querySelector('.chip').textContent).toContain(chip);
-        expect(control.closest('.s-row').textContent).toContain(detail);
-      },
-    );
+      const control = document.querySelector('.voice-echo-control');
+      expect(control.querySelector('.chip').textContent).toContain(
+        t(`settings.voice.echo${key}`),
+      );
+      expect(control.closest('.s-row').textContent).toContain(
+        t(`settings.voice.echo${key}Detail`),
+      );
+    });
 
     it('turns echo cancellation off', async () => {
       await mountPanel();
@@ -670,10 +679,10 @@ describe('WakewordVoiceSettings', () => {
       const row = document
         .querySelector('.voice-echo-control')
         .closest('.s-row');
-      expect(row.querySelector('.chip').textContent).toContain('Off');
-      expect(row.textContent).toContain(
-        'Speaker output can trigger wake phrases',
+      expect(row.querySelector('.chip').textContent).toContain(
+        t('settings.voice.echoOff'),
       );
+      expect(row.textContent).toContain(t('settings.voice.echoOffDetail'));
     });
 
     it('keeps unsaved edits when the Desktop pushes a newer status', async () => {
@@ -689,44 +698,40 @@ describe('WakewordVoiceSettings', () => {
       expect(buttonByLabel('Default Agent').textContent).toContain('Writer');
     });
 
-    it('keeps the edit and reports a save the Desktop rejected', async () => {
-      const onToast = vi.fn();
-      desktopBridge.updateVoiceConfig.mockRejectedValue(
+    it.each([
+      [
+        'with an error code by its explanation',
         new Error('voice_config_invalid'),
-      );
-      await mountPanel({ onToast });
-
-      switchByLabel('Listen for Hey Nabu').click();
-      await settle();
-
-      expect(onToast).toHaveBeenCalledWith({
-        title: 'Something went wrong. Try again.',
-        message:
-          'The Desktop rejected this Voice setting. Reload Voice settings and try again.',
-        variant: 'error',
-      });
-      expect(document.querySelector('.voice-save-state').textContent).toContain(
-        'Not saved',
-      );
-      expect(
-        switchByLabel('Listen for Hey Nabu').getAttribute('aria-checked'),
-      ).toBe('false');
-    });
-
-    it('reports a failure without an error code by its own message', async () => {
-      const onToast = vi.fn();
-      desktopBridge.updateVoiceConfig.mockRejectedValue(
+        () => errorMessage('voice_config_invalid'),
+      ],
+      [
+        'without an error code by its own message',
         new Error('Desktop bridge not available'),
-      );
-      await mountPanel({ onToast });
+        () => 'Desktop bridge not available',
+      ],
+    ])(
+      'keeps the edit and reports a rejected save %s',
+      async (_label, error, message) => {
+        const onToast = vi.fn();
+        desktopBridge.updateVoiceConfig.mockRejectedValue(error);
+        await mountPanel({ onToast });
 
-      switchByLabel('Listen for Hey Nabu').click();
-      await settle();
+        switchByLabel('Listen for Hey Nabu').click();
+        await settle();
 
-      expect(onToast).toHaveBeenCalledWith(
-        expect.objectContaining({ message: 'Desktop bridge not available' }),
-      );
-    });
+        expect(onToast).toHaveBeenCalledWith({
+          title: t('errors.generic'),
+          message: message(),
+          variant: 'error',
+        });
+        expect(
+          document.querySelector('.voice-save-state').textContent,
+        ).toContain(t('common.saveFailed', 'Not saved'));
+        expect(
+          switchByLabel('Listen for Hey Nabu').getAttribute('aria-checked'),
+        ).toBe('false');
+      },
+    );
   });
 
   describe('calibration', () => {
@@ -765,13 +770,17 @@ describe('WakewordVoiceSettings', () => {
 
       expect(desktopBridge.startVoiceCalibration).toHaveBeenCalledWith(NABU);
       const panel = phraseCard(NABU).querySelector('.voice-calibration-panel');
-      expect(panel.textContent).toContain('Calibrating “Okay Nabu”');
-      expect(panel.textContent).toContain('Recommended sensitivity 65%');
+      expect(panel.textContent).toContain(
+        t('settings.voice.calibrationHeading', '', { name: 'Okay Nabu' }),
+      );
+      expect(panel.textContent).toContain(
+        t('settings.voice.calibrationRecommendation', '', { value: 65 }),
+      );
       expect(buttonByLabel('Calibrate Hey Nabu').disabled).toBe(true);
       expect(slider(NABU).disabled).toBe(true);
       expect(desktopBridge.updateVoiceConfig).not.toHaveBeenCalled();
 
-      buttonByText('Apply calibrated value').click();
+      buttonByText(t('settings.voice.calibrationApply')).click();
       await waitForCondition(
         () => desktopBridge.updateVoiceConfig.mock.calls.length === 1,
       );
@@ -814,13 +823,15 @@ describe('WakewordVoiceSettings', () => {
       buttonByLabel('Calibrate Okay Nabu').click();
       await settle();
 
-      expect(buttonByText('Apply calibrated value').disabled).toBe(true);
+      expect(buttonByText(t('settings.voice.calibrationApply')).disabled).toBe(
+        true,
+      );
       expect(
         document.querySelector('.voice-calibration-steps li:nth-child(2)')
           .dataset.state,
       ).toBe('current');
 
-      buttonByText('Restart calibration').click();
+      buttonByText(t('settings.voice.calibrationReset')).click();
       await settle();
       expect(desktopBridge.restartVoiceCalibration).toHaveBeenCalledOnce();
       expect(
@@ -828,11 +839,12 @@ describe('WakewordVoiceSettings', () => {
           .dataset.state,
       ).toBe('current');
 
-      buttonByText('Discard and stop').click();
+      const discard = t('settings.voice.calibrationDiscard');
+      buttonByText(discard).click();
       flushSync();
       const dialog = document.querySelector('[role="dialog"]');
       [...dialog.querySelectorAll('button')]
-        .find((button) => button.textContent.trim() === 'Discard and stop')
+        .find((button) => button.textContent.trim() === discard)
         .click();
       await waitForCondition(
         () => document.querySelector('.voice-calibration-panel') === null,
@@ -887,7 +899,7 @@ describe('WakewordVoiceSettings', () => {
         'bW9kZWw=',
       );
       expect(onToast).toHaveBeenCalledWith({
-        title: 'Wakeword model imported. Activate it to listen for it.',
+        title: t('settings.voice.importSuccessInactive'),
         variant: 'success',
       });
       expect(owner.refresh).toHaveBeenCalledOnce();
@@ -912,7 +924,7 @@ describe('WakewordVoiceSettings', () => {
       expect(desktopBridge.importWakewordModel).not.toHaveBeenCalled();
       expect(onToast).toHaveBeenCalledWith(
         expect.objectContaining({
-          title: 'Wakeword model is too large.',
+          title: t('settings.voice.importTooLargeTitle'),
           variant: 'error',
         }),
       );
@@ -934,16 +946,17 @@ describe('WakewordVoiceSettings', () => {
       await mountPanel();
 
       // Built-in phrases cannot be removed.
+      const remove = t('settings.voice.removeModel');
       expect(
         [...document.querySelectorAll('button')].filter(
-          (button) => button.textContent.trim() === 'Remove imported model',
+          (button) => button.textContent.trim() === remove,
         ),
       ).toHaveLength(1);
-      buttonByText('Remove imported model').click();
+      buttonByText(remove).click();
       flushSync();
       const dialog = document.querySelector('[role="dialog"]');
       expect(dialog.textContent).toContain('Hey Computer');
-      buttonByText('Delete').click();
+      buttonByText(t('common.delete')).click();
       await settle();
 
       expect(desktopBridge.deleteWakewordModel).toHaveBeenCalledWith(
@@ -968,7 +981,7 @@ describe('WakewordVoiceSettings', () => {
 
     buttonByLabel('Transcription audio').click();
     flushSync();
-    option('Custom').click();
+    option(t('settings.voice.transcriptionProfileCustom')).click();
     await settle();
 
     expect(updateSettings).toHaveBeenLastCalledWith({
@@ -982,6 +995,9 @@ describe('WakewordVoiceSettings', () => {
     });
   });
 });
+
+// The English catalog has no entry for this label yet.
+const retryLabel = () => t('settings.voice.retry', 'Retry listening');
 
 function buttonByText(text) {
   return [...document.body.querySelectorAll('button')].find(

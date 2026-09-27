@@ -442,42 +442,16 @@ describe('AppShell Voice indicator', () => {
     expect(mountMicIndicator({ voiceAvailable: false })).toBeNull();
   });
 
-  it.each([
-    ['off', voiceStatus({ enabled: false, state: 'off' }), 'off', 'off'],
-    ['starting', voiceStatus({ state: 'starting' }), 'processing', 'starting'],
-    ['listening', voiceStatus(), 'listening', 'listening'],
-    [
-      'a lost microphone',
-      voiceStatus({ state: 'microphone_disconnected' }),
-      'warning',
-      'microphone_disconnected',
-    ],
-    ['an error', voiceStatus({ state: 'error' }), 'error', 'error'],
-    [
-      'a recording',
-      voiceStatus({ recording: { command_id: 'c-1' } }),
-      'recording',
-      'recording',
-    ],
-    [
-      'a command in flight',
-      voiceStatus({
-        commands: [{ command_id: 'c-1', model_id: null, stage: 'sending' }],
-      }),
-      'processing',
-      'sending',
-    ],
-    [
-      'an error during a recording',
-      voiceStatus({ state: 'error', recording: { command_id: 'c-1' } }),
-      'error',
-      'error',
-    ],
-    ['no status yet', null, 'off', 'off'],
-  ])('shows %s', (_label, status, tone, stateKey) => {
-    const indicator = mountMicIndicator({ status });
-    expect(indicator.querySelector(`.mic-icon--${tone}`)).toBeTruthy();
-    expect(indicator.textContent).toContain(t(`voice.state.${stateKey}`));
+  // The tone and label table of every status lives in voiceLabels.test.js.
+  it('shows the tone, label and name of the Voice status', () => {
+    const indicator = mountMicIndicator({
+      status: voiceStatus({ recording: { command_id: 'c-1' } }),
+    });
+    expect(indicator.querySelector('.mic-icon--recording')).toBeTruthy();
+    expect(indicator.textContent).toContain(t('voice.state.recording'));
+    expect(indicator.getAttribute('aria-label')).toBe(
+      t('voice.mic.tooltip.recording'),
+    );
   });
 
   it.each(['.sidebar-footer__mic', '.mic-icon'])(

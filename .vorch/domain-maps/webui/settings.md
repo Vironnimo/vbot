@@ -89,7 +89,7 @@ Cross-cutting value coercion for JSON-derived data lives in `webui/src/lib/value
 - Settings composition: `webui/src/components/SettingsView.svelte`, `webui/src/components/settings/`
 - Onboarding: `webui/src/lib/onboarding.js` and onboarding components under `webui/src/components/`
 - Desktop Voice: `webui/src/lib/desktopBridge.js`, `webui/src/app/desktop.svelte.js` (app-level Voice owner), `webui/src/lib/wakewordSettings.js`, `webui/src/components/WakewordVoiceSettings.svelte`, and `webui/src/components/voice/`
-- Focused coverage: `webui/src/lib/__tests__/settingsView.test.js`, `settingsView.extensions.test.js`, `taskModelSettings.test.js`, `onboarding.test.js`, `desktopBridge.test.js`, `wakewordSettings.test.js`, `liveVoice.test.js` (Live hold), `webui/src/__tests__/App.desktop-voice.test.js` (Voice pushes, cues, and Toasts), plus Settings and onboarding component tests under `webui/src/components/__tests__/`; specialized-model loading is covered by `SettingsSpecializedModelsPanel.test.js`, and OpenRouter routing behavior by `OpenRouterRoutingSettings.test.js`
+- Focused coverage: `webui/src/lib/__tests__/settingsView.test.js`, `settingsView.extensions.test.js`, `taskModelSettings.test.js`, `onboarding.test.js`, `desktopBridge.test.js`, `wakewordSettings.test.js`, `liveVoice.desktop.test.js` (Live hold), `webui/src/__tests__/App.desktop-voice.test.js` (Voice pushes, cues, and Toasts), plus Settings and onboarding component tests under `webui/src/components/__tests__/`; specialized-model loading is covered by `SettingsSpecializedModelsPanel.test.js`, and OpenRouter routing behavior by `OpenRouterRoutingSettings.test.js`
 
 
 ## Extension input outside Settings

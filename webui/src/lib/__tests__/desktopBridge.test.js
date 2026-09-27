@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   isDesktop,
@@ -37,12 +37,22 @@ import {
   setDesktopLiveHotkey,
 } from '../desktopBridge.js';
 
-const NO_VOICE_CAPABILITIES = {
+const DISABLED_CAPABILITIES = {
+  wakeword: false,
+  serverSelection: false,
+  contextMenu: false,
   voiceApi: 0,
   liveHotkey: false,
   secureOrigins: [],
 };
 
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+  delete globalThis.window;
+});
+
+/** A Desktop page on the accessor URL whose bridge offers `api`. */
 function desktopWindow(
   api,
   { secure = true, origin = 'http://pi.lan:8420' } = {},
@@ -54,6 +64,18 @@ function desktopWindow(
     addEventListener: vi.fn(),
     removeEventListener: vi.fn(),
   };
+}
+
+/** A window that dispatches real DOM events to its listeners. */
+function eventWindow(properties = {}) {
+  const target = new EventTarget();
+  globalThis.window = {
+    addEventListener: target.addEventListener.bind(target),
+    removeEventListener: target.removeEventListener.bind(target),
+    dispatchEvent: target.dispatchEvent.bind(target),
+    ...properties,
+  };
+  return globalThis.window;
 }
 
 function rawStatus(overrides = {}) {
@@ -82,180 +104,121 @@ function rawStatus(overrides = {}) {
 }
 
 describe('desktop detection', () => {
-  let originalLocation;
-  let originalPywebview;
-
-  beforeEach(() => {
-    originalLocation = globalThis.window?.location;
-    originalPywebview = globalThis.window?.pywebview;
-    globalThis.window = {
-      location: { search: '' },
-      pywebview: undefined,
-    };
+  const pageWindow = (search, api) => ({
+    location: { search },
+    pywebview: api && { api },
   });
 
-  afterEach(() => {
-    if (originalLocation !== undefined) {
-      globalThis.window.location = originalLocation;
-    }
-    globalThis.window.pywebview = originalPywebview;
+  it.each([
+    ['without a window', undefined, false, false],
+    ['in a browser', pageWindow(''), false, false],
+    [
+      'on the accessor URL before the bridge is ready',
+      pageWindow('?accessor=desktop'),
+      true,
+      false,
+    ],
+    ['with a bridge but no accessor URL', pageWindow('', {}), false, false],
+    [
+      'on the accessor URL with the bridge',
+      pageWindow('?accessor=desktop', {}),
+      true,
+      true,
+    ],
+  ])('detects the Desktop %s', (_label, page, accessor, desktop) => {
+    globalThis.window = page;
+
+    expect(isDesktopAccessor()).toBe(accessor);
+    expect(isDesktop()).toBe(desktop);
+  });
+});
+
+describe('waitForDesktopBridge', () => {
+  it.each([
+    ['false outside the accessor URL', { location: { search: '' } }, false],
+    [
+      'true when the bridge already exists',
+      { location: { search: '?accessor=desktop' }, pywebview: { api: {} } },
+      true,
+    ],
+  ])('resolves %s at once', async (_label, page, ready) => {
+    globalThis.window = page;
+
+    await expect(waitForDesktopBridge()).resolves.toBe(ready);
   });
 
-  it('returns false without accessor param or bridge', () => {
-    expect(isDesktopAccessor()).toBe(false);
-    expect(isDesktop()).toBe(false);
+  it('waits for pywebviewready before resolving in desktop mode', async () => {
+    const page = eventWindow({ location: { search: '?accessor=desktop' } });
+
+    const ready = waitForDesktopBridge();
+    page.pywebview = { api: {} };
+    page.dispatchEvent(new Event('pywebviewready'));
+
+    await expect(ready).resolves.toBe(true);
   });
 
-  it('detects the accessor param before the bridge is ready', () => {
-    globalThis.window.location.search = '?accessor=desktop';
-    expect(isDesktopAccessor()).toBe(true);
-    expect(isDesktop()).toBe(false);
-  });
+  it('resolves false after the timeout when the bridge never appears', async () => {
+    vi.useFakeTimers();
+    eventWindow({ location: { search: '?accessor=desktop' } });
 
-  it('returns false with only bridge api', () => {
-    globalThis.window.pywebview = { api: {} };
-    expect(isDesktop()).toBe(false);
-  });
+    const ready = waitForDesktopBridge(100);
+    await vi.advanceTimersByTimeAsync(100);
 
-  it('returns true with both accessor param and bridge api', () => {
-    globalThis.window.location.search = '?accessor=desktop';
-    globalThis.window.pywebview = { api: {} };
-    expect(isDesktopAccessor()).toBe(true);
-    expect(isDesktop()).toBe(true);
-  });
-
-  it('returns false when window is undefined', () => {
-    const savedWindow = globalThis.window;
-    globalThis.window = undefined;
-    expect(isDesktopAccessor()).toBe(false);
-    expect(isDesktop()).toBe(false);
-    globalThis.window = savedWindow;
+    await expect(ready).resolves.toBe(false);
   });
 });
 
 describe('getDesktopCapabilities', () => {
-  it('returns cached capabilities on second call', async () => {
-    globalThis.window = {
-      location: { search: '?accessor=desktop' },
-      pywebview: {
-        api: {
-          getDesktopCapabilities: () => ({
-            wakeword: true,
-            serverSelection: true,
-            contextMenu: true,
-          }),
-        },
-      },
-    };
-
-    const caps1 = await getDesktopCapabilities();
-    expect(caps1).toEqual({
+  it('normalizes the capabilities and caches them per bridge', async () => {
+    const reportCapabilities = vi.fn(() => ({
       wakeword: true,
       serverSelection: true,
       contextMenu: true,
-      ...NO_VOICE_CAPABILITIES,
-    });
+      voiceApi: 2,
+      liveHotkey: 1,
+      secureOrigins: ['http://pi.lan:8420', 42, null],
+    }));
+    desktopWindow({ getDesktopCapabilities: reportCapabilities });
 
-    // Second call should return cached result
-    const caps2 = await getDesktopCapabilities();
-    expect(caps2).toBe(caps1);
-  });
-
-  it('normalizes the Voice bridge version and the Live voice capabilities', async () => {
-    globalThis.window = {
-      location: { search: '?accessor=desktop' },
-      pywebview: {
-        api: {
-          getDesktopCapabilities: () => ({
-            wakeword: true,
-            voiceApi: 2,
-            liveHotkey: 1,
-            secureOrigins: ['http://pi.lan:8420', 42, null],
-          }),
-        },
-      },
-    };
-
-    expect(await getDesktopCapabilities()).toEqual({
+    const capabilities = await getDesktopCapabilities();
+    expect(capabilities).toEqual({
       wakeword: true,
-      serverSelection: false,
-      contextMenu: false,
+      serverSelection: true,
+      contextMenu: true,
       voiceApi: 2,
       liveHotkey: true,
       secureOrigins: ['http://pi.lan:8420'],
     });
+    expect(await getDesktopCapabilities()).toBe(capabilities);
+    expect(reportCapabilities).toHaveBeenCalledOnce();
+
+    // A new bridge object (after a reload of the shell) is asked again.
+    desktopWindow({ getDesktopCapabilities: () => ({ wakeword: false }) });
+    expect(await getDesktopCapabilities()).toEqual(DISABLED_CAPABILITIES);
   });
 
   it('reads an invalid Voice bridge version as none', async () => {
     for (const voiceApi of ['2', 1.5, -2, null]) {
-      globalThis.window = {
-        location: { search: '?accessor=desktop' },
-        pywebview: {
-          api: { getDesktopCapabilities: () => ({ wakeword: true, voiceApi }) },
-        },
-      };
+      desktopWindow({
+        getDesktopCapabilities: () => ({ wakeword: true, voiceApi }),
+      });
       expect((await getDesktopCapabilities()).voiceApi).toBe(0);
     }
   });
 
-  it('returns disabled when bridge absent', async () => {
-    globalThis.window = { location: { search: '' }, pywebview: undefined };
+  it('returns disabled capabilities without a bridge', async () => {
+    globalThis.window = { location: { search: '' } };
 
-    const caps = await getDesktopCapabilities();
-    expect(caps).toEqual({
-      wakeword: false,
-      serverSelection: false,
-      contextMenu: false,
-      ...NO_VOICE_CAPABILITIES,
-    });
-    expect(disabledDesktopCapabilities()).toEqual(caps);
-  });
-
-  it('does not reuse cached capabilities for a different bridge api object', async () => {
-    globalThis.window = {
-      location: { search: '?accessor=desktop' },
-      pywebview: {
-        api: {
-          getDesktopCapabilities: () => ({
-            wakeword: true,
-            serverSelection: true,
-            contextMenu: true,
-          }),
-        },
-      },
-    };
-
-    expect(await getDesktopCapabilities()).toEqual({
-      wakeword: true,
-      serverSelection: true,
-      contextMenu: true,
-      ...NO_VOICE_CAPABILITIES,
-    });
-
-    globalThis.window.pywebview = {
-      api: {
-        getDesktopCapabilities: () => ({ wakeword: false }),
-      },
-    };
-
-    expect(await getDesktopCapabilities()).toEqual({
-      wakeword: false,
-      serverSelection: false,
-      contextMenu: false,
-      ...NO_VOICE_CAPABILITIES,
-    });
+    const capabilities = await getDesktopCapabilities();
+    expect(capabilities).toEqual(DISABLED_CAPABILITIES);
+    expect(disabledDesktopCapabilities()).toEqual(capabilities);
   });
 
   it('propagates a transient capability failure so callers can retry', async () => {
-    globalThis.window = {
-      location: { search: '?accessor=desktop' },
-      pywebview: {
-        api: {
-          getDesktopCapabilities: () =>
-            Promise.reject(new Error('bridge starting')),
-        },
-      },
-    };
+    desktopWindow({
+      getDesktopCapabilities: () =>
+        Promise.reject(new Error('bridge starting')),
+    });
 
     await expect(getDesktopCapabilities()).rejects.toThrow('bridge starting');
   });
@@ -269,152 +232,222 @@ describe('getDesktopCapabilities', () => {
   });
 });
 
-describe('desktop context-menu actions', () => {
-  it('reads, writes, and opens through the native bridge', async () => {
-    const setClipboardText = vi.fn(() => ({ copied: true }));
-    const openExternalUrl = vi.fn(() => ({ opened: true }));
-    globalThis.window = {
-      location: { search: '?accessor=desktop' },
-      pywebview: {
-        api: {
-          setClipboardText,
-          getClipboardText: () => 'paste me',
-          openExternalUrl,
+describe('Desktop bridge calls', () => {
+  // The bridge method names are the contract with the Desktop's Python API.
+  it.each([
+    [
+      'setClipboardText',
+      setDesktopClipboardText,
+      ['copy me'],
+      { copied: true },
+    ],
+    ['getClipboardText', getDesktopClipboardText, [], 'paste me'],
+    [
+      'openExternalUrl',
+      openDesktopExternalUrl,
+      ['https://example.com/path'],
+      { opened: true },
+    ],
+    [
+      'listServers',
+      listDesktopServers,
+      [],
+      [{ host: 'pi.lan', port: 8420, label: 'Home', active: true }],
+    ],
+    [
+      'addServer',
+      addDesktopServer,
+      ['office.lan', 9000, 'Office'],
+      { host: 'office.lan', port: 9000, label: 'Office' },
+    ],
+    [
+      'removeServer',
+      removeDesktopServer,
+      ['office.lan', 9000],
+      { removed: true },
+    ],
+    [
+      'selectServer',
+      selectDesktopServer,
+      ['office.lan', 9000],
+      {
+        status: 'server_unreachable',
+        error_title: 'Server unreachable',
+        error_body: 'Try again.',
+      },
+    ],
+    [
+      'updateVoiceConfig',
+      updateVoiceConfig,
+      [
+        {
+          model_sensitivities: { 'builtin/okay_nabu': 0.8 },
+          phrase_actions: { 'builtin/hey_jarvis': null },
         },
-      },
-    };
+      ],
+      rawStatus({ sequence: 9 }),
+    ],
+    [
+      'listMicrophones',
+      listMicrophones,
+      [],
+      [{ index: 3, name: 'Desk mic', supported: true }],
+    ],
+    [
+      'importWakewordModel',
+      importWakewordModel,
+      ['computer.tflite', 'b25ueA=='],
+      { id: 'custom/model', activated: false },
+    ],
+    [
+      'deleteWakewordModel',
+      deleteWakewordModel,
+      ['custom/model'],
+      { deleted: true },
+    ],
+    ['retryVoice', retryVoice, [], { retried: true }],
+    ['stopVoiceRecording', stopVoiceRecording, [], { stopped: true }],
+    [
+      'startVoiceCalibration',
+      startVoiceCalibration,
+      ['builtin/okay_nabu'],
+      rawStatus({ sequence: 5 }),
+    ],
+    [
+      'restartVoiceCalibration',
+      restartVoiceCalibration,
+      [],
+      rawStatus({ sequence: 6 }),
+    ],
+    [
+      'stopVoiceCalibration',
+      stopVoiceCalibration,
+      [],
+      rawStatus({ sequence: 7 }),
+    ],
+    [
+      'getLiveHotkey',
+      getDesktopLiveHotkey,
+      [],
+      { supported: true, enabled: true, hotkey: null, error_code: null },
+    ],
+    [
+      'setLiveHotkey',
+      setDesktopLiveHotkey,
+      [{ enabled: true }],
+      { supported: true, enabled: true, hotkey: null, error_code: null },
+    ],
+  ])('calls %s and resolves its answer', async (method, call, args, answer) => {
+    const bridgeMethod = vi.fn(async () => answer);
+    desktopWindow({ [method]: bridgeMethod });
 
-    await expect(setDesktopClipboardText('copy me')).resolves.toEqual({
-      copied: true,
+    await expect(call(...args)).resolves.toEqual(answer);
+    expect(bridgeMethod.mock.calls).toEqual([args]);
+  });
+
+  it.each([
+    ['getClipboardText', getDesktopClipboardText, ''],
+    ['listServers', listDesktopServers, []],
+    ['listMicrophones', listMicrophones, []],
+    ['listWakewordModels', listWakewordModels, []],
+  ])('reads a malformed %s answer as empty', async (method, call, empty) => {
+    desktopWindow({ [method]: () => null });
+
+    await expect(call()).resolves.toEqual(empty);
+  });
+
+  it('rejects without the bridge instead of fabricating a disabled state', async () => {
+    globalThis.window = { location: { search: '' } };
+
+    await expect(getVoiceStatus()).rejects.toThrow(
+      'Desktop bridge not available',
+    );
+    await expect(listWakewordModels()).rejects.toThrow(
+      'Desktop bridge not available',
+    );
+  });
+
+  it('reads the status snapshot and rejects an invalid one', async () => {
+    desktopWindow({ getVoiceStatus: () => rawStatus() });
+    await expect(getVoiceStatus()).resolves.toEqual(rawStatus());
+
+    desktopWindow({ getVoiceStatus: () => ({ state: 'listening' }) });
+    await expect(getVoiceStatus()).rejects.toThrow(
+      'The Desktop returned an invalid Voice status',
+    );
+  });
+
+  it('enables Voice and reports the reason of a refusal', async () => {
+    const setEnabled = vi
+      .fn()
+      .mockResolvedValueOnce({ enabled: true, error_code: null })
+      .mockResolvedValueOnce({
+        enabled: false,
+        error_code: 'speech_to_text_unconfigured',
+      })
+      .mockResolvedValueOnce(null);
+    desktopWindow({ setVoiceEnabled: setEnabled });
+
+    await expect(setVoiceEnabled(true)).resolves.toEqual({
+      enabled: true,
+      error_code: null,
     });
-    await expect(getDesktopClipboardText()).resolves.toBe('paste me');
-    await expect(
-      openDesktopExternalUrl('https://example.com/path'),
-    ).resolves.toEqual({ opened: true });
-    expect(setClipboardText).toHaveBeenCalledWith('copy me');
-    expect(openExternalUrl).toHaveBeenCalledWith('https://example.com/path');
+    await expect(setVoiceEnabled(1)).resolves.toEqual({
+      enabled: false,
+      error_code: 'speech_to_text_unconfigured',
+    });
+    await expect(setVoiceEnabled(false)).resolves.toEqual({
+      enabled: false,
+      error_code: null,
+    });
+    expect(setEnabled.mock.calls).toEqual([[true], [true], [false]]);
   });
 
-  it('normalizes a non-text clipboard response to empty text', async () => {
-    globalThis.window = {
-      location: { search: '?accessor=desktop' },
-      pywebview: { api: { getClipboardText: () => null } },
-    };
-
-    await expect(getDesktopClipboardText()).resolves.toBe('');
-  });
-});
-
-describe('waitForDesktopBridge', () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  it('resolves false outside the desktop accessor URL', async () => {
-    globalThis.window = { location: { search: '' }, pywebview: undefined };
-
-    await expect(waitForDesktopBridge()).resolves.toBe(false);
-  });
-
-  it('resolves true immediately when the bridge already exists', async () => {
-    globalThis.window = {
-      location: { search: '?accessor=desktop' },
-      pywebview: { api: {} },
-    };
-
-    await expect(waitForDesktopBridge()).resolves.toBe(true);
-  });
-
-  it('waits for pywebviewready before resolving in desktop mode', async () => {
-    const listeners = new Map();
-    globalThis.window = {
-      location: { search: '?accessor=desktop' },
-      pywebview: undefined,
-      addEventListener: (eventName, callback) => {
-        listeners.set(eventName, callback);
-      },
-      removeEventListener: (eventName) => {
-        listeners.delete(eventName);
-      },
-    };
-
-    const readyPromise = waitForDesktopBridge();
-    globalThis.window.pywebview = { api: {} };
-    listeners.get('pywebviewready')();
-
-    await expect(readyPromise).resolves.toBe(true);
-  });
-
-  it('resolves false after timeout when the bridge never appears', async () => {
-    globalThis.window = createDesktopWindowWithoutBridge();
-
-    const readyPromise = waitForDesktopBridge(100);
-    await vi.advanceTimersByTimeAsync(100);
-
-    await expect(readyPromise).resolves.toBe(false);
-  });
-});
-
-describe('desktop server management', () => {
-  it('lists, adds, removes, and probes servers through the bridge', async () => {
-    const servers = [
-      { host: 'pi.lan', port: 8420, label: 'Home', active: true },
-    ];
-    const addServer = vi.fn(() => ({
-      host: 'office.lan',
-      port: 9000,
-      label: 'Office',
-    }));
-    const removeServer = vi.fn(() => ({ removed: true }));
-    const selectServer = vi.fn(() => ({
-      status: 'server_unreachable',
-      error_title: 'Server unreachable',
-      error_body: 'Try again.',
-    }));
-    globalThis.window = {
-      location: { search: '?accessor=desktop' },
-      pywebview: {
-        api: {
-          listServers: () => servers,
-          addServer,
-          removeServer,
-          selectServer,
+  it('lists models with their overlaps and a label for each', async () => {
+    desktopWindow({
+      listWakewordModels: () => [
+        {
+          id: 'builtin/okay_nabu',
+          label: 'Okay Nabu',
+          overlaps: ['custom/nabu', 3],
         },
-      },
-    };
+        { id: 'custom/nabu', label: '' },
+        { label: 'No id' },
+      ],
+    });
 
-    await expect(listDesktopServers()).resolves.toEqual(servers);
-    await expect(
-      addDesktopServer('office.lan', 9000, 'Office'),
-    ).resolves.toEqual({
-      host: 'office.lan',
-      port: 9000,
-      label: 'Office',
-    });
-    await expect(removeDesktopServer('office.lan', 9000)).resolves.toEqual({
-      removed: true,
-    });
-    await expect(selectDesktopServer('office.lan', 9000)).resolves.toEqual({
-      status: 'server_unreachable',
-      error_title: 'Server unreachable',
-      error_body: 'Try again.',
-    });
-    expect(addServer).toHaveBeenCalledWith('office.lan', 9000, 'Office');
-    expect(removeServer).toHaveBeenCalledWith('office.lan', 9000);
-    expect(selectServer).toHaveBeenCalledWith('office.lan', 9000);
+    await expect(listWakewordModels()).resolves.toEqual([
+      {
+        id: 'builtin/okay_nabu',
+        label: 'Okay Nabu',
+        overlaps: ['custom/nabu'],
+      },
+      { id: 'custom/nabu', label: 'custom/nabu', overlaps: [] },
+    ]);
   });
 
-  it('returns an empty list when the bridge returns no server array', async () => {
-    globalThis.window = {
-      location: { search: '?accessor=desktop' },
-      pywebview: { api: { listServers: () => null } },
-    };
+  it('reads the stable error code of a rejected call and nothing else', async () => {
+    desktopWindow({
+      updateVoiceConfig: () =>
+        Promise.reject(new Error('voice_config_invalid')),
+    });
 
-    await expect(listDesktopServers()).resolves.toEqual([]);
+    const rejected = await updateVoiceConfig({ echo_cancellation: 1 }).catch(
+      (error) => error,
+    );
+
+    expect(desktopErrorCode(rejected)).toBe('voice_config_invalid');
+    for (const failure of [
+      new Error('Desktop bridge not available'),
+      new Error('Voice_config_invalid'),
+      new Error('2fast'),
+      new Error(''),
+      { message: 7 },
+      'voice_config_invalid',
+      null,
+    ]) {
+      expect(desktopErrorCode(failure)).toBeNull();
+    }
   });
 });
 
@@ -601,194 +634,12 @@ describe('Voice status validation', () => {
   });
 });
 
-describe('Voice bridge calls', () => {
-  it('reads the status snapshot and rejects an invalid one', async () => {
-    desktopWindow({ getVoiceStatus: () => rawStatus() });
-    await expect(getVoiceStatus()).resolves.toEqual(rawStatus());
-
-    desktopWindow({ getVoiceStatus: () => ({ state: 'listening' }) });
-    await expect(getVoiceStatus()).rejects.toThrow(
-      'The Desktop returned an invalid Voice status',
-    );
-  });
-
-  it('propagates bridge absence instead of fabricating disabled state', async () => {
-    globalThis.window = { location: { search: '' }, pywebview: undefined };
-
-    await expect(getVoiceStatus()).rejects.toThrow(
-      'Desktop bridge not available',
-    );
-  });
-
-  it('enables Voice and reports the reason of a refusal', async () => {
-    const setEnabled = vi
-      .fn()
-      .mockResolvedValueOnce({ enabled: true, error_code: null })
-      .mockResolvedValueOnce({
-        enabled: false,
-        error_code: 'speech_to_text_unconfigured',
-      })
-      .mockResolvedValueOnce(null);
-    desktopWindow({ setVoiceEnabled: setEnabled });
-
-    await expect(setVoiceEnabled(true)).resolves.toEqual({
-      enabled: true,
-      error_code: null,
-    });
-    await expect(setVoiceEnabled(1)).resolves.toEqual({
-      enabled: false,
-      error_code: 'speech_to_text_unconfigured',
-    });
-    await expect(setVoiceEnabled(false)).resolves.toEqual({
-      enabled: false,
-      error_code: null,
-    });
-    expect(setEnabled.mock.calls).toEqual([[true], [true], [false]]);
-  });
-
-  it('sends a configuration change and resolves the resulting snapshot', async () => {
-    const update = vi.fn(() => rawStatus({ sequence: 9 }));
-    desktopWindow({ updateVoiceConfig: update });
-    const changes = {
-      model_sensitivities: { 'builtin/okay_nabu': 0.8 },
-      phrase_actions: { 'builtin/hey_jarvis': null },
-    };
-
-    await expect(updateVoiceConfig(changes)).resolves.toMatchObject({
-      sequence: 9,
-    });
-    expect(update).toHaveBeenCalledWith(changes);
-  });
-
-  it('controls the calibration of one phrase', async () => {
-    const start = vi.fn(() =>
-      rawStatus({
-        sequence: 5,
-        calibration: { model_id: 'builtin/okay_nabu', phase: 'noise' },
-      }),
-    );
-    const restart = vi.fn(() =>
-      rawStatus({
-        sequence: 6,
-        calibration: { model_id: 'builtin/okay_nabu', phase: 'noise' },
-      }),
-    );
-    const stop = vi.fn(() => rawStatus({ sequence: 7 }));
-    desktopWindow({
-      startVoiceCalibration: start,
-      restartVoiceCalibration: restart,
-      stopVoiceCalibration: stop,
-    });
-
-    expect(
-      (await startVoiceCalibration('builtin/okay_nabu')).calibration.model_id,
-    ).toBe('builtin/okay_nabu');
-    expect((await restartVoiceCalibration()).sequence).toBe(6);
-    expect((await stopVoiceCalibration()).calibration).toBeNull();
-    expect(start).toHaveBeenCalledWith('builtin/okay_nabu');
-    expect(restart).toHaveBeenCalledOnce();
-    expect(stop).toHaveBeenCalledOnce();
-  });
-
-  it('retries listening, stops a recording and lists microphones', async () => {
-    const devices = [{ index: 3, name: 'Desk mic', supported: true }];
-    const retry = vi.fn(() => ({ retried: true }));
-    const stop = vi.fn(() => ({ stopped: true }));
-    desktopWindow({
-      listMicrophones: () => devices,
-      retryVoice: retry,
-      stopVoiceRecording: stop,
-    });
-
-    await expect(listMicrophones()).resolves.toEqual(devices);
-    await expect(retryVoice()).resolves.toEqual({ retried: true });
-    await expect(stopVoiceRecording()).resolves.toEqual({ stopped: true });
-    expect(retry).toHaveBeenCalledOnce();
-    expect(stop).toHaveBeenCalledOnce();
-  });
-
-  it('lists models with their overlaps, imports and deletes them', async () => {
-    const importModel = vi.fn(() => ({ id: 'custom/model', activated: false }));
-    const deleteModel = vi.fn(() => ({ deleted: true }));
-    desktopWindow({
-      listWakewordModels: () => [
-        {
-          id: 'builtin/okay_nabu',
-          label: 'Okay Nabu',
-          overlaps: ['custom/nabu', 3],
-        },
-        { id: 'custom/nabu', label: '' },
-        { label: 'No id' },
-      ],
-      importWakewordModel: importModel,
-      deleteWakewordModel: deleteModel,
-    });
-
-    await expect(listWakewordModels()).resolves.toEqual([
-      {
-        id: 'builtin/okay_nabu',
-        label: 'Okay Nabu',
-        overlaps: ['custom/nabu'],
-      },
-      { id: 'custom/nabu', label: 'custom/nabu', overlaps: [] },
-    ]);
-    await expect(
-      importWakewordModel('computer.tflite', 'b25ueA=='),
-    ).resolves.toEqual({ id: 'custom/model', activated: false });
-    await expect(deleteWakewordModel('custom/model')).resolves.toEqual({
-      deleted: true,
-    });
-    expect(importModel).toHaveBeenCalledWith('computer.tflite', 'b25ueA==');
-    expect(deleteModel).toHaveBeenCalledWith('custom/model');
-  });
-
-  it('reads the stable error code of a rejected call', async () => {
-    desktopWindow({
-      updateVoiceConfig: () =>
-        Promise.reject(new Error('voice_config_invalid')),
-    });
-
-    const rejected = await updateVoiceConfig({ echo_cancellation: 1 }).catch(
-      (error) => error,
-    );
-
-    expect(desktopErrorCode(rejected)).toBe('voice_config_invalid');
-    expect(desktopErrorCode(new Error('wakeword_model_active'))).toBe(
-      'wakeword_model_active',
-    );
-  });
-
-  it('finds no error code in other failures', () => {
-    expect(desktopErrorCode(new Error('Desktop bridge not available'))).toBe(
-      null,
-    );
-    expect(desktopErrorCode(new Error('Voice_config_invalid'))).toBeNull();
-    expect(desktopErrorCode(new Error('2fast'))).toBeNull();
-    expect(desktopErrorCode(new Error(''))).toBeNull();
-    expect(desktopErrorCode({ message: 7 })).toBeNull();
-    expect(desktopErrorCode('voice_config_invalid')).toBeNull();
-    expect(desktopErrorCode(null)).toBeNull();
-  });
-
-  it('propagates model-list bridge failure so callers retain known state', async () => {
-    globalThis.window = { location: { search: '' }, pywebview: undefined };
-
-    await expect(listWakewordModels()).rejects.toThrow(
-      'Desktop bridge not available',
-    );
-  });
-});
-
 describe('pushed Voice status and events', () => {
   function listen(handler) {
-    const target = new EventTarget();
-    globalThis.window = {
-      addEventListener: target.addEventListener.bind(target),
-      removeEventListener: target.removeEventListener.bind(target),
-    };
+    const page = eventWindow();
     const cleanup = onDesktopVoicePush(handler);
     const dispatch = (detail) =>
-      target.dispatchEvent(new CustomEvent('vbot-desktop-voice', { detail }));
+      page.dispatchEvent(new CustomEvent('vbot-desktop-voice', { detail }));
     return { cleanup, dispatch };
   }
 
@@ -839,23 +690,14 @@ describe('pushed Voice status and events', () => {
     cleanup();
   });
 
-  it('returns noop cleanup without a window', () => {
-    const savedWindow = globalThis.window;
-    globalThis.window = undefined;
-    try {
-      const cleanup = onDesktopVoicePush(() => {});
-      expect(cleanup()).toBeUndefined();
-    } finally {
-      globalThis.window = savedWindow;
-    }
+  it('returns a noop cleanup without a window', () => {
+    const cleanup = onDesktopVoicePush(() => {});
+
+    expect(cleanup()).toBeUndefined();
   });
 });
 
 describe('Voice cues', () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
   it('plays the tones of a cue kind and nothing for other kinds', async () => {
     const oscillators = [];
     class FakeAudioContext {
@@ -894,57 +736,16 @@ describe('Voice cues', () => {
   });
 });
 
-function createDesktopWindowWithoutBridge() {
-  const listeners = new Map();
-
-  return {
-    location: { search: '?accessor=desktop' },
-    pywebview: undefined,
-    addEventListener: (eventName, callback) => {
-      listeners.set(eventName, callback);
-    },
-    removeEventListener: (eventName) => {
-      listeners.delete(eventName);
-    },
-  };
-}
-
 describe('desktop Live voice integration', () => {
-  let savedWindow;
-
-  beforeEach(() => {
-    savedWindow = globalThis.window;
-  });
-
-  afterEach(() => {
-    globalThis.window = savedWindow;
-    vi.restoreAllMocks();
-  });
-
   describe('microphone access', () => {
-    it('lets a secure page open the microphone without asking the bridge', async () => {
-      const getDesktopCapabilities = vi.fn();
-      desktopWindow({ getDesktopCapabilities });
+    it('lets a secure page or a server the Desktop trusted open the microphone', async () => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const reportCapabilities = vi.fn();
+      desktopWindow({ getDesktopCapabilities: reportCapabilities });
 
       expect(await desktopMicrophoneAccess()).toBeNull();
-      expect(getDesktopCapabilities).not.toHaveBeenCalled();
-    });
+      expect(reportCapabilities).not.toHaveBeenCalled();
 
-    it('asks for a restart when this server was added after the Desktop started', async () => {
-      desktopWindow(
-        {
-          getDesktopCapabilities: () => ({
-            secureOrigins: ['http://other.lan:8420'],
-          }),
-        },
-        { secure: false },
-      );
-
-      expect(await desktopMicrophoneAccess()).toBe('desktop_restart_required');
-    });
-
-    it('lets a server the Desktop trusted try the microphone', async () => {
-      vi.spyOn(console, 'warn').mockImplementation(() => {});
       desktopWindow(
         {
           getDesktopCapabilities: () => ({
@@ -953,48 +754,38 @@ describe('desktop Live voice integration', () => {
         },
         { secure: false },
       );
-
       expect(await desktopMicrophoneAccess()).toBeNull();
     });
 
-    it('asks for a restart when the bridge fails or answers too late', async () => {
+    it.each([
+      [
+        'this server was added after the Desktop started',
+        () => ({ secureOrigins: ['http://other.lan:8420'] }),
+      ],
+      ['the bridge fails', () => Promise.reject(new Error('bridge busy'))],
+      ['the bridge answers too late', () => new Promise(() => {})],
+    ])('asks for a restart when %s', async (_label, reportCapabilities) => {
       vi.useFakeTimers();
       vi.spyOn(console, 'warn').mockImplementation(() => {});
-      try {
-        desktopWindow(
-          { getDesktopCapabilities: () => new Promise(() => {}) },
-          { secure: false },
-        );
-        const access = desktopMicrophoneAccess({ timeoutMs: 100 });
-        await vi.advanceTimersByTimeAsync(100);
-        expect(await access).toBe('desktop_restart_required');
+      desktopWindow(
+        { getDesktopCapabilities: reportCapabilities },
+        { secure: false },
+      );
 
-        desktopWindow(
-          {
-            getDesktopCapabilities: () =>
-              Promise.reject(new Error('bridge busy')),
-          },
-          { secure: false },
-        );
-        expect(await desktopMicrophoneAccess()).toBe(
-          'desktop_restart_required',
-        );
-      } finally {
-        vi.useRealTimers();
-      }
+      const access = desktopMicrophoneAccess({ timeoutMs: 100 });
+      await vi.advanceTimersByTimeAsync(100);
+
+      expect(await access).toBe('desktop_restart_required');
     });
   });
 
   describe('pushed Live voice requests', () => {
     function listen(handler) {
-      const target = new EventTarget();
-      globalThis.window = {
-        addEventListener: target.addEventListener.bind(target),
-        removeEventListener: target.removeEventListener.bind(target),
-      };
+      const page = eventWindow();
       const cleanup = onDesktopLiveRequest(handler);
+      // True when the page handled the request (cancelled the event).
       const dispatch = (detail) =>
-        !target.dispatchEvent(
+        !page.dispatchEvent(
           new CustomEvent('vbot-desktop-live', { cancelable: true, detail }),
         );
       return { cleanup, dispatch };
@@ -1029,23 +820,5 @@ describe('desktop Live voice integration', () => {
       expect(handler).toHaveBeenCalledOnce();
       cleanup();
     });
-  });
-
-  it('reads and changes the global shortcut through the bridge', async () => {
-    const status = {
-      supported: true,
-      enabled: true,
-      hotkey: { ctrl: true, alt: true, shift: false, win: false, key: 'Space' },
-      error_code: null,
-    };
-    const api = {
-      getLiveHotkey: vi.fn(async () => status),
-      setLiveHotkey: vi.fn(async () => status),
-    };
-    desktopWindow(api);
-
-    expect(await getDesktopLiveHotkey()).toBe(status);
-    expect(await setDesktopLiveHotkey({ enabled: true })).toBe(status);
-    expect(api.setLiveHotkey).toHaveBeenCalledWith({ enabled: true });
   });
 });
