@@ -1,203 +1,582 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
 import {
-  PROJECT_SOURCE_FORMATS,
+  FINDING_TYPE_BAD_MODEL,
+  FINDING_TYPE_ORPHAN,
+  FINDING_TYPE_SLUG_COLLISION,
+  FINDING_TYPE_UNAVAILABLE_TOOL,
+  FINDING_TYPE_UNSLUGIFIABLE_NAME,
   PROJECT_THINKING_EFFORT_NO_DEFAULT,
-  buildAddProjectPayload,
-  buildDefaultAgentOptions,
-  buildManageProjectPayload,
-  buildRePointPayload,
-  hasManageChanges,
-  needsRePoint,
-  normalizeDetectResult,
-  normalizeProject,
-  normalizeProjects,
-  presentFormats,
-  shouldSuggestClaudeMd,
+  createProjectsController,
+  createProjectsState,
+  normalizeScanReport,
+  projectTeam,
 } from '../projectsView.js';
 
-describe('buildAddProjectPayload', () => {
-  it('builds a payload with only cwd when optionals are blank', () => {
-    expect(
-      buildAddProjectPayload({
-        cwd: '  C:/repos/demo  ',
-        display_name: '',
-        default_agent: '   ',
-        default_model: '',
-        auto_load: [],
-      }),
-    ).toEqual({ cwd: 'C:/repos/demo' });
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
   });
+  return { promise, reject, resolve };
+}
 
-  it('includes optional pointers and auto-load when provided', () => {
-    expect(
-      buildAddProjectPayload({
-        cwd: 'C:/repos/demo',
-        display_name: 'Demo',
-        default_agent: 'builder',
-        default_model: 'openai/gpt-5.2',
-        auto_load: ['AGENTS.md', '  README.md  ', ''],
-      }),
-    ).toEqual({
-      cwd: 'C:/repos/demo',
-      display_name: 'Demo',
-      default_agent: 'builder',
-      default_model: 'openai/gpt-5.2',
-      auto_load: ['AGENTS.md', 'README.md'],
-    });
+function operations(overrides = {}) {
+  return {
+    addProject: vi.fn(),
+    clearOverride: vi.fn(),
+    detectProject: vi.fn(),
+    getSettings: vi.fn(),
+    listConnections: vi.fn(),
+    listModels: vi.fn(),
+    listProjects: vi.fn(),
+    listTools: vi.fn(),
+    removeProject: vi.fn(),
+    setOverride: vi.fn(),
+    setProject: vi.fn(),
+    showProject: vi.fn(),
+    ...overrides,
+  };
+}
+
+// A controller whose Project list holds one stored `demo` record, loaded and
+// selected the way the view does on mount.
+async function loadedController(stored = {}, overrides = {}) {
+  const record = {
+    project_id: 'demo',
+    display_name: 'Demo',
+    cwd: 'C:/repos/demo',
+    cwd_exists: true,
+    ...stored,
+  };
+  const projectOperations = operations({
+    listProjects: vi.fn().mockResolvedValue({ projects: [record] }),
+    showProject: vi.fn().mockResolvedValue({ scan: {} }),
+    setProject: vi.fn().mockResolvedValue({ project: record, scan: {} }),
+    ...overrides,
   });
+  const state = createProjectsState();
+  const controller = createProjectsController({
+    operations: projectOperations,
+    state,
+  });
+  await controller.loadProjects();
+  return { controller, operations: projectOperations, state };
+}
 
-  it('includes the default knobs when set, and 0 / "" count as real values', () => {
-    expect(
-      buildAddProjectPayload({
-        cwd: 'C:/repos/demo',
-        default_temperature: '0',
-        default_thinking_effort: '',
-      }),
-    ).toEqual({
-      cwd: 'C:/repos/demo',
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+describe('Projects controller loading', () => {
+  it('normalizes listed Projects into stable records', async () => {
+    const { state, controller } = await loadedController(
+      {},
+      {
+        listProjects: vi
+          .fn()
+          .mockResolvedValueOnce({
+            projects: [
+              {
+                project_id: 'demo',
+                default_temperature: 0,
+                default_thinking_effort: '',
+                source_format: 'claude',
+                auto_load: ['AGENTS.md', '  '],
+              },
+              { project_id: 'bare', source_format: 'cursor' },
+            ],
+          })
+          .mockResolvedValueOnce({ projects: 'not a list' }),
+      },
+    );
+
+    // 0 is a real temperature and '' the explicit provider-default effort.
+    expect(state.projects[0]).toMatchObject({
+      project_id: 'demo',
       default_temperature: 0,
       default_thinking_effort: '',
+      source_format: 'claude',
+      auto_load: ['AGENTS.md'],
     });
+    // Absent values get stable defaults; an unknown format falls back.
+    expect(state.projects[1]).toMatchObject({
+      project_id: 'bare',
+      display_name: '',
+      cwd_exists: false,
+      default_temperature: null,
+      default_thinking_effort: null,
+      source_format: 'opencode',
+      auto_load: [],
+      allowed_tools: [],
+      skills_bundled_enabled: [],
+      skills_global_enabled: [],
+      skills_project_disabled: [],
+    });
+    // The form seeded from the normalized record starts without changes.
+    expect(controller.pendingChanges()).toEqual({});
+
+    await controller.loadProjects();
+    expect(state.projects).toEqual([]);
+    expect(state.selectedProjectId).toBe('');
   });
 
-  it('omits the default knobs when blank / the no-default sentinel', () => {
-    expect(
-      buildAddProjectPayload({
-        cwd: 'C:/repos/demo',
-        default_temperature: '',
-        default_thinking_effort: PROJECT_THINKING_EFFORT_NO_DEFAULT,
+  it('degrades failed or malformed catalogs to empty lists', async () => {
+    const state = createProjectsState();
+    const controller = createProjectsController({
+      operations: operations({
+        listModels: vi.fn().mockResolvedValue({ models: [{ id: 'm' }] }),
+        listConnections: vi.fn().mockResolvedValue({}),
+        listTools: vi.fn().mockRejectedValue(new Error('offline')),
       }),
-    ).toEqual({ cwd: 'C:/repos/demo' });
+      state,
+    });
+
+    await controller.loadCatalogs();
+
+    expect(state.availableModels).toEqual([{ id: 'm' }]);
+    expect(state.availableConnections).toEqual([]);
+    expect(state.toolCatalog).toEqual([]);
+    expect(state.defaultProjectTools).toEqual([]);
   });
 
-  it('includes a known source format and omits blank/unknown ones', () => {
-    expect(
-      buildAddProjectPayload({ cwd: 'C:/repos/demo', source_format: 'claude' }),
-    ).toEqual({ cwd: 'C:/repos/demo', source_format: 'claude' });
-    // Absent/blank → the server auto-detects; unknown values are never sent.
-    expect(
-      buildAddProjectPayload({ cwd: 'C:/repos/demo', source_format: '' }),
-    ).toEqual({ cwd: 'C:/repos/demo' });
-    expect(
-      buildAddProjectPayload({ cwd: 'C:/repos/demo', source_format: 'cursor' }),
-    ).toEqual({ cwd: 'C:/repos/demo' });
+  it('rejects an older Projects list response after a newer load wins', async () => {
+    const older = deferred();
+    const newer = deferred();
+    const projectOperations = operations({
+      listProjects: vi
+        .fn()
+        .mockReturnValueOnce(older.promise)
+        .mockReturnValueOnce(newer.promise),
+      showProject: vi.fn().mockResolvedValue({ scan: null }),
+    });
+    const state = createProjectsState();
+    const controller = createProjectsController({
+      operations: projectOperations,
+      state,
+    });
+
+    const olderLoad = controller.loadProjects();
+    const newerLoad = controller.loadProjects();
+    newer.resolve({
+      projects: [
+        {
+          project_id: 'new-project',
+          display_name: 'New project',
+          cwd: 'C:/new',
+        },
+      ],
+    });
+    expect(await newerLoad).toBe(true);
+    expect(state.projects).toMatchObject([{ project_id: 'new-project' }]);
+    expect(state.selectedProjectId).toBe('new-project');
+
+    older.resolve({ projects: [] });
+    expect(await olderLoad).toBe(false);
+    expect(state.projects).toMatchObject([{ project_id: 'new-project' }]);
+  });
+
+  it('reloads Projects on token changes and defers replacement while a modal is open', async () => {
+    const oldProject = {
+      project_id: 'project-one',
+      display_name: 'Old name',
+      cwd: 'C:/repo',
+    };
+    const refreshedProject = { ...oldProject, display_name: 'Fresh name' };
+    const projectOperations = operations({
+      listProjects: vi
+        .fn()
+        .mockResolvedValueOnce({ projects: [oldProject] })
+        .mockResolvedValueOnce({ projects: [refreshedProject] }),
+      showProject: vi.fn().mockResolvedValue({ scan: null }),
+    });
+    const state = createProjectsState();
+    const controller = createProjectsController({
+      operations: projectOperations,
+      state,
+    });
+
+    await controller.loadProjects();
+    controller.updateProjectsRefreshToken(0);
+    controller.openAdd();
+    await controller.updateProjectsRefreshToken(1);
+
+    expect(projectOperations.listProjects).toHaveBeenCalledTimes(2);
+    expect(state.projects[0].display_name).toBe('Old name');
+
+    controller.closeAdd();
+
+    expect(state.projects[0].display_name).toBe('Fresh name');
+    expect(state.selectedProjectId).toBe('project-one');
   });
 });
 
-describe('buildManageProjectPayload', () => {
-  const project = {
+describe('Projects controller editing', () => {
+  const STORED = {
     display_name: 'Demo',
     default_agent: 'builder',
     default_model: 'openai/gpt-5.2',
+    default_temperature: 0.5,
+    default_thinking_effort: 'high',
+    source_format: 'opencode',
     auto_load: ['AGENTS.md'],
+    allowed_tools: ['read', 'edit'],
   };
 
-  it('returns an empty change set when nothing changed', () => {
-    const changes = buildManageProjectPayload(
+  // Each case edits the form of the stored Project above (plus `stored`
+  // deviations) and saves; project.set receives only the fields that changed.
+  it.each([
+    ['nothing for an untouched form', {}, {}, null],
+    [
+      'a renamed Project',
+      {},
+      { display_name: 'Renamed' },
+      { display_name: 'Renamed' },
+    ],
+    [
+      'null for a cleared display name (the id default)',
+      {},
+      { display_name: '' },
+      { display_name: null },
+    ],
+    [
+      'null for a cleared pointer',
+      {},
+      { default_agent: '' },
+      { default_agent: null },
+    ],
+    [
+      'a changed pointer, trimmed',
+      {},
+      { default_agent: '  planner  ' },
+      { default_agent: 'planner' },
+    ],
+    [
+      'the ordered auto-load list',
+      {},
+      { auto_load: ['README.md', 'AGENTS.md'] },
+      { auto_load: ['README.md', 'AGENTS.md'] },
+    ],
+    [
+      'a changed source format',
+      {},
+      { source_format: 'claude' },
+      { source_format: 'claude' },
+    ],
+    [
+      'nothing for an emptied source format, which is required',
+      {},
+      { source_format: '' },
+      null,
+    ],
+    [
+      'a changed temperature as a number',
+      {},
+      { default_temperature: '0,2' },
+      { default_temperature: 0.2 },
+    ],
+    [
+      'null for an emptied temperature',
+      {},
+      { default_temperature: '' },
+      { default_temperature: null },
+    ],
+    [
+      '0 as a real temperature versus a stored null',
+      { default_temperature: null },
+      { default_temperature: '0' },
+      { default_temperature: 0 },
+    ],
+    [
+      'null for the no-default thinking effort',
+      {},
+      { default_thinking_effort: PROJECT_THINKING_EFFORT_NO_DEFAULT },
+      { default_thinking_effort: null },
+    ],
+    [
+      '"" to force the provider-default thinking effort',
+      {},
+      { default_thinking_effort: '' },
+      { default_thinking_effort: '' },
+    ],
+    [
+      'a changed thinking effort',
+      {},
+      { default_thinking_effort: 'low' },
+      { default_thinking_effort: 'low' },
+    ],
+    [
+      'nothing for reordered whitelist tools',
+      {},
+      { allowed_tools: ['edit', 'read'] },
+      null,
+    ],
+    [
+      'an empty Tool Whitelist as every tool off',
+      {},
+      { allowed_tools: [] },
+      { allowed_tools: [] },
+    ],
+    [
+      'changed Skill rules',
+      {},
       {
-        display_name: 'Demo',
-        default_agent: 'builder',
-        default_model: 'openai/gpt-5.2',
-        auto_load: ['AGENTS.md'],
+        skills_bundled_enabled: ['pdf'],
+        skills_project_disabled: ['debugging'],
       },
-      project,
-    );
-    expect(changes).toEqual({});
-    expect(hasManageChanges(changes)).toBe(false);
+      {
+        skills_bundled_enabled: ['pdf'],
+        skills_project_disabled: ['debugging'],
+      },
+    ],
+  ])('saves %s', async (_label, stored, edits, expected) => {
+    const { controller, operations: projectOperations } =
+      await loadedController({ ...STORED, ...stored });
+    for (const [field, value] of Object.entries(edits)) {
+      controller.updateEditField(field, value);
+    }
+
+    await expect(controller.saveSelectedProject()).resolves.toBe(true);
+
+    if (expected === null) {
+      expect(projectOperations.setProject).not.toHaveBeenCalled();
+    } else {
+      expect(projectOperations.setProject).toHaveBeenCalledWith(
+        'demo',
+        expected,
+      );
+    }
   });
 
-  it('emits only the fields that actually changed (sparse)', () => {
-    const changes = buildManageProjectPayload(
-      {
-        display_name: 'Renamed',
-        default_agent: 'builder',
-        default_model: 'openai/gpt-5.2',
-        auto_load: ['AGENTS.md', 'README.md'],
-      },
-      project,
-    );
-    expect(changes).toEqual({
-      display_name: 'Renamed',
-      auto_load: ['AGENTS.md', 'README.md'],
+  it('reconciles the saved Project and its scan into the list, form and Team', async () => {
+    const stored = {
+      project_id: 'demo',
+      display_name: 'Demo',
+      cwd: 'C:/repos/demo',
+      source_format: 'opencode',
+    };
+    const saved = { ...stored, source_format: 'claude' };
+    const { controller, state } = await loadedController(stored, {
+      listProjects: vi
+        .fn()
+        .mockResolvedValueOnce({ projects: [stored] })
+        .mockResolvedValue({ projects: [saved] }),
+      setProject: vi.fn().mockResolvedValue({
+        project: saved,
+        scan: { team: [{ agent_id: 'claude-reviewer' }] },
+      }),
     });
-    expect(hasManageChanges(changes)).toBe(true);
+
+    controller.updateEditField('source_format', 'claude');
+    await controller.saveSelectedProject({ manual: true });
+
+    expect(state.projects[0].source_format).toBe('claude');
+    expect(state.editForm.source_format).toBe('claude');
+    expect(controller.pendingChanges()).toEqual({});
+    // The Source Format decides the Team, so the saved scan replaces it.
+    expect(state.activeTeam.map((entry) => entry.agent_id)).toEqual([
+      'claude-reviewer',
+    ]);
   });
 
-  it('clears a default pointer to null when emptied', () => {
-    const changes = buildManageProjectPayload(
-      {
-        display_name: 'Demo',
-        default_agent: '',
-        default_model: 'openai/gpt-5.2',
-        auto_load: ['AGENTS.md'],
-      },
-      project,
-    );
-    // null clears the pointer (backend maps None → ""); a sent "" would be
-    // rejected as invalid_request.
-    expect(changes).toEqual({ default_agent: null });
-    expect(hasManageChanges(changes)).toBe(true);
+  it('preserves edits made while a Project save is in flight', async () => {
+    const firstSave = deferred();
+    let persistedProject = {
+      project_id: 'project-one',
+      display_name: 'Project one',
+      cwd: 'C:/repo',
+    };
+    const setProject = vi
+      .fn()
+      .mockImplementationOnce(async (_projectId, changes) => {
+        await firstSave.promise;
+        persistedProject = { ...persistedProject, ...changes };
+        return { project: persistedProject, scan: {} };
+      })
+      .mockImplementationOnce(async (_projectId, changes) => {
+        persistedProject = { ...persistedProject, ...changes };
+        return { project: persistedProject, scan: {} };
+      });
+    const state = createProjectsState({ selectedProjectId: 'project-one' });
+    state.projects = [persistedProject];
+    state.editForm = createProjectsState().editForm;
+    state.editForm.display_name = persistedProject.display_name;
+    const controller = createProjectsController({
+      operations: operations({
+        listProjects: vi.fn(() => ({
+          projects: [{ ...persistedProject }],
+        })),
+        setProject,
+        showProject: vi.fn().mockResolvedValue({ scan: {} }),
+      }),
+      state,
+    });
+
+    controller.updateEditField('display_name', 'First draft');
+    const initialSave = controller.saveSelectedProject();
+    controller.updateEditField('display_name', 'Latest draft');
+    firstSave.resolve();
+    await expect(initialSave).resolves.toBe(true);
+
+    expect(state.editForm.display_name).toBe('Latest draft');
+    expect(controller.pendingChanges()).toEqual({
+      display_name: 'Latest draft',
+    });
+
+    await expect(controller.saveSelectedProject()).resolves.toBe(true);
+    expect(setProject).toHaveBeenNthCalledWith(2, 'project-one', {
+      display_name: 'Latest draft',
+    });
   });
 
-  it('sends a changed pointer as a trimmed string', () => {
-    const changes = buildManageProjectPayload(
-      {
-        display_name: 'Demo',
-        default_agent: '  planner  ',
-        default_model: 'openai/gpt-5.2',
-        auto_load: ['AGENTS.md'],
-      },
-      project,
-    );
-    expect(changes).toEqual({ default_agent: 'planner' });
+  it('changes whitelist membership idempotently', async () => {
+    const { controller, state } = await loadedController({
+      allowed_tools: ['read'],
+    });
+
+    controller.updateListField('allowed_tools', 'read', true);
+    controller.updateListField('allowed_tools', 'bash', false);
+    controller.updateListField('allowed_tools', '  ', true);
+    expect(state.editForm.allowed_tools).toEqual(['read']);
+
+    controller.updateListField('allowed_tools', ' edit ', true);
+    controller.updateListField('allowed_tools', 'read', false);
+    expect(state.editForm.allowed_tools).toEqual(['edit']);
   });
 
-  it('clears an emptied optional display_name to its id default', () => {
-    const changes = buildManageProjectPayload(
-      {
-        display_name: '',
-        default_agent: 'builder',
-        default_model: 'openai/gpt-5.2',
-        auto_load: ['AGENTS.md'],
-      },
-      project,
-    );
-    expect(changes).toEqual({ display_name: null });
+  it('preserves duplicate auto-load entries and rejects invalid or busy moves', () => {
+    const state = createProjectsState();
+    const controller = createProjectsController({
+      operations: operations(),
+      state,
+    });
+    state.editForm.auto_load = ['AGENTS.md', 'NOTES.md', 'AGENTS.md'];
+    for (const [from, to] of [
+      [0, 0],
+      [-1, 1],
+      [0, 3],
+      [3, 0],
+      [null, 1],
+      [0, 1.5],
+    ]) {
+      expect(controller.moveAutoLoadEntry(from, to)).toBe(false);
+    }
+    state.editSaving = true;
+    expect(controller.moveAutoLoadEntry(0, 1)).toBe(false);
+    state.editSaving = false;
+    expect(state.editForm.auto_load).toEqual([
+      'AGENTS.md',
+      'NOTES.md',
+      'AGENTS.md',
+    ]);
+    expect(controller.moveAutoLoadEntry(0, 1)).toBe(true);
+    expect(state.editForm.auto_load).toEqual([
+      'NOTES.md',
+      'AGENTS.md',
+      'AGENTS.md',
+    ]);
+  });
+
+  it('owns auto-save timing and cancels pending work when destroyed', async () => {
+    vi.useFakeTimers();
+    const controller = createProjectsController({
+      operations: operations(),
+      autoSaveDelayMs: 20,
+    });
+    const firstSave = vi.fn();
+    const secondSave = vi.fn();
+
+    controller.scheduleAutoSave(firstSave);
+    controller.scheduleAutoSave(secondSave);
+    await vi.advanceTimersByTimeAsync(20);
+    expect(firstSave).not.toHaveBeenCalled();
+    expect(secondSave).toHaveBeenCalledOnce();
+
+    controller.scheduleAutoSave(secondSave);
+    controller.destroy();
+    await vi.advanceTimersByTimeAsync(20);
+    expect(secondSave).toHaveBeenCalledOnce();
   });
 });
 
-describe('buildManageProjectPayload source format', () => {
-  const project = { display_name: 'Demo', source_format: 'opencode' };
+describe('Projects controller add dialog', () => {
+  async function addWith(fields, detected) {
+    vi.useFakeTimers();
+    const detectProject = vi.fn().mockResolvedValue(detected);
+    const addProject = vi.fn().mockResolvedValue({
+      project: { project_id: 'demo' },
+      scan: {},
+    });
+    const controller = createProjectsController({
+      operations: operations({
+        addProject,
+        detectProject,
+        listProjects: vi.fn().mockResolvedValue({ projects: [] }),
+        showProject: vi.fn().mockResolvedValue({ scan: {} }),
+      }),
+      detectDelayMs: 20,
+    });
+    controller.openAdd();
+    for (const [field, value] of Object.entries(fields)) {
+      controller.updateAddField(field, value);
+    }
+    await vi.advanceTimersByTimeAsync(20);
+    await controller.submitAdd();
+    return { addProject, controller };
+  }
 
-  it('emits a changed source format', () => {
-    expect(
-      buildManageProjectPayload(
-        { display_name: 'Demo', source_format: 'claude' },
-        project,
-      ),
-    ).toEqual({ source_format: 'claude' });
+  const cwd = 'C:/repos/demo';
+
+  it.each([
+    [
+      'trims the path and omits blank optional fields',
+      { cwd: `  ${cwd}  `, display_name: '  ' },
+      null,
+      { cwd },
+    ],
+    [
+      'includes a typed display name',
+      { cwd, display_name: 'Demo' },
+      null,
+      { cwd, display_name: 'Demo' },
+    ],
+    [
+      'sends the chosen source format when both formats were detected',
+      { cwd, source_format: 'claude' },
+      { formats: { opencode: { agents: 1 }, claude: { skills: 2 } } },
+      { cwd, source_format: 'claude' },
+    ],
+    [
+      'lets the server pick the format when only one was detected',
+      { cwd, source_format: 'claude' },
+      { formats: { claude: { agents: 1 } } },
+      { cwd },
+    ],
+    [
+      'adds a found CLAUDE.md the user opted into',
+      { cwd, include_claude_md: true },
+      { context_files: { agents_md: false, claude_md: 'CLAUDE.md' } },
+      { cwd, auto_load: ['CLAUDE.md'] },
+    ],
+    [
+      'never adds CLAUDE.md next to an AGENTS.md',
+      { cwd, include_claude_md: true },
+      { context_files: { agents_md: true, claude_md: 'CLAUDE.md' } },
+      { cwd },
+    ],
+  ])('%s', async (_label, fields, detected, expected) => {
+    const { addProject, controller } = await addWith(fields, detected);
+
+    expect(addProject).toHaveBeenCalledWith(expected);
+    expect(controller.state.isAddOpen).toBe(false);
+    expect(controller.state.selectedProjectId).toBe('demo');
   });
 
-  it('treats an unchanged or empty source format as no change', () => {
-    expect(
-      buildManageProjectPayload(
-        { display_name: 'Demo', source_format: 'opencode' },
-        project,
-      ),
-    ).toEqual({});
-    // source_format is required non-empty on the backend — never a clear.
-    expect(
-      buildManageProjectPayload(
-        { display_name: 'Demo', source_format: '' },
-        project,
-      ),
-    ).toEqual({});
-  });
-});
-
-describe('normalizeDetectResult / presentFormats / shouldSuggestClaudeMd', () => {
-  it('normalizes counts, presence, and context files', () => {
-    const detect = normalizeDetectResult({
+  it('debounces path detection and normalizes the winning result', async () => {
+    vi.useFakeTimers();
+    const detectProject = vi.fn().mockResolvedValue({
       cwd_exists: true,
       formats: {
         opencode: { agents: 2, skills: 0 },
@@ -205,256 +584,304 @@ describe('normalizeDetectResult / presentFormats / shouldSuggestClaudeMd', () =>
       },
       context_files: { agents_md: true, claude_md: 'CLAUDE.md' },
     });
-
-    expect(detect.cwd_exists).toBe(true);
-    expect(detect.formats.opencode).toEqual({
-      agents: 2,
-      skills: 0,
-      present: true,
+    const controller = createProjectsController({
+      operations: operations({ detectProject }),
+      detectDelayMs: 20,
     });
-    // Skills alone make a format present (≥1 agent OR ≥1 skill).
-    expect(detect.formats.claude.present).toBe(true);
-    expect(detect.agents_md).toBe(true);
-    expect(detect.claude_md).toBe('CLAUDE.md');
-    expect(presentFormats(detect)).toEqual(['opencode', 'claude']);
-  });
+    controller.openAdd();
 
-  it('degrades a missing/foreign response to nothing found', () => {
-    const detect = normalizeDetectResult(null);
+    controller.updateAddField('cwd', 'C:/old');
+    controller.updateAddField('cwd', 'C:/new');
+    await vi.advanceTimersByTimeAsync(20);
 
-    expect(detect.cwd_exists).toBe(false);
-    for (const key of PROJECT_SOURCE_FORMATS) {
-      expect(detect.formats[key]).toEqual({
-        agents: 0,
-        skills: 0,
-        present: false,
-      });
-    }
-    expect(detect.claude_md).toBe(null);
-    expect(presentFormats(detect)).toEqual([]);
-  });
+    expect(detectProject).toHaveBeenCalledOnce();
+    expect(detectProject).toHaveBeenCalledWith('C:/new');
+    // Skills alone make a format present.
+    expect(controller.state.addDetect).toEqual({
+      cwd_exists: true,
+      formats: {
+        opencode: { agents: 2, skills: 0, present: true },
+        claude: { agents: 0, skills: 3, present: true },
+      },
+      agents_md: true,
+      claude_md: 'CLAUDE.md',
+    });
 
-  it('suggests CLAUDE.md only when found and no AGENTS.md exists', () => {
-    expect(
-      shouldSuggestClaudeMd({ agents_md: false, claude_md: 'CLAUDE.md' }),
-    ).toBe(true);
-    expect(
-      shouldSuggestClaudeMd({ agents_md: true, claude_md: 'CLAUDE.md' }),
-    ).toBe(false);
-    expect(shouldSuggestClaudeMd({ agents_md: false, claude_md: null })).toBe(
-      false,
-    );
+    // A missing or foreign response degrades to nothing found.
+    detectProject.mockResolvedValue(null);
+    controller.updateAddField('cwd', 'C:/elsewhere');
+    await vi.advanceTimersByTimeAsync(20);
+    expect(controller.state.addDetect).toEqual({
+      cwd_exists: false,
+      formats: {
+        opencode: { agents: 0, skills: 0, present: false },
+        claude: { agents: 0, skills: 0, present: false },
+      },
+      agents_md: false,
+      claude_md: null,
+    });
   });
 });
 
-describe('buildManageProjectPayload default knobs', () => {
-  const baseProject = {
-    display_name: 'Demo',
-    default_agent: 'builder',
-    default_model: 'openai/gpt-5.2',
-    default_temperature: 0.5,
-    default_thinking_effort: 'high',
-    auto_load: ['AGENTS.md'],
+describe('Projects controller Team overrides', () => {
+  const scan = {
+    team: [
+      {
+        agent_id: 'builder',
+        overrides: {
+          model: 'openai/gpt-mini',
+          temperature: 0.3,
+          thinking_effort: 'low',
+        },
+        effective: {
+          model: { value: 'openai/gpt-mini', source: 'override' },
+          temperature: { value: 0.3, source: 'override' },
+          thinking_effort: { value: 'low', source: 'override' },
+        },
+      },
+      {
+        agent_id: 'planner',
+        overrides: null,
+        effective: {
+          model: { value: 'openai/gpt-5.2', source: 'agent' },
+          temperature: { value: null, source: null },
+          thinking_effort: { value: 'high', source: 'project_default' },
+        },
+      },
+    ],
   };
 
-  function form(overrides) {
-    return {
-      display_name: 'Demo',
-      default_agent: 'builder',
-      default_model: 'openai/gpt-5.2',
-      default_temperature: '0.5',
-      default_thinking_effort: 'high',
-      auto_load: ['AGENTS.md'],
-      ...overrides,
-    };
-  }
+  it('seeds override drafts from overrides, else from the effective values', async () => {
+    const { controller } = await loadedController();
+    controller.selectProject('demo', scan);
 
-  it('emits no knob changes when they match the stored values', () => {
-    expect(buildManageProjectPayload(form(), baseProject)).toEqual({});
-  });
-
-  it('emits a changed temperature as a number', () => {
-    expect(
-      buildManageProjectPayload(
-        form({ default_temperature: '0.2' }),
-        baseProject,
-      ),
-    ).toEqual({ default_temperature: 0.2 });
-  });
-
-  it('clears temperature to null when the box is emptied', () => {
-    expect(
-      buildManageProjectPayload(form({ default_temperature: '' }), baseProject),
-    ).toEqual({ default_temperature: null });
-  });
-
-  it('treats 0 as a real temperature change versus a stored null', () => {
-    const project = { ...baseProject, default_temperature: null };
-    expect(
-      buildManageProjectPayload(form({ default_temperature: '0' }), project),
-    ).toEqual({ default_temperature: 0 });
-  });
-
-  it('clears thinking effort to null via the no-default sentinel', () => {
-    expect(
-      buildManageProjectPayload(
-        form({ default_thinking_effort: PROJECT_THINKING_EFFORT_NO_DEFAULT }),
-        baseProject,
-      ),
-    ).toEqual({ default_thinking_effort: null });
-  });
-
-  it('sends "" to force the provider default', () => {
-    expect(
-      buildManageProjectPayload(
-        form({ default_thinking_effort: '' }),
-        baseProject,
-      ),
-    ).toEqual({ default_thinking_effort: '' });
-  });
-
-  it('sends a changed effort level', () => {
-    expect(
-      buildManageProjectPayload(
-        form({ default_thinking_effort: 'low' }),
-        baseProject,
-      ),
-    ).toEqual({ default_thinking_effort: 'low' });
-  });
-});
-
-describe('buildDefaultAgentOptions', () => {
-  it('leads with the empty option and lists the scanned team', () => {
-    const options = buildDefaultAgentOptions({
-      team: [
-        { agent_id: 'builder', display_name: 'Builder' },
-        { agent_id: 'planner', display_name: 'planner' },
-      ],
-      currentValue: 'builder',
-      emptyLabel: 'No project default',
+    expect(controller.overrideDraft('builder')).toEqual({
+      model: 'openai/gpt-mini',
+      temperature: '0.3',
+      thinking_effort: 'low',
+      compaction_policy: null,
+      tool_access: { mode: 'all' },
     });
-
-    expect(options).toEqual([
-      { value: '', label: 'No project default' },
-      { value: 'builder', label: 'Builder', secondaryLabel: 'builder' },
-      { value: 'planner', label: 'planner', secondaryLabel: '' },
-    ]);
-  });
-
-  it('keeps a stored agent that is no longer in the team as a trailing option', () => {
-    const options = buildDefaultAgentOptions({
-      team: [{ agent_id: 'builder', display_name: 'Builder' }],
-      currentValue: 'ghost',
-      emptyLabel: '—',
-      unavailableLabel: (agentId) => `${agentId} (gone)`,
-    });
-
-    expect(options).toEqual([
-      { value: '', label: '—' },
-      { value: 'builder', label: 'Builder', secondaryLabel: 'builder' },
-      { value: 'ghost', label: 'ghost (gone)' },
-    ]);
-  });
-
-  it('does not duplicate a stored agent that is already in the team', () => {
-    const options = buildDefaultAgentOptions({
-      team: [{ agent_id: 'builder', display_name: 'Builder' }],
-      currentValue: 'builder',
-      emptyLabel: '—',
-    });
-
-    expect(options.filter((option) => option.value === 'builder')).toHaveLength(
-      1,
-    );
-  });
-});
-
-describe('needsRePoint / buildRePointPayload', () => {
-  it('only treats an explicit cwd_exists false as needing re-point', () => {
-    expect(needsRePoint({ cwd_exists: false })).toBe(true);
-    expect(needsRePoint({ cwd_exists: true })).toBe(false);
-    expect(needsRePoint({})).toBe(false);
-    expect(needsRePoint(null)).toBe(false);
-  });
-
-  it('builds a trimmed cwd-only re-point payload', () => {
-    expect(buildRePointPayload('  C:/repos/moved  ')).toEqual({
-      cwd: 'C:/repos/moved',
+    expect(controller.overrideDraft('planner')).toEqual({
+      model: 'openai/gpt-5.2',
+      temperature: '',
+      thinking_effort: 'high',
+      compaction_policy: null,
+      tool_access: { mode: 'all' },
     });
   });
-});
 
-describe('normalizeProject / normalizeProjects', () => {
-  it('normalizes a project into a stable display shape', () => {
-    expect(
-      normalizeProject({
-        project_id: 'demo',
-        display_name: 'Demo',
-        cwd: 'C:/repos/demo',
-        cwd_exists: true,
-        default_agent: 'builder',
-        default_model: '',
-        default_temperature: 0.4,
-        default_thinking_effort: 'high',
-        auto_load: ['AGENTS.md', '  '],
-        created_at: '2026-06-18T00:00:00Z',
-        updated_at: '2026-06-18T01:00:00Z',
+  // null: the draft holds no number, so the override is refused unsent.
+  it.each([
+    ['0,7', 0.7],
+    ['0', 0],
+    ['', null],
+    ['abc', null],
+  ])('sets the override temperature typed as %j to %j', async (draft, sent) => {
+    const setOverride = vi.fn().mockResolvedValue({ scan });
+    const { controller } = await loadedController({}, { setOverride });
+    controller.selectProject('demo', scan);
+    controller.updateOverrideDraft('planner', 'temperature', draft);
+
+    await expect(
+      controller.setMemberOverride('planner', 'temperature'),
+    ).resolves.toBe(sent !== null);
+    if (sent === null) {
+      expect(setOverride).not.toHaveBeenCalled();
+    } else {
+      expect(setOverride).toHaveBeenCalledWith(
+        'demo',
+        'planner',
+        'temperature',
+        sent,
+      );
+    }
+  });
+
+  it('owns overrides and re-pointing without leaking transport details', async () => {
+    const setOverride = vi.fn().mockResolvedValue({ scan: {} });
+    const clearOverride = vi.fn().mockResolvedValue({ scan: {} });
+    const setProject = vi.fn().mockResolvedValue({
+      project: {
+        project_id: 'project-one',
+        display_name: 'Project one',
+        cwd: 'C:/repo',
+      },
+      scan: {},
+    });
+    const state = createProjectsState({ selectedProjectId: 'project-one' });
+    state.projects = [
+      {
+        project_id: 'project-one',
+        display_name: 'Project one',
+        cwd: 'C:/old',
+      },
+    ];
+    const controller = createProjectsController({
+      operations: operations({
+        clearOverride,
+        listProjects: vi.fn().mockResolvedValue({ projects: state.projects }),
+        setOverride,
+        setProject,
+        showProject: vi.fn().mockResolvedValue({ scan: {} }),
       }),
-    ).toEqual({
-      project_id: 'demo',
-      display_name: 'Demo',
-      cwd: 'C:/repos/demo',
-      cwd_exists: true,
-      default_agent: 'builder',
-      default_model: '',
-      default_temperature: 0.4,
-      default_thinking_effort: 'high',
-      source_format: 'opencode',
-      auto_load: ['AGENTS.md'],
-      allowed_tools: [],
-      skills_bundled_enabled: [],
-      skills_global_enabled: [],
-      skills_project_disabled: [],
-      created_at: '2026-06-18T00:00:00Z',
-      updated_at: '2026-06-18T01:00:00Z',
+      state,
     });
-  });
 
-  it('defaults the knobs to null and preserves a "" provider-default effort', () => {
-    const noDefaults = normalizeProject({ project_id: 'demo' });
-    expect(noDefaults.default_temperature).toBeNull();
-    expect(noDefaults.default_thinking_effort).toBeNull();
+    controller.updateOverrideDraft('builder', 'model', 'gpt');
+    await controller.setMemberOverride('builder', 'model');
+    await controller.clearMemberOverride('builder', 'model');
+    controller.openRePoint(state.projects[0]);
+    state.rePointCwd = ' C:/repo ';
+    await controller.submitRePoint();
 
-    // 0 is a real temperature, "" is the explicit provider-default effort — both
-    // are preserved (not coerced to null).
-    const explicit = normalizeProject({
-      project_id: 'demo',
-      default_temperature: 0,
-      default_thinking_effort: '',
-    });
-    expect(explicit.default_temperature).toBe(0);
-    expect(explicit.default_thinking_effort).toBe('');
-  });
-
-  it('keeps a known source format and defaults an absent/unknown one', () => {
-    expect(
-      normalizeProject({ project_id: 'demo', source_format: 'claude' })
-        .source_format,
-    ).toBe('claude');
-    expect(normalizeProject({ project_id: 'demo' }).source_format).toBe(
-      'opencode',
+    expect(setOverride).toHaveBeenCalledWith(
+      'project-one',
+      'builder',
+      'model',
+      'gpt',
     );
+    expect(clearOverride).toHaveBeenCalledWith(
+      'project-one',
+      'builder',
+      'model',
+    );
+    expect(setProject).toHaveBeenCalledWith('project-one', { cwd: 'C:/repo' });
+  });
+});
+
+// Chat's Project context consumes these scan projections too, so they keep
+// direct tests of their shape.
+describe('Project scan projections', () => {
+  it('projects the scan Team into display-ready members with overrides and provenance', () => {
     expect(
-      normalizeProject({ project_id: 'demo', source_format: 'cursor' })
-        .source_format,
-    ).toBe('opencode');
+      projectTeam({
+        team: [
+          {
+            agent_id: 'builder',
+            display_name: 'Builder',
+            description: 'Builds things',
+            model: 'openai/gpt-5.2',
+            temperature: 0.2,
+            thinking_effort: 'high',
+            source_format: 'opencode',
+            source_path: '.opencode/agents/builder.md',
+            denied_tools: ['bash'],
+            tools: { subagent: { allowed_agents: ['builder'] } },
+            overrides: { model: 'openai/gpt-mini', unknown: 'x' },
+            effective: {
+              model: { value: 'openai/gpt-mini', source: 'override' },
+              temperature: { value: 0.2, source: 'agent' },
+              thinking_effort: { value: 'high', source: 'agent' },
+            },
+          },
+          { agent_id: 'planner', overrides: { unknown: 'x' } },
+        ],
+      }),
+    ).toEqual([
+      {
+        agent_id: 'builder',
+        display_name: 'Builder',
+        description: 'Builds things',
+        model: 'openai/gpt-5.2',
+        temperature: 0.2,
+        thinking_effort: 'high',
+        source_format: 'opencode',
+        source_path: '.opencode/agents/builder.md',
+        denied_tools: ['bash'],
+        tools: { subagent: { allowed_agents: ['builder'] } },
+        // Only the known override fields survive.
+        overrides: { model: 'openai/gpt-mini' },
+        effective: {
+          model: { value: 'openai/gpt-mini', source: 'override' },
+          temperature: { value: 0.2, source: 'agent' },
+          thinking_effort: { value: 'high', source: 'agent' },
+          tool_access: { value: { mode: 'all' }, source: null },
+        },
+      },
+      {
+        agent_id: 'planner',
+        display_name: 'planner',
+        description: '',
+        model: '',
+        temperature: null,
+        thinking_effort: null,
+        source_format: '',
+        source_path: '',
+        denied_tools: [],
+        tools: {},
+        // An override object without known fields counts as no override.
+        overrides: null,
+        effective: {
+          model: { value: null, source: null },
+          temperature: { value: null, source: null },
+          thinking_effort: { value: null, source: null },
+          tool_access: { value: { mode: 'all' }, source: null },
+        },
+      },
+    ]);
+    expect(projectTeam({})).toEqual([]);
+    expect(projectTeam(undefined)).toEqual([]);
   });
 
-  it('coerces a missing cwd_exists to false and tolerates a non-list', () => {
-    const project = normalizeProject({ project_id: 'demo' });
-    expect(project.cwd_exists).toBe(false);
-    expect(project.auto_load).toEqual([]);
-    expect(normalizeProjects(undefined)).toEqual([]);
-    expect(normalizeProjects([{ project_id: 'a' }]).length).toBe(1);
+  it('treats a missing or clean scan report as healthy', () => {
+    for (const report of [undefined, { clean: true, findings: [] }]) {
+      expect(normalizeScanReport(report)).toMatchObject({
+        clean: true,
+        findingCount: 0,
+        groups: [],
+      });
+    }
+    // Without a clean flag the findings decide.
+    expect(
+      normalizeScanReport({
+        findings: [{ type: FINDING_TYPE_BAD_MODEL, detail: 'x' }],
+      }).clean,
+    ).toBe(false);
+  });
+
+  it('groups scan findings by type in the stable display order', () => {
+    const report = normalizeScanReport({
+      clean: false,
+      findings: [
+        {
+          type: FINDING_TYPE_ORPHAN,
+          detail: 'orphan pointer',
+          agent_id: 'ghost',
+        },
+        {
+          type: FINDING_TYPE_SLUG_COLLISION,
+          detail: 'two on one id',
+          agent_id: 'dup',
+          source_path: 'a.md',
+        },
+        { type: FINDING_TYPE_BAD_MODEL, detail: 'bad model', agent_id: 'b' },
+        {
+          type: FINDING_TYPE_UNSLUGIFIABLE_NAME,
+          detail: 'no slug',
+          agent_id: '',
+        },
+        {
+          type: FINDING_TYPE_SLUG_COLLISION,
+          detail: 'another collision',
+          agent_id: 'dup2',
+        },
+        {
+          type: FINDING_TYPE_UNAVAILABLE_TOOL,
+          detail: 'extension tool is unavailable',
+        },
+      ],
+    });
+
+    expect(report.clean).toBe(false);
+    expect(report.findingCount).toBe(6);
+    expect(report.groups.map((group) => group.type)).toEqual([
+      FINDING_TYPE_SLUG_COLLISION,
+      FINDING_TYPE_UNSLUGIFIABLE_NAME,
+      FINDING_TYPE_BAD_MODEL,
+      FINDING_TYPE_ORPHAN,
+      FINDING_TYPE_UNAVAILABLE_TOOL,
+    ]);
+    expect(report.groups[0].findings).toHaveLength(2);
   });
 });

@@ -44,4 +44,4 @@ The view forwards user intent to the controller; the controller alone sequences 
 - Controller, normalization, payload builders, Team provenance: `webui/src/lib/projectsView.js`
 - Management surface: `webui/src/components/ProjectsView.svelte` and Project components under `webui/src/components/`
 - Transport wrappers: Project methods in `webui/src/lib/api.js`
-- Focused coverage: `webui/src/lib/__tests__/projectsView.test.js`, `projectsView.test.controller.test.js`, and Project component tests under `webui/src/components/__tests__/`
+- Focused coverage: `webui/src/lib/__tests__/projectsView.test.js` and Project component tests under `webui/src/components/__tests__/`
