@@ -9,7 +9,7 @@ import pytest
 from core.tools.apply_patch import register_apply_patch_tool
 from core.tools.file_state import FileReadState
 from core.tools.tools import ToolCall, ToolExecutionConfig, ToolExecutor, ToolRegistry
-from tests.core.tools.apply_patch_helpers import apply, context, update
+from tests.core.tools.apply_patch_helpers import apply, context, text, update
 
 
 @pytest.mark.asyncio
@@ -177,16 +177,87 @@ def test_context_block_constrains_later_edit(tmp_path, anchor):
     [
         ("@@\n missing\n@@\n-value=1\n+value=2", "context_not_found"),
         ("@@\n marker\n@@\n-value=1\n+value=2", "ambiguous_context"),
-        ("@@\n first\n@@\n-value=1\n+value=2", "ambiguous_match"),
         ("@@\n second\n@@\n first\n@@\n-value=1\n+value=2", "context_not_found"),
+        # Without an @@ line or an earlier change, nothing orders the occurrences.
+        ("@@\n-value=1\n+value=2", "ambiguous_match"),
+        # Lines found only with copy errors never choose among occurrences.
+        ("@@ first\n alpha beta gama delta\n-value=1\n+value=2", "ambiguous_match"),
     ],
 )
 def test_context_constraints_cannot_be_ignored_or_choose_ambiguous_target(tmp_path, body, code):
-    original = b"first\nmarker\nvalue=1\nsecond\nmarker\nvalue=1\n"
+    original = (
+        b"first\nmarker\nalpha beta gamma delta\nvalue=1\n"
+        b"second\nmarker\nalpha beta gamma delta\nvalue=1\n"
+    )
     (tmp_path / "file.txt").write_bytes(original)
     result = apply(tmp_path, update(body))
-    assert result["error"]["code"] == code
+    assert result["error"]["code"] == code, result
     assert (tmp_path / "file.txt").read_bytes() == original
+    if "gama" in body:
+        assert text(result).startswith(
+            "file.txt: the lines to replace do not match the file exactly and resemble 2 "
+            "places (lines 3, 7). Copy the current lines of the one to change exactly, with "
+            "enough unchanged lines around them to tell it apart."
+        )
+    elif code == "ambiguous_match":
+        assert "the first occurrence after that line is changed." in text(result)
+
+
+@pytest.mark.parametrize(
+    ("body", "expected", "note"),
+    [
+        # Session shape: a context block names the enclosing function, and the
+        # function's last lines occur again in a later function.
+        (
+            "@@\n def second():\n@@\n     return value\n+\n+\n+def third():\n+    return 3",
+            b"def first():\n    return value\n\n\ndef second():\n    return value\n\n\n"
+            b"def third():\n    return 3\n\n\ndef last():\n    return value\n",
+            "The lines to replace occur 2 times after 'def second():'; the first, at line 6, "
+            "was changed.",
+        ),
+        # Session shape: identical hunks change successive occurrences in file order.
+        (
+            "@@\n-def first():\n+def first(value):\n@@\n-    return value\n+    return 1\n"
+            "@@\n-    return value\n+    return 2",
+            b"def first(value):\n    return 1\n\n\ndef second():\n    return 2\n\n\n"
+            b"def last():\n    return value\n",
+            "The lines to replace occur 2 times; the first after the previous change in this "
+            "file, at line 6, was changed.",
+        ),
+    ],
+)
+def test_first_occurrence_after_an_at_at_line_or_previous_change_is_changed(
+    tmp_path, body, expected, note
+):
+    path = tmp_path / "file.py"
+    path.write_bytes(
+        b"def first():\n    return value\n\n\ndef second():\n    return value\n\n\n"
+        b"def last():\n    return value\n"
+    )
+    result = apply(tmp_path, update(body, "file.py"))
+    assert result["ok"], result
+    assert path.read_bytes() == expected
+    assert text(result).endswith(f"Note: {note}")
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        # Every occurrence comes before the previous change.
+        "@@\n-end\n+END\n@@\n-x=0\n+x=1",
+        # A change in an earlier Update of the same file orders nothing.
+        "@@\n-start\n+START\n*** Update File: file.txt\n@@\n-x=0\n+x=1",
+        # After a failed hunk, the earlier change no longer tells which one is meant.
+        "@@\n-start\n+START\n@@\n-missing\n+found\n@@\n-x=0\n+x=1",
+    ],
+)
+def test_previous_change_orders_only_later_occurrences_of_the_same_update(tmp_path, body):
+    path = tmp_path / "file.txt"
+    path.write_bytes(b"start\nx=0\nx=0\nend\n")
+    result = apply(tmp_path, update(body))
+    assert result["data"]["status"] == "partial"
+    assert "the lines to replace occur 2 times (lines 2, 3)" in text(result)
+    assert path.read_bytes().count(b"x=0") == 2
 
 
 def test_context_anchor_does_not_leak_to_next_file_or_edit(tmp_path):

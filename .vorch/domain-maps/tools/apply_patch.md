@@ -147,7 +147,18 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   conflicting destinations fail before any writes. Prefixed content remains literal.
 - `@@ context` hints select successive unique whole lines at the hunk's section.
   The final hint may also appear as the first context/removal line. Multiple
-  hints can narrow a section. Numeric unified-diff headers are advisory;
+  hints can narrow a section. Lines a precise strategy finds several times are
+  ordered as in Codex: after a hint, the first occurrence from the hint on is
+  changed; a hunk without hints takes the first occurrence from the line where
+  the same Update's last completed change ended (`_apply_hunks`,
+  `_Batch.change_ends`, `replace_fuzzy(first=True)`), and fails with
+  `ambiguous_match` when none follows. A note names the count and the changed
+  line. Without a hint or an earlier change of that Update, and for `copy_match`
+  passages, several occurrences stay `ambiguous_match`. Evidence (Sessions since
+  2026-09-01, 89 ambiguous hunks): the Agent's later successful edit targeted the
+  first occurrence after the hint in 16 of 16 and after the previous hunk in 44
+  of 45; bare first hunks meant the file's first occurrence only 11 of 15 times,
+  too few to choose silently. Numeric unified-diff headers are advisory;
   content remains authoritative. `*** End of File` restricts matching to EOF;
   when a hunk with context or removed lines fails there, it is retried without
   the marker and, if that places it, applied with a warning naming the marker.
@@ -190,13 +201,16 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   (`_STALE_FAILURE`); the patch was likely written against old content.
 - After any text-entry failure on a path, remaining hunks and `old_string` edits
   on that path allow only unique precise matches (no `copy_match`), preventing
-  tolerance from silently satisfying a failed earlier precondition. Other files
-  retain normal tolerance.
+  tolerance from silently satisfying a failed earlier precondition. The failure
+  also drops that path's `change_ends`, since the failed target still holds its
+  old lines; only a hint then orders occurrences. Other files retain normal
+  tolerance.
 - `fuzzy_match.replace_fuzzy` owns precise matching: exact, normalized (newline,
   Unicode, typography), line-trimmed, and whitespace-normalized, in that order.
   Patch-only options require whole-line matches and constrain EOF. The matcher
   retains its default substring mode for direct callers. Precise matches win;
-  ambiguity at a winning strategy never falls through to a looser strategy.
+  ambiguity at a winning strategy never falls through to a looser strategy
+  (`first=True` takes that strategy's first match instead).
   Ambiguity counts every occurrence, including overlapping ones (repeated
   closing-brace lines) and ones following a filtered partial occurrence, for
   hunks and `@@` anchors alike; `replace_all` still replaces leftmost
@@ -251,7 +265,8 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   candidates are one passage, placed by the fewest differences (a tie between
   different spans stays ambiguous); more
   than one passage at the winning level is `ambiguous_match` (`ambiguous_copy`
-  wording for `old_string`). What (merge): the change from old to new text is
+  wording for `old_string`, `ambiguous_patch_copy` for hunks, which asks for an
+  exact copy instead of an `@@` line). What (merge): the change from old to new text is
   applied to the file's text. A line the edit writes comes out as the caller's
   new text up to the file's spelling of misspelled words: kept text in it must
   match the file up to misspellings and spacing, since a difference there may
@@ -312,7 +327,8 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
 - Context-only blocks before another `@@` become ordered precise locator hints
   for that next hunk, including multiline context. Missing or ambiguous anchors
   fail without falling back to a different location; duplicate matches after
-  the anchor remain ambiguous. Anchors do not leak into subsequent edits or files.
+  the anchor resolve to the first (see the `@@ context` rule above). Anchors do
+  not leak into subsequent edits or files.
   An entirely context-only patch fails with `no_changes`, says that without a
   `-` or `+` line every line stays unchanged, and repeats the description's
   replace/insert-above rule. For each context-only block (at most 3) whose lines
