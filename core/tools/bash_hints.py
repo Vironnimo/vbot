@@ -16,14 +16,16 @@ Design rules (keep these when adding patterns):
   error headers, not deep context.
 * Hints state the *next action*, not a diagnosis essay. One or two
   sentences.
-* Pure functions, no I/O — trivially unit-testable. The single public
-  entry point is ``annotate_failure``.
+* No I/O beyond existence checks in the command's working directory —
+  trivially unit-testable. The single public entry point is
+  ``annotate_failure``.
 """
 
 from __future__ import annotations
 
 import re
 from collections.abc import Callable
+from pathlib import Path
 
 # Bounded scan window: error headers appear early; deep output is noise.
 _SCAN_CHARS = 4000
@@ -40,7 +42,7 @@ _EXIT_CODE_HINTS: dict[int, str] = {
 }
 
 
-def _hint_command_not_found(command: str, output: str) -> str | None:
+def _hint_command_not_found(command: str, output: str, workdir: Path | None) -> str | None:
     # POSIX: bash/sh report "<name>: command not found".
     m = re.search(r"(?:bash: line \d+: |bash: |sh: \d*:? ?)?([\w.+-]+): command not found", output)
     if not m:
@@ -111,7 +113,9 @@ def _quoted_in(name: str, output: str) -> bool:
     return re.search(rf"[{_QUOTES}]{re.escape(name)}[{_QUOTES}]", output) is not None
 
 
-def _hint_powershell_command_not_found(command: str, output: str) -> str | None:
+def _hint_powershell_command_not_found(
+    command: str, output: str, workdir: Path | None
+) -> str | None:
     # Windows: pwsh reports "The term 'X' is not recognized as a name of a
     # cmdlet, function, script file, or executable program."
     m = _POWERSHELL_NOT_RECOGNIZED.search(output)
@@ -151,7 +155,7 @@ _ALIAS_ADVICE: dict[str, tuple[tuple[str, ...], str]] = {
 }
 
 
-def _hint_powershell_alias_flags(command: str, output: str) -> str | None:
+def _hint_powershell_alias_flags(command: str, output: str, workdir: Path | None) -> str | None:
     """A bash flag on a PowerShell alias, such as ``ls -la``, fails parameter binding."""
     for cmdlet, (aliases, advice) in _ALIAS_ADVICE.items():
         if not re.search(rf"^{cmdlet}: ", output, re.M):
@@ -166,7 +170,7 @@ def _hint_powershell_alias_flags(command: str, output: str) -> str | None:
     return None
 
 
-def _hint_select_string_recurse(command: str, output: str) -> str | None:
+def _hint_select_string_recurse(command: str, output: str, workdir: Path | None) -> str | None:
     if not re.search(r"Select-String\b[^|;\n]*-Recurse", command, re.I):
         return None
     if "Select-String" not in output or not _quoted_in("Recurse", output):
@@ -178,7 +182,7 @@ def _hint_select_string_recurse(command: str, output: str) -> str | None:
     )
 
 
-def _hint_powershell_parser_error(command: str, output: str) -> str | None:
+def _hint_powershell_parser_error(command: str, output: str, workdir: Path | None) -> str | None:
     if "ParserError" not in output:
         return None
     if re.search(r"<<-?\s*['\"]?[A-Za-z_]\w*['\"]?", command):
@@ -196,25 +200,95 @@ def _hint_powershell_parser_error(command: str, output: str) -> str | None:
     return None
 
 
-def _hint_dev_null(command: str, output: str) -> str | None:
+def _hint_dev_null(command: str, output: str, workdir: Path | None) -> str | None:
     if "\\dev\\null" not in output:
         return None
     return "PowerShell has no /dev/null: discard output with `2>$null`, `>$null`, or `| Out-Null`."
 
 
-def _hint_module_not_found(command: str, output: str) -> str | None:
-    m = re.search(r"(?:ModuleNotFoundError|ImportError): No module named '?([\w.]+)", output)
+_MISSING_MODULE = re.compile(
+    r"(?:ModuleNotFoundError|ImportError): No module named '?([\w.]+)'?"
+    r"(; '[\w.]+' is not a package)?"
+)
+# A Python script run by its path, such as `python tests/test_x.py` or `py -u tools\run.py`.
+_PYTHON_SCRIPT = re.compile(
+    r"(?:^|[\s;&|('\"])(?:[^\s;&|()'\"]*[/\\])?(?:python[\d.]*|py)(?:\.exe)?['\"]?\s+"
+    r"(?:-[A-Za-z]\w*\s+)*['\"]?([^\s;&|<>'\"]+\.py)\b",
+    re.I | re.M,
+)
+
+
+def _hint_module_not_found(command: str, output: str, workdir: Path | None) -> str | None:
+    m = _MISSING_MODULE.search(output)
     if not m:
         return None
+    name = m.group(1)
+    if "." in name:
+        parent, _, leaf = name.rpartition(".")
+        if m.group(2):
+            return (
+                f"Python cannot import '{name}': '{parent}' is a single module, not a "
+                f"package, so it has no submodules. Import '{leaf}' from the module "
+                "that defines it."
+            )
+        return (
+            f"Python imported the package '{parent}', but it has no module '{leaf}'. "
+            f"List the files of '{parent}' to check the name, or create the module if "
+            "it is still missing."
+        )
+    if workdir is None or not _in_workdir(name, workdir):
+        return (
+            f"Python cannot import '{name}': this interpreter finds no package or module "
+            "of that name. Check the spelling; if the project has a virtual environment, "
+            "run its interpreter, otherwise install the package."
+        )
+    script = _script_in_subdirectory(command, output, workdir)
+    if script is None:
+        return (
+            f"'{name}' is in the working directory, but the working directory is not on "
+            "Python's import path for this command. Run Python from the working directory "
+            "with -m, such as `python -m pytest`, or add the working directory to PYTHONPATH."
+        )
+    run_as = (
+        f"`python -m {'.'.join(script.with_suffix('').parts)}`"
+        if all(part.isidentifier() for part in script.with_suffix("").parts)
+        else "`python -m` with its dotted module name"
+    )
     return (
-        f"Python cannot import '{m.group(1)}'. Most often the wrong "
-        "interpreter is running: activate the project venv or invoke its "
-        "python directly. Only pip install if the package is genuinely "
-        "absent from that venv."
+        f"Python cannot import '{name}' because running `{script.as_posix()}` by path puts "
+        f"its directory `{script.parent.as_posix()}` on the import path instead of the "
+        f"working directory, where '{name}' is. Run it as a module from the working "
+        f"directory instead: {run_as}."
     )
 
 
-def _hint_merge_conflict(command: str, output: str) -> str | None:
+def _in_workdir(module: str, workdir: Path) -> bool:
+    return (workdir / module).is_dir() or (workdir / f"{module}.py").is_file()
+
+
+def _script_in_subdirectory(command: str, output: str, workdir: Path) -> Path | None:
+    """The script in a subdirectory of ``workdir`` that the command ran by path.
+
+    With several scripts, the first one a traceback names wins; None when no
+    traceback names one.
+    """
+    scripts: list[Path] = []
+    for match in _PYTHON_SCRIPT.finditer(command):
+        path = Path(match.group(1).replace("\\", "/"))
+        if path.is_absolute():
+            try:
+                path = path.relative_to(workdir)
+            except ValueError:
+                continue
+        if len(path.parts) > 1 and ".." not in path.parts and path not in scripts:
+            scripts.append(path)
+    if len(scripts) > 1:
+        traceback = output.replace("\\", "/")
+        scripts = [script for script in scripts if f'/{script.as_posix()}"' in traceback]
+    return scripts[0] if scripts else None
+
+
+def _hint_merge_conflict(command: str, output: str, workdir: Path | None) -> str | None:
     if not re.search(r"^CONFLICT |Automatic merge failed|needs merge", output, re.M):
         return None
     return (
@@ -225,7 +299,7 @@ def _hint_merge_conflict(command: str, output: str) -> str | None:
     )
 
 
-def _hint_already_exists(command: str, output: str) -> str | None:
+def _hint_already_exists(command: str, output: str, workdir: Path | None) -> str | None:
     m = re.search(r"(?:fatal|error):.*?'([^']+)' already exists", output)
     if not m:
         return None
@@ -236,7 +310,7 @@ def _hint_already_exists(command: str, output: str) -> str | None:
     )
 
 
-def _hint_port_in_use(command: str, output: str) -> str | None:
+def _hint_port_in_use(command: str, output: str, workdir: Path | None) -> str | None:
     m = re.search(
         r"(?:address already in use|"
         r"port (\d+) (?:is )?already in use|"
@@ -261,7 +335,7 @@ def _hint_port_in_use(command: str, output: str) -> str | None:
     )
 
 
-def _hint_permission_denied(command: str, output: str) -> str | None:
+def _hint_permission_denied(command: str, output: str, workdir: Path | None) -> str | None:
     if "Permission denied" not in output and "EACCES" not in output:
         return None
     return (
@@ -271,7 +345,7 @@ def _hint_permission_denied(command: str, output: str) -> str | None:
     )
 
 
-def _hint_rate_limit(command: str, output: str) -> str | None:
+def _hint_rate_limit(command: str, output: str, workdir: Path | None) -> str | None:
     if "API rate limit" not in output and "was submitted too quickly" not in output:
         return None
     return (
@@ -280,7 +354,7 @@ def _hint_rate_limit(command: str, output: str) -> str | None:
     )
 
 
-def _hint_gh_unknown_json_field(command: str, output: str) -> str | None:
+def _hint_gh_unknown_json_field(command: str, output: str, workdir: Path | None) -> str | None:
     m = re.search(r"Unknown JSON field: \"?(\w+)", output)
     if not m:
         return None
@@ -291,7 +365,7 @@ def _hint_gh_unknown_json_field(command: str, output: str) -> str | None:
 
 
 # Ordered by how often each failure shape wastes a retry turn — first match wins.
-_OUTPUT_HINTS: list[Callable[[str, str], str | None]] = [
+_OUTPUT_HINTS: list[Callable[[str, str, Path | None], str | None]] = [
     _hint_gh_unknown_json_field,
     _hint_merge_conflict,
     _hint_command_not_found,
@@ -308,7 +382,9 @@ _OUTPUT_HINTS: list[Callable[[str, str], str | None]] = [
 ]
 
 
-def annotate_failure(command: str, exit_code: int | None, output: str) -> str | None:
+def annotate_failure(
+    command: str, exit_code: int | None, output: str, *, workdir: Path | None = None
+) -> str | None:
     """Return one short recovery hint for a failed command, or None.
 
     Args:
@@ -316,6 +392,7 @@ def annotate_failure(command: str, exit_code: int | None, output: str) -> str | 
         exit_code: Its exit code (non-zero for failures; None when the process
             never produced one, e.g. a kill before exit).
         output: Combined stdout/stderr as returned to the model.
+        workdir: The directory the command started in, when known.
 
     Only the first ``_SCAN_CHARS`` characters of output are examined and at
     most one hint is returned. Returns None for ``exit_code`` 0 or None so
@@ -327,7 +404,7 @@ def annotate_failure(command: str, exit_code: int | None, output: str) -> str | 
     if window:
         for fn in _OUTPUT_HINTS:
             try:
-                hint = fn(command or "", window)
+                hint = fn(command or "", window, workdir)
             except Exception:
                 continue
             if hint:

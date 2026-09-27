@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
@@ -307,6 +308,43 @@ async def test_background_trigger_message_carries_failure_hint(
     assert "Exit code: 127" in messages[0]
     assert "Hint: " in messages[0]
     assert "python3" in messages[0]
+
+
+@pytest.mark.asyncio
+async def test_background_import_hint_checks_the_working_directory(
+    manager: ProcessManager,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The automatic note judges an import failure against the command's workdir."""
+    messages: list[str] = []
+    trigger_called = asyncio.Event()
+
+    class MockTriggerService:
+        def submit_completion(self, *args: Any, body: str, **kwargs: Any) -> asyncio.Future[None]:
+            messages.append(body)
+            trigger_called.set()
+            return delivered_future()
+
+    monkeypatch.setattr(
+        bash_module, "_shell_argv", lambda command: [sys.executable, *command.split()[1:]]
+    )
+    project = tmp_path / "project"
+    (project / "shop").mkdir(parents=True)
+    (project / "tests").mkdir()
+    (project / "tests" / "test_cart.py").write_text("import shop\n")
+
+    await bash_handler(
+        make_context(tmp_path),
+        {"command": "python tests/test_cart.py", "mode": "background", "workdir": str(project)},
+        manager,
+        trigger_service=MockTriggerService(),
+    )
+    await asyncio.wait_for(trigger_called.wait(), timeout=5)
+
+    assert messages[0].endswith(
+        "Run it as a module from the working directory instead: `python -m tests.test_cart`."
+    )
 
 
 @pytest.mark.asyncio

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from core.tools.bash_hints import annotate_failure
@@ -56,15 +58,144 @@ def test_powershell_command_not_found_hint() -> None:
     assert "Get-Command cargo" in hint
 
 
-def test_module_not_found_suggests_venv() -> None:
+def _project(tmp_path: Path) -> Path:
+    """A working directory holding the package `shop` and a `tests` folder."""
+    (tmp_path / "shop").mkdir()
+    (tmp_path / "tests").mkdir()
+    return tmp_path
+
+
+def _import_traceback(script: Path, module: str) -> str:
+    return (
+        "Traceback (most recent call last):\n"
+        f'  File "{script}", line 13, in <module>\n'
+        f"    from {module}.cart import Cart\n"
+        f"ModuleNotFoundError: No module named '{module}'\n"
+    )
+
+
+_RUN_AS_MODULE = (
+    "Python cannot import '{module}' because running `tests/test_cart.py` by path puts its "
+    "directory `tests` on the import path instead of the working directory, where "
+    "'{module}' is. Run it as a module from the working directory instead: "
+    "`python -m tests.test_cart`."
+)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "python tests/test_cart.py",
+        "python tests\\test_cart.py 2>&1 | Select-Object -Last 5",
+        '& "C:/venv/Scripts/python.exe" -u tests/test_cart.py',
+    ],
+)
+@pytest.mark.parametrize("module", ["shop", "tests"])
+def test_module_not_found_from_script_run_by_path_names_module_run(
+    tmp_path: Path, command: str, module: str
+) -> None:
+    workdir = _project(tmp_path)
+    output = _import_traceback(workdir / "tests" / "test_cart.py", module)
+
+    hint = annotate_failure(command, 1, output, workdir=workdir)
+
+    assert hint == _RUN_AS_MODULE.format(module=module)
+
+
+def test_module_not_found_picks_the_script_the_traceback_names(tmp_path: Path) -> None:
+    workdir = _project(tmp_path)
+    command = (
+        "python tests/test_orders.py 2>&1 | Select-Object -Last 20; "
+        "python tests/test_cart.py 2>&1 | Select-Object -Last 3; "
+        "python tests/test_stock.py 2>&1 | Select-Object -Last 3"
+    )
+    # The first script passed; the tails of the other two tracebacks survived.
+    output = "OK: 64 checks passed\n\n" + "\n".join(
+        _import_traceback(workdir / "tests" / name, "shop").removeprefix(
+            "Traceback (most recent call last):\n"
+        )
+        for name in ("test_cart.py", "test_stock.py")
+    )
+
+    hint = annotate_failure(command, 1, output, workdir=workdir)
+
+    assert hint == _RUN_AS_MODULE.format(module="shop")
+
+
+def test_module_not_found_from_absolute_script_path(tmp_path: Path) -> None:
+    workdir = _project(tmp_path)
+    script = workdir / "tests" / "test_cart.py"
+
+    hint = annotate_failure(
+        f'python "{script}"', 1, _import_traceback(script, "shop"), workdir=workdir
+    )
+
+    assert hint == _RUN_AS_MODULE.format(module="shop")
+
+
+def test_module_in_workdir_without_script_names_import_path(tmp_path: Path) -> None:
+    workdir = _project(tmp_path)
+
+    hint = annotate_failure(
+        "pytest tests/test_cart.py",
+        1,
+        "E   ModuleNotFoundError: No module named 'shop'",
+        workdir=workdir,
+    )
+
+    assert hint == (
+        "'shop' is in the working directory, but the working directory is not on Python's "
+        "import path for this command. Run Python from the working directory with -m, "
+        "such as `python -m pytest`, or add the working directory to PYTHONPATH."
+    )
+
+
+@pytest.mark.parametrize("workdir_known", [True, False])
+def test_module_missing_everywhere_names_install(tmp_path: Path, workdir_known: bool) -> None:
     hint = annotate_failure(
         "python -m flask run",
         1,
         "Traceback (most recent call last):\nModuleNotFoundError: No module named 'flask'",
+        workdir=_project(tmp_path) if workdir_known else None,
     )
-    assert hint is not None
-    assert "flask" in hint
-    assert "venv" in hint
+
+    assert hint == (
+        "Python cannot import 'flask': this interpreter finds no package or module of that "
+        "name. Check the spelling; if the project has a virtual environment, run its "
+        "interpreter, otherwise install the package."
+    )
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        "ModuleNotFoundError: No module named 'shop.api'\n",
+        # A program that reports the failed import itself.
+        "the engine is not usable yet (ModuleNotFoundError: No module named 'shop.api')\n",
+    ],
+)
+def test_missing_submodule_names_the_package_not_the_interpreter(
+    tmp_path: Path, output: str
+) -> None:
+    hint = annotate_failure('python -c "import shop.api"', 1, output, workdir=_project(tmp_path))
+
+    assert hint == (
+        "Python imported the package 'shop', but it has no module 'api'. List the files "
+        "of 'shop' to check the name, or create the module if it is still missing."
+    )
+
+
+def test_submodule_of_a_plain_module_names_the_module() -> None:
+    hint = annotate_failure(
+        "python app.py",
+        1,
+        "ModuleNotFoundError: No module named 'shop.api'; 'shop' is not a package",
+    )
+
+    assert hint == (
+        "Python cannot import 'shop.api': 'shop' is a single module, not a package, so it "
+        "has no submodules. Import 'api' from the module that defines it."
+    )
 
 
 def test_merge_conflict_hint_says_do_not_retry() -> None:

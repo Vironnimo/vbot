@@ -227,7 +227,7 @@ async def _completion_result(
         "exit_code": tracked.exit_code,
         **_shape_output_fields(tracked, output),
     }
-    hint = annotate_failure(command, tracked.exit_code, output)
+    hint = annotate_failure(command, tracked.exit_code, output, workdir=tracked.cwd)
     if hint:
         result["hint"] = hint
     return tool_success(result)
