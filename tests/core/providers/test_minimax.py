@@ -146,6 +146,23 @@ async def _sent_request(
             ),
             id="m2-text-chat",
         ),
+        # A Model without reviewed facts keeps the generic, conservative projection.
+        pytest.param(
+            "MiniMax-Future",
+            Model(
+                model_id="MiniMax-Future",
+                name="MiniMax-Future",
+                capabilities=Capabilities(
+                    vision=False,
+                    tools=True,
+                    json_mode=False,
+                    reasoning=ReasoningCapabilities(supported=False),
+                ),
+                context_window=None,
+                max_output_tokens=None,
+            ),
+            id="unreviewed-model",
+        ),
     ],
 )
 def test_catalog_entry_carries_the_current_model_facts(raw_id: str, expected: Model) -> None:
