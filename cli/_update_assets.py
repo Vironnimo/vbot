@@ -15,6 +15,7 @@ from cli._update_types import (
     Runner,
     _Step,
 )
+from cli.webui_build import build_webui
 
 WEBUI_ASSET_NAME = "webui-dist.tar.gz"
 
@@ -48,13 +49,32 @@ def _refresh_dev_webui(
         if changed.returncode == 0:
             return _Step(True, "webui unchanged")
     webui_dir = repo / "webui"
-    install = run(_npm_command(["ci"]), webui_dir)
-    if install.returncode != 0:
-        return _Step(False, f"webui dependency install failed: {install.stderr}")
-    build = run(_npm_command(["run", "build"]), webui_dir)
-    if build.returncode != 0:
-        return _Step(False, f"webui build failed: {build.stderr}")
+
+    def npm(arguments: list[str]) -> None:
+        result = run(_npm_command(arguments), webui_dir)
+        if result.returncode != 0:
+            raise _NpmError(arguments, result.stderr or result.stdout)
+
+    node = run(["node", "--version"], webui_dir)
+    try:
+        build_webui(
+            webui_dir,
+            node_version=node.stdout.strip() if node.returncode == 0 else None,
+            npm=npm,
+        )
+    except _NpmError as exc:
+        step = "dependency install" if exc.arguments == ["ci"] else "build"
+        return _Step(False, f"webui {step} failed: {exc.detail}")
     return _Step(True, "webui rebuilt")
+
+
+class _NpmError(Exception):
+    """One failed npm command of a WebUI build."""
+
+    def __init__(self, arguments: list[str], detail: str) -> None:
+        super().__init__(f"npm {' '.join(arguments)} failed: {detail}")
+        self.arguments = arguments
+        self.detail = detail
 
 
 def _refresh_release_webui(

@@ -578,7 +578,8 @@ def test_dev_webui_detects_build_inputs_with_git(
         if command[0] == "git":
             return _default_runner(command, cwd)
         assert cwd == tmp_path / "webui"
-        builds.append(command)
+        if command[0] != "node":
+            builds.append(command)
         return _ok()
 
     result = _update_assets._refresh_dev_webui(runner, tmp_path, before, after)
@@ -589,6 +590,50 @@ def test_dev_webui_detects_build_inputs_with_git(
         if rebuild
         else []
     )
+
+
+def test_dev_webui_reuses_installed_packages_while_their_inputs_are_unchanged(
+    tmp_path: Path,
+) -> None:
+    webui = tmp_path / "webui"
+    webui.mkdir()
+    (webui / "package.json").write_text('{"name": "webui"}', encoding="utf-8")
+    (webui / "package-lock.json").write_text('{"lock": 1}', encoding="utf-8")
+    npm_calls: list[list[str]] = []
+
+    def runner(command: list[str], cwd: Path) -> CommandRun:
+        if command[:3] == ["git", "diff", "--quiet"]:
+            return _err()
+        if command == ["node", "--version"]:
+            return _ok("v22.0.0")
+        npm_calls.append(command)
+        if command == _update_assets._npm_command(["ci"]):
+            (webui / "node_modules").mkdir(exist_ok=True)
+        else:
+            (webui / "dist").mkdir(exist_ok=True)
+            (webui / "dist" / "index.html").write_text("built", encoding="utf-8")
+        return _ok()
+
+    first = _update_assets._refresh_dev_webui(runner, tmp_path, None, "first")
+    second = _update_assets._refresh_dev_webui(runner, tmp_path, "first", "second")
+
+    assert first.ok, first.message
+    assert second.ok, second.message
+    npm_ci = _update_assets._npm_command(["ci"])
+    npm_build = _update_assets._npm_command(["run", "build"])
+    assert npm_calls == [npm_ci, npm_build, npm_build]
+
+
+def test_dev_webui_reports_which_npm_step_failed(tmp_path: Path) -> None:
+    def runner(command: list[str], cwd: Path) -> CommandRun:
+        if command == _update_assets._npm_command(["ci"]):
+            return CommandRun(returncode=1, stdout="", stderr="lock mismatch")
+        return _ok()
+
+    result = _update_assets._refresh_dev_webui(runner, tmp_path, None, "target")
+
+    assert not result.ok
+    assert result.message == "webui dependency install failed: lock mismatch"
 
 
 def test_dev_webui_build_failure_preserves_revision_for_retry(tmp_path: Path) -> None:
