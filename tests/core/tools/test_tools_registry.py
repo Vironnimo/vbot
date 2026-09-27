@@ -83,8 +83,13 @@ def _file_tools() -> ToolRegistry:
         ({"activation": "mystery"}, "Unsupported Tool activation: mystery"),
         ({"activation": "follows"}, "A followed Tool requires activation_source"),
         ({"activation_source": "read"}, "activation_source is only valid for a followed Tool"),
+        ({"requires_opt_in": "true"}, "requires_opt_in must be a boolean"),
         (
             {"requires_opt_in": True, "internal": True},
+            "Only configurable, non-internal Tools can require opt-in",
+        ),
+        (
+            {"requires_opt_in": True, "activation": "follows", "activation_source": "read"},
             "Only configurable, non-internal Tools can require opt-in",
         ),
         (

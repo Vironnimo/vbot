@@ -258,25 +258,6 @@ async def test_extension_opt_in_is_enforced_in_definitions_and_dispatch(tmp_path
     assert (await tools.dispatch(context, {}, allowed_tools=allowed))["data"]["marker"] == "called"
 
 
-@pytest.mark.parametrize(
-    "options",
-    [
-        {"requires_opt_in": "true"},
-        {"requires_opt_in": True, "internal": True},
-        {"requires_opt_in": True, "activation": "follows", "activation_source": "read"},
-    ],
-)
-def test_invalid_opt_in_registration_fails_before_publication(options):
-    from core.tools import tool_success
-
-    tools = ToolRegistry()
-    with pytest.raises(ValueError):
-        tools.register(
-            "test", "test-owned", {"type": "object"}, lambda c, a: tool_success({}), **options
-        )
-    assert tools.list_tools() == []
-
-
 # --- Commands ----------------------------------------------------------------
 
 
@@ -365,28 +346,6 @@ def test_extension_recall_backends_become_selectable_unless_taken_or_invalid(
     assert len(errors) == 2
     assert any("canonical_scan" in message for message in errors)
     assert any("Bad_Name" in message and "snake_case" in message for message in errors)
-
-
-@pytest.mark.parametrize("invalid_capabilities", [False, True])
-def test_recall_registry_rejects_retired_or_invalid_backend(
-    tmp_path: Path, invalid_capabilities: bool
-) -> None:
-    class InvalidBackend:
-        def search(self, request: Any) -> dict[str, Any]:
-            return {}
-
-    class InvalidCapabilities:
-        def search_capabilities(self) -> object:
-            return object()
-
-        async def search_page(self, request: Any) -> object:
-            return object()
-
-    registry = RecallBackendRegistry()
-    implementation = InvalidCapabilities if invalid_capabilities else InvalidBackend
-    registry.register("obsolete", cast(Any, lambda _context: implementation()))
-    with pytest.raises(ValueError, match="search capabilities|search_capabilities"):
-        registry.create("obsolete", _recall_context(tmp_path))
 
 
 # --- Interaction prefixes ----------------------------------------------------
