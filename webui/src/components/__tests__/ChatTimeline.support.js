@@ -1,46 +1,201 @@
-import { flushSync, tick } from 'svelte';
+// @vitest-environment jsdom
+import { afterEach, beforeEach, vi } from 'vitest';
+import {
+  flushSync as svelteFlushSync,
+  mount,
+  tick as svelteTick,
+  unmount,
+} from 'svelte';
 
 import {
   appendRunEvent,
   createChatState,
   ensureSessionState,
 } from '../../lib/chatState.js';
+import { init, t } from '../../lib/i18n.js';
 
-export function scrollMemorySessions() {
-  const chatState = createChatState();
-  const parentSession = ensureSessionState(
-    chatState,
-    'alpha',
-    'session-scroll-memory-parent',
+vi.mock('svelte', async () => {
+  return import('../../../node_modules/svelte/src/index-client.js');
+});
+
+vi.mock('svelte/store', async () => {
+  return import('../../../node_modules/svelte/src/store/index-client.js');
+});
+
+const { default: ChatTimeline } = await import('../ChatTimeline.svelte');
+
+// Registers the per-test lifecycle and returns the mount helpers. With
+// `observeResize`, a ResizeObserver stub records callbacks that
+// `notifyContentResize()` fires; without it jsdom has no ResizeObserver.
+export function setupChatTimelineSuite({ observeResize = false } = {}) {
+  let mountedComponent = null;
+  let resizeCallbacks = [];
+
+  async function unmountTimeline() {
+    if (mountedComponent) {
+      await unmount(mountedComponent);
+      mountedComponent = null;
+    }
+  }
+
+  beforeEach(() => {
+    document.body.innerHTML = '';
+    init('en');
+    mountedComponent = null;
+    resizeCallbacks = [];
+    if (observeResize) {
+      globalThis.ResizeObserver = class {
+        constructor(callback) {
+          resizeCallbacks.push(callback);
+        }
+
+        observe() {}
+
+        disconnect() {}
+      };
+    }
+  });
+
+  afterEach(async () => {
+    await unmountTimeline();
+    document.body.innerHTML = '';
+    if (observeResize) delete globalThis.ResizeObserver;
+    vi.useRealTimers();
+  });
+
+  return {
+    // Mounts ChatTimeline with `props` as given (a plain object or a reactive
+    // props bag).
+    mount(props) {
+      mountedComponent = mount(ChatTimeline, { target: document.body, props });
+      flushSync();
+      return mountedComponent;
+    },
+    // Mounts ChatTimeline for `sessionState` as the Agent "Alpha".
+    render(sessionState, props = {}) {
+      return this.mount({ sessionState, agentName: 'Alpha', ...props });
+    },
+    unmount: unmountTimeline,
+    notifyContentResize() {
+      for (const callback of resizeCallbacks) callback([]);
+    },
+    lastResizeCallback() {
+      return resizeCallbacks.at(-1);
+    },
+  };
+}
+
+export function flushSync() {
+  return svelteFlushSync();
+}
+
+export function tick() {
+  return svelteTick();
+}
+
+export async function flushAsync() {
+  for (let index = 0; index < 5; index += 1) {
+    await Promise.resolve();
+    flushSync();
+  }
+}
+
+export function stubClipboard() {
+  const writeText = vi.fn().mockResolvedValue(undefined);
+  Object.defineProperty(navigator, 'clipboard', {
+    value: { writeText },
+    configurable: true,
+  });
+  return writeText;
+}
+
+export function timelineSession(sessionId = 'session-test', chatState) {
+  return ensureSessionState(chatState ?? createChatState(), 'alpha', sessionId);
+}
+
+// Appends `events` to one Run with consecutive sequence numbers.
+export function appendEvents(sessionState, runId, events, firstSequence = 1) {
+  events.forEach((event, index) => {
+    appendRunEvent(sessionState, {
+      run_id: runId,
+      sequence: firstSequence + index,
+      ...event,
+    });
+  });
+}
+
+export function toolStarted(id, name, args = {}, payload = {}) {
+  return {
+    type: 'tool_call_started',
+    payload: { tool_call: { id, index: 0, name, arguments: args }, ...payload },
+  };
+}
+
+export function toolResult(id, name, result, payload = {}) {
+  return {
+    type: 'tool_call_result',
+    payload: { tool_call: { id, index: 0, name }, result, ...payload },
+  };
+}
+
+export function assistantOutput(content, message = {}) {
+  return {
+    type: 'assistant_output',
+    payload: { message: { role: 'assistant', content, ...message } },
+  };
+}
+
+export function userPersisted(id, content) {
+  return {
+    type: 'user_message_persisted',
+    payload: { message: { id, role: 'user', content } },
+  };
+}
+
+// The Tool detail row labelled with the i18n `key` (`chat.toolArgs`,
+// `chat.toolResultLabel`, ...); `fallback` covers keys missing from the
+// catalog.
+export function detailRow(key, fallback) {
+  return (
+    Array.from(document.querySelectorAll('.teb-row')).find(
+      (row) =>
+        row.querySelector('.teb-label')?.textContent === t(key, fallback),
+    ) ?? null
   );
-  parentSession.messages = [
-    {
-      id: 'parent-user-one',
-      role: 'user',
-      content: 'Parent question',
-      timestamp: '2026-05-10T09:00:00',
-    },
-    {
-      id: 'parent-assistant-one',
-      role: 'assistant',
-      content: 'Parent answer',
-      timestamp: '2026-05-10T09:01:00',
-    },
-  ];
-  const childSession = ensureSessionState(
-    chatState,
-    'subagent',
-    'session-scroll-memory-child',
+}
+
+// A detail row's visible text: `key: value` lines for fields, else the code.
+export function detailText(key, fallback) {
+  const row = detailRow(key, fallback);
+  const fields = Array.from(row?.querySelectorAll('.teb-field') ?? []);
+  if (fields.length > 0) {
+    return fields
+      .map((field) => {
+        const name = field.querySelector('.teb-field-key')?.textContent ?? '';
+        const value =
+          field.querySelector('.teb-field-value')?.textContent ?? '';
+        return `${name}: ${value}`;
+      })
+      .join('\n');
+  }
+  return row?.querySelector('.teb-code')?.textContent ?? '';
+}
+
+// The rendered children of the first Assistant Run, without its footer.
+export function runChildren() {
+  return Array.from(
+    document.querySelector('.assistant-run-content').children,
+  ).filter((child) => !child.classList.contains('run-footer'));
+}
+
+export function occurrences(text) {
+  return document.body.textContent.split(text).length - 1;
+}
+
+export function follows(first, second) {
+  return Boolean(
+    first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING,
   );
-  childSession.messages = [
-    {
-      id: 'child-user-one',
-      role: 'user',
-      content: 'Child task',
-      timestamp: '2026-05-10T09:02:00',
-    },
-  ];
-  return { parentSession, childSession };
 }
 
 // jsdom has no layout: pin the container to a 2000px-tall content area in a
@@ -52,14 +207,12 @@ export function mockScrollGeometry(container) {
     configurable: true,
     get: () => scrollHeight,
   });
-  Object.defineProperty(container, 'offsetHeight', {
-    configurable: true,
-    get: () => 500,
-  });
-  Object.defineProperty(container, 'clientHeight', {
-    configurable: true,
-    get: () => 500,
-  });
+  for (const property of ['offsetHeight', 'clientHeight']) {
+    Object.defineProperty(container, property, {
+      configurable: true,
+      get: () => 500,
+    });
+  }
   Object.defineProperty(container, 'scrollTop', {
     configurable: true,
     get: () => scrollTop,
@@ -86,22 +239,18 @@ export async function waitForCondition(check, attempts = 20) {
     await tick();
     await Promise.resolve();
     flushSync();
-
-    if (check()) {
-      return;
-    }
+    if (check()) return;
     if (typeof requestAnimationFrame === 'function') {
       await new Promise((resolve) => requestAnimationFrame(resolve));
       flushSync();
-      if (check()) {
-        return;
-      }
+      if (check()) return;
     }
   }
-
   throw new Error('Timed out waiting for condition.');
 }
 
+// A reported multi-step Run: two Tool calls with Thinking and commentary
+// between them, as History rows.
 export function reportedMultiStepMessages() {
   return [
     {
@@ -157,120 +306,50 @@ export function reportedMultiStepMessages() {
   ];
 }
 
+// The same reported Run as live events.
 export function appendReportedLiveRunEvents(
   sessionState,
   runId,
-  startSequence = 1,
+  firstSequence = 1,
 ) {
-  const sequence = (offset) => startSequence + offset;
-
-  appendRunEvent(sessionState, {
-    type: 'reasoning_delta',
-    run_id: runId,
-    sequence: sequence(0),
-    payload: { reasoning_delta: 'Find candidate files.' },
-  });
-  appendRunEvent(sessionState, {
-    type: 'tool_call_started',
-    run_id: runId,
-    sequence: sequence(1),
-    payload: {
-      tool_call: {
-        id: 'call-glob',
-        index: 0,
-        name: 'glob',
-        arguments: { pattern: 'webui/src/**/*.js' },
+  const [, , , readMessage, , finalMessage] = reportedMultiStepMessages();
+  appendEvents(
+    sessionState,
+    runId,
+    [
+      {
+        type: 'reasoning_delta',
+        payload: { reasoning_delta: 'Find candidate files.' },
       },
-    },
-  });
-  appendRunEvent(sessionState, {
-    type: 'tool_call_result',
-    run_id: runId,
-    sequence: sequence(2),
-    payload: {
-      tool_call: { id: 'call-glob', index: 0, name: 'glob' },
-      result: { ok: true, data: { content: 'webui/src/lib/chatState.js' } },
-    },
-  });
-  appendRunEvent(sessionState, {
-    type: 'reasoning_delta',
-    run_id: runId,
-    sequence: sequence(3),
-    payload: { reasoning_delta: 'Read the selected file.' },
-  });
-  appendRunEvent(sessionState, {
-    type: 'assistant_output_delta',
-    run_id: runId,
-    sequence: sequence(4),
-    payload: {
-      content_delta: 'I found the timeline helper; now I will read it.',
-    },
-  });
-  appendRunEvent(sessionState, {
-    type: 'tool_call_started',
-    run_id: runId,
-    sequence: sequence(5),
-    payload: {
-      tool_call: {
-        id: 'call-read',
-        index: 0,
-        name: 'read',
-        arguments: { path: 'webui/src/lib/chatState.js' },
+      toolStarted('call-glob', 'glob', { pattern: 'webui/src/**/*.js' }),
+      toolResult('call-glob', 'glob', {
+        ok: true,
+        data: { content: 'webui/src/lib/chatState.js' },
+      }),
+      {
+        type: 'reasoning_delta',
+        payload: { reasoning_delta: 'Read the selected file.' },
       },
-    },
-  });
-  appendRunEvent(sessionState, {
-    type: 'tool_call_result',
-    run_id: runId,
-    sequence: sequence(6),
-    payload: {
-      tool_call: { id: 'call-read', index: 0, name: 'read' },
-      result: { ok: true, data: { content: 'timeline code' } },
-    },
-  });
-  appendRunEvent(sessionState, {
-    type: 'assistant_output',
-    run_id: runId,
-    sequence: sequence(7),
-    payload: {
-      message: {
-        id: 'assistant-read',
-        role: 'assistant',
-        content: 'I found the timeline helper; now I will read it.',
-        reasoning: 'Read the selected file.',
-        tool_calls: [
-          {
-            id: 'call-read',
-            name: 'read',
-            arguments: { path: 'webui/src/lib/chatState.js' },
-          },
-        ],
+      {
+        type: 'assistant_output_delta',
+        payload: { content_delta: readMessage.content },
       },
-    },
-  });
-  appendRunEvent(sessionState, {
-    type: 'reasoning_delta',
-    run_id: runId,
-    sequence: sequence(8),
-    payload: { reasoning_delta: 'Summarize the result.' },
-  });
-  appendRunEvent(sessionState, {
-    type: 'assistant_output_delta',
-    run_id: runId,
-    sequence: sequence(9),
-    payload: { content_delta: 'The timeline is in chatState.js.' },
-  });
-  appendRunEvent(sessionState, {
-    type: 'assistant_output',
-    run_id: runId,
-    sequence: sequence(10),
-    payload: {
-      message: {
-        id: 'assistant-final',
-        role: 'assistant',
-        content: 'The timeline is in chatState.js.',
-        reasoning: 'Summarize the result.',
+      toolStarted('call-read', 'read', { path: 'webui/src/lib/chatState.js' }),
+      toolResult('call-read', 'read', {
+        ok: true,
+        data: { content: 'timeline code' },
+      }),
+      { type: 'assistant_output', payload: { message: readMessage } },
+      {
+        type: 'reasoning_delta',
+        payload: { reasoning_delta: 'Summarize the result.' },
       },
-    },
-  });
+      {
+        type: 'assistant_output_delta',
+        payload: { content_delta: finalMessage.content },
+      },
+      { type: 'assistant_output', payload: { message: finalMessage } },
+    ],
+    firstSequence,
+  );
 }

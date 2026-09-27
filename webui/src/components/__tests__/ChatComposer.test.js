@@ -1,886 +1,446 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from 'vitest';
-import { HOVER_CARD_SHOW_DELAY_MS } from '../../lib/tooltip.js';
+
 import { t } from '../../lib/i18n.js';
+import { HOVER_CARD_SHOW_DELAY_MS } from '../../lib/tooltip.js';
 import {
-  flushSync,
-  mount,
-  ChatComposer,
-  typeInComposer,
-  pressKey,
-  skillFixtures,
+  buttonLabelled,
   composerInput,
-  autocompleteOptions,
-  autocompleteNames,
-  submitComposer,
-  flushComposerAsyncWork,
-  modelCatalogFixture,
-  modelAutocompleteOptions,
+  getDraft,
+  getHistory,
+  pressKey,
+  pushHistory,
+  selectFilesFromPicker,
+  setDraft,
+  settle,
   setupChatComposerSuite,
+  submitComposer,
+  typeInComposer,
+  uploadAttachment,
+  uploaded,
 } from './ChatComposer.support.js';
 
-describe('ChatComposer', () => {
-  const suite = setupChatComposerSuite();
+const attachments = () => document.body.querySelectorAll('.attachment-item');
 
-  function mountContextRing(props = {}) {
-    suite.mountedComponent = mount(ChatComposer, {
-      target: document.body,
-      props: {
+describe('ChatComposer', () => {
+  const composer = setupChatComposerSuite();
+
+  describe('context usage card', () => {
+    function mountContextRing(props = {}) {
+      composer.mount({
         contextUsage: { tokens: 4000, estimated: true },
         contextWindow: 10000,
         usage: { input_tokens: 3900, output_tokens: 100 },
         compactionState: 'idle',
         onForceCompaction: vi.fn(),
         ...props,
-      },
-    });
-    flushSync();
-    return {
-      anchor: document.querySelector('.context-ring'),
-      trigger: document.querySelector('.context-ring-trigger'),
-      card: document.querySelector('.context-card'),
-    };
-  }
-
-  it('keeps the context card open across pointer travel and invokes compaction', async () => {
-    vi.useFakeTimers();
-    try {
-      const onForceCompaction = vi.fn();
-      const { anchor, card } = mountContextRing({ onForceCompaction });
-      expect(card.parentElement).toBe(document.body);
-
-      anchor.dispatchEvent(new Event('pointerenter'));
-      await vi.advanceTimersByTimeAsync(HOVER_CARD_SHOW_DELAY_MS);
-      expect(card.dataset.floatingOpen).toBe('true');
-      anchor.dispatchEvent(new Event('pointerleave'));
-      card.dispatchEvent(new Event('pointerenter'));
-      await vi.advanceTimersByTimeAsync(500);
-      expect(card.dataset.floatingOpen).toBe('true');
-
-      const action = card.querySelector('.context-card__action');
-      expect(action.textContent.trim()).toBe('Compact now');
-      action.click();
-      expect(onForceCompaction).toHaveBeenCalledTimes(1);
-      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
-      expect(card.dataset.floatingOpen).not.toBe('true');
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it('shows used context, share, and the usage breakdown', () => {
-    const { trigger, card } = mountContextRing();
-    trigger.dispatchEvent(new Event('pointerdown', { bubbles: true }));
-
-    expect(card.dataset.floatingOpen).toBe('true');
-    expect(card.querySelector('.context-card__title').textContent).toBe(
-      'Context',
-    );
-    expect(card.querySelector('.context-card__usage').textContent).toBe(
-      '~4,000 / 10,000',
-    );
-    expect(card.querySelector('.context-card__percent').textContent).toBe(
-      '40%',
-    );
-    expect(card.querySelector('.context-card__meter-fill').style.width).toBe(
-      '40%',
-    );
-    expect(
-      card.querySelector('.context-card__section-title').textContent,
-    ).toContain('Last turn');
-    expect(card.querySelector('.context-card__level')).toBeNull();
-  });
-
-  const defaultPolicy = {
-    enabled: true,
-    trigger: { type: 'context_ratio', threshold: 0.8 },
-    strategy: { type: 'summary_tail', tail_tokens: 15000 },
-  };
-  const earlyPolicy = {
-    ...defaultPolicy,
-    trigger: { type: 'context_ratio', threshold: 0.5 },
-  };
-  const disabledPolicy = { ...defaultPolicy, enabled: false };
-
-  it.each([
-    ['the default Policy', defaultPolicy, 6900, 'normal', null],
-    ['the default Policy', defaultPolicy, 7000, 'high', 'nearLimit'],
-    [
-      'the default Policy',
-      defaultPolicy,
-      8000,
-      'high',
-      'compactionThresholdReached',
-    ],
-    ['the default Policy', defaultPolicy, 9000, 'critical', 'atLimit'],
-    ['an earlier threshold', earlyPolicy, 3900, 'normal', null],
-    ['an earlier threshold', earlyPolicy, 4000, 'high', 'nearLimit'],
-    ['disabled automatic Compaction', disabledPolicy, 6900, 'normal', null],
-    [
-      'disabled automatic Compaction',
-      disabledPolicy,
-      7000,
-      'high',
-      'nearContextLimit',
-    ],
-    ['an unknown Policy', null, 7000, 'high', 'nearContextLimit'],
-  ])(
-    'relates the context level to %s (%#)',
-    (_label, compactionPolicy, tokens, level, noteKey) => {
-      const { anchor, card } = mountContextRing({
-        contextUsage: { tokens, estimated: false },
-        compactionPolicy,
       });
+      return {
+        anchor: document.querySelector('.context-ring'),
+        trigger: document.querySelector('.context-ring-trigger'),
+        card: document.querySelector('.context-card'),
+      };
+    }
 
-      expect(anchor.classList.contains(`context-ring--${level}`)).toBe(true);
-      expect(card.classList.contains(`context-card--${level}`)).toBe(true);
+    it('shows used context, share, and the usage breakdown', () => {
+      const { trigger, card } = mountContextRing();
+      trigger.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+
+      expect(card.dataset.floatingOpen).toBe('true');
+      expect(card.querySelector('.context-card__title').textContent).toBe(
+        t('chat.contextCardTitle'),
+      );
+      expect(card.querySelector('.context-card__usage').textContent).toBe(
+        '~4,000 / 10,000',
+      );
+      expect(card.querySelector('.context-card__percent').textContent).toBe(
+        '40%',
+      );
+      expect(card.querySelector('.context-card__meter-fill').style.width).toBe(
+        '40%',
+      );
       expect(
-        card.querySelector('.context-card__level')?.textContent.trim() ?? null,
-      ).toBe(noteKey ? t(`chat.contextCard.${noteKey}`) : null);
-    },
-  );
-
-  it('reaches the action from the ring by keyboard and returns on Escape', () => {
-    const { trigger, card } = mountContextRing();
-    expect(trigger.tagName).toBe('BUTTON');
-    expect(trigger.getAttribute('aria-label')).toBe('Context window usage');
-
-    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab' }));
-    trigger.focus();
-    expect(card.dataset.floatingOpen).toBe('true');
-    expect(trigger.getAttribute('aria-describedby')).toBe(card.id);
-
-    trigger.dispatchEvent(
-      new KeyboardEvent('keydown', {
-        key: 'Tab',
-        bubbles: true,
-        cancelable: true,
-      }),
-    );
-    const action = card.querySelector('.context-card__action');
-    expect(document.activeElement).toBe(action);
-
-    window.dispatchEvent(
-      new KeyboardEvent('keydown', { key: 'Escape', cancelable: true }),
-    );
-    expect(card.dataset.floatingOpen).toBe('false');
-    expect(document.activeElement).toBe(trigger);
-  });
-
-  it.each([
-    ['pending', false, 'Compaction requested…'],
-    ['running', false, 'Compacting…'],
-    ['unavailable', false, 'Compact now'],
-    ['idle', true, 'Compaction requested…'],
-  ])(
-    'disables compaction while %s (submitting: %s)',
-    (compactionState, compactionSubmitting, label) => {
-      const onForceCompaction = vi.fn();
-      const { card } = mountContextRing({
-        compactionState,
-        compactionSubmitting,
-        onForceCompaction,
-      });
-      const button = card.querySelector('.context-card__action');
-      expect(button.textContent.trim()).toBe(label);
-      expect(button.disabled).toBe(true);
-      button.click();
-      expect(onForceCompaction).not.toHaveBeenCalled();
-    },
-  );
-
-  it('renders the context card without an action when none is wired', () => {
-    const { card } = mountContextRing({ onForceCompaction: null });
-    expect(card.querySelector('.context-card__action')).toBeNull();
-  });
-
-  it('offers slash skill autocomplete at the start of the message', async () => {
-    suite.mountedComponent = mount(ChatComposer, {
-      target: document.body,
-      props: { availableSkills: skillFixtures() },
+        card.querySelector('.context-card__section-title').textContent,
+      ).toContain(t('chat.tokenTooltipLastTurn'));
+      expect(card.querySelector('.context-card__level')).toBeNull();
     });
-    flushSync();
 
-    const input = composerInput();
-    input.value = '/deb';
-    input.setSelectionRange(4, 4);
-    input.dispatchEvent(new InputEvent('input', { bubbles: true }));
-    flushSync();
+    it('keeps the card open across pointer travel and invokes Compaction', async () => {
+      vi.useFakeTimers();
+      try {
+        const onForceCompaction = vi.fn();
+        const { anchor, card } = mountContextRing({ onForceCompaction });
+        expect(card.parentElement).toBe(document.body);
 
-    expect(document.body.textContent).toContain('debugging');
-    expect(document.body.textContent).toContain('Investigate unclear bugs.');
+        anchor.dispatchEvent(new Event('pointerenter'));
+        await vi.advanceTimersByTimeAsync(HOVER_CARD_SHOW_DELAY_MS);
+        expect(card.dataset.floatingOpen).toBe('true');
+        anchor.dispatchEvent(new Event('pointerleave'));
+        card.dispatchEvent(new Event('pointerenter'));
+        await vi.advanceTimersByTimeAsync(500);
+        expect(card.dataset.floatingOpen).toBe('true');
 
-    document.body
-      .querySelector('.skill-autocomplete__option')
-      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    await Promise.resolve();
-    flushSync();
-
-    expect(input.value).toBe('/debugging');
-  });
-
-  it('normalizes slash command names when inserting from autocomplete', async () => {
-    suite.mountedComponent = mount(ChatComposer, {
-      target: document.body,
-      props: {
-        availableSkills: [
-          {
-            name: '/compact',
-            description: 'Compact the current session context.',
-            type: 'command',
-          },
-        ],
-      },
+        const action = card.querySelector('.context-card__action');
+        expect(action.textContent.trim()).toBe(t('chat.compactNow'));
+        action.click();
+        expect(onForceCompaction).toHaveBeenCalledTimes(1);
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+        expect(card.dataset.floatingOpen).not.toBe('true');
+      } finally {
+        vi.useRealTimers();
+      }
     });
-    flushSync();
 
-    const input = composerInput();
-    input.value = '/com';
-    input.setSelectionRange(4, 4);
-    input.dispatchEvent(new InputEvent('input', { bubbles: true }));
-    flushSync();
-
-    document.body
-      .querySelector('.skill-autocomplete__option')
-      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    await Promise.resolve();
-    flushSync();
-
-    expect(input.value).toBe('/compact');
-  });
-
-  it('runs a no-argument command immediately without inserting it', async () => {
-    const onSendMessage = vi.fn().mockResolvedValue(true);
-    suite.mountedComponent = mount(ChatComposer, {
-      target: document.body,
-      props: {
-        onSendMessage,
-        availableSkills: [
-          {
-            name: 'status',
-            description: 'Show current session and runtime status.',
-            type: 'command',
-            argument: 'none',
-          },
-        ],
-      },
-    });
-    flushSync();
-
-    const input = composerInput();
-    input.value = '/stat';
-    input.setSelectionRange(5, 5);
-    input.dispatchEvent(new InputEvent('input', { bubbles: true }));
-    flushSync();
-
-    document.body
-      .querySelector('.skill-autocomplete__option')
-      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    await flushComposerAsyncWork();
-
-    expect(onSendMessage).toHaveBeenCalledWith('/status');
-    expect(input.value).toBe('');
-  });
-
-  it('does not run an immediate command while another submit is in flight', async () => {
-    let resolveSend;
-    const onSendMessage = vi.fn(
-      () =>
-        new Promise((resolve) => {
-          resolveSend = resolve;
-        }),
-    );
-    suite.mountedComponent = mount(ChatComposer, {
-      target: document.body,
-      props: {
-        onSendMessage,
-        availableSkills: [
-          {
-            name: 'status',
-            description: 'Show current session and runtime status.',
-            type: 'command',
-            argument: 'none',
-          },
-        ],
-      },
-    });
-    flushSync();
-
-    typeInComposer(composerInput(), 'first');
-    submitComposer();
-    expect(onSendMessage).toHaveBeenCalledTimes(1);
-
-    typeInComposer(composerInput(), '/stat');
-    document.body
-      .querySelector('.skill-autocomplete__option')
-      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    await Promise.resolve();
-    flushSync();
-
-    expect(onSendMessage).toHaveBeenCalledTimes(1);
-    expect(composerInput().value).toBe('/stat');
-
-    resolveSend(true);
-    await flushComposerAsyncWork();
-  });
-
-  it('inserts an argument-bearing command instead of running it', async () => {
-    const onSendMessage = vi.fn().mockResolvedValue(true);
-    suite.mountedComponent = mount(ChatComposer, {
-      target: document.body,
-      props: {
-        onSendMessage,
-        availableSkills: [
-          {
-            name: 'compact',
-            description: 'Compact the current session context.',
-            type: 'command',
-            argument: 'optional',
-          },
-        ],
-      },
-    });
-    flushSync();
-
-    const input = composerInput();
-    input.value = '/com';
-    input.setSelectionRange(4, 4);
-    input.dispatchEvent(new InputEvent('input', { bubbles: true }));
-    flushSync();
-
-    document.body
-      .querySelector('.skill-autocomplete__option')
-      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    await Promise.resolve();
-    flushSync();
-
-    expect(input.value).toBe('/compact');
-    expect(onSendMessage).not.toHaveBeenCalled();
-  });
-
-  it('offers only skills for inline dollar autocomplete', async () => {
-    suite.mountedComponent = mount(ChatComposer, {
-      target: document.body,
-      props: {
-        availableSkills: [
-          {
-            name: 'stop',
-            description: 'Cancel the active run.',
-            type: 'command',
-          },
-          {
-            name: 'debugging',
-            description: 'Investigate unclear bugs.',
-            type: 'skill',
-          },
-        ],
-      },
-    });
-    flushSync();
-
-    const input = composerInput();
-    input.value = 'Please use $';
-    input.setSelectionRange(12, 12);
-    input.dispatchEvent(new InputEvent('input', { bubbles: true }));
-    flushSync();
-
-    expect(autocompleteNames()).toEqual(['debugging']);
-    expect(
-      document.body
-        .querySelector('.skill-autocomplete__eyebrow')
-        .textContent.toLowerCase(),
-    ).toContain('skills');
-  });
-
-  it('inserts inline skill triggers without rewriting the message', async () => {
-    const onSendMessage = vi.fn().mockResolvedValue(true);
-    suite.mountedComponent = mount(ChatComposer, {
-      target: document.body,
-      props: { availableSkills: skillFixtures(), onSendMessage },
-    });
-    flushSync();
-
-    const input = composerInput();
-    input.value = 'Please use $deb here.  ';
-    input.setSelectionRange(15, 15);
-    input.dispatchEvent(new InputEvent('input', { bubbles: true }));
-    flushSync();
-
-    input.dispatchEvent(
-      new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }),
-    );
-    await Promise.resolve();
-    flushSync();
-
-    expect(input.value).toBe('Please use $debugging here.  ');
-
-    input.dispatchEvent(
-      new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }),
-    );
-    flushSync();
-
-    expect(onSendMessage).toHaveBeenCalledWith('Please use $debugging here.  ');
-  });
-
-  it('includes loadable warning skills in autocomplete', async () => {
-    suite.mountedComponent = mount(ChatComposer, {
-      target: document.body,
-      props: {
-        availableSkills: [
-          ...skillFixtures(),
-          {
-            name: 'warning-skill',
-            description: 'Loadable with validation warnings.',
-            valid: false,
-            warnings: ['Skill name differs from directory name.'],
-          },
-        ],
-      },
-    });
-    flushSync();
-
-    const input = composerInput();
-    input.value = '$warning';
-    input.setSelectionRange(8, 8);
-    input.dispatchEvent(new InputEvent('input', { bubbles: true }));
-    flushSync();
-
-    expect(document.body.textContent).toContain('warning-skill');
-    expect(document.body.textContent).toContain(
-      'Loadable with validation warnings.',
-    );
-
-    document.body
-      .querySelector('.skill-autocomplete__option')
-      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    await Promise.resolve();
-    flushSync();
-
-    expect(input.value).toBe('$warning-skill');
-  });
-
-  it('keeps slash autocomplete keyboard navigation after arrow keyup', () => {
-    suite.mountedComponent = mount(ChatComposer, {
-      target: document.body,
-      props: {
-        availableSkills: [
-          ...skillFixtures(),
-          {
-            name: 'status',
-            description: 'Show runtime status.',
-            valid: true,
-          },
-        ],
-      },
-    });
-    flushSync();
-
-    const input = composerInput();
-    input.value = '/';
-    input.setSelectionRange(1, 1);
-    input.dispatchEvent(new InputEvent('input', { bubbles: true }));
-    flushSync();
-
-    expect(autocompleteOptions()).toHaveLength(3);
-    expect(autocompleteOptions()[0].getAttribute('aria-selected')).toBe('true');
-
-    input.dispatchEvent(
-      new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }),
-    );
-    flushSync();
-    input.dispatchEvent(
-      new KeyboardEvent('keyup', { key: 'ArrowDown', bubbles: true }),
-    );
-    flushSync();
-
-    expect(autocompleteOptions()[1].getAttribute('aria-selected')).toBe('true');
-
-    input.dispatchEvent(
-      new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }),
-    );
-    flushSync();
-    input.dispatchEvent(
-      new KeyboardEvent('keyup', { key: 'ArrowDown', bubbles: true }),
-    );
-    flushSync();
-
-    expect(autocompleteOptions()[2].getAttribute('aria-selected')).toBe('true');
-
-    input.dispatchEvent(
-      new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true }),
-    );
-    flushSync();
-    input.dispatchEvent(
-      new KeyboardEvent('keyup', { key: 'ArrowUp', bubbles: true }),
-    );
-    flushSync();
-
-    expect(autocompleteOptions()[1].getAttribute('aria-selected')).toBe('true');
-  });
-
-  it('lets keyboard navigation reach every rendered match (no cap)', () => {
-    const manySkills = Array.from({ length: 9 }, (_item, index) => ({
-      name: `skill-${index + 1}`,
-      description: `Skill number ${index + 1}.`,
-      valid: true,
-    }));
-    suite.mountedComponent = mount(ChatComposer, {
-      target: document.body,
-      props: { availableSkills: manySkills },
-    });
-    flushSync();
-
-    const input = composerInput();
-    input.value = '/';
-    input.setSelectionRange(1, 1);
-    input.dispatchEvent(new InputEvent('input', { bubbles: true }));
-    flushSync();
-
-    // All nine render (the popup is scrollable); arrow-key navigation must be
-    // able to reach the last one. A stale count cap stopped the active index at
-    // the eighth entry, leaving the ninth unreachable by keyboard.
-    expect(autocompleteOptions()).toHaveLength(9);
-
-    for (let step = 0; step < 8; step += 1) {
-      input.dispatchEvent(
-        new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }),
+    it('reaches the action from the ring by keyboard and returns on Escape', () => {
+      const { trigger, card } = mountContextRing();
+      expect(trigger.tagName).toBe('BUTTON');
+      expect(trigger.getAttribute('aria-label')).toBe(
+        t('chat.contextRingLabel', 'Context window usage'),
       );
-      flushSync();
-      input.dispatchEvent(
-        new KeyboardEvent('keyup', { key: 'ArrowDown', bubbles: true }),
-      );
-      flushSync();
-    }
 
-    expect(autocompleteOptions()[8].getAttribute('aria-selected')).toBe('true');
-  });
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab' }));
+      trigger.focus();
+      expect(card.dataset.floatingOpen).toBe('true');
+      expect(trigger.getAttribute('aria-describedby')).toBe(card.id);
 
-  it('keeps popup closed after Escape keyup', () => {
-    suite.mountedComponent = mount(ChatComposer, {
-      target: document.body,
-      props: { availableSkills: skillFixtures() },
-    });
-    flushSync();
-
-    const input = composerInput();
-    input.value = '/deb';
-    input.setSelectionRange(4, 4);
-    input.dispatchEvent(new InputEvent('input', { bubbles: true }));
-    flushSync();
-
-    expect(autocompleteOptions()).toHaveLength(1);
-
-    input.dispatchEvent(
-      new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }),
-    );
-    flushSync();
-    input.dispatchEvent(
-      new KeyboardEvent('keyup', { key: 'Escape', bubbles: true }),
-    );
-    flushSync();
-
-    expect(autocompleteOptions()).toHaveLength(0);
-  });
-
-  it('keeps popup closed after Enter selection keyup (slash)', async () => {
-    suite.mountedComponent = mount(ChatComposer, {
-      target: document.body,
-      props: { availableSkills: skillFixtures() },
-    });
-    flushSync();
-
-    const input = composerInput();
-    input.value = '/deb';
-    input.setSelectionRange(4, 4);
-    input.dispatchEvent(new InputEvent('input', { bubbles: true }));
-    flushSync();
-
-    expect(autocompleteOptions()).toHaveLength(1);
-
-    input.dispatchEvent(
-      new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }),
-    );
-    await Promise.resolve();
-    flushSync();
-
-    input.dispatchEvent(
-      new KeyboardEvent('keyup', { key: 'Enter', bubbles: true }),
-    );
-    flushSync();
-
-    expect(input.value).toBe('/debugging');
-    expect(autocompleteOptions()).toHaveLength(0);
-  });
-
-  it('keeps popup closed after Enter selection keyup ($skill inline)', async () => {
-    suite.mountedComponent = mount(ChatComposer, {
-      target: document.body,
-      props: { availableSkills: skillFixtures() },
-    });
-    flushSync();
-
-    const input = composerInput();
-    input.value = 'use $deb here';
-    input.setSelectionRange(8, 8);
-    input.dispatchEvent(new InputEvent('input', { bubbles: true }));
-    flushSync();
-
-    expect(autocompleteOptions()).toHaveLength(1);
-
-    input.dispatchEvent(
-      new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }),
-    );
-    await Promise.resolve();
-    flushSync();
-
-    input.dispatchEvent(
-      new KeyboardEvent('keyup', { key: 'Enter', bubbles: true }),
-    );
-    flushSync();
-
-    expect(input.value).toContain('$debugging');
-    expect(autocompleteOptions()).toHaveLength(0);
-  });
-
-  it('opens the model argument autocomplete after "/model "', async () => {
-    const onLoadModelCatalog = vi.fn().mockResolvedValue(modelCatalogFixture());
-    suite.mountedComponent = mount(ChatComposer, {
-      target: document.body,
-      props: { onLoadModelCatalog },
-    });
-    flushSync();
-
-    typeInComposer(composerInput(), '/model ');
-    await flushComposerAsyncWork();
-
-    expect(onLoadModelCatalog).toHaveBeenCalledTimes(1);
-    const options = modelAutocompleteOptions();
-    expect(options.length).toBeGreaterThan(0);
-    expect(options[0].textContent).toContain('openai/gpt-5.2');
-  });
-
-  it('filters model options by the text after "/model "', async () => {
-    const onLoadModelCatalog = vi.fn().mockResolvedValue(modelCatalogFixture());
-    suite.mountedComponent = mount(ChatComposer, {
-      target: document.body,
-      props: { onLoadModelCatalog },
-    });
-    flushSync();
-
-    typeInComposer(composerInput(), '/model ');
-    await flushComposerAsyncWork();
-
-    // All suitable models are visible initially.
-    expect(modelAutocompleteOptions().length).toBe(2);
-
-    // Typing a fragment narrows the list.
-    typeInComposer(composerInput(), '/model ant');
-    await flushComposerAsyncWork();
-
-    const filtered = modelAutocompleteOptions();
-    expect(filtered).toHaveLength(1);
-    expect(filtered[0].textContent).toContain('anthropic/claude-sonnet-4');
-  });
-
-  it('submits "/model <value>" immediately when a model is selected', async () => {
-    const onSendMessage = vi.fn().mockResolvedValue(true);
-    const onLoadModelCatalog = vi.fn().mockResolvedValue(modelCatalogFixture());
-    suite.mountedComponent = mount(ChatComposer, {
-      target: document.body,
-      props: { onSendMessage, onLoadModelCatalog },
-    });
-    flushSync();
-
-    typeInComposer(composerInput(), '/model ');
-    await flushComposerAsyncWork();
-
-    modelAutocompleteOptions()[0].dispatchEvent(
-      new MouseEvent('click', { bubbles: true }),
-    );
-    await flushComposerAsyncWork();
-
-    expect(onSendMessage).toHaveBeenCalledWith(
-      '/model openai/gpt-5.2::api-key',
-    );
-    expect(composerInput().value).toBe('');
-  });
-
-  it('does not submit while another send is in flight', async () => {
-    let resolveSend;
-    const onSendMessage = vi.fn(
-      () =>
-        new Promise((resolve) => {
-          resolveSend = resolve;
-        }),
-    );
-    const onLoadModelCatalog = vi.fn().mockResolvedValue(modelCatalogFixture());
-    suite.mountedComponent = mount(ChatComposer, {
-      target: document.body,
-      props: { onSendMessage, onLoadModelCatalog },
-    });
-    flushSync();
-
-    typeInComposer(composerInput(), 'first message');
-    submitComposer();
-    expect(onSendMessage).toHaveBeenCalledTimes(1);
-
-    typeInComposer(composerInput(), '/model ');
-    await flushComposerAsyncWork();
-
-    modelAutocompleteOptions()[0].dispatchEvent(
-      new MouseEvent('click', { bubbles: true }),
-    );
-    await flushComposerAsyncWork();
-
-    expect(onSendMessage).toHaveBeenCalledTimes(1);
-    expect(composerInput().value).toBe('/model ');
-
-    resolveSend(true);
-    await flushComposerAsyncWork();
-  });
-
-  it('does not open the model popup for "/modeling" or other slash text', async () => {
-    const onLoadModelCatalog = vi.fn().mockResolvedValue(modelCatalogFixture());
-    suite.mountedComponent = mount(ChatComposer, {
-      target: document.body,
-      props: { availableSkills: skillFixtures(), onLoadModelCatalog },
-    });
-    flushSync();
-
-    typeInComposer(composerInput(), '/modeling something');
-    await flushComposerAsyncWork();
-
-    expect(onLoadModelCatalog).not.toHaveBeenCalled();
-    expect(document.body.querySelector('.model-autocomplete')).toBeNull();
-  });
-
-  it.each([
-    ['isComposing', { isComposing: true }],
-    ['keyCode 229', { keyCode: 229 }],
-  ])(
-    'leaves an IME-confirming Enter to the composition (%s)',
-    async (_label, compositionFlags) => {
-      const onSendMessage = vi.fn().mockResolvedValue(true);
-      suite.mountedComponent = mount(ChatComposer, {
-        target: document.body,
-        props: { draftKey: 'a::s1', historyKey: 'a', onSendMessage },
-      });
-      flushSync();
-
-      const input = composerInput();
-      typeInComposer(input, 'にほんご');
-      const confirming = new KeyboardEvent('keydown', {
-        key: 'Enter',
-        bubbles: true,
-        cancelable: true,
-        ...compositionFlags,
-      });
-      input.dispatchEvent(confirming);
-      await flushComposerAsyncWork();
-
-      expect(confirming.defaultPrevented).toBe(false);
-      expect(onSendMessage).not.toHaveBeenCalled();
-      expect(input.value).toBe('にほんご');
-
-      input.dispatchEvent(
+      trigger.dispatchEvent(
         new KeyboardEvent('keydown', {
-          key: 'Enter',
+          key: 'Tab',
           bubbles: true,
           cancelable: true,
         }),
       );
-      await flushComposerAsyncWork();
+      expect(document.activeElement).toBe(
+        card.querySelector('.context-card__action'),
+      );
 
-      expect(onSendMessage).toHaveBeenCalledWith('にほんご');
-    },
-  );
-
-  it('keeps Enter from sending while the @ picker is still loading', async () => {
-    const onSendMessage = vi.fn().mockResolvedValue(true);
-    let resolveFiles;
-    const onListFiles = vi.fn(
-      () =>
-        new Promise((resolve) => {
-          resolveFiles = resolve;
-        }),
-    );
-    suite.mountedComponent = mount(ChatComposer, {
-      target: document.body,
-      props: { onSendMessage, onListFiles },
+      window.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Escape', cancelable: true }),
+      );
+      expect(card.dataset.floatingOpen).toBe('false');
+      expect(document.activeElement).toBe(trigger);
     });
-    flushSync();
 
-    const input = composerInput();
-    typeInComposer(input, 'look at @src/ap');
-    const waiting = pressKey(input, 'Enter');
-    await flushComposerAsyncWork();
+    const defaultPolicy = {
+      enabled: true,
+      trigger: { type: 'context_ratio', threshold: 0.8 },
+      strategy: { type: 'summary_tail', tail_tokens: 15000 },
+    };
 
-    expect(waiting.defaultPrevented).toBe(true);
-    expect(onSendMessage).not.toHaveBeenCalled();
-    expect(input.value).toBe('look at @src/ap');
+    // The thresholds themselves belong to `contextLimitWarning`; the ring and
+    // card show its level and note for the displayed Session's Policy.
+    it.each([
+      ['the default Policy', defaultPolicy, 6900, 'normal', null],
+      ['the default Policy', defaultPolicy, 7000, 'high', 'nearLimit'],
+      [
+        'the default Policy',
+        defaultPolicy,
+        8000,
+        'high',
+        'compactionThresholdReached',
+      ],
+      ['the default Policy', defaultPolicy, 9000, 'critical', 'atLimit'],
+      [
+        'an earlier threshold',
+        {
+          ...defaultPolicy,
+          trigger: { type: 'context_ratio', threshold: 0.5 },
+        },
+        4000,
+        'high',
+        'nearLimit',
+      ],
+      [
+        'disabled automatic Compaction',
+        { ...defaultPolicy, enabled: false },
+        7000,
+        'high',
+        'nearContextLimit',
+      ],
+      ['an unknown Policy', null, 7000, 'high', 'nearContextLimit'],
+    ])(
+      'relates the context level to %s (%#)',
+      (_label, compactionPolicy, tokens, level, noteKey) => {
+        const { anchor, card } = mountContextRing({
+          contextUsage: { tokens, estimated: false },
+          compactionPolicy,
+        });
 
-    resolveFiles({ files: ['src/app.js'], truncated: false });
-    await flushComposerAsyncWork();
-    pressKey(input, 'Enter');
-    await flushComposerAsyncWork();
+        expect(anchor.classList.contains(`context-ring--${level}`)).toBe(true);
+        expect(card.classList.contains(`context-card--${level}`)).toBe(true);
+        expect(
+          card.querySelector('.context-card__level')?.textContent.trim() ??
+            null,
+        ).toBe(noteKey ? t(`chat.contextCard.${noteKey}`) : null);
+      },
+    );
 
-    expect(onSendMessage).not.toHaveBeenCalled();
-    expect(input.value).toBe('look at @src/app.js ');
+    it.each([
+      ['pending', false, 'chat.compactionPending'],
+      ['running', false, 'chat.compactionRunning'],
+      ['unavailable', false, 'chat.compactNow'],
+      ['idle', true, 'chat.compactionPending'],
+    ])(
+      'disables Compaction while %s (submitting: %s)',
+      (compactionState, compactionSubmitting, labelKey) => {
+        const onForceCompaction = vi.fn();
+        const { card } = mountContextRing({
+          compactionState,
+          compactionSubmitting,
+          onForceCompaction,
+        });
+        const button = card.querySelector('.context-card__action');
+        expect(button.textContent.trim()).toBe(t(labelKey));
+        expect(button.disabled).toBe(true);
+        button.click();
+        expect(onForceCompaction).not.toHaveBeenCalled();
+      },
+    );
+
+    it('renders the card without an action when none is wired', () => {
+      const { card } = mountContextRing({ onForceCompaction: null });
+      expect(card.querySelector('.context-card__action')).toBeNull();
+    });
   });
 
-  it('keeps Enter from sending while the /model catalog is still loading', async () => {
-    const onSendMessage = vi.fn().mockResolvedValue(true);
-    let resolveCatalog;
-    const onLoadModelCatalog = vi.fn(
-      () =>
-        new Promise((resolve) => {
-          resolveCatalog = resolve;
-        }),
-    );
-    suite.mountedComponent = mount(ChatComposer, {
-      target: document.body,
-      props: { onSendMessage, onLoadModelCatalog },
+  describe('drafts and history', () => {
+    const sessionProps = { draftKey: 'agent::one', historyKey: 'agent' };
+
+    it('keeps a per-Session draft and moves it to the history when sent', async () => {
+      setDraft('agent::one', 'half a thought');
+      const onSendMessage = vi.fn().mockResolvedValue(true);
+      composer.mount({ ...sessionProps, onSendMessage });
+      expect(composerInput().value).toBe('half a thought');
+
+      typeInComposer('hello there');
+      expect(getDraft('agent::one')).toBe('hello there');
+
+      submitComposer();
+      await settle();
+      expect(onSendMessage).toHaveBeenCalledWith('hello there');
+      expect(composerInput().value).toBe('');
+      expect(getDraft('agent::one')).toBe('');
+      expect(getHistory('agent')).toEqual(['hello there']);
     });
-    flushSync();
 
-    const input = composerInput();
-    typeInComposer(input, '/model ');
-    pressKey(input, 'Enter');
-    await flushComposerAsyncWork();
+    it.each([
+      ['an in-progress', 'my draft'],
+      ['an empty', ''],
+    ])(
+      'recalls sent messages with the arrow keys and returns to %s draft',
+      (_case, draft) => {
+        pushHistory('agent', 'first');
+        pushHistory('agent', 'second');
+        composer.mount(sessionProps);
+        typeInComposer(draft);
 
-    expect(onSendMessage).not.toHaveBeenCalled();
-    expect(input.value).toBe('/model ');
-
-    resolveCatalog(modelCatalogFixture());
-    await flushComposerAsyncWork();
-    pressKey(input, 'Enter');
-    await flushComposerAsyncWork();
-
-    expect(onSendMessage).toHaveBeenCalledWith(
-      '/model openai/gpt-5.2::api-key',
+        const recalled = [
+          'ArrowUp',
+          'ArrowUp',
+          'ArrowUp',
+          'ArrowDown',
+          'ArrowDown',
+        ].map((key) => {
+          pressKey(key, { keyup: false });
+          return composerInput().value;
+        });
+        // Up holds at the oldest entry; Down past the newest restores the draft.
+        expect(recalled).toEqual(['second', 'first', 'first', 'second', draft]);
+      },
     );
+
+    it('moves the caret instead of recalling when it is below the first line', () => {
+      pushHistory('agent', 'first');
+      composer.mount(sessionProps);
+      typeInComposer('line one\nline two', 12);
+
+      const event = pressKey('ArrowUp', { keyup: false });
+      expect(event.defaultPrevented).toBe(false);
+      expect(composerInput().value).toBe('line one\nline two');
+    });
   });
 
-  it('lets Enter select the active model option', async () => {
-    const onSendMessage = vi.fn().mockResolvedValue(true);
-    const onLoadModelCatalog = vi.fn().mockResolvedValue(modelCatalogFixture());
-    suite.mountedComponent = mount(ChatComposer, {
-      target: document.body,
-      props: { onSendMessage, onLoadModelCatalog },
+  describe('sending', () => {
+    it('offers no stop control while no Run is active', () => {
+      composer.mount({ isRunning: false, onCancelRun: vi.fn() });
+      expect(buttonLabelled('chat.cancelRun')).toBeNull();
     });
-    flushSync();
 
-    typeInComposer(composerInput(), '/model ');
-    await flushComposerAsyncWork();
+    it.each([
+      ['a Run is active', { isRunning: true }],
+      ['the composer itself is disabled', { isRunning: true, disabled: true }],
+    ])('offers the stop control while %s', (_case, props) => {
+      const onCancelRun = vi.fn();
+      composer.mount({ ...props, onCancelRun });
 
-    const input = composerInput();
-    input.dispatchEvent(
-      new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }),
+      const stopButton = buttonLabelled('chat.cancelRun');
+      expect(stopButton.disabled).toBe(false);
+      stopButton.click();
+      expect(onCancelRun).toHaveBeenCalledTimes(1);
+    });
+
+    it('disables the stop control while a cancel is in flight', () => {
+      composer.mount({ isRunning: true, cancelling: true });
+      expect(buttonLabelled('chat.cancelRun')).toBeNull();
+      expect(buttonLabelled('cancel.cancelling').disabled).toBe(true);
+    });
+
+    it('focuses the message field when the composer padding is pressed', () => {
+      composer.mount();
+      const event = new MouseEvent('mousedown', {
+        bubbles: true,
+        cancelable: true,
+      });
+      document.body.querySelector('.input-wrap').dispatchEvent(event);
+
+      expect(event.defaultPrevented).toBe(true);
+      expect(document.activeElement).toBe(composerInput());
+    });
+
+    it('resets the field height after sending a tall draft', async () => {
+      const onSendMessage = vi.fn().mockResolvedValue(true);
+      composer.mount({ onSendMessage });
+      const input = composerInput();
+      Object.defineProperty(input, 'scrollHeight', {
+        configurable: true,
+        get: () => 144,
+      });
+
+      typeInComposer('line one\nline two\nline three');
+      expect(input.style.height).toBe('144px');
+
+      submitComposer();
+      await settle();
+      expect(onSendMessage).toHaveBeenCalledWith(
+        'line one\nline two\nline three',
+      );
+      expect(input.value).toBe('');
+      expect(input.style.height).toBe('');
+    });
+
+    it.each([
+      ['isComposing', { isComposing: true }],
+      ['keyCode 229', { keyCode: 229 }],
+    ])(
+      'leaves an IME-confirming Enter to the composition (%s)',
+      async (_label, compositionFlags) => {
+        const onSendMessage = vi.fn().mockResolvedValue(true);
+        composer.mount({ draftKey: 'a::s1', historyKey: 'a', onSendMessage });
+        typeInComposer('にほんご');
+
+        const confirming = pressKey('Enter', {
+          keyup: false,
+          ...compositionFlags,
+        });
+        await settle();
+        expect(confirming.defaultPrevented).toBe(false);
+        expect(onSendMessage).not.toHaveBeenCalled();
+        expect(composerInput().value).toBe('にほんご');
+
+        pressKey('Enter', { keyup: false });
+        await settle();
+        expect(onSendMessage).toHaveBeenCalledWith('にほんご');
+      },
     );
-    await flushComposerAsyncWork();
 
-    expect(onSendMessage).toHaveBeenCalledWith(
-      '/model openai/gpt-5.2::api-key',
+    it.each([
+      ['an image', 'photo.png', 'image/png', 'media'],
+      ['audio', 'voice.ogg', 'audio/ogg', 'media'],
+      ['a text file', 'note.txt', 'text/plain', 'file'],
+    ])(
+      'sends %s upload as a %s block',
+      async (_case, filename, mediaType, blockType) => {
+        const onSendMessage = vi.fn().mockResolvedValue(true);
+        uploadAttachment.mockResolvedValue(
+          uploaded('attachment-1', filename, mediaType),
+        );
+        composer.mount({ onSendMessage });
+
+        await selectFilesFromPicker(
+          new File(['data'], filename, { type: mediaType }),
+        );
+        submitComposer();
+
+        expect(onSendMessage).toHaveBeenCalledWith([
+          {
+            type: blockType,
+            attachment_id: 'attachment-1',
+            filename,
+            media_type: mediaType,
+          },
+        ]);
+      },
     );
+
+    it('keeps the draft and attachments when send admission fails', async () => {
+      const onSendMessage = vi.fn().mockResolvedValue(false);
+      uploadAttachment.mockResolvedValue(
+        uploaded('attachment-file-1', 'paper.pdf', 'application/pdf'),
+      );
+      composer.mount({
+        draftKey: 'agent::one',
+        historyKey: 'agent',
+        onSendMessage,
+      });
+
+      typeInComposer('keep this');
+      await selectFilesFromPicker(
+        new File(['pdf-content'], 'paper.pdf', { type: 'application/pdf' }),
+      );
+      submitComposer();
+      await settle();
+
+      expect(onSendMessage).toHaveBeenCalledWith([
+        { type: 'text', text: 'keep this' },
+        {
+          type: 'file',
+          attachment_id: 'attachment-file-1',
+          filename: 'paper.pdf',
+          media_type: 'application/pdf',
+        },
+      ]);
+      expect(composerInput().value).toBe('keep this');
+      expect(getDraft('agent::one')).toBe('keep this');
+      expect(attachments()).toHaveLength(1);
+      expect(getHistory('agent')).toEqual([]);
+    });
+
+    it('keeps completed attachments with their original Session across composer mounts', async () => {
+      uploadAttachment.mockResolvedValue(
+        uploaded('attachment-file-1', 'brief.pdf', 'application/pdf'),
+      );
+      const first = {
+        draftKey: 'agent-one::session-one',
+        historyKey: 'agent-one',
+      };
+      composer.mount(first);
+      await selectFilesFromPicker(
+        new File(['pdf-content'], 'brief.pdf', { type: 'application/pdf' }),
+      );
+      expect(attachments()).toHaveLength(1);
+
+      await composer.unmount();
+      composer.mount({
+        draftKey: 'agent-two::session-two',
+        historyKey: 'agent-two',
+      });
+      expect(attachments()).toHaveLength(0);
+
+      await composer.unmount();
+      const onSendMessage = vi.fn().mockResolvedValue(true);
+      composer.mount({ ...first, onSendMessage });
+      expect(attachments()).toHaveLength(1);
+      submitComposer();
+      await settle();
+
+      expect(onSendMessage).toHaveBeenCalledWith([
+        {
+          type: 'file',
+          attachment_id: 'attachment-file-1',
+          filename: 'brief.pdf',
+          media_type: 'application/pdf',
+        },
+      ]);
+    });
   });
 });

@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 
-import { init } from '../../../lib/i18n.js';
+import { init, t } from '../../../lib/i18n.js';
 import { TOOLTIP_SHOW_DELAY_MS } from '../../../lib/tooltip.js';
 
 vi.mock('svelte', async () => {
@@ -37,50 +37,45 @@ describe('MarkdownContent', () => {
     vi.useRealTimers();
   });
 
-  it('renders a fenced code header and copies only the code', async () => {
+  function mountMarkdown(props) {
     mountedComponent = mount(MarkdownContent, {
       target: document.body,
-      props: {
-        source: '```python\ndef answer():\n    return 42\n```',
-        class: 'msg-markdown',
-      },
+      props: { class: 'msg-markdown', ...props },
     });
     flushSync();
+  }
 
-    expect(document.querySelector('.msg-code__language').textContent).toBe(
+  it.each([
+    [
+      'its declared language',
+      '```python\ndef answer():\n    return 42\n```',
       'python',
-    );
-    const copyButton = document.querySelector('.msg-code__copy');
-    expect(copyButton).toBeTruthy();
-    expect(copyButton.getAttribute('aria-label')).toBe('Copy code');
+      'def answer():\n    return 42\n',
+    ],
+    [
+      'the plain-text label without a language',
+      '```\nplain\n```',
+      t('chat.codeLanguagePlain'),
+      'plain\n',
+    ],
+  ])(
+    'labels a fenced code block with %s and copies only the code',
+    async (_case, source, language, code) => {
+      mountMarkdown({ source });
 
-    copyButton.click();
-    await flushAsync();
-
-    expect(writeText).toHaveBeenCalledWith('def answer():\n    return 42\n');
-  });
-
-  it('uses the localized plain-text label when no language is declared', () => {
-    mountedComponent = mount(MarkdownContent, {
-      target: document.body,
-      props: { source: '```\nplain\n```' },
-    });
-    flushSync();
-
-    expect(document.querySelector('.msg-code__language').textContent).toBe(
-      'text',
-    );
-  });
+      expect(document.querySelector('.msg-code__language').textContent).toBe(
+        language,
+      );
+      const copyButton = document.querySelector('.msg-code__copy');
+      expect(copyButton.getAttribute('aria-label')).toBe(t('chat.copyCode'));
+      copyButton.click();
+      await flushAsync();
+      expect(writeText).toHaveBeenCalledWith(code);
+    },
+  );
 
   it('withholds code copy while a streaming fence is incomplete', () => {
-    mountedComponent = mount(MarkdownContent, {
-      target: document.body,
-      props: {
-        source: '```js\nconst partial = true;',
-        streaming: true,
-      },
-    });
-    flushSync();
+    mountMarkdown({ source: '```js\nconst partial = true;', streaming: true });
 
     expect(document.querySelector('.msg-code__language').textContent).toBe(
       'js',
@@ -89,15 +84,10 @@ describe('MarkdownContent', () => {
   });
 
   it('keeps delivered HTML as a link with one external hint and no menu button', async () => {
-    mountedComponent = mount(MarkdownContent, {
-      target: document.body,
-      props: {
-        source:
-          '[site.HTML](/api/files/signed-token) [report.pdf](/api/files/pdf-token) [remote.html](https://example.com/site.html)',
-        class: 'msg-markdown',
-      },
+    mountMarkdown({
+      source:
+        '[site.HTML](/api/files/signed-token) [report.pdf](/api/files/pdf-token) [remote.html](https://example.com/site.html)',
     });
-    flushSync();
     expect(document.querySelectorAll('[data-file-external]')).toHaveLength(1);
     expect(document.querySelector('button')).toBeNull();
     const external = document.querySelector('[data-file-external]');
@@ -135,14 +125,7 @@ describe('MarkdownContent', () => {
         .replaceAll('"', '&quot;')
         .replaceAll('<', '&lt;')
         .replaceAll('>', '&gt;');
-      mountedComponent = mount(MarkdownContent, {
-        target: document.body,
-        props: {
-          source: `[report](${href} "${title}")`,
-          class: 'msg-markdown',
-        },
-      });
-      flushSync();
+      mountMarkdown({ source: `[report](${href} "${title}")` });
       const link = document.querySelector('a');
       expect(link.getAttribute('href')).toBe(href);
       expect(link.dataset.filePath).toBe(path);
@@ -166,15 +149,10 @@ describe('MarkdownContent', () => {
   );
 
   it('leaves ordinary and foreign file-shaped links with their browser behavior', () => {
-    mountedComponent = mount(MarkdownContent, {
-      target: document.body,
-      props: {
-        source:
-          '[web](https://example.com/report "Web title") [foreign](https://example.com/api/files/token "not local")',
-        class: 'msg-markdown',
-      },
+    mountMarkdown({
+      source:
+        '[web](https://example.com/report "Web title") [foreign](https://example.com/api/files/token "not local")',
     });
-    flushSync();
     expect(document.querySelector('[data-delivered-file]')).toBeNull();
     expect(document.querySelector('a').title).toBe('Web title');
   });

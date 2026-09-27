@@ -1,6 +1,8 @@
-const { unmount, flushSync, mount } = await import('svelte');
 // @vitest-environment jsdom
-import { vi } from 'vitest';
+import { afterEach, beforeEach, vi } from 'vitest';
+import { flushSync as svelteFlushSync, mount, unmount } from 'svelte';
+
+import { init } from '../../../lib/i18n.js';
 
 vi.mock('svelte', async () => {
   return import('../../../../node_modules/svelte/src/index-client.js');
@@ -9,11 +11,55 @@ vi.mock('svelte', async () => {
 const { default: ChatAssistantRun } =
   await import('../ChatAssistantRun.svelte');
 
-function createAssistantRunItem({
+// Registers the per-test lifecycle and returns `mount(props)`, which mounts
+// ChatAssistantRun into the body.
+export function setupChatAssistantRunSuite() {
+  let mountedComponent = null;
+
+  beforeEach(() => {
+    document.body.innerHTML = '';
+    init('en');
+    mountedComponent = null;
+  });
+
+  afterEach(async () => {
+    if (mountedComponent) {
+      await unmount(mountedComponent);
+      mountedComponent = null;
+    }
+    document.body.innerHTML = '';
+    vi.useRealTimers();
+  });
+
+  return {
+    mount(props) {
+      mountedComponent = mount(ChatAssistantRun, {
+        target: document.body,
+        props,
+      });
+      flushSync();
+      return mountedComponent;
+    },
+  };
+}
+
+export function flushSync() {
+  return svelteFlushSync();
+}
+
+export async function flushAsync() {
+  for (let index = 0; index < 5; index += 1) {
+    await Promise.resolve();
+    flushSync();
+  }
+}
+
+export function assistantRun({
   runId = 'run-parent',
   startTimestamp = '2026-06-09T12:00:00+00:00',
   status,
   items = [],
+  ...fields
 } = {}) {
   return {
     type: 'assistant_run',
@@ -24,140 +70,83 @@ function createAssistantRunItem({
     startTimestamp,
     ...(status ? { status } : {}),
     items,
+    ...fields,
   };
 }
 
-function createBashToolChild({
-  id = 'tool-bash-1',
-  toolCallId = 'call-bash-1',
-  status = 'running',
-  includeResult = false,
-} = {}) {
-  const tool = {
+// A Tool child row; `startedEvent` marks it dispatched.
+export function toolChild(
+  name,
+  args,
+  { id, status = 'running', ...fields } = {},
+) {
+  const toolCallId = `call-${id ?? name}`;
+  return {
     type: 'tool_call',
-    id,
-    name: 'bash',
+    id: `tool-${id ?? name}`,
+    name,
     toolCallId,
     status,
-    arguments: { command: 'ls -la' },
+    arguments: args,
     startedEvent: {
       type: 'tool_call_started',
-      payload: { tool_call: { id: toolCallId, name: 'bash' } },
+      payload: { tool_call: { id: toolCallId, name } },
     },
+    ...fields,
   };
-  if (includeResult) {
-    tool.resultEvent = {
+}
+
+export function bashChild({
+  status = 'running',
+  withResult = false,
+  ...fields
+} = {}) {
+  const child = toolChild('bash', { command: 'ls -la' }, { status, ...fields });
+  if (withResult) {
+    child.resultEvent = {
       type: 'tool_call_result',
       payload: {
-        tool_call: { id: toolCallId, name: 'bash' },
+        tool_call: { id: child.toolCallId, name: 'bash' },
         result: { ok: true, data: { output: 'file.txt' }, artifacts: [] },
       },
     };
   }
-  return tool;
+  return child;
 }
 
-function createReadToolChild({
-  id = 'tool-read-1',
-  toolCallId = 'call-read-1',
+export function readChild({ status = 'running', ...fields } = {}) {
+  return toolChild('read', { path: 'README.md' }, { status, ...fields });
+}
+
+export function subAgentChild({
   status = 'running',
+  runStatus = 'running',
 } = {}) {
-  return {
-    type: 'tool_call',
-    id,
-    name: 'read',
-    toolCallId,
-    status,
-    arguments: { path: 'README.md' },
-    startedEvent: {
-      type: 'tool_call_started',
-      payload: { tool_call: { id: toolCallId, name: 'read' } },
-    },
+  const data = {
+    id: 'sub_child',
+    agent_id: 'worker',
+    session_id: 'session-child',
+    status: runStatus,
+    delivery: 'automatic',
   };
-}
-
-function createSubAgentChild({
-  id = 'tool-subagent-1',
-  toolCallId = 'call-subagent-1',
-  status = 'running',
-  dataRunId = 'run-child',
-  dataStatus = 'running',
-  queueItemId = '',
-} = {}) {
-  return {
-    type: 'tool_call',
-    id,
-    name: 'subagent',
-    toolCallId,
-    status,
-    arguments: { action: 'run', agent_id: 'worker', content: 'Inspect' },
-    startedEvent: {
-      type: 'tool_call_started',
-      payload: { tool_call: { id: toolCallId, name: 'subagent' } },
+  return toolChild(
+    'subagent',
+    { action: 'run', agent_id: 'worker', content: 'Inspect' },
+    {
+      status,
+      subAgentSession: { ...data, run_id: 'run-child' },
+      result: { ok: true, data, artifacts: [] },
     },
-    subAgentSession: {
-      id: 'sub_child',
-      agent_id: 'worker',
-      session_id: 'session-child',
-      run_id: dataRunId,
-      status: dataStatus,
-      delivery: 'automatic',
-      ...(queueItemId ? { queue_item_id: queueItemId } : {}),
-    },
-    result: queueItemId
-      ? {
-          ok: true,
-          data: {
-            id: 'sub_child',
-            agent_id: 'worker',
-            session_id: 'session-child',
-            status: dataStatus,
-            delivery: 'automatic',
-          },
-          artifacts: [],
-        }
-      : {
-          ok: true,
-          data: {
-            id: 'sub_child',
-            agent_id: 'worker',
-            session_id: 'session-child',
-            status: dataStatus,
-            delivery: 'automatic',
-          },
-          artifacts: [],
-        },
-  };
-}
-
-function mountRun(props) {
-  const target = document.body;
-  const component = mount(ChatAssistantRun, { target, props });
-  flushSync();
-  return component;
-}
-
-function findRowCancel(kind) {
-  return Array.from(document.querySelectorAll('.row-cancel')).find(
-    (button) => button.getAttribute('data-cancel') === kind,
   );
 }
 
-async function flushAsync() {
-  for (let index = 0; index < 5; index += 1) {
-    await Promise.resolve();
-    flushSync();
-  }
+export function reasoningItem(
+  content,
+  { id = 'reasoning', streaming = false } = {},
+) {
+  return { type: 'reasoning', id, content, streaming };
 }
 
-export {
-  createAssistantRunItem,
-  createBashToolChild,
-  createReadToolChild,
-  createSubAgentChild,
-  mountRun,
-  findRowCancel,
-  flushAsync,
-};
-
-export { flushSync, unmount };
+export function outputItem(content, { id = 'answer' } = {}) {
+  return { type: 'assistant_output', id, content, streaming: false };
+}

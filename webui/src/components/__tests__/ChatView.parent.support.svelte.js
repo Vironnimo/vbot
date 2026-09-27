@@ -1,10 +1,10 @@
-// Mirrors the reactive props App passes to ChatView (and to the Session
-// drawer), so a test can change them after mounting and observe the component
-// react. Callbacks write back into the harness the way App does: a selection
-// reported through `onAgentSelected` returns as `sharedSelectedAgentId`, a
-// dropdown switch through `onProjectSelected` as `selectedProjectId`, and the
-// Project Agent ChatView reports through `onProjectAgentSelected` is the value
-// App would persist.
+// Mirrors the reactive props App passes to ChatView, so a test can change
+// them after mounting and observe the component react. Callbacks write back
+// into the harness the way App does: a selection reported through
+// `onAgentSelected` returns as `sharedSelectedAgentId`, a dropdown switch
+// through `onProjectSelected` as `selectedProjectId`, and the Project Agent
+// ChatView reports through `onProjectAgentSelected` is the value App would
+// persist.
 //
 // `connectionSnapshot` is `$state.raw`: ChatView applies each snapshot object
 // once and compares by reference, which a deep proxy would break.
@@ -16,7 +16,6 @@ export function createChatViewParentHarness() {
   let sessionsRefreshToken = $state(0);
   let sessionInvalidations = $state([]);
   let sessionInvalidationId = 0;
-  let sessionListActivity = $state([]);
   let agentsRefreshToken = $state(0);
   let pendingSessionNavigation = $state(null);
   let selectedProjectId = $state('');
@@ -92,14 +91,8 @@ export function createChatViewParentHarness() {
     setQueueInvalidation(scope) {
       queueInvalidation = scope;
     },
-    get sessionsRefreshToken() {
-      return sessionsRefreshToken;
-    },
     bumpSessionsRefreshToken() {
       sessionsRefreshToken += 1;
-    },
-    get sessionInvalidations() {
-      return sessionInvalidations;
     },
     pushSessionInvalidation(scope) {
       sessionInvalidationId += 1;
@@ -108,12 +101,6 @@ export function createChatViewParentHarness() {
         sessionInvalidationId,
         scope,
       );
-    },
-    get sessionListActivity() {
-      return sessionListActivity;
-    },
-    setSessionListActivity(activity) {
-      sessionListActivity = activity;
     },
     get selectedProjectId() {
       return selectedProjectId;
