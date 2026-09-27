@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -15,7 +16,7 @@ from core.chat.commands import (
     parse_handoff_argument,
 )
 from core.chat.status_report import STATUS_PLACEHOLDER
-from core.projects import AgentResolver, ProjectStore
+from core.projects import AgentResolver, ModelConfigurationError, ProjectStore
 from core.runs import ChatRunManager, Run, RunCancelledError
 from core.sessions import SessionAddress
 from tests.core.chat.commands_test_support import (
@@ -334,3 +335,165 @@ async def test_execute_compact_exposes_the_compaction_run_as_primary() -> None:
     assert len(result.runs) == 1
     assert result.runs[0].role == "primary"
     assert result.runs[0].run is run
+
+
+class _RecordingAgents:
+    def __init__(self) -> None:
+        self.updates: list[tuple[str, dict[str, Any]]] = []
+
+    def update(self, agent_id: str, **changes: Any) -> Any:
+        self.updates.append((agent_id, changes))
+        return SimpleNamespace(id=agent_id, **changes)
+
+
+class _RecordingProjects:
+    def __init__(self) -> None:
+        self.set_calls: list[tuple[str, str, str, Any]] = []
+        self.clear_calls: list[tuple[str, str, str]] = []
+
+    def set_override(self, project_id: str, agent_id: str, field: str, value: Any) -> Any:
+        self.set_calls.append((project_id, agent_id, field, value))
+        return SimpleNamespace(project_id=project_id)
+
+    def clear_override(self, project_id: str, agent_id: str, field: str) -> Any:
+        self.clear_calls.append((project_id, agent_id, field))
+        return SimpleNamespace(project_id=project_id)
+
+
+class _ConfiguredModels:
+    """Model-validation stub: only the configured set is usable."""
+
+    def __init__(self, configured: set[str]) -> None:
+        self._configured = configured
+
+    def require_model_configured(self, model: str) -> None:
+        if model not in self._configured:
+            raise ModelConfigurationError(f"model is not configured: {model}")
+
+
+def _model_dispatcher(
+    agents: _RecordingAgents, projects: _RecordingProjects, *, configured: set[str]
+) -> CommandDispatcher:
+    return CommandDispatcher(
+        ChatRunManager(),
+        agent_resolver=cast(AgentResolver, _ConfiguredModels(configured)),
+        agents=cast(Any, agents),
+        projects=cast(ProjectStore, projects),
+        models=cast(Any, SimpleNamespace()),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("message", "project_id", "agent_updates", "override_sets", "override_clears", "facts"),
+    [
+        # An identity Session writes the Agent's own model.
+        pytest.param(
+            "/model openai/gpt-5",
+            None,
+            [("coder", {"model": "openai/gpt-5"})],
+            [],
+            [],
+            {"agent_id": "coder", "model": "openai/gpt-5"},
+            id="identity",
+        ),
+        # Reset writes an empty model (the global default) and skips validation.
+        pytest.param(
+            "/model reset",
+            None,
+            [("coder", {"model": ""})],
+            [],
+            [],
+            {"agent_id": "coder", "model": ""},
+            id="identity-reset",
+        ),
+        # A Project Session writes a per-Agent override instead.
+        pytest.param(
+            "/model openai/gpt-5",
+            "vbot",
+            [],
+            [("vbot", "coder", "model", "openai/gpt-5")],
+            [],
+            None,
+            id="project",
+        ),
+        # The reset token is case-insensitive.
+        pytest.param(
+            "/model RESET",
+            "vbot",
+            [],
+            [],
+            [("vbot", "coder", "model")],
+            None,
+            id="project-reset",
+        ),
+    ],
+)
+async def test_model_value_writes_the_identity_model_or_project_override(
+    message: str,
+    project_id: str | None,
+    agent_updates: list[tuple[str, dict[str, Any]]],
+    override_sets: list[tuple[str, str, str, Any]],
+    override_clears: list[tuple[str, str, str]],
+    facts: dict[str, Any] | None,
+) -> None:
+    agents, projects = _RecordingAgents(), _RecordingProjects()
+    dispatcher = _model_dispatcher(agents, projects, configured={"openai/gpt-5"})
+
+    result = await _execute(dispatcher, message, project_id=project_id)
+
+    assert agents.updates == agent_updates
+    assert projects.set_calls == override_sets
+    assert projects.clear_calls == override_clears
+    if facts is not None:
+        assert result.facts == facts
+    assert result.feedback is not None
+    assert result.feedback.kind == "notice"
+
+
+@pytest.mark.asyncio
+async def test_model_value_writes_nothing_when_the_resolver_refuses_the_model() -> None:
+    # The resolver's Model checker owns usability, including forbidden pinned
+    # Connections (tests/core/projects/test_resolver_connections.py).
+    agents, projects = _RecordingAgents(), _RecordingProjects()
+    dispatcher = _model_dispatcher(agents, projects, configured={"openai/gpt-5"})
+
+    with pytest.raises(ModelConfigurationError):
+        await _execute(dispatcher, "/model openai/ghost")
+
+    assert (agents.updates, projects.set_calls, projects.clear_calls) == ([], [], [])
+
+
+class _RecordingTitles:
+    def __init__(self) -> None:
+        self.renamed: list[tuple[SessionAddress, str]] = []
+
+    def set_title(self, address: SessionAddress, title: str) -> str | None:
+        self.renamed.append((address, title))
+        return " ".join(title.split()) or None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("message", "project_id", "written", "title"),
+    [
+        ("/rename Release planning", None, "Release planning", "Release planning"),
+        # No argument clears the title.
+        ("/rename", None, "", None),
+        ("/rename Docs", "vbot", "Docs", "Docs"),
+    ],
+    ids=["identity", "clear", "project"],
+)
+async def test_rename_writes_the_session_title(
+    message: str, project_id: str | None, written: str, title: str | None
+) -> None:
+    sessions = _RecordingTitles()
+    dispatcher = CommandDispatcher(ChatRunManager(), sessions=cast(Any, sessions))
+
+    result = await _execute(dispatcher, message, project_id=project_id)
+
+    address = SessionAddress(project_id=project_id, agent_id="coder", session_id="session-one")
+    assert sessions.renamed == [(address, written)]
+    assert result.facts == {"session_id": "session-one", "title": title}
+    assert result.feedback is not None
+    assert result.feedback.kind == "notice"
