@@ -1,247 +1,215 @@
-"""Tests for cron CLI parsing, RPC commands, and output."""
+"""Tests for the ``vbot cron`` commands: schedule options, RPC requests and output."""
 
 from __future__ import annotations
 
-from pathlib import Path
+import json
 from typing import Any
 
-import httpx
 import pytest
 
-from cli import cron_management
-from cli import main as cli_main
-from cli.server_management import ServerInstance
-from core.utils.logging import resolve_daily_log_path
+from tests.cli.cli_test_support import FakeRpc, RunCli
+
+CREATE = ("cron", "create", "assistant", "--name", "Morning news", "--prompt", "Check the news")
+CREATED = {"agent_id": "assistant", "prompt": "Check the news", "name": "Morning news"}
 
 
-def make_instance(tmp_path: Path, *, port: int = 8420) -> ServerInstance:
-    data_dir = tmp_path / "data"
-    return ServerInstance(
-        host="127.0.0.1",
-        port=port,
-        data_dir=data_dir,
-        url=f"http://127.0.0.1:{port}",
-        log_path=resolve_daily_log_path(data_dir),
-    )
+@pytest.mark.parametrize(
+    ("options", "schedule"),
+    [
+        pytest.param(
+            ("--cron", "0 9 * * *", "--session", "session-one"),
+            {"schedule_type": "cron", "cron_expression": "0 9 * * *", "session_id": "session-one"},
+            id="recurring-in-session",
+        ),
+        pytest.param(
+            ("--every", "15", "--repeat", "3"),
+            {"schedule_type": "interval", "interval_seconds": 900, "repeat": 3},
+            id="interval-minutes",
+        ),
+        pytest.param(
+            ("--at", "2026-07-01T09:00:00+00:00"),
+            {"schedule_type": "once", "run_at": "2026-07-01T09:00:00+00:00"},
+            id="once",
+        ),
+    ],
+)
+def test_cron_create_sends_the_schedule_fields(
+    rpc: FakeRpc, run_cli: RunCli, options: tuple[str, ...], schedule: dict[str, Any]
+) -> None:
+    rpc.reply("cron.create", {"id": "job-1"})
+
+    code, out, _err = run_cli(*CREATE, *options)
+
+    assert code == 0
+    assert rpc.calls == [("cron.create", CREATED | schedule)]
+    assert "job-1" in out
 
 
-def test_parse_args_supports_cron_create_recurring() -> None:
-    args = cli_main.parse_args(
-        [
-            "cron",
-            "create",
-            "assistant",
-            "--name",
-            "Morning news",
-            "--prompt",
-            "Check the news",
-            "--cron",
-            "0 9 * * *",
-            "--session",
-            "session-one",
-        ]
-    )
-
-    assert args.area == "cron"
-    assert args.command == "create"
-    assert args.agent == "assistant"
-    assert args.name == "Morning news"
-    assert args.prompt == "Check the news"
-    assert args.cron == "0 9 * * *"
-    assert args.at is None
-    assert args.session == "session-one"
-
-
-def test_parse_args_cron_create_rejects_cron_and_at_together(
-    capsys: pytest.CaptureFixture[str],
+@pytest.mark.parametrize(
+    "options",
+    [
+        pytest.param(
+            ("--cron", "0 9 * * *", "--at", "2026-07-01T09:00:00+00:00"), id="cron-and-at"
+        ),
+        pytest.param((), id="no-schedule"),
+        pytest.param(("--cron", "0 9 * * *", "--timezone", "Europe/Berlin"), id="per-job-timezone"),
+    ],
+)
+def test_cron_create_rejects_invalid_schedule_options(
+    rpc: FakeRpc, run_cli: RunCli, options: tuple[str, ...]
 ) -> None:
     with pytest.raises(SystemExit) as exc_info:
-        cli_main.parse_args(
-            [
-                "cron",
-                "create",
-                "assistant",
-                "--name",
-                "Test job",
-                "--prompt",
-                "x",
-                "--cron",
-                "0 9 * * *",
-                "--at",
-                "2026-07-01T09:00:00+00:00",
-            ]
-        )
+        run_cli(*CREATE, *options)
 
     assert exc_info.value.code == 2
+    assert rpc.calls == []
 
 
-def test_parse_args_cron_create_requires_schedule(capsys: pytest.CaptureFixture[str]) -> None:
-    with pytest.raises(SystemExit) as exc_info:
-        cli_main.parse_args(["cron", "create", "assistant", "--name", "Test job", "--prompt", "x"])
-
-    assert exc_info.value.code == 2
-
-
-def test_parse_args_cron_create_rejects_per_job_timezone(
-    capsys: pytest.CaptureFixture[str],
+def test_cron_create_confirms_the_target_schedule_and_next_fire(
+    rpc: FakeRpc, run_cli: RunCli
 ) -> None:
-    with pytest.raises(SystemExit) as exc_info:
-        cli_main.parse_args(
-            [
-                "cron",
-                "create",
-                "assistant",
-                "--name",
-                "Test job",
-                "--prompt",
-                "x",
-                "--cron",
-                "0 9 * * *",
-                "--timezone",
-                "Europe/Berlin",
-            ]
-        )
-
-    assert exc_info.value.code == 2
-
-
-def test_parse_args_supports_cron_update_status() -> None:
-    args = cli_main.parse_args(["cron", "update", "job-1", "--status", "paused"])
-
-    assert args.area == "cron"
-    assert args.command == "update"
-    assert args.id == "job-1"
-    assert args.status == "paused"
-
-
-def test_cron_create_posts_recurring_fields(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    instance = make_instance(tmp_path)
-    calls: list[dict[str, Any]] = []
-
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        calls.append(json)
-        return httpx.Response(200, json={"ok": True, "result": {"id": "job-1"}})
-
-    monkeypatch.setattr(cron_management.httpx, "post", fake_post)
-
-    result = cron_management.cron_create(
-        instance,
+    rpc.reply(
+        "cron.create",
         {
-            "agent_id": "assistant",
-            "name": "Morning news",
-            "prompt": "Check the news",
+            "id": "job-1",
+            "agent_id": "builder",
+            "project_id": "vbot",
+            "target": "builder@vbot",
+            "name": "Build check",
+            "prompt": "Check the build",
             "schedule_type": "cron",
             "cron_expression": "0 9 * * *",
+            "run_at": None,
+            "status": "active",
+            "next_fire_at": "2026-07-21T07:00:00+00:00",
+            "last_outcome": None,
         },
     )
 
-    assert result.ok is True
-    assert result.instance is instance
-    assert "job-1" in result.message
-    assert calls == [
+    code, out, _err = run_cli(
+        "cron", "create", "builder@vbot", "--name", "Build check", "--prompt", "Check the build",
+        "--cron", "0 9 * * *",
+    )  # fmt: skip
+
+    assert code == 0
+    assert rpc.params("cron.create")["agent_id"] == "builder@vbot"
+    for text in (
+        "name=Build check",
+        "agent=builder@vbot",
+        "next_fire_at=2026-07-21T07:00:00+00:00",
+    ):
+        assert text in out
+
+
+def test_cron_list_prints_one_row_per_job(rpc: FakeRpc, run_cli: RunCli) -> None:
+    rpc.reply(
+        "cron.list",
         {
-            "method": "cron.create",
-            "params": {
-                "agent_id": "assistant",
-                "name": "Morning news",
-                "prompt": "Check the news",
-                "schedule_type": "cron",
-                "cron_expression": "0 9 * * *",
-            },
-        }
-    ]
-
-
-def test_cron_list_formats_rows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    instance = make_instance(tmp_path)
-
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        assert json == {"method": "cron.list", "params": {}}
-        return httpx.Response(
-            200,
-            json={
-                "ok": True,
-                "result": {
-                    "jobs": [
-                        {
-                            "id": "job-1",
-                            "agent_id": "assistant",
-                            "name": "Morning news",
-                            "prompt": "Check the news",
-                            "schedule_type": "cron",
-                            "cron_expression": "0 9 * * *",
-                            "run_at": None,
-                            "status": "active",
-                            "next_fire_at": "2026-06-12T07:00:00+00:00",
-                        },
-                        {
-                            "id": "job-2",
-                            "agent_id": "coder",
-                            "name": "One-time audit",
-                            "prompt": "A" * 100,
-                            "schedule_type": "once",
-                            "cron_expression": None,
-                            "run_at": "2026-07-01T09:00:00+00:00",
-                            "status": "paused",
-                            "next_fire_at": None,
-                        },
-                    ]
+            "jobs": [
+                {
+                    "id": "job-1",
+                    "agent_id": "assistant",
+                    "name": "Morning news",
+                    "prompt": "Check the news",
+                    "schedule_type": "cron",
+                    "cron_expression": "0 9 * * *",
+                    "run_at": None,
+                    "status": "active",
+                    "next_fire_at": "2026-06-12T07:00:00+00:00",
                 },
-            },
-        )
+                {
+                    "id": "job-2",
+                    "agent_id": "coder",
+                    "name": "One-time audit",
+                    "prompt": "A" * 100,
+                    "schedule_type": "once",
+                    "cron_expression": None,
+                    "run_at": "2026-07-01T09:00:00+00:00",
+                    "status": "paused",
+                    "next_fire_at": None,
+                },
+            ]
+        },
+    )
 
-    monkeypatch.setattr(cron_management.httpx, "post", fake_post)
+    code, out, _err = run_cli("cron", "list")
 
-    result = cron_management.cron_list(instance)
-
-    assert result.ok is True
-    assert result.message.splitlines()[1:] == [
-        (
-            "- name=Morning news id=job-1 agent=assistant status=active "
-            "schedule=cron[0 9 * * *] remaining_runs=unlimited "
-            "next_fire_at=2026-06-12T07:00:00+00:00 session=new last_outcome=- "
-            "last_error=- prompt=Check the news"
-        ),
-        (
-            "- name=One-time audit id=job-2 agent=coder status=paused "
-            "schedule=once[2026-07-01T09:00:00+00:00] remaining_runs=1 "
-            "next_fire_at=- session=new last_outcome=- last_error=- "
-            "prompt=" + "A" * 57 + "..."
-        ),
+    assert code == 0
+    assert rpc.calls == [("cron.list", {})]
+    assert out.splitlines()[1:] == [
+        "- name=Morning news id=job-1 agent=assistant status=active "
+        "schedule=cron[0 9 * * *] remaining_runs=unlimited "
+        "next_fire_at=2026-06-12T07:00:00+00:00 session=new last_outcome=- "
+        "last_error=- prompt=Check the news",
+        "- name=One-time audit id=job-2 agent=coder status=paused "
+        "schedule=once[2026-07-01T09:00:00+00:00] remaining_runs=1 "
+        "next_fire_at=- session=new last_outcome=- last_error=- "
+        "prompt=" + "A" * 57 + "...",
     ]
 
 
-def test_cron_list_reports_empty_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    instance = make_instance(tmp_path)
+def test_cron_list_reports_the_empty_state(rpc: FakeRpc, run_cli: RunCli) -> None:
+    rpc.reply("cron.list", {"jobs": []})
 
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        return httpx.Response(200, json={"ok": True, "result": {"jobs": []}})
+    code, out, _err = run_cli("cron", "list")
 
-    monkeypatch.setattr(cron_management.httpx, "post", fake_post)
-
-    result = cron_management.cron_list(instance)
-
-    assert result.ok is True
-    assert result.instance is instance
-    assert result.message.strip()
+    assert code == 0
+    assert out.strip()
 
 
-def test_cron_update_rejects_empty_changes(tmp_path: Path) -> None:
-    instance = make_instance(tmp_path)
+@pytest.mark.parametrize(
+    "jobs",
+    [
+        pytest.param([], id="no-jobs"),
+        pytest.param([{"id": "another"}], id="other-job"),
+        pytest.param(
+            [{"id": "wanted", "prompt": "long prompt " * 40, "session_id": "pinned"}],
+            id="exact-job",
+        ),
+    ],
+)
+def test_cron_show_prints_exactly_the_complete_saved_job(
+    rpc: FakeRpc, run_cli: RunCli, jobs: list[dict[str, Any]]
+) -> None:
+    rpc.reply("cron.list", {"jobs": jobs})
 
-    result = cron_management.cron_update(instance, "job-1", {})
+    code, out, _err = run_cli("cron", "show", "wanted")
 
-    assert result.ok is False
-    assert result.instance is instance
+    assert rpc.calls == [("cron.list", {})]
+    if jobs and jobs[0]["id"] == "wanted":
+        assert (code, json.loads(out)) == (0, jobs[0])
+    else:
+        assert code == 1
+
+
+@pytest.mark.parametrize(
+    ("options", "changes"),
+    [
+        pytest.param(
+            ("--cron", "30 7 * * 1-5"),
+            {"schedule_type": "cron", "cron_expression": "30 7 * * 1-5"},
+            id="schedule",
+        ),
+        pytest.param(("--status", "paused"), {"status": "paused"}, id="status"),
+    ],
+)
+def test_cron_update_sends_only_the_given_changes(
+    rpc: FakeRpc, run_cli: RunCli, options: tuple[str, ...], changes: dict[str, Any]
+) -> None:
+    rpc.reply("cron.update", {"ok": True})
+
+    code, out, _err = run_cli("cron", "update", "job-1", *options)
+
+    assert code == 0
+    assert rpc.calls == [("cron.update", {"id": "job-1", **changes})]
+    assert "job-1" in out
+
+
+def test_cron_update_without_changes_names_every_option(rpc: FakeRpc, run_cli: RunCli) -> None:
+    code, out, _err = run_cli("cron", "update", "job-1")
+
+    assert code == 1
+    assert rpc.calls == []
     for option in (
         "--agent",
         "--name",
@@ -253,196 +221,17 @@ def test_cron_update_rejects_empty_changes(tmp_path: Path) -> None:
         "--session",
         "--status",
     ):
-        assert option in result.message
+        assert option in out
 
 
-@pytest.mark.parametrize(
-    ("function_name", "method"),
-    [
-        ("cron_delete", "cron.delete"),
-        ("cron_enable", "cron.enable"),
-        ("cron_disable", "cron.disable"),
-    ],
-)
-def test_cron_simple_id_commands_post_expected_rpc(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    function_name: str,
-    method: str,
+@pytest.mark.parametrize("command", ["delete", "enable", "disable"])
+def test_cron_job_commands_address_the_job_by_id(
+    rpc: FakeRpc, run_cli: RunCli, command: str
 ) -> None:
-    instance = make_instance(tmp_path)
-    calls: list[dict[str, Any]] = []
+    rpc.reply(f"cron.{command}", {"ok": True})
 
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        calls.append(json)
-        return httpx.Response(200, json={"ok": True, "result": {"ok": True}})
+    code, out, _err = run_cli("cron", command, "job-1")
 
-    monkeypatch.setattr(cron_management.httpx, "post", fake_post)
-
-    result = getattr(cron_management, function_name)(instance, "job-1")
-
-    assert result.ok is True
-    assert result.instance is instance
-    assert "job-1" in result.message
-    assert calls == [{"method": method, "params": {"id": "job-1"}}]
-
-
-def test_run_dispatches_cron_create_with_once_schedule(
-    tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    instance = make_instance(tmp_path, port=8765)
-
-    def fake_resolve(*, host: str, port: int | None, data_dir: str | None) -> ServerInstance:
-        return instance
-
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        assert json == {
-            "method": "cron.create",
-            "params": {
-                "agent_id": "assistant",
-                "name": "One-off reminder",
-                "prompt": "One-off reminder",
-                "schedule_type": "once",
-                "run_at": "2026-07-01T09:00:00+00:00",
-            },
-        }
-        return httpx.Response(200, json={"ok": True, "result": {"id": "job-9"}})
-
-    monkeypatch.setattr(cron_management.httpx, "post", fake_post)
-
-    exit_code = cli_main.run(
-        [
-            "cron",
-            "create",
-            "assistant",
-            "--name",
-            "One-off reminder",
-            "--prompt",
-            "One-off reminder",
-            "--at",
-            "2026-07-01T09:00:00+00:00",
-            "--port",
-            "8765",
-        ],
-        resolve=fake_resolve,
-    )
-
-    assert exit_code == 0
-    assert "job-9" in capsys.readouterr().out
-
-
-def test_run_dispatches_cron_update_schedule_change(
-    tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    instance = make_instance(tmp_path, port=8765)
-
-    def fake_resolve(*, host: str, port: int | None, data_dir: str | None) -> ServerInstance:
-        return instance
-
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        assert json == {
-            "method": "cron.update",
-            "params": {
-                "id": "job-1",
-                "schedule_type": "cron",
-                "cron_expression": "30 7 * * 1-5",
-            },
-        }
-        return httpx.Response(200, json={"ok": True, "result": {"ok": True}})
-
-    monkeypatch.setattr(cron_management.httpx, "post", fake_post)
-
-    exit_code = cli_main.run(
-        ["cron", "update", "job-1", "--cron", "30 7 * * 1-5", "--port", "8765"],
-        resolve=fake_resolve,
-    )
-
-    assert exit_code == 0
-    assert "job-1" in capsys.readouterr().out
-
-
-def test_cron_create_full_response_confirms_schedule_and_next_fire(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    instance = make_instance(tmp_path)
-
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        return httpx.Response(
-            200,
-            json={
-                "ok": True,
-                "result": {
-                    "id": "job-1",
-                    "agent_id": "builder",
-                    "project_id": "vbot",
-                    "target": "builder@vbot",
-                    "name": "Build check",
-                    "prompt": "Check the build",
-                    "schedule_type": "cron",
-                    "cron_expression": "0 9 * * *",
-                    "run_at": None,
-                    "status": "active",
-                    "next_fire_at": "2026-07-21T07:00:00+00:00",
-                    "last_outcome": None,
-                },
-            },
-        )
-
-    monkeypatch.setattr(cron_management.httpx, "post", fake_post)
-
-    result = cron_management.cron_create(
-        instance,
-        {
-            "agent_id": "builder@vbot",
-            "name": "Build check",
-            "prompt": "Check the build",
-            "schedule_type": "cron",
-            "cron_expression": "0 9 * * *",
-        },
-    )
-
-    assert result.ok is True
-    assert "name=Build check" in result.message
-    assert "agent=builder@vbot" in result.message
-    assert "next_fire_at=2026-07-21T07:00:00+00:00" in result.message
-
-
-@pytest.mark.parametrize(
-    "jobs,expected",
-    [
-        ([], False),
-        ([{"id": "another"}], False),
-        ([{"id": "wanted", "prompt": "long prompt " * 40, "session_id": "pinned"}], True),
-    ],
-)
-def test_cron_show_reads_exact_full_job(tmp_path, monkeypatch, jobs, expected):
-    import json
-
-    from cli import cron_management as management
-    from cli.server_management import resolve_instance
-
-    instance = resolve_instance(data_dir=tmp_path)
-    calls = []
-
-    def post(url, **kwargs):
-        calls.append(kwargs["json"])
-        return httpx.Response(200, json={"ok": True, "result": {"jobs": jobs}})
-
-    monkeypatch.setattr(management.httpx, "post", post)
-    result = management.cron_show(instance, "wanted")
-    assert result.ok is expected
-    assert calls == [{"method": "cron.list", "params": {}}]
-    if expected:
-        assert json.loads(result.message) == jobs[0]
+    assert code == 0
+    assert rpc.calls == [(f"cron.{command}", {"id": "job-1"})]
+    assert "job-1" in out

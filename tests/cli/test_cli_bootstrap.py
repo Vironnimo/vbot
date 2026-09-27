@@ -1,195 +1,125 @@
-"""Tests for Bootstrap CLI parsing, current-Run context, RPC, and output."""
+"""Tests for the ``vbot bootstrap`` commands: current-Run targets, RPC and output."""
 
 from __future__ import annotations
 
-from pathlib import Path
+import json
 from typing import Any
 
-import httpx
 import pytest
 
-from cli import bootstrap_management
 from cli import main as cli_main
-from cli.server_management import ServerInstance
-from core.utils.logging import resolve_daily_log_path
+from tests.cli.cli_test_support import FakeRpc, RunCli, make_instance
+
+CREATE = ("bootstrap", "create", "--name", "Verify update", "--prompt", "Check", "--mode", "once")
 
 
-def make_instance(tmp_path: Path, *, host: str = "127.0.0.1") -> ServerInstance:
-    data_dir = tmp_path / "data"
-    return ServerInstance(
-        host=host,
-        port=8420,
-        data_dir=data_dir,
-        url=f"http://{host}:8420",
-        log_path=resolve_daily_log_path(data_dir),
-    )
+def test_create_needs_an_agent_or_the_current_session(rpc: FakeRpc, run_cli: RunCli) -> None:
+    code, out, err = run_cli("bootstrap", "create", "--prompt", "Check", "--mode", "once")
+
+    assert code == 1
+    assert "<agent>" in out + err and "--current-session" in out + err
+    assert rpc.calls == []
 
 
-def test_parse_args_supports_current_session_create() -> None:
-    args = cli_main.parse_args(
-        [
-            "bootstrap",
-            "create",
-            "--current-session",
-            "--name",
-            "Verify update",
-            "--prompt",
-            "Check status and logs",
-            "--mode",
-            "once",
-        ]
-    )
-
-    assert args.area == "bootstrap"
-    assert args.agent is None
-    assert args.current_session is True
-    assert args.mode == "once"
-
-
-def test_dispatch_create_requires_agent_or_current_session(tmp_path: Path) -> None:
-    args = cli_main.parse_args(["bootstrap", "create", "--prompt", "Check", "--mode", "once"])
-
-    result = cli_main.dispatch_bootstrap_command(args, make_instance(tmp_path))
-
-    assert result.ok is False
-    assert "<agent>" in result.message
-    assert "--current-session" in result.message
-
-
-def test_current_session_create_posts_injected_project_target(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_current_session_create_targets_the_injected_run(
+    rpc: FakeRpc, run_cli: RunCli, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    instance = make_instance(tmp_path)
-    calls: list[dict[str, Any]] = []
     monkeypatch.setenv("VBOT_RUN_AGENT_ID", "builder")
     monkeypatch.setenv("VBOT_RUN_SESSION_ID", "session-one")
     monkeypatch.setenv("VBOT_RUN_PROJECT_ID", "vbot")
+    rpc.reply("bootstrap.create", {"id": "job-one"})
 
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        calls.append(json)
-        return httpx.Response(200, json={"ok": True, "result": {"id": "job-one"}})
+    code, out, _err = run_cli(*CREATE, "--current-session")
 
-    monkeypatch.setattr(bootstrap_management.httpx, "post", fake_post)
-
-    result = bootstrap_management.bootstrap_create(
-        instance,
-        {"name": "Verify update", "prompt": "Check", "mode": "once"},
-        current_session=True,
-    )
-
-    assert result.ok is True
-    assert result.instance is instance
-    assert "job-one" in result.message
-    assert calls == [
-        {
-            "method": "bootstrap.create",
-            "params": {
+    assert code == 0
+    assert "job-one" in out
+    assert rpc.calls == [
+        (
+            "bootstrap.create",
+            {
                 "name": "Verify update",
                 "prompt": "Check",
                 "mode": "once",
                 "agent_id": "builder@vbot",
                 "session_id": "session-one",
             },
-        }
+        )
     ]
 
 
-def test_current_session_fails_outside_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("VBOT_RUN_AGENT_ID", raising=False)
-    monkeypatch.delenv("VBOT_RUN_SESSION_ID", raising=False)
-
-    result = bootstrap_management.bootstrap_create(
-        make_instance(tmp_path),
-        {"prompt": "Check", "mode": "once"},
-        current_session=True,
-    )
-
-    assert result.ok is False
-    assert result.message.strip()
-
-
-def test_current_session_rejects_remote_instance(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    ("host", "run_context", "problem"),
+    [
+        pytest.param("127.0.0.1", False, "only available inside a vBot Run", id="outside-run"),
+        pytest.param("server.example", True, "cannot target a remote", id="remote-target"),
+    ],
+)
+def test_current_session_create_is_refused_without_a_local_run(
+    tmp_path: Any,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    rpc: FakeRpc,
+    host: str,
+    run_context: bool,
+    problem: str,
 ) -> None:
-    monkeypatch.setenv("VBOT_RUN_AGENT_ID", "main")
-    monkeypatch.setenv("VBOT_RUN_SESSION_ID", "session-one")
+    for name, value in (("VBOT_RUN_AGENT_ID", "main"), ("VBOT_RUN_SESSION_ID", "session-one")):
+        if run_context:
+            monkeypatch.setenv(name, value)
+        else:
+            monkeypatch.delenv(name, raising=False)
+    target = make_instance(tmp_path, host=host)
 
-    result = bootstrap_management.bootstrap_create(
-        make_instance(tmp_path, host="server.example"),
-        {"prompt": "Check", "mode": "once"},
-        current_session=True,
-    )
+    code = cli_main.run([*CREATE, "--current-session"], resolve=lambda **_: target)
 
-    assert result.ok is False
-    assert "--current-session" in result.message
+    assert code == 1
+    assert problem in "".join(capsys.readouterr())
+    assert rpc.calls == []
 
 
-def test_bootstrap_list_formats_health_fields(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    instance = make_instance(tmp_path)
+def test_bootstrap_list_prints_the_health_fields_of_each_job(rpc: FakeRpc, run_cli: RunCli) -> None:
+    job = {
+        "id": "job-one",
+        "target": "main",
+        "name": "Verify update",
+        "prompt": "Check status and logs",
+        "mode": "once",
+        "status": "completed",
+        "session_id": "session-one",
+        "last_outcome": "success",
+        "last_error": None,
+    }
+    rpc.reply("bootstrap.list", {"jobs": [job]})
 
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        return httpx.Response(
-            200,
-            json={
-                "ok": True,
-                "result": {
-                    "jobs": [
-                        {
-                            "id": "job-one",
-                            "target": "main",
-                            "name": "Verify update",
-                            "prompt": "Check status and logs",
-                            "mode": "once",
-                            "status": "completed",
-                            "session_id": "session-one",
-                            "last_outcome": "success",
-                            "last_error": None,
-                        }
-                    ]
-                },
-            },
-        )
+    code, out, _err = run_cli("bootstrap", "list")
 
-    monkeypatch.setattr(bootstrap_management.httpx, "post", fake_post)
-
-    result = bootstrap_management.bootstrap_list(instance)
-
-    assert result.message.splitlines()[1:] == [
+    assert code == 0
+    assert out.splitlines()[1:] == [
         "- name=Verify update id=job-one agent=main mode=once status=completed "
         "session=session-one last_outcome=success last_error=- prompt=Check status and logs",
     ]
 
 
 @pytest.mark.parametrize(
-    "jobs,expected",
+    "jobs",
     [
-        ([], False),
-        ([{"id": "another"}], False),
-        ([{"id": "wanted", "prompt": "long prompt " * 40, "session_id": "pinned"}], True),
+        pytest.param([], id="no-jobs"),
+        pytest.param([{"id": "another"}], id="other-job"),
+        pytest.param(
+            [{"id": "wanted", "prompt": "long prompt " * 40, "session_id": "pinned"}],
+            id="exact-job",
+        ),
     ],
 )
-def test_bootstrap_show_reads_exact_full_job(tmp_path, monkeypatch, jobs, expected):
-    import json
+def test_bootstrap_show_prints_exactly_the_complete_saved_job(
+    rpc: FakeRpc, run_cli: RunCli, jobs: list[dict[str, Any]]
+) -> None:
+    rpc.reply("bootstrap.list", {"jobs": jobs})
 
-    from cli import bootstrap_management as management
-    from cli.server_management import resolve_instance
+    code, out, _err = run_cli("bootstrap", "show", "wanted")
 
-    instance = resolve_instance(data_dir=tmp_path)
-    calls = []
-
-    def post(url, **kwargs):
-        calls.append(kwargs["json"])
-        return httpx.Response(200, json={"ok": True, "result": {"jobs": jobs}})
-
-    monkeypatch.setattr(management.httpx, "post", post)
-    result = management.bootstrap_show(instance, "wanted")
-    assert result.ok is expected
-    assert calls == [{"method": "bootstrap.list", "params": {}}]
-    if expected:
-        assert json.loads(result.message) == jobs[0]
+    assert rpc.calls == [("bootstrap.list", {})]
+    if jobs and jobs[0]["id"] == "wanted":
+        assert (code, json.loads(out)) == (0, jobs[0])
+    else:
+        assert code == 1

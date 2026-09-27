@@ -1,263 +1,111 @@
-"""Tests for debug CLI parsing, RPC commands, and output."""
+"""Tests for the ``vbot debug`` commands: RPC requests and printed output."""
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any
-
-import httpx
 import pytest
 
-from cli import debug_management
-from cli import main as cli_main
-from cli.server_management import CommandResult, ServerInstance
-from core.utils.logging import resolve_daily_log_path
+from tests.cli.cli_test_support import FakeRpc, RunCli
 
 
-def make_instance(tmp_path: Path, *, port: int = 8420) -> ServerInstance:
-    data_dir = tmp_path / "data"
-    return ServerInstance(
-        host="127.0.0.1",
-        port=port,
-        data_dir=data_dir,
-        url=f"http://127.0.0.1:{port}",
-        log_path=resolve_daily_log_path(data_dir),
+@pytest.mark.parametrize(("enabled", "shown"), [(True, "yes"), (False, "no")])
+def test_debug_status_prints_the_debug_state(
+    rpc: FakeRpc, run_cli: RunCli, enabled: bool, shown: str
+) -> None:
+    state = {"enabled": enabled, "trace_limit": 50, "trace_count": 3, "data_directory": "C:/data"}
+    rpc.reply("debug.status", state)
+
+    code, out, _err = run_cli("debug", "status")
+
+    assert code == 0
+    assert rpc.calls == [("debug.status", {})]
+    assert out.splitlines() == [
+        f"enabled={shown} trace_limit=50 trace_count=3 data_directory=C:/data"
+    ]
+
+
+def test_debug_traces_prints_one_row_per_trace(rpc: FakeRpc, run_cli: RunCli) -> None:
+    trace = {
+        "trace_id": "abc123",
+        "type": "model_probe",
+        "timestamp": "2026-06-11T08:00:00+00:00",
+        "duration_ms": 412,
+        "provider_id": "openai",
+        "model_id": "",
+    }
+    rpc.reply("debug.trace_list", {"traces": [trace]})
+
+    code, out, _err = run_cli("debug", "traces")
+
+    assert code == 0
+    assert rpc.calls == [("debug.trace_list", {})]
+    assert out.splitlines()[1:] == [
+        "- id=abc123 type=model_probe timestamp=2026-06-11T08:00:00+00:00 "
+        "duration_ms=412 provider=openai model=-"
+    ]
+
+
+def test_debug_trace_prints_the_trace_as_indented_json(rpc: FakeRpc, run_cli: RunCli) -> None:
+    rpc.reply("debug.trace_get", {"trace": {"trace_id": "abc123", "type": "model_probe"}})
+
+    code, out, _err = run_cli("debug", "trace", "abc123")
+
+    assert code == 0
+    assert rpc.calls == [("debug.trace_get", {"trace_id": "abc123"})]
+    assert out.splitlines() == ["{", '  "trace_id": "abc123",', '  "type": "model_probe"', "}"]
+
+
+def test_debug_clear_posts_the_clear_request(rpc: FakeRpc, run_cli: RunCli) -> None:
+    rpc.reply("debug.trace_clear", {"cleared": True})
+
+    code, out, _err = run_cli("debug", "clear")
+
+    assert code == 0
+    assert rpc.calls == [("debug.trace_clear", {})]
+    assert out.strip()
+
+
+def test_debug_probe_prints_the_model_preview_and_the_trace_hint(
+    rpc: FakeRpc, run_cli: RunCli
+) -> None:
+    rpc.reply(
+        "debug.model_probe",
+        {
+            "trace_id": "abc123",
+            "status_code": 200,
+            "duration_ms": 412,
+            "raw_response": "{}",
+            "model_preview": {
+                "model_count": 2,
+                "models": [
+                    {"id": "gpt-5.2", "name": "GPT-5.2"},
+                    {"id": "gpt-4o", "name": "GPT-4o"},
+                ],
+            },
+        },
     )
 
+    code, out, _err = run_cli("debug", "probe", "openai", "--connection", "openai:api-key")
 
-def test_parse_args_supports_debug_trace_and_probe() -> None:
-    trace_args = cli_main.parse_args(["debug", "trace", "abc123"])
-    probe_args = cli_main.parse_args(["debug", "probe", "openai", "--connection", "openai:api-key"])
-
-    assert trace_args.area == "debug"
-    assert trace_args.command == "trace"
-    assert trace_args.trace_id == "abc123"
-    assert probe_args.command == "probe"
-    assert probe_args.provider == "openai"
-    assert probe_args.connection == "openai:api-key"
-
-
-def test_debug_status_formats_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    instance = make_instance(tmp_path)
-
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        assert json == {"method": "debug.status", "params": {}}
-        return httpx.Response(
-            200,
-            json={
-                "ok": True,
-                "result": {
-                    "enabled": True,
-                    "trace_limit": 50,
-                    "trace_count": 3,
-                    "data_directory": "C:/data",
-                },
-            },
-        )
-
-    monkeypatch.setattr(debug_management.httpx, "post", fake_post)
-
-    result = debug_management.debug_status(instance)
-
-    assert result == CommandResult(
-        ok=True,
-        message="enabled=yes trace_limit=50 trace_count=3 data_directory=C:/data",
-        instance=instance,
-    )
-
-
-def test_debug_trace_list_formats_rows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    instance = make_instance(tmp_path)
-
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        assert json == {"method": "debug.trace_list", "params": {}}
-        return httpx.Response(
-            200,
-            json={
-                "ok": True,
-                "result": {
-                    "traces": [
-                        {
-                            "trace_id": "abc123",
-                            "type": "model_probe",
-                            "timestamp": "2026-06-11T08:00:00+00:00",
-                            "duration_ms": 412,
-                            "provider_id": "openai",
-                            "model_id": "",
-                        }
-                    ]
-                },
-            },
-        )
-
-    monkeypatch.setattr(debug_management.httpx, "post", fake_post)
-
-    result = debug_management.debug_trace_list(instance)
-
-    assert result.ok is True
-    assert result.message.splitlines()[1:] == [
-        (
-            "- id=abc123 type=model_probe timestamp=2026-06-11T08:00:00+00:00 "
-            "duration_ms=412 provider=openai model=-"
-        ),
+    assert code == 0
+    assert rpc.calls == [
+        ("debug.model_probe", {"provider_id": "openai", "connection_id": "openai:api-key"})
     ]
+    for line in (
+        "probe openai: status_code=200 duration_ms=412 trace_id=abc123",
+        "model_count: 2",
+        "- gpt-5.2",
+        "- gpt-4o",
+        "debug trace abc123",
+    ):
+        assert line in out
 
 
-def test_debug_trace_show_dumps_json(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    instance = make_instance(tmp_path)
+def test_debug_commands_report_the_disabled_debug_mode(rpc: FakeRpc, run_cli: RunCli) -> None:
+    rpc.fail("debug.trace_list", "domain_error", "debug mode is not enabled", status=200)
 
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        assert json == {"method": "debug.trace_get", "params": {"trace_id": "abc123"}}
-        return httpx.Response(
-            200,
-            json={"ok": True, "result": {"trace": {"trace_id": "abc123", "type": "model_probe"}}},
-        )
+    code, out, err = run_cli("debug", "traces")
 
-    monkeypatch.setattr(debug_management.httpx, "post", fake_post)
-
-    result = debug_management.debug_trace_show(instance, "abc123")
-
-    assert result.ok is True
-    assert result.message.splitlines() == [
-        "{",
-        '  "trace_id": "abc123",',
-        '  "type": "model_probe"',
-        "}",
-    ]
-
-
-def test_debug_trace_clear_posts_clear_rpc(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    instance = make_instance(tmp_path)
-    calls: list[dict[str, Any]] = []
-
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        calls.append(json)
-        return httpx.Response(200, json={"ok": True, "result": {"cleared": True}})
-
-    monkeypatch.setattr(debug_management.httpx, "post", fake_post)
-
-    result = debug_management.debug_trace_clear(instance)
-
-    assert result.ok is True
-    assert result.instance is instance
-    assert result.message.strip()
-    assert calls == [{"method": "debug.trace_clear", "params": {}}]
-
-
-def test_debug_model_probe_formats_preview(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    instance = make_instance(tmp_path)
-
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        assert json == {
-            "method": "debug.model_probe",
-            "params": {"provider_id": "openai", "connection_id": "openai:api-key"},
-        }
-        return httpx.Response(
-            200,
-            json={
-                "ok": True,
-                "result": {
-                    "trace_id": "abc123",
-                    "status_code": 200,
-                    "duration_ms": 412,
-                    "raw_response": "{}",
-                    "model_preview": {
-                        "model_count": 2,
-                        "models": [
-                            {"id": "gpt-5.2", "name": "GPT-5.2"},
-                            {"id": "gpt-4o", "name": "GPT-4o"},
-                        ],
-                    },
-                },
-            },
-        )
-
-    monkeypatch.setattr(debug_management.httpx, "post", fake_post)
-
-    result = debug_management.debug_model_probe(instance, "openai", "openai:api-key")
-
-    assert result.ok is True
-    assert "probe openai: status_code=200 duration_ms=412 trace_id=abc123" in result.message
-    assert "model_count: 2" in result.message
-    assert "- gpt-5.2" in result.message
-    assert "- gpt-4o" in result.message
-    assert "debug trace abc123" in result.message
-
-
-def test_debug_commands_surface_disabled_error(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    instance = make_instance(tmp_path)
-
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        return httpx.Response(
-            200,
-            json={
-                "ok": False,
-                "error": {"code": "domain_error", "message": "debug mode is not enabled"},
-            },
-        )
-
-    monkeypatch.setattr(debug_management.httpx, "post", fake_post)
-
-    result = debug_management.debug_trace_list(instance)
-
-    assert result.ok is False
-    assert result.instance is instance
-    assert result.failure is not None
-    assert result.failure.code == "domain_error"
-
-
-def test_run_dispatches_debug_status(
-    tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    instance = make_instance(tmp_path, port=8765)
-
-    def fake_resolve(*, host: str, port: int | None, data_dir: str | None) -> ServerInstance:
-        return instance
-
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        return httpx.Response(
-            200,
-            json={
-                "ok": True,
-                "result": {
-                    "enabled": False,
-                    "trace_limit": 50,
-                    "trace_count": 0,
-                    "data_directory": "C:/data",
-                },
-            },
-        )
-
-    monkeypatch.setattr(debug_management.httpx, "post", fake_post)
-
-    exit_code = cli_main.run(["debug", "status", "--port", "8765"], resolve=fake_resolve)
-
-    assert exit_code == 0
-    assert capsys.readouterr().out.splitlines() == [
-        "enabled=no trace_limit=50 trace_count=0 data_directory=C:/data"
-    ]
+    assert code == 1
+    assert "debug mode is not enabled" in out
+    assert "rpc_method: debug.trace_list" in err
+    assert "request_state: responded" in err

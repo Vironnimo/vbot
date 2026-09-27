@@ -1,4 +1,4 @@
-"""Tests for model CLI parsing and RPC-backed model commands."""
+"""Tests for the ``vbot model`` commands: catalog filters, refresh requests and output."""
 
 from __future__ import annotations
 
@@ -6,243 +6,110 @@ import json
 from pathlib import Path
 from typing import Any
 
-import httpx
 import pytest
 
-from cli import main as cli_main
 from cli import model_management
 from cli.server_management import ServerInstance
-from core.utils.logging import resolve_daily_log_path
+from tests.cli.cli_test_support import FakeRpc, RunCli
 
 
-def make_instance(tmp_path: Path, *, port: int = 8420) -> ServerInstance:
-    data_dir = tmp_path / "data"
-    return ServerInstance(
-        host="127.0.0.1",
-        port=port,
-        data_dir=data_dir,
-        url=f"http://127.0.0.1:{port}",
-        log_path=resolve_daily_log_path(data_dir),
-    )
-
-
-def test_parse_args_supports_model_list() -> None:
-    args = cli_main.parse_args(
-        ["model", "list", "--host", "localhost", "--port", "8700", "--data-dir", "dev"]
-    )
-
-    assert args.area == "model"
-    assert args.command == "list"
-    assert args.host == "localhost"
-    assert args.port == 8700
-    assert args.data_dir == "dev"
-
-
-def test_parse_args_supports_model_show() -> None:
-    args = cli_main.parse_args(["model", "show", "openrouter/microsoft/mai-voice-2"])
-
-    assert args.area == "model"
-    assert args.command == "show"
-    assert args.model == "openrouter/microsoft/mai-voice-2"
-
-
-def test_parse_args_supports_model_list_filters() -> None:
-    args = cli_main.parse_args(
-        [
-            "model",
-            "list",
-            "--provider",
-            "openai",
-            "--capability",
-            "tools",
-            "--capability",
-            "reasoning",
-            "--task",
-            "chat",
-            "--input-modality",
-            "text",
-            "--output-modality",
-            "text",
-            "--min-context-window",
-            "128000",
-        ]
-    )
-
-    assert cli_main._model_filters_from_args(args) == {
-        "provider_id": "openai",
-        "capabilities": ["tools", "reasoning"],
-        "tasks": ["chat"],
-        "input_modalities": ["text"],
-        "output_modalities": ["text"],
-        "min_context_window": 128000,
-    }
-
-
-def test_parse_args_supports_model_refresh_no_provider() -> None:
-    args = cli_main.parse_args(
-        ["model", "refresh", "--host", "localhost", "--port", "8700", "--data-dir", "dev"]
-    )
-
-    assert args.area == "model"
-    assert args.command == "refresh"
-    assert args.provider is None
-    assert args.host == "localhost"
-    assert args.port == 8700
-    assert args.data_dir == "dev"
-
-
-def test_parse_args_supports_model_refresh_with_provider() -> None:
-    args = cli_main.parse_args(["model", "refresh", "openai"])
-
-    assert args.area == "model"
-    assert args.command == "refresh"
-    assert args.provider == "openai"
-
-
-def test_model_list_posts_model_list_rpc(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    instance = make_instance(tmp_path)
-    calls: list[dict[str, Any]] = []
-
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        calls.append({"url": url, "json": json, "timeout": timeout})
-        return httpx.Response(
-            200,
-            json={"ok": True, "result": {"models": [{"id": "openai/gpt-4o"}]}},
-        )
-
-    monkeypatch.setattr(model_management.httpx, "post", fake_post)
-
-    result = model_management.model_list(instance)
-
-    assert result.ok is True
-    assert result.instance == instance
-    assert calls == [
+def test_model_list_prints_one_row_per_model(rpc: FakeRpc, run_cli: RunCli) -> None:
+    rpc.reply(
+        "model.list",
         {
-            "url": f"{instance.url}/api/rpc",
-            "json": {"method": "model.list", "params": {}},
-            "timeout": 10.0,
-        }
-    ]
+            "models": [
+                {"id": "openai/gpt-4o", "name": "GPT-4o", "context_window": 128000},
+                {"id": "anthropic/claude-sonnet-4", "name": "Claude Sonnet 4"},
+            ]
+        },
+    )
 
+    code, out, _err = run_cli("model", "list")
 
-def test_model_list_formats_rows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    instance = make_instance(tmp_path)
-
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        assert url == f"{instance.url}/api/rpc"
-        assert json == {"method": "model.list", "params": {}}
-        assert timeout == 10.0
-        return httpx.Response(
-            200,
-            json={
-                "ok": True,
-                "result": {
-                    "models": [
-                        {
-                            "id": "openai/gpt-4o",
-                            "name": "GPT-4o",
-                            "context_window": 128000,
-                        },
-                        {
-                            "id": "anthropic/claude-sonnet-4",
-                            "name": "Claude Sonnet 4",
-                            "context_window": 200000,
-                        },
-                    ]
-                },
-            },
-        )
-
-    monkeypatch.setattr(model_management.httpx, "post", fake_post)
-
-    result = model_management.model_list(instance)
-
-    assert result.ok is True
-    assert result.instance == instance
-    assert result.message.splitlines()[1:] == [
+    assert code == 0
+    assert rpc.calls == [("model.list", {})]
+    assert out.splitlines()[1:] == [
         "- id: openai/gpt-4o  name: GPT-4o  context_window: 128000",
-        "- id: anthropic/claude-sonnet-4  name: Claude Sonnet 4  context_window: 200000",
+        # An unknown context window is shown as such, never guessed.
+        "- id: anthropic/claude-sonnet-4  name: Claude Sonnet 4  context_window: ?",
     ]
 
 
-def test_model_list_formats_effective_window_reachability_capabilities_and_tasks(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_model_list_sends_the_filters_and_prints_effective_window_and_capabilities(
+    rpc: FakeRpc, run_cli: RunCli
 ) -> None:
-    instance = make_instance(tmp_path)
+    rpc.reply(
+        "model.list",
+        {
+            "models": [
+                {
+                    "id": "ollama/qwen3",
+                    "name": "Qwen 3",
+                    "context_window": 262144,
+                    "effective_context_window": 32768,
+                    "reachable": False,
+                    "capabilities": {
+                        "vision": False,
+                        "tools": True,
+                        "json_mode": False,
+                        "reasoning": {"supported": True},
+                        "task_types": ["chat", "text_output"],
+                    },
+                }
+            ]
+        },
+    )
 
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        assert json == {"method": "model.list", "params": {"tasks": ["chat"]}}
-        return httpx.Response(
-            200,
-            json={
-                "ok": True,
-                "result": {
-                    "models": [
-                        {
-                            "id": "ollama/qwen3",
-                            "name": "Qwen 3",
-                            "context_window": 262144,
-                            "effective_context_window": 32768,
-                            "reachable": False,
-                            "capabilities": {
-                                "vision": False,
-                                "tools": True,
-                                "json_mode": False,
-                                "reasoning": {"supported": True},
-                                "task_types": ["chat", "text_output"],
-                            },
-                        }
-                    ]
-                },
+    code, out, _err = run_cli(
+        "model", "list",
+        "--provider", "openai",
+        "--capability", "tools",
+        "--capability", "reasoning",
+        "--task", "chat",
+        "--input-modality", "text",
+        "--output-modality", "text",
+        "--min-context-window", "128000",
+    )  # fmt: skip
+
+    assert code == 0
+    assert rpc.calls == [
+        (
+            "model.list",
+            {
+                "provider_id": "openai",
+                "capabilities": ["tools", "reasoning"],
+                "tasks": ["chat"],
+                "input_modalities": ["text"],
+                "output_modalities": ["text"],
+                "min_context_window": 128000,
             },
         )
-
-    monkeypatch.setattr(model_management.httpx, "post", fake_post)
-
-    result = model_management.model_list(instance, {"tasks": ["chat"]})
-
-    assert result.message.splitlines()[1:] == [
-        (
-            "- id: ollama/qwen3  name: Qwen 3  context_window: 32768  reachable: no  "
-            "capabilities: tools,reasoning  tasks: chat,text_output"
-        ),
+    ]
+    assert out.splitlines()[1:] == [
+        "- id: ollama/qwen3  name: Qwen 3  context_window: 32768  reachable: no  "
+        "capabilities: tools,reasoning  tasks: chat,text_output"
     ]
 
 
-def test_model_list_returns_empty_message(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    instance = make_instance(tmp_path)
+def test_model_list_reports_an_empty_catalog(rpc: FakeRpc, run_cli: RunCli) -> None:
+    rpc.reply("model.list", {"models": []})
 
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        assert url == f"{instance.url}/api/rpc"
-        assert json == {"method": "model.list", "params": {}}
-        assert timeout == 10.0
-        return httpx.Response(200, json={"ok": True, "result": {"models": []}})
+    code, out, _err = run_cli("model", "list")
 
-    monkeypatch.setattr(model_management.httpx, "post", fake_post)
-
-    result = model_management.model_list(instance)
-
-    assert result.ok is True
-    assert result.instance is instance
-    assert result.message.strip()
+    assert code == 0
+    assert out.strip()
 
 
-def test_model_show_posts_model_get_and_dumps_complete_data(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    instance = make_instance(tmp_path)
+def test_model_list_reports_a_server_error(rpc: FakeRpc, run_cli: RunCli) -> None:
+    rpc.fail("model.list", "internal_error", "refresh failed", status=500)
+
+    code, out, _err = run_cli("model", "list")
+
+    assert code == 1
+    assert "internal_error: refresh failed" in out
+
+
+def test_model_show_prints_the_complete_model_data(rpc: FakeRpc, run_cli: RunCli) -> None:
     model = {
         "id": "openrouter/microsoft/mai-voice-2",
         "capabilities": {
@@ -251,217 +118,92 @@ def test_model_show_posts_model_get_and_dumps_complete_data(
         },
         "metadata": {"source": "openrouter"},
     }
+    rpc.reply("model.get", {"model": model})
 
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        assert json == {
-            "method": "model.get",
-            "params": {"model": "openrouter/microsoft/mai-voice-2"},
-        }
-        return httpx.Response(200, json={"ok": True, "result": {"model": model}})
+    code, out, _err = run_cli("model", "show", "openrouter/microsoft/mai-voice-2")
 
-    monkeypatch.setattr(model_management.httpx, "post", fake_post)
-
-    result = model_management.model_show(instance, "openrouter/microsoft/mai-voice-2")
-
-    assert result.ok is True
-    assert json.loads(result.message) == model
+    assert code == 0
+    assert rpc.calls == [("model.get", {"model": "openrouter/microsoft/mai-voice-2"})]
+    assert json.loads(out) == model
 
 
-def test_model_refresh_posts_refresh_db_without_provider(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    ("provider", "params", "result", "shown"),
+    [
+        pytest.param(
+            (), {}, {"refreshed_count": 2, "model_count": 50}, ["2", "50"], id="all-providers"
+        ),
+        pytest.param(
+            ("openai",),
+            {"provider_id": "openai"},
+            {"provider_id": "openai"},
+            ["openai"],
+            id="one-provider",
+        ),
+    ],
+)
+def test_model_refresh_refreshes_the_model_database(
+    rpc: FakeRpc,
+    run_cli: RunCli,
+    provider: tuple[str, ...],
+    params: dict[str, str],
+    result: dict[str, Any],
+    shown: list[str],
 ) -> None:
-    instance = make_instance(tmp_path)
-    calls: list[dict[str, Any]] = []
+    rpc.reply("model.refresh_db", result)
 
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: Any, trust_env: bool
-    ) -> httpx.Response:
-        del timeout
-        calls.append({"url": url, "json": json})
-        return httpx.Response(
-            200,
-            json={"ok": True, "result": {"refreshed_count": 2, "model_count": 50}},
-        )
+    code, out, _err = run_cli("model", "refresh", *provider)
 
-    monkeypatch.setattr(model_management.httpx, "post", fake_post)
-
-    result = model_management.model_refresh(instance)
-
-    assert result.ok is True
-    assert result.instance is instance
-    assert "2" in result.message
-    assert "50" in result.message
-    assert calls == [
-        {
-            "url": f"{instance.url}/api/rpc",
-            "json": {"method": "model.refresh_db", "params": {}},
-        }
-    ]
+    assert code == 0
+    assert rpc.calls == [("model.refresh_db", params)]
+    for text in shown:
+        assert text in out
 
 
-def test_model_refresh_posts_refresh_db_with_provider(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+def test_model_refresh_fails_and_names_the_providers_it_skipped(
+    rpc: FakeRpc, run_cli: RunCli
 ) -> None:
-    instance = make_instance(tmp_path)
-    calls: list[dict[str, Any]] = []
-
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: Any, trust_env: bool
-    ) -> httpx.Response:
-        del timeout
-        calls.append({"url": url, "json": json})
-        return httpx.Response(200, json={"ok": True, "result": {"provider_id": "openai"}})
-
-    monkeypatch.setattr(model_management.httpx, "post", fake_post)
-
-    result = model_management.model_refresh(instance, provider_id="openai")
-
-    assert result.ok is True
-    assert result.instance is instance
-    assert "openai" in result.message
-    assert calls == [
+    rpc.reply(
+        "model.refresh_db",
         {
-            "url": f"{instance.url}/api/rpc",
-            "json": {"method": "model.refresh_db", "params": {"provider_id": "openai"}},
-        }
-    ]
+            "refreshed_count": 1,
+            "model_count": 25,
+            "errors": [
+                {
+                    "provider_id": "openrouter",
+                    "connection_id": "openrouter:api-key",
+                    "error": "503 upstream down",
+                }
+            ],
+        },
+    )
+
+    code, out, _err = run_cli("model", "refresh")
+
+    assert code == 1
+    for text in ("1", "25", "openrouter:api-key"):
+        assert text in out
 
 
 def test_model_refresh_can_target_the_expected_system_database(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    rpc: FakeRpc, instance: ServerInstance, tmp_path: Path
 ) -> None:
-    instance = make_instance(tmp_path)
+    # The system target has no CLI option; the model DB refresh developer script uses it.
     resources_dir = tmp_path / "checkout" / "resources"
-    calls: list[dict[str, Any]] = []
-
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: Any, trust_env: bool
-    ) -> httpx.Response:
-        del timeout
-        calls.append({"url": url, "json": json})
-        return httpx.Response(200, json={"ok": True, "result": {"provider_id": "openai"}})
-
-    monkeypatch.setattr(model_management.httpx, "post", fake_post)
+    rpc.reply("model.refresh_db", {"provider_id": "openai"})
 
     result = model_management.model_refresh(
-        instance,
-        provider_id="openai",
-        target="system",
-        expected_resources_dir=resources_dir,
+        instance, provider_id="openai", target="system", expected_resources_dir=resources_dir
     )
 
     assert result.ok is True
-    assert calls == [
-        {
-            "url": f"{instance.url}/api/rpc",
-            "json": {
-                "method": "model.refresh_db",
-                "params": {
-                    "provider_id": "openai",
-                    "target": "system",
-                    "expected_resources_dir": str(resources_dir.resolve()),
-                },
+    assert rpc.calls == [
+        (
+            "model.refresh_db",
+            {
+                "provider_id": "openai",
+                "target": "system",
+                "expected_resources_dir": str(resources_dir.resolve()),
             },
-        }
+        )
     ]
-
-
-def test_model_refresh_formats_global_result(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    instance = make_instance(tmp_path)
-
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: Any, trust_env: bool
-    ) -> httpx.Response:
-        del timeout
-        assert url == f"{instance.url}/api/rpc"
-        assert json == {"method": "model.refresh_db", "params": {}}
-        return httpx.Response(
-            200,
-            json={"ok": True, "result": {"refreshed_count": 2, "model_count": 50}},
-        )
-
-    monkeypatch.setattr(model_management.httpx, "post", fake_post)
-
-    result = model_management.model_refresh(instance)
-
-    assert result.ok is True
-    assert result.instance is instance
-    assert "2" in result.message
-    assert "50" in result.message
-
-
-def test_model_refresh_reports_failed_providers(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A refresh that skipped an unreachable provider names it in the message."""
-
-    instance = make_instance(tmp_path)
-
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        return httpx.Response(
-            200,
-            json={
-                "ok": True,
-                "result": {
-                    "refreshed_count": 1,
-                    "model_count": 25,
-                    "errors": [
-                        {
-                            "provider_id": "openrouter",
-                            "connection_id": "openrouter:api-key",
-                            "error": "503 upstream down",
-                        }
-                    ],
-                },
-            },
-        )
-
-    monkeypatch.setattr(model_management.httpx, "post", fake_post)
-
-    result = model_management.model_refresh(instance)
-
-    assert result.ok is False
-    assert result.instance is instance
-    assert "1" in result.message
-    assert "25" in result.message
-    assert "openrouter:api-key" in result.message
-
-
-def test_model_list_returns_error_on_rpc_failure(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    instance = make_instance(tmp_path)
-
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        assert url == f"{instance.url}/api/rpc"
-        assert json == {"method": "model.list", "params": {}}
-        assert timeout == 10.0
-        return httpx.Response(
-            500,
-            json={
-                "ok": False,
-                "error": {"code": "internal_error", "message": "refresh failed"},
-            },
-        )
-
-    monkeypatch.setattr(model_management.httpx, "post", fake_post)
-
-    result = model_management.model_list(instance)
-
-    assert result.ok is False
-    assert result.instance is instance
-    assert result.message.startswith("internal_error:")

@@ -1,105 +1,34 @@
-"""Tests for the pinned Memory CLI area."""
+"""Tests for the ``vbot memory`` commands (pinned Memory)."""
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
-import httpx
 import pytest
 
-from cli import main as cli_main
 from cli import memory_management
 from cli.server_management import ServerInstance
-from core.utils.logging import resolve_daily_log_path
+from tests.cli.cli_test_support import FakeRpc, RunCli
 
-
-def make_instance(tmp_path: Path, *, port: int = 8420) -> ServerInstance:
-    data_dir = tmp_path / "data"
-    return ServerInstance(
-        host="127.0.0.1",
-        port=port,
-        data_dir=data_dir,
-        url=f"http://127.0.0.1:{port}",
-        log_path=resolve_daily_log_path(data_dir),
-    )
-
-
-@pytest.mark.parametrize("listing", [{"ok": True, "result": {}}, {"ok": False}])
-def test_failed_entry_lookup_never_claims_the_scope_is_empty(tmp_path, monkeypatch, listing):
-    calls = []
-
-    def post(url, *, json, **kwargs):
-        calls.append(json["method"])
-        if json["method"] == "memory.remove":
-            return httpx.Response(
-                200,
-                json={
-                    "ok": False,
-                    "error": {"code": "domain_error", "message": "entry 99 does not exist"},
-                },
-            )
-        return httpx.Response(200, json=listing)
-
-    monkeypatch.setattr(memory_management.httpx, "post", post)
-    result = memory_management.memory_remove(
-        make_instance(tmp_path), "assistant", "agent", 99, True
-    )
-    assert not result.ok
-    assert "entry 99 does not exist" in result.message
-    assert "entry lookup" in result.message
-    assert "has no agent-scope entries" not in result.message
-    assert calls == ["memory.remove", "memory.list"]
-    assert result.failure.method == "memory.remove"
-    assert result.failure.code == "domain_error"
+AGENTS = {"agents": [{"id": "assistant"}, {"id": "coder"}]}
 
 
 def memory_response(entry: dict[str, Any] | None = None) -> dict[str, Any]:
-    scopes = {
-        "agent": [{"id": 1, "scope": "agent", "content": "Keep answers short"}],
-        "user": [],
-    }
+    scopes = {"agent": [{"id": 1, "scope": "agent", "content": "Keep answers short"}], "user": []}
     result: dict[str, Any] = {"agent_id": "assistant", "scopes": scopes}
     if entry is not None:
         result["entry"] = entry
     return result
 
 
-def test_parse_args_memory_add_defaults_to_agent_scope() -> None:
-    args = cli_main.parse_args(["memory", "add", "assistant", "--content", "Prefers brevity"])
+def test_memory_list_prints_both_scopes(rpc: FakeRpc, run_cli: RunCli) -> None:
+    rpc.reply("memory.list", memory_response())
 
-    assert args.area == "memory"
-    assert args.command == "add"
-    assert args.agent == "assistant"
-    assert args.scope == "agent"
-    assert args.content == "Prefers brevity"
+    code, out, _err = run_cli("memory", "list", "assistant")
 
-
-def test_parse_args_memory_replace_and_remove() -> None:
-    replace = cli_main.parse_args(
-        ["memory", "replace", "assistant", "--scope", "user", "3", "--content", "Updated"]
-    )
-    remove = cli_main.parse_args(["memory", "remove", "assistant", "3", "--yes"])
-
-    assert (replace.command, replace.scope, replace.entry_id) == ("replace", "user", 3)
-    assert (remove.command, remove.entry_id, remove.yes) == ("remove", 3, True)
-
-
-def test_memory_list_formats_both_scopes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    instance = make_instance(tmp_path)
-
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        assert json == {"method": "memory.list", "params": {"agent_id": "assistant"}}
-        return httpx.Response(200, json={"ok": True, "result": memory_response()})
-
-    monkeypatch.setattr(memory_management.httpx, "post", fake_post)
-
-    result = memory_management.memory_list(instance, "assistant")
-
-    assert result.ok is True
-    assert result.message.splitlines() == [
+    assert code == 0
+    assert rpc.calls == [("memory.list", {"agent_id": "assistant"})]
+    assert out.splitlines() == [
         "pinned memory for assistant:",
         "agent scope:",
         "  #1: Keep answers short",
@@ -108,183 +37,110 @@ def test_memory_list_formats_both_scopes(tmp_path: Path, monkeypatch: pytest.Mon
     ]
 
 
-def test_memory_add_posts_entry_and_reports_result(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_memory_add_defaults_to_the_agent_scope_and_reports_the_entry(
+    rpc: FakeRpc, run_cli: RunCli
 ) -> None:
-    instance = make_instance(tmp_path)
-    calls: list[dict[str, Any]] = []
+    rpc.reply("memory.add", memory_response(entry={"id": 2, "scope": "agent", "content": "New"}))
 
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        calls.append(json)
-        return httpx.Response(
-            200,
-            json={
-                "ok": True,
-                "result": memory_response(entry={"id": 2, "scope": "user", "content": "New fact"}),
-            },
-        )
+    code, out, _err = run_cli("memory", "add", "assistant", "--content", "New")
 
-    monkeypatch.setattr(memory_management.httpx, "post", fake_post)
-
-    result = memory_management.memory_add(instance, "assistant", "user", "New fact")
-
-    assert result.ok is True
-    assert result.message.splitlines() == [
-        "added memory entry in assistant (scope: user)",
-        "#2: New fact",
+    assert code == 0
+    assert rpc.calls == [
+        ("memory.add", {"agent_id": "assistant", "scope": "agent", "content": "New"})
+    ]
+    assert out.splitlines() == [
+        "added memory entry in assistant (scope: agent)",
+        "#2: New",
         "remaining entries: agent=1 user=0",
     ]
-    assert calls == [
-        {
-            "method": "memory.add",
-            "params": {"agent_id": "assistant", "scope": "user", "content": "New fact"},
-        }
-    ]
 
 
-def test_memory_remove_requires_confirmation(tmp_path: Path) -> None:
-    instance = make_instance(tmp_path)
+def test_memory_remove_requires_confirmation(rpc: FakeRpc, run_cli: RunCli) -> None:
+    code, out, err = run_cli("memory", "remove", "assistant", "1")
 
-    result = memory_management.memory_remove(instance, "assistant", "agent", 1, False)
-
-    assert result.ok is False
-    assert "--yes" in result.message
-
-
-def test_memory_commands_fail_on_rpc_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    instance = make_instance(tmp_path)
-
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        return httpx.Response(
-            400,
-            json={"ok": False, "error": {"code": "invalid_request", "message": "unknown agent"}},
-        )
-
-    monkeypatch.setattr(memory_management.httpx, "post", fake_post)
-
-    result = memory_management.memory_list(instance, "ghost")
-
-    assert result.ok is False
-    assert result.failure is not None
-    assert result.failure.code == "invalid_request"
-
-
-def test_memory_failure_with_unknown_agent_lists_available_agents(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    instance = make_instance(tmp_path)
-
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        if json["method"] == "memory.list":
-            return httpx.Response(
-                400,
-                json={
-                    "ok": False,
-                    "error": {"code": "agent_not_found", "message": "Agent not found: assistnt"},
-                },
-            )
-        assert json["method"] == "agent.list"
-        return httpx.Response(
-            200,
-            json={"ok": True, "result": {"agents": [{"id": "assistant"}, {"id": "coder"}]}},
-        )
-
-    monkeypatch.setattr(memory_management.httpx, "post", fake_post)
-
-    result = memory_management.memory_list(instance, "assistnt")
-
-    assert result.ok is False
-    assert "did you mean: assistant" in result.message
-    assert "available agents: assistant, coder" in result.message
+    assert code == 1
+    assert "--yes" in out + err
+    assert rpc.calls == []
 
 
 @pytest.mark.parametrize(
-    "error,expected_calls",
+    ("command", "code", "lookup", "shown", "hidden"),
     [
-        # The structured code routes the lookup; message wording is never parsed.
-        (
-            {"code": "agent_not_found", "message": "test sentinel"},
-            ["memory.remove", "agent.list"],
+        pytest.param(
+            "list",
+            "invalid_request",
+            None,
+            ["entry 99 does not exist"],
+            ["available agents"],
+            id="list-other-failure-needs-no-lookup",
         ),
-        (
-            {"code": "domain_error", "message": "entry 99 not found for unknown agent"},
-            ["memory.remove", "memory.list"],
+        pytest.param(
+            "list",
+            "agent_not_found",
+            ("agent.list", AGENTS),
+            ["did you mean: assistant", "available agents: assistant, coder"],
+            [],
+            id="list-unknown-agent",
+        ),
+        pytest.param(
+            "remove",
+            "agent_not_found",
+            ("agent.list", AGENTS),
+            ["did you mean: assistant", "available agents: assistant, coder"],
+            [],
+            id="remove-unknown-agent",
+        ),
+        pytest.param(
+            "remove",
+            "not_found",
+            ("memory.list", {"ok": True, "result": memory_response()}),
+            ["entry 99 does not exist", "existing agent-scope entries: 1"],
+            [],
+            id="remove-unknown-entry",
+        ),
+        pytest.param(
+            "remove",
+            "domain_error",
+            ("memory.list", {"ok": True, "result": {}}),
+            ["entry 99 does not exist", "entry lookup"],
+            ["has no agent-scope entries"],
+            id="malformed-entry-lookup",
+        ),
+        pytest.param(
+            "remove",
+            "domain_error",
+            ("memory.list", {"ok": False}),
+            ["entry 99 does not exist", "entry lookup"],
+            ["has no agent-scope entries"],
+            id="failed-entry-lookup",
         ),
     ],
 )
-def test_memory_mutation_failure_lookup_follows_the_rpc_code(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    error: dict[str, str],
-    expected_calls: list[str],
+def test_memory_failure_lookup_follows_the_rpc_code_and_keeps_the_failure(
+    rpc: FakeRpc,
+    instance: ServerInstance,
+    command: str,
+    code: str,
+    lookup: tuple[str, dict[str, Any]] | None,
+    shown: list[str],
+    hidden: list[str],
 ) -> None:
-    calls: list[str] = []
+    # The structured code selects the lookup; the message wording is never parsed.
+    rpc.fail(f"memory.{command}", code, "entry 99 does not exist")
+    lookups = [] if lookup is None else [lookup[0]]
+    if lookup is not None and lookup[0] == "agent.list":
+        rpc.reply(*lookup)
+    elif lookup is not None:
+        rpc.respond(*lookup)
 
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        calls.append(json["method"])
-        if json["method"] == "memory.remove":
-            return httpx.Response(400, json={"ok": False, "error": error})
-        if json["method"] == "agent.list":
-            return httpx.Response(
-                200,
-                json={"ok": True, "result": {"agents": [{"id": "assistant"}, {"id": "coder"}]}},
-            )
-        return httpx.Response(200, json={"ok": True, "result": memory_response()})
-
-    monkeypatch.setattr(memory_management.httpx, "post", fake_post)
-
-    result = memory_management.memory_remove(make_instance(tmp_path), "assistnt", "agent", 99, True)
+    if command == "list":
+        result = memory_management.memory_list(instance, "assistnt")
+    else:
+        result = memory_management.memory_remove(instance, "assistnt", "agent", 99, True)
 
     assert result.ok is False
-    assert calls == expected_calls
+    assert rpc.methods == [f"memory.{command}", *lookups]
     assert result.failure is not None
-    assert result.failure.code == error["code"]
-    assert result.failure.method == "memory.remove"
-
-
-def test_memory_remove_bad_entry_id_shows_existing_ids(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    instance = make_instance(tmp_path)
-
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        if json["method"] == "memory.remove":
-            return httpx.Response(
-                400,
-                json={
-                    "ok": False,
-                    "error": {"code": "not_found", "message": "entry 99 does not exist"},
-                },
-            )
-        assert json["method"] == "memory.list"
-        return httpx.Response(
-            200,
-            json={
-                "ok": True,
-                "result": {
-                    "agent_id": "assistant",
-                    "scopes": {
-                        "agent": [{"id": 1, "scope": "agent", "content": "a"}],
-                        "user": [],
-                    },
-                },
-            },
-        )
-
-    monkeypatch.setattr(memory_management.httpx, "post", fake_post)
-
-    result = memory_management.memory_remove(instance, "assistant", "agent", 99, True)
-
-    assert result.ok is False
-    assert "entry 99 does not exist" in result.message
-    assert "existing agent-scope entries: 1" in result.message
+    assert (result.failure.method, result.failure.code) == (f"memory.{command}", code)
+    assert all(text in result.message for text in shown)
+    assert not any(text in result.message for text in hidden)

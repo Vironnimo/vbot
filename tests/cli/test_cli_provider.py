@@ -1,91 +1,60 @@
-"""Tests for cli provider."""
+"""Tests for the ``vbot provider`` list, status, usage and enable/disable commands."""
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
-import httpx
 import pytest
 
-from cli import main as cli_main
-from cli import provider_management
-from tests.cli.cli_provider_test_support import (
-    make_instance,
-)
+from tests.cli.cli_test_support import FakeRpc, RunCli
 
 
-def test_provider_list_posts_connection_list_rpc(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+def _connection(connection_id: str, **fields: Any) -> dict[str, Any]:
+    provider_id, _, _ = connection_id.partition(":")
+    connection = {
+        "id": connection_id,
+        "provider_id": provider_id,
+        "type": "api_key",
+        "label": "API Key",
+        "enabled": True,
+        "usable": True,
+        "accounts": [],
+    }
+    return connection | fields
+
+
+def _set_enabled_result(connection_id: str, enabled: bool, **fields: Any) -> dict[str, Any]:
+    provider_id, _, _ = connection_id.partition(":")
+    result = {
+        "provider_id": provider_id,
+        "connection_id": connection_id,
+        "enabled": enabled,
+        "configured": True,
+    }
+    return result | fields
+
+
+def test_provider_list_overview_keeps_ids_and_offers_the_full_detail(
+    rpc: FakeRpc, run_cli: RunCli
 ) -> None:
-    instance = make_instance(tmp_path)
-    calls: list[dict[str, Any]] = []
-
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        calls.append({"url": url, "json": json, "timeout": timeout})
-        return httpx.Response(200, json={"ok": True, "result": {"connections": []}})
-
-    monkeypatch.setattr(provider_management.httpx, "post", fake_post)
-
-    result = provider_management.provider_list(instance)
-
-    assert result.ok is True
-    assert result.instance is instance
-    assert result.message.strip()
-    assert calls == [
-        {
-            "url": f"{instance.url}/api/rpc",
-            "json": {"method": "connection.list", "params": {}},
-            "timeout": 10.0,
-        }
-    ]
-
-
-def test_provider_overview_keeps_ids_and_offers_full_detail(tmp_path, monkeypatch):
-    instance = make_instance(tmp_path)
     connections = [
-        {
-            "id": "sample:oauth",
-            "provider_id": "sample",
-            "type": "oauth",
-            "label": "Subscription",
-            "enabled": True,
-            "usable": True,
-            "accounts": [{"id": "work", "usable": True, "source": "test-owned-source"}],
-        },
-        {
-            "id": "local:server",
-            "provider_id": "local",
-            "type": "none",
-            "label": "Local",
-            "enabled": True,
-            "usable": True,
-            "reachable": False,
-            "accounts": [],
-        },
-        {
-            "id": "sample:key",
-            "provider_id": "sample",
-            "type": "api_key",
-            "label": "API",
-            "enabled": False,
-            "usable": False,
-            "accounts": [],
-        },
+        _connection(
+            "sample:oauth",
+            type="oauth",
+            label="Subscription",
+            accounts=[{"id": "work", "usable": True, "source": "test-owned-source"}],
+        ),
+        _connection("local:server", type="none", label="Local", reachable=False),
+        _connection("sample:key", label="API", enabled=False, usable=False),
     ]
+    rpc.reply("connection.list", {"connections": connections})
 
-    def fake_post(url, **kwargs):
-        return httpx.Response(200, json={"ok": True, "result": {"connections": connections}})
+    _code, brief, _err = run_cli("provider", "list")
+    _code, full, _err = run_cli("provider", "list", "--details")
 
-    monkeypatch.setattr(provider_management.httpx, "post", fake_post)
-    brief = provider_management.provider_list(instance).message
-    full = provider_management.provider_list(instance, details=True).message
+    assert rpc.calls == [("connection.list", {}), ("connection.list", {})]
     for connection in connections:
-        assert connection["id"] in brief
-        assert connection["id"] in full
+        assert connection["id"] in brief and connection["id"] in full
     assert "work" in brief and "work" in full
     assert "test-owned-source" not in brief and "test-owned-source" in full
     assert "vbot provider list --details" in brief
@@ -94,535 +63,321 @@ def test_provider_overview_keeps_ids_and_offers_full_detail(tmp_path, monkeypatc
     assert len(brief) < len(full)
 
 
-def test_provider_list_formats_connection_rows(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    instance = make_instance(tmp_path)
-
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        assert url == f"{instance.url}/api/rpc"
-        assert json == {"method": "connection.list", "params": {}}
-        assert timeout == 10.0
-        return httpx.Response(
-            200,
-            json={
-                "ok": True,
-                "result": {
-                    "connections": [
+def test_provider_list_details_show_each_account_state(rpc: FakeRpc, run_cli: RunCli) -> None:
+    rpc.reply(
+        "connection.list",
+        {
+            "connections": [
+                _connection(
+                    "openai:default",
+                    label="OpenAI",
+                    accounts=[
                         {
-                            "id": "openai:default",
-                            "provider_id": "openai",
-                            "type": "api_key",
-                            "label": "OpenAI",
+                            "id": "default",
                             "usable": True,
-                            "accounts": [
-                                {
-                                    "id": "default",
-                                    "usable": True,
-                                    "source": "process_env",
-                                    "credential_key": "OPENAI_API_KEY",
-                                },
-                                {
-                                    "id": "work",
-                                    "usable": False,
-                                    "source": "data_dir",
-                                    "credential_key": "OPENAI_API_KEY__WORK",
-                                },
-                            ],
+                            "source": "process_env",
+                            "credential_key": "OPENAI_API_KEY",
                         },
                         {
-                            "id": "openrouter:main",
-                            "provider_id": "openrouter",
-                            "type": "api_key",
-                            "label": "OpenRouter",
+                            "id": "work",
                             "usable": False,
-                            "accounts": [],
+                            "source": "data_dir",
+                            "credential_key": "OPENAI_API_KEY__WORK",
                         },
-                    ]
-                },
+                    ],
+                ),
+                _connection("openrouter:main", label="OpenRouter", usable=False),
+            ]
+        },
+    )
+
+    code, out, _err = run_cli("provider", "list", "--details")
+
+    assert code == 0
+    for text in (
+        "openai:default",
+        "openrouter:main",
+        "usable: yes",
+        "usable: no",
+        "default",
+        "process_env",
+        "work",
+        "data_dir",
+    ):
+        assert text in out
+
+
+def test_provider_list_reports_the_empty_state(rpc: FakeRpc, run_cli: RunCli) -> None:
+    rpc.reply("connection.list", {"connections": []})
+
+    code, out, _err = run_cli("provider", "list")
+
+    assert code == 0
+    assert out.strip()
+
+
+def test_provider_list_reports_a_server_error(rpc: FakeRpc, run_cli: RunCli) -> None:
+    rpc.fail("connection.list", "provider_error", "boom", status=500)
+
+    code, out, _err = run_cli("provider", "list")
+
+    assert code == 1
+    assert "provider_error: boom" in out
+
+
+@pytest.mark.parametrize(
+    ("argv", "connections", "code", "shown", "hidden"),
+    [
+        pytest.param(
+            ("openrouter",),
+            [_connection("openai:api-key"), _connection("openrouter:api-key", usable=False)],
+            0,
+            ("openrouter:api-key",),
+            ("openai:api-key",),
+            id="filters-by-provider",
+        ),
+        pytest.param(
+            ("openrouter", "--connection", "openrouter:api-key"),
+            [],
+            1,
+            ("openrouter:api-key",),
+            (),
+            id="missing-connection",
+        ),
+        pytest.param(
+            ("openruter",),
+            [_connection("openrouter:api-key")],
+            1,
+            ("openruter", "openrouter"),
+            (),
+            id="unknown-provider-suggests",
+        ),
+    ],
+)
+def test_provider_status_shows_the_provider_connections(
+    rpc: FakeRpc,
+    run_cli: RunCli,
+    argv: tuple[str, ...],
+    connections: list[dict[str, Any]],
+    code: int,
+    shown: tuple[str, ...],
+    hidden: tuple[str, ...],
+) -> None:
+    rpc.reply("connection.list", {"connections": connections})
+
+    exit_code, out, _err = run_cli("provider", "status", *argv)
+
+    assert exit_code == code
+    assert rpc.calls == [("connection.list", {})]
+    for text in shown:
+        assert text in out
+    for text in hidden:
+        assert text not in out
+
+
+@pytest.mark.parametrize(
+    ("options", "params", "provider", "expected"),
+    [
+        pytest.param(
+            ("--connection", "openai:subscription"),
+            {"connections": ["openai:subscription"]},
+            {
+                "connection": "openai:subscription",
+                "display_name": "OpenAI",
+                "plan": "Plus",
+                "windows": [
+                    {"label": "5h", "used_percent": 42.5, "reset_at": "2026-07-20T18:00:00Z"},
+                    {"label": "Week", "used_percent": 12.0, "reset_at": None},
+                ],
+                "error": None,
             },
-        )
-
-    monkeypatch.setattr(provider_management.httpx, "post", fake_post)
-
-    result = provider_management.provider_list(instance, details=True)
-
-    assert result.ok is True
-    assert "openai:default" in result.message
-    assert "openrouter:main" in result.message
-    assert "usable: yes" in result.message
-    assert "usable: no" in result.message
-    assert "default" in result.message
-    assert "process_env" in result.message
-    assert "work" in result.message
-    assert "data_dir" in result.message
-
-
-def test_provider_list_returns_empty_message_when_no_connections(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    instance = make_instance(tmp_path)
-
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        assert url == f"{instance.url}/api/rpc"
-        assert json == {"method": "connection.list", "params": {}}
-        assert timeout == 10.0
-        return httpx.Response(200, json={"ok": True, "result": {"connections": []}})
-
-    monkeypatch.setattr(provider_management.httpx, "post", fake_post)
-
-    result = provider_management.provider_list(instance)
-
-    assert result.ok is True
-    assert result.instance is instance
-    assert result.message.strip()
-
-
-def test_provider_list_returns_error_on_rpc_failure(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    instance = make_instance(tmp_path)
-
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        assert url == f"{instance.url}/api/rpc"
-        assert json == {"method": "connection.list", "params": {}}
-        assert timeout == 10.0
-        return httpx.Response(
-            500,
-            json={"ok": False, "error": {"code": "provider_error", "message": "boom"}},
-        )
-
-    monkeypatch.setattr(provider_management.httpx, "post", fake_post)
-
-    result = provider_management.provider_list(instance)
-
-    assert result.ok is False
-    assert result.instance is instance
-    assert result.message.startswith("provider_error:")
-
-
-def test_provider_status_filters_provider_connections(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    instance = make_instance(tmp_path)
-
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        assert json == {"method": "connection.list", "params": {}}
-        return httpx.Response(
-            200,
-            json={
-                "ok": True,
-                "result": {
-                    "connections": [
-                        {
-                            "id": "openai:api-key",
-                            "provider_id": "openai",
-                            "type": "api_key",
-                            "label": "API Key",
-                            "usable": True,
-                        },
-                        {
-                            "id": "openrouter:api-key",
-                            "provider_id": "openrouter",
-                            "type": "api_key",
-                            "label": "API Key",
-                            "usable": False,
-                        },
-                    ]
-                },
+            [
+                "- OpenAI (openai:subscription)  plan: Plus",
+                "  - 5h: used=42.5% remaining=57.5% reset_at=2026-07-20T18:00:00Z",
+                "  - Week: used=12% remaining=88% reset_at=-",
+            ],
+            id="live-windows",
+        ),
+        pytest.param(
+            (),
+            {},
+            {
+                "connection": "github-copilot:oauth",
+                "display_name": "GitHub Copilot",
+                "plan": None,
+                "windows": [],
+                "error": "Network error",
             },
+            ["- GitHub Copilot (github-copilot:oauth)  plan: -", "  error: Network error"],
+            id="provider-error",
+        ),
+    ],
+)
+def test_provider_usage_prints_the_live_usage_snapshot(
+    rpc: FakeRpc,
+    run_cli: RunCli,
+    options: tuple[str, ...],
+    params: dict[str, Any],
+    provider: dict[str, Any],
+    expected: list[str],
+) -> None:
+    rpc.reply("provider.usage", {"generated_at": "2026-07-20T16:00:00Z", "providers": [provider]})
+
+    code, out, _err = run_cli("provider", "usage", *options)
+
+    assert code == 0
+    assert rpc.calls == [("provider.usage", params)]
+    assert out.splitlines() == [
+        "provider usage:",
+        "generated_at: 2026-07-20T16:00:00Z",
+        *expected,
+    ]
+
+
+@pytest.mark.parametrize(
+    ("connection_id", "saved", "shown"),
+    [
+        pytest.param(
+            "ollama:local", {"reachable": True}, ("ollama:local", "reachable"), id="reachable"
+        ),
+        pytest.param(
+            "ollama:local",
+            {"reachable": False},
+            ("ollama:local", "not reachable"),
+            id="unreachable",
+        ),
+        pytest.param(
+            "ollama:cloud",
+            {"configured": False},
+            ("provider status ollama --connection ollama:cloud",),
+            id="missing-credential",
+        ),
+    ],
+)
+def test_provider_enable_with_an_explicit_connection_reports_its_readiness(
+    rpc: FakeRpc,
+    run_cli: RunCli,
+    connection_id: str,
+    saved: dict[str, Any],
+    shown: tuple[str, ...],
+) -> None:
+    rpc.reply("connection.set_enabled", _set_enabled_result(connection_id, True) | saved)
+
+    code, out, _err = run_cli("provider", "enable", "ollama", "--connection", connection_id)
+
+    assert code == 0
+    assert rpc.calls == [
+        (
+            "connection.set_enabled",
+            {"provider_id": "ollama", "connection_id": connection_id, "enabled": True},
         )
-
-    monkeypatch.setattr(provider_management.httpx, "post", fake_post)
-
-    result = provider_management.provider_status(instance, "openrouter")
-
-    assert result.ok is True
-    assert "openrouter:api-key" in result.message
-    assert "openai:api-key" not in result.message
+    ]
+    for text in shown:
+        assert text in out
 
 
-def test_provider_status_returns_not_found_for_missing_connection(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+def test_provider_disable_resolves_the_only_connection(rpc: FakeRpc, run_cli: RunCli) -> None:
+    rpc.reply("connection.list", {"connections": [_connection("openrouter:api-key")]})
+    rpc.reply("connection.set_enabled", _set_enabled_result("openrouter:api-key", False))
+
+    code, out, _err = run_cli("provider", "disable", "openrouter")
+
+    assert code == 0
+    assert rpc.calls == [
+        ("connection.list", {}),
+        (
+            "connection.set_enabled",
+            {"provider_id": "openrouter", "connection_id": "openrouter:api-key", "enabled": False},
+        ),
+    ]
+    assert "openrouter:api-key" in out
+
+
+def test_provider_enable_requires_a_connection_for_a_multi_connection_provider(
+    rpc: FakeRpc, run_cli: RunCli
 ) -> None:
-    instance = make_instance(tmp_path)
+    rpc.reply(
+        "connection.list",
+        {
+            "connections": [
+                _connection(
+                    "ollama:local", type="none", label="Local", enabled=False, usable=False
+                ),
+                _connection("ollama:cloud", label="Ollama Cloud", usable=False),
+            ]
+        },
+    )
 
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        return httpx.Response(200, json={"ok": True, "result": {"connections": []}})
+    code, out, _err = run_cli("provider", "enable", "ollama")
 
-    monkeypatch.setattr(provider_management.httpx, "post", fake_post)
-
-    result = provider_management.provider_status(instance, "openrouter", "openrouter:api-key")
-
-    assert result.ok is False
-    assert result.instance is instance
-    assert "openrouter:api-key" in result.message
-
-
-def test_provider_status_not_found_includes_candidates_and_suggestion(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    instance = make_instance(tmp_path)
-
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        return httpx.Response(
-            200,
-            json={
-                "ok": True,
-                "result": {
-                    "connections": [
-                        {
-                            "id": "openrouter:api-key",
-                            "provider_id": "openrouter",
-                            "type": "api_key",
-                            "label": "API Key",
-                            "usable": True,
-                        }
-                    ]
-                },
-            },
-        )
-
-    monkeypatch.setattr(provider_management.httpx, "post", fake_post)
-
-    result = provider_management.provider_status(instance, "openruter")
-
-    assert result.ok is False
-    assert result.instance is instance
-    assert "openruter" in result.message
-    assert "openrouter" in result.message
+    assert code == 1
+    assert rpc.methods == ["connection.list"]
+    for text in ("pass --connection", "ollama:cloud", "ollama:local"):
+        assert text in out
 
 
-def test_provider_usage_posts_filter_and_formats_live_windows(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    instance = make_instance(tmp_path)
-
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        assert json == {
-            "method": "provider.usage",
-            "params": {"connections": ["openai:subscription"]},
-        }
-        return httpx.Response(
-            200,
-            json={
-                "ok": True,
-                "result": {
-                    "generated_at": "2026-07-20T16:00:00Z",
+@pytest.mark.parametrize(
+    ("options", "params", "samples", "expected"),
+    [
+        pytest.param(
+            ("--since", "2026-08-01T00:00:00Z"),
+            {"since": "2026-08-01T00:00:00Z"},
+            [
+                {
+                    "sampled_at": "2026-08-01T10:00:00+00:00",
                     "providers": [
                         {
                             "connection": "openai:subscription",
-                            "display_name": "OpenAI",
-                            "plan": "Plus",
-                            "windows": [
-                                {
-                                    "label": "5h",
-                                    "used_percent": 42.5,
-                                    "reset_at": "2026-07-20T18:00:00Z",
-                                },
-                                {"label": "Week", "used_percent": 12.0, "reset_at": None},
-                            ],
-                            "error": None,
-                        }
+                            "windows": [{"label": "5h", "used_percent": 42.0, "reset_at": "-"}],
+                        },
+                        {"connection": "broken:api-key", "error": "timeout"},
                     ],
-                },
-            },
-        )
-
-    monkeypatch.setattr(provider_management.httpx, "post", fake_post)
-
-    result = provider_management.provider_usage(instance, ["openai:subscription"])
-
-    assert result.ok is True
-    assert result.message.splitlines() == [
-        "provider usage:",
-        "generated_at: 2026-07-20T16:00:00Z",
-        "- OpenAI (openai:subscription)  plan: Plus",
-        "  - 5h: used=42.5% remaining=57.5% reset_at=2026-07-20T18:00:00Z",
-        "  - Week: used=12% remaining=88% reset_at=-",
-    ]
-
-
-def test_provider_usage_reports_provider_error_snapshot(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+                }
+            ],
+            [
+                "- 2026-08-01T10:00:00+00:00",
+                "  openai:subscription: - 5h: used=42% remaining=58% reset_at=-",
+                "  broken:api-key: error: timeout",
+            ],
+            id="samples",
+        ),
+        pytest.param((), {}, [], None, id="empty-window"),
+    ],
+)
+def test_provider_history_lists_recorded_usage_samples(
+    rpc: FakeRpc,
+    run_cli: RunCli,
+    options: tuple[str, ...],
+    params: dict[str, Any],
+    samples: list[dict[str, Any]],
+    expected: list[str] | None,
 ) -> None:
-    instance = make_instance(tmp_path)
-
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        assert json == {"method": "provider.usage", "params": {}}
-        return httpx.Response(
-            200,
-            json={
-                "ok": True,
-                "result": {
-                    "generated_at": "2026-07-20T16:00:00Z",
-                    "providers": [
-                        {
-                            "connection": "github-copilot:oauth",
-                            "display_name": "GitHub Copilot",
-                            "plan": None,
-                            "windows": [],
-                            "error": "Network error",
-                        }
-                    ],
-                },
-            },
-        )
-
-    monkeypatch.setattr(provider_management.httpx, "post", fake_post)
-
-    result = provider_management.provider_usage(instance)
-
-    assert result.message.splitlines()[-2:] == [
-        "- GitHub Copilot (github-copilot:oauth)  plan: -",
-        "  error: Network error",
-    ]
-
-
-def test_parse_args_supports_provider_enable_and_disable() -> None:
-    enable_args = cli_main.parse_args(["provider", "enable", "ollama"])
-    disable_args = cli_main.parse_args(
-        ["provider", "disable", "ollama", "--connection", "ollama:local"]
+    rpc.reply(
+        "provider.usage_history", {"generated_at": "2026-08-25T12:00:00+00:00", "samples": samples}
     )
 
-    assert enable_args.area == "provider"
-    assert enable_args.command == "enable"
-    assert enable_args.provider == "ollama"
-    assert enable_args.connection is None
-    assert disable_args.command == "disable"
-    assert disable_args.connection == "ollama:local"
+    code, out, _err = run_cli("provider", "history", "list", *options)
+
+    assert code == 0
+    assert rpc.calls == [("provider.usage_history", params)]
+    if expected is None:
+        assert "no recorded usage samples" in out
+    else:
+        assert out.splitlines() == [
+            "provider usage history:",
+            "generated_at: 2026-08-25T12:00:00+00:00",
+            *expected,
+        ]
 
 
-def test_provider_set_enabled_with_explicit_connection(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    instance = make_instance(tmp_path)
-    calls: list[dict[str, Any]] = []
+def test_provider_history_clear_requires_confirmation(rpc: FakeRpc, run_cli: RunCli) -> None:
+    rpc.reply("provider.usage_history.clear", {"deleted_samples": 12})
 
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        calls.append(json)
-        return httpx.Response(
-            200,
-            json={
-                "ok": True,
-                "result": {
-                    "provider_id": "ollama",
-                    "connection_id": "ollama:local",
-                    "enabled": True,
-                    "configured": True,
-                    "reachable": True,
-                },
-            },
-        )
+    refused = run_cli("provider", "history", "clear")
+    assert rpc.calls == []
+    cleared = run_cli("provider", "history", "clear", "--yes")
 
-    monkeypatch.setattr(provider_management.httpx, "post", fake_post)
-
-    result = provider_management.provider_set_enabled(instance, "ollama", True, "ollama:local")
-
-    assert result.ok is True
-    assert "ollama:local" in result.message
-    assert "reachable" in result.message
-    assert calls == [
-        {
-            "method": "connection.set_enabled",
-            "params": {
-                "provider_id": "ollama",
-                "connection_id": "ollama:local",
-                "enabled": True,
-            },
-        }
-    ]
-
-
-def test_provider_set_enabled_reports_unreachable_endpoint(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    instance = make_instance(tmp_path)
-
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        return httpx.Response(
-            200,
-            json={
-                "ok": True,
-                "result": {
-                    "provider_id": "ollama",
-                    "connection_id": "ollama:local",
-                    "enabled": True,
-                    "configured": True,
-                    "reachable": False,
-                },
-            },
-        )
-
-    monkeypatch.setattr(provider_management.httpx, "post", fake_post)
-
-    result = provider_management.provider_set_enabled(instance, "ollama", True, "ollama:local")
-
-    assert result.ok is True
-    assert "ollama:local" in result.message
-    assert "not reachable" in result.message
-
-
-def test_provider_set_enabled_resolves_single_connection(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Without --connection, a single-connection provider resolves automatically."""
-    instance = make_instance(tmp_path)
-    calls: list[dict[str, Any]] = []
-
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        calls.append(json)
-        if json["method"] == "connection.list":
-            return httpx.Response(
-                200,
-                json={
-                    "ok": True,
-                    "result": {
-                        "connections": [
-                            {
-                                "id": "openrouter:api-key",
-                                "provider_id": "openrouter",
-                                "type": "api_key",
-                                "label": "API Key",
-                                "enabled": True,
-                                "usable": True,
-                                "accounts": [],
-                            }
-                        ]
-                    },
-                },
-            )
-        return httpx.Response(
-            200,
-            json={
-                "ok": True,
-                "result": {
-                    "provider_id": "openrouter",
-                    "connection_id": "openrouter:api-key",
-                    "enabled": False,
-                    "configured": True,
-                },
-            },
-        )
-
-    monkeypatch.setattr(provider_management.httpx, "post", fake_post)
-
-    result = provider_management.provider_set_enabled(instance, "openrouter", False)
-
-    assert result.ok is True
-    assert "openrouter:api-key" in result.message
-    assert calls[0]["method"] == "connection.list"
-    assert calls[1] == {
-        "method": "connection.set_enabled",
-        "params": {
-            "provider_id": "openrouter",
-            "connection_id": "openrouter:api-key",
-            "enabled": False,
-        },
-    }
-
-
-def test_provider_set_enabled_requires_connection_for_multi_connection_provider(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    instance = make_instance(tmp_path)
-
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        return httpx.Response(
-            200,
-            json={
-                "ok": True,
-                "result": {
-                    "connections": [
-                        {
-                            "id": "ollama:local",
-                            "provider_id": "ollama",
-                            "type": "none",
-                            "label": "Local",
-                            "enabled": False,
-                            "usable": False,
-                            "accounts": [],
-                        },
-                        {
-                            "id": "ollama:cloud",
-                            "provider_id": "ollama",
-                            "type": "api_key",
-                            "label": "Ollama Cloud",
-                            "enabled": True,
-                            "usable": False,
-                            "accounts": [],
-                        },
-                    ]
-                },
-            },
-        )
-
-    monkeypatch.setattr(provider_management.httpx, "post", fake_post)
-
-    result = provider_management.provider_set_enabled(instance, "ollama", True)
-
-    assert result.ok is False
-    assert "pass --connection" in result.message
-    assert "ollama:cloud" in result.message
-    assert "ollama:local" in result.message
-
-
-def test_provider_set_enabled_reports_missing_credential_hint(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    instance = make_instance(tmp_path)
-
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        return httpx.Response(
-            200,
-            json={
-                "ok": True,
-                "result": {
-                    "provider_id": "ollama",
-                    "connection_id": "ollama:cloud",
-                    "enabled": True,
-                    "configured": False,
-                },
-            },
-        )
-
-    monkeypatch.setattr(provider_management.httpx, "post", fake_post)
-
-    result = provider_management.provider_set_enabled(instance, "ollama", True, "ollama:cloud")
-
-    assert result.ok is True
-    assert "provider status ollama --connection ollama:cloud" in result.message
+    assert refused[0] == 1 and "--yes" in refused[1]
+    assert cleared[0] == 0
+    assert rpc.calls == [("provider.usage_history.clear", {})]
+    assert cleared[1].splitlines() == ["deleted provider usage history: 12 samples"]

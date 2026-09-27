@@ -1,571 +1,235 @@
-"""Tests for session CLI parsing, RPC commands, and output."""
+"""Tests for the ``vbot session`` commands: RPC requests, paging and printed output."""
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
-import httpx
 import pytest
 
-from cli import main as cli_main
-from cli import session_management
-from cli.server_management import ServerInstance
-from core.utils.logging import resolve_daily_log_path
+from tests.cli.cli_test_support import FakeRpc, RunCli
+
+DEFAULT_LIST = {
+    "agent_id": "assistant",
+    "limit": 100,
+    "include_subagents": True,
+    "include_memory_reflections": True,
+    "include_skill_reflections": True,
+    "include_cron": True,
+}
+SESSION = {"agent_id": "assistant", "session_id": "session-one"}
 
 
-def make_instance(tmp_path: Path, *, port: int = 8420) -> ServerInstance:
-    data_dir = tmp_path / "data"
-    return ServerInstance(
-        host="127.0.0.1",
-        port=port,
-        data_dir=data_dir,
-        url=f"http://127.0.0.1:{port}",
-        log_path=resolve_daily_log_path(data_dir),
-    )
-
-
-def test_parse_args_supports_session_list() -> None:
-    args = cli_main.parse_args(["session", "list", "assistant", "--port", "8700"])
-
-    assert args.area == "session"
-    assert args.command == "list"
-    assert args.agent == "assistant"
-    assert args.port == 8700
-
-
-def test_parse_args_supports_session_create_options() -> None:
-    args = cli_main.parse_args(
-        ["session", "create", "assistant", "--id", "session-two", "--make-current"]
-    )
-
-    assert args.area == "session"
-    assert args.command == "create"
-    assert args.agent == "assistant"
-    assert args.id == "session-two"
-    assert args.make_current is True
-
-
-def test_parse_args_supports_session_link_channel_options() -> None:
-    args = cli_main.parse_args(
-        [
-            "session",
-            "link-channel",
-            "assistant",
-            "session-one",
-            "--channel",
-            "tg-main",
-            "--conversation",
-            "12345",
-        ]
-    )
-
-    assert args.area == "session"
-    assert args.command == "link-channel"
-    assert args.agent == "assistant"
-    assert args.session == "session-one"
-    assert args.channel == "tg-main"
-    assert args.conversation == "12345"
-
-
-def test_session_list_posts_rpc_and_formats_rows(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    instance = make_instance(tmp_path)
-    calls: list[dict[str, Any]] = []
-
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        calls.append({"url": url, "json": json, "timeout": timeout})
-        return httpx.Response(
-            200,
-            json={
-                "ok": True,
-                "result": {
-                    "sessions": [
-                        {
-                            "id": "session-one",
-                            "created_at": "2026-06-01T08:00:00+00:00",
-                            "last_active_at": "2026-06-02T09:00:00+00:00",
-                        },
-                        {
-                            "id": "session-two",
-                            "created_at": "2026-06-03T10:00:00+00:00",
-                            "last_active_at": "2026-06-03T11:00:00+00:00",
-                            "source_channel_id": "tg-main",
-                        },
-                    ]
+def test_session_list_prints_one_row_per_session(rpc: FakeRpc, run_cli: RunCli) -> None:
+    rpc.reply(
+        "session.list",
+        {
+            "sessions": [
+                {
+                    "id": "session-one",
+                    "created_at": "2026-06-01T08:00:00+00:00",
+                    "last_active_at": "2026-06-02T09:00:00+00:00",
                 },
-            },
-        )
-
-    monkeypatch.setattr(session_management.httpx, "post", fake_post)
-
-    result = session_management.session_list(instance, "assistant")
-
-    assert result.ok is True
-    assert result.message.splitlines()[1:] == [
-        (
-            "- id=session-one created_at=2026-06-01T08:00:00+00:00 "
-            "last_active_at=2026-06-02T09:00:00+00:00"
-        ),
-        (
-            "- id=session-two created_at=2026-06-03T10:00:00+00:00 "
-            "last_active_at=2026-06-03T11:00:00+00:00 channel=tg-main"
-        ),
-    ]
-    assert calls == [
-        {
-            "url": f"{instance.url}/api/rpc",
-            "json": {
-                "method": "session.list",
-                "params": {
-                    "agent_id": "assistant",
-                    "limit": 100,
-                    "include_subagents": True,
-                    "include_memory_reflections": True,
-                    "include_skill_reflections": True,
-                    "include_cron": True,
+                {
+                    "id": "session-two",
+                    "created_at": "2026-06-03T10:00:00+00:00",
+                    "last_active_at": "2026-06-03T11:00:00+00:00",
+                    "source_channel_id": "tg-main",
                 },
-            },
-            "timeout": 10.0,
-        }
-    ]
-
-
-def test_session_list_reports_empty_state(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    instance = make_instance(tmp_path)
-
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        return httpx.Response(200, json={"ok": True, "result": {"sessions": []}})
-
-    monkeypatch.setattr(session_management.httpx, "post", fake_post)
-
-    result = session_management.session_list(instance, "assistant")
-
-    assert result.ok is True
-    assert result.instance is instance
-    assert "assistant" in result.message
-
-
-def test_session_list_follows_server_pages(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    instance = make_instance(tmp_path)
-    calls: list[dict[str, Any]] = []
-    cursor = {
-        "last_activity_at": "2026-09-20T10:00:00.000000Z",
-        "agent_id": "assistant",
-        "session_id": "session-one",
-    }
-
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        calls.append(json)
-        if len(calls) == 1:
-            result = {
-                "sessions": [{"id": "session-one"}],
-                "next_cursor": cursor,
-                "total_count": 2,
-            }
-        else:
-            result = {
-                "sessions": [{"id": "session-two"}],
-                "next_cursor": None,
-                "total_count": 2,
-            }
-        return httpx.Response(200, json={"ok": True, "result": result})
-
-    monkeypatch.setattr(session_management.httpx, "post", fake_post)
-
-    result = session_management.session_list(instance, "assistant", all_pages=True)
-
-    assert result.ok is True
-    assert "id=session-one" in result.message
-    assert "id=session-two" in result.message
-    assert calls[1]["params"]["cursor"] == cursor
-
-
-def test_session_create_posts_optional_fields(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    instance = make_instance(tmp_path)
-    calls: list[dict[str, Any]] = []
-
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        calls.append(json)
-        return httpx.Response(
-            200,
-            json={"ok": True, "result": {"agent_id": "assistant", "session_id": "session-two"}},
-        )
-
-    monkeypatch.setattr(session_management.httpx, "post", fake_post)
-
-    result = session_management.session_create(instance, "assistant", "session-two", True)
-
-    assert result.ok is True
-    assert result.instance is instance
-    assert "session-two" in result.message
-    assert "assistant" in result.message
-    assert calls == [
-        {
-            "method": "session.create",
-            "params": {
-                "agent_id": "assistant",
-                "session_id": "session-two",
-                "make_current": True,
-            },
-        }
-    ]
-
-
-def test_session_create_omits_unset_fields(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    instance = make_instance(tmp_path)
-    calls: list[dict[str, Any]] = []
-
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        calls.append(json)
-        return httpx.Response(
-            200,
-            json={"ok": True, "result": {"agent_id": "assistant", "session_id": "generated-id"}},
-        )
-
-    monkeypatch.setattr(session_management.httpx, "post", fake_post)
-
-    result = session_management.session_create(instance, "assistant", None, False)
-
-    assert result.ok is True
-    assert result.instance is instance
-    assert "generated-id" in result.message
-    assert "assistant" in result.message
-    assert calls == [{"method": "session.create", "params": {"agent_id": "assistant"}}]
-
-
-def test_session_link_channel_posts_link_rpc(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    instance = make_instance(tmp_path)
-    calls: list[dict[str, Any]] = []
-
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        calls.append(json)
-        return httpx.Response(200, json={"ok": True, "result": {"ok": True}})
-
-    monkeypatch.setattr(session_management.httpx, "post", fake_post)
-
-    result = session_management.session_link_channel(
-        instance, "assistant", "session-one", "tg-main", "12345"
-    )
-
-    assert result.ok is True
-    assert result.instance is instance
-    assert "session-one" in result.message
-    assert "tg-main" in result.message
-    assert "12345" in result.message
-    assert calls == [
-        {
-            "method": "session.link_channel",
-            "params": {
-                "agent_id": "assistant",
-                "session_id": "session-one",
-                "channel_id": "tg-main",
-                "platform_conv_id": "12345",
-            },
-        }
-    ]
-
-
-def test_session_commands_surface_rpc_domain_errors(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    instance = make_instance(tmp_path)
-
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        return httpx.Response(
-            200,
-            json={
-                "ok": False,
-                "error": {"code": "not_found", "message": "Unknown agent: missing"},
-            },
-        )
-
-    monkeypatch.setattr(session_management.httpx, "post", fake_post)
-
-    result = session_management.session_list(instance, "missing")
-
-    assert result.ok is False
-    assert result.instance is instance
-    assert result.message.startswith("not_found:")
-    assert "missing" in result.message
-
-
-def test_run_dispatches_session_list(
-    tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    instance = make_instance(tmp_path, port=8765)
-
-    def fake_resolve(*, host: str, port: int | None, data_dir: str | None) -> ServerInstance:
-        return instance
-
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        assert json == {
-            "method": "session.list",
-            "params": {
-                "agent_id": "assistant",
-                "limit": 100,
-                "include_subagents": True,
-                "include_memory_reflections": True,
-                "include_skill_reflections": True,
-                "include_cron": True,
-            },
-        }
-        return httpx.Response(200, json={"ok": True, "result": {"sessions": []}})
-
-    monkeypatch.setattr(session_management.httpx, "post", fake_post)
-
-    exit_code = cli_main.run(
-        ["session", "list", "assistant", "--port", "8765"],
-        resolve=fake_resolve,
-    )
-
-    assert exit_code == 0
-
-
-def test_parse_args_supports_session_delete() -> None:
-    args = cli_main.parse_args(["session", "delete", "assistant", "session-one", "--yes"])
-
-    assert args.area == "session"
-    assert args.command == "delete"
-    assert args.agent == "assistant"
-    assert args.session == "session-one"
-    assert args.yes is True
-
-
-def test_session_delete_requires_confirmation(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    instance = make_instance(tmp_path)
-    calls: list[dict[str, Any]] = []
-
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        calls.append(json)
-        return httpx.Response(200, json={"ok": True, "result": {}})
-
-    monkeypatch.setattr(session_management.httpx, "post", fake_post)
-
-    result = session_management.session_delete(instance, "assistant", "session-one", False)
-
-    assert result.ok is False
-    assert "--yes" in result.message
-    # Refuses before any RPC call — nothing is deleted without confirmation.
-    assert calls == []
-
-
-def test_session_delete_posts_rpc_when_confirmed(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    instance = make_instance(tmp_path)
-    calls: list[dict[str, Any]] = []
-
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        calls.append(json)
-        return httpx.Response(
-            200,
-            json={
-                "ok": True,
-                "result": {
-                    "agent_id": "assistant",
-                    "session_id": "session-one",
-                    "next_session_id": "session-two",
-                },
-            },
-        )
-
-    monkeypatch.setattr(session_management.httpx, "post", fake_post)
-
-    result = session_management.session_delete(instance, "assistant", "session-one", True)
-
-    assert result.ok is True
-    assert "archived" in result.message
-    assert "session-two" in result.message
-    assert calls == [
-        {
-            "method": "session.delete",
-            "params": {"agent_id": "assistant", "session_id": "session-one"},
-        }
-    ]
-
-
-def test_session_fork_rename_and_policy_commands_post_verifiable_payloads(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    instance = make_instance(tmp_path)
-    calls: list[dict[str, Any]] = []
-
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        calls.append(json)
-        method = json["method"]
-        result: dict[str, Any]
-        if method == "session.fork":
-            result = {
-                "session": {
-                    "id": "session-fork",
-                    "agent_id": "reviewer@vbot",
-                    "fork_source": {"session_id": "session-one"},
-                }
-            }
-        elif method == "session.rename":
-            result = {
-                "agent_id": "assistant",
-                "session_id": "session-one",
-                "title": "Research notes",
-            }
-        else:
-            result = {
-                "agent_id": "assistant",
-                "session_id": "session-one",
-                "override": {"enabled": False},
-                "effective": {"enabled": False},
-                "source": "session",
-            }
-        return httpx.Response(200, json={"ok": True, "result": result})
-
-    monkeypatch.setattr(session_management.httpx, "post", fake_post)
-
-    forked = session_management.session_fork(instance, "assistant", "session-one", "reviewer@vbot")
-    renamed = session_management.session_rename(
-        instance, "assistant", "session-one", "Research notes"
-    )
-    policy = session_management.session_set_compaction_policy(
-        instance, "assistant", "session-one", {"enabled": False}
-    )
-
-    assert "session-fork" in forked.message
-    assert "title: Research notes" in renamed.message
-    assert "source: session" in policy.message
-    assert calls == [
-        {
-            "method": "session.fork",
-            "params": {
-                "agent_id": "assistant",
-                "session_id": "session-one",
-                "target_agent_id": "reviewer@vbot",
-            },
+            ]
         },
-        {
-            "method": "session.rename",
-            "params": {
-                "agent_id": "assistant",
-                "session_id": "session-one",
-                "title": "Research notes",
-            },
-        },
-        {
-            "method": "session.set_compaction_policy",
-            "params": {
-                "agent_id": "assistant",
-                "session_id": "session-one",
-                "policy": {"enabled": False},
-            },
-        },
+    )
+
+    code, out, _err = run_cli("session", "list", "assistant")
+
+    assert code == 0
+    assert rpc.calls == [("session.list", DEFAULT_LIST)]
+    assert out.splitlines()[1:] == [
+        "- id=session-one created_at=2026-06-01T08:00:00+00:00 "
+        "last_active_at=2026-06-02T09:00:00+00:00",
+        "- id=session-two created_at=2026-06-03T10:00:00+00:00 "
+        "last_active_at=2026-06-03T11:00:00+00:00 channel=tg-main",
     ]
 
 
-def test_parse_args_supports_session_policy_clear() -> None:
-    args = cli_main.parse_args(
-        ["session", "set-compaction-policy", "assistant", "session-one", "--clear"]
-    )
+def test_session_list_reports_the_empty_state(rpc: FakeRpc, run_cli: RunCli) -> None:
+    rpc.reply("session.list", {"sessions": []})
 
-    assert args.command == "set-compaction-policy"
-    assert args.policy is None
-    assert args.clear is True
+    code, out, _err = run_cli("session", "list", "assistant")
+
+    assert code == 0
+    assert "assistant" in out
 
 
-def test_session_pagination_is_bounded_and_explicit(tmp_path, monkeypatch):
-    calls = []
+def test_session_list_reads_one_page_unless_all_pages_are_requested(
+    rpc: FakeRpc, run_cli: RunCli
+) -> None:
     cursor = {"last_active_at": "2026-01-01", "id": "s1"}
+    first_page = {"sessions": [{"id": "s1"}], "next_cursor": cursor, "total_count": 2}
+    rpc.reply("session.list", first_page)
 
-    def post(url, **kwargs):
-        params = kwargs["json"]["params"]
-        calls.append(params)
-        data = (
-            {"sessions": [{"id": "s2"}]}
-            if params.get("cursor")
-            else {"sessions": [{"id": "s1"}], "next_cursor": cursor}
-        )
-        return httpx.Response(200, json={"ok": True, "result": data})
+    code, out, _err = run_cli("session", "list", "builder@project")
 
-    monkeypatch.setattr(session_management.httpx, "post", post)
-    result = session_management.session_list(make_instance(tmp_path), "builder@project")
-    assert result.ok and len(calls) == 1
-    assert '"id": "s1"' in result.message
-    assert "s2" not in result.message
-    result = session_management.session_list(
-        make_instance(tmp_path), "builder@project", all_pages=True
-    )
-    assert result.ok and len(calls) == 3
-    assert calls[-1]["cursor"] == cursor
-    assert "s1" in result.message and "s2" in result.message
+    assert code == 0
+    # The server parses a project-qualified address; the CLI forwards it verbatim.
+    assert rpc.calls == [("session.list", DEFAULT_LIST | {"agent_id": "builder@project"})]
+    assert '"id": "s1"' in out and "s2" not in out
+
+    rpc.calls.clear()
+    rpc.reply("session.list", {"sessions": [{"id": "s2"}], "next_cursor": None, "total_count": 2})
+
+    code, out, _err = run_cli("session", "list", "builder@project", "--all")
+
+    assert code == 0
+    assert [params.get("cursor") for _method, params in rpc.calls] == [None, cursor]
+    assert "id=s1" in out and "id=s2" in out
 
 
-def test_session_all_stops_repeated_cursor(tmp_path, monkeypatch):
-    calls = []
+def test_session_list_all_stops_at_a_repeated_cursor(rpc: FakeRpc, run_cli: RunCli) -> None:
+    rpc.reply("session.list", {"sessions": [], "next_cursor": {"id": "same"}})
 
-    def post(url, **kwargs):
-        calls.append(kwargs)
-        return httpx.Response(
-            200, json={"ok": True, "result": {"sessions": [], "next_cursor": {"id": "same"}}}
-        )
+    code, _out, _err = run_cli("session", "list", "assistant", "--all")
 
-    monkeypatch.setattr(session_management.httpx, "post", post)
-    assert not session_management.session_list(make_instance(tmp_path), "a", all_pages=True).ok
-    assert len(calls) == 2
+    assert code == 1
+    assert len(rpc.calls) == 2
 
 
-def test_session_fork_keeps_qualified_target(tmp_path, monkeypatch):
-    monkeypatch.setattr(
-        session_management.httpx,
-        "post",
-        lambda *a, **kw: httpx.Response(
-            200, json={"ok": True, "result": {"session": {"id": "copy", "agent_id": "builder"}}}
+def test_session_list_reports_a_domain_error(rpc: FakeRpc, run_cli: RunCli) -> None:
+    rpc.fail("session.list", "not_found", "Unknown agent: missing", status=200)
+
+    code, out, _err = run_cli("session", "list", "missing")
+
+    assert code == 1
+    assert "not_found: Unknown agent: missing" in out
+
+
+@pytest.mark.parametrize(
+    ("options", "params", "session_id"),
+    [
+        pytest.param(
+            ("--id", "session-two", "--make-current"),
+            {"agent_id": "assistant", "session_id": "session-two", "make_current": True},
+            "session-two",
+            id="explicit",
         ),
+        pytest.param((), {"agent_id": "assistant"}, "generated-id", id="server-generated"),
+    ],
+)
+def test_session_create_sends_only_the_given_fields(
+    rpc: FakeRpc,
+    run_cli: RunCli,
+    options: tuple[str, ...],
+    params: dict[str, Any],
+    session_id: str,
+) -> None:
+    rpc.reply("session.create", {"agent_id": "assistant", "session_id": session_id})
+
+    code, out, _err = run_cli("session", "create", "assistant", *options)
+
+    assert code == 0
+    assert rpc.calls == [("session.create", params)]
+    assert session_id in out and "assistant" in out
+
+
+def test_session_delete_requires_confirmation_before_any_request(
+    rpc: FakeRpc, run_cli: RunCli
+) -> None:
+    code, out, _err = run_cli("session", "delete", "assistant", "session-one")
+
+    assert code == 1
+    assert "--yes" in out
+    assert rpc.calls == []
+
+
+def test_session_delete_archives_the_session_and_names_the_next_one(
+    rpc: FakeRpc, run_cli: RunCli
+) -> None:
+    rpc.reply("session.delete", {**SESSION, "next_session_id": "session-two"})
+
+    code, out, _err = run_cli("session", "delete", "assistant", "session-one", "--yes")
+
+    assert code == 0
+    assert rpc.calls == [("session.delete", SESSION)]
+    assert "archived" in out and "session-two" in out
+
+
+def test_session_fork_keeps_the_qualified_target_agent(rpc: FakeRpc, run_cli: RunCli) -> None:
+    rpc.reply(
+        "session.fork",
+        {
+            "session": {
+                "id": "session-fork",
+                "agent_id": "builder",
+                "fork_source": {"session_id": "session-one"},
+            }
+        },
     )
-    result = session_management.session_fork(
-        make_instance(tmp_path), "source", "s", "builder@project"
+
+    code, out, _err = run_cli(
+        "session", "fork", "assistant", "session-one", "--target-agent", "builder@project"
     )
-    assert result.ok and "builder@project" in result.message
+
+    assert code == 0
+    assert rpc.calls == [("session.fork", {**SESSION, "target_agent_id": "builder@project"})]
+    assert "session-fork" in out and "builder@project" in out
+
+
+@pytest.mark.parametrize(
+    ("option", "title", "shown"),
+    [
+        pytest.param(("--title", "Research notes"), "Research notes", "Research notes", id="set"),
+        pytest.param(("--clear-title",), "", "(automatic)", id="clear"),
+    ],
+)
+def test_session_rename_sets_or_clears_the_title(
+    rpc: FakeRpc, run_cli: RunCli, option: tuple[str, ...], title: str, shown: str
+) -> None:
+    rpc.reply("session.rename", {**SESSION, "title": title})
+
+    code, out, _err = run_cli("session", "rename", "assistant", "session-one", *option)
+
+    assert code == 0
+    assert rpc.calls == [("session.rename", {**SESSION, "title": title})]
+    assert f"title: {shown}" in out
+
+
+@pytest.mark.parametrize(
+    ("option", "policy"),
+    [
+        pytest.param(("--policy", '{"enabled": false}'), {"enabled": False}, id="override"),
+        pytest.param(("--clear",), None, id="clear"),
+    ],
+)
+def test_session_set_compaction_policy_sends_the_override_and_prints_its_source(
+    rpc: FakeRpc, run_cli: RunCli, option: tuple[str, ...], policy: dict[str, bool] | None
+) -> None:
+    rpc.reply(
+        "session.set_compaction_policy",
+        {**SESSION, "override": policy, "effective": {"enabled": False}, "source": "session"},
+    )
+
+    code, out, _err = run_cli(
+        "session", "set-compaction-policy", "assistant", "session-one", *option
+    )
+
+    assert code == 0
+    assert rpc.calls == [("session.set_compaction_policy", {**SESSION, "policy": policy})]
+    assert "source: session" in out
+
+
+def test_session_link_channel_links_the_conversation(rpc: FakeRpc, run_cli: RunCli) -> None:
+    rpc.reply("session.link_channel", {"ok": True})
+
+    code, out, _err = run_cli(
+        "session", "link-channel", "assistant", "session-one",
+        "--channel", "tg-main", "--conversation", "12345",
+    )  # fmt: skip
+
+    assert code == 0
+    assert rpc.calls == [
+        (
+            "session.link_channel",
+            {**SESSION, "channel_id": "tg-main", "platform_conv_id": "12345"},
+        )
+    ]
+    for text in ("session-one", "tg-main", "12345"):
+        assert text in out
