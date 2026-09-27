@@ -1,15 +1,15 @@
-"""Tests for the models.dev catalog client + projection (Phase 3 refresh).
+"""Models: the models.dev catalog client and its projection for refresh.
 
-Fixture-driven (``fixtures/models_dev_catalog.json``, a trimmed real capture):
-no network. Covers control derivation (all four branches incl. "effort wins"),
-the lab-spec ladder lift, the canonical projection shape (matching the assembly
-contract), per-provider deviating ladders + auto canonical pointers, the raw
-dump, and shape verification.
+Fixture-driven (``fixtures/models_dev_catalog.json``, a trimmed real capture), no
+network: reasoning control derivation, the lab-spec ladder lift, the canonical
+projection (the assembly file contract), per-provider section facts, the
+canonical refresh, and shape verification.
 """
 
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -33,291 +33,166 @@ from core.models.models_dev import (
     provider_reasoning_supported,
     reasoning_response_field,
     refresh_canonical_layer,
-    write_raw_catalog,
 )
 
-FIXTURES_DIR = Path(__file__).parent / "fixtures"
-CATALOG_FIXTURE = FIXTURES_DIR / "models_dev_catalog.json"
+CATALOG_FIXTURE = Path(__file__).parent / "fixtures" / "models_dev_catalog.json"
 
 
-@pytest.fixture()
+def _raw_catalog() -> dict[str, Any]:
+    raw: dict[str, Any] = json.loads(CATALOG_FIXTURE.read_text(encoding="utf-8"))
+    return raw
+
+
+@pytest.fixture(scope="module")
 def catalog() -> ModelsDevCatalog:
-    raw = json.loads(CATALOG_FIXTURE.read_text(encoding="utf-8"))
-    return ModelsDevCatalog(raw)
+    """Read-only for every test that uses it."""
+
+    return ModelsDevCatalog(_raw_catalog())
 
 
-# ---------------------------------------------------------------------------
-# Control derivation — all four branches
-# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    ("options", "expected"),
+    [
+        pytest.param(
+            [{"type": "effort", "values": ["low", "ludicrous", "high"]}],
+            {"control": "levels", "levels": ["low", "high"]},
+            id="effort-keeps-known-levels",
+        ),
+        pytest.param(
+            [{"type": "budget_tokens", "min": 1024, "max": 32768}],
+            {"control": "budget", "budget_max": 32768},
+            id="budget-with-max",
+        ),
+        # About half of the budget_tokens options carry no max.
+        pytest.param(
+            [{"type": "budget_tokens", "min": 1024}], {"control": "budget"}, id="budget-without-max"
+        ),
+        pytest.param([{"type": "toggle"}], {"control": "on_off"}, id="toggle"),
+        pytest.param(
+            [
+                {"type": "toggle"},
+                {"type": "budget_tokens", "min": 1024, "max": 64000},
+                {"type": "effort", "values": ["high", "max"]},
+            ],
+            {"control": "levels", "levels": ["high", "max"]},
+            id="effort-wins",
+        ),
+        pytest.param(None, None, id="no-options"),
+    ],
+)
+def test_reasoning_control_derives_from_options(
+    options: list[dict[str, Any]] | None, expected: dict[str, Any] | None
+) -> None:
+    assert derive_reasoning_control(options) == expected
 
 
-def test_derive_control_effort_yields_levels():
-    # Arrange
-    options = [{"type": "effort", "values": ["low", "medium", "high"]}]
-    # Act
-    result = derive_reasoning_control(options)
-    # Assert
-    assert result == {"control": "levels", "levels": ["low", "medium", "high"]}
+@pytest.mark.parametrize(
+    ("canonical_id", "expected"),
+    [
+        # The lab spec, not OpenRouter's deviating [high, xhigh].
+        ("deepseek/deepseek-v4-pro", {"control": "levels", "levels": ["high", "max"]}),
+        # Reasoning-capable, but the lab does not key it by this wire id: hand path.
+        ("deepseek/deepseek-r1", None),
+        # Reasoning at the lab without options: no fabricated ladder.
+        ("alibaba/qwen3.5-plus", None),
+    ],
+)
+def test_canonical_ladder_lifts_only_the_lab_spec(
+    catalog: ModelsDevCatalog, canonical_id: str, expected: dict[str, Any] | None
+) -> None:
+    assert lift_canonical_ladder(catalog, canonical_id) == expected
 
 
-def test_derive_control_budget_tokens_yields_budget_with_max():
-    # Arrange
-    options = [{"type": "budget_tokens", "min": 1024, "max": 32768}]
-    # Act
-    result = derive_reasoning_control(options)
-    # Assert
-    assert result == {"control": "budget", "budget_max": 32768}
-
-
-def test_derive_control_budget_tokens_without_max_omits_budget_max():
-    # Arrange — ~half of budget_tokens options carry no ``max`` (handoff).
-    options = [{"type": "budget_tokens", "min": 1024}]
-    # Act
-    result = derive_reasoning_control(options)
-    # Assert
-    assert result == {"control": "budget"}
-
-
-def test_derive_control_toggle_yields_on_off():
-    # Arrange
-    options = [{"type": "toggle"}]
-    # Act
-    result = derive_reasoning_control(options)
-    # Assert
-    assert result == {"control": "on_off"}
-
-
-def test_derive_control_effort_wins_over_toggle_and_budget():
-    # Arrange — Claude-style: effort + budget + toggle all present.
-    options = [
-        {"type": "toggle"},
-        {"type": "budget_tokens", "min": 1024, "max": 64000},
-        {"type": "effort", "values": ["high", "max"]},
-    ]
-    # Act
-    result = derive_reasoning_control(options)
-    # Assert — effort wins.
-    assert result == {"control": "levels", "levels": ["high", "max"]}
-
-
-def test_derive_control_empty_or_none_yields_none():
-    assert derive_reasoning_control(None) is None
-    assert derive_reasoning_control([]) is None
-
-
-def test_derive_control_drops_unknown_effort_values():
-    # Arrange — an effort value vBot does not know is dropped, not crashed on.
-    options = [{"type": "effort", "values": ["low", "ludicrous", "high"]}]
-    # Act
-    result = derive_reasoning_control(options)
-    # Assert
-    assert result == {"control": "levels", "levels": ["low", "high"]}
-
-
-# ---------------------------------------------------------------------------
-# Ladder lift from the lab provider — no union
-# ---------------------------------------------------------------------------
-
-
-def test_lift_canonical_ladder_from_lab_provider(catalog: ModelsDevCatalog):
-    # Arrange / Act — deepseek lab carries effort [high, max] for deepseek-v4-pro.
-    lifted = lift_canonical_ladder(catalog, "deepseek/deepseek-v4-pro")
-    # Assert — the lab spec, NOT OpenRouter's deviating [high, xhigh].
-    assert lifted == {"control": "levels", "levels": ["high", "max"]}
-
-
-def test_lift_canonical_ladder_no_lab_provider_section(catalog: ModelsDevCatalog):
-    # deepseek-r1 is reasoning-capable but the deepseek provider does not key it
-    # by wire-id ``deepseek-r1`` → hand path, no lift.
-    assert lift_canonical_ladder(catalog, "deepseek/deepseek-r1") is None
-
-
-def test_lift_canonical_ladder_lab_has_id_but_no_options(catalog: ModelsDevCatalog):
-    # qwen3.5-plus is reasoning:true at the lab but carries no reasoning_options
-    # → no fabricated ladder.
-    assert lift_canonical_ladder(catalog, "alibaba/qwen3.5-plus") is None
-
-
-# ---------------------------------------------------------------------------
-# Canonical projection — matches the assembly contract
-# ---------------------------------------------------------------------------
-
-
-def test_project_canonical_models_worked_example(catalog: ModelsDevCatalog):
-    # Act
+def test_canonical_projection_follows_the_assembly_file_contract(
+    catalog: ModelsDevCatalog,
+) -> None:
     projected = project_canonical_models(catalog)
-    # Assert — deepseek/deepseek-v4-pro matches the assembly file-format contract.
-    record = projected["deepseek/deepseek-v4-pro"]
-    assert record["name"] == "DeepSeek V4 Pro"
-    assert record["family"] == "deepseek-thinking"
-    assert "provider_id" not in record  # NOT a provider file
-    caps = record["capabilities"]
-    assert caps["vision"] is False
-    assert caps["tools"] is True
-    assert caps["json_mode"] is True
-    assert caps["reasoning"] == {"supported": True, "control": "levels", "levels": ["high", "max"]}
-    assert caps["input_modalities"] == ["text"]
-    assert caps["output_modalities"] == ["text"]
-    assert record["context_window"] == 1000000
-    assert record["max_output_tokens"] == 384000
+
+    # No provider_id: a canonical record is not a Provider file.
+    assert projected["deepseek/deepseek-v4-pro"] == {
+        "name": "DeepSeek V4 Pro",
+        "family": "deepseek-thinking",
+        "capabilities": {
+            "vision": False,
+            "tools": True,
+            "json_mode": True,
+            "reasoning": {"supported": True, "control": "levels", "levels": ["high", "max"]},
+            "input_modalities": ["text"],
+            "output_modalities": ["text"],
+            "supported_parameters": ["temperature"],
+        },
+        "context_window": 1000000,
+        "max_output_tokens": 384000,
+        "temperature": True,
+        "knowledge": "2025-05",
+        "release_date": "2026-04-24",
+        "last_updated": "2026-04-24",
+        "pricing": {
+            "source": "models.dev:deepseek/deepseek-v4-pro",
+            "rates": {"input": 0.435, "output": 0.87, "cache_read": 0.003625},
+        },
+    }
+    capabilities = {
+        model_id: {
+            key: projected[model_id]["capabilities"][key]
+            for key in ("vision", "json_mode", "reasoning", "input_modalities")
+        }
+        for model_id in (
+            "google/gemini-2.5-flash",
+            "alibaba/qwen3.5-plus",
+            "xai/grok-4.20-0309-non-reasoning",
+        )
+    }
+    assert capabilities == {
+        # pdf and video stay verbatim; vision derives from image input.
+        "google/gemini-2.5-flash": {
+            "vision": True,
+            "json_mode": True,
+            "reasoning": {"supported": True, "control": "budget", "budget_max": 24576},
+            "input_modalities": ["text", "image", "audio", "video", "pdf"],
+        },
+        # No structured_output means no json_mode; reasoning without options stays bare.
+        "alibaba/qwen3.5-plus": {
+            "vision": True,
+            "json_mode": False,
+            "reasoning": {"supported": True},
+            "input_modalities": ["text", "image", "video"],
+        },
+        # xAI's non-reasoning twin is its own id, mirrored with reasoning unsupported.
+        "xai/grok-4.20-0309-non-reasoning": {
+            "vision": True,
+            "json_mode": True,
+            "reasoning": {"supported": False},
+            "input_modalities": ["text", "image", "pdf"],
+        },
+    }
 
 
-def test_project_canonical_stores_modalities_verbatim_incl_pdf_video(catalog: ModelsDevCatalog):
-    # Act
-    projected = project_canonical_models(catalog)
-    # Assert — pdf and video kept verbatim, no normalization.
-    caps = projected["google/gemini-2.5-flash"]["capabilities"]
-    assert caps["input_modalities"] == ["text", "image", "audio", "video", "pdf"]
-    assert caps["vision"] is True  # derived from "image" being present
+def test_provider_sections_supply_the_facts_bare_endpoints_omit(
+    catalog: ModelsDevCatalog,
+) -> None:
+    openrouter_v4 = {"models_dev_id": "openrouter", "wire_id": "deepseek/deepseek-v4-pro"}
+    openrouter_gemini = {"models_dev_id": "openrouter", "wire_id": "google/gemini-2.5-flash"}
+    lab_v4 = {"models_dev_id": "deepseek", "wire_id": "deepseek-v4-pro"}
 
-
-def test_project_canonical_missing_structured_output_is_json_mode_false(catalog: ModelsDevCatalog):
-    # qwen3.5-plus has no structured_output field in the fixture's canonical entry.
-    projected = project_canonical_models(catalog)
-    caps = projected["alibaba/qwen3.5-plus"]["capabilities"]
-    assert caps["json_mode"] is False
-
-
-def test_project_canonical_supported_no_options_is_bare_reasoning(catalog: ModelsDevCatalog):
-    projected = project_canonical_models(catalog)
-    assert projected["alibaba/qwen3.5-plus"]["capabilities"]["reasoning"] == {"supported": True}
-
-
-def test_project_canonical_non_reasoning_two_id_mirror(catalog: ModelsDevCatalog):
-    # xAI models the non-reasoning twin as its own id; mirror it 1:1 with
-    # reasoning unsupported.
-    projected = project_canonical_models(catalog)
-    record = projected["xai/grok-4.20-0309-non-reasoning"]
-    assert record["capabilities"]["reasoning"] == {"supported": False}
-
-
-def test_project_canonical_temperature_false_is_a_signal(catalog: ModelsDevCatalog):
-    # ``temperature: true`` contributes the supported parameter; a model with
-    # temperature false does not. deepseek-v4-pro has temperature true.
-    projected = project_canonical_models(catalog)
-    caps = projected["deepseek/deepseek-v4-pro"]["capabilities"]
-    assert "temperature" in caps["supported_parameters"]
-
-
-# ---------------------------------------------------------------------------
-# Per-provider enrichment: auto canonical pointer + deviating ladder
-# ---------------------------------------------------------------------------
-
-
-def test_auto_canonical_pointer_for_lab_section(catalog: ModelsDevCatalog):
-    # deepseek lab section has wire-id deepseek-v4-pro → pointer to the canonical id.
-    pointer = auto_canonical_pointer(catalog, models_dev_id="deepseek", wire_id="deepseek-v4-pro")
-    assert pointer == "deepseek/deepseek-v4-pro"
-
-
-def test_auto_canonical_pointer_absent_when_no_section_match(catalog: ModelsDevCatalog):
-    # opencode-go is not in the fixture providers → no pointer.
-    assert auto_canonical_pointer(catalog, models_dev_id="opencode-go", wire_id="x") is None
-
-
-def test_provider_reasoning_block_deviation(catalog: ModelsDevCatalog):
-    # OpenRouter carries [high, xhigh] for deepseek/deepseek-v4-pro — deviates
-    # from the lab spec [high, max] → a provider-layer block is returned.
-    block = provider_reasoning_block(
-        catalog,
-        models_dev_id="openrouter",
-        wire_id="deepseek/deepseek-v4-pro",
+    assert auto_canonical_pointer(catalog, **lab_v4) == "deepseek/deepseek-v4-pro"
+    # A deviating ladder is stamped with the section's own reasoning flag.
+    assert provider_reasoning_block(catalog, **openrouter_v4) == {
+        "supported": True,
+        "control": "levels",
+        "levels": ["high", "xhigh"],
+    }
+    # The lab does not deviate from its own spec; the Model inherits it at load.
+    assert provider_reasoning_block(catalog, **lab_v4) is None
+    assert reasoning_response_field(catalog, **openrouter_v4) == "reasoning_content"
+    assert reasoning_response_field(catalog, **openrouter_gemini) is None
+    assert provider_limits(catalog, **openrouter_v4) == (1048576, 384000)
+    assert provider_modalities(catalog, **openrouter_gemini) == (
+        ["text", "image", "audio", "video", "pdf"],
+        ["text"],
     )
-    # ``supported`` is sourced from the OpenRouter section's OWN reasoning flag,
-    # consistent with the derived control — never from a thin provider's bare
-    # adapter normalization (the regression that produced supported:false+ladder).
-    assert block == {"supported": True, "control": "levels", "levels": ["high", "xhigh"]}
-
-
-def test_provider_reasoning_block_no_deviation_returns_none(catalog: ModelsDevCatalog):
-    # The lab provider deepseek does not deviate from its own spec → None, so
-    # the model inherits the canonical ladder at load.
-    block = provider_reasoning_block(
-        catalog,
-        models_dev_id="deepseek",
-        wire_id="deepseek-v4-pro",
-    )
-    assert block is None
-
-
-def test_reasoning_response_field_from_interleaved(catalog: ModelsDevCatalog):
-    # The OpenRouter section's deepseek-v4-pro carries interleaved:
-    # {field: reasoning_content} → that field name is projected.
-    field = reasoning_response_field(
-        catalog,
-        models_dev_id="openrouter",
-        wire_id="deepseek/deepseek-v4-pro",
-    )
-    assert field == "reasoning_content"
-
-
-def test_reasoning_response_field_absent_returns_none(catalog: ModelsDevCatalog):
-    # google/gemini-2.5-flash carries no ``interleaved`` → None (graceful: the
-    # adapter keeps its hardcoded default-key scan).
-    field = reasoning_response_field(
-        catalog,
-        models_dev_id="openrouter",
-        wire_id="google/gemini-2.5-flash",
-    )
-    assert field is None
-
-
-def test_reasoning_response_field_unknown_model_returns_none(catalog: ModelsDevCatalog):
-    field = reasoning_response_field(
-        catalog,
-        models_dev_id="openrouter",
-        wire_id="does/not-exist",
-    )
-    assert field is None
-
-
-# ---------------------------------------------------------------------------
-# Per-provider section projection — limits, modalities, family, reasoning flag
-# (the facts a bare gateway endpoint omits; pulled into the provider layer)
-# ---------------------------------------------------------------------------
-
-
-def test_provider_limits_returns_context_and_output(catalog: ModelsDevCatalog):
-    assert provider_limits(
-        catalog, models_dev_id="openrouter", wire_id="deepseek/deepseek-v4-pro"
-    ) == (1048576, 384000)
-
-
-def test_provider_limits_unknown_model_returns_none_pair(catalog: ModelsDevCatalog):
-    assert provider_limits(catalog, models_dev_id="openrouter", wire_id="does/not-exist") == (
-        None,
-        None,
-    )
-
-
-def test_provider_modalities_returns_input_and_output(catalog: ModelsDevCatalog):
-    assert provider_modalities(
-        catalog, models_dev_id="openrouter", wire_id="google/gemini-2.5-flash"
-    ) == (["text", "image", "audio", "video", "pdf"], ["text"])
-
-
-def test_provider_modalities_unknown_model_returns_none(catalog: ModelsDevCatalog):
-    assert (
-        provider_modalities(catalog, models_dev_id="openrouter", wire_id="does/not-exist") is None
-    )
-
-
-def test_provider_family_returns_family(catalog: ModelsDevCatalog):
-    assert (
-        provider_family(catalog, models_dev_id="deepseek", wire_id="deepseek-v4-pro")
-        == "deepseek-thinking"
-    )
-
-
-def test_provider_family_unknown_model_returns_none(catalog: ModelsDevCatalog):
-    assert provider_family(catalog, models_dev_id="deepseek", wire_id="nope") is None
-
-
-def test_provider_reasoning_supported_true_and_false(catalog: ModelsDevCatalog):
-    assert (
-        provider_reasoning_supported(catalog, models_dev_id="deepseek", wire_id="deepseek-v4-pro")
-        is True
-    )
+    assert provider_family(catalog, **lab_v4) == "deepseek-thinking"
+    assert provider_reasoning_supported(catalog, **lab_v4) is True
     assert (
         provider_reasoning_supported(
             catalog, models_dev_id="xai", wire_id="grok-4.20-0309-non-reasoning"
@@ -326,101 +201,62 @@ def test_provider_reasoning_supported_true_and_false(catalog: ModelsDevCatalog):
     )
 
 
-def test_provider_reasoning_supported_unknown_model_returns_none(catalog: ModelsDevCatalog):
-    assert provider_reasoning_supported(catalog, models_dev_id="deepseek", wire_id="nope") is None
-
-
-# ---------------------------------------------------------------------------
-# Raw dump + canonical refresh orchestration
-# ---------------------------------------------------------------------------
-
-
-def test_write_raw_catalog_writes_dump(tmp_path: Path, catalog: ModelsDevCatalog):
-    models_dir = tmp_path / "models"
-    raw_path = write_raw_catalog(catalog, models_dir)
-    assert raw_path.name == RAW_CATALOG_FILE_NAME
-    written = json.loads(raw_path.read_text(encoding="utf-8"))
-    assert "models" in written and "providers" in written
+@pytest.mark.parametrize(
+    ("lookup", "expected"),
+    [
+        (auto_canonical_pointer, None),
+        (reasoning_response_field, None),
+        (provider_limits, (None, None)),
+        (provider_modalities, None),
+        (provider_family, None),
+        (provider_reasoning_supported, None),
+    ],
+)
+def test_provider_section_lookups_tolerate_unknown_models(
+    catalog: ModelsDevCatalog, lookup: Callable[..., object], expected: object
+) -> None:
+    assert lookup(catalog, models_dev_id="openrouter", wire_id="does/not-exist") == expected
+    assert lookup(catalog, models_dev_id="opencode-go", wire_id="x") == expected
 
 
 @pytest.mark.asyncio
-async def test_refresh_canonical_layer_writes_files(tmp_path: Path, catalog: ModelsDevCatalog):
-    # Act — reuse the fixture catalog (no fetch).
-    result = await refresh_canonical_layer(tmp_path, catalog=catalog)
+async def test_canonical_refresh_writes_the_layer_and_seeds_overrides(
+    tmp_path: Path, catalog: ModelsDevCatalog
+) -> None:
     models_dir = tmp_path / "models"
-    # Assert — models.json + raw dump + seeded overrides structure.
-    assert (models_dir / "models.json").exists()
-    assert (models_dir / RAW_CATALOG_FILE_NAME).exists()
+
+    result = await refresh_canonical_layer(tmp_path, catalog=catalog)
+
+    canonical = json.loads((models_dir / "models.json").read_text(encoding="utf-8"))
+    raw = json.loads((models_dir / RAW_CATALOG_FILE_NAME).read_text(encoding="utf-8"))
+    assert "deepseek/deepseek-v4-pro" in canonical["models"]
+    assert {"models", "providers"} <= set(raw)
     assert (models_dir / "models.overrides.json").exists()
     assert result["model_count"] == len(catalog.models)
-    canonical = json.loads((models_dir / "models.json").read_text(encoding="utf-8"))
-    assert "deepseek/deepseek-v4-pro" in canonical["models"]
+    assert result["raw_path"] == str(models_dir / RAW_CATALOG_FILE_NAME)
 
 
 @pytest.mark.asyncio
-async def test_refresh_canonical_layer_does_not_clobber_existing_overrides(
+async def test_canonical_refresh_keeps_hand_overrides(
     tmp_path: Path, catalog: ModelsDevCatalog
-):
-    # Arrange — a hand-edited overrides file must survive a refresh.
+) -> None:
     models_dir = tmp_path / "models"
     models_dir.mkdir(parents=True)
     hand: dict[str, Any] = {
         "models": {"meta/llama-4-scout-17b-instruct": {"capabilities": {"reasoning": {}}}}
     }
     (models_dir / "models.overrides.json").write_text(json.dumps(hand), encoding="utf-8")
-    # Act
+
     await refresh_canonical_layer(tmp_path, catalog=catalog)
-    # Assert — hand content untouched.
-    after = json.loads((models_dir / "models.overrides.json").read_text(encoding="utf-8"))
-    assert "meta/llama-4-scout-17b-instruct" in after["models"]
 
-
-# ---------------------------------------------------------------------------
-# fetch_catalog — mocked transport + shape verification
-# ---------------------------------------------------------------------------
+    assert json.loads((models_dir / "models.overrides.json").read_text(encoding="utf-8")) == hand
 
 
 @pytest.mark.asyncio
-async def test_fetch_catalog_parses_mocked_response():
-    # Arrange
-    raw = json.loads(CATALOG_FIXTURE.read_text(encoding="utf-8"))
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        assert str(request.url) == MODELS_DEV_CATALOG_URL
-        return httpx.Response(200, json=raw)
-
-    transport = httpx.MockTransport(handler)
-    async with httpx.AsyncClient(transport=transport) as client:
-        # Act
-        catalog = await fetch_catalog(client=client)
-    # Assert
-    assert "deepseek/deepseek-v4-pro" in catalog.models
-
-
-@pytest.mark.asyncio
-async def test_fetch_catalog_aborts_on_diverged_shape():
-    # Arrange — a response missing the top-level providers map.
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"models": {"x/y": {}}})
-
-    transport = httpx.MockTransport(handler)
-    async with httpx.AsyncClient(transport=transport) as client:
-        # Act / Assert
-        with pytest.raises(ModelsDevError):
-            await fetch_catalog(client=client)
-
-
-def test_catalog_construction_rejects_missing_modalities():
-    # Arrange — a model object without modalities.input diverges from the table.
-    raw = {"models": {"x/y": {"reasoning": True}}, "providers": {"p": {"models": {}}}}
-    # Act / Assert
-    with pytest.raises(ModelsDevError):
-        ModelsDevCatalog(raw)
-
-
-@pytest.mark.asyncio
-async def test_catalog_prices_refresh_without_provider_credentials(tmp_path: Path):
-    raw = json.loads(CATALOG_FIXTURE.read_text(encoding="utf-8"))
+async def test_canonical_refresh_prices_provider_files_without_credentials(
+    tmp_path: Path,
+) -> None:
+    raw = _raw_catalog()
     raw["providers"]["openai"]["models"]["gpt-5.5"]["cost"] = {
         "input": 2,
         "output": 8,
@@ -448,11 +284,47 @@ async def test_catalog_prices_refresh_without_provider_credentials(tmp_path: Pat
         ),
         encoding="utf-8",
     )
+
     await refresh_canonical_layer(
         tmp_path, catalog=ModelsDevCatalog(raw), provider_catalog_ids={"gateway": "openai"}
     )
+
     models = json.loads(path.read_text(encoding="utf-8"))["models"]
     assert models["gpt-5.5"]["pricing"]["rates"] == {"input": 2, "output": 8, "cache_read": 0.2}
     assert "pricing" not in models["gpt-5.5-guess"]
     canonical = json.loads((models_dir / "models.json").read_text(encoding="utf-8"))
     assert canonical["models"]["openai/gpt-5.5"]["pricing"]["rates"]["input"] == 2
+
+
+@pytest.mark.asyncio
+async def test_fetch_catalog_reads_the_public_endpoint() -> None:
+    raw = _raw_catalog()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == MODELS_DEV_CATALOG_URL
+        return httpx.Response(200, json=raw)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        catalog = await fetch_catalog(client=client)
+
+    assert "deepseek/deepseek-v4-pro" in catalog.models
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "payload",
+    [
+        pytest.param({"models": {"x/y": {}}}, id="missing-providers"),
+        pytest.param(
+            {"models": {"x/y": {"reasoning": True}}, "providers": {"p": {"models": {}}}},
+            id="model-without-modalities",
+        ),
+    ],
+)
+async def test_fetch_catalog_aborts_on_a_diverged_shape(payload: dict[str, Any]) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(ModelsDevError):
+            await fetch_catalog(client=client)
