@@ -1,7 +1,12 @@
 // @vitest-environment jsdom
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { flushSync as svelteFlushSync, mount, unmount } from 'svelte';
+import { afterEach, beforeEach, expect, vi } from 'vitest';
+import {
+  flushSync as svelteFlushSync,
+  mount,
+  tick as svelteTick,
+  unmount,
+} from 'svelte';
 
 import { init } from '../../lib/i18n.js';
 import {
@@ -20,16 +25,15 @@ export const listSessionActivityMock = vi.fn(async () => ({ agents: [] }));
 export const getSessionMock = vi.fn(async () => ({ session: null }));
 export const listQueueMock = vi.fn(async () => ({ items: [] }));
 export const removeFromQueueMock = vi.fn(async () => ({ ok: true }));
-export const updateQueueItemMock = vi.fn(async () => ({ ok: true }));
 export const cancelRunMock = vi.fn(async () => ({ ok: true }));
-export const cancelToolCallMock = vi.fn(async () => ({ ok: true }));
 export const showProjectMock = vi.fn(async () => ({ project: {}, scan: {} }));
 export const applyConnectionSnapshotMock = vi.fn();
 export const closeSubscriptionForMock = vi.fn();
+const updateQueueItemMock = vi.fn(async () => ({ ok: true }));
+const cancelToolCallMock = vi.fn(async () => ({ ok: true }));
 // Per-mount references to the real chatState and runStream created inside
-// ChatView. The reconcile tests use these to introspect live session state
-// (and, for the staleRunId-guard test, to mutate `currentRun.runId` while
-// a `chat.history` request is in flight).
+// ChatView, in mount order. Tests read live Session state through them and
+// push accessor events into the run stream.
 export const testChatStateRefs = [];
 export const testRunStreamRefs = [];
 
@@ -67,18 +71,9 @@ vi.mock('$lib/api.js', () =>
   }),
 );
 
-// Wrap the real run-stream factory so the wiring test can observe calls to
-// `applyConnectionSnapshot` independently of whatever side effects the real
-// implementation triggers (sub-agent status updates, `subscribeRunEvents`
-// attach, etc.). The wiring assertion is purely "the effect called the run
-// stream's `applyConnectionSnapshot` with the snapshot prop", which the spy
-// captures cleanly while the real `chatRunStream.js` runs untouched.
-//
-// The reconcile tests need two more hooks: (1) a `closeSubscriptionFor` spy
-// that records the session key the reconcile path passed in, and (2) access
-// to the live `chatState` and `runStream` references created inside ChatView
-// (so the staleRunId-guard test can mutate `currentRun.runId` while a
-// `chat.history` request is in flight).
+// Wrap the real run-stream factory: the real `chatRunStream.js` runs
+// untouched, while `applyConnectionSnapshot` and `closeSubscriptionFor` calls
+// are observable through their mocks.
 vi.mock('../../lib/chatRunStream.js', async () => {
   const actual = await vi.importActual('../../lib/chatRunStream.js');
   return {
@@ -105,6 +100,11 @@ vi.mock('../../lib/chatRunStream.js', async () => {
 
 const { default: ChatView } = await import('../ChatView.svelte');
 
+function resetMock(mock, value) {
+  mock.mockReset();
+  mock.mockResolvedValue(value);
+}
+
 export function setupChatViewTestSuite() {
   let mountedComponent = null;
 
@@ -112,32 +112,22 @@ export function setupChatViewTestSuite() {
     document.body.innerHTML = '';
     init('en');
     rpcMock.mockReset();
-    subscribeRunEventsMock.mockClear();
-    // Restore the default per-call subscription factory: a test that sets
-    // `mockReturnValue` (one shared subscription object) would otherwise leak
-    // it into every later test and cross-pollute close() assertions.
+    // A fresh subscription object per call, so close() assertions never
+    // cross between subscriptions or tests.
+    subscribeRunEventsMock.mockReset();
     subscribeRunEventsMock.mockImplementation(() => ({
       close: vi.fn(),
       source: null,
     }));
-    listSessionsMock.mockReset();
-    listSessionsMock.mockResolvedValue({ sessions: [] });
-    listSessionActivityMock.mockReset();
-    listSessionActivityMock.mockResolvedValue({ agents: [] });
-    getSessionMock.mockReset();
-    getSessionMock.mockResolvedValue({ session: null });
-    listQueueMock.mockReset();
-    listQueueMock.mockResolvedValue({ items: [] });
-    removeFromQueueMock.mockReset();
-    removeFromQueueMock.mockResolvedValue({ ok: true });
-    updateQueueItemMock.mockReset();
-    updateQueueItemMock.mockResolvedValue({ ok: true });
-    cancelRunMock.mockReset();
-    cancelRunMock.mockResolvedValue({ ok: true });
-    cancelToolCallMock.mockReset();
-    cancelToolCallMock.mockResolvedValue({ ok: true });
-    showProjectMock.mockReset();
-    showProjectMock.mockResolvedValue({ project: {}, scan: {} });
+    resetMock(listSessionsMock, { sessions: [] });
+    resetMock(listSessionActivityMock, { agents: [] });
+    resetMock(getSessionMock, { session: null });
+    resetMock(listQueueMock, { items: [] });
+    resetMock(removeFromQueueMock, { ok: true });
+    resetMock(updateQueueItemMock, { ok: true });
+    resetMock(cancelRunMock, { ok: true });
+    resetMock(cancelToolCallMock, { ok: true });
+    resetMock(showProjectMock, { project: {}, scan: {} });
     applyConnectionSnapshotMock.mockReset();
     closeSubscriptionForMock.mockReset();
     testChatStateRefs.length = 0;
@@ -145,12 +135,15 @@ export function setupChatViewTestSuite() {
     mountedComponent = null;
   });
 
-  afterEach(async () => {
+  async function unmountMounted() {
     if (mountedComponent) {
       await unmount(mountedComponent);
       mountedComponent = null;
     }
+  }
 
+  afterEach(async () => {
+    await unmountMounted();
     document.body.innerHTML = '';
     vi.clearAllTimers();
     vi.useRealTimers();
@@ -164,6 +157,15 @@ export function setupChatViewTestSuite() {
       mountedComponent = mount(Component, options);
       return mountedComponent;
     },
+    unmount: unmountMounted,
+    // Mounts ChatView into the body and, unless `ready` is null, waits until
+    // that text is displayed (the default History says "Hello").
+    async mountChat(props = {}, { ready = 'Hello' } = {}) {
+      mountedComponent = mount(ChatView, { target: document.body, props });
+      flushSync();
+      if (ready !== null) await waitForText(ready);
+      return mountedComponent;
+    },
   };
 }
 
@@ -171,7 +173,9 @@ export function flushSync() {
   return svelteFlushSync();
 }
 
-export { describe, expect, it, vi };
+export function tick() {
+  return svelteTick();
+}
 
 export function createChatRpcMock({
   usage,
@@ -198,13 +202,7 @@ export function createChatRpcMock({
         usage,
       },
     ],
-    'sub-session-1': [
-      {
-        id: 'sub-assistant-one',
-        role: 'assistant',
-        content: 'Sub-agent response',
-      },
-    ],
+    'sub-session-1': [message('sub-assistant-one', 'Sub-agent response')],
     ...(sessionMessages ?? {}),
   };
 
@@ -217,7 +215,7 @@ export function createChatRpcMock({
       const messages = resolvedSessionMessages[params.session_id];
       if (messages) {
         const beforeIndex = params.before
-          ? messages.findIndex((message) => message.id === params.before)
+          ? messages.findIndex((entry) => entry.id === params.before)
           : messages.length;
         if (beforeIndex < 0) {
           throw new Error(`Unexpected before message id: ${params.before}`);
@@ -299,9 +297,8 @@ export function createChatRpcMock({
     }
 
     if (method === 'session.create') {
-      // Deterministic session id derived from the address so project-agent
-      // session-create tests can assert against it. `builder@vbot` →
-      // `created-builder@vbot`.
+      // Deterministic Session id derived from the address:
+      // `builder@vbot` -> `created-builder@vbot`.
       const agentId =
         typeof params?.agent_id === 'string' ? params.agent_id : '';
       return { agent_id: agentId, session_id: `created-${agentId}` };
@@ -354,22 +351,199 @@ export function createAgent(overrides = {}) {
   };
 }
 
+// A persisted History message.
+export function message(id, content, role = 'assistant') {
+  return { id, role, content };
+}
+
+// A persisted Run summary that ends a finished Run in History.
+export function runSummary(id, runId, status = 'completed') {
+  return { id, role: 'run_summary', run_id: runId, status };
+}
+
+// The `chat.stream` / `active_run` descriptor of a running Run.
+export function runningRun(runId, events = []) {
+  return {
+    run_id: runId,
+    sse_url: `/api/runs/${runId}/events`,
+    status: 'running',
+    events,
+  };
+}
+
+// The `chat.stream` response of a handled slash command.
+export function handledCommand(reply, { output, data } = {}) {
+  return {
+    command_handled: true,
+    reply,
+    ...(output ? { output } : {}),
+    ...(data ? { data } : {}),
+  };
+}
+
+// A `chat.stream` handler answering each sent content from `responses`; any
+// other content fails the send.
+export function streamResponses(responses) {
+  return ({ content }) => {
+    if (Object.hasOwn(responses, content)) return responses[content];
+    throw new Error(`Unexpected stream content: ${content}`);
+  };
+}
+
+// Serves `session.list` with the given Session ids or rows.
+export function listedSessions(...sessions) {
+  listSessionsMock.mockResolvedValue({
+    sessions: sessions.map((session) =>
+      typeof session === 'string' ? { id: session } : session,
+    ),
+  });
+}
+
+// Serves Session activity: `sessionsByAddress` maps an Agent address to its
+// activity rows; `unread(sessionId, runId)` builds an unread result row.
+export function serveSessionActivity(sessionsByAddress) {
+  listSessionActivityMock.mockImplementation(async (addresses) => ({
+    agents: addresses.map((address) => {
+      const [agentId, projectId] = address.split('@');
+      const sessions =
+        typeof sessionsByAddress === 'function'
+          ? sessionsByAddress(address)
+          : sessionsByAddress[address];
+      return {
+        agent_id: agentId,
+        project_id: projectId ?? null,
+        sessions: sessions ?? [],
+      };
+    }),
+  }));
+}
+
+export function unread(sessionId, runId) {
+  return {
+    id: sessionId,
+    latest_completion_run_id: runId,
+    has_unread_completion: true,
+    unread_run_id: runId,
+    unread_run_status: 'completed',
+    unread_run_at: '2026-07-20T10:00:00+00:00',
+  };
+}
+
+// Serves `project.show` for the `vbot` Project with a scanned Team of
+// `[agentId, displayName]` members.
+export function serveProject({
+  defaultAgent = 'builder',
+  team = [['builder', 'Builder']],
+  findings = [],
+} = {}) {
+  showProjectMock.mockResolvedValue({
+    project: { project_id: 'vbot', default_agent: defaultAgent },
+    scan: {
+      team: team.map(([agentId, name]) => ({
+        agent_id: agentId,
+        display_name: name,
+        model: 'm',
+      })),
+      report: { clean: findings.length === 0, findings },
+    },
+  });
+}
+
+// ChatView props with the `vbot` Project open next to the Identity Agent
+// Alpha.
+export function projectChatProps(overrides = {}) {
+  return {
+    sharedAgents: [createAgent()],
+    sharedSelectedAgentId: 'alpha',
+    projects: [{ project_id: 'vbot', display_name: 'vBot' }],
+    selectedProjectId: 'vbot',
+    ...overrides,
+  };
+}
+
+export function teamTab(name) {
+  return Array.from(
+    document.querySelectorAll('.chat-view__project-team .agent-tab'),
+  ).find((tab) => tab.textContent.includes(name));
+}
+
+export function activeTeamTabName() {
+  return (
+    document
+      .querySelector('.chat-view__project-team .agent-tab.active')
+      ?.textContent.trim() ?? ''
+  );
+}
+
+// Params of every RPC call to `method`.
+export function rpcCalls(method) {
+  return rpcMock.mock.calls
+    .filter(([name]) => name === method)
+    .map(([, params]) => params ?? {});
+}
+
+export function historyReads(sessionId, agentId) {
+  return rpcCalls('chat.history').filter(
+    (params) =>
+      params.session_id === sessionId &&
+      (agentId === undefined || params.agent_id === agentId),
+  ).length;
+}
+
+export function markedRead(agentId, sessionId, runId) {
+  return rpcCalls('session.mark_read').some(
+    (params) =>
+      params.agent_id === agentId &&
+      params.session_id === sessionId &&
+      params.run_id === runId,
+  );
+}
+
+// Emits Run events into the `index`-th run event subscription, numbering
+// their sequence unless a test passes one.
+export function runEventSource(runId, index = 0) {
+  const handlers = subscribeRunEventsMock.mock.calls[index][1];
+  let sequence = 0;
+  return {
+    handlers,
+    emit(type, payload = {}, eventSequence = sequence + 1) {
+      sequence = eventSequence;
+      handlers.onEvent({
+        data: { type, run_id: runId, sequence, payload },
+      });
+    },
+  };
+}
+
+// An accessor-level Run lifecycle event as App forwards it to ChatView.
+export function runServerEvent(type, { sequence, ...payload }) {
+  return {
+    type,
+    payload: {
+      project_id: null,
+      run_event_type: type,
+      run_event_sequence: sequence,
+      run_event_timestamp: '2026-07-20T10:00:00+00:00',
+      ...payload,
+    },
+  };
+}
+
 export function findButtonByText(text) {
   return Array.from(document.querySelectorAll('button')).find((button) =>
     button.textContent.includes(text),
   );
 }
 
-// The run-level cancel is the icon-only stop button in the composer — no text
-// content, so it is matched by its aria-label instead.
+// The run-level cancel is the icon-only stop button in the composer, matched
+// by its aria-label.
 export function findCancelRunButton() {
   return Array.from(document.querySelectorAll('button')).find(
     (button) => button.getAttribute('aria-label') === 'Cancel run',
   );
 }
 
-// The New Session action is a floating icon-only button (no text content), so
-// it is matched by its aria-label instead of visible text.
+// The New Session action is an icon-only button, matched by its aria-label.
 export function findNewSessionButton() {
   return Array.from(document.querySelectorAll('button')).find(
     (button) => button.getAttribute('aria-label') === 'New session',
@@ -408,16 +582,13 @@ export function agentChip(name, root = document) {
 // Selects a personal Agent the way a user does: open the picker, choose the
 // option. The picker's list is portaled to <body>.
 export async function selectAgentFromPicker(name, root = document) {
-  await waitForCondition(
-    () => agentPickerTrigger(root)?.disabled === false,
-    100,
-  );
+  await waitForCondition(() => agentPickerTrigger(root)?.disabled === false);
   agentPickerTrigger(root).click();
   const option = () =>
     Array.from(document.querySelectorAll('[role="option"]')).find((item) =>
       item.getAttribute('aria-label')?.startsWith(`${name}:`),
     );
-  await waitForCondition(() => Boolean(option()), 100);
+  await waitForCondition(() => Boolean(option()));
   option().click();
   flushSync();
 }
@@ -439,7 +610,7 @@ export function sendComposerMessage(content) {
   flushSync();
 }
 
-export async function waitForCondition(check, attempts = 20) {
+export async function waitForCondition(check, attempts = 100) {
   for (let index = 0; index < attempts; index += 1) {
     await Promise.resolve();
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -453,13 +624,24 @@ export async function waitForCondition(check, attempts = 20) {
   throw new Error('Timed out waiting for condition.');
 }
 
+export function waitForText(text, root = document.body) {
+  return waitForCondition(() => root.textContent.includes(text));
+}
+
+// Lets any pending (possibly unwanted) async work of the last action land.
+export async function settle(ticks = 1) {
+  for (let tick = 0; tick < ticks; tick += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    flushSync();
+  }
+}
+
 // Hovers the context ring and reads its hover card: the headline
 // "tokens / context window" and the remaining usage breakdown. Usage data may
 // still be streaming in when the ring first renders; the card updates in place.
 export async function hoveredContextRingCard() {
   await waitForCondition(
     () => document.body.querySelector('.context-ring') !== null,
-    100,
   );
   vi.useFakeTimers();
   const anchor = document.body.querySelector('.context-ring');
@@ -504,7 +686,7 @@ export function contextCompactionButton() {
   return document.body.querySelector('.context-card .context-card__action');
 }
 
-export async function hoveredTooltipText(element, expectedText) {
+export async function hoveredTooltipText(element) {
   element.dispatchEvent(new Event('pointerenter'));
   await vi.advanceTimersByTimeAsync(TOOLTIP_SHOW_DELAY_MS);
   flushSync();
@@ -520,7 +702,6 @@ export async function hoveredTooltipText(element, expectedText) {
         : [block.textContent],
     )
     .join('\n');
-  expect(tooltipText).toBe(expectedText);
   element.dispatchEvent(new Event('pointerleave'));
   return tooltipText;
 }
