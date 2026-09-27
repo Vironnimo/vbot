@@ -46,7 +46,7 @@ Reads a file or lists a directory, from the working directory or an absolute pat
   candidate excerpts. The continuation names the first omitted character, allowing
   the Agent to reconstruct a complete old-text locator across reads; centered
   mismatch windows separately identify the differing character without implying
-  that an excerpt is a whole line (`test_apply_patch_diagnostics.py`).
+  that an excerpt is a whole line (`test_apply_patch_reports.py`).
 - A leading UTF-8 BOM is stripped on read so the model never sees a phantom `U+FEFF`. `apply_patch` preserves it during full replacement and targeted Updates.
 
 ## Agent-facing text
