@@ -149,7 +149,7 @@ def test_cmd_merge_merges_removes_worktree_and_branch(real_repo, monkeypatch, ca
         assert "data-status: preserved (ownership unverified)" in capsys.readouterr().out
 
 
-def test_cmd_merge_reports_conflict_and_keeps_main_intact(real_repo, monkeypatch):
+def test_cmd_merge_reports_conflict_hints_and_keeps_main_intact(capsys, real_repo, monkeypatch):
     module = _load_worktree_module()
     _patch_repo_globals(monkeypatch, module, real_repo)
     _commit_file(real_repo, "shared.txt", "one\n", "base file")
@@ -161,27 +161,15 @@ def test_cmd_merge_reports_conflict_and_keeps_main_intact(real_repo, monkeypatch
     assert module.cmd_merge(argparse.Namespace(name="task-a", message=None, wait_timeout=60)) == 0
 
     main_head = _git_output(real_repo, "rev-parse", "HEAD")
+    capsys.readouterr()
     result = module.cmd_merge(argparse.Namespace(name="task-b", message=None, wait_timeout=60))
+    captured = capsys.readouterr()
 
     assert result == module.MERGE_CONFLICT_EXIT_CODE
     assert _git_output(real_repo, "rev-parse", "HEAD") == main_head
+    assert _list_porcelain(real_repo) == []
     assert (real_repo / "shared.txt").read_text(encoding="utf-8") == "from-a\n"
     assert worktree_b.exists()
-
-
-def test_cmd_merge_reports_conflict_hints(capsys, real_repo, monkeypatch):
-    module = _load_worktree_module()
-    _patch_repo_globals(monkeypatch, module, real_repo)
-    _commit_file(real_repo, "shared.txt", "one\n", "base file")
-    worktree_a = _create_task_worktree(module, real_repo, "task-a")
-    _commit_file(worktree_a, "shared.txt", "from-a\n", "a edit")
-    worktree_b = _create_task_worktree(module, real_repo, "task-b")
-    _commit_file(worktree_b, "shared.txt", "from-b\n", "b edit")
-
-    module.cmd_merge(argparse.Namespace(name="task-a", message=None, wait_timeout=60))
-    module.cmd_merge(argparse.Namespace(name="task-b", message=None, wait_timeout=60))
-    captured = capsys.readouterr()
-
     assert "conflicted: shared.txt" in captured.out
     assert "python scripts/worktree.py repair-start task-b" in captured.out
     assert "python scripts/worktree.py merge task-b" in captured.out
@@ -244,56 +232,63 @@ def test_cmd_merge_recovers_unfinished_merge_state(real_repo, monkeypatch):
     assert (real_repo / "other-b.txt").read_text(encoding="utf-8") == "b\n"
 
 
+def _poll_the_merge_lock_quickly(monkeypatch):
+    # A waiting merger retries every 0.4-1.2 s; these tests wait for less than that.
+    monkeypatch.setattr(worktree_lock, "MERGE_LOCK_POLL_MIN_SECONDS", 0.01)
+    monkeypatch.setattr(worktree_lock, "MERGE_LOCK_POLL_MAX_SECONDS", 0.02)
+
+
 def test_merge_lock_blocks_second_merger_until_release(real_repo, monkeypatch):
     module = _load_worktree_module()
     _patch_repo_globals(monkeypatch, module, real_repo)
+    _poll_the_merge_lock_quickly(monkeypatch)
     _commit_file(real_repo, "shared.txt", "base\n", "base file")
-    _create_task_worktree(module, real_repo, "task-a")
     worktree_b = _create_task_worktree(module, real_repo, "task-b")
     _commit_file(worktree_b, "feature-b.txt", "b\n", "b file")
+    lock_path = module._merge_lock_paths()[0]
 
-    lock_path, _, _ = module._merge_lock_paths()
-    handle = lock_path.open("a+b")
-    assert worktree_lock._acquire_file_lock(handle)
-
-    blocked = module.cmd_merge(argparse.Namespace(name="task-b", message=None, wait_timeout=1.5))
-    captured_after_block = blocked
-
-    worktree_lock._release_file_lock(handle)
-    handle.close()
-
+    with lock_path.open("a+b") as handle:
+        assert worktree_lock._acquire_file_lock(handle)
+        blocked = module.cmd_merge(
+            argparse.Namespace(name="task-b", message=None, wait_timeout=0.3)
+        )
+        worktree_lock._release_file_lock(handle)
+    merged_without_lock = (real_repo / "feature-b.txt").exists()
     released = module.cmd_merge(argparse.Namespace(name="task-b", message=None, wait_timeout=60))
 
-    assert captured_after_block == 1
+    assert blocked == 1
+    assert not merged_without_lock
     assert released == 0
     assert (real_repo / "feature-b.txt").exists()
 
 
-def test_keeper_hold_releases_on_signal(tmp_path):
-    lock_path = tmp_path / "vbot-merge.lock"
-    holder_path = tmp_path / "vbot-merge.lock.holder.json"
-    release_path = tmp_path / "vbot-merge.lock.release"
-
+def _start_keeper(tmp_path, monkeypatch, deadline):
+    monkeypatch.setattr(worktree_lock, "KEEPER_POLL_SECONDS", 0.02)
+    paths = {
+        "lock_path": tmp_path / "vbot-merge.lock",
+        "holder_path": tmp_path / "vbot-merge.lock.holder.json",
+        "release_path": tmp_path / "vbot-merge.lock.release",
+    }
+    arguments = {name: str(path) for name, path in paths.items()}
     keeper = threading.Thread(
         target=worktree_lock.cmd_keeper_hold,
-        args=(
-            argparse.Namespace(
-                task="task-a",
-                deadline=time.time() + 30,
-                lock_path=str(lock_path),
-                holder_path=str(holder_path),
-                release_path=str(release_path),
-            ),
-        ),
+        args=(argparse.Namespace(task="task-a", deadline=deadline, **arguments),),
     )
     keeper.start()
+    return keeper, paths["lock_path"], paths["holder_path"], paths["release_path"]
+
+
+def test_keeper_hold_releases_on_signal(tmp_path, monkeypatch):
+    keeper, lock_path, holder_path, release_path = _start_keeper(
+        tmp_path, monkeypatch, time.time() + 30
+    )
 
     opened = False
-    for _ in range(80):
+    for _ in range(200):
         if worktree_lock._own_repair_window_is_active(holder_path, "task-a"):
             opened = True
             break
-        time.sleep(0.05)
+        time.sleep(0.02)
     assert opened
 
     release_path.write_text("release\n", encoding="utf-8")
@@ -304,27 +299,15 @@ def test_keeper_hold_releases_on_signal(tmp_path):
     assert worktree_lock._probe_lock_is_busy(lock_path) is False
 
 
-def test_keeper_hold_expires_at_deadline(tmp_path):
-    lock_path = tmp_path / "vbot-merge.lock"
-    holder_path = tmp_path / "vbot-merge.lock.holder.json"
-    release_path = tmp_path / "vbot-merge.lock.release"
+def test_keeper_hold_expires_at_deadline(tmp_path, monkeypatch):
+    deadline = time.time() + 0.5
+    keeper, lock_path, holder_path, release_path = _start_keeper(tmp_path, monkeypatch, deadline)
 
-    keeper = threading.Thread(
-        target=worktree_lock.cmd_keeper_hold,
-        args=(
-            argparse.Namespace(
-                task="task-a",
-                deadline=time.time() + 2,
-                lock_path=str(lock_path),
-                holder_path=str(holder_path),
-                release_path=str(release_path),
-            ),
-        ),
-    )
-    keeper.start()
     keeper.join(timeout=15)
 
     assert not keeper.is_alive()
+    assert time.time() >= deadline
+    assert not holder_path.exists()
     assert worktree_lock._probe_lock_is_busy(lock_path) is False
     assert not release_path.exists()
 
@@ -332,6 +315,7 @@ def test_keeper_hold_expires_at_deadline(tmp_path):
 def test_repair_start_blocks_others_and_lets_own_merge_win(real_repo, monkeypatch):
     module = _load_worktree_module()
     _patch_repo_globals(monkeypatch, module, real_repo)
+    _poll_the_merge_lock_quickly(monkeypatch)
     _commit_file(real_repo, "shared.txt", "base\n", "base file")
     worktree_a = _create_task_worktree(module, real_repo, "task-a")
     _commit_file(worktree_a, "feature-a.txt", "a\n", "a file")
@@ -341,7 +325,7 @@ def test_repair_start_blocks_others_and_lets_own_merge_win(real_repo, monkeypatc
     started = module.cmd_repair_start(argparse.Namespace(name="task-a", window=20, wait_timeout=15))
     assert started == 0
 
-    blocked = module.cmd_merge(argparse.Namespace(name="task-b", message=None, wait_timeout=1.5))
+    blocked = module.cmd_merge(argparse.Namespace(name="task-b", message=None, wait_timeout=0.3))
     assert blocked == 1
 
     own_merge = module.cmd_merge(argparse.Namespace(name="task-a", message=None, wait_timeout=30))

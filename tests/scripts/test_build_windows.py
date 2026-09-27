@@ -586,49 +586,45 @@ def test_source_update_compiles_host_without_application_dependencies(tmp_path, 
     sys.platform != "win32" or not shutil.which("clang-cl") or not shutil.which("llvm-rc"),
     reason="Windows native compiler required",
 )
-@pytest.mark.parametrize("role, stable", [("host", True), ("update", False), ("server", False)])
-def test_native_startup_failure_exits_and_reports_stderr_without_a_dialog(tmp_path, role, stable):
-    root = tmp_path / "native-failure"
-    output = (
-        root / "vBot.exe"
-        if stable
-        else root / "versions" / "rel_test" / "runtime" / f"vBot.{role.title()}.exe"
-    )
-    source = Path(build_windows.__file__).parent.parent
-    native_hosts.compile_host(source, output, role=role, version="0.4.3", stable=stable)
-    if stable:
-        (root / "active-version").write_text("rel_test\n", encoding="ascii")
-    process = subprocess.Popen(
-        [str(output), "--help"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        creationflags=subprocess.CREATE_NO_WINDOW,
-    )
-    try:
-        stdout, stderr = process.communicate(timeout=15)
-    finally:
-        if process.poll() is None:
-            process.kill()
-            process.wait(timeout=10)
-    assert process.returncode == 111
-    assert not stdout
-    assert b"[ERROR]" in stderr
-    assert str(output).encode("utf-8") in stderr
-
-
-@pytest.mark.skipif(
-    sys.platform != "win32" or not shutil.which("clang-cl") or not shutil.which("llvm-rc"),
-    reason="Windows native compiler required",
-)
 @pytest.mark.parametrize(
     "role, stable", [("host", True), ("update", False), ("gui", True), ("server", False)]
 )
-def test_native_redirected_output_preserves_unicode(tmp_path, role, stable):
+def test_native_host_reports_a_missing_runtime_and_runs_the_private_one(tmp_path, role, stable):
+    # One compiled host per role serves every phase; compiling costs about a second.
     import sysconfig
 
-    root = tmp_path / "native-encoding"
+    root = tmp_path / "native-host"
     runtime = root / "versions" / "rel_test" / "runtime"
     runtime.mkdir(parents=True)
+    output = root / "vBot.exe" if stable else runtime / f"vBot.{role.title()}.exe"
+    (root / "active-version").write_text("rel_test\n", encoding="ascii")
+    native_hosts.compile_host(
+        Path(build_windows.__file__).parent.parent,
+        output,
+        role=role,
+        version="0.4.3",
+        stable=stable and role != "gui",
+    )
+    # Without its runtime, a host exits with a report instead of waiting on a
+    # dialog; only the GUI companion reports the failure in a dialog.
+    if role != "gui":
+        process = subprocess.Popen(
+            [str(output), "--help"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+        try:
+            stdout, stderr = process.communicate(timeout=15)
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=10)
+        assert process.returncode == 111
+        assert not stdout
+        assert b"[ERROR]" in stderr
+        assert str(output).encode("utf-8") in stderr
+
     python_root = Path(sys.base_prefix)
     dll_name = f"python{sys.version_info.major}{sys.version_info.minor}.dll"
     shutil.copy2(python_root / dll_name, runtime / dll_name)
@@ -640,15 +636,6 @@ def test_native_redirected_output_preserves_unicode(tmp_path, role, stable):
         ignore=shutil.ignore_patterns(
             "__pycache__", "site-packages", "test", "tests", "ensurepip", "idlelib", "tkinter"
         ),
-    )
-    output = root / "vBot.exe" if stable else runtime / f"vBot.{role.title()}.exe"
-    (root / "active-version").write_text("rel_test\n", encoding="ascii")
-    native_hosts.compile_host(
-        Path(build_windows.__file__).parent.parent,
-        output,
-        role=role,
-        version="0.4.3",
-        stable=stable and role != "gui",
     )
     expected = "caf\u00e9 \u2014 \u65e5\u672c"
     result = subprocess.run(
@@ -733,8 +720,14 @@ def _assert_native_server_pseudoterminals_are_windowless(executable: Path) -> No
         "        assert_windowless_console()\n"
         "        process.fileobj.settimeout(5)\n"
         "        output = ''\n"
+        "        answered = False\n"
         "        while marker not in output:\n"
         "            output += process.read()\n"
+        # Answer the device-attributes query as vBot's terminal does; unanswered,
+        # the console host waits three seconds before it runs the command.
+        "            if not answered and '\\x1b[c' in output:\n"
+        "                process.write('\\x1b[?6c')\n"
+        "                answered = True\n"
         "        assert marker in output, output\n"
         "    finally:\n"
         "        process.close(force=True)\n"

@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -107,8 +108,17 @@ def _record_owned_data(module, worktree_path: Path, data_dir: Path) -> None:
 
 
 @pytest.fixture
-def real_repo(tmp_path):
-    return _init_repo(tmp_path)
+def real_repo(tmp_path, tmp_path_factory):
+    # Each test gets a copy of one initialized repository per worker; a plain
+    # repository without linked worktrees holds no absolute paths.
+    template = tmp_path_factory.getbasetemp() / "worktree-repository-template"
+    if not template.exists():
+        partial = tmp_path_factory.mktemp("worktree-repository")
+        _init_repo(partial)
+        partial.rename(template)
+    repo = tmp_path / "repo"
+    shutil.copytree(template / "repo", repo)
+    return repo
 
 
 def _list_porcelain(repo: Path) -> list[str]:

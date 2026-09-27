@@ -65,4 +65,6 @@ def create_legacy_database(path: Path, ddl: str) -> None:
     """Create a pre-Generation-1 database at ``path`` with ``ddl`` and no rows."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with closing(sqlite3.connect(path)) as connection:
+        # A source needs no crash durability, and this setting is not stored in the file.
+        connection.execute("PRAGMA synchronous = OFF")
         connection.executescript(ddl)
