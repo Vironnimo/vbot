@@ -194,11 +194,17 @@ class StubAdapter:
         self,
         responses: list[JsonObject] | None = None,
         *,
-        stream_deltas: list[JsonObject] | None = None,
+        stream_deltas: list[Any] | None = None,
         block: bool = False,
     ) -> None:
+        """Answer ``send`` from ``responses`` and ``stream`` from ``stream_deltas``.
+
+        ``stream_deltas`` is one delta list replayed for every stream, or one delta
+        list per stream request.
+        """
+
         self._responses = responses or []
-        self._stream_deltas = stream_deltas or []
+        self._stream_deltas: list[Any] = stream_deltas or []
         self._block = block
         self.request_started = asyncio.Event()
         self.release = asyncio.Event()

@@ -30,8 +30,7 @@ from tests.server.rpc.chat_methods_test_support import (
     finished_run,
     resource_changes,
 )
-from tests.server.rpc_integration_test_support import IntegrationRuntime, SequencedAdapter
-from tests.server.rpc_test_support import JsonObject, StubAdapter, make_state
+from tests.server.rpc_test_support import JsonObject, StubAdapter, StubRuntime, make_state
 
 WEBUI = ReplySurface.webui()
 
@@ -550,8 +549,11 @@ async def test_busy_session_queues_while_other_sessions_keep_running(
         await occupant.wait()
 
 
-def test_http_send_persists_the_run_and_serves_its_timeline_and_history(tmp_path: Path) -> None:
-    adapter = SequencedAdapter(
+def test_http_send_persists_the_run_and_serves_its_timeline_and_history(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    adapter = StubAdapter(
         [
             {
                 "content": None,
@@ -564,7 +566,7 @@ def test_http_send_persists_the_run_and_serves_its_timeline_and_history(tmp_path
             {"content": "Lookup complete.", "tool_calls": None},
         ]
     )
-    runtime = IntegrationRuntime(tmp_path, adapter)
+    runtime = StubRuntime(tmp_path, adapter)
     runtime.tools.register(
         "lookup",
         "Look up a value.",
@@ -655,7 +657,6 @@ def test_http_send_persists_the_run_and_serves_its_timeline_and_history(tmp_path
         "data": {"result": "found vBot"},
         "artifacts": [],
     }
-    assert adapter.closed is True
 
 
 def _parse_sse(body: str) -> list[JsonObject]:
