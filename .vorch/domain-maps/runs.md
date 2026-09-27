@@ -106,7 +106,7 @@ per-group admission state after their own drain. The completion coordinator keep
 no such state; it validates each owned submission against current group admission
 (`automation.md`).
 Unrelated work in a reused target Session remains outside that group
-(`tests/core/agents/test_temporary.py`, `tests/core/subagents/test_subagents_completion.py`).
+(`tests/core/agents/test_temporary.py`, `tests/core/subagents/test_subagents.py`).
 
 ## Constraints & Gotchas
 

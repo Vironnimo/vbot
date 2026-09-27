@@ -166,7 +166,7 @@ async def test_activity_write_failure_does_not_change_run_result(
 
 
 @pytest.mark.asyncio
-async def test_attach_keeps_watch_task_reference_until_run_completes(tmp_path: Path) -> None:
+async def test_attaching_twice_records_the_run_once(tmp_path: Path) -> None:
     activity = SubAgentActivity.create(
         TemporaryFileManager(tmp_path),
         agent_id="worker",
@@ -176,31 +176,13 @@ async def test_attach_keeps_watch_task_reference_until_run_completes(tmp_path: P
     run = Run(run_id="child-run", agent_id="worker", session_id="child-session")
     activity.attach(run)
 
-    watch_task = activity._watch_task
-    assert watch_task is not None
-    assert not watch_task.done()
-
-    run.mark_completed(ChatMessage.assistant(model="test", content="done"))
-    await watch_task
-
-    assert "completed (`child-run`)" in activity.path.read_text(encoding="utf-8")
-
-
-@pytest.mark.asyncio
-async def test_attach_twice_starts_a_single_watcher(tmp_path: Path) -> None:
-    activity = SubAgentActivity.create(
-        TemporaryFileManager(tmp_path),
-        agent_id="worker",
-        session_id="child-session",
+    activity.attach(run)
+    run.emit(
+        ASSISTANT_OUTPUT_EVENT,
+        {"message": ChatMessage.assistant(model="test", content="Only once").to_dict()},
     )
-    assert activity is not None
-    run = Run(run_id="child-run", agent_id="worker", session_id="child-session")
-    activity.attach(run)
-    first_watcher = activity._watch_task
-    assert first_watcher is not None
+    run.mark_completed(ChatMessage.assistant(model="test", content="Only once"))
 
-    activity.attach(run)
-
-    assert activity._watch_task is first_watcher
-    run.mark_completed(ChatMessage.assistant(model="test", content="done"))
-    await first_watcher
+    text = await _wait_for_text(activity.path, "completed (`child-run`)")
+    assert text.count("Only once") == 1
+    assert text.count("completed (`child-run`)") == 1
