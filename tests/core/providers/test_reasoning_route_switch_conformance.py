@@ -12,11 +12,6 @@ import pytest
 import respx
 
 from core.chat import ChatMessage, ToolCall
-from core.chat.wire_shaping import (
-    _assemble_request_history,
-    _assistant_message_from_response,
-    _embed_notes_into_request,
-)
 from core.models.models import Model, ModelRegistry
 from core.providers.adapter import ProviderAdapter
 from core.providers.anthropic_compatible import AnthropicCompatibleAdapter
@@ -31,6 +26,10 @@ from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfi
 from core.providers.reasoning import REASONING_REPLAY_FULL_HISTORY
 from core.sessions.sessions import ChatSessionManager
 from core.storage.layout import initialize_data_directory
+from tests.core.chat.assistant_turn_test_support import (
+    assistant_turn_from_response,
+    request_history,
+)
 from tests.core.providers.openai_test_support import (
     COMPLETED_RESPONSE,
     codex_sse_response,
@@ -276,7 +275,7 @@ async def test_cross_route_history_is_safe_and_tool_correlated_on_every_wire(
     target_scope: str,
     renderer: _Renderer,
 ) -> None:
-    request_messages = _embed_notes_into_request(
+    request_messages = request_history(
         _foreign_tool_history(),
         replay_policy=REASONING_REPLAY_FULL_HISTORY,
         agent_model=target_scope,
@@ -368,7 +367,7 @@ async def test_same_route_full_history_keeps_exact_provider_owned_reasoning(prof
         ),
     ]
 
-    request_messages = _embed_notes_into_request(
+    request_messages = request_history(
         messages,
         replay_policy=REASONING_REPLAY_FULL_HISTORY,
         agent_model=target_scope,
@@ -502,7 +501,7 @@ async def test_bundled_models_replay_persisted_tool_history_only_on_its_original
         normalized = adapter.normalize_response(
             _native_response(provider_id, readable_field), model_id=model_id
         )
-        assistant = _assistant_message_from_response(
+        assistant = assistant_turn_from_response(
             f"{provider_id}/{model_id}", normalized, reasoning_scope=scope
         )
         restored = _persist_and_restore(
@@ -518,7 +517,7 @@ async def test_bundled_models_replay_persisted_tool_history_only_on_its_original
         assert restored[1].reasoning_scope == scope
 
         for same_route, target_scope in ((True, scope), (False, other_account_scope)):
-            messages = _assemble_request_history(
+            messages = request_history(
                 restored,
                 replay_policy=adapter.reasoning_replay_policy(model_id),
                 agent_model=target_scope,
