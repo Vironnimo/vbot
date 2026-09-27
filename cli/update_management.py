@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import shlex
 import subprocess
@@ -56,6 +57,7 @@ from cli.server_management import (
 )
 from core.utils.atomic import atomic_write_bytes
 from core.utils.config import VBOT_ROOT
+from core.utils.processes import kill_process_tree
 
 GITHUB_API_BASE = "https://api.github.com/repos/Vironnimo/vbot"
 
@@ -64,6 +66,7 @@ _API_TIMEOUT_SECONDS = 30.0
 
 
 _COMMAND_TIMEOUT_SECONDS = 600.0
+_COMMAND_DRAIN_SECONDS = 10.0
 
 
 _WINDOWS_COMMAND_LAUNCHER_NAME = "vbot.exe"
@@ -929,26 +932,55 @@ def _default_runner(command: list[str], cwd: Path) -> CommandRun:
     environment = dict(os.environ)
     environment["GIT_TERMINAL_PROMPT"] = "0"
     try:
-        completed = subprocess.run(
+        process = subprocess.Popen(
             command,
             cwd=str(cwd),
-            capture_output=True,
-            timeout=_COMMAND_TIMEOUT_SECONDS,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             env=environment,
-        )
-    except subprocess.TimeoutExpired:
-        return CommandRun(
-            returncode=124,
-            stdout="",
-            stderr=f"command timed out after {_COMMAND_TIMEOUT_SECONDS:.0f}s: {' '.join(command)}",
         )
     except OSError as exc:
         return CommandRun(returncode=127, stdout="", stderr=f"could not run {command[0]}: {exc}")
+    with process:
+        try:
+            stdout, stderr = process.communicate(timeout=_COMMAND_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            _stop_timed_out_command(process)
+            return CommandRun(
+                returncode=124,
+                stdout="",
+                stderr=(
+                    f"command timed out after {_COMMAND_TIMEOUT_SECONDS:.0f}s: {' '.join(command)}"
+                ),
+            )
+        except BaseException:
+            process.kill()
+            raise
     return CommandRun(
-        returncode=completed.returncode,
-        stdout=decode_command_output(completed.stdout).strip(),
-        stderr=decode_command_output(completed.stderr).strip(),
+        returncode=process.returncode,
+        stdout=decode_command_output(stdout).strip(),
+        stderr=decode_command_output(stderr).strip(),
     )
+
+
+def _stop_timed_out_command(process: subprocess.Popen[bytes]) -> None:
+    """Stop a timed-out command without waiting on helpers that hold its output pipes.
+
+    On Windows, ``cmd /c npm`` and git leave node or helper processes behind that
+    keep the pipes open, so killing only the direct child would block reading them
+    until those helpers exit.  POSIX waits only for the direct child, as
+    ``subprocess.run`` does.
+    """
+
+    if os.name == "nt":
+        with contextlib.suppress(OSError):
+            kill_process_tree(process)
+    process.kill()
+    if os.name == "nt":
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            process.communicate(timeout=_COMMAND_DRAIN_SECONDS)
+    else:
+        process.wait()
 
 
 def _detect_track(run: Runner, repo: Path) -> str:

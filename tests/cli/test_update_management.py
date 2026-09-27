@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import shlex
 import shutil
 import sys
+import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -501,6 +503,26 @@ def test_update_explicit_target_fields_override_the_installation_manifest(
     assert result.instance.host == "127.0.0.2"
     assert result.instance.port == 9456
     assert result.instance.data_dir == explicit_data_dir
+
+
+def test_command_timeout_does_not_wait_for_helpers_holding_its_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    helper = [sys.executable, "-c", "import time; time.sleep(15)"]
+    # A shell running a helper as its own child, as ``cmd /c npm`` runs node.
+    command = (
+        ["cmd", "/c", *helper]
+        if sys.platform == "win32"
+        else ["sh", "-c", f"{shlex.join(helper)}; true"]
+    )
+    monkeypatch.setattr(update_management, "_COMMAND_TIMEOUT_SECONDS", 1.0)
+
+    started = time.monotonic()
+    result = _default_runner(command, tmp_path)
+
+    assert result.returncode == 124
+    assert "timed out" in result.stderr
+    assert time.monotonic() - started < 8
 
 
 def test_dev_track_reinstalls_deps_and_rebuilds_webui(tmp_path: Path) -> None:
