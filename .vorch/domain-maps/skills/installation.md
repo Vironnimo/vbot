@@ -33,5 +33,5 @@ Read when changing imports, source adapters, package validation or replacement. 
 - `tests/core/skills/test_sources.py`: HTTP bounds, redirects, GitHub, skills.sh, ClawHub and exact selection.
 - `tests/core/skills/test_package_validation.py`: local hard links, portable Windows device aliases and malformed archive Unicode paths.
 - `tests/server/rpc/test_skill_methods.py`, `tests/cli/test_cli_skill.py`: scope validation, previews, confirmation, context and transport.
-- `tests/core/runtime/test_runtime_skills.py`, `tests/core/tools/test_skill.py`: live scope/allowlist/disable/sharing behavior and arbitrary UTF-8 support-file reads.
+- `tests/core/runtime/test_runtime_skills.py`, `tests/core/runtime/test_runtime_shared_skills.py`, `tests/core/tools/test_skill.py`: live scope/allowlist/disable/sharing behavior and arbitrary UTF-8 support-file reads.
 - `tests/server/test_skill_upload.py` and `webui/src/components/skills/__tests__/`: multipart limits, scope/overwrite validation, preview continuity, candidate selection, upload and manager reconciliation; `webui/src/lib/__tests__/api.test.speech-and-files.test.js` covers binary transport.

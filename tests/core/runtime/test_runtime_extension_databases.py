@@ -15,13 +15,7 @@ from core.database import (
 )
 from core.runtime.runtime import Runtime
 from core.utils.config import Config
-from tests.core.runtime.runtime_extensions_test_support import (
-    _clean_extension_modules as _clean_extension_modules,
-)
-from tests.core.runtime.runtime_extensions_test_support import (
-    _marker_lines,
-    _write_extension,
-)
+from tests.core.runtime.runtime_test_support import marker_lines, write_extension
 
 DATABASE_NAME = "ext.notes_ext.notes"
 
@@ -63,11 +57,12 @@ def _note_count(database) -> int:
         return int(connection.execute("SELECT COUNT(*) FROM notes").fetchone()[0])
 
 
-def test_extension_database_follows_startup_reload_and_disable(tmp_path: Path) -> None:
-    config = Config(data_dir=tmp_path / "data")
+def test_extension_database_follows_startup_reload_and_disable(
+    config: Config, tmp_path: Path
+) -> None:
     data_dir = config.data_dir
     marker = tmp_path / "lifecycle.txt"
-    _write_extension(data_dir, "notes_ext", _notes_extension(marker))
+    write_extension(data_dir, "notes_ext", _notes_extension(marker))
 
     runtime = Runtime(config)
     runtime.start()
@@ -95,20 +90,19 @@ def test_extension_database_follows_startup_reload_and_disable(tmp_path: Path) -
         second = _extension_database(runtime)
         assert second is not None and second is not first
         assert _note_count(second) == 2
-        assert _marker_lines(marker) == ["shutdown-open=True"]
+        assert marker_lines(marker) == ["shutdown-open=True"]
 
         asyncio.run(runtime.apply_extension_disabled_change({"notes_ext"}))
 
         assert second.is_closed()
         assert _extension_database(runtime) is None
-        assert _marker_lines(marker) == ["shutdown-open=True", "shutdown-open=True"]
+        assert marker_lines(marker) == ["shutdown-open=True", "shutdown-open=True"]
     finally:
         runtime.stop()
 
 
-def test_runtime_stop_closes_extension_databases(tmp_path: Path) -> None:
-    config = Config(data_dir=tmp_path / "data")
-    _write_extension(config.data_dir, "notes_ext", _notes_extension(tmp_path / "lifecycle.txt"))
+def test_runtime_stop_closes_extension_databases(config: Config, tmp_path: Path) -> None:
+    write_extension(config.data_dir, "notes_ext", _notes_extension(tmp_path / "lifecycle.txt"))
 
     runtime = Runtime(config)
     runtime.start()
@@ -124,11 +118,10 @@ def test_runtime_stop_closes_extension_databases(tmp_path: Path) -> None:
 
 
 def test_a_removed_extensions_database_is_unregistered_through_the_runtime(
-    tmp_path: Path,
+    config: Config, tmp_path: Path
 ) -> None:
-    config = Config(data_dir=tmp_path / "data")
     data_dir = config.data_dir
-    _write_extension(data_dir, "notes_ext", _notes_extension(tmp_path / "lifecycle.txt"))
+    write_extension(data_dir, "notes_ext", _notes_extension(tmp_path / "lifecycle.txt"))
 
     runtime = Runtime(config)
     runtime.start()

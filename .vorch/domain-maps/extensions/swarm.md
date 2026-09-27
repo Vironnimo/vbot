@@ -69,7 +69,7 @@ persisted in temporary Agent bindings and each started Swarm's profile snapshot.
 read-only prompt inspection with the same Project ceilings and Model Tool routing.
 It returns rendered block details and separately transmitted Tool definitions;
 draft changes invalidate the displayed preview. Evidence: `test_swarm_lifecycle.py`,
-`test_runtime_extensions.py`, `test_prompts_layouts_overrides.py`, `SwarmPage.test.js`.
+`test_runtime_extension_host.py`, `test_prompts_layouts_overrides.py`, `SwarmPage.test.js`.
 
 Delivery and explicit Resume guidance are individually
 switchable in the snapshot. Their complete wording is inspectable in the editor.
