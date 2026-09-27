@@ -189,9 +189,7 @@ _SEARCH_FILTERS: tuple[dict[str, Any], ...] = (
 )
 
 
-# Newest-first differs from oldest-first only in the sort direction, and a scan
-# ranks by recency, so these two orders reach every statement shape.
-@pytest.mark.parametrize("order", ["relevance", "oldest"])
+@pytest.mark.parametrize("order", ["relevance", "oldest", "newest"])
 @pytest.mark.parametrize("use_fts", [True, False], ids=["fts", "scan"])
 def test_scoped_search_pushes_the_eligible_sessions_into_every_branch(
     history, use_fts, order
