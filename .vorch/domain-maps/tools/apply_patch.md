@@ -70,7 +70,7 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   and case-only renames (the same entry under another spelling on Windows) use
   one `os.rename` instead of copy-then-delete; relative link targets are not
   rewritten. They read as `Moved A to B.`; an Update through a link reports the
-  link target's path (`test__patch_entries.py`).
+  link target's path (`test_apply_patch_files.py`).
 - The complete patch structure is parsed before mutation; unparseable framing or
   operation syntax rejects the call without writes. Once parsed, each Update
   hunk and each Add/Delete/Move is attempted in order against actual current
@@ -446,30 +446,27 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
 
 ## Verification
 
-- `tests/core/tools/test_apply_patch.py` covers framing and matching;
-  `test_apply_patch_operations.py` covers byte preservation, ordered plans,
-  read stamps, statistics, syntax warnings, and display metadata;
-  `test_apply_patch_transactions.py` covers partial effects, failure containment,
-  locking, cancellation, and guarded retries;
-  `test_apply_patch_overwrite.py` covers creation/replacement, read guards,
-  empty contents, format preservation, and concurrent drift.
-- `test_apply_patch_recovery.py` covers Add syntax repair, context-only failure
-  and insertion, shared locks across Sessions, bounded replacement retry and
-  source/destination drift. `test_file_state.py` includes a real Windows reader
-  handle without delete sharing, not just injected exceptions.
-- `test_apply_patch_session_regressions.py` covers Session-derived concatenated
-  frames, repeated headers, argument aliases/conflicts and preserved context anchors.
-  `test_apply_patch_fields.py` runs other harnesses' shapes (Edit, MultiEdit, Write,
-  text-editor commands, Hermes mode, SEARCH/REPLACE, unified/git diffs) through
-  production dispatch, including empty-text edits, the read guard and conflicts.
-  `scripts/tool_lab/cases/files.json` holds the Model-visible result cases.
-- `test_apply_patch_code_targets.py` exercises production-dispatch code-target
-  refusal, partial success, corrected continuation, typo recovery and formatting
-  tolerance. `test_apply_patch_diagnostics.py` verifies long mismatch evidence and
-  failure -> displayed read continuation -> successful correction, including
-  Unicode and LF/CRLF/CR, plus within-line replacement and `part_of`
-  diagnostics. `test_copy_match.py` covers shared prose/identifier
-  distinctions and target IDs in substring recovery.
+- `tests/core/tools/test_apply_patch_calls.py` covers the description example,
+  display metadata, patch spellings and wrappers, and other harnesses' shapes
+  (Edit, MultiEdit, Write, text-editor commands, Hermes mode, SEARCH/REPLACE)
+  through production dispatch, including empty-text edits and refused open or
+  conflicting calls. `scripts/tool_lab/cases/files.json` holds the Model-visible
+  result cases.
+- `test_apply_patch_parsing.py` covers framing, concatenated frames, malformed
+  patches, Add syntax repair, unified/git diffs and move headers.
+- `test_apply_patch_matching.py` covers matching: gutters, escapes, copied text
+  with misspellings, code targets, typography, context hints and anchors,
+  within-line replacement and changes already in the file.
+- `test_apply_patch_reports.py` covers previews, `no_changes`, long mismatch
+  evidence and failure -> displayed read continuation -> successful correction,
+  including Unicode and LF/CRLF/CR, plus `part_of` diagnostics.
+- `test_apply_patch_files.py` covers byte and format preservation, read guards,
+  paths, links, syntax warnings, read stamps and statistics, locking across
+  Sessions, cancellation, failure containment, concurrent drift and bounded
+  guarded retries. `test_file_state.py` includes a real Windows reader handle
+  without delete sharing, not just injected exceptions.
+- `test_copy_match.py` covers shared prose/identifier distinctions and target
+  IDs in substring recovery.
 - Existing fuzzy-match, file-state, Runtime and Provider-schema
   tests cover the shared boundaries.
   `tests/core/providers/test_ollama.py` verifies intact patch arguments through

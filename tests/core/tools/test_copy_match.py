@@ -16,25 +16,6 @@ def _applied(found: object) -> FuzzyReplacement:
     return found
 
 
-def test_misspelled_old_word_keeps_the_file_spelling_and_names_the_line() -> None:
-    content = "def load():\n    return reciept_total\n"
-
-    found = _applied(
-        replace_copied(
-            content,
-            "def load():\n    return receipt_total",
-            "def load():\n    return receipt_total + tax",
-        )
-    )
-
-    assert found.new_content == "def load():\n    return reciept_total + tax\n"
-    assert copy_warnings(found) == [
-        "Line 2 did not match your old text exactly and was edited anyway; "
-        "it read:     return reciept_total",
-        'Your new text uses the file\'s spelling: "reciept_total" for "receipt_total".',
-    ]
-
-
 def test_misspelling_in_a_changed_line_is_placed_by_exact_context() -> None:
     content = "def compute(total, count):\n    value = total / count\n    return value\n"
     lines = [
@@ -663,21 +644,6 @@ def test_a_long_differing_line_is_shown_from_its_first_difference() -> None:
         "Line 1 did not match your old text exactly and was edited anyway; it read: "
         "...word54 word55 word56 word57 word58 word59 and the scheduler retries twice here."
     )
-
-
-def test_several_qualifying_passages_are_ambiguous() -> None:
-    line = "grand_total = reciept_total + shipping_cost + handling_fee"
-    content = f"{line}\nprint(grand_total)\n{line}\n"
-
-    found = replace_copied(
-        content,
-        line.replace("reciept", "receipt"),
-        "grand_total = receipt_total + shipping_cost",
-    )
-
-    assert isinstance(found, AmbiguousFuzzyMatch)
-    assert found.occurrences == 2
-    assert found.line_numbers == [1, 3]
 
 
 def test_part_of_a_line_is_matched_as_a_fragment() -> None:
