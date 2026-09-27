@@ -24,7 +24,7 @@ from server.rpc.event_bridge import (
     RUN_OUTPUT_EVENT_TYPES,
     SERVER_EVENT_TYPES,
 )
-from tests.server.test_rpc import StubAdapter, StubRuntime
+from tests.server.rpc_test_support import StubAdapter, StubRuntime
 
 
 @pytest.mark.parametrize(

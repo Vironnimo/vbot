@@ -9,7 +9,7 @@ from typing import Any, cast
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 
 from server.app import create_app
-from tests.server.test_rpc import StubAdapter, StubRuntime
+from tests.server.rpc_test_support import StubAdapter, StubRuntime
 
 
 def test_log_websocket_streams_append_events_for_selected_file(tmp_path: Path) -> None:

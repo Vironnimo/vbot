@@ -22,7 +22,7 @@ from server.file_delivery import (
     FileDelivery,
 )
 from server.rpc.payloads import _visible_message
-from tests.server.test_rpc import StubAdapter, StubRuntime
+from tests.server.rpc_test_support import StubAdapter, StubRuntime
 
 _FILE_URL_PATTERN = re.compile(r"\(/api/files/([^\s)]+)(?=[\s)])")
 

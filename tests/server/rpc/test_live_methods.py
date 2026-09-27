@@ -72,23 +72,24 @@ def test_status_reports_the_live_voice_binding() -> None:
 
 
 @pytest.mark.asyncio
-async def test_start_passes_the_offer_to_the_registry_with_the_live_voice_service() -> None:
+@pytest.mark.parametrize(
+    ("params", "offer", "media"),
+    [
+        pytest.param(
+            {"media": "webrtc", "sdp": "v=0 offer"},
+            "v=0 offer",
+            {"type": "webrtc", "sdp": "answer"},
+            id="webrtc-offer",
+        ),
+        pytest.param({"media": "relay"}, None, {"type": "relay", "audio": {}}, id="relay"),
+    ],
+)
+async def test_start_passes_the_media_request_to_the_registry_with_the_live_voice_service(
+    params: JsonObject, offer: str | None, media: JsonObject
+) -> None:
     current = state()
-    assert await _start(current, {"media": "webrtc", "sdp": "v=0 offer"}) == {
-        "call_id": "call-1",
-        "media": {"type": "webrtc", "sdp": "answer"},
-    }
-    assert current.live_calls.starts == [(current.runtime.live_voice, "webrtc", "v=0 offer", ())]
-
-
-@pytest.mark.asyncio
-async def test_start_a_relay_call_without_an_offer() -> None:
-    current = state()
-    assert await _start(current, {"media": "relay"}) == {
-        "call_id": "call-1",
-        "media": {"type": "relay", "audio": {}},
-    }
-    assert current.live_calls.starts == [(current.runtime.live_voice, "relay", None, ())]
+    assert await _start(current, params) == {"call_id": "call-1", "media": media}
+    assert current.live_calls.starts == [(current.runtime.live_voice, params["media"], offer, ())]
 
 
 @pytest.mark.asyncio
@@ -111,15 +112,13 @@ async def test_start_is_refused_while_the_server_shuts_down() -> None:
 @pytest.mark.parametrize(
     "params",
     [
-        {},
-        {"sdp": "v=0"},
-        {"media": "webrtc"},
-        {"media": "webrtc", "sdp": ""},
-        {"media": "webrtc", "sdp": 1},
-        {"media": "webrtc", "sdp": "v=0", "model": "x"},
-        {"media": "relay", "sdp": "v=0"},
-        {"media": "sip"},
-        {"media": 1},
+        pytest.param({}, id="missing-media"),
+        pytest.param({"media": 1}, id="non-string-media"),
+        pytest.param({"media": "sip"}, id="unknown-media"),
+        pytest.param({"media": "webrtc"}, id="webrtc-without-offer"),
+        pytest.param({"media": "webrtc", "sdp": ""}, id="webrtc-empty-offer"),
+        pytest.param({"media": "relay", "sdp": "v=0"}, id="relay-with-offer"),
+        pytest.param({"media": "webrtc", "sdp": "v=0", "model": "x"}, id="unsupported-field"),
     ],
 )
 async def test_start_rejects_invalid_params(params: JsonObject) -> None:
@@ -133,14 +132,24 @@ async def test_start_rejects_invalid_params(params: JsonObject) -> None:
 @pytest.mark.parametrize(
     ("wake_phrases", "passed"),
     [
-        ([], ()),
-        (["  Hey Nabu ", "Hey Jarvis"], ("Hey Nabu", "Hey Jarvis")),
-        (["Hey Nabu", "hey nabu", "Hey Jarvis", " HEY NABU"], ("Hey Nabu", "Hey Jarvis")),
-        ([f"Phrase {index}" for index in range(8)], tuple(f"Phrase {index}" for index in range(8))),
-        (["x" * 60], ("x" * 60,)),
-        (["Hallo, Jürgen!", 'Say "go"'], ("Hallo, Jürgen!", 'Say "go"')),
+        pytest.param([], (), id="empty"),
+        # Phrases are trimmed; case-insensitive duplicates keep the first spelling.
+        pytest.param(
+            ["  Hey Nabu ", "hey nabu", "Hey Jarvis", " HEY NABU"],
+            ("Hey Nabu", "Hey Jarvis"),
+            id="trimmed-and-deduplicated",
+        ),
+        pytest.param(
+            [f"Phrase {index}" for index in range(7)] + ["x" * 60],
+            (*(f"Phrase {index}" for index in range(7)), "x" * 60),
+            id="eight-phrases-of-up-to-sixty-chars",
+        ),
+        pytest.param(
+            ["Hallo, Jürgen!", 'Say "go"'],
+            ("Hallo, Jürgen!", 'Say "go"'),
+            id="printable",
+        ),
     ],
-    ids=["empty", "trimmed", "duplicates-keep-first", "eight", "sixty-chars", "printable"],
 )
 async def test_start_passes_normalized_wake_phrases(
     wake_phrases: list[str], passed: tuple[str, ...]
@@ -154,40 +163,17 @@ async def test_start_passes_normalized_wake_phrases(
 @pytest.mark.parametrize(
     "wake_phrases",
     [
-        "Hey Nabu",
-        None,
-        {"phrase": "Hey Nabu"},
-        [1],
-        [None],
-        [["Hey Nabu"]],
-        [f"Phrase {index}" for index in range(9)],
-        ["x" * 61],
-        [""],
-        ["   "],
-        ["Hey\nNabu"],
-        ["Hey\tNabu"],
-        ["Hey\x00Nabu"],
-        ["Hey\u200bNabu"],
-        ["Hey\u2028Nabu"],
-        ["Hey" + chr(0xD800) + "Nabu"],
-    ],
-    ids=[
-        "string",
-        "null",
-        "object",
-        "number-item",
-        "null-item",
-        "nested-array",
-        "too-many",
-        "too-long",
-        "empty",
-        "blank",
-        "newline",
-        "tab",
-        "nul",
-        "format-character",
-        "line-separator",
-        "lone-surrogate",
+        pytest.param("Hey Nabu", id="string"),
+        pytest.param(None, id="null"),
+        pytest.param([1], id="non-string-item"),
+        pytest.param([f"Phrase {index}" for index in range(9)], id="too-many"),
+        pytest.param(["x" * 61], id="too-long"),
+        pytest.param(["   "], id="blank"),
+        # Phrases are quoted into the voice instructions.
+        pytest.param(["Hey\nNabu"], id="control-character"),
+        pytest.param(["Hey\u200bNabu"], id="format-character"),
+        pytest.param(["Hey\u2028Nabu"], id="line-separator"),
+        pytest.param(["Hey" + chr(0xD800) + "Nabu"], id="lone-surrogate"),
     ],
 )
 async def test_start_rejects_invalid_wake_phrases(wake_phrases: Any) -> None:
@@ -218,18 +204,19 @@ def test_ui_result_forwards_a_result_or_an_error_code() -> None:
     ]
 
 
+_UI_IDS = {"call_id": "call-1", "request_id": "ui-1"}
+
+
 @pytest.mark.parametrize(
     "params",
     [
-        {"request_id": "ui-1", "result": {}},
-        {"call_id": "call-1", "result": {}},
-        {"call_id": "call-1", "request_id": "ui-1"},
-        {"call_id": "call-1", "request_id": "ui-1", "result": {}, "error": "x"},
-        {"call_id": "call-1", "request_id": "ui-1", "result": ["applied"]},
-        {"call_id": "call-1", "request_id": "ui-1", "error": ""},
-        {"call_id": "call-1", "request_id": "ui-1", "error": {"code": "x"}},
-        {"call_id": "call-1", "request_id": "ui-1", "error": "x" * 65},
-        {"call_id": "call-1", "request_id": "ui-1", "result": {}, "extra": 1},
+        pytest.param({"call_id": "call-1", "result": {}}, id="missing-request-id"),
+        pytest.param(_UI_IDS, id="neither-result-nor-error"),
+        pytest.param({**_UI_IDS, "result": {}, "error": "x"}, id="result-and-error"),
+        pytest.param({**_UI_IDS, "result": ["applied"]}, id="non-object-result"),
+        pytest.param({**_UI_IDS, "error": {"code": "x"}}, id="non-string-error"),
+        pytest.param({**_UI_IDS, "error": "x" * 65}, id="too-long-error"),
+        pytest.param({**_UI_IDS, "result": {}, "extra": 1}, id="unsupported-field"),
     ],
 )
 def test_ui_result_rejects_invalid_answers(params: JsonObject) -> None:

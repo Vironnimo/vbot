@@ -1,14 +1,4 @@
-"""Tests for debug-mode RPC handlers.
-
-Test coverage:
-- ``debug.status``: returns correct state, rejects params
-- ``debug.trace_list``: enabled/disabled gating, returns traces in order
-- ``debug.trace_get``: enabled/disabled gating, returns full trace
-- ``debug.trace_clear``: always allowed, clears all traces
-- ``debug.model_probe``: gating, error cases, success case (mocked HTTP), keyless
-  Connections, Connection-level endpoints and Adapter discovery headers/params
-- ``settings.get``: includes ``debug`` section
-"""
+"""Tests for the debug-mode RPC handlers and the debug section of ``settings.get``."""
 
 from __future__ import annotations
 
@@ -16,7 +6,6 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
@@ -32,10 +21,12 @@ from core.providers.providers import (
 )
 from core.storage.layout import DataDirectoryLayout
 from server.rpc.errors import RPC_ERROR_DOMAIN, RPC_ERROR_INVALID_REQUEST
-from server.rpc.methods import dispatch_rpc
-from tests.server.test_rpc import (
+from tests.server.rpc_test_support import (
     StubAdapter,
     make_state,
+    resource_changes,
+    rpc_error,
+    rpc_result,
 )
 
 JsonObject = dict[str, Any]
@@ -44,39 +35,26 @@ TRACE_ID_2 = "00000000000040008000000000000002"
 TRACE_ID_3 = "00000000000040008000000000000003"
 TRACE_ID_MISSING = "00000000000040008000000000000004"
 
-# ---------------------------------------------------------------------------
-# Test helpers
-# ---------------------------------------------------------------------------
 
-
-def _trace_data(
-    trace_id: str,
-    timestamp: str = "2026-06-01T12:00:00Z",
-    provider_id: str = "openai",
-    model_id: str = "gpt-4",
-    request_method: str = "POST",
-    request_url: str = "https://api.example.com/v1/chat",
-    status_code: int | None = 200,
-    duration_ms: int | None = 150,
-) -> JsonObject:
+def _trace_data(trace_id: str, timestamp: str) -> JsonObject:
     """Build a realistic trace payload used for store seeding."""
     return {
         "trace_id": trace_id,
         "timestamp": timestamp,
-        "provider_id": provider_id,
-        "model_id": model_id,
-        "request_method": request_method,
-        "request_url": request_url,
-        "status_code": status_code,
-        "duration_ms": duration_ms,
+        "provider_id": "openai",
+        "model_id": "gpt-4",
+        "request_method": "POST",
+        "request_url": "https://api.example.com/v1/chat",
+        "status_code": 200,
+        "duration_ms": 150,
         "request": {
-            "method": request_method,
-            "url": request_url,
+            "method": "POST",
+            "url": "https://api.example.com/v1/chat",
             "headers": {"Content-Type": "application/json"},
-            "body": {"model": model_id, "messages": [{"role": "user", "content": "hello"}]},
+            "body": {"model": "gpt-4", "messages": [{"role": "user", "content": "hello"}]},
         },
         "response": {
-            "status_code": status_code,
+            "status_code": 200,
             "headers": {"Content-Type": "application/json"},
             "body": {"choices": [{"message": {"content": "hello back"}}]},
         },
@@ -140,13 +118,14 @@ def _make_probe_provider(
     )
 
 
-def _use_real_credentials(
+def _add_probe_provider(
     monkeypatch: pytest.MonkeyPatch,
     state: SimpleNamespace,
     provider: ProviderConfig,
     process_env: dict[str, str] | None = None,
 ) -> None:
-    """Resolve *provider* credentials with the production resolver."""
+    """Register *provider* and resolve its credentials with the production resolver."""
+    state.runtime.providers.add(provider)
     resolver = ProviderCredentialResolver(
         ProviderRegistry({provider.id: provider}), process_env=process_env or {}
     )
@@ -155,689 +134,347 @@ def _use_real_credentials(
     )
 
 
-async def _probe(state: SimpleNamespace, provider_id: str, connection_id: str) -> JsonObject:
-    return await dispatch_rpc(
-        state,
-        {
-            "method": "debug.model_probe",
-            "params": {"provider_id": provider_id, "connection_id": connection_id},
-        },
-    )
-
-
-def _seed_traces(tmp_path: Path, *, trace_limit: int = 50) -> DebugTraceStore:
-    """Write three test traces to disk and return the store."""
-    store = DebugTraceStore(tmp_path, trace_limit=trace_limit)
+def _seed_traces(tmp_path: Path) -> None:
+    """Write three test traces to disk, out of timestamp order."""
+    store = DebugTraceStore(tmp_path, trace_limit=50)
     store.save_trace(TRACE_ID_1, _trace_data(TRACE_ID_1, "2026-06-01T10:00:00Z"))
     store.save_trace(TRACE_ID_2, _trace_data(TRACE_ID_2, "2026-06-01T12:00:00Z"))
     store.save_trace(TRACE_ID_3, _trace_data(TRACE_ID_3, "2026-06-01T11:00:00Z"))
-    return store
 
 
-# ---------------------------------------------------------------------------
-# debug.status
-# ---------------------------------------------------------------------------
+def _saved_trace(tmp_path: Path, trace_id: str) -> JsonObject:
+    return DebugTraceStore(tmp_path, trace_limit=50).get_trace(trace_id)
 
 
-class TestDebugStatus:
-    """Tests for the ``debug.status`` RPC method."""
-
-    @pytest.mark.asyncio
-    async def test_returns_disabled_state(self, tmp_path: Path) -> None:
-        """``debug.status`` returns ``enabled=false`` when debug is off."""
-        state = _make_debug_state(tmp_path, debug_enabled=False, trace_limit=30)
-
-        response = await dispatch_rpc(state, {"method": "debug.status", "params": {}})
-
-        assert response["ok"] is True
-        result = response["result"]
-        assert result["enabled"] is False
-        assert result["trace_limit"] == 30
-        assert result["trace_count"] == 0
-        assert result["data_directory"] == str(DataDirectoryLayout(tmp_path).debug)
-
-    @pytest.mark.asyncio
-    async def test_returns_enabled_state_with_trace_count(self, tmp_path: Path) -> None:
-        """``debug.status`` reports correct ``trace_count`` when traces exist."""
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("enabled", "trace_limit", "seeded"),
+    [pytest.param(False, 30, False, id="disabled"), pytest.param(True, 100, True, id="enabled")],
+)
+async def test_status_and_settings_report_the_debug_state(
+    tmp_path: Path, enabled: bool, trace_limit: int, seeded: bool
+) -> None:
+    if seeded:
         _seed_traces(tmp_path)
-        state = _make_debug_state(tmp_path, debug_enabled=True, trace_limit=100)
+    state = _make_debug_state(tmp_path, debug_enabled=enabled, trace_limit=trace_limit)
 
-        response = await dispatch_rpc(state, {"method": "debug.status", "params": {}})
+    status = await rpc_result(state, "debug.status")
+    settings = await rpc_result(state, "settings.get")
 
-        assert response["ok"] is True
-        result = response["result"]
-        assert result["enabled"] is True
-        assert result["trace_limit"] == 100
-        assert result["trace_count"] == 3
-        assert result["data_directory"] == str(DataDirectoryLayout(tmp_path).debug)
-
-    @pytest.mark.asyncio
-    async def test_rejects_params(self, tmp_path: Path) -> None:
-        """``debug.status`` does not accept extraneous params."""
-        state = _make_debug_state(tmp_path)
-
-        response = await dispatch_rpc(state, {"method": "debug.status", "params": {"extra": 1}})
-
-        assert response["ok"] is False
-        assert response["error"]["code"] == RPC_ERROR_INVALID_REQUEST
+    # Status is always available, so the client can discover the current state.
+    trace_count = 3 if seeded else 0
+    assert status == {
+        "enabled": enabled,
+        "trace_limit": trace_limit,
+        "trace_count": trace_count,
+        "data_directory": str(DataDirectoryLayout(tmp_path).debug),
+    }
+    assert settings["debug"] == {
+        "enabled": enabled,
+        "trace_limit": trace_limit,
+        "trace_count": trace_count,
+    }
 
 
-# ---------------------------------------------------------------------------
-# debug.trace_list
-# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_trace_list_returns_metadata_newest_first(tmp_path: Path) -> None:
+    state = _make_debug_state(tmp_path)
+
+    empty = await rpc_result(state, "debug.trace_list")
+    _seed_traces(tmp_path)
+    listed = await rpc_result(state, "debug.trace_list")
+
+    assert empty == {"traces": []}
+    traces = listed["traces"]
+    assert [entry["trace_id"] for entry in traces] == [TRACE_ID_2, TRACE_ID_3, TRACE_ID_1]
+    # Entries are metadata only; the bodies stay behind ``debug.trace_get``.
+    for entry in traces:
+        assert {"trace_id", "timestamp", "provider_id"} <= entry.keys()
+        assert {"request", "response"}.isdisjoint(entry)
 
 
-class TestDebugTraceList:
-    """Tests for the ``debug.trace_list`` RPC method."""
+@pytest.mark.asyncio
+async def test_trace_get_returns_the_full_trace_or_a_domain_error(tmp_path: Path) -> None:
+    _seed_traces(tmp_path)
+    state = _make_debug_state(tmp_path)
 
-    @pytest.mark.asyncio
-    async def test_rejects_when_disabled(self, tmp_path: Path) -> None:
-        """``debug.trace_list`` rejects access when ``debug.enabled`` is ``false``."""
-        state = _make_debug_state(tmp_path, debug_enabled=False)
+    trace = (await rpc_result(state, "debug.trace_get", trace_id=TRACE_ID_1))["trace"]
+    missing = await rpc_error(state, "debug.trace_get", trace_id=TRACE_ID_MISSING)
 
-        response = await dispatch_rpc(state, {"method": "debug.trace_list", "params": {}})
-
-        assert response["ok"] is False
-        assert response["error"]["code"] == RPC_ERROR_DOMAIN
-
-    @pytest.mark.asyncio
-    async def test_returns_traces_newest_first(self, tmp_path: Path) -> None:
-        """``debug.trace_list`` returns metadata-only entries sorted newest-first."""
-        _seed_traces(tmp_path)
-        state = _make_debug_state(tmp_path, debug_enabled=True)
-
-        response = await dispatch_rpc(state, {"method": "debug.trace_list", "params": {}})
-
-        assert response["ok"] is True
-        traces = response["result"]["traces"]
-        assert len(traces) == 3
-        assert [entry["trace_id"] for entry in traces] == [
-            TRACE_ID_2,
-            TRACE_ID_3,
-            TRACE_ID_1,
-        ]
-
-    @pytest.mark.asyncio
-    async def test_returns_empty_when_no_traces(self, tmp_path: Path) -> None:
-        """An empty store produces an empty trace list, not an error."""
-        state = _make_debug_state(tmp_path, debug_enabled=True)
-
-        response = await dispatch_rpc(state, {"method": "debug.trace_list", "params": {}})
-
-        assert response["ok"] is True
-        assert response["result"]["traces"] == []
-
-    @pytest.mark.asyncio
-    async def test_entries_are_metadata_only(self, tmp_path: Path) -> None:
-        """Each listed entry contains only metadata — no request/response bodies."""
-        _seed_traces(tmp_path)
-        state = _make_debug_state(tmp_path, debug_enabled=True)
-
-        response = await dispatch_rpc(state, {"method": "debug.trace_list", "params": {}})
-
-        assert response["ok"] is True
-        for entry in response["result"]["traces"]:
-            assert "request" not in entry
-            assert "response" not in entry
-            assert "trace_id" in entry
-            assert "timestamp" in entry
-            assert "provider_id" in entry
-
-    @pytest.mark.asyncio
-    async def test_rejects_params(self, tmp_path: Path) -> None:
-        """``debug.trace_list`` does not accept extraneous params."""
-        state = _make_debug_state(tmp_path, debug_enabled=True)
-
-        response = await dispatch_rpc(state, {"method": "debug.trace_list", "params": {"limit": 5}})
-
-        assert response["ok"] is False
-        assert response["error"]["code"] == RPC_ERROR_INVALID_REQUEST
+    assert trace["trace_id"] == TRACE_ID_1
+    assert "request" in trace
+    assert trace["response"]["body"]["choices"][0]["message"]["content"] == "hello back"
+    assert missing["code"] == RPC_ERROR_DOMAIN
 
 
-# ---------------------------------------------------------------------------
-# debug.trace_get
-# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_trace_clear_is_allowed_while_debug_is_disabled(tmp_path: Path) -> None:
+    _seed_traces(tmp_path)
+    state = _make_debug_state(tmp_path, debug_enabled=False)
+
+    cleared = await rpc_result(state, "debug.trace_clear")
+    # Clearing an empty store is a safe no-op.
+    cleared_again = await rpc_result(state, "debug.trace_clear")
+
+    assert cleared == cleared_again == {"cleared": True}
+    assert DebugTraceStore(tmp_path, trace_limit=50).get_traces() == []
+    assert resource_changes(state) == [{"kind": "debug_traces"}] * 2
 
 
-class TestDebugTraceGet:
-    """Tests for the ``debug.trace_get`` RPC method."""
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method", "params"),
+    [
+        ("debug.trace_list", {}),
+        ("debug.trace_get", {"trace_id": TRACE_ID_1}),
+        ("debug.model_probe", {"provider_id": "openai", "connection_id": "openai:api-key"}),
+    ],
+)
+async def test_trace_reads_and_probes_require_debug_mode(
+    tmp_path: Path, method: str, params: JsonObject
+) -> None:
+    _seed_traces(tmp_path)
+    state = _make_debug_state(tmp_path, debug_enabled=False)
 
-    @pytest.mark.asyncio
-    async def test_rejects_when_disabled(self, tmp_path: Path) -> None:
-        """``debug.trace_get`` rejects access when ``debug.enabled`` is ``false``."""
-        _seed_traces(tmp_path)
-        state = _make_debug_state(tmp_path, debug_enabled=False)
+    error = await rpc_error(state, method, **params)
 
-        response = await dispatch_rpc(
-            state,
-            {"method": "debug.trace_get", "params": {"trace_id": TRACE_ID_1}},
-        )
+    assert error["code"] == RPC_ERROR_DOMAIN
 
-        assert response["ok"] is False
-        assert response["error"]["code"] == RPC_ERROR_DOMAIN
 
-    @pytest.mark.asyncio
-    async def test_returns_full_trace_when_enabled(self, tmp_path: Path) -> None:
-        """``debug.trace_get`` returns the complete trace including request/response."""
-        _seed_traces(tmp_path)
-        state = _make_debug_state(tmp_path, debug_enabled=True)
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method", "params", "fragment"),
+    [
+        pytest.param("debug.status", {"extra": 1}, "", id="status-params"),
+        pytest.param("debug.trace_list", {"limit": 5}, "", id="list-params"),
+        pytest.param("debug.trace_clear", {"all": True}, "", id="clear-params"),
+        pytest.param("debug.trace_get", {}, "trace_id", id="get-without-trace-id"),
+        pytest.param(
+            "debug.trace_get", {"trace_id": TRACE_ID_1, "extra": True}, "", id="get-extra-field"
+        ),
+        # A trace id cannot reach JSON outside the trace directory.
+        pytest.param(
+            "debug.trace_get",
+            {"trace_id": "../../../channels/telegram/channel"},
+            "",
+            id="get-path-escape",
+        ),
+        pytest.param(
+            "debug.model_probe", {"provider_id": "openai"}, "connection_id", id="probe-partial"
+        ),
+        pytest.param(
+            "debug.model_probe",
+            {"provider_id": "openai", "connection_id": "openai:api-key", "extra": True},
+            "",
+            id="probe-extra-field",
+        ),
+    ],
+)
+async def test_invalid_debug_requests_are_rejected(
+    tmp_path: Path, method: str, params: JsonObject, fragment: str
+) -> None:
+    _seed_traces(tmp_path)
+    state = _make_debug_state(tmp_path)
 
-        response = await dispatch_rpc(
-            state,
-            {"method": "debug.trace_get", "params": {"trace_id": TRACE_ID_1}},
-        )
+    error = await rpc_error(state, method, **params)
 
-        assert response["ok"] is True
-        trace = response["result"]["trace"]
-        assert trace["trace_id"] == TRACE_ID_1
-        assert "request" in trace
-        assert "response" in trace
-        assert trace["response"]["body"]["choices"][0]["message"]["content"] == "hello back"
+    assert error["code"] == RPC_ERROR_INVALID_REQUEST
+    assert fragment in error["message"]
 
-    @pytest.mark.asyncio
-    async def test_returns_error_for_unknown_trace(self, tmp_path: Path) -> None:
-        """Requesting a non-existent trace returns a domain error."""
-        state = _make_debug_state(tmp_path, debug_enabled=True)
 
-        response = await dispatch_rpc(
-            state,
-            {"method": "debug.trace_get", "params": {"trace_id": TRACE_ID_MISSING}},
-        )
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("provider", "provider_id", "connection_id", "fragments"),
+    [
+        pytest.param(None, "nonexistent", "nonexistent:key", ("nonexistent",), id="unknown"),
+        pytest.param(
+            _make_probe_provider(),
+            "openrouter",
+            "wrong-prefix:api-key",
+            ("wrong-prefix:api-key", "openrouter"),
+            id="foreign-connection",
+        ),
+        # Neither the Connection nor its Provider names a catalog endpoint.
+        pytest.param(
+            _make_probe_provider(provider_id="no-catalog", models_endpoint=None),
+            "no-catalog",
+            "no-catalog:api-key",
+            ("no-catalog:api-key",),
+            id="no-endpoint",
+        ),
+    ],
+)
+async def test_model_probe_rejects_connections_it_cannot_probe(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    provider: ProviderConfig | None,
+    provider_id: str,
+    connection_id: str,
+    fragments: tuple[str, ...],
+) -> None:
+    state = _make_debug_state(tmp_path)
+    if provider is not None:
+        _add_probe_provider(monkeypatch, state, provider)
 
-        assert response["ok"] is False
-        assert response["error"]["code"] == RPC_ERROR_DOMAIN
+    error = await rpc_error(
+        state, "debug.model_probe", provider_id=provider_id, connection_id=connection_id
+    )
 
-    @pytest.mark.asyncio
-    async def test_rejects_missing_trace_id(self, tmp_path: Path) -> None:
-        """``debug.trace_get`` requires a ``trace_id`` param."""
-        state = _make_debug_state(tmp_path, debug_enabled=True)
+    assert error["code"] == RPC_ERROR_DOMAIN
+    assert all(fragment in error["message"] for fragment in fragments)
 
-        response = await dispatch_rpc(state, {"method": "debug.trace_get", "params": {}})
 
-        assert response["ok"] is False
-        assert response["error"]["code"] == RPC_ERROR_INVALID_REQUEST
-        assert "trace_id" in response["error"]["message"].lower()
+_CATALOG = [
+    {"id": "gpt-4", "name": "GPT-4"},
+    {"id": "gpt-4-mini", "name": "GPT-4 Mini"},
+    {"id": "claude-3-opus", "name": "Claude 3 Opus"},
+]
 
-    @pytest.mark.asyncio
-    async def test_rejects_path_traversal_trace_id(self, tmp_path: Path) -> None:
-        """``debug.trace_get`` cannot read JSON outside the trace directory."""
-        _seed_traces(tmp_path)
-        channel_path = tmp_path / "channels" / "telegram" / "channel.json"
-        channel_path.parent.mkdir(parents=True)
-        channel_path.write_text('{"bot_token": "secret"}', encoding="utf-8")
-        state = _make_debug_state(tmp_path, debug_enabled=True)
 
-        response = await dispatch_rpc(
-            state,
-            {
-                "method": "debug.trace_get",
-                "params": {"trace_id": "../../../channels/telegram/channel"},
+@respx.mock
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("catalog", "preview"),
+    [
+        pytest.param(_CATALOG, {"model_count": 3, "models": _CATALOG}, id="catalog"),
+        pytest.param([], {"model_count": 0, "models": []}, id="empty-catalog"),
+    ],
+)
+async def test_model_probe_returns_raw_response_preview_and_a_redacted_trace(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    catalog: list[JsonObject],
+    preview: JsonObject,
+) -> None:
+    state = _make_debug_state(tmp_path)
+    _add_probe_provider(
+        monkeypatch,
+        state,
+        _make_probe_provider(),
+        process_env={"OPENROUTER_API_KEY": "sk-test-key"},
+    )
+    raw_body = json.dumps({"data": catalog})
+    respx.get("https://openrouter.ai/api/v1/models").mock(
+        return_value=httpx.Response(
+            200,
+            text=raw_body,
+            headers={
+                "content-type": "application/json",
+                "openai-organization": "org-123",
+                "set-cookie": "session=abc",
             },
         )
+    )
 
-        assert response["ok"] is False
-        assert response["error"]["code"] == RPC_ERROR_INVALID_REQUEST
+    result = await rpc_result(
+        state, "debug.model_probe", provider_id="openrouter", connection_id="openrouter:api-key"
+    )
 
-    @pytest.mark.asyncio
-    async def test_rejects_unsupported_fields(self, tmp_path: Path) -> None:
-        """``debug.trace_get`` rejects params beyond ``trace_id``."""
-        state = _make_debug_state(tmp_path, debug_enabled=True)
-
-        response = await dispatch_rpc(
-            state,
-            {
-                "method": "debug.trace_get",
-                "params": {"trace_id": TRACE_ID_1, "extra": True},
-            },
-        )
-
-        assert response["ok"] is False
-        assert response["error"]["code"] == RPC_ERROR_INVALID_REQUEST
-
-
-# ---------------------------------------------------------------------------
-# debug.trace_clear
-# ---------------------------------------------------------------------------
-
-
-class TestDebugTraceClear:
-    """Tests for the ``debug.trace_clear`` RPC method.
-
-    ``debug.trace_clear`` is **always** allowed, even when
-    ``debug.enabled`` is ``false``.
-    """
-
-    @pytest.mark.asyncio
-    async def test_clears_traces_when_disabled(self, tmp_path: Path) -> None:
-        """``trace_clear`` works even when debug is disabled."""
-        _seed_traces(tmp_path)
-        state = _make_debug_state(tmp_path, debug_enabled=False)
-
-        response = await dispatch_rpc(state, {"method": "debug.trace_clear", "params": {}})
-
-        assert response["ok"] is True
-        assert response["result"]["cleared"] is True
-        remaining = DebugTraceStore(tmp_path, trace_limit=50).get_traces()
-        assert remaining == []
-        assert state.event_bus.events[-1]["payload"] == {"kind": "debug_traces"}
-
-    @pytest.mark.asyncio
-    async def test_clears_traces_when_enabled(self, tmp_path: Path) -> None:
-        """``trace_clear`` deletes all traces and the index."""
-        _seed_traces(tmp_path)
-        state = _make_debug_state(tmp_path, debug_enabled=True)
-
-        response = await dispatch_rpc(state, {"method": "debug.trace_clear", "params": {}})
-
-        assert response["ok"] is True
-        assert response["result"]["cleared"] is True
-        remaining = DebugTraceStore(tmp_path, trace_limit=50).get_traces()
-        assert remaining == []
-
-    @pytest.mark.asyncio
-    async def test_no_op_on_empty_store(self, tmp_path: Path) -> None:
-        """Calling ``trace_clear`` on an empty store is safe (no-op)."""
-        state = _make_debug_state(tmp_path, debug_enabled=False)
-
-        response = await dispatch_rpc(state, {"method": "debug.trace_clear", "params": {}})
-
-        assert response["ok"] is True
-        assert response["result"]["cleared"] is True
-
-    @pytest.mark.asyncio
-    async def test_rejects_params(self, tmp_path: Path) -> None:
-        """``debug.trace_clear`` does not accept extraneous params."""
-        state = _make_debug_state(tmp_path)
-
-        response = await dispatch_rpc(
-            state, {"method": "debug.trace_clear", "params": {"all": True}}
-        )
-
-        assert response["ok"] is False
-        assert response["error"]["code"] == RPC_ERROR_INVALID_REQUEST
-
-
-# ---------------------------------------------------------------------------
-# debug.model_probe
-# ---------------------------------------------------------------------------
-
-
-class TestDebugModelProbe:
-    """Tests for the ``debug.model_probe`` RPC method."""
-
-    @pytest.mark.asyncio
-    async def test_rejects_when_disabled(self, tmp_path: Path) -> None:
-        """``debug.model_probe`` rejects access when ``debug.enabled`` is ``false``."""
-        state = _make_debug_state(tmp_path, debug_enabled=False)
-
-        response = await dispatch_rpc(
-            state,
-            {
-                "method": "debug.model_probe",
-                "params": {
-                    "provider_id": "openai",
-                    "connection_id": "openai:api-key",
-                },
-            },
-        )
-
-        assert response["ok"] is False
-        assert response["error"]["code"] == RPC_ERROR_DOMAIN
-
-    @pytest.mark.asyncio
-    async def test_rejects_unknown_provider(self, tmp_path: Path) -> None:
-        """Probing a non-existent provider returns a domain error."""
-        state = _make_debug_state(tmp_path, debug_enabled=True)
-
-        response = await dispatch_rpc(
-            state,
-            {
-                "method": "debug.model_probe",
-                "params": {
-                    "provider_id": "nonexistent",
-                    "connection_id": "nonexistent:key",
-                },
-            },
-        )
-
-        assert response["ok"] is False
-        assert response["error"]["code"] == RPC_ERROR_DOMAIN
-        assert "nonexistent" in response["error"]["message"]
-
-    @pytest.mark.asyncio
-    async def test_rejects_provider_without_models_endpoint(self, tmp_path: Path) -> None:
-        """Providers without ``models_endpoint`` cannot be probed."""
-        state = _make_debug_state(tmp_path, debug_enabled=True)
-        # The "anthropic" stub has no models_endpoint attribute by default
-        state.runtime.storage._credentials["ANTHROPIC_API_KEY"] = "sk-test"
-
-        response = await dispatch_rpc(
-            state,
-            {
-                "method": "debug.model_probe",
-                "params": {
-                    "provider_id": "anthropic",
-                    "connection_id": "anthropic:api-key",
-                },
-            },
-        )
-
-        assert response["ok"] is False
-        assert response["error"]["code"] == RPC_ERROR_DOMAIN
-
-    @pytest.mark.asyncio
-    async def test_rejects_invalid_connection_id(self, tmp_path: Path) -> None:
-        """A connection ID that does not match the provider raises an error."""
-        state = _make_debug_state(tmp_path, debug_enabled=True)
-        state.runtime.providers.add(_make_probe_provider())
-
-        response = await dispatch_rpc(
-            state,
-            {
-                "method": "debug.model_probe",
-                "params": {
-                    "provider_id": "openrouter",
-                    "connection_id": "wrong-prefix:api-key",
-                },
-            },
-        )
-
-        assert response["ok"] is False
-        assert response["error"]["code"] == RPC_ERROR_DOMAIN
-        assert "wrong-prefix:api-key" in response["error"]["message"]
-        assert "openrouter" in response["error"]["message"]
-
-    @pytest.mark.asyncio
-    async def test_rejects_missing_provider_id(self, tmp_path: Path) -> None:
-        """``debug.model_probe`` requires both ``provider_id`` and ``connection_id``."""
-        state = _make_debug_state(tmp_path, debug_enabled=True)
-
-        response = await dispatch_rpc(
-            state,
-            {
-                "method": "debug.model_probe",
-                "params": {"connection_id": "openai:api-key"},
-            },
-        )
-
-        assert response["ok"] is False
-        assert response["error"]["code"] == RPC_ERROR_INVALID_REQUEST
-
-    @pytest.mark.asyncio
-    async def test_rejects_missing_connection_id(self, tmp_path: Path) -> None:
-        """``debug.model_probe`` requires both ``provider_id`` and ``connection_id``."""
-        state = _make_debug_state(tmp_path, debug_enabled=True)
-
-        response = await dispatch_rpc(
-            state,
-            {
-                "method": "debug.model_probe",
-                "params": {"provider_id": "openai"},
-            },
-        )
-
-        assert response["ok"] is False
-        assert response["error"]["code"] == RPC_ERROR_INVALID_REQUEST
-
-    @pytest.mark.asyncio
-    async def test_rejects_unsupported_fields(self, tmp_path: Path) -> None:
-        """``debug.model_probe`` rejects params beyond ``provider_id`` and
-        ``connection_id``."""
-        state = _make_debug_state(tmp_path, debug_enabled=True)
-
-        response = await dispatch_rpc(
-            state,
-            {
-                "method": "debug.model_probe",
-                "params": {
-                    "provider_id": "openai",
-                    "connection_id": "openai:api-key",
-                    "extra": True,
-                },
-            },
-        )
-
-        assert response["ok"] is False
-        assert response["error"]["code"] == RPC_ERROR_INVALID_REQUEST
-
-    @pytest.mark.asyncio
-    async def test_returns_raw_response_and_normalized_preview(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Successfully probes a provider's models endpoint, returning raw
-        JSON response + a normalized model-count/preview summary."""
-        state = _make_debug_state(tmp_path, debug_enabled=True)
-        state.runtime.providers.add(_make_probe_provider())
-        monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test-key")
-
-        mock_raw_body = json.dumps(
-            {
-                "data": [
-                    {"id": "gpt-4", "name": "GPT-4"},
-                    {"id": "gpt-4-mini", "name": "GPT-4 Mini"},
-                    {"id": "claude-3-opus", "name": "Claude 3 Opus"},
-                ]
-            }
-        )
-
-        mock_response = AsyncMock()
-        mock_response.status_code = 200
-        mock_response.text = mock_raw_body
-        mock_response.headers = {
-            "content-type": "application/json",
-            "openai-organization": "org-123",
-            "set-cookie": "session=abc",
-        }
-
-        mock_client = AsyncMock()
-        mock_client.get = AsyncMock(return_value=mock_response)
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=None)
-
-        with patch("server.rpc.debug_methods.httpx.AsyncClient", return_value=mock_client):
-            response = await dispatch_rpc(
-                state,
-                {
-                    "method": "debug.model_probe",
-                    "params": {
-                        "provider_id": "openrouter",
-                        "connection_id": "openrouter:api-key",
-                    },
-                },
-            )
-
-        assert response["ok"] is True, response
-        result = response["result"]
-        assert result["raw_response"] == mock_raw_body
-        assert result["status_code"] == 200
-        assert isinstance(result["duration_ms"], int)
-        assert result["duration_ms"] >= 0
-        assert result["trace_id"] is not None
-        assert len(result["trace_id"]) > 0
-
-        # Model preview
-        model_preview = result["model_preview"]
-        assert model_preview["model_count"] == 3
-        assert model_preview["models"] == [
-            {"id": "gpt-4", "name": "GPT-4"},
-            {"id": "gpt-4-mini", "name": "GPT-4 Mini"},
-            {"id": "claude-3-opus", "name": "Claude 3 Opus"},
-        ]
-
-        # Verify a model_probe trace was persisted
-        store = DebugTraceStore(tmp_path, trace_limit=50)
-        traces = store.get_traces()
-        assert len(traces) == 1
-        saved = store.get_trace(result["trace_id"])
-        assert saved["type"] == "model_probe"
-        assert saved["provider_id"] == "openrouter"
-        assert saved["request"]["headers"]["Authorization"] == "[REDACTED]"
-        assert saved["response"]["headers"] == {
+    assert result["raw_response"] == raw_body
+    assert result["status_code"] == 200
+    assert isinstance(result["duration_ms"], int)
+    assert result["duration_ms"] >= 0
+    assert result["model_preview"] == preview
+    # The probe is kept as a ``model_probe`` trace with credentials and session
+    # headers redacted.
+    assert len(DebugTraceStore(tmp_path, trace_limit=50).get_traces()) == 1
+    saved = _saved_trace(tmp_path, result["trace_id"])
+    assert saved["type"] == "model_probe"
+    assert saved["provider_id"] == "openrouter"
+    assert saved["request"]["headers"]["Authorization"] == "[REDACTED]"
+    assert (
+        saved["response"]["headers"].items()
+        >= {
             "content-type": "application/json",
             "openai-organization": "[REDACTED]",
             "set-cookie": "[REDACTED]",
-        }
-        assert state.event_bus.events[-1]["payload"] == {"kind": "debug_traces"}
-
-    @respx.mock
-    @pytest.mark.asyncio
-    async def test_keyless_connection_probes_without_auth_header(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """A keyless Connection has no auth header name, so none is sent."""
-        state = _make_debug_state(tmp_path, debug_enabled=True)
-        provider = _make_probe_provider(
-            provider_id="local",
-            base_url="http://127.0.0.1:1234/v1",
-            connection_id="local",
-            connection_type="none",
-        )
-        state.runtime.providers.add(provider)
-        _use_real_credentials(monkeypatch, state, provider)
-        route = respx.get("http://127.0.0.1:1234/v1/models").mock(
-            return_value=httpx.Response(200, json={"data": [{"id": "local-model"}]})
-        )
-
-        response = await _probe(state, "local", "local:local")
-
-        assert response["ok"] is True, response
-        assert response["result"]["model_preview"]["model_count"] == 1
-        sent_headers = route.calls.last.request.headers
-        assert "authorization" not in sent_headers
-        assert all(name for name in sent_headers)
-
-    @respx.mock
-    @pytest.mark.asyncio
-    async def test_probe_uses_connection_level_endpoint(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Connection ``base_url``/``models_endpoint`` override Provider values as in discovery."""
-        state = _make_debug_state(tmp_path, debug_enabled=True)
-        provider = _make_probe_provider(
-            provider_id="variant",
-            base_url="https://api.variant.test/v1",
-            models_endpoint=None,
-            credential_key="VARIANT_API_KEY",
-            connection_base_url="https://backend.variant.test/api",
-            connection_models_endpoint="/connection/models",
-        )
-        state.runtime.providers.add(provider)
-        _use_real_credentials(
-            monkeypatch, state, provider, process_env={"VARIANT_API_KEY": "sk-variant-secret"}
-        )
-        route = respx.get("https://backend.variant.test/api/connection/models").mock(
-            return_value=httpx.Response(200, json={"data": []})
-        )
-
-        response = await _probe(state, "variant", "variant:api-key")
-
-        assert response["ok"] is True, response
-        assert route.calls.last.request.headers["authorization"] == "Bearer sk-variant-secret"
-        saved = DebugTraceStore(tmp_path, trace_limit=50).get_trace(response["result"]["trace_id"])
-        assert saved["request"]["url"] == "https://backend.variant.test/api/connection/models"
-        assert "sk-variant-secret" not in json.dumps(saved["request"])
-
-    @respx.mock
-    @pytest.mark.asyncio
-    async def test_probe_sends_adapter_discovery_headers_and_params(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """The probe sends the Adapter's discovery request, with credentials redacted."""
-        state = _make_debug_state(tmp_path, debug_enabled=True)
-        provider = _make_probe_provider(
-            provider_id="anthropic-probe",
-            base_url="https://api.anthropic.test/v1",
-            adapter="anthropic",
-            auth=AuthConfig(header="x-api-key", prefix="", credential_key="PROBE_ANTHROPIC_KEY"),
-        )
-        state.runtime.providers.add(provider)
-        _use_real_credentials(
-            monkeypatch,
-            state,
-            provider,
-            process_env={"PROBE_ANTHROPIC_KEY": "sk-ant-probe-secret"},
-        )
-        route = respx.get("https://api.anthropic.test/v1/models").mock(
-            return_value=httpx.Response(200, json={"data": [{"id": "claude-probe"}]})
-        )
-
-        response = await _probe(state, "anthropic-probe", "anthropic-probe:api-key")
-
-        assert response["ok"] is True, response
-        request = route.calls.last.request
-        assert request.url.params["limit"] == "1000"
-        assert request.headers["anthropic-version"] == "2023-06-01"
-        assert request.headers["x-api-key"] == "sk-ant-probe-secret"
-        saved = DebugTraceStore(tmp_path, trace_limit=50).get_trace(response["result"]["trace_id"])
-        assert saved["request"]["headers"]["x-api-key"] == "[REDACTED]"
-        assert "sk-ant-probe-secret" not in json.dumps(saved)
-
-    @pytest.mark.asyncio
-    async def test_rejects_connection_without_effective_endpoint(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """A Connection with neither its own nor a Provider endpoint cannot be probed."""
-        state = _make_debug_state(tmp_path, debug_enabled=True)
-        provider = _make_probe_provider(provider_id="no-catalog", models_endpoint=None)
-        state.runtime.providers.add(provider)
-        _use_real_credentials(monkeypatch, state, provider)
-
-        response = await _probe(state, "no-catalog", "no-catalog:api-key")
-
-        assert response["ok"] is False
-        assert response["error"]["code"] == RPC_ERROR_DOMAIN
+        }.items()
+    )
+    assert "sk-test-key" not in json.dumps(saved)
+    assert resource_changes(state) == [{"kind": "debug_traces"}]
 
 
-# ---------------------------------------------------------------------------
-# settings.get debug section
-# ---------------------------------------------------------------------------
+@respx.mock
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("provider", "process_env", "request_url", "sent_headers", "unsent_headers"),
+    [
+        # A keyless Connection has no auth header name, so none is sent.
+        pytest.param(
+            _make_probe_provider(
+                provider_id="local",
+                base_url="http://127.0.0.1:1234/v1",
+                connection_id="local",
+                connection_type="none",
+            ),
+            {},
+            "http://127.0.0.1:1234/v1/models",
+            {},
+            ("authorization",),
+            id="keyless",
+        ),
+        # Connection ``base_url``/``models_endpoint`` override the Provider values.
+        pytest.param(
+            _make_probe_provider(
+                provider_id="variant",
+                base_url="https://api.variant.test/v1",
+                models_endpoint=None,
+                credential_key="VARIANT_API_KEY",
+                connection_base_url="https://backend.variant.test/api",
+                connection_models_endpoint="/connection/models",
+            ),
+            {"VARIANT_API_KEY": "sk-variant-secret"},
+            "https://backend.variant.test/api/connection/models",
+            {"authorization": "Bearer sk-variant-secret"},
+            (),
+            id="connection-endpoint",
+        ),
+        # The Adapter's discovery headers and parameters are sent as in discovery.
+        pytest.param(
+            _make_probe_provider(
+                provider_id="anthropic-probe",
+                base_url="https://api.anthropic.test/v1",
+                adapter="anthropic",
+                auth=AuthConfig(
+                    header="x-api-key", prefix="", credential_key="PROBE_ANTHROPIC_KEY"
+                ),
+            ),
+            {"PROBE_ANTHROPIC_KEY": "sk-ant-probe-secret"},
+            "https://api.anthropic.test/v1/models?limit=1000",
+            {"anthropic-version": "2023-06-01", "x-api-key": "sk-ant-probe-secret"},
+            (),
+            id="adapter-discovery",
+        ),
+    ],
+)
+async def test_model_probe_sends_the_connection_discovery_request(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    provider: ProviderConfig,
+    process_env: dict[str, str],
+    request_url: str,
+    sent_headers: dict[str, str],
+    unsent_headers: tuple[str, ...],
+) -> None:
+    state = _make_debug_state(tmp_path)
+    _add_probe_provider(monkeypatch, state, provider, process_env)
+    route = respx.get(request_url.partition("?")[0]).mock(
+        return_value=httpx.Response(200, json={"data": [{"id": "probe-model"}]})
+    )
 
+    result = await rpc_result(
+        state,
+        "debug.model_probe",
+        provider_id=provider.id,
+        connection_id=f"{provider.id}:{provider.connections[0].id}",
+    )
 
-class TestSettingsGetDebugSection:
-    """Verify that ``settings.get`` includes the ``debug`` section."""
-
-    @pytest.mark.asyncio
-    async def test_includes_debug_section_when_disabled(self, tmp_path: Path) -> None:
-        """``settings.get`` includes ``debug`` with ``enabled=false`` when debug
-        is off."""
-        state = _make_debug_state(tmp_path, debug_enabled=False, trace_limit=30)
-
-        response = await dispatch_rpc(state, {"method": "settings.get", "params": {}})
-
-        assert response["ok"] is True
-        debug = response["result"]["debug"]
-        assert debug == {
-            "enabled": False,
-            "trace_limit": 30,
-            "trace_count": 0,
-        }
-
-    @pytest.mark.asyncio
-    async def test_includes_debug_section_when_enabled_with_traces(self, tmp_path: Path) -> None:
-        """``settings.get`` reports the live ``trace_count`` from disk."""
-        _seed_traces(tmp_path)
-        state = _make_debug_state(tmp_path, debug_enabled=True, trace_limit=75)
-
-        response = await dispatch_rpc(state, {"method": "settings.get", "params": {}})
-
-        assert response["ok"] is True
-        debug = response["result"]["debug"]
-        assert debug == {
-            "enabled": True,
-            "trace_limit": 75,
-            "trace_count": 3,
-        }
-
-    @pytest.mark.asyncio
-    async def test_debug_section_always_present(self, tmp_path: Path) -> None:
-        """The ``debug`` key is always present in the ``settings.get`` response,
-        even when no traces exist."""
-        state = _make_debug_state(tmp_path, debug_enabled=False)
-
-        response = await dispatch_rpc(state, {"method": "settings.get", "params": {}})
-
-        assert response["ok"] is True
-        assert "debug" in response["result"]
-        assert isinstance(response["result"]["debug"]["enabled"], bool)
-        assert isinstance(response["result"]["debug"]["trace_limit"], int)
-        assert isinstance(response["result"]["debug"]["trace_count"], int)
+    request = route.calls.last.request
+    assert str(request.url) == request_url
+    assert {name: request.headers[name] for name in sent_headers} == sent_headers
+    assert set(unsent_headers).isdisjoint(request.headers)
+    assert all(name for name in request.headers)
+    assert result["model_preview"]["model_count"] == 1
+    saved = _saved_trace(tmp_path, result["trace_id"])
+    assert saved["request"]["url"] == request_url
+    assert not any(secret in json.dumps(saved) for secret in process_env.values())

@@ -19,9 +19,15 @@ from core.database import (
 from core.performance import PerformanceService
 from core.performance.performance import reset_for_tests
 from core.sessions.errors import SessionStoreCorruptError
+from core.statistics import StatisticsUnavailableError
 from server.rpc.dispatcher import RpcMethodHandler, dispatch_rpc
 from server.rpc.error_mapping import _map_expected_error
-from server.rpc.errors import RPC_ERROR_DOMAIN, RPC_ERROR_INVALID_REQUEST, RpcError
+from server.rpc.errors import (
+    RPC_ERROR_DOMAIN,
+    RPC_ERROR_INVALID_REQUEST,
+    RPC_ERROR_METHOD_NOT_FOUND,
+    RpcError,
+)
 
 
 @pytest.mark.asyncio
@@ -43,6 +49,44 @@ async def test_expected_rpc_error_is_logged_without_request_params(
     assert caplog.messages == ["RPC request rejected (method=example.reject code=invalid_request)"]
     assert "do-not-log" not in caplog.text
     assert "secret request detail" not in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("request_", "code", "logged_method"),
+    [
+        pytest.param([], RPC_ERROR_INVALID_REQUEST, "<invalid>", id="not-an-object"),
+        pytest.param({"method": ""}, RPC_ERROR_INVALID_REQUEST, "<invalid>", id="empty-method"),
+        pytest.param(
+            {"method": "example.succeed", "params": []},
+            RPC_ERROR_INVALID_REQUEST,
+            "example.succeed",
+            id="params-not-an-object",
+        ),
+        pytest.param(
+            {"method": "example.unknown"},
+            RPC_ERROR_METHOD_NOT_FOUND,
+            "example.unknown",
+            id="unknown-method",
+        ),
+    ],
+)
+async def test_malformed_or_unknown_requests_are_rejected_before_any_handler(
+    caplog: pytest.LogCaptureFixture, request_: Any, code: str, logged_method: str
+) -> None:
+    calls: list[dict[str, Any]] = []
+
+    def succeed(_state: Any, params: dict[str, Any]) -> dict[str, Any]:
+        calls.append(params)
+        return {}
+
+    with caplog.at_level(logging.WARNING, logger="vbot.server.rpc.dispatcher"):
+        response = await dispatch_rpc(object(), request_, {"example.succeed": succeed})
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == code
+    assert calls == []
+    assert caplog.messages == [f"RPC request rejected (method={logged_method} code={code})"]
 
 
 @pytest.mark.asyncio
@@ -80,8 +124,17 @@ def test_key_error_is_not_an_expected_domain_error() -> None:
         DatabaseFormatError("sessions: newer generation"),
         DatabaseSchemaMismatchError("sessions", "table sessions", "has another primary key"),
         SessionStoreCorruptError("stored Session rows are invalid"),
+        # A busy Statistics index is retryable, not an internal failure.
+        StatisticsUnavailableError("Statistics are busy; retry shortly"),
     ],
-    ids=["unavailable", "corrupt", "format", "schema-mismatch", "owner-subclass"],
+    ids=[
+        "unavailable",
+        "corrupt",
+        "format",
+        "schema-mismatch",
+        "owner-subclass",
+        "statistics-busy",
+    ],
 )
 def test_every_database_failure_maps_to_one_domain_error(error: Exception) -> None:
     mapped = _map_expected_error(error)

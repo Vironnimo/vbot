@@ -47,11 +47,13 @@ def _models_with(connections: tuple[str, ...]) -> _StubModels:
     return _StubModels({("openai", "gpt-5.4"): _model(connections)})
 
 
-def test_rejects_connection_outside_allowlist() -> None:
-    models = _models_with(("subscription",))
-
+@pytest.mark.parametrize(
+    "model", ["openai/gpt-5.4::api-key", "openai/gpt-5.4::api-key:work"], ids=["plain", "account"]
+)
+def test_rejects_a_pinned_connection_outside_the_allowlist(model: str) -> None:
+    # An account suffix is ignored: only the Connection part is checked.
     with pytest.raises(RpcError) as exc_info:
-        _ensure_model_connection_supported(models, "model", "openai/gpt-5.4::api-key")
+        _ensure_model_connection_supported(_models_with(("subscription",)), "model", model)
 
     error = exc_info.value
     assert error.code == RPC_ERROR_INVALID_REQUEST
@@ -60,47 +62,20 @@ def test_rejects_connection_outside_allowlist() -> None:
     assert "subscription" in error.message
 
 
-def test_rejects_account_pinned_connection_outside_allowlist() -> None:
-    """The account suffix is ignored — only the connection part is checked."""
-    models = _models_with(("subscription",))
-
-    with pytest.raises(RpcError):
-        _ensure_model_connection_supported(models, "model", "openai/gpt-5.4::api-key:work")
-
-
-def test_allows_connection_in_allowlist() -> None:
-    models = _models_with(("subscription",))
-
-    _ensure_model_connection_supported(models, "model", "openai/gpt-5.4::subscription")
-
-
-def test_empty_allowlist_permits_any_connection() -> None:
-    models = _models_with(())
-
-    _ensure_model_connection_supported(models, "model", "openai/gpt-5.4::api-key")
-
-
-def test_no_pinned_connection_is_not_checked() -> None:
-    models = _models_with(("subscription",))
-
-    _ensure_model_connection_supported(models, "model", "openai/gpt-5.4")
-
-
-def test_empty_model_string_is_not_checked() -> None:
-    models = _models_with(("subscription",))
-
-    _ensure_model_connection_supported(models, "fallback_models[0]", "")
-
-
-def test_unknown_model_is_not_checked() -> None:
-    """A custom/absent model has no allowlist to validate against."""
-    models = _models_with(("subscription",))
-
-    _ensure_model_connection_supported(models, "model", "openai/custom-model::api-key")
-
-
-def test_malformed_model_string_is_not_checked() -> None:
-    """A model string without a provider prefix is surfaced at run time, not here."""
-    models = _models_with(("subscription",))
-
-    _ensure_model_connection_supported(models, "model", "garbage::api-key")
+@pytest.mark.parametrize(
+    ("allowlist", "model"),
+    [
+        pytest.param(("subscription",), "openai/gpt-5.4::subscription", id="allowed-connection"),
+        pytest.param((), "openai/gpt-5.4::api-key", id="empty-allowlist-permits-any"),
+        pytest.param(("subscription",), "openai/gpt-5.4", id="no-pinned-connection"),
+        pytest.param(("subscription",), "", id="empty-model-string"),
+        # A custom or absent Model has no allowlist to validate against.
+        pytest.param(("subscription",), "openai/custom-model::api-key", id="unknown-model"),
+        # A Model string without a Provider prefix is surfaced at Run time, not here.
+        pytest.param(("subscription",), "garbage::api-key", id="malformed-model-string"),
+    ],
+)
+def test_accepts_whenever_there_is_nothing_to_reject(
+    allowlist: tuple[str, ...], model: str
+) -> None:
+    _ensure_model_connection_supported(_models_with(allowlist), "model", model)

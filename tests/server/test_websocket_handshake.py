@@ -13,7 +13,7 @@ from starlette.websockets import WebSocketDisconnect  # type: ignore[import-not-
 from core.runs import ChatRunManager, RunKind, RunStatus
 from server.app import create_app
 from server.events import APP_ERROR_EVENT, ServerEventBus
-from tests.server.test_rpc import StubAdapter, StubRuntime
+from tests.server.rpc_test_support import StubAdapter, StubRuntime
 
 
 # -- Connection-ready handshake tests (Phase 1.1, Task 2) --
