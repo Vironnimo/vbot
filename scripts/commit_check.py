@@ -33,6 +33,7 @@ import json
 import os
 import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 import time
@@ -406,8 +407,25 @@ def _summary_lines(output: str, tests: list[str]) -> str:
     return "\n".join(lines)
 
 
+def _adopt_primary_data(root: Path) -> None:
+    """Copy the primary checkout's test-impact data into a worktree that has none."""
+    if (root / file_dependencies.TESTMON_DATA).is_file():
+        return
+    common = _git(root, "rev-parse", "--path-format=absolute", "--git-common-dir").strip()
+    primary = Path(common).parent
+    if Path(common).name != ".git" or primary.resolve() == root.resolve():
+        return
+    try:
+        copied = file_dependencies.copy_data(primary, root)
+    except (OSError, sqlite3.Error):
+        return
+    if copied:
+        print("Commit check: copied the test-impact data of the primary checkout.", flush=True)
+
+
 def check_tests(root: Path, changed: list[str], dirty: set[str]) -> list[StepResult]:
     """Run the pytest tests affected by *changed*, the staged and deleted paths."""
+    _adopt_primary_data(root)
     python_changed = any(Path(path).suffix in PYTHON_SUFFIXES for path in changed)
     data_files = {path for path in changed if Path(path).suffix not in PYTHON_SUFFIXES}
     readers = file_dependencies.readers(root, data_files)

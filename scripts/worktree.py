@@ -10,7 +10,6 @@ import os
 import re
 import runpy
 import shutil
-import sqlite3
 import stat
 import subprocess
 import sys
@@ -60,7 +59,6 @@ from scripts._worktree_records import (  # noqa: E402
     _read_worktree_marker,
     _read_worktree_registrations,
 )
-from tests import file_dependencies  # noqa: E402
 
 
 def _script_checkout_root() -> Path:
@@ -584,12 +582,6 @@ def cmd_create(args: argparse.Namespace) -> int:
         )
         print_error(str(exc))
         return 1
-
-    try:
-        if file_dependencies.copy_data(PROJECT_ROOT, worktree_path):
-            print("copied the test-impact data of the primary checkout", flush=True)
-    except (OSError, sqlite3.Error) as exc:
-        print(f"warning: test-impact data not copied ({exc}); the first commit runs all tests")
 
     npm_command = shutil.which("npm") or "npm"
     print("installing the verified search engine...", flush=True)

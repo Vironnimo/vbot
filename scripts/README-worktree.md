@@ -370,7 +370,7 @@ python -m pytest tests/scripts/test_test_env.py
 cd webui && npx vitest run src/lib/__tests__/i18n.test.js
 ```
 
-Commits in the worktree run the tracked pre-commit hook (formatting, lint, type check, affected tests), because worktrees share the repository's `core.hooksPath` setting. `create` copies the primary checkout's test-impact data (`.testmondata`, `.testfiledeps`), so the first commit runs only the tests it affects.
+Commits in the worktree run the tracked pre-commit hook (formatting, lint, type check, affected tests), because worktrees share the repository's `core.hooksPath` setting. The first commit check in a worktree copies the primary checkout's test-impact data (`.testmondata`, `.testfiledeps`), so it runs only the tests the commit affects.
 
 ## Files generated per worktree
 
