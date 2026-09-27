@@ -1,4 +1,4 @@
-"""Shell Tool calls written in other harnesses' argument shapes, and the env object."""
+"""Shell Tool arguments: other harnesses' shapes, rejections, timeouts, workdir and env."""
 
 from __future__ import annotations
 
@@ -18,18 +18,19 @@ from core.tools._shell_arguments import (
     split_env_object,
 )
 from core.tools.bash import register_bash_tool
+from core.tools.contracts import ToolContractError
 from core.tools.model_names import SHELL_MODEL_NAME
 from core.tools.process_manager import ProcessManager
 from core.tools.tools import ToolContext, ToolRegistry
-from tests.core.tools.bash_helpers import (
+from tests.core.tools.bash_test_support import (
     AGENT_ID,
     make_context,
     python_command,
 )
-from tests.core.tools.bash_helpers import (
+from tests.core.tools.bash_test_support import (
     manager as manager,
 )
-from tests.core.tools.bash_helpers import (
+from tests.core.tools.bash_test_support import (
     shell_env_cache as shell_env_cache,
 )
 
@@ -137,6 +138,10 @@ def test_other_harness_shapes_map_onto_the_shell_fields(arguments, expected) -> 
             {"command": "ls", "is_background": False, "mode": "background"},
             'mode is "background" but is_background asks for foreground; send one of them.',
         ),
+        (
+            {"command": "ls", "mode": "foreground", "yield_after": 0},
+            'mode is "foreground" but yield_after asks for background; send one of them.',
+        ),
         ({"command": "ls", "background": "maybe"}, "background must be true or false."),
         ({"command": "ls", "commands": ["pwd"]}, "command and commands are both given; send one."),
         (
@@ -172,6 +177,26 @@ def test_calls_asking_for_a_different_effect_fail_with_the_fix(arguments, messag
     with pytest.raises(ValueError) as raised:
         normalize_shell_arguments(arguments)
     assert str(raised.value).startswith(NOT_RUN + message)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("arguments", "message"),
+    [
+        ({"env": "SAFE_VALUE=1"}, '"env" must be an object'),
+        ({"timeout": -1}, '"timeout" must be at least 0'),
+        ({"timeout": "never"}, '"timeout" must be a number'),
+    ],
+)
+async def test_values_the_schema_rejects_never_spawn(
+    manager: ProcessManager, tmp_path: Path, arguments: dict[str, Any], message: str
+) -> None:
+    with pytest.raises(ToolContractError, match=message):
+        await _dispatch(
+            manager, make_context(tmp_path), {"command": "print('never runs')", **arguments}
+        )
+
+    assert manager.list_processes(AGENT_ID) == []
 
 
 @pytest.mark.parametrize(
@@ -312,17 +337,43 @@ def test_timeout_message_repeats_how_the_timeout_was_read() -> None:
 
 
 @pytest.mark.asyncio
-async def test_other_harness_workdir_spelling_runs_there(
-    manager: ProcessManager, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    ("cwd", "arguments", "expected"),
+    [
+        (None, {}, "workspace"),
+        # A project Session's cwd, not the Agent workspace, is the default.
+        ("repo", {}, "repo"),
+        (
+            "repo",
+            {"workdir": "sub", "description": "Run the focused check with a long title"},
+            "repo/sub",
+        ),
+        (None, {"cwd": "src"}, "workspace/src"),
+    ],
+)
+async def test_commands_run_in_the_working_directory_the_call_resolves(
+    manager: ProcessManager,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    cwd: str | None,
+    arguments: dict[str, Any],
+    expected: str,
 ) -> None:
     monkeypatch.setattr(bash_module, "_shell_argv", python_command)
-    (tmp_path / "src").mkdir()
+    for directory in ("workspace/src", "repo/sub"):
+        (tmp_path / directory).mkdir(parents=True)
+    context = make_context(tmp_path / "workspace", cwd=tmp_path / cwd if cwd else None)
 
     result = await _dispatch(
-        manager, make_context(tmp_path), {"cmd": "import os; print(os.getcwd())", "cwd": "src"}
+        manager,
+        context,
+        {"command": "import os; open('marker.txt', 'w').write(os.getcwd())", **arguments},
     )
 
-    assert Path(result["data"]["output"].strip()) == tmp_path / "src"
+    assert result["ok"] is True
+    assert result["data"]["exit_code"] == 0
+    marker = tmp_path / expected / "marker.txt"
+    assert Path(marker.read_text(encoding="utf-8")).resolve() == (tmp_path / expected).resolve()
 
 
 @pytest.mark.asyncio
@@ -349,6 +400,22 @@ async def test_missing_workdir_fails_before_spawn_with_nearby_directories(
     assert message.startswith(NOT_RUN + "workdir ")
     for text in expected:
         assert text in message
+    assert manager.list_processes(AGENT_ID) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("timeout", [float("inf"), float("nan")])
+async def test_a_timeout_that_is_not_finite_fails_before_spawn(
+    manager: ProcessManager, tmp_path: Path, timeout: float
+) -> None:
+    result = await _dispatch(
+        manager, make_context(tmp_path), {"command": "never runs", "timeout": timeout}
+    )
+
+    assert result["error"] == {
+        "code": "invalid_arguments",
+        "message": "timeout must be a finite number",
+    }
     assert manager.list_processes(AGENT_ID) == []
 
 
