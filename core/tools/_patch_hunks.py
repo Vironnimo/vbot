@@ -41,6 +41,7 @@ _EOF_WARNING = (
     "where they are."
 )
 _WITHIN_LINE_NOTE = "The - line is part of line {line}; only that part of the line was replaced."
+_UNMARKED_ADVICE = "Start every added line with +."
 _BREAK = TEXT_LINE_BREAK
 _GUTTER = re.compile(r"^\s*[1-9][0-9]*(?::[1-9][0-9]*)?\|")
 _ESCAPE = re.compile(r"\\(n|r|t|\\|\"|')")
@@ -354,6 +355,65 @@ def _replace_within_line(window: str, hunk: _Hunk) -> tuple[str, int] | None:
     ) + 1
 
 
+def _unmarked_readings(content: str, hunk: _Hunk) -> list[tuple[_Hunk, list[str]]]:
+    """Return readings of a parsed hunk that add its unprefixed lines between + lines.
+
+    Models leave the + off some added lines, often a statement's continuation
+    lines; such a line parses as unchanged. Each reading is the hunk with the
+    lines of some such runs added as the patch wrote them, paired with their
+    texts: first the runs holding a line the file lacks, then all runs. A
+    reading keeps at least one unchanged or removed line to place it.
+    """
+    lines = hunk.lines
+    if len(hunk.written) != len(lines):
+        return []
+    runs: list[range] = []
+    start = 0
+    while start < len(lines):
+        end = start
+        while end < len(lines) and lines[end][0] == " ":
+            end += 1
+        if 0 < start < end < len(lines) and lines[start - 1][0] == lines[end][0] == "+":
+            runs.append(range(start, end))
+        start = end + 1
+    present = {_loose(line) for line in split_text_lines(content)}
+    missing = [
+        run
+        for run in runs
+        if any(lines[i][1].strip() and _loose(lines[i][1]) not in present for i in run)
+    ]
+    readings = []
+    for chosen in dict.fromkeys((tuple(missing), tuple(runs))):
+        if not chosen:
+            continue
+        added = [i for run in chosen for i in run]
+        # A line the patch wrote with only whitespace is a blank added line.
+        texts = {i: hunk.written[i] if hunk.written[i].strip() else "" for i in added}
+        read = [("+", texts[i]) if i in texts else line for i, line in enumerate(lines)]
+        if any(prefix in " -" for prefix, _ in read):
+            reading = replace(hunk, lines=read, written=[], precise_only=True)
+            readings.append((reading, [texts[i] for i in added]))
+    return readings
+
+
+def _unmarked_note(texts: list[str]) -> str:
+    """Name the unprefixed lines a reading added, by the first that is not blank."""
+    shown = next((text.strip() for text in texts if text.strip()), "")
+    quoted = repr(shown if len(shown) <= 80 else shown[:77] + "...")
+    if len(texts) == 1:
+        subject = f"The patch line {quoted}" if shown else "A blank patch line"
+        return (
+            f"{subject} between + lines has no + prefix, but the file does not have it "
+            f"there, so it was added as a + line. {_UNMARKED_ADVICE}"
+        )
+    subject = f"{len(texts)} patch lines" if shown else f"{len(texts)} blank patch lines"
+    example = f"; for example {quoted}" if shown else ""
+    return (
+        f"{subject} between + lines have no + prefix, but the file does not have them "
+        f"there, so they were added as + lines{example}. {_UNMARKED_ADVICE}"
+    )
+
+
 def _hint_text(hint: str) -> str:
     """Show a context hint in one line; a multi-line context block by its first line."""
     first, _, rest = hint.partition("\n")
@@ -501,6 +561,7 @@ def _apply_hunk(content: str, hunk: _Hunk, path: object) -> tuple[str, list[str]
         return _insert_at_line(content, hunk, path), []
     if not any(prefix in "+-" for prefix, _ in hunk.lines):
         return content, []
+    parsed = hunk
     hunk, warnings = _clean_additions(hunk, path)
     offset = 0
     hint_start = 0
@@ -628,6 +689,16 @@ def _apply_hunk(content: str, hunk: _Hunk, path: object) -> tuple[str, list[str]
     if isinstance(found, AmbiguousFuzzyMatch):
         details, values = _ambiguity(content, found, offset)
         raise _PatchError("ambiguous_match", path=path, label=hunk.label, details=details, **values)
+    if found is None:
+        # Only the lines between + lines are re-read, and only a precise match
+        # places the reading: the file must hold the lines around them adjacent.
+        for reading, added in _unmarked_readings(content, parsed):
+            try:
+                edited, notes = _apply_hunk(content, reading, path)
+            except _PatchError:
+                continue
+            if edited != content:
+                return edited, [*notes, _unmarked_note(added)]
     if found is None and hunk.eof:
         # The marker only claims where the lines are; the lines alone may still place
         # them. Text found elsewhere never proves the change was made earlier.

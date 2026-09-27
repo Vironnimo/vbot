@@ -12,7 +12,7 @@ from core.tools import file_state as file_state_module
 from core.tools.apply_patch import register_apply_patch_tool
 from core.tools.file_state import FileReadState
 from core.tools.tools import ToolRegistry
-from tests.core.tools.apply_patch_helpers import context, text
+from tests.core.tools.apply_patch_helpers import apply, context, text, update
 
 
 @pytest.mark.asyncio
@@ -233,6 +233,64 @@ async def test_context_only_patch_shows_the_lines_around_each_occurrence(tmp_pat
         "Add unchanged lines until they occur only at the place you mean.\n"
         "No file was changed."
     )
+
+
+def test_unprefixed_lines_between_additions_are_added_as_written(tmp_path):
+    # Session shape: the + on a statement's continuation lines was left off.
+    path = tmp_path / "file.py"
+    path.write_bytes(b"def f(rows):\n    for row in rows:\n        check(row)\n    return rows\n")
+    result = apply(
+        tmp_path,
+        update(
+            "@@ def f(rows):\n         check(row)\n+        if row in seen:\n"
+            '+            raise ValueError(\n                f"duplicate {row}"\n'
+            "+            )\n\n+        seen.add(row)\n     return rows",
+            "file.py",
+        ),
+    )
+    assert result["ok"], text(result)
+    assert path.read_bytes() == (
+        b"def f(rows):\n    for row in rows:\n        check(row)\n        if row in seen:\n"
+        b'            raise ValueError(\n                f"duplicate {row}"\n            )\n'
+        b"\n        seen.add(row)\n    return rows\n"
+    )
+    assert text(result).endswith(
+        "Note: 2 patch lines between + lines have no + prefix, but the file does not have "
+        "them there, so they were added as + lines; for example 'f\"duplicate {row}\"'. "
+        "Start every added line with +."
+    )
+
+
+def test_unprefixed_lines_the_file_has_between_additions_stay_unchanged(tmp_path):
+    path = tmp_path / "file.txt"
+    path.write_bytes(b"start\nkeep\nend\n")
+    result = apply(tmp_path, update("@@\n start\n+one\nkeep\n+two\n    three\n+four\n end"))
+    assert result["ok"], text(result)
+    assert path.read_bytes() == b"start\none\nkeep\ntwo\n    three\nfour\nend\n"
+    assert text(result).endswith(
+        "Note: The patch line 'three' between + lines has no + prefix, but the file does not "
+        "have it there, so it was added as a + line. Start every added line with +."
+    )
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        # A misspelled copy of the line the file has there is not a new line.
+        "@@\n start\n+one\n keep this lien\n+two\n end",
+        # Without an unchanged line, nothing places the lines.
+        "@@\n+one\n missing\n+two",
+        # Only lines between + lines are read as added.
+        "@@\n start\n+one\n missing",
+        "@@\n missing\n+one\n start",
+    ],
+)
+def test_unprefixed_lines_are_added_only_where_unchanged_lines_place_them(tmp_path, body):
+    path = tmp_path / "file.txt"
+    path.write_bytes(b"start\nkeep this line\nend\n")
+    result = apply(tmp_path, update(body))
+    assert "no + prefix" not in text(result)
+    assert b"lien" not in path.read_bytes() and b"missing" not in path.read_bytes()
 
 
 def sharing_error(code: int = 5) -> OSError:

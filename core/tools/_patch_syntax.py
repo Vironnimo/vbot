@@ -203,6 +203,10 @@ class _Hunk:
     replacement: _Replacement | None = None
     insert_line: int | None = None
     label: str = ""
+    # V4A Update lines as the patch wrote them, one per ``lines`` entry of the
+    # parsed hunk: an unprefixed line and a space-prefixed one parse alike, but
+    # read as added text they differ by that space. Empty for other forms.
+    written: list[str] = field(default_factory=list, compare=False, repr=False)
 
     def changes_text(self) -> bool:
         if self.replacement is not None:
@@ -499,6 +503,7 @@ def _parse_v4a(lines: list[str], default_path: str | None) -> list[_Operation]:
                 if anchor.strip():
                     hunk.hints.append(anchor)
                 hunk.lines = []
+                hunk.written = []
             if hunk is None or hunk.lines:
                 hunk = _Hunk()
                 current.hunks.append(hunk)
@@ -551,6 +556,7 @@ def _parse_v4a(lines: list[str], default_path: str | None) -> list[_Operation]:
             prefix, text = "+", line[1:] if line.startswith("+") else line
         else:
             prefix, text = (line[0], line[1:]) if line and line[0] in " +-" else (" ", line)
+            hunk.written.append(line)
         hunk.lines.append((prefix, text))
     return operations
 

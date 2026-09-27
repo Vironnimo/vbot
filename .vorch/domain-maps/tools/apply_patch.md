@@ -292,6 +292,19 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   doubled quote/backslash escapes absent from the actual target.
   Surplus blank boundary context can be dropped after the full locator misses.
   Blank lines explicitly marked for deletion remain meaningful operations.
+- Unprefixed or space-prefixed V4A Update lines between two `+` lines parse as
+  context (`_Hunk.written` keeps each line as written). When the hunk, its other
+  recoveries and `copy_match` all miss, `_unmarked_readings` re-reads such runs as
+  `+` lines with the text as written (whitespace-only becomes blank): first only
+  runs holding a nonblank line the file lacks, then all runs. A reading needs at
+  least one remaining context/removal line and applies only through precise
+  matching (`precise_only`), so the file must hold the surrounding lines
+  adjacent; a failing reading falls back to the original error. Success adds a
+  note naming the lines and asking for `+` on every added line. Runs at a hunk
+  edge are never re-read: a typo in edge context would otherwise duplicate the
+  line. Evidence: one Model family often left the `+` off statement continuation
+  lines; in 16 of its 34 failed calls with such runs, the first difference was
+  one of those lines (Sessions, 2026-09).
 - Context-only blocks before another `@@` become ordered precise locator hints
   for that next hunk, including multiline context. Missing or ambiguous anchors
   fail without falling back to a different location; duplicate matches after
