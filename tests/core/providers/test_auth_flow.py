@@ -1,455 +1,388 @@
-"""Auth flow: device flows behavior."""
+"""DeviceFlowEngine: per-flow authorization and polling, persistence and managed lifecycle.
+
+Every flow runs through ``connect()`` against mocked Provider endpoints. Poll waits go
+through the module's ``_sleep`` seam, so tests either record them or park polling.
+"""
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
-import json
+import logging
+from collections.abc import AsyncIterator, Awaitable
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock, patch
-from urllib.parse import parse_qs
 
 import httpx
 import pytest
+import pytest_asyncio
 import respx
 
-from core.providers.auth_flow import DeviceFlowEngine, DeviceFlowTerminalError
-from core.providers.errors import ProviderError
+from core.providers import auth_flow
+from core.providers.auth_flow import (
+    DEVICE_CODE_GRANT_TYPE,
+    MINIMAX_OAUTH_GRANT_TYPE,
+    DeviceFlowEngine,
+    DeviceFlowSession,
+    DeviceFlowTerminalError,
+)
 from core.providers.providers import OAuthConfig
 from core.providers.token_store import TokenStore
-from tests.core.providers.auth_flow_helpers import (
-    DEVICE_AUTH_URL,
+
+from .oauth_test_support import (
+    COPILOT_TOKEN_EXCHANGE_URL,
+    GITHUB_DEVICE_AUTH_URL,
+    GITHUB_TOKEN_URL,
+    MINIMAX_DEVICE_AUTH_URL,
+    MINIMAX_TOKEN_URL,
     OPENAI_DEVICE_AUTH_URL,
+    OPENAI_DEVICE_TOKEN_URL,
+    OPENAI_REDIRECT_URI,
+    OPENAI_TOKEN_URL,
     OPENAI_VERIFICATION_URI,
-    _oauth_config,
-    _openai_oauth_config,
+    github_oauth_config,
+    jwt_with_account,
+    minimax_oauth_config,
+    nous_oauth_config,
+    openai_oauth_config,
+    opencode_oauth_config,
+    request_body,
+    seconds_until,
+    xai_oauth_config,
 )
 
-MINIMAX_DEVICE_AUTH_URL = "https://api.minimax.io/oauth/code"
-
-MINIMAX_TOKEN_URL = "https://api.minimax.io/oauth/token"
-
-MINIMAX_VERIFICATION_URI = "https://api.minimax.io/oauth/verify"
-
-XAI_DEVICE_AUTH_URL = "https://auth.x.ai/oauth2/device/code"
-
-XAI_TOKEN_URL = "https://auth.x.ai/oauth2/token"
-
-NOUS_DEVICE_AUTH_URL = "https://portal.nousresearch.com/api/oauth/device/code"
-
-NOUS_TOKEN_URL = "https://portal.nousresearch.com/api/oauth/token"
-
-OPENCODE_DEVICE_AUTH_URL = "https://console.opencode.ai/auth/device/code"
-
-OPENCODE_TOKEN_URL = "https://console.opencode.ai/auth/device/token"
+GITHUB_AUTHORIZATION = {
+    "device_code": "device-code",
+    "user_code": "ABCD-EFGH",
+    "verification_uri": "https://github.com/login/device",
+    "expires_in": 900,
+    "interval": 3,
+}
+PENDING = httpx.Response(200, json={"error": "authorization_pending"})
+PENDING_400 = httpx.Response(400, json={"error": "authorization_pending"})
 
 
-def _minimax_oauth_config() -> OAuthConfig:
-    return OAuthConfig(
-        flow="device",
-        client_id="minimax-client-id",
-        device_auth_url=MINIMAX_DEVICE_AUTH_URL,
-        token_url=MINIMAX_TOKEN_URL,
-        scopes=["group_id", "profile", "model.completion"],
-        device_flow="minimax_oauth",
-    )
+class Completion:
+    """``on_complete`` callback that lets a test await the flow's outcome.
+
+    ``connect`` accepts plain and coroutine callbacks; ``awaitable`` selects the latter.
+    """
+
+    def __init__(self, *, awaitable: bool = False) -> None:
+        self.outcomes: list[bool] = []
+        self._done = asyncio.Event()
+        self._awaitable = awaitable
+
+    def __call__(self, *, success: bool) -> Awaitable[None] | None:
+        self.outcomes.append(success)
+        self._done.set()
+        return asyncio.sleep(0) if self._awaitable else None
+
+    async def wait(self) -> bool:
+        await asyncio.wait_for(self._done.wait(), timeout=5)
+        assert len(self.outcomes) == 1
+        return self.outcomes[0]
 
 
-def _xai_oauth_config() -> OAuthConfig:
-    return OAuthConfig(
-        flow="device",
-        client_id="xai-client-id",
-        device_auth_url=XAI_DEVICE_AUTH_URL,
-        token_url=XAI_TOKEN_URL,
-        scopes=["openid", "offline_access", "grok-cli:access", "api:access"],
-        device_flow="xai_oauth",
-    )
+@pytest.fixture
+def store(tmp_path) -> TokenStore:
+    return TokenStore(tmp_path)
 
 
-def _nous_oauth_config() -> OAuthConfig:
-    return OAuthConfig(
-        flow="device",
-        client_id="hermes-cli",
-        device_auth_url=NOUS_DEVICE_AUTH_URL,
-        token_url=NOUS_TOKEN_URL,
-        scopes=["inference:invoke"],
-        device_flow="nous_oauth",
-    )
+@pytest_asyncio.fixture
+async def engine(store: TokenStore) -> AsyncIterator[DeviceFlowEngine]:
+    engine = DeviceFlowEngine(store)
+    try:
+        yield engine
+    finally:
+        await engine.aclose()
 
 
-def _opencode_oauth_config() -> OAuthConfig:
-    return OAuthConfig(
-        flow="device",
-        client_id="opencode-cli",
-        device_auth_url=OPENCODE_DEVICE_AUTH_URL,
-        token_url=OPENCODE_TOKEN_URL,
-        scopes=[],
-        device_flow="opencode_oauth",
-    )
+@pytest.fixture
+def poll_waits(monkeypatch: pytest.MonkeyPatch) -> list[float]:
+    """Record every poll wait without sleeping."""
+
+    waits: list[float] = []
+
+    async def record(seconds: float) -> None:
+        waits.append(seconds)
+
+    monkeypatch.setattr(auth_flow, "_sleep", record)
+    return waits
 
 
-@respx.mock
-@pytest.mark.asyncio
-async def test_start_device_flow_posts_client_id_and_scope(tmp_path: Path) -> None:
-    """Starting a device flow returns the user-facing session data."""
-    # Arrange
-    engine = DeviceFlowEngine(TokenStore(tmp_path))
-    route = respx.post(DEVICE_AUTH_URL).mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "device_code": "device-code",
-                "user_code": "ABCD-EFGH",
-                "verification_uri": "https://github.com/login/device",
-                "expires_in": 900,
-                "interval": 3,
-            },
-        )
-    )
+class ParkedPolls:
+    """Poll waits that never elapse: each poll parks after its first pending reply."""
 
-    # Act
-    session = await engine._request_device_session("github-copilot", "oauth", _oauth_config())
+    def __init__(self) -> None:
+        self.parked: asyncio.Queue[None] = asyncio.Queue()
+        self.cancelled = 0
 
-    # Assert
-    assert session.device_code == "device-code"
-    assert session.user_code == "ABCD-EFGH"
-    assert session.verification_uri == "https://github.com/login/device"
-    assert session.expires_in == 900
-    assert session.interval == 3
-    assert route.calls.last.request.content == b"client_id=client-id&scope=read%3Auser"
+    async def __call__(self, _seconds: float) -> None:
+        self.parked.put_nowait(None)
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            self.cancelled += 1
+            raise
+
+    async def next(self) -> None:
+        await asyncio.wait_for(self.parked.get(), timeout=5)
 
 
-@respx.mock
-@pytest.mark.asyncio
-async def test_start_xai_flow_prefers_complete_verification_uri(tmp_path: Path) -> None:
-    engine = DeviceFlowEngine(TokenStore(tmp_path))
-    route = respx.post(XAI_DEVICE_AUTH_URL).mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "device_code": "xai-device-code",
-                "user_code": "XAI-CODE",
-                "verification_uri": "https://auth.x.ai/device",
-                "verification_uri_complete": "https://auth.x.ai/device?user_code=XAI-CODE",
-                "expires_in": 900,
-                "interval": 5,
-            },
-        )
-    )
+@pytest.fixture
+def parked_polls(monkeypatch: pytest.MonkeyPatch) -> ParkedPolls:
+    parked = ParkedPolls()
+    monkeypatch.setattr(auth_flow, "_sleep", parked)
+    return parked
 
-    session = await engine._request_device_session("xai", "subscription", _xai_oauth_config())
 
-    assert session.verification_uri == "https://auth.x.ai/device?user_code=XAI-CODE"
-    assert parse_qs(route.calls.last.request.content.decode()) == {
-        "client_id": ["xai-client-id"],
-        "scope": ["openid offline_access grok-cli:access api:access"],
+def _auth_logs(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [r.getMessage() for r in caplog.records if r.name == "vbot.providers.auth_flow"]
+
+
+# ---------------------------------------------------------------------------
+# Authorization and polling per flow
+# ---------------------------------------------------------------------------
+
+
+def _standard_flow(
+    config: OAuthConfig, *, pending: httpx.Response, scope: str | None = None
+) -> dict[str, Any]:
+    authorization: dict[str, Any] = {
+        "device_code": "device-code",
+        "user_code": "USER-CODE",
+        "verification_uri": "https://login.example/device",
+        "verification_uri_complete": "https://login.example/device?user_code=USER-CODE",
+        "expires_in": 900,
+        "interval": 5,
     }
-
-
-@respx.mock
-@pytest.mark.asyncio
-async def test_xai_flow_accepts_http_400_pending_then_saves_rotated_token(
-    tmp_path: Path,
-) -> None:
-    token_store = TokenStore(tmp_path)
-    engine = DeviceFlowEngine(token_store)
-    responses = [
-        httpx.Response(400, json={"error": "authorization_pending"}),
-        httpx.Response(
-            200,
-            json={
-                "access_token": "xai-access",
-                "refresh_token": "xai-refresh",
-                "expires_in": 900,
-            },
+    granted: dict[str, Any] = {"access_token": "access", "refresh_token": "refresh"}
+    if scope is not None:
+        granted["scope"] = scope
+    return {
+        "config": config,
+        "authorization": authorization,
+        "authorization_body": {"client_id": config.client_id, "scope": " ".join(config.scopes)},
+        "session": DeviceFlowSession(
+            "device-code", "USER-CODE", authorization["verification_uri_complete"], 900, 5
         ),
-    ]
-    route = respx.post(XAI_TOKEN_URL).mock(side_effect=responses)
-
-    with patch("core.providers.auth_flow._sleep", new_callable=AsyncMock):
-        await engine._poll_for_token(
-            "xai",
-            "subscription",
-            _xai_oauth_config(),
-            "xai-device-code",
-            5,
-            900,
-            AsyncMock(),
-        )
-
-    assert route.call_count == 2
-    request_form = parse_qs(route.calls.last.request.content.decode())
-    assert request_form == {
-        "client_id": ["xai-client-id"],
-        "device_code": ["xai-device-code"],
-        "grant_type": ["urn:ietf:params:oauth:grant-type:device_code"],
+        "pending": pending,
+        "granted": {**granted, "expires_in": 900},
+        "token_body": {
+            "client_id": config.client_id,
+            "device_code": "device-code",
+            "grant_type": DEVICE_CODE_GRANT_TYPE,
+        },
+        "extra": {} if scope is None else {"oauth_scope": scope},
     }
-    token = token_store.load("xai", "subscription")
+
+
+_OPENCODE = _standard_flow(opencode_oauth_config(), pending=PENDING_400)
+_OPENCODE["authorization_body"] = {"client_id": "opencode-cli"}
+
+DEVICE_FLOWS = {
+    "standard": {
+        "config": github_oauth_config(),
+        "authorization": GITHUB_AUTHORIZATION,
+        "authorization_body": {"client_id": "client-id", "scope": "read:user"},
+        "session": DeviceFlowSession(
+            "device-code", "ABCD-EFGH", "https://github.com/login/device", 900, 3
+        ),
+        "pending": PENDING,
+        "granted": {"access_token": "access", "refresh_token": "refresh", "expires_in": 600},
+        "token_body": {
+            "client_id": "client-id",
+            "device_code": "device-code",
+            "grant_type": DEVICE_CODE_GRANT_TYPE,
+        },
+        "extra": {},
+    },
+    # xAI and Nous prefer the complete verification URI and poll through HTTP 400.
+    "xai": _standard_flow(xai_oauth_config(), pending=PENDING_400),
+    "nous": _standard_flow(nous_oauth_config(), pending=PENDING_400, scope="inference:invoke"),
+    # OpenCode posts JSON to both endpoints.
+    "opencode": _OPENCODE,
+}
+
+
+@respx.mock
+@pytest.mark.asyncio
+@pytest.mark.parametrize("flow", list(DEVICE_FLOWS))
+async def test_device_flow_polls_until_granted_and_stores_the_account_token(
+    engine: DeviceFlowEngine,
+    store: TokenStore,
+    poll_waits: list[float],
+    caplog: pytest.LogCaptureFixture,
+    flow: str,
+) -> None:
+    case = DEVICE_FLOWS[flow]
+    config: OAuthConfig = case["config"]
+    authorization = respx.post(config.device_auth_url).mock(
+        return_value=httpx.Response(200, json=case["authorization"])
+    )
+    polling = respx.post(config.token_url).mock(
+        side_effect=[case["pending"], httpx.Response(200, json=case["granted"])]
+    )
+    completion = Completion()
+
+    with caplog.at_level(logging.INFO, logger="vbot.providers.auth_flow"):
+        session = await engine.connect("provider", "oauth", config, completion, account_id="work")
+        assert await completion.wait() is True
+
+    assert session == case["session"]
+    assert request_body(authorization.calls.last.request) == case["authorization_body"]
+    assert [request_body(call.request) for call in polling.calls] == [case["token_body"]] * 2
+    assert poll_waits == [session.interval]
+    token = store.load("provider", "oauth", account_id="work")
     assert token is not None
-    assert token.access_token == "xai-access"
-    assert token.refresh_token == "xai-refresh"
+    assert (token.access_token, token.refresh_token) == ("access", "refresh")
+    assert token.extra == case["extra"]
+    assert seconds_until(token.expires_at) == pytest.approx(case["granted"]["expires_in"], abs=5)
+    assert store.load("provider", "oauth") is None
+    logs = _auth_logs(caplog)
+    assert "OAuth provider connected (provider=provider connection=oauth)" in logs
+    assert all("work" not in message and "access" not in message for message in logs)
 
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_nous_flow_uses_inference_scope_and_accepts_http_400_pending(
-    tmp_path: Path,
+async def test_openai_flow_polls_usercode_then_exchanges_the_authorization_code(
+    engine: DeviceFlowEngine, store: TokenStore, poll_waits: list[float]
 ) -> None:
-    token_store = TokenStore(tmp_path)
-    engine = DeviceFlowEngine(token_store)
-    device_route = respx.post(NOUS_DEVICE_AUTH_URL).mock(
+    config = openai_oauth_config()
+    authorization = respx.post(OPENAI_DEVICE_AUTH_URL).mock(
         return_value=httpx.Response(
-            200,
-            json={
-                "device_code": "nous-device-code",
-                "user_code": "NOUS-CODE",
-                "verification_uri": "https://portal.nousresearch.com/device",
-                "verification_uri_complete": (
-                    "https://portal.nousresearch.com/device?user_code=NOUS-CODE"
-                ),
-                "expires_in": 900,
-                "interval": 5,
-            },
+            200, json={"device_auth_id": "device-auth-id", "user_code": "WXYZ-1234", "interval": 2}
         )
     )
-    token_route = respx.post(NOUS_TOKEN_URL).mock(
+    polling = respx.post(OPENAI_DEVICE_TOKEN_URL).mock(
         side_effect=[
-            httpx.Response(400, json={"error": "authorization_pending"}),
+            httpx.Response(403, json={"message": "not authorized yet"}),
             httpx.Response(
-                200,
-                json={
-                    "access_token": "nous-access",
-                    "refresh_token": "nous-refresh",
-                    "expires_in": 900,
-                    "scope": "inference:invoke",
-                },
+                200, json={"authorization_code": "authorization-code", "code_verifier": "verifier"}
             ),
         ]
     )
-
-    session = await engine._request_device_session("nous", "subscription", _nous_oauth_config())
-    with patch("core.providers.auth_flow._sleep", new_callable=AsyncMock):
-        await engine._poll_for_token(
-            "nous",
-            "subscription",
-            _nous_oauth_config(),
-            session.device_code,
-            session.interval,
-            session.expires_in,
-            AsyncMock(),
+    access_token = jwt_with_account("acct_openai")
+    exchange = respx.post(OPENAI_TOKEN_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={"access_token": access_token, "refresh_token": "refresh", "expires_in": 3600},
         )
+    )
+    completion = Completion(awaitable=True)
 
-    assert session.verification_uri.endswith("user_code=NOUS-CODE")
-    assert parse_qs(device_route.calls.last.request.content.decode()) == {
-        "client_id": ["hermes-cli"],
-        "scope": ["inference:invoke"],
+    session = await engine.connect("openai", "subscription", config, completion)
+
+    assert await completion.wait() is True
+    assert session == DeviceFlowSession(
+        "device-auth-id", "WXYZ-1234", OPENAI_VERIFICATION_URI, 600, 2
+    )
+    assert request_body(authorization.calls.last.request) == {"client_id": config.client_id}
+    assert [request_body(call.request) for call in polling.calls] == [
+        {"device_auth_id": "device-auth-id", "user_code": "WXYZ-1234"}
+    ] * 2
+    assert poll_waits == [2]
+    assert request_body(exchange.calls.last.request) == {
+        "grant_type": "authorization_code",
+        "client_id": config.client_id,
+        "code": "authorization-code",
+        "code_verifier": "verifier",
+        "redirect_uri": OPENAI_REDIRECT_URI,
     }
-    assert token_route.call_count == 2
-    stored = token_store.load("nous", "subscription")
-    assert stored is not None
-    assert stored.access_token == "nous-access"
-    assert stored.refresh_token == "nous-refresh"
-    assert stored.extra == {"oauth_scope": "inference:invoke"}
+    token = store.load("openai", "subscription")
+    assert token is not None
+    assert (token.access_token, token.refresh_token) == (access_token, "refresh")
+    assert token.extra == {"chatgpt_account_id": "acct_openai"}
 
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_nous_flow_rejects_explicitly_missing_inference_scope(tmp_path: Path) -> None:
-    engine = DeviceFlowEngine(TokenStore(tmp_path))
-    respx.post(NOUS_TOKEN_URL).mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "access_token": "wrong-access",
-                "refresh_token": "wrong-refresh",
-                "expires_in": 900,
-                "scope": "profile",
-            },
-        )
-    )
-
-    async with httpx.AsyncClient() as client:
-        data = await engine._request_device_token(
-            client,
-            _nous_oauth_config(),
-            "nous-device-code",
-        )
-        with pytest.raises(DeviceFlowTerminalError, match="missing_inference_invoke_scope"):
-            await engine._build_token(client, _nous_oauth_config(), data)
-
-
-@respx.mock
-@pytest.mark.asyncio
-async def test_opencode_flow_posts_json_accepts_pending_and_stores_rotating_token(
-    tmp_path: Path,
+async def test_minimax_flow_uses_pkce_state_and_millisecond_fields(
+    engine: DeviceFlowEngine, store: TokenStore, poll_waits: list[float]
 ) -> None:
-    token_store = TokenStore(tmp_path)
-    engine = DeviceFlowEngine(token_store)
-    device_route = respx.post(OPENCODE_DEVICE_AUTH_URL).mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "device_code": "zen-device-code",
-                "user_code": "ZEN-CODE",
-                "verification_uri": "https://console.opencode.ai/device",
-                "verification_uri_complete": (
-                    "https://console.opencode.ai/device?user_code=ZEN-CODE"
-                ),
-                "expires_in": 900,
-                "interval": 5,
-            },
-        )
-    )
-    token_route = respx.post(OPENCODE_TOKEN_URL).mock(
-        side_effect=[
-            httpx.Response(400, json={"error": "authorization_pending"}),
-            httpx.Response(
-                200,
-                json={
-                    "access_token": "zen-access",
-                    "refresh_token": "zen-refresh",
-                    "expires_in": 900,
-                },
-            ),
-        ]
-    )
+    authorization_form: dict[str, Any] = {}
 
-    session = await engine._request_device_session(
-        "opencode-zen",
-        "account",
-        _opencode_oauth_config(),
-    )
-    with patch("core.providers.auth_flow._sleep", new_callable=AsyncMock):
-        await engine._poll_for_token(
-            "opencode-zen",
-            "account",
-            _opencode_oauth_config(),
-            session.device_code,
-            session.interval,
-            session.expires_in,
-            AsyncMock(),
-        )
-
-    assert json.loads(device_route.calls.last.request.content) == {"client_id": "opencode-cli"}
-    assert token_route.call_count == 2
-    assert json.loads(token_route.calls.last.request.content) == {
-        "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
-        "device_code": "zen-device-code",
-        "client_id": "opencode-cli",
-    }
-    stored = token_store.load("opencode-zen", "account")
-    assert stored is not None
-    assert stored.access_token == "zen-access"
-    assert stored.refresh_token == "zen-refresh"
-
-
-@respx.mock
-@pytest.mark.asyncio
-async def test_xai_flow_rejects_non_polling_http_400(tmp_path: Path) -> None:
-    engine = DeviceFlowEngine(TokenStore(tmp_path))
-    respx.post(XAI_TOKEN_URL).mock(
-        return_value=httpx.Response(400, json={"error": "invalid_client"})
-    )
-
-    async with httpx.AsyncClient() as client:
-        with pytest.raises(ProviderError):
-            await engine._request_device_token(
-                client,
-                _xai_oauth_config(),
-                "xai-device-code",
-            )
-
-
-@respx.mock
-@pytest.mark.asyncio
-async def test_start_openai_device_flow_posts_json_and_uses_configured_verification_uri(
-    tmp_path: Path,
-) -> None:
-    """OpenAI Codex Device Flow uses the provider-specific JSON usercode endpoint."""
-    # Arrange
-    engine = DeviceFlowEngine(TokenStore(tmp_path))
-    route = respx.post(OPENAI_DEVICE_AUTH_URL).mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "device_auth_id": "device-auth-id",
-                "user_code": "WXYZ-1234",
-                "interval": 2,
-            },
-        )
-    )
-
-    # Act
-    session = await engine._request_device_session(
-        "openai",
-        "subscription",
-        _openai_oauth_config(),
-    )
-
-    # Assert
-    assert session.device_code == "device-auth-id"
-    assert session.user_code == "WXYZ-1234"
-    assert session.verification_uri == OPENAI_VERIFICATION_URI
-    assert session.expires_in == 600
-    assert session.interval == 2
-    assert json.loads(route.calls.last.request.content) == {"client_id": "client-id"}
-
-
-@respx.mock
-@pytest.mark.asyncio
-async def test_start_minimax_flow_posts_pkce_and_normalizes_millisecond_fields(
-    tmp_path: Path,
-) -> None:
-    engine = DeviceFlowEngine(TokenStore(tmp_path))
-    captured_form: dict[str, list[str]] = {}
-
-    def authorization_response(request: httpx.Request) -> httpx.Response:
-        captured_form.update(parse_qs(request.content.decode()))
-        expires_at_milliseconds = int(
-            (datetime.now(UTC) + timedelta(minutes=10)).timestamp() * 1000
-        )
+    def authorize(request: httpx.Request) -> httpx.Response:
+        authorization_form.update(request_body(request))
+        expires_at_ms = int((datetime.now(UTC) + timedelta(minutes=10)).timestamp() * 1000)
         return httpx.Response(
             200,
             json={
                 "user_code": "MINIMAX-CODE",
-                "verification_uri": MINIMAX_VERIFICATION_URI,
-                "expired_in": expires_at_milliseconds,
+                "verification_uri": "https://api.minimax.io/oauth/verify",
+                "expired_in": expires_at_ms,
                 "interval": 2500,
-                "state": captured_form["state"][0],
+                "state": authorization_form["state"],
             },
         )
 
-    route = respx.post(MINIMAX_DEVICE_AUTH_URL).mock(side_effect=authorization_response)
-
-    session = await engine._request_device_session(
-        "minimax", "subscription", _minimax_oauth_config()
+    authorization = respx.post(MINIMAX_DEVICE_AUTH_URL).mock(side_effect=authorize)
+    polling = respx.post(MINIMAX_TOKEN_URL).mock(
+        side_effect=[
+            httpx.Response(200, json={"status": "pending"}),
+            # A small ``expired_in`` is a TTL in seconds, not a millisecond timestamp.
+            httpx.Response(
+                200,
+                json={
+                    "status": "success",
+                    "access_token": "minimax-access",
+                    "refresh_token": "minimax-refresh",
+                    "expired_in": 900,
+                },
+            ),
+        ]
     )
+    completion = Completion()
 
-    assert session.device_code == "MINIMAX-CODE"
-    assert session.user_code == "MINIMAX-CODE"
-    assert session.verification_uri == MINIMAX_VERIFICATION_URI
+    session = await engine.connect("minimax", "subscription", minimax_oauth_config(), completion)
+
+    assert await completion.wait() is True
+    assert (session.device_code, session.user_code, session.verification_uri) == (
+        "MINIMAX-CODE",
+        "MINIMAX-CODE",
+        "https://api.minimax.io/oauth/verify",
+    )
     assert 595 <= session.expires_in <= 600
     assert session.interval == 3
-    assert captured_form["response_type"] == ["code"]
-    assert captured_form["client_id"] == ["minimax-client-id"]
-    assert captured_form["scope"] == ["group_id profile model.completion"]
-    assert captured_form["code_challenge_method"] == ["S256"]
-    assert captured_form["code_challenge"][0]
-    assert captured_form["state"][0]
-    assert route.calls.last.request.headers["x-request-id"]
+    assert poll_waits == [3]
+    assert authorization.calls.last.request.headers["x-request-id"]
+    assert {
+        key: authorization_form[key]
+        for key in ("response_type", "client_id", "scope", "code_challenge_method")
+    } == {
+        "response_type": "code",
+        "client_id": "minimax-client-id",
+        "scope": "group_id profile model.completion",
+        "code_challenge_method": "S256",
+    }
+    token_form = request_body(polling.calls.last.request)
+    assert token_form["grant_type"] == MINIMAX_OAUTH_GRANT_TYPE
+    assert token_form["user_code"] == "MINIMAX-CODE"
+    challenge = base64.urlsafe_b64encode(
+        hashlib.sha256(token_form["code_verifier"].encode()).digest()
+    )
+    assert authorization_form["code_challenge"] == challenge.decode().rstrip("=")
+    token = store.load("minimax", "subscription")
+    assert token is not None
+    assert (token.access_token, token.refresh_token) == ("minimax-access", "minimax-refresh")
+    assert seconds_until(token.expires_at) == pytest.approx(900, abs=5)
 
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_start_minimax_flow_rejects_state_mismatch(tmp_path: Path) -> None:
-    engine = DeviceFlowEngine(TokenStore(tmp_path))
+async def test_minimax_authorization_with_foreign_state_is_rejected(
+    engine: DeviceFlowEngine,
+) -> None:
     respx.post(MINIMAX_DEVICE_AUTH_URL).mock(
         return_value=httpx.Response(
             200,
             json={
                 "user_code": "MINIMAX-CODE",
-                "verification_uri": MINIMAX_VERIFICATION_URI,
+                "verification_uri": "https://api.minimax.io/oauth/verify",
                 "expired_in": 600,
                 "state": "wrong-state",
             },
@@ -457,82 +390,350 @@ async def test_start_minimax_flow_rejects_state_mismatch(tmp_path: Path) -> None
     )
 
     with pytest.raises(DeviceFlowTerminalError, match="state_mismatch"):
-        await engine._request_device_session("minimax", "subscription", _minimax_oauth_config())
+        await engine.connect("minimax", "subscription", minimax_oauth_config(), Completion())
+
+    assert not engine.is_flow_active("minimax", "subscription")
 
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_minimax_flow_polls_pending_then_saves_rotatable_token(tmp_path: Path) -> None:
-    token_store = TokenStore(tmp_path)
-    engine = DeviceFlowEngine(token_store)
-    authorization_form: dict[str, list[str]] = {}
-    token_forms: list[dict[str, list[str]]] = []
-
-    def authorization_response(request: httpx.Request) -> httpx.Response:
-        authorization_form.update(parse_qs(request.content.decode()))
-        return httpx.Response(
-            200,
-            json={
-                "user_code": "MINIMAX-CODE",
-                "verification_uri": MINIMAX_VERIFICATION_URI,
-                "expired_in": 600,
-                "interval": 2000,
-                "state": authorization_form["state"][0],
-            },
-        )
-
-    token_response_count = 0
-
-    def token_response(request: httpx.Request) -> httpx.Response:
-        nonlocal token_response_count
-        token_response_count += 1
-        token_forms.append(parse_qs(request.content.decode()))
-        if token_response_count == 1:
-            return httpx.Response(200, json={"status": "pending"})
-        expires_at_milliseconds = int(
-            (datetime.now(UTC) + timedelta(minutes=15)).timestamp() * 1000
-        )
-        return httpx.Response(
-            200,
-            json={
-                "status": "success",
-                "access_token": "minimax-access",
-                "refresh_token": "minimax-refresh",
-                "expired_in": expires_at_milliseconds,
-            },
-        )
-
-    respx.post(MINIMAX_DEVICE_AUTH_URL).mock(side_effect=authorization_response)
-    respx.post(MINIMAX_TOKEN_URL).mock(side_effect=token_response)
-    session = await engine._request_device_session(
-        "minimax", "subscription", _minimax_oauth_config()
+@pytest.mark.parametrize("exchange_succeeds", [True, False])
+async def test_copilot_flow_exchanges_the_github_token_before_storing(
+    engine: DeviceFlowEngine, store: TokenStore, poll_waits: list[float], exchange_succeeds: bool
+) -> None:
+    expires_at = datetime(2026, 5, 12, 12, 0, tzinfo=UTC)
+    respx.post(GITHUB_DEVICE_AUTH_URL).mock(
+        return_value=httpx.Response(200, json=GITHUB_AUTHORIZATION)
     )
-    on_complete = AsyncMock()
-
-    with patch("core.providers.auth_flow._sleep", new_callable=AsyncMock):
-        await engine._poll_for_token(
-            "minimax",
-            "subscription",
-            _minimax_oauth_config(),
-            session.device_code,
-            session.interval,
-            session.expires_in,
-            on_complete,
-            user_code=session.user_code,
+    respx.post(GITHUB_TOKEN_URL).mock(
+        return_value=httpx.Response(200, json={"access_token": "github-oauth-secret"})
+    )
+    exchange = respx.get(COPILOT_TOKEN_EXCHANGE_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "token": "copilot-api-secret",
+                "expires_at": expires_at.timestamp(),
+                "endpoints": {"api": "https://api.business.githubcopilot.com"},
+            },
         )
+        if exchange_succeeds
+        else httpx.Response(403, json={"message": "forbidden"})
+    )
+    completion = Completion()
 
-    token = token_store.load("minimax", "subscription")
+    await engine.connect(
+        "github-copilot", "oauth", github_oauth_config(token_exchange=True), completion
+    )
+
+    assert await completion.wait() is exchange_succeeds
+    headers = exchange.calls.last.request.headers
+    assert headers["Authorization"] == "Bearer github-oauth-secret"
+    assert headers["Copilot-Integration-Id"] == "vscode-chat"
+    assert headers["Editor-Version"] == "vscode/1.128.0"
+    token = store.load("github-copilot", "oauth")
+    if not exchange_succeeds:
+        assert token is None
+        return
     assert token is not None
-    assert token.access_token == "minimax-access"
-    assert token.refresh_token == "minimax-refresh"
-    assert token.expires_at is not None
-    assert 890 <= (token.expires_at - datetime.now(UTC)).total_seconds() <= 900
-    assert token_response_count == 2
-    assert token_forms[-1]["grant_type"] == ["urn:ietf:params:oauth:grant-type:user_code"]
-    assert token_forms[-1]["user_code"] == ["MINIMAX-CODE"]
-    verifier = token_forms[-1]["code_verifier"][0]
-    expected_challenge = (
-        base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
+    assert (token.access_token, token.refresh_token) == ("copilot-api-secret", None)
+    assert token.expires_at == expires_at
+    assert token.extra == {
+        "github_oauth_token": "github-oauth-secret",
+        "copilot_api_endpoint": "https://api.business.githubcopilot.com",
+    }
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_polling_waits_the_interval_and_slow_down_adds_five_seconds(
+    engine: DeviceFlowEngine, poll_waits: list[float]
+) -> None:
+    respx.post(GITHUB_DEVICE_AUTH_URL).mock(
+        return_value=httpx.Response(200, json={**GITHUB_AUTHORIZATION, "interval": 7})
     )
-    assert authorization_form["code_challenge"] == [expected_challenge]
-    on_complete.assert_awaited_once_with(success=True)
+    respx.post(GITHUB_TOKEN_URL).mock(
+        side_effect=[
+            PENDING,
+            httpx.Response(200, json={"error": "slow_down"}),
+            PENDING,
+            httpx.Response(200, json={"access_token": "access"}),
+        ]
+    )
+    completion = Completion()
+
+    await engine.connect("github-copilot", "oauth", github_oauth_config(), completion)
+
+    assert await completion.wait() is True
+    assert poll_waits == [7, 12, 12]
+
+
+@respx.mock
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("config", "expires_in", "replies"),
+    [
+        pytest.param(github_oauth_config(), 0, [], id="session-expired"),
+        pytest.param(
+            github_oauth_config(),
+            900,
+            [httpx.Response(200, json={"error": "access_denied"})],
+            id="access-denied",
+        ),
+        pytest.param(
+            xai_oauth_config(),
+            900,
+            [httpx.Response(400, json={"error": "invalid_client"})],
+            id="non-polling-http-400",
+        ),
+        pytest.param(
+            nous_oauth_config(),
+            900,
+            [
+                httpx.Response(
+                    200, json={"access_token": "a", "refresh_token": "r", "scope": "profile"}
+                )
+            ],
+            id="nous-without-inference-scope",
+        ),
+    ],
+)
+async def test_polling_ends_unsuccessfully_without_storing_a_token(
+    engine: DeviceFlowEngine,
+    store: TokenStore,
+    poll_waits: list[float],
+    config: OAuthConfig,
+    expires_in: int,
+    replies: list[httpx.Response],
+) -> None:
+    respx.post(config.device_auth_url).mock(
+        return_value=httpx.Response(200, json={**GITHUB_AUTHORIZATION, "expires_in": expires_in})
+    )
+    polling = respx.post(config.token_url).mock(side_effect=replies)
+    completion = Completion()
+
+    await engine.connect("provider", "oauth", config, completion)
+
+    assert await completion.wait() is False
+    assert polling.call_count == len(replies)
+    assert poll_waits == []
+    assert store.load("provider", "oauth") is None
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_polling_crash_still_reports_failure_and_is_logged(
+    engine: DeviceFlowEngine, store: TokenStore
+) -> None:
+    respx.post(GITHUB_DEVICE_AUTH_URL).mock(
+        return_value=httpx.Response(200, json=GITHUB_AUTHORIZATION)
+    )
+    respx.post(GITHUB_TOKEN_URL).mock(
+        return_value=httpx.Response(200, json={"unexpected": "shape"})
+    )
+    logged = asyncio.Event()
+
+    class _Signal(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            if record.getMessage().startswith("OAuth polling task failed"):
+                logged.set()
+
+    handler = _Signal(level=logging.ERROR)
+    logger = logging.getLogger("vbot.providers.auth_flow")
+    logger.addHandler(handler)
+    completion = Completion()
+    try:
+        await engine.connect("github-copilot", "oauth", github_oauth_config(), completion)
+        assert await completion.wait() is False
+        # Closing right after the crash must not swallow the task's failure report.
+        await engine.aclose()
+        await asyncio.wait_for(logged.wait(), timeout=5)
+    finally:
+        logger.removeHandler(handler)
+
+    assert store.load("github-copilot", "oauth") is None
+    assert not engine.is_flow_active("github-copilot", "oauth")
+
+
+# ---------------------------------------------------------------------------
+# Managed lifecycle: authorization and polling are owned per Account
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stop", ["cancel", "close", "replace"])
+async def test_pending_authorization_is_owned_and_stoppable(
+    engine: DeviceFlowEngine, parked_polls: ParkedPolls, stop: str
+) -> None:
+    started, release = asyncio.Event(), asyncio.Event()
+
+    async def authorize(_request: httpx.Request) -> httpx.Response:
+        if not started.is_set():
+            started.set()
+            await release.wait()
+        return httpx.Response(200, json=GITHUB_AUTHORIZATION)
+
+    respx.post(GITHUB_DEVICE_AUTH_URL).mock(side_effect=authorize)
+    polling = respx.post(GITHUB_TOKEN_URL).mock(return_value=PENDING)
+    pending = asyncio.create_task(
+        engine.connect("provider", "oauth", github_oauth_config(), Completion())
+    )
+    try:
+        await asyncio.wait_for(started.wait(), timeout=5)
+        assert engine.is_flow_active("provider", "oauth")
+
+        if stop == "cancel":
+            engine.cancel_flow("provider", "oauth")
+        elif stop == "close":
+            await engine.aclose()
+        else:
+            await engine.connect("provider", "oauth", github_oauth_config(), Completion())
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(pending, timeout=5)
+
+        if stop == "replace":
+            await parked_polls.next()
+            assert engine.is_flow_active("provider", "oauth")
+            assert polling.call_count == 1
+        else:
+            assert not engine.is_flow_active("provider", "oauth")
+            assert polling.call_count == 0
+    finally:
+        release.set()
+        pending.cancel()
+        await asyncio.gather(pending, return_exceptions=True)
+
+
+@respx.mock
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stop", ["cancel", "close"])
+async def test_flow_stopped_before_polling_starts_never_polls(
+    engine: DeviceFlowEngine, parked_polls: ParkedPolls, stop: str
+) -> None:
+    respx.post(GITHUB_DEVICE_AUTH_URL).mock(
+        return_value=httpx.Response(200, json=GITHUB_AUTHORIZATION)
+    )
+    polling = respx.post(GITHUB_TOKEN_URL).mock(return_value=PENDING)
+    completion = Completion()
+
+    await engine.connect("provider", "oauth", github_oauth_config(), completion)
+    assert engine.is_flow_active("provider", "oauth")
+    if stop == "cancel":
+        engine.cancel_flow("provider", "oauth")
+        assert not engine.is_flow_active("provider", "oauth")
+    await engine.aclose()
+
+    assert not engine.is_flow_active("provider", "oauth")
+    assert polling.call_count == 0
+    assert completion.outcomes == []
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_replacing_one_account_flow_keeps_other_accounts_and_close_drains_all(
+    engine: DeviceFlowEngine, parked_polls: ParkedPolls
+) -> None:
+    device_codes = iter(["device-1", "device-2", "device-3"])
+    respx.post(GITHUB_DEVICE_AUTH_URL).mock(
+        side_effect=lambda _request: httpx.Response(
+            200, json={**GITHUB_AUTHORIZATION, "device_code": next(device_codes)}
+        )
+    )
+    polling = respx.post(GITHUB_TOKEN_URL).mock(return_value=PENDING)
+    config = github_oauth_config()
+
+    await engine.connect("provider", "oauth", config, Completion())
+    await parked_polls.next()
+    await engine.connect("provider", "oauth", config, Completion(), account_id="work")
+    await parked_polls.next()
+    await engine.connect("provider", "oauth", config, Completion())
+    await parked_polls.next()
+
+    assert [request_body(call.request)["device_code"] for call in polling.calls] == [
+        "device-1",
+        "device-2",
+        "device-3",
+    ]
+    assert parked_polls.cancelled == 1  # the replaced default-Account poll
+    assert engine.is_flow_active("provider", "oauth")
+    assert engine.is_flow_active("provider", "oauth", "work")
+
+    engine.cancel_flow("provider", "oauth", "work")
+
+    assert not engine.is_flow_active("provider", "oauth", "work")
+    assert engine.is_flow_active("provider", "oauth")
+
+    await engine.aclose()
+
+    assert parked_polls.cancelled == 3
+    assert not engine.is_flow_active("provider", "oauth")
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_closed_engine_rejects_new_authorization(engine: DeviceFlowEngine) -> None:
+    authorization = respx.post(GITHUB_DEVICE_AUTH_URL).mock(
+        return_value=httpx.Response(200, json=GITHUB_AUTHORIZATION)
+    )
+    await engine.aclose()
+
+    with pytest.raises(RuntimeError, match="closed"):
+        await engine.connect("provider", "oauth", github_oauth_config(), Completion())
+
+    assert authorization.call_count == 0
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_disconnect_after_authorization_response_cannot_start_polling(
+    engine: DeviceFlowEngine, parked_polls: ParkedPolls
+) -> None:
+    def authorize(_request: httpx.Request) -> httpx.Response:
+        # The response is ready, but connect's continuation has not run yet.
+        asyncio.get_running_loop().call_soon(engine.cancel_flow, "provider", "oauth")
+        return httpx.Response(200, json=GITHUB_AUTHORIZATION)
+
+    respx.post(GITHUB_DEVICE_AUTH_URL).mock(side_effect=authorize)
+    polling = respx.post(GITHUB_TOKEN_URL).mock(return_value=PENDING)
+
+    with pytest.raises(asyncio.CancelledError):
+        await engine.connect("provider", "oauth", github_oauth_config(), Completion())
+    await engine.aclose()
+
+    assert polling.call_count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("response_ready", [False, True])
+async def test_cancelled_connect_retires_the_authorization_verifier(
+    engine: DeviceFlowEngine, response_ready: bool
+) -> None:
+    """Cancellation can land after authorization stored a PKCE verifier.
+
+    Staging that interleaving needs the private authorization seam, and the verifier
+    store has no public observable (design smell kept deliberately).
+    """
+
+    async def authorize(*_args: object, **_kwargs: object) -> DeviceFlowSession:
+        engine._minimax_code_verifiers[("provider", "oauth", "default", "user")] = "verifier"
+        asyncio.get_running_loop().call_soon(pending.cancel)
+        if not response_ready:
+            # Cancellation can also arrive during HTTP-client cleanup after
+            # authorization has already installed its verifier.
+            await asyncio.Event().wait()
+        return DeviceFlowSession("device", "user", "https://example.test", 900, 5)
+
+    with (
+        patch.object(engine, "_request_device_session", side_effect=authorize),
+        patch.object(engine, "_poll_until_complete", AsyncMock()) as poll,
+    ):
+        pending = asyncio.create_task(
+            engine.connect("provider", "oauth", minimax_oauth_config(), Completion())
+        )
+        with pytest.raises(asyncio.CancelledError):
+            await pending
+
+    assert not engine._minimax_code_verifiers
+    assert not engine.is_flow_active("provider", "oauth")
+    poll.assert_not_awaited()
