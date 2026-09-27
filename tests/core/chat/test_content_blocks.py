@@ -92,30 +92,18 @@ class TestContentBlocks:
 
         assert serialized == expected
         assert content_block_from_dict(serialized) == block
-
-    def test_unknown_type_raises_content_block_error(self):
-        with pytest.raises(ContentBlockError):
-            content_block_from_dict({"type": "unknown", "text": "hello"})
+        with pytest.raises(FrozenInstanceError):
+            block.type = "changed"
 
     @pytest.mark.parametrize(
         "payload",
         [
+            {"type": "unknown", "text": "hello"},
             {"type": "text"},
             {"type": "media", "attachment_id": "att_1", "filename": "photo.png"},
             {"type": "file", "attachment_id": "att_2", "media_type": "application/pdf"},
             {"type": "file_mention", "status": "inlined", "text": "x"},
-        ],
-    )
-    def test_missing_required_fields_raise_content_block_error(self, payload):
-        with pytest.raises(ContentBlockError):
-            content_block_from_dict(payload)
-
-    @pytest.mark.parametrize(
-        "payload",
-        [
-            # Unknown status value.
             {"type": "file_mention", "path": "a.py", "status": "weird", "text": None},
-            # Inlined must carry text; degraded must not.
             {"type": "file_mention", "path": "a.py", "status": "inlined", "text": None},
             {"type": "file_mention", "path": "a.py", "status": "missing", "text": "body"},
             {
@@ -125,7 +113,6 @@ class TestContentBlocks:
                 "media_type": "image/png",
                 "image_reference": 0,
             },
-            # size_bytes must be an integer or null.
             {
                 "type": "file_mention",
                 "path": "a.py",
@@ -134,13 +121,19 @@ class TestContentBlocks:
                 "size_bytes": "4",
             },
         ],
+        ids=[
+            "unknown-type",
+            "text-without-text",
+            "media-without-media-type",
+            "file-without-filename",
+            "mention-without-path",
+            "mention-unknown-status",
+            "inlined-without-text",
+            "degraded-with-text",
+            "non-positive-image-reference",
+            "non-integer-size",
+        ],
     )
-    def test_invalid_file_mention_payloads_raise_content_block_error(self, payload):
+    def test_invalid_payloads_raise_content_block_error(self, payload):
         with pytest.raises(ContentBlockError):
             content_block_from_dict(payload)
-
-    def test_blocks_are_frozen(self):
-        block = TextBlock(type="text", text="immutable")
-
-        with pytest.raises(FrozenInstanceError):
-            block.text = "changed"  # type: ignore[misc]

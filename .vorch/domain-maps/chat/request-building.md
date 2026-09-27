@@ -86,7 +86,7 @@ continuation notes retain their canonical receipts but produce no request messag
 Evidence: `_request_builder.py`, `wire_shaping.py`, `test_chat_loop_tools.py`,
 `tests/resources/extensions/test_swarm_lifecycle.py`.
 
-- Canonical messages: `core/chat/messages.py`; wire shaping and response ingestion: `core/chat/wire_shaping.py`; tests under `tests/core/chat/test_messages_*.py`, `test_chat_loop_messages.py`, `test_chat_loop_requests.py`, `test_chat_loop_reasoning_replay.py`, `test_chat_loop_fallback.py`, and `tests/core/providers/test_reasoning_route_switch_conformance.py`.
+- Canonical messages: `core/chat/messages.py`; wire shaping and response ingestion: `core/chat/wire_shaping.py`; tests under `tests/core/chat/test_messages_*.py`, `test_wire_shaping_*.py`, `test_chat_loop_messages.py`, `test_chat_loop_requests.py`, `test_chat_loop_reasoning_replay.py`, `test_chat_loop_fallback.py`, and `tests/core/providers/test_reasoning_route_switch_conformance.py`.
 - Skills and Tool definitions: `core/chat/tool_dispatch.py`, `core/chat/_request_builder.py`, `core/chat/_skill_activation.py`; tests in `test_chat_loop_skills.py`, `test_tool_dispatch.py`, and `test_chat_prompt.py`.
 - Content inputs and Assistant output paths: `core/chat/content_blocks.py`, `file_mentions.py`, `block_resolver.py`, `output_files.py`; matching `test_content_blocks.py`, `test_file_mentions.py`, `test_block_resolver.py`, and `test_output_files.py`.
 
