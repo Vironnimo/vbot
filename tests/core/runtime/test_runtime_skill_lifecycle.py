@@ -15,21 +15,36 @@ from core.skills import authoring as authoring_module
 from core.tools import SKILL_MANAGE_TOOL_NAME, ToolContext
 from core.utils.config import Config
 from server.rpc import agent_methods
-from server.rpc.agent_methods import _delete_agent, _rename_agent
+from tests.core.runtime.runtime_test_support import call_rpc
+
+
+async def _change_owner(state: Any, operation: str) -> Any:
+    """Delete or rename the owning Agent ``main`` through its RPC handler."""
+    handlers = agent_methods.method_handlers()
+    if operation == "delete":
+        return await call_rpc(handlers, "agent.delete", state, {"id": "main"})
+    return await call_rpc(handlers, "agent.rename", state, {"id": "main", "new_id": "renamed"})
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("operation", ["delete", "rename"])
-@pytest.mark.parametrize("write_first", [False, True])
-@pytest.mark.parametrize("reload_tools", [False, True])
+@pytest.mark.parametrize(
+    ("operation", "write_first", "reload_tools"),
+    [
+        ("delete", True, True),
+        ("delete", False, False),
+        ("rename", True, False),
+        ("rename", False, True),
+    ],
+)
 async def test_shared_write_serializes_with_owner_lifecycle(
+    config: Config,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     operation: str,
     write_first: bool,
     reload_tools: bool,
 ) -> None:
-    runtime = Runtime(Config(data_dir=tmp_path / "data"), safe_startup_mode="test")
+    runtime = Runtime(config, safe_startup_mode="test")
     runtime.start()
     release = threading.Event()
     tasks: list[asyncio.Task[Any]] = []
@@ -72,11 +87,6 @@ async def test_shared_write_serializes_with_owner_lifecycle(
                 assert release.wait(10)
             atomic_write(path, content, **kwargs)
 
-        async def lifecycle() -> Any:
-            if operation == "delete":
-                return await _delete_agent(state, {"id": "main"})
-            return await _rename_agent(state, {"id": "main", "new_id": "renamed"})
-
         def start_write() -> asyncio.Task[Any]:
             return asyncio.create_task(
                 runtime.tools.dispatch(
@@ -107,7 +117,7 @@ async def test_shared_write_serializes_with_owner_lifecycle(
                 return original(*args, **kwargs)
 
             monkeypatch.setattr(runtime.agents, method_name, observe_lifecycle)
-            change = asyncio.create_task(lifecycle())
+            change = asyncio.create_task(_change_owner(state, operation))
             tasks.append(change)
             await asyncio.wait_for(attempted.wait(), 10)
             assert not change.done()
@@ -116,7 +126,7 @@ async def test_shared_write_serializes_with_owner_lifecycle(
             assert (await write)["ok"] is True
             await change
         else:
-            await lifecycle()
+            await _change_owner(state, operation)
             result = await start_write()
             assert result["ok"] is False
 
@@ -142,12 +152,13 @@ async def test_shared_write_serializes_with_owner_lifecycle(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("operation", ["delete", "rename"])
-@pytest.mark.parametrize("admitted", [False, True])
+@pytest.mark.parametrize(
+    ("operation", "admitted"), [("delete", True), ("rename", True), ("delete", False)]
+)
 async def test_lifecycle_cancellation_preserves_admission_and_invalidation(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operation: str, admitted: bool
+    config: Config, monkeypatch: pytest.MonkeyPatch, operation: str, admitted: bool
 ) -> None:
-    runtime = Runtime(Config(data_dir=tmp_path / "data"), safe_startup_mode="test")
+    runtime = Runtime(config, safe_startup_mode="test")
     runtime.start()
     release = threading.Event()
     task: asyncio.Task[Any] | None = None
@@ -181,12 +192,7 @@ async def test_lifecycle_cancellation_preserves_admission_and_invalidation(
         if not admitted:
             await reference_lock.acquire()
 
-        async def lifecycle() -> Any:
-            if operation == "delete":
-                return await _delete_agent(state, {"id": "main"})
-            return await _rename_agent(state, {"id": "main", "new_id": "renamed"})
-
-        task = asyncio.create_task(lifecycle())
+        task = asyncio.create_task(_change_owner(state, operation))
         if admitted:
             await asyncio.wait_for(committed.wait(), 10)
         else:

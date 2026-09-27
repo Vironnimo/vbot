@@ -2,6 +2,7 @@
 
 import logging
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
@@ -17,16 +18,22 @@ from resources.extensions.mcp.extension import MCPService
 
 
 @pytest.mark.asyncio
-async def test_temporary_mcp_caller_uses_bound_policy_and_keeps_generation_scope(tmp_path):
-    runtime = Runtime(Config(data_dir=tmp_path / "data"))
+async def test_temporary_mcp_caller_uses_bound_policy_and_keeps_generation_scope(
+    config: Config, tmp_path: Path
+) -> None:
+    runtime = Runtime(config)
     runtime.start()
     service = None
     try:
-        binding = runtime._temporary_agents.create(
-            owner_name="swarm",
-            group_id="swarm-test",
-            participant_id="peer",
-            config=TemporaryAgentConfig(
+        assert runtime.extensions is not None
+        root = runtime._extension_host()  # noqa: SLF001 - the Runtime hands hosts only to Extensions.
+        assert root.for_owner is not None
+        groups = root.for_owner(runtime.extensions.registration_identity("swarm")).temporary_agents
+        assert groups is not None
+        binding = await groups.create(
+            "swarm-test",
+            "peer",
+            TemporaryAgentConfig(
                 model="fixture/model",
                 cwd=tmp_path,
                 tool_access=ToolAccess(
@@ -51,9 +58,7 @@ async def test_temporary_mcp_caller_uses_bound_policy_and_keeps_generation_scope
             data_root=tmp_path,
             execution_owner=owner,
         )
-        identity = runtime.extensions.registration_identity("mcp")
-        assert identity is not None
-        host = runtime._extension_host().for_owner(identity)
+        host = root.for_owner(runtime.extensions.registration_identity("mcp"))
         agent = host.resolve_tool_agent(ctx)
         assert agent.tool_access.granted == ("mcp_example",)
         assert not runtime.agents.exists(ctx.agent_id)
@@ -81,4 +86,4 @@ async def test_temporary_mcp_caller_uses_bound_policy_and_keeps_generation_scope
     finally:
         if service is not None:
             await service.close()
-        runtime.stop()
+        await runtime.aclose()

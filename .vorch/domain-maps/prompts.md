@@ -98,7 +98,7 @@ Source/tests: `prompts.py`, `blocks.py`, `test_prompts_layouts_overrides.py`.
 - Chat builds the prompt per request and omits the provider system message entirely when the result is empty/whitespace-only.
 - Bound temporary Sessions supply request-local data block definitions through `build_system_prompt`; the normal assembly engine owns ordering and joining. Chat gates and revalidates their exact Extension registration and complete Session Tool grant set. These definitions never enter editable/global block catalogs or unbound previews (`tests/core/chat/test_live_extension_tools.py`).
 - Do not move block behavior into Agent or WebUI code: Agents own only the flag and Workspace path, WebUI owns editing UX, this domain owns assembly semantics and the block contract.
-- Adding a keyword parameter to `build_system_prompt` breaks every duplicated prompt-manager test double that spells out the full signature - grep `class .*Prompts` under `tests/` (eight today, across `tests/core/chat`, `tests/core/runtime`, and `tests/server`). The failure appears at runtime as `TypeError: ... unexpected keyword argument` inside server/integration tests, not at import time; update every double in the same change.
+- Adding a keyword parameter to `build_system_prompt` breaks every duplicated prompt-manager test double that spells out the full signature - grep `class .*Prompts` under `tests/` (six today, across `tests/core/chat` and `tests/server`). The failure appears at runtime as `TypeError: ... unexpected keyword argument` inside server/integration tests, not at import time; update every double in the same change.
 
 ## References
 

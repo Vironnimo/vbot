@@ -1,6 +1,8 @@
-"""Tests for the keep-awake power-request controller."""
+"""The keep-awake controller holds at most one system power request."""
 
 from __future__ import annotations
+
+from typing import Any
 
 import pytest
 
@@ -23,17 +25,17 @@ class FakeLogger:
 
 
 @pytest.fixture()
-def fake_power(monkeypatch: pytest.MonkeyPatch):
+def fake_power(monkeypatch: pytest.MonkeyPatch) -> tuple[dict[str, Any], list[str]]:
     """Stub the platform seams and record acquire/release calls."""
-
-    state = {"supported": True, "acquire_result": 42, "release_result": True}
+    state: dict[str, Any] = {"supported": True, "acquire_result": 42, "release_result": True}
     calls: list[str] = []
 
     def fake_acquire() -> int | None:
         if not state["supported"]:
             return None
         calls.append("acquire")
-        return state["acquire_result"]
+        result: int | None = state["acquire_result"]
+        return result
 
     def fake_release(handle: int) -> bool:
         calls.append(f"release:{handle}")
@@ -45,52 +47,54 @@ def fake_power(monkeypatch: pytest.MonkeyPatch):
     return state, calls
 
 
-def test_enable_acquires_and_disable_releases(fake_power) -> None:
-    state, calls = fake_power
+def test_enabling_holds_one_power_request_until_disabled_or_closed(fake_power) -> None:
+    _, calls = fake_power
     controller = KeepAwakeController()
+    # Disabling or closing before any request is a no-op.
+    controller.set_enabled(False)
+    controller.close()
+    assert calls == []
 
     controller.set_enabled(True)
+    controller.set_enabled(True)
     assert controller.active is True
-
     controller.set_enabled(False)
     assert controller.active is False
     assert calls == ["acquire", "release:42"]
 
-
-def test_enable_is_idempotent(fake_power) -> None:
-    _, calls = fake_power
-    controller = KeepAwakeController()
-
     controller.set_enabled(True)
-    controller.set_enabled(True)
-
-    assert calls == ["acquire"]
-
-
-def test_disable_without_enable_is_a_no_op(fake_power) -> None:
-    _, calls = fake_power
-    controller = KeepAwakeController()
-
-    controller.set_enabled(False)
     controller.close()
+    controller.close()
+    assert controller.active is False
+    assert calls == ["acquire", "release:42", "acquire", "release:42"]
 
-    assert calls == []
 
-
-def test_close_releases_after_enable(fake_power) -> None:
+def test_rejected_release_still_deactivates_with_a_warning(fake_power) -> None:
     state, calls = fake_power
-    controller = KeepAwakeController()
+    logger = FakeLogger()
+    controller = KeepAwakeController(logger)
     controller.set_enabled(True)
 
     state["release_result"] = False
-    controller.close()
+    controller.set_enabled(False)
 
     assert controller.active is False
     assert calls == ["acquire", "release:42"]
+    assert ("warning", "Keep-awake release was rejected by the platform") in logger.records
 
 
-def test_acquire_failure_on_supported_platform_warns(fake_power) -> None:
+@pytest.mark.parametrize(
+    ("supported", "expected"),
+    [
+        (True, ("warning", "Keep-awake requested but Windows refused the power request")),
+        (False, ("debug", "Keep-awake requested but this platform has no power-request API")),
+    ],
+)
+def test_unavailable_power_request_leaves_keep_awake_inactive(
+    fake_power, supported: bool, expected: tuple[str, str]
+) -> None:
     state, _ = fake_power
+    state["supported"] = supported
     state["acquire_result"] = None
     logger = FakeLogger()
     controller = KeepAwakeController(logger)
@@ -98,37 +102,4 @@ def test_acquire_failure_on_supported_platform_warns(fake_power) -> None:
     controller.set_enabled(True)
 
     assert controller.active is False
-    assert logger.records == [
-        ("warning", "Keep-awake requested but Windows refused the power request")
-    ]
-
-
-def test_unsupported_platform_is_silent_debug(fake_power) -> None:
-    state, calls = fake_power
-    state["supported"] = False
-    logger = FakeLogger()
-    controller = KeepAwakeController(logger)
-
-    controller.set_enabled(True)
-
-    assert controller.active is False
-    assert calls == []
-    assert logger.records == [
-        (
-            "debug",
-            "Keep-awake requested but this platform has no power-request API",
-        )
-    ]
-
-
-def test_release_failure_warns_but_deactivates(fake_power) -> None:
-    state, _ = fake_power
-    logger = FakeLogger()
-    controller = KeepAwakeController(logger)
-    controller.set_enabled(True)
-
-    state["release_result"] = False
-    controller.set_enabled(False)
-
-    assert controller.active is False
-    assert ("warning", "Keep-awake release was rejected by the platform") in logger.records
+    assert logger.records == [expected]

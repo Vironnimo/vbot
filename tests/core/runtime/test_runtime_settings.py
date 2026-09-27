@@ -10,23 +10,21 @@ import pytest
 
 from core.runtime import Runtime
 from core.utils.config import Config
-from tests.core.runtime.runtime_extensions_test_support import (
-    _CAPABILITY_EXT_SOURCE,
-    _write_extension,
-    _write_settings,
-)
-from tests.core.runtime.runtime_extensions_test_support import (
-    _clean_extension_modules as _clean_extension_modules,
+from tests.core.runtime.runtime_test_support import (
+    CAPABILITY_EXT_SOURCE,
+    dispatch_tool,
+    write_extension,
+    write_settings,
+    write_skill,
 )
 
 
 @pytest.mark.parametrize("enable", [False, True])
 def test_extension_change_also_applies_recall_and_skill_changes(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, enable: bool
+    config: Config, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, enable: bool
 ) -> None:
-    config = Config(data_dir=tmp_path / "data")
-    _write_extension(config.data_dir, "capabilities_ext", _CAPABILITY_EXT_SOURCE)
-    _write_settings(
+    write_extension(config.data_dir, "capabilities_ext", CAPABILITY_EXT_SOURCE)
+    write_settings(
         config.data_dir,
         {
             "extensions": {"disabled": ["capabilities_ext"] if enable else []},
@@ -38,12 +36,7 @@ def test_extension_change_also_applies_recall_and_skill_changes(
     try:
         previous = runtime.storage.load_settings()
         skill_root = tmp_path / "new-skills"
-        skill = skill_root / "new-skill"
-        skill.mkdir(parents=True)
-        (skill / "SKILL.md").write_text(
-            "---\nname: new-skill\ndescription: Test newly configured directory.\n---\nBody.\n",
-            encoding="utf-8",
-        )
+        write_skill(skill_root, "new-skill", "Test newly configured directory.")
         runtime.storage.update_settings_sections(
             {
                 "extensions": {"disabled": [] if enable else ["capabilities_ext"]},
@@ -70,9 +63,9 @@ def test_extension_change_also_applies_recall_and_skill_changes(
 
 
 def test_unchanged_settings_do_not_refresh_live_services(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    config: Config, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    runtime = Runtime(Config(data_dir=tmp_path / "data"), safe_startup_mode="test")
+    runtime = Runtime(config, safe_startup_mode="test")
     runtime.start()
     try:
         skills = runtime.skills_for(None)
@@ -91,26 +84,27 @@ def test_unchanged_settings_do_not_refresh_live_services(
         runtime.stop()
 
 
-def test_session_search_periods_follow_the_current_timezone_setting(tmp_path: Path) -> None:
-    from tests.core.tools.session_search_helpers import make_context, success
-
-    config = Config(data_dir=tmp_path / "data")
-    _write_settings(config.data_dir, {"timezone": "Asia/Tokyo"})
+def test_session_search_periods_follow_the_current_timezone_setting(config: Config) -> None:
+    write_settings(config.data_dir, {"timezone": "Asia/Tokyo"})
     runtime = Runtime(config, safe_startup_mode="test")
     runtime.start()
     try:
-        context = make_context(tmp_path, agent_id="main")
         arguments = {"query": "needle", "period": "2026-07-01T09:00/2026-07-01T10:00"}
 
-        before = success(asyncio.run(runtime.tools.dispatch(context, dict(arguments))))
-        runtime.storage.update_settings_sections({"server": {"timezone": "America/New_York"}})
-        after = success(asyncio.run(runtime.tools.dispatch(context, dict(arguments))))
+        def search_period() -> str:
+            result = dispatch_tool(
+                runtime, "session_search", config.data_dir, dict(arguments), agent_id="main"
+            )
+            assert result["ok"] is True
+            period = result["data"]["period"]
+            assert isinstance(period, str)
+            return period
 
-        assert before["period"] == (
-            "2026-07-01T09:00:00+09:00/2026-07-01T10:00:00+09:00 (Asia/Tokyo)"
-        )
-        assert after["period"] == (
-            "2026-07-01T09:00:00-04:00/2026-07-01T10:00:00-04:00 (America/New_York)"
-        )
+        before = search_period()
+        runtime.storage.update_settings_sections({"server": {"timezone": "America/New_York"}})
+        after = search_period()
+
+        assert before == "2026-07-01T09:00:00+09:00/2026-07-01T10:00:00+09:00 (Asia/Tokyo)"
+        assert after == "2026-07-01T09:00:00-04:00/2026-07-01T10:00:00-04:00 (America/New_York)"
     finally:
         runtime.stop()

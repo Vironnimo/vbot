@@ -1,243 +1,128 @@
-"""Tests for runtime extension host."""
+"""Owner-bound Extension hosts: temporary groups, catalogs, prompt previews, payloads."""
 
 from __future__ import annotations
 
-import asyncio
 from dataclasses import replace
 from pathlib import Path
-from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
-from core.agents.temporary import (
-    TemporaryAgentConfig,
-    TemporaryAgentRegistry,
-    TemporaryExecutionGroups,
-)
-from core.database import write_bootstrap_marker
+from core.agents.temporary import TemporaryAgentConfig
+from core.chat import ChatMessage
+from core.chat.messages import ToolCall
 from core.extensions import ExtensionRegistrationIdentity
-from core.runs import ChatRunManager, RunAdmissionBlockedError, RunExecutionOwner
-from core.runtime import runtime as runtime_module
+from core.extensions.operations import ExtensionHost
+from core.runs import RunAdmission, RunAdmissionBlockedError, RunExecutionOwner
 from core.runtime.runtime import Runtime
-from core.sessions import ChatSessionManager, SessionAddress
+from core.sessions import ToolResultFacts, ToolResultPayload
+from core.tools import ToolContext
 from core.tools.availability import ToolAccess
 from core.utils.config import Config
-from tests.core.runtime.runtime_extensions_test_support import (
-    _clean_extension_modules as _clean_extension_modules,
-)
+from tests.core.runtime.runtime_test_support import write_project_skill, write_skill
+from tests.core.sessions.history_fixtures import complete_run
+
+SWARM_PRIVATE_TOOLS = {"swarm_board", "swarm_inbox", "swarm_state", "swarm_wiki"}
 
 
-class _CatalogRegistry:
-    def __init__(self, identity: ExtensionRegistrationIdentity) -> None:
-        self.identity = identity
-        self.current = True
-
-    def is_registration_current(self, identity: object) -> bool:
-        return self.current and identity == self.identity
-
-    def fire_shutdown_blocking(self) -> None:
-        pass
+def _owner_host(runtime: Runtime, name: str) -> ExtensionHost:
+    """The host a loaded Extension receives, bound to its current registration."""
+    assert runtime.extensions is not None
+    root = runtime._extension_host()  # noqa: SLF001 - the Runtime hands hosts only to Extensions.
+    assert root.for_owner is not None
+    return root.for_owner(runtime.extensions.registration_identity(name))
 
 
-class _CatalogProjects:
-    def __init__(self, registry: _CatalogRegistry, *, expire_during_list: bool = False) -> None:
-        self._registry = registry
-        self._expire_during_list = expire_during_list
-
-    def list(self) -> list[SimpleNamespace]:
-        if self._expire_during_list:
-            self._registry.current = False
-        return [
-            SimpleNamespace(
-                project_id="project-a",
-                display_name="Project A",
-                cwd="C:/work/project-a",
-                allowed_tools=["read"],
-                skills_bundled_enabled=[],
-                skills_global_enabled=["global-skill"],
-                skills_project_disabled=[],
-            )
-        ]
-
-
-def _catalog_runtime(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, expire_during_list: bool = False
-) -> tuple[Runtime, ExtensionRegistrationIdentity]:
-    runtime = Runtime(Config(data_dir=tmp_path / "data"))
-    runtime.start()
-    identity = ExtensionRegistrationIdentity("owned", "epoch-1")
-    registry = _CatalogRegistry(identity)
-    monkeypatch.setattr(runtime, "_extensions", registry)
-    monkeypatch.setattr(
-        runtime,
-        "_projects",
-        _CatalogProjects(registry, expire_during_list=expire_during_list),
+def _participant(
+    cwd: Path, *, model: str = "fixture/model", **tool_access: Any
+) -> TemporaryAgentConfig:
+    return TemporaryAgentConfig(
+        model=model,
+        cwd=cwd,
+        tool_access=ToolAccess(mode="selected", allowed=(), **tool_access),
+        allowed_skills=[],
+        tools={},
+        name="Peer",
     )
-    monkeypatch.setattr(
-        runtime,
-        "_skills",
-        SimpleNamespace(
-            list_all=lambda: [SimpleNamespace(name="global-skill", description="global sentinel")]
-        ),
-    )
-    monkeypatch.setattr(
-        runtime,
-        "_tools",
-        SimpleNamespace(
-            list_tools=lambda: [
-                SimpleNamespace(
-                    name="read",
-                    family="files",
-                    family_label="Files",
-                    activation="configurable",
-                    activation_source=None,
-                    description="read sentinel",
-                    parameters={"type": "object"},
-                    constraints=(),
-                    requires_opt_in=False,
-                    catalog_visible=True,
-                    session_scoped=False,
-                ),
-                SimpleNamespace(
-                    name="hidden-session",
-                    description="hidden sentinel",
-                    parameters={"type": "object"},
-                    constraints=(),
-                    requires_opt_in=False,
-                    catalog_visible=False,
-                    session_scoped=True,
-                ),
-            ]
-        ),
-    )
-    monkeypatch.setattr(
-        runtime,
-        "_models",
-        SimpleNamespace(
-            query=lambda _query: [
-                (
-                    "provider",
-                    SimpleNamespace(
-                        model_id="model-a",
-                        context_window=128000,
-                        capabilities=SimpleNamespace(
-                            tools=True,
-                            reasoning=SimpleNamespace(
-                                supported=True,
-                                control="levels",
-                                levels=("low", "high"),
-                                budget_max=None,
-                            ),
-                        ),
-                        name="Model A",
-                        connections=("usable", "unavailable"),
-                    ),
-                )
-            ]
-        ),
-    )
-    monkeypatch.setattr(
-        runtime,
-        "_provider_credentials",
-        SimpleNamespace(
-            is_usable=lambda provider_id, connection_id: connection_id == "provider:usable"
-        ),
-    )
-    monkeypatch.setattr(
-        runtime,
-        "project_skill_names",
-        lambda project_id: (
-            frozenset({"project-skill"}) if project_id == "project-a" else frozenset()
-        ),
-    )
-    return runtime, identity
 
 
-def test_extension_prompt_inspection_uses_selected_blocks_and_owner_tools(tmp_path, monkeypatch):
-    runtime = Runtime(Config(data_dir=tmp_path / "data"))
-    runtime.start()
-    try:
-        identity = runtime.extensions.registration_identity("swarm")
-        assert identity is not None
-        config = TemporaryAgentConfig(
-            model="fixture/model",
-            cwd=tmp_path,
-            name="Preview",
-            tool_access=ToolAccess(mode="selected", allowed=()),
-            allowed_skills=[],
-            tools={},
-            instructions="preview-body-sentinel",
-            prompt_blocks=["core:agent_body"],
-        )
-
-        def no_session(*_args, **_kwargs):
-            raise AssertionError("Preview must not create a Session")
-
-        monkeypatch.setattr(runtime.chat_sessions, "create_bound_temporary_session", no_session)
-        preview = asyncio.run(
-            runtime._host_operations()._inspect_extension_prompt(identity, config, None)
-        )
-        assert preview["text"] == "preview-body-sentinel"
-        assert {tool["name"] for tool in preview["tools"]} == {
-            "swarm_board",
-            "swarm_inbox",
-            "swarm_state",
-            "swarm_wiki",
-        }
-        blocks = {block["id"]: block for block in preview["blocks"]}
-        assert blocks["core:runtime"]["enabled"] is False
-        assert blocks["core:runtime"]["text"]
-        assert blocks["core:agent_body"]["included"] is True
-        assert not any(key.startswith("extension_session:") for key in blocks)
-        selected = replace(
-            config,
-            tool_access=ToolAccess(
-                mode="selected", allowed=(), denied=("swarm_state", "swarm_board")
-            ),
-        )
-        preview = asyncio.run(
-            runtime._host_operations()._inspect_extension_prompt(identity, selected, None)
-        )
-        assert {tool["name"] for tool in preview["tools"]} == {
-            "swarm_inbox",
-            "swarm_wiki",
-        }
-    finally:
-        runtime.stop()
+def _accept_every_model(runtime: Runtime, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(runtime.agent_resolver, "require_model_configured", lambda _model: None)
 
 
-def test_extension_catalog_projects_tools_settings_and_models_are_safe(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.asyncio
+async def test_owner_prompt_inspection_uses_selected_blocks_and_private_tool_denials(
+    runtime: Runtime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    runtime, identity = _catalog_runtime(tmp_path, monkeypatch)
-    try:
-        catalog = asyncio.run(runtime._host_operations()._extension_catalog(identity))
-    finally:
-        runtime.stop()
+    host = _owner_host(runtime, "swarm")
+    assert host.inspect_prompt is not None
+    config = replace(
+        _participant(tmp_path),
+        name="Preview",
+        instructions="preview-body-sentinel",
+        prompt_blocks=["core:agent_body"],
+    )
+
+    def no_session(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("Preview must not create a Session")
+
+    monkeypatch.setattr(runtime.chat_sessions, "create_bound_temporary_session", no_session)
+    preview = await host.inspect_prompt(config, None)
+
+    assert preview["text"] == "preview-body-sentinel"
+    assert {tool["name"] for tool in preview["tools"]} == SWARM_PRIVATE_TOOLS
+    blocks = {block["id"]: block for block in preview["blocks"]}
+    assert blocks["core:runtime"]["enabled"] is False
+    assert blocks["core:runtime"]["text"]
+    assert blocks["core:agent_body"]["included"] is True
+    assert not any(key.startswith("extension_session:") for key in blocks)
+
+    denied = replace(config, tool_access=replace(config.tool_access, denied=("swarm_state",)))
+    preview = await host.inspect_prompt(denied, None)
+    assert {tool["name"] for tool in preview["tools"]} == SWARM_PRIVATE_TOOLS - {"swarm_state"}
+
+
+@pytest.mark.asyncio
+async def test_owner_catalog_projects_registry_metadata_until_the_registration_retires(
+    runtime: Runtime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-fake-key")
+    repo = tmp_path / "project-a"
+    write_project_skill(repo, "project-skill", "Project sentinel.")
+    write_skill(runtime.global_skills_dir, "global-skill", "global sentinel")
+    runtime.reload_skills()
+    runtime.projects.create("project-a", "Project A", repo)
+    project = runtime.projects.update(
+        "project-a", allowed_tools=["read"], skills_global_enabled=["global-skill"]
+    )
+    host = _owner_host(runtime, "swarm")
+    assert host.catalog is not None
+
+    catalog = await host.catalog()
 
     assert catalog["projects"] == [
         {
             "id": "project-a",
             "name": "Project A",
-            "cwd": "C:/work/project-a",
+            "cwd": project.cwd,
             "allowed_tools": ["read"],
             "allowed_skills": ["global-skill", "project-skill"],
         }
     ]
-    assert catalog["skills"] == [{"name": "global-skill", "description": "global sentinel"}]
+    assert {"name": "global-skill", "description": "global sentinel"} in catalog["skills"]
+    assert "project-skill" not in {skill["name"] for skill in catalog["skills"]}
     assert "core:runtime" in {block["id"] for block in catalog["prompt_blocks"]}
-    assert [tool["name"] for tool in catalog["tools"]] == ["read"]
-    assert catalog["tools"][0]["family"] == "files"
-    assert catalog["tools"][0]["activation"] == "configurable"
+    # Tool family and activation come from the Tool registry; Session-scoped and
+    # catalog-hidden Tools stay out.
+    tools = {tool["name"]: tool for tool in catalog["tools"]}
+    read = runtime.tools.get("read")
+    assert (tools["read"]["family"], tools["read"]["activation"]) == (read.family, read.activation)
+    assert not {"history", *SWARM_PRIVATE_TOOLS} & tools.keys()
     assert catalog["tool_settings"] == {
         "bash": {
             "type": "object",
             "properties": {
-                "allowed_env": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "uniqueItems": True,
-                }
+                "allowed_env": {"type": "array", "items": {"type": "string"}, "uniqueItems": True}
             },
             "additionalProperties": False,
         },
@@ -253,241 +138,122 @@ def test_extension_catalog_projects_tools_settings_and_models_are_safe(
             "additionalProperties": False,
         },
     }
-    assert catalog["models"] == [
-        {
-            "id": "provider/model-a",
-            "name": "Model A",
-            "connections": ["usable"],
-            "context_window": 128000,
-            "capabilities": {
-                "tools": True,
-                "reasoning": {
-                    "supported": True,
-                    "control": "levels",
-                    "levels": ["low", "high"],
-                    "budget_max": None,
-                },
+    # Models list only usable Connections, with capabilities from the Model registry.
+    models = {model["id"]: model for model in catalog["models"]}
+    assert models
+    for model_id, entry in models.items():
+        provider_id, _, model_name = model_id.partition("/")
+        assert entry["connections"]
+        for connection in entry["connections"]:
+            assert runtime.provider_credentials.is_usable(
+                provider_id, f"{provider_id}:{connection}"
+            )
+        model = runtime.models.get(provider_id, model_name)
+        reasoning = model.capabilities.reasoning
+        assert (entry["name"], entry["context_window"]) == (model.name, model.context_window)
+        assert entry["capabilities"] == {
+            "tools": model.capabilities.tools,
+            "reasoning": {
+                "supported": reasoning.supported,
+                "control": reasoning.control,
+                "levels": list(reasoning.levels),
+                "budget_max": reasoning.budget_max,
             },
         }
-    ]
+    assert any(model_id.startswith("openai/") for model_id in models)
 
+    # A registration retired while the projection ran on its worker is refused.
+    extensions = runtime.extensions
+    assert extensions is not None
+    list_projects = runtime.projects.list
 
-def test_extension_catalog_rejects_a_registration_retired_during_projection(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    runtime, identity = _catalog_runtime(tmp_path, monkeypatch, expire_during_list=True)
-    try:
-        with pytest.raises(ValueError, match="no longer current"):
-            asyncio.run(runtime._host_operations()._extension_catalog(identity))
-    finally:
-        runtime.stop()
+    def retire_while_listing() -> Any:
+        extensions.retire_registration()
+        return list_projects()
 
-
-@pytest.mark.parametrize(
-    ("model", "cwd_name"),
-    [("missing/model", "valid"), ("provider/model", "missing")],
-)
-def test_temporary_preflight_rejects_invalid_model_or_cwd_before_group_opens(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    model: str,
-    cwd_name: str,
-) -> None:
-    runtime = Runtime(Config(data_dir=tmp_path / "runtime"))
-    runtime.start()
-    host = runtime._host_operations()
-    identity = ExtensionRegistrationIdentity("fixture", "epoch-1")
-    monkeypatch.setattr(
-        runtime,
-        "_extensions",
-        SimpleNamespace(
-            is_registration_current=lambda candidate: candidate == identity,
-            session_capability=lambda _binding, _tools: SimpleNamespace(
-                tool_names=(), identity=identity
-            ),
-        ),
-    )
-    monkeypatch.setattr(host, "tools", SimpleNamespace(list_tools=lambda **_kwargs: []))
-
-    def require_model_configured(candidate: str) -> None:
-        if candidate == "missing/model":
-            raise ValueError("model sentinel")
-
-    monkeypatch.setattr(
-        host,
-        "agent_resolver",
-        SimpleNamespace(require_model_configured=require_model_configured),
-    )
-
-    session_data_dir = tmp_path / "session-data"
-    session_data_dir.mkdir()
-    write_bootstrap_marker(session_data_dir)
-    sessions = ChatSessionManager(session_data_dir)
-    try:
-        registry = TemporaryAgentRegistry(sessions)
-        cwd = tmp_path / cwd_name
-        if cwd_name == "valid":
-            cwd.mkdir()
-        registry.create(
-            owner_name="fixture",
-            group_id="group",
-            participant_id="participant",
-            config=TemporaryAgentConfig(
-                model=model,
-                cwd=cwd,
-                tool_access=ToolAccess(mode="selected", allowed=()),
-                allowed_skills=[],
-                tools={},
-                name="fixture",
-            ),
-        )
-        groups = TemporaryExecutionGroups(
-            registry,
-            SimpleNamespace(),
-            lambda candidate: candidate == identity,
-            identity,
-            run_manager=ChatRunManager(),
-            validate_binding=host._validate_extension_session_binding,
-        )
-
-        with pytest.raises((RuntimeError, ValueError)):
-            asyncio.run(groups.open_group("group"))
-
-        assert groups._groups["group"].open is False
-    finally:
-        sessions.close()
-        monkeypatch.undo()
-        runtime.stop()
-
-
-def test_temporary_preflight_rechecks_owner_after_blocking_validation(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    runtime = Runtime(Config(data_dir=tmp_path / "runtime"))
-    monkeypatch.setattr(runtime, "_started", True)
-    identity = ExtensionRegistrationIdentity("fixture", "epoch-1")
-    registry = _CatalogRegistry(identity)
-    monkeypatch.setattr(
-        runtime,
-        "_extensions",
-        SimpleNamespace(
-            is_registration_current=registry.is_registration_current,
-            session_capability=lambda _binding, _tools: SimpleNamespace(
-                tool_names=(), identity=identity
-            ),
-        ),
-    )
-    monkeypatch.setattr(runtime, "_tools", SimpleNamespace(list_tools=lambda **_kwargs: []))
-    monkeypatch.setattr(
-        runtime,
-        "_agent_resolver",
-        SimpleNamespace(
-            require_model_configured=lambda _model: None,
-            resolve_temporary_agent=lambda _address, **_kwargs: SimpleNamespace(
-                tool_access=ToolAccess(mode="selected", allowed=()),
-                memory_prompt_mode="off",
-                workspace="",
-            ),
-        ),
-    )
-    binding = SimpleNamespace(
-        address=SessionAddress(None, "temporary", "session"),
-        generation_id="generation",
-        owner_name="fixture",
-        group_id="group",
-        participant_id="participant",
-        config={
-            "model": "provider/model",
-            "cwd": str(tmp_path),
-            "tool_access": {"mode": "selected", "allowed": []},
-            "allowed_skills": [],
-            "tools": {},
-            "name": "fixture",
-        },
-    )
-
-    async def expire_after_validation(function, *arguments):
-        function(*arguments)
-        registry.current = False
-
-    monkeypatch.setattr(runtime_module._RUNTIME_WORKERS, "run", expire_after_validation)
-
-    with pytest.raises(RuntimeError, match="temporary execution is unavailable"):
-        asyncio.run(runtime._host_operations()._validate_extension_session_binding(binding))
-
-
-@pytest.mark.parametrize(
-    "denied",
-    [
-        ("swarm_state",),
-        ("swarm_board", "swarm_inbox", "swarm_state", "swarm_wiki"),
-    ],
-)
-def test_real_owner_preflight_accepts_explicit_private_tool_denials(tmp_path, monkeypatch, denied):
-    runtime = Runtime(Config(data_dir=tmp_path / "data"))
-    runtime.start()
-    try:
-        monkeypatch.setattr(runtime.agent_resolver, "require_model_configured", lambda _model: None)
-        config = TemporaryAgentConfig(
-            model="fixture/model",
-            cwd=tmp_path,
-            tool_access=ToolAccess(mode="selected", allowed=(), denied=denied),
-            allowed_skills=[],
-            tools={},
-            name="Selective",
-        )
-        registry = TemporaryAgentRegistry(runtime.chat_sessions)
-        binding = registry.create(
-            owner_name="swarm", group_id="group", participant_id="peer", config=config
-        )
-        capability = runtime.extensions.session_capability(binding, runtime.tools)
-        assert capability is not None
-        assert not set(denied).intersection(capability.tool_names)
-        asyncio.run(runtime._host_operations()._validate_extension_session_binding(binding))
-    finally:
-        runtime.stop()
+    monkeypatch.setattr(runtime.projects, "list", retire_while_listing)
+    with pytest.raises(ValueError, match="no longer current"):
+        await host.catalog()
 
 
 @pytest.mark.asyncio
-async def test_extension_owned_work_uses_the_observable_chat_loop(tmp_path):
-    runtime = Runtime(Config(data_dir=tmp_path / "data"))
+async def test_temporary_group_preflight_validates_participants_before_opening(
+    config: Config, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime = Runtime(config)
     runtime.start()
     try:
-        identity = runtime.extensions.registration_identity("swarm")
-        assert identity is not None
-        host = runtime._host_operations().make_host().for_owner(identity)
-        # The two public loops differ in whether a pending Provider response
-        # exposes live Model deltas. Extension pages subscribe to those Runs.
-        assert host.temporary_agents._chat is runtime.streaming_chat_loop
+        groups = _owner_host(runtime, "swarm").temporary_agents
+        assert groups is not None
+        valid_cwd = tmp_path / "valid"
+        valid_cwd.mkdir()
+
+        # An unconfigured Model or a missing working directory keeps the group closed.
+        for group_id, participant in (
+            ("bad-model", _participant(valid_cwd, model="missing/model")),
+            ("bad-cwd", _participant(tmp_path / "missing")),
+        ):
+            await groups.create(group_id, "peer", participant)
+            with pytest.raises(RuntimeError, match="temporary execution is unavailable"):
+                await groups.open_group(group_id)
+            assert groups._groups[group_id].open is False  # noqa: SLF001
+            _accept_every_model(runtime, monkeypatch)
+
+        # Profiles may deny the owner's private Tools, one or all of them.
+        for group_id, denied in (
+            ("one-denied", ("swarm_state",)),
+            ("all-denied", tuple(sorted(SWARM_PRIVATE_TOOLS))),
+        ):
+            binding = await groups.create(group_id, "peer", _participant(valid_cwd, denied=denied))
+            assert runtime.extensions is not None
+            capability = runtime.extensions.session_capability(binding, runtime.tools)
+            assert capability is not None
+            assert not set(denied) & set(capability.tool_names)
+            await groups.open_group(group_id)
+
+        # The owner is rechecked after the blocking validation on its worker.
+        await groups.create("retired", "peer", _participant(valid_cwd))
+        resolve_temporary_agent = runtime.agent_resolver.resolve_temporary_agent
+
+        def retire_after_resolution(*args: Any, **kwargs: Any) -> Any:
+            resolved = resolve_temporary_agent(*args, **kwargs)
+            assert runtime.extensions is not None
+            runtime.extensions.retire_registration()
+            return resolved
+
+        monkeypatch.setattr(
+            runtime.agent_resolver, "resolve_temporary_agent", retire_after_resolution
+        )
+        with pytest.raises(RuntimeError, match="temporary execution is unavailable"):
+            await groups.open_group("retired")
+        assert groups._groups["retired"].open is False  # noqa: SLF001
     finally:
         await runtime.aclose()
 
 
 @pytest.mark.asyncio
-async def test_owned_completion_is_rejected_once_its_group_closes(tmp_path, monkeypatch):
-    runtime = Runtime(Config(data_dir=tmp_path / "data"))
+async def test_owner_groups_run_observably_and_reject_completions_after_close(
+    config: Config, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime = Runtime(config)
     runtime.start()
     try:
-        monkeypatch.setattr(runtime.agent_resolver, "require_model_configured", lambda _model: None)
-        identity = runtime.extensions.registration_identity("swarm")
-        assert identity is not None
-        groups = runtime._host_operations().make_host().for_owner(identity).temporary_agents
-        config = TemporaryAgentConfig(
-            model="fixture/model",
-            cwd=tmp_path,
-            tool_access=ToolAccess(mode="selected", allowed=()),
-            allowed_skills=[],
-            tools={},
-            name="Peer",
-        )
-        binding = await groups.create("group", "peer", config)
+        _accept_every_model(runtime, monkeypatch)
+        groups = _owner_host(runtime, "swarm").temporary_agents
+        assert groups is not None
+        # The two public loops differ in whether a pending Provider response
+        # exposes live Model deltas; Extension pages subscribe to those Runs.
+        assert groups._chat is runtime.streaming_chat_loop  # noqa: SLF001
+
+        binding = await groups.create("group", "peer", _participant(tmp_path))
         handle = await groups.open_group("group")
         owner = RunExecutionOwner("swarm", "group", "peer", binding.generation_id, handle.epoch)
+        groups.validate(binding.address, RunAdmission(owner=owner))
         service = runtime.trigger_service
-        validate = service._completion_delivery._owned_completion_validator
+        validate = service._completion_delivery._owned_completion_validator  # noqa: SLF001
         assert validate is not None
-
         validate(binding.address, owner)  # the live group admits its owner
+
         await groups.close_group("group")
 
         with pytest.raises(RunAdmissionBlockedError):
@@ -502,121 +268,96 @@ async def test_owned_completion_is_rejected_once_its_group_closes(tmp_path, monk
             execution_owner=owner,
         )
         assert late.cancelled()
+        # Usage is the Statistics projection of the owner's group; no Run finished yet.
+        usage = await groups.usage("group", {})
+        assert (usage["group_id"], usage["owned_run_count"], usage["participants"]) == (
+            "group",
+            0,
+            [],
+        )
     finally:
         await runtime.aclose()
 
 
 @pytest.mark.asyncio
-async def test_extension_group_title_reaches_the_shared_title_generator(tmp_path):
-    runtime = Runtime(Config(data_dir=tmp_path / "data"))
-    runtime.start()
-    try:
-        identity = runtime.extensions.registration_identity("swarm")
-        assert identity is not None
-        groups = runtime._host_operations().make_host().for_owner(identity).temporary_agents
+async def test_owner_group_titles_reach_the_shared_title_generator(runtime: Runtime) -> None:
+    groups = _owner_host(runtime, "swarm").temporary_agents
+    assert groups is not None
 
-        # Without participants no Model qualifies, so the local title is final.
-        title = await groups.title_group("swr_new", "  Review the\n parser  ")
+    # Without participants no Model qualifies, so the local title is final.
+    title = await groups.title_group("swr_new", "  Review the\n parser  ")
 
-        assert title == "Review the parser"
-        assert await groups.group_titles(["swr_new", "swr_other"]) == {
-            "swr_new": "Review the parser"
-        }
-        stored = await runtime.chat_sessions.temporary_group_titles_async(
-            owner_name="swarm", group_ids=["swr_new"]
-        )
-        assert stored == {"swr_new": "Review the parser"}
-    finally:
-        await runtime.aclose()
-
-
-def test_extension_group_usage_reads_the_runtime_statistics_index(tmp_path: Path) -> None:
-    runtime = Runtime(Config(data_dir=tmp_path / "data"))
-    runtime.start()
-    try:
-        operations = runtime._host_operations()
-        usage = asyncio.run(operations._extension_group_usage("swarm", "group", {}))
-        assert operations._statistics_service is not None
-        assert operations._statistics_service._index is runtime.statistics_index
-    finally:
-        runtime.stop()
-
-    assert usage["participants"] == []
+    assert title == "Review the parser"
+    assert await groups.group_titles(["swr_new", "swr_other"]) == {"swr_new": "Review the parser"}
+    stored = await runtime.chat_sessions.temporary_group_titles_async(
+        owner_name="swarm", group_ids=["swr_new"]
+    )
+    assert stored == {"swr_new": "Review the parser"}
 
 
 @pytest.mark.asyncio
-async def test_result_payloads_load_for_their_owner_through_the_calling_session(tmp_path):
-    from core.chat import ChatMessage
-    from core.chat.messages import ToolCall
-    from core.sessions import ToolResultFacts, ToolResultPayload
-    from core.tools import ToolContext
-    from tests.core.sessions.history_fixtures import complete_run
-
-    runtime = Runtime(Config(data_dir=tmp_path / "data"))
-    runtime.start()
-    try:
-        session = runtime.chat_sessions.create("agent", session_id="source")
-        runtime.chat_sessions.create("agent", session_id="other")
-        run = session.start_run("run-one")
-        assistant = ChatMessage.assistant(
-            model="model",
-            content=None,
-            tool_calls=[ToolCall(id="call", name="mcp_x", arguments={})],
-        )
-        run.append_many([ChatMessage.user("question"), assistant])
-        run.assistant_message_id = assistant.id
-        run.append_many(
-            [ChatMessage.tool(tool_call_id="call", name="mcp_x", content="receipt")],
-            tool_results={
-                "call": ToolResultFacts(
-                    "completed", True, payloads=(ToolResultPayload("res_one", "mcp", "[1]"),)
-                )
-            },
-        )
-        complete_run(
-            run,
-            ChatMessage.run_summary(
-                run_id="run-one",
-                status="completed",
-                iteration_count=1,
-                timing={
-                    "started_at": "2026-09-19T10:00:00Z",
-                    "completed_at": "2026-09-19T10:00:01Z",
-                    "duration_ms": 1000,
-                },
-            ),
-        )
-        root = runtime._host_operations().make_host()
-        owners = {}
-        for name in ("mcp", "swarm"):
-            identity = runtime.extensions.registration_identity(name)
-            assert identity is not None
-            owners[name] = root.for_owner(identity)
-
-        def call(session_id: str, *, in_session: bool = True) -> ToolContext:
-            return ToolContext(
-                agent_id="agent",
-                session_id=session_id,
-                run_id="run",
-                tool_call_id="later-call",
-                tool_name="mcp_x",
-                tool_call_index=0,
-                workspace=tmp_path,
-                vbot_root=tmp_path,
-                data_root=tmp_path,
-                result_payload_hook=(lambda *_args: "unused") if in_session else None,
+async def test_result_payloads_load_for_their_owner_through_the_calling_session(
+    runtime: Runtime, tmp_path: Path
+) -> None:
+    session = runtime.chat_sessions.create("agent", session_id="source")
+    runtime.chat_sessions.create("agent", session_id="other")
+    run = session.start_run("run-one")
+    assistant = ChatMessage.assistant(
+        model="model", content=None, tool_calls=[ToolCall(id="call", name="mcp_x", arguments={})]
+    )
+    run.append_many([ChatMessage.user("question"), assistant])
+    run.assistant_message_id = assistant.id
+    run.append_many(
+        [ChatMessage.tool(tool_call_id="call", name="mcp_x", content="receipt")],
+        tool_results={
+            "call": ToolResultFacts(
+                "completed", True, payloads=(ToolResultPayload("res_one", "mcp", "[1]"),)
             )
+        },
+    )
+    complete_run(
+        run,
+        ChatMessage.run_summary(
+            run_id="run-one",
+            status="completed",
+            iteration_count=1,
+            timing={
+                "started_at": "2026-09-19T10:00:00Z",
+                "completed_at": "2026-09-19T10:00:01Z",
+                "duration_ms": 1000,
+            },
+        ),
+    )
+    root = runtime._extension_host()  # noqa: SLF001
+    assert root.for_owner is not None
+    mcp = _owner_host(runtime, "mcp")
+    swarm = _owner_host(runtime, "swarm")
+    assert mcp.load_result_payload is not None
+    assert swarm.load_result_payload is not None
 
-        load = owners["mcp"].load_result_payload
-        assert root.load_result_payload is None
-        assert await load(call("source"), "res_one") == [1]
-        # Another Extension, another Session, a call outside any Session, an unsafe id.
-        assert await owners["swarm"].load_result_payload(call("source"), "res_one") is None
-        assert await load(call("other"), "res_one") is None
-        assert await load(call("source", in_session=False), "res_one") is None
-        assert await load(call("source"), "../res_one") is None
-        stale = root.for_owner(ExtensionRegistrationIdentity("mcp", "retired-epoch"))
-        with pytest.raises(ValueError, match="no longer current"):
-            await stale.load_result_payload(call("source"), "res_one")
-    finally:
-        await runtime.aclose()
+    def call(session_id: str, *, in_session: bool = True) -> ToolContext:
+        return ToolContext(
+            agent_id="agent",
+            session_id=session_id,
+            run_id="run",
+            tool_call_id="later-call",
+            tool_name="mcp_x",
+            tool_call_index=0,
+            workspace=tmp_path,
+            vbot_root=tmp_path,
+            data_root=tmp_path,
+            result_payload_hook=(lambda *_args: "unused") if in_session else None,
+        )
+
+    load = mcp.load_result_payload
+    assert root.load_result_payload is None
+    assert await load(call("source"), "res_one") == [1]
+    # Another Extension, another Session, a call outside any Session, an unsafe id.
+    assert await swarm.load_result_payload(call("source"), "res_one") is None
+    assert await load(call("other"), "res_one") is None
+    assert await load(call("source", in_session=False), "res_one") is None
+    assert await load(call("source"), "../res_one") is None
+    stale = root.for_owner(ExtensionRegistrationIdentity("mcp", "retired-epoch"))
+    assert stale.load_result_payload is not None
+    with pytest.raises(ValueError, match="no longer current"):
+        await stale.load_result_payload(call("source"), "res_one")

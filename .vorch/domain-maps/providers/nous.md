@@ -31,4 +31,4 @@ Read `providers.md` first. This reference owns vBot's Nous API-key and Portal-su
 - Device login and scope: `tests/core/providers/test_auth_flow.py`
 - Rotation, reuse quarantine, and no-replay refresh: `tests/core/providers/test_token_getter_refresh.py`
 - Connection-scoped raw/generated discovery: `tests/core/models/test_discovery_projection.py`
-- Bundled config, fallback Catalog, and Runtime Adapter selection: `tests/core/runtime/test_runtime_providers.py` and `test_runtime_adapter_wiring.py`
+- Bundled config, fallback Catalog, and Runtime Adapter selection: `tests/core/runtime/test_runtime_providers.py`

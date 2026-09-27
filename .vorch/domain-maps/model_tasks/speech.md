@@ -123,7 +123,7 @@ substitution, cache/lifecycle, cancellation, decode/resampling/chunk coverage,
 failures, isolated managed-worker startup, request progress, fixed setup commands/retry/cancellation and native
 adapter calls without downloading weights. `test_speech.py`
 covers service error translation and Provider routing; Runtime registration and
-cleanup are covered by `tests/core/runtime/test_runtime.py`.
+cleanup are covered by `tests/core/runtime/test_runtime_lifecycle.py`.
 
 
 Local TTS registrations are `local/qwen3-tts` (CustomVoice 1.7B/0.6B, preset
