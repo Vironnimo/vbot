@@ -35,7 +35,7 @@ vi.mock('svelte', async () => {
 });
 
 const { default: AutosaveContextHost } =
-  await import('./AutosaveContextHost.svelte');
+  await import('./AutosaveContextHost.support.svelte');
 
 function mountUnderAutosave(component, settings) {
   rpcMock.mockImplementation(createSettingsRpcMock({ settings }));

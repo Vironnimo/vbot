@@ -19,7 +19,7 @@ import {
   vi,
   waitForCondition,
 } from './ChatView.support.js';
-import { reactiveProps } from './reactiveProps.svelte.js';
+import { reactiveProps } from './reactiveProps.support.svelte.js';
 
 describe('ChatView', () => {
   const chatViewTest = setupChatViewTestSuite();

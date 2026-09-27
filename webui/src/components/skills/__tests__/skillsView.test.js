@@ -9,7 +9,7 @@ import {
   FLOATING_HOVER_CLOSE_DELAY_MS,
   TOOLTIP_SHOW_DELAY_MS,
 } from '../../../lib/tooltip.js';
-import { rpcBackedApiMock } from '../../__tests__/apiMock.js';
+import { rpcBackedApiMock } from '../../__tests__/apiMock.support.js';
 import {
   filterSkills,
   skillInstructionBody,

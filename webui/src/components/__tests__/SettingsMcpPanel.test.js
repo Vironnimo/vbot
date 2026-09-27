@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 import { init } from '../../lib/i18n.js';
-import { rpcBackedApiMock } from './apiMock.js';
+import { rpcBackedApiMock } from './apiMock.support.js';
 
 it('limits MCP typography to its panel and portaled dialogs', () => {
   const style = document.createElement('style');

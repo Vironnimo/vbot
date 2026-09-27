@@ -19,7 +19,7 @@ import {
 import { unmount } from 'svelte';
 import { resetComposerMemory } from '../../lib/composerMemory.js';
 import ChatWorkspace from '../ChatWorkspace.svelte';
-import { reactiveProps } from './reactiveProps.svelte.js';
+import { reactiveProps } from './reactiveProps.support.svelte.js';
 
 describe('ChatWorkspace', () => {
   const harness = setupChatViewTestSuite();

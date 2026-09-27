@@ -4,7 +4,7 @@ import { afterEach, beforeEach, expect, vi } from 'vitest';
 
 import { init } from '../../lib/i18n.js';
 
-import { rpcBackedApiMock } from './apiMock.js';
+import { rpcBackedApiMock } from './apiMock.support.js';
 
 const addProjectMock = vi.fn();
 

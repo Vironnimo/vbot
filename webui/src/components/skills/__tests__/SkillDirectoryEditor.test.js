@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 
 import { init } from '../../../lib/i18n.js';
-import { rpcBackedApiMock } from '../../__tests__/apiMock.js';
+import { rpcBackedApiMock } from '../../__tests__/apiMock.support.js';
 
 const rpcMock = vi.fn();
 

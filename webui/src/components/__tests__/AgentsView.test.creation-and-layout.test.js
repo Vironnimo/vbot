@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 
 import { init } from '../../lib/i18n.js';
-import { rpcBackedApiMock } from './apiMock.js';
+import { rpcBackedApiMock } from './apiMock.support.js';
 import {
   rpcMock,
   modelTriggerLabel,

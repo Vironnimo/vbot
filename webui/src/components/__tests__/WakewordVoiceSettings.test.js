@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, tick, unmount } from 'svelte';
 
 import { init } from '../../lib/i18n.js';
-import { reactiveProps } from './_reactiveProps.svelte.js';
+import { reactiveProps } from './reactiveProps.support.svelte.js';
 
 vi.mock('svelte', async () => {
   return import('../../../node_modules/svelte/src/index-client.js');

@@ -33,7 +33,7 @@ import {
   setupProjectsViewSuite,
 } from './ProjectsView.support.js';
 
-import { reactiveProps } from './_reactiveProps.svelte.js';
+import { reactiveProps } from './reactiveProps.support.svelte.js';
 
 function autoLoadNames() {
   return [...document.querySelectorAll('.projects-file-name')].map(

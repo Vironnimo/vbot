@@ -2,7 +2,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount } from 'svelte';
-import { reactiveProps } from './_reactiveProps.svelte.js';
+import { reactiveProps } from './reactiveProps.support.svelte.js';
 import {
   cleanupSettingsViewHarness,
   buttonByText,

@@ -4,8 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 
 import { init } from '../../lib/i18n.js';
-import { reactiveProps } from './_reactiveProps.svelte.js';
-import { rpcBackedApiMock } from './apiMock.js';
+import { reactiveProps } from './reactiveProps.support.svelte.js';
+import { rpcBackedApiMock } from './apiMock.support.js';
 import {
   rpcMock,
   modelListCallCount,

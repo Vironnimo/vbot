@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { join, dirname } from 'node:path';
 import { init } from '../../lib/i18n.js';
 
-import { rpcBackedApiMock } from './apiMock.js';
+import { rpcBackedApiMock } from './apiMock.support.js';
 
 const rpcMock = vi.fn();
 

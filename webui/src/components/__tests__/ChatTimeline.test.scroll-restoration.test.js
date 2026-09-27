@@ -10,7 +10,7 @@ vi.mock('svelte', async () => {
 });
 
 const { default: ChatTimeline } = await import('../ChatTimeline.svelte');
-const { reactiveProps } = await import('./reactiveProps.svelte.js');
+const { reactiveProps } = await import('./reactiveProps.support.svelte.js');
 import { createChatState, ensureSessionState } from '../../lib/chatState.js';
 import {
   mockScrollGeometry,
