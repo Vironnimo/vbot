@@ -170,7 +170,17 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   (`The closest text in the file, lines A-B:`); touching or overlapping excerpts
   merge. Missing targets use similarity-ranked diagnostics plus `First difference,
   line N: the file has '...' where the patch has '...'` (`where old_string
-  has` for `old_string` edits). Long differing lines show <=240-character windows
+  has` for `old_string` edits). Candidate windows come from the three longest
+  copied lines and from distinctive copied lines (at most 3 occurrences) the file
+  holds exactly; a window at least 2 such lines place is shown even below the
+  0.60 similarity floor (`find_closest_candidates`). The line-by-line comparison
+  starts at the first copied line the file holds near the window
+  (`_aligned_start`), because a window starts wherever its best-matching lines
+  put it, shifted by every line the copy added or dropped before them. Evidence:
+  the longest lines were often added text copied without `+`, so 43 of 133 failed
+  hunks in one Swarm said `No similar text` although most copied lines were in
+  the file, and 10 of 76 checkable first differences named a line one to seven
+  lines too early (Sessions, 2026-09). Long differing lines show <=240-character windows
   centered on the first substantive mismatch, with 1-based file/copied-line
   character coordinates and explicit truncation. Truncated candidate excerpts
   name a callable `read(path=..., offset="line:character", limit=...)` continuation;

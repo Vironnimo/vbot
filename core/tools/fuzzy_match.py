@@ -43,6 +43,8 @@ from core.tools.arguments import TEXT_LINE_BREAK, split_text_lines
 
 _CANDIDATE_ANCHOR_COUNT = 3
 _CANDIDATE_ANCHOR_POOL_SIZE = 20
+# A pattern line the file holds more often than this places no block by itself.
+_CANDIDATE_EXACT_MAX_OCCURRENCES = 3
 _CANDIDATE_SCAN_LINE_LIMIT = 50_000
 _CANDIDATE_SCORE_LINE_MAX_CHARS = 240
 _CANDIDATE_SCORE_MAX_CHARS = 4_000
@@ -208,6 +210,36 @@ def _candidate_normalize_line(line: str) -> str:
     return normalized[:_CANDIDATE_SCORE_LINE_MAX_CHARS]
 
 
+def _exact_line_starts(
+    content_lines: list[str], pattern_lines: list[str], window_size: int
+) -> Counter[int]:
+    """Count, per block start, the distinctive pattern lines the file holds exactly there.
+
+    The longest pattern lines anchor the similarity search, but they are often
+    new text the file lacks, such as added lines copied without a "+" prefix.
+    Lines found exactly still place the block.
+    """
+    wanted: dict[str, list[int]] = {}
+    for index, line in enumerate(pattern_lines):
+        if line:
+            wanted.setdefault(line, []).append(index)
+    found: dict[str, list[int]] = {}
+    for content_index, line in enumerate(content_lines[:_CANDIDATE_SCAN_LINE_LIMIT]):
+        normalized = _candidate_normalize_line(line)
+        if normalized in wanted:
+            found.setdefault(normalized, []).append(content_index)
+    starts: Counter[int] = Counter()
+    for line, occurrences in found.items():
+        if len(occurrences) > _CANDIDATE_EXACT_MAX_OCCURRENCES:
+            continue
+        for content_index in occurrences:
+            for pattern_index in wanted[line]:
+                start = content_index - pattern_index
+                if start >= 0 and start + window_size <= len(content_lines):
+                    starts[start] += 1
+    return starts
+
+
 def _top_anchor_starts(
     content_lines: list[str], anchor_index: int, anchor: str, window_size: int
 ) -> list[int]:
@@ -268,6 +300,8 @@ def find_closest_candidates(content: str, pattern: str) -> list[ClosestFuzzyCand
     possible_starts: set[int] = set()
     for _, _, anchor_index, anchor in anchors:
         possible_starts.update(_top_anchor_starts(content_lines, anchor_index, anchor, window_size))
+    placed = _exact_line_starts(content_lines, normalized_pattern_lines, window_size)
+    possible_starts.update(placed)
 
     pattern_score_text = "\n".join(normalized_pattern_lines)[:_CANDIDATE_SCORE_MAX_CHARS]
     scored: list[tuple[float, int]] = []
@@ -276,7 +310,8 @@ def find_closest_candidates(content: str, pattern: str) -> list[ClosestFuzzyCand
             _candidate_normalize_line(line) for line in content_lines[start : start + window_size]
         )[:_CANDIDATE_SCORE_MAX_CHARS]
         similarity = SequenceMatcher(None, pattern_score_text, candidate_score_text).ratio()
-        if similarity >= _CANDIDATE_MIN_SIMILARITY:
+        # Two exact lines in place show the block even when new text lowers the similarity.
+        if similarity >= _CANDIDATE_MIN_SIMILARITY or placed[start] >= 2:
             scored.append((similarity, start))
     scored.sort(key=lambda item: (-item[0], item[1]))
 

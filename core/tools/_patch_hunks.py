@@ -177,10 +177,10 @@ def _not_found(content: str, old: str, *, source: Literal["patch", "old_string"]
     if part is not None and not details["candidates"]:
         details["part_of"] = part
     if details["candidates"]:
-        start = details["candidates"][0]["line"]
         file_lines = split_text_lines(content)
         wanted_lines = split_text_lines(old)
         first = next((index for index, line in enumerate(wanted_lines) if line.strip()), 0)
+        start = _aligned_start(file_lines, details["candidates"][0]["line"], wanted_lines, first)
         for position, wanted in enumerate(wanted_lines[first:], first):
             number = start + position - first
             if number > len(file_lines):
@@ -204,6 +204,31 @@ def _not_found(content: str, old: str, *, source: Literal["patch", "old_string"]
                 }
                 break
     return details
+
+
+def _aligned_start(file_lines: list[str], start: int, wanted_lines: list[str], first: int) -> int:
+    """Return the file line where patch line ``first`` belongs.
+
+    A candidate window starts where its best-matching lines put it, so every line
+    the copy added or dropped before them shifts it. The first patch line the
+    file holds near the window fixes the alignment instead; the lines before it
+    belong directly above it.
+    """
+    span = len(wanted_lines) - first
+    for position in range(first, len(wanted_lines)):
+        text = _loose(wanted_lines[position])
+        if not text:
+            continue
+        expected = start - 1 + position - first
+        near = [
+            index
+            for index in range(max(0, expected - span), min(len(file_lines), expected + span + 1))
+            if _loose(file_lines[index]) == text
+        ]
+        if near:
+            index = min(near, key=lambda index: (abs(index - expected), index))
+            return max(1, index + 1 - (position - first))
+    return start
 
 
 def _line_list(numbers: list[int]) -> str:

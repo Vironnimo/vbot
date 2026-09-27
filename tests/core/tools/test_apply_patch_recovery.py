@@ -318,6 +318,63 @@ def test_first_difference_on_an_unprefixed_line_between_additions_names_the_pref
     assert "no + prefix" not in text(apply(tmp_path, update(marked, "file.py")))
 
 
+def test_first_difference_is_found_where_new_lines_without_prefix_shift_the_copy(tmp_path):
+    path = tmp_path / "file.py"
+    before = "".join(f"line_{index:02d} = {index}\n" for index in range(1, 12)).encode() + (
+        b"\nPATTERNS = {\n    'a': 1,\n    'b': 2,\n}\n\n\ndef check(rows):\n    return rows\n"
+    )
+    path.write_bytes(before)
+    # The copied block holds a line the file lacks before its longest line, and a
+    # typo keeps it from being added, so the closest text starts one line early.
+    body = (
+        "@@\n PATTERNS = {\n     'a': 1,\n"
+        "+    # a long explanatory comment about the new pattern entry\n"
+        "     # and its continuation line that the Agent forgot to mark as added text\n"
+        "+    'c': 3,\n     'b': 2,\n }\n \n \n-def check(rows):\n+def check(rowz):\n"
+        "     return rowz"
+    )
+    result = apply(tmp_path, update(body, "file.py"))
+    assert result["error"]["code"] == "text_not_found"
+    assert (
+        "First difference, line 15: the file has \"    'b': 2,\" where the patch has "
+        "'    # and its continuation line that the Agent forgot to mark as added text'.\n"
+        "That patch line has no + prefix, so it must already be in the file there; "
+        "if it is new, start it with +.\n"
+    ) in text(result)
+    assert path.read_bytes() == before
+
+
+def test_closest_text_is_shown_when_long_new_lines_hide_the_copied_ones(tmp_path):
+    path = tmp_path / "file.py"
+    filler = "".join(f"value_{index:02d} = compute({index})\n" for index in range(1, 40))
+    before = (
+        filler
+        + "\n\ndef parse(tokens):\n    head = tokens[0]\n    rest = tokens[1:]\n"
+        + "    return head, rest\n"
+        + filler.replace("value_", "other_")
+    ).encode()
+    path.write_bytes(before)
+    # The three longest lines are new text without "+"; the typo in the last line
+    # keeps them from being added.
+    body = (
+        "@@\n def parse(tokens):\n     head = tokens[0]\n"
+        "+    # Validate the token stream before splitting it into head and rest parts.\n"
+        "     # An empty stream has no head, so it is rejected here with a clear message\n"
+        "     # instead of failing later with an IndexError deep inside the parser code.\n"
+        "+    if not tokens:\n+        raise ValueError('empty')\n"
+        "     rest = tokens[1:]\n     return head, rst"
+    )
+    result = apply(tmp_path, update(body, "file.py"))
+    assert result["error"]["code"] == "text_not_found"
+    assert "No similar text" not in text(result)
+    assert "The closest text in the file, lines 42-47:\n42| def parse(tokens):\n" in text(result)
+    assert (
+        "First difference, line 44: the file has '    rest = tokens[1:]' where the patch has "
+        "'    # An empty stream has no head, so it is rejected here with a clear message'.\n"
+    ) in text(result)
+    assert path.read_bytes() == before
+
+
 def sharing_error(code: int = 5) -> OSError:
     error = PermissionError("replace temporarily unavailable")
     error.winerror = code
