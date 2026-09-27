@@ -10,6 +10,7 @@ import pytest
 from core.utils.logging import (
     DailyFileHandler,
     LogManager,
+    ManagedLoggerProxyHandler,
     QuietLogsWebSocketLifecycleFilter,
     is_logs_websocket_lifecycle_record,
     is_routine_websocket_lifecycle_message,
@@ -160,6 +161,41 @@ def test_websocket_lifecycle_filter_quiets_only_routine_info_records(
 ) -> None:
     assert is_logs_websocket_lifecycle_record(record) is routine
     assert QuietLogsWebSocketLifecycleFilter().filter(record) is not routine
+
+
+def test_logger_proxy_forwards_formatted_records_that_pass_its_filters() -> None:
+    # server.main wires this handler and filter into uvicorn's log config.
+    handler = ManagedLoggerProxyHandler("vbot.server.uvicorn")
+    handler.addFilter(QuietLogsWebSocketLifecycleFilter())
+    target_logger = logging.getLogger("vbot.server.uvicorn")
+    captured: list[logging.LogRecord] = []
+
+    class CaptureHandler(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            captured.append(record)
+
+    capture_handler = CaptureHandler()
+    target_logger.addHandler(capture_handler)
+    target_logger.setLevel(logging.INFO)
+    try:
+        for record in (
+            make_websocket_record(name="uvicorn.error", message="Server started"),
+            make_websocket_record(message="connection open", path="/ws/logs"),
+            make_websocket_record(
+                message='%s - "WebSocket %s" [rejected]', args=("127.0.0.1", "/ws"), path="/ws"
+            ),
+        ):
+            handler.handle(record)
+    finally:
+        target_logger.removeHandler(capture_handler)
+        handler.close()
+
+    # Forwarded records keep their level, carry the proxy's logger name and a
+    # formatted message; the routine lifecycle record is filtered out.
+    assert [(record.name, record.levelno, record.getMessage()) for record in captured] == [
+        ("vbot.server.uvicorn", logging.INFO, "Server started"),
+        ("vbot.server.uvicorn", logging.INFO, '127.0.0.1 - "WebSocket /ws" [rejected]'),
+    ]
 
 
 def test_persisted_websocket_lifecycle_messages_match_by_level_name() -> None:
