@@ -217,8 +217,16 @@ async def test_usage_restore_recovers_existing_call_from_newer_session(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("status", ["completed", "failed", "cancelled"])
-@pytest.mark.parametrize("provider_field", ["reported_cost_usd", "cost"])
+@pytest.mark.parametrize(
+    ("status", "provider_field"),
+    [
+        # Imported history reads as completed, so only a non-completed settled
+        # outcome proves the recorded outcome is retained; failed and cancelled
+        # share that rule.
+        ("failed", "reported_cost_usd"),
+        ("cancelled", "cost"),
+    ],
+)
 async def test_history_import_retains_stronger_measurements_cost_and_outcome(
     recorder, status, provider_field
 ):
