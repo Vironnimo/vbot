@@ -85,6 +85,39 @@ def test_prepare_checks_out_the_exact_release_revision_and_uses_fresh_test_data(
     assert not (test_data / "settings.json").exists()
 
 
+def test_check_verifies_the_complete_source_before_recording_the_intent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    install = _server_install(tmp_path / "install")
+    working = tmp_path / "working"
+    _repository(working)
+    (working / "webui").mkdir()
+    python = customize._development_python(install)
+    python.parent.mkdir(parents=True)
+    python.write_text("", encoding="utf-8")
+    (working / "feature.txt").write_text("local feature\n", encoding="utf-8")
+    commands: list[tuple[str, list[str]]] = []
+
+    def checked(directory: Path, arguments: list[str], _log: Path) -> None:
+        # The intent commit may only follow every verification step.
+        assert _git(working, "log", "-1", "--format=%s") == "base"
+        commands.append((directory.name, arguments[1:]))
+
+    monkeypatch.setattr(customize.shutil, "which", lambda name: name)
+    monkeypatch.setattr(customize, "_checked_command", checked)
+
+    revision = customize._validate(install, working, intent="Add the local feature")
+
+    assert ("working", ["-m", "ruff", "check", "--fix", "."]) in commands
+    assert ("working", ["-m", "mypy"]) in commands
+    assert ("working", ["-m", "pytest"]) in commands
+    assert ("webui", ["run", "lint", "--", "--fix"]) in commands
+    assert ("webui", ["test", "--", "--run"]) in commands
+    assert ("webui", ["run", "build"]) in commands
+    assert _git(working, "log", "-1", "--format=%s") == "Add the local feature"
+    assert _git(working, "rev-parse", "HEAD") == revision
+
+
 def test_activation_archive_rejects_a_source_changed_after_check(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

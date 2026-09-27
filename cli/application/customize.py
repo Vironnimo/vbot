@@ -340,8 +340,22 @@ def _validate(install: Installation, working: Path, *, intent: str) -> str:
     if npm is None:
         raise ApplicationError("Customization validation requires Node.js/npm to build the WebUI")
     _checked_command(working / "webui", [npm, "ci"], log)
-    _checked_command(working, [str(python), "scripts/quality.py"], log)
-    _checked_command(working, [str(python), "scripts/quality-frontend.py", "--build"], log)
+    # The complete repository verification, with formatter and linter fixes
+    # applied first so the recorded revision contains them.
+    for arguments in (
+        ["ruff", "format", "."],
+        ["ruff", "check", "--fix", "."],
+        ["mypy"],
+        ["pytest"],
+    ):
+        _checked_command(working, [str(python), "-m", *arguments], log)
+    for arguments in (
+        ["run", "format"],
+        ["run", "lint", "--", "--fix"],
+        ["test", "--", "--run"],
+        ["run", "build"],
+    ):
+        _checked_command(working / "webui", [npm, *arguments], log)
     _git(working, "add", "--all")
     if _git(working, "diff", "--cached", "--name-only"):
         _git(
