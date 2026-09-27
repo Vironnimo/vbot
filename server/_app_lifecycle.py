@@ -143,6 +143,13 @@ def _start_statistics_warmup(state: Any) -> asyncio.Task[None] | None:
     return asyncio.create_task(_warm_statistics_index(service))
 
 
+def _start_speech_preload(runtime: Any) -> None:
+    """Start loading a local STT model whose binding asks to be loaded at startup."""
+    preload = getattr(getattr(runtime, "speech", None), "preload_configured", None)
+    if callable(preload):
+        preload()
+
+
 async def _warm_statistics_index(service: Any) -> None:
     try:
         await service.warm_index_async()

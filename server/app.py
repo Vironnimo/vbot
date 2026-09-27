@@ -44,6 +44,7 @@ from server._app_lifecycle import (
     _shutdown_model_list_refreshes,
     _shutdown_runtime,
     _shutdown_statistics_warmup,
+    _start_speech_preload,
     _start_statistics_warmup,
     _unregister_bash_process_change_bridge,
     _unregister_calendar_change_bridge,
@@ -268,6 +269,7 @@ def create_app(
         )
         if effective_safe_mode is None:
             await _fire_extension_startup(app_runtime)
+            _start_speech_preload(app_runtime)
         # Local model catalogs (auto_refresh connections, e.g. Ollama) refresh
         # in the background — never blocking startup; the method itself is
         # throttled and swallows failures. Guarded for stub runtimes in tests.
