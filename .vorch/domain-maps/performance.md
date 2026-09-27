@@ -76,6 +76,7 @@ Durations are milliseconds. Names are dotted lowercase words with low cardinalit
 - A span appears only if it began inside the Recording; `measure` blocks open when the Recording stops are dropped from the trace but still counted in histograms.
 - Stack sampling uses `sys._current_frames()`; frames are rendered relative to the vBot root or the Python library root.
 - The garbage collection callback runs inside the collector on whatever thread allocated, possibly while that thread holds a lock such as the metric registry's. It must stay lock-free (timestamps, a float total and a bounded deque); histograms and spans are recorded later on the Event Loop.
+- The server process freezes its startup heap once the app is ready (`server.md`), so full collections skip modules, classes and Runtime services; `gc.gen2` then reflects the objects created while serving.
 - `measure()` costs about 0.7 us per call without a Recording and about 2.4 us with a track while recording (Python 3.14, Windows); keep it out of per-token or per-byte loops.
 
 ## Tests

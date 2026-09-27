@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import gc
 import os
 from pathlib import Path
+from time import perf_counter
 from typing import Any, Literal
 
 from core.storage.layout import initialize_data_directory
@@ -18,7 +20,7 @@ from core.utils.config import (
     resolve_port,
     resolve_server_bind,
 )
-from core.utils.logging import build_uvicorn_log_config
+from core.utils.logging import build_uvicorn_log_config, get_logger
 from core.utils.processes import activate_process_containment
 from core.utils.server_control import (
     create_server_control,
@@ -116,6 +118,7 @@ def main(argv: list[str] | None = None) -> None:
                 "shutdown_token": control.token,
                 "request_shutdown": request_shutdown,
                 "request_restart": request_restart,
+                "on_ready": _freeze_startup_heap,
             }
             if safe_startup_mode is not None:
                 app_kwargs["safe_startup_mode"] = safe_startup_mode
@@ -135,6 +138,24 @@ def main(argv: list[str] | None = None) -> None:
             server.run()
         finally:
             remove_server_control(control)
+
+
+def _freeze_startup_heap() -> None:
+    """Keep the objects built during startup out of later cyclic collections.
+
+    Modules, classes and Runtime services live as long as the process, yet every
+    full collection would traverse them again while holding the GIL and so
+    stall the Event Loop. Collecting first keeps startup garbage out of the
+    frozen set.
+    """
+    started = perf_counter()
+    gc.collect()
+    gc.freeze()
+    get_logger("server").info(
+        "Startup heap frozen (objects=%d collect_ms=%d)",
+        gc.get_freeze_count(),
+        round((perf_counter() - started) * 1000),
+    )
 
 
 if __name__ == "__main__":

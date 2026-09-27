@@ -109,6 +109,7 @@ def test_main_starts_uvicorn_with_configured_app(tmp_path: Path, monkeypatch, ac
             self.should_exit = False
 
         def run(self) -> None:
+            self.config.app["on_ready"]()
             if action == "restart_failure":
                 with pytest.raises(RuntimeError):
                     self.config.app["request_restart"]()
@@ -136,17 +137,24 @@ def test_main_starts_uvicorn_with_configured_app(tmp_path: Path, monkeypatch, ac
         SimpleNamespace(Config=FakeConfig, Server=FakeServer),
     )
     monkeypatch.setattr(server_main, "activate_process_containment", lambda: None)
-    monkeypatch.setattr(
-        server_main,
-        "create_app",
-        lambda *, config, server_bind, shutdown_token, request_shutdown, request_restart: {
+
+    def create_app(
+        *, config, server_bind, shutdown_token, request_shutdown, request_restart, on_ready
+    ) -> dict[str, Any]:
+        return {
             "config": config,
             "server_bind": server_bind,
             "shutdown_token": shutdown_token,
             "request_shutdown": request_shutdown,
             "request_restart": request_restart,
-        },
-    )
+            "on_ready": on_ready,
+        }
+
+    monkeypatch.setattr(server_main, "create_app", create_app)
+    # The real hook would freeze the test process heap for the rest of the session.
+    heap: list[str] = []
+    monkeypatch.setattr(server_main.gc, "collect", lambda: heap.append("collect"))
+    monkeypatch.setattr(server_main.gc, "freeze", lambda: heap.append("freeze"))
 
     main(["--data-dir", str(tmp_path / "data"), "--port", "8765"])
 
@@ -179,6 +187,8 @@ def test_main_starts_uvicorn_with_configured_app(tmp_path: Path, monkeypatch, ac
         "port_source": "cli",
     }
     assert calls[0]["app"]["shutdown_token"]
+    # Once ready, the server freezes its collected startup heap.
+    assert heap == ["collect", "freeze"]
     assert not (tmp_path / "data" / "runtime" / "server-8765.json").exists()
 
 

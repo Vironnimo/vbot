@@ -187,10 +187,15 @@ def test_stub_runtime_lifespan_wires_state_and_closes_services(
         if async_close
         else ServerStubRuntime(tmp_path, speech=speech)
     )
-    app = create_app(runtime=runtime)
+    bootstrapped_when_ready: list[bool] = []
+    on_ready = Mock(side_effect=lambda: bootstrapped_when_ready.append(runtime.bootstrap_activated))
+    app = create_app(runtime=runtime, on_ready=on_ready)
     engine = _AsyncCloseDeviceFlowEngine()
 
     with TestClient(app):
+        # The ready hook runs once, after startup finished.
+        on_ready.assert_called_once_with()
+        assert bootstrapped_when_ready == [True]
         # A local speech model configured to load at server start begins loading.
         preload.assert_called_once_with()
         assert app.state.chat_runs is runtime.chat_run_manager

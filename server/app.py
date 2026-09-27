@@ -241,8 +241,13 @@ def create_app(
     request_shutdown: Callable[[], None] | None = None,
     request_restart: Callable[[], None] | None = None,
     safe_startup_mode: Literal["verification", "test"] | None = None,
+    on_ready: Callable[[], None] | None = None,
 ) -> FastAPIType:
-    """Create the FastAPI app and wire runtime services into app state."""
+    """Create the FastAPI app and wire runtime services into app state.
+
+    ``on_ready`` runs once at the end of lifespan startup, before the server
+    accepts connections.
+    """
     if FastAPI is None:
         raise RuntimeError(
             "FastAPI is required to create the server app"
@@ -287,6 +292,8 @@ def create_app(
         activate_bootstrap = getattr(app_runtime, "activate_bootstrap", None)
         if callable(activate_bootstrap):
             activate_bootstrap()
+        if on_ready is not None:
+            on_ready()
         try:
             yield
         finally:
