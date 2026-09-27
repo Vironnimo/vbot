@@ -94,8 +94,8 @@ def _skill_names(result: dict[str, Any]) -> list[str]:
 
 
 @pytest.mark.asyncio
-async def test_no_agent_address_returns_global_skills() -> None:
-    state = _state(global_names=["debugging", "frontend-design"])
+async def test_no_agent_address_returns_global_skills_sorted_by_name() -> None:
+    state = _state(global_names=["frontend-design", "debugging"])
 
     result = await _list_commands(state, {})
 
@@ -176,24 +176,25 @@ async def test_skill_suggestions_are_computed_off_the_event_loop() -> None:
 
 
 @pytest.mark.asyncio
-async def test_commands_are_always_present() -> None:
+async def test_built_in_commands_are_always_present_with_their_input_and_output() -> None:
     state = _state(global_names=[])
 
     result = await _list_commands(state, {})
 
-    command_names = [item["name"] for item in result["items"] if item["type"] == "command"]
-    assert command_names == [
-        "agent",
-        "compact",
-        "handoff",
-        "help",
-        "learn",
-        "model",
-        "new",
-        "reflect",
-        "rename",
-        "status",
-        "stop",
+    commands = [item for item in result["items"] if item["type"] == "command"]
+    assert all(item["description"] for item in commands)
+    assert [(item["name"], item["argument"], item["output"]) for item in commands] == [
+        ("agent", "optional", "action"),
+        ("compact", "optional", "toast"),
+        ("handoff", "optional", "action"),
+        ("help", "none", "transient"),
+        ("learn", "optional", "action"),
+        ("model", "optional", "action"),
+        ("new", "none", "action"),
+        ("reflect", "optional", "action"),
+        ("rename", "optional", "toast"),
+        ("status", "none", "transient"),
+        ("stop", "none", "toast"),
     ]
 
 
