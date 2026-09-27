@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import queue
 from collections.abc import AsyncIterator, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+import pytest
 import pytest_asyncio
 
+import core.tools._bash_environment as bash_environment
+import core.tools._terminal_input as terminal_input
+import core.tools._terminal_io as terminal_io
 from core.tools.terminal_manager import (
     TerminalManager,
     TerminalOwner,
@@ -147,6 +152,30 @@ class FakeClock:
         await asyncio.sleep(0)
 
 
+@pytest.fixture(autouse=True)
+def shell_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Answer the login-shell environment probe from this process's environment.
+
+    Terminal launches read the probed shell environment; the fake keeps them from
+    starting a real shell and makes the first launch in a worker as fast as later ones.
+    """
+
+    async def probe() -> dict[str, str]:
+        return dict(os.environ)
+
+    monkeypatch.setattr(bash_environment, "_probe_shell_env", probe)
+    monkeypatch.setattr(bash_environment, "_cached_shell_env", None)
+    monkeypatch.setattr(bash_environment, "_shell_env_cache_time", 0.0)
+    monkeypatch.setattr(bash_environment, "_shell_env_probe_task", None)
+
+
+@pytest.fixture
+def quick_readiness(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Treat a start screen or shell prompt as settled after 10 ms instead of 0.5 s."""
+    monkeypatch.setattr(terminal_io, "TERMINAL_INITIAL_INPUT_QUIET_SECONDS", 0.01)
+    monkeypatch.setattr(terminal_input, "TERMINAL_INITIAL_INPUT_QUIET_SECONDS", 0.01)
+
+
 @pytest_asyncio.fixture
 async def terminal_manager() -> AsyncIterator[tuple[TerminalManager, AdapterFactory]]:
     factory = AdapterFactory()
@@ -162,8 +191,56 @@ async def terminal_manager() -> AsyncIterator[tuple[TerminalManager, AdapterFact
         await manager.aclose()
 
 
+@pytest_asyncio.fixture
+async def delivering_manager() -> AsyncIterator[
+    tuple[TerminalManager, AdapterFactory, PendingTriggerService]
+]:
+    """A manager that delivers settled activity to a recording Trigger service."""
+    trigger = PendingTriggerService()
+    factory = AdapterFactory()
+    manager = TerminalManager(
+        trigger,
+        adapter_factory=factory,
+        sweep_interval_seconds=3600,
+        activity_quiet_seconds=0.03,
+    )
+    manager.start()
+    try:
+        yield manager, factory, trigger
+    finally:
+        await manager.aclose()
+
+
+@pytest_asyncio.fixture
+async def clocked_manager() -> AsyncIterator[
+    tuple[TerminalManager, AdapterFactory, PendingTriggerService, FakeClock]
+]:
+    """A delivering manager whose quiet and resize-grace timers follow a fake clock."""
+    clock = FakeClock()
+    trigger = PendingTriggerService()
+    factory = AdapterFactory()
+    manager = TerminalManager(
+        trigger,
+        adapter_factory=factory,
+        sweep_interval_seconds=3600,
+        activity_quiet_seconds=TEST_ACTIVITY_QUIET_SECONDS,
+        monotonic=clock.monotonic,
+        sleep=clock.sleep,
+    )
+    manager.start()
+    try:
+        yield manager, factory, trigger, clock
+    finally:
+        await manager.aclose()
+
+
 def owner(session_id: str = "session-a") -> TerminalOwner:
     return TerminalOwner("project-a", "agent-a", session_id)
+
+
+def session_of(manager: TerminalManager, terminal_id: str) -> Any:
+    """Return the Session behind a terminal id, including one no Agent owns."""
+    return next(item for item in manager.list_sessions() if item.terminal_id == terminal_id)
 
 
 async def spawn(
