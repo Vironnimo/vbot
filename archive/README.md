@@ -14,3 +14,9 @@ for the `apply_patch` replacement and restoration boundary.
 `write.zip` preserves the retired `write` Tool, focused tests, prior documentation,
 and original shared integration/probe files with source commit and SHA-256 hashes.
 See [Archived Write Tool](../.vorch/domain-maps/tools/write.md) for replacement and restoration.
+
+`quality-gates.zip` preserves the retired `scripts/quality.py` and
+`scripts/quality-frontend.py` runners with their shared helper, documentation,
+tests and the integration files that invoked them, with source commit and SHA-256
+hashes. The tracked pre-commit hook, targeted test runs and CI on every push to
+`main` replace them (`.vorch/PROJECT.md` -> Testing). Restore only in a worktree.

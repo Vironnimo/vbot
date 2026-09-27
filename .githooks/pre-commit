@@ -1,0 +1,7 @@
+#!/bin/sh
+# Format, lint and type-check staged files; see scripts/commit_check.py.
+# Enable once per clone: git config core.hooksPath .githooks
+if command -v python >/dev/null 2>&1; then
+    exec python scripts/commit_check.py
+fi
+exec python3 scripts/commit_check.py

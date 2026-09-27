@@ -825,7 +825,7 @@ def _print_merge_conflict_hints(name: str, *, window_open: bool) -> None:
     print(f"hint: freeze main first: python scripts/worktree.py repair-start {name}")
     print(
         "hint: bring main into your branch (git rebase main), resolve the "
-        "conflicts, commit, and rerun the quality gates"
+        "conflicts, commit, and rerun the affected tests"
     )
     print(f"hint: retry the merge: python scripts/worktree.py merge {name}")
     if window_open:

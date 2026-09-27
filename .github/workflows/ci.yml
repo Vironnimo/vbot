@@ -1,5 +1,7 @@
 name: CI
 
+# Complete verification, called for every push to main (main.yml) and as the
+# release gate (release.yml). Local work runs targeted tests; this runs everything.
 on:
   workflow_call:
   workflow_dispatch:
@@ -8,8 +10,34 @@ permissions:
   contents: read
 
 jobs:
+  static:
+    name: static (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux x64
+            runner: ubuntu-latest
+          - platform: windows x64
+            runner: windows-latest
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install backend development dependencies
+        run: python -m pip install -e ".[dev]"
+      - name: Check formatting
+        run: python -m ruff format --check .
+      - name: Lint
+        run: python -m ruff check .
+      - name: Type-check
+        run: python -m mypy
+
   backend:
-    name: backend (${{ matrix.platform }}, Python ${{ matrix.python }})
+    name: backend (${{ matrix.platform }}, Python ${{ matrix.python }}${{ matrix.shard && format(', shard {0}', matrix.shard) || '' }})
     strategy:
       fail-fast: false
       matrix:
@@ -26,13 +54,17 @@ jobs:
           - platform: linux arm64
             runner: ubuntu-24.04-arm
             python: "3.11"
-          - platform: windows x64
-            runner: windows-latest
-            python: "3.11"
-          - platform: windows x64
-            runner: windows-latest
-            python: "3.14"
+          # Windows runs the suite several times slower; split it across jobs.
+          - { platform: windows x64, runner: windows-latest, python: "3.11", shard: 1/3 }
+          - { platform: windows x64, runner: windows-latest, python: "3.11", shard: 2/3 }
+          - { platform: windows x64, runner: windows-latest, python: "3.11", shard: 3/3 }
+          - { platform: windows x64, runner: windows-latest, python: "3.14", shard: 1/3 }
+          - { platform: windows x64, runner: windows-latest, python: "3.14", shard: 2/3 }
+          - { platform: windows x64, runner: windows-latest, python: "3.14", shard: 3/3 }
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    env:
+      VBOT_TEST_SHARD: ${{ matrix.shard }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -43,26 +75,31 @@ jobs:
         run: python -m pip install -e ".[dev]"
       - name: Provision the pinned search engine
         run: python -m cli.search_runtime
-      - name: Run backend quality gate
-        run: python scripts/quality.py --check
+      - name: Run backend tests
+        run: python -m pytest --durations=25
 
   frontend:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: webui
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
-        with:
-          python-version: "3.11"
       - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
           cache-dependency-path: webui/package-lock.json
       - name: Install WebUI dependencies
-        working-directory: webui
         run: npm ci
-      - name: Run frontend quality gate
-        run: python scripts/quality-frontend.py --check
+      - name: Check formatting
+        run: npm run format:check
+      - name: Lint
+        run: npm run lint
+      - name: Run frontend tests
+        run: npx vitest run
+      - name: Build WebUI
+        run: npm run build
 
   e2e:
     uses: ./.github/workflows/e2e.yml

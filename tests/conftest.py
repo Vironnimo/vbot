@@ -6,6 +6,7 @@ import asyncio
 import logging
 import os
 import sys
+import zlib
 from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any
@@ -120,6 +121,38 @@ def _require_loop_started_runtimes_closed(monkeypatch: pytest.MonkeyPatch) -> It
             "await runtime.aclose() before the test ends",
             pytrace=False,
         )
+
+
+def _selected_shard() -> tuple[int, int] | None:
+    """Return ``(index, count)`` from ``VBOT_TEST_SHARD=<index>/<count>``, 1-based."""
+    raw = os.environ.get("VBOT_TEST_SHARD", "").strip()
+    if not raw:
+        return None
+    index_text, _, count_text = raw.partition("/")
+    try:
+        index, count = int(index_text), int(count_text)
+    except ValueError:
+        raise pytest.UsageError(f"VBOT_TEST_SHARD must be <index>/<count>, got {raw!r}") from None
+    if not 1 <= index <= count:
+        raise pytest.UsageError(f"VBOT_TEST_SHARD index must be within 1..{count}, got {raw!r}")
+    return index, count
+
+
+def in_shard(nodeid: str, index: int, count: int) -> bool:
+    """Return whether *nodeid* belongs to shard *index* of *count* (stable across runs)."""
+    return zlib.crc32(nodeid.encode("utf-8")) % count == index - 1
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """Keep one CI shard of the collected tests when ``VBOT_TEST_SHARD`` is set."""
+    shard = _selected_shard()
+    if shard is None:
+        return
+    selected = [item for item in items if in_shard(item.nodeid, *shard)]
+    deselected = [item for item in items if not in_shard(item.nodeid, *shard)]
+    if deselected:
+        config.hook.pytest_deselected(items=deselected)
+    items[:] = selected
 
 
 def _event_loop_running() -> bool:

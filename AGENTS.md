@@ -71,7 +71,23 @@ Judge complexity by responsibilities, coupling, and what callers must understand
 
 ## Testing
 
-Cover behavior changes with appropriate tests as part of implementation. Extend existing tests where possible; add tests for meaningful gaps and regressions, not to mirror implementation details or satisfy a file count. When existing tests already cover the change, run them rather than adding duplicates. For documentation-only edits, review content, references, and the diff; application tests are unnecessary. Run the applicable quality gates below for code changes.
+Tests guard behavior against regressions from concurrent and later work. Every test also costs runtime and maintenance for all later tasks, so keep the suite a curated set of behavior contracts, not a record of every change.
+
+**Write tests for contracts, not for changes.**
+
+- Test behavior at the owning module's public interface: contracts, persisted formats, protocols, Tool-visible behavior. Test an internal helper directly only when it carries its own contract that is impractical to reach through that interface.
+- A bug fix extends the existing test that owns the behavior, with a new parameter case or assertion. Add a new test only when no existing test covers that behavior.
+- One test per distinct behavior; parameterize only over genuinely different cases.
+- Developer scripts and probes get at most a smoke test, unless they protect data or installations (converters, installers, update and worktree tooling).
+- Keep tests fast and deterministic: controlled clocks and in-memory fakes instead of real waits, subprocesses, and network. A test that needs more than about a second must justify it.
+- When a change makes tests obsolete or redundant, delete or merge them in the same change.
+- Documentation-only edits need no tests; review content, references, and the diff.
+
+**Run what covers the change; CI runs everything.**
+
+- Before each commit, run the tests that cover the change with the test runners directly (PROJECT.md -> Testing): the owning module's tests plus the tests of callers whose behavior may change, across domains. Find those callers by searching for the changed public names. After changes under `webui/src/` or an Extension page `ui/`, also run the WebUI guard tests and the WebUI build.
+- Run the complete suites locally only when the user asks, or when a change affects test infrastructure, dependencies, or tool configuration so broadly that no targeted selection is meaningful. CI runs them on every push to `main`.
+- Name the tests you ran and their result in your report.
 
 ## Dependencies
 
@@ -99,9 +115,9 @@ Maintain terminology as part of relevant work when a missing, stale, or ambiguou
 ## Git
 
 - Work directly on `main` — no feature branches by default. When you finish a task, commit it (the user may also ask you to commit mid-way); you don't need to wait to be asked.
-- **Small, quick, low-risk changes go directly on `main`; use a worktree for larger or uncertain tasks, or when concurrent work could interfere.** Create worktrees with `python scripts/worktree.py create <task-name>` (see PROJECT.md → Development), then work and commit inside them. Once the required quality gates pass and everything is committed, run `python scripts/worktree.py merge <task-name>` to merge into `main` and remove the worktree. For conflicts, follow `.vorch/workflows/worktree-workflow.md`. No user confirmation is needed before merging.
+- **Small, quick, low-risk changes go directly on `main`; use a worktree for larger or uncertain tasks, or when concurrent work could interfere.** Create worktrees with `python scripts/worktree.py create <task-name>` (see PROJECT.md → Development), then work and commit inside them. Once the affected tests pass and everything is committed, run `python scripts/worktree.py merge <task-name>` to merge into `main` and remove the worktree. For conflicts, follow `.vorch/workflows/worktree-workflow.md`. No user confirmation is needed before merging.
 - Conventional format: `<type>(<scope>): <what>` — lowercase, ≤72 chars, no trailing period. Types: `feat` `fix` `docs` `refactor` `perf` `test` `chore`. Breaking change → `!`.
 - One logical unit per commit; never batch unrelated changes; never commit broken code.
-- **Scoped gates are the default.** During work, use `python scripts/quality.py --check <paths>` or `python scripts/quality-frontend.py --check <paths>` when feedback is needed. Before each commit, run the applicable scoped gates without `--check` to apply fixes; add `--build` for frontend changes. Include all affected source and test areas, including callers whose behavior may change: automatic test mapping does not discover cross-domain dependencies. Docs-only changes need no gate.
-- **Run the full gate (no paths) when effects are broad or cannot be reliably scoped**, including changes to shared infrastructure, dependencies, or configuration with widespread impact. Run only the affected side(s); a full gate replaces the scoped pre-commit run.
-- **Keep every gate auto-fix and review the resulting diff.** Fix failures caused by the task or trivially related, then rerun the affected scope; rebuild if frontend changes affect the build. Report genuinely unrelated pre-existing failures and append them to `.vorch/FLAGGED.md`. Never revert auto-fixes or work around a real failure.
+- **The pre-commit hook checks every commit.** It formats, lints, and type-checks the staged files and re-stages its fixes for completely staged files (PROJECT.md -> Testing). Stage whole files and review its fixes. When it blocks, fix the reported problems, stage, and commit again; never bypass it with `--no-verify`. It reports mypy errors in files holding another session's uncommitted work without blocking; leave those files alone. If a commit of Python or WebUI files prints no `Commit check` report, the hook is not enabled: enable it (PROJECT.md -> Development).
+- **Fix failures caused by the task or trivially related.** Report genuinely unrelated pre-existing failures and append them to `.vorch/FLAGGED.md`. Never work around a real failure.
+- **A red CI run on `main` takes priority over new work.** When asked to fix it, read the failures with `gh run view <run-id> --log-failed`.

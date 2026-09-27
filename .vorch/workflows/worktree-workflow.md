@@ -39,7 +39,7 @@ git commit -m "<type>(<scope>): <what this phase accomplished>"
 
 ## Finalize
 
-Run quality gates from within the worktree. Everything must be green — gates are the agent's responsibility; the merge tooling never runs them.
+Run the affected tests from within the worktree (`AGENTS.md` -> Testing). They must pass and every change must be committed through the commit hook — verification is the agent's responsibility; the merge tooling never runs tests. CI runs the complete suite after the push.
 
 Write the Step 7 summary. Then merge yourself — no user confirmation is needed:
 
@@ -59,7 +59,7 @@ When the merge reports conflicts, it rolls everything back — `main` stays exac
 python scripts/worktree.py repair-start <task-name>
 ```
 
-2. In your worktree, bring `main` into your branch (`git rebase main`), resolve the conflicts, commit, and rerun the quality gates.
+2. In your worktree, bring `main` into your branch (`git rebase main`), resolve the conflicts, commit, and rerun the affected tests.
 3. Retry the merge — it runs inside your open window:
 
 ```bash
@@ -78,5 +78,5 @@ If the task is cancelled or aborted, use the project-specific `delete` command (
 - **Untracked files in worktree** — plan files (`.vorch/plans/`) and other untracked files exist only in the worktree; they are not visible in the main repo directory.
 - **Commands are project-specific** — use the worktree command names and paths documented in `.vorch/PROJECT.md`; do not assume a fixed script path.
 - **Never hand-merge into `main`** while sessions are running — all merges go through the merge command so the lock serializes them; a hand merge can collide with an automated one.
-- **The merge runs no quality gates** — green gates before merging stay the agent's job, in the worktree.
+- **The merge runs no tests** — passing affected tests before merging stay the agent's job, in the worktree.
 - **Cleanup failure after a landed merge** — if the merge succeeded but worktree cleanup failed, the output says so; finish with the project-specific `delete` command manually.

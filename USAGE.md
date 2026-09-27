@@ -1259,7 +1259,8 @@ vbot customize test
 vbot customize activate
 ```
 
-Checking runs the repository quality gates and WebUI build, records the source
+Checking applies formatter and linter fixes, runs the type check, the complete
+Python and WebUI test suites and the WebUI build, records the source
 revision and contents, and prepares a candidate with its dependencies. Changes
 after checking require another check. The foreground test uses fresh data and a
 separate port, with Extensions, Channels, Cron, Calendar and Bootstrap disabled;
@@ -1317,14 +1318,25 @@ npm run build
 npm run preview
 ```
 
-Repository quality gates are:
+Enable the tracked Git hooks once per clone. Before each commit they format,
+lint and type-check the staged files:
 
 ```bash
-python scripts/quality.py
-python scripts/quality-frontend.py
+git config core.hooksPath .githooks
 ```
 
-The Playwright E2E suite under `tests/e2e/` is separate from the local quality scripts because it controls a real server and browser environment. Local runs remain explicit opt-in and follow the repository workflow instructions; Release CI calls the same reusable Chromium job as a required pre-publish gate.
+Run the tests that cover a change with the test runners directly:
+
+```bash
+python -m pytest tests/core/tools
+cd webui
+npx vitest run src/lib
+```
+
+Every push to `main` runs the complete suites on Linux and Windows in CI
+(`.github/workflows/ci.yml`).
+
+The Playwright E2E suite under `tests/e2e/` is separate from the regular test runs because it controls a real server and browser environment. Local runs remain explicit opt-in and follow the repository workflow instructions; Release CI calls the same reusable Chromium job as a required pre-publish gate.
 
 Windows release builders and maintainers should also read the
 [native packaging guide](scripts/windows/README.md). Building artifacts does not
