@@ -275,6 +275,41 @@ async def test_immediate_cancel_reaches_terminal_and_releases_session() -> None:
     assert await replacement.wait() == "must not run"
 
 
+async def test_cancel_during_admission_still_persists_the_cancelled_run() -> None:
+    # The user can cancel before the Run's durable admission has committed. The
+    # admission must not be abandoned half-way: the Run is recorded, then closed
+    # as cancelled, and its executor never starts.
+    admitting = asyncio.Event()
+    release = asyncio.Event()
+    finished: list[tuple[str, str]] = []
+
+    class GatedAdmission:
+        async def start_run(self, run: Run) -> None:
+            admitting.set()
+            await release.wait()
+
+        async def finish_run(self, run: Run, status: str, payload: dict) -> dict:
+            finished.append((run.id, status))
+            return {}
+
+    manager = ChatRunManager(persistence=GatedAdmission())
+    entered: list[str] = []
+
+    async def execute(run: Run) -> str:
+        entered.append(run.id)
+        return "done"
+
+    run = await manager.start(SESSION, execute)
+    await admitting.wait()
+    cancel = asyncio.create_task(manager.cancel(run.id))
+    await asyncio.sleep(0)
+    release.set()
+
+    assert (await asyncio.wait_for(cancel, 1)).status == RunStatus.CANCELLED
+    assert finished == [(run.id, "cancelled")]
+    assert entered == []
+
+
 async def test_cancel_keeps_session_owned_until_async_cleanup_finishes() -> None:
     manager = ChatRunManager()
     first_started = asyncio.Event()

@@ -131,51 +131,6 @@ async def test_cancel_records_the_optional_reason_on_the_run(
     assert run.cancel_reason == reason
 
 
-class _GatedAdmission:
-    """Run persistence whose admission commit waits until the test releases it."""
-
-    def __init__(self) -> None:
-        self.admitting = asyncio.Event()
-        self.release = asyncio.Event()
-        self.finished: list[tuple[str, str]] = []
-
-    async def start_run(self, run: Run) -> None:
-        self.admitting.set()
-        await self.release.wait()
-
-    async def finish_run(self, run: Run, status: str, payload: JsonObject) -> JsonObject:
-        self.finished.append((run.id, status))
-        return {}
-
-
-@pytest.mark.asyncio
-async def test_cancel_during_admission_still_persists_the_cancelled_run() -> None:
-    # The user can cancel before the Run's durable admission has committed. The
-    # admission must not be abandoned half-way: the Run is recorded, then closed
-    # as cancelled, and its executor never starts.
-    persistence = _GatedAdmission()
-    manager = ChatRunManager(persistence=persistence)
-    entered: list[str] = []
-
-    async def execute(run: Run) -> str:
-        entered.append(run.id)
-        return "done"
-
-    run = await manager.start(ADDRESS, execute)
-    await persistence.admitting.wait()
-    cancel = asyncio.create_task(
-        call(SimpleNamespace(chat_runs=manager), "chat.cancel", run_id=run.id)
-    )
-    await asyncio.sleep(0)
-    persistence.release.set()
-
-    response = await cancel
-
-    assert response["result"]["status"] == "cancelled"
-    assert persistence.finished == [(run.id, "cancelled")]
-    assert entered == []
-
-
 @pytest.mark.asyncio
 async def test_cancel_tool_call_cancels_only_that_tool_call() -> None:
     state, run = await _held_run()
