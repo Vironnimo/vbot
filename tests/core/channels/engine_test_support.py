@@ -169,13 +169,14 @@ def make_config(
     response_mode: str = "mention",
     mention_patterns: list[str] | None = None,
     observe_unaddressed: bool = False,
+    allowed_chat_ids: list[str] | None = None,
 ) -> ChannelConfig:
     return ChannelConfig(
         id="tg-assistant",
         platform="telegram",
         agent_id="assistant",
         dm_scope=dm_scope,
-        allowed_chat_ids=["12345"],
+        allowed_chat_ids=["12345"] if allowed_chat_ids is None else list(allowed_chat_ids),
         token_env_var="TELEGRAM_BOT_TOKEN_TG_ASSISTANT",
         enabled=True,
         response_mode=response_mode,
