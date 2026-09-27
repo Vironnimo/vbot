@@ -2,7 +2,7 @@
 
 `core/providers/` owns Provider configuration, credential and Account resolution, adapter contracts, shared wire policy, and Provider-specific request/response translation.
 
-Responses decoding preserves explicit incomplete/failed terminal outcomes for both streaming and non-streaming results. A terminal-only function Call emits canonical Tool deltas; argument deltas also update retained Responses output items so an empty terminal output array cannot produce stale replay arguments. These are local normalization contracts, covered by `test_github_copilot_responses_decoding.py`; they do not change compatibility profiles.
+Responses decoding preserves explicit incomplete/failed terminal outcomes for both streaming and non-streaming results. A terminal-only function Call emits canonical Tool deltas; argument deltas also update retained Responses output items so an empty terminal output array cannot produce stale replay arguments. These are local normalization contracts, covered by `test_responses_codec_decoding.py`; they do not change compatibility profiles.
 
 ## Overview
 

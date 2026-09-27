@@ -25,7 +25,7 @@ from core.providers.github_copilot_responses import (
     ResponsesStreamState,
     normalize_responses_response,
 )
-from tests.core.providers.github_copilot_test_support import decode_responses_sse, sse_event
+from tests.core.providers.responses_test_support import decode_responses_sse, sse_event
 
 _FINISH_STOP = {"type": "finish", "reason": TERMINAL_OUTCOME_STOP}
 _FINISH_TOOL_CALLS = {"type": "finish", "reason": TERMINAL_OUTCOME_TOOL_CALLS}
