@@ -1,31 +1,36 @@
-"""Usage: service behavior."""
+"""Usage: the live Provider usage report (fetch, parse, cache, fail-open)."""
 
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
 
+from core.providers._usage_types import _PRIMARY_FALLBACK_LABEL, _SECONDARY_FALLBACK_LABEL
 from core.providers.errors import ProviderError
-from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
+from core.providers.openai import CODEX_EXTRA_HEADERS
+from core.providers.token_getter import COPILOT_EDITOR_VERSION, COPILOT_INTEGRATION_ID
 from core.providers.usage import (
+    COPILOT_USAGE_URL,
     ProviderUsageService,
+    ProviderUsageSnapshot,
     UsageCredits,
+    UsageReport,
+    UsageTransport,
+    UsageWindow,
+    clamp_percent,
 )
-from tests.core.providers.usage_helpers import (
-    _MINIMAX_BODY,
-    _OLLAMA_BODY,
-    _OPENAI_BODY,
-    _OPENROUTER_CREDITS_BODY,
-    _OPENROUTER_KEY_BODY,
-    FakeCredentials,
-    FakeProviders,
+from tests.core.providers.usage_test_support import (
+    OLLAMA_BODY,
+    OPENAI_BODY,
+    OPENROUTER_CREDITS_BODY,
+    OPENROUTER_KEY_BODY,
+    USAGE_RESPONSES,
     FakeResponse,
-    FakeRuntime,
     FakeTransport,
-    _openai_provider_config,
-    _openai_runtime,
+    usage_runtime,
 )
 
 
@@ -60,138 +65,443 @@ class RaisingTransport:
         raise RuntimeError("boom")
 
 
-def _ollama_cloud_provider_config() -> ProviderConfig:
-    return ProviderConfig(
-        id="ollama-cloud",
-        name="Ollama Cloud",
-        adapter="ollama",
-        base_url="https://ollama.com",
-        connections=[
-            ConnectionConfig(
-                id="api-key",
-                type="api_key",
-                label="API key",
-                auth=AuthConfig(
-                    header="Authorization",
-                    prefix="Bearer ",
-                    credential_key="OLLAMA_API_KEY",
-                ),
-                mode="cloud",
-            )
-        ],
+def _iso(epoch_seconds: int) -> str:
+    return datetime.fromtimestamp(epoch_seconds, UTC).isoformat()
+
+
+async def _report(
+    transport: UsageTransport, *provider_ids: str, **service_options: Any
+) -> UsageReport:
+    service = ProviderUsageService(
+        usage_runtime(*provider_ids), transport=transport, **service_options
     )
+    try:
+        return await service.report()
+    finally:
+        await service.aclose()
 
 
-def _ollama_cloud_runtime() -> FakeRuntime:
-    return FakeRuntime(
-        providers=FakeProviders({"ollama-cloud": _ollama_cloud_provider_config()}),
-        credentials=FakeCredentials({"ollama-cloud:api-key"}),
-        tokens={"ollama-cloud:api-key:default": "ollama-secret"},
-    )
+_OPENROUTER_CAP_WINDOW = UsageWindow(
+    label="API key spending cap",
+    used_percent=75.0,
+    reset_at="2026-08-20T00:00:00+00:00",
+    used_units=75.0,
+    remaining_units=25.0,
+    total_units=100.0,
+    unit="USD",
+)
+_OPENROUTER_CREDITS = UsageCredits(enabled=True, balance=37.5)
 
 
-def _openrouter_provider_config() -> ProviderConfig:
-    return ProviderConfig(
-        id="openrouter",
-        name="OpenRouter",
-        adapter="openrouter",
-        base_url="https://openrouter.ai/api/v1",
-        connections=[
-            ConnectionConfig(
-                id="api-key",
-                type="api_key",
-                label="API key",
-                auth=AuthConfig(
-                    header="Authorization",
-                    prefix="Bearer ",
-                    credential_key="OPENROUTER_API_KEY",
-                ),
-            )
-        ],
-    )
-
-
-def _openrouter_runtime() -> FakeRuntime:
-    return FakeRuntime(
-        providers=FakeProviders({"openrouter": _openrouter_provider_config()}),
-        credentials=FakeCredentials({"openrouter:api-key"}),
-        tokens={"openrouter:api-key:default": "or-secret"},
-    )
-
-
-# Service fan-out across providers
-class RoutingTransport:
-    """Returns a different response per URL substring; records calls."""
-
-    def __init__(self, responses: dict[str, FakeResponse]) -> None:
-        self._responses = responses
-        self.calls: list[tuple[str, dict[str, str]]] = []
-
-    async def get(
-        self, url: str, *, headers: Any, timeout: float, params: Any = None
-    ) -> FakeResponse:
-        self.calls.append((url, dict(headers)))
-        for marker, response in self._responses.items():
-            if marker in url:
-                return response
-        raise RuntimeError(f"no fake response for {url}")
-
-
-def _multi_provider_runtime() -> FakeRuntime:
-    providers = FakeProviders(
-        {
-            "openai": _openai_provider_config(),
-            "github-copilot": ProviderConfig(
-                id="github-copilot",
-                name="GitHub Copilot",
-                adapter="github_copilot",
-                base_url="https://api.githubcopilot.com",
-                connections=[
-                    ConnectionConfig(
-                        id="oauth",
-                        type="oauth",
-                        label="Sign in with GitHub",
-                        auth=AuthConfig(header="Authorization", prefix="Bearer "),
-                    )
+@pytest.mark.parametrize(
+    ("provider_id", "expected_calls", "expected"),
+    [
+        pytest.param(
+            "openai",
+            [
+                (
+                    "https://chatgpt.com/backend-api/wham/usage",
+                    {
+                        "Authorization": "Bearer access-token",
+                        "chatgpt-account-id": "acct-123",
+                        **CODEX_EXTRA_HEADERS,
+                    },
+                )
+            ],
+            ProviderUsageSnapshot(
+                connection="openai:subscription",
+                account="default",
+                display_name="OpenAI",
+                plan="Plus",
+                windows=[
+                    UsageWindow(
+                        label="5h",
+                        used_percent=42.5,
+                        reset_at=_iso(1_750_000_000),
+                        window_seconds=18_000,
+                    ),
+                    UsageWindow(
+                        label="Week",
+                        used_percent=12.0,
+                        reset_at=_iso(1_750_600_000),
+                        window_seconds=604_800,
+                    ),
                 ],
             ),
-            "minimax": ProviderConfig(
-                id="minimax",
-                name="MiniMax",
-                adapter="minimax",
-                base_url="https://api.minimaxi.com/v1",
-                connections=[
-                    ConnectionConfig(
-                        id="api-key",
-                        type="api_key",
-                        label="API / Token Plan Key",
-                        auth=AuthConfig(
-                            header="Authorization",
-                            prefix="Bearer ",
-                            credential_key="MINIMAX_API_KEY",
-                        ),
-                    )
-                ],
-            ),
-        }
-    )
-    return FakeRuntime(
-        providers=providers,
-        credentials=FakeCredentials(
-            {"openai:subscription", "github-copilot:oauth", "minimax:api-key"}
+            id="openai",
         ),
-        extras={
-            "openai:subscription": {"chatgpt_account_id": "acct-123"},
-            "github-copilot:oauth": {"github_oauth_token": "gho_example"},
-        },
-    )
+        # The Copilot probe authenticates with the stored GitHub OAuth token.
+        pytest.param(
+            "github-copilot",
+            [
+                (
+                    COPILOT_USAGE_URL,
+                    {
+                        "Authorization": "token gho_example",
+                        "Accept": "application/json",
+                        "Copilot-Integration-Id": COPILOT_INTEGRATION_ID,
+                        "Editor-Version": COPILOT_EDITOR_VERSION,
+                    },
+                )
+            ],
+            ProviderUsageSnapshot(
+                connection="github-copilot:oauth",
+                account="default",
+                display_name="GitHub Copilot",
+                plan="individual",
+                windows=[
+                    UsageWindow(
+                        label="Premium",
+                        used_percent=25.0,
+                        reset_at="2026-07-01T00:00:00+00:00",
+                        used_units=75.0,
+                        remaining_units=225.0,
+                        total_units=300.0,
+                        unit="interactions",
+                        unlimited=False,
+                    ),
+                    UsageWindow(
+                        label="Chat",
+                        used_percent=0.0,
+                        reset_at="2026-07-01T00:00:00+00:00",
+                        unlimited=True,
+                    ),
+                ],
+            ),
+            id="github-copilot",
+        ),
+        pytest.param(
+            "ollama-cloud",
+            [("https://ollama.com/api/usage", {"Authorization": "Bearer ollama-secret"})],
+            ProviderUsageSnapshot(
+                connection="ollama-cloud:api-key",
+                account="default",
+                display_name="Ollama Cloud",
+                windows=[
+                    UsageWindow(
+                        label="5h",
+                        used_percent=1.9,
+                        window_seconds=18_000,
+                        used_units=9.0,
+                        unit="requests",
+                    ),
+                    UsageWindow(
+                        label="Week",
+                        used_percent=0.7,
+                        window_seconds=604_800,
+                        used_units=14.0,
+                        unit="requests",
+                    ),
+                ],
+            ),
+            id="ollama-cloud",
+        ),
+        # Picks the MiniMax-M chat model with a non-zero total: (1000 - 250) / 1000.
+        pytest.param(
+            "minimax",
+            [
+                (
+                    "https://api.minimaxi.com/v1/token_plan/remains",
+                    {"Authorization": "Bearer access-token"},
+                )
+            ],
+            ProviderUsageSnapshot(
+                connection="minimax:api-key",
+                account="default",
+                display_name="MiniMax",
+                plan="Token Plan",
+                windows=[
+                    UsageWindow(
+                        label="24h",
+                        used_percent=75.0,
+                        reset_at=_iso(1_750_600_000),
+                        window_seconds=86_400,
+                        used_units=750.0,
+                        remaining_units=250.0,
+                        total_units=1000.0,
+                        unit="requests",
+                    )
+                ],
+            ),
+            id="minimax",
+        ),
+        # Cap used = (100 - 25) / 100; balance = 50 - 12.5.
+        pytest.param(
+            "openrouter",
+            [
+                ("https://openrouter.ai/api/v1/credits", {"Authorization": "Bearer or-secret"}),
+                ("https://openrouter.ai/api/v1/key", {"Authorization": "Bearer or-secret"}),
+            ],
+            ProviderUsageSnapshot(
+                connection="openrouter:api-key",
+                account="default",
+                display_name="OpenRouter",
+                windows=[_OPENROUTER_CAP_WINDOW],
+                credits=_OPENROUTER_CREDITS,
+            ),
+            id="openrouter",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_report_fetches_and_normalizes_each_supported_connection(
+    provider_id: str,
+    expected_calls: list[tuple[str, dict[str, str]]],
+    expected: ProviderUsageSnapshot,
+) -> None:
+    transport = FakeTransport(USAGE_RESPONSES)
+
+    report = await _report(transport, provider_id)
+
+    assert report.providers == [expected]
+    assert transport.calls == expected_calls
+
+
+def _openrouter_key(**changes: Any) -> dict[str, FakeResponse]:
+    key_body = {"data": {**OPENROUTER_KEY_BODY["data"], **changes}}
+    return {
+        "/credits": FakeResponse(payload=OPENROUTER_CREDITS_BODY),
+        "/key": FakeResponse(payload=key_body),
+    }
+
+
+_UNSUPPORTED_SHAPE = {"windows": [], "error": "Unsupported response shape"}
+
+
+@pytest.mark.parametrize(
+    ("provider_id", "responses", "expected"),
+    [
+        pytest.param(
+            "openai",
+            FakeResponse(
+                payload={
+                    "rate_limit": {
+                        "primary_window": {"used_percent": 150, "reset_at": 1_750_000_000_000},
+                        "secondary_window": {
+                            "used_percent": -5,
+                            "limit_window_seconds": 86_400,
+                            "reset_at": "nope",
+                        },
+                    }
+                }
+            ),
+            {
+                "windows": [
+                    UsageWindow(
+                        label=_PRIMARY_FALLBACK_LABEL,
+                        used_percent=100.0,
+                        reset_at=_iso(1_750_000_000),
+                    ),
+                    UsageWindow(label="Day", used_percent=0.0, window_seconds=86_400),
+                ]
+            },
+            id="openai-clamped-millisecond-reset-and-day-window",
+        ),
+        pytest.param(
+            "openai",
+            FakeResponse(
+                payload={
+                    "rate_limit": {
+                        "primary_window": {"used_percent": 3, "limit_window_seconds": 18_000}
+                    }
+                }
+            ),
+            {"windows": [UsageWindow(label="5h", used_percent=3.0, window_seconds=18_000)]},
+            id="openai-primary-window-only",
+        ),
+        # The live body reports the balance as a string gated by ``has_credits``.
+        pytest.param(
+            "openai",
+            FakeResponse(
+                payload={
+                    "credits": {"has_credits": True, "balance": "1234"},
+                    "rate_limit": {
+                        "secondary_window": {"used_percent": 1, "limit_window_seconds": 18_000}
+                    },
+                }
+            ),
+            {
+                "windows": [UsageWindow(label="5h", used_percent=1.0, window_seconds=18_000)],
+                "credits": UsageCredits(enabled=True, balance=1234.0),
+            },
+            id="openai-string-credit-balance-and-sub-day-window",
+        ),
+        pytest.param(
+            "openai",
+            FakeResponse(
+                payload={
+                    "credits": {"has_credits": False, "balance": "0"},
+                    "rate_limit": {"secondary_window": {"used_percent": 1}},
+                }
+            ),
+            {
+                "windows": [UsageWindow(label=_SECONDARY_FALLBACK_LABEL, used_percent=1.0)],
+                "credits": UsageCredits(enabled=False, balance=0.0),
+            },
+            id="openai-disabled-credits-and-unlabelled-window",
+        ),
+        # Neither windows, enabled credits nor an error: omitted from the report.
+        pytest.param(
+            "openai", FakeResponse(payload={"plan_type": "Plus"}), None, id="openai-no-windows"
+        ),
+        pytest.param(
+            "github-copilot",
+            FakeResponse(payload={"copilot_plan": "business"}),
+            None,
+            id="copilot-no-quota-snapshots",
+        ),
+        pytest.param(
+            "ollama-cloud",
+            FakeResponse(payload={"unexpected": True}),
+            _UNSUPPORTED_SHAPE,
+            id="ollama-no-limits-object",
+        ),
+        pytest.param(
+            "ollama-cloud",
+            FakeResponse(payload={"limits": {}}),
+            _UNSUPPORTED_SHAPE,
+            id="ollama-no-limit-windows",
+        ),
+        pytest.param(
+            "ollama-cloud",
+            FakeResponse(payload={"limits": {"session": {"usage": "0.1"}}}),
+            _UNSUPPORTED_SHAPE,
+            id="ollama-non-numeric-usage",
+        ),
+        pytest.param(
+            "ollama-cloud",
+            FakeResponse(
+                payload={"limits": {"session": {"usage": 0.25, "models": {"unexpected": True}}}}
+            ),
+            {"windows": [UsageWindow(label="5h", used_percent=25.0, window_seconds=18_000)]},
+            id="ollama-changed-request-breakdown-keeps-percent",
+        ),
+        pytest.param(
+            "minimax",
+            FakeResponse(payload={"unexpected": True}),
+            _UNSUPPORTED_SHAPE,
+            id="minimax-no-model-remains",
+        ),
+        pytest.param(
+            "minimax",
+            FakeResponse(
+                payload={
+                    "model_remains": [
+                        {"model_name": "MiniMax-Text-01", "current_interval_total_count": 5}
+                    ]
+                }
+            ),
+            _UNSUPPORTED_SHAPE,
+            id="minimax-no-chat-model",
+        ),
+        pytest.param(
+            "openrouter",
+            _openrouter_key(limit=None),
+            {"windows": [], "credits": _OPENROUTER_CREDITS},
+            id="openrouter-no-cap-limit",
+        ),
+        # remaining > limit means the cap rolled over; the ratio is meaningless.
+        pytest.param(
+            "openrouter",
+            _openrouter_key(limit_remaining=120.0),
+            {"windows": [], "credits": _OPENROUTER_CREDITS},
+            id="openrouter-rolled-over-cap",
+        ),
+        pytest.param(
+            "openrouter",
+            _openrouter_key(limit_reset="not-a-date"),
+            {"windows": [UsageWindow(**{**_OPENROUTER_CAP_WINDOW.to_dict(), "reset_at": None})]},
+            id="openrouter-non-iso-reset",
+        ),
+        pytest.param(
+            "openrouter",
+            {
+                "/credits": FakeResponse(payload=OPENROUTER_CREDITS_BODY),
+                "/key": FakeResponse(status_code=500),
+            },
+            {"windows": [], "credits": _OPENROUTER_CREDITS, "error": None},
+            id="openrouter-key-failure-degrades-to-credits",
+        ),
+        pytest.param(
+            "openrouter",
+            {
+                "/credits": FakeResponse(status_code=500),
+                "/key": FakeResponse(payload=OPENROUTER_KEY_BODY),
+            },
+            {"error": "HTTP 500"},
+            id="openrouter-credits-failure",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_report_projects_upstream_body_variants(
+    provider_id: str,
+    responses: FakeResponse | dict[str, FakeResponse],
+    expected: dict[str, Any] | None,
+) -> None:
+    report = await _report(FakeTransport(responses), provider_id)
+
+    if expected is None:
+        assert report.providers == []
+        return
+    [snapshot] = report.providers
+    assert {field: getattr(snapshot, field) for field in expected} == expected
+
+
+def test_clamp_percent_bounds_and_rejects_non_numbers() -> None:
+    assert clamp_percent(150) == 100.0
+    assert clamp_percent(-5) == 0.0
+    assert clamp_percent(42.5) == 42.5
+    assert clamp_percent("nope") == 0.0
+    assert clamp_percent(True) == 0.0
+
+
+@pytest.mark.parametrize(
+    ("provider_id", "transport", "error"),
+    [
+        pytest.param("ollama-cloud", HangingTransport(), "Timeout", id="timeout"),
+        pytest.param(
+            "ollama-cloud",
+            FakeTransport(FakeResponse(status_code=503)),
+            "HTTP 503",
+            id="http-status",
+        ),
+        pytest.param(
+            "ollama-cloud", FakeTransport(FakeResponse()), "Invalid response", id="invalid-json"
+        ),
+        pytest.param("ollama-cloud", RaisingTransport(), "Unavailable", id="unexpected-error"),
+        # The OAuth Connection's token getter cannot refresh, so the 401 stands.
+        pytest.param(
+            "openai",
+            FakeTransport(FakeResponse(status_code=401)),
+            "HTTP 401",
+            id="oauth-401-without-refresh",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_report_fails_open_into_an_error_snapshot(
+    provider_id: str, transport: UsageTransport, error: str
+) -> None:
+    report = await _report(transport, provider_id, timeout=0.01)
+
+    assert [snapshot.error for snapshot in report.providers] == [error]
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("outcome", ["success", "rejected_again", "forbidden", "refresh_failure"])
+@pytest.mark.parametrize(
+    ("outcome", "error"),
+    [
+        ("success", None),
+        ("rejected_again", "HTTP 401"),
+        ("forbidden", "HTTP 403"),
+        ("refresh_failure", "Unavailable"),
+    ],
+)
 async def test_usage_recovers_oauth_once_and_rebuilds_account_headers(
     monkeypatch: pytest.MonkeyPatch,
     outcome: str,
+    error: str | None,
 ) -> None:
     class Getter:
         token = "old-test-token"
@@ -224,9 +534,9 @@ async def test_usage_recovers_oauth_once_and_rebuilds_account_headers(
             self.calls.append(dict(headers))
             if len(self.calls) == 1:
                 return FakeResponse(403 if outcome == "forbidden" else 401)
-            return FakeResponse(401 if outcome == "rejected_again" else 200, _OPENAI_BODY)
+            return FakeResponse(401 if outcome == "rejected_again" else 200, OPENAI_BODY)
 
-    runtime = _openai_runtime()
+    runtime = usage_runtime("openai")
     getter = Getter()
     monkeypatch.setattr(runtime, "get_connection_token_getter", lambda _connection: getter)
     monkeypatch.setattr(
@@ -238,64 +548,21 @@ async def test_usage_recovers_oauth_once_and_rebuilds_account_headers(
     service = ProviderUsageService(runtime, transport=transport)
     try:
         report = await service.report()
-        assert len(report.providers) == 1
-        assert (report.providers[0].error is None) == (outcome == "success")
-        assert getter.refreshes == (0 if outcome == "forbidden" else 1)
-        assert len(transport.calls) == (2 if outcome in {"success", "rejected_again"} else 1)
-        if len(transport.calls) == 2:
-            assert transport.calls[1]["Authorization"] == "Bearer new-test-token"
-            assert transport.calls[1]["chatgpt-account-id"] == "new-test-account"
     finally:
         await service.aclose()
 
-
-# Service
-@pytest.mark.asyncio
-async def test_report_returns_openai_snapshot_with_windows() -> None:
-    # Arrange
-    transport = FakeTransport(FakeResponse(payload=_OPENAI_BODY))
-    service = ProviderUsageService(_openai_runtime(), transport=transport)
-
-    # Act
-    report = await service.report()
-
-    # Assert
-    assert len(report.providers) == 1
-    snapshot = report.providers[0]
-    assert snapshot.connection == "openai:subscription"
-    assert snapshot.account == "default"
-    assert [window.label for window in snapshot.windows] == ["5h", "Week"]
-    # The request carries the account header + Codex beta/originator headers.
-    _, headers = transport.calls[0]
-    assert headers["chatgpt-account-id"] == "acct-123"
-    assert headers["OpenAI-Beta"] == "responses=experimental"
-    assert headers["originator"] == "vbot"
+    assert [snapshot.error for snapshot in report.providers] == [error]
+    assert getter.refreshes == (0 if outcome == "forbidden" else 1)
+    assert len(transport.calls) == (2 if outcome in {"success", "rejected_again"} else 1)
+    if len(transport.calls) == 2:
+        assert transport.calls[1]["Authorization"] == "Bearer new-test-token"
+        assert transport.calls[1]["chatgpt-account-id"] == "new-test-account"
 
 
 @pytest.mark.asyncio
-async def test_report_fetches_ollama_cloud_usage_with_connection_auth() -> None:
-    transport = FakeTransport(FakeResponse(payload=_OLLAMA_BODY))
-    service = ProviderUsageService(_ollama_cloud_runtime(), transport=transport)
-
-    report = await service.report()
-
-    assert len(report.providers) == 1
-    snapshot = report.providers[0]
-    assert snapshot.connection == "ollama-cloud:api-key"
-    assert snapshot.account == "default"
-    assert [window.used_percent for window in snapshot.windows] == [1.9, 0.7]
-    assert transport.calls == [
-        (
-            "https://ollama.com/api/usage",
-            {"Authorization": "Bearer ollama-secret"},
-        )
-    ]
-
-
-@pytest.mark.asyncio
-async def test_report_skips_unusable_connections() -> None:
-    transport = FakeTransport(FakeResponse(payload=_OPENAI_BODY))
-    service = ProviderUsageService(_openai_runtime(usable=False), transport=transport)
+async def test_report_never_probes_an_unusable_connection() -> None:
+    transport = FakeTransport(USAGE_RESPONSES)
+    service = ProviderUsageService(usage_runtime("openai", usable=False), transport=transport)
 
     report = await service.report()
 
@@ -304,82 +571,49 @@ async def test_report_skips_unusable_connections() -> None:
 
 
 @pytest.mark.asyncio
-async def test_report_times_out_into_error_snapshot() -> None:
-    service = ProviderUsageService(_openai_runtime(), transport=HangingTransport(), timeout=0.01)
+async def test_report_probes_only_the_requested_connections() -> None:
+    transport = FakeTransport(USAGE_RESPONSES)
+    service = ProviderUsageService(usage_runtime("openai", "minimax"), transport=transport)
 
-    report = await service.report()
+    report = await service.report(connections=["minimax:api-key"])
 
-    assert len(report.providers) == 1
-    assert report.providers[0].error == "Timeout"
+    assert [snapshot.connection for snapshot in report.providers] == ["minimax:api-key"]
+    assert [url for url, _headers in transport.calls] == [
+        "https://api.minimaxi.com/v1/token_plan/remains"
+    ]
 
 
+@pytest.mark.parametrize(
+    ("response", "ttl"),
+    [
+        pytest.param(FakeResponse(payload=OLLAMA_BODY), 10.0, id="success-for-ten-seconds"),
+        pytest.param(FakeResponse(status_code=429), 60.0, id="error-for-sixty-seconds"),
+    ],
+)
 @pytest.mark.asyncio
-async def test_report_fails_open_on_http_error() -> None:
-    transport = FakeTransport(FakeResponse(status_code=401))
-    service = ProviderUsageService(_openai_runtime(), transport=transport)
-
-    report = await service.report()
-
-    assert len(report.providers) == 1
-    assert report.providers[0].error == "HTTP 401"
-
-
-@pytest.mark.asyncio
-async def test_report_fails_open_on_unexpected_error() -> None:
-    service = ProviderUsageService(_openai_runtime(), transport=RaisingTransport())
-
-    report = await service.report()
-
-    assert len(report.providers) == 1
-    assert report.providers[0].error == "Unavailable"
-
-
-@pytest.mark.asyncio
-async def test_report_uses_ttl_cache_on_repeated_calls() -> None:
-    transport = FakeTransport(FakeResponse(payload=_OPENAI_BODY))
-    # A constant clock keeps every cache entry fresh.
-    service = ProviderUsageService(_openai_runtime(), transport=transport, monotonic=lambda: 1000.0)
+async def test_report_caches_each_snapshot_until_its_ttl(
+    response: FakeResponse, ttl: float
+) -> None:
+    transport = FakeTransport(response)
+    now = 1000.0
+    service = ProviderUsageService(
+        usage_runtime("ollama-cloud"), transport=transport, monotonic=lambda: now
+    )
 
     first = await service.report()
-    second = await service.report()
-
-    assert len(transport.calls) == 1
-    assert first.providers[0].windows == second.providers[0].windows
-
-
-@pytest.mark.asyncio
-async def test_report_refreshes_successful_snapshot_after_ten_seconds() -> None:
-    transport = FakeTransport(FakeResponse(payload=_OPENAI_BODY))
-    now = 1000.0
-    service = ProviderUsageService(_openai_runtime(), transport=transport, monotonic=lambda: now)
-
-    await service.report()
-    now += 10.0
-    await service.report()
-
-    assert len(transport.calls) == 2
-
-
-@pytest.mark.asyncio
-async def test_report_backs_off_error_snapshot_for_sixty_seconds() -> None:
-    transport = FakeTransport(FakeResponse(status_code=429))
-    now = 1000.0
-    service = ProviderUsageService(_openai_runtime(), transport=transport, monotonic=lambda: now)
-
-    await service.report()
-    now += 10.1
+    now = 1000.0 + ttl - 0.1
     cached = await service.report()
-    now += 50.0
+    now = 1000.0 + ttl
     await service.report()
 
-    assert cached.providers[0].error == "HTTP 429"
+    assert cached.providers == first.providers
     assert len(transport.calls) == 2
 
 
 @pytest.mark.asyncio
 async def test_report_coalesces_concurrent_fetches_per_connection() -> None:
-    transport = BlockingTransport(FakeResponse(payload=_OPENAI_BODY))
-    service = ProviderUsageService(_openai_runtime(), transport=transport)
+    transport = BlockingTransport(FakeResponse(payload=OPENAI_BODY))
+    service = ProviderUsageService(usage_runtime("openai"), transport=transport)
 
     first = asyncio.create_task(service.report())
     await transport.started.wait()
@@ -393,94 +627,14 @@ async def test_report_coalesces_concurrent_fetches_per_connection() -> None:
 
 
 @pytest.mark.asyncio
-async def test_report_filters_to_requested_connections() -> None:
-    transport = FakeTransport(FakeResponse(payload=_OPENAI_BODY))
-    service = ProviderUsageService(_openai_runtime(), transport=transport)
-
-    report = await service.report(connections=["minimax:api-key"])
-
-    assert report.providers == []
-    assert transport.calls == []
-
-
-@pytest.mark.asyncio
-async def test_report_fetches_openrouter_credits_and_key_cap() -> None:
-    # Arrange
-    transport = RoutingTransport(
-        {
-            "/credits": FakeResponse(payload=_OPENROUTER_CREDITS_BODY),
-            "/key": FakeResponse(payload=_OPENROUTER_KEY_BODY),
-        }
-    )
-    service = ProviderUsageService(_openrouter_runtime(), transport=transport)
-
-    # Act
-    report = await service.report(connections=["openrouter:api-key"])
-
-    # Assert
-    assert len(report.providers) == 1
-    snapshot = report.providers[0]
-    assert snapshot.connection == "openrouter:api-key"
-    assert snapshot.account == "default"
-    assert snapshot.windows[0].used_percent == 75.0
-    assert snapshot.credits == UsageCredits(enabled=True, balance=37.5)
-    assert [(url, headers) for url, headers in transport.calls] == [
-        ("https://openrouter.ai/api/v1/credits", {"Authorization": "Bearer or-secret"}),
-        ("https://openrouter.ai/api/v1/key", {"Authorization": "Bearer or-secret"}),
-    ]
-
-
-@pytest.mark.asyncio
-async def test_report_openrouter_degrades_to_credits_when_key_endpoint_fails() -> None:
-    transport = RoutingTransport(
-        {
-            "/credits": FakeResponse(payload=_OPENROUTER_CREDITS_BODY),
-            "/key": FakeResponse(status_code=500),
-        }
-    )
-    service = ProviderUsageService(_openrouter_runtime(), transport=transport)
-
-    report = await service.report()
-
-    assert len(report.providers) == 1
-    snapshot = report.providers[0]
-    assert snapshot.error is None
-    assert snapshot.windows == []
-    assert snapshot.credits == UsageCredits(enabled=True, balance=37.5)
-
-
-@pytest.mark.asyncio
-async def test_report_openrouter_credits_failure_is_error_snapshot() -> None:
-    transport = RoutingTransport(
-        {
-            "/credits": FakeResponse(status_code=500),
-            "/key": FakeResponse(payload=_OPENROUTER_KEY_BODY),
-        }
-    )
-    service = ProviderUsageService(_openrouter_runtime(), transport=transport)
-
-    report = await service.report()
-
-    assert len(report.providers) == 1
-    assert report.providers[0].error == "HTTP 500"
-
-
-@pytest.mark.asyncio
 async def test_report_fans_out_across_providers_failing_open() -> None:
-    # Arrange — OpenAI succeeds, Copilot returns 401, MiniMax succeeds.
-    transport = RoutingTransport(
-        {
-            "wham/usage": FakeResponse(payload=_OPENAI_BODY),
-            "copilot_internal/user": FakeResponse(status_code=401),
-            "token_plan/remains": FakeResponse(payload=_MINIMAX_BODY),
-        }
+    # OpenAI succeeds, Copilot returns 401, MiniMax succeeds.
+    transport = FakeTransport(
+        {**USAGE_RESPONSES, "copilot_internal/user": FakeResponse(status_code=401)}
     )
-    service = ProviderUsageService(_multi_provider_runtime(), transport=transport)
 
-    # Act
-    report = await service.report()
+    report = await _report(transport, "openai", "github-copilot", "minimax")
 
-    # Assert — all three present; Copilot is an error snapshot, siblings parsed.
     by_connection = {snapshot.connection: snapshot for snapshot in report.providers}
     assert set(by_connection) == {
         "openai:subscription",

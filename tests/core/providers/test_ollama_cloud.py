@@ -22,7 +22,14 @@ from core.chat.wire_shaping import (
     _assistant_message_from_response,
 )
 from core.providers.errors import ProviderRequestTooLargeError
+from core.providers.ollama import OllamaCloudAdapter
 from core.providers.providers import ProviderRegistry
+from core.providers.reasoning import (
+    REASONING_INTENT_DEFAULT,
+    REASONING_INTENT_EFFORT,
+    REASONING_INTENT_OFF,
+    ReasoningIntent,
+)
 from tests.core.providers.ollama_test_support import (
     CLOUD_CHAT_URL,
     CLOUD_CONFIG,
@@ -32,6 +39,7 @@ from tests.core.providers.ollama_test_support import (
     bundled_cloud_adapter,
     cloud_adapter,
     cloud_sse,
+    model_lookup,
     sent_body,
 )
 
@@ -85,23 +93,59 @@ async def test_request_uses_the_openai_compatible_shape_on_the_exact_cloud_route
     await adapter.aclose()
 
 
+_EFFORT = REASONING_INTENT_EFFORT
+_OFF = ReasoningIntent(REASONING_INTENT_OFF)
+
+
 @pytest.mark.parametrize(
-    ("model_id", "effort", "wire_effort"),
+    ("model_id", "effort", "wire_effort", "described"),
     [
-        pytest.param("minimax-m3", "medium", "medium", id="supported-level"),
-        pytest.param("deepseek-v4-flash", "xhigh", "max", id="xhigh-normalizes-to-max"),
-        pytest.param("thinking-model", "high", "high", id="on-off-model-on"),
-        pytest.param("thinking-model", "none", "none", id="explicit-off-switch-for-on-off-model"),
-        pytest.param("plain-model", "high", None, id="non-thinking-model"),
-        pytest.param("new-unenriched-model", "high", None, id="unknown-support-until-catalog"),
-        pytest.param("minimax-m3", "future-tier", None, id="unknown-effort-omitted-not-rejected"),
+        pytest.param(
+            "minimax-m3",
+            "medium",
+            "medium",
+            ReasoningIntent(_EFFORT, effort_level="medium"),
+            id="supported-level",
+        ),
+        pytest.param(
+            "deepseek-v4-flash",
+            "xhigh",
+            "max",
+            ReasoningIntent(_EFFORT, effort_level="max"),
+            id="xhigh-normalizes-to-max",
+        ),
+        pytest.param(
+            "thinking-model",
+            "high",
+            "high",
+            ReasoningIntent(_EFFORT, effort_level="high"),
+            id="on-off-model-sends-level",
+        ),
+        pytest.param(
+            "thinking-model", "none", "none", _OFF, id="explicit-off-switch-for-on-off-model"
+        ),
+        pytest.param("plain-model", "high", None, _OFF, id="non-thinking-model"),
+        # The description of an unconfirmed Model is not pinned: it still reports
+        # the effort although the wire omits it until the catalog confirms support.
+        pytest.param(
+            "new-unenriched-model", "high", None, None, id="unknown-support-until-catalog"
+        ),
+        pytest.param(
+            "minimax-m3",
+            "future-tier",
+            None,
+            ReasoningIntent(REASONING_INTENT_DEFAULT),
+            id="unknown-effort-omitted-not-rejected",
+        ),
     ],
 )
 @respx.mock
 @pytest.mark.asyncio
 async def test_reasoning_effort_renders_only_confirmed_cloud_vocabulary(
-    model_id: str, effort: str, wire_effort: str | None
+    model_id: str, effort: str, wire_effort: str | None, described: ReasoningIntent | None
 ) -> None:
+    """The sent effort and the ``/status`` description of the same selection agree."""
+
     route = respx.post(CLOUD_CHAT_URL).mock(
         return_value=httpx.Response(200, json=CLOUD_TEXT_RESPONSE)
     )
@@ -112,6 +156,16 @@ async def test_reasoning_effort_renders_only_confirmed_cloud_vocabulary(
     payload = sent_body(route)
     assert payload.get("reasoning_effort") == wire_effort
     assert ("reasoning_effort" in payload) is (wire_effort is not None)
+    if described is not None:
+        assert (
+            OllamaCloudAdapter.describe_reasoning_render(
+                model_lookup=model_lookup,
+                model_id=model_id,
+                effort=effort,
+                provider_config=CLOUD_CONFIG,
+            )
+            == described
+        )
     await adapter.aclose()
 
 

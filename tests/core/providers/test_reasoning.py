@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from typing import Any
 
 import pytest
@@ -26,7 +27,6 @@ from core.providers.reasoning import (
     REASONING_REPLAY_POLICIES,
     ReasoningIntent,
     closest_supported_effort,
-    detail_names_rejected_effort,
     effort_to_budget,
     model_reasoning_budget_max,
     model_reasoning_control,
@@ -39,6 +39,9 @@ from core.providers.reasoning import (
 )
 
 _REASONING_LOGGER = "vbot.providers.reasoning"
+_LADDER = ("none", "low", "medium", "high")
+_ACTIVE_LADDER = ("low", "medium", "high")
+_ZERO_REASONING_USAGE = {"completion_tokens_details": {"reasoning_tokens": 0}}
 
 
 def _model_with_reasoning(reasoning: ReasoningCapabilities) -> Model:
@@ -56,112 +59,94 @@ def _model_with_reasoning(reasoning: ReasoningCapabilities) -> Model:
     )
 
 
-def test_reasoning_replay_policy_axis_is_pinned() -> None:
-    """The replay-policy axis is a deliberate three-value contract."""
+def _warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [record.getMessage() for record in caplog.records if record.levelno == logging.WARNING]
+
+
+def test_reasoning_vocabularies_are_pinned() -> None:
+    """The replay-policy axis and the intent kinds are deliberate contracts."""
     assert REASONING_REPLAY_POLICIES == ("none", "current_run", "full_history")
+    assert REASONING_INTENT_KINDS == ("default", "off", "effort", "budget", "on")
 
 
-def test_closest_supported_effort_maps_to_nearest_known_level() -> None:
-    assert closest_supported_effort("minimal", {"low", "medium", "high"}) == "low"
-    assert closest_supported_effort("max", {"low", "medium", "high"}) == "high"
-    assert closest_supported_effort("low", {"none", "high"}) == "high"
+@pytest.mark.parametrize(
+    ("effort", "supported", "expected"),
+    [
+        pytest.param("minimal", {"low", "medium", "high"}, "low", id="up-to-nearest"),
+        pytest.param("max", {"low", "medium", "high"}, "high", id="down-to-nearest"),
+        pytest.param("low", {"none", "high"}, "high", id="none-is-not-an-active-level"),
+        pytest.param("medium", {"low", "high"}, "low", id="tie-prefers-lower-cost"),
+        pytest.param("none", {"low", "medium", "high"}, None, id="none-omitted-when-unsupported"),
+    ],
+)
+def test_closest_supported_effort_snaps_to_the_nearest_known_level(
+    effort: str, supported: set[str], expected: str | None
+) -> None:
+    assert closest_supported_effort(effort, supported) == expected
 
 
-def test_closest_supported_effort_prefers_lower_cost_on_tie() -> None:
-    assert closest_supported_effort("medium", {"low", "high"}) == "low"
+_Accessor = Callable[[Callable[[str], Model | None] | None, str], Any]
+_ACCESSORS: tuple[_Accessor, ...] = (
+    model_reasoning_supported,
+    model_reasoning_levels,
+    model_reasoning_control,
+    model_reasoning_budget_max,
+)
 
 
-def test_closest_supported_effort_omits_none_when_unsupported() -> None:
-    assert closest_supported_effort("none", {"low", "medium", "high"}) is None
-
-
-def test_model_reasoning_supported_strips_connection_suffix() -> None:
-    def model_lookup(model_id: str) -> Model | None:
-        assert model_id == "gpt-4o"
-        return Model(
-            model_id=model_id,
-            name=model_id,
-            capabilities=Capabilities(
-                vision=False,
-                tools=True,
-                json_mode=True,
-                reasoning=ReasoningCapabilities(supported=False),
-            ),
-            context_window=128000,
-            max_output_tokens=4096,
-        )
-
-    assert model_reasoning_supported(model_lookup, "gpt-4o::api-key") is False
-
-
-# ---------------------------------------------------------------------------
-# Effective per-model reasoning ladder
-# ---------------------------------------------------------------------------
-
-
-def test_model_reasoning_levels_returns_effective_ladder() -> None:
-    """A model with a feed ladder returns it as a tuple, suffix-stripped."""
-
-    def model_lookup(model_id: str) -> Model | None:
-        assert model_id == "deepseek/deepseek-v4-pro"
-        return _model_with_reasoning(
-            ReasoningCapabilities(supported=True, control="levels", levels=("high", "xhigh"))
-        )
-
-    assert model_reasoning_levels(model_lookup, "deepseek/deepseek-v4-pro::api-key") == (
-        "high",
-        "xhigh",
-    )
-
-
-def test_model_reasoning_levels_none_without_ladder() -> None:
-    """No lookup, unknown model, or empty ladder all signal 'fall back to floor'."""
-    assert model_reasoning_levels(None, "anything") is None
-    assert model_reasoning_levels(lambda _model_id: None, "missing") is None
-    empty_ladder_lookup = lambda _model_id: _model_with_reasoning(  # noqa: E731
-        ReasoningCapabilities(supported=True)
-    )
-    assert model_reasoning_levels(empty_ladder_lookup, "budget-only") is None
-
-
-# ---------------------------------------------------------------------------
-# Reasoning control / budget_max accessors
-# ---------------------------------------------------------------------------
-
-
-def test_model_reasoning_control_reads_control_and_strips_suffix() -> None:
-    def model_lookup(model_id: str) -> Model | None:
-        assert model_id == "anthropic/claude-opus-4-1"
-        return _model_with_reasoning(
-            ReasoningCapabilities(supported=True, control=REASONING_CONTROL_BUDGET)
-        )
-
-    assert (
-        model_reasoning_control(model_lookup, "anthropic/claude-opus-4-1::api-key")
-        == REASONING_CONTROL_BUDGET
-    )
-
-
-def test_model_reasoning_control_none_without_lookup_or_model() -> None:
-    assert model_reasoning_control(None, "anything") is None
-    assert model_reasoning_control(lambda _model_id: None, "missing") is None
-
-
-def test_model_reasoning_budget_max_reads_value_and_strips_suffix() -> None:
-    def model_lookup(model_id: str) -> Model | None:
-        assert model_id == "google/gemini-2.5-pro"
-        return _model_with_reasoning(
+@pytest.mark.parametrize(
+    ("accessor", "reasoning", "expected"),
+    [
+        pytest.param(
+            model_reasoning_supported, ReasoningCapabilities(supported=False), False, id="supported"
+        ),
+        pytest.param(
+            model_reasoning_levels,
+            ReasoningCapabilities(supported=True, control="levels", levels=("high", "xhigh")),
+            ("high", "xhigh"),
+            id="levels",
+        ),
+        pytest.param(
+            model_reasoning_levels,
+            ReasoningCapabilities(supported=True),
+            None,
+            id="levels-empty-ladder-falls-back",
+        ),
+        pytest.param(
+            model_reasoning_control,
+            ReasoningCapabilities(supported=True, control=REASONING_CONTROL_BUDGET),
+            REASONING_CONTROL_BUDGET,
+            id="control",
+        ),
+        pytest.param(
+            model_reasoning_budget_max,
             ReasoningCapabilities(
                 supported=True, control=REASONING_CONTROL_BUDGET, budget_max=24576
-            )
-        )
+            ),
+            24576,
+            id="budget-max",
+        ),
+    ],
+)
+def test_model_reasoning_accessors_read_the_catalog_model_without_connection_suffix(
+    accessor: _Accessor, reasoning: ReasoningCapabilities, expected: Any
+) -> None:
+    looked_up: list[str] = []
 
-    assert model_reasoning_budget_max(model_lookup, "google/gemini-2.5-pro::api-key") == 24576
+    def model_lookup(model_id: str) -> Model | None:
+        looked_up.append(model_id)
+        return _model_with_reasoning(reasoning)
+
+    assert accessor(model_lookup, "vendor/model::api-key") == expected
+    assert looked_up == ["vendor/model"]
 
 
-def test_model_reasoning_budget_max_none_without_lookup_or_model() -> None:
-    assert model_reasoning_budget_max(None, "anything") is None
-    assert model_reasoning_budget_max(lambda _model_id: None, "missing") is None
+@pytest.mark.parametrize("accessor", _ACCESSORS)
+def test_model_reasoning_accessors_are_unknown_without_lookup_or_model(
+    accessor: _Accessor,
+) -> None:
+    assert accessor(None, "anything") is None
+    assert accessor(lambda _model_id: None, "missing") is None
 
 
 # ---------------------------------------------------------------------------
@@ -170,383 +155,323 @@ def test_model_reasoning_budget_max_none_without_lookup_or_model() -> None:
 
 
 @pytest.mark.parametrize(
-    ("effort", "expected"),
+    ("budget_max", "expected"),
     [
-        ("minimal", 1024),
-        ("low", 4096),
-        ("medium", 8192),
-        ("high", 16384),
-        ("xhigh", 24576),
-        ("max", 32768),
+        pytest.param(
+            None,
+            {
+                "minimal": 1024,
+                "low": 4096,
+                "medium": 8192,
+                "high": 16384,
+                "xhigh": 24576,
+                "max": 32768,
+            },
+            id="absolute-ladder-without-ceiling",
+        ),
+        pytest.param(
+            100_000,
+            {"low": 25000, "medium": 50000, "high": 75000, "max": 100000},
+            id="proportional-to-ceiling",
+        ),
     ],
 )
-def test_effort_to_budget_uses_absolute_ladder_without_ceiling(effort: str, expected: int) -> None:
-    """No ``budget_max`` → the absolute fallback ladder (one rung per effort)."""
-    assert effort_to_budget(effort, budget_max=None) == expected
+def test_effort_to_budget_maps_each_effort(
+    budget_max: int | None, expected: dict[str, int]
+) -> None:
+    assert {effort: effort_to_budget(effort, budget_max=budget_max) for effort in expected} == (
+        expected
+    )
 
 
 @pytest.mark.parametrize(
-    ("effort", "expected"),
+    ("effort", "budget_max", "max_tokens", "expected"),
     [
-        ("low", 25000),  # 0.25 * 100_000
-        ("medium", 50000),
-        ("high", 75000),
-        ("max", 100000),
+        # 0.10 * 5000 == 500, below the floor.
+        pytest.param("minimal", 5000, None, BUDGET_FLOOR_TOKENS, id="lifted-to-floor"),
+        pytest.param("max", 20000, None, 20000, id="capped-at-ceiling"),
+        pytest.param("max", None, 10000, 9999, id="strictly-under-max-tokens"),
+        pytest.param("high", None, BUDGET_FLOOR_TOKENS, None, id="floor-does-not-fit"),
+        pytest.param("none", 50000, None, None, id="none-effort"),
+        pytest.param(None, None, None, None, id="no-effort"),
     ],
 )
-def test_effort_to_budget_is_proportional_to_ceiling(effort: str, expected: int) -> None:
-    """A positive ``budget_max`` → that ceiling times the effort fraction."""
-    assert effort_to_budget(effort, budget_max=100_000) == expected
-
-
-def test_effort_to_budget_applies_floor() -> None:
-    """A tiny ceiling fraction is lifted to the budget floor."""
-    # 0.10 * 5000 == 500, below the 1024 floor.
-    assert effort_to_budget("minimal", budget_max=5000) == BUDGET_FLOOR_TOKENS
-
-
-def test_effort_to_budget_caps_at_ceiling() -> None:
-    assert effort_to_budget("max", budget_max=20000) == 20000
-
-
-def test_effort_to_budget_clamps_under_max_tokens() -> None:
-    """The budget must stay strictly under a positive ``max_tokens``."""
-    assert effort_to_budget("max", budget_max=None, max_tokens=10000) == 9999
-
-
-def test_effort_to_budget_skips_when_floor_does_not_fit() -> None:
-    """When even the floor cannot fit under ``max_tokens`` no budget is formed."""
-    assert effort_to_budget("high", budget_max=None, max_tokens=BUDGET_FLOOR_TOKENS) is None
-    assert effort_to_budget("high", budget_max=None, max_tokens=500) is None
-
-
-def test_effort_to_budget_none_for_empty_or_none_effort() -> None:
-    assert effort_to_budget("", budget_max=50000) is None
-    assert effort_to_budget("none", budget_max=50000) is None
-    assert effort_to_budget(None) is None
+def test_effort_to_budget_bounds(
+    effort: str | None, budget_max: int | None, max_tokens: int | None, expected: int | None
+) -> None:
+    assert effort_to_budget(effort, budget_max=budget_max, max_tokens=max_tokens) == expected
 
 
 # ---------------------------------------------------------------------------
 # resolve_reasoning_intent — the single decision layer (D1/D2/D3)
 # ---------------------------------------------------------------------------
 
-_LADDER = ("none", "low", "medium", "high")
-_ACTIVE_LADDER = ("low", "medium", "high")
-
-
-def test_reasoning_intent_kinds_are_pinned() -> None:
-    assert REASONING_INTENT_KINDS == ("default", "off", "effort", "budget", "on")
-
-
-def test_resolve_intent_off_when_reasoning_unsupported() -> None:
-    intent = resolve_reasoning_intent(
-        supported=False,
-        control=REASONING_CONTROL_LEVELS,
-        levels=_LADDER,
-        effort="high",
-    )
-    assert intent == ReasoningIntent(REASONING_INTENT_OFF)
-
-
-@pytest.mark.parametrize("effort", ["", None, "bogus"])
-def test_resolve_intent_default_when_no_effort_selected(effort: Any) -> None:
-    intent = resolve_reasoning_intent(
-        supported=True,
-        control=REASONING_CONTROL_LEVELS,
-        levels=_LADDER,
-        effort=effort,
-    )
-    assert intent == ReasoningIntent(REASONING_INTENT_DEFAULT)
-
-
-def test_resolve_intent_none_on_levels_with_none_rung_carries_snapped_none() -> None:
-    """An effort-spelled-off wire (``none`` rung) keeps ``effort_level='none'``."""
-    intent = resolve_reasoning_intent(
-        supported=True,
-        control=REASONING_CONTROL_LEVELS,
-        levels=_LADDER,
-        effort="none",
-    )
-    assert intent == ReasoningIntent(REASONING_INTENT_OFF, effort_level="none")
-
-
-def test_resolve_intent_none_on_levels_without_none_rung_is_bare_off() -> None:
-    intent = resolve_reasoning_intent(
-        supported=True,
-        control=REASONING_CONTROL_LEVELS,
-        levels=_ACTIVE_LADDER,
-        effort="none",
-    )
-    assert intent == ReasoningIntent(REASONING_INTENT_OFF, effort_level=None)
-
-
-@pytest.mark.parametrize("control", [REASONING_CONTROL_ON_OFF, REASONING_CONTROL_BUDGET])
-def test_resolve_intent_none_on_native_control_is_bare_off(control: str) -> None:
-    """A native toggle/budget wire spells off itself — no carried effort level."""
-    intent = resolve_reasoning_intent(
-        supported=True,
-        control=control,
-        levels=_LADDER,
-        effort="none",
-    )
-    assert intent == ReasoningIntent(REASONING_INTENT_OFF)
-
 
 @pytest.mark.parametrize(
-    ("effort", "expected_level"),
-    [("low", "low"), ("medium", "medium"), ("high", "high"), ("max", "high")],
-)
-def test_resolve_intent_levels_snaps_active_effort(effort: str, expected_level: str) -> None:
-    intent = resolve_reasoning_intent(
-        supported=True,
-        control=REASONING_CONTROL_LEVELS,
-        levels=_ACTIVE_LADDER,
-        effort=effort,
-    )
-    assert intent == ReasoningIntent(REASONING_INTENT_EFFORT, effort_level=expected_level)
-
-
-def test_resolve_intent_levels_default_when_nothing_snaps() -> None:
-    """An empty ladder cannot snap an active effort → leave the provider default."""
-    intent = resolve_reasoning_intent(
-        supported=True,
-        control=REASONING_CONTROL_LEVELS,
-        levels=(),
-        effort="high",
-    )
-    assert intent == ReasoningIntent(REASONING_INTENT_DEFAULT)
-
-
-def test_resolve_intent_unknown_control_takes_levels_path() -> None:
-    intent = resolve_reasoning_intent(
-        supported=True,
-        control=None,
-        levels=_ACTIVE_LADDER,
-        effort="high",
-    )
-    assert intent == ReasoningIntent(REASONING_INTENT_EFFORT, effort_level="high")
-
-
-@pytest.mark.parametrize("effort", ["low", "medium", "high", "max"])
-def test_resolve_intent_on_off_is_on_for_any_active_effort(effort: str) -> None:
-    intent = resolve_reasoning_intent(
-        supported=True,
-        control=REASONING_CONTROL_ON_OFF,
-        levels=_ACTIVE_LADDER,
-        effort=effort,
-    )
-    assert intent.kind == REASONING_INTENT_ON
-
-
-def test_resolve_intent_budget_without_ceiling_uses_absolute_ladder() -> None:
-    intent = resolve_reasoning_intent(
-        supported=True,
-        control=REASONING_CONTROL_BUDGET,
-        levels=_ACTIVE_LADDER,
-        effort="high",
-        budget_max=None,
-    )
-    assert intent == ReasoningIntent(
-        REASONING_INTENT_BUDGET, effort_level="high", budget_tokens=16384
-    )
-
-
-def test_resolve_intent_budget_with_ceiling_is_proportional() -> None:
-    intent = resolve_reasoning_intent(
-        supported=True,
-        control=REASONING_CONTROL_BUDGET,
-        levels=_ACTIVE_LADDER,
-        effort="medium",
-        budget_max=40000,
-    )
-    assert intent.kind == REASONING_INTENT_BUDGET
-    assert intent.budget_tokens == 20000
-
-
-def test_resolve_intent_budget_falls_back_to_on_when_no_budget_fits() -> None:
-    """When even the floor cannot fit ``max_tokens`` budget degrades to a plain on."""
-    intent = resolve_reasoning_intent(
-        supported=True,
-        control=REASONING_CONTROL_BUDGET,
-        levels=_ACTIVE_LADDER,
-        effort="high",
-        budget_max=None,
-        max_tokens=500,
-    )
-    assert intent.kind == REASONING_INTENT_ON
-
-
-# ---------------------------------------------------------------------------
-# Observability — rejected reasoning effort (HTTP 400)
-# ---------------------------------------------------------------------------
-
-
-def test_detail_names_rejected_effort_matches_known_field_spellings() -> None:
-    assert detail_names_rejected_effort("400 invalid value for 'reasoning_effort'") is True
-    assert detail_names_rejected_effort("Unsupported reasoning effort: ultra") is True
-
-
-def test_detail_names_rejected_effort_is_conservative() -> None:
-    assert detail_names_rejected_effort("400 model is overloaded") is False
-    assert detail_names_rejected_effort("") is False
-
-
-def test_warn_rejected_effort_emits_on_400_naming_effort(caplog: Any) -> None:
-    """A 400 whose body names a rejected effort emits a structured warning."""
-    # Arrange / Act
-    with caplog.at_level(logging.WARNING, logger=_REASONING_LOGGER):
-        warn_rejected_effort(
-            status_code=400,
-            detail="400 invalid value for 'reasoning_effort': 'ultra'",
-            model_id="gpt-5.2",
-            selected_effort="max",
-        )
-
-    # Assert
-    warnings = [record for record in caplog.records if record.levelno == logging.WARNING]
-    assert len(warnings) == 1
-    message = warnings[0].getMessage()
-    assert "gpt-5.2" in message
-    assert "max" in message
-
-
-def test_warn_rejected_effort_silent_when_status_is_not_400(caplog: Any) -> None:
-    with caplog.at_level(logging.WARNING, logger=_REASONING_LOGGER):
-        warn_rejected_effort(
-            status_code=500,
-            detail="500 invalid value for 'reasoning_effort'",
-            model_id="gpt-5.2",
-            selected_effort="max",
-        )
-
-    assert [record for record in caplog.records if record.levelno == logging.WARNING] == []
-
-
-def test_warn_rejected_effort_silent_when_detail_unrelated(caplog: Any) -> None:
-    with caplog.at_level(logging.WARNING, logger=_REASONING_LOGGER):
-        warn_rejected_effort(
-            status_code=400,
-            detail="400 context length exceeded",
-            model_id="gpt-5.2",
-            selected_effort="max",
-        )
-
-    assert [record for record in caplog.records if record.levelno == logging.WARNING] == []
-
-
-# ---------------------------------------------------------------------------
-# Observability — swallowed reasoning effort (0 reasoning tokens)
-# ---------------------------------------------------------------------------
-
-
-def test_reasoning_token_count_reads_openai_and_responses_shapes() -> None:
-    assert reasoning_token_count({"completion_tokens_details": {"reasoning_tokens": 7}}) == 7
-    assert reasoning_token_count({"output_tokens_details": {"reasoning_tokens": 0}}) == 0
-    assert reasoning_token_count({"output_tokens_details": {"thinking_tokens": 5}}) == 5
-
-
-def test_reasoning_token_count_unknown_when_absent_or_malformed() -> None:
-    assert reasoning_token_count(None) is None
-    assert reasoning_token_count({}) is None
-    assert reasoning_token_count({"completion_tokens_details": {}}) is None
-    # A boolean is not a token count.
-    assert reasoning_token_count({"completion_tokens_details": {"reasoning_tokens": True}}) is None
-
-
-_ZERO_REASONING_USAGE = {"completion_tokens_details": {"reasoning_tokens": 0}}
-
-
-def _swallowed_warnings(caplog: Any) -> list[str]:
-    return [record.getMessage() for record in caplog.records if record.levelno == logging.WARNING]
-
-
-@pytest.mark.parametrize(
-    ("rendered", "expected_label"),
+    ("supported", "control", "levels", "effort", "extra", "expected"),
     [
-        (ReasoningIntent(REASONING_INTENT_EFFORT, effort_level="high"), "high"),
-        (
-            ReasoningIntent(REASONING_INTENT_BUDGET, effort_level="high", budget_tokens=16384),
-            "budget:16384",
+        pytest.param(
+            False,
+            REASONING_CONTROL_LEVELS,
+            _LADDER,
+            "high",
+            {},
+            ReasoningIntent(REASONING_INTENT_OFF),
+            id="unsupported-is-off",
         ),
-        (ReasoningIntent(REASONING_INTENT_ON, effort_level="high"), "on"),
+        pytest.param(
+            True,
+            REASONING_CONTROL_LEVELS,
+            _LADDER,
+            "bogus",
+            {},
+            ReasoningIntent(REASONING_INTENT_DEFAULT),
+            id="no-known-effort-is-default",
+        ),
+        pytest.param(
+            True,
+            REASONING_CONTROL_LEVELS,
+            _LADDER,
+            "none",
+            {},
+            ReasoningIntent(REASONING_INTENT_OFF, effort_level="none"),
+            id="none-on-levels-with-none-rung-carries-it",
+        ),
+        pytest.param(
+            True,
+            REASONING_CONTROL_LEVELS,
+            _ACTIVE_LADDER,
+            "none",
+            {},
+            ReasoningIntent(REASONING_INTENT_OFF),
+            id="none-on-levels-without-none-rung-is-bare-off",
+        ),
+        pytest.param(
+            True,
+            REASONING_CONTROL_ON_OFF,
+            _LADDER,
+            "none",
+            {},
+            ReasoningIntent(REASONING_INTENT_OFF),
+            id="none-on-native-control-is-bare-off",
+        ),
+        pytest.param(
+            True,
+            REASONING_CONTROL_LEVELS,
+            _ACTIVE_LADDER,
+            "high",
+            {},
+            ReasoningIntent(REASONING_INTENT_EFFORT, effort_level="high"),
+            id="levels-keeps-a-known-level",
+        ),
+        pytest.param(
+            True,
+            REASONING_CONTROL_LEVELS,
+            _ACTIVE_LADDER,
+            "max",
+            {},
+            ReasoningIntent(REASONING_INTENT_EFFORT, effort_level="high"),
+            id="levels-snaps-an-unknown-level",
+        ),
+        pytest.param(
+            True,
+            REASONING_CONTROL_LEVELS,
+            (),
+            "high",
+            {},
+            ReasoningIntent(REASONING_INTENT_DEFAULT),
+            id="levels-default-when-nothing-snaps",
+        ),
+        pytest.param(
+            True,
+            None,
+            _ACTIVE_LADDER,
+            "high",
+            {},
+            ReasoningIntent(REASONING_INTENT_EFFORT, effort_level="high"),
+            id="unknown-control-takes-levels-path",
+        ),
+        pytest.param(
+            True,
+            REASONING_CONTROL_ON_OFF,
+            _ACTIVE_LADDER,
+            "max",
+            {},
+            ReasoningIntent(REASONING_INTENT_ON, effort_level="high"),
+            id="on-off-is-on-with-snapped-level",
+        ),
+        pytest.param(
+            True,
+            REASONING_CONTROL_BUDGET,
+            _ACTIVE_LADDER,
+            "high",
+            {"budget_max": None},
+            ReasoningIntent(REASONING_INTENT_BUDGET, effort_level="high", budget_tokens=16384),
+            id="budget-without-ceiling-uses-absolute-ladder",
+        ),
+        pytest.param(
+            True,
+            REASONING_CONTROL_BUDGET,
+            _ACTIVE_LADDER,
+            "medium",
+            {"budget_max": 40000},
+            ReasoningIntent(REASONING_INTENT_BUDGET, effort_level="medium", budget_tokens=20000),
+            id="budget-with-ceiling-is-proportional",
+        ),
+        pytest.param(
+            True,
+            REASONING_CONTROL_BUDGET,
+            _ACTIVE_LADDER,
+            "high",
+            {"budget_max": None, "max_tokens": 500},
+            ReasoningIntent(REASONING_INTENT_ON, effort_level="high"),
+            id="budget-degrades-to-on-when-no-budget-fits",
+        ),
     ],
 )
-def test_warn_effort_swallowed_emits_when_rendered_reasoning_yields_zero_tokens(
-    caplog: Any, rendered: ReasoningIntent, expected_label: str
+def test_resolve_reasoning_intent(
+    supported: bool,
+    control: str | None,
+    levels: tuple[str, ...],
+    effort: str,
+    extra: dict[str, Any],
+    expected: ReasoningIntent,
 ) -> None:
-    """Rendered reasoning with 0 reasoning tokens and nothing returned warns once."""
-    # Arrange / Act
+    intent = resolve_reasoning_intent(
+        supported=supported, control=control, levels=levels, effort=effort, **extra
+    )
+
+    assert intent == expected
+
+
+# ---------------------------------------------------------------------------
+# Observability
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("status_code", "detail", "warns"),
+    [
+        pytest.param(400, "400 invalid value for 'reasoning_effort': 'ultra'", True, id="field"),
+        pytest.param(400, "Unsupported reasoning effort: ultra", True, id="prose"),
+        pytest.param(400, "400 model is overloaded", False, id="unrelated-400"),
+        pytest.param(400, "", False, id="empty-detail"),
+        pytest.param(500, "500 invalid value for 'reasoning_effort'", False, id="not-400"),
+    ],
+)
+def test_warn_rejected_effort_only_for_a_400_naming_the_effort(
+    caplog: pytest.LogCaptureFixture, status_code: int, detail: str, warns: bool
+) -> None:
+    with caplog.at_level(logging.WARNING, logger=_REASONING_LOGGER):
+        warn_rejected_effort(
+            status_code=status_code,
+            detail=detail,
+            model_id="gpt-5.2",
+            selected_effort="max",
+        )
+
+    warnings = _warnings(caplog)
+    if not warns:
+        assert warnings == []
+        return
+    assert len(warnings) == 1
+    assert "gpt-5.2" in warnings[0]
+    assert "max" in warnings[0]
+
+
+@pytest.mark.parametrize(
+    ("usage", "expected"),
+    [
+        pytest.param({"completion_tokens_details": {"reasoning_tokens": 7}}, 7, id="chat"),
+        pytest.param({"output_tokens_details": {"reasoning_tokens": 0}}, 0, id="responses"),
+        pytest.param({"output_tokens_details": {"thinking_tokens": 5}}, 5, id="thinking"),
+        pytest.param(None, None, id="no-usage"),
+        pytest.param({}, None, id="no-details"),
+        pytest.param({"completion_tokens_details": {}}, None, id="no-counter"),
+        # A boolean is not a token count.
+        pytest.param({"completion_tokens_details": {"reasoning_tokens": True}}, None, id="boolean"),
+    ],
+)
+def test_reasoning_token_count(usage: dict[str, Any] | None, expected: int | None) -> None:
+    assert reasoning_token_count(usage) == expected
+
+
+_EFFORT_HIGH = ReasoningIntent(REASONING_INTENT_EFFORT, effort_level="high")
+
+
+@pytest.mark.parametrize(
+    ("rendered", "usage", "returned_reasoning", "expected_label"),
+    [
+        pytest.param(_EFFORT_HIGH, _ZERO_REASONING_USAGE, False, "high", id="effort"),
+        pytest.param(
+            ReasoningIntent(REASONING_INTENT_BUDGET, effort_level="high", budget_tokens=16384),
+            _ZERO_REASONING_USAGE,
+            False,
+            "budget:16384",
+            id="budget",
+        ),
+        pytest.param(
+            ReasoningIntent(REASONING_INTENT_ON, effort_level="high"),
+            _ZERO_REASONING_USAGE,
+            False,
+            "on",
+            id="on",
+        ),
+        pytest.param(
+            _EFFORT_HIGH,
+            {"completion_tokens_details": {"reasoning_tokens": 42}},
+            False,
+            None,
+            id="silent-with-reasoning-tokens",
+        ),
+        # Off (including a catalog non-reasoning strip) and default expect no reasoning.
+        pytest.param(
+            ReasoningIntent(REASONING_INTENT_OFF),
+            _ZERO_REASONING_USAGE,
+            False,
+            None,
+            id="silent-when-off",
+        ),
+        pytest.param(
+            ReasoningIntent(REASONING_INTENT_DEFAULT),
+            _ZERO_REASONING_USAGE,
+            False,
+            None,
+            id="silent-when-default",
+        ),
+        # A zero counter cannot deny Reasoning the response actually returned.
+        pytest.param(
+            _EFFORT_HIGH, _ZERO_REASONING_USAGE, True, None, id="silent-when-reasoning-returned"
+        ),
+        # Sparse usage (no reasoning-token counter) is unknown, not swallowed.
+        pytest.param(
+            _EFFORT_HIGH,
+            {"prompt_tokens": 10, "completion_tokens": 5},
+            False,
+            None,
+            id="silent-when-count-unknown",
+        ),
+    ],
+)
+def test_warn_effort_swallowed_only_when_requested_reasoning_yields_zero_tokens(
+    caplog: pytest.LogCaptureFixture,
+    rendered: ReasoningIntent,
+    usage: dict[str, Any],
+    returned_reasoning: bool,
+    expected_label: str | None,
+) -> None:
     with caplog.at_level(logging.WARNING, logger=_REASONING_LOGGER):
         warn_effort_swallowed(
             rendered=rendered,
-            usage=_ZERO_REASONING_USAGE,
-            returned_reasoning=False,
+            usage=usage,
+            returned_reasoning=returned_reasoning,
             model_id="gpt-5.2",
         )
 
-    # Assert
-    warnings = _swallowed_warnings(caplog)
+    warnings = _warnings(caplog)
+    if expected_label is None:
+        assert warnings == []
+        return
     assert len(warnings) == 1
     assert "gpt-5.2" in warnings[0]
     assert f"rendered_reasoning={expected_label}" in warnings[0]
-
-
-def test_warn_effort_swallowed_silent_when_reasoning_tokens_nonzero(caplog: Any) -> None:
-    with caplog.at_level(logging.WARNING, logger=_REASONING_LOGGER):
-        warn_effort_swallowed(
-            rendered=ReasoningIntent(REASONING_INTENT_EFFORT, effort_level="high"),
-            usage={"completion_tokens_details": {"reasoning_tokens": 42}},
-            returned_reasoning=False,
-            model_id="gpt-5.2",
-        )
-
-    assert _swallowed_warnings(caplog) == []
-
-
-@pytest.mark.parametrize(
-    "rendered",
-    [
-        ReasoningIntent(REASONING_INTENT_OFF),
-        ReasoningIntent(REASONING_INTENT_OFF, effort_level="none"),
-        ReasoningIntent(REASONING_INTENT_DEFAULT),
-    ],
-)
-def test_warn_effort_swallowed_silent_when_rendered_intent_requests_no_reasoning(
-    caplog: Any, rendered: ReasoningIntent
-) -> None:
-    """Off (including a catalog non-reasoning strip) and default expect no reasoning."""
-    with caplog.at_level(logging.WARNING, logger=_REASONING_LOGGER):
-        warn_effort_swallowed(
-            rendered=rendered,
-            usage=_ZERO_REASONING_USAGE,
-            returned_reasoning=False,
-            model_id="gpt-5.2",
-        )
-
-    assert _swallowed_warnings(caplog) == []
-
-
-def test_warn_effort_swallowed_silent_when_response_returned_reasoning(caplog: Any) -> None:
-    """A zero counter cannot deny Reasoning the response actually returned."""
-    with caplog.at_level(logging.WARNING, logger=_REASONING_LOGGER):
-        warn_effort_swallowed(
-            rendered=ReasoningIntent(REASONING_INTENT_EFFORT, effort_level="high"),
-            usage=_ZERO_REASONING_USAGE,
-            returned_reasoning=True,
-            model_id="gpt-5.2",
-        )
-
-    assert _swallowed_warnings(caplog) == []
-
-
-def test_warn_effort_swallowed_silent_when_token_count_unknown(caplog: Any) -> None:
-    """Sparse usage (no reasoning-token counter) is unknown, not swallowed."""
-    with caplog.at_level(logging.WARNING, logger=_REASONING_LOGGER):
-        warn_effort_swallowed(
-            rendered=ReasoningIntent(REASONING_INTENT_EFFORT, effort_level="high"),
-            usage={"prompt_tokens": 10, "completion_tokens": 5},
-            returned_reasoning=False,
-            model_id="gpt-5.2",
-        )
-
-    assert _swallowed_warnings(caplog) == []

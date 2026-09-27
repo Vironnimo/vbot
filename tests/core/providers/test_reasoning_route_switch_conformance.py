@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
+import respx
 
 from core.chat import ChatMessage, ToolCall
 from core.chat.wire_shaping import (
@@ -16,12 +17,13 @@ from core.chat.wire_shaping import (
     _assistant_message_from_response,
     _embed_notes_into_request,
 )
-from core.models.models import ModelRegistry
+from core.models.models import Model, ModelRegistry
+from core.providers.adapter import ProviderAdapter
 from core.providers.anthropic_compatible import AnthropicCompatibleAdapter
 from core.providers.github_copilot_policy import RESPONSES_ENDPOINT, copilot_model_policy
 from core.providers.github_copilot_responses import build_responses_payload
 from core.providers.mistral import MistralAdapter
-from core.providers.ollama import OllamaAdapter, OllamaCloudAdapter
+from core.providers.ollama import OLLAMA_CLOUD_MODE, OllamaAdapter, OllamaCloudAdapter
 from core.providers.openai import CODEX_RESPONSES_MODE, OpenAIAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.opencode_go import OpenCodeGoAdapter
@@ -29,6 +31,13 @@ from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfi
 from core.providers.reasoning import REASONING_REPLAY_FULL_HISTORY
 from core.sessions.sessions import ChatSessionManager
 from core.storage.layout import initialize_data_directory
+from tests.core.providers.openai_test_support import (
+    COMPLETED_RESPONSE,
+    codex_sse_response,
+    jwt_with_account,
+)
+
+RESOURCES = Path(__file__).resolve().parents[3] / "resources"
 
 SOURCE_SCOPE = "source/reasoning-model::connection:account"
 READABLE_REASONING = "The two Tool outputs must be compared."
@@ -136,46 +145,80 @@ def _foreign_tool_history() -> list[ChatMessage]:
     ]
 
 
-def _build_adapter_payload(
-    adapter: OpenAICompatibleAdapter | AnthropicCompatibleAdapter | OllamaAdapter,
+CHAT_RESPONSE = {
+    "choices": [{"message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}]
+}
+MESSAGES_RESPONSE = {
+    "type": "message",
+    "role": "assistant",
+    "content": [{"type": "text", "text": "ok"}],
+    "stop_reason": "end_turn",
+    "usage": {"input_tokens": 1, "output_tokens": 1},
+}
+OLLAMA_RESPONSE = {"message": {"role": "assistant", "content": "ok"}, "done": True}
+
+
+async def _sent_payload(
+    adapter: ProviderAdapter,
     messages: list[dict[str, Any]],
     *,
     model_id: str,
+    response: httpx.Response,
+) -> dict[str, Any]:
+    """Send once against a mocked endpoint and return the request body."""
+
+    with respx.mock:
+        route = respx.post().mock(return_value=response)
+        await adapter.send(messages, model_id=model_id)
+    payload: dict[str, Any] = json.loads(route.calls.last.request.content)
+    return payload
+
+
+async def _render(
+    adapter: ProviderAdapter,
+    messages: list[dict[str, Any]],
+    *,
+    model_id: str,
+    response: dict[str, Any],
 ) -> dict[str, Any]:
     try:
-        return adapter._build_payload(messages, model_id)
+        return await _sent_payload(
+            adapter, messages, model_id=model_id, response=httpx.Response(200, json=response)
+        )
     finally:
-        asyncio.run(adapter.aclose())
+        await adapter.aclose()
 
 
-def _render_openai(messages: list[dict[str, Any]]) -> dict[str, Any]:
+async def _render_openai(messages: list[dict[str, Any]]) -> dict[str, Any]:
     config = _provider_config(
         "openai-compatible",
         "openai_compatible",
         base_url="https://openai-compatible.invalid/v1",
     )
-    return _build_adapter_payload(
+    return await _render(
         OpenAICompatibleAdapter(config, "test-token"),
         messages,
         model_id="target-chat-model",
+        response=CHAT_RESPONSE,
     )
 
 
-def _render_anthropic(messages: list[dict[str, Any]]) -> dict[str, Any]:
+async def _render_anthropic(messages: list[dict[str, Any]]) -> dict[str, Any]:
     config = _provider_config(
         "anthropic",
         "anthropic",
         base_url="https://anthropic.invalid/v1",
         max_tokens=4096,
     )
-    return _build_adapter_payload(
+    return await _render(
         AnthropicCompatibleAdapter(config, "test-token"),
         messages,
         model_id="target-messages-model",
+        response=MESSAGES_RESPONSE,
     )
 
 
-def _render_responses(messages: list[dict[str, Any]]) -> dict[str, Any]:
+async def _render_responses(messages: list[dict[str, Any]]) -> dict[str, Any]:
     return build_responses_payload(
         messages,
         model_id="gpt-5.4",
@@ -183,34 +226,37 @@ def _render_responses(messages: list[dict[str, Any]]) -> dict[str, Any]:
     )
 
 
-def _render_mistral(messages: list[dict[str, Any]]) -> dict[str, Any]:
+async def _render_mistral(messages: list[dict[str, Any]]) -> dict[str, Any]:
     config = _provider_config(
         "mistral",
         "mistral",
         base_url="https://mistral.invalid/v1",
         max_tokens=4096,
     )
-    return _build_adapter_payload(
+    return await _render(
         MistralAdapter(config, "test-token"),
         messages,
         model_id="target-mistral-model",
+        response=CHAT_RESPONSE,
     )
 
 
-def _render_ollama(messages: list[dict[str, Any]]) -> dict[str, Any]:
+async def _render_ollama(messages: list[dict[str, Any]]) -> dict[str, Any]:
     config = _provider_config(
         "ollama",
         "ollama",
         base_url="http://ollama.invalid",
     )
-    return _build_adapter_payload(
+    return await _render(
         OllamaAdapter(config, "test-token"),
         messages,
         model_id="target-ollama-model",
+        response=OLLAMA_RESPONSE,
     )
 
 
-WIRE_PROFILES: tuple[tuple[str, str, Callable[[list[dict[str, Any]]], dict[str, Any]]], ...] = (
+_Renderer = Callable[[list[dict[str, Any]]], Awaitable[dict[str, Any]]]
+WIRE_PROFILES: tuple[tuple[str, str, _Renderer], ...] = (
     ("chat-completions", "openai/target-chat-model::api-key", _render_openai),
     ("messages", "anthropic/target-messages-model::api-key", _render_anthropic),
     ("responses", "github-copilot/gpt-5.4::oauth", _render_responses),
@@ -219,15 +265,16 @@ WIRE_PROFILES: tuple[tuple[str, str, Callable[[list[dict[str, Any]]], dict[str, 
 )
 
 
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("profile", "target_scope", "renderer"),
     WIRE_PROFILES,
     ids=[profile for profile, _, _ in WIRE_PROFILES],
 )
-def test_cross_route_history_is_safe_and_tool_correlated_on_every_wire(
+async def test_cross_route_history_is_safe_and_tool_correlated_on_every_wire(
     profile: str,
     target_scope: str,
-    renderer: Callable[[list[dict[str, Any]]], dict[str, Any]],
+    renderer: _Renderer,
 ) -> None:
     request_messages = _embed_notes_into_request(
         _foreign_tool_history(),
@@ -235,7 +282,7 @@ def test_cross_route_history_is_safe_and_tool_correlated_on_every_wire(
         agent_model=target_scope,
     )
 
-    payload = renderer(request_messages)
+    payload = await renderer(request_messages)
 
     serialized = json.dumps(payload, sort_keys=True)
     assert READABLE_REASONING in serialized
@@ -281,8 +328,9 @@ def _wire_tool_ids(profile: str, payload: dict[str, Any]) -> tuple[list[str], li
     return call_ids, result_ids
 
 
+@pytest.mark.asyncio
 @pytest.mark.parametrize("profile", ["messages", "responses"])
-def test_same_route_full_history_keeps_exact_provider_owned_reasoning(profile: str) -> None:
+async def test_same_route_full_history_keeps_exact_provider_owned_reasoning(profile: str) -> None:
     target_scope = (
         "anthropic/claude-sonnet-4::api-key"
         if profile == "messages"
@@ -325,7 +373,7 @@ def test_same_route_full_history_keeps_exact_provider_owned_reasoning(profile: s
         replay_policy=REASONING_REPLAY_FULL_HISTORY,
         agent_model=target_scope,
     )
-    payload = (
+    payload = await (
         _render_anthropic(request_messages)
         if profile == "messages"
         else _render_responses(request_messages)
@@ -337,159 +385,165 @@ def test_same_route_full_history_keeps_exact_provider_owned_reasoning(profile: s
     assert "provider-neutral context" not in serialized
 
 
+NATIVE_RESPONSES_OUTPUT: list[dict[str, Any]] = [
+    {
+        "type": "reasoning",
+        "id": "rs_native",
+        "encrypted_content": "native-encrypted",
+        "summary": [{"type": "summary_text", "text": READABLE_REASONING}],
+    },
+    {
+        "type": "message",
+        "id": "msg_native",
+        "role": "assistant",
+        "phase": "commentary",
+        "content": [{"type": "output_text", "text": "Reading the file."}],
+    },
+    {
+        "type": "function_call",
+        "id": "fc_native",
+        "call_id": "call_native",
+        "name": "read",
+        "arguments": '{"path":"a.py"}',
+    },
+]
+
+
+def _bundled_adapter(provider_id: str) -> ProviderAdapter:
+    registry = ModelRegistry.load(RESOURCES)
+    config = ProviderRegistry.load(RESOURCES).get(provider_id)
+
+    def lookup(candidate: str) -> Model | None:
+        return registry.get(provider_id, candidate)
+
+    if provider_id == "openai":
+        return OpenAIAdapter(
+            config, jwt_with_account(), model_lookup=lookup, connection_mode=CODEX_RESPONSES_MODE
+        )
+    if provider_id == "ollama-cloud":
+        return OllamaCloudAdapter(
+            config, "test-token", model_lookup=lookup, connection_mode=OLLAMA_CLOUD_MODE
+        )
+    return OpenCodeGoAdapter(config, "test-token", model_lookup=lookup)
+
+
+def _native_response(provider_id: str, readable_field: str) -> dict[str, Any]:
+    if provider_id == "openai":
+        return {"output": NATIVE_RESPONSES_OUTPUT, "status": "completed"}
+    return {
+        "choices": [
+            {
+                "finish_reason": "tool_calls",
+                "message": {
+                    "role": "assistant",
+                    "content": "Reading the file.",
+                    readable_field: READABLE_REASONING,
+                    "reasoning_details": [
+                        {"type": "reasoning.encrypted", "data": "foreign-encrypted"}
+                    ],
+                    "tool_calls": [
+                        {
+                            "id": "call_native",
+                            "type": "function",
+                            "function": {"name": "read", "arguments": '{"path":"a.py"}'},
+                        }
+                    ],
+                },
+            }
+        ]
+    }
+
+
+def _persist_and_restore(data_dir: Path, messages: list[ChatMessage]) -> list[ChatMessage]:
+    initialize_data_directory(data_dir)
+    manager = ChatSessionManager(data_dir)
+    try:
+        session = manager.create("audit", session_id="replay")
+        session.append_many(messages)
+        address = session.address
+    finally:
+        manager.close()
+    manager = ChatSessionManager(data_dir)
+    try:
+        return manager.get(address).load()
+    finally:
+        manager.close()
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("provider_id", "model_id", "connection"),
     [
-        ("openai", "gpt-6-astra", "subscription"),
-        ("opencode-go", "deepseek-flash", "api-key"),
-        ("opencode-go", "mimo-v2.6-flash", "api-key"),
-        ("opencode-go", "mimo-v2.6-pro", "api-key"),
-        ("ollama-cloud", "deepseek-v4.1-flash", "api-key"),
+        pytest.param("openai", "gpt-6-astra", "subscription", id="responses"),
+        pytest.param("opencode-go", "deepseek-flash", "api-key", id="chat-reasoning-content"),
+        pytest.param("ollama-cloud", "deepseek-v4.1-flash", "api-key", id="chat-reasoning"),
     ],
 )
-@pytest.mark.parametrize("route_change", [None, "provider", "model", "connection", "account"])
-async def test_new_models_replay_persisted_tool_history_only_on_its_original_route(
-    tmp_path: Path, provider_id: str, model_id: str, connection: str, route_change: str | None
+async def test_bundled_models_replay_persisted_tool_history_only_on_its_original_route(
+    tmp_path: Path, provider_id: str, model_id: str, connection: str
 ) -> None:
-    resources = Path(__file__).resolve().parents[3] / "resources"
-    registry = ModelRegistry.load(resources)
-    config = ProviderRegistry.load(resources).get(provider_id)
+    """Native Reasoning replays on the original route and not after a route change.
 
-    def lookup(candidate: str):
-        return registry.get(provider_id, candidate)
+    Chat owns which route changes count (Provider, Model, Connection, account);
+    one changed account stands for all of them here.
+    """
 
-    adapter: OpenAIAdapter | OpenCodeGoAdapter | OllamaCloudAdapter
-    if provider_id == "openai":
-        adapter = OpenAIAdapter(
-            config, "test-token", model_lookup=lookup, connection_mode=CODEX_RESPONSES_MODE
-        )
-    elif provider_id == "ollama-cloud":
-        adapter = OllamaCloudAdapter(
-            config, "test-token", model_lookup=lookup, connection_mode="cloud"
-        )
-    else:
-        adapter = OpenCodeGoAdapter(config, "test-token", model_lookup=lookup)
+    adapter = _bundled_adapter(provider_id)
     readable_field = "reasoning" if provider_id == "ollama-cloud" else "reasoning_content"
-    original_output = [
-        {
-            "type": "reasoning",
-            "id": "rs_native",
-            "encrypted_content": "native-encrypted",
-            "summary": [{"type": "summary_text", "text": READABLE_REASONING}],
-        },
-        {
-            "type": "message",
-            "id": "msg_native",
-            "role": "assistant",
-            "phase": "commentary",
-            "content": [{"type": "output_text", "text": "Reading the file."}],
-        },
-        {
-            "type": "function_call",
-            "id": "fc_native",
-            "call_id": "call_native",
-            "name": "read",
-            "arguments": '{"path":"a.py"}',
-        },
-    ]
-    raw_response = (
-        {"output": original_output, "status": "completed"}
-        if provider_id == "openai"
-        else {
-            "choices": [
-                {
-                    "finish_reason": "tool_calls",
-                    "message": {
-                        "role": "assistant",
-                        "content": "Reading the file.",
-                        readable_field: READABLE_REASONING,
-                        "reasoning_details": [
-                            {"type": "reasoning.encrypted", "data": "foreign-encrypted"}
-                        ],
-                        "tool_calls": [
-                            {
-                                "id": "call_native",
-                                "type": "function",
-                                "function": {
-                                    "name": "read",
-                                    "arguments": '{"path":"a.py"}',
-                                },
-                            }
-                        ],
-                    },
-                }
-            ]
-        }
-    )
     scope = f"{provider_id}/{model_id}::{connection}:default"
+    other_account_scope = f"{provider_id}/{model_id}::{connection}:other"
+    response = (
+        codex_sse_response(COMPLETED_RESPONSE)
+        if provider_id == "openai"
+        else httpx.Response(200, json=CHAT_RESPONSE)
+    )
+    payloads: dict[bool, dict[str, Any]] = {}
     try:
-        normalized = adapter.normalize_response(raw_response, model_id=model_id)
+        normalized = adapter.normalize_response(
+            _native_response(provider_id, readable_field), model_id=model_id
+        )
         assistant = _assistant_message_from_response(
             f"{provider_id}/{model_id}", normalized, reasoning_scope=scope
         )
-        data_dir = tmp_path / "data"
-        initialize_data_directory(data_dir)
-        manager = ChatSessionManager(data_dir)
-        try:
-            session = manager.create("audit", session_id="replay")
-            session.append_many(
-                [
-                    ChatMessage.user("Read the file."),
-                    assistant,
-                    ChatMessage.tool(tool_call_id="call_native", name="read", content="alpha"),
-                ]
-            )
-            address = session.address
-        finally:
-            manager.close()
-        manager = ChatSessionManager(data_dir)
-        try:
-            restored = manager.get(address).load()
-        finally:
-            manager.close()
+        restored = _persist_and_restore(
+            tmp_path / "data",
+            [
+                ChatMessage.user("Read the file."),
+                assistant,
+                ChatMessage.tool(tool_call_id="call_native", name="read", content="alpha"),
+            ],
+        )
         assert restored[1].reasoning == assistant.reasoning == READABLE_REASONING
         assert restored[1].reasoning_meta == assistant.reasoning_meta
         assert restored[1].reasoning_scope == scope
-        route = {
-            "provider": provider_id,
-            "model": model_id,
-            "connection": connection,
-            "account": "default",
-        }
-        if route_change is not None:
-            route[route_change] = "other"
-        target_scope = (
-            f"{route['provider']}/{route['model']}::{route['connection']}:{route['account']}"
-        )
-        messages = _assemble_request_history(
-            restored,
-            replay_policy=adapter.reasoning_replay_policy(model_id),
-            agent_model=target_scope,
-        )
-        payload = (
-            adapter._build_responses_payload(messages, model_id=model_id)
-            if isinstance(adapter, OpenAIAdapter)
-            else adapter._build_payload(messages, model_id)
-        )
-        profile = "responses" if provider_id == "openai" else "chat-completions"
+
+        for same_route, target_scope in ((True, scope), (False, other_account_scope)):
+            messages = _assemble_request_history(
+                restored,
+                replay_policy=adapter.reasoning_replay_policy(model_id),
+                agent_model=target_scope,
+            )
+            payloads[same_route] = await _sent_payload(
+                adapter, messages, model_id=model_id, response=response
+            )
+    finally:
+        await adapter.aclose()
+
+    profile = "responses" if provider_id == "openai" else "chat-completions"
+    for same_route, payload in payloads.items():
         assert _wire_tool_ids(profile, payload) == (["call_native"], ["call_native"])
         serialized = json.dumps(payload)
         assert READABLE_REASONING in serialized
         assert "foreign-encrypted" not in serialized
         if provider_id == "openai":
-            if route_change is None:
-                assert payload["input"][1:4] == original_output
+            if same_route:
+                assert payload["input"][1:4] == NATIVE_RESPONSES_OUTPUT
             else:
                 assert "native-encrypted" not in serialized
                 assert all(item.get("type") != "reasoning" for item in payload["input"])
-        else:
-            prior = next(item for item in payload["messages"] if item["role"] == "assistant")
-            assert prior.get(readable_field) == (
-                READABLE_REASONING if route_change is None else None
-            )
-            other_field = "reasoning_content" if readable_field == "reasoning" else "reasoning"
-            assert other_field not in prior
-            assert "reasoning_details" not in prior
-    finally:
-        await adapter.aclose()
+            continue
+        prior = next(item for item in payload["messages"] if item["role"] == "assistant")
+        assert prior.get(readable_field) == (READABLE_REASONING if same_route else None)
+        other_field = "reasoning_content" if readable_field == "reasoning" else "reasoning"
+        assert other_field not in prior
+        assert "reasoning_details" not in prior
