@@ -223,14 +223,24 @@ def post_block(
     header = f"[{post['id']}] {post['author']['name']}"
     if details:
         header += f" ({'; '.join(details)})"
-    body = post["text"]
+    return f"{header}:\n{_body(post, opening=opening)}"
+
+
+def delivered_chars(post: Json) -> int:
+    """The length of the text a delivery shows for ``post``; delivery batches count it."""
+
+    return len(_body(post, opening=True))
+
+
+def _body(post: Json, *, opening: bool) -> str:
+    body = str(post["text"])
     if opening and shortened(post):
         start = _opening(body)
         body = f"{start} ...\n" + text.POST_SHORTENED.format(
             count=len(body) - len(start),
             call=call_text({"action": "read", "message_id": post["id"]}),
         )
-    return f"{header}:\n{body}"
+    return body
 
 
 def shortened(post: Json) -> bool:
@@ -389,6 +399,7 @@ __all__ = [
     "close_discussion",
     "discussion_choices",
     "discussion_label",
+    "delivered_chars",
     "delivery_text",
     "discussions_text",
     "excerpt",

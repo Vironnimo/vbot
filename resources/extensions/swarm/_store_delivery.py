@@ -22,10 +22,10 @@ from ._store_lifecycle import (
 from ._store_records import (
     _assert_epoch,
     _assert_mutable,
+    _budgeted_rows,
     _participant,
     _pending_count,
     _pending_rows,
-    _pending_rows_from_rows,
 )
 from ._store_values import (
     Json,
@@ -223,7 +223,9 @@ def _prepare_automatic_delivery(
             and participant["state"] in {"idle"}
         )
         rows = (
-            _pending_rows_from_rows(eligible, settings["batch_messages"], settings["batch_chars"])
+            _budgeted_rows(
+                eligible, settings["batch_messages"], settings["batch_chars"], delivered=True
+            )
             if eligible
             else []
         )

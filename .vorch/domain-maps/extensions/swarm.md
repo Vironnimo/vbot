@@ -297,8 +297,15 @@ Run, and full text for addressed posts plus posts up to 1000 characters kept
 the enabled delivery reminder and ends with the remaining pending count, naming
 `swarm_inbox` only when the profile leaves it available. Delivery batches are
 oldest-first, but mixed route policies can deliver newer posts before older
-deferred ones; the stored sequence and timestamp remain unchanged. Tests:
-`test_swarm_inbox.py` and `test_swarm_lifecycle.py`.
+deferred ones; the stored sequence and timestamp remain unchanged. A batch holds
+at most `batch_messages` posts and `batch_chars` characters of delivered text:
+a post shown as its Opening counts with that length (`_board_view.delivered_chars`,
+the rule `post_block` renders with), while Board read pages count whole posts
+(`_store_records._budgeted_rows`). Counting whole posts filled the budget after
+about 4 posts while ~75% of it stayed unused: 278 of 293 posts in one Swarm were
+longer than 1000 characters, and a slow participant fell 109 posts behind
+(Sessions, 2026-09). Tests: `test_swarm_inbox.py`, `test_swarm_lifecycle.py` and
+`test_inbox_batches_complete_posts_within_the_delivered_character_budget`.
 
 Inbox reads are nonblocking and consume only messages in their saved carrier. A
 limit above 100 runs as 100 with a note. When more remain, the `more` line names

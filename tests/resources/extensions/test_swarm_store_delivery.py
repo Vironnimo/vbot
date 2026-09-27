@@ -70,7 +70,9 @@ async def test_prepared_delivery_reconciles_only_matching_canonical_receipts(tmp
 
 
 @pytest.mark.asyncio
-async def test_inbox_batches_complete_posts_without_exceeding_character_budget(tmp_path) -> None:
+async def test_inbox_batches_complete_posts_within_the_delivered_character_budget(
+    tmp_path,
+) -> None:
     async def lookup(*_arguments: object) -> DeliveryReceipt | None:
         return None
 
@@ -91,15 +93,22 @@ async def test_inbox_batches_complete_posts_without_exceeding_character_budget(t
                 {},
             )
         )
-        for index, size in enumerate((16_000, 8_000, 1), start=1):
+        # Addressed posts arrive whole; the unaddressed long one arrives as its
+        # Opening and counts only with that length.
+        sizes = (16_000, 4_000, 8_000, 1)
+        for index, size in enumerate(sizes, start=1):
             await value.post(
-                started["swarm_id"], sender, text="x" * size, request_id=f"batch-{index}"
+                started["swarm_id"],
+                sender,
+                text="x" * size,
+                request_id=f"batch-{index}",
+                recipients=() if size == 8_000 else [recipient],
             )
         prepared = await value.prepare_inbox_delivery(started["swarm_id"], recipient)
-        assert [len(entry["text"]) for entry in prepared["entries"]] == [16_000, 8_000]
-        assert prepared["pending_remaining"] == 1
+        assert [len(entry["text"]) for entry in prepared["entries"]] == list(sizes)
+        assert prepared["pending_remaining"] == 0
         discussions = await value.list_discussions(started["swarm_id"], recipient)
-        assert discussions.entries[0]["pending_count"] == 3
+        assert discussions.entries[0]["pending_count"] == 4
         await value.apply_delivery_settings(
             started["swarm_id"],
             {**swarm["delivery"], "batch_chars": 16_000},
@@ -109,8 +118,8 @@ async def test_inbox_batches_complete_posts_without_exceeding_character_budget(t
         )
         current = await value.prepare_inbox_delivery(started["swarm_id"], recipient)
         assert [len(entry["text"]) for entry in current["entries"]] == [16_000]
-        assert current["pending_remaining"] == 2
-        assert prepared["entries"][1]["text"] == "x" * 8_000
+        assert current["pending_remaining"] == 3
+        assert prepared["entries"][1]["text"] == "x" * 4_000
     finally:
         await value.close()
         database.close()

@@ -16,12 +16,12 @@ from ._store_database import (
     SwarmDatabase,
 )
 from ._store_records import (
+    _budgeted_rows,
     _discussion,
     _discussion_high_water,
     _human_posts,
     _main,
     _participant,
-    _pending_rows_from_rows,
     _post_high_water,
 )
 from ._store_values import (
@@ -258,7 +258,7 @@ def _post_page(
         "ORDER BY p.sequence DESC LIMIT ? OFFSET ?",
         (participant_id, swarm_id, discussion_id, high_water, limit + 1, offset),
     ).fetchall()
-    selected = _pending_rows_from_rows(rows, limit, batch_chars)
+    selected = _budgeted_rows(rows, limit, batch_chars)
     values = [_post(row) for row in reversed(selected)]
     more = len(rows) > len(selected)
     return Page(
@@ -296,7 +296,7 @@ def _human_post_page(
         "ORDER BY sequence DESC LIMIT ? OFFSET ?",
         (swarm_id, discussion_id, high_water, limit + 1, offset),
     ).fetchall()
-    selected = _pending_rows_from_rows(rows, limit, batch_chars)
+    selected = _budgeted_rows(rows, limit, batch_chars)
     values = _human_posts(connection, list(reversed(selected)))
     more = len(rows) > len(selected)
     return Page(
