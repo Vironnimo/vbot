@@ -82,6 +82,50 @@ describe('Dropdown', () => {
     expect(list.getAttribute('style') ?? '').toContain('max-height');
   });
 
+  it('portals the open list and closes on outside mousedown or page scroll', async () => {
+    const host = document.createElement('div');
+    document.body.append(host);
+    mountedComponent = mount(Dropdown, {
+      target: host,
+      props: { id: 'floating-dropdown', value: 'a', options: ['a', 'b'] },
+    });
+    flushSync();
+
+    const trigger = document.querySelector('#floating-dropdown');
+    const root = trigger.closest('.dropdown-primitive');
+    const list = () => document.querySelector('.dropdown-primitive__list');
+    const open = async () => {
+      trigger.click();
+      await vi.waitFor(() => {
+        expect(root.dataset.state).toBe('open');
+      });
+    };
+
+    // A mousedown while closed leaves the dropdown alone.
+    document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    flushSync();
+    expect(root.dataset.state).toBe('closed');
+
+    await open();
+    expect(trigger.getAttribute('aria-expanded')).toBe('true');
+    // Portaled to <body> so no card or modal ancestor can clip or cover it.
+    expect(list().parentElement).toBe(document.body);
+    expect(host.contains(list())).toBe(false);
+    list().dispatchEvent(new Event('scroll'));
+    flushSync();
+    expect(root.dataset.state).toBe('open');
+
+    window.dispatchEvent(new Event('scroll'));
+    flushSync();
+    expect(root.dataset.state).toBe('closed');
+
+    await open();
+    document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    flushSync();
+    expect(root.dataset.state).toBe('closed');
+    expect(list()).toBeNull();
+  });
+
   it('treats an empty-string option as a real active option', async () => {
     mountedComponent = mount(Dropdown, {
       target: document.body,
