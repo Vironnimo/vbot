@@ -121,7 +121,9 @@ bindings preserve an existing checkout and its track. The running server uses a
 complete prepared version, so Git/build failures leave the active version intact.
 An initial build failure retains the base installation for an ordinary update retry.
 Host input fingerprints in `release.json` permit unchanged native hosts to be reused;
-changed native sources require the compiler/SDK inputs described above.
+changed native sources require the compiler/SDK inputs described above. Such an update
+compiles the hosts before any other build work, so a missing toolchain fails it within
+seconds; `-Dev` warns during installation when `clang-cl` or `llvm-rc` is not on PATH.
 
 For local features, Extension dependencies and isolated candidate testing, see
 [the user guide](../../USAGE.md#local-features-in-a-packaged-windows-application).

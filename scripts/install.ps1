@@ -221,6 +221,24 @@ function Confirm-Node {
     }
 }
 
+function Confirm-NativeBuildTools {
+    # Main updates recompile the Windows launchers only when their sources change.
+    # That needs LLVM's clang-cl and llvm-rc on PATH plus the Visual Studio C++ build
+    # tools with the Windows SDK, so a missing compiler warns instead of stopping.
+    $missing = @("clang-cl", "llvm-rc" | Where-Object { -not (Test-Have $_) })
+    if ($missing.Count -eq 0) {
+        return
+    }
+    $llvmBin = Join-Path $env:ProgramFiles "LLVM\bin"
+    $remedy = if (Test-Path -LiteralPath (Join-Path $llvmBin "clang-cl.exe") -PathType Leaf) {
+        "add $llvmBin to PATH"
+    }
+    else {
+        "install LLVM (winget install LLVM.LLVM) and add its bin directory to PATH"
+    }
+    Write-Status "WARN" "$($missing -join ' and ') not found. Main updates that change the Windows launchers fail until you $remedy; they also need the Visual Studio C++ build tools with the Windows SDK."
+}
+
 function Get-LatestTag {
     # A repo without releases answers 404 here; surface the -Dev hint instead of
     # the raw API error (mirrors install.sh).
@@ -608,6 +626,7 @@ if ($useNativeInstaller) {
         Write-Step "Checking main build requirements"
         Confirm-Git
         if (-not $DesktopClient) { Confirm-Node }
+        Confirm-NativeBuildTools
     }
     $shape = if ($DesktopClient) { "desktop-client" } elseif ($Desktop) { "server-desktop" } else { "server" }
     Install-NativeRelease -Tag $Version -Shape $shape

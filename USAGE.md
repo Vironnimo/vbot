@@ -132,8 +132,10 @@ On Windows, `-Dev` is the native installation that follows `main`: it has the sa
 EXE, tray, update command and directory as a release installation. It keeps its
 editable Git checkout under `<install>/source`, prepares a complete version before
 startup and requires Git plus Node.js/npm for server assets. Native host source
-changes additionally require LLVM and the Windows SDK. `-SourceCheckout` explicitly
-selects the separate Python installation workflow.
+changes additionally require LLVM (`clang-cl` and `llvm-rc` on PATH) and the Visual
+Studio C++ build tools with the Windows SDK; the installer warns when LLVM is missing,
+and such an update stops before other build work with the running version unchanged.
+`-SourceCheckout` explicitly selects the separate Python installation workflow.
 
 An existing native installation can select its update source without moving:
 
