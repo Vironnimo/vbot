@@ -15,6 +15,7 @@ from cli.install_state import (
     InstallState,
     InstallStateError,
     build_install_state,
+    dependency_digest,
     infer_legacy_install_state,
     read_install_state,
     write_install_state,
@@ -139,6 +140,83 @@ def test_build_install_state_records_exact_groups_and_digest(
     assert state.server_host == "127.0.0.1"
     assert state.server_port == 18420
     assert state.server_data_directory == str((tmp_path / "data").absolute())
+
+
+_PYPROJECT = """[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "vbot"
+version = "1.0.0"
+dependencies = ["httpx"]
+
+[project.optional-dependencies]
+server = ["fastapi"]
+
+[project.scripts]
+vbot = "cli.main:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["core"]
+
+[tool.ruff]
+line-length = 100
+"""
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        ('version = "1.0.0"', 'version = "1.0.1"'),
+        ("line-length = 100", "line-length = 120"),
+        ('dependencies = ["httpx"]', 'dependencies = [ "httpx" ]  # reformatted'),
+    ],
+)
+def test_dependency_digest_ignores_changes_an_install_does_not_consume(
+    tmp_path: Path, old: str, new: str
+) -> None:
+    project = tmp_path / "pyproject.toml"
+    project.write_bytes(_PYPROJECT.encode())
+    before = dependency_digest(tmp_path)
+
+    project.write_bytes(_PYPROJECT.replace(old, new).encode())
+
+    assert dependency_digest(tmp_path) == before
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        ('dependencies = ["httpx"]', 'dependencies = ["httpx", "pyyaml"]'),
+        ('server = ["fastapi"]', 'server = ["fastapi", "uvicorn"]'),
+        ('vbot = "cli.main:main"', 'vbot = "cli.other:main"'),
+        ('packages = ["core"]', 'packages = ["core", "server"]'),
+        ('requires = ["hatchling"]', 'requires = ["hatchling>=1.27"]'),
+    ],
+)
+def test_dependency_digest_tracks_what_an_install_consumes(
+    tmp_path: Path, old: str, new: str
+) -> None:
+    project = tmp_path / "pyproject.toml"
+    project.write_bytes(_PYPROJECT.encode())
+    before = dependency_digest(tmp_path)
+
+    project.write_bytes(_PYPROJECT.replace(old, new).encode())
+
+    assert dependency_digest(tmp_path) != before
+
+
+def test_dependency_digest_falls_back_to_bytes_for_an_unparseable_file(tmp_path: Path) -> None:
+    project = tmp_path / "pyproject.toml"
+    assert dependency_digest(tmp_path) == ""
+
+    project.write_bytes(b"[project\nversion = 1")
+    first = dependency_digest(tmp_path)
+    project.write_bytes(b"[project\nversion = 2")
+
+    assert first
+    assert dependency_digest(tmp_path) != first
 
 
 def test_build_install_state_preserves_symlinked_environment_interpreter(

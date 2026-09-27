@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import shlex
+import shutil
 import sys
+import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -12,6 +15,7 @@ import cli.update_management as update_management
 from cli import _update_assets
 from cli._update_types import UpdateResult, _SnapshotStep
 from cli.install_state import (
+    dependency_digest,
     read_install_state,
 )
 from cli.main import dispatch_update_command
@@ -501,6 +505,26 @@ def test_update_explicit_target_fields_override_the_installation_manifest(
     assert result.instance.data_dir == explicit_data_dir
 
 
+def test_command_timeout_does_not_wait_for_helpers_holding_its_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    helper = [sys.executable, "-c", "import time; time.sleep(15)"]
+    # A shell running a helper as its own child, as ``cmd /c npm`` runs node.
+    command = (
+        ["cmd", "/c", *helper]
+        if sys.platform == "win32"
+        else ["sh", "-c", f"{shlex.join(helper)}; true"]
+    )
+    monkeypatch.setattr(update_management, "_COMMAND_TIMEOUT_SECONDS", 1.0)
+
+    started = time.monotonic()
+    result = _default_runner(command, tmp_path)
+
+    assert result.returncode == 124
+    assert "timed out" in result.stderr
+    assert time.monotonic() - started < 8
+
+
 def test_dev_track_reinstalls_deps_and_rebuilds_webui(tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()
     (tmp_path / "pyproject.toml").write_text("before", encoding="utf-8")
@@ -577,7 +601,8 @@ def test_dev_webui_detects_build_inputs_with_git(
         if command[0] == "git":
             return _default_runner(command, cwd)
         assert cwd == tmp_path / "webui"
-        builds.append(command)
+        if command[0] != "node":
+            builds.append(command)
         return _ok()
 
     result = _update_assets._refresh_dev_webui(runner, tmp_path, before, after)
@@ -587,6 +612,158 @@ def test_dev_webui_detects_build_inputs_with_git(
         [_update_assets._npm_command(["ci"]), _update_assets._npm_command(["run", "build"])]
         if rebuild
         else []
+    )
+
+
+def test_dev_webui_reuses_installed_packages_while_their_inputs_are_unchanged(
+    tmp_path: Path,
+) -> None:
+    webui = tmp_path / "webui"
+    webui.mkdir()
+    (webui / "package.json").write_text('{"name": "webui"}', encoding="utf-8")
+    (webui / "package-lock.json").write_text('{"lock": 1}', encoding="utf-8")
+    npm_calls: list[list[str]] = []
+
+    def runner(command: list[str], cwd: Path) -> CommandRun:
+        if command[:3] == ["git", "diff", "--quiet"]:
+            return _err()
+        if command == ["node", "--version"]:
+            return _ok("v22.0.0")
+        npm_calls.append(command)
+        if command == _update_assets._npm_command(["ci"]):
+            (webui / "node_modules").mkdir(exist_ok=True)
+        else:
+            (webui / "dist").mkdir(exist_ok=True)
+            (webui / "dist" / "index.html").write_text("built", encoding="utf-8")
+        return _ok()
+
+    first = _update_assets._refresh_dev_webui(runner, tmp_path, None, "first")
+    second = _update_assets._refresh_dev_webui(runner, tmp_path, "first", "second")
+
+    assert first.ok, first.message
+    assert second.ok, second.message
+    npm_ci = _update_assets._npm_command(["ci"])
+    npm_build = _update_assets._npm_command(["run", "build"])
+    assert npm_calls == [npm_ci, npm_build, npm_build]
+
+
+def _write_build(root: Path, content: str) -> None:
+    """Write a WebUI build and the build of one Extension page."""
+
+    dist = root / "webui" / "dist"
+    dist.mkdir(parents=True, exist_ok=True)
+    (dist / "index.html").write_text(content, encoding="utf-8")
+    page = root / "resources" / "extensions" / "swarm"
+    (page / "ui").mkdir(parents=True, exist_ok=True)
+    (page / "ui" / "page.html").write_text("page source", encoding="utf-8")
+    (page / "web").mkdir(exist_ok=True)
+    (page / "web" / "index.html").write_text(content, encoding="utf-8")
+
+
+def _break_build(root: Path) -> None:
+    """Leave every output tree the way a build failing part-way does."""
+
+    pages = (root / "resources" / "extensions").glob("*/ui/page.html")
+    for tree in [root / "webui" / "dist", *(page.parent.parent / "web" for page in pages)]:
+        shutil.rmtree(tree, ignore_errors=True)
+        tree.mkdir(parents=True)
+        (tree / "partial.js").write_text("partial", encoding="utf-8")
+
+
+def _checkout_files(root: Path) -> dict[str, str]:
+    return {
+        path.relative_to(root).as_posix(): path.read_text(encoding="utf-8")
+        for path in root.rglob("*")
+        if path.is_file() and ".previous-build" not in path.parts
+    }
+
+
+def test_dev_webui_build_failure_keeps_the_previous_build(tmp_path: Path) -> None:
+    _write_build(tmp_path, "old")
+    added = tmp_path / "resources" / "extensions" / "added" / "ui"
+    added.mkdir(parents=True)
+    (added / "page.html").write_text("new page source", encoding="utf-8")
+    before = _checkout_files(tmp_path)
+
+    def runner(command: list[str], cwd: Path) -> CommandRun:
+        if command[:3] == ["git", "diff", "--quiet"]:
+            return _err()
+        if command == _update_assets._npm_command(["run", "build"]):
+            _break_build(tmp_path)
+            return _err("render failed")
+        return _ok()
+
+    result = _update_assets._refresh_dev_webui(runner, tmp_path, "old", "new")
+
+    assert not result.ok
+    assert result.message == "webui build failed: render failed\nthe previous WebUI was kept"
+    assert _checkout_files(tmp_path) == before
+    assert not (tmp_path / "webui" / ".previous-build").exists()
+
+
+def test_dev_webui_interrupted_build_is_restored_before_the_next_build(tmp_path: Path) -> None:
+    _write_build(tmp_path, "old")
+    before = _checkout_files(tmp_path)
+
+    def interrupted(command: list[str], cwd: Path) -> CommandRun:
+        if command[:3] == ["git", "diff", "--quiet"]:
+            return _err()
+        if command == _update_assets._npm_command(["run", "build"]):
+            _break_build(tmp_path)
+            raise KeyboardInterrupt
+        return _ok()
+
+    with pytest.raises(KeyboardInterrupt):
+        _update_assets._refresh_dev_webui(interrupted, tmp_path, "old", "new")
+    assert _checkout_files(tmp_path) != before
+    seen_by_build: list[dict[str, str]] = []
+
+    def resumed(command: list[str], cwd: Path) -> CommandRun:
+        if command[:3] == ["git", "diff", "--quiet"]:
+            return _err()
+        if command == _update_assets._npm_command(["run", "build"]):
+            seen_by_build.append(_checkout_files(tmp_path))
+            _write_build(tmp_path, "new")
+        return _ok()
+
+    result = _update_assets._refresh_dev_webui(resumed, tmp_path, "old", "new")
+
+    assert result.ok, result.message
+    assert seen_by_build == [before]
+    assert (tmp_path / "webui" / "dist" / "index.html").read_text(encoding="utf-8") == "new"
+    assert not (tmp_path / "webui" / ".previous-build").exists()
+
+
+@pytest.mark.parametrize("leftover", ["other_revision", "incomplete"])
+def test_dev_webui_discards_a_copy_it_cannot_trust(tmp_path: Path, leftover: str) -> None:
+    _write_build(tmp_path, "older")
+    _update_assets._save_previous_build(
+        tmp_path, "older" if leftover == "other_revision" else "current"
+    )
+    if leftover == "incomplete":
+        (tmp_path / "webui" / ".previous-build" / "trees.json").unlink()
+    _write_build(tmp_path, "current")
+
+    result = _update_assets._refresh_dev_webui(
+        lambda _command, _cwd: _ok(), tmp_path, "current", "current"
+    )
+
+    assert result.ok, result.message
+    assert (tmp_path / "webui" / "dist" / "index.html").read_text(encoding="utf-8") == "current"
+    assert not (tmp_path / "webui" / ".previous-build").exists()
+
+
+def test_dev_webui_reports_which_npm_step_failed(tmp_path: Path) -> None:
+    def runner(command: list[str], cwd: Path) -> CommandRun:
+        if command == _update_assets._npm_command(["ci"]):
+            return CommandRun(returncode=1, stdout="", stderr="lock mismatch")
+        return _ok()
+
+    result = _update_assets._refresh_dev_webui(runner, tmp_path, None, "target")
+
+    assert not result.ok
+    assert result.message == (
+        "webui dependency install failed: lock mismatch\nthe previous WebUI was kept"
     )
 
 
@@ -754,6 +931,69 @@ def test_dispatch_update_passes_flags_through() -> None:
         "port": None,
         "data_dir": None,
     }
+
+
+def _dev_update_handler(
+    tmp_path: Path, *, pyproject_after: str, search_runtime: CommandRun | None = None
+) -> Callable[[list[str]], CommandRun]:
+    """Answer one dev update from ``old`` to ``new`` whose merge rewrites pyproject.toml."""
+
+    revisions = iter(["old", "new"])
+
+    def handler(command: list[str]) -> CommandRun:
+        if command[:2] == ["git", "symbolic-ref"]:
+            return _ok("main")
+        if command[:2] == ["git", "rev-parse"]:
+            return _ok(next(revisions))
+        if command[:2] == ["git", "rev-list"]:
+            return _upstream(behind=1)
+        if command[:2] == ["git", "merge"]:
+            (tmp_path / "pyproject.toml").write_bytes(pyproject_after.encode())
+            return _ok()
+        if search_runtime is not None and command[1:] == ["-m", "cli.search_runtime"]:
+            return search_runtime
+        return _ok()
+
+    return handler
+
+
+def test_version_bump_does_not_reinstall_dependencies(tmp_path: Path) -> None:
+    (tmp_path / ".git").mkdir()
+    project = '[project]\nname = "vbot"\nversion = "1.0.0"\ndependencies = ["httpx"]\n'
+    (tmp_path / "pyproject.toml").write_bytes(project.encode())
+    dist = tmp_path / "webui" / "dist"
+    dist.mkdir(parents=True)
+    (dist / "index.html").write_text("existing build", encoding="utf-8")
+    _write_state(tmp_path, revision="old", webui_revision="old")
+
+    runner = ScriptedRunner(
+        _dev_update_handler(tmp_path, pyproject_after=project.replace("1.0.0", "1.0.1"))
+    )
+    events, stop, start = _recording_restart()
+    result = run_update(_instance(), runner=runner, root=tmp_path, stop=stop, start=start)
+
+    assert result.ok, result.message
+    assert not runner.ran("-m", "pip")
+    assert events == ["stop", "start"]
+
+
+def test_installed_dependencies_are_recorded_when_a_later_step_fails(tmp_path: Path) -> None:
+    (tmp_path / ".git").mkdir()
+    (tmp_path / "pyproject.toml").write_text("before", encoding="utf-8")
+    _write_state(tmp_path, revision="old", webui_revision="old")
+
+    runner = ScriptedRunner(
+        _dev_update_handler(tmp_path, pyproject_after="after", search_runtime=_err("offline"))
+    )
+    events, stop, start = _recording_restart()
+    failed = run_update(_instance(), runner=runner, root=tmp_path, stop=stop, start=start)
+
+    assert not failed.ok
+    assert runner.ran("-m", "pip", "install")
+    state = read_install_state(tmp_path)
+    assert state is not None
+    assert state.dependency_digest == dependency_digest(tmp_path)
+    assert events == []
 
 
 def test_dependency_failure_is_retried_after_head_already_advanced(tmp_path: Path) -> None:

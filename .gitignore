@@ -43,6 +43,7 @@ shot-*.png
 # Node / webui
 node_modules/
 webui/dist/
+webui/.previous-build/
 resources/extensions/*/web/
 tests/fixtures/extension-pages/*/web/
 coverage/

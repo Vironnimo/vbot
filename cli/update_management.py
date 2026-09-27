@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import shlex
 import subprocess
@@ -37,7 +38,7 @@ from cli.install_state import (
     SERVER_DESKTOP_SHAPE,
     InstallState,
     InstallStateError,
-    file_digest,
+    dependency_digest,
     infer_legacy_install_state,
     read_install_state,
     write_install_state,
@@ -56,6 +57,7 @@ from cli.server_management import (
 )
 from core.utils.atomic import atomic_write_bytes
 from core.utils.config import VBOT_ROOT
+from core.utils.processes import kill_process_tree
 
 GITHUB_API_BASE = "https://api.github.com/repos/Vironnimo/vbot"
 
@@ -64,6 +66,7 @@ _API_TIMEOUT_SECONDS = 30.0
 
 
 _COMMAND_TIMEOUT_SECONDS = 600.0
+_COMMAND_DRAIN_SECONDS = 10.0
 
 
 _WINDOWS_COMMAND_LAUNCHER_NAME = "vbot.exe"
@@ -355,16 +358,24 @@ def run_update(
 
     announce("success", "Code is current")
     announce("busy", "Checking and installing Python dependencies")
+    current_digest = dependency_digest(repo)
     deps = _refresh_dependencies(
         run,
         repo,
         state,
+        current_digest,
         platform_name=effective_platform,
     )
     if deps.message:
         record(deps.message, deps.ok)
     if not deps.ok:
         return _failure_with_stash(instance, lines, run, repo, stashed=stashed)
+    if state.dependency_digest != current_digest:
+        state = replace(state, dependency_digest=current_digest)
+        saved = _save_state(repo, state)
+        if not saved.ok:
+            record(saved.message, saved.ok)
+            return _failure_with_stash(instance, lines, run, repo, stashed=stashed)
     announce("success", "Python dependencies are current")
     if state.install_shape != "desktop-client":
         announce("busy", "Checking the bundled search engine")
@@ -373,13 +384,6 @@ def run_update(
             record(f"search engine installation failed: {native.stderr or native.stdout}", False)
             return _failure_with_stash(instance, lines, run, repo, stashed=stashed)
         announce("success", "Search engine is current")
-    current_digest = file_digest(repo / "pyproject.toml")
-    if state.dependency_digest != current_digest:
-        state = replace(state, dependency_digest=current_digest)
-        saved = _save_state(repo, state)
-        if not saved.ok:
-            record(saved.message, saved.ok)
-            return _failure_with_stash(instance, lines, run, repo, stashed=stashed)
 
     announce("busy", "Checking command launcher and Desktop shortcuts")
     command_shim = _refresh_windows_command_shim(
@@ -571,7 +575,7 @@ def _applied_at(state: InstallState, repo: Path, *, track: str, revision: str) -
     return (
         state.source_track == track
         and state.applied_revision == revision
-        and state.dependency_digest == file_digest(repo / "pyproject.toml")
+        and state.dependency_digest == dependency_digest(repo)
         and (
             state.install_shape == DESKTOP_CLIENT_SHAPE
             or (
@@ -724,12 +728,13 @@ def _refresh_dependencies(
     run: Runner,
     repo: Path,
     state: InstallState,
+    current_digest: str,
     *,
     platform_name: str,
 ) -> _Step:
     """Apply the manifest's exact dependency groups until their digest is current."""
 
-    if file_digest(repo / "pyproject.toml") == state.dependency_digest:
+    if current_digest == state.dependency_digest:
         return _Step(True, "")
 
     desktop_guard = _guard_windows_desktop_not_running(
@@ -927,26 +932,55 @@ def _default_runner(command: list[str], cwd: Path) -> CommandRun:
     environment = dict(os.environ)
     environment["GIT_TERMINAL_PROMPT"] = "0"
     try:
-        completed = subprocess.run(
+        process = subprocess.Popen(
             command,
             cwd=str(cwd),
-            capture_output=True,
-            timeout=_COMMAND_TIMEOUT_SECONDS,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             env=environment,
-        )
-    except subprocess.TimeoutExpired:
-        return CommandRun(
-            returncode=124,
-            stdout="",
-            stderr=f"command timed out after {_COMMAND_TIMEOUT_SECONDS:.0f}s: {' '.join(command)}",
         )
     except OSError as exc:
         return CommandRun(returncode=127, stdout="", stderr=f"could not run {command[0]}: {exc}")
+    with process:
+        try:
+            stdout, stderr = process.communicate(timeout=_COMMAND_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            _stop_timed_out_command(process)
+            return CommandRun(
+                returncode=124,
+                stdout="",
+                stderr=(
+                    f"command timed out after {_COMMAND_TIMEOUT_SECONDS:.0f}s: {' '.join(command)}"
+                ),
+            )
+        except BaseException:
+            process.kill()
+            raise
     return CommandRun(
-        returncode=completed.returncode,
-        stdout=decode_command_output(completed.stdout).strip(),
-        stderr=decode_command_output(completed.stderr).strip(),
+        returncode=process.returncode,
+        stdout=decode_command_output(stdout).strip(),
+        stderr=decode_command_output(stderr).strip(),
     )
+
+
+def _stop_timed_out_command(process: subprocess.Popen[bytes]) -> None:
+    """Stop a timed-out command without waiting on helpers that hold its output pipes.
+
+    On Windows, ``cmd /c npm`` and git leave node or helper processes behind that
+    keep the pipes open, so killing only the direct child would block reading them
+    until those helpers exit.  POSIX waits only for the direct child, as
+    ``subprocess.run`` does.
+    """
+
+    if os.name == "nt":
+        with contextlib.suppress(OSError):
+            kill_process_tree(process)
+    process.kill()
+    if os.name == "nt":
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            process.communicate(timeout=_COMMAND_DRAIN_SECONDS)
+    else:
+        process.wait()
 
 
 def _detect_track(run: Runner, repo: Path) -> str:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import json
 import shutil
 import sys
 import tarfile
@@ -15,8 +16,18 @@ from cli._update_types import (
     Runner,
     _Step,
 )
+from cli.webui_build import build_webui
+from core.utils.atomic import atomic_write_text
 
 WEBUI_ASSET_NAME = "webui-dist.tar.gz"
+
+# Where a branch install keeps the last good build while ``npm run build`` runs.
+_PREVIOUS_BUILD = Path("webui") / ".previous-build"
+_PREVIOUS_BUILD_MANIFEST = "trees.json"
+_EXTENSION_PAGE_ROOTS = (
+    Path("resources") / "extensions",
+    Path("tests") / "fixtures" / "extension-pages",
+)
 
 
 _DOWNLOAD_TIMEOUT_SECONDS = 60.0
@@ -25,8 +36,19 @@ _DOWNLOAD_TIMEOUT_SECONDS = 60.0
 def _refresh_dev_webui(
     run: Runner, repo: Path, applied_revision: str | None, target_revision: str
 ) -> _Step:
-    """Bring a branch install's local WebUI to the target revision idempotently."""
+    """Bring a branch install's local WebUI to the target revision idempotently.
 
+    ``npm run build`` rewrites ``webui/dist`` and every Extension page's ``web``
+    tree in place, which the running server serves.  They are copied before the
+    build and put back when it fails.  An interrupted update leaves the copy
+    behind; the next update restores it before looking at the trees.
+    """
+
+    backup = repo / _PREVIOUS_BUILD
+    try:
+        _restore_previous_build(repo, applied_revision)
+    except (OSError, ValueError) as exc:
+        return _Step(False, f"webui: could not restore the previous build from {backup}: {exc}")
     dist_present = (repo / "webui" / "dist" / "index.html").is_file()
     if applied_revision == target_revision and dist_present:
         return _Step(True, "")
@@ -48,13 +70,134 @@ def _refresh_dev_webui(
         if changed.returncode == 0:
             return _Step(True, "webui unchanged")
     webui_dir = repo / "webui"
-    install = run(_npm_command(["ci"]), webui_dir)
-    if install.returncode != 0:
-        return _Step(False, f"webui dependency install failed: {install.stderr}")
-    build = run(_npm_command(["run", "build"]), webui_dir)
-    if build.returncode != 0:
-        return _Step(False, f"webui build failed: {build.stderr}")
+
+    def npm(arguments: list[str]) -> None:
+        result = run(_npm_command(arguments), webui_dir)
+        if result.returncode != 0:
+            raise _NpmError(arguments, result.stderr or result.stdout)
+
+    node = run(["node", "--version"], webui_dir)
+    try:
+        _save_previous_build(repo, applied_revision)
+    except OSError as exc:
+        return _Step(False, f"webui: could not copy the current build before rebuilding: {exc}")
+    try:
+        build_webui(
+            webui_dir,
+            node_version=node.stdout.strip() if node.returncode == 0 else None,
+            npm=npm,
+        )
+    except _NpmError as exc:
+        step = "dependency install" if exc.arguments == ["ci"] else "build"
+        failure = f"webui {step} failed: {exc.detail}"
+        try:
+            _restore_previous_build(repo, applied_revision)
+        except (OSError, ValueError) as restore_exc:
+            return _Step(
+                False,
+                f"{failure}\nthe previous WebUI could not be restored ({restore_exc}); "
+                f"the next update restores it from {backup}",
+            )
+        return _Step(False, f"{failure}\nthe previous WebUI was kept")
+    try:
+        # Without its manifest the copy is never restored over the new build.
+        (backup / _PREVIOUS_BUILD_MANIFEST).unlink()
+    except OSError as exc:
+        return _Step(False, f"webui: could not discard the copy of the previous build: {exc}")
+    shutil.rmtree(backup, ignore_errors=True)
     return _Step(True, "webui rebuilt")
+
+
+def _build_output_trees(repo: Path) -> list[Path]:
+    """The repository-relative trees ``npm run build`` rewrites for the current pages."""
+
+    trees = [Path("webui") / "dist"]
+    for pages in _EXTENSION_PAGE_ROOTS:
+        if (repo / pages).is_dir():
+            trees.extend(
+                pages / page.name / "web"
+                for page in sorted((repo / pages).iterdir())
+                if (page / "ui" / "page.html").is_file()
+            )
+    return trees
+
+
+def _save_previous_build(repo: Path, revision: str | None) -> None:
+    """Copy the build output trees; the manifest, written last, completes the copy."""
+
+    backup = repo / _PREVIOUS_BUILD
+    shutil.rmtree(backup, ignore_errors=True)
+    try:
+        trees = []
+        for relative in _build_output_trees(repo):
+            previous = (repo / relative).is_dir()
+            if previous:
+                shutil.copytree(repo / relative, backup / relative)
+            trees.append({"path": relative.as_posix(), "previous": previous})
+        backup.mkdir(parents=True, exist_ok=True)
+        atomic_write_text(
+            backup / _PREVIOUS_BUILD_MANIFEST, json.dumps({"revision": revision, "trees": trees})
+        )
+    except OSError:
+        shutil.rmtree(backup, ignore_errors=True)
+        raise
+
+
+def _restore_previous_build(repo: Path, revision: str | None) -> None:
+    """Put back a complete copy of ``revision``'s build, then remove any copy.
+
+    A copy without its manifest was never finished, so the build it guarded never
+    started; a copy of another revision no longer matches the installation.  Both
+    are discarded.  Restoring is idempotent, so an interrupted restore can repeat.
+    """
+
+    backup = repo / _PREVIOUS_BUILD
+    if not backup.exists():
+        return
+    manifest_path = backup / _PREVIOUS_BUILD_MANIFEST
+    if manifest_path.is_file():
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if not isinstance(manifest, dict) or not isinstance(manifest.get("trees"), list):
+            raise ValueError(f"{manifest_path} is not a build copy manifest")
+        if manifest.get("revision") == revision:
+            for tree in manifest["trees"]:
+                relative = _build_tree_path(tree)
+                target, saved = repo / relative, backup / relative
+                if tree["previous"] and not saved.is_dir():
+                    continue  # already restored
+                if target.exists():
+                    shutil.rmtree(target)
+                if tree["previous"]:
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    saved.rename(target)
+        manifest_path.unlink()
+    shutil.rmtree(backup)
+
+
+def _build_tree_path(tree: object) -> Path:
+    """Validate one manifest entry as a relative path to a build output tree."""
+
+    if not isinstance(tree, dict) or not isinstance(tree.get("previous"), bool):
+        raise ValueError(f"invalid build copy entry: {tree!r}")
+    value = tree.get("path")
+    relative = Path(value) if isinstance(value, str) else None
+    if (
+        relative is None
+        or relative.anchor
+        or ".." in relative.parts
+        or relative.name not in {"dist", "web"}
+    ):
+        raise ValueError(f"invalid build copy path: {value!r}")
+    return relative
+
+
+class _NpmError(Exception):
+    """One failed npm command of a WebUI build."""
+
+    def __init__(self, arguments: list[str], detail: str) -> None:
+        super().__init__(f"npm {' '.join(arguments)} failed: {detail}")
+        self.arguments = arguments
+        self.detail = detail
 
 
 def _refresh_release_webui(

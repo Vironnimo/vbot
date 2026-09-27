@@ -12,9 +12,9 @@ from cli._update_types import _Step
 from cli.install_state import (
     INSTALL_STATE_SCHEMA_VERSION,
     InstallState,
-    file_digest,
     write_install_state,
 )
+from cli.install_state import dependency_digest as current_dependency_digest
 from cli.server_management import CommandResult, ServerInstance
 from cli.update_management import (
     CommandRun,
@@ -132,9 +132,7 @@ def _write_state(
             source_track=track,
             applied_revision=revision,
             dependency_digest=(
-                file_digest(root / "pyproject.toml")
-                if dependency_digest is None
-                else dependency_digest
+                current_dependency_digest(root) if dependency_digest is None else dependency_digest
             ),
             webui_revision=None if shape == "desktop-client" else webui_revision,
             server_host=server_host,
