@@ -1,10 +1,14 @@
-"""Openai: websocket behavior."""
+"""OpenAI Adapter Codex WebSocket transport: continuation, route isolation, fallback and tracing.
+
+Every socket is an in-memory fake injected through ``codex_websocket_connect``.
+"""
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections import deque
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Sequence
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -15,25 +19,28 @@ import respx
 from core.debug.recorder import DebugContext, ProviderDebugRecorder
 from core.debug.store import DebugTraceStore
 from core.providers.errors import NetworkError
-from core.providers.openai import (
-    CODEX_RESPONSES_MODE,
-    CODEX_WEBSOCKET_BETA,
-    OpenAIAdapter,
-)
+from core.providers.openai import CODEX_WEBSOCKET_BETA, OpenAIAdapter
 from core.utils.tls import shared_ssl_context
-from tests.core.providers.openai_helpers import (
-    _CODEX_TOOLS,
+
+from .openai_helpers import (
+    ACCOUNT_ID,
+    CODEX_TOOLS,
     OPENAI_SUBSCRIPTION_URL,
     SAMPLE_MESSAGES,
+    RotatingTokenGetter,
     _codex_sse_response,
     _jwt_with_account,
-    _RotatingTokenGetter,
-    _subscription_config,
+    codex_adapter,
 )
+
+MODEL_ID = "gpt-5.6-terra"
+CONVERSATION_ID = "orchestrator:sess-42"
 
 
 class _FakeCodexWebSocket:
-    def __init__(self, event_batches: list[list[dict[str, Any] | BaseException]]) -> None:
+    """Replays one scripted event batch per ``response.create`` sent."""
+
+    def __init__(self, event_batches: Sequence[Sequence[dict[str, Any] | BaseException]]) -> None:
         self._event_batches = deque(deque(batch) for batch in event_batches)
         self._active_events: deque[dict[str, Any] | BaseException] = deque()
         self.sent_payloads: list[dict[str, Any]] = []
@@ -72,11 +79,11 @@ class _FakeCodexWebSocketConnector:
             raise connection
         return connection
 
+    def headers(self, name: str) -> list[str]:
+        return [kwargs["additional_headers"][name] for _url, kwargs in self.calls]
 
-def _codex_completed_event(
-    response_id: str,
-    output: list[dict[str, Any]],
-) -> dict[str, Any]:
+
+def _completed(response_id: str, output: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "type": "response.completed",
         "response": {
@@ -88,22 +95,18 @@ def _codex_completed_event(
     }
 
 
-def _codex_output_item_event(output_index: int, item: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "type": "response.output_item.done",
-        "output_index": output_index,
-        "item": item,
-    }
+def _output_item_done(output_index: int, item: dict[str, Any]) -> dict[str, Any]:
+    return {"type": "response.output_item.done", "output_index": output_index, "item": item}
 
 
-_CODEX_REASONING_ITEM = {
+_REASONING_ITEM = {
     "id": "rs_1",
     "type": "reasoning",
     "summary": [{"type": "summary_text", "text": "Checking"}],
     "encrypted_content": "opaque-reasoning",
 }
 
-_CODEX_TOOL_CALL_ITEM = {
+_TOOL_CALL_ITEM = {
     "id": "fc_1",
     "type": "function_call",
     "status": "completed",
@@ -112,7 +115,7 @@ _CODEX_TOOL_CALL_ITEM = {
     "arguments": '{"query":"river"}',
 }
 
-_CODEX_FINAL_MESSAGE_ITEM = {
+_FINAL_MESSAGE_ITEM = {
     "id": "msg_2",
     "type": "message",
     "role": "assistant",
@@ -120,8 +123,28 @@ _CODEX_FINAL_MESSAGE_ITEM = {
     "content": [{"type": "output_text", "text": "Done"}],
 }
 
+_TOOL_OUTPUT = {
+    "type": "function_call_output",
+    "call_id": "call_1",
+    "output": '{"ok":true,"data":{"level":91}}',
+}
 
-def _messages_with_codex_tool_result(normalized: dict[str, Any]) -> list[dict[str, Any]]:
+_FULL_CONTEXT_INPUT_KINDS = ["user", "reasoning", "function_call", "function_call_output"]
+
+
+def _tool_call_turn(response_id: str) -> list[dict[str, Any]]:
+    return [_completed(response_id, [dict(_REASONING_ITEM), dict(_TOOL_CALL_ITEM)])]
+
+
+def _final_turn(response_id: str) -> list[dict[str, Any]]:
+    return [_completed(response_id, [dict(_FINAL_MESSAGE_ITEM)])]
+
+
+def _input_kinds(payload: dict[str, Any]) -> list[str]:
+    return [item.get("type", item.get("role")) for item in payload["input"]]
+
+
+def _messages_with_tool_result(normalized: dict[str, Any]) -> list[dict[str, Any]]:
     return [
         *SAMPLE_MESSAGES,
         {
@@ -135,71 +158,71 @@ def _messages_with_codex_tool_result(normalized: dict[str, Any]) -> list[dict[st
             "role": "tool",
             "tool_call_id": "call_1",
             "name": "lookup",
-            "content": '{"ok":true,"data":{"level":91}}',
+            "content": _TOOL_OUTPUT["output"],
         },
     ]
 
 
+async def _send(
+    adapter: OpenAIAdapter,
+    messages: list[dict[str, Any]] = SAMPLE_MESSAGES,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    kwargs.setdefault("model_id", MODEL_ID)
+    kwargs.setdefault("conversation_id", CONVERSATION_ID)
+    return adapter.normalize_response(await adapter.send(messages, **kwargs))
+
+
+# ---------------------------------------------------------------------------
+# Continuation on one socket
+# ---------------------------------------------------------------------------
+
+
 @pytest.mark.asyncio
 async def test_codex_websocket_reuses_connection_and_sends_only_new_tool_result() -> None:
+    """A Tool continuation chains by ``previous_response_id`` with only the appended input.
+
+    The Provider-visible cache headers are clamped to 64 characters while the full
+    conversation id keeps keying the local route.
+    """
+
     websocket = _FakeCodexWebSocket(
         [
             [
-                _codex_output_item_event(0, dict(_CODEX_REASONING_ITEM)),
-                _codex_output_item_event(1, dict(_CODEX_TOOL_CALL_ITEM)),
-                _codex_completed_event(
-                    "resp_1",
-                    [],
-                ),
+                _output_item_done(0, dict(_REASONING_ITEM)),
+                _output_item_done(1, dict(_TOOL_CALL_ITEM)),
+                _completed("resp_1", []),
             ],
-            [_codex_completed_event("resp_2", [dict(_CODEX_FINAL_MESSAGE_ITEM)])],
+            _final_turn("resp_2"),
         ]
     )
     connector = _FakeCodexWebSocketConnector([websocket])
-    adapter = OpenAIAdapter(
-        _subscription_config(),
-        _jwt_with_account("acct_openai"),
-        connection_mode=CODEX_RESPONSES_MODE,
-        codex_websocket_connect=connector,
-    )
+    adapter = codex_adapter(codex_websocket_connect=connector)
+    conversation_id = "orchestrator:" + ("session-" * 20)
+    request: dict[str, Any] = {
+        "conversation_id": conversation_id,
+        "thinking_effort": "high",
+        "tools": CODEX_TOOLS,
+    }
 
-    first_raw = await adapter.send(
-        SAMPLE_MESSAGES,
-        model_id="gpt-5.6-terra",
-        conversation_id="orchestrator:sess-42",
-        thinking_effort="high",
-        tools=_CODEX_TOOLS,
-    )
-    first = adapter.normalize_response(first_raw)
-    second_raw = await adapter.send(
-        _messages_with_codex_tool_result(first),
-        model_id="gpt-5.6-terra",
-        conversation_id="orchestrator:sess-42",
-        thinking_effort="high",
-        tools=_CODEX_TOOLS,
-    )
-    second = adapter.normalize_response(second_raw)
+    first = await _send(adapter, **request)
+    second = await _send(adapter, _messages_with_tool_result(first), **request)
 
     assert second["content"] == "Done"
     assert len(connector.calls) == 1
-    assert len(websocket.sent_payloads) == 2
     first_payload, second_payload = websocket.sent_payloads
     assert first_payload["type"] == "response.create"
     assert first_payload["store"] is False
     assert "previous_response_id" not in first_payload
     assert second_payload["previous_response_id"] == "resp_1"
-    assert second_payload["input"] == [
-        {
-            "type": "function_call_output",
-            "call_id": "call_1",
-            "output": '{"ok":true,"data":{"level":91}}',
-        }
-    ]
-    _, connect_kwargs = connector.calls[0]
-    websocket_headers = connect_kwargs["additional_headers"]
-    assert websocket_headers["OpenAI-Beta"] == CODEX_WEBSOCKET_BETA
-    assert websocket_headers["session-id"] == "orchestrator:sess-42"
-    assert "session_id" not in websocket_headers
+    assert second_payload["input"] == [_TOOL_OUTPUT]
+    url, connect_kwargs = connector.calls[0]
+    assert url == "wss://chatgpt.com/backend-api/codex/responses"
+    headers = connect_kwargs["additional_headers"]
+    assert headers["OpenAI-Beta"] == CODEX_WEBSOCKET_BETA
+    assert headers["session-id"] == conversation_id[:64]
+    assert headers["x-client-request-id"] == conversation_id[:64]
+    assert "session_id" not in headers
     # One process-wide TLS context: no CA bundle parse per connection on the loop.
     assert connect_kwargs["ssl"] is shared_ssl_context()
     await adapter.aclose()
@@ -207,257 +230,34 @@ async def test_codex_websocket_reuses_connection_and_sends_only_new_tool_result(
 
 
 @pytest.mark.asyncio
-async def test_closing_partial_codex_stream_releases_socket_before_returning() -> None:
-    websocket = _FakeCodexWebSocket([[{"type": "response.output_text.delta", "delta": "partial"}]])
-    adapter = OpenAIAdapter(
-        _subscription_config(),
-        _jwt_with_account("acct_openai"),
-        connection_mode=CODEX_RESPONSES_MODE,
-        codex_websocket_connect=_FakeCodexWebSocketConnector([websocket]),
-    )
+async def test_closing_a_partial_codex_stream_releases_the_socket_for_the_next_request() -> None:
+    partial = _FakeCodexWebSocket([[{"type": "response.output_text.delta", "delta": "partial"}]])
+    replacement = _FakeCodexWebSocket([_final_turn("resp_2")])
+    connector = _FakeCodexWebSocketConnector([partial, replacement])
+    adapter = codex_adapter(codex_websocket_connect=connector)
     stream = cast(
         AsyncGenerator[dict[str, Any], None],
-        adapter.stream(SAMPLE_MESSAGES, model_id="gpt-5.6-terra", conversation_id="agent:session"),
+        adapter.stream(SAMPLE_MESSAGES, model_id=MODEL_ID, conversation_id=CONVERSATION_ID),
     )
     try:
         assert await anext(stream) == {"type": "content_delta", "text": "partial"}
         await stream.aclose()
+        assert partial.closed is True
 
-        assert websocket.closed
-        assert not adapter._codex_socket._codex_websocket_lock.locked()
+        # A socket lock left held by the abandoned stream would block this request.
+        assert (await asyncio.wait_for(_send(adapter), timeout=1))["content"] == "Done"
+        assert len(connector.calls) == 2
+        assert "previous_response_id" not in replacement.sent_payloads[0]
     finally:
         await stream.aclose()
         await adapter.aclose()
 
 
 @pytest.mark.asyncio
-async def test_codex_shared_cache_affinity_does_not_share_websocket_continuation() -> None:
-    source_websocket = _FakeCodexWebSocket(
-        [
-            [
-                _codex_output_item_event(0, dict(_CODEX_REASONING_ITEM)),
-                _codex_output_item_event(1, dict(_CODEX_TOOL_CALL_ITEM)),
-                _codex_completed_event("resp_source", []),
-            ]
-        ]
-    )
-    fork_websocket = _FakeCodexWebSocket(
-        [[_codex_completed_event("resp_fork", [dict(_CODEX_FINAL_MESSAGE_ITEM)])]]
-    )
-    connector = _FakeCodexWebSocketConnector([source_websocket, fork_websocket])
-    adapter = OpenAIAdapter(
-        _subscription_config(),
-        _jwt_with_account("acct_openai"),
-        connection_mode=CODEX_RESPONSES_MODE,
-        codex_websocket_connect=connector,
-    )
-
-    source_raw = await adapter.send(
-        SAMPLE_MESSAGES,
-        model_id="gpt-5.6-terra",
-        conversation_id="orchestrator:source",
-        prompt_cache_affinity_id="shared-cache-lineage",
-        thinking_effort="high",
-        tools=_CODEX_TOOLS,
-    )
-    source = adapter.normalize_response(source_raw)
-    await adapter.send(
-        _messages_with_codex_tool_result(source),
-        model_id="gpt-5.6-terra",
-        conversation_id="orchestrator:fork",
-        prompt_cache_affinity_id="shared-cache-lineage",
-        thinking_effort="high",
-        tools=_CODEX_TOOLS,
-    )
-
-    assert len(connector.calls) == 2
-    assert source_websocket.closed is True
-    assert "previous_response_id" not in source_websocket.sent_payloads[0]
-    assert "previous_response_id" not in fork_websocket.sent_payloads[0]
-    assert fork_websocket.sent_payloads[0]["input"][-1] == {
-        "type": "function_call_output",
-        "call_id": "call_1",
-        "output": '{"ok":true,"data":{"level":91}}',
-    }
-    for _url, connect_kwargs in connector.calls:
-        headers = connect_kwargs["additional_headers"]
-        assert headers["session-id"] == "shared-cache-lineage"
-        assert headers["x-client-request-id"] == "shared-cache-lineage"
-    await adapter.aclose()
-
-
-@pytest.mark.asyncio
-async def test_codex_websocket_exchange_keeps_canonical_debug_trace(
-    tmp_path: Path,
-) -> None:
-    websocket = _FakeCodexWebSocket(
-        [[_codex_completed_event("resp_1", [dict(_CODEX_FINAL_MESSAGE_ITEM)])]]
-    )
-    connector = _FakeCodexWebSocketConnector([websocket])
-    debug_store = DebugTraceStore(tmp_path, trace_limit=10)
-    adapter = OpenAIAdapter(
-        _subscription_config(),
-        _jwt_with_account("acct_openai"),
-        connection_mode=CODEX_RESPONSES_MODE,
-        codex_websocket_connect=connector,
-        debug_recorder=ProviderDebugRecorder(debug_store),
-    )
-    adapter.set_debug_context(
-        DebugContext(
-            run_id="run-ws",
-            agent_id="orchestrator",
-            session_id="sess-42",
-            provider_id="openai",
-            connection_id="openai:subscription",
-            model_id="gpt-5.6-terra",
-            streaming=True,
-            iteration_number=1,
-        )
-    )
-
-    await adapter.send(
-        SAMPLE_MESSAGES,
-        model_id="gpt-5.6-terra",
-        conversation_id="orchestrator:sess-42",
-    )
-
-    traces = debug_store.get_traces()
-    assert len(traces) == 1
-    trace = debug_store.get_trace(traces[0]["trace_id"])
-    assert trace["request"]["method"] == "WEBSOCKET"
-    assert trace["request"]["url"] == "wss://chatgpt.com/backend-api/codex/responses"
-    assert json.loads(trace["request"]["body"])["type"] == "response.create"
-    assert trace["request"]["headers"]["Authorization"] == "[REDACTED]"
-    assert trace["request"]["headers"]["chatgpt-account-id"] == "[REDACTED]"
-    assert "acct_openai" not in json.dumps(trace["request"]["headers"])
-    assert trace["response"]["status_code"] == 101
-    assert json.loads(trace["response"]["body"])["type"] == "response.completed"
-    await adapter.aclose()
-
-
-@pytest.mark.asyncio
-async def test_codex_websocket_clamps_cache_scope_headers_to_openai_limit() -> None:
-    websocket = _FakeCodexWebSocket(
-        [[_codex_completed_event("resp_1", [dict(_CODEX_FINAL_MESSAGE_ITEM)])]]
-    )
-    connector = _FakeCodexWebSocketConnector([websocket])
-    adapter = OpenAIAdapter(
-        _subscription_config(),
-        _jwt_with_account("acct_openai"),
-        connection_mode=CODEX_RESPONSES_MODE,
-        codex_websocket_connect=connector,
-    )
-    conversation_id = "orchestrator:" + ("session-" * 20)
-
-    await adapter.send(
-        SAMPLE_MESSAGES,
-        model_id="gpt-5.6-terra",
-        conversation_id=conversation_id,
-    )
-
-    _, connect_kwargs = connector.calls[0]
-    websocket_headers = connect_kwargs["additional_headers"]
-    assert websocket_headers["session-id"] == conversation_id[:64]
-    assert websocket_headers["x-client-request-id"] == conversation_id[:64]
-    await adapter.aclose()
-
-
-@respx.mock
-@pytest.mark.asyncio
-async def test_codex_websocket_failure_before_events_disables_route_and_falls_back_to_sse() -> None:
-    connector = _FakeCodexWebSocketConnector([OSError("upgrade unavailable")])
-    adapter = OpenAIAdapter(
-        _subscription_config(),
-        _jwt_with_account("acct_openai"),
-        connection_mode=CODEX_RESPONSES_MODE,
-        codex_websocket_connect=connector,
-    )
-    route = respx.post(OPENAI_SUBSCRIPTION_URL).mock(
-        side_effect=[
-            _codex_sse_response(
-                {
-                    "id": response_id,
-                    "status": "completed",
-                    "output": [dict(_CODEX_FINAL_MESSAGE_ITEM)],
-                }
-            )
-            for response_id in ("resp_sse_1", "resp_sse_2")
-        ]
-    )
-
-    for _ in range(2):
-        raw = await adapter.send(
-            SAMPLE_MESSAGES,
-            model_id="gpt-5.6-terra",
-            conversation_id="orchestrator:sess-42",
-        )
-        assert adapter.normalize_response(raw)["content"] == "Done"
-
-    assert len(connector.calls) == 1
-    assert route.call_count == 2
-    await adapter.aclose()
-
-
-@respx.mock
-@pytest.mark.asyncio
-async def test_codex_websocket_failure_after_event_disables_route_for_next_attempt() -> None:
-    websocket = _FakeCodexWebSocket(
-        [
-            [
-                {"type": "response.created", "response": {"id": "resp_started"}},
-                OSError("socket dropped"),
-            ]
-        ]
-    )
-    connector = _FakeCodexWebSocketConnector([websocket])
-    adapter = OpenAIAdapter(
-        _subscription_config(),
-        _jwt_with_account("acct_openai"),
-        connection_mode=CODEX_RESPONSES_MODE,
-        codex_websocket_connect=connector,
-    )
-    sse_route = respx.post(OPENAI_SUBSCRIPTION_URL).mock(
-        return_value=_codex_sse_response(
-            {
-                "id": "should_not_run",
-                "status": "completed",
-                "output": [dict(_CODEX_FINAL_MESSAGE_ITEM)],
-            }
-        )
-    )
-
-    with pytest.raises(NetworkError, match="socket dropped"):
-        await adapter.send(
-            SAMPLE_MESSAGES,
-            model_id="gpt-5.6-terra",
-            conversation_id="orchestrator:sess-42",
-        )
-
-    assert sse_route.call_count == 0
-    assert websocket.closed is True
-
-    raw = await adapter.send(
-        SAMPLE_MESSAGES,
-        model_id="gpt-5.6-terra",
-        conversation_id="orchestrator:sess-42",
-    )
-
-    assert adapter.normalize_response(raw)["content"] == "Done"
-    assert sse_route.call_count == 1
-    assert len(connector.calls) == 1
-    await adapter.aclose()
-
-
-@pytest.mark.asyncio
 async def test_codex_websocket_missing_continuation_reconnects_with_full_context() -> None:
     first_websocket = _FakeCodexWebSocket(
         [
-            [
-                _codex_completed_event(
-                    "resp_1",
-                    [dict(_CODEX_REASONING_ITEM), dict(_CODEX_TOOL_CALL_ITEM)],
-                )
-            ],
+            _tool_call_turn("resp_1"),
             [
                 {
                     "type": "error",
@@ -469,148 +269,178 @@ async def test_codex_websocket_missing_continuation_reconnects_with_full_context
             ],
         ]
     )
-    replacement_websocket = _FakeCodexWebSocket(
-        [[_codex_completed_event("resp_2", [dict(_CODEX_FINAL_MESSAGE_ITEM)])]]
-    )
+    replacement_websocket = _FakeCodexWebSocket([_final_turn("resp_2")])
     connector = _FakeCodexWebSocketConnector([first_websocket, replacement_websocket])
-    adapter = OpenAIAdapter(
-        _subscription_config(),
-        _jwt_with_account("acct_openai"),
-        connection_mode=CODEX_RESPONSES_MODE,
-        codex_websocket_connect=connector,
-    )
+    adapter = codex_adapter(codex_websocket_connect=connector)
 
-    first_raw = await adapter.send(
-        SAMPLE_MESSAGES,
-        model_id="gpt-5.6-terra",
-        conversation_id="orchestrator:sess-42",
-        tools=_CODEX_TOOLS,
-    )
-    first = adapter.normalize_response(first_raw)
-    second_raw = await adapter.send(
-        _messages_with_codex_tool_result(first),
-        model_id="gpt-5.6-terra",
-        conversation_id="orchestrator:sess-42",
-        tools=_CODEX_TOOLS,
-    )
+    first = await _send(adapter, tools=CODEX_TOOLS)
+    second = await _send(adapter, _messages_with_tool_result(first), tools=CODEX_TOOLS)
 
-    assert adapter.normalize_response(second_raw)["content"] == "Done"
+    assert second["content"] == "Done"
     assert len(connector.calls) == 2
     assert first_websocket.sent_payloads[1]["previous_response_id"] == "resp_1"
     replay = replacement_websocket.sent_payloads[0]
     assert "previous_response_id" not in replay
-    assert [item.get("type", item.get("role")) for item in replay["input"]] == [
-        "user",
-        "reasoning",
-        "function_call",
-        "function_call_output",
-    ]
+    assert _input_kinds(replay) == _FULL_CONTEXT_INPUT_KINDS
     assert first_websocket.closed is True
     await adapter.aclose()
+
+
+# ---------------------------------------------------------------------------
+# Route isolation
+# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
-    ("first_conversation", "second_conversation", "first_model", "second_model"),
+    ("second_conversation", "second_model", "accounts"),
     [
-        ("orchestrator:sess-1", "orchestrator:sess-2", "gpt-5.6-terra", "gpt-5.6-terra"),
-        ("orchestrator:sess-1", "orchestrator:sess-1", "gpt-5.6-terra", "gpt-5.6-sol"),
+        pytest.param(
+            "orchestrator:fork", MODEL_ID, ("acct_one", "acct_one"), id="conversation-change"
+        ),
+        pytest.param(CONVERSATION_ID, "gpt-5.6-sol", ("acct_one", "acct_one"), id="model-change"),
+        pytest.param(CONVERSATION_ID, MODEL_ID, ("acct_one", "acct_two"), id="account-change"),
     ],
 )
 @pytest.mark.asyncio
-async def test_codex_websocket_never_chains_across_conversation_or_model_change(
-    first_conversation: str,
-    second_conversation: str,
-    first_model: str,
-    second_model: str,
+async def test_codex_websocket_never_chains_across_a_route_change(
+    second_conversation: str, second_model: str, accounts: tuple[str, str]
 ) -> None:
-    first_websocket = _FakeCodexWebSocket(
-        [
-            [
-                _codex_completed_event(
-                    "resp_1",
-                    [dict(_CODEX_REASONING_ITEM), dict(_CODEX_TOOL_CALL_ITEM)],
-                )
-            ]
-        ]
-    )
-    second_websocket = _FakeCodexWebSocket(
-        [[_codex_completed_event("resp_2", [dict(_CODEX_FINAL_MESSAGE_ITEM)])]]
-    )
+    """Conversation, Model and ChatGPT Account isolate continuation; cache affinity does not."""
+
+    first_websocket = _FakeCodexWebSocket([_tool_call_turn("resp_1")])
+    second_websocket = _FakeCodexWebSocket([_final_turn("resp_2")])
     connector = _FakeCodexWebSocketConnector([first_websocket, second_websocket])
-    adapter = OpenAIAdapter(
-        _subscription_config(),
-        _jwt_with_account("acct_openai"),
-        connection_mode=CODEX_RESPONSES_MODE,
+    adapter = codex_adapter(
+        RotatingTokenGetter([_jwt_with_account(account) for account in accounts]),
         codex_websocket_connect=connector,
     )
+    shared: dict[str, Any] = {
+        "prompt_cache_affinity_id": "shared-cache-lineage",
+        "tools": CODEX_TOOLS,
+    }
 
-    first_raw = await adapter.send(
-        SAMPLE_MESSAGES,
-        model_id=first_model,
-        conversation_id=first_conversation,
-        tools=_CODEX_TOOLS,
-    )
-    first = adapter.normalize_response(first_raw)
-    await adapter.send(
-        _messages_with_codex_tool_result(first),
+    first = await _send(adapter, **shared)
+    await _send(
+        adapter,
+        _messages_with_tool_result(first),
         model_id=second_model,
         conversation_id=second_conversation,
-        tools=_CODEX_TOOLS,
+        **shared,
     )
 
     assert len(connector.calls) == 2
+    assert first_websocket.closed is True
     second_payload = second_websocket.sent_payloads[0]
     assert "previous_response_id" not in second_payload
-    assert len(second_payload["input"]) == 4
-    assert first_websocket.closed is True
+    assert _input_kinds(second_payload) == _FULL_CONTEXT_INPUT_KINDS
+    assert connector.headers("chatgpt-account-id") == list(accounts)
+    assert connector.headers("session-id") == ["shared-cache-lineage"] * 2
+    assert connector.headers("x-client-request-id") == ["shared-cache-lineage"] * 2
+    await adapter.aclose()
+
+
+# ---------------------------------------------------------------------------
+# Transport failure and SSE fallback
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_codex_websocket_failure_before_events_disables_route_and_falls_back_to_sse() -> None:
+    connector = _FakeCodexWebSocketConnector([OSError("upgrade unavailable")])
+    adapter = codex_adapter(codex_websocket_connect=connector)
+
+    with respx.mock:
+        route = respx.post(OPENAI_SUBSCRIPTION_URL).mock(
+            side_effect=[
+                _codex_sse_response(
+                    {
+                        "id": response_id,
+                        "status": "completed",
+                        "output": [dict(_FINAL_MESSAGE_ITEM)],
+                    }
+                )
+                for response_id in ("resp_sse_1", "resp_sse_2")
+            ]
+        )
+        for _ in range(2):
+            assert (await _send(adapter))["content"] == "Done"
+
+    assert len(connector.calls) == 1
+    assert route.call_count == 2
     await adapter.aclose()
 
 
 @pytest.mark.asyncio
-async def test_codex_websocket_never_chains_across_account_change() -> None:
-    first_websocket = _FakeCodexWebSocket(
+async def test_codex_websocket_failure_after_event_propagates_and_next_attempt_uses_sse() -> None:
+    """An in-flight exchange is never replayed internally; Chat's next attempt uses SSE."""
+
+    websocket = _FakeCodexWebSocket(
         [
             [
-                _codex_completed_event(
-                    "resp_1",
-                    [dict(_CODEX_REASONING_ITEM), dict(_CODEX_TOOL_CALL_ITEM)],
-                )
+                {"type": "response.created", "response": {"id": "resp_started"}},
+                OSError("socket dropped"),
             ]
         ]
     )
-    second_websocket = _FakeCodexWebSocket(
-        [[_codex_completed_event("resp_2", [dict(_CODEX_FINAL_MESSAGE_ITEM)])]]
-    )
-    connector = _FakeCodexWebSocketConnector([first_websocket, second_websocket])
-    token_getter = _RotatingTokenGetter(
-        [_jwt_with_account("acct_one"), _jwt_with_account("acct_two")]
-    )
-    adapter = OpenAIAdapter(
-        _subscription_config(),
-        token_getter,
-        connection_mode=CODEX_RESPONSES_MODE,
+    connector = _FakeCodexWebSocketConnector([websocket])
+    adapter = codex_adapter(codex_websocket_connect=connector)
+
+    with respx.mock:
+        sse_route = respx.post(OPENAI_SUBSCRIPTION_URL).mock(
+            return_value=_codex_sse_response(
+                {"id": "resp_sse", "status": "completed", "output": [dict(_FINAL_MESSAGE_ITEM)]}
+            )
+        )
+        with pytest.raises(NetworkError):
+            await _send(adapter)
+
+        assert sse_route.call_count == 0
+        assert websocket.closed is True
+
+        assert (await _send(adapter))["content"] == "Done"
+
+    assert sse_route.call_count == 1
+    assert len(connector.calls) == 1
+    await adapter.aclose()
+
+
+# ---------------------------------------------------------------------------
+# Debug tracing
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_codex_websocket_exchange_keeps_canonical_debug_trace(tmp_path: Path) -> None:
+    connector = _FakeCodexWebSocketConnector([_FakeCodexWebSocket([_final_turn("resp_1")])])
+    debug_store = DebugTraceStore(tmp_path, trace_limit=10)
+    adapter = codex_adapter(
         codex_websocket_connect=connector,
+        debug_recorder=ProviderDebugRecorder(debug_store),
+    )
+    adapter.set_debug_context(
+        DebugContext(
+            run_id="run-ws",
+            agent_id="orchestrator",
+            session_id="sess-42",
+            provider_id="openai",
+            connection_id="openai:subscription",
+            model_id=MODEL_ID,
+            streaming=True,
+            iteration_number=1,
+        )
     )
 
-    first_raw = await adapter.send(
-        SAMPLE_MESSAGES,
-        model_id="gpt-5.6-terra",
-        conversation_id="orchestrator:sess-1",
-        tools=_CODEX_TOOLS,
-    )
-    first = adapter.normalize_response(first_raw)
-    await adapter.send(
-        _messages_with_codex_tool_result(first),
-        model_id="gpt-5.6-terra",
-        conversation_id="orchestrator:sess-1",
-        tools=_CODEX_TOOLS,
-    )
+    await _send(adapter)
 
-    assert len(connector.calls) == 2
-    assert connector.calls[0][1]["additional_headers"]["chatgpt-account-id"] == "acct_one"
-    assert connector.calls[1][1]["additional_headers"]["chatgpt-account-id"] == "acct_two"
-    second_payload = second_websocket.sent_payloads[0]
-    assert "previous_response_id" not in second_payload
-    assert len(second_payload["input"]) == 4
-    assert first_websocket.closed is True
+    traces = debug_store.get_traces()
+    assert len(traces) == 1
+    trace = debug_store.get_trace(traces[0]["trace_id"])
+    assert trace["request"]["method"] == "WEBSOCKET"
+    assert trace["request"]["url"] == "wss://chatgpt.com/backend-api/codex/responses"
+    assert json.loads(trace["request"]["body"])["type"] == "response.create"
+    assert trace["request"]["headers"]["Authorization"] == "[REDACTED]"
+    assert trace["request"]["headers"]["chatgpt-account-id"] == "[REDACTED]"
+    assert ACCOUNT_ID not in json.dumps(trace["request"]["headers"])
+    assert trace["response"]["status_code"] == 101
+    assert json.loads(trace["response"]["body"])["type"] == "response.completed"
     await adapter.aclose()
