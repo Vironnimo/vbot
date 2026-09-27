@@ -22,7 +22,9 @@ Progress = Callable[[Status, str], None]
 class UpdateResult(CommandResult):
     """Update outcome with an explicit, observed restart state."""
 
-    restart_state: Literal["completed", "pending", "skipped", "not_applicable", "failed"] = "failed"
+    restart_state: Literal[
+        "completed", "pending", "skipped", "unchanged", "not_applicable", "failed"
+    ] = "failed"
 
 
 ResolveInstance = Callable[..., ServerInstance]
@@ -64,3 +66,10 @@ class _SnapshotStep(_Step):
     """The pre-update data snapshot step; ``snapshot_id`` names the snapshot it took."""
 
     snapshot_id: str | None = None
+
+
+@dataclass(frozen=True)
+class _UpstreamStep(_Step):
+    """A fetched branch upstream; ``behind`` counts the commits a fast-forward adds."""
+
+    behind: int = 0

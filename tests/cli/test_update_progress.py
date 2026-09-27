@@ -6,7 +6,7 @@ from cli import update_management
 from cli._output import print_update_command_result
 from cli._update_types import UpdateResult, _Step
 from cli.server_management import CommandResult, WebUIProbeResult
-from tests.cli.update_management_test_support import _instance, _ok, _write_state
+from tests.cli.update_management_test_support import _instance, _ok, _upstream, _write_state
 
 
 @pytest.mark.parametrize("mode", ["completed", "pending", "skipped", "not_applicable", "failed"])
@@ -25,6 +25,8 @@ def test_update_restart_state_and_progress(tmp_path, monkeypatch, mode):
             return _ok("samesha")
         if command[:2] == ["git", "symbolic-ref"]:
             return _ok("main")
+        if command[:2] == ["git", "rev-list"]:
+            return _upstream(behind=1)
         return _ok()
 
     def snapshot(instance):
@@ -61,6 +63,7 @@ def test_update_restart_state_and_progress(tmp_path, monkeypatch, mode):
         ("completed", "[OK]"),
         ("pending", "[WARN]"),
         ("skipped", "[WARN]"),
+        ("unchanged", "[OK]"),
         ("not_applicable", "[OK]"),
         ("failed", "[ERROR]"),
     ],
@@ -105,10 +108,17 @@ def test_snapshot_failure_is_reported_before_any_checkout_mutation(tmp_path):
     (tmp_path / ".git").mkdir()
     _write_state(tmp_path)
     progress = []
+    read_only = {
+        "symbolic-ref": _ok("main"),
+        "rev-parse": _ok("samesha"),
+        "status": _ok(""),
+        "fetch": _ok(""),
+        "rev-list": _upstream(behind=1),
+    }
 
     def runner(command, cwd):
-        assert command[:2] in (["git", "symbolic-ref"], ["git", "rev-parse"])
-        return _ok("main" if command[1] == "symbolic-ref" else "samesha")
+        assert command[0] == "git" and command[1] in read_only, command
+        return read_only[command[1]]
 
     result = update_management.run_update(
         _instance(),

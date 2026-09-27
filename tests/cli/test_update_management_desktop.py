@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 import cli.update_management as update_management
+from cli._update_types import UpdateResult
 from cli.update_management import (
     CommandRun,
     _running_process_id,
@@ -17,6 +18,7 @@ from tests.cli.update_management_test_support import (
     _instance,
     _ok,
     _recording_restart,
+    _upstream,
     _write_state,
 )
 
@@ -41,7 +43,9 @@ def test_desktop_client_update_keeps_exact_shape_and_never_starts_server(
             return _ok(next(revisions))
         if command[:2] == ["git", "status"]:
             return _ok("")
-        if command[:2] == ["git", "pull"]:
+        if command[:2] == ["git", "rev-list"]:
+            return _upstream(behind=1)
+        if command[:2] == ["git", "merge"]:
             (tmp_path / "pyproject.toml").write_text("after", encoding="utf-8")
         return _ok()
 
@@ -120,7 +124,7 @@ def test_windows_update_refuses_running_owned_desktop_before_changes(
     assert f"resume update: {expected_recovery}" in result.message
     assert manifest.read_bytes() == manifest_before
     assert not runner.ran("git", "status")
-    assert not runner.ran("git", "pull")
+    assert not runner.ran("git", "merge")
     assert not runner.ran("pip")
     assert events == []
 
@@ -168,7 +172,11 @@ def test_windows_update_rechecks_desktop_immediately_before_pip(
             return _ok("")
         if command[:2] == ["git", "rev-parse"]:
             return _ok(next(revisions))
-        if command[:2] == ["git", "pull"]:
+        if command[:2] == ["git", "fetch"]:
+            return _ok("")
+        if command[:2] == ["git", "rev-list"]:
+            return _upstream(behind=1)
+        if command[:2] == ["git", "merge"]:
             (tmp_path / "pyproject.toml").write_text("after", encoding="utf-8")
             return _ok("")
         raise AssertionError(f"dependency step continued while Desktop was running: {command}")
@@ -183,7 +191,7 @@ def test_windows_update_rechecks_desktop_immediately_before_pip(
     )
 
     assert not result.ok
-    assert runner.ran("git", "pull")
+    assert runner.ran("git", "merge")
     assert not runner.ran("pip")
     assert manifest.read_bytes() == manifest_before
 
@@ -235,7 +243,7 @@ def test_windows_update_refuses_active_package_launcher_before_changes(
     assert f"resume update: {expected_recovery}" in result.message
     assert manifest.read_bytes() == manifest_before
     assert not runner.ran("git", "status")
-    assert not runner.ran("git", "pull")
+    assert not runner.ran("git", "merge")
     assert not runner.ran("pip")
 
 
@@ -267,8 +275,10 @@ def test_windows_update_migrates_installer_command_shim_to_python_module(
             return _ok("samesha")
         if command[:2] == ["git", "status"]:
             return _ok("")
-        if command[:2] == ["git", "pull"]:
+        if command[:2] == ["git", "fetch"]:
             return _ok("")
+        if command[:2] == ["git", "rev-list"]:
+            return _upstream()
         if command[1:] == ["-m", "cli.search_runtime"]:
             return _ok("")
         raise AssertionError(f"unexpected command: {command}")
@@ -281,7 +291,9 @@ def test_windows_update_migrates_installer_command_shim_to_python_module(
         platform_name="nt",
     )
 
+    assert isinstance(result, UpdateResult)
     assert result.ok, result.message
+    assert result.restart_state == "unchanged"
     assert shim.read_bytes() == (
         f'@echo off\r\n"{python_executable}" -P -m cli.main %*\r\n'.encode()
     )
@@ -353,7 +365,9 @@ def test_windows_desktop_update_refreshes_shortcut_to_gui_launcher(tmp_path: Pat
             return _ok(next(revisions))
         if command[:2] == ["git", "status"]:
             return _ok("")
-        if command[:2] == ["git", "pull"]:
+        if command[:2] == ["git", "rev-list"]:
+            return _upstream(behind=1)
+        if command[:2] == ["git", "merge"]:
             (tmp_path / "pyproject.toml").write_text("after", encoding="utf-8")
         return _ok("")
 
