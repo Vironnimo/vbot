@@ -1,46 +1,54 @@
-"""Tests for calendar RPC handlers."""
+"""Calendar RPCs: the window projection, event mutations and event actions."""
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
+from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import Mock
 
 import pytest
 
+from core.automation.cron import CronOccurrence
 from core.calendar import CalendarService
-from server.rpc.methods import dispatch_rpc
+from server.events import ServerEventBus
+from tests.server.rpc_test_support import resource_changes, rpc_error, rpc_result
+
+JsonObject = dict[str, Any]
+_CALENDAR_CHANGED = {"kind": "calendar"}
+_WEEKLY_STANDUP = {
+    "title": "Standup",
+    "start": "2026-08-31T09:00:00",
+    "rrule": {"freq": "weekly", "by_weekday": ["mo"]},
+}
 
 
 @pytest.fixture()
-def state(tmp_path: Any) -> Mock:
-    runtime = Mock()
-    runtime.calendar_service = CalendarService(tmp_path, tz="Europe/Berlin")
-    runtime.cron_service = Mock()
-    runtime.cron_service.project_occurrences.return_value = []
-    return Mock(runtime=runtime)
+def state(tmp_path: Path) -> SimpleNamespace:
+    cron_service = Mock()
+    cron_service.project_occurrences.return_value = []
+    return SimpleNamespace(
+        runtime=SimpleNamespace(
+            calendar_service=CalendarService(tmp_path, tz="Europe/Berlin"),
+            cron_service=cron_service,
+        ),
+        event_bus=ServerEventBus(),
+        agent_delete_lock=asyncio.Lock(),
+    )
+
+
+def _configure_actions(state: SimpleNamespace, *, session_exists: bool) -> CalendarService:
+    service: CalendarService = state.runtime.calendar_service
+    service.actions.configure(Mock(), Mock(), Mock(exists=Mock(return_value=session_exists)))
+    return service
 
 
 @pytest.mark.asyncio
-async def test_calendar_window_returns_layers(state: Mock) -> None:
+async def test_calendar_window_returns_event_and_cron_layers(state: SimpleNamespace) -> None:
     service = state.runtime.calendar_service
     service.create_event(title="Zahnarzt", start="2026-09-03T15:00:00+02:00")
-    response = await dispatch_rpc(
-        state, {"method": "calendar.window", "params": {"from": "2026-09-01", "to": "2026-09-30"}}
-    )
-    assert response["ok"] is True
-    data = response["result"]
-    assert len(data["occurrences"]) == 1
-    assert data["occurrences"][0]["title"] == "Zahnarzt"
-    assert len(data["events"]) == 1
-    assert data["cron"] == []
-    assert data["system_timezone"] == service.system_timezone_name()
-
-
-@pytest.mark.asyncio
-async def test_calendar_window_includes_cron_layer(state: Mock) -> None:
-    from core.automation.cron import CronOccurrence
-
     state.runtime.cron_service.project_occurrences.return_value = [
         CronOccurrence(
             job_id="job-1",
@@ -49,10 +57,15 @@ async def test_calendar_window_includes_cron_layer(state: Mock) -> None:
             schedule_type="cron",
         )
     ]
-    response = await dispatch_rpc(
-        state, {"method": "calendar.window", "params": {"from": "2026-09-01", "to": "2026-09-30"}}
+
+    window = await rpc_result(
+        state, "calendar.window", **{"from": "2026-09-01", "to": "2026-09-30"}
     )
-    assert response["result"]["cron"] == [
+
+    [occurrence] = window["occurrences"]
+    assert occurrence["title"] == "Zahnarzt"
+    assert len(window["events"]) == 1
+    assert window["cron"] == [
         {
             "job_id": "job-1",
             "name": "Check mail",
@@ -60,227 +73,134 @@ async def test_calendar_window_includes_cron_layer(state: Mock) -> None:
             "schedule_type": "cron",
         }
     ]
+    assert window["system_timezone"] == service.system_timezone_name()
 
 
 @pytest.mark.asyncio
-async def test_calendar_create_update_delete_roundtrip(state: Mock) -> None:
-    created = await dispatch_rpc(
-        state,
-        {
-            "method": "calendar.create",
-            "params": {
-                "title": "Standup",
-                "start": "2026-08-31T09:00:00",
-                "rrule": {"freq": "weekly", "by_weekday": ["mo"]},
-            },
-        },
-    )
-    assert created["result"]["event"]["recurring"] is True
-    event_id = created["result"]["event"]["id"]
+async def test_calendar_event_create_update_delete_roundtrip(state: SimpleNamespace) -> None:
+    created = await rpc_result(state, "calendar.create", **_WEEKLY_STANDUP)
+    event_id = created["event"]["id"]
+    updated = await rpc_result(state, "calendar.update", id=event_id, title="Daily")
+    deleted = await rpc_result(state, "calendar.delete", id=event_id)
 
-    updated = await dispatch_rpc(
-        state, {"method": "calendar.update", "params": {"id": event_id, "title": "Daily"}}
-    )
-    assert updated["result"]["event"]["title"] == "Daily"
-
-    deleted = await dispatch_rpc(state, {"method": "calendar.delete", "params": {"id": event_id}})
-    assert deleted["result"]["deleted"] is True
-
+    assert created["event"]["recurring"] is True
+    assert updated["event"]["title"] == "Daily"
+    assert deleted == {"id": event_id, "deleted": True}
     assert state.runtime.calendar_service.list_events() == []
+    assert resource_changes(state) == [_CALENDAR_CHANGED] * 3
 
 
 @pytest.mark.asyncio
-async def test_calendar_create_rejects_invalid_rrule(state: Mock) -> None:
-    response = await dispatch_rpc(
-        state,
-        {
-            "method": "calendar.create",
-            "params": {"title": "X", "start": "2026-09-03", "rrule": {"freq": "hourly"}},
-        },
+async def test_calendar_add_exdate_excludes_one_occurrence_additively(
+    state: SimpleNamespace,
+) -> None:
+    created = await rpc_result(state, "calendar.create", **_WEEKLY_STANDUP)
+    event_id = created["event"]["id"]
+
+    first = await rpc_result(
+        state, "calendar.add_exdate", id=event_id, occurrence_start="2026-09-14T09:00:00"
     )
-    assert response["error"]["code"] == "domain_error"
-    assert "rrule.freq" in response["error"]["message"]
+    # A second exclusion keeps the first rather than replacing it, so clients need
+    # no read-modify-write.
+    second = await rpc_result(
+        state, "calendar.add_exdate", id=event_id, occurrence_start="2026-09-21T09:00:00"
+    )
+
+    assert first["event"]["exdates"] == ["2026-09-14T09:00:00"]
+    assert second["event"]["exdates"] == ["2026-09-14T09:00:00", "2026-09-21T09:00:00"]
 
 
 @pytest.mark.asyncio
-async def test_calendar_window_requires_bounds(state: Mock) -> None:
-    response = await dispatch_rpc(state, {"method": "calendar.window", "params": {}})
-    assert response["error"]["code"] == "invalid_request"
+async def test_calendar_actions_roundtrip(state: SimpleNamespace) -> None:
+    service = _configure_actions(state, session_exists=True)
+    event = await rpc_result(state, "calendar.create", title="Meeting", start="2026-09-10T15:00")
 
-
-@pytest.mark.asyncio
-async def test_calendar_window_rejects_unknown_fields(state: Mock) -> None:
-    response = await dispatch_rpc(
+    created = await rpc_result(
         state,
-        {
-            "method": "calendar.window",
-            "params": {"from": "2026-09-01", "to": "2026-09-02", "bogus": 1},
-        },
+        "calendar.add_action",
+        id=event["event"]["id"],
+        when="start - 1h",
+        prompt="prepare",
+        target="main",
+        session="chosen",
     )
-    assert response["error"]["code"] == "invalid_request"
-
-
-@pytest.mark.asyncio
-async def test_calendar_update_missing_event_maps_domain_error(state: Mock) -> None:
-    response = await dispatch_rpc(
-        state, {"method": "calendar.update", "params": {"id": "missing", "title": "X"}}
+    action_id = created["action"]["id"]
+    updated = await rpc_result(
+        state, "calendar.update_action", id=action_id, session=None, when="end"
     )
-    assert response["error"]["code"] == "domain_error"
-    assert "not found" in response["error"]["message"]
-
-
-@pytest.mark.asyncio
-async def test_calendar_delete_rejects_unknown_fields(state: Mock) -> None:
-    response = await dispatch_rpc(
-        state, {"method": "calendar.delete", "params": {"id": "x", "title": "Y"}}
+    window = await rpc_result(
+        state, "calendar.window", **{"from": "2026-09-10", "to": "2026-09-10"}
     )
-    assert response["error"]["code"] == "invalid_request"
+    deleted = await rpc_result(state, "calendar.delete_action", id=action_id)
 
-
-@pytest.mark.asyncio
-async def test_calendar_add_exdate_excludes_one_occurrence_additively(state: Mock) -> None:
-    created = await dispatch_rpc(
-        state,
-        {
-            "method": "calendar.create",
-            "params": {
-                "title": "Standup",
-                "start": "2026-08-31T09:00:00",
-                "rrule": {"freq": "weekly", "by_weekday": ["mo"]},
-            },
-        },
-    )
-    event_id = created["result"]["event"]["id"]
-
-    first = await dispatch_rpc(
-        state,
-        {
-            "method": "calendar.add_exdate",
-            "params": {"id": event_id, "occurrence_start": "2026-09-14T09:00:00"},
-        },
-    )
-    assert first["ok"] is True
-    assert first["result"]["event"]["exdates"] == ["2026-09-14T09:00:00"]
-
-    # Additive semantics: a second exclusion keeps the first rather than
-    # replacing it (no read-modify-write race on the client side).
-    second = await dispatch_rpc(
-        state,
-        {
-            "method": "calendar.add_exdate",
-            "params": {"id": event_id, "occurrence_start": "2026-09-21T09:00:00"},
-        },
-    )
-    assert second["result"]["event"]["exdates"] == [
-        "2026-09-14T09:00:00",
-        "2026-09-21T09:00:00",
-    ]
-
-
-@pytest.mark.asyncio
-async def test_calendar_add_exdate_rejects_single_event(state: Mock) -> None:
-    created = await dispatch_rpc(
-        state,
-        {"method": "calendar.create", "params": {"title": "X", "start": "2026-09-10T15:00:00"}},
-    )
-    event_id = created["result"]["event"]["id"]
-    response = await dispatch_rpc(
-        state,
-        {
-            "method": "calendar.add_exdate",
-            "params": {"id": event_id, "occurrence_start": "2026-09-10T15:00:00"},
-        },
-    )
-    assert response["error"]["code"] == "domain_error"
-
-
-@pytest.mark.asyncio
-async def test_calendar_add_exdate_rejects_unknown_fields(state: Mock) -> None:
-    response = await dispatch_rpc(
-        state,
-        {
-            "method": "calendar.add_exdate",
-            "params": {"id": "x", "occurrence_start": "2026-09-14T09:00:00", "bogus": 1},
-        },
-    )
-    assert response["error"]["code"] == "invalid_request"
-
-
-@pytest.mark.asyncio
-async def test_calendar_actions_roundtrip(state: Mock) -> None:
-    import asyncio
-
-    state.agent_delete_lock = asyncio.Lock()
-    service = state.runtime.calendar_service
-    service.actions.configure(Mock(), Mock(), Mock(exists=Mock(return_value=True)))
-    event = service.create_event(title="Meeting", start="2026-09-10T15:00")
-    created = await dispatch_rpc(
-        state,
-        {
-            "method": "calendar.add_action",
-            "params": {
-                "id": event.id,
-                "when": "start - 1h",
-                "prompt": "prepare",
-                "target": "main",
-                "session": "chosen",
-            },
-        },
-    )
-    assert created["ok"] is True
-    action_id = created["result"]["action"]["id"]
-    updated = await dispatch_rpc(
-        state,
-        {
-            "method": "calendar.update_action",
-            "params": {
-                "id": action_id,
-                "session": None,
-                "when": "end",
-            },
-        },
-    )
-    assert updated["result"]["action"]["session"] is None
-    assert updated["result"]["action"]["prompt"] == "prepare"
-    listed = await dispatch_rpc(
-        state,
-        {
-            "method": "calendar.window",
-            "params": {
-                "from": "2026-09-10",
-                "to": "2026-09-10",
-            },
-        },
-    )
-    assert listed["result"]["actions"][0]["id"] == action_id
-    assert listed["result"]["executions"][0]["action_id"] == action_id
-    deleted = await dispatch_rpc(
-        state, {"method": "calendar.delete_action", "params": {"id": action_id}}
-    )
-    assert deleted["result"]["deleted"] is True
+    assert event["event"]["recurring"] is False
+    assert updated["action"]["session"] is None
+    assert updated["action"]["prompt"] == "prepare"
+    assert window["actions"][0]["id"] == action_id
+    assert window["executions"][0]["action_id"] == action_id
+    assert deleted == {"id": action_id, "deleted": True}
     assert service.actions.list_actions() == []
 
 
 @pytest.mark.asyncio
-async def test_calendar_action_rejects_session_of_another_target(state: Mock) -> None:
-    import asyncio
-
-    state.agent_delete_lock = asyncio.Lock()
-    service = state.runtime.calendar_service
-    service.actions.configure(Mock(), Mock(), Mock(exists=Mock(return_value=False)))
-    event = service.create_event(title="Meeting", start="2026-09-10T15:00")
-    result = await dispatch_rpc(
-        state,
-        {
-            "method": "calendar.add_action",
-            "params": {
-                "id": event.id,
+@pytest.mark.parametrize(
+    ("method", "params", "code", "named"),
+    [
+        (
+            "calendar.create",
+            {"title": "X", "start": "2026-09-03", "rrule": {"freq": "hourly"}},
+            "domain_error",
+            "rrule.freq",
+        ),
+        ("calendar.window", {}, "invalid_request", "from"),
+        (
+            "calendar.window",
+            {"from": "2026-09-01", "to": "2026-09-02", "bogus": 1},
+            "invalid_request",
+            "bogus",
+        ),
+        ("calendar.update", {"id": "missing", "title": "X"}, "domain_error", "not found"),
+        ("calendar.delete", {"id": "{single}", "title": "Y"}, "invalid_request", "title"),
+        # Only a recurring event has occurrences to exclude.
+        (
+            "calendar.add_exdate",
+            {"id": "{single}", "occurrence_start": "2026-09-10T15:00:00"},
+            "domain_error",
+            "",
+        ),
+        (
+            "calendar.add_exdate",
+            {"id": "{single}", "occurrence_start": "2026-09-14T09:00:00", "bogus": 1},
+            "invalid_request",
+            "bogus",
+        ),
+        # An action's Session must belong to its target.
+        (
+            "calendar.add_action",
+            {
+                "id": "{single}",
                 "when": "start",
                 "prompt": "prepare",
                 "target": "main",
                 "session": "other",
             },
-        },
-    )
-    assert result["error"]["code"] == "domain_error"
+            "domain_error",
+            "",
+        ),
+    ],
+)
+async def test_calendar_refusals_change_nothing(
+    state: SimpleNamespace, method: str, params: JsonObject, code: str, named: str
+) -> None:
+    service = _configure_actions(state, session_exists=False)
+    single = service.create_event(title="X", start="2026-09-10T15:00:00")
+    before = [event.to_dict() for event in service.list_events()]
+    params = {key: single.id if value == "{single}" else value for key, value in params.items()}
+
+    error = await rpc_error(state, method, **params)
+
+    assert error["code"] == code
+    assert named in error["message"]
+    assert [event.to_dict() for event in service.list_events()] == before
     assert service.actions.list_actions() == []
+    assert resource_changes(state) == []

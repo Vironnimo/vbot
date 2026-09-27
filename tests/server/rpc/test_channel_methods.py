@@ -1,102 +1,31 @@
-"""Tests for channel RPC handlers and session channel-linking RPCs."""
+"""Channel RPCs: configuration, managed credentials, status, access and WhatsApp pairing.
+
+Linking a Session to a Channel is a Session RPC (``test_session_methods.py``).
+"""
 
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock
+from typing import Any
+from unittest.mock import AsyncMock, Mock, call
 
 import pytest
 
 from core.channels import ChannelConfig, ChannelConfigError, DeniedChatFacts
-from core.sessions import SessionAddress
-from core.settings.normalizers import normalize_compaction_settings
 from server.events import ServerEventBus
-from server.rpc.methods import dispatch_rpc
+from tests.server.rpc_test_support import resource_changes, rpc_error, rpc_result
 
-
-@pytest.mark.asyncio
-async def test_slack_credentials_rollback_together_when_creation_fails() -> None:
-    service = _channel_service_mock()
-    service.create_channel.side_effect = ChannelConfigError("cannot create")
-    state = _state(channel_service=service)
-    state.runtime.storage.credentials["UNRELATED"] = "keep"
-    response = await dispatch_rpc(
-        state,
-        {
-            "method": "channel.create",
-            "params": {
-                "id": "slack",
-                "platform": "slack",
-                "agent_id": "assistant",
-                "token": "private-bot-token",
-                "app_token": "private-app-token",
-            },
-        },
-    )
-    assert not response["ok"]
-    assert state.runtime.storage.credentials == {"UNRELATED": "keep"}
-    assert "private" not in str(response)
-
-
-@pytest.mark.asyncio
-async def test_slack_requires_distinct_credential_keys_before_writing() -> None:
-    state = _state()
-    response = await dispatch_rpc(
-        state,
-        {
-            "method": "channel.create",
-            "params": {
-                "id": "slack",
-                "platform": "slack",
-                "agent_id": "assistant",
-                "token_env_var": "SAME",
-                "app_token_env_var": "SAME",
-            },
-        },
-    )
-    assert not response["ok"]
-    state.runtime.channel_service.create_channel.assert_not_called()
-    assert not state.runtime.storage.credentials
-
-
-@pytest.mark.asyncio
-async def test_whatsapp_creation_needs_no_token_and_pairing_uses_dedicated_rpc() -> None:
-    service = _channel_service_mock()
-    service.pair_whatsapp = AsyncMock(return_value={"state": "pairing", "qr_image": "private-qr"})
-    state = _state(channel_service=service)
-    response = await dispatch_rpc(
-        state,
-        {
-            "method": "channel.create",
-            "params": {
-                "id": "wa",
-                "platform": "whatsapp",
-                "agent_id": "assistant",
-                "allowed_chat_ids": ["self"],
-                "enabled": False,
-            },
-        },
-    )
-    assert response["ok"]
-    assert response["result"]["token_env_var"] == ""
-    assert not state.runtime.storage.credentials
-    response = await dispatch_rpc(
-        state, {"method": "channel.whatsapp.pair", "params": {"id": "wa", "reset": True}}
-    )
-    assert response["ok"]
-    service.pair_whatsapp.assert_awaited_once_with("wa", reset=True)
-
-
-class _NullAsyncContext:
-    """Stand-in for the per-session write lock in mocked chat-session managers."""
-
-    async def __aenter__(self) -> _NullAsyncContext:
-        return self
-
-    async def __aexit__(self, *exc_info: object) -> None:
-        return None
+JsonObject = dict[str, Any]
+_CHANNELS_CHANGED = {"kind": "channels"}
+_TOKEN_KEY = "TELEGRAM_BOT_TOKEN_TG_ASSISTANT"
+_MANAGED_KEY = "VBOT_CHANNEL_TOKEN__74672D6D61696E"  # managed key of the id "tg-main"
+_TELEGRAM = {
+    "id": "tg-assistant",
+    "platform": "telegram",
+    "agent_id": "assistant",
+    "token_env_var": _TOKEN_KEY,
+}
 
 
 class _CredentialStorage:
@@ -112,112 +41,408 @@ class _CredentialStorage:
     def remove_data_dir_credential(self, key: str) -> bool:
         return self.credentials.pop(key, None) is not None
 
-    def load_compaction_settings(self) -> dict[str, object]:
-        return normalize_compaction_settings(None)
-
 
 def _channel_config(
-    *,
-    channel_id: str = "tg-assistant",
-    enabled: bool = True,
-    observe_unaddressed: bool = False,
+    *, channel_id: str = "tg-assistant", enabled: bool = True, **changes: Any
 ) -> ChannelConfig:
-    return ChannelConfig(
-        id=channel_id,
-        platform="telegram",
-        agent_id="assistant",
-        dm_scope="per_conversation",
-        allowed_chat_ids=[],
-        token_env_var="TELEGRAM_BOT_TOKEN_TG_ASSISTANT",
-        enabled=enabled,
-        observe_unaddressed=observe_unaddressed,
-    )
+    fields: JsonObject = {
+        "id": channel_id,
+        "platform": "telegram",
+        "agent_id": "assistant",
+        "dm_scope": "per_conversation",
+        "allowed_chat_ids": [],
+        "token_env_var": _TOKEN_KEY,
+        "enabled": enabled,
+    }
+    return ChannelConfig(**{**fields, **changes})
 
 
-def _channel_service_mock() -> Mock:
+def _channel_service(*configs: ChannelConfig) -> Mock:
     """A ChannelService double whose config changes are awaitable like the real ones."""
     service = Mock()
-    service.create_channel = AsyncMock()
-    service.update_channel = AsyncMock()
-    service.delete_channel = AsyncMock()
-    service.enable_channel = AsyncMock()
-    service.disable_channel = AsyncMock()
-    service.restart_channel = AsyncMock()
+    for name in (
+        "create_channel",
+        "update_channel",
+        "delete_channel",
+        "enable_channel",
+        "disable_channel",
+        "restart_channel",
+    ):
+        setattr(service, name, AsyncMock())
+    service.list_channels.return_value = list(configs)
+    service.is_running.return_value = True
+    service.is_failed.return_value = False
+    service.failure_reason.return_value = None
+    service.denied_chats.return_value = []
     return service
 
 
-def _session_manager_mock() -> Mock:
-    """A Session manager double whose database pool runs each unit inline."""
-    chat_sessions = Mock()
-    chat_sessions.run_async = AsyncMock(
-        side_effect=lambda function, *args, **kwargs: function(*args, **kwargs)
-    )
-    return chat_sessions
-
-
 def _state(
+    channel_service: Mock | None = None,
     *,
-    channel_service: object | None = None,
-    chat_sessions: object | None = None,
-    agents: object | None = None,
     process_credentials: dict[str, str] | None = None,
 ) -> SimpleNamespace:
-    agent_store = agents if agents is not None else Mock()
-    if isinstance(agent_store, Mock):
-        agent_store.get.return_value = SimpleNamespace(id="assistant")
-
     storage = _CredentialStorage()
     process_values = dict(process_credentials or {})
+    # What live credential resolution sees: data-dir values arrive only on reload.
+    live: dict[str, str] = {}
+
+    def reload_environment_credentials() -> None:
+        live.clear()
+        live.update(storage.credentials)
 
     def resolve_environment_credential(key: str) -> str:
-        if key in process_values:
-            return process_values[key]
-        return storage.credentials.get(key, "")
+        return process_values.get(key, live.get(key, ""))
 
     def environment_credential_source(key: str) -> str | None:
         if key in process_values:
             return "process_environment"
-        if key in storage.credentials:
-            return "data_dir"
-        return None
+        return "data_dir" if key in live else None
 
+    agents = Mock()
+    agents.get.return_value = SimpleNamespace(id="assistant")
     runtime = SimpleNamespace(
-        channel_service=(
-            channel_service if channel_service is not None else _channel_service_mock()
-        ),
+        channel_service=channel_service if channel_service is not None else _channel_service(),
         reload_channel_tool=Mock(),
-        reload_environment_credentials=Mock(),
+        reload_environment_credentials=reload_environment_credentials,
         resolve_environment_credential=resolve_environment_credential,
         environment_credential_source=environment_credential_source,
         storage=storage,
-        chat_sessions=chat_sessions if chat_sessions is not None else Mock(),
-        agents=agent_store,
+        live_credentials=live,
+        agents=agents,
     )
     return SimpleNamespace(runtime=runtime, event_bus=ServerEventBus())
 
 
+# ---------------------------------------------------------------------------
+# channel.list / channel.create
+# ---------------------------------------------------------------------------
+
+
 @pytest.mark.asyncio
-async def test_channel_list_happy_path_returns_serialized_channels() -> None:
+async def test_channel_list_returns_serialized_channels() -> None:
     config = _channel_config()
-    channel_service = _channel_service_mock()
-    channel_service.list_channels.return_value = [config]
-    state = _state(channel_service=channel_service)
 
-    response = await dispatch_rpc(state, {"method": "channel.list", "params": {}})
+    result = await rpc_result(_state(_channel_service(config)), "channel.list")
 
-    assert response == {"ok": True, "result": {"channels": [config.to_dict()]}}
+    assert result == {"channels": [config.to_dict()]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("params", "expected"),
+    [
+        (
+            {**_TELEGRAM, "observe_unaddressed": True},
+            _channel_config(observe_unaddressed=True),
+        ),
+        (
+            {**_TELEGRAM, "id": "dc-assistant", "platform": "discord", "token_env_var": "DC_KEY"},
+            _channel_config(channel_id="dc-assistant", platform="discord", token_env_var="DC_KEY"),
+        ),
+    ],
+    ids=["telegram", "discord"],
+)
+async def test_channel_create_saves_the_config_and_reloads_the_channel_tool(
+    params: JsonObject, expected: ChannelConfig
+) -> None:
+    state = _state()
+    service = state.runtime.channel_service
+
+    result = await rpc_result(state, "channel.create", **params)
+
+    [created] = service.create_channel.call_args.args
+    assert isinstance(created, ChannelConfig)
+    assert created.to_dict() == expected.to_dict()
+    assert result == expected.to_dict()
+    state.runtime.agents.get.assert_called_once_with("assistant")
+    state.runtime.reload_channel_tool.assert_called_once_with()
+    assert resource_changes(state) == [_CHANNELS_CHANGED]
+
+
+@pytest.mark.asyncio
+async def test_channel_create_with_managed_token_stores_secret_without_returning_it() -> None:
+    state = _state()
+
+    result = await rpc_result(
+        state,
+        "channel.create",
+        id="tg-main",
+        platform="telegram",
+        agent_id="assistant",
+        token="super-secret-token",
+    )
+
+    assert "super-secret-token" not in repr(result)
+    assert result["token_env_var"] == _MANAGED_KEY
+    assert result["credential"] == {
+        "key": _MANAGED_KEY,
+        "saved": True,
+        "changed": True,
+        "effective_source": "data_dir",
+        "applied": True,
+    }
+    assert (result["running"], result["failed"]) == (True, False)
+    assert state.runtime.storage.credentials == {_MANAGED_KEY: "super-secret-token"}
+    assert state.runtime.live_credentials == {_MANAGED_KEY: "super-secret-token"}
+    [created] = state.runtime.channel_service.create_channel.call_args.args
+    assert created.token_env_var == _MANAGED_KEY
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"id": "tg-main", "platform": "telegram", "token": "private-bot-token"},
+        # Slack's bot and app tokens are written and rolled back together.
+        {
+            "id": "slack",
+            "platform": "slack",
+            "token": "private-bot-token",
+            "app_token": "private-app-token",
+        },
+    ],
+    ids=["telegram", "slack"],
+)
+async def test_failed_channel_create_restores_every_managed_credential(params: JsonObject) -> None:
+    service = _channel_service()
+    service.create_channel.side_effect = ChannelConfigError("cannot create")
+    state = _state(service)
+    state.runtime.storage.credentials["UNRELATED"] = "keep"
+
+    error = await rpc_error(state, "channel.create", agent_id="assistant", **params)
+
+    assert error["code"] == "channel_config_error"
+    assert "private" not in str(error)
+    assert state.runtime.storage.credentials == {"UNRELATED": "keep"}
+    assert state.runtime.live_credentials == {"UNRELATED": "keep"}
+    assert resource_changes(state) == []
+
+
+@pytest.mark.asyncio
+async def test_whatsapp_creation_needs_no_token_and_pairing_uses_dedicated_rpc() -> None:
+    service = _channel_service()
+    service.pair_whatsapp = AsyncMock(return_value={"state": "pairing", "qr_image": "private-qr"})
+    state = _state(service)
+
+    created = await rpc_result(
+        state,
+        "channel.create",
+        id="wa",
+        platform="whatsapp",
+        agent_id="assistant",
+        allowed_chat_ids=["self"],
+        enabled=False,
+    )
+    paired = await rpc_result(state, "channel.whatsapp.pair", id="wa", reset=True)
+
+    assert created["token_env_var"] == ""
+    assert not state.runtime.storage.credentials
+    assert paired == {"state": "pairing", "qr_image": "private-qr"}
+    service.pair_whatsapp.assert_awaited_once_with("wa", reset=True)
+    assert resource_changes(state) == [_CHANNELS_CHANGED, _CHANNELS_CHANGED]
+
+
+# ---------------------------------------------------------------------------
+# channel.update / delete / enable / disable
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("params", "updates", "validates_agent"),
+    [
+        (
+            {
+                "dm_scope": "main",
+                "allowed_chat_ids": [12345, -100],
+                "enabled": False,
+                "observe_unaddressed": True,
+            },
+            {
+                "dm_scope": "main",
+                "allowed_chat_ids": ["12345", "-100"],
+                "enabled": False,
+                "observe_unaddressed": True,
+            },
+            False,
+        ),
+        # A new Agent must exist before the Channel is re-pointed to it.
+        ({"agent_id": "assistant"}, {"agent_id": "assistant"}, True),
+    ],
+    ids=["fields", "agent"],
+)
+async def test_channel_update_saves_normalized_fields_and_reloads(
+    params: JsonObject, updates: JsonObject, validates_agent: bool
+) -> None:
+    saved = _channel_config(dm_scope="main", allowed_chat_ids=["12345", "-100"], enabled=False)
+    state = _state(_channel_service(saved))
+
+    result = await rpc_result(state, "channel.update", id="tg-assistant", **params)
+
+    assert result == saved.to_dict()
+    state.runtime.channel_service.update_channel.assert_called_once_with("tg-assistant", **updates)
+    assert state.runtime.agents.get.called is validates_agent
+    state.runtime.reload_channel_tool.assert_called_once_with()
+    assert resource_changes(state) == [_CHANNELS_CHANGED]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method", "service_method"),
+    [
+        ("channel.delete", "delete_channel"),
+        ("channel.enable", "enable_channel"),
+        ("channel.disable", "disable_channel"),
+    ],
+)
+async def test_channel_lifecycle_methods_call_service_and_reload(
+    method: str, service_method: str
+) -> None:
+    config = _channel_config(enabled=method != "channel.disable")
+    state = _state(_channel_service(config))
+
+    result = await rpc_result(state, method, id="tg-assistant")
+
+    assert result == ({"ok": True} if method == "channel.delete" else config.to_dict())
+    getattr(state.runtime.channel_service, service_method).assert_called_once_with("tg-assistant")
+    state.runtime.reload_channel_tool.assert_called_once_with()
+    assert resource_changes(state) == [_CHANNELS_CHANGED]
+
+
+# ---------------------------------------------------------------------------
+# channel.set_token
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("process_override", [False, True])
+async def test_channel_set_token_saves_the_credential_and_restarts_only_when_it_applies(
+    caplog: pytest.LogCaptureFixture, process_override: bool
+) -> None:
+    state = _state(
+        _channel_service(_channel_config()),
+        process_credentials={_TOKEN_KEY: "process-token"} if process_override else None,
+    )
+    service = state.runtime.channel_service
+    service.restart_channel.return_value = True
+    caplog.set_level(logging.INFO, logger="vbot.server.rpc.channels")
+
+    result = await rpc_result(state, "channel.set_token", id="tg-assistant", token="rotated-secret")
+
+    # A process environment value keeps precedence: the saved fallback does not
+    # change the effective token, so the adapter is not restarted.
+    assert result == {
+        "id": "tg-assistant",
+        "token_env_var": _TOKEN_KEY,
+        "credential": {
+            "key": _TOKEN_KEY,
+            "saved": True,
+            "changed": True,
+            "effective_source": "process_environment" if process_override else "data_dir",
+            "applied": not process_override,
+        },
+        "adapter_restart_requested": not process_override,
+        "enabled": True,
+        "running": True,
+        "failed": False,
+        "failure_reason": None,
+    }
+    assert state.runtime.storage.credentials == {_TOKEN_KEY: "rotated-secret"}
+    assert state.runtime.live_credentials == {_TOKEN_KEY: "rotated-secret"}
+    assert service.restart_channel.await_args_list == (
+        [] if process_override else [call("tg-assistant")]
+    )
+    state.runtime.reload_channel_tool.assert_called_once_with()
+    assert resource_changes(state) == [_CHANNELS_CHANGED]
+    assert all("rotated-secret" not in record.getMessage() for record in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_channel_set_token_rolls_back_credential_when_restart_fails() -> None:
+    config = _channel_config()
+    service = _channel_service(config)
+    service.restart_channel.side_effect = [ChannelConfigError("restart failed"), True]
+    state = _state(service)
+    state.runtime.storage.credentials[config.token_env_var] = "old-token"
+    state.runtime.reload_environment_credentials()
+
+    error = await rpc_error(state, "channel.set_token", id="tg-assistant", token="new-token")
+
+    assert error["code"] == "channel_config_error"
+    assert state.runtime.storage.credentials == {_TOKEN_KEY: "old-token"}
+    assert state.runtime.live_credentials == {_TOKEN_KEY: "old-token"}
+    # The adapter is restarted again on the restored token.
+    assert service.restart_channel.await_count == 2
+    assert resource_changes(state) == []
+
+
+# ---------------------------------------------------------------------------
+# channel.status / access
+# ---------------------------------------------------------------------------
+
+
+_DENIED_CHAT = DeniedChatFacts(
+    chat_id="99999",
+    kind="direct",
+    display_name="Julian B.",
+    last_seen_at="2026-07-05T12:00:00+00:00",
+    count=3,
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("running", "failure_reason", "denied", "denied_chats"),
+    [
+        (
+            True,
+            None,
+            [_DENIED_CHAT],
+            [
+                {
+                    "chat_id": "99999",
+                    "kind": "direct",
+                    "display_name": "Julian B.",
+                    "last_seen_at": "2026-07-05T12:00:00+00:00",
+                    "count": 3,
+                }
+            ],
+        ),
+        (False, "Unknown agent_id: missing-agent", [], []),
+    ],
+    ids=["running-with-denied-chats", "failed"],
+)
+async def test_channel_status_reports_health_and_denied_chats(
+    running: bool,
+    failure_reason: str | None,
+    denied: list[DeniedChatFacts],
+    denied_chats: list[JsonObject],
+) -> None:
+    service = _channel_service(_channel_config())
+    service.is_running.return_value = running
+    service.is_failed.return_value = not running
+    service.failure_reason.return_value = failure_reason
+    service.denied_chats.return_value = denied
+
+    result = await rpc_result(_state(service), "channel.status", id="tg-assistant")
+
+    assert result == {
+        "id": "tg-assistant",
+        "enabled": True,
+        "running": running,
+        "failed": not running,
+        "failure_reason": failure_reason,
+        "denied_chats": denied_chats,
+    }
+    service.denied_chats.assert_called_once_with("tg-assistant")
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("method", "params", "service_method", "service_args"),
     [
-        (
-            "channel.access.get",
-            {"id": "tg-assistant"},
-            "channel_access",
-            ("tg-assistant",),
-        ),
+        ("channel.access.get", {"id": "tg-assistant"}, "channel_access", ("tg-assistant",)),
         (
             "channel.identity.set",
             {"id": "tg-assistant", "user_id": "50"},
@@ -239,800 +464,136 @@ async def test_channel_list_happy_path_returns_serialized_channels() -> None:
     ],
 )
 async def test_channel_access_methods_return_saved_state_without_runtime_reload(
-    method: str,
-    params: dict[str, str],
-    service_method: str,
-    service_args: tuple[str, ...],
+    method: str, params: JsonObject, service_method: str, service_args: tuple[str, ...]
 ) -> None:
     saved = {
         "channel_id": "tg-assistant",
         "self_user_id": "50",
-        "groups": [
-            {
-                "access_scope_id": "-100",
-                "admin_user_ids": ["50", "51"],
-                "participants": [],
-            }
-        ],
+        "groups": [{"access_scope_id": "-100", "admin_user_ids": ["50", "51"], "participants": []}],
     }
-    channel_service = _channel_service_mock()
-    setattr(channel_service, service_method, AsyncMock(return_value=saved))
-    state = _state(channel_service=channel_service)
+    service = _channel_service()
+    setattr(service, service_method, AsyncMock(return_value=saved))
+    state = _state(service)
 
-    response = await dispatch_rpc(state, {"method": method, "params": params})
+    result = await rpc_result(state, method, **params)
 
-    assert response == {"ok": True, "result": saved}
-    getattr(channel_service, service_method).assert_awaited_once_with(*service_args)
+    assert result == saved
+    getattr(service, service_method).assert_awaited_once_with(*service_args)
     state.runtime.reload_channel_tool.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Refusals
+# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("method", "params"),
+    ("method", "params", "failure", "code", "named"),
     [
         (
             "channel.create",
-            {
-                "id": "tg-assistant",
-                "platform": "telegram",
-                "agent_id": "assistant",
-                "token_env_var": "TELEGRAM_BOT_TOKEN_TG_ASSISTANT",
-                "owner_user_ids": ["50"],
-            },
+            {**_TELEGRAM, "owner_user_ids": ["50"]},
+            None,
+            "invalid_request",
+            "owner_user_ids",
         ),
         (
             "channel.update",
             {"id": "tg-assistant", "owner_user_ids": ["50"]},
+            None,
+            "invalid_request",
+            "owner_user_ids",
+        ),
+        # A Channel takes exactly one token source.
+        (
+            "channel.create",
+            {**_TELEGRAM, "token": "secret"},
+            None,
+            "invalid_request",
+            "token",
+        ),
+        (
+            "channel.create",
+            {
+                "id": "slack",
+                "platform": "slack",
+                "agent_id": "assistant",
+                "token_env_var": "SAME",
+                "app_token_env_var": "SAME",
+            },
+            None,
+            "channel_config_error",
+            "",
+        ),
+        (
+            "channel.create",
+            {**_TELEGRAM, "platform": "matrix"},
+            None,
+            "invalid_request",
+            "platform",
+        ),
+        (
+            "channel.update",
+            {"id": "tg-assistant", "dm_scope": "unsupported"},
+            None,
+            "invalid_request",
+            "dm_scope",
+        ),
+        (
+            "channel.create",
+            {**_TELEGRAM, "agent_id": "missing"},
+            "unknown_agent",
+            "channel_config_error",
+            "missing",
+        ),
+        (
+            "channel.update",
+            {"id": "tg-assistant", "agent_id": "missing"},
+            "unknown_agent",
+            "channel_config_error",
+            "missing",
+        ),
+        (
+            "channel.create",
+            _TELEGRAM,
+            ("create_channel", ChannelConfigError("Channel already exists: tg-assistant")),
+            "channel_already_exists",
+            "tg-assistant",
+        ),
+        (
+            "channel.update",
+            {"id": "tg-assistant", "enabled": False},
+            ("update_channel", ChannelConfigError("invalid channel config")),
+            "channel_config_error",
+            "",
+        ),
+        (
+            "channel.status",
+            {"id": "missing-channel"},
+            None,
+            "channel_not_found",
+            "missing-channel",
         ),
     ],
 )
-async def test_channel_rpc_rejects_legacy_owner_field(
-    method: str,
-    params: dict[str, object],
+async def test_channel_refusals_store_and_publish_nothing(
+    method: str, params: JsonObject, failure: Any, code: str, named: str
 ) -> None:
-    response = await dispatch_rpc(_state(), {"method": method, "params": params})
-
-    assert response["ok"] is False
-    assert response["error"]["code"] == "invalid_request"
-    assert "owner_user_ids" in response["error"]["message"]
-
-
-@pytest.mark.asyncio
-async def test_channel_create_happy_path_calls_service_and_reload() -> None:
-    channel_service = _channel_service_mock()
-    state = _state(channel_service=channel_service)
-
-    response = await dispatch_rpc(
-        state,
-        {
-            "method": "channel.create",
-            "params": {
-                "id": "tg-assistant",
-                "platform": "telegram",
-                "agent_id": "assistant",
-                "token_env_var": "TELEGRAM_BOT_TOKEN_TG_ASSISTANT",
-                "observe_unaddressed": True,
-            },
-        },
-    )
-
-    channel_service.create_channel.assert_called_once()
-    created_config = channel_service.create_channel.call_args.args[0]
-    assert isinstance(created_config, ChannelConfig)
-    assert created_config.to_dict() == _channel_config(observe_unaddressed=True).to_dict()
-    assert response == {"ok": True, "result": created_config.to_dict()}
-    state.runtime.agents.get.assert_called_once_with("assistant")
-    state.runtime.reload_channel_tool.assert_called_once_with()
-    assert state.event_bus.events[-1]["payload"] == {"kind": "channels"}
-
-
-@pytest.mark.asyncio
-async def test_channel_create_with_managed_token_stores_secret_without_returning_it() -> None:
-    channel_service = _channel_service_mock()
-    channel_service.is_running.return_value = True
-    channel_service.is_failed.return_value = False
-    channel_service.failure_reason.return_value = None
-    state = _state(channel_service=channel_service)
-
-    response = await dispatch_rpc(
-        state,
-        {
-            "method": "channel.create",
-            "params": {
-                "id": "tg-main",
-                "platform": "telegram",
-                "agent_id": "assistant",
-                "token": "super-secret-token",
-            },
-        },
-    )
-
-    credential_key = "VBOT_CHANNEL_TOKEN__74672D6D61696E"
-    assert response["ok"] is True
-    assert "super-secret-token" not in repr(response)
-    assert response["result"]["token_env_var"] == credential_key
-    assert response["result"]["credential"] == {
-        "key": credential_key,
-        "saved": True,
-        "changed": True,
-        "effective_source": "data_dir",
-        "applied": True,
-    }
-    assert response["result"]["running"] is True
-    assert response["result"]["failed"] is False
-    assert state.runtime.storage.credentials[credential_key] == "super-secret-token"
-    state.runtime.reload_environment_credentials.assert_called_once_with()
-    created_config = channel_service.create_channel.call_args.args[0]
-    assert created_config.token_env_var == credential_key
-
-
-@pytest.mark.asyncio
-async def test_channel_create_rejects_ambiguous_token_inputs() -> None:
     state = _state()
+    if failure == "unknown_agent":
+        state.runtime.agents.get.side_effect = KeyError("missing")
+    elif failure is not None:
+        service_method, error = failure
+        getattr(state.runtime.channel_service, service_method).side_effect = error
 
-    response = await dispatch_rpc(
-        state,
-        {
-            "method": "channel.create",
-            "params": {
-                "id": "tg-main",
-                "platform": "telegram",
-                "agent_id": "assistant",
-                "token": "secret",
-                "token_env_var": "TELEGRAM_BOT_TOKEN",
-            },
-        },
-    )
+    error = await rpc_error(state, method, **params)
 
-    assert response["ok"] is False
-    assert response["error"]["code"] == "invalid_request"
-
-
-@pytest.mark.asyncio
-async def test_channel_create_rolls_back_managed_token_when_create_fails() -> None:
-    channel_service = _channel_service_mock()
-    channel_service.create_channel.side_effect = ChannelConfigError("create failed")
-    state = _state(channel_service=channel_service)
-
-    response = await dispatch_rpc(
-        state,
-        {
-            "method": "channel.create",
-            "params": {
-                "id": "tg-main",
-                "platform": "telegram",
-                "agent_id": "assistant",
-                "token": "super-secret-token",
-            },
-        },
-    )
-
-    assert response["ok"] is False
+    assert error["code"] == code
+    assert named in error["message"]
     assert state.runtime.storage.credentials == {}
-    assert state.runtime.reload_environment_credentials.call_count == 2
-
-
-@pytest.mark.asyncio
-async def test_channel_update_happy_path_calls_service_and_reload() -> None:
-    channel_service = _channel_service_mock()
-    updated_config = ChannelConfig(
-        id="tg-assistant",
-        platform="telegram",
-        agent_id="assistant",
-        dm_scope="main",
-        allowed_chat_ids=["12345", "-100"],
-        token_env_var="TELEGRAM_BOT_TOKEN_TG_ASSISTANT",
-        enabled=False,
-        observe_unaddressed=True,
-    )
-    channel_service.list_channels.return_value = [updated_config]
-    state = _state(channel_service=channel_service)
-
-    response = await dispatch_rpc(
-        state,
-        {
-            "method": "channel.update",
-            "params": {
-                "id": "tg-assistant",
-                "dm_scope": "main",
-                "allowed_chat_ids": [12345, -100],
-                "enabled": False,
-                "observe_unaddressed": True,
-            },
-        },
-    )
-
-    assert response == {"ok": True, "result": updated_config.to_dict()}
-    channel_service.update_channel.assert_called_once_with(
-        "tg-assistant",
-        dm_scope="main",
-        allowed_chat_ids=["12345", "-100"],
-        enabled=False,
-        observe_unaddressed=True,
-    )
-    state.runtime.agents.get.assert_not_called()
-    state.runtime.reload_channel_tool.assert_called_once_with()
-    assert state.event_bus.events[-1]["payload"] == {"kind": "channels"}
-
-
-@pytest.mark.asyncio
-async def test_channel_update_validates_agent_when_agent_id_is_present() -> None:
-    channel_service = _channel_service_mock()
-    updated_config = _channel_config()
-    channel_service.list_channels.return_value = [updated_config]
-    state = _state(channel_service=channel_service)
-
-    response = await dispatch_rpc(
-        state,
-        {
-            "method": "channel.update",
-            "params": {
-                "id": "tg-assistant",
-                "agent_id": "assistant",
-            },
-        },
-    )
-
-    assert response == {"ok": True, "result": updated_config.to_dict()}
-    state.runtime.agents.get.assert_called_once_with("assistant")
-    channel_service.update_channel.assert_called_once_with(
-        "tg-assistant",
-        agent_id="assistant",
-    )
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("method", "service_method"),
-    [
-        ("channel.delete", "delete_channel"),
-        ("channel.enable", "enable_channel"),
-        ("channel.disable", "disable_channel"),
-    ],
-)
-async def test_channel_mutation_methods_call_service_and_reload(
-    method: str,
-    service_method: str,
-) -> None:
-    channel_service = _channel_service_mock()
-    config = _channel_config(enabled=method != "channel.disable")
-    channel_service.list_channels.return_value = [config]
-    state = _state(channel_service=channel_service)
-
-    response = await dispatch_rpc(
-        state,
-        {
-            "method": method,
-            "params": {
-                "id": "tg-assistant",
-            },
-        },
-    )
-
-    expected_result = {"ok": True} if method == "channel.delete" else config.to_dict()
-    assert response == {"ok": True, "result": expected_result}
-    getattr(channel_service, service_method).assert_called_once_with("tg-assistant")
-    state.runtime.reload_channel_tool.assert_called_once_with()
-    assert state.event_bus.events[-1]["payload"] == {"kind": "channels"}
-
-
-@pytest.mark.asyncio
-async def test_channel_set_token_reloads_credentials_and_restarts_only_channel(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    config = _channel_config()
-    channel_service = _channel_service_mock()
-    channel_service.list_channels.return_value = [config]
-    channel_service.restart_channel.return_value = True
-    channel_service.is_running.return_value = True
-    channel_service.is_failed.return_value = False
-    channel_service.failure_reason.return_value = None
-    state = _state(channel_service=channel_service)
-    caplog.set_level(logging.INFO, logger="vbot.server.rpc.channels")
-
-    response = await dispatch_rpc(
-        state,
-        {
-            "method": "channel.set_token",
-            "params": {"id": "tg-assistant", "token": "rotated-super-secret"},
-        },
-    )
-
-    assert response == {
-        "ok": True,
-        "result": {
-            "id": "tg-assistant",
-            "token_env_var": "TELEGRAM_BOT_TOKEN_TG_ASSISTANT",
-            "credential": {
-                "key": "TELEGRAM_BOT_TOKEN_TG_ASSISTANT",
-                "saved": True,
-                "changed": True,
-                "effective_source": "data_dir",
-                "applied": True,
-            },
-            "adapter_restart_requested": True,
-            "enabled": True,
-            "running": True,
-            "failed": False,
-            "failure_reason": None,
-        },
-    }
-    assert state.runtime.storage.credentials == {
-        "TELEGRAM_BOT_TOKEN_TG_ASSISTANT": "rotated-super-secret"
-    }
-    state.runtime.reload_environment_credentials.assert_called_once_with()
-    channel_service.restart_channel.assert_called_once_with("tg-assistant")
-    state.runtime.reload_channel_tool.assert_called_once_with()
-    assert state.event_bus.events[-1]["payload"] == {"kind": "channels"}
-    assert all("rotated-super-secret" not in record.getMessage() for record in caplog.records)
-
-
-@pytest.mark.asyncio
-async def test_channel_set_token_reports_process_environment_override_without_restart() -> None:
-    config = _channel_config()
-    channel_service = _channel_service_mock()
-    channel_service.list_channels.return_value = [config]
-    channel_service.is_running.return_value = True
-    channel_service.is_failed.return_value = False
-    channel_service.failure_reason.return_value = None
-    state = _state(
-        channel_service=channel_service,
-        process_credentials={"TELEGRAM_BOT_TOKEN_TG_ASSISTANT": "process-token"},
-    )
-
-    response = await dispatch_rpc(
-        state,
-        {
-            "method": "channel.set_token",
-            "params": {"id": "tg-assistant", "token": "saved-fallback-token"},
-        },
-    )
-
-    assert response["ok"] is True
-    result = response["result"]
-    assert result["credential"]["effective_source"] == "process_environment"
-    assert result["credential"]["applied"] is False
-    assert result["adapter_restart_requested"] is False
-    channel_service.restart_channel.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_channel_set_token_rolls_back_credential_when_restart_fails() -> None:
-    config = _channel_config()
-    channel_service = _channel_service_mock()
-    channel_service.list_channels.return_value = [config]
-    channel_service.restart_channel.side_effect = [ChannelConfigError("restart failed"), True]
-    state = _state(channel_service=channel_service)
-    state.runtime.storage.credentials[config.token_env_var] = "old-token"
-
-    response = await dispatch_rpc(
-        state,
-        {
-            "method": "channel.set_token",
-            "params": {"id": "tg-assistant", "token": "new-token"},
-        },
-    )
-
-    assert response["ok"] is False
-    assert state.runtime.storage.credentials[config.token_env_var] == "old-token"
-    assert channel_service.restart_channel.call_count == 2
-    assert state.runtime.reload_environment_credentials.call_count == 2
-
-
-@pytest.mark.asyncio
-async def test_channel_status_happy_path_returns_enabled_and_running() -> None:
-    config = _channel_config(enabled=True)
-    channel_service = _channel_service_mock()
-    channel_service.list_channels.return_value = [config]
-    channel_service.is_running = Mock(return_value=True)
-    channel_service.is_failed = Mock(return_value=False)
-    channel_service.failure_reason = Mock(return_value=None)
-    channel_service.denied_chats = Mock(return_value=[])
-    state = _state(channel_service=channel_service)
-
-    response = await dispatch_rpc(
-        state,
-        {
-            "method": "channel.status",
-            "params": {
-                "id": "tg-assistant",
-            },
-        },
-    )
-
-    assert response == {
-        "ok": True,
-        "result": {
-            "id": "tg-assistant",
-            "enabled": True,
-            "running": True,
-            "failed": False,
-            "failure_reason": None,
-            "denied_chats": [],
-        },
-    }
-
-
-@pytest.mark.asyncio
-async def test_channel_status_returns_failure_reason() -> None:
-    config = _channel_config(enabled=True)
-    channel_service = _channel_service_mock()
-    channel_service.list_channels.return_value = [config]
-    channel_service.is_running = Mock(return_value=False)
-    channel_service.is_failed = Mock(return_value=True)
-    channel_service.failure_reason = Mock(return_value="Unknown agent_id: missing-agent")
-    channel_service.denied_chats = Mock(return_value=[])
-    state = _state(channel_service=channel_service)
-
-    response = await dispatch_rpc(
-        state,
-        {
-            "method": "channel.status",
-            "params": {
-                "id": "tg-assistant",
-            },
-        },
-    )
-
-    assert response == {
-        "ok": True,
-        "result": {
-            "id": "tg-assistant",
-            "enabled": True,
-            "running": False,
-            "failed": True,
-            "failure_reason": "Unknown agent_id: missing-agent",
-            "denied_chats": [],
-        },
-    }
-
-
-@pytest.mark.asyncio
-async def test_channel_status_returns_denied_chats() -> None:
-    config = _channel_config(enabled=True)
-    channel_service = _channel_service_mock()
-    channel_service.list_channels.return_value = [config]
-    channel_service.is_running = Mock(return_value=True)
-    channel_service.is_failed = Mock(return_value=False)
-    channel_service.failure_reason = Mock(return_value=None)
-    channel_service.denied_chats = Mock(
-        return_value=[
-            DeniedChatFacts(
-                chat_id="99999",
-                kind="direct",
-                display_name="Julian B.",
-                last_seen_at="2026-07-05T12:00:00+00:00",
-                count=3,
-            )
-        ]
-    )
-    state = _state(channel_service=channel_service)
-
-    response = await dispatch_rpc(
-        state,
-        {
-            "method": "channel.status",
-            "params": {
-                "id": "tg-assistant",
-            },
-        },
-    )
-
-    assert response["ok"] is True
-    assert response["result"]["denied_chats"] == [
-        {
-            "chat_id": "99999",
-            "kind": "direct",
-            "display_name": "Julian B.",
-            "last_seen_at": "2026-07-05T12:00:00+00:00",
-            "count": 3,
-        }
-    ]
-    channel_service.denied_chats.assert_called_once_with("tg-assistant")
-
-
-@pytest.mark.asyncio
-async def test_session_list_happy_path_returns_bounded_session_summaries() -> None:
-    sessions = [
-        {
-            "id": "ch-tg-assistant-12345",
-            "created_at": "2026-05-15T10:00:00+00:00",
-            "last_active_at": "2026-05-15T10:05:00+00:00",
-            "source_channel_id": "tg-assistant",
-            "platform": "telegram",
-            "platform_conv_id": "12345",
-        }
-    ]
-    chat_sessions = _session_manager_mock()
-    chat_sessions.list_summaries_page.return_value = SimpleNamespace(
-        sessions=tuple(
-            {**session, "agent_id": "assistant", "project_id": None} for session in sessions
-        ),
-        next_cursor=None,
-        total_count=1,
-    )
-    state = _state(chat_sessions=chat_sessions)
-
-    response = await dispatch_rpc(
-        state,
-        {
-            "method": "session.list",
-            "params": {
-                "agent_id": "assistant",
-            },
-        },
-    )
-
-    assert response == {
-        "ok": True,
-        "result": {
-            "sessions": [
-                {
-                    **sessions[0],
-                    "agent_address": "assistant",
-                    "has_active_run": False,
-                    "compaction_policy_override": None,
-                    "compaction_policy_effective": normalize_compaction_settings(None),
-                }
-            ],
-            "next_cursor": None,
-            "total_count": 1,
-        },
-    }
-    # A bare agent id resolves to the identity scope (project_id=None).
-    call = chat_sessions.list_summaries_page.call_args
-    assert call.args == ([(None, "assistant")],)
-    assert call.kwargs["limit"] == 100
-
-
-@pytest.mark.asyncio
-async def test_session_link_channel_sets_metadata_without_writing_reminder() -> None:
-    config = _channel_config()
-    channel_service = _channel_service_mock()
-    channel_service.list_channels.return_value = [config]
-
-    chat_sessions = _session_manager_mock()
-    metadata = {"persisted": "value"}
-
-    def mutate_metadata(
-        address: SessionAddress, mutation: Callable[[dict], None]
-    ) -> tuple[dict, dict]:
-        assert address == SessionAddress(None, "assistant", "session-1")
-        previous = dict(metadata)
-        mutation(metadata)
-        return previous, dict(metadata)
-
-    chat_sessions.mutate_metadata_with_previous.side_effect = mutate_metadata
-    chat_sessions.write_lock.return_value = _NullAsyncContext()
-    linked_session = Mock()
-    chat_sessions.get.return_value = linked_session
-
-    state = _state(channel_service=channel_service, chat_sessions=chat_sessions)
-
-    response = await dispatch_rpc(
-        state,
-        {
-            "method": "session.link_channel",
-            "params": {
-                "agent_id": "assistant",
-                "session_id": "session-1",
-                "channel_id": "tg-assistant",
-                "platform_conv_id": "12345",
-            },
-        },
-    )
-
-    assert response == {"ok": True, "result": {"ok": True}}
-    assert metadata == {
-        "persisted": "value",
-        "source_channel_id": "tg-assistant",
-        "platform": "telegram",
-        "platform_conv_id": "12345",
-        "last_reply_target": {
-            "channel_id": "tg-assistant",
-            "platform_target": "12345",
-        },
-    }
-    linked_session.add_note.assert_not_called()
-    chat_sessions.write_lock.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_session_link_channel_rejects_channel_from_other_agent() -> None:
-    config = _channel_config()
-    channel_service = _channel_service_mock()
-    channel_service.list_channels.return_value = [config]
-    chat_sessions = _session_manager_mock()
-    state = _state(channel_service=channel_service, chat_sessions=chat_sessions)
-
-    response = await dispatch_rpc(
-        state,
-        {
-            "method": "session.link_channel",
-            "params": {
-                "agent_id": "writer",
-                "session_id": "session-1",
-                "channel_id": "tg-assistant",
-                "platform_conv_id": "12345",
-            },
-        },
-    )
-
-    assert response["ok"] is False
-    assert response["error"]["code"] == "channel_config_error"
-    assert "tg-assistant" in response["error"]["message"]
-    chat_sessions.get.assert_not_called()
-    chat_sessions.set_metadata.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_channel_create_maps_duplicate_error_to_channel_already_exists() -> None:
-    channel_service = _channel_service_mock()
-    channel_service.create_channel.side_effect = ChannelConfigError(
-        "Channel already exists: tg-assistant"
-    )
-    state = _state(channel_service=channel_service)
-
-    response = await dispatch_rpc(
-        state,
-        {
-            "method": "channel.create",
-            "params": {
-                "id": "tg-assistant",
-                "platform": "telegram",
-                "agent_id": "assistant",
-                "token_env_var": "TELEGRAM_BOT_TOKEN_TG_ASSISTANT",
-            },
-        },
-    )
-
-    assert response["ok"] is False
-    assert response["error"]["code"] == "channel_already_exists"
-
-
-@pytest.mark.asyncio
-async def test_channel_update_maps_config_error_to_channel_config_error() -> None:
-    channel_service = _channel_service_mock()
-    channel_service.update_channel.side_effect = ChannelConfigError("invalid channel config")
-    state = _state(channel_service=channel_service)
-
-    response = await dispatch_rpc(
-        state,
-        {
-            "method": "channel.update",
-            "params": {
-                "id": "tg-assistant",
-                "enabled": False,
-            },
-        },
-    )
-
-    assert response["ok"] is False
-    assert response["error"]["code"] == "channel_config_error"
-
-
-@pytest.mark.asyncio
-async def test_channel_create_rejects_unknown_agent() -> None:
-    state = _state(channel_service=_channel_service_mock())
-    state.runtime.agents.get.side_effect = KeyError("missing")
-
-    response = await dispatch_rpc(
-        state,
-        {
-            "method": "channel.create",
-            "params": {
-                "id": "tg-assistant",
-                "platform": "telegram",
-                "agent_id": "missing",
-                "token_env_var": "TELEGRAM_BOT_TOKEN_TG_ASSISTANT",
-            },
-        },
-    )
-
-    assert response["ok"] is False
-    assert response["error"]["code"] == "channel_config_error"
-    assert "missing" in response["error"]["message"]
-
-
-@pytest.mark.asyncio
-async def test_channel_update_rejects_unknown_agent() -> None:
-    state = _state(channel_service=_channel_service_mock())
-    state.runtime.agents.get.side_effect = KeyError("missing")
-
-    response = await dispatch_rpc(
-        state,
-        {
-            "method": "channel.update",
-            "params": {
-                "id": "tg-assistant",
-                "agent_id": "missing",
-            },
-        },
-    )
-
-    assert response["ok"] is False
-    assert response["error"]["code"] == "channel_config_error"
-    assert "missing" in response["error"]["message"]
-
-
-@pytest.mark.asyncio
-async def test_channel_status_unknown_channel_returns_channel_not_found() -> None:
-    channel_service = _channel_service_mock()
-    channel_service.list_channels.return_value = []
-    state = _state(channel_service=channel_service)
-
-    response = await dispatch_rpc(
-        state,
-        {
-            "method": "channel.status",
-            "params": {
-                "id": "missing-channel",
-            },
-        },
-    )
-
-    assert response["ok"] is False
-    assert response["error"]["code"] == "channel_not_found"
-    assert "missing-channel" in response["error"]["message"]
-
-
-@pytest.mark.asyncio
-async def test_channel_create_accepts_discord_platform() -> None:
-    state = _state(channel_service=_channel_service_mock())
-
-    response = await dispatch_rpc(
-        state,
-        {
-            "method": "channel.create",
-            "params": {
-                "id": "dc-assistant",
-                "platform": "discord",
-                "agent_id": "assistant",
-                "token_env_var": "DISCORD_BOT_TOKEN_DC_ASSISTANT",
-            },
-        },
-    )
-
-    created_config = state.runtime.channel_service.create_channel.call_args.args[0]
-    assert response == {"ok": True, "result": created_config.to_dict()}
-    assert created_config.platform == "discord"
-
-
-@pytest.mark.asyncio
-async def test_channel_create_rejects_invalid_platform() -> None:
-    state = _state(channel_service=_channel_service_mock())
-
-    response = await dispatch_rpc(
-        state,
-        {
-            "method": "channel.create",
-            "params": {
-                "id": "matrix-assistant",
-                "platform": "matrix",
-                "agent_id": "assistant",
-                "token_env_var": "MATRIX_BOT_TOKEN",
-            },
-        },
-    )
-
-    assert response["ok"] is False
-    assert response["error"]["code"] == "invalid_request"
-
-
-@pytest.mark.asyncio
-async def test_channel_update_rejects_invalid_dm_scope() -> None:
-    state = _state(channel_service=_channel_service_mock())
-
-    response = await dispatch_rpc(
-        state,
-        {
-            "method": "channel.update",
-            "params": {
-                "id": "tg-assistant",
-                "dm_scope": "unsupported",
-            },
-        },
-    )
-
-    assert response["ok"] is False
-    assert response["error"]["code"] == "invalid_request"
+    state.runtime.reload_channel_tool.assert_not_called()
+    assert resource_changes(state) == []
+    if failure is None:
+        state.runtime.channel_service.create_channel.assert_not_called()
+        state.runtime.channel_service.update_channel.assert_not_called()

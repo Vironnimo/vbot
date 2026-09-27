@@ -1,7 +1,8 @@
-"""Data-store RPC catalog and operator-state contracts."""
+"""Data-store RPCs: health status, snapshots, incidents and Extension database release."""
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -19,10 +20,21 @@ from core.database import snapshots as snapshots_module
 from core.database.recovery import write_incident
 from core.sessions import ChatSessionManager
 from server.events import ServerEventBus
-from server.rpc.methods import build_method_handlers, dispatch_rpc
 from tests.core.database.database_test_support import notes_spec
+from tests.server.rpc_test_support import resource_changes, rpc_error, rpc_result
 
 _EXTENSION = "ext.demo.notes"
+_DATA_STORE_CHANGED = {"kind": "data_store"}
+
+
+@pytest.fixture
+def sessions(tmp_path: Path) -> Iterator[ChatSessionManager]:
+    write_bootstrap_marker(tmp_path)
+    manager = ChatSessionManager(tmp_path)
+    try:
+        yield manager
+    finally:
+        manager.close()
 
 
 def _state(data_dir: Path, sessions: ChatSessionManager) -> SimpleNamespace:
@@ -39,164 +51,95 @@ def _state(data_dir: Path, sessions: ChatSessionManager) -> SimpleNamespace:
     )
 
 
-def test_data_store_status_and_incident_methods_are_publicly_catalogued() -> None:
-    handlers = build_method_handlers()
-
-    assert {
-        "data_store.status",
-        "data_store.snapshot_create",
-        "data_store.incident_acknowledge",
-        "data_store.unregister",
-    } <= handlers.keys()
+def _register_extension_database(data_dir: Path) -> Path:
+    spec = notes_spec(data_dir, name=_EXTENSION)
+    open_database(spec).close()
+    return Path(spec.path)
 
 
 @pytest.mark.asyncio
-async def test_status_and_incident_acknowledgement_are_operator_safe(tmp_path: Path) -> None:
-    write_bootstrap_marker(tmp_path)
-    sessions = ChatSessionManager(tmp_path)
-    state = _state(tmp_path, sessions)
-    try:
-        status = await dispatch_rpc(state, {"method": "data_store.status", "params": {}})
-        assert status["ok"] is True
-        assert status["result"]["state"] == "snapshot_degraded"
-        assert set(status["result"]["databases"]) == {"sessions"}
-        assert status["result"]["databases"]["sessions"]["state"] == "healthy"
-
-        created = await dispatch_rpc(
-            state,
-            {"method": "data_store.snapshot_create", "params": {"reason": "manual"}},
-        )
-        assert created["ok"] is True
-        assert created["result"]["snapshot"]["reason"] == "manual"
-        assert set(created["result"]["snapshot"]["members"]) == {"sessions"}
-        assert state.event_bus.events[-1]["payload"] == {"kind": "data_store"}
-
-        write_incident(
-            tmp_path,
-            "sessions",
-            cause="test-corruption",
-            quarantine_path=tmp_path / "quarantine" / "sessions" / "bundle",
-            restored_snapshot_id="snapshot-1",
-            restored_snapshot_time="2026-08-31T10:00:00.000000Z",
-            failure_detected_at="2026-08-31T10:05:00.000000Z",
-        )
-        incident_status = await dispatch_rpc(state, {"method": "data_store.status", "params": {}})
-        incident = incident_status["result"]["incidents"][0]
-        assert incident["database"] == "sessions"
-        assert incident_status["result"]["state"] == "recovered_with_incident"
-
-        stale = await dispatch_rpc(
-            state,
-            {"method": "data_store.incident_acknowledge", "params": {"incident_id": "stale"}},
-        )
-        assert stale["ok"] is False
-
-        acknowledged = await dispatch_rpc(
-            state,
-            {
-                "method": "data_store.incident_acknowledge",
-                "params": {"incident_id": incident["incident_id"]},
-            },
-        )
-        assert acknowledged["ok"] is True
-        assert acknowledged["result"]["state"] == "healthy"
-        assert acknowledged["result"]["incidents"] == []
-        assert state.event_bus.events[-1]["payload"] == {"kind": "data_store"}
-    finally:
-        sessions.close()
-
-
-@pytest.mark.asyncio
-async def test_snapshot_create_rejects_unknown_reasons(tmp_path: Path) -> None:
-    write_bootstrap_marker(tmp_path)
-    sessions = ChatSessionManager(tmp_path)
-    try:
-        response = await dispatch_rpc(
-            _state(tmp_path, sessions),
-            {"method": "data_store.snapshot_create", "params": {"reason": "nightly"}},
-        )
-    finally:
-        sessions.close()
-
-    assert response["ok"] is False
-
-
-@pytest.mark.asyncio
-async def test_snapshot_create_returns_without_reverifying_the_snapshot_directory(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+async def test_status_snapshot_and_incident_acknowledgement_are_operator_safe(
+    tmp_path: Path, sessions: ChatSessionManager, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    write_bootstrap_marker(tmp_path)
-    sessions = ChatSessionManager(tmp_path)
     state = _state(tmp_path, sessions)
-    sha256_calls: list[Path] = []
-    verification_calls: list[Path] = []
+    hashed: list[Path] = []
+    verified: list[Path] = []
     real_sha256 = snapshots_module._sha256
     real_verify = snapshots_module.verify_database_file
 
     def counted_sha256(path: Path, **kwargs: Any) -> str:
-        sha256_calls.append(path)
+        hashed.append(path)
         return real_sha256(path, **kwargs)
 
     def counted_verify(path: Path, *args: Any, **kwargs: Any) -> Any:
-        verification_calls.append(path)
+        verified.append(path)
         return real_verify(path, *args, **kwargs)
 
     monkeypatch.setattr(snapshots_module, "_sha256", counted_sha256)
     monkeypatch.setattr(snapshots_module, "verify_database_file", counted_verify)
-    try:
-        created = await dispatch_rpc(
-            state,
-            {"method": "data_store.snapshot_create", "params": {"reason": "manual"}},
-        )
 
-        assert created["ok"] is True
-        assert created["result"]["snapshot"]["reason"] == "manual"
-        assert len(sha256_calls) == 1
-        assert len(verification_calls) == 1
-    finally:
-        sessions.close()
+    status = await rpc_result(state, "data_store.status")
+    created = await rpc_result(state, "data_store.snapshot_create", reason="manual")
+    write_incident(
+        tmp_path,
+        "sessions",
+        cause="test-corruption",
+        quarantine_path=tmp_path / "quarantine" / "sessions" / "bundle",
+        restored_snapshot_id="snapshot-1",
+        restored_snapshot_time="2026-08-31T10:00:00.000000Z",
+        failure_detected_at="2026-08-31T10:05:00.000000Z",
+    )
+    incident_status = await rpc_result(state, "data_store.status")
+    [incident] = incident_status["incidents"]
+    stale = await rpc_error(state, "data_store.incident_acknowledge", incident_id="stale")
+    acknowledged = await rpc_result(
+        state, "data_store.incident_acknowledge", incident_id=incident["incident_id"]
+    )
+
+    assert status["state"] == "snapshot_degraded"
+    assert set(status["databases"]) == {"sessions"}
+    assert status["databases"]["sessions"]["state"] == "healthy"
+    assert created["snapshot"]["reason"] == "manual"
+    assert set(created["snapshot"]["members"]) == {"sessions"}
+    # The reply reads the fresh snapshot back without re-verifying its directory:
+    # the one member is hashed and verified once, while it is created.
+    assert (len(hashed), len(verified)) == (1, 1)
+    assert incident["database"] == "sessions"
+    assert incident_status["state"] == "recovered_with_incident"
+    assert stale["code"] == "invalid_request"
+    assert acknowledged["state"] == "healthy"
+    assert acknowledged["incidents"] == []
+    assert resource_changes(state) == [_DATA_STORE_CHANGED, _DATA_STORE_CHANGED]
 
 
 @pytest.mark.asyncio
-async def test_snapshot_create_names_why_no_snapshot_was_taken(tmp_path: Path) -> None:
-    write_bootstrap_marker(tmp_path)
-    sessions = ChatSessionManager(tmp_path)
-    open_database(notes_spec(tmp_path, name=_EXTENSION)).close()
-    notes_spec(tmp_path, name=_EXTENSION).path.unlink()
-    try:
-        response = await dispatch_rpc(
-            _state(tmp_path, sessions),
-            {"method": "data_store.snapshot_create", "params": {"reason": "manual"}},
-        )
-    finally:
-        sessions.close()
+async def test_snapshot_create_names_why_no_snapshot_was_taken(
+    tmp_path: Path, sessions: ChatSessionManager
+) -> None:
+    _register_extension_database(tmp_path).unlink()
 
-    assert response["ok"] is False
-    assert response["error"]["code"] == "domain_error"
-    assert response["error"]["message"].startswith(
+    error = await rpc_error(
+        _state(tmp_path, sessions), "data_store.snapshot_create", reason="manual"
+    )
+
+    assert error["code"] == "domain_error"
+    assert error["message"].startswith(
         "the data snapshot was not created: data snapshots need every registered database: "
         f"the registered Extension database {_EXTENSION} has no file"
     )
-    assert f"vbot data-store unregister {_EXTENSION} --yes" in response["error"]["message"]
+    assert f"vbot data-store unregister {_EXTENSION} --yes" in error["message"]
 
 
 @pytest.mark.asyncio
-async def test_unregister_releases_an_extension_database(tmp_path: Path) -> None:
-    write_bootstrap_marker(tmp_path)
-    sessions = ChatSessionManager(tmp_path)
-    open_database(notes_spec(tmp_path, name=_EXTENSION)).close()
-    path = notes_spec(tmp_path, name=_EXTENSION).path
+async def test_unregister_releases_an_extension_database(
+    tmp_path: Path, sessions: ChatSessionManager
+) -> None:
+    path = _register_extension_database(tmp_path)
     state = _state(tmp_path, sessions)
-    try:
-        response = await dispatch_rpc(
-            state, {"method": "data_store.unregister", "params": {"name": _EXTENSION}}
-        )
-    finally:
-        sessions.close()
 
-    assert response["ok"] is True
-    released = response["result"]["unregistered"]
+    result = await rpc_result(state, "data_store.unregister", name=_EXTENSION)
+
+    released = result["unregistered"]
     assert released["name"] == _EXTENSION
     assert released["database_id"]
     assert (Path(released["quarantine"]) / path.name).is_file()
@@ -204,36 +147,44 @@ async def test_unregister_releases_an_extension_database(tmp_path: Path) -> None
     marker = read_marker(tmp_path)
     assert marker is not None
     assert set(marker.databases) == {"sessions"}
-    assert state.event_bus.events[-1]["payload"] == {"kind": "data_store"}
+    assert resource_changes(state) == [_DATA_STORE_CHANGED]
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("params", "message"),
+    ("method", "params", "message"),
     [
-        ({"name": "sessions"}, "sessions is a core vBot database and cannot be unregistered"),
-        ({"name": "ext.demo.other"}, "ext.demo.other is not a registered database"),
-        ({}, "params.name must be a non-empty string"),
-        ({"name": _EXTENSION, "force": True}, "force"),
+        (
+            "data_store.unregister",
+            {"name": "sessions"},
+            "sessions is a core vBot database and cannot be unregistered",
+        ),
+        (
+            "data_store.unregister",
+            {"name": "ext.demo.other"},
+            "ext.demo.other is not a registered database",
+        ),
+        ("data_store.unregister", {}, "params.name must be a non-empty string"),
+        ("data_store.unregister", {"name": _EXTENSION, "force": True}, "force"),
+        ("data_store.snapshot_create", {"reason": "nightly"}, "params.reason must be one of"),
     ],
 )
-async def test_unregister_refuses_core_unknown_and_malformed_requests(
-    tmp_path: Path, params: dict[str, Any], message: str
+async def test_data_store_refusals_keep_every_database_registered(
+    tmp_path: Path,
+    sessions: ChatSessionManager,
+    method: str,
+    params: dict[str, Any],
+    message: str,
 ) -> None:
-    write_bootstrap_marker(tmp_path)
-    sessions = ChatSessionManager(tmp_path)
-    open_database(notes_spec(tmp_path, name=_EXTENSION)).close()
+    path = _register_extension_database(tmp_path)
     state = _state(tmp_path, sessions)
-    try:
-        response = await dispatch_rpc(state, {"method": "data_store.unregister", "params": params})
-    finally:
-        sessions.close()
 
-    assert response["ok"] is False
-    assert response["error"]["code"] == "invalid_request"
-    assert message in response["error"]["message"]
+    error = await rpc_error(state, method, **params)
+
+    assert error["code"] == "invalid_request"
+    assert message in error["message"]
     marker = read_marker(tmp_path)
     assert marker is not None
     assert set(marker.databases) == {"sessions", _EXTENSION}
-    assert notes_spec(tmp_path, name=_EXTENSION).path.is_file()
-    assert state.event_bus.events == []
+    assert path.is_file()
+    assert resource_changes(state) == []
