@@ -6,6 +6,7 @@ import argparse
 import sys
 from collections.abc import Callable
 from contextvars import ContextVar
+from datetime import datetime
 from functools import wraps
 from pathlib import Path
 from typing import TYPE_CHECKING, ParamSpec
@@ -235,6 +236,20 @@ def print_update_command_result(
         print("  Attention: stopping the old server required forced termination.")
 
 
+def _operation_duration(operation: Operation) -> str | None:
+    """Time from the update request to its saved outcome, e.g. ``2m 05s``."""
+    try:
+        elapsed = datetime.fromisoformat(operation.updated_at) - datetime.fromisoformat(
+            operation.created_at
+        )
+    except (TypeError, ValueError):
+        return None
+    seconds = round(elapsed.total_seconds())
+    if seconds < 0:
+        return None
+    return f"{seconds}s" if seconds < 60 else f"{seconds // 60}m {seconds % 60:02d}s"
+
+
 def print_application_update_result(
     install: Installation, operation: Operation, *, handoff: bool = False
 ) -> None:
@@ -308,6 +323,9 @@ def print_application_update_result(
             print(f"  {operation.message}")
         if operation.error:
             print(f"  Reason: {operation.error}")
+    duration = _operation_duration(operation) if operation.terminal else None
+    if duration is not None:
+        print(f"  Duration: {duration}")
     if operation.phase != "completed":
         print(f"  Status: vbot update status {operation.id}")
     if operation.phase == "prepared":

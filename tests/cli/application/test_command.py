@@ -314,6 +314,34 @@ def test_current_version_output_has_no_restart_or_reopen_instruction(tmp_path, c
     assert "->" not in output and "reopen" not in output and "server restarted" not in output
 
 
+@pytest.mark.parametrize(
+    "phase, finished, shown",
+    [
+        ("completed", "2026-09-27T11:08:07.4+00:00", "2m 25s"),
+        ("failed", "2026-09-27T11:06:29.1+00:00", "47s"),
+        ("preparing", "2026-09-27T11:06:29.1+00:00", None),
+    ],
+)
+def test_update_outcome_reports_its_total_duration(tmp_path, capsys, phase, finished, shown):
+    install = _install(tmp_path)
+    operation = Operation(
+        id="upd_duration",
+        phase=phase,
+        previous_version="rel_current",
+        candidate_version="rel_current",
+        created_at="2026-09-27T11:05:42.1+00:00",
+    )
+    operation.updated_at = finished
+
+    command._print_update_result(install, operation)
+
+    output = capsys.readouterr().out
+    if shown is None:
+        assert "Duration" not in output
+    else:
+        assert shown in output
+
+
 def test_detached_update_keeps_operation_handle_without_claiming_completion(
     tmp_path, monkeypatch, capsys
 ):
