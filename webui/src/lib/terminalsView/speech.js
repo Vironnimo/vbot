@@ -10,6 +10,7 @@ export function createTerminalSpeech({
   onSpeechError,
   createRecorder,
   transcribe,
+  prepareTranscription,
   isDestroyed,
   isUnavailable,
   streamView,
@@ -115,6 +116,9 @@ export function createTerminalSpeech({
       request.recorder = recorder;
       recorder.start();
       state.speechState = 'recording';
+      // A local speech model loads while the user speaks. Only a hint: the
+      // transcription reports its own failures.
+      prepareTranscription().catch(() => {});
     } catch (error) {
       if (speechRequest === request) {
         cancelSpeech(terminalId);

@@ -837,9 +837,9 @@ interrupted downloads resume their existing model revision. Alternatively, point
 **Model directory** at a complete compatible Transformers checkpoint on the server.
 Recordings are processed by the local engine, without a transcription API call.
 
-After every server start, loading a local model takes a while. Chat and Desktop
-Voice therefore ask the server to start loading as soon as a recording begins, so
-most of the load happens while you speak. To have the model ready before the first
+After every server start, loading a local model takes a while. Chat, terminal
+dictation and Desktop Voice therefore ask the server to start loading as soon as a
+recording begins, so part of the load happens while you speak. To have the model ready before the first
 recording, turn on **Load at server start** in the engine's options: the server
 then loads it in the background after starting and whenever you change this
 binding. The model stays in memory until you unload it or stop the server.
