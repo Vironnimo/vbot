@@ -1,4 +1,4 @@
-"""Terminal: calls in other harnesses' shapes, and what results show."""
+"""Terminal Tool: input, calls in other harnesses' shapes, and what results show."""
 
 from __future__ import annotations
 
@@ -10,36 +10,30 @@ from typing import Any, cast
 
 import pytest
 
-from core.projects import ProjectStore
 from core.providers._tool_result_text import render_tool_result_envelope
 from core.tools import terminal as terminal_module
 from core.tools._terminal_arguments import normalize_terminal_arguments, terminal_key_name
-from core.tools.terminal import TERMINAL_TOOL_NAME, register_terminal_tool
 from core.tools.terminal_manager import TerminalManager, TerminalOwner
-from core.tools.tools import JsonObject, ToolContext, ToolRegistry
-from tests.core.tools.terminal_helpers import make_context
+from core.tools.tools import JsonObject, ToolContext, tool_failure
+from tests.core.tools.terminal_helpers import call, make_context
 from tests.core.tools.terminal_helpers import manager as manager
 from tests.core.tools.terminal_manager_helpers import AdapterFactory, eventually
+from tests.core.tools.terminal_manager_helpers import shell_environment as shell_environment
 
 OWNER = TerminalOwner("project-a", "agent-a", "session-a")
 
 
 class Terminal:
-    """Dispatch terminal calls through the production registry path."""
+    """Make the Agent's terminal calls as the Tool executor runs them."""
 
     def __init__(self, terminal_manager: TerminalManager, tmp_path: Path) -> None:
         self.manager = terminal_manager
-        self.registry = ToolRegistry()
-        register_terminal_tool(self.registry, terminal_manager, ProjectStore(tmp_path))
         self.context = make_context(tmp_path)
 
     async def __call__(
         self, arguments: JsonObject, context: ToolContext | None = None
     ) -> dict[str, Any]:
-        return cast(
-            dict[str, Any],
-            await self.registry.dispatch(context or self.context, arguments, [TERMINAL_TOOL_NAME]),
-        )
+        return cast(dict[str, Any], await call(self.manager, context or self.context, arguments))
 
     async def start(self, **fields: Any) -> str:
         result = await self({"action": "start", "command": "fake-tui", **fields})
@@ -84,7 +78,9 @@ async def test_start_ignores_placeholders_that_request_nothing(
     assert "note" not in result["data"]
     assert manager[1].calls[0][0] == ["fake-tui"]
     assert manager[1].calls[0][3:] == (24, 80)
-    await asyncio.sleep(0.1)
+    # No start input is queued, so nothing is typed later either.
+    session = terminal.manager.get_session(result["data"]["terminal_id"], OWNER)
+    assert session.initial_input_task is None
     assert manager[1].adapters[0].writes == []
 
 
@@ -97,8 +93,8 @@ async def test_start_applies_a_requested_size(
     assert result["ok"] is True
     assert (result["data"]["columns"], result["data"]["rows"]) == (120, 32)
     assert manager[1].calls[0][3:] == (32, 120)
-    with pytest.raises(ValueError, match="columns"):
-        await terminal({"action": "start", "command": "fake-tui", "columns": 30})
+    too_narrow = await terminal({"action": "start", "command": "fake-tui", "columns": 30})
+    assert "columns" in _error(too_narrow)["message"]
     assert len(manager[1].calls) == 1
 
 
@@ -143,8 +139,8 @@ async def test_start_takes_an_argument_list_as_command(
 
     assert result["ok"] is True
     assert manager[1].calls[0][0] == ["fake-tui", "--flag", "a b"]
-    with pytest.raises(ValueError, match="every argument in args"):
-        await terminal({"action": "start", "command": ["fake-tui", "-x"], "args": ["-y"]})
+    both = await terminal({"action": "start", "command": ["fake-tui", "-x"], "args": ["-y"]})
+    assert "every argument in args" in _error(both)["message"]
     assert len(manager[1].calls) == 1
 
 
@@ -179,11 +175,79 @@ async def test_start_with_a_terminal_id_opens_a_new_terminal_or_refuses_an_exist
 async def test_start_refuses_input_it_cannot_send(
     terminal: Terminal, manager: tuple[TerminalManager, AdapterFactory]
 ) -> None:
-    with pytest.raises(ValueError, match='send key "escape" with the input action'):
-        await terminal({"action": "start", "command": "fake-tui", "key": "Esc"})
-    with pytest.raises(ValueError, match="send exact data with the input action"):
-        await terminal({"action": "start", "command": "fake-tui", "data": "\x03"})
+    key = await terminal({"action": "start", "command": "fake-tui", "key": "Esc"})
+    assert 'send key "escape" with the input action' in _error(key)["message"]
+    data = await terminal({"action": "start", "command": "fake-tui", "data": "\x03"})
+    assert "send exact data with the input action" in _error(data)["message"]
     assert manager[1].calls == []
+
+
+@pytest.mark.asyncio
+async def test_input_types_text_keys_and_exact_data_against_the_current_screen(
+    terminal: Terminal, manager: tuple[TerminalManager, AdapterFactory]
+) -> None:
+    terminal_id = await terminal.start()
+    adapter = manager[1].adapters[0]
+    session = terminal.manager.get_session(terminal_id, OWNER)
+    adapter.emit("QUESTION> ")
+    await eventually(lambda: session.renderer.revision > 0)
+
+    async def send(**fields: Any) -> dict[str, Any]:
+        return await terminal({"action": "input", "terminal_id": terminal_id, **fields})
+
+    stale = await send(text="answer", expected_screen_revision=0)
+    assert stale == tool_failure(
+        "stale_screen",
+        "Terminal screen changed; inspect status before sending this input",
+        retryable=True,
+    )
+    typed = await send(text="answer", expected_screen_revision=session.renderer.revision)
+    assert (typed["data"]["key"], typed["data"]["delivery"]) == (
+        None,
+        "automatic_terminal_activity",
+    )
+    submitted = await send(text="submit", key="enter")
+    assert submitted["data"]["key"] == "enter"
+    await send(key="f12")
+    raw = "\x1b[200~more\r\n\x1b[201~"
+    exact = await send(data=raw)
+    assert exact["data"]["characters_sent"] == len(raw)
+    assert adapter.writes == ["answer", "submit", "\r", "\x1b[24~", raw]
+
+    multiline = "first\n  second"
+    adapter.emit("\x1b[?2004h")
+    await eventually(lambda: session.renderer.bracketed_paste_enabled)
+    pasted = await send(text=multiline)
+    assert adapter.writes[-1] == f"\x1b[200~{multiline}\x1b[201~"
+    assert pasted["data"]["bracketed_paste"] is True
+    adapter.emit("\x1b[?2004l")
+    await eventually(lambda: not session.renderer.bracketed_paste_enabled)
+    typed_lines = await send(text=multiline)
+    assert adapter.writes[-1] == multiline
+    assert typed_lines["data"]["bracketed_paste"] is False
+
+
+@pytest.mark.parametrize(
+    ("fields", "writes"),
+    [({"text": "", "key": "enter"}, ["\r"]), ({"text": ""}, [])],
+    ids=["key-remains", "nothing-remains"],
+)
+@pytest.mark.asyncio
+async def test_empty_optional_input_fields_are_ignored(
+    terminal: Terminal,
+    manager: tuple[TerminalManager, AdapterFactory],
+    fields: JsonObject,
+    writes: list[str],
+) -> None:
+    terminal_id = await terminal.start()
+
+    result = await terminal({"action": "input", "terminal_id": terminal_id, **fields})
+
+    assert result["ok"] is True
+    assert result["data"]["characters_sent"] == len("".join(writes))
+    # Input that sends nothing starts no activity to deliver.
+    assert ("delivery" in result["data"]) is bool(writes)
+    assert manager[1].adapters[0].writes == writes
 
 
 @pytest.mark.parametrize(
@@ -267,12 +331,14 @@ async def test_enter_flag_and_another_key_conflict(
 ) -> None:
     terminal_id = await terminal.start()
 
-    with pytest.raises(ValueError, match='enter asks for Enter and key asks for "escape"'):
-        await terminal(
-            {"action": "input", "terminal_id": terminal_id, "key": "escape", "enter": True}
-        )
-    with pytest.raises(ValueError, match="enter must be true or false"):
-        await terminal({"action": "input", "terminal_id": terminal_id, "text": "x", "enter": "y"})
+    conflict = await terminal(
+        {"action": "input", "terminal_id": terminal_id, "key": "escape", "enter": True}
+    )
+    assert 'enter asks for Enter and key asks for "escape"' in _error(conflict)["message"]
+    unclear = await terminal(
+        {"action": "input", "terminal_id": terminal_id, "text": "x", "enter": "y"}
+    )
+    assert "enter must be true or false" in _error(unclear)["message"]
     assert manager[1].adapters[0].writes == []
 
 
@@ -331,23 +397,20 @@ async def test_fields_another_action_owns_fail_with_the_call_that_uses_them(
 ) -> None:
     terminal_id = await terminal.start()
 
-    with pytest.raises(ValueError) as waited:
-        await terminal({"action": "wait", "terminal_id": terminal_id, "text": "y"})
-    assert str(waited.value) == (
+    waited = await terminal({"action": "wait", "terminal_id": terminal_id, "text": "y"})
+    assert _error(waited)["message"] == (
         "terminal was not run: wait sends no input; type with "
         + json.dumps({"action": "input", "terminal_id": terminal_id, "text": "y"})
         + "."
     )
-    with pytest.raises(ValueError) as sized:
-        await terminal({"action": "status", "terminal_id": terminal_id, "columns": 120})
-    assert str(sized.value) == (
+    sized = await terminal({"action": "status", "terminal_id": terminal_id, "columns": 120})
+    assert _error(sized)["message"] == (
         "terminal was not run: status does not change the size; resize with "
         + json.dumps({"action": "resize", "terminal_id": terminal_id, "columns": 120})
         + "."
     )
-    with pytest.raises(ValueError) as commanded:
-        await terminal({"action": "input", "terminal_id": terminal_id, "command": "ls -la"})
-    assert str(commanded.value) == (
+    commanded = await terminal({"action": "input", "terminal_id": terminal_id, "command": "ls -la"})
+    assert _error(commanded)["message"] == (
         "terminal was not run: input types text instead of running a command; to run it in "
         "this terminal, send "
         + json.dumps(

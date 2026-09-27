@@ -1,179 +1,114 @@
-"""Terminal manager: launch behavior."""
+"""Terminal manager: launch environment, start input, and manual launch commands."""
 
 from __future__ import annotations
 
 import ast
-import asyncio
 import os
 import shlex
 import shutil
 import subprocess
 import sys
-import threading
 from pathlib import Path
 
 import pytest
 
 import core.tools._bash_environment as bash_environment
 import core.tools._terminal_input as terminal_input
-import core.tools._terminal_io as terminal_io
-import core.tools.terminal_backend as terminal_backend
 import core.tools.terminal_manager as terminal_module
-from core.runs import RunExecutionOwner
-from core.tools.terminal_manager import (
-    TerminalClosedError,
-    TerminalManager,
-    TerminalStaleScreenError,
-)
+from core.tools.terminal_manager import TerminalManager, TerminalStaleScreenError
 from tests.core.tools.terminal_manager_helpers import (
-    TEST_ACTIVITY_QUIET_SECONDS,
     AdapterFactory,
-    FakeClock,
-    PendingTriggerService,
-    establish_delivered_baseline,
     eventually,
     owner,
-    settle_next_activity,
+    session_of,
     spawn,
 )
-from tests.core.tools.terminal_manager_helpers import (
-    terminal_manager as terminal_manager,
+from tests.core.tools.terminal_manager_helpers import quick_readiness as quick_readiness
+from tests.core.tools.terminal_manager_helpers import shell_environment as shell_environment
+from tests.core.tools.terminal_manager_helpers import terminal_manager as terminal_manager
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("inherited", "explicit", "expected"),
+    [
+        (None, None, "xterm-256color"),
+        ("", None, "xterm-256color"),
+        ("dumb", None, "xterm-256color"),
+        ("screen-256color", None, "screen-256color"),
+        ("screen-256color", {"TERM": "dumb"}, "dumb"),
+    ],
+    ids=["unset", "empty", "dumb", "real-terminal", "explicit-env"],
 )
+async def test_launch_corrects_an_inherited_dumb_term_and_keeps_explicit_env(
+    terminal_manager: tuple[TerminalManager, AdapterFactory],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    inherited: str | None,
+    explicit: dict[str, str] | None,
+    expected: str,
+) -> None:
+    if inherited is None:
+        monkeypatch.delenv("TERM", raising=False)
+    else:
+        monkeypatch.setenv("TERM", inherited)
+    manager, factory = terminal_manager
+
+    await manager.spawn(owner(), ["fake-tui"], cwd=tmp_path, env=explicit, origin_run_id="run-a")
+
+    assert factory.calls[0][2]["TERM"] == expected
+    assert os.environ.get("TERM") == inherited
 
 
 @pytest.mark.asyncio
-async def test_execution_group_stop_keeps_unrelated_terminal_after_attachment_transfer(
-    terminal_manager,
-    tmp_path,
-    monkeypatch,
-):
-    manager, _factory = terminal_manager
-    monkeypatch.setattr(
-        terminal_backend, "terminate_process_tree", lambda adapter, **_kwargs: adapter.terminate()
-    )
-    execution = RunExecutionOwner("fixture", "group", "peer", "generation", "epoch")
-    owned = await manager.spawn(
-        owner(),
-        ["fake"],
-        cwd=tmp_path,
-        env=None,
-        origin_run_id="run",
-        execution_owner=execution,
-    )
-    unrelated = await manager.spawn(
-        owner(), ["fake"], cwd=tmp_path, env=None, origin_run_id="other"
-    )
-    manager.detach(owned.terminal_id, owner())
-    await manager.close_execution_group("fixture", "group", "epoch")
-    assert not owned.adapter.is_alive()
-    assert unrelated.adapter.is_alive()
-    # The settled group's admission marker does not outlive its drain.
-    assert manager._closed_execution_groups == set()
+async def test_terminal_reprobes_missing_program_and_keeps_explicit_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[dict[str, str]] = []
+    probes = 0
 
+    async def probe() -> dict[str, str]:
+        nonlocal probes
+        probes += 1
+        return {"PATH": f"path-{probes}", "TERM": "dumb"}
 
-@pytest.mark.asyncio
-async def test_execution_group_stop_drains_pending_terminal_launch(tmp_path, monkeypatch):
-    started = threading.Event()
-    release = threading.Event()
     factory = AdapterFactory()
 
-    def blocked_factory(*args):
-        started.set()
-        assert release.wait(5)
-        return factory(*args)
+    def launch(argv, cwd, env, rows, columns):  # type: ignore[no-untyped-def]
+        calls.append(dict(env))
+        if len(calls) == 1:
+            raise FileNotFoundError("test-owned absent executable")
+        return factory(argv, cwd, env, rows, columns)
 
-    monkeypatch.setattr(
-        terminal_backend, "terminate_process_tree", lambda adapter, **_kwargs: adapter.terminate()
-    )
-    manager = TerminalManager(adapter_factory=blocked_factory)
-    execution = RunExecutionOwner("fixture", "group", "peer", "generation", "epoch")
-    launch = asyncio.create_task(
-        manager.spawn(
-            owner(),
-            ["fake"],
-            cwd=tmp_path,
-            env=None,
-            origin_run_id="run",
-            execution_owner=execution,
-        )
-    )
+    monkeypatch.setattr(bash_environment, "_probe_shell_env", probe)
+    manager = TerminalManager(adapter_factory=launch)
     try:
-        assert await asyncio.to_thread(started.wait, 5)
-        close = asyncio.create_task(manager.close_execution_group("fixture", "group", "epoch"))
-        await asyncio.sleep(0)
-        assert not close.done()
-        # A launch racing the drain is rejected while admission is closed.
-        with pytest.raises(TerminalClosedError):
-            await manager.spawn(
-                owner(),
-                ["fake"],
-                cwd=tmp_path,
-                env=None,
-                origin_run_id="late",
-                execution_owner=execution,
-            )
-        release.set()
-        session = await launch
-        await close
-        assert not session.adapter.is_alive()
-        assert manager._closed_execution_groups == set()
+        await manager.spawn(
+            owner(), ["new-program"], cwd=tmp_path, env={"EXPLICIT": "kept"}, origin_run_id="run"
+        )
+        assert [call["PATH"] for call in calls] == ["path-1", "path-2"]
+        assert all(call["TERM"] == "xterm-256color" for call in calls)
+        assert all(call["EXPLICIT"] == "kept" for call in calls)
     finally:
-        release.set()
-        await asyncio.gather(launch, return_exceptions=True)
         await manager.aclose()
 
 
 @pytest.mark.asyncio
-async def test_terminal_completion_uses_activity_owner_without_transferring_process_lifetime(
-    tmp_path,
-):
-    clock = FakeClock()
-    trigger = PendingTriggerService()
-    factory = AdapterFactory()
-    manager = TerminalManager(
-        trigger,
-        adapter_factory=factory,
-        sweep_interval_seconds=3600,
-        activity_quiet_seconds=TEST_ACTIVITY_QUIET_SECONDS,
-        monotonic=clock.monotonic,
-        sleep=clock.sleep,
-    )
-    manager.start()
-    execution = RunExecutionOwner("swarm", "group", "peer", "generation", "epoch")
-    try:
-        session = await establish_delivered_baseline(
-            manager,
-            factory,
-            trigger,
-            clock,
-            tmp_path,
-            quiet_seconds=TEST_ACTIVITY_QUIET_SECONDS,
-        )
-        manager.attach(
-            session.terminal_id, owner(), origin_run_id="owned-run", execution_owner=execution
-        )
-        await manager.send_input(
-            session.terminal_id,
-            owner(),
-            data="next\r",
-            text=None,
-            key=None,
-            expected_screen_revision=None,
-            origin_run_id="owned-run",
-            execution_owner=execution,
-        )
-        generation = session.activity_generation
-        factory.adapters[0].emit("new result")
-        await settle_next_activity(
-            clock, session, after_generation=generation, quiet_seconds=TEST_ACTIVITY_QUIET_SECONDS
-        )
-        await eventually(lambda: len(trigger.submissions) == 2)
-        assert trigger.submissions[-1][1]["execution_owner"] == execution
-        assert session.execution_owner is None
-        await manager.close_execution_group("swarm", "group", "epoch")
-        assert session.adapter.is_alive()
-    finally:
-        await manager.aclose()
+@pytest.mark.usefixtures("quick_readiness")
+async def test_start_input_waits_for_a_settled_screen_and_answers_terminal_queries_meanwhile(
+    terminal_manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
+) -> None:
+    manager, factory = terminal_manager
+    session = await spawn(manager, tmp_path, initial_text="agent task")
+    assert session.state == "starting"
+
+    factory.adapters[0].emit("\x1b[6n")
+    await eventually(lambda: factory.adapters[0].writes == ["\x1b[1;1R"])
+    assert session.initial_input_task is not None
+    assert not session.initial_input_task.done()
+    factory.adapters[0].emit("READY> ")
+    await eventually(lambda: factory.adapters[0].writes == ["\x1b[1;1R", "agent task", "\r"])
+    assert session.state == "working"
 
 
 @pytest.mark.asyncio
@@ -226,108 +161,39 @@ async def test_empty_agent_input_preserves_startup_and_pending_input(
     assert factory.adapters[0].writes == []
 
 
-@pytest.mark.asyncio
-async def test_guarded_input_cannot_be_replayed_before_echo(
-    terminal_manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
-) -> None:
-    manager, factory = terminal_manager
-    session = await spawn(manager, tmp_path)
-    revision = session.renderer.revision
-    arguments = {
-        "text": None,
-        "key": "enter",
-        "expected_screen_revision": revision,
-        "origin_run_id": "run-a",
-    }
-    await manager.send_input(session.terminal_id, owner(), **arguments)
-    with pytest.raises(TerminalStaleScreenError):
-        await manager.send_input(session.terminal_id, owner(), **arguments)
-    assert factory.adapters[0].writes == ["\r"]
-
-
-@pytest.mark.asyncio
-async def test_headless_queries_do_not_cancel_queued_initial_input(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(terminal_io, "TERMINAL_INITIAL_INPUT_QUIET_SECONDS", 0.01)
-    factory = AdapterFactory()
-    manager = TerminalManager(adapter_factory=factory, sweep_interval_seconds=3600)
-    manager.start()
-    try:
-        session = await spawn(manager, tmp_path, initial_text="agent task")
-        factory.adapters[0].emit("\x1b[6n")
-        await eventually(lambda: factory.adapters[0].writes == ["\x1b[1;1R"])
-        assert session.initial_input_task is not None
-        assert not session.initial_input_task.done()
-        factory.adapters[0].emit("READY> ")
-        await eventually(lambda: factory.adapters[0].writes == ["\x1b[1;1R", "agent task", "\r"])
-    finally:
-        await manager.aclose()
-
-
-@pytest.mark.asyncio
-async def test_initial_task_waits_for_tui_and_sends_enter_separately(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(terminal_io, "TERMINAL_INITIAL_INPUT_QUIET_SECONDS", 0.01)
-    factory = AdapterFactory("READY> ")
-    manager = TerminalManager(adapter_factory=factory, sweep_interval_seconds=3600)
-    manager.start()
-    try:
-        session = await spawn(manager, tmp_path, initial_text="do the work")
-        assert session.state == "starting"
-        await eventually(lambda: factory.adapters[0].writes == ["do the work", "\r"])
-        assert session.state == "working"
-        assert manager.get_session(session.terminal_id, owner()) is session
-    finally:
-        await manager.aclose()
-
-
-@pytest.mark.asyncio
-async def test_manual_command_runs_inside_the_default_shell(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+@pytest.fixture
+def host_shell(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(terminal_module, "default_terminal_argv", lambda env: ["host-shell"])
-    monkeypatch.setattr(terminal_io, "TERMINAL_INITIAL_INPUT_QUIET_SECONDS", 0.01)
-    factory = AdapterFactory("PS C:\\work> ")
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("host_shell", "quick_readiness")
+async def test_manual_command_is_typed_into_the_default_shell_with_quoted_arguments(
+    tmp_path: Path,
+) -> None:
+    factory = AdapterFactory()
+    # The default quiet period keeps the shell busy with its prompt output while
+    # the command is typed.
     manager = TerminalManager(adapter_factory=factory, sweep_interval_seconds=3600)
     manager.start()
     try:
         result = await manager.spawn_for_operator(
-            command="codex",
-            arguments=["--profile", "work"],
-            cwd=tmp_path,
+            command="codex", arguments=["--profile", "work space"], cwd=tmp_path
         )
-        session = manager._sessions[result["terminal_id"]]
+        session = session_of(manager, result["terminal_id"])
 
         assert session.owner is None
-        assert session.command == "host-shell"
-        assert session.arguments == ()
-        assert session.launch_command == "codex"
-        assert session.launch_arguments == ("--profile", "work")
-        assert result["command"] == "host-shell"
-        assert result["launch_command"] == "codex"
-        assert result["launch_args"] == ["--profile", "work"]
-        await eventually(lambda: factory.adapters[0].writes == ["codex --profile work", "\r"])
-    finally:
-        await manager.aclose()
-
-
-@pytest.mark.asyncio
-async def test_manual_command_quotes_arguments_with_spaces(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(terminal_module, "default_terminal_argv", lambda env: ["host-shell"])
-    monkeypatch.setattr(terminal_io, "TERMINAL_INITIAL_INPUT_QUIET_SECONDS", 0.01)
-    factory = AdapterFactory("PS C:\\work> ")
-    manager = TerminalManager(adapter_factory=factory, sweep_interval_seconds=3600)
-    manager.start()
-    try:
-        await manager.spawn_for_operator(
-            command="codex",
-            arguments=["--profile", "work space"],
-            cwd=tmp_path,
+        assert (session.command, session.arguments) == ("host-shell", ())
+        assert (session.launch_command, session.launch_arguments) == (
+            "codex",
+            ("--profile", "work space"),
         )
+        assert (result["command"], result["launch_command"], result["launch_args"]) == (
+            "host-shell",
+            "codex",
+            ["--profile", "work space"],
+        )
+        factory.adapters[0].emit("PS C:\\work> ")
         await eventually(
             lambda: factory.adapters[0].writes == ["codex --profile 'work space'", "\r"]
         )
@@ -336,86 +202,62 @@ async def test_manual_command_quotes_arguments_with_spaces(
 
 
 @pytest.mark.asyncio
-async def test_manual_command_is_not_written_without_a_shell_prompt(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    ("prompt", "ready_timeout", "shell_ends"),
+    [(None, 0.01, False), ("PS C:\\work> ", 0.25, False), (None, None, True)],
+    ids=["no-prompt", "prompt-not-quiet-long-enough", "shell-exits"],
+)
+@pytest.mark.usefixtures("host_shell")
+async def test_manual_command_is_not_written_without_a_ready_shell(
+    terminal_manager: tuple[TerminalManager, AdapterFactory],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    prompt: str | None,
+    ready_timeout: float | None,
+    shell_ends: bool,
 ) -> None:
-    monkeypatch.setattr(terminal_module, "default_terminal_argv", lambda env: ["host-shell"])
-    monkeypatch.setattr(terminal_io, "TERMINAL_INITIAL_INPUT_QUIET_SECONDS", 0.01)
-    monkeypatch.setattr(terminal_input, "TERMINAL_OPERATOR_READY_TIMEOUT_SECONDS", 0.01)
-    factory = AdapterFactory()
-    manager = TerminalManager(adapter_factory=factory, sweep_interval_seconds=3600)
-    manager.start()
-    try:
-        result = await manager.spawn_for_operator(
-            command="codex",
-            arguments=[],
-            cwd=tmp_path,
+    # A prompt must stay unchanged for a whole minute before the command is typed.
+    monkeypatch.setattr(terminal_input, "TERMINAL_INITIAL_INPUT_QUIET_SECONDS", 60)
+    if ready_timeout is not None:
+        monkeypatch.setattr(
+            terminal_input, "TERMINAL_OPERATOR_READY_TIMEOUT_SECONDS", ready_timeout
         )
-        session = manager._sessions[result["terminal_id"]]
-        assert session.operator_command_task is not None
-        await eventually(lambda: session.operator_command_task.done())
-        assert factory.adapters[0].writes == []
-    finally:
-        await manager.aclose()
-
-
-@pytest.mark.asyncio
-async def test_manual_command_is_not_written_when_shell_ends_first(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(terminal_module, "default_terminal_argv", lambda env: ["host-shell"])
-    monkeypatch.setattr(terminal_io, "TERMINAL_INITIAL_INPUT_QUIET_SECONDS", 0.01)
-    factory = AdapterFactory()
-    manager = TerminalManager(adapter_factory=factory, sweep_interval_seconds=3600)
-    manager.start()
-    try:
-        result = await manager.spawn_for_operator(
-            command="codex",
-            arguments=[],
-            cwd=tmp_path,
-        )
-        session = manager._sessions[result["terminal_id"]]
+    manager, factory = terminal_manager
+    result = await manager.spawn_for_operator(command="codex", arguments=[], cwd=tmp_path)
+    session = session_of(manager, result["terminal_id"])
+    command_task = session.operator_command_task
+    assert command_task is not None
+    if prompt is not None:
+        factory.adapters[0].emit(prompt)
+    if shell_ends:
         factory.adapters[0].finish(1)
         await eventually(lambda: session.state == "exited")
-        assert session.operator_command_task is not None
-        await eventually(lambda: session.operator_command_task.done())
-        assert factory.adapters[0].writes == []
-    finally:
-        await manager.aclose()
+
+    await eventually(command_task.done)
+    assert factory.adapters[0].writes == []
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("host_shell", "quick_readiness")
 async def test_manual_command_survives_early_operator_input(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    terminal_manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
 ) -> None:
-    """Operator input must not cancel the launch command write.
+    """Operator input queues behind the launch command instead of cancelling it.
 
-    The WebUI takes control immediately after a manual start; the first typed
-    characters used to cancel the shared initial-input task and the launch
-    command was never entered. The launch command has its own task and the
-    operator input waits briefly for it instead of cancelling it.
+    The WebUI takes control right after a manual start, so the first typed
+    characters can arrive while the shell is still booting.
     """
-    monkeypatch.setattr(terminal_module, "default_terminal_argv", lambda env: ["host-shell"])
-    monkeypatch.setattr(terminal_io, "TERMINAL_INITIAL_INPUT_QUIET_SECONDS", 0.01)
-    factory = AdapterFactory("PS C:\\work> ")
-    manager = TerminalManager(adapter_factory=factory, sweep_interval_seconds=3600)
-    manager.start()
-    try:
-        result = await manager.spawn_for_operator(
-            command="opencode2",
-            arguments=[],
-            cwd=tmp_path,
-        )
-        session = manager._sessions[result["terminal_id"]]
-        assert session.operator_command_task is not None
-        assert not session.operator_command_task.done()
+    manager, factory = terminal_manager
+    result = await manager.spawn_for_operator(command="opencode2", arguments=[], cwd=tmp_path)
+    session = session_of(manager, result["terminal_id"])
+    assert session.operator_command_task is not None
+    assert not session.operator_command_task.done()
 
-        await manager.send_operator_input(session.terminal_id, "x")
+    factory.adapters[0].emit("PS C:\\work> ")
+    await manager.send_operator_input(session.terminal_id, "x")
 
-        await eventually(lambda: factory.adapters[0].writes == ["opencode2", "\r", "x"])
-        assert session.operator_command_task.done()
-    finally:
-        await manager.aclose()
+    await eventually(lambda: factory.adapters[0].writes == ["opencode2", "\r", "x"])
+    assert session.operator_command_task.done()
 
 
 def test_shell_command_renders_exact_typed_shell_input() -> None:
@@ -517,38 +359,3 @@ def test_screen_prompt_markers_detect_common_shell_prompts() -> None:
     assert terminal_input._screen_has_prompt_marker("") is False
     assert terminal_input._screen_has_prompt_marker("hello world") is False
     assert terminal_input._screen_has_prompt_marker("PS") is False
-
-
-@pytest.mark.asyncio
-async def test_terminal_reprobes_missing_program_and_keeps_explicit_env(tmp_path, monkeypatch):
-    import core.tools.bash as bash_module
-
-    calls = []
-    probes = 0
-
-    async def probe():
-        nonlocal probes
-        probes += 1
-        return {"PATH": f"path-{probes}", "TERM": "dumb"}
-
-    factory = AdapterFactory()
-
-    def launch(argv, cwd, env, rows, columns):
-        calls.append(dict(env))
-        if len(calls) == 1:
-            raise FileNotFoundError("test-owned absent executable")
-        return factory(argv, cwd, env, rows, columns)
-
-    monkeypatch.setattr(bash_environment, "_probe_shell_env", probe)
-    bash_module.reset_shell_env_cache()
-    manager = TerminalManager(adapter_factory=launch)
-    try:
-        await manager.spawn(
-            owner(), ["new-program"], cwd=tmp_path, env={"EXPLICIT": "kept"}, origin_run_id="run"
-        )
-        assert [call["PATH"] for call in calls] == ["path-1", "path-2"]
-        assert all(call["TERM"] == "xterm-256color" for call in calls)
-        assert all(call["EXPLICIT"] == "kept" for call in calls)
-    finally:
-        await manager.aclose()
-        bash_module.reset_shell_env_cache()

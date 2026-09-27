@@ -292,32 +292,6 @@ def test_ansi_snapshot_rebuilds_bounded_scrollback_for_a_late_viewer() -> None:
     assert late_viewer.screen_text() == source.screen_text()
 
 
-def test_page_from_addresses_whole_buffer_by_absolute_line() -> None:
-    renderer = TerminalRenderer(12, 3, scrollback_lines=20)
-    renderer.feed("".join(f"line-{index}\r\n" for index in range(8)))
-
-    first = renderer.page_from(0, 3)
-    assert first["text"] == "line-0\nline-1\nline-2"
-    assert first["line_count"] == 3
-    assert first["start_line"] == 0
-    assert first["end_line"] == 3
-    assert first["next_start_line"] == 3
-    assert first["total_lines"] == 8
-    assert first["viewport_rows"] == 3
-    assert first["cursor_row"] == 8
-
-    next_page = renderer.page_from(first["next_start_line"], 3)
-    assert next_page["text"] == "line-3\nline-4\nline-5"
-    assert next_page["start_line"] == 3
-    assert next_page["end_line"] == 6
-
-    tail = renderer.page_from(6, 100)
-    assert tail["text"] == "line-6\nline-7"
-    assert tail["line_count"] == 2
-    assert tail["end_line"] == 8
-    assert tail["next_start_line"] is None
-
-
 def test_page_from_handles_empty_and_overflow_addresses() -> None:
     renderer = TerminalRenderer(12, 3, scrollback_lines=20)
     renderer.feed("")
@@ -362,13 +336,14 @@ def test_cursor_page_carries_absolute_buffer_metrics() -> None:
 
 
 @pytest.mark.parametrize("platform_name", ["nt", "posix"])
-def test_adapter_read_is_bounded_and_preserves_split_unicode(platform_name):
+def test_adapter_read_is_bounded_and_preserves_split_unicode(platform_name, monkeypatch):
     import os
     import socket
-    import time
 
     if platform_name == "posix" and os.name == "nt":
         pytest.skip("POSIX descriptor readiness requires POSIX")
+    # A read waits at most this long for output; zero proves it never blocks past it.
+    monkeypatch.setattr(terminal_backend, "TERMINAL_READ_TIMEOUT_SECONDS", 0)
     if platform_name == "nt":
         receiver, sender = socket.socketpair()
         process = SimpleNamespace(fileobj=receiver)
@@ -390,10 +365,8 @@ def test_adapter_read_is_bounded_and_preserves_split_unicode(platform_name):
             os.close(write_fd)
 
     try:
-        start = time.monotonic()
         with pytest.raises(TimeoutError):
             adapter.read(4096)
-        assert time.monotonic() - start < 1
         encoded = "😀".encode()
         send(encoded[:2])
         assert adapter.read(4096) == ""

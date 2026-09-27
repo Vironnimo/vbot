@@ -1,4 +1,4 @@
-"""Terminal manager: operator behavior."""
+"""Terminal manager: the operator's stream, controls, groups, and launch history."""
 
 from __future__ import annotations
 
@@ -12,20 +12,24 @@ import pytest
 import core.tools._terminal_state as terminal_state
 import core.tools.terminal_manager as terminal_module
 from core.tools.terminal_manager import (
-    TerminalClosedError,
     TerminalManager,
-    TerminalNotOwnedError,
+    TerminalManagerError,
+    TerminalNotFoundError,
+    TerminalProgramNotRunningError,
+    TerminalStaleScreenError,
 )
 from tests.core.tools.terminal_manager_helpers import (
     AdapterFactory,
-    PendingTriggerService,
     eventually,
     owner,
     spawn,
 )
-from tests.core.tools.terminal_manager_helpers import (
-    terminal_manager as terminal_manager,
-)
+from tests.core.tools.terminal_manager_helpers import shell_environment as shell_environment
+from tests.core.tools.terminal_manager_helpers import terminal_manager as terminal_manager
+
+
+async def _next_event(stream: Any) -> dict[str, Any]:
+    return await asyncio.wait_for(anext(stream), timeout=1)
 
 
 @pytest.mark.asyncio
@@ -40,7 +44,7 @@ async def test_operator_stream_starts_with_ansi_snapshot_and_continues_in_sequen
         + "".join(f"history-{index}\r\n" for index in range(40))
         + "\x1b[31mREADY>\x1b[0m "
     )
-    await eventually(lambda: session.renderer.page(before=None, limit=100)["line_count"] > 0)
+    await eventually(lambda: "READY>" in session.renderer.screen_text())
 
     stream = manager.watch_for_operator(session.terminal_id)
     ready = await anext(stream)
@@ -55,68 +59,55 @@ async def test_operator_stream_starts_with_ansi_snapshot_and_continues_in_sequen
     assert "READY>" in ready["ansi"]
     assert "\x1b[2J" in ready["ansi"]
 
-    next_event = asyncio.create_task(anext(stream))
     adapter.emit("\x1b]0;Codex tests\x07next")
-    event = await asyncio.wait_for(next_event, timeout=1)
+    event = await _next_event(stream)
     while event["type"] != "terminal_output":
         assert event["sequence"] > ready["sequence"]
-        event = await asyncio.wait_for(anext(stream), timeout=1)
+        event = await _next_event(stream)
     assert event["data"].endswith("next")
     assert event["sequence"] > ready["sequence"]
-    state_event = await asyncio.wait_for(anext(stream), timeout=1)
+    state_event = await _next_event(stream)
     assert state_event["type"] == "terminal_state"
     assert state_event["terminal"]["title"] == "Codex tests"
     await stream.aclose()
 
 
 @pytest.mark.asyncio
-async def test_operator_stream_refreshes_authoritative_screen_after_alternate_screen_exit(
-    terminal_manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
+@pytest.mark.parametrize(
+    ("entered", "left", "hidden"),
+    [
+        ("PS> ", "\x1b[?1049h\x1b[2J\x1b[Hnvim\x1b[?1049lPS> ", "nvim"),
+        ("\x1b[?2004hTUI", "\x1b[?2004lPS> ", None),
+    ],
+    ids=["alternate-screen-exit", "bracketed-paste-off"],
+)
+async def test_operator_stream_refreshes_the_authoritative_screen_when_a_program_leaves_a_mode(
+    terminal_manager: tuple[TerminalManager, AdapterFactory],
+    tmp_path: Path,
+    entered: str,
+    left: str,
+    hidden: str | None,
 ) -> None:
     manager, factory = terminal_manager
     session = await spawn(manager, tmp_path)
     adapter = factory.adapters[0]
-    adapter.emit("PS> ")
-    await eventually(lambda: session.renderer.screen_text() == "PS>")
+    adapter.emit(entered)
+    await eventually(lambda: session.renderer.revision > 0)
     stream = manager.watch_for_operator(session.terminal_id)
     ready = await anext(stream)
 
-    adapter.emit("\x1b[?1049h\x1b[2J\x1b[Hnvim\x1b[?1049lPS> ")
-    output = await asyncio.wait_for(anext(stream), timeout=1)
-    while output["type"] != "terminal_output":
-        output = await asyncio.wait_for(anext(stream), timeout=1)
-    snapshot = await asyncio.wait_for(anext(stream), timeout=1)
+    adapter.emit(left)
+    events = [await _next_event(stream)]
+    while events[-1]["type"] != "terminal_snapshot":
+        events.append(await _next_event(stream))
+    snapshot = events[-1]
 
-    assert output["type"] == "terminal_output"
-    assert snapshot["type"] == "terminal_snapshot"
+    output = next(event for event in events if event["type"] == "terminal_output")
     assert snapshot["sequence"] == output["sequence"] + 1
     assert snapshot["sequence"] > ready["sequence"]
     assert "PS>" in snapshot["ansi"]
-    assert "nvim" not in snapshot["ansi"]
-    await stream.aclose()
-
-
-@pytest.mark.asyncio
-async def test_operator_stream_refreshes_after_tui_disables_bracketed_paste(
-    terminal_manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
-) -> None:
-    manager, factory = terminal_manager
-    session = await spawn(manager, tmp_path)
-    adapter = factory.adapters[0]
-    adapter.emit("\x1b[?2004hTUI")
-    await eventually(lambda: session.renderer.bracketed_paste_enabled)
-    stream = manager.watch_for_operator(session.terminal_id)
-    ready = await anext(stream)
-
-    adapter.emit("\x1b[?2004lPS> ")
-    snapshot: dict[str, Any] | None = None
-    while snapshot is None:
-        event = await asyncio.wait_for(anext(stream), timeout=1)
-        if event["type"] == "terminal_snapshot":
-            snapshot = event
-
-    assert snapshot["sequence"] > ready["sequence"]
-    assert "PS>" in snapshot["ansi"]
+    if hidden is not None:
+        assert hidden not in snapshot["ansi"]
     assert session.renderer.bracketed_paste_enabled is False
     await stream.aclose()
 
@@ -138,19 +129,41 @@ async def test_operator_stream_publishes_final_snapshot_before_terminal_state(
         event["type"] == "terminal_state" and event["terminal"]["state"] == "exited"
         for event in events
     ):
-        events.append(await asyncio.wait_for(anext(stream), timeout=1))
+        events.append(await _next_event(stream))
 
-    terminal_snapshot_index = next(
+    snapshot_index = next(
         index for index, event in enumerate(events) if event["type"] == "terminal_snapshot"
     )
-    terminal_state_index = next(
+    exited_index = next(
         index
         for index, event in enumerate(events)
         if event["type"] == "terminal_state" and event["terminal"]["state"] == "exited"
     )
-    assert terminal_snapshot_index < terminal_state_index
-    assert events[terminal_snapshot_index]["sequence"] > ready["sequence"]
-    assert "final screen" in events[terminal_snapshot_index]["ansi"]
+    assert snapshot_index < exited_index
+    assert events[snapshot_index]["sequence"] > ready["sequence"]
+    assert "final screen" in events[snapshot_index]["ansi"]
+    await stream.aclose()
+
+
+@pytest.mark.asyncio
+async def test_terminal_snapshots_obey_byte_budget_and_reconnect(
+    terminal_manager: tuple[TerminalManager, AdapterFactory],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(terminal_state, "TERMINAL_STREAM_BYTE_LIMIT", 50_000)
+    manager, _ = terminal_manager
+    session = await manager.spawn(owner(), ["fake"], cwd=tmp_path, env=None, origin_run_id="run")
+    session.renderer.feed("".join("x" * 70 + "\r\n" for _ in range(250)))
+    for _ in range(20):
+        manager._events._publish_snapshot(session)
+    events = session.stream.events
+    assert len(events) < 20
+    assert sum(terminal_state._stream_event_size(event) for event in events) <= 50_000
+    stream = manager.watch_for_operator(session.terminal_id)
+    snapshot = await anext(stream)
+    assert snapshot["sequence"] == session.stream_sequence
+    assert snapshot["ansi"] == session.renderer.ansi_snapshot()
     await stream.aclose()
 
 
@@ -172,8 +185,7 @@ async def test_operator_controls_same_live_session_and_changed_callbacks(
     assert factory.adapters[0].writes == ["hello\r"]
 
     resized = await manager.resize_for_operator(session.terminal_id, columns=90, rows=28)
-    assert resized["columns"] == 90
-    assert resized["rows"] == 28
+    assert (resized["columns"], resized["rows"]) == (90, 28)
     assert factory.adapters[0].resizes == [(28, 90)]
 
     killed = await manager.kill_for_operator(session.terminal_id)
@@ -187,260 +199,66 @@ async def test_operator_controls_same_live_session_and_changed_callbacks(
 
 
 @pytest.mark.asyncio
-async def test_closed_pty_write_marks_terminal_exited_and_delivers_attention(
-    tmp_path: Path,
-) -> None:
-    trigger = PendingTriggerService()
-    factory = AdapterFactory()
-    manager = TerminalManager(
-        trigger,
-        adapter_factory=factory,
-        sweep_interval_seconds=3600,
-        activity_quiet_seconds=0.03,
-    )
-    manager.start()
-    try:
-        session = await spawn(manager, tmp_path)
-        manager.attach(session.terminal_id, owner(), origin_run_id="attach-run")
-        factory.adapters[0].write_error = EOFError("Pty is closed")
-
-        with pytest.raises(TerminalClosedError):
-            await manager.send_operator_input(session.terminal_id, "late input")
-
-        await eventually(lambda: len(trigger.submissions) == 1)
-        assert session.state == "exited"
-        assert session.attention is not None
-        assert session.attention.kind == "exited"
-        assert trigger.submissions[0][1]["origin_run_id"] == "attach-run"
-    finally:
-        await manager.aclose()
-
-
-@pytest.mark.asyncio
-async def test_unattached_operator_terminal_has_no_agent_scope_or_attention_delivery(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    trigger = PendingTriggerService()
-    factory = AdapterFactory()
-    manager = TerminalManager(
-        trigger,
-        adapter_factory=factory,
-        sweep_interval_seconds=3600,
-        activity_quiet_seconds=0.03,
-    )
-    monkeypatch.setattr(terminal_module, "default_terminal_argv", lambda env: ["host-shell"])
-    manager.start()
-    try:
-        result = await manager.spawn_for_operator(
-            command=None,
-            arguments=["--login"],
-            cwd=tmp_path,
-        )
-        terminal_id = result["terminal_id"]
-        session = manager._sessions[terminal_id]
-
-        assert factory.calls[0][0] == ["host-shell", "--login"]
-        assert result["owner"] is None
-        assert result["attachment"] is None
-        assert session.owner is None
-        assert session.lifecycle_owner is None
-        assert session.attachment is None
-        assert manager.list_sessions() == [session]
-
-        await manager.close_project_scope("project-a")
-        assert factory.adapters[0].alive is True
-
-        await manager.send_operator_input(terminal_id, "echo ready\r")
-        factory.adapters[0].emit("ready\r\n")
-        await eventually(lambda: session.state == "ready")
-        assert trigger.submissions == []
-
-        factory.adapters[0].finish(0)
-        await eventually(lambda: session.state == "exited")
-        assert trigger.submissions == []
-    finally:
-        await manager.aclose()
-
-
-@pytest.mark.asyncio
-async def test_operator_terminal_attach_delivers_activity_and_detach_preserves_lifetime(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    trigger = PendingTriggerService()
-    factory = AdapterFactory()
-    manager = TerminalManager(
-        trigger,
-        adapter_factory=factory,
-        sweep_interval_seconds=3600,
-        activity_quiet_seconds=0.03,
-    )
-    monkeypatch.setattr(terminal_module, "default_terminal_argv", lambda env: ["host-shell"])
-    manager.start()
-    try:
-        result = await manager.spawn_for_operator(
-            command=None, arguments=[], cwd=tmp_path, columns=137, rows=41
-        )
-        terminal_id = result["terminal_id"]
-        session = manager._sessions[terminal_id]
-
-        attached, changed = manager.attach(terminal_id, owner(), origin_run_id="attach-run")
-        assert attached is session
-        assert changed is True
-        assert session.owner is None
-        assert session.lifecycle_owner is None
-        assert session.attachment == owner()
-        assert manager.get_session(terminal_id, owner()) is session
-        assert (session.renderer.columns, session.renderer.rows) == (137, 41)
-        assert factory.adapters[0].resizes == []
-
-        same, changed = manager.attach(terminal_id, owner(), origin_run_id="attach-run-2")
-        assert same is session
-        assert changed is False
-        assert (session.renderer.columns, session.renderer.rows) == (137, 41)
-        assert factory.adapters[0].resizes == []
-
-        await manager.send_operator_input(terminal_id, "echo ready\r")
-        factory.adapters[0].emit("ready\r\n")
-        await eventually(lambda: len(trigger.submissions) == 1)
-        assert trigger.submissions[0][0] == ("agent-a", "session-a")
-        assert trigger.submissions[0][1]["origin_run_id"] == "attach-run-2"
-
-        assert manager.detach(terminal_id, owner()) is session
-        assert session.attachment is None
-        assert factory.adapters[0].alive is True
-        with pytest.raises(TerminalNotOwnedError):
-            manager.get_session(terminal_id, owner())
-
-        await manager.close_scope(owner())
-        assert factory.adapters[0].alive is True
-    finally:
-        await manager.aclose()
-
-
-@pytest.mark.asyncio
-async def test_attach_arms_an_already_working_terminal_for_its_next_quiet_boundary(
-    tmp_path: Path,
-) -> None:
-    trigger = PendingTriggerService()
-    factory = AdapterFactory()
-    manager = TerminalManager(
-        trigger,
-        adapter_factory=factory,
-        sweep_interval_seconds=3600,
-        activity_quiet_seconds=0.03,
-    )
-    manager.start()
-    try:
-        result = await manager.spawn_for_operator(command=None, arguments=[], cwd=tmp_path)
-        session = manager._sessions[result["terminal_id"]]
-        session.state = "working"
-
-        manager.attach(session.terminal_id, owner(), origin_run_id="attach-run")
-
-        await eventually(lambda: len(trigger.submissions) == 1)
-        assert session.attention is not None
-        assert session.attention.kind == "output_settled"
-        assert trigger.submissions[0][1]["origin_run_id"] == "attach-run"
-    finally:
-        await manager.aclose()
-
-
-@pytest.mark.asyncio
-async def test_attach_rejects_another_session_and_detached_agent_origin_still_owns_lifecycle(
+async def test_operator_read_preserves_binding_and_rejects_stale_guarded_input(
     terminal_manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
 ) -> None:
-    manager, factory = terminal_manager
-    session = await spawn(manager, tmp_path)
-    other = owner("session-b")
+    manager, _factory = terminal_manager
+    session = await manager.spawn(
+        owner(), ["codex"], cwd=tmp_path, env=None, origin_run_id="run-live"
+    )
+    original_attachment = session.attachment
+    original_observation = session.observed_screen
+    snapshot = manager.read_for_operator(session.terminal_id)
+    assert snapshot["terminal"]["terminal_id"] == session.terminal_id
+    assert session.attachment == original_attachment
+    assert session.observed_screen == original_observation
+    revision = snapshot["terminal"]["screen_revision"]
+    await manager.send_operator_input(
+        session.terminal_id, "first", expected_screen_revision=revision
+    )
 
-    with pytest.raises(terminal_module.TerminalAlreadyAttachedError):
-        manager.attach(session.terminal_id, other, origin_run_id="run-b")
-
-    manager.detach(session.terminal_id, owner())
-    attached, changed = manager.attach(session.terminal_id, other, origin_run_id="run-b")
-    assert attached is session
-    assert changed is True
-    assert session.owner == owner()
-    assert session.lifecycle_owner == owner()
-    assert session.attachment == other
-
-    await manager.close_scope(other)
-    assert factory.adapters[0].alive is True
-    assert session.attachment is None
-
-    await manager.close_scope(owner())
-    assert factory.adapters[0].alive is False
+    with pytest.raises(TerminalStaleScreenError):
+        await manager.send_operator_input(
+            session.terminal_id, "second", expected_screen_revision=revision
+        )
+    assert session.attachment == original_attachment
 
 
 @pytest.mark.asyncio
-async def test_session_move_transfers_operator_terminal_attachment_not_lifecycle(
-    terminal_manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
+async def test_operator_input_expecting_a_program_writes_only_while_it_runs(
+    tmp_path: Path,
 ) -> None:
-    manager, factory = terminal_manager
-    result = await manager.spawn_for_operator(command=None, arguments=[], cwd=tmp_path)
-    session = manager._sessions[result["terminal_id"]]
-    target = owner("session-b")
-    manager.attach(session.terminal_id, owner(), origin_run_id="run-a")
+    running: set[str] = {"codex"}
+    probes: list[tuple[int, str]] = []
 
-    assert manager.transfer_scope(owner(), target) == 1
-    assert session.owner is None
-    assert session.lifecycle_owner is None
-    assert session.attachment == target
-    assert manager.get_session(session.terminal_id, target) is session
+    def probe(pid: int, program: str) -> bool:
+        probes.append((pid, program))
+        return program in running
 
-    await manager.close_scope(target)
-    assert session.attachment is None
-    assert factory.adapters[0].alive is True
-
-
-@pytest.mark.asyncio
-async def test_manual_launch_history_is_persistent_mru_and_deduplicated(tmp_path: Path) -> None:
-    history_path = tmp_path / "terminals" / "launch-history.json"
     factory = AdapterFactory()
     manager = TerminalManager(
-        adapter_factory=factory,
-        launch_history_path=history_path,
-        data_dir=tmp_path,
-        sweep_interval_seconds=3600,
+        adapter_factory=factory, sweep_interval_seconds=3600, program_probe=probe
     )
     manager.start()
     try:
-        await manager.spawn_for_operator(
-            command="python",
-            arguments=["-m", "http.server", "8080"],
-            cwd=tmp_path,
-            launch_workdir="~/sites/docs",
+        session = await manager.spawn(
+            owner(), ["pwsh"], cwd=tmp_path, env=None, origin_run_id="run-live"
         )
-        await manager.spawn_for_operator(
-            command="codex",
-            arguments=["--profile", "work space"],
-            cwd=tmp_path,
-            launch_workdir="C:\\Development\\vBot",
+        revision = session.renderer.revision
+        await manager.send_operator_input(
+            session.terminal_id, "task", expected_program="codex", expected_screen_revision=revision
         )
-        await manager.spawn_for_operator(
-            command="python",
-            arguments=["-m", "http.server", "8080"],
-            cwd=tmp_path,
-            launch_workdir="~/sites/docs",
-        )
-
-        history = manager.list_operator_launch_history()
-        assert len(history) == 2
-        assert history[0]["command"] == "python"
-        assert history[0]["args"] == ["-m", "http.server", "8080"]
-        assert history[0]["workdir"] == "~/sites/docs"
-        assert len(history[0]["id"]) == 64
-        assert history[1]["command"] == "codex"
-        assert history_path.is_file()
+        running.clear()
+        with pytest.raises(TerminalProgramNotRunningError, match="codex is not running"):
+            await manager.send_operator_input(session.terminal_id, "\r", expected_program="codex")
+        # Input without an expected program never asks the process tree.
+        await manager.send_operator_input(session.terminal_id, "dir\r")
+        with pytest.raises(ValueError, match="expected_program"):
+            await manager.send_operator_input(session.terminal_id, "x", expected_program=" ")
+        assert factory.adapters[0].writes == ["task", "dir\r"]
+        assert probes == [(factory.adapters[0].pid, "codex")] * 2
     finally:
         await manager.aclose()
-
-    reloaded = TerminalManager(
-        launch_history_path=history_path,
-        data_dir=tmp_path,
-        adapter_factory=AdapterFactory(),
-    )
-    assert reloaded.list_operator_launch_history() == history
 
 
 @pytest.mark.asyncio
@@ -478,20 +296,187 @@ async def test_finished_operator_history_expires_with_a_catalog_change(
 
 
 @pytest.mark.asyncio
-async def test_terminal_snapshots_obey_byte_budget_and_reconnect(
-    terminal_manager, tmp_path, monkeypatch
-):
-    monkeypatch.setattr(terminal_state, "TERMINAL_STREAM_BYTE_LIMIT", 50_000)
-    manager, _ = terminal_manager
-    session = await manager.spawn(owner(), ["fake"], cwd=tmp_path, env=None, origin_run_id="run")
-    session.renderer.feed("".join("x" * 70 + "\r\n" for _ in range(250)))
-    for _ in range(20):
-        manager._events._publish_snapshot(session)
-    events = session.stream.events
-    assert len(events) < 20
-    assert sum(terminal_state._stream_event_size(event) for event in events) <= 50_000
-    stream = manager.watch_for_operator(session.terminal_id)
-    snapshot = await anext(stream)
-    assert snapshot["sequence"] == session.stream_sequence
-    assert snapshot["ansi"] == session.renderer.ansi_snapshot()
-    await stream.aclose()
+async def test_manual_launch_history_is_persistent_mru_and_deduplicated(tmp_path: Path) -> None:
+    history_path = tmp_path / "terminals" / "launch-history.json"
+    manager = TerminalManager(
+        adapter_factory=AdapterFactory(),
+        launch_history_path=history_path,
+        data_dir=tmp_path,
+        sweep_interval_seconds=3600,
+    )
+    manager.start()
+    try:
+        for command, arguments, workdir in [
+            ("python", ["-m", "http.server", "8080"], "~/sites/docs"),
+            ("codex", ["--profile", "work space"], "C:\\Development\\vBot"),
+            ("python", ["-m", "http.server", "8080"], "~/sites/docs"),
+        ]:
+            await manager.spawn_for_operator(
+                command=command, arguments=arguments, cwd=tmp_path, launch_workdir=workdir
+            )
+
+        history = manager.list_operator_launch_history()
+        assert [entry["command"] for entry in history] == ["python", "codex"]
+        assert history[0]["args"] == ["-m", "http.server", "8080"]
+        assert history[0]["workdir"] == "~/sites/docs"
+        assert len(history[0]["id"]) == 64
+        assert history_path.is_file()
+    finally:
+        await manager.aclose()
+
+    reloaded = TerminalManager(
+        launch_history_path=history_path, data_dir=tmp_path, adapter_factory=AdapterFactory()
+    )
+    assert reloaded.list_operator_launch_history() == history
+
+
+async def _spawn_manual(
+    manager: TerminalManager, tmp_path: Path, *, group_id: str | None = None
+) -> str:
+    result = await manager.spawn_for_operator(
+        command=None, arguments=[], cwd=tmp_path, group_id=group_id
+    )
+    return str(result["terminal_id"])
+
+
+@pytest.mark.asyncio
+async def test_user_groups_are_unique_persistent_and_renamable(tmp_path: Path) -> None:
+    groups_path = tmp_path / "terminals" / "groups.json"
+    manager = TerminalManager(
+        groups_path=groups_path, data_dir=tmp_path, sweep_interval_seconds=3600
+    )
+    try:
+        created = manager.create_group_for_operator("Work")
+        assert (created["kind"], created["terminal_count"]) == ("user", 0)
+        with pytest.raises(TerminalManagerError, match="already exists"):
+            manager.create_group_for_operator("work")
+
+        renamed = manager.rename_group_for_operator(created["group_id"], "Dev")
+        assert renamed["name"] == "Dev"
+        assert groups_path.is_file()
+    finally:
+        await manager.aclose()
+
+    reloaded = TerminalManager(
+        groups_path=groups_path, data_dir=tmp_path, sweep_interval_seconds=3600
+    )
+    try:
+        groups = reloaded.list_groups_for_operator()
+        assert [(group["name"], group["kind"]) for group in groups] == [("Dev", "user")]
+    finally:
+        await reloaded.aclose()
+
+
+@pytest.mark.asyncio
+async def test_agent_group_is_created_and_reused_by_name(tmp_path: Path) -> None:
+    manager = TerminalManager(sweep_interval_seconds=3600)
+    try:
+        first = manager.resolve_or_create_agent_group("codex")
+        second = manager.resolve_or_create_agent_group("codex")
+        assert first.group_id == second.group_id
+        assert first.kind == "agent"
+
+        # An operator user group with the same name wins the reuse lookup.
+        user = manager.create_group_for_operator("My Codex")
+        reused = manager.resolve_or_create_agent_group("my codex")
+        assert reused.group_id == user["group_id"]
+    finally:
+        await manager.aclose()
+
+
+@pytest.mark.asyncio
+async def test_spawned_terminals_join_explicit_and_automatic_groups(
+    terminal_manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
+) -> None:
+    manager, _factory = terminal_manager
+    group = manager.create_group_for_operator("Work")
+    agent_session = await spawn(manager, tmp_path)
+    manual_id = await _spawn_manual(manager, tmp_path)
+    grouped_id = await _spawn_manual(manager, tmp_path, group_id=group["group_id"])
+
+    by_id = {summary["terminal_id"]: summary for summary in manager.list_for_operator()}
+    assert by_id[agent_session.terminal_id]["group_id"] == "auto:agent:agent-a"
+    assert by_id[manual_id]["group_id"] == "auto:manual"
+    assert by_id[grouped_id]["group_id"] == group["group_id"]
+
+    by_name = {item["name"]: item for item in manager.list_groups_for_operator()}
+    assert by_name["Work"]["terminal_count"] == 1
+    assert by_name["Manual"]["terminal_count"] == 1
+    assert by_name["Agent agent-a"]["terminal_count"] == 1
+    assert "finished" not in by_name
+
+
+@pytest.mark.asyncio
+async def test_killed_terminal_moves_to_finished_group_only_when_present(
+    terminal_manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
+) -> None:
+    manager, _factory = terminal_manager
+    session = await spawn(manager, tmp_path)
+    await manager.kill_for_operator(session.terminal_id)
+
+    by_id = {summary["terminal_id"]: summary for summary in manager.list_for_operator()}
+    assert by_id[session.terminal_id]["group_id"] == "finished"
+    finished = [
+        group for group in manager.list_groups_for_operator() if group["kind"] == "finished"
+    ]
+    assert [group["terminal_count"] for group in finished] == [1]
+
+    manager.forget_for_operator(session.terminal_id)
+    assert all(group["kind"] != "finished" for group in manager.list_groups_for_operator())
+
+
+@pytest.mark.asyncio
+async def test_group_order_is_persisted_and_new_terminals_append(tmp_path: Path) -> None:
+    groups_path = tmp_path / "terminals" / "groups.json"
+    manager = TerminalManager(
+        adapter_factory=AdapterFactory(),
+        groups_path=groups_path,
+        data_dir=tmp_path,
+        sweep_interval_seconds=3600,
+    )
+    manager.start()
+    try:
+        group_id = manager.create_group_for_operator("Work")["group_id"]
+        first = await _spawn_manual(manager, tmp_path, group_id=group_id)
+        second = await _spawn_manual(manager, tmp_path, group_id=group_id)
+
+        manager.set_group_order_for_operator(group_id, [second, first])
+        assert [item["terminal_id"] for item in manager.list_for_operator()] == [second, first]
+
+        third = await _spawn_manual(manager, tmp_path, group_id=group_id)
+        listed = [item["terminal_id"] for item in manager.list_for_operator()]
+        assert listed == [second, first, third]
+
+        with pytest.raises(TerminalManagerError, match="do not belong"):
+            manager.set_group_order_for_operator(group_id, ["other-terminal"])
+    finally:
+        await manager.aclose()
+
+    reloaded = TerminalManager(
+        groups_path=groups_path, data_dir=tmp_path, sweep_interval_seconds=3600
+    )
+    assert reloaded.list_groups_for_operator()[0]["order"] == [second, first]
+
+
+@pytest.mark.asyncio
+async def test_deleting_a_group_kills_every_terminal_in_it(
+    terminal_manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
+) -> None:
+    manager, _factory = terminal_manager
+    group_id = manager.create_group_for_operator("Work")["group_id"]
+    first = await _spawn_manual(manager, tmp_path, group_id=group_id)
+    second = await _spawn_manual(manager, tmp_path, group_id=group_id)
+    outsider = await _spawn_manual(manager, tmp_path)
+
+    result = await manager.delete_group_for_operator(group_id)
+    assert result["terminals_killed"] == 2
+    assert group_id not in {item["group_id"] for item in manager.list_groups_for_operator()}
+
+    by_id = {summary["terminal_id"]: summary for summary in manager.list_for_operator()}
+    assert [(by_id[item]["state"], by_id[item]["group_id"]) for item in (first, second)] == [
+        ("exited", "finished"),
+        ("exited", "finished"),
+    ]
+    assert by_id[outsider]["state"] != "exited"
+    with pytest.raises(TerminalNotFoundError):
+        await manager.delete_group_for_operator(group_id)
