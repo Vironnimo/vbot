@@ -6,10 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from core.tools import FileReadState, ToolRegistry, register_read_tool
-from core.tools.contracts import ToolContractError
+from core.tools import FileReadState
 from core.tools.file_state import StaleReason
-from tests.core.tools.test_read import _FakeAttachmentStore, _FakeSpeech, make_context
+from tests.core.tools.read_test_support import make_context, read_registry
 
 APP = "".join(f"line {number}\n" for number in range(1, 13))
 
@@ -26,14 +25,7 @@ def project(tmp_path: Path) -> Path:
 
 
 async def dispatch(root: Path, arguments: dict, *, file_state: FileReadState | None = None):
-    registry = ToolRegistry()
-    register_read_tool(
-        registry,
-        attachment_store=_FakeAttachmentStore(),
-        speech_service=_FakeSpeech(),
-        file_state=file_state or FileReadState(),
-        speech_max_size_bytes=20_971_520,
-    )
+    registry = read_registry(file_state=file_state)
     return await registry.dispatch(make_context(root), arguments)
 
 
@@ -220,16 +212,6 @@ async def test_line_pair_past_the_line_end_reads_as_a_line_range(
 
 
 @pytest.mark.asyncio
-async def test_offset_text_that_is_no_line_names_the_line_calls(project: Path) -> None:
-    message = await rejected(project, {"path": "src/app.txt", "offset": "max-10"})
-
-    assert message == (
-        'offset takes a line number, not "max-10": offset=10 starts at line 10, and '
-        "offset=-10 shows the last 10 lines."
-    )
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("arguments", "message"),
     [
@@ -266,6 +248,11 @@ async def test_offset_text_that_is_no_line_names_the_line_calls(project: Path) -
             "offset=-5 counts from the end, so end_line=9 cannot close it.",
         ),
         ({"lines": "four"}, 'lines="four" is not a line range.'),
+        (
+            {"offset": "max-10"},
+            'offset takes a line number, not "max-10": offset=10 starts at line 10, and '
+            "offset=-10 shows the last 10 lines.",
+        ),
     ],
 )
 async def test_contradictory_or_unclear_windows_fail_with_the_call_to_send(
@@ -340,27 +327,28 @@ async def test_notes_and_one_file_lists_read_that_file(project: Path, arguments:
             'read has no command "str_replace": it shows the file or lists the directory '
             "given as path. To change a file, call apply_patch.",
         ),
+        # Two different paths are a conflict, not a choice.
+        (
+            {"path": "src/app.txt", "file_path": "src/code.py"},
+            "Conflicting values for path",
+        ),
+        # A requested summary of other lines is not silently dropped.
+        (
+            {"path": "src/app.txt", "limit": 3, "IncludeSummaryOfOtherLines": True},
+            '"IncludeSummaryOfOtherLines" is not a parameter.',
+        ),
+        (
+            {"path": "src", "pattern": "greet", "glob": "*.py", "output_mode": "content"},
+            "read shows one file or lists one directory and has no glob, output_mode field. "
+            'To search files, call search_files(pattern="greet", path="src", glob="*.py", '
+            'output_mode="content").',
+        ),
     ],
 )
 async def test_several_files_or_other_commands_fail_with_the_calls_to_send(
     project: Path, arguments: dict, message: str
 ) -> None:
     assert message in await rejected(project, arguments)
-
-
-@pytest.mark.asyncio
-async def test_a_requested_summary_of_other_lines_is_not_dropped(project: Path) -> None:
-    message = await rejected(
-        project, {"path": "src/app.txt", "limit": 3, "IncludeSummaryOfOtherLines": True}
-    )
-
-    assert '"IncludeSummaryOfOtherLines" is not a parameter.' in message
-
-
-@pytest.mark.asyncio
-async def test_two_different_paths_are_a_conflict_not_a_choice(project: Path) -> None:
-    with pytest.raises(ToolContractError, match="Conflicting values for path"):
-        await dispatch(project, {"path": "src/app.txt", "file_path": "src/code.py"})
 
 
 @pytest.mark.asyncio
@@ -405,27 +393,27 @@ async def test_pattern_that_is_not_a_regex_matches_as_text(project: Path) -> Non
 
 
 @pytest.mark.asyncio
-async def test_pattern_on_a_directory_names_the_search_call(project: Path) -> None:
-    result = await dispatch(project, {"path": "src", "pattern": "greet", "ignore_case": True})
+@pytest.mark.parametrize(
+    ("arguments", "message"),
+    [
+        (
+            {"path": "src", "pattern": "greet", "ignore_case": True},
+            "src is a directory, and read shows the lines of one file. To find matching lines "
+            'in its files, call search_files(pattern="greet", path="src", args=["-i"]).',
+        ),
+        (
+            {"path": "src/code.py", "pattern": "greet", "offset": -1},
+            "offset counts back from the end, which pattern cannot use; omit offset or give "
+            "the line to start searching at",
+        ),
+    ],
+)
+async def test_a_pattern_the_read_cannot_apply_names_the_fix(
+    project: Path, arguments: dict, message: str
+) -> None:
+    result = await dispatch(project, arguments)
 
-    assert error(result) == (
-        "src is a directory, and read shows the lines of one file. To find matching lines "
-        'in its files, call search_files(pattern="greet", path="src", args=["-i"]).'
-    )
-
-
-@pytest.mark.asyncio
-async def test_search_only_fields_name_the_search_call(project: Path) -> None:
-    message = await rejected(
-        project,
-        {"path": "src", "pattern": "greet", "glob": "*.py", "output_mode": "content"},
-    )
-
-    assert message == (
-        "read shows one file or lists one directory and has no glob, output_mode field. "
-        'To search files, call search_files(pattern="greet", path="src", glob="*.py", '
-        'output_mode="content").'
-    )
+    assert error(result) == message
 
 
 @pytest.mark.asyncio

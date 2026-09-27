@@ -1,4 +1,4 @@
-"""Tests for the Run-scoped file-content change tracker (git-style stats)."""
+"""Run-scoped file-content change tracker (git-style stats)."""
 
 from __future__ import annotations
 
@@ -15,188 +15,72 @@ def _key(session_id: str) -> tuple[SessionAddress, str]:
     return SessionAddress(None, "agent", session_id), "run-one"
 
 
-def test_repeated_edit_of_same_line_counts_once(tmp_path: Path) -> None:
+def _stats(files: int, added: int, removed: int, paths: list[str]) -> dict[str, object]:
+    return {"files": files, "added": added, "removed": removed, "paths": paths}
+
+
+# Repeated filler lines are real diff units: SequenceMatcher's auto-junk heuristic
+# would inflate this one-line change into large replace blocks; git reports 1/1.
+_LONG = "\n".join(f"filler {index % 5}" for index in range(400)) + "\nunique line\n"
+
+
+@pytest.mark.parametrize(
+    ("writes", "expected"),
+    [
+        # Repeated edits of one line count once against the Run's first pre-state.
+        (
+            [
+                ("a.txt", "line1\nline2\nline3\n", "line1\nline2b\nline3\n"),
+                ("a.txt", "line1\nline2b\nline3\n", "line1\nline2c\nline3\n"),
+            ],
+            _stats(1, 1, 1, ["a.txt"]),
+        ),
+        ([("a.txt", "keep\nold\nkeep\n", "keep\nnew\nkeep\n")], _stats(1, 1, 1, ["a.txt"])),
+        ([("new.txt", "", "x\ny\n")], _stats(1, 2, 0, ["new.txt"])),
+        ([("a.txt", "a\n", "b\nc\n")], _stats(1, 2, 1, ["a.txt"])),
+        ([("long.txt", _LONG, _LONG.replace("unique", "changed"))], _stats(1, 1, 1, ["long.txt"])),
+        # Several files aggregate, with paths sorted.
+        ([("b.txt", "a\n", "b\n"), ("a.txt", "a\n", "c\n")], _stats(2, 2, 2, ["a.txt", "b.txt"])),
+        # Unchanged or reverted writes report an explicit zero, not None.
+        ([("a.txt", "same\n", "same\n")], _stats(0, 0, 0, [])),
+        ([("a.txt", "a\n", "b\n"), ("a.txt", "b\n", "a\n")], _stats(0, 0, 0, [])),
+    ],
+)
+def test_stats_are_the_net_line_diff_of_each_file(
+    writes: list[tuple[str, str, str]], expected: dict[str, object]
+) -> None:
     tracker = ChangeTracker()
-    target = tmp_path / "a.txt"
-    start = "line1\nline2\nline3\n"
+    for path, before, after in writes:
+        tracker.record_write(_key("session-1"), Path(path), before, after)
 
-    tracker.record_write(_key("session-1"), target, start, "line1\nline2b\nline3\n")
-    tracker.record_write(
-        _key("session-1"), target, "line1\nline2b\nline3\n", "line1\nline2c\nline3\n"
-    )
-
-    stats = tracker.take_run_stats(_key("session-1"))
-    assert stats is not None
-    assert stats["files"] == 1
-    assert stats["added"] == 1
-    assert stats["removed"] == 1
-    assert stats["paths"] == [str(target)]
-
-
-def test_full_rewrite_counts_only_real_delta() -> None:
-    tracker = ChangeTracker()
-
-    tracker.record_write(_key("session-1"), Path("a.txt"), "keep\nold\nkeep\n", "keep\nnew\nkeep\n")
-
-    stats = tracker.take_run_stats(_key("session-1"))
-    assert stats is not None
-    assert stats["added"] == 1
-    assert stats["removed"] == 1
+    # Peeking streams live totals without consuming them; taking consumes them once.
+    assert tracker.peek_run_stats(_key("session-1")) == expected
+    assert tracker.peek_run_stats(_key("session-1")) == expected
+    assert tracker.take_run_stats(_key("session-1")) == expected
+    assert tracker.peek_run_stats(_key("session-1")) is None
+    assert tracker.take_run_stats(_key("session-1")) is None
 
 
 def test_external_intermediate_changes_are_not_attributed_to_the_run() -> None:
-    """A formatter/shell rewrite between two mutations must not inflate stats.
-
-    The first mutation stores its own pre-state; later mutations of the same
-    path deduplicate against it, so content that changed out of band between
-    them does not show up as run delta.
-    """
+    """A formatter or shell rewrite between two Runs must not inflate the second Run's stats."""
     tracker = ChangeTracker()
     target = Path("a.txt")
 
-    # Run 1: agent edits one line; afterwards an external formatter rewrites more.
     tracker.record_write(_key("session-1"), target, "a\nb\nc\n", "a\nB\nc\n")
-    assert tracker.take_run_stats(_key("session-1")) == {
-        "files": 1,
-        "added": 1,
-        "removed": 1,
-        "paths": [str(target)],
-    }
+    assert tracker.take_run_stats(_key("session-1")) == _stats(1, 1, 1, ["a.txt"])
 
-    # Run 2 starts from whatever is on disk now (formatter output included):
-    # only the agent's own delta may be reported, not the formatter churn.
-    disk_after_formatter = "A\nB\nc\n"  # external churn: first line reformatted
-    tracker.record_write(_key("session-2"), target, disk_after_formatter, "A\nB2\nc\n")
-    assert tracker.take_run_stats(_key("session-2")) == {
-        "files": 1,
-        "added": 1,
-        "removed": 1,
-        "paths": [str(target)],
-    }
-
-
-def test_new_file_counts_whole_content_as_added() -> None:
-    tracker = ChangeTracker()
-    target = Path("new.txt")
-
-    tracker.record_write(_key("session-1"), target, "", "x\ny\n")
-
-    stats = tracker.take_run_stats(_key("session-1"))
-    assert stats is not None
-    assert stats["files"] == 1
-    assert stats["added"] == 2
-    assert stats["removed"] == 0
-
-
-def test_unchanged_write_reports_zero_stats() -> None:
-    tracker = ChangeTracker()
-    target = Path("a.txt")
-
-    tracker.record_write(_key("session-1"), target, "same\n", "same\n")
-
-    assert tracker.take_run_stats(_key("session-1")) == {
-        "files": 0,
-        "added": 0,
-        "removed": 0,
-        "paths": [],
-    }
-
-
-def test_stats_are_consumed_per_run() -> None:
-    tracker = ChangeTracker()
-    target = Path("a.txt")
-    tracker.record_write(_key("session-1"), target, "a\n", "b\n")
-
-    assert tracker.take_run_stats(_key("session-1")) is not None
-    assert tracker.take_run_stats(_key("session-1")) is None
-
-
-def test_peek_returns_totals_without_consuming_them() -> None:
-    tracker = ChangeTracker()
-    target = Path("a.txt")
-    tracker.record_write(_key("session-1"), target, "a\n", "b\nc\n")
-
-    first = tracker.peek_run_stats(_key("session-1"))
-    second = tracker.peek_run_stats(_key("session-1"))
-
-    assert first == second
-    assert first == {"files": 1, "added": 2, "removed": 1, "paths": [str(target)]}
-
-    stats = tracker.take_run_stats(_key("session-1"))
-    assert stats == {"files": 1, "added": 2, "removed": 1, "paths": [str(target)]}
-    assert tracker.peek_run_stats(_key("session-1")) is None
-
-
-def test_peek_reports_explicit_zero_when_changes_revert_to_baseline() -> None:
-    tracker = ChangeTracker()
-    target = Path("a.txt")
-    tracker.record_write(_key("session-1"), target, "a\n", "b\n")
-    tracker.record_write(_key("session-1"), target, "b\n", "a\n")
-
-    peeked = tracker.peek_run_stats(_key("session-1"))
-    assert peeked == {"files": 0, "added": 0, "removed": 0, "paths": []}
-
-    assert tracker.take_run_stats(_key("session-1")) == peeked
-    assert tracker.take_run_stats(_key("session-1")) is None
-
-
-def test_peek_returns_none_for_unknown_session() -> None:
-    tracker = ChangeTracker()
-
-    assert tracker.peek_run_stats(_key("missing-session")) is None
-
-
-def test_sessions_are_isolated() -> None:
-    tracker = ChangeTracker()
-    target = Path("a.txt")
-    tracker.record_write(_key("session-1"), target, "a\n", "b\n")
-
-    assert tracker.take_run_stats(_key("session-2")) is None
-    assert tracker.take_run_stats(_key("session-1")) is not None
-
-
-def test_multiple_files_are_aggregated_and_sorted() -> None:
-    tracker = ChangeTracker()
-    first = Path("b.txt")
-    second = Path("a.txt")
-    tracker.record_write(_key("session-1"), first, "a\n", "b\n")
-    tracker.record_write(_key("session-1"), second, "a\n", "c\n")
-
-    stats = tracker.take_run_stats(_key("session-1"))
-    assert stats is not None
-    assert stats["files"] == 2
-    assert stats["added"] == 2
-    assert stats["paths"] == [str(second), str(first)]
+    # The next Run starts from the formatter's output on disk: only its own delta counts.
+    tracker.record_write(_key("session-2"), target, "A\nB\nc\n", "A\nB2\nc\n")
+    assert tracker.take_run_stats(_key("session-2")) == _stats(1, 1, 1, ["a.txt"])
 
 
 def test_oversized_content_is_not_tracked() -> None:
     tracker = ChangeTracker()
-    target = Path("big.txt")
     huge = "x\n" * (MAX_TRACKED_BYTES // 2 + 8)
 
-    tracker.record_write(_key("session-1"), target, huge, huge + "extra\n")
+    tracker.record_write(_key("session-1"), Path("big.txt"), huge, huge + "extra\n")
 
     assert tracker.peek_run_stats(_key("session-1")) is None
-
-
-def test_large_file_with_repeated_lines_diffs_like_git() -> None:
-    """Auto-junking must stay off: repeated filler lines are real diff units.
-
-    With SequenceMatcher's default heuristic, popular lines in sequences over
-    200 items are treated as junk and a one-line change inflates into large
-    replace blocks. Git reports exactly one added and one removed line here.
-    """
-    tracker = ChangeTracker()
-    target = Path("long.txt")
-    before = "\n".join(f"filler {index % 5}" for index in range(400)) + "\nunique line\n"
-    after = before.replace("unique line\n", "changed line\n")
-
-    tracker.record_write(_key("session-1"), target, before, after)
-
-    stats = tracker.take_run_stats(_key("session-1"))
-    assert stats is not None
-    assert stats["added"] == 1
-    assert stats["removed"] == 1
 
 
 def test_tracked_file_cap_evicts_oldest_and_falls_back_for_that_session(
@@ -229,45 +113,38 @@ def test_tracked_file_cap_bounds_retained_entries(monkeypatch: pytest.MonkeyPatc
     for index in range(10):
         tracker.record_write(_key(f"session-{index}"), Path("a.txt"), "", "x\n")
 
-    assert len(tracker._run_changes) == 3
-    assert tracker.peek_run_stats(_key("session-9")) is not None
+    retained = [index for index in range(10) if tracker.peek_run_stats(_key(f"session-{index}"))]
+    assert retained == [7, 8, 9]
 
 
 @pytest.mark.parametrize(
-    "other_address,other_run",
+    ("other_address", "other_run"),
     [
         (SessionAddress("project", "agent", "same-session"), "same-run"),
         (SessionAddress(None, "other-agent", "same-session"), "same-run"),
+        (SessionAddress(None, "agent", "other-session"), "same-run"),
         (SessionAddress(None, "agent", "same-session"), "next-run"),
     ],
 )
-def test_scoped_runs_never_share_or_consume_each_others_changes(other_address, other_run):
+def test_scoped_runs_never_share_or_consume_each_others_changes(
+    other_address: SessionAddress, other_run: str
+) -> None:
     tracker = ChangeTracker()
     first = (SessionAddress(None, "agent", "same-session"), "same-run")
     second = (other_address, other_run)
     tracker.record_write(first, Path("first.txt"), "", "one\n")
     tracker.record_write(second, Path("second.txt"), "", "two\nthree\n")
 
-    assert tracker.take_run_stats(first) == {
-        "files": 1,
-        "added": 1,
-        "removed": 0,
-        "paths": ["first.txt"],
-    }
-    assert tracker.take_run_stats(second) == {
-        "files": 1,
-        "added": 2,
-        "removed": 0,
-        "paths": ["second.txt"],
-    }
+    assert tracker.take_run_stats(first) == _stats(1, 1, 0, ["first.txt"])
+    assert tracker.take_run_stats(second) == _stats(1, 2, 0, ["second.txt"])
 
 
-def test_final_diff_failure_still_detaches_owned_changes(monkeypatch):
+def test_final_diff_failure_still_detaches_owned_changes(monkeypatch: pytest.MonkeyPatch) -> None:
     tracker = ChangeTracker()
     key = _key("session-one")
     tracker.record_write(key, Path("file.txt"), "before", "after")
 
-    def fail_diff(_before, _after):
+    def fail_diff(_before: str, _after: str) -> tuple[int, int]:
         raise RuntimeError("diff unavailable")
 
     monkeypatch.setattr(change_tracker_module, "_line_diff_counts", fail_diff)

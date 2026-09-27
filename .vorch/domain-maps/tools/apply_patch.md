@@ -472,7 +472,8 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
 - `test_apply_patch_files.py` covers byte and format preservation, read guards,
   paths, links, syntax warnings, read stamps and statistics, locking across
   Sessions, cancellation, failure containment, concurrent drift and bounded
-  guarded retries. `test_file_state.py` includes a real Windows reader handle
+  guarded retries. `test_file_state.py` covers which Windows sharing errors are
+  retried behind a precondition check and includes a real Windows reader handle
   without delete sharing, not just injected exceptions.
 - `test_copy_match.py` covers shared prose/identifier distinctions and target
   IDs in substring recovery.
