@@ -692,11 +692,15 @@ def _apply_hunk(
     copied = False
     offset = 0
     hint_start = 0
+    # A repeated @@ line is read from its first occurrence, as Codex does. The
+    # lines to replace must then occur once after it: that one place is right
+    # whichever occurrence was meant. Otherwise this error is raised.
+    repeated_hint: _PatchError | None = None
     for hint in hunk.hints:
         found = _match(content[offset:], hint, hint)
         if isinstance(found, AmbiguousFuzzyMatch):
             details, values = _ambiguity(content, found, offset)
-            raise _PatchError(
+            repeated_hint = repeated_hint or _PatchError(
                 "ambiguous_context",
                 path=path,
                 label=hunk.label,
@@ -704,7 +708,8 @@ def _apply_hunk(
                 details=details,
                 **values,
             )
-        if found is None:
+            found = _match(content[offset:], hint, hint, first=True)
+        if not isinstance(found, FuzzyReplacement):
             raise _PatchError(
                 "context_not_found",
                 path=path,
@@ -720,6 +725,8 @@ def _apply_hunk(
     window = content[offset:]
     old, new = _hunk_text(hunk, " -"), _hunk_text(hunk, " +")
     if not any(prefix in " -" for prefix, _ in hunk.lines):
+        if repeated_hint is not None:
+            raise repeated_hint
         position = offset if hunk.hints else len(content)
         if hunk.no_newline and position != len(content):
             raise _PatchError(
@@ -797,7 +804,8 @@ def _apply_hunk(
         context = "".join(text.strip() for prefix, text in hunk.lines if prefix == " ")
         poststate = _match(window, new, new, eof=hunk.eof or hunk.no_newline) if new else None
         if (
-            (len(context) >= 4 or _inline_context_identifies(window, old, new))
+            repeated_hint is None
+            and (len(context) >= 4 or _inline_context_identifies(window, old, new))
             and isinstance(poststate, FuzzyReplacement)
             and (not hunk.no_newline or poststate.before_spans[0][1] == len(window))
         ):
@@ -813,6 +821,10 @@ def _apply_hunk(
         # Old text copied with errors is placed and merged by ``copy_match``.
         if not hunk.precise_only and (not new or _match(window, new, new) is None):
             found, copied = match_copied_edit(window, hunk.lines, at_eof=hunk.eof), True
+    if repeated_hint is not None and (
+        isinstance(found, AmbiguousFuzzyMatch) or (copied and found is not None)
+    ):
+        raise repeated_hint
     if isinstance(found, AmbiguousFuzzyMatch):
         # As in Codex, an @@ line or the file's previous change orders the
         # occurrences, and the first after it is meant (Sessions: 60 of 61 such

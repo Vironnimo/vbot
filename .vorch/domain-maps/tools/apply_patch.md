@@ -145,9 +145,15 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
 - `Move to` is operation metadata and may precede, separate, or follow Update
   hunks. Repeated identical destinations are harmless, including after Move File;
   conflicting destinations fail before any writes. Prefixed content remains literal.
-- `@@ context` hints select successive unique whole lines at the hunk's section.
+- `@@ context` hints select successive whole lines at the hunk's section.
   The final hint may also appear as the first context/removal line. Multiple
-  hints can narrow a section. Lines a precise strategy finds several times are
+  hints can narrow a section. A hint that occurs several times is read from its
+  first occurrence, as in Codex, but only while the hunk's lines then match once
+  through a precise strategy (not `copy_match`, not an already-applied
+  post-state, not an addition-only hunk); otherwise it fails with
+  `ambiguous_context`. That one place is right whichever occurrence was meant.
+  Evidence: in all 4 `ambiguous_context` failures of one Swarm, the hunk's lines
+  occurred once in the file (Sessions, 2026-09). Lines a precise strategy finds several times are
   ordered as in Codex: after a hint, the first occurrence from the hint on is
   changed; a hunk without hints takes the first occurrence from the line where
   the same Update's last completed change ended (`_apply_hunks`,
@@ -345,8 +351,9 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   with +.` (difference key `unprefixed`), since identical retries followed the
   bare difference.
 - Context-only blocks before another `@@` become ordered precise locator hints
-  for that next hunk, including multiline context. Missing or ambiguous anchors
-  fail without falling back to a different location; duplicate matches after
+  for that next hunk, including multiline context. Missing anchors fail without
+  falling back to a different location, and repeated anchors follow the hint
+  rule above; duplicate matches after
   the anchor resolve to the first (see the `@@ context` rule above). Anchors do
   not leak into subsequent edits or files.
   An entirely context-only patch fails with `no_changes`, says that without a
