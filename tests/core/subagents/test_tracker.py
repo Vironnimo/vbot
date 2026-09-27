@@ -1,431 +1,273 @@
-"""Tests for the in-memory sub-agent batch tracker."""
+"""The Sub-Agent batch tracker: completion notices, acknowledgement and pruning."""
 
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
+from typing import Any
 
 import pytest
 
+import core.subagents.tracker as subagent_tracker
 from core.chat import ChatSessionManager
-from core.sessions import SessionAddress
-from core.subagents.tracker import (
-    SubAgentBatchTracker,
-    _entry_result_text,
-    _entry_status,
-    _SubAgentEntry,
-)
+from core.runs import Run, RunExecutionOwner
+from core.subagents import SubAgentBatchTracker
 from tests.core.sessions.history_fixtures import settle_run
+from tests.core.subagents.subagents_test_support import (
+    JsonObject,
+    RecordingTriggerService,
+    address,
+)
 
-pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("current_format_data_directory")]
+pytestmark = pytest.mark.asyncio
 
-
-class RecordingTriggerService:
-    def __init__(self) -> None:
-        self.calls: list[tuple[str, str, str | None, bool, str | None]] = []
-        self.error: BaseException | None = None
-        self.defer_input_persisted = False
-        self.input_persisted_hooks: list[object] = []
-        self.deliveries: dict[str, asyncio.Future[None]] = {}
-        self.execution_owners: list[object | None] = []
-
-    def submit_completion(
-        self,
-        agent_id: str,
-        session_id: str,
-        *,
-        notice_id: str,
-        origin_run_id: str,
-        body: str,
-        project_id: str | None = None,
-        on_persisted: object | None = None,
-        execution_owner: object | None = None,
-    ) -> asyncio.Future[None]:
-        delivery: asyncio.Future[None] = asyncio.get_running_loop().create_future()
-        self.deliveries[notice_id] = delivery
-        if self.error is not None:
-            delivery.set_exception(self.error)
-            return delivery
-        self.calls.append((agent_id, body, session_id, True, project_id))
-        self.execution_owners.append(execution_owner)
-        assert origin_run_id
-        if callable(on_persisted):
-
-            def persist() -> None:
-                on_persisted()
-                if not delivery.done():
-                    delivery.set_result(None)
-
-            self.input_persisted_hooks.append(persist)
-            if not self.defer_input_persisted:
-                persist()
-        elif not delivery.done():
-            delivery.set_result(None)
-        return delivery
-
-    def cancel_completion(
-        self,
-        _agent_id: str,
-        _session_id: str,
-        *,
-        notice_id: str,
-        project_id: str | None = None,
-    ) -> bool:
-        del project_id
-        delivery = self.deliveries.pop(notice_id, None)
-        if delivery is None:
-            return False
-        if not delivery.done():
-            delivery.cancel()
-        return True
+PARENT_KEY = ("parent", "parent-session", "parent-run")
+ACTIVITY_FILE = "C:/data/artifacts/temp/subagents/run-one.md"
+PARTIAL_NOTE = "Result is partial: the Sub-Agent Run was interrupted by timeout."
 
 
-def _completed_entry(result: dict[str, object]) -> _SubAgentEntry:
-    return _SubAgentEntry(
-        agent_id="worker",
-        session_id="session-one",
-        run_id="run-one",
-        complete=True,
-        result=dict(result),
-    )
-
-
-async def test_entry_status_returns_cancelled_by_user_for_user_cancelled_entry() -> None:
-    # Arrange
-    entry = _completed_entry(
-        {
-            "status": "cancelled",
-            "result": "Cancelled by the user",
-            "cancelled_by_user": True,
-        }
-    )
-
-    # Act
-    status = _entry_status(entry)
-
-    # Assert
-    assert status == "cancelled by user"
-
-
-async def test_entry_status_returns_cancelled_for_generic_cancellation() -> None:
-    # Arrange
-    entry = _completed_entry({"status": "cancelled", "result": None})
-
-    # Act
-    status = _entry_status(entry)
-
-    # Assert
-    assert status == "cancelled"
-
-
-async def test_interrupted_entry_surfaces_cause_and_continuation_guidance() -> None:
-    note = (
-        "Result is partial: the Sub-Agent Run was interrupted by timeout. Continue the "
-        "same Session by passing both agent_id and session_id from this result to subagent."
-    )
-    entry = _completed_entry(
-        {
-            "status": "completed",
-            "result": "I am about to write the plan.",
-            "interrupted": True,
-            "interruption_cause": "timeout",
-            "note": note,
-        }
-    )
-
-    assert _entry_status(entry) == "interrupted (timeout)"
-    assert _entry_result_text(entry) == f"I am about to write the plan.\n\n{note}"
-
-
-async def test_entry_result_text_uses_user_cancel_message_when_flag_set() -> None:
-    # Arrange
-    entry = _completed_entry(
-        {
-            "status": "cancelled",
-            "result": "Cancelled by the user",
-            "cancelled_by_user": True,
-        }
-    )
-
-    # Act
-    text = _entry_result_text(entry)
-
-    # Assert
-    assert text == "Cancelled by the user"
-
-
-async def test_batch_completion_message_marks_user_cancelled_entry_in_note() -> None:
-    # Arrange
-    trigger_service = RecordingTriggerService()
-    tracker = SubAgentBatchTracker(trigger_service)
-    parent_key = ("parent", "parent-session", "parent-run")
-    tracker.register(parent_key, "worker", "session-one", "run-one")
-    tracker.on_sub_agent_complete(
-        parent_key,
-        "run-one",
-        {
-            "status": "cancelled",
-            "result": "Cancelled by the user",
-            "cancelled_by_user": True,
-        },
-    )
-    await asyncio.sleep(0)
-
-    # Assert
-    assert len(trigger_service.calls) == 1
-    message = trigger_service.calls[0][1]
-    assert "### Sub-Agent worker (id run-one, session session-one) — cancelled by user" in message
-    assert "Cancelled by the user" in message
-
-
-async def test_reserved_batch_completion_keeps_exact_execution_owner() -> None:
-    from core.runs import RunExecutionOwner
-
-    trigger = RecordingTriggerService()
-    tracker = SubAgentBatchTracker(trigger)
-    parent = ("parent", "parent-session", "parent-run")
-    owner = RunExecutionOwner("swarm", "group", "peer", "generation", "epoch")
-    assert tracker.reserve_slot(parent, 4, execution_owner=owner)
-    tracker.register_reserved(parent, "worker", "reused-session", "child-run")
-    tracker.on_sub_agent_complete(parent, "child-run", {"status": "completed", "result": "fixture"})
-    await asyncio.sleep(0)
-    assert trigger.execution_owners == [owner]
-
-
-async def test_batch_completion_message_includes_activity_file_when_available() -> None:
-    trigger_service = RecordingTriggerService()
-    tracker = SubAgentBatchTracker(trigger_service)
-    parent_key = ("parent", "parent-session", "parent-run")
-    tracker.register(
+def _track(
+    tracker: SubAgentBatchTracker,
+    run_id: str,
+    *,
+    parent_key: tuple[str, str, str] = PARENT_KEY,
+    parent_project: str | None = None,
+    child_project: str | None = None,
+    session_id: str | None = None,
+    activity_file: str | None = None,
+    execution_owner: RunExecutionOwner | None = None,
+) -> str:
+    """Track one started child Run the way a spawn does and return its work id."""
+    assert tracker.reserve_slot(parent_key, 8, parent_project, execution_owner=execution_owner)
+    work_id = f"sub_{run_id}"
+    tracker.register_reserved(
         parent_key,
         "worker",
-        "session-one",
+        session_id or f"session-{run_id}",
+        run_id,
+        child_project,
+        activity_file,
+        work_id=work_id,
+    )
+    return work_id
+
+
+def _batch_open(tracker: SubAgentBatchTracker) -> bool:
+    return tracker.references_identity_agent("parent")
+
+
+@pytest.mark.parametrize(
+    ("result", "activity_file", "status_line", "text"),
+    [
+        (
+            {"status": "completed", "result": "x" * 2000},
+            ACTIVITY_FILE,
+            "completed",
+            # The whole result is delivered, without truncation.
+            f"Activity file: {ACTIVITY_FILE}\n" + "x" * 2000,
+        ),
+        ({"status": "failed", "result": None, "note": "boom"}, None, "failed", "(no output) boom"),
+        (
+            {"status": "cancelled", "result": "Cancelled by the user", "cancelled_by_user": True},
+            None,
+            "cancelled by user",
+            "Cancelled by the user",
+        ),
+        ({"status": "cancelled", "result": None}, None, "cancelled", "(no output)"),
+        (
+            {
+                "status": "completed",
+                "result": "I am about to write the plan.",
+                "interrupted": True,
+                "interruption_cause": "timeout",
+                "note": PARTIAL_NOTE,
+            },
+            None,
+            "interrupted (timeout)",
+            f"I am about to write the plan.\n\n{PARTIAL_NOTE}",
+        ),
+    ],
+)
+async def test_completion_notice_describes_how_the_child_ended(
+    result: JsonObject, activity_file: str | None, status_line: str, text: str
+) -> None:
+    triggers = RecordingTriggerService()
+    tracker = SubAgentBatchTracker(triggers)
+    _track(tracker, "run-one", activity_file=activity_file)
+
+    tracker.on_sub_agent_complete(PARENT_KEY, "run-one", result)
+
+    assert triggers.bodies == [
+        f"### Sub-Agent worker (id sub_run-one, session session-run-one) — {status_line}\n{text}"
+    ]
+
+
+async def test_each_result_is_submitted_once() -> None:
+    triggers = RecordingTriggerService()
+    tracker = SubAgentBatchTracker(triggers)
+    first = _track(tracker, "run-one")
+    second = _track(tracker, "run-two")
+
+    tracker.on_sub_agent_complete(PARENT_KEY, "run-one", {"result": "First result"})
+    tracker.on_sub_agent_complete(PARENT_KEY, "run-two", {"result": "Second result"})
+    tracker.on_sub_agent_complete(PARENT_KEY, "run-two", {"result": "Second result again"})
+
+    assert [notice.notice_id for notice in triggers.notices] == [
+        f"subagent:parent-run:{first}",
+        f"subagent:parent-run:{second}",
+    ]
+    assert triggers.bodies[1].endswith("\nSecond result")
+
+
+@pytest.mark.parametrize(
+    ("parent_key", "parent_project", "owner"),
+    [
+        (PARENT_KEY, None, None),
+        # A Project Agent's Parent continues under its project and execution owner.
+        (
+            ("orchestrator", "parent-session", "parent-run"),
+            "vbot",
+            RunExecutionOwner("swarm", "group", "peer", "generation", "epoch"),
+        ),
+    ],
+)
+async def test_notice_continues_the_parent_where_it_ran(
+    parent_key: tuple[str, str, str], parent_project: str | None, owner: RunExecutionOwner | None
+) -> None:
+    triggers = RecordingTriggerService()
+    tracker = SubAgentBatchTracker(triggers)
+    _track(
+        tracker,
         "run-one",
-        activity_file="C:/data/artifacts/temp/subagents/run-one.md",
+        parent_key=parent_key,
+        parent_project=parent_project,
+        child_project="vbot",
+        execution_owner=owner,
     )
 
-    tracker.on_sub_agent_complete(parent_key, "run-one", {"result": "done"})
-    await asyncio.sleep(0)
-
-    assert (
-        "Activity file: C:/data/artifacts/temp/subagents/run-one.md" in trigger_service.calls[0][1]
-    )
-
-
-async def test_batch_completion_message_keeps_generic_cancellation_wording() -> None:
-    # Arrange
-    trigger_service = RecordingTriggerService()
-    tracker = SubAgentBatchTracker(trigger_service)
-    parent_key = ("parent", "parent-session", "parent-run")
-    tracker.register(parent_key, "worker", "session-one", "run-one")
-    tracker.on_sub_agent_complete(
-        parent_key,
-        "run-one",
-        {"status": "cancelled", "result": None},
-    )
-    await asyncio.sleep(0)
-
-    # Assert
-    assert len(trigger_service.calls) == 1
-    message = trigger_service.calls[0][1]
-    assert "### Sub-Agent worker (id run-one, session session-one) — cancelled" in message
-    assert "cancelled by user" not in message
-
-
-async def test_batch_is_pruned_after_each_completion_is_persisted() -> None:
-    # Arrange: a non-blocking batch whose entries are never fetched via
-    # an explicit status fetch (the standard flow embeds the
-    # results and forbids re-fetching). Regression test for handoff3 B4.
-    trigger_service = RecordingTriggerService()
-    tracker = SubAgentBatchTracker(trigger_service)
-    parent_key = ("parent", "parent-session", "parent-run")
-    tracker.register(parent_key, "worker", "session-one", "run-one")
-    tracker.register(parent_key, "worker", "session-two", "run-two")
-
-    # Act
-    tracker.on_sub_agent_complete(parent_key, "run-one", {"result": "first output"})
-    tracker.on_sub_agent_complete(parent_key, "run-two", {"result": "second output"})
-    await asyncio.sleep(0)
-
-    # Assert: each result entered shared Run-boundary delivery and the tracker no longer leaks.
-    assert len(trigger_service.calls) == 2
-    assert "first output" in trigger_service.calls[0][1]
-    assert "second output" in trigger_service.calls[1][1]
-    assert parent_key not in tracker._batches  # noqa: SLF001 - leak regression check.
-
-
-async def test_background_result_is_read_only_after_parent_note_persists(tmp_path) -> None:
-    trigger_service = RecordingTriggerService()
-    trigger_service.defer_input_persisted = True
-    sessions = ChatSessionManager(tmp_path)
-    sessions.create("worker", session_id="session-one")
-    settle_run(
-        sessions,
-        SessionAddress(project_id=None, agent_id="worker", session_id="session-one"),
-        "run-one",
-        completed_at="2026-07-22T10:00:00+00:00",
-    )
-    tracker = SubAgentBatchTracker(trigger_service, sessions=sessions)
-    parent_key = ("parent", "parent-session", "parent-run")
-    tracker.register(parent_key, "worker", "session-one", "run-one")
-
-    tracker.on_sub_agent_complete(parent_key, "run-one", {"result": "done"})
-    await asyncio.sleep(0)
-    await asyncio.sleep(0)
-
-    assert sessions.list_summaries("worker")[0]["has_unread_completion"] is True
-    assert len(trigger_service.input_persisted_hooks) == 1
-    input_persisted_hook = trigger_service.input_persisted_hooks[0]
-    assert callable(input_persisted_hook)
-    input_persisted_hook()
-
-    assert sessions.list_summaries("worker")[0]["has_unread_completion"] is False
-
-
-async def test_background_delivery_failure_leaves_child_unread(tmp_path) -> None:
-    trigger_service = RecordingTriggerService()
-    trigger_service.error = RuntimeError("parent unavailable")
-    sessions = ChatSessionManager(tmp_path)
-    sessions.create("worker", session_id="session-one")
-    settle_run(
-        sessions,
-        SessionAddress(project_id=None, agent_id="worker", session_id="session-one"),
-        "run-one",
-        completed_at="2026-07-22T10:00:00+00:00",
-    )
-    tracker = SubAgentBatchTracker(trigger_service, sessions=sessions)
-    parent_key = ("parent", "parent-session", "parent-run")
-    tracker.register(parent_key, "worker", "session-one", "run-one")
-
-    tracker.on_sub_agent_complete(parent_key, "run-one", {"result": "done"})
-    await asyncio.sleep(0)
-    await asyncio.sleep(0)
-
-    assert sessions.list_summaries("worker")[0]["has_unread_completion"] is True
-    assert parent_key not in tracker._batches  # noqa: SLF001 - terminal leak regression.
-
-
-async def test_completion_trigger_carries_parent_project_id() -> None:
-    # Arrange: a project (config) agent reserves its batch under a project, so the
-    # batch-completion trigger must continue the parent under that same project
-    # rather than falling through to the identity path. Regression for the
-    # "Agent not found: orchestrator" failure on a project sub-agent batch.
-    trigger_service = RecordingTriggerService()
-    tracker = SubAgentBatchTracker(trigger_service)
-    parent_key = ("orchestrator", "parent-session", "parent-run")
-    assert tracker.reserve_slot(parent_key, max_count=8, project_id="vbot")
-    tracker.register_reserved(parent_key, "worker", "session-one", "run-one")
-
-    # Act
     tracker.on_sub_agent_complete(parent_key, "run-one", {"result": "output"})
-    await asyncio.sleep(0)
 
-    # Assert: exactly one trigger, carrying the parent run's project_id.
-    assert len(trigger_service.calls) == 1
-    assert trigger_service.calls[0][0] == "orchestrator"
-    assert trigger_service.calls[0][4] == "vbot"
-
-
-async def test_completion_trigger_keeps_none_project_for_identity_parent() -> None:
-    # Arrange: an identity parent (no project) must keep the legacy global layout —
-    # the trigger carries project_id None, unchanged from before projects existed.
-    trigger_service = RecordingTriggerService()
-    tracker = SubAgentBatchTracker(trigger_service)
-    parent_key = ("parent", "parent-session", "parent-run")
-    assert tracker.reserve_slot(parent_key, max_count=8)
-    tracker.register_reserved(parent_key, "worker", "session-one", "run-one")
-
-    # Act
-    tracker.on_sub_agent_complete(parent_key, "run-one", {"result": "output"})
-    await asyncio.sleep(0)
-
-    # Assert
-    assert len(trigger_service.calls) == 1
-    assert trigger_service.calls[0][4] is None
+    [notice] = triggers.notices
+    assert (notice.agent_id, notice.session_id, notice.project_id, notice.execution_owner) == (
+        parent_key[0],
+        "parent-session",
+        parent_project,
+        owner,
+    )
+    assert notice.body.startswith("### Sub-Agent worker@vbot (id sub_run-one,")
 
 
-async def test_batch_with_fetched_entries_prunes_without_second_note() -> None:
-    # Arrange: one entry already fetched via status, one not. The note
-    # must only embed the unfetched entry, and the batch is dropped afterwards.
-    trigger_service = RecordingTriggerService()
-    trigger_service.defer_input_persisted = True
-    tracker = SubAgentBatchTracker(trigger_service)
-    parent_key = ("parent", "parent-session", "parent-run")
-    tracker.register(parent_key, "worker", "session-one", "run-one")
-    tracker.register(parent_key, "worker", "session-two", "run-two")
-    tracker.on_sub_agent_complete(parent_key, "run-one", {"result": "first output"})
-    tracker.mark_fetched(parent_key, "session-one", "run-one")
+async def test_batch_closes_once_every_notice_is_stored() -> None:
+    triggers = RecordingTriggerService()
+    triggers.defer_persistence = True
+    tracker = SubAgentBatchTracker(triggers)
+    _track(tracker, "run-one")
+    _track(tracker, "run-two")
+    tracker.on_sub_agent_complete(PARENT_KEY, "run-one", {"result": "first output"})
+    tracker.on_sub_agent_complete(PARENT_KEY, "run-two", {"result": "second output"})
+    assert _batch_open(tracker)
 
-    # Act
-    trigger_service.defer_input_persisted = False
-    tracker.on_sub_agent_complete(parent_key, "run-two", {"result": "second output"})
-    await asyncio.sleep(0)
+    triggers.persist()
 
-    # Assert
-    assert len(trigger_service.calls) == 2
-    assert "first output" in trigger_service.calls[0][1]
-    assert "second output" in trigger_service.calls[1][1]
-    assert parent_key not in tracker._batches  # noqa: SLF001 - leak regression check.
+    assert len(triggers.notices) == 2
+    assert not _batch_open(tracker)
 
 
-async def test_remove_queued_prunes_after_completed_sibling_was_delivered() -> None:
-    # Arrange: sibling B enters shared completion delivery immediately even while
-    # queued A remains open.
-    trigger_service = RecordingTriggerService()
-    tracker = SubAgentBatchTracker(trigger_service)
-    parent_key = ("parent", "parent-session", "parent-run")
-    tracker.register(parent_key, "worker", "session-b", "run-b")
-    tracker.register_queued(parent_key, "worker", "session-a", "queue-item-a")
-    tracker.on_sub_agent_complete(parent_key, "run-b", {"result": "b output"})
-    assert len(trigger_service.calls) == 1
+async def test_result_fetched_through_status_withdraws_its_notice() -> None:
+    triggers = RecordingTriggerService()
+    triggers.defer_persistence = True
+    tracker = SubAgentBatchTracker(triggers)
+    first = _track(tracker, "run-one")
+    _track(tracker, "run-two")
+    tracker.on_sub_agent_complete(PARENT_KEY, "run-one", {"result": "first output"})
 
-    # Act
-    tracker.remove_queued(parent_key, "queue-item-a")
-    await asyncio.sleep(0)
+    tracker.mark_fetched(PARENT_KEY, "session-run-one", "run-one", sub_agent_id="worker")
+    triggers.defer_persistence = False
+    tracker.on_sub_agent_complete(PARENT_KEY, "run-two", {"result": "second output"})
 
-    # Assert: removing the last open entry drops the already-delivered batch.
-    assert len(trigger_service.calls) == 1
-    assert "b output" in trigger_service.calls[0][1]
-    assert parent_key not in tracker._batches  # noqa: SLF001 - leak regression check.
+    assert triggers.cancelled_notice_ids == [f"subagent:parent-run:{first}"]
+    assert len(triggers.notices) == 2
+    assert not _batch_open(tracker)
 
 
-async def test_remove_queued_stays_silent_while_siblings_still_run() -> None:
-    # Arrange: removing queued A while live sibling B is still running must not
-    # notify — B's own completion event fires the note later, exactly once.
-    trigger_service = RecordingTriggerService()
-    tracker = SubAgentBatchTracker(trigger_service)
-    parent_key = ("parent", "parent-session", "parent-run")
-    tracker.register(parent_key, "worker", "session-b", "run-b")
-    tracker.register_queued(parent_key, "worker", "session-a", "queue-item-a")
+async def test_result_fetched_before_its_watcher_reports_sends_no_notice() -> None:
+    triggers = RecordingTriggerService()
+    tracker = SubAgentBatchTracker(triggers)
+    _track(tracker, "run-one")
 
-    # Act
-    tracker.remove_queued(parent_key, "queue-item-a")
-    tracker.on_sub_agent_complete(parent_key, "run-b", {"result": "b output"})
-    await asyncio.sleep(0)
+    # A status call read the terminal Run before the completion watcher ran.
+    tracker.mark_fetched(PARENT_KEY, "session-run-one", "run-one")
+    tracker.on_sub_agent_complete(PARENT_KEY, "run-one", {"result": "Already fetched"})
 
-    # Assert: B's completion enters shared delivery exactly once.
-    assert len(trigger_service.calls) == 1
-    assert "b output" in trigger_service.calls[0][1]
-    assert parent_key not in tracker._batches  # noqa: SLF001 - leak regression check.
+    assert triggers.notices == []
+    assert not _batch_open(tracker)
 
 
-async def test_remove_queued_only_entry_prunes_batch_without_note() -> None:
-    # Arrange: the batch's single entry is the queued item being removed — the
-    # batch just empties out; an empty batch never notifies.
-    trigger_service = RecordingTriggerService()
-    tracker = SubAgentBatchTracker(trigger_service)
-    parent_key = ("parent", "parent-session", "parent-run")
-    tracker.register_queued(parent_key, "worker", "session-a", "queue-item-a")
+@pytest.mark.parametrize("sibling", [None, "delivered", "running"])
+async def test_removed_queue_entry_leaves_only_its_siblings_notice(sibling: str | None) -> None:
+    triggers = RecordingTriggerService()
+    tracker = SubAgentBatchTracker(triggers)
+    if sibling is not None:
+        _track(tracker, "run-b")
+    assert tracker.reserve_slot(PARENT_KEY, 8)
+    tracker.register_queued(PARENT_KEY, "worker", "session-a", "queue-item-a", work_id="sub_a")
+    if sibling == "delivered":
+        tracker.on_sub_agent_complete(PARENT_KEY, "run-b", {"result": "b output"})
 
-    # Act
-    tracker.remove_queued(parent_key, "queue-item-a")
-    await asyncio.sleep(0)
+    tracker.remove_queued(PARENT_KEY, "queue-item-a")
+    if sibling == "running":
+        assert _batch_open(tracker)
+        tracker.on_sub_agent_complete(PARENT_KEY, "run-b", {"result": "b output"})
 
-    # Assert
-    assert trigger_service.calls == []
-    assert parent_key not in tracker._batches  # noqa: SLF001 - leak regression check.
+    assert triggers.bodies == ([] if sibling is None else [triggers.bodies[0]])
+    if sibling is not None:
+        assert triggers.bodies[0].endswith("\nb output")
+    assert not _batch_open(tracker)
 
 
-async def test_work_ids_are_reserved_before_registration_across_parent_batches(monkeypatch):
+@pytest.mark.parametrize("delivered", [True, False])
+async def test_child_is_marked_read_only_after_its_notice_is_stored(
+    tmp_path: Path,
+    current_format_data_directory: None,
+    monkeypatch: pytest.MonkeyPatch,
+    delivered: bool,
+) -> None:
+    del current_format_data_directory
+    sessions = ChatSessionManager(tmp_path)
+    child = address("worker", "session-run-one")
+    sessions.create("worker", session_id=child.session_id)
+    settle_run(sessions, child, "run-one", completed_at="2026-07-22T10:00:00+00:00")
+    triggers = RecordingTriggerService()
+    triggers.defer_persistence = True
+    if not delivered:
+        triggers.error = RuntimeError("parent unavailable")
+    logged: list[tuple[Any, ...]] = []
+    monkeypatch.setattr(
+        subagent_tracker._LOGGER, "error", lambda *args, **_kwargs: logged.append(args)
+    )
+    tracker = SubAgentBatchTracker(triggers, sessions=sessions)
+    _track(tracker, "run-one")
+
+    try:
+        tracker.on_sub_agent_complete(PARENT_KEY, "run-one", {"result": "done"})
+        assert sessions.list_summaries("worker")[0]["has_unread_completion"] is True
+        triggers.persist()
+        await asyncio.sleep(0)  # Delivery outcomes are reported by Future callbacks.
+
+        unread = sessions.list_summaries("worker")[0]["has_unread_completion"]
+    finally:
+        sessions.close()
+    # A notice that cannot be delivered releases the work but leaves the child unread.
+    assert unread is not delivered
+    assert not _batch_open(tracker)
+    if delivered:
+        assert logged == []
+    else:
+        assert "Sub-Agent completion delivery failed" in logged[0][1]
+        assert str(logged[0][2]) == "parent unavailable"
+
+
+async def test_work_ids_are_unique_across_parent_batches(monkeypatch: pytest.MonkeyPatch) -> None:
     from core.utils import ids
 
     tracker = SubAgentBatchTracker(RecordingTriggerService())
@@ -435,23 +277,39 @@ async def test_work_ids_are_reserved_before_registration_across_parent_batches(m
     assert tracker.reserve_slot(second, 2)
     values = iter((1, 1, 2))
     monkeypatch.setattr(ids.secrets, "randbits", lambda _bits: next(values))
+
     assert tracker.allocate_work_id(first) == "sub_000000000001"
     assert tracker.allocate_work_id(second) == "sub_000000000002"
 
 
-async def test_parent_run_budget_survives_fetched_batch_pruning() -> None:
-    from unittest.mock import Mock
-
-    from core.runs import Run
-
-    tracker = SubAgentBatchTracker(Mock())
+async def test_parent_run_budget_survives_its_pruned_batch() -> None:
+    tracker = SubAgentBatchTracker(RecordingTriggerService())
     parent = ("parent", "session", "run-parent")
     run = Run(run_id=parent[2], agent_id=parent[0], session_id=parent[1])
     assert tracker.reserve_slot(parent, max_count=1, parent_run=run)
     tracker.register_reserved(parent, "child", "child-session", "child-run")
     tracker.mark_fetched(parent, "child-session", "child-run")
-    tracker.on_sub_agent_complete(parent, "child-run", {"status": "completed", "content": "done"})
-    assert parent not in tracker._batches
+    tracker.on_sub_agent_complete(parent, "child-run", {"status": "completed", "result": "done"})
+    assert tracker.owned_entries(parent[0], parent[1], None) == []
+
     assert not tracker.reserve_slot(parent, max_count=1, parent_run=run)
     next_run = Run(run_id="next", agent_id=parent[0], session_id=parent[1])
     assert tracker.reserve_slot((parent[0], parent[1], "next"), max_count=1, parent_run=next_run)
+
+
+async def test_open_batches_report_the_identity_agents_they_address() -> None:
+    tracker = SubAgentBatchTracker(RecordingTriggerService())
+    tracker.reserve_slot(("parent", "session", "run"), 2, project_id=None)
+    tracker.reserve_slot(("project-parent", "session", "run"), 2, project_id="vbot")
+    tracker.register_reserved(("project-parent", "session", "run"), "child", "s", "r")
+    tracker.reserve_slot(("qualified-parent", "session", "run"), 2, project_id="vbot")
+    tracker.register_reserved(
+        ("qualified-parent", "session", "run"), "qualified-child", "s", "r", project_id="vbot"
+    )
+
+    assert tracker.references_identity_agent("parent") is True
+    assert tracker.references_identity_agent("child") is True
+    assert tracker.references_identity_agent("project-parent") is False
+    assert tracker.references_identity_agent("qualified-parent") is False
+    assert tracker.references_identity_agent("qualified-child") is False
+    assert tracker.references_identity_agent("missing") is False
