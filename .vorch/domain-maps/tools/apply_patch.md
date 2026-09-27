@@ -334,6 +334,8 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   doubled quote/backslash escapes absent from the actual target.
   Surplus blank boundary context can be dropped after the full locator misses.
   Blank lines explicitly marked for deletion remain meaningful operations.
+  A blank last context line matches the empty line past the file's final line
+  break; `+` lines after it end with that line break, so the file keeps it.
 - Unprefixed or space-prefixed V4A Update lines between two `+` lines parse as
   context (`_Hunk.written` keeps each line as written). When the hunk, its other
   recoveries and `copy_match` all miss, `_unmarked_readings` re-reads such runs as

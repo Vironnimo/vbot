@@ -949,7 +949,8 @@ def _apply_hunk(
     # Line splitting omits the final empty line; the hunk still gives it a position.
     old_count = sum(p in " -" for p, _ in hunk.lines)
     new_count = sum(p in " +" for p, _ in hunk.lines)
-    if len(actual) < old_count:
+    padded = len(actual) < old_count
+    if padded:
         actual.append(("", ""))
     if len(prepared) < new_count:
         prepared.append(("", ""))
@@ -970,6 +971,11 @@ def _apply_hunk(
         )
     if actual:
         actual[-1] = (actual[-1][0], final_ending)
+    added_ending = final_ending
+    if padded and not final_ending and len(actual) > 1:
+        # Past the file's final line break, the final empty line has no ending of
+        # its own; lines added after it end the file with that line break.
+        added_ending = actual[-2][1]
     output: list[tuple[str, str]] = []
     last_output_prefix = ""
     old_index = new_index = 0
@@ -996,7 +1002,7 @@ def _apply_hunk(
     if output:
         output = [(text, ending or _ending(content)) for text, ending in output[:-1]] + output[-1:]
         if last_output_prefix == "+" or hunk.no_newline:
-            output[-1] = (output[-1][0], "" if hunk.no_newline else final_ending)
+            output[-1] = (output[-1][0], "" if hunk.no_newline else added_ending)
     replacement_text = "".join(text + ending for text, ending in output)
     warnings.extend(copy_warnings(found, line_shift=len(_BREAK.findall(content, 0, offset))))
     return content[: offset + start] + replacement_text + window[end:], warnings

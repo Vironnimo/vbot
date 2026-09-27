@@ -418,6 +418,9 @@ def test_normalized_changed_lines_preserve_only_unchanged_typography(
     [
         (b"alpha\n\nomega\n", "@@\n-", b"alpha\nomega\n"),
         (b"alpha\n\nomega\n", "@@\n-\n+middle", b"alpha\nmiddle\nomega\n"),
+        # A blank last unchanged line past the final line break keeps it.
+        (b"last\r\n", "@@\n last\n \n+added\n+more", b"last\r\n\r\nadded\r\nmore\r\n"),
+        (b"alpha\n\nomega\n", "@@\n alpha\n \n+middle\n omega", b"alpha\n\nmiddle\nomega\n"),
         (b"alpha\nold\nomega\n", "@@\n \n alpha\n-old\n+new\n omega\n ", b"alpha\nnew\nomega\n"),
         (b"alpha\r\nold\nomega\r", "@@\n alpha\n-old\n+new\n omega", b"alpha\r\nnew\r\nomega\r"),
         (b"old\n", "@@\n-old\n+1| first\n+2| second", b"first\nsecond\n"),
