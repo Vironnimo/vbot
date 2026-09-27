@@ -381,10 +381,10 @@
               aria-label={railCompact
                 ? t(item.labelKey, item.labelFallback)
                 : undefined}
-              data-tooltip-placement="right"
-              use:tooltip={railCompact
-                ? t(item.labelKey, item.labelFallback)
-                : ''}
+              use:tooltip={{
+                text: railCompact ? t(item.labelKey, item.labelFallback) : '',
+                placement: 'right',
+              }}
               onclick={() => handleSelectView(item.id)}
             >
               <svg
@@ -486,7 +486,7 @@
           <button
             type="button"
             class="sidebar-footer__mic"
-            use:tooltip={micIndicator.tooltip}
+            use:tooltip={{ text: micIndicator.tooltip, placement: 'right' }}
             aria-label={micIndicator.tooltip}
             onclick={handleMicIndicatorClick}
           >
@@ -508,8 +508,10 @@
           class="conn-icon {statusIconClass}"
           viewBox="0 0 16 16"
           aria-hidden="true"
-          data-tooltip-placement="right"
-          use:tooltip={railCompact ? statusLabel : ''}
+          use:tooltip={{
+            text: railCompact ? statusLabel : '',
+            placement: 'right',
+          }}
         >
           <path d="M5 1.5v3.5M11 1.5v3.5" />
           <rect x="3.5" y="5" width="9" height="5.5" rx="1.2" />

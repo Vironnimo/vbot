@@ -39,6 +39,21 @@
   function tokenTooltip(point) {
     return `${activityPeriodLabel(point.date, granularity, locale, true)} · ${t('statistics.legend.measured', 'Measured tokens')}: ${formatTokens(point.measured, locale)} · ${t('statistics.legend.estimated', 'Estimated tokens')}: ${formatTokens(point.estimated, locale)}`;
   }
+  function tokenTooltipCard(point) {
+    return {
+      title: activityPeriodLabel(point.date, granularity, locale, true),
+      rows: [
+        {
+          label: t('statistics.legend.measured', 'Measured tokens'),
+          value: formatTokens(point.measured, locale),
+        },
+        {
+          label: t('statistics.legend.estimated', 'Estimated tokens'),
+          value: formatTokens(point.estimated, locale),
+        },
+      ],
+    };
+  }
 </script>
 
 {#snippet showMonths()}
@@ -96,7 +111,7 @@
               type="button"
               class="stats-activity__col"
               aria-label={tokenTooltip(point)}
-              use:tooltip={tokenTooltip(point)}
+              use:tooltip={tokenTooltipCard(point)}
             >
               <span
                 class="stats-activity__bar"

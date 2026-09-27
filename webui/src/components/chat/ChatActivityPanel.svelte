@@ -65,7 +65,10 @@
   );
   let sessionStats = $derived(sessionChangeStats(timelineItems));
   let sessionStatsParts = $derived(changeStatsParts(sessionStats));
-  let sessionStatsTooltip = $derived(changeStatsTooltip(sessionStats));
+  // The panel sits at the right edge, so its tooltips open to the left.
+  let sessionStatsTooltip = $derived(
+    changeStatsTooltip(sessionStats, { placement: 'left' }),
+  );
   let sessionStatsLabel = $derived(changeStatsLabel(sessionStats));
 
   const panelId = $props.id();
@@ -241,7 +244,7 @@
     class:chat-activity__status--failed={task.dotStatus === 'failed'}
     class:chat-activity__status--cancelled={task.dotStatus === 'cancelled'}
     data-status={task.dotStatus}
-    use:tooltip={statusLabel(task.dotStatus)}
+    use:tooltip={{ text: statusLabel(task.dotStatus), placement: 'left' }}
     aria-hidden="true"
   >
     {#if task.dotStatus === 'running'}
@@ -274,7 +277,7 @@
       icon
       class="chat-activity__cancel"
       ariaLabel={cancelTaskLabel(task)}
-      tooltip={cancelTaskLabel(task)}
+      tooltip={{ text: cancelTaskLabel(task), placement: 'left' }}
       loading={isTaskCancelling(task)}
       data-cancel-kind={task.kind}
       onClick={() => handleCancelTask(task)}
@@ -292,7 +295,15 @@
       class="chat-activity__task-row chat-activity__task-row--bash"
       aria-label={taskLabel(task)}
     >
-      <span class="chat-activity__task-name" use:tooltip={task.command}>
+      <span
+        class="chat-activity__task-name"
+        use:tooltip={{
+          text: task.command,
+          mono: true,
+          selectable: true,
+          placement: 'left',
+        }}
+      >
         {task.command}
         {#if task.timeLabel}
           <span class="chat-activity__task-time">· {task.timeLabel}</span>
@@ -310,7 +321,7 @@
         aria-describedby={task.preview
           ? `${panelId}-${task.id}-preview`
           : undefined}
-        tooltip={task.preview}
+        tooltip={{ text: task.preview, placement: 'left' }}
         disabled={!task.target}
         onClick={() => task.target && onNavigateToSubAgent(task.target)}
       >
@@ -358,7 +369,7 @@
     variant="tertiary"
     class="chat-activity__rail"
     ariaLabel={railLabel}
-    tooltip={railLabel}
+    tooltip={{ text: railLabel, placement: 'left' }}
     aria-expanded={open}
     aria-controls={panelId}
     onClick={togglePanel}

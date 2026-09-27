@@ -50,6 +50,33 @@ async function flushMicrotasks() {
   }
 }
 
+// A pointer event at viewport coordinates, as real browsers deliver them.
+function pointerAt(type, x, y, { relatedTarget, buttons } = {}) {
+  const event = new Event(type, { bubbles: type === 'pointerdown' });
+  Object.defineProperty(event, 'clientX', { value: x });
+  Object.defineProperty(event, 'clientY', { value: y });
+  if (relatedTarget !== undefined) {
+    Object.defineProperty(event, 'relatedTarget', { value: relatedTarget });
+  }
+  if (buttons) {
+    Object.defineProperty(event, 'buttons', { value: buttons });
+  }
+  return event;
+}
+
+function placeAt(element, { left, top, width, height }) {
+  element.getBoundingClientRect = () => ({
+    left,
+    top,
+    width,
+    height,
+    right: left + width,
+    bottom: top + height,
+    x: left,
+    y: top,
+  });
+}
+
 function button(label, parent = document.body) {
   const element = document.createElement('button');
   element.type = 'button';
@@ -112,17 +139,169 @@ describe('tooltip action', () => {
     expect(node.hasAttribute('aria-describedby')).toBe(false);
   });
 
-  it('stays open while the pointer rests on the tooltip itself', () => {
-    action = tooltip(node, 'A long value worth reading');
+  it('lets the pointer pass through a label, which closes after leaving its anchor', () => {
+    action = tooltip(node, 'Copy to clipboard');
     hover(node);
+    expect(tooltipElement().dataset.selectable).toBe('false');
 
     node.dispatchEvent(new Event('pointerleave'));
     tooltipElement().dispatchEvent(new Event('pointerenter'));
-    vi.advanceTimersByTime(FLOATING_HOVER_CLOSE_DELAY_MS * 4);
-    expect(isVisible()).toBe(true);
-
-    tooltipElement().dispatchEvent(new Event('pointerleave'));
     vi.advanceTimersByTime(FLOATING_HOVER_CLOSE_DELAY_MS);
+
+    expect(isVisible()).toBe(false);
+  });
+
+  describe('when selectable', () => {
+    beforeEach(() => {
+      placeAt(node, { left: 100, top: 300, width: 80, height: 20 });
+      action = tooltip(node, { text: 'C:/repo/src/app.js', selectable: true });
+      hover(node);
+      // Above the anchor, 6px away.
+      placeAt(tooltipElement(), { left: 80, top: 250, width: 120, height: 44 });
+    });
+
+    afterEach(() => {
+      window.getSelection().removeAllRanges();
+    });
+
+    it('stays open while the pointer travels onto it and closes once it heads elsewhere', () => {
+      expect(tooltipElement().dataset.selectable).toBe('true');
+
+      node.dispatchEvent(
+        pointerAt('pointerleave', 140, 299, { relatedTarget: document.body }),
+      );
+      window.dispatchEvent(pointerAt('pointermove', 141, 296));
+      vi.advanceTimersByTime(FLOATING_HOVER_CLOSE_DELAY_MS * 4);
+      expect(isVisible()).toBe(true);
+
+      tooltipElement().dispatchEvent(new Event('pointerenter'));
+      tooltipElement().dispatchEvent(
+        pointerAt('pointerleave', 205, 260, { relatedTarget: document.body }),
+      );
+      window.dispatchEvent(pointerAt('pointermove', 260, 262));
+      expect(isVisible()).toBe(false);
+    });
+
+    it('closes at once when the pointer leaves its anchor away from it', () => {
+      node.dispatchEvent(
+        pointerAt('pointerleave', 140, 321, { relatedTarget: document.body }),
+      );
+      expect(isVisible()).toBe(true);
+
+      window.dispatchEvent(pointerAt('pointermove', 140, 330));
+      expect(isVisible()).toBe(false);
+    });
+
+    it('closes at once when the pointer leaves the document', () => {
+      node.dispatchEvent(
+        pointerAt('pointerleave', 140, 299, { relatedTarget: null }),
+      );
+      expect(isVisible()).toBe(false);
+    });
+
+    it('falls back to the short grace for events without pointer coordinates', () => {
+      node.dispatchEvent(new Event('pointerleave'));
+      tooltipElement().dispatchEvent(new Event('pointerenter'));
+      vi.advanceTimersByTime(FLOATING_HOVER_CLOSE_DELAY_MS * 4);
+      expect(isVisible()).toBe(true);
+
+      tooltipElement().dispatchEvent(new Event('pointerleave'));
+      vi.advanceTimersByTime(FLOATING_HOVER_CLOSE_DELAY_MS);
+      expect(isVisible()).toBe(false);
+    });
+
+    it('keeps a text selection inside it until an outside press', () => {
+      const range = document.createRange();
+      range.selectNodeContents(tooltipElement().firstChild);
+      window.getSelection().addRange(range);
+
+      tooltipElement().dispatchEvent(
+        pointerAt('pointerleave', 260, 262, { relatedTarget: document.body }),
+      );
+      window.dispatchEvent(pointerAt('pointermove', 300, 262));
+      vi.advanceTimersByTime(FLOATING_HOVER_CLOSE_DELAY_MS * 4);
+      expect(isVisible()).toBe(true);
+
+      document.body.dispatchEvent(pointerEvent('pointerdown', 'mouse'));
+      expect(isVisible()).toBe(false);
+    });
+  });
+
+  it('renders details as a title, free text and aligned label/value rows', () => {
+    const plain = button('Plain');
+    const plainAction = tooltip(plain, 'Plain label');
+    action = tooltip(node, {
+      title: 'Fix login redirect',
+      text: 'Reviews the auth flow.',
+      rows: [
+        { label: 'Agent', value: 'Alpha' },
+        { label: 'Parent', value: 'alpha/session-1', mono: true },
+        { label: 'Source channel', value: '' },
+      ],
+    });
+
+    hover(node);
+    const element = tooltipElement();
+    expect(element.classList.contains('app-tooltip--rich')).toBe(true);
+    expect([...element.children].map((child) => child.className)).toEqual([
+      'app-tooltip__title',
+      'app-tooltip__text',
+      'app-tooltip__rows',
+    ]);
+    expect(
+      [...element.querySelectorAll('dt')].map((term) => term.textContent),
+    ).toEqual(['Agent', 'Parent']);
+    expect(
+      element.querySelectorAll('dd')[1].classList.contains('app-tooltip__mono'),
+    ).toBe(true);
+
+    node.dispatchEvent(new Event('pointerleave'));
+    hover(plain);
+    expect(element.classList.contains('app-tooltip--rich')).toBe(false);
+    expect(element.textContent).toBe('Plain label');
+    plainAction.destroy();
+  });
+
+  it('shows a truncation tooltip only while its anchor clips the text', () => {
+    Object.defineProperty(node, 'clientWidth', { value: 100 });
+    let scrollWidth = 100;
+    Object.defineProperty(node, 'scrollWidth', { get: () => scrollWidth });
+    action = tooltip(node, { text: 'Anchor', whenTruncated: true });
+
+    hover(node);
+    expect(isVisible()).toBe(false);
+
+    node.dispatchEvent(new Event('pointerleave'));
+    scrollWidth = 180;
+    hover(node);
+    expect(isVisible()).toBe(true);
+  });
+
+  it('hands the tooltip back to the enclosing anchor when leaving a nested one', () => {
+    const marker = document.createElement('span');
+    node.appendChild(marker);
+    action = tooltip(node, 'Session details');
+    const markerAction = tooltip(marker, 'Running');
+
+    hover(node);
+    marker.dispatchEvent(new Event('pointerenter'));
+    expect(tooltipElement().textContent).toBe('Running');
+
+    marker.dispatchEvent(
+      pointerAt('pointerleave', 12, 8, { relatedTarget: node }),
+    );
+    vi.advanceTimersByTime(FLOATING_HOVER_CLOSE_DELAY_MS);
+    expect(isVisible()).toBe(true);
+    expect(tooltipElement().textContent).toBe('Session details');
+    markerAction.destroy();
+  });
+
+  it('stays quiet while a pointer button is held', () => {
+    action = tooltip(node, 'Copy to clipboard');
+
+    node.dispatchEvent(pointerAt('pointerenter', 10, 10, { buttons: 1 }));
+    vi.advanceTimersByTime(SHOW_DELAY_MS);
+
     expect(isVisible()).toBe(false);
   });
 
@@ -144,10 +323,13 @@ describe('tooltip action', () => {
     const thirdAction = tooltip(third, 'Third hint');
 
     hover(node);
+    expect(tooltipElement().dataset.floatingInstant).toBe('false');
     node.dispatchEvent(new Event('pointerleave'));
     second.dispatchEvent(new Event('pointerenter'));
     expect(isVisible()).toBe(true);
     expect(tooltipElement().textContent).toBe('Second hint');
+    // A warm hand-off moves the bubble without replaying its entry motion.
+    expect(tooltipElement().dataset.floatingInstant).toBe('true');
     expect(node.hasAttribute('aria-describedby')).toBe(false);
 
     second.dispatchEvent(new Event('pointerleave'));
@@ -438,9 +620,8 @@ describe('positionFloating', () => {
     window.innerWidth = originalWidth;
   });
 
-  function anchorAt({ top, bottom, left = 500, width = 40, placement }) {
+  function anchorAt({ top, bottom, left = 500, width = 40 }) {
     return {
-      dataset: placement ? { tooltipPlacement: placement } : {},
       getBoundingClientRect: () => ({
         top,
         bottom,
@@ -494,39 +675,59 @@ describe('positionFloating', () => {
     expect(element.style.left).toBe(`${1200 - 200 - 8}px`);
   });
 
-  it('places a rail anchor tooltip to its right, vertically centered', () => {
+  it('places a side placement beside the anchor, vertically centered', () => {
     const element = floatingOfSize(100, 24);
     positionFloating(
-      anchorAt({
-        top: 300,
-        bottom: 340,
-        left: 12,
-        width: 40,
-        placement: 'right',
-      }),
+      anchorAt({ top: 300, bottom: 340, left: 12, width: 40 }),
       element,
+      'right',
     );
 
     // right: 12 + 40 + 6 = 58; centered: 300 + 20 - 12 = 308.
     expect(element.style.left).toBe('58px');
     expect(element.style.top).toBe('308px');
     expect(element.dataset.floatingSide).toBe('right');
+
+    positionFloating(
+      anchorAt({ top: 300, bottom: 340, left: 1100, width: 40 }),
+      element,
+      'left',
+    );
+    // left: 1100 - 6 - 100 = 994.
+    expect(element.style.left).toBe('994px');
+    expect(element.dataset.floatingSide).toBe('left');
   });
 
-  it('falls back to above when a right placement does not fit', () => {
+  it('flips a side placement to the opposite side when it does not fit', () => {
     const element = floatingOfSize(100, 24);
     positionFloating(
-      anchorAt({
-        top: 300,
-        bottom: 320,
-        left: 1150,
-        width: 40,
-        placement: 'right',
-      }),
+      anchorAt({ top: 300, bottom: 320, left: 1150, width: 40 }),
       element,
+      'right',
+    );
+
+    // left: 1150 - 6 - 100 = 1044.
+    expect(element.style.left).toBe('1044px');
+    expect(element.dataset.floatingSide).toBe('left');
+  });
+
+  it('falls back to above when neither side fits', () => {
+    const element = floatingOfSize(700, 24);
+    positionFloating(
+      anchorAt({ top: 300, bottom: 320, left: 500, width: 40 }),
+      element,
+      'right',
     );
 
     expect(element.style.top).toBe('270px');
+    expect(element.dataset.floatingSide).toBe('top');
+  });
+
+  it('treats an unknown placement as the default above', () => {
+    const element = floatingOfSize(100, 24);
+    positionFloating(anchorAt({ top: 300, bottom: 320 }), element, 'sideways');
+
+    expect(element.dataset.floatingSide).toBe('top');
   });
 });
 
@@ -629,6 +830,21 @@ describe('floatingHoverCard action', () => {
 
     card.dispatchEvent(new Event('pointerleave'));
     vi.advanceTimersByTime(FLOATING_HOVER_CLOSE_DELAY_MS);
+    expect(card.dataset.floatingOpen).toBe('false');
+  });
+
+  it('closes at once when the pointer leaves the anchor away from the card', () => {
+    placeAt(anchor, { left: 100, top: 300, width: 200, height: 24 });
+    action = floatingHoverCard(card, { placement: 'right' });
+    open();
+    // To the right of the anchor, 6px away.
+    placeAt(card, { left: 306, top: 280, width: 180, height: 64 });
+
+    anchor.dispatchEvent(
+      pointerAt('pointerleave', 200, 299, { relatedTarget: document.body }),
+    );
+    window.dispatchEvent(pointerAt('pointermove', 200, 290));
+
     expect(card.dataset.floatingOpen).toBe('false');
   });
 

@@ -508,7 +508,18 @@ export async function hoveredTooltipText(element, expectedText) {
   element.dispatchEvent(new Event('pointerenter'));
   await vi.advanceTimersByTimeAsync(TOOLTIP_SHOW_DELAY_MS);
   flushSync();
-  const tooltipText = document.getElementById('app-tooltip')?.textContent ?? '';
+  // One line per tooltip block; details rows read as "Label: value".
+  const blocks = [...(document.getElementById('app-tooltip')?.children ?? [])];
+  const tooltipText = blocks
+    .flatMap((block) =>
+      block.tagName === 'DL'
+        ? [...block.querySelectorAll('dt')].map(
+            (term) =>
+              `${term.textContent}: ${term.nextElementSibling?.textContent}`,
+          )
+        : [block.textContent],
+    )
+    .join('\n');
   expect(tooltipText).toBe(expectedText);
   element.dispatchEvent(new Event('pointerleave'));
   return tooltipText;

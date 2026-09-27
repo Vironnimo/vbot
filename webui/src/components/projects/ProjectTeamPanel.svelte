@@ -306,9 +306,16 @@
                 class="projects-team-header"
                 data-testid={`project-team-toggle-${member.agent_id}`}
                 aria-expanded={expanded}
-                use:tooltip={[member.description, summary.value]
-                  .filter(Boolean)
-                  .join('\n\n')}
+                use:tooltip={{
+                  text: member.description,
+                  rows: [
+                    {
+                      label: t('projects.team.effectiveModel', 'Model'),
+                      value: summary.value,
+                      mono: true,
+                    },
+                  ],
+                }}
                 onclick={() => toggleMember(member.agent_id)}
               >
                 <span

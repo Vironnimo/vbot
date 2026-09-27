@@ -661,7 +661,7 @@ describe('changeStatsParts', () => {
 });
 
 describe('changeStatsTooltip', () => {
-  it('lists every changed file, one per line', () => {
+  it('lists every changed file, one per line, as selectable mono text', () => {
     expect(
       changeStatsTooltip({
         files: 2,
@@ -669,7 +669,18 @@ describe('changeStatsTooltip', () => {
         removed: 3,
         paths: ['a.txt', 'b.txt'],
       }),
-    ).toBe('a.txt\nb.txt');
+    ).toEqual({
+      text: 'a.txt\nb.txt',
+      mono: true,
+      selectable: true,
+      placement: 'top',
+    });
+  });
+
+  it('keeps the requested placement', () => {
+    expect(
+      changeStatsTooltip({ paths: ['a.txt'] }, { placement: 'left' }).placement,
+    ).toBe('left');
   });
 
   it('returns an empty string when no paths are known', () => {

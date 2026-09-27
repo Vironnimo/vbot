@@ -1,11 +1,13 @@
 /* Floating layers (lib/tooltip.js, ui/InfoHint.svelte). Quick tooltips,
    hover cards and info popovers are portaled to <body> and share one visual
-   language: `.floating-tooltip` is the compact bubble for short,
-   non-interactive text; `.floating-card` holds richer or interactive
-   content. Consumers add only size/layout modifiers. The open state is
-   `[data-floating-open='true']`: layers enter with a short fade and a small
-   slide away from their anchor (`data-floating-side`), with no motion under
-   prefers-reduced-motion. No arrows; long content scrolls. */
+   language: `.floating-tooltip` is the compact bubble for short text;
+   `.floating-card` holds richer or interactive content. Consumers add only
+   size/layout modifiers. The open state is `[data-floating-open='true']`:
+   layers enter with a short fade and a small slide away from their anchor
+   (`data-floating-side`), with no motion for a warm hand-off between anchors
+   (`data-floating-instant`) or under prefers-reduced-motion. Quick tooltips
+   let the pointer pass through unless they are selectable; cards and
+   popovers receive it. No arrows; long content scrolls. */
 .floating-tooltip,
 .floating-card {
   --floating-shift-x: 0px;
@@ -27,12 +29,13 @@
 
 .floating-tooltip {
   max-height: min(320px, 50vh);
-  padding: 6px 9px;
+  padding: 5px 9px;
   border-radius: var(--r-md);
   background: var(--surface-3);
   box-shadow: var(--floating-elevation-sm);
   font-size: var(--fs-label-sm);
-  line-height: 1.45;
+  line-height: 1.4;
+  text-wrap: pretty;
 }
 
 .floating-card {
@@ -47,9 +50,18 @@
 
 .floating-tooltip[data-floating-open='true'],
 .floating-card[data-floating-open='true'] {
-  pointer-events: auto;
   visibility: visible;
   animation: floating-layer-enter 120ms ease-out;
+}
+
+.floating-card[data-floating-open='true'],
+[data-floating-hover-card][data-floating-open='true'],
+.app-tooltip[data-selectable='true'][data-floating-open='true'] {
+  pointer-events: auto;
+}
+
+.floating-tooltip[data-floating-instant='true'] {
+  animation: none;
 }
 
 .floating-tooltip[data-floating-side='bottom'],
@@ -77,9 +89,77 @@
   }
 }
 
-/* The shared quick tooltip keeps author line breaks. */
+/* The shared quick tooltip keeps author line breaks. A plain label is a
+   single text block; details add a title and aligned label/value rows. */
 .app-tooltip {
   white-space: pre-line;
+}
+
+.app-tooltip:not([data-selectable='true']) {
+  overflow: hidden;
+}
+
+.app-tooltip[data-clipped='true']:not([data-selectable='true']) {
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 32px), transparent);
+}
+
+.app-tooltip[data-selectable='true'] {
+  cursor: text;
+  user-select: text;
+}
+
+.app-tooltip--rich {
+  max-width: min(360px, calc(100vw - 16px));
+  padding: 8px 11px 9px;
+  border-radius: var(--r-lg);
+}
+
+.app-tooltip__title {
+  font-size: var(--fs-body-sm);
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.app-tooltip__rows {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 3px 14px;
+  margin: 0;
+}
+
+.app-tooltip__label {
+  color: var(--text-lo);
+  white-space: nowrap;
+}
+
+.app-tooltip__value {
+  min-width: 0;
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.app-tooltip__value--full {
+  grid-column: 1 / -1;
+}
+
+.app-tooltip__title + .app-tooltip__text {
+  color: var(--text-med);
+}
+
+.app-tooltip__title + .app-tooltip__rows,
+.app-tooltip__title + .app-tooltip__text {
+  margin-top: 5px;
+}
+
+.app-tooltip__text + .app-tooltip__rows {
+  margin-top: 7px;
+  padding-top: 7px;
+  border-top: 1px solid var(--border-2);
+}
+
+.app-tooltip__mono {
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-xs);
 }
 
 /* Copyable Tool values: the complete plain-text value stays readable in the

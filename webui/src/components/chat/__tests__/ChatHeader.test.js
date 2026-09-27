@@ -106,8 +106,13 @@ describe('ChatHeader', () => {
     vi.useFakeTimers();
     trigger.dispatchEvent(new Event('pointerenter'));
     await vi.advanceTimersByTimeAsync(TOOLTIP_SHOW_DELAY_MS);
-    expect(document.getElementById('app-tooltip')?.textContent).toBe(
-      'Beta: Running\nanthropic/claude-sonnet-4',
+    const tooltipElement = document.getElementById('app-tooltip');
+    expect(
+      tooltipElement.querySelector('.app-tooltip__title').textContent,
+    ).toBe('Beta: Running');
+    expect(tooltipElement.querySelector('dt').textContent).toBe('Model');
+    expect(tooltipElement.querySelector('dd').textContent).toBe(
+      'anthropic/claude-sonnet-4',
     );
   });
 

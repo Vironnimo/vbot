@@ -267,7 +267,16 @@
                     </StatusChip>
                   {/if}
                 </span>
-                <span class="project-item-cwd" use:tooltip={project.cwd}>
+                <span
+                  class="project-item-cwd"
+                  use:tooltip={{
+                    text: project.cwd,
+                    mono: true,
+                    selectable: true,
+                    placement: 'right',
+                    whenTruncated: true,
+                  }}
+                >
                   {project.cwd}
                 </span>
               </span>

@@ -419,7 +419,7 @@
               ? 'true'
               : undefined}
             aria-label={`${group.name}: ${t('terminals.count', '{count} terminals', { count: group.terminal_count })}`}
-            use:tooltip={group.name}
+            use:tooltip={{ text: group.name, whenTruncated: true }}
             onclick={() => controller.selectGroup(group.group_id)}
           >
             <span class="terminals-view__group-tab-label">
@@ -624,12 +624,17 @@
               <div class="terminals-view__tile-bar-primary">
                 <span
                   class="terminals-view__tile-title"
-                  use:tooltip={terminalTitle(item)}>{terminalTitle(item)}</span
+                  use:tooltip={{
+                    text: terminalTitle(item),
+                    whenTruncated: true,
+                  }}>{terminalTitle(item)}</span
                 >
                 <span
                   class="terminals-view__tile-target"
-                  use:tooltip={terminalTarget(item)}
-                  >{terminalTarget(item)}</span
+                  use:tooltip={{
+                    text: terminalTarget(item),
+                    whenTruncated: true,
+                  }}>{terminalTarget(item)}</span
                 >
                 {#if gridMismatch}
                   <span

@@ -233,7 +233,7 @@
       class="live-voice__toggle"
       class:live-voice__toggle--active={running}
       aria-label={toggleLabel}
-      use:tooltip={toggleLabel}
+      use:tooltip={{ text: toggleLabel, placement: 'right' }}
       disabled={voice.phase === 'closing' || (!running && serverUnavailable)}
       onclick={() => (running ? controller.stop() : startVoice())}
     >
@@ -248,7 +248,7 @@
         class="live-voice__busy"
         role="status"
         aria-label={busyLabel}
-        use:tooltip={busyLabel}
+        use:tooltip={{ text: busyLabel, placement: 'right' }}
       ></span>
     {/if}
     {#if running}
@@ -257,7 +257,7 @@
         class="live-voice__mute"
         aria-label={muteLabel}
         aria-pressed={voice.muted}
-        use:tooltip={muteLabel}
+        use:tooltip={{ text: muteLabel, placement: 'right' }}
         disabled={voice.phase === 'closing'}
         onclick={() => controller.mute()}
       >
@@ -277,7 +277,11 @@
         data-role={voice.phase === 'live' && caption && !voice.held
           ? caption.role
           : 'status'}
-        use:tooltip={captionText}>{captionText}</span
+        use:tooltip={{
+          text: captionText,
+          placement: 'right',
+          whenTruncated: true,
+        }}>{captionText}</span
       >
     </div>
   {/if}

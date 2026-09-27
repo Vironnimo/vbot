@@ -657,17 +657,27 @@
       aria-label={t('logs.entries', 'Log entries')}
     >
       {#each filteredEntries as entry, index (entryKey(entry, index))}
-        <article
-          class={`logs-entry ${levelTone(entry.level)}`}
-          role="listitem"
-          use:tooltip={entryBody(entry)}
-        >
+        <!-- Clipped cells reveal their full text; the row's Copy action
+             carries the verbatim entry. -->
+        <article class={`logs-entry ${levelTone(entry.level)}`} role="listitem">
           <span class="logs-entry__timestamp">{entry.timestamp || '—'}</span>
           <span class="logs-entry__level">{levelLabel(entry.level)}</span>
-          <span class="logs-entry__logger"
-            >{entry.logger_name || t('common.unknown', 'Unknown')}</span
+          <span
+            class="logs-entry__logger"
+            use:tooltip={{
+              text: entry.logger_name,
+              mono: true,
+              whenTruncated: true,
+            }}>{entry.logger_name || t('common.unknown', 'Unknown')}</span
           >
-          <span class="logs-entry__message">{entryPreview(entry)}</span>
+          <span
+            class="logs-entry__message"
+            use:tooltip={{
+              text: entryBody(entry),
+              mono: true,
+              whenTruncated: !entry.continuation,
+            }}>{entryPreview(entry)}</span
+          >
           <CopyButton
             class="logs-entry__copy"
             text={entryCopyText(entry)}

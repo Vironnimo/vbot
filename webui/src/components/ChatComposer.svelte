@@ -1062,7 +1062,9 @@
             </span>
           {/if}
           <div class="attachment-meta">
-            <span class="attachment-name" use:tooltip={attachment.filename}
+            <span
+              class="attachment-name"
+              use:tooltip={{ text: attachment.filename, whenTruncated: true }}
               >{attachment.filename}</span
             >
             {#if attachment.uploading}

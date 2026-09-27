@@ -127,6 +127,34 @@ describe('InfoHint', () => {
     expect(popover()).toBeNull();
   });
 
+  it('closes a preview at once when the pointer leaves the dot away from it', () => {
+    mountHint();
+    hover(dot());
+    const popoverRect = { left: 90, top: 200, width: 220, height: 80 };
+    popover().getBoundingClientRect = () => ({
+      ...popoverRect,
+      right: popoverRect.left + popoverRect.width,
+      bottom: popoverRect.top + popoverRect.height,
+    });
+
+    const leave = new Event('pointerleave');
+    Object.defineProperties(leave, {
+      clientX: { value: 200 },
+      clientY: { value: 305 },
+      relatedTarget: { value: document.body },
+    });
+    dot().dispatchEvent(leave);
+    const move = new Event('pointermove');
+    Object.defineProperties(move, {
+      clientX: { value: 200 },
+      clientY: { value: 320 },
+    });
+    window.dispatchEvent(move);
+    flushSync();
+
+    expect(popover()).toBeNull();
+  });
+
   it('stays open when pinned by click, and a second click closes it', () => {
     mountHint();
 
