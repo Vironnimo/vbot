@@ -44,7 +44,8 @@ and its target registry to SpeechService and TaskModelService. Built-ins are
 `local/qwen3-asr` (Qwen 1.7B or 0.6B, language/context options),
 `local/parakeet` (NVIDIA TDT v3), and `local/nemotron3.5-asr` (NVIDIA Nemotron 3.5
 ASR Streaming 0.6B, automatic or explicit language). All use native Transformers under the optional
-`local-speech` extra. Configuration does not load weights; first non-silent use does.
+`local-speech` extra. Configuration does not load weights; first non-silent use does,
+unless a preload or preparation request (below) started the load earlier.
 
 To add an engine, supply a `SpeechEngineDefinition` with descriptor, factory and
 optional load-affecting option names. Its synchronous `LocalTranscriptionEngine` or `LocalSynthesisEngine`
@@ -59,6 +60,28 @@ before reporting cancellation. Memory status is metadata-only; targeted manual
 release refuses a busy engine immediately and retains downloaded files. Coverage:
 `test_speech_local.py` checks independent residency, busy TTS during STT release,
 cancellation, no-op release and loading again.
+
+Preloading avoids the cold load on the first transcription (tens of seconds for a
+packaged engine). Every local STT engine has the boolean option `preload`
+("Load at server start", `PRELOAD_OPTION`, default off). It is not a load option,
+so toggling it never reloads and turning it off unloads nothing.
+`SpeechService.preload_configured()` starts a background load of the bound engine
+when the option is on; the server lifespan calls it after startup (not in a safe
+startup mode) and `Runtime.apply_settings_change` calls it when the
+`model_tasks.speech_to_text` binding changed. `SpeechService.prepare_transcription()`
+starts the same load regardless of the option and returns at once with `loaded`,
+`loading`, `not_local` (Provider binding) or `unavailable`. Both use
+`LocalSpeechExecutor.prepare(local_id, options)` (Event Loop only): the load runs on
+the engine's worker, so a transcription arriving meanwhile queues behind it and
+reuses the model; a pending load with the same load identity is not started
+twice; failures are logged and left for the next transcription to report.
+Shutdown cancels a preload that has not started and kills a managed STT child
+that is still loading; an in-process load (source install) cannot be interrupted
+and delays shutdown until it finishes. `Loading local STT model` and `Local STT
+model ready (engine=..., seconds=...)` bracket the real load, including a managed
+child's. Coverage: `test_speech_local.py` (prepare states, dedupe, waiting
+transcription, failed preload, shutdown during a managed preload), `test_speech.py`,
+`test_runtime_settings.py`, `tests/server/test_app.py`.
 
 PyAV decodes canonical audio into mono float32 at 16 kHz. Chunks are at most 30
 seconds, cut near a quiet point in the last second, with no discarded samples.
@@ -109,6 +132,14 @@ import ML runtimes nor start subprocesses, rewrite receipts or run setup. Explic
 `task_model.status` checks report the selected local speech environment's concrete
 unavailability reason once per change, plus recovery; catalog enumeration remains silent.
 See `USAGE.md` -> Local speech recognition for the user setup flow.
+
+The managed STT child (`speech_worker.py --stt <engine> <app_root>`) serves one
+engine over JSON lines: `{"load": true, "options"}` loads the model and answers
+`{"loaded": true}`; a samples request answers `{"result"}`; `{"phase"}` frames
+forward loader and inference progress; `{"error"}` ends the child.
+`_ManagedSttEngine` construction returns only after `loaded`, so the executor's
+load boundary (logs, progress, preloading) covers the child's real load.
+`test_speech_local.py` runs this protocol against a real child with a fake engine.
 
 `SpeechProgress` is a request-local, thread-safe snapshot of phase and elapsed
 time. `SpeechService.transcribe/synthesize(progress=...)` carries it to local workers
@@ -195,6 +226,10 @@ Executable TTS targets send JSON to `/audio/speech` and return raw audio bytes. 
   or interrupts work. Specialized Models polls status and offers one button per
   model, disabling only the busy/unloaded model. RPC and component tests cover
   targeted release, invalid requests and independent controls.
+- `speech.prepare_transcription` takes no parameters and returns
+  `{state}` from `SpeechService.prepare_transcription()` without waiting for the
+  load. Accessors send it as a best-effort hint when a recording starts (Desktop
+  Voice command recording, Chat microphone) and ignore failures.
 - With `Accept: application/x-ndjson`, synthesis uses the same progress stream
   and returns a persisted speech artifact projection as its terminal result.
   The Settings preview uses its URL; ordinary clients still receive raw audio.
