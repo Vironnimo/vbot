@@ -56,3 +56,31 @@ def _openrouter_image_client(model_id: str) -> ProviderImageClient:
         credential="sk-test",
         model_id=model_id,
     )
+
+
+def _openai_image_client(model_id: str) -> ProviderImageClient:
+    """Build a ProviderImageClient wired to a mockable OpenAI endpoint."""
+
+    provider = ProviderConfig(
+        id="openai",
+        name="OpenAI",
+        adapter="openai_compatible",
+        base_url="https://api.openai.com/v1",
+        connections=[],
+    )
+    connection = ConnectionConfig(
+        id="api-key",
+        type="api_key",
+        label="API Key",
+        auth=AuthConfig(
+            header="Authorization",
+            prefix="Bearer ",
+            credential_key="OPENAI_API_KEY",
+        ),
+    )
+    return ProviderImageClient(
+        provider=provider,
+        connection=connection,
+        credential="sk-test",
+        model_id=model_id,
+    )

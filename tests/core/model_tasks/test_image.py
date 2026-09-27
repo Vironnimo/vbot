@@ -84,17 +84,23 @@ async def test_generate_with_local_target_is_unsupported(tmp_path: Path) -> None
         await service.generate("a cat")
 
 
+@pytest.mark.parametrize(
+    ("media_type", "extension"),
+    [("image/png", ".png"), ("image/svg+xml", ".svg"), ("image/webp", ".webp")],
+)
 @pytest.mark.asyncio
-async def test_generate_artifacts_uses_caller_owned_output_directory(
+async def test_generate_artifacts_stores_each_image_in_the_caller_owned_directory(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    media_type: str,
+    extension: str,
 ) -> None:
     service = ImageService(_MissingModelTasks(), cast(Any, object()))
 
     async def generate(_prompt: str, **_kwargs: Any) -> ImageGenerationResult:
         return ImageGenerationResult(
             images=(b"first image", b"second image"),
-            media_type="image/png",
+            media_type=media_type,
             model="provider/model",
         )
 
@@ -105,6 +111,9 @@ async def test_generate_artifacts_uses_caller_owned_output_directory(
 
     assert len(artifacts) == 2
     assert {artifact.file_path.parent for artifact in artifacts} == {output_dir}
+    assert {(artifact.media_type, artifact.file_path.suffix) for artifact in artifacts} == {
+        (media_type, extension)
+    }
     assert artifacts[0].file_path != artifacts[1].file_path
     assert [artifact.file_path.read_bytes() for artifact in artifacts] == [
         b"first image",
@@ -208,83 +217,79 @@ def _image_model(parameters: dict[str, Any]) -> Any:
     )
 
 
-def test_split_routes_advertised_enum_value_to_wire() -> None:
-    model = _image_model({"aspect_ratio": {"type": "enum", "values": ("1:1", "16:9")}})
-
-    wire_options, hints = split_image_call_options(model, {"aspect_ratio": "16:9"})
-
-    assert wire_options == {"aspect_ratio": "16:9"}
-    assert hints == []
+_NO_TASK_OPTIONS = SimpleNamespace(capabilities=SimpleNamespace(task_options={}))
 
 
-def test_split_routes_unsupported_enum_value_to_hint() -> None:
-    model = _image_model({"resolution": {"type": "enum", "values": ("1K", "2K")}})
-
-    wire_options, hints = split_image_call_options(model, {"resolution": "4K"})
-
-    assert wire_options == {}
-    assert hints == ["4K resolution"]
-
-
-def test_split_routes_unadvertised_parameter_to_hint() -> None:
-    model = _image_model({"resolution": {"type": "enum", "values": ("1K", "2K")}})
-
-    wire_options, hints = split_image_call_options(model, {"aspect_ratio": "16:9"})
-
-    assert wire_options == {}
-    assert hints == ["aspect ratio 16:9"]
-
-
-def test_split_routes_open_string_spec_to_wire() -> None:
-    model = _image_model({"aspect_ratio": {"type": "string"}})
-
-    wire_options, hints = split_image_call_options(model, {"aspect_ratio": "16:9"})
-
-    assert wire_options == {"aspect_ratio": "16:9"}
-    assert hints == []
-
-
-def test_split_reads_enum_values_as_list_form() -> None:
-    """Fallback specs build ``values`` as lists; loaded specs freeze them to tuples."""
-
-    model = _image_model({"resolution": {"type": "enum", "values": ["1K", "2K", "4K"]}})
-
-    wire_options, hints = split_image_call_options(model, {"resolution": "2K"})
-
-    assert wire_options == {"resolution": "2K"}
-    assert hints == []
-
-
-def test_split_without_model_makes_every_knob_a_hint() -> None:
-    wire_options, hints = split_image_call_options(
-        None, {"aspect_ratio": "16:9", "resolution": "4K"}
-    )
-
-    assert wire_options == {}
-    assert hints == ["aspect ratio 16:9", "4K resolution"]
-
-
-def test_split_without_task_options_makes_every_knob_a_hint() -> None:
-    model = SimpleNamespace(capabilities=SimpleNamespace(task_options={}))
-
-    wire_options, hints = split_image_call_options(model, {"resolution": "2K"})
-
-    assert wire_options == {}
-    assert hints == ["2K resolution"]
-
-
-def test_split_ignores_blank_and_empty_call_options() -> None:
-    model = _image_model({"aspect_ratio": {"type": "enum", "values": ("1:1",)}})
-
-    assert split_image_call_options(model, {}) == ({}, [])
-    assert split_image_call_options(model, {"aspect_ratio": "  "}) == ({}, [])
-
-
-def test_split_generic_hint_label_for_unknown_knob() -> None:
-    wire_options, hints = split_image_call_options(None, {"color_space": "srgb"})
-
-    assert wire_options == {}
-    assert hints == ["color space srgb"]
+@pytest.mark.parametrize(
+    ("model", "call_options", "wire_options", "hints"),
+    [
+        pytest.param(
+            _image_model({"aspect_ratio": {"type": "enum", "values": ("1:1", "16:9")}}),
+            {"aspect_ratio": "16:9"},
+            {"aspect_ratio": "16:9"},
+            [],
+            id="advertised-enum-value",
+        ),
+        # Fallback specs build ``values`` as lists; loaded specs freeze them to tuples.
+        pytest.param(
+            _image_model({"resolution": {"type": "enum", "values": ["1K", "2K", "4K"]}}),
+            {"resolution": "2K"},
+            {"resolution": "2K"},
+            [],
+            id="advertised-enum-value-in-list-form",
+        ),
+        pytest.param(
+            _image_model({"aspect_ratio": {"type": "string"}}),
+            {"aspect_ratio": "16:9"},
+            {"aspect_ratio": "16:9"},
+            [],
+            id="open-string-spec",
+        ),
+        pytest.param(
+            _image_model({"resolution": {"type": "enum", "values": ("1K", "2K")}}),
+            {"resolution": "4K"},
+            {},
+            ["4K resolution"],
+            id="unsupported-enum-value",
+        ),
+        pytest.param(
+            _image_model({"resolution": {"type": "enum", "values": ("1K", "2K")}}),
+            {"aspect_ratio": "16:9"},
+            {},
+            ["aspect ratio 16:9"],
+            id="unadvertised-parameter",
+        ),
+        pytest.param(
+            None,
+            {"aspect_ratio": "16:9", "resolution": "4K"},
+            {},
+            ["aspect ratio 16:9", "4K resolution"],
+            id="no-model",
+        ),
+        pytest.param(
+            _NO_TASK_OPTIONS, {"resolution": "2K"}, {}, ["2K resolution"], id="no-task-options"
+        ),
+        pytest.param(None, {"color_space": "srgb"}, {}, ["color space srgb"], id="unknown-knob"),
+        pytest.param(
+            _image_model({"aspect_ratio": {"type": "enum", "values": ("1:1",)}}),
+            {"aspect_ratio": "  "},
+            {},
+            [],
+            id="blank-value",
+        ),
+        pytest.param(
+            _image_model({"aspect_ratio": {"type": "enum", "values": ("1:1",)}}),
+            {},
+            {},
+            [],
+            id="no-call-options",
+        ),
+    ],
+)
+def test_call_options_go_to_the_wire_only_when_the_model_supports_them(
+    model: Any, call_options: dict[str, Any], wire_options: dict[str, Any], hints: list[str]
+) -> None:
+    assert split_image_call_options(model, call_options) == (wire_options, hints)
 
 
 # ---------------------------------------------------------------------------
@@ -333,49 +338,51 @@ class _RoutingModelTasks:
         return self._model
 
 
+@pytest.mark.parametrize(
+    ("binding_options", "call_options", "wire_options", "prompt"),
+    [
+        pytest.param(
+            {"aspect_ratio": "1:1"},
+            {"aspect_ratio": "16:9"},
+            {"aspect_ratio": "16:9"},
+            "a cat",
+            id="native-call-value-overrides-binding",
+        ),
+        # A non-native value becomes a prompt hint and keeps the binding default.
+        pytest.param(
+            {"aspect_ratio": "1:1"},
+            {"aspect_ratio": "21:9"},
+            {"aspect_ratio": "1:1"},
+            "a cat (aspect ratio 21:9)",
+            id="non-native-call-value-hints",
+        ),
+        pytest.param(
+            {"size": "1024x1024"},
+            None,
+            {"size": "1024x1024"},
+            "a cat",
+            id="no-call-options-reproduce-binding",
+        ),
+    ],
+)
 @pytest.mark.asyncio
-async def test_generate_native_call_value_overrides_binding_default(tmp_path: Path) -> None:
+async def test_generate_routes_per_call_options(
+    binding_options: dict[str, Any],
+    call_options: dict[str, Any] | None,
+    wire_options: dict[str, Any],
+    prompt: str,
+) -> None:
     model = _image_model({"aspect_ratio": {"type": "enum", "values": ("1:1", "16:9")}})
-    model_tasks = _RoutingModelTasks(model, binding_options={"aspect_ratio": "1:1"})
+    model_tasks = _RoutingModelTasks(model, binding_options=binding_options)
     service = ImageService(model_tasks, cast(Any, object()))
     client = _RecordingImageClient()
 
     with patch("core.model_tasks.image.ProviderImageClient.from_runtime", return_value=client):
-        await service.generate("a cat", call_options={"aspect_ratio": "16:9"})
+        await service.generate("a cat", call_options=call_options)
 
-    assert client.options == {"aspect_ratio": "16:9"}
-    assert client.prompt == "a cat"
-
-
-@pytest.mark.asyncio
-async def test_generate_non_native_call_value_hints_and_keeps_binding(tmp_path: Path) -> None:
-    model = _image_model({"aspect_ratio": {"type": "enum", "values": ("1:1", "16:9")}})
-    model_tasks = _RoutingModelTasks(model, binding_options={"aspect_ratio": "1:1"})
-    service = ImageService(model_tasks, cast(Any, object()))
-    client = _RecordingImageClient()
-
-    with patch("core.model_tasks.image.ProviderImageClient.from_runtime", return_value=client):
-        await service.generate("a cat", call_options={"aspect_ratio": "21:9"})
-
-    # A non-native value never touches the wire options — the binding default stays.
-    assert client.options == {"aspect_ratio": "1:1"}
-    assert client.prompt == "a cat (aspect ratio 21:9)"
-
-
-@pytest.mark.asyncio
-async def test_generate_without_call_options_reproduces_binding_request(tmp_path: Path) -> None:
-    model = _image_model({"aspect_ratio": {"type": "enum", "values": ("1:1",)}})
-    model_tasks = _RoutingModelTasks(model, binding_options={"size": "1024x1024"})
-    service = ImageService(model_tasks, cast(Any, object()))
-    client = _RecordingImageClient()
-
-    with patch("core.model_tasks.image.ProviderImageClient.from_runtime", return_value=client):
-        await service.generate("a cat")
-
-    assert client.options == {"size": "1024x1024"}
-    assert client.prompt == "a cat"
-    # The no-options path must not even resolve the model.
-    assert model_tasks.model_for_target_calls == 0
+    assert (client.options, client.prompt) == (wire_options, prompt)
+    # Without call options the model is not even resolved.
+    assert model_tasks.model_for_target_calls == (0 if call_options is None else 1)
 
 
 @pytest.mark.asyncio

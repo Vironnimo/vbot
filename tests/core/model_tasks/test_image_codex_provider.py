@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+from typing import Any
 
 import httpx
 import pytest
@@ -11,10 +12,7 @@ import respx
 
 from core.model_tasks.image_providers import (
     _OPENAI_CODEX_IMAGE_CARRIER_MODEL,
-    _OPENAI_CODEX_IMAGE_TOOL_KEYS,
     ProviderImageClient,
-    _build_openai_codex_image_payload,
-    _parse_openai_codex_image_response,
 )
 from core.model_tasks.image_types import ImageInput
 from core.model_tasks.model_tasks import parse_task_model_target_id
@@ -165,131 +163,111 @@ async def test_subscription_image_records_independent_carrier_even_for_unusable_
     assert all(record.kind == "image_generation" for record in records)
 
 
-# ---------------------------------------------------------------------------
-# OpenAI subscription Codex Responses payload and parser
-# ---------------------------------------------------------------------------
-def test_build_openai_codex_payload_uses_carrier_and_image_tool() -> None:
-    """The subscription image wire asks a Codex carrier to call the backend
-    image_generation tool and keeps size/quality/background in the prompt text."""
-
-    payload = _build_openai_codex_image_payload(
-        "a cat",
-        {
-            "size": "1024x1536",
-            "quality": "low",
-            "background": "opaque",
-            "moderation": "low",
-            "output_format": "webp",
-            "output_compression": 50,
-        },
-    )
-
-    assert payload["model"] == _OPENAI_CODEX_IMAGE_CARRIER_MODEL
-    assert payload["stream"] is True
-    assert payload["store"] is False
-    assert payload["instructions"] == "You are an image generation assistant."
-    assert payload["tools"] == [
-        {
-            "type": "image_generation",
-            "output_format": "webp",
-            "output_compression": 50,
-            "moderation": "low",
-            "background": "opaque",
-            "size": "1024x1536",
-            "quality": "low",
-        }
-    ]
-    text = payload["input"][0]["content"][0]["text"]
-    assert text == (
-        "Use the image_generation tool to render "
-        "(size 1024x1536, quality low, background opaque): a cat"
-    )
+def _data_url(image: ImageInput) -> str:
+    return f"data:{image.media_type};base64,{base64.b64encode(image.data).decode('ascii')}"
 
 
-def test_build_openai_codex_payload_drops_n_and_model_even_from_extra_options() -> None:
-    """The Codex image tool rejects ``n`` and silently overrides ``model``, so
-    the builder never forwards either field while still honoring the escape hatch."""
+_SOURCES = (
+    ImageInput(filename="square.jpg", media_type="image/jpeg", data=b"source-one"),
+    ImageInput(filename="style.png", media_type="image/png", data=b"source-two"),
+)
 
-    payload = _build_openai_codex_image_payload(
-        "a cat",
-        {
-            "n": 2,
-            "model": "gpt-image-1",
-            "output_format": "webp",
-            "extra_options": {
-                "n": 10,
-                "model": "gpt-image-2",
-                "future_option": "kept",
+
+@pytest.mark.parametrize(
+    ("options", "input_images", "tool", "text", "media_type"),
+    [
+        # Size, quality and background also reach the carrier as prompt text.
+        pytest.param(
+            {
+                "size": "1024x1536",
+                "quality": "low",
+                "background": "opaque",
+                "moderation": "low",
+                "output_format": "webp",
+                "output_compression": 50,
             },
-        },
+            (),
+            {
+                "output_format": "webp",
+                "output_compression": 50,
+                "moderation": "low",
+                "background": "opaque",
+                "size": "1024x1536",
+                "quality": "low",
+            },
+            "Use the image_generation tool to render "
+            "(size 1024x1536, quality low, background opaque): a cat",
+            "image/webp",
+            id="every-tool-option",
+        ),
+        # The image tool rejects ``n`` and overrides ``model``, even from extra_options.
+        pytest.param(
+            {
+                "n": 2,
+                "model": "gpt-image-1",
+                "output_format": "webp",
+                "extra_options": {"n": 10, "model": "gpt-image-2", "future_option": "kept"},
+            },
+            (),
+            {"output_format": "webp", "future_option": "kept"},
+            "Use the image_generation tool to render: a cat",
+            "image/webp",
+            id="n-and-model-never-forwarded",
+        ),
+        # Without a requested format the final image call names it.
+        pytest.param(
+            {},
+            _SOURCES,
+            {},
+            "Use the image_generation tool to edit the provided image(s): a cat",
+            "image/jpeg",
+            id="source-images-for-editing",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+@respx.mock
+async def test_subscription_image_asks_a_codex_carrier_to_call_the_image_tool(
+    options: dict[str, Any],
+    input_images: tuple[ImageInput, ...],
+    tool: dict[str, Any],
+    text: str,
+    media_type: str,
+) -> None:
+    route = respx.post(OPENAI_CODEX_RESPONSES_URL).mock(
+        return_value=httpx.Response(
+            200,
+            text=_openai_codex_image_sse(b"codex-image", output_format="jpeg"),
+            headers={"content-type": "text/event-stream"},
+        )
     )
 
-    tool = payload["tools"][0]
-    assert tool == {
-        "type": "image_generation",
-        "output_format": "webp",
-        "future_option": "kept",
-    }
-
-
-def test_build_openai_codex_payload_carries_source_images_for_editing() -> None:
-    payload = _build_openai_codex_image_payload(
-        "make the square blue while preserving its position",
-        {},
-        input_images=(
-            ImageInput(filename="square.jpg", media_type="image/jpeg", data=b"source-one"),
-            ImageInput(filename="style.png", media_type="image/png", data=b"source-two"),
-        ),
+    result = await _openai_subscription_image_client("gpt-image-2").generate(
+        "a cat", options=options, input_images=input_images
     )
 
-    content = payload["input"][0]["content"]
-    assert content[0] == {
-        "type": "input_text",
-        "text": (
-            "Use the image_generation tool to edit the provided image(s): "
-            "make the square blue while preserving its position"
-        ),
+    request = route.calls.last.request
+    assert request.headers["authorization"] == f"Bearer {_openai_subscription_access_token()}"
+    assert request.headers["chatgpt-account-id"] == "account-123"
+    assert all(request.headers[name] == value for name, value in CODEX_EXTRA_HEADERS.items())
+    payload = json.loads(request.content)
+    assert {key: payload[key] for key in ("model", "stream", "store", "instructions")} == {
+        "model": _OPENAI_CODEX_IMAGE_CARRIER_MODEL,
+        "stream": True,
+        "store": False,
+        "instructions": "You are an image generation assistant.",
     }
-    assert content[1:] == [
-        {
-            "type": "input_image",
-            "image_url": (
-                "data:image/jpeg;base64," + base64.b64encode(b"source-one").decode("ascii")
-            ),
-        },
-        {
-            "type": "input_image",
-            "image_url": (
-                "data:image/png;base64," + base64.b64encode(b"source-two").decode("ascii")
-            ),
-        },
+    assert payload["tools"] == [{"type": "image_generation", **tool}]
+    assert payload["input"][0]["content"] == [
+        {"type": "input_text", "text": text},
+        *({"type": "input_image", "image_url": _data_url(image)} for image in input_images),
     ]
-
-
-def test_openai_codex_image_tool_key_constant_matches_verified_wire() -> None:
-    assert _OPENAI_CODEX_IMAGE_TOOL_KEYS == (
-        "output_format",
-        "output_compression",
-        "moderation",
-        "background",
-        "size",
-        "quality",
+    # Progressive previews are ignored; the final call and both usages are kept.
+    assert (result.images, result.media_type, result.model) == (
+        (b"codex-image",),
+        media_type,
+        "gpt-image-2",
     )
-
-
-def test_parse_openai_codex_sse_extracts_final_image_and_usage() -> None:
-    """The parser ignores progressive previews and reads the final image call
-    plus image/tool usage from the completed Responses event."""
-
-    result = _parse_openai_codex_image_response(
-        _openai_codex_image_sse(b"webp-bytes", output_format="webp"),
-        model="gpt-image-2",
-        requested_output_format="webp",
-    )
-
-    assert result.images == (b"webp-bytes",)
-    assert result.media_type == "image/webp"
-    assert result.model == "gpt-image-2"
     assert result.usage == {
         "image_gen": {
             "input_tokens": 12,
@@ -300,62 +278,7 @@ def test_parse_openai_codex_sse_extracts_final_image_and_usage() -> None:
         "response": {"input_tokens": 3, "output_tokens": 1, "total_tokens": 4},
     }
     assert result.raw is not None
-    call = result.raw["image_generation_calls"][0]
-    assert call["revised_prompt"] == "a revised image prompt"
-    assert call["size"] == "1536x1024"
-    assert call["quality"] == "medium"
-
-
-def test_parse_openai_codex_sse_without_final_image_is_retryable() -> None:
-    with pytest.raises(ProviderError) as exc_info:
-        _parse_openai_codex_image_response(
-            _sse_event({"type": "response.completed", "response": {"status": "completed"}}),
-            model="gpt-image-2",
-        )
-
-    assert exc_info.value.retryable is True
-
-
-@pytest.mark.asyncio
-@respx.mock
-async def test_openai_subscription_image_generate_posts_codex_responses() -> None:
-    """The subscription connection uses ``/codex/responses`` with Codex headers
-    and decodes the final image_generation_call SSE item."""
-
-    route = respx.post(OPENAI_CODEX_RESPONSES_URL).mock(
-        return_value=httpx.Response(
-            200,
-            text=_openai_codex_image_sse(b"codex-webp", output_format="webp"),
-            headers={"content-type": "text/event-stream"},
-        )
-    )
-    client = _openai_subscription_image_client("gpt-image-2")
-
-    result = await client.generate(
-        "a cat",
-        options={"size": "1024x1536", "quality": "low", "output_format": "webp", "n": 3},
-    )
-
-    request = route.calls[0].request
-    assert request.headers["authorization"] == f"Bearer {_openai_subscription_access_token()}"
-    assert request.headers["chatgpt-account-id"] == "account-123"
-    for header, value in CODEX_EXTRA_HEADERS.items():
-        assert request.headers[header] == value
-
-    payload = json.loads(request.content)
-    assert payload["model"] == _OPENAI_CODEX_IMAGE_CARRIER_MODEL
-    assert payload["stream"] is True
-    assert payload["store"] is False
-    assert payload["tools"][0] == {
-        "type": "image_generation",
-        "output_format": "webp",
-        "size": "1024x1536",
-        "quality": "low",
-    }
-    assert "n" not in payload["tools"][0]
-    assert "size 1024x1536" in payload["input"][0]["content"][0]["text"]
-    assert result.images == (b"codex-webp",)
-    assert result.media_type == "image/webp"
+    assert result.raw["image_generation_calls"][0]["revised_prompt"] == "a revised image prompt"
 
 
 @pytest.mark.asyncio
@@ -364,34 +287,6 @@ async def test_openai_subscription_image_generate_requires_account_header() -> N
 
     with pytest.raises(ProviderAuthError, match="reconnect"):
         await client.generate("a cat", options={})
-
-
-@pytest.mark.asyncio
-@respx.mock
-async def test_openai_subscription_image_edit_posts_source_image() -> None:
-    route = respx.post(OPENAI_CODEX_RESPONSES_URL).mock(
-        return_value=httpx.Response(
-            200,
-            text=_openai_codex_image_sse(b"edited-image"),
-            headers={"content-type": "text/event-stream"},
-        )
-    )
-    client = _openai_subscription_image_client("gpt-image-2")
-
-    result = await client.generate(
-        "make it rainy",
-        options={},
-        input_images=(ImageInput(filename="photo.png", media_type="image/png", data=b"source"),),
-    )
-
-    payload = json.loads(route.calls[0].request.content)
-    content = payload["input"][0]["content"]
-    assert "edit the provided image" in content[0]["text"]
-    assert content[1] == {
-        "type": "input_image",
-        "image_url": "data:image/png;base64," + base64.b64encode(b"source").decode("ascii"),
-    }
-    assert result.images == (b"edited-image",)
 
 
 @pytest.mark.asyncio
