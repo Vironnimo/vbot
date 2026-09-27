@@ -100,7 +100,7 @@ async def test_attached_payload_is_stored_with_its_tool_result(tmp_path) -> None
 
 
 @pytest.mark.asyncio
-async def test_a_failed_call_keeps_no_payload(tmp_path) -> None:
+async def test_a_failed_or_core_tool_call_keeps_no_payload(tmp_path) -> None:
     async def crash(context: ToolContext, _arguments: Any) -> Any:
         context.attach_result_payload({"orphan": True})
         raise OSError("test-owned crash")
@@ -114,9 +114,15 @@ async def test_a_failed_call_keeps_no_payload(tmp_path) -> None:
         payload_id = context.attach_result_payload({"kept": True})
         return tool_failure("remote_error", payload_id)
 
+    async def core_tool(context: ToolContext, _arguments: Any) -> Any:
+        context.attach_result_payload({"core": True})
+        return tool_success({})
+
+    tools = _extension_tools(crash=crash, invalid=invalid, failed=failed)
+    tools.register("core_tool", "test-sentinel", _PARAMETERS, core_tool)
     runtime = _runtime(
         tmp_path,
-        _extension_tools(crash=crash, invalid=invalid, failed=failed),
+        tools,
         [
             {
                 "content": None,
@@ -124,6 +130,7 @@ async def test_a_failed_call_keeps_no_payload(tmp_path) -> None:
                     {"id": "crash-call", "name": "crash", "arguments": {}},
                     {"id": "invalid-call", "name": "invalid", "arguments": {}},
                     {"id": "failed-call", "name": "failed", "arguments": {}},
+                    {"id": "core-call", "name": "core_tool", "arguments": {}},
                 ],
             },
             {"content": "ok"},
@@ -136,6 +143,12 @@ async def test_a_failed_call_keeps_no_payload(tmp_path) -> None:
     results = _tool_results(runtime)
     assert results["crash-call"]["error"]["code"] == "tool_execution_error"
     assert results["invalid-call"]["error"]["code"] == "invalid_tool_result"
+    # Only Extension Tools may attach payloads; a core Tool's attempt fails its call.
+    core_error = results["core-call"]["error"]
+    assert (core_error["code"], core_error["message"]) == (
+        "tool_execution_error",
+        "Result payloads are available only to Extension Tools",
+    )
     kept = results["failed-call"]["error"]["message"]
     assert _payload_rows(runtime) == [("failed-call", kept, "owner", '{"kept":true}')]
 
@@ -158,25 +171,6 @@ async def test_a_cancelled_call_leaves_no_payload(tmp_path) -> None:
     with pytest.raises(RunCancelledError):
         await run.wait()
 
-    assert _payload_rows(runtime) == []
-
-
-@pytest.mark.asyncio
-async def test_only_extension_tools_can_attach_payloads(tmp_path) -> None:
-    async def core_tool(context: ToolContext, _arguments: Any) -> Any:
-        context.attach_result_payload({"core": True})
-        return tool_success({})
-
-    tools = ToolRegistry()
-    tools.register("core_tool", "test-sentinel", _PARAMETERS, core_tool)
-    runtime = _runtime(tmp_path, tools, [_call("core_tool"), {"content": "ok"}])
-
-    run = await build_chat_loop(runtime).start_run("coder", "core", session_id="session-one")
-    await run.wait()
-
-    error = _tool_results(runtime)["call-one"]["error"]
-    assert error["code"] == "tool_execution_error"
-    assert error["message"] == "Result payloads are available only to Extension Tools"
     assert _payload_rows(runtime) == []
 
 
