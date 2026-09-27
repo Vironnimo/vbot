@@ -17,11 +17,12 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from cli.application.payload import NATIVE_SOURCE_FILES
 from scripts import build_windows
+from scripts.windows import native_hosts
 
 
 def test_build_command_preserves_failure_output() -> None:
     with pytest.raises(build_windows.BuildError, match="build-tool-error"):
-        build_windows._run(
+        native_hosts.run_tool(
             [sys.executable, "-c", "import sys; sys.stderr.write('build-tool-error'); sys.exit(7)"]
         )
 
@@ -33,11 +34,11 @@ def test_build_tool_has_no_console_when_builder_has_none(tmp_path: Path) -> None
         "import ctypes, sys\n"
         "from pathlib import Path\n"
         "sys.path.insert(0, sys.argv[1])\n"
-        "from scripts import build_windows\n"
+        "from scripts.windows import native_hosts\n"
         "assert not ctypes.windll.kernel32.GetConsoleWindow()\n"
         "child = ('import ctypes, sys; '"
         "'sys.exit(23 if ctypes.windll.kernel32.GetConsoleWindow() else 0)')\n"
-        "build_windows._run([sys.executable, '-c', child])\n"
+        "native_hosts.run_tool([sys.executable, '-c', child])\n"
         "print('windowless-build-completed')\n",
         encoding="utf-8",
     )
@@ -106,6 +107,48 @@ def test_native_source_fingerprint_ignores_checkout_line_endings_but_detects_cha
     assert build_windows.native_source_digest(source) == expected
     launcher.write_bytes(b"int main(void) { return 1; }\n")
     assert build_windows.native_source_digest(source) != expected
+
+
+def test_native_source_fingerprint_covers_the_compile_recipe_but_not_the_release_builder(
+    tmp_path: Path,
+) -> None:
+    source = _source(tmp_path)
+    builder = source / "scripts" / "build_windows.py"
+    builder.parent.mkdir(parents=True, exist_ok=True)
+    builder.write_text("# release builder\n", encoding="utf-8")
+    expected = build_windows.native_source_digest(source)
+
+    builder.write_text("# release builder with a new runtime step\n", encoding="utf-8")
+    assert build_windows.native_source_digest(source) == expected
+
+    recipe = source / "scripts" / "windows" / "native_hosts.py"
+    recipe.write_text("# changed compiler flags\n", encoding="utf-8")
+    assert build_windows.native_source_digest(source) != expected
+
+
+def test_updaters_of_earlier_versions_still_find_the_native_compiler() -> None:
+    # Their candidate step runs `from scripts.build_windows import HOSTS, compile_host`
+    # against the new source checkout.
+    assert build_windows.HOSTS is native_hosts.HOSTS
+    assert build_windows.compile_host is native_hosts.compile_host
+
+
+def test_only_the_root_bootstraps_are_compiled_as_stable_hosts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    commands: list[list[str]] = []
+    monkeypatch.setattr(native_hosts, "require_tool", lambda name: name)
+    monkeypatch.setattr(native_hosts, "run_tool", lambda command: commands.append(list(command)))
+
+    native_hosts.compile_hosts(_source(tmp_path), tmp_path / "runtime", version="1.0.0")
+
+    stable = {
+        Path(command[command.index("/link") - 1].removeprefix("/Fe:")).name
+        for command, compiled in zip(commands[2::3], commands[1::3], strict=True)
+        if "/DVBOT_STABLE_BOOTSTRAP" in compiled
+    }
+    assert len(commands) == 3 * len(native_hosts.HOSTS)
+    assert stable == {"vBot.exe", "vBot.GUI.exe"}
 
 
 @pytest.mark.parametrize(
@@ -291,7 +334,7 @@ def test_runtime_provisioning_uses_shape_lock_with_hashes(
     lock.parent.mkdir(parents=True, exist_ok=True)
     lock.write_text("example==1.0 --hash=sha256:abc\n", encoding="utf-8")
     commands: list[list[str]] = []
-    monkeypatch.setattr(build_windows, "_run", lambda command: commands.append(command))
+    monkeypatch.setattr(build_windows, "run_tool", lambda command: commands.append(command))
     runtime = _runtime(tmp_path)
 
     build_windows.copy_runtime(
@@ -331,7 +374,7 @@ def test_build_writes_complete_hashed_manifest_and_rooted_archive(
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_bytes(f"{role}:{stable}".encode())
 
-    monkeypatch.setattr(build_windows, "compile_host", fake_compile)
+    monkeypatch.setattr(native_hosts, "compile_host", fake_compile)
     args = argparse.Namespace(
         source=str(source),
         runtime=str(runtime),
@@ -381,7 +424,7 @@ def test_release_build_fails_closed_without_signing_key(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        build_windows, "compile_host", lambda *args, **kwargs: args[1].write_bytes(b"exe")
+        native_hosts, "compile_host", lambda *args, **kwargs: args[1].write_bytes(b"exe")
     )
     monkeypatch.delenv("MISSING_SIGNING_KEY", raising=False)
     args = argparse.Namespace(
@@ -404,7 +447,7 @@ def test_release_archive_signature_covers_raw_sha256(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        build_windows, "compile_host", lambda *args, **kwargs: args[1].write_bytes(b"exe")
+        native_hosts, "compile_host", lambda *args, **kwargs: args[1].write_bytes(b"exe")
     )
     key = Ed25519PrivateKey.generate()
     monkeypatch.setenv("TEST_SIGNING_KEY", base64.b64encode(key.private_bytes_raw()).decode())
@@ -460,9 +503,9 @@ def test_installer_bootstraps_application_and_stops_before_uninstall() -> None:
 def test_native_host_manifest_matches_role(tmp_path: Path, monkeypatch, role: str) -> None:
     commands = []
     source = Path(build_windows.__file__).parent.parent
-    monkeypatch.setattr(build_windows, "_tool", lambda name: name)
-    monkeypatch.setattr(build_windows, "_run", lambda command: commands.append(list(command)))
-    build_windows.compile_host(source, tmp_path / "host.exe", role=role, version="1.0.0")
+    monkeypatch.setattr(native_hosts, "require_tool", lambda name: name)
+    monkeypatch.setattr(native_hosts, "run_tool", lambda command: commands.append(list(command)))
+    native_hosts.compile_host(source, tmp_path / "host.exe", role=role, version="1.0.0")
     expected = "desktop.manifest" if role == "desktop" else "launcher.manifest"
     manifest_path = (source / "scripts" / "windows" / expected).resolve()
     assert f'/dVBOT_MANIFEST_PATH="{manifest_path}"' in commands[0]
@@ -483,10 +526,10 @@ def test_compile_host_constructs_msvc_abi_commands(
 ) -> None:
     commands: list[list[str]] = []
     source = _source(tmp_path)
-    monkeypatch.setattr(build_windows, "_tool", lambda name: name)
-    monkeypatch.setattr(build_windows, "_run", lambda command: commands.append(list(command)))
+    monkeypatch.setattr(native_hosts, "require_tool", lambda name: name)
+    monkeypatch.setattr(native_hosts, "run_tool", lambda command: commands.append(list(command)))
 
-    build_windows.compile_host(source, tmp_path / "vBot.Server.exe", role="server", version="2.3.4")
+    native_hosts.compile_host(source, tmp_path / "vBot.Server.exe", role="server", version="2.3.4")
 
     assert commands[0][0] == "llvm-rc"
     assert any("VBOT_ICON_PATH" in argument for argument in commands[0])
@@ -501,7 +544,7 @@ def test_compile_host_constructs_msvc_abi_commands(
     assert "/SUBSYSTEM:CONSOLE" in commands[2]
 
     commands.clear()
-    build_windows.compile_host(source, tmp_path / "vBot.Python.exe", role="python", version="2.3.4")
+    native_hosts.compile_host(source, tmp_path / "vBot.Python.exe", role="python", version="2.3.4")
     assert "/SUBSYSTEM:CONSOLE" in commands[2]
 
 
@@ -509,7 +552,7 @@ def test_compile_host_constructs_msvc_abi_commands(
     sys.platform != "win32" or not shutil.which("clang-cl") or not shutil.which("llvm-rc"),
     reason="Windows native compiler required",
 )
-@pytest.mark.parametrize("filename,role", build_windows.HOSTS.items())
+@pytest.mark.parametrize("filename,role", native_hosts.HOSTS.items())
 def test_source_update_compiles_host_without_application_dependencies(tmp_path, filename, role):
     # Keep each native build independent instead of fitting all six compilers
     # into one normal per-test timeout on slower Windows runners.
@@ -522,7 +565,7 @@ def test_source_update_compiles_host_without_application_dependencies(tmp_path, 
             "-c",
             "import sys\n"
             "from pathlib import Path\n"
-            "from scripts.build_windows import compile_host\n"
+            "from scripts.windows.native_hosts import compile_host\n"
             "filename, role = sys.argv[2:4]\n"
             "compile_host(Path.cwd(), Path(sys.argv[1]) / filename, "
             "role=role, version='0.4.3', stable=filename == 'vBot.exe')\n",
@@ -552,7 +595,7 @@ def test_native_startup_failure_exits_and_reports_stderr_without_a_dialog(tmp_pa
         else root / "versions" / "rel_test" / "runtime" / f"vBot.{role.title()}.exe"
     )
     source = Path(build_windows.__file__).parent.parent
-    build_windows.compile_host(source, output, role=role, version="0.4.3", stable=stable)
+    native_hosts.compile_host(source, output, role=role, version="0.4.3", stable=stable)
     if stable:
         (root / "active-version").write_text("rel_test\n", encoding="ascii")
     process = subprocess.Popen(
@@ -600,7 +643,7 @@ def test_native_redirected_output_preserves_unicode(tmp_path, role, stable):
     )
     output = root / "vBot.exe" if stable else runtime / f"vBot.{role.title()}.exe"
     (root / "active-version").write_text("rel_test\n", encoding="ascii")
-    build_windows.compile_host(
+    native_hosts.compile_host(
         Path(build_windows.__file__).parent.parent,
         output,
         role=role,

@@ -463,11 +463,8 @@ def _candidate(
             native_script = (
                 "import sys\n"
                 "from pathlib import Path\n"
-                "from scripts.build_windows import HOSTS, compile_host\n"
-                "source, runtime, version = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]\n"
-                "for filename, role in HOSTS.items():\n"
-                "    compile_host(source, runtime / filename, role=role, version=version, "
-                "stable=role in {'host', 'gui'})\n"
+                "from scripts.windows.native_hosts import compile_hosts\n"
+                "compile_hosts(Path(sys.argv[1]), Path(sys.argv[2]), version=sys.argv[3])\n"
             )
             _checked_command(
                 source,
