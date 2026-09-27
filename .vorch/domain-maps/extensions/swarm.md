@@ -431,8 +431,8 @@ Internal Extension source routing: `extension.py` owns the live Swarm service an
   through the first batch, and `WakePacing` levels with a fake event loop.
   Default wake routes remain unchanged.
 - Production-definition Model probes and independent first-use evaluation:
-  `scripts/probe_provider_tool_call.py` (`swarm_tool` scenario), with probe tests
-  under `tests/scripts/test_probe_provider_tool_call_extensions.py`. The `unassisted` case
+  `scripts/probe_provider_tool_call.py` (`swarm_tool` scenario); its offline tests are the
+  CLI smoke test and two `swarm_tool` cases in `tests/scripts/test_provider_probe.py`. The `unassisted` case
   supplies the production initial message pointing to the original goal post, with
   all four private Tools available. Success requires reading that goal, receiving peer
   feedback, a later public contribution, and a normal final response. It evaluates

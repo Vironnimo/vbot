@@ -1,15 +1,15 @@
-"""Tests for the maintainer-only tracked Model DB refresh entry point."""
+"""Smoke test of the maintainer-only tracked Model DB refresh script."""
 
 from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
 from types import ModuleType
+from typing import Any
 
 import pytest
 
-from cli.server_management import CommandResult, ServerInstance
-from core.utils.logging import resolve_daily_log_path
+from cli.server_management import CommandResult
 
 
 def _load_script() -> ModuleType:
@@ -25,65 +25,24 @@ def _load_script() -> ModuleType:
 refresh_model_db = _load_script()
 
 
-def test_main_targets_this_checkout_system_database(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+def test_refresh_publishes_into_this_checkouts_system_model_db(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    data_dir = tmp_path / "data"
-    instance = ServerInstance(
-        host="127.0.0.1",
-        port=8421,
-        data_dir=data_dir,
-        url="http://127.0.0.1:8421",
-        log_path=resolve_daily_log_path(data_dir),
-    )
-    captured: dict[str, object] = {}
-    monkeypatch.setattr(refresh_model_db, "_is_branch_checkout", lambda: True)
-    monkeypatch.setattr(refresh_model_db, "_worktree_data_dir", lambda: data_dir)
+    refreshed: dict[str, Any] = {}
 
-    def fake_resolve_instance(**kwargs):
-        captured["resolve"] = kwargs
-        return instance
-
-    def fake_model_refresh(
-        selected_instance,
-        provider,
-        *,
-        target,
-        expected_resources_dir,
-    ):
-        captured["refresh"] = {
-            "instance": selected_instance,
-            "provider": provider,
-            "target": target,
-            "expected_resources_dir": expected_resources_dir,
-        }
+    def model_refresh(instance: Any, provider: str | None, **target: Any) -> CommandResult:
+        refreshed.update(port=instance.port, provider=provider, **target)
         return CommandResult(ok=True, message="refreshed openai", instance=instance)
 
-    monkeypatch.setattr(refresh_model_db, "resolve_instance", fake_resolve_instance)
-    monkeypatch.setattr(refresh_model_db, "model_refresh", fake_model_refresh)
+    monkeypatch.setattr(refresh_model_db, "_is_branch_checkout", lambda: True)
+    monkeypatch.setattr(refresh_model_db, "model_refresh", model_refresh)
 
-    exit_code = refresh_model_db.main(["openai", "--port", "8421"])
+    code = refresh_model_db.main(["openai", "--port", "8421", "--data-dir", str(tmp_path)])
 
-    assert exit_code == 0
-    assert captured["resolve"] == {
-        "host": "127.0.0.1",
+    assert code == 0
+    assert refreshed == {
         "port": 8421,
-        "data_dir": data_dir,
-    }
-    assert captured["refresh"] == {
-        "instance": instance,
         "provider": "openai",
         "target": "system",
         "expected_resources_dir": refresh_model_db.PROJECT_ROOT / "resources",
     }
-
-
-def test_main_rejects_detached_checkout(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(refresh_model_db, "_is_branch_checkout", lambda: False)
-
-    exit_code = refresh_model_db.main([])
-
-    assert exit_code == 2

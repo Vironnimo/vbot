@@ -236,7 +236,7 @@ habits, command-line strings, and path suggestions in `test_search_files_fields.
 with deterministic traversal-pruning and timeout-recovery checks in
 `test_search_files_selection.py`,
 `tests/cli/test_search_runtime.py`, `tests/scripts/converters/persistence_generation_1/test_json_documents.py`,
-`tests/scripts/test_probe_search_files.py`, plus runtime, scanner, Chat, packaging,
+the retained probe cases in `tests/scripts/test_provider_probe.py`, plus runtime, scanner, Chat, packaging,
 and Tool row integration tests. Tests execute the private native engine.
 
 `scripts/probe_provider_tool_call.py --scenario tool_first_use --first-use-tool search_files`
