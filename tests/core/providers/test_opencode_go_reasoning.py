@@ -10,12 +10,12 @@ import pytest
 import respx
 
 from core.chat import ChatMessage
-from core.chat.wire_shaping import _assemble_request_history
 from core.providers.reasoning import (
     DEFAULT_REASONING_REPLAY_FIDELITY,
     REASONING_REPLAY_FIDELITY_READABLE_ONLY,
     REASONING_REPLAY_FULL_HISTORY,
 )
+from tests.core.chat.assistant_turn_test_support import request_history
 
 from .opencode_go_test_support import (
     CHAT_MODEL,
@@ -175,7 +175,7 @@ async def test_provider_default_messages_profile_preserves_native_history(
         ChatMessage.user("Next"),
     ]
     persisted = [ChatMessage.from_dict(message.to_dict()) for message in history]
-    messages = _assemble_request_history(
+    messages = request_history(
         persisted, replay_policy=adapter.reasoning_replay_policy("union-alpha"), agent_model=scope
     )
     reply = {

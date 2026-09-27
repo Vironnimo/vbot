@@ -11,11 +11,14 @@ import httpx
 import pytest
 import respx
 
-from core.chat.events import _visible_message_payload
 from core.chat.streaming import StreamingAccumulator, StreamingDeltaBatcher
-from core.chat.wire_shaping import _assistant_continuation_dict, _assistant_message_from_response
 from core.providers.errors import ProviderTimeoutError
 from core.providers.openai import OpenAIAdapter
+from tests.core.chat.assistant_turn_test_support import (
+    assistant_turn_from_response,
+    event_payload,
+    request_history,
+)
 
 from .openai_test_support import (
     OPENAI_SUBSCRIPTION_URL,
@@ -252,11 +255,11 @@ async def test_reasoning_summary_sections_stream_backfill_and_stay_out_of_replay
     assert sent["reasoning_summary"] == sections
     assert adapter.normalize_response({"output": [item]})["reasoning_summary"] == sections
 
-    message = _assistant_message_from_response("test/model", fields.to_response_dict())
-    public = _visible_message_payload(message)
+    message = assistant_turn_from_response("test/model", fields.to_response_dict())
+    public = event_payload(message)
     assert public["reasoning_summary"] == sections
     assert "opaque-sentinel" not in str(public)
-    replay = _assistant_continuation_dict(message)
+    [replay] = request_history([], current_turn=message)
     assert "reasoning_summary" not in replay
     assert replay["reasoning_meta"]["response_output"][0] == item
 

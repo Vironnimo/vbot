@@ -2,7 +2,7 @@
 
 `core/providers/` owns Provider configuration, credential and Account resolution, adapter contracts, shared wire policy, and Provider-specific request/response translation.
 
-Responses decoding preserves explicit incomplete/failed terminal outcomes for both streaming and non-streaming results. A terminal-only function Call emits canonical Tool deltas; argument deltas also update retained Responses output items so an empty terminal output array cannot produce stale replay arguments. These are local normalization contracts, covered by `test_github_copilot_responses_decoding.py`; they do not change compatibility profiles.
+Responses decoding preserves explicit incomplete/failed terminal outcomes for both streaming and non-streaming results. A terminal-only function Call emits canonical Tool deltas; argument deltas also update retained Responses output items so an empty terminal output array cannot produce stale replay arguments. These are local normalization contracts, covered by `test_responses_codec_decoding.py`; they do not change compatibility profiles.
 
 ## Overview
 
@@ -85,7 +85,7 @@ Core terms Provider, Model, and Reasoning live in `.vorch/GLOSSARY.md`; Model-DB
 - Generated Provider catalogs are refresh artifacts. Durable behavior belongs in Adapter code or verified override files, not hand edits to generated `resources/models/<provider>.json`.
 - A Provider listing that contains proven-unusable ids uses `catalog_exclusions` in its static Provider config; discovery preserves the raw response and omits only those exact ids from the usable Model projection. Do not use this as a preference allow/deny list.
 
-Provider test suites under `tests/core/providers/` separate configuration/catalog, request construction, completed responses, streaming, and authentication/lifecycle behavior. Shared fixtures and captured wire payloads remain in the existing `*_test_support.py` and focused `*_helpers.py` modules.
+Provider test suites under `tests/core/providers/` separate configuration/catalog, request construction, completed responses, streaming, and authentication/lifecycle behavior. Shared fixtures and captured wire payloads remain in the existing `*_test_support.py` and focused `*_helpers.py` modules. A test that follows a normalized response through Chat persistence into the next request uses Chat's `tests/core/chat/assistant_turn_test_support.py` instead of private `core.chat` names.
 
 The Tool-contract probe keeps its CLI in `scripts/probe_provider_tool_call.py`; scenarios, workflows and measurement helpers live under `scripts/provider_probe/`. Probes call adapters directly, so `common.ModelFacingAdapter` applies Chat's host-specific Tool names to their requests (`tools.md` -> Model Tool names); probe code and captured traces use registry names. The exact Reasoning probe CLI keeps orchestration in `scripts/probe_reasoning_replay_exact.py`, with connection preparation in `_reasoning_probe_connection.py` and wire/evidence helpers in `_reasoning_probe_wire.py`.
 

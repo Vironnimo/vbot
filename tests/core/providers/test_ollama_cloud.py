@@ -16,11 +16,6 @@ from PIL import Image
 from core.attachments.images import ImageConverter
 from core.chat.block_resolver import ContentBlockResolver
 from core.chat.messages import ChatMessage
-from core.chat.wire_shaping import (
-    _assemble_request_history,
-    _assistant_continuation_dict,
-    _assistant_message_from_response,
-)
 from core.providers.errors import ProviderRequestTooLargeError
 from core.providers.ollama import OllamaCloudAdapter
 from core.providers.providers import ProviderRegistry
@@ -29,6 +24,10 @@ from core.providers.reasoning import (
     REASONING_INTENT_EFFORT,
     REASONING_INTENT_OFF,
     ReasoningIntent,
+)
+from tests.core.chat.assistant_turn_test_support import (
+    assistant_turn_from_response,
+    request_history,
 )
 from tests.core.providers.ollama_test_support import (
     CLOUD_CHAT_URL,
@@ -426,7 +425,7 @@ async def test_v41_replays_persisted_reasoning_on_fresh_adapter(
         return_value=httpx.Response(200, json=CLOUD_TEXT_RESPONSE)
     )
     # Simulate the normalized response persisted by a previous Adapter/Run.
-    assistant = _assistant_message_from_response(
+    assistant = assistant_turn_from_response(
         f"ollama-cloud/{V41}",
         {
             "content": None,
@@ -442,20 +441,24 @@ async def test_v41_replays_persisted_reasoning_on_fresh_adapter(
     policy = adapter.reasoning_replay_policy(V41)
     assert policy == "full_history"
     assert adapter.reasoning_replay_fidelity(V41) == "readable_only"
-    messages = _assemble_request_history(
-        [ChatMessage.user("Check Berlin weather."), restored],
-        replay_policy=policy,
-        agent_model=scope,
-    )
+    question = ChatMessage.user("Check Berlin weather.")
+    result = ChatMessage.tool(tool_call_id="call_weather", name="get_weather", content="20 C")
     if current_run:
-        messages[-1] = _assistant_continuation_dict(restored, replay_policy=policy)
-    messages.append({"role": "tool", "tool_call_id": "call_weather", "content": "20 C"})
-    if not current_run:
-        messages.extend(
+        messages = request_history(
+            [question], replay_policy=policy, agent_model=scope, current_turn=restored
+        )
+        messages.append(result.to_dict())
+    else:
+        messages = request_history(
             [
-                {"role": "assistant", "content": "20 C in Berlin."},
-                {"role": "user", "content": "Check again."},
-            ]
+                question,
+                restored,
+                result,
+                ChatMessage.assistant(model=f"ollama-cloud/{V41}", content="20 C in Berlin."),
+                ChatMessage.user("Check again."),
+            ],
+            replay_policy=policy,
+            agent_model=scope,
         )
     try:
         await adapter.send(messages, model_id=V41, thinking_effort=effort, tools=[WEATHER_TOOL])
@@ -549,7 +552,7 @@ async def test_patch_body_survives_cloud_response_and_chat_ingestion(patch: str)
     }
 
     response = adapter.normalize_response(raw, model_id=V41)
-    message = _assistant_message_from_response(f"ollama-cloud/{V41}", response)
+    message = assistant_turn_from_response(f"ollama-cloud/{V41}", response)
     restored = ChatMessage.from_dict(json.loads(json.dumps(message.to_dict())))
 
     assert restored.tool_calls is not None and len(restored.tool_calls) == 1

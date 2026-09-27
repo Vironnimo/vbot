@@ -2,8 +2,7 @@
 
 The Adapter routes each Model to ``/chat/completions``, ``/responses`` or
 ``/v1/messages``. The helpers mock all three endpoints at once, so a test
-observes the selected route from the endpoint that was actually called. The
-Responses helpers also drive the shared stateless Responses codec directly.
+observes the selected route from the endpoint that was actually called.
 """
 
 from __future__ import annotations
@@ -23,15 +22,10 @@ from core.providers.github_copilot_policy import (
     CHAT_COMPLETIONS_ENDPOINT,
     MESSAGES_ENDPOINT,
     RESPONSES_ENDPOINT,
-    GitHubCopilotModelPolicy,
-    copilot_model_policy,
-)
-from core.providers.github_copilot_responses import (
-    ResponsesStreamState,
-    iter_responses_sse_deltas_with_state,
 )
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 from core.providers.token_getter import TokenGetter
+from tests.core.providers.responses_test_support import sse_event
 
 FIXTURE_PATH = Path("tests/core/models/fixtures/github_copilot_models_raw.json")
 API_KEY = "test-api-key-12345"
@@ -304,39 +298,3 @@ class RotatingTokenGetter:
         token = self._tokens[min(self.calls, len(self._tokens) - 1)]
         self.calls += 1
         return token
-
-
-# ---------------------------------------------------------------------------
-# Shared Responses codec
-# ---------------------------------------------------------------------------
-
-
-def responses_policy(model_id: str = "gpt-5.4", **overrides: Any) -> GitHubCopilotModelPolicy:
-    """A Copilot Responses policy with every optional feature unless overridden."""
-
-    metadata = copilot_metadata(
-        "OpenAI",
-        model_id,
-        [RESPONSES_ENDPOINT],
-        reasoning_efforts=["low", "medium", "high", "xhigh"],
-        tool_calls=True,
-        parallel_tool_calls=True,
-        streaming=True,
-        structured_outputs=True,
-    )
-    metadata["github_copilot"].update(overrides)
-    return copilot_model_policy(model_id, metadata)
-
-
-def sse_event(event: str, data: Mapping[str, Any]) -> str:
-    """One named SSE event; ``data`` may omit ``type`` to rely on the event name."""
-
-    return f"event: {event}\ndata: {json.dumps(data)}\n\n"
-
-
-def decode_responses_sse(
-    lines: Iterable[str], state: ResponsesStreamState | None = None
-) -> list[dict[str, Any]]:
-    """Decode Responses SSE lines with a fresh (or the given) stream state."""
-
-    return list(iter_responses_sse_deltas_with_state(lines, state or ResponsesStreamState()))

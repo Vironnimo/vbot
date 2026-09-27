@@ -16,7 +16,7 @@ from core.providers.github_copilot_responses import (
 )
 from core.tools import HISTORY_TOOL_DESCRIPTION, HISTORY_TOOL_NAME, HISTORY_TOOL_PARAMETERS
 from core.utils.tokens import NATIVE_MEDIA_TOKEN_RESERVE
-from tests.core.providers.github_copilot_test_support import responses_policy
+from tests.core.providers.responses_test_support import responses_policy
 
 _ENCRYPTED_INCLUDE = [REASONING_ENCRYPTED_CONTENT_INCLUDE]
 _HELLO = [{"role": "user", "content": "Hello"}]
