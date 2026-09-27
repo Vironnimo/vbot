@@ -15,7 +15,10 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
 - The owner-selected argument repair (`normalize_patch_arguments`) accepts patch-text
   aliases (`input`, `patch_text`, `diff`, ...), ordinary field formatting and shared
   call wrappers. Equal aliases coalesce; a placeholder alias (`""`, `null`, `...`)
-  beside a real patch is ignored (`placeholder_as_omitted`). Conflicting aliases
+  beside a real patch is ignored (`placeholder_as_omitted`). An object, or JSON
+  text of one, under a patch spelling whose keys are all call fields wraps them
+  (`wrapping_fields`): `input: {"path": ...}` beside `patch` supplies `path`, which
+  must agree with the patch's file headers (Sessions, 2026-09). Conflicting aliases
   fail before mutation, naming both keys and values (`Conflicting values for patch:
   patch is "..." and input is "...". Send only the intended one.`; shared
   `normalize_call_arguments` wording). Unsupported fields fail as well. Patch

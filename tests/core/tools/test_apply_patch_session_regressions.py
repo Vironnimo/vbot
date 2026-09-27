@@ -36,10 +36,30 @@ async def test_patch_argument_repair_preserves_payload_and_input(tmp_path, shape
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    "arguments",
+    [
+        # The input object holds the path the patch names, beside the patch.
+        {"input": {"path": "new.txt"}, "patch": "*** Add File: new.txt\n+hello"},
+        {"input": '{"path": "new.txt"}', "patch": "*** Add File: new.txt\n+hello"},
+        {"input": {"path": "new.txt", "patch": "*** Add File: new.txt\n+hello"}},
+    ],
+)
+async def test_input_object_of_call_fields_wraps_them(tmp_path, arguments):
+    registry = ToolRegistry()
+    register_apply_patch_tool(registry, file_state=FileReadState())
+    result = await registry.dispatch(context(tmp_path), arguments, ["apply_patch"])
+    assert result["ok"], result
+    assert (tmp_path / "new.txt").read_bytes() == b"hello\n"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     "extra",
     [
         {"input": "*** Add File: other.txt\n+different"},
         {"path": "other.txt"},
+        {"input": {"path": "other.txt"}},
+        {"input": {"path": "new.txt", "colour": "red"}},
         {"dry_run": True},
         {"arguments": {"patch": "*** Add File: other.txt\n+different"}},
     ],
