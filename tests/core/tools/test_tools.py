@@ -1,4 +1,4 @@
-"""Tools: definitions behavior."""
+"""Tools: result envelopes, call display, prompt blocks, workers and built-in conventions."""
 
 from __future__ import annotations
 
@@ -6,20 +6,15 @@ import ast
 import asyncio
 import logging
 import threading
-from collections.abc import Callable
-from dataclasses import FrozenInstanceError
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from core.tools import (
-    Tool,
-    ToolContext,
     ToolDisplay,
     ToolDisplayField,
     ToolDisplayPart,
-    ToolNoteHook,
     ToolPromptBlockRegistry,
     ToolRegistry,
     is_tool_result_envelope,
@@ -27,14 +22,350 @@ from core.tools import (
     tool_failure,
     tool_success,
 )
+from core.tools.apply_patch import APPLY_PATCH_TOOL_PARAMETERS
+from core.tools.bash import BASH_TOOL_PARAMETERS
+from core.tools.channel import CHANNEL_SEND_TOOL_PARAMETERS
+from core.tools.cron import CRON_TOOL_PARAMETERS
+from core.tools.history import HISTORY_TOOL_PARAMETERS
+from core.tools.image import ANALYZE_IMAGE_TOOL_PARAMETERS, IMAGE_GENERATION_TOOL_PARAMETERS
+from core.tools.memory import MEMORY_TOOL_PARAMETERS
+from core.tools.process import PROCESS_TOOL_PARAMETERS
+from core.tools.project import PROJECT_TOOL_PARAMETERS
+from core.tools.read import READ_TOOL_PARAMETERS
+from core.tools.search_files import SEARCH_FILES_TOOL_PARAMETERS
+from core.tools.session_search import SESSION_SEARCH_TOOL_PARAMETERS
+from core.tools.skill import SKILL_TOOL_PARAMETERS
+from core.tools.skill_manage import SKILL_MANAGE_TOOL_PARAMETERS
+from core.tools.speech import TEXT_TO_SPEECH_TOOL_PARAMETERS
+from core.tools.status import STATUS_TOOL_PARAMETERS
+from core.tools.subagent import SUBAGENT_TOOL_PARAMETERS
 from core.tools.tools import run_tool_worker
-from tests.core.tools.tools_helpers import (
-    READ_FILE_SCHEMA,
-    JsonObject,
-    make_context,
-    read_file_handler,
-    register_read_file,
+from core.tools.web_fetch import WEB_FETCH_TOOL_PARAMETERS
+from core.tools.web_search import WEB_SEARCH_TOOL_PARAMETERS
+from tests.core.tools.tools_test_support import JsonObject, make_context, read_file_handler
+
+# --- Result envelopes ---------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("envelope", "expected"),
+    [
+        pytest.param(
+            tool_success({"content": "hello"}),
+            {"ok": True, "error": None, "data": {"content": "hello"}, "artifacts": []},
+            id="success",
+        ),
+        pytest.param(
+            tool_failure("not_found", "File not found"),
+            {
+                "ok": False,
+                "error": {"code": "not_found", "message": "File not found"},
+                "data": None,
+                "artifacts": [],
+            },
+            id="failure-without-retry-signal",
+        ),
+        pytest.param(
+            tool_failure(
+                "request_error", "HTTP 503 while fetching URL", retryable=True, attempts_made=4
+            ),
+            {
+                "ok": False,
+                "error": {
+                    "code": "request_error",
+                    "message": "HTTP 503 while fetching URL",
+                    "retryable": True,
+                    "attempts_made": 4,
+                },
+                "data": None,
+                "artifacts": [],
+            },
+            id="retry-signal-inside-error",
+        ),
+        pytest.param(
+            tool_failure("validation_error", "bad input", retryable=False),
+            {
+                "ok": False,
+                "error": {"code": "validation_error", "message": "bad input", "retryable": False},
+                "data": None,
+                "artifacts": [],
+            },
+            id="retryable-false-without-attempts",
+        ),
+    ],
 )
+def test_envelope_helpers_build_valid_envelopes(envelope: JsonObject, expected: JsonObject) -> None:
+    assert envelope == expected
+    assert is_tool_result_envelope(envelope) is True
+
+
+@pytest.mark.parametrize(
+    ("signal", "field"),
+    [
+        ({"retryable": "yes"}, "retryable"),
+        ({"attempts_made": -1}, "attempts_made"),
+        ({"attempts_made": True}, "attempts_made"),
+        ({"attempts_made": 1.5}, "attempts_made"),
+    ],
+)
+def test_failure_rejects_an_invalid_retry_signal(signal: dict[str, Any], field: str) -> None:
+    with pytest.raises(ValueError, match=field):
+        tool_failure("x", "y", **signal)
+
+
+@pytest.mark.parametrize(
+    "envelope",
+    [
+        pytest.param({"ok": True, "data": {}}, id="missing-keys"),
+        pytest.param(
+            {
+                "ok": False,
+                "error": {"code": "x", "message": "y", "unexpected": 1},
+                "data": None,
+                "artifacts": [],
+            },
+            id="unknown-error-key",
+        ),
+        pytest.param(
+            {
+                "ok": False,
+                "error": {"code": "x", "message": "y", "attempts_made": -1},
+                "data": None,
+                "artifacts": [],
+            },
+            id="negative-attempts",
+        ),
+    ],
+)
+def test_malformed_envelopes_are_not_result_envelopes(envelope: JsonObject) -> None:
+    assert is_tool_result_envelope(envelope) is False
+
+
+# --- Call display ---------------------------------------------------------------
+
+
+def _display_for_call(display: ToolDisplay, arguments: Any, **call: Any) -> JsonObject:
+    registry = ToolRegistry()
+    registry.register(
+        "probe", "Probe the call display.", {"type": "object"}, read_file_handler, display=display
+    )
+    return registry.display_for_call("probe", arguments, **call)
+
+
+def _text_part(value: str) -> JsonObject:
+    return {
+        "kind": "text",
+        "value": value,
+        "full_value": value,
+        "truncate": "end",
+        "tooltip": "truncated",
+        "max_characters": 64,
+        "quote": False,
+        "copyable": False,
+    }
+
+
+@pytest.mark.parametrize(
+    ("arguments", "summary", "primary"),
+    [
+        pytest.param(
+            {"pattern": "TODO", "path": "src", "content": "large body"},
+            "TODO · src",
+            [_text_part("TODO · src")],
+            id="summary-fields",
+        ),
+        pytest.param({"content": "large body"}, "", [], id="no-summary-argument"),
+    ],
+)
+def test_summary_fields_describe_the_call_and_bulky_arguments_stay_hidden(
+    arguments: JsonObject, summary: str, primary: list[JsonObject]
+) -> None:
+    display = ToolDisplay(summary_fields=("pattern", "path"), hidden_argument_keys=("content",))
+
+    assert _display_for_call(display, arguments) == {
+        "version": 1,
+        "summary": summary,
+        "hidden_argument_keys": ["content"],
+        "primary": primary,
+        "facts": [],
+    }
+
+
+@pytest.mark.parametrize(
+    ("description", "value", "kind", "quote"),
+    [
+        ("  run tests  ", "run tests", "description", True),
+        ("  ", "python -m pytest", "command", False),
+    ],
+)
+def test_display_shows_the_first_nonblank_primary_candidate(
+    description: str, value: str, kind: str, quote: bool
+) -> None:
+    display = ToolDisplay(
+        primary_candidates=(
+            ToolDisplayField("description", kind="description", quote=True),
+            ToolDisplayField("command", kind="command"),
+        )
+    )
+
+    [part] = _display_for_call(
+        display, {"description": description, "command": "python -m pytest"}
+    )["primary"]
+
+    assert (part["value"], part["kind"], part["quote"]) == (value, kind, quote)
+
+
+def test_display_builds_computed_semantic_parts() -> None:
+    display = ToolDisplay(
+        parts_builder=lambda _arguments: (
+            ToolDisplayPart("status", truncate="never", tooltip="none"),
+            ToolDisplayPart("process-session-one", kind="identifier", truncate="middle"),
+        )
+    )
+
+    payload = _display_for_call(display, {"action": "status"})
+
+    assert payload["summary"] == "status · process-session-one"
+    assert payload["primary"][0]["truncate"] == "never"
+    assert payload["primary"][1]["kind"] == "identifier"
+    assert payload["primary"][1]["truncate"] == "middle"
+
+
+def test_display_resolves_a_path_against_the_call_cwd(tmp_path: Path) -> None:
+    display = ToolDisplay(
+        primary_candidates=(
+            ToolDisplayField(
+                "path", kind="path", truncate="start", tooltip="always", copyable=True
+            ),
+        )
+    )
+    context = make_context("probe", workspace=tmp_path / "workspace", cwd=tmp_path / "project")
+
+    payload = _display_for_call(display, {"path": "src/main.py"}, context=context)
+
+    assert payload["primary"][0] == {
+        "kind": "path",
+        "value": "src/main.py",
+        "full_value": (tmp_path / "project" / "src" / "main.py").as_posix(),
+        "truncate": "start",
+        "tooltip": "always",
+        "max_characters": 64,
+        "quote": False,
+        "copyable": True,
+    }
+
+
+def test_facts_recorded_by_the_handler_precede_the_display_facts() -> None:
+    display = ToolDisplay(
+        fact_builder=lambda _arguments, _result: (
+            {"kind": "line_range", "start": 170, "end": 280},
+            {"kind": "line_change", "change": "added", "value": 3},
+        )
+    )
+    context = make_context("probe")
+    context.add_display_count(10, "matches", at_least=True)
+    context.add_display_line_changes(added=4, removed=0)
+
+    assert _display_for_call(display, {}, context=context)["facts"] == [
+        {"kind": "count", "value": 10, "unit": "matches", "at_least": True},
+        {"kind": "line_change", "change": "added", "value": 4},
+        {"kind": "line_change", "change": "removed", "value": 0},
+        {"kind": "line_range", "start": 170, "end": 280},
+        {"kind": "line_change", "change": "added", "value": 3},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("arguments", "result", "facts"),
+    [
+        pytest.param(
+            {"action": "list"},
+            tool_success({"items": [{"id": 1}, {"id": 2}], "has_more": True}),
+            [{"kind": "count", "value": 2, "unit": "results", "at_least": True}],
+            id="listed-page-with-more",
+        ),
+        pytest.param(
+            {"action": "list"},
+            tool_success({"items": 4}),
+            [{"kind": "count", "value": 4, "unit": "results", "at_least": False}],
+            id="reported-count",
+        ),
+        pytest.param(
+            {"action": "list"},
+            tool_success({"items": [], "has_more": True}),
+            [{"kind": "count", "value": 0, "unit": "results", "at_least": False}],
+            id="empty-page-is-no-lower-bound",
+        ),
+        pytest.param({"action": "list"}, tool_failure("failed", "no count"), [], id="failed-call"),
+        pytest.param({"action": "add"}, tool_success({"items": 4}), [], id="other-action"),
+        *(
+            pytest.param(
+                {"action": "list"}, tool_success({"items": count}), [], id=f"count-{count!r}"
+            )
+            for count in (-1, True, "4", None)
+        ),
+    ],
+)
+def test_result_count_fact_counts_successful_listings(
+    arguments: JsonObject, result: JsonObject, facts: list[JsonObject]
+) -> None:
+    display = ToolDisplay(
+        fact_builder=result_count_fact_builder(
+            "items", when_arguments={"action": "list"}, at_least_field="has_more"
+        )
+    )
+
+    assert _display_for_call(display, arguments, result=result)["facts"] == facts
+
+
+def test_display_rejects_bare_string_summary_fields() -> None:
+    with pytest.raises(ValueError, match="summary_fields"):
+        ToolDisplay(summary_fields="path")  # type: ignore[arg-type]
+
+
+# --- Prompt blocks ----------------------------------------------------------------
+
+
+class TestToolPromptBlockRegistry:
+    """A Tool declares its System Prompt block here; the prompts domain imports no Tool."""
+
+    def test_static_and_dynamic_tool_blocks_become_definitions(self) -> None:
+        registry = ToolPromptBlockRegistry()
+        assert registry.block_definitions() == []
+        registry.register("bash", default_text="Bash guidance.")
+        registry.register("web_fetch", render=lambda ctx: "Fetched.")
+
+        by_id = {definition.id: definition for definition in registry.block_definitions()}
+
+        assert by_id["tool:bash"].owner == "tool:bash"
+        assert by_id["tool:bash"].default_text == "Bash guidance."
+        assert by_id["tool:bash"].editable is True
+        assert by_id["tool:web_fetch"].owner == "tool:web_fetch"
+        assert by_id["tool:web_fetch"].render is not None
+        assert by_id["tool:web_fetch"].editable is False
+
+    def test_requires_exactly_one_of_text_or_render(self) -> None:
+        registry = ToolPromptBlockRegistry()
+
+        with pytest.raises(ValueError):
+            registry.register("bash", default_text="x", render=lambda ctx: "y")
+        with pytest.raises(ValueError):
+            registry.register("bash")
+
+    def test_duplicate_tool_name_is_first_wins(self, caplog: pytest.LogCaptureFixture) -> None:
+        registry = ToolPromptBlockRegistry()
+        registry.register("bash", default_text="First.")
+
+        caplog.set_level(logging.WARNING, logger="vbot.tools")
+        registry.register("bash", default_text="Second.")
+
+        definitions = registry.block_definitions()
+        assert len(definitions) == 1
+        assert definitions[0].default_text == "First."
+        assert any("already declared" in record.getMessage() for record in caplog.records)
+
+
+# --- Blocking work ----------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -63,623 +394,69 @@ async def test_tool_worker_offloads_and_settles_mutation_before_cancellation() -
         await task
 
 
-class TestToolContext:
-    def test_nesting_depth_defaults_to_zero(self) -> None:
-        context = make_context()
-
-        assert context.nesting_depth == 0
-
-    def test_effective_cwd_falls_back_to_workspace_without_project_cwd(self) -> None:
-        # Default identity behavior: no project cwd means tools resolve against
-        # the workspace exactly as before this field existed.
-        context = make_context()
-
-        assert context.cwd is None
-        assert context.effective_cwd == Path("workspace")
-
-    def test_effective_cwd_uses_project_cwd_when_set(self) -> None:
-        context = ToolContext(
-            agent_id="agent-1",
-            session_id="session-1",
-            run_id="run-1",
-            tool_call_id="call-1",
-            tool_name="read_file",
-            tool_call_index=0,
-            workspace=Path("workspace"),
-            vbot_root=Path("app"),
-            data_root=Path("data"),
-            cwd=Path("repo"),
-        )
-
-        assert context.effective_cwd == Path("repo")
-
-    def test_resolve_path_uses_effective_cwd_for_relative_path(self, tmp_path: Path) -> None:
-        context = ToolContext(
-            agent_id="agent",
-            session_id="session",
-            run_id="run",
-            tool_call_id="call",
-            tool_name="read",
-            tool_call_index=0,
-            workspace=tmp_path / "workspace",
-            vbot_root=tmp_path / "app",
-            data_root=tmp_path / "data",
-            cwd=tmp_path / "repo",
-        )
-
-        assert context.resolve_path("src/main.py") == (tmp_path / "repo" / "src/main.py").resolve()
-
-    @pytest.mark.asyncio
-    async def test_emit_uses_async_hook(self) -> None:
-        events: list[tuple[str, JsonObject]] = []
-
-        async def emit_hook(event_type: str, payload: JsonObject) -> None:
-            events.append((event_type, payload))
-
-        context = ToolContext(
-            agent_id="agent-1",
-            session_id="session-1",
-            run_id="run-1",
-            tool_call_id="call-1",
-            tool_name="read_file",
-            tool_call_index=0,
-            workspace=Path("workspace"),
-            vbot_root=Path("app"),
-            data_root=Path("data"),
-            emit_hook=emit_hook,
-            cancellation_hook=lambda: True,
-        )
-
-        await context.emit("tool_call_started", {"id": "call-1"})
-
-        assert events == [("tool_call_started", {"id": "call-1"})]
-        assert context.is_cancelled() is True
-
-    def test_is_cancelled_defaults_to_false(self) -> None:
-        context = make_context()
-
-        assert context.is_cancelled() is False
-
-    def test_add_note_uses_hook_when_present(self) -> None:
-        notes: list[str] = []
-        context = ToolContext(
-            agent_id="agent-1",
-            session_id="session-1",
-            run_id="run-1",
-            tool_call_id="call-1",
-            tool_name="read_file",
-            tool_call_index=0,
-            workspace=Path("workspace"),
-            vbot_root=Path("app"),
-            data_root=Path("data"),
-            note_hook=notes.append,
-        )
-
-        context.add_note("reminder")
-
-        assert notes == ["reminder"]
-
-    def test_add_note_without_hook_does_nothing(self) -> None:
-        context = make_context()
-
-        context.add_note("reminder")
-
-        assert context.note_hook is None
-
-
-class TestToolContextCancelHooks:
-    def test_on_cancel_invokes_registration_hook_with_callback(self) -> None:
-        registered: list[Callable[[], None]] = []
-
-        def registration_hook(callback: Callable[[], None]) -> None:
-            registered.append(callback)
-
-        context = ToolContext(
-            agent_id="agent-1",
-            session_id="session-1",
-            run_id="run-1",
-            tool_call_id="call-1",
-            tool_name="read_file",
-            tool_call_index=0,
-            workspace=Path("workspace"),
-            vbot_root=Path("app"),
-            data_root=Path("data"),
-            cancel_registration_hook=registration_hook,
-        )
-
-        def cancel_callback() -> None:
-            pass
-
-        context.on_cancel(cancel_callback)
-
-        assert registered == [cancel_callback]
-
-    def test_on_cancel_without_hook_is_a_safe_noop(self) -> None:
-        context = make_context()
-
-        context.on_cancel(lambda: None)
-
-        assert context.cancel_registration_hook is None
-
-    def test_was_cancelled_by_user_returns_hook_result(self) -> None:
-        cancel_state = {"user_cancelled": True}
-        context = ToolContext(
-            agent_id="agent-1",
-            session_id="session-1",
-            run_id="run-1",
-            tool_call_id="call-1",
-            tool_name="read_file",
-            tool_call_index=0,
-            workspace=Path("workspace"),
-            vbot_root=Path("app"),
-            data_root=Path("data"),
-            cancel_check_hook=lambda: cancel_state["user_cancelled"],
-        )
-
-        assert context.was_cancelled_by_user() is True
-
-        cancel_state["user_cancelled"] = False
-
-        assert context.was_cancelled_by_user() is False
-
-    def test_was_cancelled_by_user_returns_false_without_hook(self) -> None:
-        context = make_context()
-
-        assert context.was_cancelled_by_user() is False
-        assert context.cancel_check_hook is None
-
-
-class TestToolEnvelope:
-    def test_success_envelope_shape_is_valid(self) -> None:
-        result = tool_success({"content": "hello"})
-
-        assert result == {
-            "ok": True,
-            "error": None,
-            "data": {"content": "hello"},
-            "artifacts": [],
-        }
-        assert is_tool_result_envelope(result) is True
-
-    def test_failure_envelope_shape_is_valid(self) -> None:
-        result = tool_failure("not_found", "File not found")
-
-        assert result == {
-            "ok": False,
-            "error": {"code": "not_found", "message": "File not found"},
-            "data": None,
-            "artifacts": [],
-        }
-        assert is_tool_result_envelope(result) is True
-
-    def test_invalid_envelope_is_rejected(self) -> None:
-        assert is_tool_result_envelope({"ok": True, "data": {}}) is False
-
-    def test_failure_envelope_carries_retry_signal_inside_error(self) -> None:
-        result = tool_failure(
-            "request_error",
-            "HTTP 503 while fetching URL",
-            retryable=True,
-            attempts_made=4,
-        )
-
-        assert result == {
-            "ok": False,
-            "error": {
-                "code": "request_error",
-                "message": "HTTP 503 while fetching URL",
-                "retryable": True,
-                "attempts_made": 4,
-            },
-            "data": None,
-            "artifacts": [],
-        }
-        # The retry signal lives inside error, so the top-level key set is intact.
-        assert is_tool_result_envelope(result) is True
-
-    def test_failure_envelope_omits_unset_retry_signal(self) -> None:
-        result = tool_failure("validation_error", "bad input")
-
-        assert set(result["error"]) == {"code", "message"}
-        assert is_tool_result_envelope(result) is True
-
-    def test_failure_envelope_allows_retryable_false_without_attempts(self) -> None:
-        result = tool_failure("validation_error", "bad input", retryable=False)
-
-        assert result["error"] == {
-            "code": "validation_error",
-            "message": "bad input",
-            "retryable": False,
-        }
-        assert is_tool_result_envelope(result) is True
-
-    def test_failure_envelope_rejects_non_bool_retryable(self) -> None:
-        with pytest.raises(ValueError, match="retryable"):
-            tool_failure("x", "y", retryable="yes")  # type: ignore[arg-type]
-
-    @pytest.mark.parametrize("attempts", [-1, True, 1.5])
-    def test_failure_envelope_rejects_invalid_attempts_made(self, attempts: object) -> None:
-        with pytest.raises(ValueError, match="attempts_made"):
-            tool_failure("x", "y", attempts_made=attempts)  # type: ignore[arg-type]
-
-    def test_envelope_rejects_unknown_error_keys(self) -> None:
-        assert (
-            is_tool_result_envelope(
-                {
-                    "ok": False,
-                    "error": {"code": "x", "message": "y", "unexpected": 1},
-                    "data": None,
-                    "artifacts": [],
-                }
-            )
-            is False
-        )
-
-    def test_envelope_rejects_negative_attempts_made(self) -> None:
-        assert (
-            is_tool_result_envelope(
-                {
-                    "ok": False,
-                    "error": {"code": "x", "message": "y", "attempts_made": -1},
-                    "data": None,
-                    "artifacts": [],
-                }
-            )
-            is False
-        )
-
-
-class TestTool:
-    def test_fields_are_stored(self) -> None:
-        tool = Tool(
-            name="read_file",
-            description="Read a UTF-8 text file from the workspace.",
-            parameters=READ_FILE_SCHEMA,
-            handler=read_file_handler,
-        )
-
-        assert tool.name == "read_file"
-        assert tool.description == "Read a UTF-8 text file from the workspace."
-        assert tool.parameters == READ_FILE_SCHEMA
-        assert tool.handler is read_file_handler
-        assert tool.display == ToolDisplay()
-
-    def test_display_builds_payload_from_summary_fields(self) -> None:
-        display = ToolDisplay(
-            summary_fields=("pattern", "path"),
-            hidden_argument_keys=("content",),
-        )
-
-        payload = display.to_payload({"pattern": "TODO", "path": "src", "content": "large body"})
-
-        assert payload == {
-            "version": 1,
-            "summary": "TODO · src",
-            "hidden_argument_keys": ["content"],
-            "primary": [
-                {
-                    "kind": "text",
-                    "value": "TODO · src",
-                    "full_value": "TODO · src",
-                    "truncate": "end",
-                    "tooltip": "truncated",
-                    "max_characters": 64,
-                    "quote": False,
-                    "copyable": False,
-                }
-            ],
-            "facts": [],
-        }
-
-    def test_display_omits_empty_argument_summary(self) -> None:
-        display = ToolDisplay(summary_fields=("path",))
-
-        assert display.to_payload({}) == {
-            "version": 1,
-            "summary": "",
-            "hidden_argument_keys": [],
-            "primary": [],
-            "facts": [],
-        }
-
-    def test_display_prefers_nonblank_structured_candidate(self) -> None:
-        display = ToolDisplay(
-            primary_candidates=(
-                ToolDisplayField("description", kind="description", quote=True),
-                ToolDisplayField("command", kind="command"),
-            )
-        )
-
-        described = display.to_payload(
-            {"description": "  run tests  ", "command": "python -m pytest"}
-        )
-        fallback = display.to_payload({"description": "  ", "command": "python -m pytest"})
-
-        assert described["primary"][0]["value"] == "run tests"
-        assert described["primary"][0]["kind"] == "description"
-        assert described["primary"][0]["quote"] is True
-        assert fallback["primary"][0]["value"] == "python -m pytest"
-        assert fallback["primary"][0]["kind"] == "command"
-
-    def test_display_builds_computed_semantic_parts(self) -> None:
-        display = ToolDisplay(
-            parts_builder=lambda _arguments: (
-                ToolDisplayPart("status", truncate="never", tooltip="none"),
-                ToolDisplayPart("process-session-one", kind="identifier", truncate="middle"),
-            )
-        )
-
-        payload = display.to_payload({"action": "status"})
-
-        assert payload["summary"] == "status · process-session-one"
-        assert payload["primary"][0]["truncate"] == "never"
-        assert payload["primary"][1]["kind"] == "identifier"
-        assert payload["primary"][1]["truncate"] == "middle"
-
-    def test_display_resolves_complete_path_against_call_cwd(self, tmp_path: Path) -> None:
-        context = ToolContext(
-            agent_id="agent-1",
-            session_id="session-1",
-            run_id="run-1",
-            tool_call_id="call-1",
-            tool_name="read",
-            tool_call_index=0,
-            workspace=tmp_path / "workspace",
-            cwd=tmp_path / "project",
-            vbot_root=tmp_path,
-            data_root=tmp_path / "data",
-        )
-        display = ToolDisplay(
-            primary_candidates=(
-                ToolDisplayField(
-                    "path",
-                    kind="path",
-                    truncate="start",
-                    tooltip="always",
-                    copyable=True,
-                ),
-            )
-        )
-
-        payload = display.to_payload({"path": "src/main.py"}, context=context)
-
-        assert payload["primary"][0] == {
-            "kind": "path",
-            "value": "src/main.py",
-            "full_value": (tmp_path / "project" / "src" / "main.py").as_posix(),
-            "truncate": "start",
-            "tooltip": "always",
-            "max_characters": 64,
-            "quote": False,
-            "copyable": True,
-        }
-
-    def test_context_records_validated_presentation_count(self) -> None:
-        context = make_context()
-
-        context.add_display_count(10, "matches", at_least=True)
-
-        assert context.presentation_facts == [
-            {"kind": "count", "value": 10, "unit": "matches", "at_least": True}
-        ]
-
-    def test_context_records_added_and_removed_line_facts_in_display_order(self) -> None:
-        context = make_context()
-
-        context.add_display_line_changes(added=4, removed=0)
-
-        assert context.presentation_facts == [
-            {"kind": "line_change", "change": "added", "value": 4},
-            {"kind": "line_change", "change": "removed", "value": 0},
-        ]
-
-    def test_display_normalizes_line_range_and_change_facts(self) -> None:
-        display = ToolDisplay(
-            fact_builder=lambda _arguments, _result: (
-                {"kind": "line_range", "start": 170, "end": 280},
-                {"kind": "line_change", "change": "added", "value": 3},
-                {"kind": "line_change", "change": "removed", "value": 2},
-            )
-        )
-
-        assert display.to_payload({})["facts"] == [
-            {"kind": "line_range", "start": 170, "end": 280},
-            {"kind": "line_change", "change": "added", "value": 3},
-            {"kind": "line_change", "change": "removed", "value": 2},
-        ]
-
-    def test_result_count_fact_builder_counts_successful_lists_and_pagination(self) -> None:
-        display = ToolDisplay(
-            fact_builder=result_count_fact_builder(
-                "items",
-                when_arguments={"action": "list"},
-                at_least_field="has_more",
-            )
-        )
-
-        payload = display.to_payload(
-            {"action": "list"},
-            result=tool_success({"items": [{"id": 1}, {"id": 2}], "has_more": True}),
-        )
-
-        assert payload["facts"] == [
-            {"kind": "count", "value": 2, "unit": "results", "at_least": True}
-        ]
-
-    def test_result_count_fact_builder_ignores_failures_and_other_actions(self) -> None:
-        display = ToolDisplay(
-            fact_builder=result_count_fact_builder("count", when_arguments={"action": "list"})
-        )
-
-        assert (
-            display.to_payload({"action": "list"}, result=tool_failure("failed", "no count"))[
-                "facts"
-            ]
-            == []
-        )
-        assert (
-            display.to_payload({"action": "add"}, result=tool_success({"count": 4}))["facts"] == []
-        )
-
-    def test_result_count_fact_builder_does_not_mark_empty_page_as_lower_bound(self) -> None:
-        display = ToolDisplay(
-            fact_builder=result_count_fact_builder("items", at_least_field="has_more")
-        )
-
-        assert display.to_payload({}, result=tool_success({"items": [], "has_more": True}))[
-            "facts"
-        ] == [{"kind": "count", "value": 0, "unit": "results", "at_least": False}]
-
-    @pytest.mark.parametrize("count", (-1, True, "4", None))
-    def test_result_count_fact_builder_rejects_invalid_result_counts(self, count: Any) -> None:
-        display = ToolDisplay(fact_builder=result_count_fact_builder("count"))
-
-        assert display.to_payload({}, result=tool_success({"count": count}))["facts"] == []
-
-    def test_display_rejects_bare_string_summary_fields(self) -> None:
-        with pytest.raises(ValueError, match="summary_fields"):
-            ToolDisplay(summary_fields="path")  # type: ignore[arg-type]
-
-    def test_every_builtin_registration_has_an_explicit_display_profile(self) -> None:
-        tools_dir = Path(__file__).parents[3] / "core" / "tools"
-        missing: list[str] = []
-        for source_path in tools_dir.glob("*.py"):
-            tree = ast.parse(source_path.read_text(encoding="utf-8"), filename=str(source_path))
-            for node in ast.walk(tree):
-                if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
-                    continue
-                if node.func.attr != "register" or not isinstance(node.func.value, ast.Name):
-                    continue
-                if node.func.value.id != "registry":
-                    continue
-                keyword_names = {keyword.arg for keyword in node.keywords}
-                is_tool_registration = len(node.args) >= 4 or "handler" in keyword_names
-                if is_tool_registration and "display" not in keyword_names:
-                    missing.append(f"{source_path.name}:{node.lineno}")
-
-        assert missing == []
-
-    def test_frozen_raises_on_attribute_assignment(self) -> None:
-        tool = Tool(
-            name="read_file",
-            description="Read a UTF-8 text file from the workspace.",
-            parameters=READ_FILE_SCHEMA,
-            handler=read_file_handler,
-        )
-
-        with pytest.raises(FrozenInstanceError):
-            tool.name = "changed"  # type: ignore[misc]
-
-
-class TestPublicExports:
-    def test_registry_exports_from_package_root(self) -> None:
-        registry = ToolRegistry()
-
-        tool = register_read_file(registry)
-
-        assert tool.name == "read_file"
-
-    def test_note_hook_type_exports_from_package_root(self) -> None:
-        def note_hook(content: str) -> None:
-            assert content == "reminder"
-
-        exported_hook: ToolNoteHook = note_hook
-
-        exported_hook("reminder")
-
-
-class TestToolPromptBlockRegistry:
-    """The tool side of the unified contributor path (D6).
-
-    A tool declares a prompt block here; the runtime gathers ``block_definitions``
-    and hands them to the prompt manager. The prompts domain only ever consumes a
-    list of ``BlockDefinition`` objects — it never imports a tool class.
-    """
-
-    def test_static_and_dynamic_tool_blocks_become_definitions(self) -> None:
-        registry = ToolPromptBlockRegistry()
-        registry.register("bash", default_text="Bash guidance.")
-        registry.register("web_fetch", render=lambda ctx: "Fetched.")
-
-        definitions = registry.block_definitions()
-
-        by_id = {definition.id: definition for definition in definitions}
-        assert by_id["tool:bash"].owner == "tool:bash"
-        assert by_id["tool:bash"].default_text == "Bash guidance."
-        assert by_id["tool:bash"].editable is True
-        assert by_id["tool:web_fetch"].owner == "tool:web_fetch"
-        assert by_id["tool:web_fetch"].render is not None
-        assert by_id["tool:web_fetch"].editable is False
-
-    def test_requires_exactly_one_of_text_or_render(self) -> None:
-        registry = ToolPromptBlockRegistry()
-
-        with pytest.raises(ValueError):
-            registry.register("bash", default_text="x", render=lambda ctx: "y")
-        with pytest.raises(ValueError):
-            registry.register("bash")
-
-    def test_duplicate_tool_name_is_first_wins(self, caplog: pytest.LogCaptureFixture) -> None:
-        registry = ToolPromptBlockRegistry()
-        registry.register("bash", default_text="First.")
-
-        caplog.set_level(logging.WARNING, logger="vbot.tools")
-        registry.register("bash", default_text="Second.")
-
-        definitions = registry.block_definitions()
-        assert len(definitions) == 1
-        assert definitions[0].default_text == "First."
-        assert any("already declared" in record.getMessage() for record in caplog.records)
-
-    def test_empty_registry_yields_no_definitions(self) -> None:
-        assert ToolPromptBlockRegistry().block_definitions() == []
-
-
-@pytest.mark.asyncio
-async def test_domain_argument_repair_precedes_schema_and_preserves_input(tmp_path: Path) -> None:
-    calls = []
-
-    def repair(arguments):
-        calls.append("repair")
-        return arguments.pop("fetch")
-
-    def handler(context, arguments):
-        calls.append(arguments)
-        return tool_success({})
-
-    registry = ToolRegistry()
-    registry.register(
-        "fixture",
-        "Fixture",
-        {
-            "type": "object",
-            "properties": {"count": {"type": "integer", "minimum": 1}},
-            "required": ["count"],
-            "additionalProperties": False,
-        },
-        handler,
-        argument_normalizer=repair,
-    )
-    context = ToolContext(
-        agent_id="probe",
-        session_id="probe",
-        run_id="probe",
-        tool_call_id="probe",
-        tool_name="fixture",
-        tool_call_index=0,
-        workspace=tmp_path,
-        vbot_root=tmp_path,
-        data_root=tmp_path,
-    )
-    original = {"fetch": {"count": "3.0"}}
-    assert (await registry.dispatch(context, original, ["fixture"]))["ok"]
-    assert calls == ["repair", {"count": 3}]
-    assert original == {"fetch": {"count": "3.0"}}
-    with pytest.raises(ValueError):
-        await registry.dispatch(context, {"fetch": {"count": 0}}, ["fixture"])
-    assert calls[-1] == "repair"
-    from core.tools.tools import ToolNotAllowedError
-
-    with pytest.raises(ToolNotAllowedError):
-        await registry.dispatch(context, original, [])
-    assert calls == ["repair", {"count": 3}, "repair"]
+# --- Built-in Tool conventions ----------------------------------------------------
+
+_BUILTIN_TOOL_SCHEMAS: dict[str, JsonObject] = {
+    "apply_patch": APPLY_PATCH_TOOL_PARAMETERS,
+    "analyze_image": ANALYZE_IMAGE_TOOL_PARAMETERS,
+    "bash": BASH_TOOL_PARAMETERS,
+    "channel_send": CHANNEL_SEND_TOOL_PARAMETERS,
+    "cron": CRON_TOOL_PARAMETERS,
+    "history": HISTORY_TOOL_PARAMETERS,
+    "image_generation": IMAGE_GENERATION_TOOL_PARAMETERS,
+    "memory": MEMORY_TOOL_PARAMETERS,
+    "process": PROCESS_TOOL_PARAMETERS,
+    "project": PROJECT_TOOL_PARAMETERS,
+    "read": READ_TOOL_PARAMETERS,
+    "search_files": SEARCH_FILES_TOOL_PARAMETERS,
+    "session_search": SESSION_SEARCH_TOOL_PARAMETERS,
+    "skill": SKILL_TOOL_PARAMETERS,
+    "skill_manage": SKILL_MANAGE_TOOL_PARAMETERS,
+    "status": STATUS_TOOL_PARAMETERS,
+    "subagent": SUBAGENT_TOOL_PARAMETERS,
+    "text_to_speech": TEXT_TO_SPEECH_TOOL_PARAMETERS,
+    "web_fetch": WEB_FETCH_TOOL_PARAMETERS,
+    "web_search": WEB_SEARCH_TOOL_PARAMETERS,
+}
+
+
+def test_builtin_tool_schemas_are_flat_objects_with_declared_required_fields() -> None:
+    def violations(schema: JsonObject) -> list[str]:
+        found = []
+        if schema.get("type") != "object":
+            found.append("not an object")
+        if "oneOf" in schema:
+            found.append("oneOf")
+        if "additionalProperties" in schema:
+            found.append("additionalProperties")
+        if not set(schema.get("required", ())) <= set(schema.get("properties", {})):
+            found.append("undeclared required field")
+        return found
+
+    assert {
+        name: violations(schema)
+        for name, schema in _BUILTIN_TOOL_SCHEMAS.items()
+        if violations(schema)
+    } == {}
+
+
+def test_every_builtin_registration_has_an_explicit_display_profile() -> None:
+    tools_dir = Path(__file__).parents[3] / "core" / "tools"
+    missing: list[str] = []
+    for source_path in tools_dir.glob("*.py"):
+        source = source_path.read_text(encoding="utf-8")
+        if "registry.register(" not in source:
+            continue
+        for node in ast.walk(ast.parse(source, filename=str(source_path))):
+            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+                continue
+            if node.func.attr != "register" or not isinstance(node.func.value, ast.Name):
+                continue
+            if node.func.value.id != "registry":
+                continue
+            keyword_names = {keyword.arg for keyword in node.keywords}
+            is_tool_registration = len(node.args) >= 4 or "handler" in keyword_names
+            if is_tool_registration and "display" not in keyword_names:
+                missing.append(f"{source_path.name}:{node.lineno}")
+
+    assert missing == []

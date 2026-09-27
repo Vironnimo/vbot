@@ -19,7 +19,7 @@ import pytest
 from core.tools.cron import CRON_TOOL_NAME
 
 from .cron_tool_support import CronTool, cron_tool
-from .tools_helpers import clock_at
+from .tools_test_support import clock_at
 
 PROMPT = "Lint the wiki and report broken links."
 
