@@ -5,7 +5,6 @@ A fake transport keeps every test off the live network.
 
 from __future__ import annotations
 
-import threading
 from collections.abc import AsyncIterator
 from pathlib import Path
 from types import SimpleNamespace
@@ -267,26 +266,6 @@ async def test_provider_usage_history_clear_is_explicit(history_state: SimpleNam
     assert result == {"deleted_samples": 1}
     assert repeated == {"deleted_samples": 0}
     assert (await rpc_result(history_state, "provider.usage_history"))["samples"] == []
-
-
-@pytest.mark.asyncio
-async def test_provider_usage_history_reads_off_the_event_loop(
-    history_state: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    store = history_state.usage_service._history  # noqa: SLF001
-    read_samples = store._read_samples  # noqa: SLF001
-    reader_threads: list[int] = []
-
-    def recording_read(*arguments: Any) -> Any:
-        reader_threads.append(threading.get_ident())
-        return read_samples(*arguments)
-
-    monkeypatch.setattr(store, "_read_samples", recording_read)
-
-    await rpc_result(history_state, "provider.usage_history")
-
-    assert reader_threads
-    assert threading.get_ident() not in reader_threads
 
 
 @pytest.mark.asyncio

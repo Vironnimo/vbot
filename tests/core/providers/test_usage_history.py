@@ -6,6 +6,7 @@ import asyncio
 import copy
 import logging
 import sqlite3
+import threading
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
@@ -123,6 +124,27 @@ async def test_samples_read_an_inclusive_window_oldest_first(
         sample.sampled_at for sample in everything
     )
     assert len(everything) == 5
+
+
+@pytest.mark.asyncio
+async def test_async_reads_run_off_the_event_loop(
+    store: ProviderUsageHistoryStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert await store.append("2026-07-01T00:00:00+00:00", [_snapshot()]) is True
+    open_read = store.database.read
+    reader_threads: list[int] = []
+
+    def recording_read() -> Any:
+        reader_threads.append(threading.get_ident())
+        return open_read()
+
+    monkeypatch.setattr(store.database, "read", recording_read)
+
+    assert len(await store.samples()) == 1
+    assert await store.latest_sampled_at() is not None
+
+    assert len(reader_threads) == 2
+    assert threading.get_ident() not in reader_threads
 
 
 @pytest.mark.asyncio
