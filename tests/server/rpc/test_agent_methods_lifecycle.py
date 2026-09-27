@@ -1,8 +1,9 @@
-"""Tests for rpc agents lifecycle."""
+"""Identity Agent rename and delete: reference retargeting, rollback and refusals."""
 
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -12,13 +13,20 @@ import pytest
 from core.channels import ChannelConfigError
 from core.runs import Run
 from core.sessions import SessionAddress
-from server.rpc.methods import dispatch_rpc
 from tests.server.rpc_test_support import (
     InstrumentedAgentDeleteLock,
+    JsonObject,
     StubAdapter,
+    call,
     make_state,
+    rpc_error,
+    rpc_result,
 )
 from tests.server.rpc_test_support import _no_models_dev_fetch as _no_models_dev_fetch
+
+
+def _agent_names(state: Any) -> dict[str, str]:
+    return {agent.id: agent.name for agent in state.runtime.agents.list()}
 
 
 @pytest.mark.asyncio
@@ -90,14 +98,10 @@ async def test_agent_rename_retargets_live_references_and_publishes_mapping(
         update_job=update_bootstrap_job,
     )
 
-    response = await dispatch_rpc(
-        state,
-        {"method": "agent.rename", "params": {"id": "coder", "new_id": "researcher"}},
-    )
+    result = await rpc_result(state, "agent.rename", id="coder", new_id="researcher")
 
-    assert response["ok"] is True
-    assert response["result"]["id"] == "researcher"
-    assert response["result"]["rename"] == {
+    assert result["id"] == "researcher"
+    assert result["rename"] == {
         "old_id": "coder",
         "new_id": "researcher",
         "channels_updated": ["telegram"],
@@ -141,56 +145,6 @@ async def test_agent_rename_retargets_live_references_and_publishes_mapping(
         {"kind": "channels"},
         {"kind": "cron"},
     ]
-
-
-@pytest.mark.asyncio
-async def test_agent_rename_rejects_active_run(tmp_path: Path) -> None:
-    state = make_state(tmp_path, StubAdapter())
-    release = asyncio.Event()
-    coder = state.runtime.agents.get("coder")
-
-    async def hold_run(_run: Run) -> str:
-        await release.wait()
-        return "done"
-
-    run = await state.chat_runs.start(
-        SessionAddress(project_id=None, agent_id="coder", session_id=coder.current_session_id),
-        hold_run,
-    )
-
-    response = await dispatch_rpc(
-        state,
-        {"method": "agent.rename", "params": {"id": "coder", "new_id": "researcher"}},
-    )
-
-    assert response["ok"] is False
-    assert response["error"]["code"] == "agent_busy"
-    assert state.runtime.agents.get("coder").id == "coder"
-    release.set()
-    assert await run.wait() == "done"
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("busy_agent_id", ["coder", "researcher"])
-async def test_agent_rename_rejects_open_subagent_relation(
-    tmp_path: Path,
-    busy_agent_id: str,
-) -> None:
-    state = make_state(tmp_path, StubAdapter())
-    state.runtime.subagents = SimpleNamespace(
-        batch_tracker=SimpleNamespace(
-            references_identity_agent=lambda agent_id: agent_id == busy_agent_id
-        )
-    )
-
-    response = await dispatch_rpc(
-        state,
-        {"method": "agent.rename", "params": {"id": "coder", "new_id": "researcher"}},
-    )
-
-    assert response["ok"] is False
-    assert response["error"]["code"] == "agent_busy"
-    assert state.runtime.agents.get("coder").id == "coder"
 
 
 @pytest.mark.asyncio
@@ -238,12 +192,8 @@ async def test_agent_rename_rolls_back_all_changes_when_reference_update_fails(
         update_channel=update_channel,
     )
 
-    response = await dispatch_rpc(
-        state,
-        {"method": "agent.rename", "params": {"id": "coder", "new_id": "researcher"}},
-    )
+    await rpc_error(state, "agent.rename", id="coder", new_id="researcher")
 
-    assert response["ok"] is False
     assert state.runtime.agents.get("coder").id == "coder"
     assert all(channel.agent_id == "coder" for channel in channels)
     # Forward changes and their rollback both ran on the Event Loop.
@@ -254,32 +204,16 @@ async def test_agent_rename_rolls_back_all_changes_when_reference_update_fails(
 
 
 @pytest.mark.asyncio
-async def test_agent_rename_rejects_existing_destination(tmp_path: Path) -> None:
-    state = make_state(tmp_path, StubAdapter())
-    state.runtime.agents.create("researcher", "Researcher")
-
-    response = await dispatch_rpc(
-        state,
-        {"method": "agent.rename", "params": {"id": "coder", "new_id": "researcher"}},
-    )
-
-    assert response["ok"] is False
-    assert state.runtime.agents.get("coder").id == "coder"
-    assert state.runtime.agents.get("researcher").name == "Researcher"
-
-
-@pytest.mark.asyncio
-async def test_agent_delete_rejects_last_agent(tmp_path: Path) -> None:
-    state = make_state(tmp_path, StubAdapter())
-
-    response = await dispatch_rpc(state, {"method": "agent.delete", "params": {"id": "coder"}})
-
-    assert response["ok"] is False
-    assert response["error"]["code"] == "last_agent"
-
-
-@pytest.mark.asyncio
-async def test_agent_delete_rejects_agent_with_active_run(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("method", "params"),
+    [
+        ("agent.rename", {"id": "coder", "new_id": "researcher"}),
+        ("agent.delete", {"id": "coder"}),
+    ],
+)
+async def test_an_agent_with_an_active_run_cannot_be_renamed_or_deleted(
+    tmp_path: Path, method: str, params: JsonObject
+) -> None:
     state = make_state(tmp_path, StubAdapter())
     state.runtime.agents.create("writer", "Writer")
     release = asyncio.Event()
@@ -293,108 +227,140 @@ async def test_agent_delete_rejects_agent_with_active_run(tmp_path: Path) -> Non
         SessionAddress(project_id=None, agent_id="coder", session_id=coder.current_session_id),
         hold_run,
     )
+    before = _agent_names(state)
 
-    response = await dispatch_rpc(state, {"method": "agent.delete", "params": {"id": "coder"}})
+    error = await rpc_error(state, method, **params)
 
-    assert response["ok"] is False
-    assert response["error"]["code"] == "agent_busy"
-    assert state.runtime.agents.get("coder").id == "coder"
-
+    assert error["code"] == "agent_busy"
+    assert _agent_names(state) == before
     release.set()
     assert await run.wait() == "done"
 
 
-@pytest.mark.asyncio
-async def test_agent_delete_rejects_agent_with_channel_reference(tmp_path: Path) -> None:
-    state = make_state(tmp_path, StubAdapter())
-    state.runtime.agents.create("writer", "Writer")
-    state.runtime.channel_service = SimpleNamespace(
-        list_channels=lambda: [SimpleNamespace(id="tg-coder", agent_id="coder")]
-    )
-
-    response = await dispatch_rpc(state, {"method": "agent.delete", "params": {"id": "coder"}})
-
-    assert response["ok"] is False
-    assert response["error"]["code"] == "agent_in_use"
-    assert "channel:tg-coder" in response["error"]["message"]
-    assert state.runtime.agents.get("coder").id == "coder"
-
-
-@pytest.mark.asyncio
-async def test_agent_delete_rejects_agent_with_cron_reference(tmp_path: Path) -> None:
-    # A bare cron job (project_id=None) targets the identity agent, so it blocks
-    # the identity-agent delete.
-    state = make_state(tmp_path, StubAdapter())
-    state.runtime.agents.create("writer", "Writer")
-    state.runtime.cron_service = SimpleNamespace(
-        list_jobs=lambda: [SimpleNamespace(id="job-coder", agent_id="coder", project_id=None)]
-    )
-
-    response = await dispatch_rpc(state, {"method": "agent.delete", "params": {"id": "coder"}})
-
-    assert response["ok"] is False
-    assert response["error"]["code"] == "agent_in_use"
-    assert "cron:job-coder" in response["error"]["message"]
-    assert state.runtime.agents.get("coder").id == "coder"
-
-
-@pytest.mark.asyncio
-async def test_agent_delete_rejects_agent_with_bootstrap_reference(tmp_path: Path) -> None:
-    state = make_state(tmp_path, StubAdapter())
-    state.runtime.agents.create("writer", "Writer")
-    state.runtime.bootstrap_service = SimpleNamespace(
-        list_jobs=lambda: [
-            SimpleNamespace(
-                id="boot-coder",
-                agent_id="coder",
-                project_id=None,
-                status="active",
+def _open_subagent_relation(busy_agent_id: str) -> Callable[[Any], None]:
+    def arrange(state: Any) -> None:
+        state.runtime.subagents = SimpleNamespace(
+            batch_tracker=SimpleNamespace(
+                references_identity_agent=lambda agent_id: agent_id == busy_agent_id
             )
-        ]
-    )
+        )
 
-    response = await dispatch_rpc(state, {"method": "agent.delete", "params": {"id": "coder"}})
-
-    assert response["ok"] is False
-    assert response["error"]["code"] == "agent_in_use"
-    assert "bootstrap:boot-coder" in response["error"]["message"]
+    return arrange
 
 
-@pytest.mark.asyncio
-async def test_agent_delete_ignores_project_qualified_cron_reference(tmp_path: Path) -> None:
-    # A project-qualified cron job (project_id set) targets that project's Team
-    # agent, not the same-named identity agent, so it must not block the identity
-    # delete.
-    state = make_state(tmp_path, StubAdapter())
-    state.runtime.agents.create("writer", "Writer")
-    state.runtime.cron_service = SimpleNamespace(
-        list_jobs=lambda: [SimpleNamespace(id="job-coder", agent_id="coder", project_id="vbot")]
-    )
-
-    response = await dispatch_rpc(state, {"method": "agent.delete", "params": {"id": "coder"}})
-
-    assert response["ok"] is True
-    assert response["result"]["agent_id"] == "coder"
+def _existing_destination(state: Any) -> None:
+    state.runtime.agents.create("researcher", "Researcher")
 
 
 @pytest.mark.asyncio
-async def test_agent_delete_ignores_terminal_cron_history(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("arrange", "code"),
+    [
+        pytest.param(_open_subagent_relation("coder"), "agent_busy", id="subagent-source"),
+        pytest.param(_open_subagent_relation("researcher"), "agent_busy", id="subagent-target"),
+        pytest.param(_existing_destination, "domain_error", id="existing-destination"),
+    ],
+)
+async def test_a_refused_agent_rename_leaves_every_agent_in_place(
+    tmp_path: Path, arrange: Callable[[Any], None], code: str
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    arrange(state)
+    before = _agent_names(state)
+
+    error = await rpc_error(state, "agent.rename", id="coder", new_id="researcher")
+
+    assert error["code"] == code
+    assert _agent_names(state) == before
+
+
+def _references(service: str, *entries: JsonObject) -> Callable[[Any], None]:
+    """Install a Channel, cron or bootstrap service listing *entries*."""
+
+    def arrange(state: Any) -> None:
+        listed = [SimpleNamespace(**entry) for entry in entries]
+        fake = SimpleNamespace(list_channels=lambda: listed, list_jobs=lambda: listed)
+        setattr(state.runtime, service, fake)
+
+    return arrange
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("arrange", "code", "named"),
+    [
+        pytest.param(
+            _references("channel_service", {"id": "tg-coder", "agent_id": "coder"}),
+            "agent_in_use",
+            "channel:tg-coder",
+            id="channel",
+        ),
+        # A bare cron job (no Project) targets the identity Agent.
+        pytest.param(
+            _references(
+                "cron_service", {"id": "job-coder", "agent_id": "coder", "project_id": None}
+            ),
+            "agent_in_use",
+            "cron:job-coder",
+            id="cron",
+        ),
+        pytest.param(
+            _references(
+                "bootstrap_service",
+                {"id": "boot-coder", "agent_id": "coder", "project_id": None, "status": "active"},
+            ),
+            "agent_in_use",
+            "bootstrap:boot-coder",
+            id="bootstrap",
+        ),
+    ],
+)
+async def test_agent_delete_refuses_a_referenced_agent(
+    tmp_path: Path, arrange: Callable[[Any], None], code: str, named: str
+) -> None:
     state = make_state(tmp_path, StubAdapter())
     state.runtime.agents.create("writer", "Writer")
-    state.runtime.cron_service = SimpleNamespace(
-        list_jobs=lambda: [
-            SimpleNamespace(
-                id="job-coder",
-                agent_id="coder",
-                project_id=None,
-                status="completed",
-            )
-        ]
-    )
+    arrange(state)
+    before = _agent_names(state)
 
-    response = await dispatch_rpc(state, {"method": "agent.delete", "params": {"id": "coder"}})
+    error = await rpc_error(state, "agent.delete", id="coder")
 
-    assert response["ok"] is True
+    assert error["code"] == code
+    assert named in error["message"]
+    assert _agent_names(state) == before
+
+
+@pytest.mark.asyncio
+async def test_agent_delete_refuses_the_last_agent(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+
+    error = await rpc_error(state, "agent.delete", id="coder")
+
+    assert error["code"] == "last_agent"
+    assert list(_agent_names(state)) == ["coder"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "job",
+    [
+        # A Project-qualified job targets that Project's Team Agent, not the
+        # same-named identity Agent.
+        pytest.param({"project_id": "vbot"}, id="project-qualified"),
+        pytest.param({"project_id": None, "status": "completed"}, id="terminal-history"),
+    ],
+)
+async def test_agent_delete_ignores_cron_jobs_that_do_not_target_the_identity_agent(
+    tmp_path: Path, job: JsonObject
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.agents.create("writer", "Writer")
+    _references("cron_service", {"id": "job-coder", "agent_id": "coder", **job})(state)
+
+    result = await rpc_result(state, "agent.delete", id="coder")
+
+    assert result["agent_id"] == "coder"
+    assert list(_agent_names(state)) == ["writer"]
 
 
 @pytest.mark.asyncio
@@ -404,34 +370,16 @@ async def test_agent_delete_serializes_minimum_one_check_and_delete(tmp_path: Pa
     agent_delete_lock = InstrumentedAgentDeleteLock()
     state.agent_delete_lock = agent_delete_lock
 
-    coder_delete, writer_delete = await asyncio.gather(
-        dispatch_rpc(state, {"method": "agent.delete", "params": {"id": "coder"}}),
-        dispatch_rpc(state, {"method": "agent.delete", "params": {"id": "writer"}}),
+    responses = await asyncio.gather(
+        call(state, "agent.delete", id="coder"),
+        call(state, "agent.delete", id="writer"),
     )
 
-    responses = [coder_delete, writer_delete]
     successes = [response for response in responses if response["ok"]]
     failures = [response for response in responses if not response["ok"]]
-
     assert len(successes) == 1
     assert len(failures) == 1
     assert failures[0]["error"]["code"] == "last_agent"
     assert len(state.runtime.agents.list()) == 1
     assert len(successes[0]["result"]["remaining_agents"]) == 1
     assert agent_delete_lock.max_active == 1
-
-
-@pytest.mark.asyncio
-async def test_session_create_make_current_updates_agent(tmp_path: Path) -> None:
-    state = make_state(tmp_path, StubAdapter())
-
-    response = await dispatch_rpc(
-        state,
-        {
-            "method": "session.create",
-            "params": {"agent_id": "coder", "session_id": "current-two", "make_current": True},
-        },
-    )
-
-    assert response["ok"] is True
-    assert state.runtime.agents.get("coder").current_session_id == "current-two"

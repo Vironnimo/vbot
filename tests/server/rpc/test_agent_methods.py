@@ -1,4 +1,7 @@
-"""Tests for agent methods."""
+"""Identity Agent RPCs: payload, mutable fields, validation, ordering and custom prompts.
+
+Rename and delete live in ``test_agent_methods_lifecycle.py``.
+"""
 
 from __future__ import annotations
 
@@ -9,488 +12,130 @@ from typing import Any
 import pytest
 
 from core.agents.agents import AgentStore
-from core.chat import ChatSessionError
 from core.database import write_bootstrap_marker
-from core.projects.resolver import AgentResolver
+from core.models import Capabilities, Model, ReasoningCapabilities
+from core.projects.resolver import AgentResolver, ModelConfigurationChecker
 from core.projects.store import ProjectStore
-from core.sessions import (
-    ChatSessionManager,
-    SessionAddress,
-)
-from server.rpc.agent_methods import (
-    _get_agent,
-)
-from server.rpc.errors import RpcError
-from server.rpc.session_methods import (
-    _create_session,
-    _list_session_activity,
-    _list_sessions,
-    _mark_session_read,
-    _rename_session,
-    _set_session_compaction_policy,
-)
-from tests.server.rpc.agent_methods_test_support import (
-    _make_state,
-    _sessions_resource_events,
+from core.prompts import LayoutEntry, load_bundled_default_layout
+from core.providers.providers import GLOBAL_CONTEXT_WINDOW_FLOOR
+from core.sessions import ChatSessionManager
+from tests.server.rpc_test_support import (
+    JsonObject,
+    StubAdapter,
+    _no_models_dev_fetch,
+    make_state,
+    resource_changes,
+    rpc_error,
+    rpc_result,
 )
 
-
-@pytest.mark.asyncio
-async def test_create_bare_agent_creates_identity_session() -> None:
-    state, resolver, sessions = _make_state()
-
-    result = await _create_session(state, {"agent_id": "builder", "make_current": True})
-
-    assert result == {"agent_id": "builder", "session_id": "new-session"}
-    assert resolver.resolved == [(None, "builder")]
-    assert sessions.created[0]["project_id"] is None
-    # Identity make-current writes the agent's current_session_id.
-    assert state._updates == [{"builder": {"current_session_id": "new-session"}}]
+__all__ = ["_no_models_dev_fetch"]
 
 
-@pytest.mark.asyncio
-async def test_create_qualified_agent_creates_project_session() -> None:
-    state, resolver, sessions = _make_state()
-
-    result = await _create_session(state, {"agent_id": "builder@vbot", "make_current": True})
-
-    assert result == {"agent_id": "builder", "session_id": "new-session"}
-    assert resolver.resolved == [("vbot", "builder")]
-    assert sessions.created[0]["project_id"] == "vbot"
-    # A project config agent has no identity current-session pointer to write.
-    assert state._updates == []
-
-
-@pytest.mark.asyncio
-async def test_create_invalid_address_is_invalid_request() -> None:
-    state, _resolver, sessions = _make_state()
-
-    with pytest.raises(RpcError) as exc_info:
-        await _create_session(state, {"agent_id": "builder@bad project"})
-
-    assert exc_info.value.code == "invalid_request"
-    assert sessions.created == []
-
-
-@pytest.mark.asyncio
-async def test_list_qualified_agent_scopes_to_project() -> None:
-    state, _resolver, sessions = _make_state()
-
-    result = await _list_sessions(state, {"agent_id": "builder@vbot"})
-
-    assert result["sessions"][0]["id"] == "s1"
-    assert result["sessions"][0]["compaction_policy_override"] is None
-    assert result["sessions"][0]["compaction_policy_effective"]["enabled"] is True
-    assert sessions.listed == [("builder", "vbot")]
-
-
-@pytest.mark.asyncio
-async def test_list_bare_agent_is_identity() -> None:
-    state, _resolver, sessions = _make_state()
-
-    await _list_sessions(state, {"agent_id": "builder"})
-
-    assert sessions.listed == [("builder", None)]
-
-
-@pytest.mark.asyncio
-async def test_list_batches_agents_and_passes_bounded_filter_contract() -> None:
-    state, resolver, sessions = _make_state()
-    sessions.metadata_rows = [
-        {
-            "id": "s1",
-            "created_at": "2026-09-01T10:00:00+00:00",
-            "last_active_at": "2026-09-01T10:00:00+00:00",
-        }
-    ]
-
-    result = await _list_sessions(
-        state,
-        {
-            "agent_ids": ["builder", "reviewer@vbot"],
-            "limit": 35,
-            "include_subagents": False,
-            "include_memory_reflections": False,
-            "include_skill_reflections": False,
-            "include_cron": False,
-            "include_channels": False,
-            "required_session": {"agent_id": "builder", "session_id": "s1"},
-        },
-    )
-
-    assert [session["agent_address"] for session in result["sessions"]] == [
-        "builder",
-        "reviewer@vbot",
-    ]
-    assert all("agent_id" not in session for session in result["sessions"])
-    assert all("project_id" not in session for session in result["sessions"])
-    assert result["next_cursor"] is None
-    assert result["total_count"] == 2
-    assert resolver.resolved == [(None, "builder"), ("vbot", "reviewer")]
-    call = sessions.list_page_calls[0]
-    assert call["scopes"] == [(None, "builder"), ("vbot", "reviewer")]
-    assert call["limit"] == 35
-    assert call["filters"].include_subagents is False
-    assert call["filters"].include_channels is False
-    assert call["required_address"] == SessionAddress(None, "builder", "s1")
-
-
-@pytest.mark.asyncio
-async def test_list_rejects_required_session_from_an_unlisted_agent() -> None:
-    state, _resolver, sessions = _make_state()
-
-    with pytest.raises(RpcError) as exc_info:
-        await _list_sessions(
-            state,
-            {
-                "agent_id": "builder",
-                "required_session": {
-                    "agent_id": "reviewer@vbot",
-                    "session_id": "s1",
-                },
-            },
+def _add_model(state: Any, model_id: str, **fields: Any) -> None:
+    """Register one extra OpenAI catalog model on this test's state only."""
+    fields.setdefault("context_window", 256000)
+    fields.setdefault("max_output_tokens", 32000)
+    state.runtime.models._models["openai"].append(
+        Model(
+            model_id=model_id,
+            name=model_id,
+            capabilities=Capabilities(
+                vision=False,
+                tools=True,
+                json_mode=True,
+                reasoning=ReasoningCapabilities(supported=False),
+            ),
+            **fields,
         )
-
-    assert exc_info.value.code == "invalid_request"
-    assert sessions.list_page_calls == []
-
-
-@pytest.mark.asyncio
-async def test_activity_list_reads_every_address_in_one_store_call_without_resolving() -> None:
-    state, resolver, sessions = _make_state()
-
-    result = await _list_session_activity(
-        state,
-        {
-            "agent_ids": [
-                "builder",
-                "reviewer@vbot",
-                "builder",
-            ]
-        },
     )
-
-    assert result == {
-        "agents": [
-            {
-                "agent_id": "builder",
-                "project_id": None,
-                "sessions": sessions.activity_rows,
-            },
-            {
-                "agent_id": "reviewer",
-                "project_id": "vbot",
-                "sessions": sessions.activity_rows,
-            },
-        ]
-    }
-    # Activity is a Session-store projection: no per-Agent resolution, one read.
-    assert resolver.resolved == []
-    assert sessions.activity_reads == [[(None, "builder"), ("vbot", "reviewer")]]
-
-
-@pytest.mark.asyncio
-async def test_activity_list_accepts_an_empty_address_batch() -> None:
-    state, resolver, sessions = _make_state()
-
-    result = await _list_session_activity(state, {"agent_ids": []})
-
-    assert result == {"agents": []}
-    assert resolver.resolved == []
-    assert sessions.activity_reads == []
-
-
-@pytest.mark.asyncio
-async def test_activity_list_rejects_a_malformed_address_before_storage() -> None:
-    state, resolver, sessions = _make_state()
-
-    with pytest.raises(RpcError) as exc_info:
-        await _list_session_activity(
-            state,
-            {"agent_ids": ["builder", "reviewer@bad project"]},
-        )
-
-    assert exc_info.value.code == "invalid_request"
-    assert resolver.resolved == []
-    assert sessions.activity_reads == []
-
-
-@pytest.mark.asyncio
-async def test_activity_list_maps_session_storage_failures() -> None:
-    state, _resolver, sessions = _make_state()
-    sessions.activity_error = ChatSessionError("activity sidecar unavailable")
-
-    with pytest.raises(RpcError) as exc_info:
-        await _list_session_activity(state, {"agent_ids": ["builder"]})
-
-    assert exc_info.value.code == "domain_error"
-    assert sessions.activity_reads == [[(None, "builder")]]
-
-
-@pytest.mark.asyncio
-async def test_mark_session_read_acknowledges_exact_project_run() -> None:
-    state, resolver, sessions = _make_state()
-
-    result = await _mark_session_read(
-        state,
-        {"agent_id": "builder@vbot", "session_id": "s1", "run_id": "run-one"},
-    )
-
-    assert resolver.resolved == [("vbot", "builder")]
-    assert sessions.marked_read == [("builder", "s1", "run-one", "vbot")]
-    assert result["agent_id"] == "builder@vbot"
-    assert result["marked_read"] is True
-    assert _sessions_resource_events(state) == []
-
-
-@pytest.mark.asyncio
-async def test_mark_session_read_stale_ack_does_not_invalidate_sessions() -> None:
-    state, _resolver, sessions = _make_state()
-    sessions.mark_read_result["marked_read"] = False
-    sessions.mark_read_result["has_unread_completion"] = True
-    sessions.mark_read_result["latest_completion_run_id"] = "run-newer"
-    sessions.mark_read_result["unread_run_id"] = "run-newer"
-
-    result = await _mark_session_read(
-        state,
-        {"agent_id": "builder", "session_id": "s1", "run_id": "run-old"},
-    )
-
-    assert result["unread_run_id"] == "run-newer"
-    assert _sessions_resource_events(state) == []
-
-
-@pytest.mark.asyncio
-async def test_session_compaction_policy_override_and_clear() -> None:
-    state, _resolver, sessions = _make_state()
-    policy = {
-        "enabled": True,
-        "trigger": {"type": "input_tokens", "tokens": 100_000},
-        "strategy": {"type": "continuation"},
-    }
-
-    set_result = await _set_session_compaction_policy(
-        state,
-        {"agent_id": "builder", "session_id": "s1", "policy": policy},
-    )
-    clear_result = await _set_session_compaction_policy(
-        state,
-        {"agent_id": "builder", "session_id": "s1", "policy": None},
-    )
-
-    assert set_result["override"] == policy
-    assert set_result["source"] == "session"
-    assert clear_result["override"] is None
-    assert clear_result["source"] == "agent_or_global"
-    assert sessions.saved_metadata[("builder", "s1", None)] == {}
-
-
-@pytest.mark.asyncio
-async def test_session_compaction_policy_rejects_invalid_shape() -> None:
-    state, _resolver, sessions = _make_state()
-
-    with pytest.raises(RpcError) as exc_info:
-        await _set_session_compaction_policy(
-            state,
-            {
-                "agent_id": "builder",
-                "session_id": "s1",
-                "policy": {"enabled": True, "trigger": {"type": "unknown"}},
-            },
-        )
-
-    assert exc_info.value.code == "invalid_request"
-    assert sessions.saved_metadata == {}
-
-
-@pytest.mark.asyncio
-async def test_create_session_publishes_sessions_resource_changed() -> None:
-    state, _resolver, _sessions = _make_state()
-
-    await _create_session(state, {"agent_id": "builder", "make_current": True})
-
-    # The single sessions emit point: other windows refresh this agent's session
-    # list/marking. Scoped to the new Session so unrelated windows ignore it.
-    assert _sessions_resource_events(state) == [
-        {
-            "kind": "sessions",
-            "scope": {"project_id": None, "agent_id": "builder", "session_id": "new-session"},
-        }
-    ]
-
-
-@pytest.mark.asyncio
-async def test_create_session_scope_uses_bare_agent_id_for_project_address() -> None:
-    state, _resolver, _sessions = _make_state()
-
-    await _create_session(state, {"agent_id": "builder@vbot"})
-
-    # The scope carries the bare agent id (the project rides separately), matching
-    # how the queue/session channels are keyed on the client.
-    assert _sessions_resource_events(state) == [
-        {
-            "kind": "sessions",
-            "scope": {"project_id": "vbot", "agent_id": "builder", "session_id": "new-session"},
-        }
-    ]
-
-
-@pytest.mark.asyncio
-async def test_rename_bare_agent_sets_title() -> None:
-    state, _resolver, sessions = _make_state()
-
-    result = await _rename_session(
-        state, {"agent_id": "builder", "session_id": "s1", "title": "Release planning"}
-    )
-
-    assert result == {"agent_id": "builder", "session_id": "s1", "title": "Release planning"}
-    assert sessions.renamed == [("builder", "s1", "Release planning", None)]
-
-
-@pytest.mark.asyncio
-async def test_rename_qualified_agent_scopes_to_project() -> None:
-    state, _resolver, sessions = _make_state()
-
-    result = await _rename_session(
-        state, {"agent_id": "builder@vbot", "session_id": "s1", "title": "Release planning"}
-    )
-
-    assert result["agent_id"] == "builder"
-    assert sessions.renamed == [("builder", "s1", "Release planning", "vbot")]
-
-
-@pytest.mark.asyncio
-async def test_rename_without_title_clears() -> None:
-    state, _resolver, sessions = _make_state()
-
-    # An absent title field is the clear signal: the handler passes through "".
-    result = await _rename_session(state, {"agent_id": "builder", "session_id": "s1"})
-
-    assert result == {"agent_id": "builder", "session_id": "s1", "title": None}
-    assert sessions.renamed == [("builder", "s1", "", None)]
-
-
-@pytest.mark.asyncio
-async def test_rename_publishes_sessions_resource_changed() -> None:
-    state, _resolver, _sessions = _make_state()
-
-    await _rename_session(state, {"agent_id": "builder", "session_id": "s1", "title": "Hi"})
-
-    assert _sessions_resource_events(state) == [
-        {
-            "kind": "sessions",
-            "scope": {"project_id": None, "agent_id": "builder", "session_id": "s1"},
-        }
-    ]
-
-
-@pytest.mark.asyncio
-async def test_rename_rejects_unsupported_field() -> None:
-    state, _resolver, sessions = _make_state()
-
-    with pytest.raises(RpcError) as exc_info:
-        await _rename_session(
-            state, {"agent_id": "builder", "session_id": "s1", "title": "Hi", "bogus": 1}
-        )
-
-    assert exc_info.value.code == "invalid_request"
-    assert sessions.renamed == []
-
-
-@pytest.mark.asyncio
-async def test_rename_rejects_non_string_title() -> None:
-    state, _resolver, sessions = _make_state()
-
-    with pytest.raises(RpcError) as exc_info:
-        await _rename_session(
-            state,
-            {"agent_id": "builder", "session_id": "s1", "title": 42},
-        )
-
-    assert exc_info.value.code == "invalid_request"
-    assert sessions.renamed == []
 
 
 # ---------------------------------------------------------------------------
-# agent.get payload: config (raw own values) + effective (per-field value+source).
-# Wired against a real AgentStore + AgentResolver so get_raw / effective_config
-# are exercised end-to-end rather than stubbed.
+# Payload
 # ---------------------------------------------------------------------------
-class _UnrestrictedCatalogModel:
-    """Catalog-model stub with no connection allowlist (every connection allowed)."""
 
+
+@pytest.mark.asyncio
+async def test_agent_crud_round_trip(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.chat_sessions.create("coder", session_id="current-one")
+    state.runtime.agents.update("coder", current_session_id="current-one")
+
+    [listed] = (await rpc_result(state, "agent.list"))["agents"]
+    created = await rpc_result(state, "agent.create", id="writer")
+    updated = await rpc_result(state, "agent.update", id="writer", name="Updated Writer")
+    deleted = await rpc_result(state, "agent.delete", id="writer")
+
+    assert listed["current_session_id"] == "current-one"
+    # Connections are chosen per Model binding, never stored on the Agent.
+    assert "connection" not in listed
+    assert "fallback_connection" not in listed
+    assert created["id"] == "writer"
+    assert created["name"] == "writer"
+    assert created["custom_system_prompt_enabled"] is False
+    assert created["memory_prompt_mode"] == "agent_user"
+    assert created["tools"] == {}
+    assert updated["name"] == "Updated Writer"
+    assert deleted["agent_id"] == "writer"
+
+
+@pytest.mark.asyncio
+async def test_agent_create_returns_resolved_defaults_but_keeps_raw_values(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.storage.update_settings_sections(
+        {"defaults": {"agent": {"model": "openai/gpt-5.2", "temperature": 0.6}}}
+    )
+    state.runtime.storage.update_settings_sections(
+        {"defaults": {"agent": {"thinking_effort": "high"}}}
+    )
+
+    created = await rpc_result(
+        state,
+        "agent.create",
+        id="writer",
+        name="Writer",
+        model="",
+        temperature=None,
+        thinking_effort=None,
+    )
+    # The generic channel signals a reload; it carries no Agent data.
+    signals = resource_changes(state)
+    stored = await rpc_result(state, "agent.get", id="writer")
+
+    assert created["model"] == "openai/gpt-5.2"
+    assert created["temperature"] == 0.6
+    assert created["thinking_effort"] == "high"
+    assert created["context_window"] == 256000
+    assert signals == [{"kind": "agents"}]
+    # Inherited values stay inherited: the Agent's own configuration is empty.
+    assert stored["config"]["model"] == ""
+    assert stored["config"]["temperature"] is None
+    assert stored["config"]["thinking_effort"] is None
+
+
+class _CatalogModel:
     connections: tuple[str, ...] = ()
 
     def allows_connection(self, connection_id: str) -> bool:
         return True
 
 
-class _PayloadCheckerModels:
-    """Model existence probe the resolver's checker uses (unrestricted marker)."""
-
-    def get(self, provider_id: str, model_id: str) -> _UnrestrictedCatalogModel:
+class _CheckerModels:
+    def get(self, provider_id: str, model_id: str) -> _CatalogModel:
         if (provider_id, model_id) == ("openai", "gpt-5.2"):
-            return _UnrestrictedCatalogModel()
+            return _CatalogModel()
         raise KeyError(f"{provider_id}/{model_id}")
 
 
-class _PayloadRuntimeModels:
-    """The runtime model registry the context-window lookup reads.
-
-    It always raises ``KeyError`` so ``_resolve_context_window`` degrades to
-    ``None`` — the payload test does not assert the window, and a bare-object
-    return would trip ``.context_window``.
-    """
-
-    def get(self, provider_id: str, model_id: str) -> object:
-        raise KeyError(f"{provider_id}/{model_id}")
-
-
-def _agent_payload_state(tmp_path: Path, defaults: dict[str, Any]) -> SimpleNamespace:
-    """Build a real-store state for the agent.get payload path.
-
-    ``defaults`` is the ``defaults.agent`` map both the store (for baking) and the
-    resolver's global tier read, so the baked top-level keys and the effective
-    ``global_default`` source agree.
-    """
-    from core.projects.resolver import ModelConfigurationChecker
-
-    data_dir = tmp_path / "data"
-    template_dir = tmp_path / "templates"
-    template_dir.mkdir(parents=True)
-    for filename in ("SOUL.md", "USER.md", "MEMORY.md"):
-        (template_dir / filename).write_text(f"# {filename}\n", encoding="utf-8")
-
-    data_dir.mkdir()
-    write_bootstrap_marker(data_dir)
-    sessions = ChatSessionManager(data_dir)
-    agents = AgentStore(
-        data_dir, template_dir=template_dir, defaults_provider=lambda: defaults, sessions=sessions
-    )
-    projects = ProjectStore(data_dir)
-    checker = ModelConfigurationChecker(
-        _PayloadCheckerModels(),
-        _PayloadProviders(),
-        _PayloadCredentials(),
-    )
-    resolver = AgentResolver(agents, projects, checker, lambda: defaults)
-    runtime = SimpleNamespace(
-        agents=agents,
-        agent_resolver=resolver,
-        chat_sessions=sessions,
-        models=_PayloadRuntimeModels(),
-    )
-    return SimpleNamespace(runtime=runtime)
-
-
-class _PayloadProviders:
+class _CheckerProviders:
     def get(self, provider_id: str) -> object:
         if provider_id == "openai":
             return SimpleNamespace(connections=[SimpleNamespace(id="api-key")])
         raise KeyError(provider_id)
 
 
-class _PayloadCredentials:
+class _CheckerCredentials:
     def has_credentials(self, provider_id: str, connection_id: str | None = None) -> bool:
         return connection_id == "openai:api-key"
 
@@ -501,14 +146,57 @@ class _PayloadCredentials:
         return self.has_credentials(provider_id, connection_id)
 
 
+class _NoContextWindows:
+    def get(self, provider_id: str, model_id: str) -> object:
+        raise KeyError(f"{provider_id}/{model_id}")
+
+
+def _real_agent_state(tmp_path: Path, defaults: JsonObject) -> SimpleNamespace:
+    """A real Agent store and resolver sharing one ``defaults.agent`` map."""
+    template_dir = tmp_path / "templates"
+    template_dir.mkdir(parents=True)
+    for filename in ("SOUL.md", "USER.md", "MEMORY.md"):
+        (template_dir / filename).write_text(f"# {filename}\n", encoding="utf-8")
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    write_bootstrap_marker(data_dir)
+    sessions = ChatSessionManager(data_dir)
+    agents = AgentStore(
+        data_dir, template_dir=template_dir, defaults_provider=lambda: defaults, sessions=sessions
+    )
+    checker = ModelConfigurationChecker(
+        _CheckerModels(), _CheckerProviders(), _CheckerCredentials()
+    )
+    resolver = AgentResolver(agents, ProjectStore(data_dir), checker, lambda: defaults)
+    return SimpleNamespace(
+        runtime=SimpleNamespace(
+            agents=agents,
+            agent_resolver=resolver,
+            chat_sessions=sessions,
+            models=_NoContextWindows(),
+        )
+    )
+
+
 @pytest.mark.asyncio
-async def test_agent_get_reports_config_and_effective_for_own_value(tmp_path: Path) -> None:
-    state = _agent_payload_state(tmp_path, defaults={})
-    state.runtime.agents.create("orchestrator", "Orchestrator", model="openai/gpt-5.2")
+@pytest.mark.parametrize(
+    ("defaults", "own_model", "source"),
+    [
+        pytest.param({}, "openai/gpt-5.2", "agent", id="own-value"),
+        pytest.param({"model": "openai/gpt-5.2"}, None, "global_default", id="global-default"),
+    ],
+)
+async def test_agent_get_reports_raw_config_and_the_effective_source(
+    tmp_path: Path, defaults: JsonObject, own_model: str | None, source: str
+) -> None:
+    state = _real_agent_state(tmp_path, defaults)
+    if own_model is None:
+        state.runtime.agents.create("orchestrator", "Orchestrator")
+    else:
+        state.runtime.agents.create("orchestrator", "Orchestrator", model=own_model)
 
-    result = await _get_agent(state, {"id": "orchestrator"})
+    result = await rpc_result(state, "agent.get", id="orchestrator")
 
-    # config = raw own values (pre-default-bake); shape check.
     assert set(result["config"]) == {
         "model",
         "fallback_models",
@@ -516,23 +204,264 @@ async def test_agent_get_reports_config_and_effective_for_own_value(tmp_path: Pa
         "thinking_effort",
         "compaction_policy",
     }
-    assert result["config"]["model"] == "openai/gpt-5.2"
+    # ``config`` is the Agent's own value; the top-level value is the resolved one.
+    assert result["config"]["model"] == (own_model or "")
     assert result["config"]["fallback_models"] == []
-    assert result["config"]["temperature"] is None
-    # effective = per-field {value, source}; the own model wins as source "agent".
-    assert result["effective"]["model"] == {"value": "openai/gpt-5.2", "source": "agent"}
+    assert result["model"] == "openai/gpt-5.2"
+    assert result["effective"]["model"] == {"value": "openai/gpt-5.2", "source": source}
     assert result["effective"]["temperature"] == {"value": None, "source": None}
 
 
 @pytest.mark.asyncio
-async def test_agent_get_effective_reports_global_default_when_own_empty(tmp_path: Path) -> None:
-    # With a global default set, the top-level model is baked while config keeps the
-    # raw "", and effective attributes the value to the global_default tier.
-    state = _agent_payload_state(tmp_path, defaults={"model": "openai/gpt-5.2"})
-    state.runtime.agents.create("orchestrator", "Orchestrator")
+@pytest.mark.parametrize(
+    ("model", "window"),
+    [
+        pytest.param("openai/gpt-5.2", 256000, id="catalog-window"),
+        pytest.param("openai/gpt-5.2::api-key", 256000, id="connection-suffix"),
+        pytest.param("unknown/missing-model", None, id="unknown-model"),
+        pytest.param("bare-model-id", None, id="no-provider-prefix"),
+        # The window drives the WebUI token badge, so a catalog model without one
+        # resolves through the default chain (here the global floor).
+        pytest.param("openai/windowless", GLOBAL_CONTEXT_WINDOW_FLOOR, id="catalog-without-window"),
+    ],
+)
+async def test_agent_list_reports_the_effective_context_window(
+    tmp_path: Path, model: str, window: int | None
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    _add_model(state, "windowless", context_window=None, max_output_tokens=None)
+    state.runtime.agents.update("coder", model=model)
 
-    result = await _get_agent(state, {"id": "orchestrator"})
+    [agent] = (await rpc_result(state, "agent.list"))["agents"]
 
-    assert result["model"] == "openai/gpt-5.2"  # baked top-level key
-    assert result["config"]["model"] == ""  # raw own value
-    assert result["effective"]["model"] == {"value": "openai/gpt-5.2", "source": "global_default"}
+    assert agent["model"] == model
+    assert agent["context_window"] == window
+
+
+# ---------------------------------------------------------------------------
+# Mutable fields and validation
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("params", "field", "expected"),
+    [
+        pytest.param({"name": None}, "name", "coder", id="empty-name-restores-id"),
+        pytest.param({"temperature": None}, "temperature", None, id="clear-temperature"),
+        pytest.param({"memory_prompt_mode": "off"}, "memory_prompt_mode", "off", id="memory-mode"),
+        pytest.param(
+            {"tool_access": {"mode": "selected", "allowed": ["read"], "denied": ["memory"]}},
+            "tool_access",
+            {"mode": "selected", "allowed": ["read"], "denied": ["memory"]},
+            id="tool-access",
+        ),
+        pytest.param(
+            {"tools": {"bash": {"allowed_env": ["OPENAI_API_KEY", "OPENAI_API_KEY"]}}},
+            "tools",
+            {"bash": {"allowed_env": ["OPENAI_API_KEY"]}},
+            id="bash-env-grants-normalized",
+        ),
+    ],
+)
+async def test_agent_update_applies_a_mutable_field(
+    tmp_path: Path, params: JsonObject, field: str, expected: Any
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.agents.update("coder", name="Coder", temperature=0.9)
+
+    updated = await rpc_result(state, "agent.update", id="coder", **params)
+    stored = await rpc_result(state, "agent.get", id="coder")
+
+    assert updated[field] == expected
+    assert stored[field] == expected
+
+
+@pytest.mark.asyncio
+async def test_workspace_is_set_by_update_only(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    workspace = tmp_path / "updated-workspace"
+
+    refused = await rpc_error(state, "agent.create", id="writer", workspace="C:/escape")
+    updated = await rpc_result(state, "agent.update", id="coder", workspace=str(workspace))
+
+    assert refused["code"] == "invalid_request"
+    assert updated["workspace"] == str(workspace.resolve())
+    assert state.runtime.agents.get("coder").workspace == str(workspace.resolve())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method", "params", "named"),
+    [
+        ("agent.create", {"id": "writer", "allowed_tools": ["read_file"]}, "allowed_tools"),
+        ("agent.create", {"id": "writer", "connection": "openai:api-key"}, "connection"),
+        ("agent.update", {"id": "coder", "fallback_connection": ""}, "fallback_connection"),
+        ("agent.create", {"id": "writer", "name": 5}, "name"),
+        ("agent.update", {"id": "coder", "model": 5}, "model"),
+        ("agent.update", {"id": "coder", "temperature": "0.7"}, "temperature"),
+        ("agent.create", {"id": "writer", "temperature": 2.1}, "temperature"),
+        ("agent.update", {"id": "coder", "thinking_effort": "extreme"}, "thinking_effort"),
+        ("agent.update", {"id": "coder", "memory_prompt_mode": "sometimes"}, "memory_prompt_mode"),
+        (
+            "agent.update",
+            {
+                "id": "coder",
+                "tool_access": {"mode": "selected", "allowed": ["read"], "denied": ["read"]},
+            },
+            "",
+        ),
+        ("agent.create", {"id": "writer", "allowed_skills": ["debugging", None]}, "allowed_skills"),
+        ("agent.update", {"id": "coder", "tools": "worker"}, "tools"),
+        (
+            "agent.create",
+            {"id": "writer", "tools": {"subagent": {"allowed_agents": ["worker", None]}}},
+            "allowed_agents",
+        ),
+        ("agent.create", {"id": "writer", "tools": {"bash": {"allowed_env": ["bad-key"]}}}, ""),
+        (
+            "agent.update",
+            {"id": "coder", "custom_system_prompt_enabled": "yes"},
+            "custom_system_prompt_enabled",
+        ),
+        ("agent.reorder", {"agent_ids": ["coder", "coder"], "expected_revision": 1}, ""),
+    ],
+)
+async def test_malformed_agent_payloads_are_rejected(
+    tmp_path: Path, method: str, params: JsonObject, named: str
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+
+    error = await rpc_error(state, method, **params)
+
+    assert error["code"] == "invalid_request"
+    assert named in error["message"]
+    assert [agent.id for agent in state.runtime.agents.list()] == ["coder"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method", "params", "named"),
+    [
+        ("agent.create", {"id": "writer", "model": "openai/gpt-5.4::api-key"}, "api-key"),
+        (
+            "agent.update",
+            {"id": "coder", "fallback_models": ["openai/gpt-5.4::api-key"]},
+            "openai/gpt-5.4",
+        ),
+        (
+            "settings.update",
+            {"defaults": {"agent": {"model": "openai/gpt-5.4::api-key"}}},
+            "defaults.agent.model",
+        ),
+        (
+            "settings.update",
+            {
+                "compaction": {
+                    "enabled": True,
+                    "trigger": {"type": "context_ratio", "threshold": 0.8},
+                    "strategy": {
+                        "type": "summary_tail",
+                        "tail_tokens": 15000,
+                        "summary_model": "openai/gpt-5.4::api-key",
+                    },
+                }
+            },
+            "compaction.summary_model",
+        ),
+    ],
+)
+async def test_a_model_pinned_to_a_connection_it_forbids_is_rejected(
+    tmp_path: Path, method: str, params: JsonObject, named: str
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    _add_model(state, "gpt-5.4", connections=("subscription",))
+
+    error = await rpc_error(state, method, **params)
+
+    assert error["code"] == "invalid_request"
+    assert named in error["message"]
+    assert state.runtime.storage.load_defaults() == {}
+    assert state.runtime.agents.get("coder").fallback_models == []
+
+
+@pytest.mark.asyncio
+async def test_a_model_pinned_to_a_connection_it_permits_is_accepted(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    _add_model(state, "gpt-5.4", connections=("subscription",))
+
+    created = await rpc_result(
+        state, "agent.create", id="writer", model="openai/gpt-5.4::subscription"
+    )
+
+    assert created["model"] == "openai/gpt-5.4::subscription"
+
+
+@pytest.mark.asyncio
+async def test_agent_reorder_persists_the_order_and_rejects_a_stale_revision(
+    tmp_path: Path,
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    await rpc_result(state, "agent.create", id="writer")
+    revision = (await rpc_result(state, "agent.list"))["order_revision"]
+
+    reordered = await rpc_result(
+        state, "agent.reorder", agent_ids=["writer", "coder"], expected_revision=revision
+    )
+    stale = await rpc_error(
+        state, "agent.reorder", agent_ids=["coder", "writer"], expected_revision=revision
+    )
+
+    assert [agent["id"] for agent in reordered["agents"]] == ["writer", "coder"]
+    assert reordered["order_revision"] == revision + 1
+    assert stale["code"] == "agent_order_conflict"
+    assert [agent.id for agent in state.runtime.agents.list()] == ["writer", "coder"]
+
+
+# ---------------------------------------------------------------------------
+# Custom system prompt
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("default_layout_saved", [True, False], ids=["saved", "bundled"])
+async def test_enabling_a_custom_prompt_seeds_the_agent_from_the_effective_defaults(
+    tmp_path: Path, default_layout_saved: bool
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    storage = state.runtime.storage
+    storage.write_prompt_fragment("runtime.md", "custom default runtime")
+    default_layout = [
+        LayoutEntry(id="core:intro", enabled=True, source="core"),
+        LayoutEntry(id="tool:bash", enabled=False, source="tool"),
+    ]
+    if default_layout_saved:
+        storage.write_block_layout(None, default_layout)
+
+    updated = await rpc_result(state, "agent.update", id="coder", custom_system_prompt_enabled=True)
+
+    assert updated["custom_system_prompt_enabled"] is True
+    assert storage.read_agent_prompt_fragment("coder", "runtime.md") == "custom default runtime"
+    assert (storage.agent_prompts_dir("coder") / "layout.json").exists()
+    assert storage.read_block_layout("coder") == (
+        default_layout if default_layout_saved else load_bundled_default_layout()
+    )
+
+
+@pytest.mark.asyncio
+async def test_reenabling_a_custom_prompt_preserves_the_agent_customizations(
+    tmp_path: Path,
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    storage = state.runtime.storage
+    customized = [LayoutEntry(id="user:house-rules", enabled=True, source="user")]
+    state.runtime.agents.update("coder", custom_system_prompt_enabled=True)
+    storage.write_agent_prompt_fragment("coder", "runtime.md", "agent custom")
+    storage.write_block_layout("coder", customized)
+    state.runtime.agents.update("coder", custom_system_prompt_enabled=False)
+    storage.write_prompt_fragment("runtime.md", "custom default runtime")
+
+    await rpc_result(state, "agent.update", id="coder", custom_system_prompt_enabled=True)
+
+    assert storage.read_agent_prompt_fragment("coder", "runtime.md") == "agent custom"
+    assert storage.read_block_layout("coder") == customized

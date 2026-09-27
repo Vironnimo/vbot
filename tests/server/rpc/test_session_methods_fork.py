@@ -1,40 +1,31 @@
-"""Tests for session methods fork."""
+"""session.fork: provenance, scope, re-homing and failures."""
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
 
 import pytest
 
 from core.chat import ChatMessage, ChatSessionError
 from core.prompts.pinned_context import PINNED_SKILL_CATALOG_SLOT
 from core.sessions import FORK_SOURCE_META_KEY, SeenSkillsUpdate, SessionAddress
-from server.rpc.errors import RpcError
-from server.rpc.methods import dispatch_rpc
-from server.rpc.session_methods import (
-    _fork_session,
+from tests.server.rpc.session_methods_test_support import FakeSessions, stub_session_state
+from tests.server.rpc_test_support import (
+    StubAdapter,
+    make_state,
+    resource_changes,
+    rpc_error,
+    rpc_result,
 )
-from tests.server.rpc.agent_methods_test_support import (
-    _make_state,
-    _sessions_resource_events,
-)
-from tests.server.rpc_test_support import StubAdapter, make_state
-
-
-async def _rpc_fork(state: Any, params: dict[str, Any]) -> dict[str, Any]:
-    response = await dispatch_rpc(state, {"method": "session.fork", "params": params})
-    assert response["ok"] is True, response
-    result: dict[str, Any] = response["result"]
-    return result
 
 
 @pytest.mark.asyncio
 async def test_fork_same_agent_returns_new_id_with_provenance() -> None:
-    state, resolver, sessions = _make_state()
+    state, resolver, sessions = stub_session_state()
 
-    result = await _fork_session(state, {"agent_id": "builder", "session_id": "s1"})
+    result = await rpc_result(state, "session.fork", agent_id="builder", session_id="s1")
 
     assert result["session"]["id"] == "fork-1"
     assert result["session"]["agent_id"] == "builder"
@@ -67,7 +58,7 @@ async def test_fork_strips_channel_and_subagent_bindings_but_keeps_title(tmp_pat
         ),
     )
 
-    result = await _rpc_fork(state, {"agent_id": "coder", "session_id": "s1"})
+    result = await rpc_result(state, "session.fork", agent_id="coder", session_id="s1")
 
     fork_address = SessionAddress(None, "coder", result["session"]["id"])
     metadata = sessions.get_metadata(fork_address)
@@ -94,7 +85,7 @@ async def test_fork_of_a_project_session_stays_in_its_project(tmp_path: Path) ->
     source = sessions.create("coder", session_id="s1", project_id="proj")
     source.append(ChatMessage.user("hello"))
 
-    result = await _rpc_fork(state, {"agent_id": "coder@proj", "session_id": "s1"})
+    result = await rpc_result(state, "session.fork", agent_id="coder@proj", session_id="s1")
 
     fork_address = SessionAddress("proj", "coder", result["session"]["id"])
     assert [message.content for message in sessions.get(fork_address).load_active()] == ["hello"]
@@ -105,12 +96,11 @@ async def test_fork_of_a_project_session_stays_in_its_project(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
-async def test_fork_to_other_agent_strips_catalog_and_lands_under_target() -> None:
-    state, resolver, sessions = _make_state()
+async def test_fork_to_other_agent_resolves_both_endpoints_and_lands_under_target() -> None:
+    state, resolver, sessions = stub_session_state()
 
-    result = await _fork_session(
-        state,
-        {"agent_id": "builder", "session_id": "s1", "target_agent_id": "reviewer"},
+    result = await rpc_result(
+        state, "session.fork", agent_id="builder", session_id="s1", target_agent_id="reviewer"
     )
 
     assert result["session"]["agent_id"] == "reviewer"
@@ -119,7 +109,7 @@ async def test_fork_to_other_agent_strips_catalog_and_lands_under_target() -> No
     # Both endpoints are resolved before any file work.
     assert resolver.resolved == [(None, "builder"), (None, "reviewer")]
     # The refresh event names the fork under the target agent.
-    assert _sessions_resource_events(state) == [
+    assert resource_changes(state) == [
         {
             "kind": "sessions",
             "scope": {"project_id": None, "agent_id": "reviewer", "session_id": "fork-1"},
@@ -140,9 +130,9 @@ async def test_fork_to_other_agent_leaves_the_pinned_skill_catalog_behind(
     sessions.ensure_prompt_pin(source.address, PINNED_SKILL_CATALOG_SLOT, catalog, lambda _: True)
     sessions.record_seen_skills(source.address, SeenSkillsUpdate(("deploy",)))
 
-    same_agent = await _rpc_fork(state, {"agent_id": "coder", "session_id": "s1"})
-    other_agent = await _rpc_fork(
-        state, {"agent_id": "coder", "session_id": "s1", "target_agent_id": "reviewer"}
+    same_agent = await rpc_result(state, "session.fork", agent_id="coder", session_id="s1")
+    other_agent = await rpc_result(
+        state, "session.fork", agent_id="coder", session_id="s1", target_agent_id="reviewer"
     )
 
     # A fork on the same Agent keeps the prompt-cache-warm catalog; a fork into
@@ -157,42 +147,35 @@ async def test_fork_to_other_agent_leaves_the_pinned_skill_catalog_behind(
     assert [message.content for message in sessions.get(moved).load_active()] == ["hello"]
 
 
-@pytest.mark.asyncio
-async def test_fork_unknown_session_is_domain_error() -> None:
-    state, _resolver, sessions = _make_state()
-    sessions.missing = {"gone"}
-
-    with pytest.raises(RpcError) as exc_info:
-        await _fork_session(state, {"agent_id": "builder", "session_id": "gone"})
-
-    assert exc_info.value.code == "domain_error"
+def _missing(sessions: FakeSessions) -> None:
+    sessions.missing = {"s1"}
 
 
-@pytest.mark.asyncio
-async def test_fork_owner_managed_session_is_domain_error_without_explicit_export() -> None:
-    state, _resolver, sessions = _make_state()
+def _owner_managed(sessions: FakeSessions) -> None:
     sessions.fork_error = ChatSessionError(
         "This Session is managed by an Extension. Use that Extension to resume it."
     )
 
-    with pytest.raises(RpcError) as exc_info:
-        await _fork_session(state, {"agent_id": "builder", "session_id": "s1"})
-
-    assert exc_info.value.code == "domain_error"
-    assert (
-        exc_info.value.message
-        == "This Session is managed by an Extension. Use that Extension to resume it."
-    )
-    assert _sessions_resource_events(state) == []
-    assert sessions.forked[0]["target_agent_id"] is None
-
 
 @pytest.mark.asyncio
-async def test_fork_rejects_unsupported_field() -> None:
-    state, _resolver, sessions = _make_state()
+@pytest.mark.parametrize(
+    ("arrange", "message"),
+    [
+        (_missing, "session does not exist: s1"),
+        (
+            _owner_managed,
+            "This Session is managed by an Extension. Use that Extension to resume it.",
+        ),
+    ],
+    ids=["missing", "owner-managed"],
+)
+async def test_a_refused_fork_is_a_domain_error_without_a_refresh(
+    arrange: Callable[[FakeSessions], None], message: str
+) -> None:
+    state, _resolver, sessions = stub_session_state()
+    arrange(sessions)
 
-    with pytest.raises(RpcError) as exc_info:
-        await _fork_session(state, {"agent_id": "builder", "session_id": "s1", "bogus": 1})
+    error = await rpc_error(state, "session.fork", agent_id="builder", session_id="s1")
 
-    assert exc_info.value.code == "invalid_request"
-    assert sessions.forked == []
+    assert error == {"code": "domain_error", "message": message}
+    assert resource_changes(state) == []

@@ -1,33 +1,38 @@
-"""Tests for session methods delete."""
+"""session.delete: archive, landing, refresh events and refusals."""
 
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from types import SimpleNamespace
 
 import pytest
 
 from core.chat import ChatSessionError
 from core.runs import RunAdmissionBlockedError
-from core.sessions import (
-    SessionAddress,
-)
+from core.sessions import SessionAddress
 from core.tools.terminal_manager import TerminalOwner
-from server.rpc.errors import RpcError
-from server.rpc.session_methods import (
-    _delete_session,
-)
-from tests.server.rpc.agent_methods_test_support import (
-    _make_state,
-    _sessions_resource_events,
-)
+from tests.server.rpc.session_methods_test_support import FakeSessions, stub_session_state
+from tests.server.rpc_test_support import JsonObject, resource_changes, rpc_error, rpc_result
 
 
 @pytest.mark.asyncio
-async def test_delete_bare_agent_archives_and_lands_on_reaimed_current() -> None:
-    state, resolver, sessions = _make_state()
+@pytest.mark.parametrize(
+    ("current_session_id", "refreshed_kinds"),
+    [
+        pytest.param("other", ["sessions"], id="not-current"),
+        # Re-aiming the current pointer is an Agent-config change, so Agent state
+        # refreshes too.
+        pytest.param("s1", ["sessions", "agents"], id="current"),
+    ],
+)
+async def test_delete_identity_session_archives_and_lands_on_the_reaimed_current(
+    current_session_id: str, refreshed_kinds: list[str]
+) -> None:
+    state, resolver, sessions = stub_session_state()
+    state._agent_current["current_session_id"] = current_session_id
 
-    result = await _delete_session(state, {"agent_id": "builder", "session_id": "s1"})
+    result = await rpc_result(state, "session.delete", agent_id="builder", session_id="s1")
 
     assert result == {"agent_id": "builder", "session_id": "s1", "next_session_id": "landing"}
     assert resolver.resolved == [(None, "builder")]
@@ -36,57 +41,81 @@ async def test_delete_bare_agent_archives_and_lands_on_reaimed_current() -> None
     assert state.runtime.terminal_manager.closed_scopes == [TerminalOwner(None, "builder", "s1")]
     # Identity pointer re-aimed through the shared seam; the landing is its result.
     assert state._resets == [("builder", "s1")]
-    # Dropped from the recall index immediately (#6).
+    # Dropped from the recall index immediately.
     assert state._recall_removals == [("builder", "s1", None)]
+    events = resource_changes(state)
+    assert [event["kind"] for event in events] == refreshed_kinds
+    # Other windows learn which Session was archived and where to land.
+    assert events[0]["scope"] == {
+        "agent_id": "builder",
+        "project_id": None,
+        "deleted_session_id": "s1",
+        "next_session_id": "landing",
+    }
 
 
 @pytest.mark.asyncio
-async def test_delete_qualified_agent_lands_on_most_recent_remaining() -> None:
-    state, _resolver, sessions = _make_state()
-    sessions.metadata_rows = [
-        {"id": "old", "last_active_at": "2026-01-01T00:00:00+00:00"},
-        {"id": "recent", "last_active_at": "2026-06-01T00:00:00+00:00"},
-    ]
+@pytest.mark.parametrize(
+    ("remaining", "landing"),
+    [
+        pytest.param(
+            [
+                {"id": "old", "last_active_at": "2026-01-01T00:00:00+00:00"},
+                {"id": "recent", "last_active_at": "2026-06-01T00:00:00+00:00"},
+            ],
+            "recent",
+            id="most-recent-remaining",
+        ),
+        pytest.param([], "new-session", id="fresh-when-none-remain"),
+    ],
+)
+async def test_delete_project_session_lands_without_a_current_pointer(
+    remaining: list[JsonObject], landing: str
+) -> None:
+    state, _resolver, sessions = stub_session_state()
+    sessions.metadata_rows = remaining
 
-    result = await _delete_session(state, {"agent_id": "builder@vbot", "session_id": "s1"})
+    result = await rpc_result(state, "session.delete", agent_id="builder@vbot", session_id="s1")
 
-    assert result["next_session_id"] == "recent"
+    assert result["next_session_id"] == landing
     assert sessions.archived == [("builder", "s1", "vbot")]
-    # A project config agent has no identity current pointer to re-aim.
+    assert [created["project_id"] for created in sessions.created] == (
+        ["vbot"] if not remaining else []
+    )
+    # A Project Agent has no identity current pointer to re-aim.
     assert state._resets == []
     assert state._recall_removals == [("builder", "s1", "vbot")]
-
-
-@pytest.mark.asyncio
-async def test_delete_project_session_creates_fresh_when_none_remain() -> None:
-    state, _resolver, sessions = _make_state()
-    sessions.metadata_rows = []
-
-    result = await _delete_session(state, {"agent_id": "builder@vbot", "session_id": "s1"})
-
-    assert result["next_session_id"] == "new-session"
-    assert sessions.created[0]["project_id"] == "vbot"
+    assert resource_changes(state) == [
+        {
+            "kind": "sessions",
+            "scope": {
+                "agent_id": "builder",
+                "project_id": "vbot",
+                "deleted_session_id": "s1",
+                "next_session_id": landing,
+            },
+        }
+    ]
 
 
 @pytest.mark.asyncio
 async def test_delete_busy_session_is_rejected() -> None:
-    state, _resolver, sessions = _make_state()
+    state, _resolver, sessions = stub_session_state()
 
     async with state.chat_runs.session_admission_guard(
         SessionAddress(project_id=None, agent_id="builder", session_id="s1")
     ):
-        with pytest.raises(RpcError) as exc_info:
-            await _delete_session(state, {"agent_id": "builder", "session_id": "s1"})
+        error = await rpc_error(state, "session.delete", agent_id="builder", session_id="s1")
 
-    assert exc_info.value.code == "session_busy"
-    # The guard fires before any file work — nothing archived, nothing re-aimed.
+    assert error["code"] == "session_busy"
+    # The guard fires before any file work: nothing archived, nothing re-aimed.
     assert sessions.archived == []
     assert state._resets == []
 
 
 @pytest.mark.asyncio
 async def test_delete_session_referenced_by_bootstrap_is_rejected() -> None:
-    state, _resolver, sessions = _make_state()
+    state, _resolver, sessions = stub_session_state()
     state.runtime.bootstrap_service = SimpleNamespace(
         list_jobs=lambda: [
             SimpleNamespace(
@@ -99,22 +128,21 @@ async def test_delete_session_referenced_by_bootstrap_is_rejected() -> None:
         ]
     )
 
-    with pytest.raises(RpcError) as exc_info:
-        await _delete_session(state, {"agent_id": "builder", "session_id": "s1"})
+    error = await rpc_error(state, "session.delete", agent_id="builder", session_id="s1")
 
-    assert exc_info.value.code == "session_busy"
-    assert "bootstrap:boot-1" in exc_info.value.message
+    assert error["code"] == "session_busy"
+    assert "bootstrap:boot-1" in error["message"]
     assert sessions.archived == []
 
 
 @pytest.mark.asyncio
 async def test_delete_guard_rejects_run_while_archive_is_waiting() -> None:
-    state, _resolver, sessions = _make_state()
+    state, _resolver, sessions = stub_session_state()
     sessions.archive_started = asyncio.Event()
     sessions.archive_release = asyncio.Event()
 
     delete_task = asyncio.create_task(
-        _delete_session(state, {"agent_id": "builder", "session_id": "s1"})
+        rpc_result(state, "session.delete", agent_id="builder", session_id="s1")
     )
     await asyncio.wait_for(sessions.archive_started.wait(), timeout=1)
 
@@ -128,96 +156,39 @@ async def test_delete_guard_rejects_run_while_archive_is_waiting() -> None:
     assert result["session_id"] == "s1"
 
 
-@pytest.mark.asyncio
-async def test_delete_missing_session_is_domain_error() -> None:
-    state, _resolver, sessions = _make_state()
-    sessions.missing = {"gone"}
-
-    with pytest.raises(RpcError) as exc_info:
-        await _delete_session(state, {"agent_id": "builder", "session_id": "gone"})
-
-    assert exc_info.value.code == "domain_error"
-    assert sessions.archived == []
+def _missing(sessions: FakeSessions) -> None:
+    sessions.missing = {"s1"}
 
 
-@pytest.mark.asyncio
-async def test_delete_owner_managed_session_is_domain_error() -> None:
-    state, _resolver, sessions = _make_state()
+def _owner_managed(sessions: FakeSessions) -> None:
     sessions.archive_error = ChatSessionError(
         "This Session is managed by an Extension. Use that Extension to resume it."
     )
 
-    with pytest.raises(RpcError) as exc_info:
-        await _delete_session(state, {"agent_id": "builder", "session_id": "s1"})
-
-    assert exc_info.value.code == "domain_error"
-    assert (
-        exc_info.value.message
-        == "This Session is managed by an Extension. Use that Extension to resume it."
-    )
-    assert _sessions_resource_events(state) == []
-
 
 @pytest.mark.asyncio
-async def test_delete_publishes_sessions_resource_changed() -> None:
-    state, _resolver, _sessions = _make_state()
+@pytest.mark.parametrize(
+    ("arrange", "message", "archived"),
+    [
+        (_missing, "session does not exist: s1", []),
+        (
+            _owner_managed,
+            "This Session is managed by an Extension. Use that Extension to resume it.",
+            [("builder", "s1", None)],
+        ),
+    ],
+    ids=["missing", "owner-managed"],
+)
+async def test_a_refused_delete_is_a_domain_error_without_a_refresh(
+    arrange: Callable[[FakeSessions], None],
+    message: str,
+    archived: list[tuple[str, str, str | None]],
+) -> None:
+    state, _resolver, sessions = stub_session_state()
+    arrange(sessions)
 
-    await _delete_session(state, {"agent_id": "builder", "session_id": "s1"})
+    error = await rpc_error(state, "session.delete", agent_id="builder", session_id="s1")
 
-    # Other windows learn which Session was archived and where to land.
-    assert _sessions_resource_events(state) == [
-        {
-            "kind": "sessions",
-            "scope": {
-                "agent_id": "builder",
-                "project_id": None,
-                "deleted_session_id": "s1",
-                "next_session_id": "landing",
-            },
-        }
-    ]
-
-
-@pytest.mark.asyncio
-async def test_delete_project_session_event_names_its_project_address() -> None:
-    state, _resolver, sessions = _make_state()
-    sessions.metadata_rows = [{"id": "recent", "last_active_at": "2026-06-01T00:00:00+00:00"}]
-
-    await _delete_session(state, {"agent_id": "builder@vbot", "session_id": "s1"})
-
-    assert _sessions_resource_events(state) == [
-        {
-            "kind": "sessions",
-            "scope": {
-                "agent_id": "builder",
-                "project_id": "vbot",
-                "deleted_session_id": "s1",
-                "next_session_id": "recent",
-            },
-        }
-    ]
-
-
-@pytest.mark.asyncio
-async def test_delete_current_identity_session_refreshes_agents() -> None:
-    state, _resolver, _sessions = _make_state()
-    # The deleted session is the identity agent's current one.
-    state._agent_current["current_session_id"] = "s1"
-
-    await _delete_session(state, {"agent_id": "builder", "session_id": "s1"})
-
-    # Re-aiming the current pointer is an agent-config change, so both the session
-    # list and agent state refresh; a non-current delete emits only sessions.
-    events = _sessions_resource_events(state)
-    assert [event["kind"] for event in events] == ["sessions", "agents"]
-
-
-@pytest.mark.asyncio
-async def test_delete_rejects_unsupported_field() -> None:
-    state, _resolver, sessions = _make_state()
-
-    with pytest.raises(RpcError) as exc_info:
-        await _delete_session(state, {"agent_id": "builder", "session_id": "s1", "bogus": 1})
-
-    assert exc_info.value.code == "invalid_request"
-    assert sessions.archived == []
+    assert error == {"code": "domain_error", "message": message}
+    assert sessions.archived == archived
+    assert resource_changes(state) == []

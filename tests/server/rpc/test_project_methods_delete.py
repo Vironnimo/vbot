@@ -1,41 +1,37 @@
-"""Tests for project methods delete."""
+"""project.rm: archive, rooted identity Agents, cache invalidation and refusals."""
 
 from __future__ import annotations
 
 import asyncio
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
-from core.projects.resolver import (
-    AgentResolutionError,
-)
+from core.projects.resolver import AgentResolutionError
 from core.projects.scanners.opencode import OPENCODE_AGENTS_SUBPATH
 from core.runs import Run, RunAdmission
 from core.sessions import SessionAddress
-from server.rpc.errors import RPC_ERROR_PROJECT_BUSY, RpcError
-from server.rpc.methods import build_method_handlers
-from server.rpc.project_methods import (
-    _add_project,
-    _remove_project,
-)
-from tests.server.rpc.project_methods_test_support import (
-    _make_repo,
-    _make_state,
-)
+from server.rpc.errors import RPC_ERROR_PROJECT_BUSY
+from tests.server.rpc.project_methods_test_support import _make_repo, _make_state
+from tests.server.rpc_test_support import JsonObject, call, rpc_error, rpc_result
 
 
-# ---------------------------------------------------------------------------
-# rm: archive + remove lock.
-# ---------------------------------------------------------------------------
+async def _vbot_state(
+    tmp_path: Path, *agents: str, **jobs: list[Any]
+) -> tuple[SimpleNamespace, Path]:
+    state = _make_state(tmp_path, **jobs)
+    repo = _make_repo(tmp_path, "vbot", *agents)
+    await rpc_result(state, "project.add", cwd=str(repo), display_name="vBot")
+    return state, repo
+
+
 @pytest.mark.asyncio
 async def test_rm_archives_project(tmp_path: Path) -> None:
-    state = _make_state(tmp_path)
-    repo = _make_repo(tmp_path, "vbot", "builder.md")
-    _add_project(state, {"cwd": str(repo), "display_name": "vBot"})
+    state, repo = await _vbot_state(tmp_path, "builder.md")
 
-    result = await _remove_project(state, {"project_id": "vbot"})
+    result = await rpc_result(state, "project.rm", project_id="vbot")
 
     assert result["archived"] is True
     assert not state.runtime.projects.exists("vbot")
@@ -48,20 +44,13 @@ async def test_rm_archives_project(tmp_path: Path) -> None:
 async def test_rm_unroots_identity_agents_and_resets_default_workspaces(
     tmp_path: Path,
 ) -> None:
-    state = _make_state(tmp_path)
-    repo = _make_repo(tmp_path, "vbot", "builder.md")
-    _add_project(state, {"cwd": str(repo), "display_name": "vBot"})
-    custom_workspace = tmp_path / "identity-home"
-    agent = state.runtime.agents.create("coder", "Coder", workspace=custom_workspace)
+    state, repo = await _vbot_state(tmp_path, "builder.md")
+    agent = state.runtime.agents.create("coder", "Coder", workspace=tmp_path / "identity-home")
     Path(agent.workspace, "USER.md").write_text("user", encoding="utf-8")
     state.runtime.agents.update("coder", root_project_id="vbot")
 
-    result = await _remove_project(
-        state,
-        {
-            "project_id": "vbot",
-            "copy_rooted_agent_identity_files": True,
-        },
+    result = await rpc_result(
+        state, "project.rm", project_id="vbot", copy_rooted_agent_identity_files=True
     )
 
     reset_agent = state.runtime.agents.get("coder")
@@ -78,11 +67,8 @@ async def test_rm_rolls_back_agent_reset_when_project_archive_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    state = _make_state(tmp_path)
-    repo = _make_repo(tmp_path, "vbot")
-    _add_project(state, {"cwd": str(repo), "display_name": "vBot"})
-    custom_workspace = tmp_path / "identity-home"
-    agent = state.runtime.agents.create("coder", "Coder", workspace=custom_workspace)
+    state, _repo = await _vbot_state(tmp_path)
+    agent = state.runtime.agents.create("coder", "Coder", workspace=tmp_path / "identity-home")
     Path(agent.workspace, "USER.md").write_text("source", encoding="utf-8")
     default_workspace = Path(state.runtime.agents.default_workspace("coder"))
     default_workspace.mkdir(parents=True)
@@ -95,13 +81,7 @@ async def test_rm_rolls_back_agent_reset_when_project_archive_fails(
     monkeypatch.setattr(state.runtime.projects, "delete", fail_archive)
 
     with pytest.raises(OSError):
-        await _remove_project(
-            state,
-            {
-                "project_id": "vbot",
-                "copy_rooted_agent_identity_files": True,
-            },
-        )
+        await call(state, "project.rm", project_id="vbot", copy_rooted_agent_identity_files=True)
 
     restored = state.runtime.agents.get("coder")
     assert state.runtime.projects.exists("vbot")
@@ -112,41 +92,14 @@ async def test_rm_rolls_back_agent_reset_when_project_archive_fails(
 
 
 @pytest.mark.asyncio
-async def test_rm_blocks_identity_run_using_project_as_working_context(
-    tmp_path: Path,
-) -> None:
-    state = _make_state(tmp_path)
-    repo = _make_repo(tmp_path, "vbot")
-    _add_project(state, {"cwd": str(repo), "display_name": "vBot"})
-    release = asyncio.Event()
-
-    async def execute(_run: Run) -> None:
-        await release.wait()
-
-    run = await state.chat_runs.start(
-        SessionAddress(project_id=None, agent_id="coder", session_id="s1"),
-        execute,
-        admission=RunAdmission(working_project_id="vbot"),
-    )
-    try:
-        with pytest.raises(RpcError) as exc:
-            await _remove_project(state, {"project_id": "vbot"})
-        assert exc.value.code == RPC_ERROR_PROJECT_BUSY
-    finally:
-        release.set()
-        await run.wait()
-
-
-@pytest.mark.asyncio
 async def test_rm_invalidates_caches_so_readd_resolves_against_new_repo(tmp_path: Path) -> None:
     # Removing a project must drop both per-project caches keyed on its repo, so a
     # later project that reuses the same slug against a *different* repo resolves
-    # against the new repo — not the removed project's stale Team/skills.
+    # against the new repo, not the removed project's stale Team/skills.
     state = _make_state(tmp_path)
     repo_a = _make_repo(tmp_path, "repo-a", "builder.md")
     repo_b = _make_repo(tmp_path, "repo-b", "tester.md")
-    _add_project(state, {"cwd": str(repo_a), "display_name": "vBot"})
-
+    await rpc_result(state, "project.add", cwd=str(repo_a), display_name="vBot")
     resolver = state.runtime.agent_resolver
     # A run populates the Team cache for "vbot" against repo A.
     resolver.resolve_agent("vbot", "builder")
@@ -154,26 +107,37 @@ async def test_rm_invalidates_caches_so_readd_resolves_against_new_repo(tmp_path
     skill_invalidations: list[str] = []
     state.runtime.invalidate_project_skills = skill_invalidations.append
 
-    await _remove_project(state, {"project_id": "vbot"})
+    await rpc_result(state, "project.rm", project_id="vbot")
+    await rpc_result(state, "project.add", cwd=str(repo_b), display_name="vBot")
 
     assert skill_invalidations == ["vbot"]
-
-    # Re-add the same slug pointing at repo B: the dropped Team cache must let repo
-    # B's agent resolve, and repo A's agent must be gone with it.
-    _add_project(state, {"cwd": str(repo_b), "display_name": "vBot"})
     assert resolver.resolve_agent("vbot", "tester").id == "tester"
     with pytest.raises(AgentResolutionError):
         resolver.resolve_agent("vbot", "builder")
 
 
 @pytest.mark.asyncio
-async def test_rm_blocked_by_active_run_of_project_agent(tmp_path: Path) -> None:
-    state = _make_state(tmp_path)
-    repo = _make_repo(tmp_path, "vbot", "builder.md")
-    _add_project(state, {"cwd": str(repo), "display_name": "vBot"})
+@pytest.mark.parametrize(
+    ("address", "admission"),
+    [
+        pytest.param(
+            SessionAddress(project_id="vbot", agent_id="builder", session_id="s1"),
+            None,
+            id="project-agent-run",
+        ),
+        pytest.param(
+            SessionAddress(project_id=None, agent_id="coder", session_id="s1"),
+            RunAdmission(working_project_id="vbot"),
+            id="identity-run-working-in-project",
+        ),
+    ],
+)
+async def test_rm_is_refused_while_a_run_uses_the_project(
+    tmp_path: Path, address: SessionAddress, admission: RunAdmission | None
+) -> None:
+    state, _repo = await _vbot_state(tmp_path, "builder.md")
     # Create the canonical Session so the busy check has an owner to match.
     state.runtime.sessions.create("builder", session_id="s1", project_id="vbot")
-
     release = asyncio.Event()
 
     async def hold_run(_run: Run) -> str:
@@ -181,129 +145,74 @@ async def test_rm_blocked_by_active_run_of_project_agent(tmp_path: Path) -> None
         return "done"
 
     run = await state.chat_runs.start(
-        SessionAddress(project_id="vbot", agent_id="builder", session_id="s1"),
-        hold_run,
+        address, hold_run, **({"admission": admission} if admission else {})
     )
+    try:
+        error = await rpc_error(state, "project.rm", project_id="vbot")
+    finally:
+        release.set()
+        assert await run.wait() == "done"
 
-    with pytest.raises(RpcError) as exc_info:
-        await _remove_project(state, {"project_id": "vbot"})
-
-    assert exc_info.value.code == "project_busy"
-    assert state.runtime.projects.exists("vbot")
-
-    release.set()
-    assert await run.wait() == "done"
-
-
-@pytest.mark.asyncio
-async def test_rm_blocked_by_cron_pointing_at_project_agent(tmp_path: Path) -> None:
-    # A cron job qualified with this project's id blocks removal.
-    cron_jobs = [SimpleNamespace(id="job-1", agent_id="builder", project_id="vbot")]
-    state = _make_state(tmp_path, cron_jobs=cron_jobs)
-    repo = _make_repo(tmp_path, "vbot", "builder.md")
-    _add_project(state, {"cwd": str(repo), "display_name": "vBot"})
-
-    with pytest.raises(RpcError) as exc_info:
-        await _remove_project(state, {"project_id": "vbot"})
-
-    assert exc_info.value.code == "project_in_use"
-    assert "cron:job-1" in exc_info.value.message
+    assert error["code"] == RPC_ERROR_PROJECT_BUSY
     assert state.runtime.projects.exists("vbot")
 
 
 @pytest.mark.asyncio
-async def test_rm_blocked_by_bootstrap_pointing_at_project_agent(tmp_path: Path) -> None:
-    jobs = [
-        SimpleNamespace(
-            id="boot-1",
-            agent_id="builder",
-            project_id="vbot",
-            status="active",
-        )
-    ]
-    state = _make_state(tmp_path, bootstrap_jobs=jobs)
-    repo = _make_repo(tmp_path, "vbot", "builder.md")
-    _add_project(state, {"cwd": str(repo), "display_name": "vBot"})
+@pytest.mark.parametrize(
+    ("jobs", "project_id", "code", "named"),
+    [
+        pytest.param(
+            {"cron_jobs": [SimpleNamespace(id="job-1", agent_id="builder", project_id="vbot")]},
+            "vbot",
+            "project_in_use",
+            "cron:job-1",
+            id="cron",
+        ),
+        pytest.param(
+            {
+                "bootstrap_jobs": [
+                    SimpleNamespace(
+                        id="boot-1", agent_id="builder", project_id="vbot", status="active"
+                    )
+                ]
+            },
+            "vbot",
+            "project_in_use",
+            "bootstrap:boot-1",
+            id="bootstrap",
+        ),
+        pytest.param({}, "ghost", "project_not_found", "", id="unknown-project"),
+    ],
+)
+async def test_rm_refusals_keep_the_project(
+    tmp_path: Path, jobs: dict[str, list[Any]], project_id: str, code: str, named: str
+) -> None:
+    state, _repo = await _vbot_state(tmp_path, "builder.md", **jobs)
 
-    with pytest.raises(RpcError) as exc_info:
-        await _remove_project(state, {"project_id": "vbot"})
+    error = await rpc_error(state, "project.rm", project_id=project_id)
 
-    assert exc_info.value.code == "project_in_use"
-    assert "bootstrap:boot-1" in exc_info.value.message
+    assert error["code"] == code
+    assert named in error["message"]
+    assert state.runtime.projects.exists("vbot")
 
 
 @pytest.mark.asyncio
-async def test_rm_ignores_bare_cron_with_same_named_identity_agent(tmp_path: Path) -> None:
-    # A bare job (project_id=None) targets the identity agent, not this project's
-    # Team agent — even when the ids collide by name — so it must not block.
-    cron_jobs = [SimpleNamespace(id="job-1", agent_id="builder", project_id=None)]
-    state = _make_state(tmp_path, cron_jobs=cron_jobs)
-    repo = _make_repo(tmp_path, "vbot", "builder.md")
-    _add_project(state, {"cwd": str(repo), "display_name": "vBot"})
+@pytest.mark.parametrize(
+    "job",
+    [
+        # A bare job targets the identity Agent, not this Project's same-named
+        # Team Agent.
+        pytest.param({"project_id": None}, id="bare-identity-job"),
+        pytest.param({"project_id": "vbot", "status": "missed"}, id="terminal-history"),
+        pytest.param({"project_id": "other"}, id="other-project"),
+    ],
+)
+async def test_rm_ignores_cron_jobs_that_do_not_target_the_project(
+    tmp_path: Path, job: JsonObject
+) -> None:
+    cron_jobs = [SimpleNamespace(id="job-1", agent_id="builder", **job)]
+    state, _repo = await _vbot_state(tmp_path, "builder.md", cron_jobs=cron_jobs)
 
-    result = await _remove_project(state, {"project_id": "vbot"})
+    result = await rpc_result(state, "project.rm", project_id="vbot")
 
     assert result["archived"] is True
-
-
-@pytest.mark.asyncio
-async def test_rm_ignores_terminal_cron_history_for_project_agent(tmp_path: Path) -> None:
-    cron_jobs = [
-        SimpleNamespace(
-            id="job-1",
-            agent_id="builder",
-            project_id="vbot",
-            status="missed",
-        )
-    ]
-    state = _make_state(tmp_path, cron_jobs=cron_jobs)
-    repo = _make_repo(tmp_path, "vbot", "builder.md")
-    _add_project(state, {"cwd": str(repo), "display_name": "vBot"})
-
-    result = await _remove_project(state, {"project_id": "vbot"})
-
-    assert result["archived"] is True
-
-
-@pytest.mark.asyncio
-async def test_rm_ignores_cron_pointing_at_other_project_agent(tmp_path: Path) -> None:
-    # A cron job qualified with a different project's id does not block.
-    cron_jobs = [SimpleNamespace(id="job-1", agent_id="builder", project_id="other")]
-    state = _make_state(tmp_path, cron_jobs=cron_jobs)
-    repo = _make_repo(tmp_path, "vbot", "builder.md")
-    _add_project(state, {"cwd": str(repo), "display_name": "vBot"})
-
-    result = await _remove_project(state, {"project_id": "vbot"})
-
-    assert result["archived"] is True
-
-
-@pytest.mark.asyncio
-async def test_rm_unknown_project_errors(tmp_path: Path) -> None:
-    state = _make_state(tmp_path)
-
-    with pytest.raises(RpcError) as exc_info:
-        await _remove_project(state, {"project_id": "ghost"})
-
-    assert exc_info.value.code == "project_not_found"
-
-
-# ---------------------------------------------------------------------------
-# Registration.
-# ---------------------------------------------------------------------------
-def test_project_methods_are_registered() -> None:
-    handlers = build_method_handlers()
-
-    for method in (
-        "project.add",
-        "project.list",
-        "project.show",
-        "project.set",
-        "project.set_override",
-        "project.clear_override",
-        "project.rm",
-        "project.detect",
-    ):
-        assert method in handlers
-    # The retired override handler is gone from the method table.
-    assert "project.clear_model_override" not in handlers
