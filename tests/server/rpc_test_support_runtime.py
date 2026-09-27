@@ -306,7 +306,7 @@ class StubRuntime:
         self.tools = ToolRegistry()
         self.system_prompts = StubPrompts(self.tools)
         self.skills: Any = StubSkills()
-        self._models = StubModels()
+        self.models: Any = StubModels()
         self.providers = StubProviders()
         self.adapter = adapter
         self.chat_runs: ChatRunManager | None = None
@@ -323,7 +323,7 @@ class StubRuntime:
             self.chat_run_manager,
             agent_resolver=cast(Any, self.agent_resolver),
             sessions=self.chat_sessions,
-            models=cast(Any, self._models),
+            models=cast(Any, self.models),
             projects=cast(Any, self.projects),
             agents=cast(Any, self.agents),
             storage=cast(Any, self.storage),
@@ -356,10 +356,6 @@ class StubRuntime:
 
     def model_database_refresh(self) -> asyncio.Lock:
         return self._model_database_refresh_lock
-
-    @property
-    def models(self) -> Any:
-        return self._models
 
     def has_provider_credentials(self, provider_id: str) -> bool:
         provider = cast(Any, self.providers.get(provider_id))
