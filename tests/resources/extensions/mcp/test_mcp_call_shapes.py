@@ -1,4 +1,4 @@
-"""Mcp: connection Tool call shapes, target resolution, and request failures."""
+"""MCP: connection Tool call shapes, target resolution, and request failures."""
 
 from __future__ import annotations
 
@@ -8,9 +8,14 @@ import pytest
 
 from core.tools.contracts import ToolContractError
 from resources.extensions.mcp.client import InvocationNotSentError
-from tests.resources.extensions.mcp_helpers import context, model_text, targets
-from tests.resources.extensions.mcp_helpers import context_service as context_service
-from tests.resources.extensions.mcp_helpers import host as host
+from tests.resources.extensions.mcp.mcp_test_support import (
+    context,
+    dispatch,
+    model_text,
+    operation_target,
+    targets,
+    tool_target,
+)
 
 TARGET = "<target>"
 
@@ -21,14 +26,6 @@ def _with_target(value, target):
     if isinstance(value, dict):
         return {key: _with_target(item, target) for key, item in value.items()}
     return value
-
-
-def _tool_target(service, runner, host) -> str:
-    return str(service._entries(runner, service._allowed(context(host)))[-1]["target"])
-
-
-async def _dispatch(registry, host, arguments):
-    return await registry.dispatch(context(host), arguments, allowed_tools=["mcp_example"])
 
 
 @pytest.mark.asyncio
@@ -49,9 +46,9 @@ async def _dispatch(registry, host, arguments):
 )
 async def test_call_dialects_reach_the_exact_remote_tool(context_service, host, arguments):
     service, registry, runner, calls = context_service
-    arguments = _with_target(arguments, _tool_target(service, runner, host))
+    arguments = _with_target(arguments, await tool_target(registry, host))
 
-    result = await _dispatch(registry, host, arguments)
+    result = await dispatch(registry, host, arguments)
 
     assert result["ok"], result
     assert result["data"]["content"] == "sentinel"
@@ -73,10 +70,10 @@ async def test_call_dialects_reach_the_exact_remote_tool(context_service, host, 
 async def test_search_dialects_list_the_tool(context_service, host, arguments):
     service, registry, runner, calls = context_service
 
-    result = await _dispatch(registry, host, arguments)
+    result = await dispatch(registry, host, arguments)
 
     assert result["ok"], result
-    assert targets(result)[0] == _tool_target(service, runner, host)
+    assert targets(result)[0] == await tool_target(registry, host)
     assert calls == []
 
 
@@ -95,7 +92,7 @@ async def test_read_dialects_select_the_saved_text(context_service, host, extra)
         {"content": [{"type": "text", "text": "sentinel " * 1000}]}, context(host), "example"
     )
 
-    result = await _dispatch(registry, host, {"result_id": receipt["result_id"], **extra})
+    result = await dispatch(registry, host, {"result_id": receipt["result_id"], **extra})
 
     assert result["ok"], result
     assert result["data"]["pointer"] == "/content/0/text"
@@ -111,7 +108,7 @@ async def test_read_field_list_may_be_comma_separated(context_service, host):
         "example",
     )
 
-    result = await _dispatch(
+    result = await dispatch(
         registry,
         host,
         {
@@ -160,16 +157,22 @@ async def test_read_field_list_may_be_comma_separated(context_service, host):
         ),
         ({"action": "read"}, "read was not run: result_id is missing"),
         ({"action": "describe"}, "target is missing. Use a target from search"),
+        ({"action": "call"}, "call was not run: target is missing"),
+        (
+            {"action": "search", "unknown": True},
+            "unknown is not a field of mcp_example. search takes query, kind, offset, limit",
+        ),
+        ({"action": "search", "limit": -1}, '"limit" must be at least 1; received -1'),
     ],
 )
 async def test_unclear_calls_refuse_with_the_corrected_call(
     context_service, host, arguments, expected
 ):
     service, registry, runner, calls = context_service
-    target = _tool_target(service, runner, host)
+    target = await tool_target(registry, host)
 
     with pytest.raises(ToolContractError) as refusal:
-        await _dispatch(registry, host, _with_target(arguments, target))
+        await dispatch(registry, host, _with_target(arguments, target))
 
     assert expected.replace(TARGET, target) in str(refusal.value)
     assert calls == []
@@ -178,11 +181,11 @@ async def test_unclear_calls_refuse_with_the_corrected_call(
 @pytest.mark.asyncio
 async def test_a_long_corrected_call_is_described_instead_of_repeated(context_service, host):
     service, registry, runner, calls = context_service
-    target = _tool_target(service, runner, host)
+    target = await tool_target(registry, host)
     code = "x = 1\n" * 1000
 
     with pytest.raises(ToolContractError) as refusal:
-        await _dispatch(
+        await dispatch(
             registry,
             host,
             {"action": "call", "target": target, "arguments": {"value": code}, "limit": 3},
@@ -196,10 +199,10 @@ async def test_a_long_corrected_call_is_described_instead_of_repeated(context_se
 @pytest.mark.asyncio
 async def test_unparsable_argument_text_is_refused_without_echo(context_service, host):
     service, registry, runner, calls = context_service
-    target = _tool_target(service, runner, host)
+    target = await tool_target(registry, host)
 
     with pytest.raises(ToolContractError) as refusal:
-        await _dispatch(
+        await dispatch(
             registry,
             host,
             {"action": "call", "target": target, "arguments": '{"value": "test-owned-secret"'},
@@ -213,15 +216,15 @@ async def test_unparsable_argument_text_is_refused_without_echo(context_service,
 @pytest.mark.asyncio
 async def test_changed_definition_is_not_substituted_for_a_call(context_service, host):
     service, registry, runner, calls = context_service
-    old = _tool_target(service, runner, host)
+    old = await tool_target(registry, host)
     runner.catalog["tools"][0]["description"] = "test-owned-new-description"
     service._publish(runner, runner.catalog)
-    current = _tool_target(service, runner, host)
+    current = await tool_target(registry, host)
 
-    call = await _dispatch(
+    call = await dispatch(
         registry, host, {"action": "call", "target": old, "arguments": {"value": "x"}}
     )
-    describe = await _dispatch(registry, host, {"action": "describe", "target": old})
+    describe = await dispatch(registry, host, {"action": "describe", "target": old})
 
     assert call["error"]["code"] == "mcp_target_changed"
     assert current in call["error"]["message"]
@@ -242,10 +245,10 @@ async def test_a_name_of_several_items_is_never_chosen(context_service, host):
     runner.catalog["prompts"] = [{"name": "inspect", "description": "test-owned-prompt"}]
     service._publish(runner, runner.catalog)
 
-    ambiguous = await _dispatch(
+    ambiguous = await dispatch(
         registry, host, {"action": "call", "target": "inspect", "arguments": {"value": "x"}}
     )
-    kinded = await _dispatch(
+    kinded = await dispatch(
         registry, host, {"action": "call", "target": "tool:inspect", "arguments": {"value": "x"}}
     )
 
@@ -271,9 +274,9 @@ async def test_unknown_target_names_candidates_without_calling(
     context_service, host, target, expected
 ):
     service, registry, runner, calls = context_service
-    current = _tool_target(service, runner, host)
+    current = await tool_target(registry, host)
 
-    result = await _dispatch(
+    result = await dispatch(
         registry, host, {"action": "call", "target": target, "arguments": {"value": "x"}}
     )
 
@@ -287,7 +290,7 @@ async def test_resource_can_be_named_by_its_uri(context_service, host):
     service, registry, runner, calls = context_service
     runner.catalog["resources"] = [{"uri": "test://scene", "name": "scene"}]
 
-    result = await _dispatch(registry, host, {"action": "call", "target": "resource:test://scene"})
+    result = await dispatch(registry, host, {"action": "call", "target": "resource:test://scene"})
 
     assert result["ok"], result
     assert calls == [("resources/read", {"uri": "test://scene"})]
@@ -298,9 +301,9 @@ async def test_invalid_target_arguments_name_the_fields_and_the_describe_call(
     context_service, host
 ):
     service, registry, runner, calls = context_service
-    target = _tool_target(service, runner, host)
+    target = await tool_target(registry, host)
 
-    result = await _dispatch(
+    result = await dispatch(
         registry,
         host,
         {"action": "call", "target": target, "arguments": {"value": "x", "vlaue": "y"}},
@@ -320,14 +323,14 @@ async def test_a_call_that_was_never_sent_says_so_and_invites_one_retry(
     context_service, host, monkeypatch
 ):
     service, registry, runner, calls = context_service
-    target = _tool_target(service, runner, host)
+    target = await tool_target(registry, host)
 
     async def unavailable(*args):
         calls.append(args)
         raise InvocationNotSentError("MCP connection did not become ready")
 
     monkeypatch.setattr(runner, "invoke", unavailable)
-    result = await _dispatch(
+    result = await dispatch(
         registry, host, {"action": "call", "target": target, "arguments": {"value": "x"}}
     )
 
@@ -345,13 +348,13 @@ async def test_a_call_that_was_never_sent_says_so_and_invites_one_retry(
 @pytest.mark.asyncio
 async def test_a_refused_queued_call_reports_the_access_rule(context_service, host, monkeypatch):
     service, registry, runner, calls = context_service
-    target = _tool_target(service, runner, host)
+    target = await tool_target(registry, host)
 
     async def refused(*args):
         raise InvocationNotSentError("denied", denied=True)
 
     monkeypatch.setattr(runner, "invoke", refused)
-    result = await _dispatch(
+    result = await dispatch(
         registry, host, {"action": "call", "target": target, "arguments": {"value": "x"}}
     )
 
@@ -370,27 +373,33 @@ async def test_a_refused_queued_call_reports_the_access_rule(context_service, ho
             None,
             "may already have changed the application",
         ),
+        ("tools/call", {"value": "sentinel"}, None, "may already have changed the application"),
     ],
 )
-async def test_unconfirmed_calls_say_whether_repeating_is_safe(
+async def test_unconfirmed_calls_are_not_repeated_and_say_whether_repeating_is_safe(
     context_service, host, monkeypatch, operation, arguments, retryable, expected
 ):
     service, registry, runner, calls = context_service
+    target = (
+        await tool_target(registry, host)
+        if operation == "tools/call"
+        else await operation_target(registry, host, operation)
+    )
 
     async def timeout(*args):
+        calls.append(args)
         raise ValueError("test-owned-timeout")
 
     monkeypatch.setattr(runner, "invoke", timeout)
-    result = await _dispatch(
-        registry,
-        host,
-        {"action": "call", "target": service._operation_target(operation), "arguments": arguments},
+    result = await dispatch(
+        registry, host, {"action": "call", "target": target, "arguments": arguments}
     )
 
     assert result["error"]["code"] == "mcp_call_unconfirmed"
     assert result["error"]["message"].startswith("test-owned-timeout. ")
     assert expected in result["error"]["message"]
     assert result["error"].get("retryable") is retryable
+    assert len(calls) == 1
 
 
 @pytest.mark.asyncio
@@ -404,7 +413,7 @@ async def test_unreachable_connection_on_discovery_invites_one_retry(
         raise InvocationNotSentError("test-owned-connection-error")
 
     monkeypatch.setattr(runner, "invoke", unreachable)
-    result = await _dispatch(registry, host, {"action": "search"})
+    result = await dispatch(registry, host, {"action": "search"})
 
     assert result["error"]["code"] == "mcp_request_failed"
     assert result["error"]["retryable"] is True

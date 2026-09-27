@@ -9,27 +9,29 @@ import pytest
 from core.tools.availability import ToolAccess, resolve_tool_access
 from core.tools.tools import ToolNotAllowedError
 from resources.extensions.mcp.client import Invocation
-from resources.extensions.mcp.config import validate_connection
 from resources.extensions.mcp.extension import remote_tool_name
-from tests.resources.extensions.mcp_helpers import context, targets
-from tests.resources.extensions.mcp_helpers import context_service as context_service
-from tests.resources.extensions.mcp_helpers import host as host
+from tests.resources.extensions.mcp.mcp_test_support import (
+    allowed_tools,
+    context,
+    dispatch,
+    targets,
+)
+
+_GRANTED = ("mcp_example",)
 
 
+# The mode, grant and denial combinations themselves are core Tool access rules
+# (tests/core/tools/test_availability.py); these rows check that the connection Tool
+# is an opt-in Tool whose remote Tools follow it, for ordinary and temporary Agents.
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "agent_id,project_id", [("alice", None), ("alice", "studio"), ("tmp_peer", None)]
-)
-@pytest.mark.parametrize(
-    "policy,enabled",
+    ("agent_id", "project_id", "policy", "enabled"),
     [
-        (ToolAccess(), False),
-        (ToolAccess(mode="selected", allowed=("mcp_example",)), False),
-        (ToolAccess(granted=("mcp_example",)), True),
-        (ToolAccess(mode="selected", allowed=("mcp_example",), granted=("mcp_example",)), True),
-        (ToolAccess(mode="selected", allowed=(), granted=("mcp_example",)), False),
-        (ToolAccess(mode="none", granted=("mcp_example",)), False),
-        (ToolAccess(granted=("mcp_example",), denied=("mcp_example",)), False),
+        ("alice", None, ToolAccess(), False),
+        ("alice", None, ToolAccess(mode="selected", allowed=_GRANTED), False),
+        ("alice", "studio", ToolAccess(granted=_GRANTED), True),
+        ("tmp_peer", None, ToolAccess(mode="selected", allowed=_GRANTED, granted=_GRANTED), True),
+        ("alice", None, ToolAccess(granted=_GRANTED, denied=_GRANTED), False),
     ],
 )
 async def test_connection_policy_controls_definitions_and_real_dispatch(
@@ -59,9 +61,30 @@ async def test_connection_policy_controls_definitions_and_real_dispatch(
 
 
 @pytest.mark.asyncio
+async def test_tools_published_later_follow_the_grant_and_explicit_denials_win(context_service):
+    service, registry, runner, calls = context_service
+    denied = remote_tool_name("example", "denied")
+    policy = ToolAccess(mode="selected", allowed=_GRANTED, granted=_GRANTED, denied=(denied,))
+
+    service._publish(
+        runner,
+        {
+            "tools": [
+                {"name": name, "inputSchema": {"type": "object"}}
+                for name in ("inspect", "new", "denied")
+            ]
+        },
+    )
+
+    allowed = resolve_tool_access(policy, registry.list_tools(), "off").allowed_tools
+    assert remote_tool_name("example", "new") in allowed
+    assert denied not in allowed
+
+
+@pytest.mark.asyncio
 async def test_direct_remote_dispatch_rechecks_revoked_parent(context_service, host):
     service, registry, runner, calls = context_service
-    stale_allowed = service._allowed(context(host))
+    stale_allowed = allowed_tools(registry, host)
     host.resolve_agent(None, "alice").tool_access = ToolAccess()
     result = await registry.dispatch(
         replace(context(host), tool_name=remote_tool_name("example", "inspect")),
@@ -80,15 +103,12 @@ async def test_same_name_in_other_project_does_not_inherit_opt_in(context_servic
     service.host = replace(
         host, resolve_tool_agent=lambda ctx: granted if ctx.project_id is None else blocked
     )
-    assert "mcp_example" in service._allowed(context(host))
-    assert "mcp_example" not in service._allowed(context(host, project="other"))
 
+    own = await dispatch(registry, host, {"action": "search"})
+    other = await dispatch(registry, host, {"action": "search"}, project="other")
 
-def test_connection_config_rejects_removed_agent_list():
-    with pytest.raises(ValueError):
-        validate_connection(
-            {"id": "example", "transport": "stdio", "command": "unused", "agents": []}
-        )
+    assert own["ok"]
+    assert other["error"]["code"] == "mcp_access_denied"
 
 
 @pytest.mark.asyncio

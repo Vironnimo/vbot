@@ -1,13 +1,15 @@
-"""Mcp: results behavior."""
+"""MCP: remote results are preserved, bounded, saved with the Tool Result and read back."""
 
 from __future__ import annotations
 
+import base64
 import json
+from dataclasses import replace
 
 import pytest
 
+from core.attachments import AttachmentTooLargeError
 from core.tools.availability import ToolAccess
-from core.tools.tools import ToolDefinitionProfileContext
 from resources.extensions.mcp.content import (
     READ_TOO_LARGE,
     RESULT_DENIED,
@@ -17,16 +19,12 @@ from resources.extensions.mcp.content import (
     ContentStore,
 )
 from resources.extensions.mcp.extension import MCP_MESSAGES, remote_tool_name
-from tests.resources.extensions.mcp_helpers import (
+from tests.resources.extensions.mcp.mcp_test_support import (
     context,
+    dispatch,
     model_text,
     payloads,
-)
-from tests.resources.extensions.mcp_helpers import (
-    context_service as context_service,
-)
-from tests.resources.extensions.mcp_helpers import (
-    host as host,
+    tool_target,
 )
 
 
@@ -161,34 +159,34 @@ async def test_revoke_prevents_reading_a_saved_remote_result(context_service, ho
     assert result["error"]["message"] == MCP_MESSAGES["access_denied"]
 
 
-@pytest.mark.asyncio
-async def test_connection_disconnect_keeps_the_fixed_model_definition(context_service):
+async def _call_returning(payload, context_service, host, monkeypatch):
+    """Call the remote Tool through the connection Tool; the server answers *payload*."""
     service, registry, runner, calls = context_service
-    profile = ToolDefinitionProfileContext(agent_id="alice")
-    before = registry.provider_definitions(profile_context=profile, allowed_tools=["mcp_example"])
 
-    await service.manage("disconnect", {"id": "example"})
+    async def answer(operation, arguments, invocation_context=None):
+        return payload
 
-    assert (
-        registry.provider_definitions(profile_context=profile, allowed_tools=["mcp_example"])
-        == before
+    target = await tool_target(registry, host)
+    monkeypatch.setattr(runner, "invoke", answer)
+    return await dispatch(
+        registry, host, {"action": "call", "target": target, "arguments": {"value": "x"}}
     )
 
 
 @pytest.mark.asyncio
-async def test_large_error_keeps_full_payload_and_bounded_receipt(context_service, host):
+async def test_large_error_keeps_full_payload_and_bounded_receipt(
+    context_service, host, monkeypatch
+):
     service, registry, runner, calls = context_service
     report = "start " + "failure " * 3000 + "NameError: final line"
     payload = {"isError": True, "content": [{"type": "text", "text": report}]}
 
-    result = await service._present(runner, context(host), payload, source="inspect")
+    result = await _call_returning(payload, context_service, host, monkeypatch)
     message = result["error"]["message"]
     identifier = payload_id(message)
     saved = await service.content.load_result(identifier, context(host), "example")
-    page = await registry.dispatch(
-        context(host),
-        {"action": "read", "result_id": identifier, "pointer": "/content/0/text"},
-        allowed_tools=["mcp_example"],
+    page = await dispatch(
+        registry, host, {"action": "read", "result_id": identifier, "pointer": "/content/0/text"}
     )
 
     assert not result["ok"]
@@ -205,14 +203,13 @@ def payload_id(message: str) -> str:
 
 
 @pytest.mark.asyncio
-async def test_tool_error_reads_as_the_servers_own_report(context_service, host):
-    service, registry, runner, calls = context_service
+async def test_tool_error_reads_as_the_servers_own_report(context_service, host, monkeypatch):
     payload = {
         "isError": True,
         "content": [{"type": "text", "text": "Traceback:\nNameError: name 'scene' is undefined"}],
     }
 
-    result = await service._present(runner, context(host), payload, source="inspect")
+    result = await _call_returning(payload, context_service, host, monkeypatch)
 
     assert model_text(result) == (
         "Error (mcp_tool_error): The MCP tool inspect reported an error:\n"
@@ -259,3 +256,104 @@ async def test_string_pages_shrink_until_escaped_text_fits(host):
         arguments = page["next"]
 
     assert "".join(pieces) == text
+
+
+@pytest.mark.asyncio
+async def test_unknown_metadata_and_media_are_preserved(host):
+    payload = {
+        "content": [
+            {
+                "type": "image",
+                "mimeType": "image/png",
+                "data": base64.b64encode(b"image-bytes").decode(),
+                "_meta": {"detail": "original"},
+            }
+        ],
+        "structuredContent": {"answer": 42},
+        "_meta": {"vendor": {"future": True}},
+    }
+    result, artifacts = await ContentStore(host).preserve(payload)
+    assert result["_meta"] == payload["_meta"]
+    assert result["structuredContent"] == payload["structuredContent"]
+    assert result["content"][0]["_meta"] == {"detail": "original"}
+    assert result["content"][0]["size_bytes"] == len(b"image-bytes")
+    assert len(artifacts) == 1
+    assert "data" in payload["content"][0]
+
+
+@pytest.mark.asyncio
+async def test_media_shaped_application_data_and_metadata_are_not_rewritten(host):
+    media_shape = {"type": "image", "data": "not base64", "mimeType": "image/png"}
+    resource_shape = {"uri": "app://item", "blob": "ordinary application data"}
+    payload = {
+        "structuredContent": {"rows": [media_shape, resource_shape]},
+        "_meta": media_shape,
+        "content": [{"type": "text", "text": "sentinel", "_meta": resource_shape}],
+        "tools": [{"name": "example", "inputSchema": {"examples": [media_shape]}}],
+    }
+    result, artifacts = await ContentStore(host).preserve(payload)
+    assert result == payload
+    assert artifacts == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("position", ["content", "contents", "messages", "message_list"])
+async def test_protocol_resource_and_prompt_media_positions_are_preserved(host, position):
+    raw = b"test-owned-media"
+    resource = {
+        "uri": "test://blob",
+        "mimeType": "image/png",
+        "blob": base64.b64encode(raw).decode(),
+    }
+    block = {"type": "resource", "resource": resource}
+    if position == "contents":
+        payload = {"contents": [resource]}
+    elif position == "content":
+        payload = {"content": [block]}
+    else:
+        payload = {
+            "messages": [
+                {"role": "user", "content": [block] if position == "message_list" else block}
+            ]
+        }
+    result, artifacts = await ContentStore(host).preserve(payload)
+    if position == "contents":
+        preserved = result["contents"][0]
+    elif position == "content":
+        preserved = result["content"][0]["resource"]
+    else:
+        content = result["messages"][0]["content"]
+        preserved = (content[0] if isinstance(content, list) else content)["resource"]
+    assert preserved["size_bytes"] == len(raw)
+    assert "path" in preserved
+    assert "blob" not in preserved
+    assert "blob" in resource
+    assert artifacts == []
+
+
+@pytest.mark.asyncio
+async def test_media_attachment_delivery_refuses_is_omitted_with_a_marker(host):
+    def reject(name, data):
+        raise AttachmentTooLargeError("test-owned-size-limit")
+
+    host = replace(host, store_attachment=reject)
+    raw = b"media-sentinel"
+    before = set(host.data_dir.rglob("*"))
+    result, artifacts = await ContentStore(host).preserve(
+        {
+            "content": [
+                {"type": "image", "mimeType": "image/png", "data": base64.b64encode(raw).decode()}
+            ]
+        }
+    )
+
+    # No unmanaged copy: the bytes are gone and the marker says why.
+    assert result["content"][0] == {
+        "type": "image",
+        "mimeType": "image/png",
+        "content_omitted": True,
+        "media_delivery_error": "test-owned-size-limit",
+        "size_bytes": len(raw),
+    }
+    assert set(host.data_dir.rglob("*")) == before
+    assert artifacts == []

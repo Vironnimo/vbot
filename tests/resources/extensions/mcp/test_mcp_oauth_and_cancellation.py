@@ -1,4 +1,4 @@
-"""Mcp: oauth and cancellation behavior."""
+"""MCP: OAuth credentials, redaction, retries and cancellation of connection work."""
 
 from __future__ import annotations
 
@@ -12,9 +12,7 @@ from resources.extensions.mcp import client as mcp_client
 from resources.extensions.mcp.client import ConnectionRunner, InvocationNotSentError, OAuthStorage
 from resources.extensions.mcp.config import validate_connection
 from resources.extensions.mcp.interactions import InputRequests
-from tests.resources.extensions.mcp_helpers import (
-    host as host,
-)
+from tests.resources.extensions.mcp.mcp_test_support import context, runner_for
 
 
 @pytest.mark.asyncio
@@ -78,6 +76,31 @@ async def test_cancelled_oauth_does_not_leave_a_pending_request(host):
     with pytest.raises(ValueError):
         await task
     assert runner.inputs.list() == []
+
+
+@pytest.mark.asyncio
+async def test_cancelled_mutation_is_not_replayed(host, server, monkeypatch):
+    entered = asyncio.Event()
+    calls = []
+
+    @server.tool()
+    async def mutate() -> str:
+        calls.append("mutated")
+        entered.set()
+        await asyncio.Event().wait()
+        return "unreachable"
+
+    runner = runner_for(host, server, monkeypatch)
+    try:
+        task = asyncio.create_task(runner.invoke("tools/call", {"name": "mutate"}, context(host)))
+        await asyncio.wait_for(entered.wait(), 10)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        await asyncio.wait_for(runner.invoke("ping", {}), 5)
+        assert calls == ["mutated"]
+    finally:
+        await runner.close()
 
 
 @pytest.mark.asyncio
