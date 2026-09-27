@@ -293,6 +293,52 @@ def test_unprefixed_lines_are_added_only_where_unchanged_lines_place_them(tmp_pa
     assert b"lien" not in path.read_bytes() and b"missing" not in path.read_bytes()
 
 
+def test_unprefixed_lines_after_the_last_unchanged_line_are_added_when_new_there(tmp_path):
+    path = tmp_path / "file.py"
+    path.write_bytes(b"def f(seed):\n    produced = gen(seed)\n    return produced\n")
+    body = (
+        "@@\n     produced = gen(seed)\n+    if not produced:\n        raise ValueError(\n"
+        "            seed)\n+    log(seed)"
+    )
+    result = apply(tmp_path, update(body, "file.py"))
+    assert result["ok"], text(result)
+    assert path.read_bytes() == (
+        b"def f(seed):\n    produced = gen(seed)\n    if not produced:\n"
+        b"        raise ValueError(\n            seed)\n    log(seed)\n    return produced\n"
+    )
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        # Session shape: after the last unchanged line the file holds, unchanged
+        # lines differ from the file in one line. Added, they would repeat the
+        # loop body one space deeper.
+        "@@\n     total = 0\n+    unordered = []\n     for seed in SEEDS:\n"
+        "         produced = gen(seed)\n+        unordered.extend(produced)\n"
+        "         for entry in produced:\n             skipped = False\n"
+        "             record(entry)\n+    assert unordered",
+        # The same before the first unchanged line.
+        "@@\n+import os\n import sys\n SEED = 4\n+import json\n \n \n def check():",
+    ],
+)
+def test_unprefixed_lines_are_not_added_where_the_file_has_them(tmp_path, body):
+    path = tmp_path / "file.py"
+    before = (
+        b"import sys\nimport time\n\n\ndef check():\n    total = 0\n    for seed in SEEDS:\n"
+        b"        produced = gen(seed)\n        for entry in produced:\n"
+        b"            total += entry.size\n            record(entry)\n    return total\n"
+    )
+    path.write_bytes(before)
+    result = apply(tmp_path, update(body, "file.py"))
+    assert result["error"]["code"] == "text_not_found"
+    assert (
+        "That patch line has no + prefix, so it must already be in the file there; "
+        "if it is new, start it with +.\n"
+    ) in text(result)
+    assert path.read_bytes() == before
+
+
 def test_first_difference_on_an_unprefixed_line_between_additions_names_the_prefix(tmp_path):
     path = tmp_path / "file.py"
     before = (

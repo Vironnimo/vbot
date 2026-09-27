@@ -324,7 +324,14 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   runs holding a nonblank line the file lacks, then all runs. A reading needs at
   least one remaining context/removal line and applies only through precise
   matching (`precise_only`), so the file must hold the surrounding lines
-  adjacent; a failing reading falls back to the original error. Success adds a
+  adjacent; a failing reading falls back to the original error. A re-read run
+  with no context/removal line after it (or before it) is placed on one side
+  only, so the reading is dropped when the file continues on that side with one
+  of the run's lines or a near copy (similarity >= 0.80, `_repeats_neighbors`):
+  the run was context that differs from the file, and adding it would repeat
+  those lines one space deeper. Evidence: in a replay of one Swarm's last 18
+  minutes, 2 of 5 such hunks applied with duplicated lines before this check
+  (Sessions, 2026-09). Success adds a
   note naming the lines and asking for `+` on every added line. Runs at a hunk
   edge are never re-read: a typo in edge context would otherwise duplicate the
   line. Evidence: one Model family often left the `+` off statement continuation
