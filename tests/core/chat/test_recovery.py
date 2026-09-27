@@ -1,13 +1,11 @@
 """One budget must cover every way an unfinished Model step is retried."""
 
 import asyncio
-import time
 from unittest.mock import AsyncMock
 
 import pytest
 
 from core.chat.recovery import RecoveryBudget
-from core.chat.streaming import StreamingProgressTimeoutError, iter_with_chunk_timeout
 from core.providers.errors import ProviderRateLimitError
 from core.runs import RunInterruptedError
 
@@ -114,31 +112,6 @@ async def test_no_retry_starts_when_wait_would_exceed_remaining_budget(monkeypat
         await budget.begin("primary", lambda notice: None)
     sleep.assert_not_awaited()
     assert budget.attempts == 1
-
-
-@pytest.mark.asyncio
-async def test_recovery_deadline_stops_fresh_deltas_and_closes_stream():
-    closed = asyncio.Event()
-
-    async def progressing():
-        try:
-            while True:
-                yield {"type": "content_delta", "text": "x"}
-                await asyncio.sleep(0.005)
-        finally:
-            closed.set()
-
-    deltas = []
-    with pytest.raises(StreamingProgressTimeoutError, match="recovery time budget"):
-        async for delta in iter_with_chunk_timeout(
-            progressing(),
-            timeout_seconds=None,
-            progress_timeout_seconds=None,
-            deadline=time.monotonic() + 0.1,
-        ):
-            deltas.append(delta)
-    assert deltas
-    assert closed.is_set()
 
 
 @pytest.mark.asyncio

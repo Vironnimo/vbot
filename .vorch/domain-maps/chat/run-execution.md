@@ -85,5 +85,5 @@ When readable reasoning or answer content already exists at cancellation, Chat u
 
 - Admission: `core/chat/chat.py`; Run setup/fallback/terminal cleanup: `_run_execution.py`; completed Model/Tool progression: `_agentic_progression.py`; resolved state/context preparation: `_run_state.py`; route resolution: `model_resolution.py`; tests in `test_chat_loop_lifecycle.py`, `test_chat_loop_fallback.py`, `test_chat_loop_model_resolution.py`, and `test_chat_loop_tools.py`.
 - Continuation: `core/chat/continuation.py`; tests in `test_continuation.py` and `test_chat_loop_continuation.py`.
-- Streaming and cancellation: `core/chat/streaming.py`, `request_runner.py`, `_agentic_progression.py`; tests in `test_streaming.py`, `test_chat_loop_stream_recovery.py`, and `test_chat_loop_streaming.py`.
+- Streaming and cancellation: `core/chat/streaming.py`, `request_runner.py`, `_agentic_progression.py`; tests in `test_streaming.py`, `test_streaming_recovery.py`, `test_chat_loop_streaming.py`, `test_chat_loop_stream_recovery.py`, and `test_chat_loop_stream_cancellation.py`.
 - Shared recovery: `core/chat/recovery.py`; `test_recovery.py` and `test_chat_loop_recovery_budget.py` cover combined budgets, deadlines, cancellation, nested retry ownership, fallback, output integrity, and Tool side-effect boundaries.

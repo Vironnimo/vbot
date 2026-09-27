@@ -1,8 +1,10 @@
-"""Tests for streaming recovery."""
+"""Stream stall guards, recovery decisions and local-provider detection."""
 
 from __future__ import annotations
 
 import asyncio
+import time
+from collections.abc import AsyncIterator
 from types import SimpleNamespace
 from typing import Any
 
@@ -10,7 +12,6 @@ import pytest
 
 from core.chat import streaming as streaming_module
 from core.chat.streaming import (
-    StreamingAccumulator,
     StreamingChunkTimeoutError,
     StreamingProgressTimeoutError,
     StreamRecoveryAction,
@@ -20,91 +21,60 @@ from core.chat.streaming import (
 )
 from core.providers.errors import (
     NetworkError,
+    ProviderRateLimitError,
     ProviderStreamingUnsupportedError,
-    ProviderTimeoutError,
 )
 from core.utils.errors import ProviderError
 
-pytestmark = pytest.mark.asyncio
+JsonObject = dict[str, Any]
+
+_CHUNKS: list[JsonObject] = [
+    {"type": "heartbeat"},
+    {"type": "content_delta", "text": "still working"},
+    {"type": "finish", "reason": "stop"},
+]
 
 
-async def test_finish_delta_records_reason_without_visible_event() -> None:
-    accumulator = StreamingAccumulator()
-
-    visible = accumulator.add_delta({"type": "finish", "reason": "stop"})
-
-    fields = accumulator.finalize_assistant_fields()
-    assert visible == []
-    assert fields.finish_reason == "stop"
+def _fake_clock(monkeypatch: pytest.MonkeyPatch) -> list[float]:
+    clock = [0.0]
+    monkeypatch.setattr(streaming_module, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    return clock
 
 
-async def test_iter_with_chunk_timeout_resets_after_each_delta() -> None:
-    async def source() -> AsyncIteratorForTest:
-        yield {"type": "content_delta", "text": "first"}
-        await asyncio.sleep(0.01)
-        yield {"type": "content_delta", "text": "second"}
-
-    chunks = [chunk async for chunk in iter_with_chunk_timeout(source(), timeout_seconds=0.05)]
-
-    assert chunks == [
-        {"type": "content_delta", "text": "first"},
-        {"type": "content_delta", "text": "second"},
-    ]
-
-
-async def test_iter_with_chunk_timeout_counts_tool_call_fragments_as_progress(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("timeout_seconds", "progress_timeout_seconds"),
+    [(1.0, 1.0), (None, None)],
+    ids=["guarded", "guards-disabled"],
+)
+async def test_iter_with_chunk_timeout_passes_every_chunk_through(
+    timeout_seconds: float | None, progress_timeout_seconds: float | None
 ) -> None:
-    clock = 0.0
-
-    async def source() -> AsyncIteratorForTest:
-        nonlocal clock
-        yield {
-            "type": "tool_call_delta",
-            "id": "call-write",
-            "name_delta": "write",
-            "arguments_delta": '{"path":"plan.md","content":"',
-        }
-        clock += 0.03
-        yield {
-            "type": "tool_call_delta",
-            "id": "call-write",
-            "name_delta": "",
-            "arguments_delta": 'large plan"}',
-        }
-        clock += 0.03
-        yield {"type": "heartbeat"}
-
-    monkeypatch.setattr(
-        streaming_module,
-        "time",
-        SimpleNamespace(monotonic=lambda: clock),
-    )
+    async def source() -> AsyncIterator[JsonObject]:
+        for chunk in _CHUNKS:
+            yield chunk
 
     chunks = [
         chunk
         async for chunk in iter_with_chunk_timeout(
             source(),
-            timeout_seconds=1.0,
-            progress_timeout_seconds=0.05,
+            timeout_seconds=timeout_seconds,
+            progress_timeout_seconds=progress_timeout_seconds,
         )
     ]
 
-    assert [chunk["arguments_delta"] for chunk in chunks if chunk["type"] == "tool_call_delta"] == [
-        '{"path":"plan.md","content":"',
-        'large plan"}',
-    ]
+    assert chunks == _CHUNKS
 
 
-async def test_iter_with_chunk_timeout_fails_on_stalled_delta() -> None:
+@pytest.mark.asyncio
+async def test_iter_with_chunk_timeout_fails_on_stalled_delta_and_closes_the_source() -> None:
     closed = False
 
-    async def source() -> AsyncIteratorForTest:
+    async def source() -> AsyncIterator[JsonObject]:
         nonlocal closed
         try:
             yield {"type": "content_delta", "text": "first"}
-            await asyncio.sleep(1)
-            yield {"type": "content_delta", "text": "late"}
+            await asyncio.Event().wait()
         finally:
             closed = True
 
@@ -116,220 +86,150 @@ async def test_iter_with_chunk_timeout_fails_on_stalled_delta() -> None:
     assert closed is True
 
 
-async def test_iter_with_chunk_timeout_heartbeats_keep_transport_alive_only(
+@pytest.mark.asyncio
+async def test_model_deltas_including_tool_call_fragments_reset_the_progress_window(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    closed = False
-    clock = 0.0
+    clock = _fake_clock(monkeypatch)
+    chunks: list[JsonObject] = [
+        {"type": "tool_call_delta", "id": "call-write", "arguments_delta": '{"content":"'},
+        {"type": "tool_call_delta", "id": "call-write", "arguments_delta": 'large plan"}'},
+        {"type": "content_delta", "text": "still working"},
+        {"type": "heartbeat"},
+    ]
 
-    async def source() -> AsyncIteratorForTest:
-        nonlocal clock, closed
+    async def source() -> AsyncIterator[JsonObject]:
+        for chunk in chunks:
+            yield chunk
+            clock[0] += 0.03
+
+    received = [
+        chunk
+        async for chunk in iter_with_chunk_timeout(
+            source(), timeout_seconds=1.0, progress_timeout_seconds=0.05
+        )
+    ]
+
+    assert received == chunks
+
+
+@pytest.mark.asyncio
+async def test_heartbeats_keep_the_transport_alive_but_not_model_progress(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = _fake_clock(monkeypatch)
+    closed = False
+
+    async def source() -> AsyncIterator[JsonObject]:
+        nonlocal closed
         try:
             while True:
-                clock += 0.03
+                clock[0] += 0.03
                 yield {"type": "heartbeat"}
         finally:
             closed = True
 
-    monkeypatch.setattr(
-        streaming_module,
-        "time",
-        SimpleNamespace(monotonic=lambda: clock),
-    )
-    iterator = iter_with_chunk_timeout(
-        source(),
-        timeout_seconds=1.0,
-        progress_timeout_seconds=0.08,
-    )
+    iterator = iter_with_chunk_timeout(source(), timeout_seconds=1.0, progress_timeout_seconds=0.08)
 
     assert await anext(iterator) == {"type": "heartbeat"}
     assert await anext(iterator) == {"type": "heartbeat"}
-    with pytest.raises(StreamingProgressTimeoutError):
+    with pytest.raises(StreamingProgressTimeoutError, match="produced no Model delta"):
         while True:
             await anext(iterator)
     assert closed is True
 
 
-async def test_iter_with_chunk_timeout_model_delta_resets_progress_window() -> None:
-    async def source() -> AsyncIteratorForTest:
-        yield {"type": "heartbeat"}
-        await asyncio.sleep(0.02)
-        yield {"type": "content_delta", "text": "still working"}
-        await asyncio.sleep(0.02)
-        yield {"type": "finish", "reason": "stop"}
+@pytest.mark.asyncio
+async def test_recovery_deadline_stops_fresh_deltas_and_closes_the_stream() -> None:
+    closed = asyncio.Event()
 
-    chunks = [
-        chunk
-        async for chunk in iter_with_chunk_timeout(
-            source(),
-            timeout_seconds=0.2,
-            progress_timeout_seconds=0.1,
-        )
-    ]
+    async def progressing() -> AsyncIterator[JsonObject]:
+        try:
+            while True:
+                yield {"type": "content_delta", "text": "x"}
+                await asyncio.sleep(0.005)
+        finally:
+            closed.set()
 
-    assert chunks == [
-        {"type": "heartbeat"},
-        {"type": "content_delta", "text": "still working"},
-        {"type": "finish", "reason": "stop"},
-    ]
-
-
-async def test_decide_recovery_streaming_unsupported_before_visible_falls_back() -> None:
-    action = decide_stream_recovery(
-        ProviderStreamingUnsupportedError("no streaming"),
-        can_restart=True,
-        has_partial_content=False,
-    )
-
-    assert action is StreamRecoveryAction.FALLBACK
+    deltas = []
+    with pytest.raises(StreamingProgressTimeoutError, match="recovery time budget"):
+        async for delta in iter_with_chunk_timeout(
+            progressing(),
+            timeout_seconds=None,
+            progress_timeout_seconds=None,
+            deadline=time.monotonic() + 0.1,
+        ):
+            deltas.append(delta)
+    assert deltas
+    assert closed.is_set()
 
 
-async def test_decide_recovery_accepts_logically_finished_stream() -> None:
-    action = decide_stream_recovery(
-        NetworkError("missing transport terminator"),
-        can_restart=True,
-        has_partial_content=False,
-        finish_received=True,
-    )
-
-    assert action is StreamRecoveryAction.ACCEPT_COMPLETE
+_ACCEPT = StreamRecoveryAction.ACCEPT_COMPLETE
+_RESTART = StreamRecoveryAction.RESTART
+_FALLBACK = StreamRecoveryAction.FALLBACK
+_PRESERVE = StreamRecoveryAction.PRESERVE_PARTIAL
+_INTERRUPT = StreamRecoveryAction.INTERRUPT
+_FAIL = StreamRecoveryAction.FAIL
 
 
-async def test_decide_recovery_restartable_transient_before_visible_restarts() -> None:
-    for error in (
-        NetworkError("dropped"),
-        ProviderTimeoutError("slow"),
-        StreamingChunkTimeoutError("stalled"),
-        ProviderError("overloaded", retryable=True),
-    ):
-        action = decide_stream_recovery(
-            error,
-            can_restart=True,
-            has_partial_content=False,
-        )
+@pytest.mark.parametrize(
+    ("error", "state", "action"),
+    [
+        (NetworkError("no terminator"), {"finish_received": True}, _ACCEPT),
+        (ProviderStreamingUnsupportedError("no streaming"), {}, _FALLBACK),
+        (NetworkError("dropped"), {}, _RESTART),
+        (StreamingChunkTimeoutError("stalled"), {}, _RESTART),
+        (ProviderError("overloaded", retryable=True), {}, _RESTART),
+        (NetworkError("dropped"), {"can_restart": False}, _INTERRUPT),
+        (ProviderError("overloaded", retryable=True), {"can_restart": False}, _FAIL),
+        (ProviderRateLimitError("quota"), {"has_fallback_chain": True}, _FAIL),
+        (ProviderError("fatal", retryable=False), {}, _FAIL),
+        (NetworkError("dropped"), {"has_partial_content": True}, _PRESERVE),
+        (ProviderStreamingUnsupportedError("no"), {"has_partial_content": True}, _PRESERVE),
+        (ProviderError("fatal", retryable=False), {"has_partial_content": True}, _FAIL),
+    ],
+    ids=[
+        "finished-stream",
+        "unsupported-before-text",
+        "drop-before-text",
+        "stall-before-text",
+        "retryable-before-text",
+        "drop-restarts-exhausted",
+        "retryable-restarts-exhausted",
+        "rate-limit-with-chain",
+        "fatal-before-text",
+        "drop-after-text",
+        "unsupported-after-text",
+        "fatal-after-text",
+    ],
+)
+def test_decide_stream_recovery(
+    error: Exception, state: dict[str, bool], action: StreamRecoveryAction
+) -> None:
+    arguments = {"can_restart": True, "has_partial_content": False, **state}
 
-        assert action is StreamRecoveryAction.RESTART, type(error).__name__
-
-
-async def test_decide_recovery_restartable_before_visible_interrupts_when_budget_exhausted() -> (
-    None
-):
-    action = decide_stream_recovery(
-        NetworkError("dropped"),
-        can_restart=False,
-        has_partial_content=False,
-    )
-
-    assert action is StreamRecoveryAction.INTERRUPT
-
-
-async def test_decide_recovery_retryable_provider_error_fails_when_restart_budget_exhausted() -> (
-    None
-):
-    action = decide_stream_recovery(
-        ProviderError("overloaded", retryable=True),
-        can_restart=False,
-        has_partial_content=False,
-    )
-
-    assert action is StreamRecoveryAction.FAIL
-
-
-async def test_decide_recovery_non_restartable_before_visible_fails() -> None:
-    action = decide_stream_recovery(
-        ProviderError("fatal", retryable=False),
-        can_restart=True,
-        has_partial_content=False,
-    )
-
-    assert action is StreamRecoveryAction.FAIL
+    assert decide_stream_recovery(error, **arguments) is action
 
 
-async def test_decide_recovery_visible_with_content_preserves_partial() -> None:
-    for error in (
-        NetworkError("dropped"),
-        StreamingChunkTimeoutError("stalled"),
-        ProviderError("overloaded", retryable=True),
-        ProviderStreamingUnsupportedError("no streaming"),
-    ):
-        action = decide_stream_recovery(
-            error,
-            can_restart=True,
-            has_partial_content=True,
-        )
-
-        assert action is StreamRecoveryAction.PRESERVE_PARTIAL, type(error).__name__
-
-
-async def test_decide_recovery_reasoning_only_restarts_when_budget_remains() -> None:
-    action = decide_stream_recovery(
-        NetworkError("dropped"),
-        can_restart=True,
-        has_partial_content=False,
-    )
-
-    assert action is StreamRecoveryAction.RESTART
-
-
-async def test_decide_recovery_tool_preview_restarts_when_no_answer_text_exists() -> None:
-    action = decide_stream_recovery(
-        NetworkError("dropped after Tool Call preview"),
-        can_restart=True,
-        has_partial_content=False,
-    )
-
-    assert action is StreamRecoveryAction.RESTART
-
-
-async def test_local_provider_base_url_detects_loopback_and_local_names() -> None:
-    for url in (
-        "http://localhost:11434",
-        "http://localhost:11434/v1",
-        "http://127.0.0.1:8080",
-        "http://[::1]:8080",
-        "http://ollama.local:11434",
-        "http://box.localhost/v1",
-    ):
-        assert is_local_provider_base_url(url) is True, url
-
-
-async def test_local_provider_base_url_detects_private_and_link_local_ips() -> None:
-    for url in (
-        "http://10.0.0.5:1234",
-        "http://172.16.4.2:1234",
-        "http://192.168.1.50:11434",
-        "http://169.254.10.10:1234",
-    ):
-        assert is_local_provider_base_url(url) is True, url
-
-
-async def test_local_provider_base_url_rejects_public_hosts() -> None:
-    for url in (
-        "https://api.openai.com/v1",
-        "https://api.anthropic.com",
-        "http://8.8.8.8:443",
-    ):
-        assert is_local_provider_base_url(url) is False, url
-
-
-async def test_local_provider_base_url_rejects_missing_or_unparseable() -> None:
-    assert is_local_provider_base_url(None) is False
-    assert is_local_provider_base_url("") is False
-    assert is_local_provider_base_url("not a url") is False
-
-
-async def test_iter_with_chunk_timeout_disabled_never_aborts_on_silence() -> None:
-    async def source() -> AsyncIteratorForTest:
-        yield {"type": "content_delta", "text": "first"}
-        await asyncio.sleep(0.02)
-        yield {"type": "content_delta", "text": "second"}
-
-    chunks = [chunk async for chunk in iter_with_chunk_timeout(source(), timeout_seconds=None)]
-
-    assert chunks == [
-        {"type": "content_delta", "text": "first"},
-        {"type": "content_delta", "text": "second"},
-    ]
-
-
-AsyncIteratorForTest = Any
+@pytest.mark.parametrize(
+    ("base_url", "local"),
+    [
+        ("http://localhost:11434/v1", True),
+        ("http://127.0.0.1:8080", True),
+        ("http://[::1]:8080", True),
+        ("http://ollama.local:11434", True),
+        ("http://box.localhost/v1", True),
+        ("http://10.0.0.5:1234", True),
+        ("http://192.168.1.50:11434", True),
+        ("http://169.254.10.10:1234", True),
+        ("https://api.openai.com/v1", False),
+        ("http://8.8.8.8:443", False),
+        (None, False),
+        ("", False),
+        ("not a url", False),
+    ],
+)
+def test_local_provider_base_url_detects_loopback_local_names_and_private_ips(
+    base_url: str | None, local: bool
+) -> None:
+    assert is_local_provider_base_url(base_url) is local

@@ -1,4 +1,4 @@
-"""Chat-loop tests grouped by streaming."""
+"""Streaming Model steps that complete: deltas, Run events, persisted turns and Tool loops."""
 
 from __future__ import annotations
 
@@ -33,6 +33,7 @@ from core.tools import (
     ToolRegistry,
     tool_success,
 )
+from tests.core.chat.chat_loop_streaming_test_support import history, last_run, stream_runtime
 from tests.core.chat.chat_loop_support import (
     StubAdapter,
     StubAgent,
@@ -73,11 +74,9 @@ async def test_stream_delta_emitter_flushes_a_quiet_pending_fragment() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.asyncio
 async def test_streaming_mode_emits_deltas_then_final_authoritative_message(
     tmp_path: Path,
 ) -> None:
-    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
     adapter = StubAdapter(
         [],
         stream_responses=[
@@ -89,7 +88,7 @@ async def test_streaming_mode_emits_deltas_then_final_authoritative_message(
             ]
         ],
     )
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime = stream_runtime(tmp_path, adapter)
 
     assistant = await build_chat_loop(runtime, streaming=True).send(
         "coder",
@@ -97,8 +96,8 @@ async def test_streaming_mode_emits_deltas_then_final_authoritative_message(
         session_id="session-one",
     )
 
-    run = next(iter(runtime.chat_runs._runs.values()))
-    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
+    run = last_run(runtime)
+    messages = history(runtime)
     assert assistant.content == "Hello world"
     assert assistant.reasoning == "Think"
     assert persisted_roles(messages) == ["user", "assistant"]
@@ -136,7 +135,9 @@ async def test_streaming_mode_emits_deltas_then_final_authoritative_message(
             "message"
         ]
     )
+    # Reasoning followed by a visible answer is complete: no recovery request follows.
     assert adapter.requests == []
+    assert len(adapter.stream_requests) == 1
     assert adapter.stream_requests[0]["kwargs"]["thinking_effort"] == "high"
 
 
@@ -144,7 +145,6 @@ async def test_streaming_mode_emits_deltas_then_final_authoritative_message(
 async def test_streaming_mode_emits_provider_heartbeat_without_model_output(
     tmp_path: Path,
 ) -> None:
-    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
     adapter = StubAdapter(
         [],
         stream_responses=[
@@ -155,7 +155,7 @@ async def test_streaming_mode_emits_provider_heartbeat_without_model_output(
             ]
         ],
     )
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime = stream_runtime(tmp_path, adapter)
 
     await build_chat_loop(runtime, streaming=True).send(
         "coder",
@@ -163,13 +163,11 @@ async def test_streaming_mode_emits_provider_heartbeat_without_model_output(
         session_id="session-one",
     )
 
-    run = next(iter(runtime.chat_runs._runs.values()))
+    run = last_run(runtime)
     heartbeat = next(event for event in run.events if event.type == PROVIDER_HEARTBEAT_EVENT)
     assert heartbeat.payload["state"] == "waiting_for_model_delta"
     assert heartbeat.payload["idle_seconds"] >= 0
-    assert persisted_roles(
-        runtime.chat_sessions.get(session_address("coder", "session-one")).load()
-    ) == [
+    assert persisted_roles(history(runtime)) == [
         "user",
         "assistant",
     ]
@@ -221,11 +219,8 @@ async def test_streaming_mode_persists_only_final_messages_and_continues_tool_lo
         session_id="session-one",
     )
 
-    run = next(iter(runtime.chat_runs._runs.values()))
-    persisted = [
-        message.to_dict()
-        for message in runtime.chat_sessions.get(session_address("coder", "session-one")).load()
-    ]
+    run = last_run(runtime)
+    persisted = [message.to_dict() for message in history(runtime)]
     assert assistant.content == "Sunny"
     assert persisted_dict_roles(persisted) == ["user", "assistant", "tool", "assistant"]
     assert persisted[1]["reasoning_meta"] == {"signature": "opaque"}
@@ -294,7 +289,6 @@ async def test_streaming_mode_persists_only_final_messages_and_continues_tool_lo
 async def test_streaming_mode_malformed_tool_arguments_return_tool_failure_and_continue(
     tmp_path: Path,
 ) -> None:
-    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
     adapter = StubAdapter(
         [],
         stream_responses=[
@@ -314,13 +308,13 @@ async def test_streaming_mode_malformed_tool_arguments_return_tool_failure_and_c
             ],
         ],
     )
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime = stream_runtime(tmp_path, adapter)
 
     loop = build_chat_loop(runtime, streaming=True)
     result = await loop.send("coder", "Build it", session_id="session-one")
 
-    run = next(iter(runtime.chat_runs._runs.values()))
-    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
+    run = last_run(runtime)
+    messages = history(runtime)
 
     assert result.content == "The Tool Call was malformed, so I stopped."
     assert run.status == RunStatus.COMPLETED
@@ -344,87 +338,10 @@ async def test_streaming_mode_malformed_tool_arguments_return_tool_failure_and_c
 
 
 @pytest.mark.asyncio
-async def test_streaming_mode_missing_finish_delta_continues_after_visible_partial(
+async def test_transport_error_after_a_finish_delta_keeps_the_completed_step(
     tmp_path: Path,
 ) -> None:
-    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
-    adapter = StubAdapter(
-        [],
-        stream_responses=[
-            [
-                {"type": "content_delta", "text": "Partial answer"},
-            ],
-            [
-                {"type": "content_delta", "text": " continued"},
-                {"type": "finish", "reason": "stop"},
-            ],
-        ],
-    )
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
-
-    assistant = await build_chat_loop(runtime, streaming=True).send(
-        "coder", "Hi", session_id="session-one"
-    )
-
-    run = next(iter(runtime.chat_runs._runs.values()))
-    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
-
-    # The partial boundary remains durable while a fresh Model step continues
-    # the same Run without replaying the original visible output.
-    assert assistant.content == " continued"
-    assert assistant.interrupted is False
-    assert run.status == RunStatus.COMPLETED
-    assert persisted_roles(messages) == ["user", "assistant", "note", "assistant"]
-    assert messages[1].interrupted is True
-    assert [event.type for event in run.events if event.type != "provider_request_status"] == [
-        "run_started",
-        "user_message_persisted",
-        ASSISTANT_OUTPUT_DELTA_EVENT,
-        "assistant_output",
-        MODEL_STEP_USAGE_EVENT,
-        ASSISTANT_OUTPUT_DELTA_EVENT,
-        "assistant_output",
-        MODEL_STEP_USAGE_EVENT,
-        "run_completed",
-    ]
-
-
-@pytest.mark.asyncio
-async def test_streaming_transport_error_after_finish_keeps_completed_answer(
-    tmp_path: Path,
-) -> None:
-    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
-    adapter = StubAdapter(
-        [],
-        stream_responses=[
-            [
-                {"type": "content_delta", "text": "Complete answer"},
-                {"type": "finish", "reason": "stop"},
-                NetworkError("missing transport terminator"),
-            ]
-        ],
-    )
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
-
-    assistant = await build_chat_loop(runtime, streaming=True).send(
-        "coder", "Hi", session_id="session-one"
-    )
-
-    run = next(iter(runtime.chat_runs._runs.values()))
-    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
-    persisted_assistant = next(message for message in messages if message.role == "assistant")
-
-    assert assistant.content == "Complete answer"
-    assert assistant.interrupted is False
-    assert persisted_assistant.interrupted is False
-    assert run.status == RunStatus.COMPLETED
-    assert not any(message.role == "error" for message in messages)
-    assert len(adapter.stream_requests) == 1
-
-
-@pytest.mark.asyncio
-async def test_streaming_tool_finish_survives_late_transport_error(tmp_path: Path) -> None:
-    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["get_weather"])
+    late_error = NetworkError("missing transport terminator")
     adapter = StubAdapter(
         [],
         stream_responses=[
@@ -436,11 +353,12 @@ async def test_streaming_tool_finish_survives_late_transport_error(tmp_path: Pat
                     "arguments_delta": '{"city":"Berlin"}',
                 },
                 {"type": "finish", "reason": "tool_calls"},
-                NetworkError("missing transport terminator"),
+                late_error,
             ],
             [
                 {"type": "content_delta", "text": "Sunny"},
                 {"type": "finish", "reason": "stop"},
+                late_error,
             ],
         ],
     )
@@ -451,16 +369,16 @@ async def test_streaming_tool_finish_survives_late_transport_error(tmp_path: Pat
         {"type": "object"},
         lambda _context, arguments: tool_success({"temp": 22, "city": arguments["city"]}),
     )
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["get_weather"])
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
 
     assistant = await build_chat_loop(runtime, streaming=True).send(
         "coder", "Weather?", session_id="session-one"
     )
 
-    run = next(iter(runtime.chat_runs._runs.values()))
-    persisted = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
-
-    assert assistant.content == "Sunny"
-    assert persisted_roles(persisted) == ["user", "assistant", "tool", "assistant"]
-    assert run.status == RunStatus.COMPLETED
+    messages = history(runtime)
+    assert (assistant.content, assistant.interrupted) == ("Sunny", False)
+    assert persisted_roles(messages) == ["user", "assistant", "tool", "assistant"]
+    assert not any(message.interrupted for message in messages if message.role == "assistant")
+    assert last_run(runtime).status == RunStatus.COMPLETED
     assert len(adapter.stream_requests) == 2

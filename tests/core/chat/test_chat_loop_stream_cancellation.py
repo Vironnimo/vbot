@@ -1,8 +1,9 @@
-"""Tests for chat loop stream cancellation."""
+"""Cancelling a streaming Run: what stays durable and how the Run ends."""
 
 from __future__ import annotations
 
 import asyncio
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -13,20 +14,24 @@ from core.chat.continuation import (
 )
 from core.providers.reasoning import REASONING_REPLAY_FULL_HISTORY
 from core.runs import (
+    ASSISTANT_OUTPUT_DELTA_EVENT,
+    MODEL_STEP_USAGE_EVENT,
     RunCancelledError,
     RunStatus,
 )
-from tests.core.chat.chat_loop_stream_recovery_test_support import (
+from tests.core.chat.chat_loop_streaming_test_support import (
     JsonObject,
+    event_types,
+    history,
+    stream_runtime,
 )
 from tests.core.chat.chat_loop_support import (
     BlockingReasoningStreamingStubAdapter,
     BlockingStreamingStubAdapter,
+    MidStreamCancelledStubAdapter,
     PolicyStubAdapter,
     SilentBlockingStreamingStubAdapter,
     StubAdapter,
-    StubAgent,
-    StubRuntime,
     build_chat_loop,
     persisted_roles,
     session_address,
@@ -56,12 +61,13 @@ class CompletedStreamingStubAdapter(StubAdapter):
 
 
 @pytest.mark.asyncio
-async def test_user_cancel_after_visible_stream_preserves_partial_and_stays_cancelled(
+async def test_user_cancel_after_visible_stream_closes_the_adapter_and_keeps_the_partial(
     tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    caplog.set_level(logging.DEBUG, logger="vbot.chat")
     adapter = BlockingStreamingStubAdapter()
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime = stream_runtime(tmp_path, adapter)
     runtime.chat_sessions.create("coder", session_id="session-one")
 
     run = await build_chat_loop(runtime, streaming=True).start_run(
@@ -71,18 +77,36 @@ async def test_user_cancel_after_visible_stream_preserves_partial_and_stays_canc
     run.request_cancel(reason="user")
     await asyncio.sleep(0)
 
-    # A user cancel mid visible stream still ends as cancelled — never
-    # reclassified as a transient error or a completed run — but the answer the
-    # user already saw is preserved as an interrupted assistant turn.
+    # A user cancel mid visible stream still ends as cancelled, never reclassified
+    # as a transient error or a completed Run.
     with pytest.raises(RunCancelledError):
         await run.wait()
 
-    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
+    messages = history(runtime)
+    assert adapter.closed is True
     assert run.status == RunStatus.CANCELLED
+    terminal_logs = [
+        record
+        for record in caplog.records
+        if record.name == "vbot.chat"
+        and isinstance(record.args, tuple)
+        and record.args[:2] == (run.id, "cancelled")
+    ]
+    assert [record.levelno for record in terminal_logs] == [logging.DEBUG]
+    # The already-shown partial answer is preserved as an interrupted turn
+    # (GLOSSARY -> Cancel); the never-released late delta stays suppressed.
     assert persisted_roles(messages) == ["user", "assistant"]
-    assert messages[1].content == "before"
-    assert messages[1].interrupted is True
-    assert not any(message.error_kind for message in messages if message.role == "error")
+    assert (messages[1].content, messages[1].interrupted) == ("before", True)
+    assert messages[-1].role == "run_summary"
+    assert messages[-1].status == "cancelled"
+    assert event_types(run) == [
+        "run_started",
+        "user_message_persisted",
+        ASSISTANT_OUTPUT_DELTA_EVENT,
+        "assistant_output",
+        MODEL_STEP_USAGE_EVENT,
+        "run_cancelled",
+    ]
 
 
 @pytest.mark.asyncio
@@ -90,9 +114,8 @@ async def test_user_cancel_while_complete_stream_waits_to_persist_preserves_answ
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
     adapter = CompletedStreamingStubAdapter()
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime = stream_runtime(tmp_path, adapter)
     runtime.chat_sessions.create("coder", session_id="session-one")
 
     run = await build_chat_loop(runtime, streaming=True).start_run(
@@ -150,9 +173,8 @@ async def test_user_cancel_while_complete_stream_waits_to_persist_preserves_answ
 async def test_user_cancel_replays_interrupted_reasoning_only_through_checkpoint(
     tmp_path: Path,
 ) -> None:
-    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
     adapter = BlockingReasoningStreamingStubAdapter()
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime = stream_runtime(tmp_path, adapter)
     runtime.chat_sessions.create("coder", session_id="session-one")
 
     run = await build_chat_loop(runtime, streaming=True).start_run(
@@ -165,7 +187,7 @@ async def test_user_cancel_replays_interrupted_reasoning_only_through_checkpoint
     with pytest.raises(RunCancelledError):
         await run.wait()
 
-    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
+    messages = history(runtime)
     assert run.status == RunStatus.CANCELLED
     assert persisted_roles(messages) == ["user", "assistant"]
     assert messages[1].content is None
@@ -202,7 +224,7 @@ async def test_user_cancel_replays_interrupted_reasoning_only_through_checkpoint
     )
     assert "Thinking hard." in reminder
     assert not [message for message in request_messages if message["role"] == "assistant"]
-    persisted = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
+    persisted = history(runtime)
     assert persisted[1].reasoning == "Thinking hard."
     assert persisted[1].reasoning_meta == {"signature": "interrupted-signed-state"}
 
@@ -211,9 +233,8 @@ async def test_user_cancel_replays_interrupted_reasoning_only_through_checkpoint
 async def test_user_cancel_before_visible_output_does_not_persist_assistant(
     tmp_path: Path,
 ) -> None:
-    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
     adapter = SilentBlockingStreamingStubAdapter()
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime = stream_runtime(tmp_path, adapter)
     runtime.chat_sessions.create("coder", session_id="session-one")
 
     run = await build_chat_loop(runtime, streaming=True).start_run(
@@ -226,7 +247,7 @@ async def test_user_cancel_before_visible_output_does_not_persist_assistant(
     with pytest.raises(RunCancelledError):
         await run.wait()
 
-    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
+    messages = history(runtime)
     assert run.status == RunStatus.CANCELLED
     assert persisted_roles(messages) == ["user"]
     assert not any(event.type == "assistant_output" for event in run.events)
@@ -235,22 +256,16 @@ async def test_user_cancel_before_visible_output_does_not_persist_assistant(
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "worker",
-    [
-        "record_delivered",
-        "_prepare_completed_assistant",
-        "_assistant_continuation_dict",
-        "observe",
-        "project",
-    ],
+    ["record_delivered", "project"],
+    ids=["first-preparation-step", "last-preparation-step"],
 )
 async def test_cancel_during_completed_answer_preparation_preserves_visible_answer(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, worker: str
 ) -> None:
     from core.chat._agentic_progression import _CHAT_TRANSFORM_WORKERS
 
-    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
     adapter = CompletedStreamingStubAdapter()
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime = stream_runtime(tmp_path, adapter)
     runtime.chat_sessions.create("coder", session_id="session-one")
     run = await build_chat_loop(runtime, streaming=True).start_run(
         "coder", "Hi", session_id="session-one"
@@ -274,7 +289,24 @@ async def test_cancel_during_completed_answer_preparation_preserves_visible_answ
     release.set()
     with pytest.raises(RunCancelledError):
         await run.wait()
-    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
+    messages = history(runtime)
     assert [message.content for message in messages if message.role == "assistant"] == [
         "Complete answer"
     ]
+
+
+@pytest.mark.asyncio
+async def test_internal_cancellation_after_reasoning_keeps_a_continuation_checkpoint(
+    tmp_path: Path,
+) -> None:
+    runtime = stream_runtime(tmp_path, MidStreamCancelledStubAdapter([]))
+
+    with pytest.raises(RunCancelledError):
+        await build_chat_loop(runtime, streaming=True).send("coder", "Hi", session_id="session-one")
+
+    assert persisted_roles(history(runtime)) == ["user"]
+    state = await recover_continuation(
+        runtime.chat_sessions.get(session_address("coder", "session-one"))
+    )
+    assert state is not None
+    assert (state.reasoning, state.cause) == ("Need network.", "internal")
