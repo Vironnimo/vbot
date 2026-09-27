@@ -386,6 +386,12 @@ def test_a_capture_gap_discards_the_recording_and_listening_continues(
     assert rig.server.uploads == []
     assert rig.state() == ("listening", None)
 
+    # Detection may still hold audio from before the gap: a wake phrase matched
+    # there starts a recording that the same gap interrupts. Wait until detection
+    # reached a quiet marker fed after the gap.
+    marker = 1234
+    rig.sd.feed(np.full(1600, marker, dtype=np.int16))
+    wait_until(lambda: marker in rig.engine.peaks, message="detection never passed the gap")
     rig.say_command()
     rig.sink.wait_for_event("sent")
 
