@@ -91,6 +91,7 @@ def test_area_aliases_parse_identically(alias, canonical):
         ["config", "set", "debug.enabled", "true", "--stdin"],
         ["cron", "update", "job", "--session", "s", "--clear-session"],
         ["uninstall", "--app-only", "--data-only"],
+        ["update", "--discard", "--stash"],
         # Target options follow the action, and desktop never selects a data directory.
         ["config", "--port", "8999", "get", "debug.enabled"],
         ["desktop", "--data-dir", "data"],

@@ -1,9 +1,10 @@
-"""Tests for server management target."""
+"""CLI server target: resolution, local listener ownership, health and WebUI probes, status."""
 
 from __future__ import annotations
 
 import json
 import socket
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -14,7 +15,6 @@ import pytest
 
 from cli import _server_target, server_management
 from cli.server_management import (
-    CommandResult,
     HealthProbeResult,
     ServerInstance,
     WebUIProbeResult,
@@ -24,9 +24,39 @@ from cli.server_management import (
     resolve_instance,
 )
 from core.utils.logging import resolve_daily_log_path
-from tests.cli.server_management_test_support import (
-    make_instance,
+from tests.cli.cli_test_support import make_instance
+
+
+def listening(ip: str | None, port: int) -> SimpleNamespace:
+    """Return a process with one listening socket; ``ip=None`` omits the address field."""
+
+    address = SimpleNamespace(port=port) if ip is None else SimpleNamespace(ip=ip, port=port)
+    connection = SimpleNamespace(status=server_management.psutil.CONN_LISTEN, laddr=address)
+    return SimpleNamespace(net_connections=lambda kind: [connection])
+
+
+@pytest.mark.parametrize(
+    ("listeners", "owner"),
+    [
+        pytest.param([(None, 9002), (None, 9001)], 1, id="port-without-address"),
+        pytest.param([("127.0.0.2", 9001), ("127.0.0.1", 9001)], 1, id="exact-address"),
+        pytest.param([("0.0.0.0", 9001)], 0, id="ipv4-wildcard"),
+        pytest.param([("::", 9001)], None, id="ipv6-wildcard-misses-ipv4-target"),
+    ],
 )
+def test_find_listening_process_matches_the_target_address_and_port(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    listeners: list[tuple[str | None, int]],
+    owner: int | None,
+) -> None:
+    instance = make_instance(tmp_path, port=9001)
+    processes = [listening(ip, port) for ip, port in listeners]
+    monkeypatch.setattr(server_management.psutil, "process_iter", lambda: processes)
+
+    found = _server_target.find_listening_process(instance)
+
+    assert found is (None if owner is None else processes[owner])
 
 
 @pytest.mark.parametrize(
@@ -53,14 +83,7 @@ def test_wildcard_listener_only_owns_locally_addressed_targets(
     expected: bool,
 ) -> None:
     instance = replace(make_instance(tmp_path), host=host)
-    process = SimpleNamespace(
-        net_connections=lambda kind: [
-            SimpleNamespace(
-                status=server_management.psutil.CONN_LISTEN,
-                laddr=SimpleNamespace(ip=wildcard, port=instance.port),
-            )
-        ]
-    )
+    process = listening(wildcard, instance.port)
     monkeypatch.setattr(
         _server_target.socket,
         "getaddrinfo",
@@ -84,24 +107,41 @@ def test_wildcard_listener_only_owns_locally_addressed_targets(
     assert _server_target.find_listening_process(instance) is (process if expected else None)
 
 
-def test_resolve_instance_uses_explicit_port_before_environment_and_settings(
+@pytest.mark.parametrize(
+    ("port", "environment", "settings", "expected"),
+    [
+        pytest.param(8700, "8600", 8500, 8700, id="explicit-port"),
+        pytest.param(None, "8600", 8500, 8600, id="environment"),
+        pytest.param(None, None, 8500, 8500, id="settings"),
+        pytest.param(None, None, None, 8420, id="default"),
+    ],
+)
+def test_resolve_instance_uses_the_server_port_precedence_and_daily_log(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    port: int | None,
+    environment: str | None,
+    settings: int | None,
+    expected: int,
 ) -> None:
     data_dir = tmp_path / "data"
     data_dir.mkdir()
-    (data_dir / "settings.json").write_text(
-        json.dumps({"format_version": 1, "server_port": 8500}), encoding="utf-8"
-    )
-    monkeypatch.setenv("VBOT_SERVER_PORT", "8600")
+    if settings is not None:
+        (data_dir / "settings.json").write_text(
+            json.dumps({"format_version": 1, "server_port": settings}), encoding="utf-8"
+        )
+    if environment is None:
+        monkeypatch.delenv("VBOT_SERVER_PORT", raising=False)
+    else:
+        monkeypatch.setenv("VBOT_SERVER_PORT", environment)
 
-    instance = resolve_instance(host="localhost", port=8700, data_dir=data_dir)
+    instance = resolve_instance(host="localhost", port=port, data_dir=data_dir)
 
-    assert instance.host == "localhost"
-    assert instance.port == 8700
-    assert instance.url == "http://localhost:8700"
+    assert instance.port == expected
+    assert instance.url == f"http://localhost:{expected}"
     assert instance.data_dir == data_dir.resolve()
     assert instance.log_path == resolve_daily_log_path(data_dir.resolve())
+    assert instance.log_path.suffix == ".log"
 
 
 @pytest.mark.parametrize(
@@ -121,345 +161,157 @@ def test_resolve_instance_builds_connectable_ipv6_safe_url(
     assert instance.url == expected_url
 
 
-def test_resolve_instance_uses_environment_before_settings(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    data_dir = tmp_path / "data"
-    data_dir.mkdir()
-    (data_dir / "settings.json").write_text(
-        json.dumps({"format_version": 1, "server_port": 8500}), encoding="utf-8"
-    )
-    monkeypatch.setenv("VBOT_SERVER_PORT", "8600")
-
-    instance = resolve_instance(data_dir=data_dir)
-
-    assert instance.port == 8600
+def connect_error(url: str, **_kwargs: Any) -> httpx.Response:
+    raise httpx.ConnectError("offline", request=httpx.Request("GET", url))
 
 
-def test_resolve_instance_uses_settings_before_default(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.delenv("VBOT_SERVER_PORT", raising=False)
-    data_dir = tmp_path / "data"
-    data_dir.mkdir()
-    (data_dir / "settings.json").write_text(
-        json.dumps({"format_version": 1, "server_port": 8500}), encoding="utf-8"
-    )
-
-    assert resolve_instance(data_dir=data_dir).port == 8500
-    assert resolve_instance(data_dir=tmp_path / "missing").port == 8420
-
-
-def test_probe_health_classifies_exact_health_contract(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    instance = make_instance(tmp_path)
-
-    monkeypatch.setattr(
-        server_management.httpx,
-        "get",
-        lambda url, *, timeout, trust_env: httpx.Response(200, json={"status": "ok"}),
-    )
-
-    result = probe_health(instance)
-
-    assert result == HealthProbeResult(reachable=True, is_vbot=True, status_code=200)
-
-
-def test_probe_health_uses_direct_loopback_without_proxy_env(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    instance = ServerInstance(
-        host="0.0.0.0",
-        port=8420,
-        data_dir=tmp_path / "data",
-        url="http://0.0.0.0:8420",
-        log_path=resolve_daily_log_path((tmp_path / "data").resolve()),
-    )
-    captured: dict[str, object] = {}
-
-    def fake_get(url, *, timeout, trust_env):
-        captured["url"] = url
-        captured["timeout"] = timeout
-        captured["trust_env"] = trust_env
-        return httpx.Response(200, json={"status": "ok"})
-
-    monkeypatch.setattr(server_management.httpx, "get", fake_get)
-
-    result = probe_health(instance)
-
-    assert result == HealthProbeResult(reachable=True, is_vbot=True, status_code=200)
-    assert captured == {
-        "url": "http://127.0.0.1:8420/health",
-        "timeout": server_management.DEFAULT_PROBE_TIMEOUT_SECONDS,
-        "trust_env": False,
-    }
+def respond(response: httpx.Response) -> Callable[..., httpx.Response]:
+    return lambda _url, **_kwargs: response
 
 
 @pytest.mark.parametrize(
-    "response",
+    ("get", "expected"),
     [
-        httpx.Response(200, json={"status": "ok", "extra": True}),
-        httpx.Response(200, json={"status": "up"}),
-        httpx.Response(503, json={"status": "ok"}),
-        httpx.Response(200, content=b"not-json"),
+        pytest.param(
+            respond(httpx.Response(200, json={"status": "ok"})),
+            HealthProbeResult(reachable=True, is_vbot=True, status_code=200),
+            id="vbot",
+        ),
+        pytest.param(
+            respond(httpx.Response(200, json={"status": "ok", "extra": True})),
+            HealthProbeResult(reachable=True, is_vbot=False, status_code=200),
+            id="extra-field",
+        ),
+        pytest.param(
+            respond(httpx.Response(200, json={"status": "up"})),
+            HealthProbeResult(reachable=True, is_vbot=False, status_code=200),
+            id="other-status",
+        ),
+        pytest.param(
+            respond(httpx.Response(503, json={"status": "ok"})),
+            HealthProbeResult(reachable=True, is_vbot=False, status_code=503),
+            id="error-status",
+        ),
+        pytest.param(
+            respond(httpx.Response(200, content=b"not-json")),
+            HealthProbeResult(reachable=True, is_vbot=False, status_code=200),
+            id="not-json",
+        ),
+        pytest.param(
+            connect_error,
+            HealthProbeResult(reachable=False, is_vbot=False, error="ConnectError"),
+            id="unreachable",
+        ),
     ],
 )
-def test_probe_health_rejects_non_vbot_responses(
-    tmp_path: Path,
+def test_probe_health_classifies_only_the_exact_health_answer_as_vbot(
+    instance: ServerInstance,
     monkeypatch: pytest.MonkeyPatch,
-    response: httpx.Response,
+    get: Callable[..., httpx.Response],
+    expected: HealthProbeResult,
 ) -> None:
-    instance = make_instance(tmp_path)
-    monkeypatch.setattr(
-        server_management.httpx,
-        "get",
-        lambda url, *, timeout, trust_env: response,
-    )
+    monkeypatch.setattr(server_management.httpx, "get", get)
 
-    result = probe_health(instance)
-
-    assert result.reachable is True
-    assert result.is_vbot is False
-
-
-def test_probe_health_reports_unreachable(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    instance = make_instance(tmp_path)
-
-    def raise_connect_error(url, *, timeout, trust_env):
-        request = httpx.Request("GET", url)
-        raise httpx.ConnectError("offline", request=request)
-
-    monkeypatch.setattr(server_management.httpx, "get", raise_connect_error)
-
-    result = probe_health(instance)
-
-    assert result.reachable is False
-    assert result.is_vbot is False
-    assert result.error == "ConnectError"
+    assert probe_health(instance) == expected
 
 
 @pytest.mark.parametrize(
-    ("status_code", "available"),
-    [(200, True), (302, True), (404, False), (500, False)],
+    ("get", "expected"),
+    [
+        (respond(httpx.Response(200)), WebUIProbeResult(available=True, status_code=200)),
+        (respond(httpx.Response(302)), WebUIProbeResult(available=True, status_code=302)),
+        (respond(httpx.Response(404)), WebUIProbeResult(available=False, status_code=404)),
+        (respond(httpx.Response(500)), WebUIProbeResult(available=False, status_code=500)),
+        (connect_error, WebUIProbeResult(available=False, error="ConnectError")),
+    ],
+    ids=["200", "302", "404", "500", "unreachable"],
 )
-def test_probe_webui_classifies_root_status(
+def test_probe_webui_classifies_the_root_answer(
+    instance: ServerInstance,
+    monkeypatch: pytest.MonkeyPatch,
+    get: Callable[..., httpx.Response],
+    expected: WebUIProbeResult,
+) -> None:
+    monkeypatch.setattr(server_management.httpx, "get", get)
+
+    assert probe_webui(instance) == expected
+
+
+@pytest.mark.parametrize(
+    ("probe", "url", "response"),
+    [
+        (probe_health, "http://127.0.0.1:8420/health", httpx.Response(200, json={"status": "ok"})),
+        (probe_webui, "http://127.0.0.1:8420/", httpx.Response(200)),
+    ],
+    ids=["health", "webui"],
+)
+def test_probes_request_the_wildcard_target_directly_on_loopback_without_proxies(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    status_code: int,
-    available: bool,
+    probe: Callable[[ServerInstance], object],
+    url: str,
+    response: httpx.Response,
 ) -> None:
-    instance = make_instance(tmp_path)
-    monkeypatch.setattr(
-        server_management.httpx,
-        "get",
-        lambda url, *, timeout, trust_env: httpx.Response(status_code),
-    )
+    instance = replace(make_instance(tmp_path), host="0.0.0.0", url="http://0.0.0.0:8420")
+    captured: list[dict[str, Any]] = []
 
-    result = probe_webui(instance)
-
-    assert result == WebUIProbeResult(available=available, status_code=status_code)
-
-
-def test_probe_webui_uses_direct_request_without_proxy_env(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    instance = make_instance(tmp_path)
-    captured: dict[str, object] = {}
-
-    def fake_get(url, *, timeout, trust_env):
-        captured["url"] = url
-        captured["timeout"] = timeout
-        captured["trust_env"] = trust_env
-        return httpx.Response(200)
+    def fake_get(url: str, *, timeout: float, trust_env: bool) -> httpx.Response:
+        captured.append({"url": url, "timeout": timeout, "trust_env": trust_env})
+        return response
 
     monkeypatch.setattr(server_management.httpx, "get", fake_get)
 
-    result = probe_webui(instance)
+    probe(instance)
 
-    assert result == WebUIProbeResult(available=True, status_code=200)
-    assert captured == {
-        "url": "http://127.0.0.1:8420/",
-        "timeout": server_management.DEFAULT_PROBE_TIMEOUT_SECONDS,
-        "trust_env": False,
-    }
-
-
-def test_get_status_reports_running_with_webui(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    instance = make_instance(tmp_path)
-    monkeypatch.setattr(
-        server_management,
-        "probe_health",
-        lambda instance: HealthProbeResult(reachable=True, is_vbot=True, status_code=200),
-    )
-    monkeypatch.setattr(
-        server_management, "probe_webui", lambda instance: WebUIProbeResult(True, 200)
-    )
-
-    result = get_status(instance)
-
-    assert result.ok is True
-    assert result.health == HealthProbeResult(reachable=True, is_vbot=True, status_code=200)
-    assert result.webui == WebUIProbeResult(True, 200)
-
-
-def test_schedule_server_restart_detaches_exact_target_and_strips_run_context(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    instance = make_instance(tmp_path, port=9001)
-    captured: dict[str, Any] = {}
-    monkeypatch.setenv("VBOT_RUN_AGENT_ID", "main")
-    monkeypatch.setenv("VBOT_RUN_SESSION_ID", "session-1")
-
-    def open_process(arguments: list[str], environment: dict[str, str]) -> SimpleNamespace:
-        captured["arguments"] = arguments
-        captured["environment"] = environment
-        return SimpleNamespace(pid=7654)
-
-    monkeypatch.setattr(server_management, "_open_scheduled_restart_process", open_process)
-
-    result = server_management.schedule_server_restart(
-        instance,
-        service_name="vbot-test",
-        wait_pid=4321,
-    )
-
-    assert result.ok is True
-    assert "7654" in result.message
-    assert captured["arguments"] == [
-        server_management.sys.executable,
-        "-m",
-        "cli.server_management",
-        "--scheduled-restart",
-        "--wait-pid",
-        "4321",
-        "--host",
-        "127.0.0.1",
-        "--port",
-        "9001",
-        "--data-dir",
-        str(instance.data_dir),
-        "--service-name",
-        "vbot-test",
+    assert captured == [
+        {
+            "url": url,
+            "timeout": server_management.DEFAULT_PROBE_TIMEOUT_SECONDS,
+            "trust_env": False,
+        }
     ]
-    assert not any(key.startswith("VBOT_RUN_") for key in captured["environment"])
 
 
-def test_vbot_run_context_requires_agent_and_session_identity() -> None:
-    assert server_management.has_vbot_run_context({}) is False
-    assert server_management.has_vbot_run_context({"VBOT_RUN_AGENT_ID": "main"}) is False
-    assert (
-        server_management.has_vbot_run_context(
-            {"VBOT_RUN_AGENT_ID": "main", "VBOT_RUN_SESSION_ID": "session-1"}
-        )
-        is True
-    )
-
-
-def test_scheduled_restart_waits_then_runs_once_and_logs_result(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    instance = make_instance(tmp_path, port=9001)
-    events: list[object] = []
-
-    class FakeCaller:
-        def wait(self, *, timeout: float) -> None:
-            events.append(("wait", timeout))
-
-    class FakeLogger:
-        def info(self, message: str, value: str) -> None:
-            events.append(("log", message, value))
-
-        def error(self, message: str, value: str) -> None:
-            events.append(("error", message, value))
-
-    class FakeManager:
-        def get_logger(self, _name: str) -> FakeLogger:
-            return FakeLogger()
-
-        def close(self) -> None:
-            events.append("close")
-
-    monkeypatch.setattr(server_management, "resolve_instance", lambda **_kwargs: instance)
-    monkeypatch.setattr(
-        server_management, "_create_cli_log_manager", lambda _instance: FakeManager()
-    )
-    monkeypatch.setattr(server_management.psutil, "Process", lambda _pid: FakeCaller())
-    monkeypatch.setattr(
-        server_management.time, "sleep", lambda seconds: events.append(("sleep", seconds))
-    )
-    monkeypatch.setattr(
-        server_management,
-        "restart_server",
-        lambda target, *, service_name: CommandResult(
-            ok=True, message=f"restarted {service_name}", instance=target
+@pytest.mark.parametrize(
+    ("health", "ok", "message", "webui"),
+    [
+        pytest.param(
+            HealthProbeResult(reachable=True, is_vbot=True, status_code=200),
+            True,
+            "running",
+            WebUIProbeResult(True, 200),
+            id="running",
         ),
-    )
-
-    result = server_management._run_scheduled_restart(
-        [
-            "--scheduled-restart",
-            "--wait-pid",
-            "4321",
-            "--host",
-            "127.0.0.1",
-            "--port",
-            "9001",
-            "--data-dir",
-            str(instance.data_dir),
-            "--service-name",
-            "vbot-test",
-        ]
-    )
-
-    assert result == 0
-    assert events == [
-        ("wait", 60.0),
-        ("sleep", 0.5),
-        ("log", "Scheduled update restart result: %s", "restarted vbot-test"),
-        "close",
-    ]
-
-
-def test_get_status_reports_non_vbot_conflict(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        pytest.param(
+            HealthProbeResult(reachable=True, is_vbot=False, status_code=200),
+            False,
+            "port occupied by non-vBot process",
+            WebUIProbeResult(False),
+            id="non-vbot",
+        ),
+        pytest.param(
+            HealthProbeResult(reachable=False, is_vbot=False, error="ConnectError"),
+            True,
+            "not running",
+            WebUIProbeResult(False),
+            id="not-running",
+        ),
+    ],
+)
+def test_get_status_reports_health_and_probes_the_webui_only_for_vbot(
+    instance: ServerInstance,
+    monkeypatch: pytest.MonkeyPatch,
+    health: HealthProbeResult,
+    ok: bool,
+    message: str,
+    webui: WebUIProbeResult,
 ) -> None:
-    instance = make_instance(tmp_path)
+    monkeypatch.setattr(server_management, "probe_health", lambda _instance: health)
     monkeypatch.setattr(
-        server_management,
-        "probe_health",
-        lambda instance: HealthProbeResult(reachable=True, is_vbot=False, status_code=200),
+        server_management, "probe_webui", lambda _instance: WebUIProbeResult(True, 200)
     )
 
     result = get_status(instance)
 
-    assert result.ok is False
-    assert result.health == HealthProbeResult(reachable=True, is_vbot=False, status_code=200)
-    assert result.webui == WebUIProbeResult(False)
-
-
-def test_get_status_reports_not_running_with_webui_unavailable(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    instance = make_instance(tmp_path)
-    monkeypatch.setattr(
-        server_management,
-        "probe_health",
-        lambda instance: HealthProbeResult(reachable=False, is_vbot=False, error="ConnectError"),
-    )
-
-    result = get_status(instance)
-
-    assert result.ok is True
-    assert result.health == HealthProbeResult(reachable=False, is_vbot=False, error="ConnectError")
-    assert result.webui == WebUIProbeResult(False)
+    assert (result.ok, result.message, result.health, result.webui) == (ok, message, health, webui)
+    assert result.log_path == instance.log_path

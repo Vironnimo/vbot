@@ -6,7 +6,6 @@ import base64
 import json
 import re
 import subprocess
-import sys
 import sysconfig
 from collections.abc import Callable, Sequence
 from pathlib import Path
@@ -55,36 +54,21 @@ def _windows_task_script_and_payload(command: list[str]) -> tuple[str, dict[str,
     return script, payload
 
 
-def test_default_runner_decodes_utf8_and_preserves_invalid_bytes() -> None:
-    utf8_result = _default_runner(
-        [
-            sys.executable,
-            "-c",
-            "import sys; sys.stdout.buffer.write('Łódź'.encode('utf-8'))",
-        ]
-    )
-    invalid_result = _default_runner(
-        [
-            sys.executable,
-            "-c",
-            "import sys; sys.stderr.buffer.write(bytes([0x81]) + b'tail')",
-        ]
-    )
+def test_default_runner_runs_without_a_console_and_decodes_its_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
 
-    assert utf8_result.stdout == "Łódź"
-    assert invalid_result.stderr == r"\x81tail"
-
-
-def test_autostart_subprocess_does_not_allocate_a_console(monkeypatch):
-    captured = {}
-
-    def run(command, **kwargs):
+    def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
         captured.update(kwargs)
-        return subprocess.CompletedProcess(command, 0, b"registered", b"")
+        return subprocess.CompletedProcess(command, 0, "Łódź\n".encode(), b"\x81tail")
 
     monkeypatch.setattr(autostart_management.subprocess, "run", run)
     monkeypatch.setattr(autostart_management, "subprocess_creation_flags", lambda: 0x08000000)
-    assert _default_runner(["powershell.exe"]).stdout == "registered"
+
+    result = _default_runner(["powershell.exe"])
+
+    assert (result.stdout, result.stderr) == ("Łódź", r"\x81tail")
     assert captured["creationflags"] == 0x08000000
     assert captured["capture_output"] is True
 
@@ -252,8 +236,14 @@ def test_windows_autostart_server_gets_cold_start_timeout(
     assert captured == [(instance, 60.0)]
 
 
-def test_enable_linux_writes_unit_and_enables(tmp_path: Path) -> None:
-    runner = ScriptedRunner(lambda command: _ok())
+@pytest.mark.parametrize("lingering", [True, False], ids=["lingering", "linger-refused"])
+def test_enable_linux_writes_unit_and_enables(tmp_path: Path, lingering: bool) -> None:
+    def handler(command: list[str]) -> CommandRun:
+        # Lingering is best effort: its failure warns but keeps the enabled unit.
+        refused = command[0] == "loginctl" and not lingering
+        return _err("permission denied") if refused else _ok()
+
+    runner = ScriptedRunner(handler)
     events, start = _recording_start()
 
     repo = Path("/opt/vbot")
@@ -277,6 +267,10 @@ def test_enable_linux_writes_unit_and_enables(tmp_path: Path) -> None:
     assert "KillMode=mixed" in unit
     assert "KillMode=process" not in unit
     assert runner.ran("systemctl", "--user", "enable", "--now", "vbot.service")
+    assert runner.ran("loginctl", "enable-linger")
+    assert ("login lingering could not be enabled" in result.message) is not lingering
+    linger_attention = "Login lingering could not be enabled; boot-before-login is not guaranteed"
+    assert (linger_attention in result.attention) is not lingering
 
 
 def test_enable_unsupported_platform() -> None:
@@ -289,144 +283,140 @@ def test_enable_unsupported_platform() -> None:
     assert events == []
 
 
-def test_disable_windows_deletes_existing_task() -> None:
-    runner = ScriptedRunner(lambda command: _ok())
+@pytest.mark.parametrize(
+    ("status", "operations"),
+    [
+        pytest.param(_ok(), ["status", "delete"], id="existing-task"),
+        pytest.param(CommandRun(3, "", ""), ["status"], id="absent-task"),
+    ],
+)
+def test_disable_windows_deletes_only_an_existing_task(
+    status: CommandRun, operations: list[str]
+) -> None:
+    def handler(command: list[str]) -> CommandRun:
+        operation = _windows_task_script_and_payload(command)[1]["operation"]
+        return status if operation == "status" else _ok()
+
+    runner = ScriptedRunner(handler)
+
     result = disable_autostart(_instance(), platform="win32", runner=runner)
 
     assert result.ok
-    operations = [_windows_task_script_and_payload(call)[1]["operation"] for call in runner.calls]
-    assert operations == ["status", "delete"]
+    called = [_windows_task_script_and_payload(call)[1]["operation"] for call in runner.calls]
+    assert called == operations
 
 
-def test_disable_windows_idempotent_when_absent() -> None:
-    runner = ScriptedRunner(lambda command: CommandRun(3, "", ""))
-    result = disable_autostart(_instance(), platform="win32", runner=runner)
+@pytest.mark.parametrize("disabled", [True, False], ids=["disabled", "disable-fails"])
+def test_disable_linux_removes_the_unit_only_after_systemd_disabled_it(
+    tmp_path: Path, disabled: bool
+) -> None:
+    unit = tmp_path / "vbot.service"
+    unit.write_text("[Unit]\n", encoding="utf-8")
 
-    assert result.ok
-    assert len(runner.calls) == 1
-    assert _windows_task_script_and_payload(runner.calls[0])[1]["operation"] == "status"
+    def handler(command: list[str]) -> CommandRun:
+        return _err("dbus unavailable") if "disable" in command and not disabled else _ok()
 
-
-def test_disable_linux_removes_unit(tmp_path: Path) -> None:
-    (tmp_path / "vbot.service").write_text("[Unit]\n", encoding="utf-8")
-    runner = ScriptedRunner(lambda command: _ok())
+    runner = ScriptedRunner(handler)
 
     result = disable_autostart(_instance(), platform="linux", runner=runner, unit_dir=tmp_path)
 
-    assert result.ok
-    assert not (tmp_path / "vbot.service").exists()
+    assert result.ok is disabled
+    assert unit.exists() is not disabled
     assert runner.ran("systemctl", "--user", "disable", "vbot.service")
 
 
-def test_status_reports_enabled_windows() -> None:
-    launcher = r"C:\vbot\vbot-desktop.exe"
-    action = json.dumps(
-        {
-            "launcher": launcher,
-            "arguments": subprocess.list2cmdline(
-                [
-                    "--host",
-                    "127.0.0.1",
-                    "--port",
-                    "8420",
-                    "--data-dir",
-                    str(_instance().data_dir),
-                ]
+_WINDOWS_LAUNCHER = r"C:\vbot\vbot-desktop.exe"
+
+
+def _task_action(arguments: list[str]) -> CommandRun:
+    action = {"launcher": _WINDOWS_LAUNCHER, "arguments": subprocess.list2cmdline(arguments)}
+    return _ok(json.dumps(action))
+
+
+@pytest.mark.parametrize(
+    ("answer", "ok", "message"),
+    [
+        pytest.param(
+            _task_action(
+                ["--host", "127.0.0.1", "--port", "8420", "--data-dir", str(_instance().data_dir)]
             ),
-        }
-    )
-    runner = ScriptedRunner(lambda command: _ok(action))
+            True,
+            "autostart: enabled (per-user Task Scheduler task 'vBot')",
+            id="enabled",
+        ),
+        pytest.param(
+            _task_action(["--host", "127.0.0.1", "--port", "9999", "--data-dir", "/data"]),
+            False,
+            "targets a different server instance",
+            id="other-instance",
+        ),
+        pytest.param(
+            CommandRun(3, "", ""),
+            True,
+            "autostart: not enabled (per-user Task Scheduler task 'vBot')",
+            id="absent",
+        ),
+        pytest.param(
+            _err("no service"),
+            False,
+            "autostart: Task Scheduler query failed: no service",
+            id="scheduler-failure",
+        ),
+    ],
+)
+def test_windows_status_matches_the_task_to_the_exact_instance(
+    answer: CommandRun, ok: bool, message: str
+) -> None:
     result = autostart_status(
         _instance(),
         platform="win32",
-        runner=runner,
-        windows_launcher_path=launcher,
+        runner=ScriptedRunner(lambda command: answer),
+        windows_launcher_path=_WINDOWS_LAUNCHER,
     )
 
-    assert result.ok
-    assert "enabled" in result.message
-    assert "not enabled" not in result.message
+    assert result.ok is ok
+    assert message in result.message
 
 
-def test_status_rejects_windows_task_for_different_instance() -> None:
-    launcher = r"C:\vbot\vbot-desktop.exe"
-    action = json.dumps(
-        {
-            "launcher": launcher,
-            "arguments": "--host 127.0.0.1 --port 9999 --data-dir /data",
-        }
-    )
-
-    result = autostart_status(
-        _instance(),
-        platform="win32",
-        runner=ScriptedRunner(lambda command: _ok(action)),
-        windows_launcher_path=launcher,
-    )
-
-    assert not result.ok
-    assert "different server instance" in result.message
-
-
-def test_status_distinguishes_absent_task_from_scheduler_failure() -> None:
-    absent = autostart_status(
-        _instance(),
-        platform="win32",
-        runner=ScriptedRunner(lambda command: CommandRun(3, "", "")),
-    )
-    failed = autostart_status(
-        _instance(), platform="win32", runner=ScriptedRunner(lambda command: _err("no service"))
-    )
-
-    assert absent.ok
-    assert "not enabled" in absent.message
-    assert not failed.ok
-    assert "no service" in failed.message
-
-
-def test_status_reports_not_enabled_linux() -> None:
-    runner = ScriptedRunner(lambda command: CommandRun(1, "disabled", ""))
-    result = autostart_status(_instance(), platform="linux", runner=runner)
-
-    assert result.ok
-    assert "not enabled" in result.message
-
-
-def test_status_rejects_enabled_linux_unit_for_different_instance(tmp_path: Path) -> None:
-    (tmp_path / "vbot.service").write_text(
-        "[Service]\nExecStart=/wrong/program\n", encoding="utf-8"
-    )
-
-    result = autostart_status(
-        _instance(),
-        platform="linux",
-        runner=ScriptedRunner(lambda command: _ok("enabled")),
-        unit_dir=tmp_path,
-        python_executable="/expected/python",
-        repo_root=Path("/repo"),
-    )
-
-    assert not result.ok
-    assert "different server instance" in result.message
-
-
-def test_status_accepts_enabled_linux_unit_for_exact_instance(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("answer", "unit", "ok", "message"),
+    [
+        pytest.param(CommandRun(1, "disabled", ""), None, True, "not enabled", id="disabled"),
+        pytest.param(
+            _ok("enabled"),
+            "[Service]\nExecStart=/wrong/program\n",
+            False,
+            "different server instance",
+            id="other-instance",
+        ),
+        pytest.param(_ok("enabled"), "exact", True, "enabled", id="exact-instance"),
+        pytest.param(_err("no bus"), None, False, "systemctl is-enabled failed", id="failure"),
+    ],
+)
+def test_linux_status_matches_the_enabled_unit_to_the_exact_instance(
+    tmp_path: Path, answer: CommandRun, unit: str | None, ok: bool, message: str
+) -> None:
     python_executable = "/expected/python"
     repo_root = Path("/repo")
-    unit = autostart_management._systemd_unit(_instance(), python_executable, repo_root)
-    (tmp_path / "vbot.service").write_text(unit, encoding="utf-8")
+    if unit is not None:
+        content = (
+            autostart_management._systemd_unit(_instance(), python_executable, repo_root)
+            if unit == "exact"
+            else unit
+        )
+        (tmp_path / "vbot.service").write_text(content, encoding="utf-8")
 
     result = autostart_status(
         _instance(),
         platform="linux",
-        runner=ScriptedRunner(lambda command: _ok("enabled")),
+        runner=ScriptedRunner(lambda command: answer),
         unit_dir=tmp_path,
         python_executable=python_executable,
         repo_root=repo_root,
     )
 
-    assert result.ok
-    assert "enabled" in result.message
+    assert result.ok is ok
+    assert message in result.message
 
 
 def test_linux_service_name_cannot_escape_unit_directory(tmp_path: Path) -> None:
@@ -474,58 +464,7 @@ def test_linux_unit_quotes_paths_and_escapes_specifiers(tmp_path: Path) -> None:
     assert f'"--data-dir" "{escaped_data}"' in unit
 
 
-def test_linux_disable_failure_preserves_unit(tmp_path: Path) -> None:
-    unit = tmp_path / "vbot.service"
-    unit.write_text("[Unit]\n", encoding="utf-8")
-
-    def handler(command: list[str]) -> CommandRun:
-        if "disable" in command:
-            return _err("dbus unavailable")
-        return _ok()
-
-    result = disable_autostart(
-        _instance(), platform="linux", runner=ScriptedRunner(handler), unit_dir=tmp_path
-    )
-
-    assert not result.ok
-    assert unit.exists()
-
-
-def test_linux_status_surfaces_systemctl_failure() -> None:
-    result = autostart_status(
-        _instance(), platform="linux", runner=ScriptedRunner(lambda command: _err("no bus"))
-    )
-
-    assert not result.ok
-
-
-def test_linger_failure_does_not_roll_back_enabled_unit(tmp_path: Path) -> None:
-    def handler(command: list[str]) -> CommandRun:
-        if command[0] == "loginctl":
-            return _err("permission denied")
-        return _ok()
-
-    result = enable_autostart(
-        _instance(),
-        platform="linux",
-        runner=ScriptedRunner(handler),
-        unit_dir=tmp_path,
-    )
-
-    assert result.ok
-    assert (tmp_path / "vbot.service").exists()
-
-
-def test_parse_args_autostart() -> None:
-    args = parse_args(["autostart", "enable", "--task-name", "MyTask"])
-
-    assert args.area == "autostart"
-    assert args.command == "enable"
-    assert args.task_name == "MyTask"
-    assert args.service_name is None
-
-
-def test_dispatch_autostart_routes_to_enable() -> None:
+def test_dispatch_autostart_passes_the_parsed_options_to_enable() -> None:
     captured: dict[str, object] = {}
 
     def enable_fn(instance: ServerInstance, **kwargs: object) -> CommandResult:
@@ -535,11 +474,11 @@ def test_dispatch_autostart_routes_to_enable() -> None:
     def start(instance: ServerInstance) -> CommandResult:
         return CommandResult(ok=True, message="started", instance=instance)
 
-    args = parse_args(["autostart", "enable"])
+    args = parse_args(["autostart", "enable", "--task-name", "MyTask"])
     result = dispatch_autostart_command(
         args, resolve=lambda **_kwargs: _instance(), start=start, enable_fn=enable_fn
     )
 
     assert result.ok
-    assert captured["task_name"] is None
-    assert "start" in captured
+    assert (captured["task_name"], captured["service_name"]) == ("MyTask", None)
+    assert captured["start"] is start

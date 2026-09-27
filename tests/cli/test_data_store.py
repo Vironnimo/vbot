@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 
@@ -80,10 +81,14 @@ def test_remote_data_store_commands_never_inspect_local_data(tmp_path: Path, mon
     monkeypatch.setattr(data_store_management, "read_marker", forbidden)
     monkeypatch.setattr(data_store_management, "restore_data_snapshot", forbidden)
     monkeypatch.setattr(data_store_management, "stop_server", forbidden)
+    monkeypatch.setattr(data_store_management, "unregister_database", forbidden)
 
-    status = data_store_management.data_store_status(instance)
-    assert not status.ok
-    assert status.message == "remote RPC unavailable"
+    for answered_by_rpc in (
+        data_store_management.data_store_status(instance),
+        data_store_management.data_store_unregister(instance, _EXTENSION, True),
+    ):
+        assert not answered_by_rpc.ok
+        assert answered_by_rpc.message == "remote RPC unavailable"
     for result in (
         data_store_management.data_store_snapshot_list(instance),
         data_store_management.data_store_snapshot_verify(instance, "snapshot"),
@@ -404,23 +409,6 @@ def test_unregister_is_performed_and_refused_by_a_running_server(
     assert refused.message == "the database is open by its Extension"
 
 
-def test_unregister_never_changes_local_data_for_a_remote_target(
-    tmp_path: Path, monkeypatch
-) -> None:
-    instance = replace(_instance(tmp_path), host="remote.example", url="http://remote.example:8420")
-    _stopped_server(monkeypatch, instance)
-    monkeypatch.setattr(
-        data_store_management,
-        "unregister_database",
-        lambda *_args: pytest.fail("a remote target must not change local state"),
-    )
-
-    result = data_store_management.data_store_unregister(instance, _EXTENSION, True)
-
-    assert not result.ok
-    assert result.message == "RPC unavailable"
-
-
 def test_unregister_releases_locally_and_a_restore_registers_it_again(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -456,31 +444,47 @@ def test_unregister_releases_locally_and_a_restore_registers_it_again(
     assert _registered_names(tmp_path) == {_EXTENSION}
 
 
-def test_unregister_is_refused_locally_while_a_server_runs_on_the_data_directory(
-    tmp_path: Path, monkeypatch
-) -> None:
-    instance = _instance(tmp_path)
-    _registered_extension(tmp_path)
-    _stopped_server(monkeypatch, instance)
-    monkeypatch.setattr(data_store_management, "live_server_ports", lambda _data_dir: (8421,))
-
-    result = data_store_management.data_store_unregister(instance, _EXTENSION, True)
-
-    assert not result.ok
-    assert "a vBot server is running on the data directory (port 8421)" in result.message
-    assert _registered_names(tmp_path) == {_EXTENSION}
-    assert notes_spec(tmp_path, name=_EXTENSION).path.is_file()
-
-
-def test_local_unregister_refuses_a_core_database(tmp_path: Path, monkeypatch) -> None:
-    instance = _instance(tmp_path)
+def _core_database(tmp_path: Path) -> None:
     write_bootstrap_marker(tmp_path)
     ChatSessionManager(tmp_path).close()
-    _stopped_server(monkeypatch, instance)
-    monkeypatch.setattr(data_store_management, "live_server_ports", lambda _data_dir: ())
 
-    result = data_store_management.data_store_unregister(instance, "sessions", True)
+
+@pytest.mark.parametrize(
+    ("prepare", "name", "live_ports", "reason"),
+    [
+        pytest.param(
+            _registered_extension,
+            _EXTENSION,
+            (8421,),
+            "a vBot server is running on the data directory (port 8421)",
+            id="server-running-on-the-data-directory",
+        ),
+        pytest.param(
+            _core_database,
+            "sessions",
+            (),
+            "sessions is a core vBot database and cannot be unregistered",
+            id="core-database",
+        ),
+    ],
+)
+def test_local_unregister_refuses_and_keeps_the_registration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    prepare: Callable[[Path], object],
+    name: str,
+    live_ports: tuple[int, ...],
+    reason: str,
+) -> None:
+    instance = _instance(tmp_path)
+    prepare(tmp_path)
+    _stopped_server(monkeypatch, instance)
+    monkeypatch.setattr(data_store_management, "live_server_ports", lambda _data_dir: live_ports)
+
+    result = data_store_management.data_store_unregister(instance, name, True)
 
     assert not result.ok
-    assert "sessions is a core vBot database and cannot be unregistered" in result.message
-    assert _registered_names(tmp_path) == {"sessions"}
+    assert reason in result.message
+    assert _registered_names(tmp_path) == {name}
+    if name == _EXTENSION:
+        assert notes_spec(tmp_path, name=_EXTENSION).path.is_file()
