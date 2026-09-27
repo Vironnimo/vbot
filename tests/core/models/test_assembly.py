@@ -1,16 +1,17 @@
-"""Tests for the at-load 3-layer assembly, the canonical join, and the merge.
+"""Models: at-load assembly of the canonical, provider, and override layers.
 
-Two layers of coverage:
-
-* Unit tests over the pure functions in ``core.models.assembly``
-  (:func:`resolve_canonical_id`, :func:`merge_layers`, :func:`load_canonical_layer`,
-  :func:`assemble_provider_model`).
-* End-to-end tests over ``ModelRegistry.load()`` against the worked-example
-  fixtures under ``fixtures/assembly/`` — this is the acceptance gate for the
-  handoff's ``deepseek-v4-pro`` example (two providers, two effective ladders).
+Table tests pin the join and merge rules of ``core.models.assembly``; the
+end-to-end tests load the worked example under ``fixtures/assembly/`` (the
+``deepseek-v4-pro`` Model on two Providers with two effective ladders).
 """
 
+from __future__ import annotations
+
+import copy
+import json
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -25,435 +26,227 @@ from core.models.models import ModelRegistry
 ASSEMBLY_FIXTURES = Path(__file__).parent / "fixtures" / "assembly"
 
 
-@pytest.fixture(autouse=True)
-def _clear_registry_cache():
-    ModelRegistry._cache.clear()
-    yield
-    ModelRegistry._cache.clear()
-
-
-# ---------------------------------------------------------------------------
-# resolve_canonical_id — the deterministic join (no fuzzy)
-# ---------------------------------------------------------------------------
-
-
-class TestResolveCanonicalId:
-    def test_explicit_override_pointer_wins(self):
-        """A manual pointer in the override layer beats the auto pointer in the
-        provider layer."""
-
-        result = resolve_canonical_id(
+@pytest.mark.parametrize(
+    ("wire_id", "provider_model", "override_model", "canonical_ids", "expected"),
+    [
+        pytest.param(
             "wire-id",
             {"canonical": "lab/auto"},
             {"canonical": "lab/manual"},
-            {"lab/auto": {}, "lab/manual": {}},
-        )
-        assert result == "lab/manual"
-
-    def test_provider_auto_pointer_used_when_no_override_pointer(self):
-        result = resolve_canonical_id(
-            "wire-id",
-            {"canonical": "lab/auto"},
-            None,
-            {"lab/auto": {}},
-        )
-        assert result == "lab/auto"
-
-    def test_exact_canonical_id_match_when_no_pointer(self):
-        """A wire-id that is itself a canonical-layer key auto-joins by exact
-        match (OpenRouter/Mistral-style ``lab/model`` wire-ids)."""
-
-        result = resolve_canonical_id(
-            "deepseek/deepseek-v4-pro",
-            {},
-            None,
-            {"deepseek/deepseek-v4-pro": {}},
-        )
-        assert result == "deepseek/deepseek-v4-pro"
-
-    def test_no_join_when_no_pointer_and_no_exact_match(self):
-        """A missed join is not an error — it returns None."""
-
-        result = resolve_canonical_id("opaque-wire-id", {}, None, {"other/model": {}})
-        assert result is None
-
-    def test_pointer_at_a_missing_target_is_still_returned(self):
-        """The pointer is honored verbatim; a dead target is caught by the
-        validator, not silently dropped here."""
-
-        result = resolve_canonical_id("wire-id", {"canonical": "lab/dead"}, None, {})
-        assert result == "lab/dead"
-
-    def test_empty_string_pointer_falls_through_to_exact_match(self):
-        result = resolve_canonical_id(
+            ["lab/auto", "lab/manual"],
+            "lab/manual",
+            id="manual-pointer-beats-auto-pointer",
+        ),
+        pytest.param(
+            "wire-id", {"canonical": "lab/auto"}, None, ["lab/auto"], "lab/auto", id="auto-pointer"
+        ),
+        pytest.param(
+            "lab/model", {}, None, ["lab/model"], "lab/model", id="wire-id-is-a-canonical-id"
+        ),
+        pytest.param(
             "lab/model",
             {"canonical": ""},
             None,
-            {"lab/model": {}},
-        )
-        assert result == "lab/model"
+            ["lab/model"],
+            "lab/model",
+            id="empty-pointer-falls-through-to-exact-match",
+        ),
+        # A dead target is the validator's finding, not silently dropped here.
+        pytest.param(
+            "wire-id", {"canonical": "lab/dead"}, None, [], "lab/dead", id="dead-pointer-is-kept"
+        ),
+        pytest.param("opaque-wire-id", {}, None, ["other/model"], None, id="no-join"),
+    ],
+)
+def test_canonical_join_is_deterministic(
+    wire_id: str,
+    provider_model: dict[str, Any],
+    override_model: dict[str, Any] | None,
+    canonical_ids: list[str],
+    expected: str | None,
+) -> None:
+    canonical_layer: dict[str, Any] = {canonical_id: {} for canonical_id in canonical_ids}
+
+    assert resolve_canonical_id(wire_id, provider_model, override_model, canonical_layer) == (
+        expected
+    )
 
 
-# ---------------------------------------------------------------------------
-# merge_layers — field-level, highest wins, capabilities one level deep
-# ---------------------------------------------------------------------------
-
-
-class TestMergeLayers:
-    def test_highest_layer_wins_per_top_level_field(self):
-        merged = merge_layers(
+@pytest.mark.parametrize(
+    ("layers", "expected"),
+    [
+        pytest.param(
             [
                 {"name": "canonical", "context_window": 1000, "family": "base"},
                 {"name": "provider", "context_window": 2000},
                 {"name": "override"},
-            ]
-        )
-        assert merged["name"] == "override"
-        assert merged["context_window"] == 2000
-        assert merged["family"] == "base"
-
-    def test_higher_null_does_not_clobber_lower_value(self):
-        """A ``null`` in a higher layer means "unknown", not "erase": it must not
-        overwrite a value a lower layer supplied (fill, don't un-fill). This is the
-        opencode-go case — a provider's ``context_window: null`` lets the canonical
-        window flow through the join."""
-
-        merged = merge_layers(
+            ],
+            {"name": "override", "context_window": 2000, "family": "base"},
+            id="highest-layer-wins-per-field",
+        ),
+        # A higher null means "unknown": it fills an absent field but never erases a value.
+        pytest.param(
             [
                 {"context_window": 512000, "max_output_tokens": 128000},
                 {"context_window": None, "max_output_tokens": None, "name": "provider"},
-            ]
-        )
-        assert merged["context_window"] == 512000
-        assert merged["max_output_tokens"] == 128000
-        assert merged["name"] == "provider"
-
-    def test_higher_null_still_fills_absent_field(self):
-        """When no lower layer defines the field, a higher ``null`` is kept (the
-        field is genuinely unknown, not inherited from anywhere)."""
-
-        merged = merge_layers([{"name": "base"}, {"context_window": None}])
-        assert merged["context_window"] is None
-
-    def test_capabilities_merged_one_level_deep(self):
-        """Each capability sub-field is taken from its highest definer; sub-fields
-        a higher layer omits are inherited from below."""
-
-        merged = merge_layers(
+                {"family": None},
+            ],
+            {
+                "context_window": 512000,
+                "max_output_tokens": 128000,
+                "name": "provider",
+                "family": None,
+            },
+            id="null-fills-but-never-erases",
+        ),
+        pytest.param(
             [
-                {"capabilities": {"vision": False, "tools": True, "json_mode": True}},
-                {"capabilities": {"tools": False}},
-            ]
-        )
-        assert merged["capabilities"] == {
-            "vision": False,
-            "tools": False,
-            "json_mode": True,
-        }
-
-    def test_null_capabilities_inherit_without_erasing_false_or_empty_values(self):
-        lower = {
-            "capabilities": {
-                "reasoning": {"supported": True},
-                "vision": False,
-                "tools": True,
-                "input_modalities": ["text"],
-                "supported_voices": [],
-            }
-        }
-        merged = merge_layers(
-            [
-                lower,
                 {
                     "capabilities": {
-                        "reasoning": None,
+                        "reasoning": {"supported": True, "control": "levels", "levels": ["high"]},
+                        "vision": False,
+                        "tools": True,
+                        "input_modalities": ["text", "image"],
+                        "supported_voices": [],
+                    }
+                },
+                {
+                    "capabilities": {
+                        "reasoning": {"supported": True, "control": "on_off"},
                         "vision": None,
                         "tools": False,
-                        "input_modalities": None,
+                        "input_modalities": ["text"],
                         "supported_voices": None,
+                        "json_mode": None,
                     }
                 },
-            ]
-        )
-        assert merged["capabilities"] == {**lower["capabilities"], "tools": False}
+            ],
+            {
+                "capabilities": {
+                    "reasoning": {"supported": True, "control": "on_off"},
+                    "vision": False,
+                    "tools": False,
+                    "input_modalities": ["text"],
+                    "supported_voices": [],
+                    "json_mode": None,
+                }
+            },
+            id="capabilities-merge-one-level-deep-with-nested-values-wholesale",
+        ),
+    ],
+)
+def test_layers_merge_field_by_field(
+    layers: list[Mapping[str, Any]], expected: dict[str, Any]
+) -> None:
+    untouched = copy.deepcopy(layers)
 
-    def test_reasoning_object_replaced_wholesale_not_deep_merged(self):
-        """A nested ``reasoning`` object is replaced wholesale by the higher
-        layer — never key-by-key deep-merged."""
-
-        merged = merge_layers(
-            [
-                {
-                    "capabilities": {
-                        "reasoning": {
-                            "supported": True,
-                            "control": "levels",
-                            "levels": ["high", "max"],
-                        }
-                    }
-                },
-                {"capabilities": {"reasoning": {"supported": True, "control": "on_off"}}},
-            ]
-        )
-        # ``levels`` from the lower layer does NOT survive — wholesale replace.
-        assert merged["capabilities"]["reasoning"] == {
-            "supported": True,
-            "control": "on_off",
-        }
-
-    def test_modality_list_replaced_wholesale(self):
-        merged = merge_layers(
-            [
-                {"capabilities": {"input_modalities": ["text", "image"]}},
-                {"capabilities": {"input_modalities": ["text"]}},
-            ]
-        )
-        assert merged["capabilities"]["input_modalities"] == ["text"]
-
-    def test_inputs_are_not_mutated(self):
-        low = {"capabilities": {"vision": False}}
-        high = {"capabilities": {"vision": True}}
-        merge_layers([low, high])
-        assert low == {"capabilities": {"vision": False}}
-        assert high == {"capabilities": {"vision": True}}
+    assert merge_layers(layers) == expected
+    assert layers == untouched
 
 
-# ---------------------------------------------------------------------------
-# load_canonical_layer — defensive, base + canonical overrides
-# ---------------------------------------------------------------------------
+def test_canonical_layer_applies_its_overrides(tmp_path: Path) -> None:
+    models_dir = tmp_path / "models"
+    models_dir.mkdir()
+
+    assert load_canonical_layer(models_dir) == {}
+
+    (models_dir / "models.json").write_text(
+        json.dumps({"models": {"lab/x": {"name": "Base", "family": "base"}}}), encoding="utf-8"
+    )
+    (models_dir / "models.overrides.json").write_text(
+        json.dumps({"models": {"lab/x": {"name": "Corrected"}, "lab/y": {"name": "Y"}}}),
+        encoding="utf-8",
+    )
+
+    assert load_canonical_layer(models_dir) == {
+        "lab/x": {"name": "Corrected", "family": "base"},
+        "lab/y": {"name": "Y"},
+    }
 
 
-class TestLoadCanonicalLayer:
-    def test_absent_canonical_file_yields_empty_layer(self, tmp_path: Path):
-        models_dir = tmp_path / "models"
-        models_dir.mkdir()
-        assert load_canonical_layer(models_dir) == {}
-
-    def test_loads_base_records(self):
-        layer = load_canonical_layer(ASSEMBLY_FIXTURES / "models")
-        assert "deepseek/deepseek-v4-pro" in layer
-        assert layer["deepseek/deepseek-v4-pro"]["family"] == "deepseek-v4"
-
-    def test_canonical_overrides_win_field_level(self, tmp_path: Path):
-        models_dir = tmp_path / "models"
-        models_dir.mkdir()
-        (models_dir / "models.json").write_text(
-            '{"models": {"lab/x": {"name": "Base", "family": "base"}}}',
-            encoding="utf-8",
-        )
-        (models_dir / "models.overrides.json").write_text(
-            '{"models": {"lab/x": {"name": "Corrected"}}}',
-            encoding="utf-8",
-        )
-
-        layer = load_canonical_layer(models_dir)
-
-        assert layer["lab/x"]["name"] == "Corrected"
-        assert layer["lab/x"]["family"] == "base"
-
-    def test_canonical_override_can_add_a_new_record(self, tmp_path: Path):
-        models_dir = tmp_path / "models"
-        models_dir.mkdir()
-        (models_dir / "models.json").write_text(
-            '{"models": {"lab/x": {"name": "X"}}}', encoding="utf-8"
-        )
-        (models_dir / "models.overrides.json").write_text(
-            '{"models": {"lab/y": {"name": "Y"}}}', encoding="utf-8"
-        )
-
-        layer = load_canonical_layer(models_dir)
-
-        assert set(layer) == {"lab/x", "lab/y"}
-
-
-# ---------------------------------------------------------------------------
-# assemble_provider_model — strips the join key, applies the merge
-# ---------------------------------------------------------------------------
-
-
-class TestAssembleProviderModel:
-    def test_canonical_pointer_is_stripped_from_result(self):
-        record = assemble_provider_model(
+@pytest.mark.parametrize(
+    ("wire_id", "provider_model", "canonical_layer", "expected"),
+    [
+        pytest.param(
             "deepseek-v4-pro",
             {"name": "P", "canonical": "deepseek/deepseek-v4-pro"},
-            None,
             {"deepseek/deepseek-v4-pro": {"name": "Canon", "family": "deepseek-v4"}},
-        )
-        assert "canonical" not in record
-        assert record["family"] == "deepseek-v4"
-
-    def test_no_join_runs_on_provider_data_only(self):
-        record = assemble_provider_model(
+            {"name": "P", "family": "deepseek-v4"},
+            id="join-inherits-and-strips-the-pointer",
+        ),
+        pytest.param(
             "opaque",
             {"name": "Provider Only", "context_window": 8000},
-            None,
             {},
-        )
-        assert record == {"name": "Provider Only", "context_window": 8000}
+            {"name": "Provider Only", "context_window": 8000},
+            id="no-join-uses-provider-data-only",
+        ),
+    ],
+)
+def test_provider_model_assembles_from_its_layers(
+    wire_id: str,
+    provider_model: dict[str, Any],
+    canonical_layer: dict[str, Any],
+    expected: dict[str, Any],
+) -> None:
+    assert assemble_provider_model(wire_id, provider_model, None, canonical_layer) == expected
 
 
-# ---------------------------------------------------------------------------
-# Worked example — ModelRegistry.load() over the fixtures (acceptance gate)
-# ---------------------------------------------------------------------------
+def test_worked_example_loads_one_canonical_model_with_per_provider_ladders() -> None:
+    """Canonical ladder ``[high, max]``; OpenRouter deviates to ``[high, xhigh]``
+    through the exact-id join; opencode-go omits reasoning behind a pointer."""
+
+    registry = ModelRegistry.load(ASSEMBLY_FIXTURES)
+    openrouter = registry.get("openrouter", "deepseek/deepseek-v4-pro")
+    opencode_go = registry.get("opencode-go", "deepseek-v4-pro")
+    standalone = registry.get("openrouter", "vendor-x/standalone-model")
+    hand_corrected = registry.get("mistral", "thin-deepseek")
+
+    # The provider name wins; family comes from the canonical record.
+    assert (openrouter.name, openrouter.family) == ("DeepSeek V4 Pro (OpenRouter)", "deepseek-v4")
+    assert openrouter.capabilities.reasoning.levels == ("high", "xhigh")
+    # The wire id stays the Provider's; the canonical id never lands on the Model.
+    assert (opencode_go.model_id, opencode_go.family) == ("deepseek-v4-pro", "deepseek-v4")
+    assert opencode_go.capabilities.reasoning.control == "levels"
+    assert opencode_go.capabilities.reasoning.levels == ("high", "max")
+    # A missed join is not an error: the Model loads on Provider data alone.
+    assert (standalone.name, standalone.family, standalone.context_window) == (
+        "Standalone Model",
+        "",
+        64000,
+    )
+    assert standalone.capabilities.reasoning.supported is False
+    # The override (no provider_id, manual pointer) wins, and its ladder replaces
+    # both the provider ladder [low, medium] and the canonical [high, max] wholesale.
+    assert (hand_corrected.name, hand_corrected.family) == (
+        "Thin DeepSeek (hand-corrected)",
+        "deepseek-v4",
+    )
+    assert hand_corrected.capabilities.reasoning.levels == ("medium", "high", "max")
+    assert (
+        hand_corrected.context_window,
+        hand_corrected.max_output_tokens,
+        hand_corrected.capabilities.tools,
+    ) == (128000, 16000, True)
 
 
-class TestWorkedExampleDeepseekV4Pro:
-    """The handoff's ``deepseek-v4-pro`` worked example, end-to-end.
+def test_empty_provider_record_inherits_the_complete_canonical_model(tmp_path: Path) -> None:
+    models_dir = tmp_path / "models"
+    models_dir.mkdir()
+    (models_dir / "thin.json").write_text(
+        json.dumps({"provider_id": "thin", "models": {"lab/model": {}}}), encoding="utf-8"
+    )
+    canonical = {
+        "name": "Canonical",
+        "capabilities": {
+            "vision": False,
+            "tools": True,
+            "json_mode": False,
+            "reasoning": {"supported": False},
+        },
+    }
+    (models_dir / "models.json").write_text(
+        json.dumps({"models": {"lab/model": canonical}}), encoding="utf-8"
+    )
 
-    Canonical ladder ``[high, max]``. OpenRouter deviates to ``[high, xhigh]``
-    (joins by exact canonical-id match). opencode-go omits reasoning and carries
-    a ``canonical`` pointer, so it inherits ``[high, max]``.
-    """
-
-    def test_openrouter_deviating_ladder_is_effective(self):
-        registry = ModelRegistry.load(ASSEMBLY_FIXTURES)
-        model = registry.get("openrouter", "deepseek/deepseek-v4-pro")
-
-        assert model.capabilities.reasoning.levels == ("high", "xhigh")
-        # Provider name wins over canonical; family is inherited from canonical.
-        assert model.name == "DeepSeek V4 Pro (OpenRouter)"
-        assert model.family == "deepseek-v4"
-
-    def test_opencode_go_inherits_canonical_ladder(self):
-        registry = ModelRegistry.load(ASSEMBLY_FIXTURES)
-        model = registry.get("opencode-go", "deepseek-v4-pro")
-
-        assert model.capabilities.reasoning.levels == ("high", "max")
-        assert model.capabilities.reasoning.control == "levels"
-        # The wire-id stays the provider wire-id; the canonical id never lands
-        # on the model.
-        assert model.model_id == "deepseek-v4-pro"
-        assert model.family == "deepseek-v4"
-
-    def test_both_effective_ladders_asserted_together(self):
-        """The two providers, side by side — the explicit acceptance assertion."""
-
-        registry = ModelRegistry.load(ASSEMBLY_FIXTURES)
-
-        openrouter = registry.get("openrouter", "deepseek/deepseek-v4-pro")
-        opencode_go = registry.get("opencode-go", "deepseek-v4-pro")
-
-        assert openrouter.capabilities.reasoning.levels == ("high", "xhigh")
-        assert opencode_go.capabilities.reasoning.levels == ("high", "max")
-
-
-class TestAssemblyRegressionCases:
-    """Provider-only, override-wins, and wholesale-nested-replace, end-to-end."""
-
-    def test_provider_only_model_with_no_canonical_loads(self):
-        """A model whose wire-id joins nothing loads on provider data alone — a
-        missed join is not an error."""
-
-        registry = ModelRegistry.load(ASSEMBLY_FIXTURES)
-        model = registry.get("openrouter", "vendor-x/standalone-model")
-
-        assert model.name == "Standalone Model"
-        assert model.family == ""
-        assert model.capabilities.reasoning.supported is False
-        assert model.context_window == 64000
-
-    def test_override_wins_and_omits_provider_id(self):
-        """The mistral override omits ``provider_id`` (derived from filename),
-        carries a manual ``canonical`` pointer, and its fields win."""
-
-        registry = ModelRegistry.load(ASSEMBLY_FIXTURES)
-        model = registry.get("mistral", "thin-deepseek")
-
-        assert model.name == "Thin DeepSeek (hand-corrected)"
-        # Manual pointer forced the join → canonical family inherited.
-        assert model.family == "deepseek-v4"
-
-    def test_override_reasoning_replaces_provider_and_canonical_wholesale(self):
-        """The override's ``reasoning`` ladder wins wholesale over both the
-        provider ladder ``[low, medium]`` and the canonical ladder ``[high, max]``."""
-
-        registry = ModelRegistry.load(ASSEMBLY_FIXTURES)
-        model = registry.get("mistral", "thin-deepseek")
-
-        assert model.capabilities.reasoning.levels == ("medium", "high", "max")
-        # Provider-layer facts the override doesn't touch survive.
-        assert model.context_window == 128000
-        assert model.max_output_tokens == 16000
-        assert model.capabilities.tools is True
-
-
-# ---------------------------------------------------------------------------
-# Cache / invalidation — canonical data participates in refresh-then-reload
-# ---------------------------------------------------------------------------
-
-
-class TestCanonicalCacheInvalidation:
-    def test_canonical_edit_picked_up_after_invalidate_and_reload(self, tmp_path: Path):
-        """A ``model.refresh_db``-style reload (invalidate then load) picks up new
-        canonical data, since the canonical files live under the same
-        ``resources_dir`` the registry caches by."""
-
-        models_dir = tmp_path / "models"
-        models_dir.mkdir()
-        (models_dir / "openrouter.json").write_text(
-            """
-            {
-              "provider_id": "openrouter",
-              "models": {
-                "lab/model": {
-                  "name": "Wire Name",
-                  "capabilities": {
-                    "vision": false, "tools": true, "json_mode": true,
-                    "input_modalities": ["text"], "output_modalities": ["text"]
-                  },
-                  "context_window": 100000,
-                  "max_output_tokens": 8000
-                }
-              }
-            }
-            """,
-            encoding="utf-8",
-        )
-        # No canonical file yet → the provider model is missing ``reasoning``.
-        # Assembly must still place it via... actually it needs reasoning; so the
-        # first load supplies reasoning through the canonical file below. Write
-        # the canonical file before the first load.
-        (models_dir / "models.json").write_text(
-            """
-            {
-              "models": {
-                "lab/model": {
-                  "capabilities": {
-                    "reasoning": {"supported": true, "control": "levels", "levels": ["low"]}
-                  }
-                }
-              }
-            }
-            """,
-            encoding="utf-8",
-        )
-
-        first = ModelRegistry.load(tmp_path)
-        assert first.get("openrouter", "lab/model").capabilities.reasoning.levels == ("low",)
-
-        # Refresh rewrites the canonical ladder; without invalidation the cached
-        # registry still serves the old data.
-        (models_dir / "models.json").write_text(
-            """
-            {
-              "models": {
-                "lab/model": {
-                  "capabilities": {
-                    "reasoning": {"supported": true, "control": "levels", "levels": ["low", "high"]}
-                  }
-                }
-              }
-            }
-            """,
-            encoding="utf-8",
-        )
-        assert ModelRegistry.load(tmp_path) is first
-
-        ModelRegistry.invalidate(tmp_path)
-        second = ModelRegistry.load(tmp_path)
-
-        assert second is not first
-        assert second.get("openrouter", "lab/model").capabilities.reasoning.levels == (
-            "low",
-            "high",
-        )
+    assert ModelRegistry.load(tmp_path).get("thin", "lab/model").name == "Canonical"

@@ -1,10 +1,12 @@
-"""Tests for complete system/runtime Model DB root selection."""
+"""Models: the complete system/runtime Model DB roots (manifest, selection, refresh)."""
 
 from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
 from pathlib import Path
+
+import pytest
 
 from core.models.database import (
     MODEL_DATABASE_SCHEMA_VERSION,
@@ -51,7 +53,28 @@ def test_boolean_schema_version_is_not_accepted_as_version_one(tmp_path: Path) -
     assert read_model_database_manifest(models_dir) is None
 
 
-def test_newer_runtime_database_wins_as_a_complete_root(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("runtime_manifest", "selected"),
+    [
+        pytest.param(
+            {"refreshed_at": "2026-07-21T00:00:00+00:00"}, "runtime", id="newer-runtime-wins"
+        ),
+        pytest.param(
+            {"refreshed_at": "2026-07-20T00:00:00+00:00"}, "system", id="equal-time-prefers-system"
+        ),
+        pytest.param(
+            {
+                "refreshed_at": "2030-01-01T00:00:00+00:00",
+                "schema_version": MODEL_DATABASE_SCHEMA_VERSION + 1,
+            },
+            "system",
+            id="incompatible-runtime-is-ignored",
+        ),
+    ],
+)
+def test_newest_compatible_database_is_selected_as_a_complete_root(
+    tmp_path: Path, runtime_manifest: dict[str, object], selected: str
+) -> None:
     resources_dir = tmp_path / "resources"
     system_models_dir = resources_dir / "models"
     runtime_models_dir = tmp_path / "data" / "models"
@@ -60,52 +83,17 @@ def test_newer_runtime_database_wins_as_a_complete_root(tmp_path: Path) -> None:
         source=MODEL_DATABASE_SOURCE_SYSTEM,
         refreshed_at=datetime(2026, 7, 20, tzinfo=UTC),
     )
-    write_model_database_manifest(
-        runtime_models_dir,
-        source=MODEL_DATABASE_SOURCE_RUNTIME,
-        refreshed_at=datetime(2026, 7, 21, tzinfo=UTC),
-    )
-
-    assert select_model_database_dir(resources_dir, runtime_models_dir) == runtime_models_dir
-
-
-def test_equal_refresh_time_prefers_system_database(tmp_path: Path) -> None:
-    resources_dir = tmp_path / "resources"
-    system_models_dir = resources_dir / "models"
-    runtime_models_dir = tmp_path / "data" / "models"
-    refreshed_at = datetime(2026, 7, 21, tzinfo=UTC)
-    write_model_database_manifest(
-        system_models_dir,
-        source=MODEL_DATABASE_SOURCE_SYSTEM,
-        refreshed_at=refreshed_at,
-    )
-    write_model_database_manifest(
-        runtime_models_dir,
-        source=MODEL_DATABASE_SOURCE_RUNTIME,
-        refreshed_at=refreshed_at,
-    )
-
-    assert select_model_database_dir(resources_dir, runtime_models_dir) == system_models_dir
-
-
-def test_incompatible_runtime_database_is_ignored(tmp_path: Path) -> None:
-    resources_dir = tmp_path / "resources"
-    system_models_dir = resources_dir / "models"
-    runtime_models_dir = tmp_path / "data" / "models"
-    system_models_dir.mkdir(parents=True)
     runtime_models_dir.mkdir(parents=True)
     runtime_models_dir.joinpath("manifest.json").write_text(
         json.dumps(
-            {
-                "schema_version": MODEL_DATABASE_SCHEMA_VERSION + 1,
-                "refreshed_at": "2030-01-01T00:00:00+00:00",
-                "source": "runtime",
-            }
+            {"schema_version": MODEL_DATABASE_SCHEMA_VERSION, "source": "runtime"}
+            | runtime_manifest
         ),
         encoding="utf-8",
     )
 
-    assert select_model_database_dir(resources_dir, runtime_models_dir) == system_models_dir
+    expected = runtime_models_dir if selected == "runtime" else system_models_dir
+    assert select_model_database_dir(resources_dir, runtime_models_dir) == expected
 
 
 def test_runtime_refresh_copies_and_publishes_every_model_file(tmp_path: Path) -> None:
@@ -223,7 +211,7 @@ def test_system_refresh_is_unpublished_until_complete_commit(tmp_path: Path) -> 
     assert manifest.source == MODEL_DATABASE_SOURCE_SYSTEM
 
 
-def test_newer_runtime_catalog_uses_current_bundled_override(tmp_path: Path) -> None:
+def test_newer_runtime_catalog_loads_under_current_bundled_overrides(tmp_path: Path) -> None:
     resources_dir = tmp_path / "resources"
     system_models_dir = resources_dir / "models"
     runtime_models_dir = tmp_path / "data" / "models"
@@ -233,29 +221,7 @@ def test_newer_runtime_catalog_uses_current_bundled_override(tmp_path: Path) -> 
         _provider_payload("system-only", "system-model", "Must not leak"),
         encoding="utf-8",
     )
-    write_model_database_manifest(
-        system_models_dir,
-        source=MODEL_DATABASE_SOURCE_SYSTEM,
-        refreshed_at=datetime(2026, 7, 20, tzinfo=UTC),
-    )
-    write_model_database_manifest(
-        runtime_models_dir,
-        source=MODEL_DATABASE_SOURCE_RUNTIME,
-        refreshed_at=datetime(2026, 7, 21, tzinfo=UTC),
-    )
-
-    registry = ModelRegistry.load(resources_dir, runtime_models_dir=runtime_models_dir)
-
-    assert registry.get("openai", "gpt-test").name == "System override"
-    assert registry.list_for_provider("system-only") == []
-
-
-def test_bundled_override_only_provider_needs_no_registration(tmp_path: Path) -> None:
-    resources_dir = tmp_path / "resources"
-    system_models_dir = resources_dir / "models"
-    runtime_models_dir = tmp_path / "data" / "models"
-    system_models_dir.mkdir(parents=True)
-    runtime_models_dir.mkdir(parents=True)
+    # A bundled override-only Provider needs no generated catalog in either root.
     system_models_dir.joinpath("hand-only.overrides.json").write_text(
         json.dumps(
             {
@@ -281,6 +247,8 @@ def test_bundled_override_only_provider_needs_no_registration(tmp_path: Path) ->
 
     registry = ModelRegistry.load(resources_dir, runtime_models_dir=runtime_models_dir)
 
+    assert registry.get("openai", "gpt-test").name == "System override"
+    assert registry.list_for_provider("system-only") == []
     assert registry.get("hand-only", "manual-model").name == "Manual"
 
 

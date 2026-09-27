@@ -1,349 +1,674 @@
-"""Tests for discovery projection."""
+"""Models: Provider-specific catalog projections through ``refresh_models``.
+
+Each test drives one Provider's discovery hooks (supplementary and task
+catalogs, per-model enrichment, Connection filters, models.dev enrichment)
+end to end: HTTP catalog -> raw dump and projection -> ``ModelRegistry``.
+"""
 
 from __future__ import annotations
 
-from dataclasses import replace
+import json
+from pathlib import Path
+from typing import Any
+
+import httpx
+import pytest
+import respx
+
+from core.models.discovery import refresh_models
+from core.models.models import ModelRegistry
+from core.models.models_dev import ModelsDevCatalog
+from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 
 from .discovery_test_support import (
     API_KEY,
     FIXTURES_DIR,
     GITHUB_COPILOT_MODELS_URL,
     OPENCODE_GO_MODELS_URL,
-    AuthConfig,
-    ConnectionConfig,
-    ModelRegistry,
-    Path,
-    ProviderConfig,
-    httpx,
-    json,
-    pytest,
+    OPENROUTER_IMAGE_MODELS_URL,
+    OPENROUTER_MODELS_URL,
+    OPENROUTER_VIDEO_MODELS_URL,
+    api_key_connection,
+    github_copilot_config,
+    keyless_connection,
+    model_data,
+    opencode_go_config,
+    openrouter_config,
     raw_openrouter_model,
-    refresh_models,
-    respx,
+    read_models_file,
 )
-from .discovery_test_support import _clear_registry_cache as _clear_registry_cache
-from .discovery_test_support import github_copilot_config as github_copilot_config
-from .discovery_test_support import (
-    openai_subscription_connection_config as openai_subscription_connection_config,
-)
-from .discovery_test_support import opencode_go_config as opencode_go_config
-from .discovery_test_support import openrouter_config as openrouter_config
 
 
-class TestRefreshModels:
-    @respx.mock
-    @pytest.mark.asyncio
-    async def test_refresh_models_supports_opencode_go_discovery_adapter(
-        self,
-        tmp_path: Path,
-        opencode_go_config: ProviderConfig,
-    ):
-        resources_dir = tmp_path / "resources"
-        route = respx.get(OPENCODE_GO_MODELS_URL).mock(
-            return_value=httpx.Response(
-                200,
-                json={
-                    "data": [
-                        raw_openrouter_model(
-                            model_id="deepseek/deepseek-r1",
-                            name="DeepSeek R1",
-                        )
-                    ]
-                },
-            )
-        )
+def _raw_ids(resources_dir: Path, provider_id: str, key: str = "id") -> set[str]:
+    raw = read_models_file(resources_dir, f"{provider_id}.raw.json")["raw_response"]
+    entries = raw["data"] if "data" in raw else raw["models"]
+    return {entry[key] for entry in entries}
 
-        result = await refresh_models(opencode_go_config, API_KEY, resources_dir)
 
-        registry = ModelRegistry.load(resources_dir)
-        model = registry.get("opencode-go", "deepseek/deepseek-r1")
-        assert result["provider_id"] == "opencode-go"
-        assert result["model_count"] == 1
-        assert model.name == "DeepSeek R1"
-        assert route.calls.last.request.headers["Authorization"] == f"Bearer {API_KEY}"
-
-    @respx.mock
-    @pytest.mark.asyncio
-    async def test_refresh_keeps_catalog_exclusions_only_in_raw_inspection_dump(
-        self,
-        tmp_path: Path,
-        opencode_go_config: ProviderConfig,
-    ) -> None:
-        resources_dir = tmp_path / "resources"
-        config = replace(
-            opencode_go_config,
-            catalog_exclusions=frozenset({"broken-preview"}),
-        )
-        respx.get(OPENCODE_GO_MODELS_URL).mock(
-            return_value=httpx.Response(
-                200,
-                json={
-                    "data": [
-                        raw_openrouter_model(model_id="working", name="Working"),
-                        raw_openrouter_model(model_id="broken-preview", name="Broken"),
-                    ]
-                },
-            )
-        )
-
-        result = await refresh_models(config, API_KEY, resources_dir)
-
-        raw = json.loads(
-            (resources_dir / "models" / "opencode-go.raw.json").read_text(encoding="utf-8")
-        )
-        projected = json.loads(
-            (resources_dir / "models" / "opencode-go.json").read_text(encoding="utf-8")
-        )
-        assert result["model_count"] == 1
-        assert {entry["id"] for entry in raw["raw_response"]["data"]} == {
-            "working",
-            "broken-preview",
-        }
-        assert set(projected["models"]) == {"working"}
-
-    @respx.mock
-    @pytest.mark.asyncio
-    async def test_refresh_models_uses_tolerant_normalizer_for_github_copilot(
-        self,
-        tmp_path: Path,
-        github_copilot_config: ProviderConfig,
-    ):
-        raw_fixture = json.loads(
-            (FIXTURES_DIR / "github_copilot_models_raw.json").read_text(encoding="utf-8")
-        )
-        route = respx.get(GITHUB_COPILOT_MODELS_URL).mock(
-            return_value=httpx.Response(200, json=raw_fixture)
-        )
-
-        result = await refresh_models(github_copilot_config, API_KEY, tmp_path / "resources")
-
-        registry = ModelRegistry.load(tmp_path / "resources")
-        gpt_4o = registry.get("github-copilot", "gpt-4o")
-        gemini_2_5_pro = registry.get("github-copilot", "gemini-2.5-pro")
-        output_data = json.loads(
-            (tmp_path / "resources" / "models" / "github-copilot.json").read_text(encoding="utf-8")
-        )
-        raw_output_path = tmp_path / "resources" / "models" / "github-copilot.raw.json"
-        raw_output_data = json.loads(raw_output_path.read_text(encoding="utf-8"))
-        gpt_5_mini_data = output_data["models"]["gpt-5-mini"]
-        assert result["model_count"] == 5
-        assert raw_output_path.exists()
-        assert raw_output_data["raw_response"] == raw_fixture
-        assert gpt_4o.capabilities.vision is True
-        assert gpt_4o.context_window == 128000
-        assert gpt_4o.max_output_tokens == 4096
-        assert gemini_2_5_pro.capabilities.reasoning.supported is True
-        assert gpt_5_mini_data["metadata"]["github_copilot"] == {
-            "family": "gpt-5-mini",
-            "parallel_tool_calls": True,
-            "reasoning_efforts": ["low", "medium", "high"],
-            "streaming": True,
-            "structured_outputs": True,
-            "supported_endpoints": ["/chat/completions", "/responses", "ws:/responses"],
-            "tool_calls": True,
-            "vendor": "Azure OpenAI",
-            "version": "gpt-5-mini",
-        }
-        assert "policy" not in gpt_5_mini_data["metadata"]["github_copilot"]
-        assert registry.get("github-copilot", "gpt-5-mini").metadata["github_copilot"][
-            "supported_endpoints"
-        ] == ("/chat/completions", "/responses", "ws:/responses")
-        assert route.calls.last.request.headers["Authorization"] == f"Bearer {API_KEY}"
-        assert route.calls.last.request.headers["Copilot-Integration-Id"] == "vbot"
-
-    @respx.mock
-    @pytest.mark.asyncio
-    async def test_copilot_discovery_keeps_hidden_entries_only_in_raw_audit(
-        self,
-        tmp_path: Path,
-        github_copilot_config: ProviderConfig,
-    ) -> None:
-        raw_fixture = {
-            "data": [
-                {
-                    "id": "visible-chat",
-                    "name": "Visible Chat",
-                    "model_picker_enabled": True,
-                    "supported_endpoints": ["/chat/completions"],
-                    "capabilities": {"type": "chat", "supports": {}},
-                },
-                {
-                    "id": "hidden-chat",
-                    "name": "Hidden Chat",
-                    "model_picker_enabled": False,
-                    "capabilities": {"type": "chat", "supports": {}},
-                },
-                {
-                    "id": "embedding-only",
-                    "name": "Embedding Only",
-                    "capabilities": {"type": "embeddings", "supports": {}},
-                },
-                {
-                    "id": "websocket-only",
-                    "name": "Websocket Only",
-                    "supported_endpoints": ["ws:/responses"],
-                    "capabilities": {"type": "chat", "supports": {}},
-                },
-            ]
-        }
-        respx.get(GITHUB_COPILOT_MODELS_URL).mock(
-            return_value=httpx.Response(200, json=raw_fixture)
-        )
-
-        result = await refresh_models(
-            github_copilot_config,
-            API_KEY,
-            tmp_path / "resources",
-        )
-
-        generated = json.loads(
-            (tmp_path / "resources" / "models" / "github-copilot.json").read_text(encoding="utf-8")
-        )
-        raw = json.loads(
-            (tmp_path / "resources" / "models" / "github-copilot.raw.json").read_text(
-                encoding="utf-8"
-            )
-        )
-        assert result["model_count"] == 1
-        assert set(generated["models"]) == {"visible-chat"}
-        assert {entry["id"] for entry in raw["raw_response"]["data"]} == {
-            "visible-chat",
-            "hidden-chat",
-            "embedding-only",
-            "websocket-only",
-        }
-
-    @respx.mock
-    @pytest.mark.asyncio
-    async def test_nous_discovery_uses_selected_connection_and_keeps_skips_in_raw(
-        self,
-        tmp_path: Path,
-    ) -> None:
-        connection = ConnectionConfig(
-            id="subscription",
-            type="oauth",
-            label="Portal Login",
-            auth=AuthConfig(header="Authorization", prefix="Bearer "),
-            models_endpoint="/models",
-        )
-        config = ProviderConfig(
-            id="nous",
-            name="Nous Portal",
-            adapter="nous",
-            base_url="https://inference-api.nousresearch.com/v1",
-            connections=[connection],
-            defaults={"max_tokens": 32000},
-        )
-        route = respx.get("https://inference-api.nousresearch.com/v1/models").mock(
-            return_value=httpx.Response(
-                200,
-                json={
-                    "data": [
-                        {
-                            "id": "vendor/agent-model",
-                            "name": "Agent Model",
-                            "supported_parameters": ["tools", "reasoning"],
-                            "context_length": 200000,
-                            "top_provider": {"max_completion_tokens": 64000},
-                        },
-                        {"id": "Hermes-4-70B", "name": "Hermes 4 70B"},
-                    ]
-                },
-            )
-        )
-
-        result = await refresh_models(
-            config,
-            "nous-oauth-jwt",
-            tmp_path / "resources",
-            credential_connection=connection,
-        )
-
-        generated = json.loads(
-            (tmp_path / "resources" / "models" / "nous.json").read_text(encoding="utf-8")
-        )
-        raw = json.loads(
-            (tmp_path / "resources" / "models" / "nous.raw.json").read_text(encoding="utf-8")
-        )
-        assert result["model_count"] == 1
-        assert set(generated["models"]) == {"vendor/agent-model"}
-        assert generated["models"]["vendor/agent-model"]["connections"] == ["subscription"]
-        assert generated["models"]["vendor/agent-model"]["max_output_tokens"] == 32000
-        assert {entry["id"] for entry in raw["raw_response"]["data"]} == {
-            "vendor/agent-model",
-            "Hermes-4-70B",
-        }
-        assert route.calls.last.request.headers["authorization"] == "Bearer nous-oauth-jwt"
-
-    @respx.mock
-    @pytest.mark.asyncio
-    async def test_stepfun_discovery_preserves_other_connection_memberships_and_raw(
-        self,
-        tmp_path: Path,
-    ) -> None:
-        direct = ConnectionConfig(
-            id="direct-api",
-            type="api_key",
-            label="Direct API",
-            mode="direct_api",
-            auth=AuthConfig(
-                header="Authorization",
-                prefix="Bearer ",
-                credential_key="STEPFUN_DIRECT_API_KEY",
+@respx.mock
+@pytest.mark.asyncio
+async def test_opencode_zen_enriches_its_allowlist_and_merges_connections(tmp_path: Path) -> None:
+    resources_dir = tmp_path / "resources"
+    config = ProviderConfig(
+        id="opencode-zen",
+        name="OpenCode Zen",
+        adapter="opencode_zen",
+        base_url="https://opencode.ai/zen/v1",
+        connections=[
+            api_key_connection("OPENCODE_API_KEY", models_endpoint="/models"),
+            ConnectionConfig(
+                id="account",
+                type="oauth",
+                label="OpenCode Account",
+                auth=AuthConfig(header="Authorization", prefix="Bearer "),
+                models_endpoint="/models",
             ),
-            models_endpoint="/models",
-        )
-        config = ProviderConfig(
-            id="stepfun",
-            name="StepFun",
-            adapter="stepfun",
-            base_url="https://api.stepfun.com/v1",
-            connections=[direct],
-            defaults={"temperature": 0.5},
-            context_window=256000,
-        )
-        resources_dir = tmp_path / "resources"
-        models_dir = resources_dir / "models"
-        models_dir.mkdir(parents=True)
-        existing = json.loads(
-            (Path("resources") / "models" / "stepfun.json").read_text(encoding="utf-8")
-        )
-        (models_dir / "stepfun.json").write_text(
-            json.dumps(existing),
-            encoding="utf-8",
-        )
-        route = respx.get("https://api.stepfun.com/v1/models").mock(
-            return_value=httpx.Response(
-                200,
-                json={
-                    "data": [
-                        {"id": "step-3.7-flash", "name": "Step 3.7 Flash"},
-                        {"id": "step-router-v1", "name": "Step Router V1"},
-                        {"id": "stepaudio-2.5-chat", "name": "StepAudio 2.5 Chat"},
-                    ]
-                },
-            )
-        )
-
-        result = await refresh_models(
-            config,
-            "direct-token",
-            resources_dir,
-            credential_connection=direct,
-        )
-
-        generated = json.loads((models_dir / "stepfun.json").read_text(encoding="utf-8"))
-        raw = json.loads((models_dir / "stepfun.raw.json").read_text(encoding="utf-8"))
-        assert result["model_count"] == 4
-        assert generated["models"]["step-3.7-flash"]["connections"] == [
-            "step-plan",
-            "direct-api",
-        ]
-        assert generated["models"]["step-3.5-flash"]["connections"] == ["step-plan"]
-        assert generated["models"]["step-router-v1"]["connections"] == ["step-plan"]
-        assert {entry["id"] for entry in raw["raw_response"]["data"]} == {
-            "step-3.7-flash",
-            "step-router-v1",
-            "stepaudio-2.5-chat",
+        ],
+        defaults={"max_tokens": 8192},
+        models_endpoint="/models",
+        models_dev_id="opencode",
+        catalog_exclusions=frozenset({"glm-5"}),
+    )
+    modalities = {"input": ["text", "image", "video", "audio", "pdf"], "output": ["text"]}
+    catalog = ModelsDevCatalog(
+        {
+            "models": {
+                "google/gemini-3.5-flash": {
+                    "id": "google/gemini-3.5-flash",
+                    "name": "Gemini 3.5 Flash",
+                    "modalities": modalities,
+                    "reasoning": True,
+                }
+            },
+            "providers": {
+                "opencode": {
+                    "id": "opencode",
+                    "name": "OpenCode",
+                    "models": {
+                        "gemini-3.5-flash": {
+                            "id": "gemini-3.5-flash",
+                            "name": "Gemini 3.5 Flash",
+                            "family": "gemini",
+                            "limit": {"context": 1_048_576, "output": 65_536},
+                            "modalities": modalities,
+                            "reasoning": True,
+                            "tool_call": True,
+                            "reasoning_options": [
+                                {"type": "effort", "values": ["minimal", "low", "medium", "high"]}
+                            ],
+                        }
+                    },
+                }
+            },
         }
-        assert route.calls.last.request.headers["authorization"] == "Bearer direct-token"
+    )
+    live_ids = [
+        "gemini-3.5-flash",
+        "claude-fable-5-1",
+        "glm-5",
+        "unreviewed-future-model",
+        "mimo-v2.6-flash-free",
+    ]
+    route = respx.get("https://opencode.ai/zen/v1/models").mock(
+        return_value=httpx.Response(200, json={"data": [{"id": item} for item in live_ids]})
+    )
+
+    counts = [
+        (
+            await refresh_models(
+                config,
+                credential,
+                resources_dir,
+                credential_connection=config.get_connection(connection_id),
+                models_dev_catalog=catalog,
+            )
+        )["model_count"]
+        for connection_id, credential in (("api-key", "api-key-secret"), ("account", "token"))
+    ]
+
+    written = read_models_file(resources_dir, "opencode-zen.json")["models"]
+    gemini = written["gemini-3.5-flash"]
+    assert counts == [2, 2]
+    assert route.call_count == 2
+    assert set(written) == {"gemini-3.5-flash", "claude-fable-5-1"}
+    assert gemini["connections"] == ["api-key", "account"]
+    assert (gemini["context_window"], gemini["max_output_tokens"]) == (1_048_576, 65_536)
+    assert gemini["capabilities"]["input_modalities"] == modalities["input"]
+    assert gemini["metadata"]["opencode_zen"]["protocol"] == "gemini_generate_content"
+    assert written["claude-fable-5-1"]["metadata"]["opencode_zen"]["protocol"] == "messages"
+    assert _raw_ids(resources_dir, "opencode-zen") == set(live_ids)
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_opencode_go_projects_its_catalog_without_excluded_models(tmp_path: Path) -> None:
+    resources_dir = tmp_path / "resources"
+    config = opencode_go_config(catalog_exclusions=frozenset({"broken-preview"}))
+    route = respx.get(OPENCODE_GO_MODELS_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    raw_openrouter_model(model_id="deepseek/deepseek-r1", name="DeepSeek R1"),
+                    raw_openrouter_model(model_id="broken-preview", name="Broken"),
+                ]
+            },
+        )
+    )
+
+    result = await refresh_models(config, API_KEY, resources_dir)
+
+    assert result["model_count"] == 1
+    assert _raw_ids(resources_dir, "opencode-go") == {"deepseek/deepseek-r1", "broken-preview"}
+    assert set(read_models_file(resources_dir, "opencode-go.json")["models"]) == {
+        "deepseek/deepseek-r1"
+    }
+    model = ModelRegistry.load(resources_dir).get("opencode-go", "deepseek/deepseek-r1")
+    assert model.name == "DeepSeek R1"
+    assert route.calls.last.request.headers["Authorization"] == f"Bearer {API_KEY}"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_github_copilot_projects_selectable_models_and_their_metadata(
+    tmp_path: Path,
+) -> None:
+    resources_dir = tmp_path / "resources"
+    payload = json.loads(
+        (FIXTURES_DIR / "github_copilot_models_raw.json").read_text(encoding="utf-8")
+    )
+    selectable = {entry["id"] for entry in payload["data"]}
+    # Hidden, non-chat and websocket-only entries stay in the raw audit only.
+    payload["data"] += [
+        {
+            "id": "hidden-chat",
+            "name": "Hidden Chat",
+            "model_picker_enabled": False,
+            "capabilities": {"type": "chat", "supports": {}},
+        },
+        {
+            "id": "embedding-only",
+            "name": "Embedding Only",
+            "capabilities": {"type": "embeddings", "supports": {}},
+        },
+        {
+            "id": "websocket-only",
+            "name": "Websocket Only",
+            "supported_endpoints": ["ws:/responses"],
+            "capabilities": {"type": "chat", "supports": {}},
+        },
+    ]
+    route = respx.get(GITHUB_COPILOT_MODELS_URL).mock(
+        return_value=httpx.Response(200, json=payload)
+    )
+
+    result = await refresh_models(github_copilot_config(), API_KEY, resources_dir)
+
+    written = read_models_file(resources_dir, "github-copilot.json")["models"]
+    assert result["model_count"] == len(selectable)
+    assert set(written) == selectable
+    assert read_models_file(resources_dir, "github-copilot.raw.json")["raw_response"] == payload
+    assert written["gpt-5-mini"]["metadata"]["github_copilot"] == {
+        "family": "gpt-5-mini",
+        "parallel_tool_calls": True,
+        "reasoning_efforts": ["low", "medium", "high"],
+        "streaming": True,
+        "structured_outputs": True,
+        "supported_endpoints": ["/chat/completions", "/responses", "ws:/responses"],
+        "tool_calls": True,
+        "vendor": "Azure OpenAI",
+        "version": "gpt-5-mini",
+    }
+    registry = ModelRegistry.load(resources_dir)
+    gpt_4o = registry.get("github-copilot", "gpt-4o")
+    assert (gpt_4o.capabilities.vision, gpt_4o.context_window, gpt_4o.max_output_tokens) == (
+        True,
+        128000,
+        4096,
+    )
+    assert registry.get("github-copilot", "gemini-2.5-pro").capabilities.reasoning.supported
+    assert registry.get("github-copilot", "gpt-5-mini").metadata["github_copilot"][
+        "supported_endpoints"
+    ] == ("/chat/completions", "/responses", "ws:/responses")
+    headers = route.calls.last.request.headers
+    assert headers["Authorization"] == f"Bearer {API_KEY}"
+    assert headers["Copilot-Integration-Id"] == "vbot"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_nous_projects_agent_models_for_the_selected_connection(tmp_path: Path) -> None:
+    resources_dir = tmp_path / "resources"
+    connection = ConnectionConfig(
+        id="subscription",
+        type="oauth",
+        label="Portal Login",
+        auth=AuthConfig(header="Authorization", prefix="Bearer "),
+        models_endpoint="/models",
+    )
+    config = ProviderConfig(
+        id="nous",
+        name="Nous Portal",
+        adapter="nous",
+        base_url="https://inference-api.nousresearch.com/v1",
+        connections=[connection],
+        defaults={"max_tokens": 32000},
+    )
+    route = respx.get("https://inference-api.nousresearch.com/v1/models").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "id": "vendor/agent-model",
+                        "name": "Agent Model",
+                        "supported_parameters": ["tools", "reasoning"],
+                        "context_length": 200000,
+                        "top_provider": {"max_completion_tokens": 64000},
+                    },
+                    {"id": "Hermes-4-70B", "name": "Hermes 4 70B"},
+                ]
+            },
+        )
+    )
+
+    result = await refresh_models(
+        config, "nous-oauth-jwt", resources_dir, credential_connection=connection
+    )
+
+    written = read_models_file(resources_dir, "nous.json")["models"]
+    assert result["model_count"] == 1
+    assert set(written) == {"vendor/agent-model"}
+    assert written["vendor/agent-model"]["connections"] == ["subscription"]
+    assert written["vendor/agent-model"]["max_output_tokens"] == 32000
+    assert _raw_ids(resources_dir, "nous") == {"vendor/agent-model", "Hermes-4-70B"}
+    assert route.calls.last.request.headers["authorization"] == "Bearer nous-oauth-jwt"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_stepfun_direct_refresh_keeps_other_connection_memberships(tmp_path: Path) -> None:
+    """A refresh replaces only the refreshed Connection's memberships."""
+
+    resources_dir = tmp_path / "resources"
+    models_dir = resources_dir / "models"
+    models_dir.mkdir(parents=True)
+    (models_dir / "stepfun.json").write_text(
+        json.dumps(
+            {
+                "provider_id": "stepfun",
+                "models": {
+                    "step-3.7-flash": model_data() | {"connections": ["step-plan"]},
+                    "step-3.5-flash": model_data() | {"connections": ["step-plan", "direct-api"]},
+                    "step-router-v1": model_data() | {"connections": ["step-plan"]},
+                    "retired": model_data() | {"connections": ["direct-api"]},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    direct = api_key_connection(
+        "STEPFUN_DIRECT_API_KEY",
+        id="direct-api",
+        label="Direct API",
+        mode="direct_api",
+        models_endpoint="/models",
+    )
+    config = ProviderConfig(
+        id="stepfun",
+        name="StepFun",
+        adapter="stepfun",
+        base_url="https://api.stepfun.com/v1",
+        connections=[direct],
+        defaults={"temperature": 0.5},
+        context_window=256000,
+    )
+    live_ids = ["step-3.7-flash", "step-router-v1", "stepaudio-2.5-chat"]
+    route = respx.get("https://api.stepfun.com/v1/models").mock(
+        return_value=httpx.Response(200, json={"data": [{"id": item} for item in live_ids]})
+    )
+
+    result = await refresh_models(
+        config, "direct-token", resources_dir, credential_connection=direct
+    )
+
+    written = read_models_file(resources_dir, "stepfun.json")["models"]
+    assert result["model_count"] == 3
+    assert {model_id: data["connections"] for model_id, data in written.items()} == {
+        "step-3.7-flash": ["step-plan", "direct-api"],
+        "step-3.5-flash": ["step-plan"],
+        "step-router-v1": ["step-plan"],
+    }
+    assert _raw_ids(resources_dir, "stepfun") == set(live_ids)
+    assert route.calls.last.request.headers["authorization"] == "Bearer direct-token"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_xai_subscription_uses_plain_oauth_discovery(tmp_path: Path) -> None:
+    """xAI inherits the OpenAI catalog normalizer but not Codex account routing:
+    its token carries no ChatGPT account claim and needs no ``client_version``."""
+
+    resources_dir = tmp_path / "resources"
+    subscription = ConnectionConfig(
+        id="subscription",
+        type="oauth",
+        label="SuperGrok Login (Subscription)",
+        auth=AuthConfig(header="Authorization", prefix="Bearer "),
+        models_endpoint="/language-models",
+    )
+    config = ProviderConfig(
+        id="xai",
+        name="xAI",
+        adapter="xai",
+        base_url="https://api.x.ai/v1",
+        connections=[subscription],
+        defaults={"max_tokens": 8192},
+    )
+    route = respx.get("https://api.x.ai/v1/language-models").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "id": "grok-4.5",
+                        "name": "Grok 4.5",
+                        "input_modalities": ["text", "image"],
+                        "output_modalities": ["text"],
+                        "context_window": 500000,
+                    }
+                ]
+            },
+        )
+    )
+
+    result = await refresh_models(
+        config, "xai-token-without-chatgpt-claim", resources_dir, credential_connection=subscription
+    )
+
+    written = read_models_file(resources_dir, "xai.json")["models"]
+    request = route.calls.last.request
+    assert result["model_count"] == 1
+    assert (written["grok-4.5"]["name"], written["grok-4.5"]["connections"]) == (
+        "Grok 4.5",
+        ["subscription"],
+    )
+    assert request.headers["Authorization"] == "Bearer xai-token-without-chatgpt-claim"
+    assert "chatgpt-account-id" not in request.headers
+    assert "client_version" not in request.url.params
+
+
+def _ollama_config(connection: ConnectionConfig, **changes: Any) -> ProviderConfig:
+    return ProviderConfig(
+        **{
+            "id": "ollama",
+            "name": "Ollama",
+            "adapter": "ollama",
+            "base_url": "http://localhost:11434",
+            "connections": [connection],
+            "models_endpoint": "/api/tags",
+        }
+        | changes
+    )
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_ollama_enriches_tags_through_api_show(tmp_path: Path) -> None:
+    connection = keyless_connection()
+    respx.get("http://localhost:11434/api/tags").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "models": [
+                    {
+                        "name": "ministral-3:8b",
+                        "model": "ministral-3:8b",
+                        "details": {"family": "mistral3"},
+                    },
+                    {
+                        "name": "kimi-k2.6:cloud",
+                        "model": "kimi-k2.6:cloud",
+                        "remote_model": "kimi-k2.6",
+                        "remote_host": "https://ollama.com:443",
+                        "details": {"family": "kimi"},
+                    },
+                ]
+            },
+        )
+    )
+    show_responses = {
+        "ministral-3:8b": {
+            "capabilities": ["completion", "vision", "tools"],
+            "model_info": {
+                "general.architecture": "mistral3",
+                "mistral3.context_length": 262144,
+                "mistral3.rope.scaling.original_context_length": 16384,
+            },
+        },
+        "kimi-k2.6:cloud": {"capabilities": ["completion", "tools", "thinking"], "model_info": {}},
+    }
+    show_route = respx.post("http://localhost:11434/api/show").mock(
+        side_effect=lambda request: httpx.Response(
+            200, json=show_responses[json.loads(request.content)["model"]]
+        )
+    )
+
+    result = await refresh_models(
+        _ollama_config(connection), "", tmp_path / "resources", credential_connection=connection
+    )
+
+    registry = ModelRegistry.load(tmp_path / "resources")
+    local = registry.get("ollama", "ministral-3:8b")
+    cloud = registry.get("ollama", "kimi-k2.6:cloud")
+    raw = read_models_file(tmp_path / "resources", "ollama.raw.json")
+    assert result["model_count"] == 2
+    assert show_route.call_count == 2
+    assert (local.capabilities.tools, local.capabilities.vision) == (True, True)
+    assert local.context_window == 262144
+    assert local.metadata["ollama"] == {"local": True}
+    assert local.connections == ("local",)
+    assert cloud.capabilities.reasoning.supported is True
+    assert cloud.metadata["ollama"] == {"remote": True}
+    assert len(raw["raw_enrichment_responses"]) == 2
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_direct_ollama_cloud_catalog_is_remote_and_public(tmp_path: Path) -> None:
+    connection = api_key_connection(
+        "OLLAMA_API_KEY", mode="cloud", catalog_requires_credentials=False
+    )
+    config = _ollama_config(connection, id="ollama-cloud", base_url="https://ollama.com")
+    tags_route = respx.get("https://ollama.com/api/tags").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "models": [{"name": "glm-5.1", "model": "glm-5.1", "details": {"family": "glm5.1"}}]
+            },
+        )
+    )
+    show_route = respx.post("https://ollama.com/api/show").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "capabilities": ["completion", "tools", "thinking"],
+                "model_info": {"general.architecture": "glm5.1", "glm5.1.context_length": 202752},
+            },
+        )
+    )
+
+    result = await refresh_models(
+        config, "", tmp_path / "resources", credential_connection=connection
+    )
+
+    model = ModelRegistry.load(tmp_path / "resources").get("ollama-cloud", "glm-5.1")
+    assert result["model_count"] == 1
+    assert model.metadata["ollama"] == {"remote": True}
+    assert model.connections == ("api-key",)
+    assert model.context_window == 202752
+    assert "Authorization" not in tags_route.calls.last.request.headers
+    assert "Authorization" not in show_route.calls.last.request.headers
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_failed_ollama_enrichment_keeps_the_conservative_catalog(tmp_path: Path) -> None:
+    connection = keyless_connection()
+    respx.get("http://localhost:11434/api/tags").mock(
+        return_value=httpx.Response(
+            200, json={"models": [{"model": "ministral-3:8b", "details": {"family": "mistral3"}}]}
+        )
+    )
+    respx.post("http://localhost:11434/api/show").mock(
+        return_value=httpx.Response(404, json={"error": "model not found"})
+    )
+
+    result = await refresh_models(
+        _ollama_config(connection), "", tmp_path / "resources", credential_connection=connection
+    )
+
+    model = ModelRegistry.load(tmp_path / "resources").get("ollama", "ministral-3:8b")
+    assert result["model_count"] == 1
+    assert (model.capabilities.tools, model.context_window) == (False, None)
+
+
+def _mock_openrouter_catalogs(
+    by_output_modality: dict[str | None, httpx.Response],
+) -> None:
+    """Answer the main catalog (``None``) and each supplementary ``output_modalities``
+    fetch; a supplementary modality without an entry returns an empty list."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        modality = request.url.params.get("output_modalities")
+        default = httpx.Response(200, json={"data": []})
+        return by_output_modality.get(modality, default)
+
+    respx.get(OPENROUTER_MODELS_URL).mock(side_effect=handler)
+
+
+def _catalog(*entries: dict[str, Any]) -> httpx.Response:
+    return httpx.Response(200, json={"data": list(entries)})
+
+
+def _audio_model(model_id: str, output: str) -> dict[str, Any]:
+    input_modalities = ["audio"] if output == "transcription" else ["text"]
+    return raw_openrouter_model(
+        model_id=model_id,
+        name=model_id,
+        input_modalities=input_modalities,
+        output_modalities=[output],
+    )
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_openrouter_merges_supplementary_and_task_catalogs(tmp_path: Path) -> None:
+    """Supplementary fetches add dedicated audio Models once; the image task
+    catalog enriches a chat-catalog Model and adds an image-API-only Model."""
+
+    resources_dir = tmp_path / "resources"
+    gpt_audio = raw_openrouter_model(
+        model_id="openai/gpt-audio", name="GPT Audio", output_modalities=["text", "audio"]
+    )
+    _mock_openrouter_catalogs(
+        {
+            None: _catalog(
+                raw_openrouter_model(model_id="openai/gpt-4o", name="GPT-4o"),
+                gpt_audio,
+                raw_openrouter_model(
+                    model_id="recraft/recraft-v3", name="Recraft V3", output_modalities=["image"]
+                ),
+            ),
+            "transcription": _catalog(gpt_audio, _audio_model("openai/whisper-1", "transcription")),
+            "speech": _catalog(_audio_model("openai/gpt-4o-mini-tts", "speech")),
+        }
+    )
+    respx.get(OPENROUTER_IMAGE_MODELS_URL).mock(
+        return_value=_catalog(
+            {
+                "id": "recraft/recraft-v3",
+                "name": "Recraft: Recraft V3",
+                "supported_parameters": {"n": {"type": "range", "min": 1, "max": 6}},
+            },
+            {
+                "id": "future-lab/pixel-marvel",
+                "name": "Pixel Marvel",
+                "architecture": {"input_modalities": ["text"], "output_modalities": ["image"]},
+                "supported_parameters": {
+                    "aspect_ratio": {"type": "enum", "values": ["1:1", "16:9"]}
+                },
+            },
+        )
+    )
+    respx.get(f"{OPENROUTER_IMAGE_MODELS_URL}/recraft/recraft-v3/endpoints").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "endpoints": [
+                    {
+                        "provider_slug": "recraft",
+                        "allowed_passthrough_parameters": ["style", "controls"],
+                    }
+                ]
+            },
+        )
+    )
+    respx.get(f"{OPENROUTER_IMAGE_MODELS_URL}/future-lab/pixel-marvel/endpoints").mock(
+        return_value=httpx.Response(200, json={"endpoints": []})
+    )
+    respx.get(OPENROUTER_VIDEO_MODELS_URL).mock(return_value=_catalog())
+
+    result = await refresh_models(openrouter_config(), API_KEY, resources_dir)
+
+    written = read_models_file(resources_dir, "openrouter.json")["models"]
+    raw = read_models_file(resources_dir, "openrouter.raw.json")
+    assert result["model_count"] == 6
+    assert set(written) == {
+        "openai/gpt-4o",
+        "openai/gpt-audio",
+        "openai/whisper-1",
+        "openai/gpt-4o-mini-tts",
+        "recraft/recraft-v3",
+        "future-lab/pixel-marvel",
+    }
+    assert sorted(entry["id"] for entry in raw["raw_response"]["data"]) == [
+        "openai/gpt-4o",
+        "openai/gpt-4o-mini-tts",
+        "openai/gpt-audio",
+        "openai/whisper-1",
+        "recraft/recraft-v3",
+    ]
+    assert "/images/models" in raw["raw_task_responses"]
+    recraft = written["recraft/recraft-v3"]
+    assert recraft["name"] == "Recraft V3"
+    assert recraft["capabilities"]["task_options"]["image_generation"] == {
+        "parameters": {"n": {"type": "range", "min": 1, "max": 6}},
+        "passthrough": {"recraft": ["controls", "style"]},
+    }
+    pixel = ModelRegistry.load(resources_dir).get("openrouter", "future-lab/pixel-marvel")
+    assert pixel.name == "Pixel Marvel"
+    assert pixel.capabilities.task_options["image_generation"]["parameters"]["aspect_ratio"][
+        "values"
+    ] == ("1:1", "16:9")
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_failed_optional_openrouter_catalogs_do_not_block_the_refresh(
+    tmp_path: Path,
+) -> None:
+    resources_dir = tmp_path / "resources"
+    rejected = httpx.Response(400, text="Invalid request")
+    main = _catalog(raw_openrouter_model(model_id="model-a", name="Model A"))
+    by_modality: dict[str | None, httpx.Response] = {"transcription": rejected, None: main}
+    _mock_openrouter_catalogs(by_modality)
+    respx.get(OPENROUTER_IMAGE_MODELS_URL).mock(return_value=rejected)
+    respx.get(OPENROUTER_VIDEO_MODELS_URL).mock(return_value=_catalog())
+
+    result = await refresh_models(openrouter_config(), API_KEY, resources_dir)
+
+    written = read_models_file(resources_dir, "openrouter.json")["models"]
+    assert result["model_count"] == 1
+    assert "task_options" not in written["model-a"]["capabilities"]
+    assert ModelRegistry.load(resources_dir).get("openrouter", "model-a").name == "Model A"

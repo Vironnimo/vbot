@@ -1,12 +1,12 @@
-"""Tests for the standalone Model DB validator detection logic.
+"""Models: the offline Model DB validator (dead pointers, redundant manual joins).
 
-The validator is offline (not on the runtime read path). It flags dead canonical
-pointers and redundant manual joins. The fixtures under ``fixtures/validator/``
-carry exactly one deliberately dead pointer and one deliberately redundant manual
-join, plus a clean valid manual pointer that must NOT be flagged.
+The fixtures under ``fixtures/validator/`` carry one dead pointer, one redundant
+manual join, and one valid manual pointer that must not be flagged.
 """
 
 from pathlib import Path
+
+import pytest
 
 from core.models.validation import (
     DEAD_POINTER,
@@ -17,78 +17,39 @@ from core.models.validation import (
 VALIDATOR_FIXTURES = Path(__file__).parent / "fixtures" / "validator"
 
 
-class TestValidateModelDb:
-    def test_flags_the_deliberately_dead_pointer(self):
-        findings = validate_model_db(VALIDATOR_FIXTURES)
+def test_fixture_db_reports_exactly_the_planted_findings() -> None:
+    findings = validate_model_db(VALIDATOR_FIXTURES)
 
-        dead = [f for f in findings if f.kind == DEAD_POINTER]
-        assert len(dead) == 1
-        assert dead[0].provider_id == "opencode-go"
-        assert dead[0].wire_id == "deepseek-v4-pro"
-        assert dead[0].pointer == "deepseek/deepseek-v4-renamed"
+    assert [(f.kind, f.provider_id, f.wire_id, f.pointer) for f in findings] == [
+        (DEAD_POINTER, "opencode-go", "deepseek-v4-pro", "deepseek/deepseek-v4-renamed"),
+        (
+            REDUNDANT_MANUAL_JOIN,
+            "openrouter",
+            "deepseek/deepseek-v4-pro",
+            "deepseek/deepseek-v4-pro",
+        ),
+    ]
 
-    def test_flags_the_deliberately_redundant_manual_join(self):
-        findings = validate_model_db(VALIDATOR_FIXTURES)
 
-        redundant = [f for f in findings if f.kind == REDUNDANT_MANUAL_JOIN]
-        assert len(redundant) == 1
-        assert redundant[0].provider_id == "openrouter"
-        assert redundant[0].wire_id == "deepseek/deepseek-v4-pro"
-        assert redundant[0].pointer == "deepseek/deepseek-v4-pro"
+@pytest.mark.parametrize(
+    ("canonical_id", "wire_id"),
+    [
+        ("lab/x", "wire-1"),
+        # Redundancy applies to manual (override) pointers only, not auto pointers.
+        ("lab/model", "lab/model"),
+    ],
+    ids=["valid-auto-pointer", "auto-pointer-equal-to-wire-id"],
+)
+def test_clean_db_has_no_findings(tmp_path: Path, canonical_id: str, wire_id: str) -> None:
+    models_dir = tmp_path / "models"
+    models_dir.mkdir()
+    (models_dir / "models.json").write_text(
+        f'{{"models": {{"{canonical_id}": {{"name": "X"}}}}}}', encoding="utf-8"
+    )
+    (models_dir / "p.json").write_text(
+        f'{{"provider_id": "p", "models": {{"{wire_id}": '
+        f'{{"name": "W", "canonical": "{canonical_id}"}}}}}}',
+        encoding="utf-8",
+    )
 
-    def test_does_not_flag_a_valid_non_redundant_manual_pointer(self):
-        """``openrouter/vendor-x/clean-mapped`` carries a valid manual pointer
-        whose target exists and does not equal the wire-id — no finding."""
-
-        findings = validate_model_db(VALIDATOR_FIXTURES)
-
-        offenders = {(f.provider_id, f.wire_id) for f in findings}
-        assert ("openrouter", "vendor-x/clean-mapped") not in offenders
-
-    def test_total_finding_count_is_exactly_two(self):
-        findings = validate_model_db(VALIDATOR_FIXTURES)
-        assert len(findings) == 2
-
-    def test_clean_db_has_no_findings(self, tmp_path: Path):
-        models_dir = tmp_path / "models"
-        models_dir.mkdir()
-        (models_dir / "models.json").write_text(
-            '{"models": {"lab/x": {"name": "X"}}}', encoding="utf-8"
-        )
-        (models_dir / "p.json").write_text(
-            """
-            {
-              "provider_id": "p",
-              "models": {
-                "wire-1": {"name": "W1", "canonical": "lab/x"}
-              }
-            }
-            """,
-            encoding="utf-8",
-        )
-
-        assert validate_model_db(tmp_path) == []
-
-    def test_auto_pointer_equal_to_wire_id_is_not_redundant(self, tmp_path: Path):
-        """The redundancy check is for MANUAL (override) pointers only. An auto
-        pointer in ``<provider>.json`` that equals the wire-id is not flagged —
-        only a hand-written redundant join is."""
-
-        models_dir = tmp_path / "models"
-        models_dir.mkdir()
-        (models_dir / "models.json").write_text(
-            '{"models": {"lab/model": {"name": "X"}}}', encoding="utf-8"
-        )
-        (models_dir / "openrouter.json").write_text(
-            """
-            {
-              "provider_id": "openrouter",
-              "models": {
-                "lab/model": {"name": "M", "canonical": "lab/model"}
-              }
-            }
-            """,
-            encoding="utf-8",
-        )
-
-        assert validate_model_db(tmp_path) == []
+    assert validate_model_db(tmp_path) == []
