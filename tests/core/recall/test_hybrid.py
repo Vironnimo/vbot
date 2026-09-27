@@ -1,25 +1,14 @@
-"""Tests for the hybrid recall backend.
-
-The hybrid backend fuses the SQLite FTS and vector arms. These tests
-construct it directly (no registry) and exercise the headline
-behaviors: literal-keyword coverage, conceptual-query fallback,
-shared-session tagging, graceful degradation when no embedding
-binding is configured, ordering rules, over-fetch, and short queries
-that fall through the FTS trigram path.
-"""
+"""The ``hybrid`` backend: Reciprocal Rank Fusion of the literal and semantic Passage arms."""
 
 from __future__ import annotations
 
 import asyncio
-from dataclasses import replace
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from core.chat import ChatMessage
-from core.model_tasks import EmbeddingResult, EmbeddingSpaceIdentity
 from core.recall import (
     RecallBackendContext,
     RecallSearchHit,
@@ -28,126 +17,39 @@ from core.recall import (
     hybrid,
 )
 from core.recall.canonical import RecallScope
-from core.recall.hybrid import (
-    HybridRecallBackend,
-)
+from core.recall.hybrid import HybridRecallBackend
 from core.sessions import ChatSessionManager
-from tests.core.recall.vector_helpers import (
+from tests.core.recall.recall_test_support import (
+    StubEmbeddings,
     forbid_database_calls_on_loop,
     forbid_event_loop_calls,
+    request,
+    timestamp,
 )
 
 pytestmark = pytest.mark.asyncio
 
 
-def timestamp(day: int, hour: int = 12) -> datetime:
-    return datetime(2026, 5, day, hour, tzinfo=UTC)
-
-
-class _StubEmbeddings:
-    """Deterministic embedding stub for hybrid tests.
-
-    Vector assignment rules — the same text always maps to the same
-    vector so cosine distance is a stable signal:
-
-    * ``vehicle``/``driving`` (and other car-like text) → ``[1, 0, 0, 0]``
-    * ``bild`` → ``[0, 0, 0, 1]`` — orthogonal to every other cluster,
-      so any session whose embedding is not the ``bild`` vector has
-      distance ``> 0.7`` to the ``bild`` query. That makes the
-      ``bild`` regression test possible: a single-token keyword with
-      no semantic context must come back via the literal arm, not via
-      a fake semantic match.
-    * default → ``[0.5, 0.5, 0, 0]`` (the same default the existing
-      vector tests use).
-    """
-
-    def __init__(self, *, dimension: int = 4) -> None:
-        self.dimension = dimension
-        self.provider_id = "openrouter"
-        self.model_id = "stub-embed"
-        self.embed_calls: list[list[str]] = []
-        self.resolve_calls = 0
-
-    def resolve_space(self) -> EmbeddingSpaceIdentity:
-        self.resolve_calls += 1
-        return EmbeddingSpaceIdentity(self.provider_id, self.model_id, "")
-
-    async def embed(
-        self,
-        texts: list[str],
-        *,
-        purpose: str | None = None,
-    ) -> EmbeddingResult:
-        del purpose
-        self.embed_calls.append(list(texts))
-        vectors: list[list[float]] = [self._vector_for(text) for text in texts]
-        return EmbeddingResult(
-            vectors=tuple(vectors),
-            model_id=self.model_id,
-            provider_id=self.provider_id,
-            dimension=self.dimension,
-        )
-
-    def _vector_for(self, text: str) -> list[float]:
-        lowered = text.lower()
-        if "vehicle" in lowered or "driving" in lowered or " car " in lowered:
-            return [1.0, 0.0, 0.0, 0.0] + [0.0] * (self.dimension - 4)
-        # The ``bild`` regression: a single-token query like ``bild`` has
-        # almost no semantic context, so its embedding is essentially
-        # orthogonal to every session's embedding. Model that by
-        # routing the keyword itself to a unique vector *only* when the
-        # text is short (the query case). Longer text containing
-        # ``bild`` — session messages — falls into the default branch
-        # and is well-separated from the query vector.
-        if "bild" in lowered and len(lowered.strip()) <= 5:
-            return [0.0, 0.0, 0.0, 1.0] + [0.0] * (self.dimension - 4)
-        return [0.5, 0.5, 0.0, 0.0] + [0.0] * (self.dimension - 4)
-
-
 def backend(
-    tmp_path: Path,
-    sessions: ChatSessionManager,
-    *,
-    embeddings: Any | None = None,
+    tmp_path: Path, sessions: ChatSessionManager, *, embeddings: Any | None = None
 ) -> HybridRecallBackend:
     return HybridRecallBackend(
-        RecallBackendContext(
-            data_dir=tmp_path,
-            sessions=sessions,
-            embeddings=embeddings,
-        )
-    )
-
-
-def search_request(query: str, *, limit: int = 10) -> RecallSearchRequest:
-    return RecallSearchRequest(
-        agent_id="coder",
-        project_id=None,
-        session_id=None,
-        query=query,
-        since=None,
-        until=None,
-        roles=("user", "assistant", "error", "compaction_checkpoint"),
-        match_mode="all_terms",
-        order="relevance",
-        offset=0,
-        limit=limit,
+        RecallBackendContext(data_dir=tmp_path, sessions=sessions, embeddings=embeddings)
     )
 
 
 async def test_typed_hybrid_search_uses_passage_rrf_and_source_membership(
-    tmp_path: Path,
+    tmp_path: Path, sessions: ChatSessionManager
 ) -> None:
-    sessions = ChatSessionManager(tmp_path)
     sessions.create("coder", session_id="both").append(
         ChatMessage.user("I was driving today", timestamp=timestamp(1))
     )
     sessions.create("coder", session_id="semantic").append(
         ChatMessage.user("vehicle maintenance", timestamp=timestamp(2))
     )
-    recall = backend(tmp_path, sessions, embeddings=_StubEmbeddings())
+    recall = backend(tmp_path, sessions, embeddings=StubEmbeddings())
 
-    page = await recall.search_page(search_request("driving"))
+    page = await recall.search_page(request("driving"))
 
     assert page.result_type == "passage"
     assert page.ranking == "reciprocal_rank_fusion"
@@ -157,15 +59,14 @@ async def test_typed_hybrid_search_uses_passage_rrf_and_source_membership(
 
 
 async def test_typed_hybrid_degrades_explicitly_to_literal_passages(
-    tmp_path: Path,
+    tmp_path: Path, sessions: ChatSessionManager
 ) -> None:
-    sessions = ChatSessionManager(tmp_path)
     sessions.create("coder", session_id="literal").append(
         ChatMessage.user("telegraminstallation", timestamp=timestamp(1))
     )
     recall = backend(tmp_path, sessions)
 
-    page = await recall.search_page(search_request("telegram"))
+    page = await recall.search_page(request("telegram"))
 
     assert [hit.session_id for hit in page.hits] == ["literal"]
     assert page.hits[0].sources == ("literal",)
@@ -174,15 +75,14 @@ async def test_typed_hybrid_degrades_explicitly_to_literal_passages(
 
 
 async def test_typed_hybrid_keeps_multiple_passages_from_one_session(
-    tmp_path: Path,
+    tmp_path: Path, sessions: ChatSessionManager
 ) -> None:
-    sessions = ChatSessionManager(tmp_path)
     sessions.create("coder", session_id="repeated").append(
         ChatMessage.user("needle context " * 400, timestamp=timestamp(1))
     )
-    recall = backend(tmp_path, sessions, embeddings=_StubEmbeddings())
+    recall = backend(tmp_path, sessions, embeddings=StubEmbeddings())
 
-    page = await recall.search_page(search_request("needle"))
+    page = await recall.search_page(request("needle"))
 
     repeated = [hit for hit in page.hits if hit.session_id == "repeated"]
     assert len(repeated) > 1
@@ -204,9 +104,9 @@ class _WaitingArm:
 
 
 async def test_hybrid_arms_run_concurrently(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, sessions: ChatSessionManager, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    recall = backend(tmp_path, ChatSessionManager(tmp_path))
+    recall = backend(tmp_path, sessions)
     literal_prepared = asyncio.Event()
     semantic_prepared = asyncio.Event()
     literal_ranked = asyncio.Event()
@@ -224,22 +124,21 @@ async def test_hybrid_arms_run_concurrently(
 
     monkeypatch.setattr(recall._fts, "prepare_passage_search", literal)
     monkeypatch.setattr(recall._vector, "prepare_search", semantic)
-    page = await asyncio.wait_for(recall.search_page(search_request("query")), timeout=2)
+    page = await asyncio.wait_for(recall.search_page(request("query")), timeout=2)
     assert page.degraded is False
     assert page.hits == ()
 
 
 async def test_hybrid_depth_growth_prepares_each_arm_once(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, sessions: ChatSessionManager, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A deeper fusion pass reruns only the rankings, never freshness or query embedding."""
 
-    sessions = ChatSessionManager(tmp_path)
     for index in range(3):
         sessions.create("coder", session_id=f"drive-{index}").append(
             ChatMessage.user(f"I was driving today {index}", timestamp=timestamp(index + 1))
         )
-    embeddings = _StubEmbeddings()
+    embeddings = StubEmbeddings()
     recall = backend(tmp_path, sessions, embeddings=embeddings)
     stability_checks = 0
 
@@ -273,7 +172,7 @@ async def test_hybrid_depth_growth_prepares_each_arm_once(
     monkeypatch.setattr(sessions, "list_history_versions", reject_listing)
     monkeypatch.setattr(recall._fts._catalog, "refresh", counting_sync)
 
-    page = await recall.search_page(search_request("driving"))
+    page = await recall.search_page(request("driving"))
 
     assert stability_checks == 2
     assert page.degraded is False
@@ -283,41 +182,49 @@ async def test_hybrid_depth_growth_prepares_each_arm_once(
     assert syncs == 1
 
 
-async def test_hybrid_search_keeps_session_and_store_reads_off_the_event_loop(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+async def test_hybrid_search_keeps_session_and_index_work_off_the_event_loop(
+    tmp_path: Path, sessions: ChatSessionManager, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    sessions = ChatSessionManager(tmp_path)
     sessions.create("coder", session_id="both").append(
         ChatMessage.user("I was driving today", timestamp=timestamp(1))
     )
-    recall = backend(tmp_path, sessions, embeddings=_StubEmbeddings())
+    recall = backend(tmp_path, sessions, embeddings=StubEmbeddings())
     calls = forbid_event_loop_calls(monkeypatch, sessions._store)
     database_calls = forbid_database_calls_on_loop(monkeypatch)
 
-    page = await recall.search_page(search_request("driving"))
+    page = await recall.search_page(request("driving"))
 
     # An arm failure would only degrade the page, so both arms must have succeeded.
     assert page.degraded is False
     assert page.hits[0].sources == ("literal", "semantic")
     assert "list_history_revisions" in calls
-    assert {"recall_index.read", "recall_vectors.read"} <= set(database_calls)
+    # Both arms refreshed and read their Passage indexes on the database worker pools.
+    assert {
+        "recall_index.read",
+        "recall_index.write",
+        "recall_vectors.read",
+        "recall_vectors.write",
+    } <= set(database_calls)
 
 
-async def test_hybrid_short_query_retains_literal_and_semantic_sources(tmp_path: Path) -> None:
-    sessions = ChatSessionManager(tmp_path)
+async def test_hybrid_short_query_retains_literal_and_semantic_sources(
+    tmp_path: Path, sessions: ChatSessionManager
+) -> None:
     sessions.create("coder", session_id="short").append(
         ChatMessage.user("Go fast", timestamp=timestamp(1))
     )
-    page = await backend(tmp_path, sessions, embeddings=_StubEmbeddings()).search_page(
-        search_request("go")
-    )
+    page = await backend(tmp_path, sessions, embeddings=StubEmbeddings()).search_page(request("go"))
     assert page.hits[0].session_id == "short"
     assert page.hits[0].sources == ("literal", "semantic")
 
 
 @pytest.mark.parametrize(("offset", "limit"), [(0, 10), (8, 2), (9, 1)])
 async def test_hybrid_resolves_late_contributions_before_returning_selected_hits(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, offset: int, limit: int
+    tmp_path: Path,
+    sessions: ChatSessionManager,
+    monkeypatch: pytest.MonkeyPatch,
+    offset: int,
+    limit: int,
 ) -> None:
     literal = ["a", "b", *[f"shared-{index}" for index in range(1, 9)]]
     semantic = [
@@ -350,13 +257,11 @@ async def test_hybrid_resolves_late_contributions_before_returning_selected_hits
                 total_candidate_sessions=1,
             )
 
-    recall = backend(tmp_path, ChatSessionManager(tmp_path))
+    recall = backend(tmp_path, sessions)
     monkeypatch.setattr(recall._fts, "prepare_passage_search", Ranking(literal).prepare)
     monkeypatch.setattr(recall._vector, "prepare_search", Ranking(semantic).prepare)
     try:
-        page = await recall.search_page(
-            replace(search_request("query", limit=limit), offset=offset)
-        )
+        page = await recall.search_page(request("query", limit=limit, offset=offset))
     finally:
         await recall.aclose()
 

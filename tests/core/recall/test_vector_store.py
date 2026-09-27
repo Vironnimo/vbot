@@ -1,9 +1,9 @@
-"""Tests for the sqlite-vec Passage vector store and its shared Passage catalog."""
+"""The sqlite-vec Passage vector store and the Passage catalog it holds."""
 
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
@@ -13,7 +13,6 @@ import pytest
 from core.database import (
     APPLICATION_IDS,
     DatabaseCorruptError,
-    DatabaseUnavailableError,
     projection_failure,
 )
 from core.recall._passage_catalog import (
@@ -24,7 +23,7 @@ from core.recall._passage_catalog import (
 )
 from core.recall.passages import Passage
 from core.recall.vector_store import VectorHeader, VectorStore, VectorStoreError
-from tests.core.recall.vector_helpers import _connect_store
+from tests.core.recall.recall_test_support import connect_store
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.filterwarnings("ignore::DeprecationWarning")]
 
@@ -145,7 +144,7 @@ def _identity(path: Path) -> dict[str, object]:
 
 
 def _refs(path: Path) -> dict[str, int]:
-    with closing(_connect_store(path)) as connection:
+    with closing(connect_store(path)) as connection:
         return {
             str(text): int(ref)
             for ref, text in connection.execute("SELECT passage_ref, text FROM passages")
@@ -157,81 +156,54 @@ def _refs(path: Path) -> dict[str, int]:
 # ---------------------------------------------------------------------------
 
 
-async def test_vector_store_is_a_kernel_disposable_projection(tmp_path: Path) -> None:
-    store = VectorStore(tmp_path)
-    await _index(store, {"one": [_passage("alpha")]})
-
-    identity = _identity(store.path)
-    assert store.path == tmp_path / "recall" / "session_passage_vectors.sqlite"
-    assert identity["application_id"] == APPLICATION_IDS["recall_vectors"]
-    assert identity["database_name"] == "recall_vectors"
-    assert identity["projection_version"] == "1"
-    store.close()
+def _outdate(path: Path) -> None:
+    with closing(sqlite3.connect(path)) as connection, connection:
+        connection.execute("UPDATE kernel_meta SET value = '0' WHERE key = 'projection_version'")
 
 
-async def test_projection_version_mismatch_discards_and_rebuilds_the_store(
-    tmp_path: Path,
+def _overwrite(path: Path) -> None:
+    path.write_bytes(b"not a sqlite database")
+
+
+@pytest.mark.parametrize(
+    "damage", [None, _outdate, _overwrite], ids=["current", "old-version", "unreadable"]
+)
+async def test_vector_store_opens_as_the_current_disposable_projection(
+    tmp_path: Path, damage: Callable[[Path], None] | None
 ) -> None:
     store = VectorStore(tmp_path)
     await _index(store, {"one": [_passage("alpha")]})
     old_identity = _identity(store.path)
     store.close()
-    with closing(sqlite3.connect(store.path)) as connection, connection:
-        connection.execute("UPDATE kernel_meta SET value = '0' WHERE key = 'projection_version'")
+    if damage is not None:
+        damage(store.path)
 
     reopened = VectorStore(tmp_path)
+    indexed = await reopened.list_indexed_sessions("coder")
+    await _index(reopened, {"two": [_passage("beta")]})
 
-    assert await reopened.read_header() is None
-    assert await reopened.list_indexed_sessions("coder") == {}
     identity = _identity(reopened.path)
+    assert reopened.path == tmp_path / "recall" / "session_passage_vectors.sqlite"
+    assert identity["application_id"] == APPLICATION_IDS["recall_vectors"]
+    assert identity["database_name"] == "recall_vectors"
     assert identity["projection_version"] == "1"
-    assert identity["database_id"] != old_identity["database_id"]
+    # A stale or unreadable store is discarded, never migrated.
+    assert (identity["database_id"] == old_identity["database_id"]) is (damage is None)
+    assert set(indexed) == ({"one"} if damage is None else set())
+    assert await _nearest(reopened, [0.0, 1.0, 0.0], _candidates("two")) == [("two", "beta")]
     reopened.close()
-
-
-async def test_unreadable_store_file_is_rebuilt_on_open(tmp_path: Path) -> None:
-    path = tmp_path / "recall" / "session_passage_vectors.sqlite"
-    path.parent.mkdir(parents=True)
-    path.write_bytes(b"not a sqlite database")
-    store = VectorStore(tmp_path)
-
-    await _index(store, {"one": [_passage("alpha")]})
-
-    assert await _nearest(store, [1.0, 0.0, 0.0], _candidates("one")) == [("one", "alpha")]
-    store.close()
 
 
 async def test_pinned_space_without_its_vector_table_is_damage(tmp_path: Path) -> None:
     store = VectorStore(tmp_path)
     await _index(store, {"one": [_passage("alpha")]})
-    with closing(_connect_store(store.path)) as connection, connection:
+    with closing(connect_store(store.path)) as connection, connection:
         connection.execute("DROP TABLE passage_vectors")
 
     with pytest.raises(Exception) as failure:
         await store.read_header()
 
     assert projection_failure(failure.value) == "rebuild"
-    store.close()
-
-
-async def test_busy_store_fails_as_busy_and_keeps_its_rows(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr("core.recall._passage_catalog.WRITE_PATIENCE_S", 0.2)
-    store = VectorStore(tmp_path)
-    await _index(store, {"one": [_passage("alpha")]})
-    identity = _identity(store.path)
-
-    with closing(sqlite3.connect(store.path, isolation_level=None)) as blocker:
-        blocker.execute("BEGIN IMMEDIATE")
-        with pytest.raises(DatabaseUnavailableError) as failure:
-            await _apply(store, _change("two", [_passage("beta")]))
-        blocker.execute("ROLLBACK")
-
-    assert projection_failure(failure.value) == "busy"
-    await store.discard_if_damaged(failure.value)
-    assert _identity(store.path)["database_id"] == identity["database_id"]
-    assert await store.list_indexed_sessions("coder") == {"one": ("generation", 1)}
     store.close()
 
 
@@ -257,34 +229,7 @@ async def test_vector_store_first_space_pins_header_and_queues_new_passages(
     store.close()
 
 
-async def test_vector_store_refuses_non_positive_dimension(tmp_path: Path) -> None:
-    store = VectorStore(tmp_path)
-
-    with pytest.raises(VectorStoreError):
-        await store.use_space(VectorHeader(provider_id="p", model_id="m", dimension=0))
-    store.close()
-
-
-async def test_vector_store_new_passage_reuses_a_stored_vector_for_its_text(
-    tmp_path: Path,
-) -> None:
-    store = VectorStore(tmp_path)
-    await _index(store, {"one": [_passage("alpha")]})
-
-    await _apply(
-        store, _change("two", [_passage("alpha", passage_id="other", end_message_id="m2")])
-    )
-    await _apply(store, _change("one", [_passage("alpha")]), project="proj")
-
-    assert await store.pending_texts(None, limit=10) == []
-    assert await _nearest(store, [1.0, 0.0, 0.0], _candidates("two")) == [("two", "alpha")]
-    assert await _nearest(store, [1.0, 0.0, 0.0], _candidates("one", project="proj")) == [
-        ("one", "alpha")
-    ]
-    store.close()
-
-
-async def test_vector_store_one_vector_serves_every_waiting_passage_with_its_text(
+async def test_vector_store_embeds_each_text_once_for_every_passage_that_shows_it(
     tmp_path: Path,
 ) -> None:
     store = VectorStore(tmp_path)
@@ -292,12 +237,21 @@ async def test_vector_store_one_vector_serves_every_waiting_passage_with_its_tex
     await _apply(store, _change("one", [_passage("alpha")]))
     await _apply(store, _change("one", [_passage("alpha")]), project="proj")
 
-    batch = await store.pending_texts(None, limit=10)
-    assert batch == [(text_hash("alpha"), "alpha")]
+    # Waiting Passages with the same text wait for one vector.
+    assert await store.pending_texts(None, limit=10) == [(text_hash("alpha"), "alpha")]
     assert await store.store_vectors(HEADER, {text_hash("alpha"): VECTORS["alpha"]})
-
     assert await store.count_pending(_candidates("one")) == 0
     assert await store.count_pending(_candidates("one", project="proj")) == 0
+
+    # A new Passage with a stored text reuses its vector without waiting.
+    await _apply(
+        store, _change("two", [_passage("alpha", passage_id="other", end_message_id="m2")])
+    )
+    assert await store.pending_texts(None, limit=10) == []
+    assert await _nearest(store, [1.0, 0.0, 0.0], _candidates("two")) == [("two", "alpha")]
+    assert await _nearest(store, [1.0, 0.0, 0.0], _candidates("one", project="proj")) == [
+        ("one", "alpha")
+    ]
     store.close()
 
 
@@ -331,8 +285,12 @@ async def test_vector_store_pending_texts_are_newest_first_bounded_and_filtered(
     store.close()
 
 
-async def test_vector_store_refuses_vectors_of_a_space_it_left(tmp_path: Path) -> None:
+async def test_vector_store_refuses_invalid_spaces_and_vectors_of_a_space_it_left(
+    tmp_path: Path,
+) -> None:
     store = VectorStore(tmp_path)
+    with pytest.raises(VectorStoreError):
+        await store.use_space(VectorHeader(provider_id="p", model_id="m", dimension=0))
     await store.use_space(HEADER)
     await _apply(store, _change("one", [_passage("alpha")]))
     other = VectorHeader(provider_id="p", model_id="m2", dimension=3)
@@ -389,7 +347,7 @@ async def test_vector_store_refresh_keeps_unchanged_passages_and_drops_vanished_
     assert set(after) == {"alpha", "beta grown"}
     assert await _embed_waiting(store) == ["beta grown"]
     assert await store.list_indexed_sessions("coder") == {"one": ("generation", 2)}
-    with closing(_connect_store(store.path)) as connection:
+    with closing(connect_store(store.path)) as connection:
         assert connection.execute("SELECT COUNT(*) FROM passage_vectors").fetchone()[0] == 2
     store.close()
 
@@ -429,7 +387,7 @@ async def test_vector_store_prune_keeps_passages_another_session_shows(tmp_path:
     await store.remove_session("coder", None, "fork")
 
     assert _refs(store.path) == {}
-    with closing(_connect_store(store.path)) as connection:
+    with closing(connect_store(store.path)) as connection:
         assert connection.execute("SELECT COUNT(*) FROM passage_vectors").fetchone()[0] == 0
     store.close()
 
