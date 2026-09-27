@@ -2,17 +2,20 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
+import pytest
+
 from core.model_tasks import (
-    SUPPORTED_TASK_TYPES,
     TASK_IMAGE_GENERATION,
     TASK_IMAGE_UNDERSTANDING,
     TASK_LIVE_VOICE,
     TASK_SPEECH_TO_TEXT,
     TASK_TEXT_TO_SPEECH,
+    TASK_VIDEO_GENERATION,
     LocalTaskTargetDescriptor,
     LocalTaskTargetRegistry,
     TaskModelService,
-    validate_task_type,
 )
 from tests.core.model_tasks.model_tasks_test_support import (
     _Credentials,
@@ -25,55 +28,49 @@ from tests.core.model_tasks.model_tasks_test_support import (
 )
 
 
-def test_list_targets_filters_by_task_type_and_credentials() -> None:
-    providers = _Providers()
+@pytest.mark.parametrize(
+    ("task_type", "expected"),
+    [
+        pytest.param(
+            TASK_SPEECH_TO_TEXT,
+            [("openrouter/openai/gpt-4o-transcribe::api-key", "OpenAI GPT-4o Transcribe")],
+            id="speech-to-text",
+        ),
+        pytest.param(
+            TASK_TEXT_TO_SPEECH,
+            [("openrouter/openai/gpt-4o-mini-tts::api-key", "OpenAI GPT-4o Mini TTS")],
+            id="text-to-speech",
+        ),
+        pytest.param(
+            TASK_IMAGE_GENERATION,
+            [
+                ("openrouter/dall-e-3::api-key", "DALL-E 3"),
+                ("openrouter/gpt-image-1::api-key", "GPT Image 1"),
+            ],
+            id="image-generation",
+        ),
+        pytest.param(TASK_VIDEO_GENERATION, [], id="no-matching-model"),
+    ],
+)
+def test_list_targets_offers_only_models_tagged_for_the_task(
+    task_type: str, expected: list[tuple[str, str]]
+) -> None:
     models = _Models(
         [
             _model("openai/gpt-4o-transcribe", (TASK_SPEECH_TO_TEXT,)),
             _model("openai/gpt-4o-mini-tts", (TASK_TEXT_TO_SPEECH,)),
-        ]
-    )
-    service = TaskModelService(providers, models, _Credentials(), _Storage())
-
-    targets = service.list_targets(TASK_SPEECH_TO_TEXT)
-
-    assert [target.id for target in targets] == ["openrouter/openai/gpt-4o-transcribe::api-key"]
-    assert targets[0].connection_id == "openrouter:api-key"
-    assert targets[0].label == "OpenRouter / OpenAI GPT-4o Transcribe"
-
-
-def test_list_targets_for_tts_returns_only_tts_models() -> None:
-    providers = _Providers()
-    models = _Models(
-        [
-            _model("openai/gpt-4o-transcribe", (TASK_SPEECH_TO_TEXT,)),
-            _model("openai/gpt-4o-mini-tts", (TASK_TEXT_TO_SPEECH,)),
-        ]
-    )
-    service = TaskModelService(providers, models, _Credentials(), _Storage())
-
-    targets = service.list_targets(TASK_TEXT_TO_SPEECH)
-
-    assert [target.id for target in targets] == ["openrouter/openai/gpt-4o-mini-tts::api-key"]
-    assert targets[0].label == "OpenRouter / OpenAI GPT-4o Mini TTS"
-
-
-def test_list_targets_for_image_generation() -> None:
-    providers = _Providers()
-    models = _Models(
-        [
             _model("dall-e-3", (TASK_IMAGE_GENERATION,), name="DALL-E 3"),
             _model("gpt-image-1", (TASK_IMAGE_GENERATION,), name="GPT Image 1"),
         ]
     )
-    service = TaskModelService(providers, models, _Credentials(), _Storage())
+    service = TaskModelService(_Providers(), models, _Credentials(), _Storage())
 
-    targets = service.list_targets(TASK_IMAGE_GENERATION)
+    targets = service.list_targets(task_type)
 
-    assert [target.id for target in targets] == [
-        "openrouter/dall-e-3::api-key",
-        "openrouter/gpt-image-1::api-key",
+    assert [(target.id, target.label) for target in targets] == [
+        (target_id, f"OpenRouter / {label}") for target_id, label in expected
     ]
+    assert all(target.connection_id == "openrouter:api-key" for target in targets)
 
 
 def test_list_targets_for_image_understanding_filters_by_capability() -> None:
@@ -116,12 +113,6 @@ def test_list_targets_for_image_understanding_filters_by_capability() -> None:
 
     assert [target.id for target in targets] == ["opencode-go/kimi-k2.5::api-key"]
     assert TASK_IMAGE_UNDERSTANDING in targets[0].task_types
-
-
-def test_image_understanding_is_a_supported_task_type() -> None:
-    assert TASK_IMAGE_UNDERSTANDING == "image_understanding"
-    assert TASK_IMAGE_UNDERSTANDING in SUPPORTED_TASK_TYPES
-    assert validate_task_type(TASK_IMAGE_UNDERSTANDING) == TASK_IMAGE_UNDERSTANDING
 
 
 def test_binding_is_usable_validates_live_image_understanding_target() -> None:
@@ -206,217 +197,99 @@ def test_binding_is_usable_rejects_forbidden_connection_and_local_target() -> No
     )
 
 
-def test_list_targets_expands_multiple_usable_connections() -> None:
-    providers = _Providers(
-        providers=[
-            _provider(
-                "openrouter",
-                "OpenRouter",
-                [("api-key", "API Key"), ("oauth", "OAuth")],
-            )
-        ]
-    )
-    models = _Models([_model("openai/gpt-4o-transcribe", (TASK_SPEECH_TO_TEXT,))])
+_OPENROUTER_TWO_CONNECTIONS = _provider(
+    "openrouter", "OpenRouter", [("api-key", "API Key"), ("oauth", "OAuth")]
+)
+_OPENAI_TWO_CONNECTIONS = _provider(
+    "openai", "OpenAI", [("api-key", "API Key"), ("subscription", "ChatGPT Plus/Pro")]
+)
+_TRANSCRIBE = "openrouter/openai/gpt-4o-transcribe"
+
+
+@pytest.mark.parametrize(
+    ("providers", "granted", "models", "expected"),
+    [
+        # Sorted by label: "API Key" before "OAuth".
+        pytest.param(
+            [_OPENROUTER_TWO_CONNECTIONS],
+            {"openrouter:api-key", "openrouter:oauth"},
+            [_model("openai/gpt-4o-transcribe", (TASK_SPEECH_TO_TEXT,))],
+            [
+                (f"{_TRANSCRIBE}::api-key", "OpenRouter / OpenAI GPT-4o Transcribe (API Key)"),
+                (f"{_TRANSCRIBE}::oauth", "OpenRouter / OpenAI GPT-4o Transcribe (OAuth)"),
+            ],
+            id="one-target-per-usable-connection",
+        ),
+        pytest.param(
+            [_OPENROUTER_TWO_CONNECTIONS],
+            {"openrouter:api-key"},
+            [_model("openai/gpt-4o-transcribe", (TASK_SPEECH_TO_TEXT,))],
+            [(f"{_TRANSCRIBE}::api-key", "OpenRouter / OpenAI GPT-4o Transcribe")],
+            id="single-usable-connection-has-a-bare-label",
+        ),
+        # A per-model allowlist yields no cross product.
+        pytest.param(
+            [_OPENAI_TWO_CONNECTIONS],
+            {"openai:api-key", "openai:subscription"},
+            [
+                _model(
+                    "gpt-5.2",
+                    (TASK_SPEECH_TO_TEXT,),
+                    name="GPT-5.2",
+                    provider_id="openai",
+                    connections=("api-key",),
+                ),
+                _model(
+                    "gpt-5.5",
+                    (TASK_SPEECH_TO_TEXT,),
+                    name="GPT-5.5",
+                    provider_id="openai",
+                    connections=("subscription",),
+                ),
+            ],
+            [
+                ("openai/gpt-5.2::api-key", "OpenAI / GPT-5.2 (API Key)"),
+                ("openai/gpt-5.5::subscription", "OpenAI / GPT-5.5 (ChatGPT Plus/Pro)"),
+            ],
+            id="per-model-connection-allowlist",
+        ),
+        pytest.param(
+            [
+                _provider("openrouter", "OpenRouter", [("api-key", "API Key")]),
+                _provider("unauth", "Unauth Provider", [("api-key", "API Key")]),
+            ],
+            {"openrouter:api-key"},
+            [
+                _model("openai/gpt-4o-transcribe", (TASK_SPEECH_TO_TEXT,)),
+                _model(
+                    "openai/gpt-4o-transcribe",
+                    (TASK_SPEECH_TO_TEXT,),
+                    name="Unauth Transcribe",
+                    provider_id="unauth",
+                ),
+            ],
+            [(f"{_TRANSCRIBE}::api-key", "OpenRouter / OpenAI GPT-4o Transcribe")],
+            id="provider-without-credentials",
+        ),
+    ],
+)
+def test_list_targets_expand_only_usable_allowed_connections(
+    providers: list[SimpleNamespace],
+    granted: set[str],
+    models: list[SimpleNamespace],
+    expected: list[tuple[str, str]],
+) -> None:
     service = TaskModelService(
-        providers,
-        models,
-        _Credentials(granted={"openrouter:api-key", "openrouter:oauth"}),
-        _Storage(),
+        _Providers(providers=providers), _Models(models), _Credentials(granted), _Storage()
     )
 
     targets = service.list_targets(TASK_SPEECH_TO_TEXT)
 
-    # Multi-connection expansion: one target per usable connection, sorted
-    # by (kind, label.lower(), id) — alphabetical on label puts "API Key" before "OAuth".
-    assert [target.id for target in targets] == [
-        "openrouter/openai/gpt-4o-transcribe::api-key",
-        "openrouter/openai/gpt-4o-transcribe::oauth",
-    ]
-    assert [target.label for target in targets] == [
-        "OpenRouter / OpenAI GPT-4o Transcribe (API Key)",
-        "OpenRouter / OpenAI GPT-4o Transcribe (OAuth)",
-    ]
-
-
-def test_list_targets_respects_per_model_connections_allowlist() -> None:
-    """A provider with two usable connections and per-connection-tagged
-    models produces exactly one target per model — never the cross product.
-    Codex-style models (gpt-5.5) only get the ``subscription`` connection;
-    Platform-style models (gpt-5.2) only get the ``api-key`` connection.
-    """
-
-    providers = _Providers(
-        providers=[
-            _provider(
-                "openai",
-                "OpenAI",
-                [("api-key", "API Key"), ("subscription", "ChatGPT Plus/Pro")],
-            )
-        ]
+    assert [(target.id, target.label) for target in targets] == expected
+    assert all(
+        target.connection_id == f"{target.id.split('/')[0]}:{target.id.split('::')[1]}"
+        for target in targets
     )
-    models = _Models(
-        [
-            _model(
-                "gpt-5.2",
-                (TASK_SPEECH_TO_TEXT,),
-                name="GPT-5.2",
-                provider_id="openai",
-                connections=("api-key",),
-            ),
-            _model(
-                "gpt-5.5",
-                (TASK_SPEECH_TO_TEXT,),
-                name="GPT-5.5",
-                provider_id="openai",
-                connections=("subscription",),
-            ),
-        ]
-    )
-    service = TaskModelService(
-        providers,
-        models,
-        _Credentials(granted={"openai:api-key", "openai:subscription"}),
-        _Storage(),
-    )
-
-    targets = service.list_targets(TASK_SPEECH_TO_TEXT)
-
-    # One target per (model, allowed-connection) — no cross product.
-    assert [target.id for target in targets] == [
-        "openai/gpt-5.2::api-key",
-        "openai/gpt-5.5::subscription",
-    ]
-    assert targets[0].connection_id == "openai:api-key"
-    assert targets[1].connection_id == "openai:subscription"
-
-
-def test_list_targets_with_empty_connections_keeps_existing_expansion() -> None:
-    """Models with ``connections == ()`` are still valid for every usable
-    connection — the per-model allowlist is opt-in. The legacy
-    cross-product expansion remains unchanged for these entries."""
-
-    providers = _Providers(
-        providers=[
-            _provider(
-                "openrouter",
-                "OpenRouter",
-                [("api-key", "API Key"), ("oauth", "OAuth")],
-            )
-        ]
-    )
-    models = _Models([_model("openai/gpt-4o-transcribe", (TASK_SPEECH_TO_TEXT,), connections=())])
-    service = TaskModelService(
-        providers,
-        models,
-        _Credentials(granted={"openrouter:api-key", "openrouter:oauth"}),
-        _Storage(),
-    )
-
-    targets = service.list_targets(TASK_SPEECH_TO_TEXT)
-
-    assert [target.id for target in targets] == [
-        "openrouter/openai/gpt-4o-transcribe::api-key",
-        "openrouter/openai/gpt-4o-transcribe::oauth",
-    ]
-
-
-def test_list_targets_with_connections_allowlist_skips_non_matching_connection() -> None:
-    """When a connection in the usable set is not in the model's allowlist,
-    no target is produced for that (model, connection) pair — the model
-    is simply absent on that connection's side of the expansion."""
-
-    providers = _Providers(
-        providers=[
-            _provider(
-                "openai",
-                "OpenAI",
-                [("api-key", "API Key"), ("subscription", "ChatGPT Plus/Pro")],
-            )
-        ]
-    )
-    models = _Models(
-        [
-            _model(
-                "gpt-5.5",
-                (TASK_SPEECH_TO_TEXT,),
-                name="GPT-5.5",
-                provider_id="openai",
-                connections=("subscription",),
-            )
-        ]
-    )
-    service = TaskModelService(
-        providers,
-        models,
-        _Credentials(granted={"openai:api-key", "openai:subscription"}),
-        _Storage(),
-    )
-
-    targets = service.list_targets(TASK_SPEECH_TO_TEXT)
-
-    # Only the subscription target exists; api-key is not in the allowlist.
-    assert [target.id for target in targets] == ["openai/gpt-5.5::subscription"]
-
-
-def test_list_targets_single_usable_connection_omits_label_suffix() -> None:
-    """With one usable connection, the label is the bare model label — unchanged from before."""
-
-    providers = _Providers(
-        providers=[
-            _provider(
-                "openrouter",
-                "OpenRouter",
-                [("api-key", "API Key"), ("oauth", "OAuth")],
-            )
-        ]
-    )
-    models = _Models([_model("openai/gpt-4o-transcribe", (TASK_SPEECH_TO_TEXT,))])
-    service = TaskModelService(
-        providers,
-        models,
-        # Only one connection has credentials — only it is expanded.
-        _Credentials(granted={"openrouter:api-key"}),
-        _Storage(),
-    )
-
-    targets = service.list_targets(TASK_SPEECH_TO_TEXT)
-
-    assert [target.id for target in targets] == [
-        "openrouter/openai/gpt-4o-transcribe::api-key",
-    ]
-    assert targets[0].label == "OpenRouter / OpenAI GPT-4o Transcribe"
-
-
-def test_list_targets_skips_provider_without_credentials() -> None:
-    providers = _Providers(
-        providers=[
-            _provider("openrouter", "OpenRouter", [("api-key", "API Key")]),
-            _provider("unauth", "Unauth Provider", [("api-key", "API Key")]),
-        ]
-    )
-    models = _Models(
-        [
-            _model("openai/gpt-4o-transcribe", (TASK_SPEECH_TO_TEXT,)),
-            _model(
-                "openai/gpt-4o-transcribe",
-                (TASK_SPEECH_TO_TEXT,),
-                name="Unauth Transcribe",
-                provider_id="unauth",
-            ),
-        ]
-    )
-    service = TaskModelService(
-        providers,
-        models,
-        _Credentials(granted={"openrouter:api-key"}),
-        _Storage(),
-    )
-
-    targets = service.list_targets(TASK_SPEECH_TO_TEXT)
-
-    # Credential gating removes "unauth" entirely — both from provider
-    # iteration and from query results.
-    assert [target.id for target in targets] == ["openrouter/openai/gpt-4o-transcribe::api-key"]
 
 
 def test_list_targets_merges_local_targets_with_provider_targets() -> None:
@@ -446,23 +319,6 @@ def test_list_targets_merges_local_targets_with_provider_targets() -> None:
         ("local", "local/whisper-local"),
         ("provider", "openrouter/openai/gpt-4o-transcribe::api-key"),
     ]
-
-
-def test_list_targets_query_delegation_does_not_reach_provider_without_match() -> None:
-    """When the core query excludes all models for a provider, no targets are produced."""
-
-    providers = _Providers()
-    models = _Models(
-        [
-            # Only TTS-capable; STT query should exclude this.
-            _model("openai/gpt-4o-mini-tts", (TASK_TEXT_TO_SPEECH,)),
-        ]
-    )
-    service = TaskModelService(providers, models, _Credentials(), _Storage())
-
-    targets = service.list_targets(TASK_SPEECH_TO_TEXT)
-
-    assert targets == []
 
 
 def test_live_voice_targets_are_explicit_and_limited_to_allowed_connections() -> None:

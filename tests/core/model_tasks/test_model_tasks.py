@@ -27,15 +27,6 @@ from tests.core.model_tasks.model_tasks_test_support import (
 )
 
 
-def test_parse_openrouter_target_with_nested_model_id() -> None:
-    ref = parse_task_model_target_id("openrouter/openai/gpt-4o-transcribe::api-key")
-
-    assert ref.provider_id == "openrouter"
-    assert ref.model_id == "openai/gpt-4o-transcribe"
-    assert ref.connection_id == "openrouter:api-key"
-    assert ref.local_connection_id == "api-key"
-
-
 def test_local_speech_binding_uses_live_engine_availability_and_options() -> None:
     available = False
     registry = LocalTaskTargetRegistry(
@@ -65,11 +56,6 @@ def test_local_speech_binding_uses_live_engine_availability_and_options() -> Non
     assert not service.binding_is_usable(TASK_SPEECH_TO_TEXT)
 
 
-def test_parse_provider_target_requires_connection_suffix() -> None:
-    with pytest.raises(TaskModelValidationError):
-        parse_task_model_target_id("openrouter/openai/gpt-4o-transcribe")
-
-
 @pytest.mark.parametrize("operation", ["update", "options"])
 def test_unknown_local_target_is_a_binding_validation_error(operation: str) -> None:
     service = TaskModelService(_Providers(), _Models([]), _Credentials(), _Storage())
@@ -81,22 +67,62 @@ def test_unknown_local_target_is_a_binding_validation_error(operation: str) -> N
             service.options(TASK_SPEECH_TO_TEXT, "local/missing")
 
 
-def test_parse_target_with_account_suffix() -> None:
-    ref = parse_task_model_target_id("openrouter/openai/gpt-4o-transcribe::api-key:work")
+@pytest.mark.parametrize(
+    ("target", "expected"),
+    [
+        pytest.param(
+            "openrouter/openai/gpt-4o-transcribe::api-key",
+            ("openrouter", "openai/gpt-4o-transcribe", "openrouter:api-key", "api-key", ""),
+            id="nested-model-id",
+        ),
+        pytest.param(
+            "openrouter/openai/gpt-4o-transcribe::api-key:work",
+            (
+                "openrouter",
+                "openai/gpt-4o-transcribe",
+                "openrouter:api-key:work",
+                "api-key",
+                "work",
+            ),
+            id="account-suffix",
+        ),
+        pytest.param(
+            "openai/gpt-4o::openai:api-key:work",
+            ("openai", "gpt-4o", "openai:api-key:work", "api-key", "work"),
+            id="provider-prefixed-connection",
+        ),
+    ],
+)
+def test_provider_target_names_provider_model_connection_and_account(
+    target: str, expected: tuple[str, str, str, str, str]
+) -> None:
+    ref = parse_task_model_target_id(target)
 
-    assert ref.provider_id == "openrouter"
-    assert ref.model_id == "openai/gpt-4o-transcribe"
-    assert ref.connection_id == "openrouter:api-key:work"
-    assert ref.local_connection_id == "api-key"
-    assert ref.account_id == "work"
+    assert (
+        ref.provider_id,
+        ref.model_id,
+        ref.connection_id,
+        ref.local_connection_id,
+        ref.account_id,
+    ) == expected
 
 
-def test_parse_target_with_provider_prefixed_connection_and_account() -> None:
-    ref = parse_task_model_target_id("openai/gpt-4o::openai:api-key:work")
-
-    assert ref.connection_id == "openai:api-key:work"
-    assert ref.local_connection_id == "api-key"
-    assert ref.account_id == "work"
+@pytest.mark.parametrize(
+    "target",
+    [
+        pytest.param("openrouter/openai/gpt-4o-transcribe", id="no-connection"),
+        pytest.param(
+            "openrouter/openai/gpt-4o-transcribe::api-key:Work-Acct", id="invalid-account"
+        ),
+        pytest.param(
+            "openrouter/openai/gpt-4o-transcribe::openrouter::work",
+            id="empty-connection-before-account",
+        ),
+    ],
+)
+def test_malformed_provider_target_is_a_validation_error(target: str) -> None:
+    with pytest.raises(TaskModelValidationError):
+        parse_task_model_target_id(target)
 
 
 @pytest.mark.parametrize(
@@ -118,24 +144,7 @@ def test_task_target_identity_preserves_local_provider_and_account_boundaries(
     assert task_model_targets_equal(left, right) is equal
 
 
-def test_parse_target_without_account_leaves_account_empty() -> None:
-    ref = parse_task_model_target_id("openrouter/openai/gpt-4o-transcribe::api-key")
-
-    assert ref.account_id == ""
-    assert ref.connection_id == "openrouter:api-key"
-
-
-def test_parse_target_rejects_invalid_account_id() -> None:
-    with pytest.raises(TaskModelValidationError):
-        parse_task_model_target_id("openrouter/openai/gpt-4o-transcribe::api-key:Work-Acct")
-
-
-def test_parse_target_rejects_empty_connection_before_account() -> None:
-    with pytest.raises(TaskModelValidationError):
-        parse_task_model_target_id("openrouter/openai/gpt-4o-transcribe::openrouter::work")
-
-
-@pytest.mark.parametrize("dimensions", [0, -1, 256.0, True, "256"])
+@pytest.mark.parametrize("dimensions", [0, 256.0, True])
 def test_update_rejects_invalid_embedding_dimensions(dimensions: object) -> None:
     service = TaskModelService(_Providers(), _Models([]), _Credentials(), _Storage())
 

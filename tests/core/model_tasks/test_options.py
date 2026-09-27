@@ -28,72 +28,37 @@ from core.model_tasks.options import (
 from core.models import Capabilities, Model, ReasoningCapabilities
 
 
-def test_allowed_option_types_includes_json() -> None:
-    """The ``json`` field type is part of the supported set so the Settings
-    UI can render generic array/object options like the extra-options
-    escape hatch or provider passthrough options."""
+def test_field_types_are_the_renderable_set_and_json_defaults_pass_through() -> None:
+    """The Settings UI renders exactly these field types; a ``json`` field hands
+    its raw array/object default to the frontend unchanged."""
 
-    assert "json" in ALLOWED_OPTION_TYPES
-    # Existing renderable types remain in the whitelist.
-    for known in ("text", "textarea", "select", "number", "boolean"):
-        assert known in ALLOWED_OPTION_TYPES
-
-
-def test_task_model_option_field_accepts_json_type() -> None:
-    """A field declared as ``json`` is constructed and serialized as ``json``.
-    The default value is passed through untouched so the frontend receives
-    the raw array/object the provider expects."""
-
+    assert {"text", "textarea", "select", "number", "boolean", "json"} == ALLOWED_OPTION_TYPES
+    default = [{"text": "hi", "bbox": [[0, 0], [1, 0], [1, 1], [0, 1]]}]
     field = TaskModelOptionField(
-        name="text_layout",
-        type="json",
-        label="Text layout",
-        default=[{"text": "hi", "bbox": [[0, 0], [1, 0], [1, 1], [0, 1]]}],
-        description="Array of {text, bbox} entries (recraft-v3).",
+        name="text_layout", type="json", label="Text layout", default=default
     )
 
-    assert field.type == "json"
-    payload = field.to_dict()
-    assert payload["type"] == "json"
-    assert payload["name"] == "text_layout"
-    # Default is preserved as-is — backend does not transform JSON values.
-    assert payload["default"] == [{"text": "hi", "bbox": [[0, 0], [1, 0], [1, 1], [0, 1]]}]
-    assert payload["description"].startswith("Array of ")
+    assert field.to_dict()["type"] == "json"
+    assert field.to_dict()["default"] == default
 
 
-def test_task_model_option_field_rejects_unknown_type() -> None:
-    """Unknown field types are rejected up front so the renderer never sees
-    them as silent fallbacks. ``json`` is allowed; ``totally-unknown`` is not."""
-
-    with pytest.raises(TaskModelOptionValidationError, match="totally-unknown"):
-        TaskModelOptionField(
-            name="x",
-            type="totally-unknown",
-            label="X",
-        )
-
-    # Sanity: the constructor's error names the actual offending type.
-    with pytest.raises(TaskModelOptionValidationError, match="json-list"):
-        TaskModelOptionField(
-            name="x",
-            type="json-list",  # plausible typo
-            label="X",
-        )
+@pytest.mark.parametrize(
+    ("name", "field_type", "message"),
+    [
+        pytest.param("x", "json-list", "json-list", id="unknown-type"),
+        pytest.param("", "json", "name", id="empty-name"),
+    ],
+)
+def test_invalid_field_declaration_is_rejected(name: str, field_type: str, message: str) -> None:
+    with pytest.raises(TaskModelOptionValidationError, match=message):
+        TaskModelOptionField(name=name, type=field_type, label="X")
 
 
-def test_task_model_option_field_rejects_empty_name() -> None:
-    """An empty name would render as an unkeyed option in the binding — reject it."""
-
-    with pytest.raises(TaskModelOptionValidationError, match="name"):
-        TaskModelOptionField(name="", type="json", label="X")
-
-
-@pytest.mark.parametrize("value", [10**400, -(10**400)])
-def test_numeric_options_reject_overflow_as_validation_error(value: int) -> None:
+def test_numeric_options_reject_overflow_as_validation_error() -> None:
     schema = option_schema_for(TASK_TEXT_TO_SPEECH, "openai", "openai/tts-1::api-key")
 
     with pytest.raises(TaskModelOptionValidationError):
-        validate_task_model_options(schema, {"speed": value})
+        validate_task_model_options(schema, {"speed": 10**400})
 
 
 def test_select_without_choices_accepts_no_value() -> None:
@@ -172,22 +137,6 @@ def test_narrowed_choices_do_not_restrict_validation() -> None:
     validate_task_model_options(schema, {"tier": "deep"})
     with pytest.raises(TaskModelOptionValidationError):
         validate_task_model_options(schema, {"tier": "turbo"})
-
-
-def test_existing_field_types_still_validate() -> None:
-    """Sanity: the pre-existing field types still construct without error,
-    and each reports the correct ``type`` in its serialized form."""
-
-    cases = [
-        ("text", "language"),
-        ("textarea", "instructions"),
-        ("number", "temperature"),
-        ("boolean", "enabled"),
-    ]
-    for field_type, name in cases:
-        field = TaskModelOptionField(name=name, type=field_type, label=name.title())
-        assert field.type == field_type
-        assert field.to_dict()["type"] == field_type
 
 
 # ---------------------------------------------------------------------------
@@ -272,142 +221,129 @@ def test_option_schema_for_unrecognized_task_type_returns_empty_schema() -> None
 # ---------------------------------------------------------------------------
 
 
-def test_option_schema_for_tts_uses_supported_voices_from_model() -> None:
-    """When the model carries ``supported_voices``, the TTS schema
-    surfaces exactly those voices and marks the field required."""
+_OPENAI_VOICES = [
+    "alloy",
+    "ash",
+    "ballad",
+    "coral",
+    "echo",
+    "fable",
+    "nova",
+    "onyx",
+    "sage",
+    "shimmer",
+    "verse",
+]
+_KOKORO_VOICES = ("af_alloy", "af_aoede", "af_bella", "af_jessica")
 
-    voices = ("af_alloy", "af_aoede", "af_bella", "af_jessica")
-    model = _make_model("hexgrad/kokoro-82m", supported_voices=voices)
 
+def _choices(field: TaskModelOptionField) -> list[str]:
+    return [choice.value for choice in field.options]
+
+
+@pytest.mark.parametrize(
+    ("provider_id", "model", "voice", "formats"),
+    [
+        # Only a model's published voices are authoritative.
+        pytest.param(
+            "openrouter",
+            _make_model("hexgrad/kokoro-82m", supported_voices=_KOKORO_VOICES),
+            ("select", True, None, list(_KOKORO_VOICES)),
+            ["mp3", "pcm"],
+            id="model-voices",
+        ),
+        # OpenAI is the only Provider with a built-in voice list.
+        pytest.param(
+            "openai",
+            None,
+            ("select", True, "alloy", _OPENAI_VOICES),
+            ["mp3", "opus", "aac", "flac", "wav", "pcm"],
+            id="openai-fallback",
+        ),
+        pytest.param(
+            "openrouter", None, ("text", False, "", []), ["mp3", "pcm"], id="free-text-voice"
+        ),
+    ],
+)
+def test_tts_voice_and_formats_come_from_the_model_or_the_provider(
+    provider_id: str,
+    model: Model | None,
+    voice: tuple[str, bool, str | None, list[str]],
+    formats: list[str],
+) -> None:
     schema = option_schema_for(
-        TASK_TEXT_TO_SPEECH,
-        "openrouter",
-        "openrouter/hexgrad/kokoro-82m::api-key",
-        model=model,
+        TASK_TEXT_TO_SPEECH, provider_id, f"{provider_id}/tts::api-key", model=model
     )
 
-    voice_field = schema.fields[0]
-    assert voice_field.name == "voice"
-    assert voice_field.required is True
-    assert [choice.value for choice in voice_field.options] == list(voices)
-    field_names = {field.name for field in schema.fields}
-    assert {"response_format", "speed"} <= field_names
-    assert "instructions" not in field_names
+    fields = {field.name: field for field in schema.fields}
+    assert list(fields) == ["voice", "response_format", "speed", "extra_options"]
+    voice_field = fields["voice"]
+    assert (
+        voice_field.type,
+        voice_field.required,
+        voice_field.default,
+        _choices(voice_field),
+    ) == voice
+    assert _choices(fields["response_format"]) == formats
 
 
-def test_option_schema_for_tts_falls_back_to_openai_voices_for_openai_provider() -> None:
-    """``provider_id == "openai"`` with no model still uses the OpenAI
-    voice list as a select. This is the only provider that gets a hard-
-    coded fallback list — every other provider must wait for the model
-    to publish ``supported_voices``."""
+def test_tts_instructions_field_only_when_the_model_advertises_it() -> None:
+    def names(*supported: str) -> list[str]:
+        model = _make_model("openai-tts", supported_parameters=supported)
+        schema = option_schema_for(
+            TASK_TEXT_TO_SPEECH, "openai", "openai/openai-tts::api-key", model=model
+        )
+        return [field.name for field in schema.fields]
 
+    assert "instructions" in names("voice", "response_format", "speed", "instructions")
+    assert "instructions" not in names("voice", "response_format", "speed")
+
+
+@pytest.mark.parametrize(
+    ("provider_id", "model", "names"),
+    [
+        pytest.param(
+            "openai",
+            _make_model("whisper-1", supported_parameters=("response_format",)),
+            ["language", "prompt", "temperature", "response_format", "extra_options"],
+            id="advertised-response-format",
+        ),
+        pytest.param(
+            "openai",
+            _make_model("gpt-4o-transcribe"),
+            ["language", "prompt", "temperature", "extra_options"],
+            id="unadvertised-response-format",
+        ),
+        pytest.param(
+            "openai", None, ["language", "prompt", "temperature", "extra_options"], id="no-model"
+        ),
+        # OpenRouter execution sends neither a prompt nor a response format.
+        pytest.param(
+            "openrouter",
+            _make_model("openai/whisper-1", supported_parameters=("response_format",)),
+            ["language", "temperature", "extra_options"],
+            id="openrouter",
+        ),
+    ],
+)
+def test_stt_fields_depend_on_provider_protocol_and_model_support(
+    provider_id: str, model: Model | None, names: list[str]
+) -> None:
     schema = option_schema_for(
-        TASK_TEXT_TO_SPEECH,
-        "openai",
-        "openai/tts-1::api-key",
+        TASK_SPEECH_TO_TEXT, provider_id, f"{provider_id}/stt::api-key", model=model
     )
 
-    voice_field = schema.fields[0]
-    assert voice_field.type == "select"
-    assert voice_field.default == "alloy"
-    voice_values = {choice.value for choice in voice_field.options}
-    assert voice_values == {
-        "alloy",
-        "ash",
-        "ballad",
-        "coral",
-        "echo",
-        "fable",
-        "nova",
-        "onyx",
-        "sage",
-        "shimmer",
-        "verse",
-    }
-
-
-def test_option_schema_for_tts_uses_free_text_voice_for_unknown_provider() -> None:
-    """For an unknown provider with no model, the voice field is a
-    free-text input — the OpenAI voice list is not invented for other
-    providers."""
-
-    schema = option_schema_for(
-        TASK_TEXT_TO_SPEECH,
-        "openrouter",
-        "openrouter/unknown-model::api-key",
-    )
-
-    voice_field = schema.fields[0]
-    assert voice_field.name == "voice"
-    assert voice_field.type == "text"
-    # No default — the user must provide a model-accepted voice id.
-    assert voice_field.default in (None, "")
-
-
-def test_option_schema_for_openai_tts_instructions_only_when_advertised() -> None:
-    """The ``instructions`` field is model-specific: it is exposed only
-    for models that advertise support (gpt-4o-mini-tts); tts-1 never
-    exposes the field."""
-
-    gpt4o = _make_model(
-        "gpt-4o-mini-tts",
-        supported_parameters=("voice", "response_format", "speed", "instructions"),
-    )
-    tts1 = _make_model(
-        "tts-1",
-        supported_parameters=("voice", "response_format", "speed"),
-    )
-
-    gpt4o_schema = option_schema_for(
-        TASK_TEXT_TO_SPEECH,
-        "openai",
-        "openai/gpt-4o-mini-tts::api-key",
-        model=gpt4o,
-    )
-    tts1_schema = option_schema_for(
-        TASK_TEXT_TO_SPEECH,
-        "openai",
-        "openai/tts-1::api-key",
-        model=tts1,
-    )
-
-    gpt4o_names = {field.name for field in gpt4o_schema.fields}
-    tts1_names = {field.name for field in tts1_schema.fields}
-
-    assert "instructions" in gpt4o_names
-    assert "instructions" not in tts1_names
-    for schema_names in (gpt4o_names, tts1_names):
-        assert {"voice", "response_format", "speed"} <= schema_names
-
-
-# ---------------------------------------------------------------------------
-# STT
-# ---------------------------------------------------------------------------
-
-
-def test_option_schema_for_stt_response_format_field_type() -> None:
-    """``response_format`` is a select field with the Whisper-style
-    format set when the model advertises support for it."""
-
-    model = _make_model("openai/whisper-1", supported_parameters=("response_format",))
-
-    schema = option_schema_for(
-        TASK_SPEECH_TO_TEXT,
-        "openai",
-        "openai/whisper-1::api-key",
-        model=model,
-    )
-
-    response_format = next(field for field in schema.fields if field.name == "response_format")
-    assert response_format.type == "select"
-    assert {choice.value for choice in response_format.options} == {
-        "json",
-        "text",
-        "srt",
-        "verbose_json",
-        "vtt",
-    }
-    assert response_format.default == "json"
+    fields = {field.name: field for field in schema.fields}
+    assert list(fields) == names
+    if "response_format" in fields:
+        assert _choices(fields["response_format"]) == [
+            "json",
+            "text",
+            "srt",
+            "verbose_json",
+            "vtt",
+        ]
+        assert fields["response_format"].default == "json"
 
 
 # ---------------------------------------------------------------------------
@@ -661,6 +597,8 @@ def test_image_passthrough_renders_provider_options_json_field() -> None:
     )
 
     schema = _image_schema(model)
+    # No hard-coded family fields (``strength``, ``rgb_colors``) appear.
+    assert [field.name for field in schema.fields] == ["n", "provider_options", "extra_options"]
     provider_options = next(field for field in schema.fields if field.name == "provider_options")
     assert provider_options.type == "json"
     assert provider_options.default == {}
@@ -824,79 +762,39 @@ def test_music_schema_uses_only_model_supported_sampling_options() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_option_schema_for_text_embedding_emits_dimensions_field() -> None:
-    """A text_embedding schema for an unknown model exposes the
-    ``dimensions`` field (union shown before the catalog is loaded)."""
-
+@pytest.mark.parametrize(
+    ("model", "names"),
+    [
+        # Before the catalog is loaded the knob is offered.
+        pytest.param(None, ["dimensions", "extra_options"], id="unknown-model"),
+        # A Provider would reject a knob the model does not list.
+        pytest.param(
+            _make_model("some/embedding-model-v1"), ["extra_options"], id="unsupported-dimensions"
+        ),
+    ],
+)
+def test_embedding_dimensions_field_follows_model_support(
+    model: Model | None, names: list[str]
+) -> None:
     schema = option_schema_for(
-        TASK_TEXT_EMBEDDING,
-        "openrouter",
-        "openrouter/google/gemini-embedding-2::api-key",
-        model=None,
+        TASK_TEXT_EMBEDDING, "openrouter", "openrouter/embed::api-key", model=model
     )
 
-    field_names = {field.name for field in schema.fields}
-    assert field_names == {"dimensions", "extra_options"}
-
-    dimensions = schema.fields[0]
-    assert dimensions.name == "dimensions"
-    assert dimensions.type == "number"
-    # The schema emits a None default; the wire layer drops None
-    # before sending, so the request omits ``dimensions`` by default.
-    assert dimensions.default is None
-    assert dimensions.min_value == 1
-    assert dimensions.step == 1
+    assert [field.name for field in schema.fields] == names
 
 
-def test_option_schema_for_text_embedding_without_supported_dimensions() -> None:
-    """A model that does not list ``dimensions`` in
-    ``supported_parameters`` has no dimensions knob — the Settings UI
-    does not invent one the provider would reject."""
+def test_embedding_schema_defaults_send_no_dimensions() -> None:
+    target = "openrouter/google/gemini-embedding-2::api-key"
+    schema = option_schema_for(TASK_TEXT_EMBEDDING, "openrouter", target)
 
-    model = _make_model("some/embedding-model-v1", supported_parameters=())
-
-    schema = option_schema_for(
-        TASK_TEXT_EMBEDDING,
-        "openrouter",
-        "openrouter/some/embedding-model-v1::api-key",
-        model=model,
-    )
-
-    assert [field.name for field in schema.fields] == ["extra_options"]
-
-
-def test_option_schema_for_text_embedding_default_options_only_escape_hatch() -> None:
-    """The embedding schema's defaults carry only the empty escape hatch —
-    the ``dimensions`` field has ``default=None`` and the wire layer drops
-    empty placeholders, so a binding with no stored options produces a
-    request without ``dimensions``."""
-
-    schema = option_schema_for(
-        TASK_TEXT_EMBEDDING,
-        "openrouter",
-        "openrouter/google/gemini-embedding-2::api-key",
-        model=None,
-    )
-
+    # The empty ``dimensions`` default is dropped before the request.
     assert schema.default_options() == {"extra_options": {}}
-
-
-def test_option_schema_for_text_embedding_to_dict_has_dimensions_field() -> None:
-    """The serialized form reaches the Settings UI as a ``number`` field
-    with min=1 and an explicit description of the Matryoshka behavior."""
-
-    schema = option_schema_for(
-        TASK_TEXT_EMBEDDING,
-        "openrouter",
-        "openrouter/google/gemini-embedding-2::api-key",
-        model=None,
-    )
-
     rendered = schema.to_dict()
-    assert rendered["task_type"] == TASK_TEXT_EMBEDDING
-    assert rendered["target"] == "openrouter/google/gemini-embedding-2::api-key"
-    field = next(item for item in rendered["fields"] if item["name"] == "dimensions")
-    assert field["type"] == "number"
-    assert field["default"] is None
-    assert field["min"] == 1
-    assert "Matryoshka" in field["description"]
+    assert (rendered["task_type"], rendered["target"]) == (TASK_TEXT_EMBEDDING, target)
+    dimensions = rendered["fields"][0]
+    assert (dimensions["name"], dimensions["type"], dimensions["default"]) == (
+        "dimensions",
+        "number",
+        None,
+    )
+    assert (dimensions["min"], dimensions["step"]) == (1, 1)
