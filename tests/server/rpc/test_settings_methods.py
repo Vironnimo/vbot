@@ -1,767 +1,466 @@
-"""Tests for settings RPC helpers.
+"""Settings read RPCs: ``settings.get``, ``get_raw``, ``catalog`` and ``get_path``.
 
-Focus: ``_trace_count`` must not mask unexpected debug-trace-store failures.
-Expected store-absence errors (``FileNotFoundError``/``OSError``) return 0
-silently; anything unexpected logs at WARNING with a traceback before
-returning 0.
+Writes (``settings.update`` and ``settings.patch``) live in
+``test_settings_methods_update.py``.
 """
 
 from __future__ import annotations
 
-import asyncio
-import json
 import logging
-from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
-from core.extensions.extensions import ExtensionDeclarations, ExtensionRecord
-from core.extensions.settings_schema import parse_settings_fields
-from core.model_tasks import TASK_TEXT_TO_SPEECH, TaskModelService
-from core.models import Capabilities, Model, ReasoningCapabilities
-from core.storage import StorageManager
 from server.rpc import settings_methods
-from server.rpc.methods import dispatch_rpc
-from server.rpc.settings_methods import _trace_count
-from tests.server.test_rpc import StubAdapter, make_state
-
-_ASYNC_COORDINATION_TIMEOUT_SECONDS = 10.0
-
-
-class _RaisingStorage:
-    """Storage stub whose ``load_debug_settings`` raises a chosen error."""
-
-    data_dir = "."
-
-    def __init__(self, error: BaseException) -> None:
-        self._error = error
-
-    def load_debug_settings(self) -> dict[str, Any]:
-        raise self._error
-
-
-def _runtime_with_storage(storage: Any) -> Any:
-    return SimpleNamespace(storage=storage)
-
-
-@pytest.mark.asyncio
-async def test_trace_count_returns_zero_silently_on_missing_store(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    runtime = _runtime_with_storage(_RaisingStorage(FileNotFoundError("no traces yet")))
-
-    caplog.set_level(logging.WARNING, logger="vbot.server.rpc.settings")
-    assert await _trace_count(runtime) == 0
-
-    assert [record for record in caplog.records if record.name == "vbot.server.rpc.settings"] == []
-
-
-@pytest.mark.asyncio
-async def test_trace_count_logs_warning_on_unexpected_error(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    runtime = _runtime_with_storage(_RaisingStorage(RuntimeError("store corrupt")))
-
-    caplog.set_level(logging.WARNING, logger="vbot.server.rpc.settings")
-    assert await _trace_count(runtime) == 0
-
-    warning_records = [
-        record for record in caplog.records if record.name == "vbot.server.rpc.settings"
-    ]
-    assert len(warning_records) == 1
-    assert warning_records[0].exc_info is not None
-
-
-def test_trace_count_logger_name() -> None:
-    assert settings_methods._LOGGER.name == "vbot.server.rpc.settings"
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("method", ["settings.patch", "settings.update"])
-async def test_settings_change_accepts_raw_null_extension_disabled_set(
-    tmp_path: Path, method: str
-) -> None:
-    state = make_state(tmp_path, StubAdapter())
-    state.runtime.storage = StorageManager(tmp_path / "settings-data")
-    state.runtime.storage.save_settings({"extensions": {"disabled": None}})
-    params = (
-        {"operations": [{"op": "set", "path": "server.keep_awake", "value": False}]}
-        if method == "settings.patch"
-        else {"server": {"keep_awake": False}}
-    )
-
-    response = await dispatch_rpc(state, {"method": method, "params": params})
-
-    assert response["ok"] is True, response
-    assert state.runtime.storage.load_settings()["keep_awake"] is False
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("method", ["settings.patch", "settings.update"])
-async def test_reset_last_default_preserves_unknown_fields_through_rpc(
-    tmp_path: Path, method: str
-) -> None:
-    state = make_state(tmp_path, StubAdapter())
-    state.runtime.storage = StorageManager(tmp_path / "settings-data")
-    storage = state.runtime.storage
-    storage.save_settings(
-        {"defaults": {"agent": {"temperature": 0.2, "future_option": True}, "future_section": 1}}
-    )
-    params = (
-        {"operations": [{"op": "unset", "path": "defaults.agent.temperature"}]}
-        if method == "settings.patch"
-        else {"defaults": {"agent": {"temperature": None}}}
-    )
-
-    response = await dispatch_rpc(state, {"method": method, "params": params})
-
-    assert response["ok"] is True, response
-    assert storage.load_defaults() == {}
-    assert json.loads(storage.settings_path.read_text(encoding="utf-8"))["defaults"] == {
-        "agent": {"future_option": True},
-        "future_section": 1,
-    }
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("method", ["settings.patch", "settings.update"])
-async def test_disabling_extension_does_not_skip_simultaneous_recall_change(
-    tmp_path: Path, method: str
-) -> None:
-    state = make_state(tmp_path, StubAdapter())
-    state.runtime.storage.save_settings(
-        {"extensions": {"disabled": []}, "recall": {"backend": "vector"}}
-    )
-    observed_backends: list[str] = []
-    state.runtime.reload_recall_backend = lambda: observed_backends.append(
-        state.runtime.storage.load_recall_settings()["backend"]
-    )
-    params = (
-        {
-            "operations": [
-                {"op": "set", "path": "extensions.disabled", "value": ["example"]},
-                {"op": "set", "path": "recall.backend", "value": "sqlite_fts"},
-            ]
-        }
-        if method == "settings.patch"
-        else {
-            "extensions": {"disabled": ["example"]},
-            "recall": {"backend": "sqlite_fts"},
-        }
-    )
-
-    response = await dispatch_rpc(state, {"method": method, "params": params})
-
-    assert response["ok"] is True, response
-    assert state.runtime.extension_disabled_changes == [{"example"}]
-    assert state.runtime.extension_reload_count == 0
-    assert observed_backends == ["sqlite_fts"]
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "operation",
-    [
-        {"op": [], "path": "server.port", "value": 8420},
-        {"op": {}, "path": "server.port", "value": 8420},
-        {"op": "set", "path": "server.port", "value": 10**400},
-        {"op": "set", "path": "defaults.agent.temperature", "value": 10**400},
-    ],
+from tests.server.rpc_test_support import (
+    JsonObject,
+    StubAdapter,
+    _no_models_dev_fetch,
+    make_state,
+    openrouter_provider,
+    rpc_error,
+    rpc_result,
 )
-async def test_invalid_settings_patch_returns_validation_error_without_writing(
-    tmp_path: Path, operation: dict[str, Any]
-) -> None:
-    state = make_state(tmp_path, StubAdapter())
-    previous = state.runtime.storage.load_settings()
 
-    response = await dispatch_rpc(
-        state, {"method": "settings.patch", "params": {"operations": [operation]}}
+__all__ = ["_no_models_dev_fetch"]
+
+_SETTINGS_LOGGER = "vbot.server.rpc.settings"
+
+
+def _copilot_device_flow_provider() -> SimpleNamespace:
+    return SimpleNamespace(
+        id="github-copilot",
+        name="GitHub Copilot",
+        base_url="https://api.githubcopilot.com",
+        models_endpoint=None,
+        connections=[
+            SimpleNamespace(
+                id="oauth",
+                type="oauth",
+                label="Sign in with GitHub",
+                auth=SimpleNamespace(credential_key=""),
+                oauth=SimpleNamespace(flow="device"),
+            )
+        ],
     )
 
-    assert response["ok"] is False
-    assert response["error"]["code"] == "invalid_request"
-    assert state.runtime.storage.load_settings() == previous
-
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("method", ["settings.patch", "settings.update"])
-@pytest.mark.parametrize("cancel", [False, True])
-async def test_skill_settings_refresh_is_async_serialized_and_survives_cancellation(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, method: str, cancel: bool
-) -> None:
-    state = make_state(tmp_path, StubAdapter())
-    state.runtime.storage = StorageManager(tmp_path / "settings-data")
-    entered = asyncio.Event()
-    release = asyncio.Event()
-    refreshed: list[list[str]] = []
-    first_directory = str(tmp_path / "first")
-    second_directory = str(tmp_path / "second")
-
-    def blocking_reload() -> None:
-        raise AssertionError("Skill scans must not run synchronously on the Event Loop")
-
-    async def reload_skills() -> None:
-        directories = list(state.runtime.storage.load_settings()["skill_directories"])
-        if not entered.is_set():
-            entered.set()
-            await release.wait()
-        refreshed.append(directories)
-
-    def request(name: str, directory: str) -> dict[str, Any]:
-        params = (
-            {"skills": {"directories": [directory]}}
-            if name == "settings.update"
-            else {"operations": [{"op": "set", "path": "skills.directories", "value": [directory]}]}
-        )
-        return {"method": name, "params": params}
-
-    monkeypatch.setattr(state.runtime, "reload_skills", blocking_reload)
-    monkeypatch.setattr(state.runtime, "reload_skills_async", reload_skills)
-    first = asyncio.create_task(dispatch_rpc(state, request(method, first_directory)))
-    second = None
-    try:
-        await asyncio.wait_for(entered.wait(), _ASYNC_COORDINATION_TIMEOUT_SECONDS)
-        if cancel:
-            first.cancel()
-            await asyncio.sleep(0)
-            first.cancel()
-        other_method = "settings.update" if method == "settings.patch" else "settings.patch"
-        second = asyncio.create_task(dispatch_rpc(state, request(other_method, second_directory)))
-        await asyncio.sleep(0)
-        assert not first.done()
-        assert not second.done()
-        assert state.runtime.storage.load_settings()["skill_directories"] == [first_directory]
-        release.set()
-        if cancel:
-            with pytest.raises(asyncio.CancelledError):
-                await asyncio.wait_for(first, _ASYNC_COORDINATION_TIMEOUT_SECONDS)
-        else:
-            assert (await asyncio.wait_for(first, _ASYNC_COORDINATION_TIMEOUT_SECONDS))[
-                "ok"
-            ] is True
-        assert (await asyncio.wait_for(second, _ASYNC_COORDINATION_TIMEOUT_SECONDS))["ok"] is True
-        assert refreshed == [[first_directory], [second_directory]]
-        assert state.runtime.storage.load_settings()["skill_directories"] == [second_directory]
-    finally:
-        release.set()
-        await asyncio.gather(
-            first, *([second] if second is not None else []), return_exceptions=True
-        )
-
-
-@pytest.mark.asyncio
-async def test_session_title_settings_round_trip_and_validate_model_connection(
+async def test_settings_get_returns_normalized_settings_payload_without_secrets(
     tmp_path: Path,
-    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-live-secret")
+    for key in ("ANTHROPIC_API_KEY", "OPENAI_OAUTH_TOKEN", "OLLAMA_API_KEY", "OPENROUTER_API_KEY"):
+        monkeypatch.delenv(key, raising=False)
     state = make_state(tmp_path, StubAdapter())
-
-    with caplog.at_level(logging.INFO, logger="vbot.server.rpc.settings"):
-        result = await dispatch_rpc(
-            state,
-            {
-                "method": "settings.update",
-                "params": {
-                    "session_titles": {
-                        "enabled": True,
-                        "model": "openai/gpt-4.1-mini::api-key",
-                    }
-                },
-            },
-        )
-
-    assert result["ok"] is True
-    assert result["result"]["session_titles"] == {
-        "enabled": True,
-        "model": "openai/gpt-4.1-mini::api-key",
+    state.runtime.providers.add(_copilot_device_flow_provider())
+    state.runtime.providers.add(openrouter_provider())
+    state.runtime.models._models["github-copilot"] = []
+    state.runtime.models._models["openrouter"] = []
+    state.server_bind = {
+        "listen_host": "0.0.0.0",
+        "listen_port": 9001,
+        "port_source": "settings.server_port",
     }
-    assert state.runtime.storage.load_session_title_settings() == result["result"]["session_titles"]
-    messages = [
-        record.getMessage()
-        for record in caplog.records
-        if record.name == "vbot.server.rpc.settings"
-    ]
-    assert len(messages) == 1
-    assert "sections=session_titles" in messages[0]
 
+    result = await rpc_result(state, "settings.get")
 
-@pytest.mark.asyncio
-async def test_appearance_only_update_does_not_log(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
-) -> None:
-    state = make_state(tmp_path, StubAdapter())
-
-    with caplog.at_level(logging.INFO, logger="vbot.server.rpc.settings"):
-        result = await dispatch_rpc(
-            state,
-            {
-                "method": "settings.update",
-                "params": {
-                    "appearance": {
-                        "language": "en",
-                        "chat_width": "wide",
-                        "chat_working_mode": "compact",
-                    }
+    timezone = result["general"].pop("timezone")
+    available_timezones = result["general"].pop("available_timezones")
+    assert timezone in available_timezones
+    assert "Europe/Berlin" in available_timezones
+    assert result == {
+        "general": {
+            "server": {
+                "listen_host": "0.0.0.0",
+                "listen_port": 9001,
+                "port_source": "settings.server_port",
+            },
+            "data_directory": str(tmp_path),
+            "keep_awake": False,
+        },
+        "providers": {
+            "items": [
+                {
+                    "id": "anthropic",
+                    "name": "Anthropic",
+                    "base_url": "https://api.anthropic.com/v1",
+                    "models_endpoint": None,
+                    "connections": [
+                        {
+                            "id": "anthropic:api-key",
+                            "type": "api_key",
+                            "label": "API Key",
+                            "configured": False,
+                            "enabled": True,
+                            "usable": False,
+                            "accounts": [],
+                            "credential_key": "ANTHROPIC_API_KEY",
+                        }
+                    ],
+                    "credentials_configured": False,
+                    "status": "missing_credentials",
+                    "model_count": 1,
+                    "kind": "remote",
+                    "editable": False,
                 },
-            },
-        )
-
-    assert result["ok"] is True
-    assert not [record for record in caplog.records if record.name == "vbot.server.rpc.settings"]
-
-
-def _add_tts_model(state: SimpleNamespace) -> None:
-    state.runtime.models._models["openai"].append(
-        Model(
-            model_id="gpt-4o-mini-tts",
-            name="GPT-4o mini TTS",
-            capabilities=Capabilities(
-                vision=False,
-                tools=False,
-                json_mode=False,
-                reasoning=ReasoningCapabilities(supported=False),
-                input_modalities=("text",),
-                output_modalities=("speech",),
-                supported_voices=("alloy", "echo"),
-            ),
-            context_window=None,
-            max_output_tokens=None,
-        )
-    )
-    state.runtime.model_tasks = TaskModelService(
-        state.runtime.providers,
-        state.runtime.models,
-        state.runtime.provider_credentials,
-        state.runtime.storage,
-    )
-
-
-@pytest.mark.asyncio
-async def test_settings_update_rejects_invalid_task_model_option_before_persistence(
-    tmp_path: Path,
-) -> None:
-    state = make_state(tmp_path, StubAdapter())
-    _add_tts_model(state)
-
-    result = await dispatch_rpc(
-        state,
-        {
-            "method": "settings.update",
-            "params": {
-                "model_tasks": {
-                    TASK_TEXT_TO_SPEECH: {
-                        "target": "openai/gpt-4o-mini-tts::api-key",
-                        "options": {"voice": "Mia"},
-                    }
-                }
-            },
-        },
-    )
-
-    assert result["ok"] is False
-    assert result["error"]["code"] == "invalid_request"
-    assert "must be one of: alloy, echo" in result["error"]["message"]
-    assert state.runtime.storage.load_model_task_settings() == {}
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("method", ["settings.update", "settings.patch"])
-async def test_settings_update_persists_target_switch_with_validated_options(
-    tmp_path: Path,
-    method: str,
-) -> None:
-    state = make_state(tmp_path, StubAdapter())
-    state.runtime.storage = StorageManager(tmp_path)
-    _add_tts_model(state)
-    model = state.runtime.models.get("openai", "gpt-4o-mini-tts")
-    state.runtime.models._models["openai"].append(
-        replace(
-            model,
-            model_id="tts-default",
-            capabilities=replace(model.capabilities, supported_voices=()),
-        )
-    )
-    state.runtime.storage.update_model_task_settings(
-        {
-            TASK_TEXT_TO_SPEECH: {
-                "target": "openai/retired-tts::api-key",
-                "options": {"retired_option": True},
-            }
-        }
-    )
-
-    result = await dispatch_rpc(
-        state,
-        {
-            "method": method,
-            "params": {
-                "model_tasks": {TASK_TEXT_TO_SPEECH: {"target": "openai/tts-default::api-key"}}
-            }
-            if method == "settings.update"
-            else {
-                "operations": [
-                    {
-                        "op": "set",
-                        "path": 'model_tasks["text_to_speech"].target',
-                        "value": "openai/tts-default::api-key",
-                    }
-                ]
-            },
-        },
-    )
-
-    assert result["ok"] is True
-    binding = state.runtime.storage.load_model_task_settings()[TASK_TEXT_TO_SPEECH]
-    assert binding == {"target": "openai/tts-default::api-key", "options": {}}
-    state.runtime.model_tasks.validate_binding(TASK_TEXT_TO_SPEECH, binding)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("method", ["settings.update", "settings.patch", "task_model.update"])
-@pytest.mark.parametrize("reverse", [False, True])
-@pytest.mark.parametrize("account_suffix", ["", ":work"])
-@pytest.mark.parametrize("options", [{"voice": "echo"}, {"retired_option": True}])
-async def test_equivalent_task_target_spelling_preserves_options(
-    tmp_path: Path, method: str, reverse: bool, account_suffix: str, options: dict[str, Any]
-) -> None:
-    state = make_state(tmp_path, StubAdapter())
-    state.runtime.storage = StorageManager(tmp_path)
-    _add_tts_model(state)
-    plain = f"openai/gpt-4o-mini-tts::api-key{account_suffix}"
-    prefixed = f"openai/gpt-4o-mini-tts::openai:api-key{account_suffix}"
-    previous_target, next_target = (prefixed, plain) if reverse else (plain, prefixed)
-    state.runtime.storage.update_model_task_settings(
-        {TASK_TEXT_TO_SPEECH: {"target": previous_target, "options": options}}
-    )
-    params = (
-        {
-            "operations": [
-                {"op": "set", "path": 'model_tasks["text_to_speech"].target', "value": next_target}
-            ]
-        }
-        if method == "settings.patch"
-        else {"model_tasks": {TASK_TEXT_TO_SPEECH: {"target": next_target}}}
-    )
-
-    result = await dispatch_rpc(state, {"method": method, "params": params})
-
-    assert result["ok"] is True, result
-    binding = state.runtime.storage.load_model_task_settings()[TASK_TEXT_TO_SPEECH]
-    assert binding["options"] == options
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("method", ["settings.update", "settings.patch"])
-@pytest.mark.parametrize("options", [{"retired_option": True}, {}])
-async def test_unchanged_task_binding_does_not_block_other_settings(
-    tmp_path: Path, method: str, options: dict[str, Any]
-) -> None:
-    state = make_state(tmp_path, StubAdapter())
-    state.runtime.storage = StorageManager(tmp_path)
-    _add_tts_model(state)
-    binding = {"target": "openai/retired-tts::api-key", "options": options}
-    state.runtime.storage.update_model_task_settings({TASK_TEXT_TO_SPEECH: binding})
-    previous = state.runtime.storage.load_model_task_settings()
-    params = (
-        {"model_tasks": {TASK_TEXT_TO_SPEECH: binding}, "server": {"keep_awake": True}}
-        if method == "settings.update"
-        else {
-            "operations": [
-                {"op": "set", "path": 'model_tasks["text_to_speech"]', "value": binding},
-                {"op": "set", "path": "server.keep_awake", "value": True},
-            ]
-        }
-    )
-
-    result = await dispatch_rpc(state, {"method": method, "params": params})
-
-    assert result["ok"] is True, result
-    assert state.runtime.storage.load_model_task_settings() == previous
-    assert state.runtime.storage.load_settings()["keep_awake"] is True
-
-
-@pytest.mark.asyncio
-async def test_settings_patch_can_remove_incomplete_task_binding(tmp_path: Path) -> None:
-    state = make_state(tmp_path, StubAdapter())
-    state.runtime.storage = StorageManager(tmp_path)
-    state.runtime.storage.save_settings({"model_tasks": {TASK_TEXT_TO_SPEECH: {}}})
-    _add_tts_model(state)
-
-    result = await dispatch_rpc(
-        state,
-        {
-            "method": "settings.patch",
-            "params": {"operations": [{"op": "unset", "path": 'model_tasks["text_to_speech"]'}]},
-        },
-    )
-
-    assert result["ok"] is True, result
-    assert state.runtime.storage.load_model_task_settings() == {}
-
-
-@pytest.mark.asyncio
-async def test_settings_patch_rejects_invalid_task_model_option_before_persistence(
-    tmp_path: Path,
-) -> None:
-    state = make_state(tmp_path, StubAdapter())
-    _add_tts_model(state)
-
-    result = await dispatch_rpc(
-        state,
-        {
-            "method": "settings.patch",
-            "params": {
-                "operations": [
-                    {
-                        "op": "set",
-                        "path": 'model_tasks["text_to_speech"]',
-                        "value": {
-                            "target": "openai/gpt-4o-mini-tts::api-key",
-                            "options": {"voice": "Mia"},
+                {
+                    "id": "github-copilot",
+                    "name": "GitHub Copilot",
+                    "base_url": "https://api.githubcopilot.com",
+                    "models_endpoint": None,
+                    "connections": [
+                        {
+                            "id": "github-copilot:oauth",
+                            "type": "oauth",
+                            "label": "Sign in with GitHub",
+                            "configured": False,
+                            "enabled": True,
+                            "usable": False,
+                            "accounts": [],
+                            # A device-flow OAuth Connection can be signed in from Settings.
+                            "connectable": True,
+                        }
+                    ],
+                    "credentials_configured": False,
+                    "status": "missing_credentials",
+                    "model_count": 0,
+                    "kind": "remote",
+                    "editable": False,
+                },
+                {
+                    "id": "ollama",
+                    "name": "Ollama",
+                    "base_url": "",
+                    "models_endpoint": None,
+                    "connections": [
+                        {
+                            "id": "ollama:api-key",
+                            "type": "api_key",
+                            "label": "API Key",
+                            "configured": False,
+                            "enabled": True,
+                            "usable": False,
+                            "accounts": [],
+                            "credential_key": "OLLAMA_API_KEY",
+                        }
+                    ],
+                    "credentials_configured": False,
+                    "status": "missing_credentials",
+                    "model_count": 1,
+                    "kind": "local",
+                    "editable": False,
+                },
+                {
+                    "id": "openai",
+                    "name": "OpenAI",
+                    "base_url": "https://api.openai.com/v1",
+                    "models_endpoint": None,
+                    "connections": [
+                        {
+                            "id": "openai:oauth",
+                            "type": "oauth",
+                            "label": "OAuth",
+                            "configured": False,
+                            "enabled": True,
+                            "usable": False,
+                            "accounts": [],
+                            "connectable": False,
                         },
-                    }
-                ]
+                        {
+                            "id": "openai:api-key",
+                            "type": "api_key",
+                            "label": "API Key",
+                            "configured": True,
+                            "enabled": True,
+                            "usable": True,
+                            "accounts": [
+                                {
+                                    "id": "default",
+                                    "usable": True,
+                                    "source": "process_env",
+                                    "credential_key": "OPENAI_API_KEY",
+                                }
+                            ],
+                            "credential_key": "OPENAI_API_KEY",
+                        },
+                    ],
+                    "credentials_configured": True,
+                    "status": "configured",
+                    "model_count": 2,
+                    "kind": "remote",
+                    "editable": False,
+                },
+                {
+                    "id": "openrouter",
+                    "name": "OpenRouter",
+                    "base_url": "https://openrouter.ai/api/v1",
+                    # The endpoint enables the Settings refresh button.
+                    "models_endpoint": "/models",
+                    "connections": [
+                        {
+                            "id": "openrouter:api-key",
+                            "type": "api_key",
+                            "label": "API Key",
+                            "configured": False,
+                            "enabled": True,
+                            "usable": False,
+                            "accounts": [],
+                            "credential_key": "OPENROUTER_API_KEY",
+                        }
+                    ],
+                    "credentials_configured": False,
+                    "status": "missing_credentials",
+                    "model_count": 0,
+                    "kind": "remote",
+                    "editable": False,
+                    "routing": {
+                        "default": {
+                            "mode": "automatic",
+                            "providers": [],
+                            "blocked": [],
+                            "allow_fallbacks": True,
+                        },
+                        "models": {},
+                    },
+                },
+            ],
+            "custom_endpoints": {"supported": True, "items": []},
+        },
+        "appearance": {
+            "language": "en",
+            "available_languages": ["en"],
+            "chat_width": "comfortable",
+            "chat_working_mode": "normal",
+        },
+        "defaults": {},
+        "subagents": {
+            "max_subagent_depth": 4,
+            "max_subagents_per_turn": 8,
+            "subagent_timeout_minutes": 60,
+        },
+        "compaction": {
+            "enabled": True,
+            "trigger": {"type": "context_ratio", "threshold": 0.8},
+            "strategy": {
+                "type": "summary_tail",
+                "tail_tokens": 15000,
+                "summary_model": None,
             },
         },
-    )
-
-    assert result["ok"] is False
-    assert result["error"]["code"] == "invalid_request"
-    assert "must be one of: alloy, echo" in result["error"]["message"]
-    assert state.runtime.storage.load_model_task_settings() == {}
-
-
-# --- Extensions section: schema validation + restart-required split ----------
-
-
-class _SchemaRegistry:
-    def __init__(self, records: list[ExtensionRecord]) -> None:
-        self._records = records
-
-    def records(self) -> list[ExtensionRecord]:
-        return list(self._records)
-
-
-def _schemed_record() -> ExtensionRecord:
-    declarations = ExtensionDeclarations()
-    declarations.settings_schema = parse_settings_fields(
-        [
-            {"key": "url", "type": "text", "label": "URL", "required": True},
-            {"key": "port", "type": "number", "label": "Port"},
-            {"key": "token", "type": "secret", "label": "Token", "env_key": "HASS_TOKEN"},
-        ]
-    )
-    return ExtensionRecord(
-        name="homeassistant",
-        root_path=Path("/bundled/homeassistant"),
-        entry_path=Path("/bundled/homeassistant/__init__.py"),
-        status="loaded",
-        declarations=declarations,
-    )
-
-
-def _state_with_schema(tmp_path: Path) -> SimpleNamespace:
-    state = make_state(tmp_path, StubAdapter())
-    state.runtime.extensions = _SchemaRegistry([_schemed_record()])
-    return state
-
-
-async def _update(state: SimpleNamespace, extensions: dict[str, Any]) -> dict[str, Any]:
-    return await dispatch_rpc(
-        state, {"method": "settings.update", "params": {"extensions": extensions}}
-    )
+        "recall": {
+            "backend": "sqlite_fts",
+            "available_backends": ["hybrid", "sqlite_fts", "vector"],
+        },
+        "web_fetch": {
+            "provider": "direct",
+            "mode": "fallback",
+            "available_providers": ["direct", "firecrawl", "tavily", "exa", "parallel"],
+            "services": [
+                {
+                    "id": "firecrawl",
+                    "api_key_env": "FIRECRAWL_API_KEY",
+                    "configured": False,
+                    "pricing_url": "https://www.firecrawl.dev/pricing",
+                },
+                {
+                    "id": "tavily",
+                    "api_key_env": "TAVILY_API_KEY",
+                    "configured": False,
+                    "pricing_url": "https://docs.tavily.com/documentation/api-credits",
+                },
+                {
+                    "id": "exa",
+                    "api_key_env": "EXA_API_KEY",
+                    "configured": False,
+                    "pricing_url": "https://exa.ai/pricing",
+                },
+                {
+                    "id": "parallel",
+                    "api_key_env": "PARALLEL_API_KEY",
+                    "configured": False,
+                    "pricing_url": "https://docs.parallel.ai/getting-started/pricing",
+                },
+            ],
+        },
+        "web_search": {
+            "provider": "brave",
+            "available_providers": [
+                "brave",
+                "duckduckgo",
+                "exa",
+                "firecrawl",
+                "perplexity",
+                "searxng",
+                "serper",
+                "tavily",
+            ],
+            "default_count": 12,
+            "searxng": {"base_url": "http://localhost:8888"},
+        },
+        "debug": {
+            "enabled": False,
+            "trace_limit": 50,
+            "trace_count": 0,
+        },
+        "reflection": {
+            "enabled": False,
+            "memory_turn_interval": 10,
+            "skill_model_step_interval": 10,
+        },
+        "speech": {
+            "transcription_audio": {
+                "profile": "compatibility",
+                "format": "wav",
+                "sample_rate_hz": 16_000,
+            }
+        },
+        "model_tasks": {},
+        "session_titles": {"enabled": False, "model": ""},
+        "local_models": {"context_windows": {}},
+        "skills": {
+            "default_directory": str(tmp_path / "skills"),
+            "directories": [],
+        },
+    }
+    assert "sk-live-secret" not in str(result)
+    # Retired settings are not returned: token counts and the live voice opt-in.
+    assert "show_token_counts" not in str(result)
+    assert "live_voice" not in result
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "config",
+    ("error", "warns"),
+    [(FileNotFoundError("no traces yet"), False), (RuntimeError("store corrupt"), True)],
+    ids=["missing-store", "unexpected-failure"],
+)
+async def test_settings_get_reports_zero_traces_when_the_trace_store_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    error: Exception,
+    warns: bool,
+) -> None:
+    """A missing store is expected and silent; anything else warns with a traceback."""
+
+    def failing_store(**_kwargs: Any) -> Any:
+        raise error
+
+    monkeypatch.setattr(settings_methods, "DebugTraceStore", failing_store)
+    state = make_state(tmp_path, StubAdapter())
+
+    with caplog.at_level(logging.WARNING, logger=_SETTINGS_LOGGER):
+        result = await rpc_result(state, "settings.get")
+
+    assert result["debug"]["trace_count"] == 0
+    warnings = [record for record in caplog.records if record.name == _SETTINGS_LOGGER]
+    assert len(warnings) == (1 if warns else 0)
+    assert all(record.exc_info is not None for record in warnings)
+
+
+@pytest.mark.asyncio
+async def test_settings_get_raw_returns_raw_settings_payload(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.storage.save_settings({"server_port": 9001, "feature_flags": {"logs": True}})
+
+    result = await rpc_result(state, "settings.get_raw")
+
+    assert result == {"settings": {"server_port": 9001, "feature_flags": {"logs": True}}}
+
+
+@pytest.mark.asyncio
+async def test_settings_catalog_exposes_public_paths_and_lifecycle(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+
+    result = await rpc_result(state, "settings.catalog", prefix="web_search")
+
+    entries = {entry["path"]: entry for entry in result["settings"]}
+    provider = entries["web_search.provider"]
+    assert provider["value"] == "brave"
+    assert provider["source"] == "default"
+    assert provider["allowed_values"] == [
+        "brave",
+        "duckduckgo",
+        "exa",
+        "firecrawl",
+        "perplexity",
+        "searxng",
+        "serper",
+        "tavily",
+    ]
+    assert provider["application"] == "live"
+
+
+@pytest.mark.asyncio
+async def test_settings_catalog_lists_a_patched_quoted_dynamic_path(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    path = 'local_models.context_windows["ollama/qwen2.5:7b"]'
+
+    await rpc_result(
+        state, "settings.patch", operations=[{"op": "set", "path": path, "value": 32768}]
+    )
+    result = await rpc_result(state, "settings.catalog", prefix=path)
+
+    assert state.runtime.storage.load_local_models_settings() == {
+        "context_windows": {"ollama/qwen2.5:7b": 32768}
+    }
+    assert result["settings"] == [
+        {
+            "path": path,
+            "template": 'local_models.context_windows["<model>"]',
+            "type": "integer",
+            "description": "Effective context window override for one local Model.",
+            "application": "live",
+            "nullable": False,
+            "unsettable": True,
+            "has_default": False,
+            "minimum": 1,
+            "exclusive_minimum": False,
+            "configured": True,
+            "source": "configured",
+            "restart_required": False,
+            "value": 32768,
+            "configured_value": 32768,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_settings_get_path_returns_effective_value_and_details(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+
+    result = await rpc_result(state, "settings.get_path", path="web_search.provider")
+
+    setting = result["setting"]
+    assert setting["value"] == "brave"
+    assert setting["default"] == "brave"
+    assert setting["configured"] is False
+    assert setting["source"] == "default"
+    assert setting["restart_required"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method", "params", "named"),
     [
-        {"homeassistant": {"unknown": 1}},  # unknown key
-        {"homeassistant": {"url": 5}},  # wrong type
-        {"homeassistant": {"url": "http://x", "token": "abc"}},  # secret in config
-        {"homeassistant": {"port": 80}},  # missing required 'url'
+        ("settings.get", {"extra": True}, "settings.get does not accept params"),
+        ("settings.catalog", {"prefix": 5}, "params.prefix must be a string"),
+        (
+            "settings.get_path",
+            {"path": "web_search.provider", "allow_missing": "yes"},
+            "params.allow_missing must be a boolean",
+        ),
     ],
 )
-async def test_extensions_update_rejects_invalid_schema_config(
-    tmp_path: Path, config: dict[str, Any]
-) -> None:
-    state = _state_with_schema(tmp_path)
-
-    result = await _update(state, {"disabled": [], "config": config})
-
-    assert result["ok"] is False
-    assert result["error"]["code"] == "invalid_request"
-    # Nothing persisted.
-    assert state.runtime.storage.load_extensions_settings() == {"disabled": [], "config": {}}
-
-
-@pytest.mark.asyncio
-async def test_settings_path_rejects_extension_secret_with_safe_command_hint(
-    tmp_path: Path,
-) -> None:
-    state = _state_with_schema(tmp_path)
-
-    result = await dispatch_rpc(
-        state,
-        {
-            "method": "settings.patch",
-            "params": {
-                "operations": [
-                    {
-                        "op": "set",
-                        "path": 'extensions.config["homeassistant"]["token"]',
-                        "value": "must-not-be-stored",
-                    }
-                ]
-            },
-        },
-    )
-
-    assert result["ok"] is False
-    assert result["error"]["code"] == "invalid_request"
-    assert "vbot extensions homeassistant set token --stdin" in result["error"]["message"]
-    assert state.runtime.storage.load_extensions_settings() == {"disabled": [], "config": {}}
-
-
-@pytest.mark.asyncio
-async def test_extensions_update_passes_schemaless_config(tmp_path: Path) -> None:
-    state = make_state(tmp_path, StubAdapter())  # no registry → no schemas
-
-    result = await _update(state, {"disabled": [], "config": {"legacy": {"anything": [1, 2]}}})
-
-    assert result["ok"] is True
-    assert state.runtime.storage.load_extensions_settings()["config"] == {
-        "legacy": {"anything": [1, 2]}
-    }
-
-
-@pytest.mark.asyncio
-async def test_extensions_config_only_change_touches_neither_seam(tmp_path: Path) -> None:
-    state = _state_with_schema(tmp_path)
-
-    result = await _update(
-        state, {"disabled": [], "config": {"homeassistant": {"url": "http://x"}}}
-    )
-
-    assert result["ok"] is True
-    # A config-value-only save applies live via ExtensionAPI.get_config(): it
-    # neither reloads the layer nor runs the live-disable path.
-    assert state.runtime.extension_reload_count == 0
-    assert state.runtime.extension_disabled_changes == []
-    assert state.event_bus.events == []
-
-
-@pytest.mark.asyncio
-async def test_extensions_disabled_path_patch_invalidates_commands(tmp_path: Path) -> None:
-    state = _state_with_schema(tmp_path)
-
-    result = await dispatch_rpc(
-        state,
-        {
-            "method": "settings.patch",
-            "params": {
-                "operations": [
-                    {
-                        "op": "set",
-                        "path": "extensions.disabled",
-                        "value": ["homeassistant"],
-                    }
-                ]
-            },
-        },
-    )
-
-    assert result["ok"] is True
-    assert state.runtime.extension_disabled_changes == [{"homeassistant"}]
-    assert state.event_bus.events[-1]["payload"] == {"kind": "commands"}
-
-
-def _reset_extension_spies(state: SimpleNamespace) -> None:
-    """Reset the StubRuntime's reload / live-disable call counters between saves."""
-    state.runtime.extension_reload_count = 0
-    state.runtime.extension_disabled_changes.clear()
-
-
-@pytest.mark.asyncio
-async def test_extensions_newly_disabled_applies_live(tmp_path: Path) -> None:
-    state = _state_with_schema(tmp_path)
-
-    result = await _update(state, {"disabled": ["homeassistant"], "config": {}})
-
-    assert result["ok"] is True
-    # A disable-only save takes the surgical live-disable path (no full reload).
-    assert state.runtime.extension_disabled_changes == [{"homeassistant"}]
-    assert state.runtime.extension_reload_count == 0
-
-
-@pytest.mark.asyncio
-async def test_extensions_newly_enabled_reloads_layer(tmp_path: Path) -> None:
-    state = _state_with_schema(tmp_path)
-    # Seed a persisted disabled set, then re-enable (remove from disabled).
-    await _update(state, {"disabled": ["homeassistant"], "config": {}})
-    _reset_extension_spies(state)
-
-    result = await _update(state, {"disabled": [], "config": {}})
-
-    assert result["ok"] is True
-    # Enabling rebuilds the whole layer; the surgical live-disable path is NOT run.
-    assert state.runtime.extension_reload_count == 1
-    assert state.runtime.extension_disabled_changes == []
-
-
-@pytest.mark.asyncio
-async def test_extensions_mixed_enable_and_disable_reloads_only(tmp_path: Path) -> None:
-    state = _state_with_schema(tmp_path)
-    # Start with "one" disabled; then flip to "two" disabled: enables one, disables two.
-    await _update(state, {"disabled": ["one"], "config": {}})
-    _reset_extension_spies(state)
-
-    result = await _update(state, {"disabled": ["two"], "config": {}})
-
-    assert result["ok"] is True
-    # A save that enables any name reloads the whole layer and does nothing else —
-    # the reload reads the freshly persisted state, so it also applies the disable.
-    assert state.runtime.extension_reload_count == 1
-    assert state.runtime.extension_disabled_changes == []
-
-
-@pytest.mark.asyncio
-async def test_extensions_unchanged_disabled_set_touches_neither_seam(
-    tmp_path: Path,
-) -> None:
-    state = _state_with_schema(tmp_path)
-    # Seed a persisted disabled set, then resend it unchanged (config-only change).
-    await _update(state, {"disabled": ["homeassistant"], "config": {}})
-    _reset_extension_spies(state)
-
-    result = await _update(
-        state, {"disabled": ["homeassistant"], "config": {"homeassistant": {"url": "http://y"}}}
-    )
-
-    assert result["ok"] is True
-    # No disabled-set delta: neither the reload nor the live-disable path runs.
-    assert state.runtime.extension_reload_count == 0
-    assert state.runtime.extension_disabled_changes == []
-
-
-@pytest.mark.asyncio
-async def test_removed_live_voice_opt_in_is_neither_returned_nor_patchable(
-    tmp_path: Path,
+async def test_malformed_settings_reads_are_rejected(
+    tmp_path: Path, method: str, params: JsonObject, named: str
 ) -> None:
     state = make_state(tmp_path, StubAdapter())
 
-    loaded = await dispatch_rpc(state, {"method": "settings.get", "params": {}})
-    patched = await dispatch_rpc(
-        state,
-        {
-            "method": "settings.patch",
-            "params": {"operations": [{"op": "set", "path": "live_voice.enabled", "value": True}]},
-        },
-    )
+    error = await rpc_error(state, method, **params)
 
-    assert "live_voice" not in loaded["result"]
-    assert patched["error"]["code"] == "invalid_request"
-    assert "live_voice" not in state.runtime.storage.load_settings()
+    assert error == {"code": "invalid_request", "message": named}

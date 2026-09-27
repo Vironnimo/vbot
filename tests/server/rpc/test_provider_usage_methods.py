@@ -1,11 +1,4 @@
-"""Tests for the ``provider.usage`` RPC handler.
-
-Coverage:
-- returns the report/snapshot shape from a seeded service,
-- rejects unknown params and a malformed ``connections`` filter,
-- forwards the optional ``connections`` filter to the service,
-- lazily builds and caches the service on RPC state,
-- the handler is registered in the method table.
+"""``provider.usage``, ``provider.usage_history`` and ``.clear`` RPCs.
 
 A fake transport keeps every test off the live network.
 """
@@ -25,13 +18,7 @@ from core.database import write_bootstrap_marker
 from core.providers.accounts import ConnectionRef
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 from core.providers.usage import ProviderUsageService
-from server.rpc.errors import RpcError
-from server.rpc.methods import build_method_handlers
-from server.rpc.provider_usage_methods import (
-    _provider_usage,
-    _provider_usage_history,
-    _provider_usage_history_clear,
-)
+from tests.server.rpc_test_support import JsonObject, rpc_error, rpc_result
 
 # ---------------------------------------------------------------------------
 # Fakes
@@ -121,13 +108,19 @@ class _FakeRuntime:
         )
 
 
-class _CapturingService:
+class _RecordingService:
+    """Records every usage request the RPCs forward to the service."""
+
     def __init__(self) -> None:
-        self.connections: Any = "unset"
+        self.calls: list[tuple[str, Any]] = []
 
     async def report(self, connections: list[str] | None = None) -> Any:
-        self.connections = connections
+        self.calls.append(("report", connections))
         return SimpleNamespace(to_dict=lambda: {"generated_at": "t", "providers": []})
+
+    async def history_report(self, **window: Any) -> Any:
+        self.calls.append(("history_report", window))
+        return SimpleNamespace(to_dict=lambda: {"generated_at": "t", "samples": []})
 
 
 def _openai_provider_config() -> ProviderConfig:
@@ -199,7 +192,7 @@ async def history_state(tmp_path: Path) -> AsyncIterator[SimpleNamespace]:
 async def test_provider_usage_returns_report_shape() -> None:
     state = _openai_state()
 
-    result = await _provider_usage(state, {})
+    result = await rpc_result(state, "provider.usage")
 
     assert set(result) == {"generated_at", "providers"}
     assert len(result["providers"]) == 1
@@ -219,96 +212,61 @@ async def test_provider_usage_returns_report_shape() -> None:
 
 
 @pytest.mark.asyncio
-async def test_provider_usage_rejects_unknown_fields() -> None:
-    with pytest.raises(RpcError) as exc_info:
-        await _provider_usage(SimpleNamespace(), {"bogus": 1})
-    assert exc_info.value.code == "invalid_request"
-    assert "bogus" in exc_info.value.message
-
-
-@pytest.mark.asyncio
-async def test_provider_usage_rejects_malformed_connections_filter() -> None:
-    with pytest.raises(RpcError) as exc_info:
-        await _provider_usage(SimpleNamespace(), {"connections": "openai:subscription"})
-    assert exc_info.value.code == "invalid_request"
-
-
-@pytest.mark.asyncio
 async def test_provider_usage_forwards_connections_filter() -> None:
-    service = _CapturingService()
+    service = _RecordingService()
     state = SimpleNamespace(usage_service=service)
 
-    await _provider_usage(state, {"connections": ["openai:subscription"]})
+    await rpc_result(state, "provider.usage", connections=["openai:subscription"])
 
-    assert service.connections == ["openai:subscription"]
+    assert service.calls == [("report", ["openai:subscription"])]
 
 
 @pytest.mark.asyncio
 async def test_provider_usage_uses_runtime_owned_service() -> None:
     runtime = _FakeRuntime(usable=set())
-    service = ProviderUsageService(runtime)
-    runtime.provider_usage = service
+    runtime.provider_usage = ProviderUsageService(runtime)
     state = SimpleNamespace(runtime=runtime)
 
-    result = await _provider_usage(state, {})
-    await _provider_usage(state, {})
+    result = await rpc_result(state, "provider.usage")
+    await rpc_result(state, "provider.usage")
 
     assert not hasattr(state, "usage_service")
     assert result["providers"] == []
 
 
 @pytest.mark.asyncio
-async def test_provider_usage_history_returns_only_automatic_samples(
+async def test_provider_usage_history_returns_automatic_samples_within_the_window(
     history_state: SimpleNamespace,
 ) -> None:
-    await _provider_usage(history_state, {})
+    # A live report is not an automatic sample; only the collected one is history.
+    await rpc_result(history_state, "provider.usage")
     await history_state.usage_service.collect_history_sample()
 
-    result = await _provider_usage_history(
+    result = await rpc_result(
         history_state,
-        {"since": "2020-01-01T00:00:00Z", "until": "2099-01-01T00:00:00Z"},
+        "provider.usage_history",
+        since="2020-01-01T00:00:00Z",
+        until="2099-01-01T00:00:00Z",
     )
+    before = await rpc_result(history_state, "provider.usage_history", until="2020-01-01T00:00:00Z")
 
     assert set(result) == {"generated_at", "samples"}
     assert len(result["samples"]) == 1
     assert set(result["samples"][0]) == {"sampled_at", "providers"}
     assert result["samples"][0]["providers"][0]["account"] == "default"
-
-
-@pytest.mark.asyncio
-async def test_provider_usage_history_window_excludes_samples_outside_it(
-    history_state: SimpleNamespace,
-) -> None:
-    await history_state.usage_service.collect_history_sample()
-
-    result = await _provider_usage_history(history_state, {"until": "2020-01-01T00:00:00Z"})
-
-    assert result["samples"] == []
-
-
-@pytest.mark.asyncio
-async def test_provider_usage_history_rejects_an_inverted_window(
-    history_state: SimpleNamespace,
-) -> None:
-    with pytest.raises(RpcError) as exc_info:
-        await _provider_usage_history(
-            history_state,
-            {"since": "2026-08-02T00:00:00Z", "until": "2026-08-01T00:00:00Z"},
-        )
-
-    assert exc_info.value.code == "invalid_request"
+    assert before["samples"] == []
 
 
 @pytest.mark.asyncio
 async def test_provider_usage_history_clear_is_explicit(history_state: SimpleNamespace) -> None:
     await history_state.usage_service.collect_history_sample()
 
-    result = await _provider_usage_history_clear(history_state, {})
-    repeated = await _provider_usage_history_clear(history_state, {})
+    result = await rpc_result(history_state, "provider.usage_history.clear")
+    repeated = await rpc_result(history_state, "provider.usage_history.clear")
 
     assert result == {"deleted_samples": 1}
     assert repeated == {"deleted_samples": 0}
-    assert (await _provider_usage_history(history_state, {}))["samples"] == []
+    assert (await rpc_result(history_state, "provider.usage_history"))["samples"] == []
 
 
 @pytest.mark.asyncio
@@ -325,15 +283,42 @@ async def test_provider_usage_history_reads_off_the_event_loop(
 
     monkeypatch.setattr(store, "_read_samples", recording_read)
 
-    await _provider_usage_history(history_state, {})
+    await rpc_result(history_state, "provider.usage_history")
 
     assert reader_threads
     assert threading.get_ident() not in reader_threads
 
 
-def test_provider_usage_is_registered() -> None:
-    handlers = build_method_handlers()
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method", "params", "named"),
+    [
+        ("provider.usage", {"bogus": 1}, "bogus"),
+        (
+            "provider.usage",
+            {"connections": "openai:subscription"},
+            "params.connections must be a list of connection id strings",
+        ),
+        (
+            "provider.usage_history",
+            {"since": "2026-08-02T00:00:00Z", "until": "2026-08-01T00:00:00Z"},
+            "params.since must not be after params.until",
+        ),
+        (
+            "provider.usage_history",
+            {"since": "yesterday"},
+            "params.since must be an ISO 8601 timestamp string",
+        ),
+    ],
+)
+async def test_malformed_provider_usage_requests_reach_no_service(
+    method: str, params: JsonObject, named: str
+) -> None:
+    service = _RecordingService()
+    state = SimpleNamespace(usage_service=service)
 
-    assert "provider.usage" in handlers
-    assert "provider.usage_history" in handlers
-    assert "provider.usage_history.clear" in handlers
+    error = await rpc_error(state, method, **params)
+
+    assert error["code"] == "invalid_request"
+    assert named in error["message"]
+    assert service.calls == []
