@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 
 import httpx
 import pytest
@@ -22,6 +23,11 @@ from core.providers.stepfun import (
 
 STEPFUN_DIRECT_CHAT_URL = "https://api.stepfun.com/v1/chat/completions"
 STEPFUN_PLAN_CHAT_URL = "https://api.stepfun.com/step_plan/v1/chat/completions"
+HELLO = [{"role": "user", "content": "Hello"}]
+CHAT_SUCCESS = {
+    "choices": [{"message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}]
+}
+ABSENT = object()
 
 
 def _config() -> ProviderConfig:
@@ -72,13 +78,12 @@ def _models() -> dict[str, Model]:
     }
 
 
-@pytest.fixture()
-def direct_adapter() -> StepFunAdapter:
+def _adapter(connection_id: str) -> StepFunAdapter:
     config = _config()
-    connection = config.get_connection("direct-api")
+    connection = config.get_connection(connection_id)
     return StepFunAdapter(
         config,
-        "direct-secret",
+        "plan-secret" if connection_id == "step-plan" else "direct-secret",
         base_url=connection.base_url or config.base_url,
         auth_config=connection.auth,
         model_lookup=_models().get,
@@ -86,99 +91,105 @@ def direct_adapter() -> StepFunAdapter:
     )
 
 
-@pytest.fixture()
-def plan_adapter() -> StepFunAdapter:
-    config = _config()
-    connection = config.get_connection("step-plan")
-    return StepFunAdapter(
-        config,
-        "plan-secret",
-        base_url=connection.base_url or config.base_url,
-        auth_config=connection.auth,
-        model_lookup=_models().get,
-        connection_mode=connection.mode,
-    )
-
-
-def test_payload_uses_one_output_field_and_model_effort_ladder(
-    direct_adapter: StepFunAdapter,
-) -> None:
-    payload = direct_adapter._build_payload(
-        [{"role": "user", "content": "Solve this"}],
-        "step-3.5-flash-2603",
-        max_output_tokens=220_000,
-        max_completion_tokens=200_000,
-        thinking_effort="high",
-        temperature=1.5,
-        top_p=0.9,
-        frequency_penalty=-0.5,
-    )
-
-    assert payload["max_tokens"] == 200_000
-    assert "max_output_tokens" not in payload
-    assert "max_completion_tokens" not in payload
-    assert payload["reasoning_effort"] == "high"
-    assert payload["temperature"] == 1.5
-    assert payload["top_p"] == 0.9
-    assert payload["frequency_penalty"] == -0.5
-
-
-def test_base_flash_omits_unavailable_effort_control(direct_adapter: StepFunAdapter) -> None:
-    payload = direct_adapter._build_payload(
-        [{"role": "user", "content": "Think"}],
-        "step-3.5-flash",
-        thinking_effort="high",
-    )
-
-    assert "reasoning_effort" not in payload
-
-
-def test_router_is_plan_only_and_caps_output(
-    direct_adapter: StepFunAdapter,
-    plan_adapter: StepFunAdapter,
-) -> None:
-    with pytest.raises(ProviderError):
-        direct_adapter._build_payload(
-            [{"role": "user", "content": "Route this"}],
-            "step-router-v1",
-        )
-
-    payload = plan_adapter._build_payload(
-        [{"role": "user", "content": "Route this"}],
-        "step-router-v1",
-        max_tokens=999_999,
-        thinking_effort="medium",
-    )
-
-    assert payload["max_tokens"] == STEPFUN_ROUTER_MAX_OUTPUT_TOKENS
-    assert payload["reasoning_effort"] == "medium"
+def _chat_url(connection_id: str) -> str:
+    return STEPFUN_PLAN_CHAT_URL if connection_id == "step-plan" else STEPFUN_DIRECT_CHAT_URL
 
 
 @pytest.mark.parametrize(
-    ("kwargs", "_message"),
+    ("connection_id", "model_id", "request_kwargs", "expected"),
     [
-        ({"temperature": 2.1}, "temperature"),
-        ({"top_p": 0}, "top_p"),
-        ({"frequency_penalty": -2.1}, "frequency_penalty"),
-        ({"n": 2}, "exactly 1"),
-        ({"seed": 7}, "does not document"),
-        ({"stream_options": {"include_usage": True}}, "does not document"),
-        ({"reasoning_format": "future"}, "reasoning_format"),
+        pytest.param(
+            "direct-api",
+            "step-3.5-flash-2603",
+            {
+                "max_output_tokens": 220_000,
+                "max_completion_tokens": 200_000,
+                "thinking_effort": "high",
+                "temperature": 1.5,
+                "top_p": 0.9,
+                "frequency_penalty": -0.5,
+            },
+            {
+                "max_tokens": 200_000,
+                "max_output_tokens": ABSENT,
+                "max_completion_tokens": ABSENT,
+                "reasoning_effort": "high",
+                "temperature": 1.5,
+                "top_p": 0.9,
+                "frequency_penalty": -0.5,
+            },
+            id="one-output-field-model-ladder-and-documented-sampling",
+        ),
+        pytest.param(
+            "direct-api",
+            "step-3.5-flash",
+            {"thinking_effort": "high"},
+            {"reasoning_effort": ABSENT},
+            id="base-flash-has-no-effort-control",
+        ),
+        pytest.param(
+            "step-plan",
+            "step-router-v1",
+            {"max_tokens": 999_999, "thinking_effort": "medium"},
+            {"max_tokens": STEPFUN_ROUTER_MAX_OUTPUT_TOKENS, "reasoning_effort": "medium"},
+            id="plan-router-caps-output",
+        ),
     ],
 )
-def test_invalid_or_undocumented_parameters_fail_before_network(
-    direct_adapter: StepFunAdapter,
-    kwargs: dict[str, object],
-    _message: str,
+@pytest.mark.asyncio
+async def test_request_follows_the_model_policy(
+    connection_id: str,
+    model_id: str,
+    request_kwargs: dict[str, Any],
+    expected: dict[str, Any],
 ) -> None:
-    with pytest.raises(ProviderError) as exc_info:
-        direct_adapter._build_payload(
-            [{"role": "user", "content": "Hello"}],
-            "step-3.7-flash",
-            **kwargs,
+    adapter = _adapter(connection_id)
+    with respx.mock:
+        route = respx.post(_chat_url(connection_id)).mock(
+            return_value=httpx.Response(200, json=CHAT_SUCCESS)
         )
+        await adapter.send(HELLO, model_id=model_id, **request_kwargs)
+
+    body = json.loads(route.calls.last.request.content)
+    for key, value in expected.items():
+        if value is ABSENT:
+            assert key not in body, key
+        else:
+            assert body[key] == value, key
+    # StepFun documents images; vBot has no video wire encoder.
+    assert adapter.wire_media_support(model_id) == IMAGE_WIRE_MEDIA_TYPES
+
+
+@pytest.mark.parametrize(
+    ("connection_id", "model_id", "request_kwargs", "message"),
+    [
+        pytest.param(
+            "direct-api", "step-router-v1", {}, "only through the Step Plan", id="router-direct"
+        ),
+        pytest.param("direct-api", "step-3.7-flash", {"temperature": 2.1}, "temperature"),
+        pytest.param("direct-api", "step-3.7-flash", {"top_p": 0}, "top_p"),
+        pytest.param(
+            "direct-api", "step-3.7-flash", {"frequency_penalty": -2.1}, "frequency_penalty"
+        ),
+        pytest.param("direct-api", "step-3.7-flash", {"n": 2}, "exactly 1"),
+        pytest.param("direct-api", "step-3.7-flash", {"seed": 7}, "does not document"),
+        pytest.param(
+            "direct-api", "step-3.7-flash", {"reasoning_format": "future"}, "reasoning_format"
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_invalid_or_undocumented_requests_fail_before_network(
+    connection_id: str, model_id: str, request_kwargs: dict[str, Any], message: str
+) -> None:
+    adapter = _adapter(connection_id)
+    with respx.mock:
+        route = respx.post(_chat_url(connection_id))
+        with pytest.raises(ProviderError, match=message) as exc_info:
+            await adapter.send(HELLO, model_id=model_id, **request_kwargs)
 
     assert exc_info.value.retryable is False
+    assert route.call_count == 0
 
 
 def test_catalog_is_exact_and_carries_current_capabilities() -> None:
@@ -204,17 +215,8 @@ def test_catalog_is_exact_and_carries_current_capabilities() -> None:
         StepFunAdapter.normalize_catalog_entry({"id": "stepaudio-2.5-chat"}, {})
 
 
-def test_media_and_reasoning_replay_use_system_defaults(
-    direct_adapter: StepFunAdapter,
-) -> None:
-    assert direct_adapter.wire_media_support("step-3.7-flash") == IMAGE_WIRE_MEDIA_TYPES
-    assert direct_adapter.reasoning_replay_policy("step-3.7-flash") == "full_history"
-
-
-def test_response_normalizes_reasoning_tools_cache_and_terminal_outcome(
-    direct_adapter: StepFunAdapter,
-) -> None:
-    normalized = direct_adapter.normalize_response(
+def test_response_normalizes_reasoning_tools_cache_and_terminal_outcome() -> None:
+    normalized = _adapter("direct-api").normalize_response(
         {
             "choices": [
                 {
@@ -261,9 +263,7 @@ def test_response_normalizes_reasoning_tools_cache_and_terminal_outcome(
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_plan_stream_uses_plan_endpoint_without_undocumented_stream_options(
-    plan_adapter: StepFunAdapter,
-) -> None:
+async def test_plan_stream_uses_plan_endpoint_without_undocumented_stream_options() -> None:
     body = (
         'data: {"choices":[{"delta":{"reasoning":"Check"}}]}\n\n'
         'data: {"choices":[{"delta":{"content":"Done"}}]}\n\n'
@@ -279,11 +279,7 @@ async def test_plan_stream_uses_plan_endpoint_without_undocumented_stream_option
     )
 
     deltas = [
-        delta
-        async for delta in plan_adapter.stream(
-            [{"role": "user", "content": "Hello"}],
-            model_id="step-3.7-flash",
-        )
+        delta async for delta in _adapter("step-plan").stream(HELLO, model_id="step-3.7-flash")
     ]
 
     assert deltas == [
@@ -304,19 +300,14 @@ async def test_plan_stream_uses_plan_endpoint_without_undocumented_stream_option
     [(402, "entitlement"), (451, "content safety")],
 )
 async def test_stepfun_fatal_account_and_safety_errors_are_not_retried(
-    direct_adapter: StepFunAdapter,
-    status_code: int,
-    detail: str,
+    status_code: int, detail: str
 ) -> None:
     route = respx.post(STEPFUN_DIRECT_CHAT_URL).mock(
         return_value=httpx.Response(status_code, json={"error": "rejected"})
     )
 
     with pytest.raises(ProviderError, match=detail) as exc_info:
-        await direct_adapter.send(
-            [{"role": "user", "content": "Hello"}],
-            model_id="step-3.7-flash",
-        )
+        await _adapter("direct-api").send(HELLO, model_id="step-3.7-flash")
 
     assert route.call_count == 1
     assert exc_info.value.retryable is False
