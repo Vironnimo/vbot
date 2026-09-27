@@ -7,6 +7,7 @@ import io
 import json
 import threading
 import zipfile
+from collections.abc import Callable
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -37,6 +38,13 @@ def _build_ooxml_payload(content_types_xml: bytes) -> bytes:
     return buffer.getvalue()
 
 
+_DOCX_CONTENT_TYPES = (
+    b'<?xml version="1.0"?><Types><Override '
+    b'ContentType="application/vnd.openxmlformats-officedocument.'
+    b'wordprocessingml.document.main+xml"/></Types>'
+)
+
+
 @pytest.mark.parametrize(
     ("filename", "data", "expected_media_type"),
     [
@@ -48,46 +56,40 @@ def _build_ooxml_payload(content_types_xml: bytes) -> bytes:
         ("report.pdf", b"%PDF-1.7\n1 0 obj\n", "application/pdf"),
         ("notes.txt", "héllo wörld\n".encode(), "text/plain"),
         ("payload.bin", b"\x00\x01\x02\xff\xfe", "application/octet-stream"),
+        # Text that merely starts with a media magic word stays text.
+        ("notes.md", b"ID3 tags are read by the player.\n", "text/plain"),
+        ("notes.md", b"ID3v2 notes\n", "text/plain"),
+        ("notes.md", b"OggS container notes\n", "text/plain"),
+        ("notes.md", b"fLaC is the FLAC magic.\n", "text/plain"),
+        ("notes.md", b"GIF8 is how a GIF starts.\n", "text/plain"),
+        ("notes.md", b"GIF89a version notes\n", "text/plain"),
+        # The same magic words with plausible headers keep their media type.
+        ("file.bin", b"ID3\x03\x00\x00\x00\x00\x02\x01rest", "audio/mpeg"),
+        ("file.bin", b"OggS\x00\x02" + b"\x00" * 21, "audio/ogg"),
+        ("file.bin", b"fLaC\x80\x00\x00\x22" + b"\x00" * 34, "audio/flac"),
+        ("file.bin", b"GIF87a\x10\x00\x10\x00\x00\x00\x00\x3b", "image/gif"),
+        # Global colour tables (flag 0x80) of 2 and 256 entries precede the first block.
+        ("file.bin", b"GIF89a\x01\x00\x01\x00\x80\x00\x00" + b"\x00" * 6 + b"\x2c", "image/gif"),
+        ("file.bin", b"GIF89a\x01\x00\x01\x00\x87\x00\x00" + b"\xff" * 768 + b"\x21", "image/gif"),
+        # A small, well-formed [Content_Types].xml classifies as docx. One that
+        # decompresses past the sniff cap is a zip bomb, not an Office file, even
+        # though it carries the docx marker; the bounded read keeps memory flat.
+        ("report.docx", _build_ooxml_payload(_DOCX_CONTENT_TYPES), _DOCX_MEDIA_TYPE),
+        (
+            "bomb.docx",
+            _build_ooxml_payload(
+                b"wordprocessingml.document" + b" " * (_MAX_OOXML_CONTENT_TYPES_BYTES + 1)
+            ),
+            "application/octet-stream",
+        ),
     ],
 )
-def test_sniff_media_type_classifies_known_signatures(
+def test_sniff_media_type_classifies_by_content(
     filename: str,
     data: bytes,
     expected_media_type: str,
 ) -> None:
     assert sniff_media_type(data, filename) == expected_media_type
-
-
-def test_sniff_media_type_does_not_create_attachments(tmp_path: Path) -> None:
-    # Sniffing is a pure byte inspection: it must not write any blob/sidecar.
-    sniff_media_type(b"\x89PNG\r\n\x1a\n", "diagram.png")
-
-    assert not DataDirectoryLayout(tmp_path).attachments.exists()
-
-
-def test_sniff_media_type_classifies_valid_ooxml() -> None:
-    # A small, well-formed [Content_Types].xml still classifies as docx — the bomb
-    # guard must not break legitimate Office files.
-    payload = _build_ooxml_payload(
-        b'<?xml version="1.0"?><Types><Override '
-        b'ContentType="application/vnd.openxmlformats-officedocument.'
-        b'wordprocessingml.document.main+xml"/></Types>'
-    )
-
-    assert sniff_media_type(payload, "report.docx") == _DOCX_MEDIA_TYPE
-
-
-def test_sniff_media_type_rejects_oversized_ooxml_content_types() -> None:
-    # A [Content_Types].xml that decompresses past the sniff cap is a zip bomb, not
-    # an Office file — even though it carries the docx marker. The bounded read keeps
-    # this from exhausting memory, and the type must not be classified as OOXML.
-    bomb_xml = b"wordprocessingml.document" + b" " * (_MAX_OOXML_CONTENT_TYPES_BYTES + 1)
-    payload = _build_ooxml_payload(bomb_xml)
-
-    media_type = sniff_media_type(payload, "bomb.docx")
-
-    assert not media_type.startswith(_OOXML_PREFIX)
-    assert media_type == "application/octet-stream"
 
 
 @pytest.mark.parametrize("damage", ["encrypted", "unsupported_compression", "invalid_deflate"])
@@ -137,6 +139,8 @@ def test_store_happy_path_persists_blob_and_sidecar(
     assert record.filename == filename
     assert record.media_type == expected_media_type
     assert record.size_bytes == len(data)
+    assert record.stored_at.endswith("+00:00")
+    assert datetime.fromisoformat(record.stored_at).utcoffset() == timedelta(0)
 
     blob_path = Path(record.file_path)
     assert blob_path.exists()
@@ -193,36 +197,30 @@ async def test_store_async_keeps_the_event_loop_responsive_during_the_blob_write
 
 
 @pytest.mark.parametrize(
-    ("filename", "data", "expected_filename"),
+    ("filename", "data", "expected_filename", "blob_suffix"),
     [
-        ("camera-upload", b"\xff\xd8\xff\x00\x10", "camera-upload.jpg"),
-        ("voice-message", b"ID3\x04\x00mp3-data", "voice-message.mp3"),
-        ("document", b"%PDF-1.7\n1 0 obj\n", "document.pdf"),
-        ("notes", b"line one\nline two\n", "notes.txt"),
-        ("...", b"\xff\xd8\xff\x00\x10", "attachment.jpg"),
+        ("camera-upload", b"\xff\xd8\xff\x00\x10", "camera-upload.jpg", ".jpg"),
+        ("voice-message", b"ID3\x04\x00mp3-data", "voice-message.mp3", ".mp3"),
+        ("document", b"%PDF-1.7\n1 0 obj\n", "document.pdf", ".pdf"),
+        ("notes", b"line one\nline two\n", "notes.txt", ".txt"),
+        ("...", b"\xff\xd8\xff\x00\x10", "attachment.jpg", ".jpg"),
+        # An existing extension is kept; the blob still uses the canonical one.
+        ("original.jpeg", b"\xff\xd8\xff\x00\x10", "original.jpeg", ".jpg"),
     ],
 )
-def test_store_adds_canonical_extension_when_filename_has_none(
+def test_store_names_the_attachment_and_its_blob(
     tmp_path: Path,
     filename: str,
     data: bytes,
     expected_filename: str,
+    blob_suffix: str,
 ) -> None:
     store = AttachmentStore(tmp_path)
 
     record = store.store(filename, data)
 
     assert record.filename == expected_filename
-    assert Path(record.file_path).suffix == Path(expected_filename).suffix
-
-
-def test_store_preserves_existing_filename_extension(tmp_path: Path) -> None:
-    store = AttachmentStore(tmp_path)
-
-    record = store.store("original.jpeg", b"\xff\xd8\xff\x00\x10")
-
-    assert record.filename == "original.jpeg"
-    assert Path(record.file_path).suffix == ".jpg"
+    assert Path(record.file_path).suffix == blob_suffix
 
 
 @pytest.mark.parametrize(
@@ -257,24 +255,7 @@ def test_store_accepts_audio_and_video_files(
     assert record.transcription is None
 
 
-def test_set_transcription_persists_to_sidecar(tmp_path: Path) -> None:
-    # Arrange
-    store = AttachmentStore(tmp_path)
-    record = store.store("voice.ogg", b"OggS\x00\x02opus-data")
-
-    # Act
-    updated = store.set_transcription(record.id, "hello world")
-
-    # Assert
-    assert updated.transcription == "hello world"
-    assert store.get(record.id).transcription == "hello world"
-
-    sidecar_path = DataDirectoryLayout(tmp_path).attachments / f"{record.id}.json"
-    sidecar_payload = json.loads(sidecar_path.read_text(encoding="utf-8"))
-    assert sidecar_payload["transcription"] == "hello world"
-
-
-def test_set_transcription_keeps_the_unknown_fields_of_the_sidecar(tmp_path: Path) -> None:
+def test_set_transcription_persists_and_keeps_unknown_sidecar_fields(tmp_path: Path) -> None:
     store = AttachmentStore(tmp_path)
     record = store.store("voice.ogg", b"OggS\x00\x02opus-data")
     sidecar_path = DataDirectoryLayout(tmp_path).attachments / f"{record.id}.json"
@@ -282,8 +263,10 @@ def test_set_transcription_keeps_the_unknown_fields_of_the_sidecar(tmp_path: Pat
     payload["duration_ms"] = 1200
     sidecar_path.write_text(json.dumps(payload), encoding="utf-8")
 
-    store.set_transcription(record.id, "hello world")
+    updated = store.set_transcription(record.id, "hello world")
 
+    assert updated.transcription == "hello world"
+    assert store.get(record.id).transcription == "hello world"
     stored = json.loads(sidecar_path.read_text(encoding="utf-8"))
     assert stored == {**payload, "transcription": "hello world"}
     report = validate_attachment_metadata_file(sidecar_path)
@@ -346,31 +329,17 @@ def test_set_transcription_rejects_empty_text(tmp_path: Path) -> None:
         store.set_transcription(record.id, "   ")
 
 
-def test_store_rejects_file_larger_than_max_size(tmp_path: Path) -> None:
-    # Arrange
+def test_size_limit_applies_to_stored_bytes_and_reported_sizes(tmp_path: Path) -> None:
     store = AttachmentStore(tmp_path, max_size_bytes=4)
 
-    # Act / Assert
     with pytest.raises(AttachmentTooLargeError):
         store.store("too-large.txt", b"12345")
-
-
-def test_ensure_within_limit_rejects_oversized_reported_size(tmp_path: Path) -> None:
-    # Arrange
-    store = AttachmentStore(tmp_path, max_size_bytes=4)
-
-    # Act / Assert
     with pytest.raises(AttachmentTooLargeError):
         store.ensure_within_limit(5)
-
-
-def test_ensure_within_limit_allows_size_at_limit(tmp_path: Path) -> None:
-    # Arrange
-    store = AttachmentStore(tmp_path, max_size_bytes=4)
-
-    # Act / Assert — at-or-below the limit and an unknown (None) size both pass.
+    # At the limit and an unknown (None) size both pass.
     store.ensure_within_limit(4)
     store.ensure_within_limit(None)
+    assert not DataDirectoryLayout(tmp_path).attachments.exists()
 
 
 def test_store_rejects_blocked_mime_type(tmp_path: Path) -> None:
@@ -382,41 +351,16 @@ def test_store_rejects_blocked_mime_type(tmp_path: Path) -> None:
         store.store("payload.exe", b"MZ\x90\x00\x03\x00\x00\x00")
 
 
-def test_get_missing_attachment_raises_not_found(tmp_path: Path) -> None:
-    # Arrange
-    store = AttachmentStore(tmp_path)
-    missing_attachment_id = "00000000-0000-4000-8000-000000000000"
-
-    # Act / Assert
-    with pytest.raises(AttachmentNotFoundError):
-        store.get(missing_attachment_id)
-
-
-def test_get_rejects_path_traversal_attachment_id(tmp_path: Path) -> None:
-    # Arrange
+@pytest.mark.parametrize(
+    "attachment_id",
+    ["00000000-0000-4000-8000-000000000000", "../../etc/passwd", "", "not-a-uuid"],
+    ids=["missing", "path-traversal", "empty", "not-a-uuid"],
+)
+def test_get_unknown_or_malformed_id_is_not_found(tmp_path: Path, attachment_id: str) -> None:
     store = AttachmentStore(tmp_path)
 
-    # Act / Assert
     with pytest.raises(AttachmentNotFoundError):
-        store.get("../../etc/passwd")
-
-
-def test_get_rejects_empty_attachment_id(tmp_path: Path) -> None:
-    # Arrange
-    store = AttachmentStore(tmp_path)
-
-    # Act / Assert
-    with pytest.raises(AttachmentNotFoundError):
-        store.get("")
-
-
-def test_get_rejects_non_uuid_attachment_id(tmp_path: Path) -> None:
-    # Arrange
-    store = AttachmentStore(tmp_path)
-
-    # Act / Assert
-    with pytest.raises(AttachmentNotFoundError):
-        store.get("not-a-uuid")
+        store.get(attachment_id)
 
 
 def test_get_uses_canonical_blob_path_when_sidecar_path_is_stale(tmp_path: Path) -> None:
@@ -432,23 +376,22 @@ def test_get_uses_canonical_blob_path_when_sidecar_path_is_stale(tmp_path: Path)
     assert loaded.file_path == record.file_path
 
 
-def test_get_rejects_sidecar_id_mismatch(tmp_path: Path) -> None:
-    store = AttachmentStore(tmp_path)
-    record = store.store("notes.txt", b"mismatch")
-    sidecar_path = DataDirectoryLayout(tmp_path).attachments / f"{record.id}.json"
-    payload = json.loads(sidecar_path.read_text(encoding="utf-8"))
+def _other_id(sidecar: bytes) -> bytes:
+    payload = json.loads(sidecar)
     payload["id"] = "00000000-0000-4000-8000-000000000000"
-    sidecar_path.write_text(json.dumps(payload), encoding="utf-8")
-
-    with pytest.raises(AttachmentError):
-        store.get(record.id)
+    return json.dumps(payload).encode()
 
 
-def test_get_rejects_non_utf8_sidecar_as_attachment_error(tmp_path: Path) -> None:
+def _not_utf8(_sidecar: bytes) -> bytes:
+    return b"\xff\xfe"
+
+
+@pytest.mark.parametrize("corrupt", [_other_id, _not_utf8], ids=["id-mismatch", "not-utf8"])
+def test_get_refuses_a_corrupt_sidecar(tmp_path: Path, corrupt: Callable[[bytes], bytes]) -> None:
     store = AttachmentStore(tmp_path)
     record = store.store("notes.txt", b"notes")
     sidecar_path = DataDirectoryLayout(tmp_path).attachments / f"{record.id}.json"
-    sidecar_path.write_bytes(b"\xff\xfe")
+    sidecar_path.write_bytes(corrupt(sidecar_path.read_bytes()))
 
     with pytest.raises(AttachmentError):
         store.get(record.id)
@@ -475,6 +418,8 @@ def test_get_accepts_uppercase_attachment_id(tmp_path: Path) -> None:
 def test_delete_removes_blob_and_sidecar_and_missing_is_noop(tmp_path: Path) -> None:
     # Arrange
     store = AttachmentStore(tmp_path)
+    store.delete("00000000-0000-4000-8000-000000000001")
+    assert not DataDirectoryLayout(tmp_path).attachments.exists()
     record = store.store("notes.txt", b"to delete")
     blob_path = Path(record.file_path)
     sidecar_path = DataDirectoryLayout(tmp_path).attachments / f"{record.id}.json"
@@ -505,31 +450,6 @@ def test_delete_rejects_path_traversal_id_without_removing_existing_files(tmp_pa
     assert sidecar_path.exists()
 
 
-def test_delete_missing_valid_uuid_is_noop(tmp_path: Path) -> None:
-    # Arrange
-    store = AttachmentStore(tmp_path)
-
-    # Act
-    store.delete("00000000-0000-4000-8000-000000000001")
-
-    # Assert
-    assert not DataDirectoryLayout(tmp_path).attachments.exists()
-
-
-def test_stored_at_uses_utc_iso_format_with_explicit_offset(tmp_path: Path) -> None:
-    # Arrange
-    store = AttachmentStore(tmp_path)
-
-    # Act
-    record = store.store("notes.txt", b"timestamp check")
-    parsed = datetime.fromisoformat(record.stored_at)
-
-    # Assert
-    assert record.stored_at.endswith("+00:00")
-    assert parsed.tzinfo is not None
-    assert parsed.utcoffset() == timedelta(0)
-
-
 def test_short_attachment_ids_reserve_sidecars_across_extensions(tmp_path, monkeypatch):
     from core.utils import ids
 
@@ -542,37 +462,6 @@ def test_short_attachment_ids_reserve_sidecars_across_extensions(tmp_path, monke
     assert second.id == "att_000000000002"
     assert Path(store.get(first.id).file_path).read_bytes() == b"first"
     assert Path(store.get(second.id).file_path).read_bytes() == b"%PDF-1.7 second"
-
-
-@pytest.mark.parametrize(
-    "data",
-    [
-        b"ID3 tags are read by the player.\n",
-        b"ID3v2 notes\n",
-        b"OggS container notes\n",
-        b"fLaC is the FLAC magic.\n",
-        b"GIF8 is how a GIF starts.\n",
-        b"GIF89a version notes\n",
-    ],
-)
-def test_text_starting_with_a_media_magic_word_is_text(data: bytes) -> None:
-    assert sniff_media_type(data, "notes.md") == "text/plain"
-
-
-@pytest.mark.parametrize(
-    ("data", "expected"),
-    [
-        (b"ID3\x03\x00\x00\x00\x00\x02\x01rest", "audio/mpeg"),
-        (b"OggS\x00\x02" + b"\x00" * 21, "audio/ogg"),
-        (b"fLaC\x80\x00\x00\x22" + b"\x00" * 34, "audio/flac"),
-        (b"GIF87a\x10\x00\x10\x00\x00\x00\x00\x3b", "image/gif"),
-        # Global colour tables (flag 0x80) of 2 and 256 entries precede the first block.
-        (b"GIF89a\x01\x00\x01\x00\x80\x00\x00" + b"\x00" * 6 + b"\x2c", "image/gif"),
-        (b"GIF89a\x01\x00\x01\x00\x87\x00\x00" + b"\xff" * 768 + b"\x21", "image/gif"),
-    ],
-)
-def test_media_magic_words_with_real_headers_keep_their_type(data: bytes, expected: str) -> None:
-    assert sniff_media_type(data, "file.bin") == expected
 
 
 @pytest.mark.parametrize(
