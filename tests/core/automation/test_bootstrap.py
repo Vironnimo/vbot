@@ -157,50 +157,27 @@ async def test_shutdown_cancellation_leaves_once_job_retryable(tmp_path: Path) -
 
 
 @pytest.mark.asyncio
-async def test_same_session_jobs_run_sequentially(
+async def test_jobs_run_concurrently_across_sessions_and_in_order_within_one(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    job_ids = iter(("boot_000000000002", "boot_000000000001"))
+    # Ids sort against creation order and timestamps tie: creation order still wins.
+    job_ids = iter(("boot_000000000003", "boot_000000000002", "boot_000000000001"))
     monkeypatch.setattr(bootstrap_module, "new_id", lambda *_args, **_kwargs: next(job_ids))
-    monkeypatch.setattr(
-        bootstrap_module,
-        "_utc_now_iso",
-        lambda: "2026-08-07T12:00:00+00:00",
-    )
+    monkeypatch.setattr(bootstrap_module, "_utc_now_iso", lambda: "2026-08-07T12:00:00+00:00")
     creator = make_service(StubTriggerService(), tmp_path, "creator")
-    for prompt in ("first", "second"):
-        creator.create_job(agent_id="main", prompt=prompt, mode="once", session_id="session-one")
-    first_release = asyncio.Event()
-    trigger = StubTriggerService()
-    trigger.runs.extend(
-        [
-            StubRun("run-one", "session-one", release=first_release),
-            StubRun("run-two", "session-one"),
-        ]
-    )
-    service = make_service(trigger, tmp_path, "boot")
-
-    service.activate()
-    while len(trigger.calls) < 1:
-        await asyncio.sleep(0)
-    await asyncio.sleep(0)
-    assert len(trigger.calls) == 1
-    first_release.set()
-    await service.wait_until_idle()
-    assert [call["prompt"] for call in trigger.calls] == ["first", "second"]
-
-
-@pytest.mark.asyncio
-async def test_different_session_jobs_can_run_concurrently(tmp_path: Path) -> None:
-    creator = make_service(StubTriggerService(), tmp_path, "creator")
-    creator.create_job(agent_id="main", prompt="first", mode="once", session_id="session-one")
-    creator.create_job(agent_id="main", prompt="second", mode="once", session_id="session-two")
+    for prompt, session_id in (
+        ("first", "session-one"),
+        ("second", "session-one"),
+        ("other", "session-two"),
+    ):
+        creator.create_job(agent_id="main", prompt=prompt, mode="once", session_id=session_id)
     release = asyncio.Event()
     trigger = StubTriggerService()
     trigger.runs.extend(
         [
             StubRun("run-one", "session-one", release=release),
-            StubRun("run-two", "session-two", release=release),
+            StubRun("run-other", "session-two", release=release),
+            StubRun("run-two", "session-one"),
         ]
     )
     service = make_service(trigger, tmp_path, "boot")
@@ -208,9 +185,11 @@ async def test_different_session_jobs_can_run_concurrently(tmp_path: Path) -> No
     service.activate()
     while len(trigger.calls) < 2:
         await asyncio.sleep(0)
-    assert {call["session_id"] for call in trigger.calls} == {"session-one", "session-two"}
+    await asyncio.sleep(0)
+    assert [call["prompt"] for call in trigger.calls] == ["first", "other"]
     release.set()
     await service.wait_until_idle()
+    assert [call["prompt"] for call in trigger.calls] == ["first", "other", "second"]
 
 
 @pytest.mark.asyncio
@@ -321,32 +300,29 @@ async def test_restart_reconciles_terminal_run_before_retry(
     assert reconciled.last_outcome == expected_outcome
 
 
-def test_validation_reports_invalid_mode() -> None:
-    diagnostics = validate_bootstrap_jobs_data(
-        {
-            "format_version": 1,
-            "jobs": [
-                {
-                    "id": "job",
-                    "agent_id": "main",
-                    "name": "Check",
-                    "prompt": "Check",
-                    "mode": "sometimes",
-                    "status": "active",
-                    "created_at": "2026-08-02T00:00:00+00:00",
-                    "armed_after_startup_id": "startup",
-                }
-            ],
-        }
-    )
-
-    assert any(diagnostic.path == "$.jobs[0].mode" for diagnostic in diagnostics)
+_JOB = {
+    "id": "job",
+    "agent_id": "main",
+    "name": "Check",
+    "prompt": "Check",
+    "mode": "sometimes",
+    "status": "active",
+    "created_at": "2026-08-02T00:00:00+00:00",
+    "armed_after_startup_id": "startup",
+}
 
 
-def test_validation_requires_the_versioned_document() -> None:
-    assert [diagnostic.path for diagnostic in validate_bootstrap_jobs_data([])] == ["$"]
-    diagnostics = validate_bootstrap_jobs_data({"jobs": []})
-    assert [diagnostic.path for diagnostic in diagnostics] == ["$.format_version"]
+@pytest.mark.parametrize(
+    ("document", "paths"),
+    [
+        pytest.param([], ["$"], id="not-an-object"),
+        pytest.param({"jobs": []}, ["$.format_version"], id="unversioned"),
+        pytest.param({"format_version": 1, "jobs": [_JOB]}, ["$.jobs[0].mode"], id="invalid-mode"),
+    ],
+)
+def test_validation_reports_the_faulty_path(document: object, paths: list[str]) -> None:
+    diagnostics = validate_bootstrap_jobs_data(document)
+    assert [diagnostic.path for diagnostic in diagnostics] == paths
 
 
 def test_save_keeps_invalid_entries_and_unknown_fields(tmp_path: Path) -> None:
