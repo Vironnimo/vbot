@@ -12,4 +12,4 @@ A running server needs Extension Reload or restart to retire an already loaded c
 
 `resources/skills/playwright-cli/UPSTREAM.json` records the fixed upstream revision, package version, original file hashes and local adaptation. The bundled Apache-2.0 license and unmodified references stay with the Skill. When updating, fetch a fixed upstream revision, review the complete Agent-facing wording, retain or revise the vBot introduction, and update provenance and notices together; runtime startup does not update these instructions.
 
-Verify changes with the package provenance/reference tests in `tests/core/skills/test_skills.py`, the activation and file-read tests in `tests/core/tools/test_skill.py`, and the bundled-startup test above.
+Verify changes with the package provenance, activation and reference-read tests in `tests/resources/skills/test_bundled_skills.py` and the bundled-startup test above.

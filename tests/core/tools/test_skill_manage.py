@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
-from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
 
@@ -32,60 +31,6 @@ def _skill_md(
     return f"---\nname: {name}\ndescription: {description}\n---\n\n{body}"
 
 
-class _Harness:
-    def __init__(
-        self,
-        tmp_path: Path,
-        resolve_external_skill_scope: (Callable[[str, str, str | None], str | None] | None) = None,
-    ) -> None:
-        self.root = tmp_path
-        self._homes = tmp_path / "agents"
-        self.invalidated: list[str | None] = []
-        self.tools = ToolRegistry()
-        register_skill_manage_tool(
-            self.tools,
-            SkillAuthoringService(
-                protected_roots=[tmp_path / "resources" / "skills"],
-            ),
-            self.home,
-            self.invalidated.append,
-            resolve_external_skill_scope=resolve_external_skill_scope,
-        )
-
-    def home(self, agent_id: str) -> Path:
-        return self._homes / agent_id / "skills"
-
-    def run(self, arguments: dict[str, object], agent_id: str = "main") -> dict[str, Any]:
-        context = _context(agent_id, self.root)
-        try:
-            return cast(
-                dict[str, Any],
-                asyncio.run(
-                    self.tools.dispatch(
-                        context,
-                        arguments,
-                        [SKILL_MANAGE_TOOL_NAME],
-                    )
-                ),
-            )
-        except ValueError as error:
-            return tool_failure("invalid_arguments", str(error), retryable=False)
-
-    def create(
-        self,
-        *,
-        name: str = "demo",
-        content: str | None = None,
-    ) -> dict[str, Any]:
-        return self.run(
-            {
-                "action": "create",
-                "name": name,
-                "content": content if content is not None else _skill_md(name=name),
-            }
-        )
-
-
 def _context(agent_id: str, root: Path) -> ToolContext:
     return ToolContext(
         agent_id=agent_id,
@@ -99,6 +44,63 @@ def _context(agent_id: str, root: Path) -> ToolContext:
         data_root=root,
         cwd=root,
     )
+
+
+class _Harness:
+    """The Tool for the caller ``main``; ``owner`` can share Skills with it."""
+
+    def __init__(self, tmp_path: Path, scopes: dict[str, str] | None = None) -> None:
+        self.root = tmp_path
+        self.invalidated: list[str | None] = []
+        # Names the Agent ``owner`` shares with every other Agent.
+        self.shared: set[str] = set()
+        self.tools = ToolRegistry()
+        register_skill_manage_tool(
+            self.tools,
+            SkillAuthoringService(protected_roots=[tmp_path / "resources" / "skills"]),
+            self.home,
+            self.invalidated.append,
+            lambda agent_id, name: (
+                self.home("owner") if agent_id != "owner" and name in self.shared else None
+            ),
+            lambda _agent_id, name, _project_id: (scopes or {}).get(name),
+        )
+
+    def home(self, agent_id: str) -> Path:
+        return self.root / "agents" / agent_id / "skills"
+
+    def document(self, name: str = "demo", agent_id: str = "main") -> Path:
+        return self.home(agent_id) / name / "SKILL.md"
+
+    def run(self, arguments: dict[str, object], agent_id: str = "main") -> dict[str, Any]:
+        try:
+            return cast(
+                dict[str, Any],
+                asyncio.run(
+                    self.tools.dispatch(
+                        _context(agent_id, self.root), arguments, [SKILL_MANAGE_TOOL_NAME]
+                    )
+                ),
+            )
+        except ValueError as error:
+            # The executor reports contract violations the same way.
+            return tool_failure("invalid_arguments", str(error), retryable=False)
+
+    def create(self, *, name: str = "demo", content: str | None = None) -> dict[str, Any]:
+        return self.run(
+            {
+                "action": "create",
+                "name": name,
+                "content": content if content is not None else _skill_md(name=name),
+            }
+        )
+
+    def share(self, name: str = "deploy") -> Path:
+        document = self.document(name, "owner")
+        document.parent.mkdir(parents=True)
+        document.write_text(_skill_md(name, "Ship it.", "# Shared\n"), encoding="utf-8")
+        self.shared.add(name)
+        return document
 
 
 @pytest.mark.asyncio
@@ -158,8 +160,7 @@ async def test_admitted_write_runs_off_loop_and_settles_before_cancellation(
 
 
 def test_provider_schema_is_flat_and_hermes_shaped(tmp_path: Path) -> None:
-    harness = _Harness(tmp_path)
-    definitions = harness.tools.provider_definitions([SKILL_MANAGE_TOOL_NAME])
+    definitions = _Harness(tmp_path).tools.provider_definitions([SKILL_MANAGE_TOOL_NAME])
     parameters = cast(dict[str, Any], definitions[0]["parameters"])
 
     assert parameters == SKILL_MANAGE_TOOL_PARAMETERS
@@ -202,50 +203,7 @@ def test_provider_schema_is_flat_and_hermes_shaped(tmp_path: Path) -> None:
     )
 
 
-def test_patch_empty_content_removes_only_the_selected_text(tmp_path: Path) -> None:
-    harness = _Harness(tmp_path)
-    harness.create(content=_skill_md(body="Keep this step.\nObsolete step.\n"))
-    result = harness.run(
-        {"action": "patch", "name": "demo", "match": "Obsolete step.\n", "content": ""}
-    )
-    assert result["ok"] is True
-    text = (harness.home("main") / "demo/SKILL.md").read_text(encoding="utf-8")
-    assert "Obsolete step." not in text
-    assert "Keep this step." in text
-
-
-@pytest.mark.parametrize("existing", [False, True])
-def test_write_file_preserves_intentional_empty_content(tmp_path: Path, existing: bool) -> None:
-    harness = _Harness(tmp_path)
-    harness.create()
-    arguments = {"action": "write_file", "name": "demo", "file_path": "assets/empty.txt"}
-    if existing:
-        assert harness.run({**arguments, "content": "old contents"})["ok"] is True
-    result = harness.run({**arguments, "content": ""})
-    assert result["ok"] is True
-    assert (harness.home("main") / "demo/assets/empty.txt").read_bytes() == b""
-
-
-@pytest.mark.parametrize("action", ["patch", "write_file"])
-@pytest.mark.parametrize("extra", [{}, {"content": None}, {"content": False}])
-def test_content_must_be_present_and_textual(
-    tmp_path: Path, action: str, extra: dict[str, object]
-) -> None:
-    harness = _Harness(tmp_path)
-    harness.create()
-    skill_path = harness.home("main") / "demo/SKILL.md"
-    before = skill_path.read_bytes()
-    fields = {"match": "Demo"} if action == "patch" else {"file_path": "assets/empty.txt"}
-    result = harness.run({"action": action, "name": "demo", **fields, **extra})
-    assert result["ok"] is False
-    assert skill_path.read_bytes() == before
-    assert not (skill_path.parent / "assets/empty.txt").exists()
-
-
-def test_create_is_immediately_live_and_invalidates(
-    tmp_path: Path,
-    caplog: Any,
-) -> None:
+def test_create_is_immediately_live_and_invalidates(tmp_path: Path, caplog: Any) -> None:
     harness = _Harness(tmp_path)
 
     with caplog.at_level(logging.INFO, logger="vbot.tools.skill_manage"):
@@ -253,7 +211,7 @@ def test_create_is_immediately_live_and_invalidates(
 
     assert result["ok"] is True
     assert result["data"] == {"content": "Created Skill 'demo'."}
-    assert (harness.home("main") / "demo" / "SKILL.md").is_file()
+    assert harness.document().is_file()
     assert SkillRegistry.load(harness.home("main")).get("demo").description == "Do a demo task."
     assert harness.invalidated == ["main"]
     assert "action=create" in caplog.text
@@ -261,20 +219,54 @@ def test_create_is_immediately_live_and_invalidates(
     assert str(harness.home("main")) not in str(result)
 
 
-def test_create_requires_content(tmp_path: Path) -> None:
+_STAMPED_HEAD = (
+    "---\nname: demo\ndescription: Do a demo task.\nmetadata:\n  vbot:\n    author: agent\n---\n\n"
+)
+_CREATED = _STAMPED_HEAD.encode() + b"# Demo\n"
+
+
+@pytest.mark.parametrize(
+    ("content", "description"),
+    [
+        ("# Demo\n", "Do a demo task."),
+        ("---\nname: demo\n---\n\n# Demo\n", "Do a demo task."),
+        ("---\ndescription: Do a demo task.\n---\n\n# Demo\n", None),
+        (
+            "\n```markdown\n---\nname: demo\ndescription: Do a demo task.\n---\n\n# Demo\n```\n",
+            None,
+        ),
+    ],
+)
+def test_create_completes_the_front_matter_and_writes_lf(
+    tmp_path: Path, content: str, description: str | None
+) -> None:
+    harness = _Harness(tmp_path)
+    arguments: dict[str, object] = {"action": "create", "name": "demo", "content": content}
+    if description is not None:
+        arguments["description"] = description
+
+    result = harness.run(arguments)
+
+    assert result["data"] == {"content": "Created Skill 'demo'."}
+    assert harness.document().read_bytes() == _CREATED
+
+
+def test_own_scope_is_accepted_and_category_is_noted(tmp_path: Path) -> None:
     harness = _Harness(tmp_path)
 
-    result = harness.run({"action": "create", "name": "demo"})
-
-    assert result == tool_failure(
-        "invalid_arguments",
-        "create needs content. SKILL.md starts with front matter holding name and a "
-        "description of when to load the Skill, then the instructions:\n---\nname: demo\n"
-        "description: <what it covers and when to load it>\n---\n\n<instructions>",
-        retryable=False,
+    result = harness.run(
+        {
+            "action": "create",
+            "name": "demo",
+            "content": _skill_md(),
+            "scope": "private",
+            "category": "devops",
+        }
     )
-    assert not harness.home("main").exists()
-    assert harness.invalidated == []
+
+    assert result["data"] == {
+        "content": "Created Skill 'demo'.\nNote: category is not used; Skills have no categories."
+    }
 
 
 @pytest.mark.parametrize("content", ["---\nname: demo\n---\n\nbody\n", "# Demo\n\nbody\n"])
@@ -290,10 +282,199 @@ def test_missing_description_is_refused_with_the_header(tmp_path: Path, content:
     assert harness.invalidated == []
 
 
-def test_write_read_and_remove_support_file(tmp_path: Path) -> None:
+# --- Patch tolerance --------------------------------------------------------
+
+_PATCH_BODY = (
+    '# Demo\n\n1. Run `pytest`.\n2. Tag the release: "v1".\n\n## Pitfalls\n\n'
+    "- Never deploy on Fridays.\n- Check the Friday calendar.\n"
+)
+
+
+def _patch_harness(tmp_path: Path, body: str = _PATCH_BODY) -> tuple[_Harness, Path]:
     harness = _Harness(tmp_path)
-    assert harness.create()["ok"] is True
+    assert harness.create(content=_skill_md(body=body))["ok"] is True
     harness.invalidated.clear()
+    return harness, harness.document()
+
+
+def _body(skill_file: Path) -> str:
+    text = skill_file.read_bytes().decode("utf-8")
+    assert text.startswith(_STAMPED_HEAD)
+    return text[len(_STAMPED_HEAD) :]
+
+
+_MESSAGE_HEADER = "---\nname: new\ndescription: <what it covers and when to load it>\n---"
+
+
+@pytest.mark.parametrize(
+    ("arguments", "message"),
+    [
+        pytest.param(
+            {"action": "create", "name": "new"},
+            "create needs content. SKILL.md starts with front matter holding name and a "
+            f"description of when to load the Skill, then the instructions:\n{_MESSAGE_HEADER}"
+            "\n\n<instructions>",
+            id="create-without-content",
+        ),
+        pytest.param(
+            {
+                "action": "create",
+                "name": "new",
+                "content": _skill_md(name="new"),
+                "description": "Something else.",
+            },
+            "description differs from the description in the front matter; give it once.",
+            id="create-with-two-descriptions",
+        ),
+        pytest.param(
+            {"action": "create", "name": "new", "content": _skill_md(name="other")},
+            "The front matter names 'other' but name is 'new'; use the same name in both.",
+            id="create-with-two-names",
+        ),
+        pytest.param(
+            {
+                "action": "create",
+                "name": "new",
+                "content": _skill_md(name="new"),
+                "scope": "global",
+            },
+            "skill_manage writes only your own Skills; global, Project and bundled Skills are "
+            "read-only here. Omit scope to write one of your own Skills.",
+            id="global-scope",
+        ),
+        pytest.param(
+            {"action": "create", "file_path": "references/notes.md", "content": "Notes."},
+            "create writes SKILL.md. To write references/notes.md, use action write_file with "
+            "that file_path; omit file_path to create SKILL.md.",
+            id="create-support-file",
+        ),
+        pytest.param(
+            {"action": "delete", "content": _skill_md()},
+            "delete removes the whole Skill and takes no text. Use edit or patch to change it "
+            "instead.",
+            id="delete-with-text",
+        ),
+        pytest.param(
+            {"action": "delete", "file_path": "references/notes.md"},
+            "delete removes the whole Skill. To remove one file, use action remove_file with "
+            'file_path "references/notes.md"; omit file_path to delete the Skill.',
+            id="delete-one-file",
+        ),
+        pytest.param(
+            {"action": "remove_file", "file_path": "SKILL.md"},
+            "SKILL.md cannot be removed on its own; action delete removes the whole Skill.",
+            id="remove-document",
+        ),
+        pytest.param(
+            {
+                "action": "write_file",
+                "file_path": "references/notes.md",
+                "old_string": "a",
+                "content": "b",
+            },
+            "write_file replaces the whole file and takes no old_string. Use action patch with "
+            'file_path "references/notes.md", old_string and new_string to change one passage, '
+            "or omit old_string to write the complete file.",
+            id="write-file-with-old-string",
+        ),
+        pytest.param(
+            {"action": "patch", "description": "New.", "old_string": "a", "new_string": "b"},
+            "description is used only by create and edit. To change an existing Skill's "
+            "description, patch its description line in SKILL.md.",
+            id="patch-description",
+        ),
+        pytest.param(
+            {"action": "patch", "old_string": "- Never deploy on Fridays.", "new_string": "A"}
+            | {"content": "B"},
+            "Conflicting values for new_string: content and new_string differ; give one text.",
+            id="patch-with-two-texts",
+        ),
+        pytest.param(
+            {"action": "patch", "new_string": _skill_md(body="# New\n")},
+            "patch needs old_string, the exact current text to replace. To replace the "
+            "complete SKILL.md, use action edit with the same text as content.",
+            id="patch-with-a-document",
+        ),
+        pytest.param(
+            {"action": "patch", "new_string": "# New"},
+            "patch needs old_string, the exact current text to replace, and new_string. Read "
+            'the current text with skill {"name": "demo", "file_path": "SKILL.md"}.',
+            id="patch-without-old-string",
+        ),
+        pytest.param(
+            {"action": "edit", "old_string": "# Demo", "content": _skill_md(body="# New\n")},
+            "edit replaces the complete SKILL.md and takes no old_string. Omit old_string to "
+            "replace the whole file, or use action patch with old_string and new_string to "
+            "change one passage.",
+            id="edit-with-old-string",
+        ),
+    ],
+)
+def test_calls_that_cannot_apply_as_given_are_refused_before_writing(
+    tmp_path: Path, arguments: dict[str, object], message: str
+) -> None:
+    harness, skill_file = _patch_harness(tmp_path)
+    before = skill_file.read_bytes()
+
+    result = harness.run({"name": "demo", **arguments})
+
+    assert result == tool_failure("invalid_arguments", message, retryable=False)
+    assert skill_file.read_bytes() == before
+    assert [path.name for path in harness.home("main").iterdir()] == ["demo"]
+    assert [path.name for path in skill_file.parent.iterdir()] == ["SKILL.md"]
+    assert harness.invalidated == []
+
+
+@pytest.mark.parametrize(
+    ("arguments", "named"),
+    [
+        (
+            {"action": "write_file", "file_path": "assets/logo.png", "source_path": "logo.png"},
+            "source_path",
+        ),
+        (
+            {
+                "action": "write_file",
+                "file_path": "scripts/run.py",
+                "content": "print('ok')\n",
+                "executable": True,
+            },
+            "executable",
+        ),
+        ({"action": "begin"}, '"action" must be one of "create", "edit"'),
+    ],
+    ids=["binary-copy", "executable-flag", "draft-action"],
+)
+def test_removed_actions_and_arguments_are_rejected_by_name(
+    tmp_path: Path, arguments: dict[str, object], named: str
+) -> None:
+    harness, skill_file = _patch_harness(tmp_path)
+
+    result = harness.run({"name": "demo", **arguments})
+
+    assert result["ok"] is False
+    assert named in result["error"]["message"]
+    assert [path.name for path in skill_file.parent.iterdir()] == ["SKILL.md"]
+
+
+@pytest.mark.parametrize("action", ["patch", "write_file"])
+@pytest.mark.parametrize("extra", [{}, {"content": None}, {"content": False}])
+def test_content_must_be_present_and_textual(
+    tmp_path: Path, action: str, extra: dict[str, object]
+) -> None:
+    harness, skill_path = _patch_harness(tmp_path)
+    before = skill_path.read_bytes()
+    fields = {"match": "Demo"} if action == "patch" else {"file_path": "assets/empty.txt"}
+
+    result = harness.run({"action": action, "name": "demo", **fields, **extra})
+
+    assert result["ok"] is False
+    assert skill_path.read_bytes() == before
+    assert not (skill_path.parent / "assets/empty.txt").exists()
+
+
+def test_write_and_remove_support_file(tmp_path: Path) -> None:
+    harness, skill_file = _patch_harness(tmp_path)
 
     written = harness.run(
         {
@@ -304,49 +485,61 @@ def test_write_read_and_remove_support_file(tmp_path: Path) -> None:
         }
     )
     removed = harness.run(
-        {
-            "action": "remove_file",
-            "name": "demo",
-            "file_path": "references/notes.md",
-        }
+        {"action": "remove_file", "name": "demo", "file_path": "references/notes.md"}
     )
 
     assert written["data"] == {"content": "Wrote references/notes.md of Skill 'demo'."}
     assert removed["data"] == {"content": "Removed references/notes.md from Skill 'demo'."}
-    assert not (harness.home("main") / "demo" / "references").exists()
+    assert not (skill_file.parent / "references").exists()
     assert harness.invalidated == ["main", "main"]
 
 
-def test_write_file_rejects_removed_binary_copy_arguments(tmp_path: Path) -> None:
-    harness = _Harness(tmp_path)
-    harness.create()
+@pytest.mark.parametrize("existing", [False, True])
+def test_write_file_preserves_intentional_empty_content(tmp_path: Path, existing: bool) -> None:
+    harness, skill_file = _patch_harness(tmp_path)
+    arguments = {"action": "write_file", "name": "demo", "file_path": "assets/empty.txt"}
+    if existing:
+        assert harness.run({**arguments, "content": "old contents"})["ok"] is True
 
-    source = harness.run(
+    result = harness.run({**arguments, "content": ""})
+
+    assert result["ok"] is True
+    assert (skill_file.parent / "assets/empty.txt").read_bytes() == b""
+
+
+def test_write_file_to_skill_md_replaces_the_document(tmp_path: Path) -> None:
+    harness, skill_file = _patch_harness(tmp_path)
+
+    result = harness.run(
         {
             "action": "write_file",
             "name": "demo",
-            "file_path": "assets/logo.png",
-            "source_path": "logo.png",
-        }
-    )
-    executable = harness.run(
-        {
-            "action": "write_file",
-            "name": "demo",
-            "file_path": "scripts/run.py",
-            "content": "print('ok')\n",
-            "executable": True,
+            "file_path": "SKILL.md",
+            "content": _skill_md(body="# Rewritten\n"),
         }
     )
 
-    for result, field in ((source, "source_path"), (executable, "executable")):
-        assert result["ok"] is False
-        assert field in cast(dict[str, Any], result["error"])["message"]
+    assert result["data"] == {"content": "Replaced SKILL.md of Skill 'demo'."}
+    assert _body(skill_file) == "# Rewritten\n"
+
+
+def test_non_skill_file_path_is_rejected(tmp_path: Path) -> None:
+    harness, skill_file = _patch_harness(tmp_path)
+
+    result = harness.run(
+        {"action": "write_file", "name": "demo", "file_path": "other/data.txt", "content": "no"}
+    )
+
+    assert result["error"]["code"] == "skill_write_rejected"
+    assert (
+        "Support files must live under scripts/ or references/ or assets/"
+        in result["error"]["message"]
+    )
+    assert not (skill_file.parent / "other").exists()
 
 
 def test_edit_replaces_complete_skill_document(tmp_path: Path) -> None:
-    harness = _Harness(tmp_path)
-    harness.create()
+    harness, skill_file = _patch_harness(tmp_path)
 
     result = harness.run(
         {
@@ -357,110 +550,13 @@ def test_edit_replaces_complete_skill_document(tmp_path: Path) -> None:
     )
 
     assert result["ok"] is True
-    skill_file = harness.home("main") / "demo" / "SKILL.md"
-    assert "description: Updated." in skill_file.read_text(encoding="utf-8")
-    assert "New body." in skill_file.read_text(encoding="utf-8")
-
-
-def test_patch_defaults_to_skill_md_and_requires_unique_match(tmp_path: Path) -> None:
-    harness = _Harness(tmp_path)
-    harness.create(content=_skill_md(body="old marker\nold marker\n"))
-
-    rejected = harness.run(
-        {
-            "action": "patch",
-            "name": "demo",
-            "match": "old marker",
-            "content": "new marker",
-        }
-    )
-    replaced = harness.run(
-        {
-            "action": "patch",
-            "name": "demo",
-            "match": "old marker\nold marker",
-            "content": "new marker\nnew marker",
-        }
-    )
-
-    assert rejected["ok"] is False
-    assert rejected["error"]["code"] == "ambiguous_match"
-    assert replaced["data"] == {"content": "Patched SKILL.md of Skill 'demo' at line 9."}
-    content = (harness.home("main") / "demo" / "SKILL.md").read_text(encoding="utf-8")
-    assert content.count("new marker") == 2
-
-
-def test_patch_support_file_by_relative_path(tmp_path: Path) -> None:
-    harness = _Harness(tmp_path)
-    harness.create()
-    harness.run(
-        {
-            "action": "write_file",
-            "name": "demo",
-            "file_path": "scripts/run.py",
-            "content": "print('old')\n",
-        }
-    )
-
-    result = harness.run(
-        {
-            "action": "patch",
-            "name": "demo",
-            "file_path": "scripts/run.py",
-            "match": "old",
-            "content": "new",
-        }
-    )
-
-    assert result["ok"] is True
-    assert (harness.home("main") / "demo" / "scripts" / "run.py").read_text(
-        encoding="utf-8"
-    ) == "print('new')\n"
-
-
-def test_action_rejects_fields_from_another_action(tmp_path: Path) -> None:
-    harness = _Harness(tmp_path)
-
-    result = harness.run(
-        {
-            "action": "delete",
-            "name": "demo",
-            "content": _skill_md(),
-        }
-    )
-
-    assert result == tool_failure(
-        "invalid_arguments",
-        "delete removes the whole Skill and takes no text. Use edit or patch to change it instead.",
-        retryable=False,
-    )
-
-
-def test_non_skill_file_path_is_rejected(tmp_path: Path) -> None:
-    harness = _Harness(tmp_path)
-    harness.create()
-
-    result = harness.run(
-        {
-            "action": "write_file",
-            "name": "demo",
-            "file_path": "other/data.txt",
-            "content": "no",
-        }
-    )
-
-    assert result["ok"] is False
-    assert result["error"]["code"] == "skill_write_rejected"
-    assert (
-        "Support files must live under scripts/ or references/ or assets/"
-        in (result["error"]["message"])
-    )
-    assert not (harness.home("main") / "demo/other").exists()
+    text = skill_file.read_text(encoding="utf-8")
+    assert "description: Updated." in text
+    assert "New body." in text
 
 
 def test_delete_removes_complete_skill_and_invalidates(tmp_path: Path) -> None:
-    harness = _Harness(tmp_path)
-    harness.create()
+    harness, skill_file = _patch_harness(tmp_path)
     harness.run(
         {
             "action": "write_file",
@@ -473,108 +569,55 @@ def test_delete_removes_complete_skill_and_invalidates(tmp_path: Path) -> None:
 
     result = harness.run({"action": "delete", "name": "demo"})
 
-    assert result["ok"] is True
     assert result["data"] == {"content": "Deleted Skill 'demo' and its files."}
-    assert not (harness.home("main") / "demo").exists()
+    assert not skill_file.parent.exists()
     assert harness.invalidated == ["main"]
 
 
-def test_global_scope_is_not_available_to_agent_tool(tmp_path: Path) -> None:
-    harness = _Harness(tmp_path)
-
-    result = harness.run(
-        {
-            "action": "create",
-            "name": "demo",
-            "content": _skill_md(),
-            "scope": "global",
-        }
-    )
-
-    assert result == tool_failure(
-        "invalid_arguments",
-        "skill_manage writes only your own Skills; global, Project and bundled Skills are "
-        "read-only here. Omit scope to write one of your own Skills.",
-        retryable=False,
-    )
-    assert not harness.home("main").exists()
-    assert harness.invalidated == []
+# --- Names and scopes -------------------------------------------------------
 
 
-def test_removed_draft_action_is_rejected(tmp_path: Path) -> None:
-    harness = _Harness(tmp_path)
+@pytest.mark.parametrize(
+    ("scope", "arguments", "fragments"),
+    [
+        (
+            "bundled",
+            {"action": "edit", "content": _skill_md(name="foreign")},
+            [
+                "Skill 'foreign' is a bundled Skill — read-only here.",
+                "user-facing Skill controls",
+                "do not edit the package with file or shell tools",
+            ],
+        ),
+        (
+            "project",
+            {"action": "patch", "match": "x", "content": "y"},
+            ["is a Project Skill — read-only here."],
+        ),
+        (
+            "shared",
+            {"action": "delete"},
+            ["is shared with you", "only its owner or the user can delete it"],
+        ),
+    ],
+)
+def test_foreign_skill_names_report_their_scope_instead_of_not_found(
+    tmp_path: Path, scope: str, arguments: dict[str, object], fragments: list[str]
+) -> None:
+    harness = _Harness(tmp_path, scopes={"foreign": scope})
 
-    result = harness.run({"action": "begin", "name": "demo"})
+    result = harness.run({"name": "foreign", **arguments})
 
-    assert result["ok"] is False
-    message = cast(dict[str, Any], result["error"])["message"]
-    assert '"action" must be one of "create", "edit"' in message
-    assert 'received "begin"' in message
-
-
-def _scope_resolver(
-    mapping: dict[str, str],
-) -> Callable[[str, str, str | None], str | None]:
-    def resolve(agent_id: str, name: str, project_id: str | None) -> str | None:
-        return mapping.get(name)
-
-    return resolve
-
-
-def test_edit_foreign_bundled_name_reports_scope_not_notfound(tmp_path: Path) -> None:
-    harness = _Harness(
-        tmp_path,
-        resolve_external_skill_scope=_scope_resolver({"bundle-me": "bundled"}),
-    )
-
-    result = harness.run(
-        {"action": "edit", "name": "bundle-me", "content": _skill_md(name="bundle-me")}
-    )
-
-    assert result["ok"] is False
-    error = cast(dict[str, Any], result["error"])
-    assert error["code"] == "skill_write_rejected"
-    assert error["retryable"] is False
-    assert "Skill 'bundle-me' is a bundled Skill — read-only here." in error["message"]
-    assert "user-facing Skill controls" in error["message"]
-    assert "do not edit the package with file or shell tools" in error["message"]
+    error = result["error"]
+    assert (error["code"], error["retryable"]) == ("skill_write_rejected", False)
+    assert all(fragment in error["message"] for fragment in fragments)
     assert "not found" not in error["message"]
+    # create is not blocked: it writes the caller's own shadowing copy.
+    assert harness.create(name="foreign")["ok"] is True
 
 
-def test_edit_foreign_project_name_reports_scope(tmp_path: Path) -> None:
-    harness = _Harness(
-        tmp_path,
-        resolve_external_skill_scope=_scope_resolver({"project-me": "project"}),
-    )
-
-    result = harness.run({"action": "patch", "name": "project-me", "match": "x", "content": "y"})
-
-    assert result["ok"] is False
-    error = cast(dict[str, Any], result["error"])
-    assert error["code"] == "skill_write_rejected"
-    assert "is a Project Skill — read-only here." in error["message"]
-
-
-def test_delete_shared_name_reports_owner_limited(tmp_path: Path) -> None:
-    harness = _Harness(
-        tmp_path,
-        resolve_external_skill_scope=_scope_resolver({"shared-me": "shared"}),
-    )
-
-    result = harness.run({"action": "delete", "name": "shared-me"})
-
-    assert result["ok"] is False
-    error = cast(dict[str, Any], result["error"])
-    assert error["code"] == "skill_write_rejected"
-    assert "is shared with you" in error["message"]
-    assert "only its owner or the user can delete it" in error["message"]
-
-
-def test_unknown_name_keeps_plain_notfound(tmp_path: Path) -> None:
-    harness = _Harness(
-        tmp_path,
-        resolve_external_skill_scope=_scope_resolver({"bundle-me": "bundled"}),
-    )
+def test_unknown_name_keeps_plain_not_found(tmp_path: Path) -> None:
+    harness = _Harness(tmp_path, scopes={"foreign": "bundled"})
 
     result = harness.run(
         {"action": "edit", "name": "no-such-skill", "content": _skill_md(name="no-such-skill")}
@@ -588,15 +631,38 @@ def test_unknown_name_keeps_plain_notfound(tmp_path: Path) -> None:
     )
 
 
-def test_create_shadows_foreign_name_unblocked_by_scope_check(tmp_path: Path) -> None:
-    harness = _Harness(
-        tmp_path,
-        resolve_external_skill_scope=_scope_resolver({"bundle-me": "bundled"}),
+@pytest.mark.parametrize("name", ["demos", "Demo", "xdemo"])
+def test_similar_skill_name_is_suggested_and_nothing_is_written(tmp_path: Path, name: str) -> None:
+    harness, skill_file = _patch_harness(tmp_path)
+    before = skill_file.read_bytes()
+
+    result = harness.run(
+        {"action": "patch", "name": name, "old_string": "# Demo", "new_string": "# Other"}
     )
 
-    result = harness.create(name="bundle-me")
+    assert result == tool_failure(
+        "skill_not_found",
+        f"You have no Skill named '{name}'; nothing changed. Did you mean 'demo'?",
+        retryable=False,
+    )
+    assert skill_file.read_bytes() == before
+    assert sorted(path.name for path in harness.home("main").iterdir()) == ["demo"]
 
-    assert result["ok"] is True
+
+def test_invocation_marks_and_package_paths_in_the_name(tmp_path: Path) -> None:
+    harness, skill_file = _patch_harness(tmp_path)
+
+    patched = harness.run(
+        {"action": "patch", "name": "/demo", "old_string": "# Demo", "new_string": "# Demo!"}
+    )
+    written = harness.run(
+        {"action": "write_file", "name": "demo/references/notes.md", "content": "Notes.\n"}
+    )
+
+    assert patched["ok"] is True
+    assert _body(skill_file).startswith("# Demo!\n")
+    assert written["data"] == {"content": "Wrote references/notes.md of Skill 'demo'."}
+    assert (skill_file.parent / "references" / "notes.md").read_bytes() == b"Notes.\n"
 
 
 @pytest.mark.parametrize(
@@ -628,10 +694,10 @@ def test_create_shadows_foreign_name_unblocked_by_scope_check(tmp_path: Path) ->
 def test_recognizable_mistakes_write_real_empty_file(
     tmp_path: Path, arguments: dict[str, object]
 ) -> None:
-    harness = _Harness(tmp_path)
-    assert harness.create()["ok"] is True
+    harness, skill_file = _patch_harness(tmp_path)
+
     assert harness.run(arguments)["ok"] is True
-    assert (harness.home("main") / "demo/assets/empty.txt").read_bytes() == b""
+    assert (skill_file.parent / "assets/empty.txt").read_bytes() == b""
 
 
 @pytest.mark.parametrize(
@@ -655,27 +721,114 @@ def test_normalized_call_records_the_package_path_it_writes(
     assert normalized["file_path"] == recorded
 
 
+# --- Skills shared with the caller -------------------------------------------
+
+
+def test_receiver_changes_land_in_the_owner_package_and_invalidate_everyone(
+    tmp_path: Path,
+) -> None:
+    harness = _Harness(tmp_path)
+    document = harness.share()
+
+    patched = harness.run(
+        {"action": "patch", "name": "deploy", "match": "# Shared", "content": "# Patched"}
+    )
+    written = harness.run(
+        {
+            "action": "write_file",
+            "name": "deploy",
+            "file_path": "references/notes.md",
+            "content": "notes",
+        }
+    )
+    removed = harness.run(
+        {"action": "remove_file", "name": "deploy", "file_path": "references/notes.md"}
+    )
+    edited = harness.run(
+        {
+            "action": "edit",
+            "name": "deploy",
+            "content": _skill_md("deploy", "Rewritten.", "# Body\n"),
+        }
+    )
+
+    # The results read exactly like changes of the caller's own Skill.
+    assert patched["data"] == {"content": "Patched SKILL.md of Skill 'deploy' at line 6."}
+    assert all(result["ok"] for result in (written, removed, edited))
+    assert "# Body" in document.read_text(encoding="utf-8")
+    assert not (document.parent / "references" / "notes.md").exists()
+    assert not harness.home("main").exists()
+    assert harness.invalidated == [None, None, None, None]
+
+
+def test_own_home_wins_over_a_shared_skill_of_the_same_name(tmp_path: Path) -> None:
+    harness = _Harness(tmp_path)
+    shared = harness.share()
+    before = shared.read_bytes()
+    own = harness.document("deploy")
+    own.parent.mkdir(parents=True)
+    own.write_text(_skill_md("deploy", "My own copy.", "# Own\n"), encoding="utf-8")
+
+    patched = harness.run(
+        {"action": "patch", "name": "deploy", "match": "# Own", "content": "# Own patched"}
+    )
+    deleted = harness.run({"action": "delete", "name": "deploy"})
+
+    assert patched["ok"] is True
+    assert deleted["ok"] is True
+    assert not own.exists()
+    assert shared.read_bytes() == before
+
+
+def test_create_and_delete_never_target_a_shared_package(tmp_path: Path) -> None:
+    harness = _Harness(tmp_path)
+    shared = harness.share()
+    before = shared.read_bytes()
+
+    deleted = harness.run({"action": "delete", "name": "deploy"})
+    created = harness.run(
+        {"action": "create", "name": "deploy", "content": _skill_md("deploy", "My own copy.")}
+    )
+
+    # create writes the caller's own shadowing copy; delete refuses the shared one.
+    assert deleted["error"]["code"] == "skill_not_found"
+    assert created["ok"] is True
+    assert harness.document("deploy").is_file()
+    assert shared.read_bytes() == before
+
+
 # --- Patch tolerance --------------------------------------------------------
 
-_PATCH_BODY = (
-    '# Demo\n\n1. Run `pytest`.\n2. Tag the release: "v1".\n\n## Pitfalls\n\n'
-    "- Never deploy on Fridays.\n- Check the Friday calendar.\n"
-)
-_STAMPED_HEAD = (
-    "---\nname: demo\ndescription: Do a demo task.\nmetadata:\n  vbot:\n    author: agent\n---\n\n"
-)
 
+def test_patch_by_legacy_names_changes_skill_md_or_the_named_file(tmp_path: Path) -> None:
+    harness, skill_file = _patch_harness(tmp_path, body="Keep this step.\nObsolete step.\n")
+    harness.run(
+        {
+            "action": "write_file",
+            "name": "demo",
+            "file_path": "scripts/run.py",
+            "content": "print('old')\n",
+        }
+    )
 
-def _patch_harness(tmp_path: Path, body: str = _PATCH_BODY) -> tuple[_Harness, Path]:
-    harness = _Harness(tmp_path)
-    assert harness.create(content=_skill_md(body=body))["ok"] is True
-    return harness, harness.home("main") / "demo" / "SKILL.md"
+    removed = harness.run(
+        {"action": "patch", "name": "demo", "match": "Obsolete step.\n", "content": ""}
+    )
+    script = harness.run(
+        {
+            "action": "patch",
+            "name": "demo",
+            "file_path": "scripts/run.py",
+            "match": "old",
+            "content": "new",
+        }
+    )
 
-
-def _body(skill_file: Path) -> str:
-    text = skill_file.read_bytes().decode("utf-8")
-    assert text.startswith(_STAMPED_HEAD)
-    return text[len(_STAMPED_HEAD) :]
+    assert (removed["ok"], script["ok"]) == (True, True)
+    assert _body(skill_file) == "Keep this step.\n"
+    assert (skill_file.parent / "scripts" / "run.py").read_text(encoding="utf-8") == (
+        "print('new')\n"
+    )
 
 
 @pytest.mark.parametrize(
@@ -722,7 +875,6 @@ def test_patch_that_changes_nothing_says_so(tmp_path: Path) -> None:
         }
     )
 
-    assert result["ok"] is True
     assert result["data"]["content"] == (
         "SKILL.md of Skill 'demo' already reads as new_string at line 9; nothing changed."
     )
@@ -795,7 +947,6 @@ def test_patch_applies_old_string_copied_with_a_misspelling_and_names_it(tmp_pat
         }
     )
 
-    assert result["ok"] is True
     assert _body(skill_file) == "Always run the full test suite and the linter before merging.\n"
     content = result["data"]["content"]
     assert "\nNote: Line " in content
@@ -847,7 +998,7 @@ def test_patch_miss_names_the_closest_text_and_the_read_call(tmp_path: Path) -> 
 
 def test_patch_miss_points_to_the_support_file_holding_the_text(tmp_path: Path) -> None:
     harness, skill_file = _patch_harness(tmp_path)
-    notes = harness.home("main") / "demo" / "references" / "notes.md"
+    notes = skill_file.parent / "references" / "notes.md"
     harness.run(
         {
             "action": "write_file",
@@ -927,28 +1078,6 @@ def test_patch_ignores_empty_placeholders_and_identical_duplicates(
     assert "- Never deploy after 4 pm.\n- Check the Friday calendar.\n" in _body(skill_file)
 
 
-def test_patch_with_two_different_texts_changes_nothing(tmp_path: Path) -> None:
-    harness, skill_file = _patch_harness(tmp_path)
-    before = skill_file.read_bytes()
-
-    result = harness.run(
-        {
-            "action": "patch",
-            "name": "demo",
-            "old_string": "- Never deploy on Fridays.",
-            "new_string": "A",
-            "content": "B",
-        }
-    )
-
-    assert result == tool_failure(
-        "invalid_arguments",
-        "Conflicting values for new_string: content and new_string differ; give one text.",
-        retryable=False,
-    )
-    assert skill_file.read_bytes() == before
-
-
 def test_edit_with_old_string_and_a_fragment_patches_only_that_text(tmp_path: Path) -> None:
     harness, skill_file = _patch_harness(tmp_path)
 
@@ -966,223 +1095,3 @@ def test_edit_with_old_string_and_a_fragment_patches_only_that_text(tmp_path: Pa
         "Note: edit with old_string changed only that text, as patch does."
     }
     assert _body(skill_file) == _PATCH_BODY.replace("on Fridays", "on holidays")
-
-
-def test_edit_with_old_string_and_a_complete_document_is_refused(tmp_path: Path) -> None:
-    harness, skill_file = _patch_harness(tmp_path)
-    before = skill_file.read_bytes()
-
-    result = harness.run(
-        {
-            "action": "edit",
-            "name": "demo",
-            "old_string": "# Demo",
-            "content": _skill_md(body="# New\n"),
-        }
-    )
-
-    assert result == tool_failure(
-        "invalid_arguments",
-        "edit replaces the complete SKILL.md and takes no old_string. Omit old_string to "
-        "replace the whole file, or use action patch with old_string and new_string to "
-        "change one passage.",
-        retryable=False,
-    )
-    assert skill_file.read_bytes() == before
-
-
-def test_patch_without_old_string_names_edit_for_a_complete_document(tmp_path: Path) -> None:
-    harness, skill_file = _patch_harness(tmp_path)
-    before = skill_file.read_bytes()
-
-    complete = harness.run(
-        {"action": "patch", "name": "demo", "new_string": _skill_md(body="# New\n")}
-    )
-    fragment = harness.run({"action": "patch", "name": "demo", "new_string": "# New"})
-
-    assert complete["error"]["message"] == (
-        "patch needs old_string, the exact current text to replace. To replace the "
-        "complete SKILL.md, use action edit with the same text as content."
-    )
-    assert fragment["error"]["message"] == (
-        "patch needs old_string, the exact current text to replace, and new_string. Read "
-        'the current text with skill {"name": "demo", "file_path": "SKILL.md"}.'
-    )
-    assert skill_file.read_bytes() == before
-
-
-# --- Documents and names ----------------------------------------------------
-
-_CREATED = _STAMPED_HEAD.encode() + b"# Demo\n"
-
-
-@pytest.mark.parametrize(
-    ("content", "description"),
-    [
-        ("# Demo\n", "Do a demo task."),
-        ("---\nname: demo\n---\n\n# Demo\n", "Do a demo task."),
-        ("---\ndescription: Do a demo task.\n---\n\n# Demo\n", None),
-        (
-            "\n```markdown\n---\nname: demo\ndescription: Do a demo task.\n---\n\n# Demo\n```\n",
-            None,
-        ),
-    ],
-)
-def test_create_completes_the_front_matter_and_writes_lf(
-    tmp_path: Path, content: str, description: str | None
-) -> None:
-    harness = _Harness(tmp_path)
-    arguments: dict[str, object] = {"action": "create", "name": "demo", "content": content}
-    if description is not None:
-        arguments["description"] = description
-
-    result = harness.run(arguments)
-
-    assert result["data"] == {"content": "Created Skill 'demo'."}
-    assert (harness.home("main") / "demo" / "SKILL.md").read_bytes() == _CREATED
-
-
-@pytest.mark.parametrize(
-    ("content", "description", "message"),
-    [
-        (
-            _skill_md(),
-            "Something else.",
-            "description differs from the description in the front matter; give it once.",
-        ),
-        (
-            _skill_md(name="other"),
-            None,
-            "The front matter names 'other' but name is 'demo'; use the same name in both.",
-        ),
-    ],
-)
-def test_create_refuses_conflicting_document_fields(
-    tmp_path: Path, content: str, description: str | None, message: str
-) -> None:
-    harness = _Harness(tmp_path)
-    arguments: dict[str, object] = {"action": "create", "name": "demo", "content": content}
-    if description is not None:
-        arguments["description"] = description
-
-    result = harness.run(arguments)
-
-    assert result == tool_failure("invalid_arguments", message, retryable=False)
-    assert not harness.home("main").exists()
-
-
-@pytest.mark.parametrize("name", ["demos", "Demo", "xdemo"])
-def test_similar_skill_name_is_suggested_and_nothing_is_written(tmp_path: Path, name: str) -> None:
-    harness, skill_file = _patch_harness(tmp_path)
-    before = skill_file.read_bytes()
-
-    result = harness.run(
-        {"action": "patch", "name": name, "old_string": "# Demo", "new_string": "# Other"}
-    )
-
-    assert result == tool_failure(
-        "skill_not_found",
-        f"You have no Skill named '{name}'; nothing changed. Did you mean 'demo'?",
-        retryable=False,
-    )
-    assert skill_file.read_bytes() == before
-    assert sorted(path.name for path in harness.home("main").iterdir()) == ["demo"]
-
-
-def test_invocation_marks_and_package_paths_in_the_name(tmp_path: Path) -> None:
-    harness, skill_file = _patch_harness(tmp_path)
-
-    patched = harness.run(
-        {"action": "patch", "name": "/demo", "old_string": "# Demo", "new_string": "# Demo!"}
-    )
-    written = harness.run(
-        {"action": "write_file", "name": "demo/references/notes.md", "content": "Notes.\n"}
-    )
-
-    assert patched["ok"] is True
-    assert _body(skill_file).startswith("# Demo!\n")
-    assert written["data"] == {"content": "Wrote references/notes.md of Skill 'demo'."}
-    notes = harness.home("main") / "demo" / "references" / "notes.md"
-    assert notes.read_bytes() == b"Notes.\n"
-
-
-def test_write_file_to_skill_md_replaces_the_document(tmp_path: Path) -> None:
-    harness, skill_file = _patch_harness(tmp_path)
-
-    result = harness.run(
-        {
-            "action": "write_file",
-            "name": "demo",
-            "file_path": "SKILL.md",
-            "content": _skill_md(body="# Rewritten\n"),
-        }
-    )
-
-    assert result["data"] == {"content": "Replaced SKILL.md of Skill 'demo'."}
-    assert _body(skill_file) == "# Rewritten\n"
-
-
-@pytest.mark.parametrize(
-    ("arguments", "message"),
-    [
-        (
-            {"action": "remove_file", "file_path": "SKILL.md"},
-            "SKILL.md cannot be removed on its own; action delete removes the whole Skill.",
-        ),
-        (
-            {"action": "delete", "file_path": "references/notes.md"},
-            "delete removes the whole Skill. To remove one file, use action remove_file with "
-            'file_path "references/notes.md"; omit file_path to delete the Skill.',
-        ),
-        (
-            {
-                "action": "write_file",
-                "file_path": "references/notes.md",
-                "old_string": "a",
-                "content": "b",
-            },
-            "write_file replaces the whole file and takes no old_string. Use action patch with "
-            'file_path "references/notes.md", old_string and new_string to change one passage, '
-            "or omit old_string to write the complete file.",
-        ),
-        (
-            {"action": "create", "file_path": "references/notes.md", "content": "Notes."},
-            "create writes SKILL.md. To write references/notes.md, use action write_file with "
-            "that file_path; omit file_path to create SKILL.md.",
-        ),
-        (
-            {"action": "patch", "description": "New.", "old_string": "a", "new_string": "b"},
-            "description is used only by create and edit. To change an existing Skill's "
-            "description, patch its description line in SKILL.md.",
-        ),
-    ],
-)
-def test_calls_with_another_actions_effect_are_refused_before_writing(
-    tmp_path: Path, arguments: dict[str, object], message: str
-) -> None:
-    harness, skill_file = _patch_harness(tmp_path)
-    before = skill_file.read_bytes()
-
-    result = harness.run({"name": "demo", **arguments})
-
-    assert result == tool_failure("invalid_arguments", message, retryable=False)
-    assert skill_file.read_bytes() == before
-    assert sorted(path.name for path in skill_file.parent.iterdir()) == ["SKILL.md"]
-
-
-def test_own_scope_is_accepted_and_category_is_noted(tmp_path: Path) -> None:
-    harness = _Harness(tmp_path)
-
-    result = harness.run(
-        {
-            "action": "create",
-            "name": "demo",
-            "content": _skill_md(),
-            "scope": "private",
-            "category": "devops",
-        }
-    )
-
-    assert result["data"] == {
-        "content": "Created Skill 'demo'.\nNote: category is not used; Skills have no categories."
-    }
