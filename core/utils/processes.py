@@ -13,10 +13,12 @@ import subprocess
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, Protocol, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from core.utils.logging import get_logger
-from core.utils.workers import BoundedWorkerPool
+
+if TYPE_CHECKING:
+    from core.utils.workers import BoundedWorkerPool
 
 
 class ProcessIdentity(Protocol):
@@ -190,7 +192,13 @@ def subprocess_creation_flags(
     return flags
 
 
-_LAUNCH_WORKERS = BoundedWorkerPool(name="process-launch", max_workers=4)
+@functools.cache
+def _launch_workers() -> BoundedWorkerPool:
+    # Imported on first launch: update and install paths import this module in an
+    # interpreter without the application's third-party packages.
+    from core.utils.workers import BoundedWorkerPool
+
+    return BoundedWorkerPool(name="process-launch", max_workers=4)
 
 
 async def create_subprocess_exec(
@@ -249,7 +257,7 @@ async def _create_windows_subprocess_exec(
         return popen
 
     try:
-        popen = await _LAUNCH_WORKERS.run(launch)
+        popen = await _launch_workers().run(launch)
     except BaseException:
         # Cancellation waits for a started launch; never leave its process behind.
         for orphan in started:
