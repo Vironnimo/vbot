@@ -1064,6 +1064,16 @@ async def test_runs_without_tools_pace_wakes_until_addressed_or_quiet_ends(
         {"content": "Nothing to add"},
         {"tool_calls": [{"id": "look", "name": "swarm_state", "arguments": {}}]},
         {"content": "Checked"},
+        {
+            "tool_calls": [
+                {
+                    "id": "note",
+                    "name": "swarm_wiki",
+                    "arguments": {"action": "create", "title": "Notes", "content": "Parser"},
+                }
+            ]
+        },
+        {"content": "Written"},
         {"content": "Seen"},
     ]
     profile = await lifecycle.service.store.save_profile(
@@ -1110,15 +1120,27 @@ async def test_runs_without_tools_pace_wakes_until_addressed_or_quiet_ends(
     assert len(requests) == 2
     assert "ordinary-sentinel" in await next_request(3)
 
-    # The second Run without a Tool starts a 30 s period; a post naming the reader ends the wait.
+    # The second Run without a Tool starts a 30 s period; a post addressing the reader ends
+    # the wait, and a name without "@" does not.
     await settled(_wake_pacing.ADDRESSED_ROUTES)
-    await post(f"{reader['display_name']}, addressed-sentinel")
+    await post(f"{reader['display_name']} mentioned-sentinel")
+    await asyncio.sleep(0.1)
+    assert len(requests) == 3
+    await post(f"@{reader['display_name']} addressed-sentinel")
     assert "addressed-sentinel" in await next_request(4)
 
-    # That Run used a Tool, so the next ordinary post wakes the reader at once.
+    # That Run only read its status, so an ordinary post still waits.
+    await settled(_wake_pacing.ADDRESSED_ROUTES)
+    await post("after-read-sentinel")
+    await asyncio.sleep(0.1)
+    assert len(requests) == 5
+    await post(f"@{reader['display_name']} write-sentinel")
+    assert "write-sentinel" in await next_request(6)
+
+    # That Run changed the Wiki, so the next ordinary post wakes the reader at once.
     await settled(None)
     await post("after-tool-sentinel")
-    assert "after-tool-sentinel" in await next_request(6)
+    assert "after-tool-sentinel" in await next_request(8)
 
 
 @pytest.mark.asyncio

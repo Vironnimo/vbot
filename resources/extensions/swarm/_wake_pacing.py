@@ -1,19 +1,21 @@
 """Wake pacing: participants with nothing to do are not woken for every post.
 
-A completed Run in which the participant used no Tool shows that the posts it
-received needed nothing from it. Until its quiet period ends, only posts that
-address it and posts by the user wake it; each further Run without a Tool
-doubles the period up to its maximum, and a Run that uses a Tool ends pacing.
+A completed Run in which the participant acted on nothing shows that the posts
+it received needed nothing from it. Using no Tool, or Tools only to read the
+Board, the Wiki or the Swarm state, is not acting: a delivered opening invites a
+read, and reading it may show there is nothing to do. Until its quiet period
+ends, only posts that address it and posts by the user wake it; each further
+such Run doubles the period up to its maximum, and a Run that acts ends pacing.
 Pacing lives in memory: after a restart every participant starts unpaced.
 """
 
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
-# Seconds of quiet after the first, second, third, and every later Run without a Tool.
+# Seconds of quiet after the first, second, third, and every later Run without acting.
 QUIET_SECONDS = (30.0, 60.0, 120.0, 240.0)
 # Routes that still wake a quiet participant; the Store adds posts by the user.
 ADDRESSED_ROUTES = frozenset({"ping"})
@@ -32,17 +34,31 @@ class WakePacing:
         self._quiet_ended = quiet_ended
         self._quiet: dict[tuple[str, str], _Quiet] = {}
         self._acting: dict[tuple[str, str], str] = {}
+        self._reading: dict[tuple[str, str], set[str]] = {}
 
-    def tool_used(self, swarm_id: str, participant_id: str, run_id: str) -> None:
-        self._acting[(swarm_id, participant_id)] = run_id
+    def read_only(self, swarm_id: str, participant_id: str, call_id: str) -> None:
+        """Record a Tool call that only read; its batch is reported to ``tools_used``."""
+
+        self._reading.setdefault((swarm_id, participant_id), set()).add(call_id)
+
+    def tools_used(
+        self, swarm_id: str, participant_id: str, run_id: str, call_ids: Iterable[str]
+    ) -> None:
+        """Record a finished Tool batch; any call not recorded as read-only is acting."""
+
+        key = (swarm_id, participant_id)
+        reading = self._reading.pop(key, set())
+        if any(call_id not in reading for call_id in call_ids):
+            self._acting[key] = run_id
 
     def run_finished(
         self, swarm_id: str, participant_id: str, run_id: str, *, completed: bool
     ) -> None:
-        """Start or extend a quiet period after a completed Run that used no Tool."""
+        """Start or extend a quiet period after a completed Run that did not act."""
 
         key = (swarm_id, participant_id)
         acted = self._acting.pop(key, None) == run_id
+        self._reading.pop(key, None)
         previous = self._quiet.pop(key, None)
         if previous is not None and previous.timer is not None:
             previous.timer.cancel()
@@ -66,8 +82,9 @@ class WakePacing:
             timer = self._quiet.pop(key).timer
             if timer is not None:
                 timer.cancel()
-        for key in [key for key in self._acting if key[0] == swarm_id]:
-            del self._acting[key]
+        for table in (self._acting, self._reading):
+            for key in [key for key in table if key[0] == swarm_id]:
+                del table[key]
 
     def close(self) -> None:
         for state in self._quiet.values():
@@ -75,9 +92,10 @@ class WakePacing:
                 state.timer.cancel()
         self._quiet.clear()
         self._acting.clear()
+        self._reading.clear()
 
     def _end(self, key: tuple[str, str], state: _Quiet) -> None:
-        # The level stays, so the next Run without a Tool waits longer.
+        # The level stays, so the next Run without acting waits longer.
         if self._quiet.get(key) is state:
             state.timer = None
             self._quiet_ended(key[0])

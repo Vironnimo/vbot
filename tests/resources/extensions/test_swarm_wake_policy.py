@@ -194,13 +194,13 @@ async def test_quiet_wake_waits_for_addressed_or_user_posts_without_freezing_a_b
         assert not await quiet_wake()
         assert not (await store.list_wake_intents(sid)).entries
         await store.post(
-            sid, env.sender, text=f"{env.recipient_name}, please check", request_id="addressed"
+            sid, env.sender, text=f"@{env.recipient_name}, please check", request_id="addressed"
         )
         assert await quiet_wake()
         # The held scan froze nothing, so the Run receives both posts in one batch.
         assert await _run_wake(env, "addressed-run") == [
             "Status update",
-            f"{env.recipient_name}, please check",
+            f"@{env.recipient_name}, please check",
         ]
 
         await store.post(sid, env.sender, text="Another update", request_id="ordinary-2")
@@ -285,20 +285,50 @@ def test_a_run_that_uses_a_tool_or_does_not_complete_ends_pacing(paced) -> None:
     pacing, loop = paced.pacing, paced.loop
     pacing.run_finished("swarm", "reader", "run-1", completed=True)
     pacing.run_finished("swarm", "reader", "run-2", completed=True)
-    pacing.tool_used("swarm", "reader", "run-3")
+    pacing.tools_used("swarm", "reader", "run-3", ["call-1"])
     pacing.run_finished("swarm", "reader", "run-3", completed=True)
     assert loop.timers[-1].cancelled and pacing.wake_routes("swarm", "reader") is None
     pacing.run_finished("swarm", "reader", "run-4", completed=True)
     assert loop.timers[-1].delay == 30.0
 
     # A Tool used by an earlier Run does not count for the next one.
-    pacing.tool_used("swarm", "reader", "run-5")
+    pacing.tools_used("swarm", "reader", "run-5", ["call-2"])
     pacing.run_finished("swarm", "reader", "run-6", completed=True)
     assert loop.timers[-1].delay == 60.0
     pacing.run_finished("swarm", "reader", "run-7", completed=False)
     assert loop.timers[-1].cancelled and pacing.wake_routes("swarm", "reader") is None
     pacing.run_finished("swarm", "reader", "run-8", completed=True)
     assert loop.timers[-1].delay == 30.0
+
+
+def test_a_run_whose_tool_calls_only_read_keeps_pacing(paced) -> None:
+    pacing, loop = paced.pacing, paced.loop
+    pacing.run_finished("swarm", "reader", "run-1", completed=True)
+    pacing.read_only("swarm", "reader", "read-1")
+    pacing.read_only("swarm", "reader", "read-2")
+    pacing.tools_used("swarm", "reader", "run-2", ["read-1", "read-2"])
+    pacing.run_finished("swarm", "reader", "run-2", completed=True)
+    assert loop.timers[-1].delay == 60.0
+    assert pacing.wake_routes("swarm", "reader") == ADDRESSED_ROUTES
+
+    # One call beside the reads acts.
+    pacing.read_only("swarm", "reader", "read-3")
+    pacing.tools_used("swarm", "reader", "run-3", ["read-3", "post"])
+    pacing.run_finished("swarm", "reader", "run-3", completed=True)
+    assert loop.timers[-1].cancelled and pacing.wake_routes("swarm", "reader") is None
+
+    # A read counts only in its own batch and for its own participant.
+    pacing.run_finished("swarm", "reader", "run-4", completed=True)
+    pacing.read_only("swarm", "reader", "call")
+    pacing.tools_used("swarm", "reader", "run-5", ["call"])
+    pacing.tools_used("swarm", "reader", "run-5", ["call"])
+    pacing.run_finished("swarm", "reader", "run-5", completed=True)
+    assert loop.timers[-1].cancelled
+    pacing.run_finished("swarm", "reader", "run-6", completed=True)
+    pacing.read_only("swarm", "writer", "other")
+    pacing.tools_used("swarm", "reader", "run-7", ["other"])
+    pacing.run_finished("swarm", "reader", "run-7", completed=True)
+    assert loop.timers[-1].cancelled and pacing.wake_routes("swarm", "reader") is None
 
 
 def test_forgetting_a_swarm_or_closing_cancels_its_quiet_periods(paced) -> None:

@@ -323,7 +323,7 @@ def _addressed(
     sender_id: str,
 ) -> list[str]:
     """Participants a post concerns, in roster order: explicit recipients, the
-    participants its text names, and the author of the post it answers."""
+    participants its text names after "@", and the author of the post it answers."""
 
     concerned = {*recipients, *mentioned_participants(text, names)}
     if answered is not None:

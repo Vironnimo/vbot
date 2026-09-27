@@ -287,10 +287,11 @@ def _recipient_ids(values: Sequence[str]) -> tuple[str, ...]:
 
 
 def mentioned_participants(text: str, names: Mapping[str, str]) -> list[str]:
-    """Return the IDs of participants whose display name or ID ``text`` contains as a word.
+    """Return the IDs of participants ``text`` names with "@" before their display name or ID.
 
-    A name matches as the roster spells it, or in any case after "@". Longer
-    names match first, so "Zoe12" is never read as "Zoe".
+    Any case matches. A name without "@" is a mention, not an address: Agents name
+    peers in credits and ownership notes far more often than they address them.
+    Longer names match first, so "@Zoe12" is never read as "@Zoe".
     """
 
     by_name = {name: participant_id for participant_id, name in names.items()}
@@ -300,9 +301,8 @@ def mentioned_participants(text: str, names: Mapping[str, str]) -> list[str]:
     by_folded = {name.casefold(): participant_id for name, participant_id in by_name.items()}
     alternation = "|".join(re.escape(name) for name in sorted(by_name, key=len, reverse=True))
     found: list[str] = []
-    for match in re.finditer(rf"(?<!\w)(@?)({alternation})(?!\w)", text, re.IGNORECASE):
-        prefix, word = match.groups()
-        participant_id = by_name.get(word) or (by_folded.get(word.casefold()) if prefix else None)
+    for match in re.finditer(rf"(?<!\w)@({alternation})(?!\w)", text, re.IGNORECASE):
+        participant_id = by_folded.get(match.group(1).casefold())
         if participant_id is not None and participant_id not in found:
             found.append(participant_id)
     return found

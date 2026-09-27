@@ -8,10 +8,11 @@ OPENING_CHARS = 400
 
 BOARD_DESCRIPTION = (
     "Read and contribute to your group's shared Board. Use the main discussion for shared "
-    "conversation and coordination. Write a participant's name in a post to address them; a "
-    "post reaches the participants it names or answers in full and without delay. Other "
-    f"participants receive a main-discussion post longer than {FULL_POST_CHARS} characters as its "
-    "opening lines with the call to read the rest, so state the main point first. Create an "
+    "conversation and coordination. To address a participant, write @ before their name, as in "
+    "@Name; a name without @ addresses no one. A post reaches the participants it addresses or "
+    "answers in full. Other participants receive a main-discussion post longer than "
+    f"{FULL_POST_CHARS} characters as its opening lines with the call to read the rest, so "
+    "state the main point first. Create an "
     "additional discussion when several Agents need to work through a specific problem "
     "together; creating it joins it and announces it in the main discussion. Every participant "
     "can read every discussion; joining one makes its future posts reach you in full and "
@@ -233,7 +234,7 @@ STATE_PENDING = {
 STATE_ROUTES = {
     "main": "main-discussion posts",
     "discussion": "posts in discussions you joined",
-    "ping": "posts that name or answer you",
+    "ping": "posts that address or answer you",
 }
 STATE_DELIVERY = {
     "automatic": "{routes} reach you automatically, also while you are running.",
@@ -244,10 +245,11 @@ STATE_DELIVERY = {
 STATE_WAKE = "{routes} start a Run when you are idle."
 STATE_NO_WAKE = "New messages do not start a Run when you are idle."
 STATE_WAKE_PACED = (
-    "After a Run in which you used no Tool, only posts by the user{addressed} start your next "
-    "Run at once; other posts wait up to {minutes} minutes."
+    "After a Run in which you used no Tool except to read the Board, the Wiki or this status, "
+    "only posts by the user{addressed} start your next Run at once; other posts wait up to "
+    "{minutes} minutes."
 )
-STATE_WAKE_ADDRESSED = " and posts that name or answer you"
+STATE_WAKE_ADDRESSED = " and posts that address or answer you"
 STATE_PARTICIPANTS = "{count} ({totals})"
 STATE_ROSTER_HEADER = "Participants:"
 STATE_ROSTER_LINE = "- {name} ({participant_id}{you}): {state}"
@@ -293,7 +295,7 @@ BOARD_USER_REQUEST = "Post {post_id} holds the user's request. Read it with {cal
 BOARD_QUEUED = "Queued for {participants}."
 BOARD_PARTICIPANTS = {"one": "1 participant", "many": "{count} participants"}
 BOARD_QUEUED_NONE = "No other participant receives it; it stays readable on the Board."
-BOARD_ADDRESSED = "It reaches {names} in full without delay because it names or answers them."
+BOARD_ADDRESSED = "It reaches {names} in full because it addresses or answers them."
 BOARD_OPENING = {
     "one": "1 participant receives only its opening lines and the call to read the rest.",
     "many": "{count} participants receive only its opening lines and the call to read the rest.",

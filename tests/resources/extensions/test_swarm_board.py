@@ -329,8 +329,8 @@ async def test_registered_board_public_posts_pages_and_durable_read_receipt(boar
     )
     assert posted["ok"]
     assert posted["data"]["delivery"] == (
-        f"Queued for 2 participants. It reaches {_name(board, 1)} in full without delay "
-        "because it names or answers them."
+        f"Queued for 2 participants. It reaches {_name(board, 1)} in full because it addresses "
+        "or answers them."
     )
     replay, _ = await call(
         board,
@@ -684,13 +684,13 @@ async def test_status_delivery_policy_and_pending_messages_enable_direct_receivi
     assert visible(result) == (
         f"you: {_name(board, 0)} ({board.bindings[0].participant_id}), idle\n"
         "pending: 1 message for you; receive it with swarm_inbox.\n"
-        "delivery: Posts that name or answer you reach you automatically, also while you are "
+        "delivery: Posts that address or answer you reach you automatically, also while you are "
         "running. Posts in discussions you joined reach you automatically when you are idle. "
         "Main-discussion posts reach you only through swarm_inbox.\n"
-        "wake: Posts in discussions you joined and posts that name or answer you start a Run "
-        "when you are idle. After a Run in which you used no Tool, only posts by the user and "
-        "posts that name or answer you start your next Run at once; other posts wait up to 4 "
-        "minutes.\n"
+        "wake: Posts in discussions you joined and posts that address or answer you start a Run "
+        "when you are idle. After a Run in which you used no Tool except to read the Board, the "
+        "Wiki or this status, only posts by the user and posts that address or answer you start "
+        "your next Run at once; other posts wait up to 4 minutes.\n"
         f"participants: 3 (3 idle)\n\nParticipants:\n{roster}"
     )
     inbox, _ = await dispatch(board, {}, name="swarm_inbox")
@@ -1026,29 +1026,31 @@ async def test_board_runs_clear_intent_after_repairing_the_call_shape(board):
 
 def _reaches(*names):
     listed = " and ".join(names)
-    return f"It reaches {listed} in full without delay because it names or answers them."
+    return f"It reaches {listed} in full because it addresses or answers them."
 
 
 @pytest.mark.asyncio
-async def test_board_addresses_participants_its_text_names_or_answers(board):
+async def test_board_addresses_participants_its_text_names_after_at_or_answers(board):
     ids = _ids(board)
     one, two = _name(board, 1), _name(board, 2)
-    named, _ = await dispatch(board, {"text": f"{one}, can you check the parser?"})
+    named, _ = await dispatch(board, {"text": f"@{one}, can you check the parser?"})
     assert named["data"]["delivery"] == f"Queued for 2 participants. {_reaches(one)}"
-    handle, _ = await dispatch(board, {"text": f"thanks @{two.lower()} and {ids[1]}"})
+    handle, _ = await dispatch(board, {"text": f"thanks @{two.lower()} and @{ids[1]}"})
     assert handle["data"]["delivery"] == f"Queued for 2 participants. {_reaches(one, two)}"
-    # A name in another case without "@" is an ordinary word, not an address.
-    lowered, _ = await dispatch(board, {"text": f"{one.lower()} and {one.upper()}"})
-    assert lowered["data"]["delivery"] == "Queued for 2 participants."
+    # A name or ID without "@" credits or mentions a participant; it addresses no one.
+    mentioned, _ = await dispatch(
+        board, {"text": f"{one} fixed it, {two} and {ids[1]} confirmed; see x@{one} or @ {two}"}
+    )
+    assert mentioned["data"]["delivery"] == "Queued for 2 participants."
     answer, _ = await dispatch(
         board, {"text": "done", "reply_to": named["data"]["post_id"]}, peer=2
     )
     assert answer["data"]["delivery"] == (f"Queued for 2 participants. {_reaches(_name(board, 0))}")
     saved = {post["text"]: post["recipients"] for post in await board_posts(board)}
-    assert saved[f"{one}, can you check the parser?"] == [ids[1]]
+    assert saved[f"@{one}, can you check the parser?"] == [ids[1]]
     assert saved["done"] == [ids[0]]
     routes = {post["text"]: post.get("route_class") for post in await board_posts(board, peer=1)}
-    assert routes[f"{one}, can you check the parser?"] == "ping"
+    assert routes[f"@{one}, can you check the parser?"] == "ping"
     assert routes["done"] == "main"
     read, _ = await dispatch(board, {"action": "read"}, peer=1)
     assert f"{_name(board, 0)} (to you and {two}):\nthanks" in read["data"]["content"]

@@ -500,11 +500,10 @@ async def test_long_main_posts_reach_unaddressed_readers_as_their_opening(board)
         "Queued for 2 participants. 2 participants receive only its opening lines and the call "
         "to read the rest."
     )
-    addressed, _ = await dispatch(board, {"text": f"{reader}: {long_text}"})
+    addressed, _ = await dispatch(board, {"text": f"@{reader}: {long_text}"})
     assert addressed["data"]["delivery"] == (
-        f"Queued for 2 participants. It reaches {reader} in full without delay because it names "
-        "or answers them. 1 participant receives only its opening lines and the call to read the "
-        "rest."
+        f"Queued for 2 participants. It reaches {reader} in full because it addresses or answers "
+        "them. 1 participant receives only its opening lines and the call to read the rest."
     )
     human = await board.store.post_human(sid, text=long_text, request_id="human")
     opened = await board.store.create_discussion(
@@ -530,7 +529,7 @@ async def test_long_main_posts_reach_unaddressed_readers_as_their_opening(board)
     assert delivered[post_id] == f"{start} ...\n" + POST_SHORTENED.format(
         count=len(long_text) - len(start), call=call
     )
-    assert delivered[addressed["data"]["post_id"]] == f"{reader}: {long_text}"
+    assert delivered[addressed["data"]["post_id"]] == f"@{reader}: {long_text}"
     assert delivered[human["post_id"]] == long_text
     assert delivered[discussion["post_id"]] == long_text
     # The call named in the delivery returns the whole post.
