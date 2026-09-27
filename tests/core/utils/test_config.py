@@ -3,16 +3,22 @@
 import json
 import os
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from core.utils.config import (
+    DEFAULT_PORT,
     Config,
     _find_worktree_file_from_cwd,
     _resolve_default_data_dir,
     parse_env_lines,
     read_env_file,
+    resolve_port,
+    resolve_server_bind,
 )
+
+_PORT_SETTINGS = {"format_version": 1, "server_port": 8500}
 
 
 def test_parse_env_lines_keeps_values_conservative() -> None:
@@ -211,3 +217,61 @@ def test_an_unusable_worktree_file_falls_to_the_default(
         assert _resolve_default_data_dir() == Path.home() / ".vbot"
 
     assert (str(marker) in caplog.text) is warned
+
+
+@pytest.mark.parametrize(
+    ("settings", "environment", "explicit_port", "port", "source"),
+    [
+        (_PORT_SETTINGS, {"VBOT_SERVER_PORT": "8600"}, 8700, 8700, "cli"),
+        (_PORT_SETTINGS, {"VBOT_SERVER_PORT": "8600"}, None, 8600, "VBOT_SERVER_PORT"),
+        (_PORT_SETTINGS, {}, None, 8500, "settings.server_port"),
+        (
+            {"format_version": 1, "SERVER_PORT": 8700},
+            {"PORT": "8600", "SERVER_PORT": "8800"},
+            None,
+            8700,
+            "settings.SERVER_PORT",
+        ),
+        (
+            {**_PORT_SETTINGS, "debug": {"enabled": "yes"}},
+            {},
+            None,
+            8500,
+            "settings.server_port",
+        ),
+        (None, {"PORT": "8600", "SERVER_PORT": "8700"}, None, DEFAULT_PORT, "default"),
+        ("{", {}, None, DEFAULT_PORT, "default"),
+    ],
+    ids=[
+        "cli-first",
+        "environment-before-settings",
+        "settings",
+        "settings-uppercase-key-ignores-ambient-environment",
+        "valid-port-next-to-invalid-setting",
+        "default-ignores-ambient-environment",
+        "default-for-unreadable-settings",
+    ],
+)
+def test_server_bind_resolves_cli_then_environment_then_settings_then_default(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    settings: dict[str, Any] | str | None,
+    environment: dict[str, str],
+    explicit_port: int | None,
+    port: int,
+    source: str,
+) -> None:
+    monkeypatch.delenv("VBOT_SERVER_PORT", raising=False)
+    for name, value in environment.items():
+        monkeypatch.setenv(name, value)
+    if settings is not None:
+        text = settings if isinstance(settings, str) else json.dumps(settings)
+        (tmp_path / "settings.json").write_text(text, encoding="utf-8")
+    config = Config(data_dir=tmp_path)
+
+    assert resolve_server_bind(config, host="0.0.0.0", explicit_port=explicit_port) == {
+        "listen_host": "0.0.0.0",
+        "listen_port": port,
+        "port_source": source,
+    }
+    assert resolve_port(config, explicit_port) == port

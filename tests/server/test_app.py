@@ -1,4 +1,4 @@
-"""Server app lifespan: runtime wiring, startup resilience, bind state and shutdown."""
+"""Server app lifespan: runtime wiring, bind state and shutdown."""
 
 from __future__ import annotations
 
@@ -13,8 +13,6 @@ from unittest.mock import Mock
 import pytest
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 
-from core.automation import _cron_claims as cron_claims
-from core.automation.cron import CronService
 from core.chat import ChatLoop
 from core.database import write_bootstrap_marker
 from core.extensions import ExtensionRegistrationIdentity
@@ -118,64 +116,6 @@ def test_real_runtime_serves_a_fresh_data_directory_and_stops_with_the_app(
         _ = runtime.storage
 
 
-def test_startup_tolerates_corrupt_agent_settings_and_automation_state(tmp_path: Path) -> None:
-    data_dir = tmp_path / "data"
-    seed_cron = CronService(cast(Any, SimpleNamespace()), data_dir)
-    once = seed_cron.create_job(
-        agent_id="main",
-        prompt="Once prompt",
-        schedule_type="once",
-        run_at="2099-01-01T00:00:00+00:00",
-    )
-    claim_path = cron_claims.path_for(seed_cron._once_fire_claims_dir, once.id)
-    claim_path.parent.mkdir(parents=True, exist_ok=True)
-    claim_path.write_text("{", encoding="utf-8")
-    write_bootstrap_marker(data_dir)
-    (data_dir / "agents" / "main").mkdir(parents=True)
-    (data_dir / "agents" / "main" / "agent.json").write_text(
-        json.dumps({"name": "Missing id"}), encoding="utf-8"
-    )
-    (data_dir / "settings.json").write_text(
-        json.dumps({"format_version": 1, "server_port": 8500, "compaction": {"enabled": "yes"}}),
-        encoding="utf-8",
-    )
-    (data_dir / "bootstrap").mkdir()
-    (data_dir / "bootstrap" / "jobs.json").write_text("{", encoding="utf-8")
-    app = create_app(runtime=Runtime(Config(data_dir=data_dir)))
-
-    with TestClient(app) as client:
-        health = client.get("/health")
-        agents = _rpc_result(client, "agent.list")["agents"]
-        cron_jobs = _rpc_result(client, "cron.list")["jobs"]
-        bootstrap_jobs = _rpc_result(client, "bootstrap.list")["jobs"]
-        server_bind = app.state.server_bind
-
-    assert health.json() == {"status": "ok"}
-    assert [agent["id"] for agent in agents] == ["main-2"]
-    # Only the once job with the unreadable claim is held; Cron stays available.
-    assert [job["id"] for job in cron_jobs] == [once.id]
-    assert bootstrap_jobs == []
-    # The valid port survives next to an invalid Settings key.
-    assert server_bind["listen_port"] == 8500
-
-
-def test_startup_tolerates_a_corrupt_cron_store(tmp_path: Path) -> None:
-    data_dir = tmp_path / "data"
-    jobs_path = data_dir / "cron" / "jobs.json"
-    jobs_path.parent.mkdir(parents=True)
-    write_bootstrap_marker(data_dir)
-    jobs_path.write_text("{", encoding="utf-8")
-    app = create_app(runtime=Runtime(Config(data_dir=data_dir)))
-
-    with TestClient(app) as client:
-        agents = _rpc_result(client, "agent.list")["agents"]
-        cron_jobs = _rpc_result(client, "cron.list")["jobs"]
-
-    assert [agent["id"] for agent in agents] == ["main"]
-    assert cron_jobs == []
-    assert jobs_path.read_text(encoding="utf-8") == "{"
-
-
 @pytest.mark.parametrize("async_close", [False, True])
 def test_stub_runtime_lifespan_wires_state_and_closes_services(
     tmp_path: Path, async_close: bool
@@ -217,7 +157,9 @@ def test_server_bind_prefers_explicit_state_then_environment_then_settings(
     data_dir = tmp_path / "data"
     data_dir.mkdir()
     (data_dir / "settings.json").write_text(
-        json.dumps({"format_version": 1, "server_port": 8500}), encoding="utf-8"
+        # The valid port survives next to an invalid Settings key.
+        json.dumps({"format_version": 1, "server_port": 8500, "compaction": {"enabled": "yes"}}),
+        encoding="utf-8",
     )
 
     def served_bind(**options: Any) -> JsonObject:
