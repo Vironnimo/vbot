@@ -295,9 +295,6 @@ async def test_auto_compaction_preserves_active_tool_continuation_reasoning(
             self.request_messages: list[JsonObject] = []
             self.checks = 0
 
-        def estimate_messages_tokens(self, _messages: list[JsonObject]) -> int:
-            return 90
-
         def has_new_compactable_context(self, *_args: Any, **_kwargs: Any) -> bool:
             return True
 
