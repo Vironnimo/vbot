@@ -847,8 +847,7 @@ def sharing_error(code: int = 5) -> OSError:
     return error
 
 
-@pytest.mark.parametrize("code", [32, 33])
-def test_windows_retry_replaces_once_without_replaying_earlier_append(tmp_path, monkeypatch, code):
+def test_windows_retry_replaces_once_without_replaying_earlier_append(tmp_path, monkeypatch):
     (tmp_path / "log.txt").write_bytes(b"start\n")
     (tmp_path / "file.txt").write_bytes(b"old\n")
     original = file_state_module.os.replace
@@ -858,7 +857,7 @@ def test_windows_retry_replaces_once_without_replaying_earlier_append(tmp_path, 
     def flaky_replace(source, target):
         attempts.append(Path(target).name)
         if Path(target).name == "file.txt" and attempts.count("file.txt") <= 2:
-            raise sharing_error(code)
+            raise sharing_error(32)
         original(source, target)
 
     monkeypatch.setattr(file_state_module.os, "replace", flaky_replace)

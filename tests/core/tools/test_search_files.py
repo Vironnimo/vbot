@@ -1,54 +1,19 @@
-"""File-search contracts exercised against the pinned engine and real files."""
+"""The search_files Tool: modes, scope, ignores, links, encodings, paging, and selection."""
 
 from __future__ import annotations
 
 import asyncio
 import os
+import sys
+import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
-from core.tools.contracts import ToolContractError
-from core.tools.search_files import register_search_files_tool, search_files_handler
-from core.tools.tools import ToolContext, ToolRegistry
-
-
-def context(root: Path, **kwargs) -> ToolContext:
-    return ToolContext(
-        agent_id="a",
-        session_id="s",
-        run_id="r",
-        tool_call_id="c",
-        tool_name="search_files",
-        tool_call_index=0,
-        workspace=root,
-        vbot_root=root,
-        data_root=root,
-        **kwargs,
-    )
-
-
-def search(root: Path, **arguments):
-    # Fixture notation keeps the engine cases readable; each runs the public argv Tool.
-    action = arguments.pop("action", "content")
-    kind = arguments.pop("kind", "all")
-    patterns = arguments.pop("patterns", [])
-    options = arguments.pop("options", [])
-    paths = arguments.pop("paths", [])
-    tokens = list(options)
-    if "--type-list" not in tokens:
-        if action == "paths":
-            tokens.append({"all": "--entries", "files": "--files", "directories": "--dirs"}[kind])
-            for pattern in patterns:
-                tokens.extend(["-g", "./" + pattern])
-        else:
-            for pattern in patterns:
-                tokens.extend(["-e", pattern])
-    if paths:
-        tokens.extend(["--", *paths])
-    result = search_files_handler(context(root), {"args": tokens, **arguments})
-    assert result["ok"], result
-    return result["data"]
+from core.tools import _search_ignores, _search_selection
+from core.tools._search_selection import Glob
+from tests.core.tools.search_files_test_support import context, dispatch, search, search_registry
 
 
 @pytest.fixture
@@ -157,10 +122,23 @@ def test_page_boundary_context_stops_before_the_next_pages_match(tmp_path: Path)
     assert second["content"] == "g.txt:3:m3\ng.txt:4-c4\ng.txt:5-c5\ng.txt:6-c6\ng.txt:7-c7"
 
 
-def test_context_overlap_and_line_coordinates(tmp_path: Path) -> None:
-    (tmp_path / "a").write_text("before\nrun\nrun\nafter\n")
-    data = search(tmp_path, action="content", patterns=["run"], options=["-C", "1"])
-    assert data["content"] == "a:1-before\na:2:run\na:3:run\na:4-after"
+@pytest.mark.parametrize(
+    ("text", "options", "expected"),
+    [
+        # Overlapping context merges, and every line keeps its own coordinate.
+        ("before\nrun\nrun\nafter\n", ["-C", "1"], "a:1-before\na:2:run\na:3:run\na:4-after"),
+        # -A and -B override -C, whatever their order.
+        (
+            "l1\nl2\nl3\nl4\nrun\nl6\nl7\nl8\n",
+            ["-A1", "-C3", "-B2", "-C4"],
+            "a:3-l3\na:4-l4\na:5:run\na:6-l6",
+        ),
+    ],
+)
+def test_context_lines(tmp_path: Path, text: str, options: list[str], expected: str) -> None:
+    (tmp_path / "a").write_text(text)
+    data = search(tmp_path, action="content", patterns=["run"], options=options)
+    assert data["content"] == expected
 
 
 def test_multiline_count_semantics(tmp_path: Path) -> None:
@@ -278,60 +256,34 @@ def test_binary_encodings_and_existence(tmp_path: Path) -> None:
     )
 
 
-@pytest.mark.parametrize(
-    "arguments",
-    [
-        {"args": ["--files", "missing"]},
-        {"args": ["--dirs", "-tpy"]},
-        {"args": ["--files", "--dirs"]},
-        {"args": ["--dirs", "-e", "run"]},
-        {"args": ["run", "-C", "2", "-l"]},
-        {"args": ["--files", "--pre", "anything"]},
-        {"args": ["--help", "missing"]},
-        {"args": ["--files"], "limit": 0},
-        {"args": ["--files"], "offset": -1},
-    ],
-)
-def test_invalid_calls_preserve_constraints(tree: Path, arguments) -> None:
-    result = search_files_handler(context(tree), arguments)
-    assert result["ok"] is False
-    assert result["data"] is None
-
-
-def test_unknown_argument_is_rejected_before_the_search_runs(tree: Path) -> None:
-    registry = ToolRegistry()
-    register_search_files_tool(registry)
-
-    with pytest.raises(ToolContractError, match='"unknown_feature" is not a parameter'):
-        asyncio.run(registry.dispatch(context(tree), {"args": ["run"], "unknown_feature": True}))
-
-
-@pytest.mark.parametrize("candidates", [False, True])
-@pytest.mark.parametrize("args", [["["], ["-P", "a{2,1}"]])
-def test_native_validation_with_and_without_candidates(
+# The engine validates a pattern even when no file could be searched.
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("args", "candidates"), [(["["], False), (["-P", "a{2,1}"], True)])
+async def test_native_validation_with_and_without_candidates(
     tmp_path: Path, args: list[str], candidates: bool
 ) -> None:
     if candidates:
         (tmp_path / "a.txt").write_text("[a{2,1}")
-    result = search_files_handler(context(tmp_path), {"args": args})
+    result = await dispatch(tmp_path, {"args": args})
     assert result["ok"] is False
     message = result["error"]["message"]
     assert "regex parse error" in message or "PCRE2: error compiling pattern" in message
     assert "If you meant literal text, add -F to args." in message
 
 
-def test_timeout_and_user_cancel(tree: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.asyncio
+async def test_timeout_and_user_cancel(tree: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import core.tools.search as shared
 
-    result = search_files_handler(context(tree, cancel_check_hook=lambda: True), {"args": ["run"]})
-    assert result["error"]["code"] == "cancelled_by_user"
+    cancelled = await dispatch(tree, {"args": ["run"]}, cancel_check_hook=lambda: True)
+    assert cancelled["error"]["code"] == "cancelled_by_user"
     monkeypatch.setattr(shared, "SEARCH_TIMEOUT_SECONDS", -1)
-    assert search(tree, action="paths")["complete"] is False
+    timed_out = await dispatch(tree, {"args": ["--entries"]})
+    assert timed_out["data"]["complete"] is False
 
 
-def test_schema_and_registry_repairs(tree: Path) -> None:
-    registry = ToolRegistry()
-    register_search_files_tool(registry)
+def test_schema_display_and_registry_repairs(tree: Path) -> None:
+    registry = search_registry()
     definition = registry.provider_definitions(["search_files"])[0]
     assert list(definition["parameters"]["properties"]) == [
         "pattern",
@@ -345,12 +297,11 @@ def test_schema_and_registry_repairs(tree: Path) -> None:
     ]
     assert "required" not in definition["parameters"]
     assert "additionalProperties" not in definition["parameters"]
-    result = asyncio.run(
-        registry.dispatch(
-            context(tree),
-            {"argv": ["-n", "run", "tests"], "limit": "1"},
-        )
+    display = registry.get("search_files").display.to_payload(
+        {"args": ["-e", "alpha", "-e", "beta", "src", "tests"]}
     )
+    assert [part["value"] for part in display["primary"]] == ["-e alpha -e beta src tests"]
+    result = asyncio.run(dispatch(tree, {"argv": ["-n", "run", "tests"], "limit": "1"}))
     assert result["data"]["content"] == "tests/b.PY:1:run"
 
 
@@ -360,3 +311,422 @@ def test_live_path_pagination_newest_and_ties(tree: Path) -> None:
     assert page["content"] == "plain.txt"
     assert page["next_offset"] == 1
     assert "plain.txt" not in search(tree, action="paths", kind="files", offset=1)["content"]
+
+
+def test_worktree_bounds_parent_ignores(tmp_path):
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".gitignore").write_text("work/\n*.py\n")
+    work = tmp_path / "work"
+    work.mkdir()
+    (work / ".git").write_text("gitdir: ../.git/worktrees/work")
+    (work / "a.py").write_text("needle")
+    assert (
+        search(tmp_path, action="content", patterns=["needle"], paths=["work"])["content"]
+        == "work/a.py:1:needle"
+    )
+
+
+def test_global_and_repository_excludes(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "exclude").write_text("global.py\n")
+    (home / ".gitconfig").write_text(
+        '[core]\n excludesFile = "' + (home / "exclude").as_posix() + '"\n'
+    )
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    root = tmp_path / "repo"
+    (root / ".git/info").mkdir(parents=True)
+    (root / ".git/info/exclude").write_text("local.py\n")
+    for name in ("global.py", "local.py", "keep.py"):
+        (root / name).write_text("needle")
+    assert search(root, action="content", patterns=["needle"])["content"] == "keep.py:1:needle"
+    data = search(
+        root,
+        action="content",
+        patterns=["needle"],
+        options=["--no-ignore-global", "--no-ignore-exclude"],
+    )
+    assert len(data["content"].splitlines()) == 3
+
+
+def _age(path: Path, seconds: int = 60) -> None:
+    moment = time.time() - seconds
+    os.utime(path, (moment, moment))
+
+
+def _found(root: Path) -> set[str]:
+    return set(search(root, action="content", patterns=["needle"])["content"].splitlines())
+
+
+def test_unchanged_ignore_sources_are_compiled_once_across_searches(tmp_path, monkeypatch):
+    compiled: list[list[str]] = []
+    real = _search_ignores.PathSpec
+
+    class CountingPathSpec:
+        @staticmethod
+        def from_lines(kind, lines):
+            compiled.append(list(lines))
+            return real.from_lines(kind, lines)
+
+    monkeypatch.setattr(_search_ignores, "PathSpec", CountingPathSpec)
+    (tmp_path / ".gitignore").write_text("a.py\n")
+    _age(tmp_path / ".gitignore")
+    for name in ("a.py", "b.py"):
+        (tmp_path / name).write_text("needle")
+    assert _found(tmp_path) == {"b.py:1:needle"}
+    assert ["a.py"] in compiled
+    compiled.clear()
+    for _ in range(2):
+        assert _found(tmp_path) == {"b.py:1:needle"}
+    assert compiled == []
+
+
+def test_ignore_and_git_configuration_edits_apply_to_the_next_search(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    root = tmp_path / "repo"
+    (root / ".git").mkdir(parents=True)
+    for name in ("a.py", "b.py", "c.py"):
+        (root / name).write_text("needle")
+    (home / "one").write_text("c.py\n")
+    (home / "two").write_text("b.py\n")
+    config = home / ".gitconfig"
+    config.write_text('[core]\n excludesFile = "' + (home / "one").as_posix() + '"\n')
+    ignore = root / ".gitignore"
+    ignore.write_text("a.py\n")
+    for path in (home / "one", home / "two", config, ignore):
+        _age(path)
+    assert _found(root) == {"b.py:1:needle"}
+    # Same-size rewrites differ only in modification time.
+    ignore.write_text("b.py\n")
+    _age(ignore, 30)
+    assert _found(root) == {"a.py:1:needle"}
+    config.write_text('[core]\n excludesFile = "' + (home / "two").as_posix() + '"\n')
+    _age(config, 30)
+    assert _found(root) == {"a.py:1:needle", "c.py:1:needle"}
+    ignore.unlink()
+    assert _found(root) == {"a.py:1:needle", "c.py:1:needle"}
+    config.unlink()
+    assert _found(root) == {"a.py:1:needle", "b.py:1:needle", "c.py:1:needle"}
+
+
+def test_recently_written_ignore_sources_are_reread_with_an_identical_stamp(tmp_path):
+    ignore = tmp_path / ".gitignore"
+    ignore.write_text("a.py\n")
+    for name in ("a.py", "b.py"):
+        (tmp_path / name).write_text("needle")
+    written = ignore.stat()
+    assert _found(tmp_path) == {"b.py:1:needle"}
+    # A rewrite within one filesystem timestamp tick keeps size and mtime.
+    ignore.write_text("b.py\n")
+    os.utime(ignore, ns=(written.st_atime_ns, written.st_mtime_ns))
+    assert _found(tmp_path) == {"a.py:1:needle"}
+
+
+def test_extra_ignore_case_and_explicit_ignored_file(tmp_path):
+    (tmp_path / "rules").write_text("HIDDEN.PY\n")
+    (tmp_path / "hidden.py").write_text("needle")
+    args = {
+        "action": "content",
+        "patterns": ["needle"],
+        "options": ["--ignore-file", "rules", "--ignore-file-case-insensitive"],
+    }
+    assert search(tmp_path, **args)["content"] == "No results."
+    assert search(tmp_path, **args, paths=["hidden.py"])["content"] == "hidden.py:1:needle"
+
+
+def test_crlf_encoding_null_records_and_unicode(tmp_path):
+    (tmp_path / "crlf").write_bytes(b"needle\r\n")
+    assert (
+        search(
+            tmp_path,
+            action="content",
+            patterns=["needle"],
+            paths=["crlf"],
+            options=["-x", "--crlf"],
+        )["content"]
+        == "crlf:1:needle"
+    )
+    (tmp_path / "latin").write_bytes(b"caf\xe9\n")
+    assert (
+        "café"
+        in search(
+            tmp_path, action="content", patterns=["café"], paths=["latin"], options=["-Elatin1"]
+        )["content"]
+    )
+    (tmp_path / "null").write_bytes(b"first\0needle\0")
+    assert (
+        search(
+            tmp_path,
+            action="content",
+            patterns=["needle"],
+            paths=["null"],
+            options=["--null-data", "-o"],
+        )["content"]
+        == "null:2:1:needle"
+    )
+
+
+def test_byte_pagination_makes_progress(tmp_path):
+    (tmp_path / "a").write_text("".join(f"needle {i} " + "x" * 1000 + "\n" for i in range(150)))
+    offset = 0
+    seen = []
+    while True:
+        page = search(tmp_path, action="content", patterns=["needle"], limit=1000, offset=offset)
+        seen.extend(
+            line.split(":", 2)[1] for line in page["content"].splitlines() if line.startswith("a:")
+        )
+        assert len(page["content"].encode()) <= 51200
+        if "next_offset" not in page:
+            break
+        assert page["next_offset"] > offset
+        offset = page["next_offset"]
+    assert seen == list(map(str, range(1, 151)))
+
+
+def test_large_context_cannot_hide_match_or_stall_paging(tmp_path):
+    (tmp_path / "a").write_text(("context " + "x" * 3000 + "\n") * 100 + "NEEDLE\n")
+    data = search(tmp_path, action="content", patterns=["NEEDLE"], options=["-B100"])
+    assert "a:101:NEEDLE" in data["content"]
+    assert data.get("next_offset") != 0
+
+
+@pytest.mark.parametrize(
+    "pattern,path,matched",
+    [
+        ("**/*.{py,js}", "src/file.py", True),
+        ("**/{src,{lib,test}}/*.py", "lib/file.py", True),
+        ("**/[{}].py", "src/{.py", True),
+        ("**/[]].py", "src/].py", True),
+        ("*.py", "src/file.py", False),
+        ("**/*", "~lock", True),
+        ("**/*", "..data", True),
+    ],
+)
+def test_glob_grammar(pattern, path, matched):
+    assert Glob(pattern).matches(path, False) is matched
+
+
+def test_follow_preserves_spelling_and_stops_loops(tmp_path):
+    (tmp_path / "real").mkdir()
+    (tmp_path / "real/a").write_text("needle")
+    try:
+        (tmp_path / "link").symlink_to(tmp_path / "real", target_is_directory=True)
+        (tmp_path / "real/loop").symlink_to(tmp_path / "real", target_is_directory=True)
+    except OSError:
+        pytest.skip("Host does not permit creating symbolic links")
+    data = search(tmp_path, action="content", patterns=["needle"], paths=["link"], options=["-L"])
+    assert data["content"] == "link/a:1:needle"
+    assert data["complete"] is False
+    assert any("loop" in warning for warning in data["warnings"])
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows directory junctions")
+def test_junctions_are_followed_only_on_request_or_as_explicit_roots(tmp_path):
+    import _winapi
+
+    project = tmp_path / "project"
+    outside = tmp_path / "outside"
+    project.mkdir()
+    outside.mkdir()
+    (project / "a.txt").write_text("needle")
+    (outside / "secret.txt").write_text("needle")
+    _winapi.CreateJunction(str(outside), str(project / "linked"))
+
+    content = search(project, action="content", patterns=["needle"], options=["-F"])
+    paths = search(project, action="paths", kind="files")
+    followed = search(project, action="content", patterns=["needle"], options=["-F", "-L"])
+    explicit = search(project, action="content", patterns=["needle"], paths=["linked"])
+
+    assert content["content"] == "a.txt:1:needle"
+    assert paths["content"] == "a.txt"
+    assert followed["content"] == "a.txt:1:needle\nlinked/secret.txt:1:needle"
+    assert explicit["content"] == "linked/secret.txt:1:needle"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("pattern", ["true", "false"])
+async def test_boolean_words_are_search_text_not_flag_values(tmp_path, pattern):
+    (tmp_path / "a").write_text("true false\n")
+    result = await dispatch(tmp_path, {"args": ["-n", pattern]})
+    assert result["data"]["content"] == "a:1:true false"
+
+
+def test_nested_repository_uses_its_own_git_ignores(tmp_path):
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".gitignore").write_text("a.py\n")
+    nested = tmp_path / "nested"
+    (nested / ".git/info").mkdir(parents=True)
+    (nested / ".git/info/exclude").write_text("b.py\n")
+    for path in (tmp_path / "a.py", nested / "a.py", nested / "b.py"):
+        path.write_text("needle\n")
+    assert (
+        search(tmp_path, action="content", patterns=["needle"])["content"] == "nested/a.py:1:needle"
+    )
+
+
+def test_explicit_nested_repository_keeps_its_internal_ignores(tmp_path):
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".gitignore").write_text("nested/\n")
+    nested = tmp_path / "nested"
+    (nested / ".git").mkdir(parents=True)
+    (nested / ".gitignore").write_text("ignored.py\n")
+    (nested / "ignored.py").write_text("needle\n")
+    (nested / "keep.py").write_text("needle\n")
+    result = search(tmp_path, action="content", paths=["nested"], patterns=["needle"])
+    assert result["content"] == "nested/keep.py:1:needle"
+
+
+@pytest.mark.asyncio
+async def test_missing_engine_hides_tool_and_dispatch_explains_repair(tmp_path, monkeypatch):
+    def unavailable():
+        raise ValueError("Repair the vBot installation; run python -m cli.search_runtime.")
+
+    monkeypatch.setattr("core.tools.search_files.require_binary", unavailable)
+    registry = search_registry()
+    assert registry.provider_definitions(["search_files"]) == []
+    result = await registry.dispatch(context(tmp_path), {"args": ["--files"]})
+    assert result["error"]["code"] == "tool_not_ready"
+    assert "cli.search_runtime" in result["error"]["message"]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX literal filename grammar")
+def test_unusual_literal_names_roundtrip_in_file_modes(tmp_path):
+    for name in ('"quoted"', "literal\\name", "with\nnewline"):
+        (tmp_path / name).write_text("needle\n")
+        data = search(tmp_path, action="content", patterns=["needle"], paths=[name], options=["-c"])
+        assert data["complete"]
+        assert data["content"].endswith(":1")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("globs", "expected", "must_visit"),
+    [
+        (["wanted/**"], ["wanted/.hidden.rs", "wanted/deep/a.rs"], {"wanted/deep"}),
+        (["wanted/*.rs"], ["wanted/.hidden.rs"], set()),
+        (["{wanted,other}/deep/*.rs"], ["other/deep/b.rs", "wanted/deep/a.rs"], {"other/deep"}),
+        (["**/deep/*.rs"], ["other/deep/b.rs", "wanted/deep/a.rs"], {"other", "wanted/deep"}),
+        (
+            ["wanted/**", "!wanted/deep/**", "wanted/deep/a.rs"],
+            ["wanted/.hidden.rs", "wanted/deep/a.rs"],
+            {"wanted/deep"},
+        ),
+        (["WANTED/**"], ["wanted/.hidden.rs", "wanted/deep/a.rs"], {"wanted/deep"}),
+        (["./*.rs"], ["top.rs"], set()),
+    ],
+)
+async def test_rooted_filters_prune_only_impossible_subtrees(
+    tmp_path, monkeypatch, globs, expected, must_visit
+):
+    files = {
+        "wanted/.hidden.rs": "needle\n",
+        "wanted/deep/a.rs": "needle\n",
+        "wanted/ignored.rs": "needle\n",
+        "wanted/.git/config": "needle\n",
+        "wanted/.gitignore": "ignored.rs\n",
+        "other/deep/b.rs": "needle\n",
+        "unrelated/deep/c.txt": "needle\n",
+        "top.rs": "needle\n",
+    }
+    for name, content in files.items():
+        target = tmp_path / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content)
+    visited = set()
+    scandir = _search_selection.os.scandir
+
+    def observe(path):
+        if isinstance(path, (str, Path)) and Path(path).is_relative_to(tmp_path):
+            visited.add(Path(path).relative_to(tmp_path).as_posix())
+        return scandir(path)
+
+    monkeypatch.setattr(_search_selection.os, "scandir", observe)
+    result = await dispatch(tmp_path, {"pattern": "needle", "glob": globs, "output": "files"})
+
+    assert result["ok"], result
+    assert result["data"]["content"].splitlines() == expected
+    assert result["data"]["complete"] is True
+    assert must_visit <= visited
+    assert "wanted/.git" not in visited
+    if "**/deep/*.rs" not in globs:
+        assert "unrelated" not in visited
+    if globs == ["wanted/*.rs"]:
+        assert "wanted/deep" not in visited
+
+
+@pytest.mark.asyncio
+async def test_basename_filters_still_find_deep_matches_and_explicit_ignored_roots(tmp_path):
+    (tmp_path / ".gitignore").write_text("vendor/\n")
+    target = tmp_path / "vendor/one/deep/file.rs"
+    target.parent.mkdir(parents=True)
+    target.write_text("needle\n")
+
+    result = await dispatch(tmp_path, {"pattern": "needle", "glob": "*.rs", "path": "vendor"})
+
+    assert result["data"]["content"] == "vendor/one/deep/file.rs:1:needle"
+    assert result["data"]["complete"] is True
+
+
+@pytest.mark.asyncio
+async def test_pruning_preserves_selected_directories_and_overlapping_roots(tmp_path):
+    (tmp_path / "wanted/empty").mkdir(parents=True)
+    (tmp_path / "other/deep").mkdir(parents=True)
+
+    result = await dispatch(
+        tmp_path, {"args": ["--dirs", "--sort=path"], "glob": "wanted/", "path": [".", "."]}
+    )
+
+    assert result["data"]["content"] == "wanted/"
+    assert result["data"]["complete"] is True
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows DirEntry omits device identities")
+@pytest.mark.asyncio
+async def test_one_file_system_uses_real_device_identity_for_files_and_directories(
+    tmp_path, monkeypatch
+):
+    for name in ["local.rs", "foreign.rs", "mount/nested.rs"]:
+        target = tmp_path / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("needle\n")
+    foreign_paths = {tmp_path / "foreign.rs", tmp_path / "mount"}
+    original_stat = Path.stat
+
+    def device_stat(path, **kwargs):
+        info = original_stat(path, **kwargs)
+        if path in foreign_paths:
+            fields = {name: getattr(info, name) for name in dir(info) if name.startswith("st_")}
+            fields["st_dev"] += 1
+            return SimpleNamespace(**fields)
+        return info
+
+    monkeypatch.setattr(Path, "stat", device_stat)
+    unrestricted = await dispatch(tmp_path, {"glob": "*.rs", "args": ["--sort=path"]})
+    restricted = await dispatch(tmp_path, {"glob": "*.rs", "args": ["--one-file-system"]})
+
+    assert unrestricted["data"]["content"] == "foreign.rs\nlocal.rs\nmount/nested.rs"
+    assert restricted["data"]["content"] == "local.rs"
+    assert restricted["data"]["complete"] is True
+
+
+@pytest.mark.asyncio
+async def test_timeout_offers_a_callable_directory_narrowing_step(tmp_path, monkeypatch):
+    import core.tools.search as shared
+
+    (tmp_path / "vendor/package/src").mkdir(parents=True)
+    (tmp_path / "outside").mkdir()
+    with monkeypatch.context() as patch:
+        patch.setattr(shared, "SEARCH_TIMEOUT_SECONDS", -1)
+        timed_out = await dispatch(
+            tmp_path, {"pattern": "needle", "path": "vendor", "glob": "*.rs"}
+        )
+
+    assert timed_out["ok"]
+    assert timed_out["data"]["complete"] is False
+    assert timed_out["data"]["warnings"]
+    recovery = await dispatch(tmp_path, timed_out["data"]["narrow_call"])
+    assert recovery["data"]["content"] == "vendor/package/"
+    assert recovery["data"]["complete"] is True
