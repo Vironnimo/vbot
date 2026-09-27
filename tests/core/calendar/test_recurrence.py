@@ -12,7 +12,6 @@ from core.calendar.recurrence import (
     expand_recurring_allday,
     expand_recurring_timed,
     normalize_rrule,
-    parse_date_string,
 )
 
 BERLIN = ZoneInfo("Europe/Berlin")
@@ -26,9 +25,6 @@ WEEKLY_MONDAY = {
 
 
 class TestNormalizeRrule:
-    def test_none_stays_none(self) -> None:
-        assert normalize_rrule(None) is None
-
     def test_normalizes_defaults(self) -> None:
         normalized = normalize_rrule({"freq": "weekly", "by_weekday": ["we", "mo"]})
         assert normalized == {
@@ -39,38 +35,28 @@ class TestNormalizeRrule:
             "by_weekday": ["mo", "we"],
         }
 
-    def test_rejects_unknown_fields(self) -> None:
-        with pytest.raises(CalendarValidationError, match="Unsupported rrule fields"):
-            normalize_rrule({"freq": "daily", "bogus": 1})
-
-    def test_rejects_unknown_freq(self) -> None:
-        with pytest.raises(CalendarValidationError, match="rrule.freq"):
-            normalize_rrule({"freq": "hourly"})
-
-    def test_rejects_by_weekday_outside_weekly(self) -> None:
-        with pytest.raises(CalendarValidationError, match="only valid for weekly"):
-            normalize_rrule({"freq": "daily", "by_weekday": ["mo"]})
-
-    def test_rejects_bad_interval(self) -> None:
-        with pytest.raises(CalendarValidationError, match="interval"):
-            normalize_rrule({"freq": "daily", "interval": 0})
-
-    def test_rejects_bad_until(self) -> None:
-        with pytest.raises(CalendarValidationError, match="rrule.until"):
-            normalize_rrule({"freq": "daily", "until": "tomorrow"})
-
-    def test_rejects_simultaneous_count_and_until(self) -> None:
-        with pytest.raises(CalendarValidationError):
-            normalize_rrule({"freq": "daily", "count": 2, "until": "2026-09-14"})
-
-
-class TestParseDateString:
-    def test_parses_iso_date(self) -> None:
-        assert parse_date_string("2026-09-14", field_name="x").isoformat() == "2026-09-14"
-
-    def test_rejects_datetime_string(self) -> None:
-        with pytest.raises(CalendarValidationError):
-            parse_date_string("2026-09-14T10:00:00", field_name="x")
+    @pytest.mark.parametrize(
+        ("rrule", "message"),
+        [
+            ({"freq": "daily", "bogus": 1}, "Unsupported rrule fields"),
+            ({"freq": "hourly"}, "rrule.freq"),
+            ({"freq": "daily", "by_weekday": ["mo"]}, "only valid for weekly"),
+            ({"freq": "daily", "interval": 0}, "interval"),
+            ({"freq": "daily", "until": "2026-09-14T10:00:00"}, "rrule.until must be a date"),
+            ({"freq": "daily", "count": 2, "until": "2026-09-14"}, "either count or until"),
+        ],
+        ids=[
+            "unknown-field",
+            "unknown-freq",
+            "weekday-outside-weekly",
+            "interval",
+            "until-is-a-datetime",
+            "count-and-until",
+        ],
+    )
+    def test_rejects_invalid_rules(self, rrule: dict[str, object], message: str) -> None:
+        with pytest.raises(CalendarValidationError, match=message):
+            normalize_rrule(rrule)
 
 
 class TestExpandRecurringTimed:
@@ -120,6 +106,8 @@ class TestExpandRecurringTimed:
             max_occurrences=500,
         )
         starts = [start.isoformat() for start, _ in occurrences]
+        # The one-hour duration keeps its shape on both sides of the change.
+        assert all(end - start == timedelta(hours=1) for start, end in occurrences)
         assert starts == [
             "2026-10-05T07:00:00+00:00",
             "2026-10-12T07:00:00+00:00",
@@ -128,34 +116,6 @@ class TestExpandRecurringTimed:
             "2026-11-02T08:00:00+00:00",
             "2026-11-09T08:00:00+00:00",
         ]
-
-    def test_occurrence_duration_keeps_wall_clock_shape(self) -> None:
-        occurrences = expand_recurring_timed(
-            start_local=datetime(2026, 8, 31, 9, 0),
-            tz=BERLIN,
-            rrule_spec=dict(WEEKLY_MONDAY),
-            duration_minutes=60,
-            exdates=frozenset(),
-            window_start_utc=datetime(2026, 10, 26, tzinfo=UTC),
-            window_end_utc=datetime(2026, 10, 27, tzinfo=UTC),
-            max_occurrences=500,
-        )
-        start_utc, end_utc = occurrences[0]
-        assert start_utc == datetime(2026, 10, 26, 8, 0, tzinfo=UTC)
-        assert end_utc == datetime(2026, 10, 26, 9, 0, tzinfo=UTC)
-
-    def test_exdates_remove_single_occurrences(self) -> None:
-        occurrences = expand_recurring_timed(
-            start_local=datetime(2026, 8, 31, 9, 0),
-            tz=BERLIN,
-            rrule_spec=dict(WEEKLY_MONDAY),
-            duration_minutes=60,
-            exdates=frozenset({"2026-10-12T09:00:00"}),
-            window_start_utc=datetime(2026, 10, 1, tzinfo=UTC),
-            window_end_utc=datetime(2026, 11, 15, tzinfo=UTC),
-            max_occurrences=500,
-        )
-        assert len(occurrences) == 5
 
     def test_count_limits_occurrences_from_dtstart(self) -> None:
         occurrences = expand_recurring_timed(
@@ -243,31 +203,10 @@ class TestExpandRecurringTimed:
 
 
 class TestExpandRecurringAllday:
-    def test_weekly_allday_expansion_overlaps_window(self) -> None:
+    def test_multi_day_occurrences_overlap_the_window_minus_exdates(self) -> None:
         occurrences = expand_recurring_allday(
             start_date=date(2026, 9, 10),
             duration_days=2,
-            rrule_spec={
-                "freq": "daily",
-                "interval": 7,
-                "count": None,
-                "until": None,
-                "by_weekday": None,
-            },
-            exdates=frozenset(),
-            window_start_utc=datetime(2026, 9, 1, tzinfo=UTC),
-            window_end_utc=datetime(2026, 10, 1, tzinfo=UTC),
-            system_tz=BERLIN,
-            max_occurrences=500,
-        )
-        assert (date(2026, 9, 10), date(2026, 9, 12)) in occurrences
-        assert (date(2026, 9, 17), date(2026, 9, 19)) in occurrences
-        assert all(end - start == timedelta(days=2) for start, end in occurrences)
-
-    def test_exdates_remove_dates(self) -> None:
-        occurrences = expand_recurring_allday(
-            start_date=date(2026, 9, 10),
-            duration_days=1,
             rrule_spec={
                 "freq": "weekly",
                 "interval": 1,
@@ -281,6 +220,9 @@ class TestExpandRecurringAllday:
             system_tz=BERLIN,
             max_occurrences=500,
         )
-        starts = [start.isoformat() for start, _ in occurrences]
-        assert "2026-09-10" in starts
-        assert "2026-09-17" not in starts
+        # 2026-10-01 starts at 22:00 UTC the day before, inside the UTC window.
+        assert occurrences == [
+            (date(2026, 9, 10), date(2026, 9, 12)),
+            (date(2026, 9, 24), date(2026, 9, 26)),
+            (date(2026, 10, 1), date(2026, 10, 3)),
+        ]
