@@ -1,4 +1,4 @@
-"""Tests for commands extensions."""
+"""Extension slash commands: registration, execution, isolation and page navigation."""
 
 from __future__ import annotations
 
@@ -25,6 +25,7 @@ from tests.core.chat.commands_test_support import (
 
 
 def test_extension_command_registers_in_catalog_and_executes_sync_handler() -> None:
+    # The command claims only "/workflow"; a same-named "$workflow" Skill trigger stays free.
     dispatcher = CommandDispatcher(ChatRunManager())
     observed: list[tuple[str, str | None]] = []
 
@@ -50,18 +51,6 @@ def test_extension_command_registers_in_catalog_and_executes_sync_handler() -> N
     assert [spec.name for spec in dispatcher.catalog()][-1] == "workflow"
     assert result.feedback == CommandFeedback(kind="notice", text="Workflow started.")
     assert observed == [("session-one", "review this")]
-
-
-def test_extension_command_leaves_same_named_dollar_skill_trigger_unclaimed() -> None:
-    dispatcher = CommandDispatcher(ChatRunManager())
-    dispatcher.register_extension_command(
-        "workflow_ext",
-        name="workflow",
-        description="Start the workflow.",
-        handler=lambda _context, _argument: CommandOutcome(command="workflow"),
-    )
-
-    assert dispatcher.prepare("/workflow") is not None
     assert dispatcher.prepare("$workflow") is None
 
 
@@ -98,32 +87,21 @@ async def test_extension_command_supports_async_handler_and_follow_up_run() -> N
     assert result.facts == {"same_run": True}
 
 
-def test_extension_command_rejects_invalid_metadata() -> None:
+@pytest.mark.parametrize(
+    ("name", "options"),
+    [("Bad Name", {}), ("help", {}), ("workflow", {"argument": cast(Any, [])})],
+    ids=["invalid-name", "shadows-built-in", "invalid-argument-mode"],
+)
+def test_extension_command_rejects_invalid_metadata(name: str, options: dict[str, Any]) -> None:
     dispatcher = CommandDispatcher(ChatRunManager())
 
     with pytest.raises(ValueError):
         dispatcher.register_extension_command(
             "workflow_ext",
-            name="Bad Name",
-            description="Bad.",
-            handler=lambda _context, _argument: CommandOutcome(command="bad"),
-        )
-
-    with pytest.raises(ValueError):
-        dispatcher.register_extension_command(
-            "workflow_ext",
-            name="help",
-            description="Shadow help.",
-            handler=lambda _context, _argument: CommandOutcome(command="help"),
-        )
-
-    with pytest.raises(ValueError):
-        dispatcher.register_extension_command(
-            "workflow_ext",
-            name="workflow",
-            description="Bad argument metadata.",
-            handler=lambda _context, _argument: CommandOutcome(command="workflow"),
-            argument=cast(Any, []),
+            name=name,
+            description="Invalid.",
+            handler=lambda _context, _argument: CommandOutcome(command=name),
+            **options,
         )
 
 
@@ -161,17 +139,26 @@ async def test_stale_extension_command_returns_neutral_feedback() -> None:
     assert "no longer available" in result.feedback.text
 
 
-@pytest.mark.asyncio
-async def test_extension_command_failure_is_isolated(caplog: pytest.LogCaptureFixture) -> None:
-    def handler(_context: ExtensionCommandContext, _argument: str | None) -> CommandOutcome:
-        raise RuntimeError("boom")
+def _raising_handler(_context: ExtensionCommandContext, _argument: str | None) -> CommandOutcome:
+    raise RuntimeError("boom")
 
+
+def _invalid_outcome_handler(
+    _context: ExtensionCommandContext, _argument: str | None
+) -> CommandOutcome:
+    return CommandOutcome(command="workflow", feedback=cast(Any, "not feedback"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "handler", [_raising_handler, _invalid_outcome_handler], ids=["raises", "invalid-outcome"]
+)
+async def test_extension_command_failure_is_isolated_with_feedback(
+    handler: Any, caplog: pytest.LogCaptureFixture
+) -> None:
     dispatcher = CommandDispatcher(ChatRunManager())
     dispatcher.register_extension_command(
-        "workflow_ext",
-        name="workflow",
-        description="Start the workflow.",
-        handler=handler,
+        "workflow_ext", name="workflow", description="Start the workflow.", handler=handler
     )
 
     result = await _execute(dispatcher, "/workflow")
@@ -179,34 +166,6 @@ async def test_extension_command_failure_is_isolated(caplog: pytest.LogCaptureFi
     assert result.feedback is not None
     assert result.feedback.text
     assert caplog.records
-
-
-@pytest.mark.asyncio
-async def test_extension_command_invalid_nested_outcome_is_isolated() -> None:
-    dispatcher = CommandDispatcher(ChatRunManager())
-    dispatcher.register_extension_command(
-        "workflow_ext",
-        name="workflow",
-        description="Start the workflow.",
-        handler=lambda _context, _argument: CommandOutcome(
-            command="workflow",
-            feedback=cast(Any, "not feedback"),
-        ),
-    )
-
-    result = await _execute(dispatcher, "/workflow")
-
-    assert result.feedback is not None
-    assert result.feedback.text
-
-
-def test_dispatch_status_marks_transient_output() -> None:
-    dispatcher = CommandDispatcher(ChatRunManager())
-
-    result = _execute_sync(dispatcher, "/status")
-
-    assert result.feedback is not None
-    assert result.feedback.kind == "detail"
 
 
 @pytest.mark.asyncio

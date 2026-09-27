@@ -1,504 +1,75 @@
-"""Tests for chat loop debug context passing.
+"""Debug context for Provider requests: every Model request of a Run, including a fallback
+Model's, tells a recording Adapter which Run, Agent, Session, route and iteration it serves.
 
-Verifies that the chat loop sets ``DebugContext`` on adapters before each
-provider request, that the context includes correct run metadata, that
-the streaming flag matches the chat loop's mode, that iteration_number
-increments across tool-call iterations, and that the context is NOT
-passed to adapters without a debug recorder.
+Adapters without ``set_debug_context`` (the plain test doubles used everywhere else) receive
+nothing and run normally.
 """
 
 from __future__ import annotations
 
-from copy import deepcopy
-from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import pytest
 
-from core.chat import ChatSessionManager
-from core.database import write_bootstrap_marker
 from core.debug.recorder import DebugContext
-from core.providers.accounts import ConnectionRef
-from core.runs import ChatRunManager
-from core.skills.skills import SkillRegistry
-from core.tools import ToolAccess, ToolRegistry, tool_success
-from core.tools.file_state import FileReadState
-from tests.core.chat.chat_loop_support import StubModels, StubProjects, build_chat_loop
+from core.providers.errors import ProviderRateLimitError
+from core.tools import ToolRegistry, tool_success
+from tests.core.chat.chat_loop_support import (
+    StubAdapter,
+    StubAgent,
+    StubRuntime,
+    build_chat_loop,
+    last_run,
+)
 
 JsonObject = dict[str, Any]
 
 
-# ---------------------------------------------------------------------------
-# Stub adapter with debug context tracking
-# ---------------------------------------------------------------------------
+class DebugTrackingAdapter(StubAdapter):
+    """Records every debug context the Chat Run sets before a request."""
 
-
-class DebugTrackingStubAdapter:
-    """Stub adapter that records set_debug_context() calls.
-
-    This is separate from the chat_loop_support StubAdapter so we can
-    add debug context tracking without modifying existing test stubs.
-    """
-
-    def __init__(self, responses: list[Any]) -> None:
-        self._responses = responses
-        self.requests: list[JsonObject] = []
+    def __init__(self, responses: list[Any], **options: Any) -> None:
+        super().__init__(responses, **options)
         self.debug_contexts: list[DebugContext] = []
 
-    async def send(
-        self,
-        messages: list[JsonObject],
-        *,
-        model_id: str,
-        **kwargs: Any,
-    ) -> JsonObject:
-        self.requests.append(
-            {
-                "messages": deepcopy(messages),
-                "model_id": model_id,
-                "kwargs": deepcopy(kwargs),
-            }
-        )
-        if not self._responses:
-            raise AssertionError("unexpected adapter request")
-        response = self._responses.pop(0)
-        if isinstance(response, Exception):
-            raise response
-        return cast(JsonObject, response)
-
-    def normalize_response(
-        self, response: JsonObject, *, model_id: str | None = None
-    ) -> JsonObject:
-        return response
-
-    def set_debug_context(self, ctx: DebugContext) -> None:
-        """Record the debug context for later verification."""
-        self.debug_contexts.append(ctx)
-
-    async def aclose(self) -> None:
-        pass
+    def set_debug_context(self, context: DebugContext) -> None:
+        self.debug_contexts.append(context)
 
 
-class DebugTrackingStreamingStubAdapter(DebugTrackingStubAdapter):
-    """Stub adapter that also supports streaming."""
-
-    def __init__(
-        self,
-        responses: list[Any],
-        *,
-        stream_responses: list[Any] | None = None,
-    ) -> None:
-        super().__init__(responses)
-        self._stream_responses = stream_responses or []
-        self.stream_requests: list[JsonObject] = []
-
-    async def stream(
-        self,
-        messages: list[JsonObject],
-        *,
-        model_id: str,
-        **kwargs: Any,
-    ) -> Any:
-        self.stream_requests.append(
-            {
-                "messages": deepcopy(messages),
-                "model_id": model_id,
-                "kwargs": deepcopy(kwargs),
-            }
-        )
-        if not self._stream_responses:
-            raise AssertionError("unexpected adapter stream request")
-        response = self._stream_responses.pop(0)
-        if isinstance(response, Exception):
-            raise response
-        for delta in response:
-            if isinstance(delta, Exception):
-                raise delta
-            yield delta
+def _echo_call(call_id: str, value: str) -> JsonObject:
+    return {"id": call_id, "name": "echo", "arguments": {"value": value}}
 
 
-# ---------------------------------------------------------------------------
-# Stub runtime
-# ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class StubAgent:
-    tool_access: ToolAccess = field(default_factory=ToolAccess, init=False)
-    id: str
-    model: str
-    fallback_models: list[str] = field(default_factory=list)
-    temperature: float = 0.1
-    thinking_effort: str = "high"
-    allowed_tools: list[str] | None = None
-    allowed_skills: list[str] | None = None
-    workspace: Path | None = None
-
-
-class StubAgents:
-    def __init__(self, agent: StubAgent) -> None:
-        self._agent = agent
-
-    def get(self, agent_id: str) -> StubAgent:
-        assert agent_id == self._agent.id
-        return self._agent
-
-
-class StubAgentResolver:
-    """Identity-only resolver seam for the debug-path runtime stub."""
-
-    def __init__(self, agents: StubAgents) -> None:
-        self._agents = agents
-
-    def resolve_agent(self, project_id: str | None, agent_id: str) -> StubAgent:
-        assert project_id is None
-        return self._agents.get(agent_id)
-
-    async def resolve_agent_async(
-        self, project_id: str | None, agent_id: str, **options: Any
-    ) -> Any:
-        return self.resolve_agent(project_id, agent_id, **options)
-
-
-class StubProviders:
-    def __init__(self, provider_ids: set[str]) -> None:
-        self._provider_ids = provider_ids
-
-    def get(self, provider_id: str) -> object:
-        if provider_id not in self._provider_ids:
-            raise KeyError(provider_id)
-
-        @dataclass(frozen=True)
-        class _Conn:
-            id: str
-
-        return _StubProviderConfig([_Conn("api-key")])
-
-
-@dataclass(frozen=True)
-class _StubProviderConfig:
-    connections: list[Any]
-
-
-class StubPrompts:
-    vbot_root = Path("app")
-
-    def build_system_prompt(
-        self,
-        agent: StubAgent,
-        scope: Any = None,
-        *,
-        agent_body: str = "",
-        project_context: Any = None,
-        working_project_context: str | None = None,
-        soul_context: str | None = None,
-        memory_files_context: str | None = None,
-        agent_project_id: str | None = None,
-        nesting_depth: int = 0,
-        skill_registry: Any = None,
-        skill_catalog: Any = None,
-        read_paths: list[Path] | None = None,
-        effective_tool_names: Any = None,
-        session_tool_grants: Any = (),
-        request_block_definitions: Any = (),
-    ) -> str:
-        del agent_project_id, request_block_definitions
-        return f"System for {agent.id}"
-
-    def render_project_files(self, project_context: Any, *, on_read: Any = None) -> str:
-        return "" if project_context is None else "RENDERED-PROJECT-FILES"
-
-    def render_project_skills(self, project_name: str, skills: Any) -> str:
-        return ""
-
-    def render_skill_catalog(self, agent: StubAgent, skill_registry: Any = None) -> Any:
-        from core.prompts import PinnedSkillCatalog
-
-        return PinnedSkillCatalog(catalog_text="")
-
-    def provider_tool_definitions(
-        self,
-        agent: StubAgent,
-        *,
-        skill_registry: Any = None,
-        skill_catalog: Any = None,
-        session_tool_grants: Any = (),
-    ) -> list[JsonObject]:
-        return [
-            {
-                "name": "get_weather",
-                "description": "Get weather.",
-                "parameters": {"type": "object"},
-            }
-        ]
-
-
-class StubProviderCredentials:
-    def __init__(self, usable_connection_ids: set[str]) -> None:
-        self._usable_connection_ids = usable_connection_ids
-
-    def has_credentials(self, _provider_id: str, connection_id: str | None = None) -> bool:
-        return connection_id in self._usable_connection_ids
-
-    def is_usable(self, provider_id: str, connection_id: str | None = None) -> bool:
-        return self.has_credentials(provider_id, connection_id)
-
-    def resolve_account_id(
-        self,
-        provider_id: str,
-        local_connection_id: str,
-        account_id: str | None = None,
-    ) -> str:
-        del provider_id, local_connection_id
-        return account_id or "default"
-
-
-class StubProcessManager:
-    async def cancel_scope_async(self, run_id: str) -> None:
-        del run_id
-
-    def release_scope(self, run_id: str) -> None:
-        del run_id
-
-
-class StubStorage:
-    def __init__(self, data_dir: Path) -> None:
-        self.data_dir = data_dir
-
-    def load_compaction_settings(self) -> JsonObject:
-        return {"auto": False, "threshold": 0.8, "tail_tokens": 15_000, "summary_model": None}
-
-
-class StubRuntime:
-    def __init__(
-        self,
-        *,
-        data_dir: Path,
-        agent: StubAgent,
-        adapter: DebugTrackingStubAdapter,
-        tools: ToolRegistry | None = None,
-    ) -> None:
-        if not (data_dir / "data-store.json").exists():
-            write_bootstrap_marker(data_dir)
-        self.agents = StubAgents(agent)
-        self.agent_resolver = StubAgentResolver(self.agents)
-        self.projects = StubProjects({})
-        self.chat_sessions = ChatSessionManager(data_dir)
-        self.system_prompts = StubPrompts()
-        self.file_read_state = FileReadState()
-        self.tools = tools or ToolRegistry()
-        self.chat_runs = ChatRunManager(persistence=self.chat_sessions)
-        self.chat_run_manager = self.chat_runs
-        self.process_manager = StubProcessManager()
-        self.extensions: Any = None
-        self.storage = StubStorage(data_dir)
-        self.providers = StubProviders({agent.model.split("/", 1)[0]})
-        self.provider_credentials = StubProviderCredentials(
-            {f"{agent.model.split('/', 1)[0]}:api-key"}
-        )
-        self.models = StubModels({})
-        self.adapter = adapter
-        self.adapter_provider_id: str | None = None
-        self.adapter_connection_id: str | None = None
-
-    def get_adapter(self, connection: ConnectionRef) -> DebugTrackingStubAdapter:
-        self.adapter_provider_id = connection.provider_id
-        self.adapter_connection_id = connection.connection_id
-        return self.adapter
-
-    def skills_for(
-        self, _project_id: str | None = None, _agent_id: str | None = None
-    ) -> SkillRegistry:
-        return SkillRegistry({})
-
-    def project_skill_names(self, _project_id: str | None = None) -> frozenset[str]:
-        return frozenset()
-
-
-# ---------------------------------------------------------------------------
-# Debug context is set before adapter calls
-# ---------------------------------------------------------------------------
+def _echo_stream(call_id: str, value: str) -> list[JsonObject]:
+    return [
+        {
+            "type": "tool_call_delta",
+            "id": call_id,
+            "name_delta": "echo",
+            "arguments_delta": f'{{"value":"{value}"}}',
+        },
+        {"type": "finish", "reason": "tool_calls"},
+    ]
 
 
 @pytest.mark.asyncio
-async def test_debug_context_is_set_before_send(tmp_path: Path) -> None:
-    """The chat loop calls set_debug_context() before adapter.send()."""
-    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
-    adapter = DebugTrackingStubAdapter(
-        [{"content": "Hello", "reasoning": None, "tool_calls": None}]
-    )
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
-
-    await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
-
-    assert len(adapter.debug_contexts) == 1
-
-
-@pytest.mark.asyncio
-async def test_debug_context_is_set_before_stream(tmp_path: Path) -> None:
-    """The streaming chat loop calls set_debug_context() before adapter.stream()."""
-    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
-    adapter = DebugTrackingStreamingStubAdapter(
-        [{"content": "Hello", "tool_calls": None}],
-        stream_responses=[
-            [
-                {"type": "content_delta", "text": "Hello"},
-                {"type": "finish", "reason": "stop"},
-            ]
-        ],
-    )
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
-
-    await build_chat_loop(runtime, streaming=True).send("coder", "Hi", session_id="session-one")
-
-    assert len(adapter.debug_contexts) == 1
-    assert len(adapter.stream_requests) == 1
-
-
-# ---------------------------------------------------------------------------
-# Context includes correct fields
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_debug_context_includes_correct_run_agent_session_ids(
-    tmp_path: Path,
+@pytest.mark.parametrize("streaming", [False, True], ids=["plain", "streaming"])
+async def test_every_model_request_of_a_run_carries_its_debug_context(
+    tmp_path: Path, streaming: bool
 ) -> None:
-    """The debug context contains run_id, agent_id, and session_id."""
-    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
-    adapter = DebugTrackingStubAdapter(
-        [{"content": "Hello", "reasoning": None, "tool_calls": None}]
-    )
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
-
-    await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
-
-    ctx = adapter.debug_contexts[0]
-    assert ctx.agent_id == "coder"
-    assert ctx.session_id == "session-one"
-    assert ctx.run_id
-    assert len(ctx.run_id) > 0
-
-
-@pytest.mark.asyncio
-async def test_debug_context_includes_provider_and_connection_ids(
-    tmp_path: Path,
-) -> None:
-    """The debug context contains provider_id and connection_id."""
-    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
-    adapter = DebugTrackingStubAdapter(
-        [{"content": "Hello", "reasoning": None, "tool_calls": None}]
-    )
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
-
-    await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
-
-    ctx = adapter.debug_contexts[0]
-    assert ctx.provider_id == "openai"
-    assert ctx.connection_id == "openai:api-key"
-
-
-@pytest.mark.asyncio
-async def test_debug_context_includes_model_id(tmp_path: Path) -> None:
-    """The debug context contains the model_id."""
-    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
-    adapter = DebugTrackingStubAdapter(
-        [{"content": "Hello", "reasoning": None, "tool_calls": None}]
-    )
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
-
-    await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
-
-    ctx = adapter.debug_contexts[0]
-    assert ctx.model_id == "gpt-5.2"
-
-
-# ---------------------------------------------------------------------------
-# Context includes streaming flag matching the chat loop's mode
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_debug_context_streaming_false_for_non_streaming_loop(
-    tmp_path: Path,
-) -> None:
-    """Non-streaming ChatLoop sets streaming=False in debug context."""
-    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
-    adapter = DebugTrackingStubAdapter(
-        [{"content": "Hello", "reasoning": None, "tool_calls": None}]
-    )
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
-
-    await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
-
-    ctx = adapter.debug_contexts[0]
-    assert ctx.streaming is False
-
-
-@pytest.mark.asyncio
-async def test_debug_context_streaming_true_for_streaming_loop(
-    tmp_path: Path,
-) -> None:
-    """Streaming ChatLoop sets streaming=True in debug context."""
-    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
-    adapter = DebugTrackingStreamingStubAdapter(
-        [{"content": "Hello", "tool_calls": None}],
-        stream_responses=[
-            [
-                {"type": "content_delta", "text": "Hello"},
-                {"type": "finish", "reason": "stop"},
-            ]
-        ],
-    )
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
-
-    await build_chat_loop(runtime, streaming=True).send("coder", "Hi", session_id="session-one")
-
-    ctx = adapter.debug_contexts[0]
-    assert ctx.streaming is True
-
-
-# ---------------------------------------------------------------------------
-# Context includes iteration_number (incrementing)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_debug_context_iteration_starts_at_one(tmp_path: Path) -> None:
-    """The first iteration has iteration_number=1."""
-    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
-    adapter = DebugTrackingStubAdapter(
-        [{"content": "Hello", "reasoning": None, "tool_calls": None}]
-    )
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
-
-    await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
-
-    ctx = adapter.debug_contexts[0]
-    assert ctx.iteration_number == 1
-
-
-@pytest.mark.asyncio
-async def test_debug_context_iteration_increments_across_tool_calls(
-    tmp_path: Path,
-) -> None:
-    """Iteration number increments when the model makes tool calls."""
-    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["echo"])
-    adapter = DebugTrackingStubAdapter(
+    adapter = DebugTrackingAdapter(
         [
-            {
-                "content": None,
-                "tool_calls": [{"id": "call_1", "name": "echo", "arguments": {"value": "first"}}],
-            },
-            {
-                "content": None,
-                "tool_calls": [{"id": "call_2", "name": "echo", "arguments": {"value": "second"}}],
-            },
+            {"content": None, "tool_calls": [_echo_call("call_1", "first")]},
+            {"content": None, "tool_calls": [_echo_call("call_2", "second")]},
             {"content": "Done", "tool_calls": None},
-        ]
+        ],
+        stream_responses=[
+            _echo_stream("call_1", "first"),
+            _echo_stream("call_2", "second"),
+            [{"type": "content_delta", "text": "Done"}, {"type": "finish", "reason": "stop"}],
+        ],
     )
-
     tools = ToolRegistry()
     tools.register(
         "echo",
@@ -506,129 +77,64 @@ async def test_debug_context_iteration_increments_across_tool_calls(
         {"type": "object"},
         lambda _context, arguments: tool_success({"value": arguments["value"]}),
     )
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["echo"])
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
 
-    await build_chat_loop(runtime).send("coder", "echo twice", session_id="session-one")
-
-    assert len(adapter.debug_contexts) == 3
-    assert adapter.debug_contexts[0].iteration_number == 1
-    assert adapter.debug_contexts[1].iteration_number == 2
-    assert adapter.debug_contexts[2].iteration_number == 3
-
-
-# ---------------------------------------------------------------------------
-# Context is NOT passed to adapters without a debug recorder
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_no_debug_context_for_adapters_without_set_debug_context(
-    tmp_path: Path,
-) -> None:
-    """The chat loop does not crash when the adapter lacks set_debug_context."""
-    from tests.core.chat.chat_loop_support import StubAdapter as BaseStubAdapter
-    from tests.core.chat.chat_loop_support import StubAgent as BaseStubAgent
-    from tests.core.chat.chat_loop_support import StubRuntime as BaseStubRuntime
-
-    agent = BaseStubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
-    adapter = BaseStubAdapter([{"content": "Hello", "tool_calls": None}])
-
-    runtime: Any = BaseStubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
-
-    # Should not raise.
-    assistant = await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
-    assert assistant.content == "Hello"
-    assert len(adapter.requests) == 1
-
-
-@pytest.mark.asyncio
-async def test_no_debug_context_for_streaming_without_set_debug_context(
-    tmp_path: Path,
-) -> None:
-    """The streaming chat loop does not crash when the adapter lacks
-    set_debug_context."""
-    from tests.core.chat.chat_loop_support import StubAdapter as BaseStubAdapter
-    from tests.core.chat.chat_loop_support import StubAgent as BaseStubAgent
-    from tests.core.chat.chat_loop_support import StubRuntime as BaseStubRuntime
-
-    agent = BaseStubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
-    adapter = BaseStubAdapter(
-        [{"content": "Hello", "tool_calls": None}],
-        stream_responses=[
-            [
-                {"type": "content_delta", "text": "Hello"},
-                {"type": "finish", "reason": "stop"},
-            ]
-        ],
+    await build_chat_loop(runtime, streaming=streaming).send(
+        "coder", "echo twice", session_id="session-one"
     )
-    runtime: Any = BaseStubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
-    assistant = await build_chat_loop(runtime, streaming=True).send(
-        "coder", "Hi", session_id="session-one"
-    )
-    assert assistant.content == "Hello"
-
-
-# ---------------------------------------------------------------------------
-# Fallback adapter also receives debug context
-# ---------------------------------------------------------------------------
+    run_id = last_run(runtime).id
+    assert [
+        (
+            context.run_id,
+            context.agent_id,
+            context.session_id,
+            context.provider_id,
+            context.connection_id,
+            context.model_id,
+            context.streaming,
+            context.iteration_number,
+        )
+        for context in adapter.debug_contexts
+    ] == [
+        (run_id, "coder", "session-one", "openai", "openai:api-key", "gpt-5.2", streaming, step)
+        for step in (1, 2, 3)
+    ]
 
 
 @pytest.mark.asyncio
-async def test_fallback_adapter_receives_debug_context(tmp_path: Path) -> None:
-    """When the primary model fails and fallback is used, the fallback
-    adapter also receives debug context."""
-    from core.providers.errors import ProviderRateLimitError
-
+async def test_fallback_model_request_carries_the_same_runs_debug_context(
+    tmp_path: Path, recovery_waits: list[float]
+) -> None:
+    primary = DebugTrackingAdapter([ProviderRateLimitError("primary rate limited")])
+    fallback = DebugTrackingAdapter([{"content": "Recovered", "tool_calls": None}])
     agent = StubAgent(
         id="coder",
         model="openai/gpt-5.2",
         fallback_models=["anthropic/claude-sonnet-4::api-key"],
         allowed_tools=["*"],
     )
-    primary_adapter = DebugTrackingStubAdapter([ProviderRateLimitError("primary rate limited")])
-    fallback_adapter = DebugTrackingStubAdapter([{"content": "Recovered", "tool_calls": None}])
-
-    class FallbackStubRuntime(StubRuntime):
-        def __init__(
-            self,
-            *,
-            data_dir: Path,
-            agent: StubAgent,
-            adapter: DebugTrackingStubAdapter,
-            fallback_adapter: DebugTrackingStubAdapter,
-            tools: ToolRegistry | None = None,
-        ) -> None:
-            super().__init__(data_dir=data_dir, agent=agent, adapter=adapter, tools=tools)
-            self.fallback_adapter = fallback_adapter
-
-        def get_adapter(self, connection: ConnectionRef) -> DebugTrackingStubAdapter:
-            self.adapter_provider_id = connection.provider_id
-            self.adapter_connection_id = connection.connection_id
-            if connection.connection_id.startswith("anthropic"):
-                return self.fallback_adapter
-            return self.adapter
-
-    runtime: Any = FallbackStubRuntime(
+    runtime: Any = StubRuntime(
         data_dir=tmp_path,
         agent=agent,
-        adapter=primary_adapter,
-        fallback_adapter=fallback_adapter,
+        adapter=primary,
+        provider_ids={"openai", "anthropic"},
+        adapters_by_connection={"anthropic:api-key": fallback},
     )
-    runtime.providers = StubProviders({"openai", "anthropic"})
-    runtime.provider_credentials = StubProviderCredentials({"openai:api-key", "anthropic:api-key"})
 
-    assistant = await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
+    answer = await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
 
-    assert assistant.content == "Recovered"
-    assert len(fallback_adapter.debug_contexts) == 1
-
-    # Fallback context has correct provider info.
-    fallback_ctx = fallback_adapter.debug_contexts[0]
-    assert fallback_ctx.provider_id == "anthropic"
-    assert fallback_ctx.connection_id == "anthropic:api-key"
-    assert fallback_ctx.model_id == "claude-sonnet-4"
-    # Same run/session info.
-    assert fallback_ctx.run_id == primary_adapter.debug_contexts[0].run_id
-    assert fallback_ctx.agent_id == "coder"
-    assert fallback_ctx.session_id == "session-one"
+    assert answer.content == "Recovered"
+    [primary_context] = primary.debug_contexts
+    [fallback_context] = fallback.debug_contexts
+    assert (
+        fallback_context.provider_id,
+        fallback_context.connection_id,
+        fallback_context.model_id,
+    ) == ("anthropic", "anthropic:api-key", "claude-sonnet-4")
+    assert (fallback_context.run_id, fallback_context.agent_id, fallback_context.session_id) == (
+        primary_context.run_id,
+        "coder",
+        "session-one",
+    )

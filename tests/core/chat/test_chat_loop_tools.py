@@ -443,6 +443,56 @@ async def test_real_run_cancel_during_parallel_tools_repairs_the_next_request(
 
 
 @pytest.mark.asyncio
+async def test_cooperative_stop_after_a_tool_batch_persists_every_sibling_first(
+    tmp_path: Path,
+) -> None:
+    # The cancel flag is raised once every parallel sibling has started, without the
+    # forceful task cancel above, so the loop honors it only at its boundary after the
+    # batch persistence and never leaves a dangling Tool Call turn behind.
+    started: set[str] = set()
+    all_started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def sibling(context: ToolContext, _arguments: JsonObject) -> JsonObject:
+        started.add(context.tool_call_id)
+        if len(started) == 3:
+            all_started.set()
+        await release.wait()
+        return tool_success({"sibling": context.tool_call_id})
+
+    tools = ToolRegistry()
+    for name in ("first", "second", "third"):
+        tools.register(name, "Parallel sibling.", {"type": "object"}, sibling, parallel_safe=True)
+    runtime = tool_runtime(
+        tmp_path,
+        tools,
+        [tool_turn(("call_first", "first"), ("call_second", "second"), ("call_third", "third"))],
+    )
+    runtime.chat_sessions.create("coder", session_id="session-one")
+    run = await build_chat_loop(runtime).start_run("coder", "Multi", session_id="session-one")
+
+    await asyncio.wait_for(all_started.wait(), timeout=WAIT_SECONDS)
+    run.cancel_requested = True
+    release.set()
+    with pytest.raises(RunCancelledError):
+        await run.wait()
+
+    persisted = history(runtime)
+    assert [m.tool_call_id for m in persisted if m.role == "tool"] == [
+        "call_first",
+        "call_second",
+        "call_third",
+    ]
+    assert (persisted[-1].role, persisted[-1].status) == ("run_summary", "cancelled")
+    activity = runtime.chat_sessions.list_summaries("coder")[0]
+    assert (activity["run_kinds"], activity["unread_run_id"], activity["unread_run_status"]) == (
+        ["user"],
+        run.id,
+        "cancelled",
+    )
+
+
+@pytest.mark.asyncio
 async def test_run_cancel_rejects_a_racing_launch_and_releases_the_settled_scope(
     tmp_path: Path,
 ) -> None:

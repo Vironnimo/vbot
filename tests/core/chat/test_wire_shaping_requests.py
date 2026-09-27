@@ -4,16 +4,20 @@ Run-local Tool media."""
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 import pytest
+from PIL import Image
 
+from core.attachments import AttachmentStore
 from core.chat import ChatError, ChatMessage, MessageSender, ReplySurface, ToolCall
 from core.chat._message_history import reply_surface_from_note
-from core.chat.content_blocks import FileBlock, TextBlock
+from core.chat.block_resolver import ContentBlockResolver
+from core.chat.content_blocks import FileBlock, MediaBlock, TextBlock
 from core.chat.messages import COMPACTION_SUMMARY_NOTE_PREFIX, ERROR_KIND_PROVIDER_ERROR
 from core.chat.output_files import AssistantFileReference
 from core.chat.wire_shaping import (
@@ -26,6 +30,7 @@ from core.chat.wire_shaping import (
 )
 from core.providers.adapter import TOOL_RESULT_CONTENT_BLOCKS_FIELD
 from core.tools import read_media_artifact, tool_success
+from core.utils.paths import model_path
 from tests.core.chat.chat_loop_support import (
     StubAdapter,
     StubAgent,
@@ -513,4 +518,60 @@ def test_rebuilt_request_gives_each_tool_result_only_its_own_media(tmp_path: Pat
     ] == [
         [{"type": "text", "text": "first-image"}],
         [{"type": "text", "text": "second-image"}],
+    ]
+
+
+def test_request_resolves_user_blocks_only_when_the_history_carries_them(tmp_path: Path) -> None:
+    # The latest user turn marks the current turn even when it is plain text, so an
+    # earlier attachment renders as an earlier-turn note; plain-text history skips resolution.
+    class RecordingResolver(ContentBlockResolver):
+        def __init__(self, store: AttachmentStore) -> None:
+            super().__init__(store)
+            self.current_turns: list[str] = []
+
+        async def resolve_messages(
+            self, messages: list[dict[str, Any]], *, current_user_message_id: str, **kwargs: Any
+        ) -> list[dict[str, Any]]:
+            self.current_turns.append(current_user_message_id)
+            return await super().resolve_messages(
+                messages, current_user_message_id=current_user_message_id, **kwargs
+            )
+
+    image = io.BytesIO()
+    Image.new("RGB", (12, 8), "blue").save(image, format="PNG")
+    store = AttachmentStore(tmp_path)
+    record = store.store("old-photo.png", image.getvalue())
+    agent = StubAgent(id="coder", model="openai/gpt-5.2")
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=StubAdapter([]))
+    resolver = RecordingResolver(store)
+    loop = build_chat_loop(runtime, attachment_resolver=resolver)
+    plain = runtime.chat_sessions.create("coder", session_id="plain")
+    plain.append(ChatMessage.user("first"))
+    plain.append(ChatMessage.user("second"))
+    attached = runtime.chat_sessions.create("coder", session_id="attached")
+    attached.append(
+        ChatMessage.user([MediaBlock("media", record.id, record.filename, record.media_type)])
+    )
+    latest = ChatMessage.user("latest plain text")
+    attached.append(latest)
+
+    plain_request = asyncio.run(build_request_messages(loop, agent, plain))
+    attached_request = asyncio.run(build_request_messages(loop, agent, attached))
+
+    assert resolver.current_turns == [latest.id]
+    assert [entry["content"] for entry in plain_request if entry["role"] == "user"] == [
+        "first",
+        "second",
+    ]
+    assert [entry["content"] for entry in attached_request if entry["role"] == "user"] == [
+        [
+            {
+                "type": "text",
+                "text": (
+                    "[Image from an earlier turn: old-photo.png (image/png) "
+                    f"— Path: {model_path(record.file_path)}]"
+                ),
+            }
+        ],
+        "latest plain text",
     ]

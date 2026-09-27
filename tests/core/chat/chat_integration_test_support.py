@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable, Iterator
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -14,8 +15,11 @@ from core.providers.adapter import (
     IMAGE_WIRE_MEDIA_TYPES,
     ProviderAdapter,
 )
+from core.runtime import Runtime
+from core.utils.config import Config
 
 JsonObject = dict[str, Any]
+StartRuntime = Callable[..., AbstractContextManager[Runtime]]
 
 
 @dataclass(frozen=True)
@@ -76,6 +80,30 @@ def resources_dir(tmp_path: Path) -> Path:
     return resources
 
 
+@pytest.fixture
+def start_runtime(
+    tmp_path: Path, resources_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> StartRuntime:
+    """Start a real Runtime on the fake resources; its Model requests reach ``adapter``."""
+
+    @contextmanager
+    def start(adapter: ProviderAdapter | None = None) -> Iterator[Runtime]:
+        config = Config(data_dir=tmp_path / "data")
+        config._data["RESOURCES_PATH"] = str(resources_dir)
+        config._data["VBOT_VERSION"] = "test-version"
+        runtime = Runtime(config)
+        monkeypatch.setenv("FAKE_API_KEY", "test-key")
+        if adapter is not None:
+            monkeypatch.setattr(runtime, "get_adapter", lambda connection: adapter)
+        runtime.start()
+        try:
+            yield runtime
+        finally:
+            runtime.stop()
+
+    return start
+
+
 def _write_provider_resource(resources: Path) -> None:
     providers_dir = resources / "providers"
     providers_dir.mkdir(parents=True)
@@ -114,17 +142,6 @@ def _write_model_resource(resources: Path) -> None:
                 "models": {
                     "fake-model-v1": {
                         "name": "Fake Model",
-                        "capabilities": {
-                            "vision": False,
-                            "tools": True,
-                            "json_mode": True,
-                            "reasoning": {"supported": True},
-                        },
-                        "context_window": 4096,
-                        "max_output_tokens": 1024,
-                    },
-                    "fake-model-v2": {
-                        "name": "Fake Model Two",
                         "capabilities": {
                             "vision": False,
                             "tools": True,

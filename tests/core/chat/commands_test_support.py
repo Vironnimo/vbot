@@ -89,43 +89,32 @@ _UNSET: Any = object()
 class _StubResolver:
     """Resolver stub returning a fixed agent, recording the resolve target.
 
-    Mirrors the run-path seam ``/status`` now uses, so a test can assert the
-    dispatcher threads the session's ``project_id`` through to the resolver. It
-    also answers ``effective_config`` — the provenance seam ``/model`` reads — with
-    a configurable model ``{value, source}`` so a test can drive each origin
-    wording by choosing the winning tier.
+    Mirrors the run-path seam ``/status`` uses, so a test can assert the dispatcher
+    threads the session's ``project_id`` through to the resolver. It also answers
+    ``effective_config``, the provenance seam ``/model`` reads, with a configurable
+    model ``{value, source}`` so a test can drive each origin wording.
     """
 
     def __init__(
         self,
         agent: Agent,
         *,
-        resolve_error: Exception | None = None,
         model_value: Any = _UNSET,
         model_source: Any = _UNSET,
-        effective_error: Exception | None = None,
     ) -> None:
         self._agent = agent
-        self._resolve_error = resolve_error
-        # Default the effective model to the agent's own model / "agent" source so a
-        # test that only cares about the value need not spell out the tier. A sentinel
-        # distinguishes "not passed" from an explicit ``None`` (a fallen-through tier).
+        # Default the effective model to the agent's own model / "agent" source. A
+        # sentinel distinguishes "not passed" from an explicit ``None`` (a fallen-through
+        # tier).
         self._model_value = agent.model if model_value is _UNSET else model_value
         self._model_source = "agent" if model_source is _UNSET else model_source
-        self._effective_error = effective_error
         self.calls: list[tuple[str | None, str]] = []
-        self.effective_calls: list[tuple[str | None, str]] = []
 
     def resolve_agent(self, project_id: str | None, agent_id: str) -> Agent:
         self.calls.append((project_id, agent_id))
-        if self._resolve_error is not None:
-            raise self._resolve_error
         return self._agent
 
     def effective_config(self, project_id: str | None, agent_id: str) -> dict[str, dict[str, Any]]:
-        self.effective_calls.append((project_id, agent_id))
-        if self._effective_error is not None:
-            raise self._effective_error
         return {"model": {"value": self._model_value, "source": self._model_source}}
 
 

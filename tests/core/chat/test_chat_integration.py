@@ -1,4 +1,9 @@
-"""Tests for chat integration."""
+"""The chat loop on a real Runtime: Provider wiring, the read Tool, change statistics and prompts.
+
+These tests start the production Runtime on fake Provider resources and route its Model
+requests to a recording adapter; the chat-loop behavior itself is covered by the
+``test_chat_loop_*`` suites on stub runtimes.
+"""
 
 from __future__ import annotations
 
@@ -10,20 +15,14 @@ from typing import Any, cast
 import pytest
 
 from core.prompts import SkillPromptRegistry
-from core.runs import RUN_CHANGE_STATS_EVENT
-from core.runtime import Runtime
+from core.runs import MODEL_STEP_USAGE_EVENT, RUN_CHANGE_STATS_EVENT
 from core.skills.skills import SkillRegistry
 from core.tools import tool_success
 from core.tools.memory import MEMORY_TOOL_DESCRIPTION, MEMORY_TOOL_PARAMETERS
-from core.utils.config import Config
-from tests.core.chat.chat_integration_test_support import (
-    FakeAdapter,
-    JsonObject,
-)
-from tests.core.chat.chat_integration_test_support import (
-    resources_dir as resources_dir,
-)
-from tests.core.chat.chat_loop_support import RecordingReflection, build_chat_loop, session_address
+from tests.core.chat.chat_integration_test_support import FakeAdapter, JsonObject, StartRuntime
+from tests.core.chat.chat_integration_test_support import resources_dir as resources_dir
+from tests.core.chat.chat_integration_test_support import start_runtime as start_runtime
+from tests.core.chat.chat_loop_support import RecordingReflection, build_chat_loop, history
 
 
 def _ok_tool_handler(_context: Any, _arguments: JsonObject) -> JsonObject:
@@ -32,178 +31,99 @@ def _ok_tool_handler(_context: Any, _arguments: JsonObject) -> JsonObject:
 
 @pytest.mark.asyncio
 async def test_agent_sends_message_and_persists_assistant_response(
-    tmp_path: Path,
-    resources_dir: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    start_runtime: StartRuntime,
 ) -> None:
     adapter = FakeAdapter({"content": "assistant response", "reasoning": None, "tool_calls": None})
-    config = Config(data_dir=tmp_path / "data")
-    config._data["RESOURCES_PATH"] = str(resources_dir)
-    config._data["VBOT_VERSION"] = "test-version"
-    runtime = Runtime(config)
-    monkeypatch.setenv("FAKE_API_KEY", "test-key")
-    monkeypatch.setattr(runtime, "get_adapter", lambda connection: adapter)
 
-    runtime.start()
-    try:
+    with start_runtime(adapter) as runtime:
         runtime.agents.create(
-            "coder",
-            "Coder Agent",
-            model="fake-provider/fake-model-v1",
-            thinking_effort="high",
+            "coder", "Coder Agent", model="fake-provider/fake-model-v1", thinking_effort="high"
         )
 
         assistant = await build_chat_loop(runtime).send("coder", "Hello", session_id="session-one")
 
-        messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
+        messages = history(runtime)
         assert assistant.content == "assistant response"
         assert runtime.has_provider_credentials("fake-provider") is True
         assert runtime.get_provider_credentials("fake-provider") == "test-key"
         assert [message.role for message in messages] == ["user", "assistant", "run_summary"]
         assert messages[0].content == "Hello"
         assert messages[1].model == "fake-provider/fake-model-v1"
-        assert messages[1].content == "assistant response"
         assert messages[-1].iteration_count == 1
-        assert adapter.requests[0].model_id == "fake-model-v1"
-        assert adapter.requests[0].kwargs["thinking_effort"] == "high"
-        assert adapter.requests[0].kwargs["temperature"] is None
-        assert [message["role"] for message in adapter.requests[0].messages] == ["system", "user"]
-    finally:
-        runtime.stop()
+        request = adapter.requests[0]
+        assert request.model_id == "fake-model-v1"
+        assert (request.kwargs["thinking_effort"], request.kwargs["temperature"]) == ("high", None)
+        assert [message["role"] for message in request.messages] == ["system", "user"]
 
 
 @pytest.mark.asyncio
-async def test_read_tool_success_persists_result_and_final_response_uses_content(
-    tmp_path: Path,
-    resources_dir: Path,
-    monkeypatch: pytest.MonkeyPatch,
+async def test_read_tool_batch_persists_each_result_and_counts_one_iteration_per_response(
+    start_runtime: StartRuntime,
 ) -> None:
     adapter = FakeAdapter(
         [
             {
                 "content": None,
+                "reasoning": "Read both files together.",
                 "tool_calls": [
-                    {"id": "call_read", "name": "read", "arguments": {"path": "note.txt"}}
+                    {"id": "call_note", "name": "read", "arguments": {"path": "note.txt"}},
+                    {"id": "call_missing", "name": "read", "arguments": {"path": "missing.txt"}},
                 ],
             },
-            {"content": "I read: file content", "tool_calls": None},
+            {"content": "One file was missing.", "reasoning": "Compare.", "tool_calls": None},
         ]
     )
-    config = Config(data_dir=tmp_path / "data")
-    config._data["RESOURCES_PATH"] = str(resources_dir)
-    config._data["VBOT_VERSION"] = "test-version"
-    runtime = Runtime(config)
-    monkeypatch.setenv("FAKE_API_KEY", "test-key")
-    monkeypatch.setattr(runtime, "get_adapter", lambda connection: adapter)
 
-    runtime.start()
-    try:
-        agent = runtime.agents.create(
-            "coder",
-            "Coder Agent",
-            model="fake-provider/fake-model-v1",
-        )
+    with start_runtime(adapter) as runtime:
+        reflection = RecordingReflection()
+        agent = runtime.agents.create("coder", "Coder Agent", model="fake-provider/fake-model-v1")
         Path(agent.workspace).joinpath("note.txt").write_text("file content", encoding="utf-8")
 
-        assistant = await build_chat_loop(runtime).send(
-            "coder", "Read note", session_id="session-one"
+        assistant = await build_chat_loop(runtime, reflection_service=reflection).send(
+            "coder", "Read both", session_id="session-one"
         )
 
-        messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
-        tool_message_content = messages[2].content
-        assert isinstance(tool_message_content, str)
-        tool_result = json.loads(tool_message_content)
-        assert assistant.content == "I read: file content"
+        messages = history(runtime)
+        run = runtime.chat_run_manager.get(str(messages[-1].run_id))
+        assert assistant.content == "One file was missing."
         assert [message.role for message in messages] == [
             "user",
             "assistant",
             "tool",
+            "tool",
             "assistant",
             "run_summary",
         ]
-        assert messages[-1].status == "completed"
-        assert messages[-1].timing is not None
-        assert messages[-1].iteration_count == 2
-        assert tool_result["ok"] is True
-        assert tool_result["error"] is None
-        assert tool_result["data"] == {"content": "1| file content"}
-        assert tool_result["artifacts"] == []
-        assert adapter.requests[1].messages[3]["content"] == messages[2].content
-    finally:
-        runtime.stop()
-
-
-@pytest.mark.asyncio
-async def test_parallel_tool_calls_count_one_iteration_per_model_response(
-    tmp_path: Path,
-    resources_dir: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    adapter = FakeAdapter(
-        [
-            {
-                "content": None,
-                "reasoning": "Read all five files together.",
-                "tool_calls": [
-                    {
-                        "id": f"call_read_{index}",
-                        "name": "read",
-                        "arguments": {"path": "note.txt"},
-                    }
-                    for index in range(5)
-                ],
-            },
-            {
-                "content": "All five reads completed.",
-                "reasoning": "The results agree.",
-                "tool_calls": None,
-            },
+        found, missing = (json.loads(str(message.content)) for message in messages[2:4])
+        assert (found["ok"], found["data"], found["error"], found["artifacts"]) == (
+            True,
+            {"content": "1| file content"},
+            None,
+            [],
+        )
+        assert (missing["ok"], missing["data"], missing["artifacts"]) == (False, None, [])
+        assert missing["error"]["code"] == "file_not_found"
+        assert "missing.txt" in missing["error"]["message"]
+        # The next request replays exactly the persisted Tool results.
+        assert [m["content"] for m in adapter.requests[1].messages if m["role"] == "tool"] == [
+            messages[2].content,
+            messages[3].content,
         ]
-    )
-    config = Config(data_dir=tmp_path / "data")
-    config._data["RESOURCES_PATH"] = str(resources_dir)
-    config._data["VBOT_VERSION"] = "test-version"
-    runtime = Runtime(config)
-    monkeypatch.setenv("FAKE_API_KEY", "test-key")
-    monkeypatch.setattr(runtime, "get_adapter", lambda connection: adapter)
-
-    runtime.start()
-    try:
-        reflection = RecordingReflection()
-        agent = runtime.agents.create(
-            "coder",
-            "Coder Agent",
-            model="fake-provider/fake-model-v1",
-        )
-        Path(agent.workspace).joinpath("note.txt").write_text("same", encoding="utf-8")
-
-        await build_chat_loop(runtime, reflection_service=reflection).send(
-            "coder", "Read this five times", session_id="session-one"
-        )
-
-        messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
-        run = runtime.chat_run_manager.get(str(messages[-1].run_id))
-        live_counts = [
+        # Two Tool calls in one Model response still count as one iteration.
+        assert (run.iteration_count, run.tool_call_count) == (2, 2)
+        assert [
             event.payload["iteration_count"]
             for event in run.events
-            if event.type == "model_step_usage"
-        ]
-        assert len(adapter.requests) == 2
-        assert run.iteration_count == 2
-        assert run.tool_call_count == 5
+            if event.type == MODEL_STEP_USAGE_EVENT
+        ] == [1, 2]
+        assert messages[-1].status == "completed" and messages[-1].timing is not None
         assert messages[-1].iteration_count == 2
-        assert live_counts == [1, 2]
-        assert run.events[-1].payload["iteration_count"] == 2
         assert reflection.calls[0]["iteration_count"] == 2
-    finally:
-        runtime.stop()
 
 
 @pytest.mark.asyncio
 async def test_change_stats_stream_after_each_tool_round_and_match_terminal(
-    tmp_path: Path,
-    resources_dir: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    start_runtime: StartRuntime, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     adapter = FakeAdapter(
         [
@@ -230,53 +150,33 @@ async def test_change_stats_stream_after_each_tool_round_and_match_terminal(
             {"content": "Both files written.", "tool_calls": None},
         ]
     )
-    config = Config(data_dir=tmp_path / "data")
-    config._data["RESOURCES_PATH"] = str(resources_dir)
-    config._data["VBOT_VERSION"] = "test-version"
-    runtime = Runtime(config)
-    monkeypatch.setenv("FAKE_API_KEY", "test-key")
-    monkeypatch.setattr(runtime, "get_adapter", lambda connection: adapter)
 
-    runtime.start()
-    try:
-        agent = runtime.agents.create(
-            "coder",
-            "Coder Agent",
-            model="fake-provider/fake-model-v1",
-        )
+    with start_runtime(adapter) as runtime:
+        agent = runtime.agents.create("coder", "Coder Agent", model="fake-provider/fake-model-v1")
         workspace = Path(agent.workspace)
         tracker = runtime.change_tracker
-        peek_run_stats = tracker.peek_run_stats
-        peek_threads: list[int] = []
+        threads: dict[str, list[int]] = {"peek_run_stats": [], "take_run_stats": []}
+        for name, calls in threads.items():
+            original = getattr(tracker, name)
 
-        def recording_peek(run_key) -> dict[str, object] | None:
-            peek_threads.append(threading.get_ident())
-            return peek_run_stats(run_key)
+            def recording(run_key: Any, original: Any = original, calls: list[int] = calls) -> Any:
+                calls.append(threading.get_ident())
+                return original(run_key)
 
-        monkeypatch.setattr(tracker, "peek_run_stats", recording_peek)
-        take_run_stats = tracker.take_run_stats
-        take_threads: list[int] = []
-
-        def recording_take(run_key):
-            take_threads.append(threading.get_ident())
-            return take_run_stats(run_key)
-
-        monkeypatch.setattr(tracker, "take_run_stats", recording_take)
+            monkeypatch.setattr(tracker, name, recording)
 
         await build_chat_loop(runtime).send("coder", "Write files", session_id="session-one")
-        # Live and terminal diffs run off the Event Loop; finalization computes once.
-        assert len(peek_threads) == 2
-        assert len(take_threads) == 1
-        assert threading.get_ident() not in [*peek_threads, *take_threads]
 
-        messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
+        # Live and terminal diffs run off the Event Loop; finalization computes once.
+        assert [len(calls) for calls in threads.values()] == [2, 1]
+        assert threading.get_ident() not in [*threads["peek_run_stats"], *threads["take_run_stats"]]
+        messages = history(runtime)
         run = runtime.chat_run_manager.get(str(messages[-1].run_id))
         live_stats = [
             event.payload["change_stats"]
             for event in run.events
             if event.type == RUN_CHANGE_STATS_EVENT
         ]
-
         assert live_stats == [
             {"files": 1, "added": 2, "removed": 0, "paths": [str(workspace / "a.txt")]},
             {
@@ -288,142 +188,21 @@ async def test_change_stats_stream_after_each_tool_round_and_match_terminal(
         ]
         assert run.terminal_payload_extras["change_stats"] == live_stats[-1]
         assert messages[-1].change_stats == live_stats[-1]
-    finally:
-        runtime.stop()
-
-
-@pytest.mark.asyncio
-async def test_reasoning_only_response_requests_visible_continuation(
-    tmp_path: Path,
-    resources_dir: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    adapter = FakeAdapter(
-        [
-            {"content": None, "reasoning": "Only thinking this time.", "tool_calls": None},
-            {"content": "Visible answer.", "reasoning": None, "tool_calls": None},
-        ]
-    )
-    config = Config(data_dir=tmp_path / "data")
-    config._data["RESOURCES_PATH"] = str(resources_dir)
-    config._data["VBOT_VERSION"] = "test-version"
-    runtime = Runtime(config)
-    monkeypatch.setenv("FAKE_API_KEY", "test-key")
-    monkeypatch.setattr(runtime, "get_adapter", lambda connection: adapter)
-
-    runtime.start()
-    try:
-        runtime.agents.create(
-            "coder",
-            "Coder Agent",
-            model="fake-provider/fake-model-v1",
-        )
-
-        await build_chat_loop(runtime).send(
-            "coder", "Think without answering", session_id="session-one"
-        )
-
-        messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
-        run = runtime.chat_run_manager.get(str(messages[-1].run_id))
-        assert len(adapter.requests) == 2
-        assert messages[1].reasoning == "Only thinking this time."
-        assert messages[1].content is None
-        assert messages[1].interrupted is True
-        assistant_messages = [message for message in messages if message.role == "assistant"]
-        assert assistant_messages[-1].content == "Visible answer."
-        assert run.iteration_count == 2
-        assert messages[-1].iteration_count == 2
-    finally:
-        runtime.stop()
-
-
-@pytest.mark.asyncio
-async def test_read_tool_missing_file_persists_failure_and_run_recovers(
-    tmp_path: Path,
-    resources_dir: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    adapter = FakeAdapter(
-        [
-            {
-                "content": None,
-                "tool_calls": [
-                    {"id": "call_missing", "name": "read", "arguments": {"path": "missing.txt"}}
-                ],
-            },
-            {"content": "The file was missing, so I recovered.", "tool_calls": None},
-        ]
-    )
-    config = Config(data_dir=tmp_path / "data")
-    config._data["RESOURCES_PATH"] = str(resources_dir)
-    config._data["VBOT_VERSION"] = "test-version"
-    runtime = Runtime(config)
-    monkeypatch.setenv("FAKE_API_KEY", "test-key")
-    monkeypatch.setattr(runtime, "get_adapter", lambda connection: adapter)
-
-    runtime.start()
-    try:
-        runtime.agents.create(
-            "coder",
-            "Coder Agent",
-            model="fake-provider/fake-model-v1",
-        )
-
-        assistant = await build_chat_loop(runtime).send(
-            "coder", "Read missing", session_id="session-one"
-        )
-
-        messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
-        tool_message_content = messages[2].content
-        assert isinstance(tool_message_content, str)
-        tool_result = json.loads(tool_message_content)
-        assert assistant.content == "The file was missing, so I recovered."
-        assert [message.role for message in messages] == [
-            "user",
-            "assistant",
-            "tool",
-            "assistant",
-            "run_summary",
-        ]
-        assert messages[-1].status == "completed"
-        assert messages[-1].timing is not None
-        assert tool_result["ok"] is False
-        assert tool_result["error"]["code"] == "file_not_found"
-        assert "missing.txt" in tool_result["error"]["message"]
-        assert tool_result["data"] is None
-        assert tool_result["artifacts"] == []
-        assert adapter.requests[1].messages[3]["content"] == messages[2].content
-    finally:
-        runtime.stop()
 
 
 def test_runtime_prompt_includes_workspace_files_and_filtered_tool_skill_metadata(
-    tmp_path: Path,
-    resources_dir: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    start_runtime: StartRuntime,
 ) -> None:
-    config = Config(data_dir=tmp_path / "data")
-    config._data["RESOURCES_PATH"] = str(resources_dir)
-    config._data["VBOT_VERSION"] = "test-version"
-    runtime = Runtime(config)
-
-    runtime.start()
-    try:
+    with start_runtime() as runtime:
         _write_skill(runtime.storage.data_dir, "agent-cli", "Delegate coding tasks")
         _write_skill(runtime.storage.data_dir, "news", "Fetch news")
         runtime._skills = SkillRegistry.load(runtime.storage.data_dir / "skills")
         runtime.system_prompts._skill_registry = cast(SkillPromptRegistry, runtime.skills)
         runtime.tools.register(
-            "read_file",
-            "Read a workspace file.",
-            {"type": "object"},
-            _ok_tool_handler,
+            "read_file", "Read a workspace file.", {"type": "object"}, _ok_tool_handler
         )
         runtime.tools.register(
-            "shell",
-            "Run a shell command.",
-            {"type": "object"},
-            _ok_tool_handler,
+            "shell", "Run a shell command.", {"type": "object"}, _ok_tool_handler
         )
         agent = runtime.agents.create(
             "coder",
@@ -446,6 +225,7 @@ def test_runtime_prompt_includes_workspace_files_and_filtered_tool_skill_metadat
         assert "- shell:" not in prompt
         assert "- agent-cli: Delegate coding tasks" in prompt
         assert "news" not in prompt
+        # skill and skill_manage are ordinary Tools that this Agent's selection filters out.
         assert tool_definitions == [
             {
                 "name": "memory",
@@ -458,13 +238,6 @@ def test_runtime_prompt_includes_workspace_files_and_filtered_tool_skill_metadat
                 "parameters": {"type": "object"},
             },
         ]
-        # skill/skill_manage are ordinary tools now: this agent allows only read_file,
-        # so neither is offered — the per-agent toggle filters them like any tool.
-        offered_names = {definition["name"] for definition in tool_definitions}
-        assert "skill" not in offered_names
-        assert "skill_manage" not in offered_names
-    finally:
-        runtime.stop()
 
 
 def _write_skill(data_dir: Path, name: str, description: str) -> None:
