@@ -377,17 +377,20 @@ async def test_reset_last_default_preserves_unknown_fields(tmp_path: Path, metho
 
 
 @pytest.mark.asyncio
-async def test_extensions_update_passes_schemaless_config(tmp_path: Path) -> None:
+async def test_extensions_update_persists_the_section_with_schemaless_config(
+    tmp_path: Path,
+) -> None:
     state = make_state(tmp_path, StubAdapter())  # no registry, so no schemas
 
     await rpc_result(
         state,
         "settings.update",
-        extensions={"disabled": [], "config": {"legacy": {"anything": [1, 2]}}},
+        extensions={"disabled": ["legacy"], "config": {"legacy": {"anything": [1, 2]}}},
     )
 
-    assert state.runtime.storage.load_extensions_settings()["config"] == {
-        "legacy": {"anything": [1, 2]}
+    assert state.runtime.storage.load_extensions_settings() == {
+        "disabled": ["legacy"],
+        "config": {"legacy": {"anything": [1, 2]}},
     }
 
 

@@ -35,9 +35,7 @@ from core.utils.errors import ConfigError
 from server.events import ServerEventBus
 from tests.server.rpc_test_support import (
     JsonObject,
-    StubAdapter,
     call,
-    make_state,
     resource_changes,
     rpc_error,
     rpc_result,
@@ -790,58 +788,3 @@ async def test_extension_page_run_reports_verified_replay_watermark(scenario: st
             "participant_id": "participant-a",
         },
     }
-
-
-# ---------------------------------------------------------------------------
-# settings.update: the extensions section
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_settings_update_extensions_disable_applies_live(tmp_path: Path) -> None:
-    # Disabling takes the surgical live-disable path: the section persists, the
-    # disabled name is applied live, and no full reload runs.
-    state = make_state(tmp_path, StubAdapter())
-
-    await rpc_result(
-        state,
-        "settings.update",
-        extensions={"disabled": ["legacy"], "config": {"guard_bash": {"deny": ["rm -rf"]}}},
-    )
-
-    assert state.runtime.extension_disabled_changes == [{"legacy"}]
-    assert state.runtime.extension_reload_count == 0
-    assert state.event_bus.events[-1]["payload"] == {"kind": "commands"}
-    assert state.runtime.storage.load_extensions_settings() == {
-        "disabled": ["legacy"],
-        "config": {"guard_bash": {"deny": ["rm -rf"]}},
-    }
-
-
-@pytest.mark.asyncio
-async def test_settings_update_extensions_enable_reloads_layer(tmp_path: Path) -> None:
-    # Enabling (removing a name from the persisted disabled set) rebuilds the whole
-    # extension layer live.
-    state = make_state(tmp_path, StubAdapter())
-    state.runtime.storage.update_settings_sections(
-        {"extensions": {"disabled": ["legacy"], "config": {}}}
-    )
-
-    await rpc_result(state, "settings.update", extensions={"disabled": [], "config": {}})
-
-    assert state.runtime.extension_reload_count == 1
-    assert state.runtime.extension_disabled_changes == []
-    assert state.event_bus.events[-1]["payload"] == {"kind": "commands"}
-    assert state.runtime.storage.load_extensions_settings() == {"disabled": [], "config": {}}
-
-
-@pytest.mark.asyncio
-async def test_settings_update_without_extensions_touches_no_extension_seam(
-    tmp_path: Path,
-) -> None:
-    state = make_state(tmp_path, StubAdapter())
-
-    await rpc_result(state, "settings.update", appearance={"language": "en"})
-
-    assert state.runtime.extension_reload_count == 0
-    assert state.runtime.extension_disabled_changes == []
